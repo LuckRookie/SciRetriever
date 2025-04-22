@@ -1,5 +1,4 @@
-from .network import NetworkClient
-
+from .client import NetworkClient
 
 __all__=[
     'NetworkClient'
