@@ -5,7 +5,8 @@ from bs4._typing import _OneElement
 import json
 from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
-
+import time
+import random
 class CJEM:
     def __init__(self,issue:str):
         # https://energetic-materials.org.cn/
@@ -16,6 +17,7 @@ class CJEM:
         
     def get_issue(self):
         issue_url = self.article_url + self.issue
+        
         response = requests.get(issue_url)
         response.encoding = 'utf-8'
         return response
@@ -82,13 +84,22 @@ class CJEM:
         if not isinstance(save_path,Path):
             save_path = Path(save_path) / self.issue
         save_path.mkdir(parents=True,exist_ok=True)
-        for dict in self.pdf_list:
-            pdf_url = dict["pdf_url"]
-            pdf_name = dict["code"]
+        for pdf in self.pdf_list:
+            pdf_url = pdf["pdf_url"]
+            pdf_name = pdf["code"]
             
             # 开始下载
             print(f"开始下载 {pdf_name}.pdf")
-            self.download(pdf_path=save_path / f"{pdf_name}.pdf",pdf_url=pdf_url)
+            try:
+                w = random.uniform(0.5, 1.5)
+                time.sleep(w)
+                
+                self.download(pdf_path=save_path / f"{pdf_name}.pdf",pdf_url=pdf_url)
+            except requests.exceptions.HTTPError as e:
+                print(f"错误代码：{e.response.status_code},下载 {pdf_name}.pdf 失败")
+                print(pdf)
+                print(e)
+                continue
             
     @staticmethod
     def download(pdf_path:Union[str,Path],pdf_url:str):
@@ -140,6 +151,7 @@ class CJEM_ALL:
                     cjem = CJEM(issue)
                     # 发送请求
                     response = cjem.get_issue()
+                    # 检查是否有这一期
                     if cjem.check_have_issue(response):
                         print(f"开始解析{year}年第{volume}卷第{no}期")
                         self.all_issue.append(issue)
@@ -152,6 +164,7 @@ class CJEM_ALL:
                         break
                 except Exception as e:
                     print(e)
+                    no += 1
                     
     def get_all_issue(self):
         return self.all_issue

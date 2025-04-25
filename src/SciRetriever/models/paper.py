@@ -1,5 +1,5 @@
 """
-Paper model for SciRetriever.
+文章元信息
 """
 
 from dataclasses import dataclass, field
@@ -27,6 +27,7 @@ class Paper:
     issue: Optional[str] = None
     pages: Optional[str] = None
     keywords: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     # PDF information
     downloaded: bool = False
@@ -37,7 +38,7 @@ class Paper:
     references: List["Paper"] = field(default_factory=list)
     citations: List["Paper"] = field(default_factory=list)
     citations_num: int = None
-    notes: List[str] = field(default_factory=list)
+    notes: Optional[str] = None
     
     def __post_init__(self):
         """Normalize fields after initialization."""
@@ -133,20 +134,14 @@ class Paper:
         return cls(**data)
     
     def add_keywords(self, keywords: List[str]) -> None:
-        """
-        Add a tag to the paper if it doesn't already exist.
-        
-        Args:
-            tag: Tag to add
-        """
         if keywords not in self.keywords:
             self.keywords.extend(keywords)
-    
-    def add_note(self, note: str) -> None:
-        """
-        Add a note to the paper.
+            
+    def update_keywords(self, keywords: List[str]) -> None:
+        self.keywords = keywords
         
-        Args:
-            note: Note text to add
-        """
-        self.notes.append(note)
+    def update_note(self, note: str) -> None:
+        self.notes = note
+
+class Book():
+    pass

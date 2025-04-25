@@ -7,6 +7,7 @@ import abc
 from typing import Dict, List, Optional, Union, Any
 
 from ..models.paper import Paper
+from ..network import NetworkClient
 from ..utils.exceptions import SearchError
 from ..utils.logging import get_logger
 
@@ -18,16 +19,12 @@ class BaseSearcher(abc.ABC):
     
     def __init__(
         self,
-        proxy:Optional[dict]=None
+        client: NetworkClient = NetworkClient(),
         ):
         """
         Initialize the searcher.
-
-        Args:
-            proxy: A dictionary containing proxy information,
-                   proxy = {"http":"http://127.0.0.1:7890","https":"http://127.0.0.1:7890"}  
         """
-        self.proxy = proxy
+        self.client = client
         
     
     
@@ -54,52 +51,52 @@ class BaseSearcher(abc.ABC):
         """
         pass
     
-    @abc.abstractmethod
-    def get_paper_by_doi(self, doi: str) -> Optional[Paper]:
-        """
-        Retrieve a specific paper by its DOI.
+    # @abc.abstractmethod
+    # def get_paper_by_doi(self, doi: str) -> Optional[Paper]:
+    #     """
+    #     Retrieve a specific paper by its DOI.
         
-        Args:
-            doi: The DOI of the paper
+    #     Args:
+    #         doi: The DOI of the paper
             
-        Returns:
-            A Paper object or None if not found
+    #     Returns:
+    #         A Paper object or None if not found
             
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        pass
+    #     Raises:
+    #         SearchError: If the retrieval fails
+    #     """
+    #     pass
 
-    @abc.abstractmethod
-    def get_citations(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-        """
-        Get papers that cite the given paper.
+    # @abc.abstractmethod
+    # def get_citations(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
+    #     """
+    #     Get papers that cite the given paper.
         
-        Args:
-            paper: A Paper object or DOI string
-            limit: Maximum number of results to return
+    #     Args:
+    #         paper: A Paper object or DOI string
+    #         limit: Maximum number of results to return
             
-        Returns:
-            A list of Paper objects
+    #     Returns:
+    #         A list of Paper objects
             
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        pass
+    #     Raises:
+    #         SearchError: If the retrieval fails
+    #     """
+    #     pass
     
-    @abc.abstractmethod
-    def get_references(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-        """
-        Get papers cited by the given paper.
+    # @abc.abstractmethod
+    # def get_references(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
+    #     """
+    #     Get papers cited by the given paper.
         
-        Args:
-            paper: A Paper object or DOI string
-            limit: Maximum number of results to return
+    #     Args:
+    #         paper: A Paper object or DOI string
+    #         limit: Maximum number of results to return
             
-        Returns:
-            A list of Paper objects
+    #     Returns:
+    #         A list of Paper objects
             
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        pass
+    #     Raises:
+    #         SearchError: If the retrieval fails
+    #     """
+    #     pass

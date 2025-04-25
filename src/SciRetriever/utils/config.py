@@ -20,7 +20,11 @@ class Config:
         "database": {
             "path": "sciretriever.db"
         },
-        "download": {
+        "proxy":{
+            "http":None,
+            "https":None
+        },
+        "session": {
             "output_dir": "downloads",
             "rate_limit": 5.0,  # Seconds between requests
             "max_retries": 3,

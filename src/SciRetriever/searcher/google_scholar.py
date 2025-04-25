@@ -5,10 +5,12 @@ Google Scholar searcher implementation.
 import time
 from typing import Dict, List, Optional, Union, Any
 
-from scholarly import scholarly
+from scholarly import scholarly,ProxyGenerator
+from bs4 import BeautifulSoup
+from requests import Response
 
 from ..models.paper import Paper
-from ..utils.config import get_config
+from ..network import NetworkClient
 from ..utils.exceptions import SearchError, RateLimitError
 from ..utils.logging import get_logger
 from .searcher import BaseSearcher
@@ -19,23 +21,43 @@ logger = get_logger(__name__)
 class GoogleScholarSearcher(BaseSearcher):
     """Implementation of BaseSearcher for Google Scholar."""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        client: NetworkClient = NetworkClient(),
+        parser: GoogleScholarParser = GoogleScholarParser(),
+        ):
         """
         Initialize the Google Scholar searcher.
         
         Args:
             api_key: Not used for scholarly library, but kept for consistency
         """
-        super().__init__(api_key)
+        super().__init__(client=client)
+        
         self._configure_scholarly()
         logger.info("Initialized Google Scholar searcher")
+        self.parser = parser
     
     def _configure_scholarly(self):
         """Configure scholarly library settings."""
         # This method can be extended to configure proxies or other settings
         # scholarly.use_proxy(...)
-        pass
-    
+        self.scholarly = scholarly
+        
+        if self.client.proxy:
+            logger.info(f"Setting proxy for scholarly: {self.client.proxy}")
+            proxy = self.client.proxy.get_proxies()
+            pg1 = ProxyGenerator()
+            pg2 = ProxyGenerator()
+            
+            success1 = pg1.SingleProxy(http=proxy['http'])
+            success2 = pg2.SingleProxy(http=proxy['http'])
+            if success1 and success2:
+                logger.info("Successfully set proxies for scholarly")
+                self.scholarly.use_proxy(pg1,pg2)
+            else:
+                logger.warning("Failed to set proxies for scholarly")
+
     def search(
         self, 
         query: str, 
@@ -79,7 +101,7 @@ class GoogleScholarSearcher(BaseSearcher):
         
         papers = []
         try:
-            search_query = scholarly.search_pubs(full_query)
+            search_query = self.scholarly.search_pubs(full_query)
             
             # Collect the specified number of results
             for _ in range(limit):
@@ -102,55 +124,16 @@ class GoogleScholarSearcher(BaseSearcher):
             logger.error(f"Error searching Google Scholar: {e}")
             raise SearchError(f"Failed to search Google Scholar: {e}")
     
-    def get_paper_by_doi(self, doi: str) -> Optional[Paper]:
-        """
-        Retrieve a specific paper by its DOI.
-        
-        Args:
-            doi: The DOI of the paper
-            
-        Returns:
-            A Paper object or None if not found
-            
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        logger.info(f"Retrieving paper with DOI: {doi}")
-        try:
-            # Google Scholar doesn't have a direct DOI search
-            # We'll search for the DOI and filter the results
-            search_query = scholarly.search_pubs(doi)
-            for pub in search_query:
-                if pub.get('pub_url') and doi in pub.get('pub_url'):
-                    return self._convert_to_paper(pub)
-                
-                # Also check citation data
-                if 'bib' in pub and 'doi' in pub['bib'] and pub['bib']['doi'] == doi:
-                    return self._convert_to_paper(pub)
-                
-                # Limit number of results to avoid excessive API usage
-                time.sleep(1)
-            
-            logger.info(f"No paper found with DOI: {doi}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error retrieving paper by DOI: {e}")
-            raise SearchError(f"Failed to retrieve paper with DOI {doi}: {e}")
-    
     def get_citations(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
         """
-        Get papers that cite the given paper.
+        获取引用改文献的其他论文
         
         Args:
             paper: A Paper object or DOI string
             limit: Maximum number of results to return
-            
+
         Returns:
             A list of Paper objects
-            
-        Raises:
-            SearchError: If the retrieval fails
         """
         if isinstance(paper, str):
             # If only DOI is provided, try to get the paper first
@@ -192,24 +175,20 @@ class GoogleScholarSearcher(BaseSearcher):
     
     def get_references(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
         """
-        Get papers cited by the given paper.
-        Note: Google Scholar doesn't provide a direct method for this.
-        
+        获取该文献引用的论文的信息
+
         Args:
             paper: A Paper object or DOI string
             limit: Maximum number of results to return
             
         Returns:
-            A list of Paper objects (always empty for Google Scholar)
-            
-        Raises:
-            SearchError: If the retrieval fails
+            A list of Paper objects
         """
         logger.warning("Google Scholar doesn't support retrieving references directly")
         return []
     
     def _convert_to_paper(self, data: Dict[str, Any]) -> Paper:
-        """Convert Google Scholar data to a Paper object."""
+        """将获取到的页面转化为Paper类型"""
         # Extract authors
         authors = []
         if "bib" in data and "author" in data["bib"]:
@@ -238,17 +217,18 @@ class GoogleScholarSearcher(BaseSearcher):
         if "bib" in data and "abstract" in data["bib"]:
             abstract = data["bib"]["abstract"]
         
-        # Extract DOI from URL if available
-        doi = None
-        if "pub_url" in data:
-            url = data["pub_url"]
-            # Try to extract DOI from URL
-            if "doi.org/" in url:
-                doi = url.split("doi.org/")[-1]
         
-        # Also check for DOI in the bib data
-        if not doi and "bib" in data and "doi" in data["bib"]:
-            doi = data["bib"]["doi"]
+        # # Extract DOI from URL if available
+        # doi = None
+        # if "pub_url" in data:
+        #     url = data["pub_url"]
+        #     # Try to extract DOI from URL
+        #     if "doi.org/" in url:
+        #         doi = url.split("doi.org/")[-1]
+        
+        # # Also check for DOI in the bib data
+        # if not doi and "bib" in data and "doi" in data["bib"]:
+        #     doi = data["bib"]["doi"]
         
         return Paper(
             title=title,
@@ -263,3 +243,28 @@ class GoogleScholarSearcher(BaseSearcher):
             downloaded=False,
             metadata=data,
         )
+        
+class GoogleScholar():
+    """
+    Google Scholar的页面
+    """
+    def __init__(
+        self,
+        response: Response = None,
+        url: str = None,
+        ) -> None:
+        self.soup = BeautifulSoup(response.text, "html.parser")
+        self.url = url
+        
+    pass
+
+class GoogleScholarParser():
+    """
+    给一个GoogleScholar返回的页面，解析出论文信息
+    """
+    def __init__(
+        self,
+        
+        ) -> None:
+        pass
+    pass
