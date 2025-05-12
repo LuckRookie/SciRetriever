@@ -2,15 +2,17 @@
 Google Scholar searcher implementation.
 """
 
+import requests
 import time
 from typing import Dict, List, Optional, Union, Any
 
 from scholarly import scholarly,ProxyGenerator
 from bs4 import BeautifulSoup
-from requests import Response
+from bibtexparser.bibdatabase import BibDatabase
+import bibtexparser
 import re
 from ..models.paper import Paper
-from ..network import NetworkClient
+from ..network import NetworkClient, Proxy
 from ..utils.exceptions import SearchError, RateLimitError
 from ..utils.logging import get_logger
 from .searcher import BaseSearcher
@@ -26,8 +28,8 @@ _SCHOLARPUBRE = r'cites=([\d,]*)'
 _CITATIONPUB = '/citations?hl=en&view_op=view_citation&citation_for_view={0}'
 _SCHOLARPUB = '/scholar?hl=en&oi=bibs&cites={0}'
 _CITATIONPUBRE = r'citation_for_view=([\w-]*:[\w-]*)'
-_BIBCITE = '/scholar?hl=en&q=info:{0}:scholar.google.com/\
-&output=cite&scirp={1}&hl=en'
+# 关键的是cid，这个位置({1})根本就不关键
+_BIBCITE = '/scholar?hl=en&q=info:{0}:scholar.google.com/&output=cite&scirp={1}&hl=en'
 _CITEDBYLINK = '/scholar?hl=en&cites={0}'
 _MANDATES_URL = '/citations?view_op=view_mandate&hl=en&citation_for_view={0}'
 
@@ -45,7 +47,69 @@ _BIB_REVERSE_MAPPING = {
     'pub_type': 'ENTRYTYPE',
     'bib_id': 'ID',
 }
+class GSClint():
+    """
+    基于爬虫类通用客户端,编写处理GoogleScholar网络请求的客户端
+    仅接受网址后面的,而不需要全部网址
 
+    参数：
+        use_proxy: 是否使用代理
+        proxy: 代理对象
+        mirror: 镜像网站,0为官方网站
+    """
+    def __init__(
+        self,
+        use_proxy: bool = False,
+        proxy:Proxy = None,
+        mirror:int = 0,
+        ) -> None:
+        self.session = NetworkClient(use_proxy = use_proxy,proxy=proxy)
+        self.mirror = mirror
+        self.base_url = __GoogleScholar[self.mirror]
+
+    def _get_mirror_response(self,url:str,response:requests.Response) -> requests.Response:
+        """
+        从镜像网站获取响应
+        """
+        
+        # 检查是否是验证页面
+        if 'AutoJump' in response.text:
+            # print("检测到验证页面，正在提取验证Cookie...")
+            
+            # 从页面中提取cookie值
+            cookie_match = re.search(r'document\.cookie="google_verify_data=([^;]+);', response.text)
+            if cookie_match:
+                verify_data = cookie_match.group(1)
+                cookie = {
+                    'google_verify_data': verify_data
+                }
+                # 手动设置cookie
+                self.session.update_cookie(cookie=cookie)
+
+                # 等待一小段时间模拟浏览器行为
+                time.sleep(1)
+                
+                # 再次请求
+                response = self.session.get(url=url)
+        # 处理响应
+        if response.status_code == 200:
+            return response
+
+
+    def get_page_soup(self,scholar_url):
+
+        url = self.base_url + scholar_url
+        response = self.session.get(url=url)
+        
+
+        if self.mirror == 1:
+            response = self._get_mirror_response(url = url,response = response)
+            soup = BeautifulSoup(response.text, "html.parser")
+            return soup,response.text
+
+        else:
+            soup = BeautifulSoup(response.text, "html.parser")
+            return soup,response.text
 
 class GoogleScholarSearcher(BaseSearcher):
     """Implementation of BaseSearcher for Google Scholar."""
@@ -96,18 +160,18 @@ class GoogleScholarSearcher(BaseSearcher):
         **kwargs
     ) -> List[Paper]:
         """
-        Search for papers using Google Scholar.
+        Google Scholar搜索的通用方法
         
         Args:
-            query: The search query
-            limit: Maximum number of results to return
-            fields: Not used for Google Scholar
-            **kwargs: Additional parameters:
-                year_start: Start year for filtering
-                year_end: End year for filtering
+            query: 搜索的关键词
+            limit: 默认限制返回的文献数量,设置为0则不限制
+            fields: 默认不用
+            **kwargs: 附加参数:
+                year_start: 起始日期
+                year_end: 结束日期
                 
         Returns:
-            A list of Paper objects
+            返回一个Paper对象列表(暂定)
             
         Raises:
             SearchError: If the search fails
@@ -273,27 +337,92 @@ class GoogleScholarSearcher(BaseSearcher):
             downloaded=False,
             metadata=data,
         )
+    @staticmethod
+    def _build_url(baseurl: str, patents: bool = True,
+                    citations: bool = True, year_low: int = None,
+                    year_high: int = None, sort_by: str = "relevance",
+                    include_last_year: str = "abstracts",
+                    start_index: int = 0
+                    )-> str:
+        """build URL of google scholar from requested parameters."""
+        url = baseurl
+
+        yr_lo = '&as_ylo={0}'.format(year_low) if year_low is not None else ''
+        yr_hi = '&as_yhi={0}'.format(year_high) if year_high is not None else ''
+        citations = '&as_vis={0}'.format(1 - int(citations))
+        patents = '&as_sdt={0},33'.format(1 - int(patents))
+        sortby = ''
+        start = '&start={0}'.format(start_index) if start_index > 0 else ''
+
+        if sort_by == "date":
+            if include_last_year == "abstracts":
+                sortby = '&scisbd=1'
+            elif include_last_year == "everything":
+                sortby = '&scisbd=2'
+            else:
+                logger.debug("Invalid option for 'include_last_year', available options: 'everything', 'abstracts'")
+                return
+        elif sort_by != "relevance":
+            logger.debug("Invalid option for 'sort_by', available options: 'relevance', 'date'")
+            return
+
+        # improve str below
+        return url + yr_lo + yr_hi + citations + patents + sortby + start
+
+    def search_publication(self,query:str = None,patents: bool = True,
+                            citations: bool = True, year_low: int = None,
+                            year_high: int = None, sort_by: str = "relevance",
+                            include_last_year: str = "abstracts",
+                            start_index: int = 0
+                            )-> str:
+        params = {
+            "q": query,
+        }
+
+        url = self.base_url 
+
+        return response
         
+class Total_GoogleScholar():
+    """
+    Google Scholar的总对象,针对每一次查询
+    """
+    def __init__(
+        self,
+        response: requests.Response,
+        session: GSClint,
+        ) -> None:
+        if not response:
+            raise "ERROR: 请提供response"
+
+        self.soup = BeautifulSoup(response.text, "html.parser")
+        self.url = response.url
+        # 文章的rows
+
 class GoogleScholar():
     """
     Google Scholar的页面对象
     """
     def __init__(
         self,
-        response: Response,
-        session: NetworkClient,
+        url:str,
+        session: GSClint,
         ) -> None:
-        if not response:
-            raise "ERROR: 请提供response"
-        
-        self.soup = BeautifulSoup(response.text, "html.parser")
-        self.url = response.url
+        if not url:
+            raise "ERROR: 请提供url"
+
+        self.soup,self.html = session.get_page_soup(url)
+        self.url = url
+        self.session = session
+        # 文章的rows
         self.rows = self.soup.find_all('div', class_='gs_r gs_or gs_scl') + self.soup.find_all('div', class_='gsc_mpat_ttl')
         # 删除一些没有data-cid的文章或者广告
-        self.rows = [row for row in self.rows if row.get("data-cid")]
+        self.rows = [GSRow(row) for row in self.rows if row.get("data-cid")]
+
+        # 下一页的按钮
         self.next = self.soup.find(class_='gs_ico gs_ico_nav_next')
         self.totle_results = self._get_total_results()
-        self.session = session
+        
         
     def _get_total_results(self):
         if self.soup.find("div", class_="gs_pda"):
@@ -308,46 +437,153 @@ class GoogleScholar():
         return 0
     
     def __next__(self):
+        # 下一个页面
         if self.next:
             next_url = self.next.get("href")
-            response = self.session.get(next_url)
-            return GoogleScholar(response, self.session)
+            return GoogleScholar(next_url, self.session)
         else:
             raise StopIteration
     
     def __iter__(self):
         return self
-    def get_rows(self):
-        
-        pass
         
 class GSRow():
     """
     GoogleScholar中一个文章的对象
+    
+    GoogleScholar: 文章所在的GoogleScholar对象
+    row: 文章的soup对象,class = gs_r gs_or gs_scl
+    cid: 文章的cid
+    pos: 文章在GoogleScholar中的位置
+    title: 文章的标题
+    pub_url: 文章的网页链接
+    abstract: 文章的摘要
+    author: 文章的作者
+    publisher: 文章的出版社
+    journal: 文章的期刊
+    pub_type: 文章的类型:文章或者图书
+    pub_year: 文章的发表年份
+    url_scholarbib: 文章的bib链接(总的,有四种格式,其中一种是bib)
+    num_citations: 文章的引用数
+    cite_url: 文章的引用链接
+    related_url: 与文章相关的链接
+    pdf_url: 文章的pdf链接(如果有的话)
+    bib: 文章的bib信息
+    filled: 文章的bib信息是否已经填充
     """
     def __init__(
         self,
         row: BeautifulSoup,
-        pos: int,
+        session: GSClint,
         ) -> None:
         self.row = row
-        self.pos = pos
+        self.session = session
         self.load_information()
         self.filled = False
-    
+        self.bib = {}
+        
+    @staticmethod
+    def _get_authorlist(authorinfo):
+        authorlist = list()
+        text = authorinfo.split(' - ')[0]
+        for i in text.split(','):
+            i = i.strip()
+            if bool(re.search(r'\d', i)):
+                continue
+            if ("Proceedings" in i or "Conference" in i or "Journal" in i or
+                    "(" in i or ")" in i or "[" in i or "]" in i or
+                    "Transactions" in i):
+                continue
+            i = i.replace("…", "")
+            authorlist.append(i)
+        return authorlist
+
+    @staticmethod
+    def _extract_tag(text):
+        """从形如 [TAG][X] 的文本中提取 TAG"""
+        match = re.search(r'\[([A-Z]+)\]', text)
+        if match:
+            return match.group(1)  # 返回第一个匹配的括号内容
+        return None
+
     def load_information(self):
         """根据row加载信息"""
         row = self.row
+        # databox是每一个文章的box而不是整个页面的box
         databox = row.find('div', class_='gs_ri')
-        self.title = databox.find('h3', class_='gs_rt')
-        if self.title.find('a'):
-            self.pub_url = self.title.find('a')['href']
+        title = databox.find('h3', class_='gs_rt')
+        if title.find('a'):
+            self.pub_url = title.find('a')['href']
         self.cid = row.get('data-cid')
         self.pos = row.get('data-rp')
+
+        if title.find('span', class_='gs_ctu'):  # A citation
+            title.span.extract()
+        elif title.find('span', class_='gs_ctc'):  # A book or PDF
+            span = title.span.extract()
+            span_text = span.text
+            tag = self._extract_tag(span_text)
+            if tag == 'BOOK':
+                self.pub_type = 'BOOK'
+            else:
+                self.pub_type = 'ARTICLE'
+        else:
+            self.pub_type = 'ARTICLE'
         
+        self.title = title.text.strip()
+        # 提取作者等基本信息
+        author_div_element = databox.find('div', class_='gs_a')
+        authorinfo = author_div_element.text
+        authorinfo = authorinfo.replace(u'\xa0', u' ')       # NBSP
+        authorinfo = authorinfo.replace(u'&amp;', u'&')      # Ampersand
+        self.author = self._get_authorlist(authorinfo)
+        # 获取author_id
+        # authorinfo_html = author_div_element.decode_contents()
+        # self.author_id = self._get_author_id_list(authorinfo_html)
+
+        # 该行有四种类型并且有一些信息(author/venue/year/host):
+        #  (A) authors - host
+        #  (B) authors - venue, year - host
+        #  (C) authors - venue - host
+        #  (D) authors - year - host
+        venueyear = authorinfo.split(' - ')
+        self.publisher = venueyear[-1].strip()
+        # If there is no middle part (A) then venue and year are unknown.
+        if len(venueyear) <= 2:
+            self.journal, self.pub_year = None, None
+        else:
+            venueyear = venueyear[1].split(',')
+            journal = None
+            year = venueyear[-1].strip()
+            if year.isnumeric() and len(year) == 4:
+                self.pub_year = year
+                if len(venueyear) >= 2:
+                    journal = ','.join(venueyear[0:-1]) # everything but last
+            else:
+                journal = ','.join(venueyear) # everything
+                self.pub_year = None
+            self.journal = journal
+        
+        # abstract 有可能不全
+        if databox.find('div', class_='gs_rs'):
+            self.abstract = databox.find('div', class_='gs_rs').text
+            self.abstract = self.abstract.replace(u'\u2026', u'')
+            self.abstract = self.abstract.replace(u'\n', u' ')
+            self.abstract = self.abstract.strip()
+
+            if self.abstract[0:8].lower() == 'abstract':
+                self.abstract = self.abstract[9:].strip()
+
+
+        # sclib指的是将该文章存入自己库的链接,需要整个页面的信息才能拿到，而GSRow只有单个文章的信息
+        # sclib = row.find('div', id='gs_res_glb').get('data-sva').format(self.cid)
+        # self.add_lib_url = sclib
+
+        # bibcite url
+        self.url_scholarbib = _BIBCITE.format(self.cid, self.pos)
         # cite and related
         lowerlinks = databox.find('div', class_='gs_fl').find_all('a')
-        
+
         self.num_citations = 0
         self.cite_url = None
         self.related_url = None
@@ -362,20 +598,56 @@ class GSRow():
         # pdf url
         if row.find('div', class_='gs_ggs gs_fl'):
             self.pdf_url = row.find('div', class_='gs_ggs gs_fl').a['href']
-        pass
     
-    def load_fill(self):
-        self.filled = True
+    def load_bib(self):
+        if self.filled:
+            return
         
+        bibtex_url = self._get_bibtex(self.url_scholarbib)
+        if bibtex_url:
+            bibtex_url = self.session.base_url + bibtex_url
+            _, bibtex_text = self.session.get_page_soup(bibtex_url)
+            parser = bibtexparser.bparser.BibTexParser(common_strings=True)
+            parsed_bib = self.remap_bib(bibtexparser.loads(bibtex_text,parser).entries[-1], _BIB_MAPPING, _BIB_DATATYPES)
+            self.bib.update(parsed_bib)
+            self.filled = True
+
+    def _get_bibtex(self, bib_url) -> str:
+        """Retrieves the bibtex url"""
+
+        soup, _ = self.session.get_page_soup(bib_url)
+        styles = soup.find_all('a', class_='gs_citi')
+
+        for link in styles:
+            if link.string.lower() == "bibtex":
+                return link.get('href')
+        return ''
+
+    def export_Paper(self):
+        """导出为Paper对象"""
         pass
+
+    @staticmethod
+    def remap_bib(parsed_bib: dict, mapping: dict, data_types:dict ={}) -> Dict:
+        for key, value in mapping.items():
+            if key in parsed_bib:
+                parsed_bib[value] = parsed_bib.pop(key)
+
+        for key, value in data_types.items():
+            if key in parsed_bib:
+                if value == 'int':
+                    parsed_bib[key] = int(parsed_bib[key])
+
+        return parsed_bib
     
-class GoogleScholarParser():
-    """
-    给一个GoogleScholar返回的页面，解析出论文信息
-    """
-    def __init__(
-        self,
+
+# class GoogleScholarParser():
+#     """
+#     给一个GoogleScholar返回的页面，解析出论文信息
+#     """
+#     def __init__(
+#         self,
         
-        ) -> None:
-        pass
-    pass
+#         ) -> None:
+#         pass
+#     pass

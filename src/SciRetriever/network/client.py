@@ -1,5 +1,5 @@
 """
-Network client for making HTTP requests with rate limiting and retries.
+对所有爬虫类网络请求都适用的对象
 """
 from http.client import USE_PROXY
 import time
@@ -82,6 +82,7 @@ class NetworkClient:
         proxy: Optional[Proxy] = None,
         headers: Optional[Dict[str, str]] = None,
         allow_redirects: bool = True,
+        cookie: Optional[Dict[str, str]] = None,
         verify: bool = False
     ):
         """
@@ -123,7 +124,7 @@ class NetworkClient:
         
         self.allow_redirects = allow_redirects
         self.verify = verify
-        
+        self.cookie = cookie
         # 创建session
         self.session = self._create_session()
     
@@ -148,7 +149,19 @@ class NetworkClient:
             user_agent = DEFAULT_USER_AGENT
             
         return user_agent
-    
+        
+    def update_cookie(self,cookie:Dict[str,str]) -> None:
+        """
+        更新session的cookie
+        """
+        self.session.cookies.update(cookie)
+
+    def update_headers(self,headers:Dict[str,str]) -> None:
+        """
+        更新session的headers
+        """
+        self.session.headers.update(headers)
+
     def _create_session(self) -> requests.Session:
         """创建并配置session"""
         session = requests.Session()
@@ -157,6 +170,11 @@ class NetworkClient:
         session.verify = self.verify
         session.allow_redirects = self.allow_redirects
         # Note: timeout 无法写在session中.必须每次请求进行指定
+
+        # 应用cookie
+        if self.cookie:
+            session.cookies.update(self.cookie)
+
         # 应用代理
         if self.use_proxy:
             proxy_settings = self.proxy.get_proxies()
@@ -226,7 +244,7 @@ class NetworkClient:
             response = client.get('https://api.example.com/data', timeout=60.0)
         """
         return self._request_with_retry("GET", url, params=params, **kwargs)
-    
+        
     # def post(
     #     self,
     #     url: str,

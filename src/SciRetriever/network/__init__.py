@@ -1,5 +1,6 @@
-from .client import NetworkClient
+from .client import NetworkClient,Proxy
 
 __all__=[
-    'NetworkClient'
+    "NetworkClient",
+    "Proxy"
     ]
