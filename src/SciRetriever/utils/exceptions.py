@@ -12,6 +12,9 @@ class SearchError(SciRetrieverError):
     """Raised when there is an error searching for papers."""
     pass
 
+class RetryError(SciRetrieverError):
+    """Raised when there is an error searching for papers."""
+    pass
 
 class DownloadError(SciRetrieverError):
     """Raised when there is an error downloading a paper."""

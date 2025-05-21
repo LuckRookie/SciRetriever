@@ -17,7 +17,7 @@ class Paper:
     authors: List[str]
     
     # Optional metadata
-    abstract: Optional[str] = None
+    abstract: Optional[str] = None   
     doi: Optional[str] = None
     url: Optional[str] = None
     publisher: Optional[str] = None
@@ -33,6 +33,7 @@ class Paper:
     downloaded: bool = False
     pdf_path: Optional[Union[str, Path]] = None
     download_date: Optional[datetime] = None
+    pdf_url: Optional[str] = None
     
     # Additional data
     references: List["Paper"] = field(default_factory=list)

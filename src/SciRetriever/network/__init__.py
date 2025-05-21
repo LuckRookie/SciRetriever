@@ -1,6 +1,7 @@
-from .client import NetworkClient,Proxy
+from .client import NetworkClient,Proxy,RateLimiter
 
 __all__=[
     "NetworkClient",
-    "Proxy"
+    "Proxy",
+    "RateLimiter"
     ]

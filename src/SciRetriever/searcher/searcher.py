@@ -4,7 +4,7 @@ This module provides an abstract base class for different search engine implemen
 """
 
 import abc
-from typing import Dict, List, Optional, Union, Any
+from typing import List,TypeVar,Type
 
 from ..models.paper import Paper
 from ..network import NetworkClient
@@ -19,7 +19,7 @@ class BaseSearcher(abc.ABC):
     
     def __init__(
         self,
-        client: NetworkClient = NetworkClient(),
+        client:TypeVar("T",bound=NetworkClient) = None,
         ):
         """
         Initialize the searcher.

@@ -16,9 +16,10 @@ except Exception:
     DEFAULT_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36'
 
 from ..utils.config import get_config
-from ..utils.exceptions import DownloadError, RateLimitError
-from ..utils.logging import get_logger
+from ..utils.exceptions import DownloadError, RateLimitError,RetryError
+from ..utils.logging import get_logger,setup_logging
 
+setup_logging(log_file=Path.cwd()/'logs/sciretriever.log')
 logger = get_logger(__name__)
 
 
@@ -49,7 +50,16 @@ class RateLimiter:
         self.last_request_time = time.time()
 
 class Proxy:
-    """管理代理设置的类"""
+    """
+    管理代理设置的类
+    
+    示例：
+    proxy = Proxy(
+        http="127.0.0.1:7890",
+        https='127.0.0.1:7890',
+    )
+    
+    """
     
     def __init__(self,http:str=None,https:str=None):
         self.http = http
@@ -69,7 +79,7 @@ class Proxy:
 
     
 class NetworkClient:
-    """Client for making network requests with retries and rate limiting."""
+    """用于网络爬虫的通用网络请求客户端"""
     
     def __init__(
         self,
@@ -245,32 +255,6 @@ class NetworkClient:
         """
         return self._request_with_retry("GET", url, params=params, **kwargs)
         
-    # def post(
-    #     self,
-    #     url: str,
-    #     data: Optional[Dict[str, Any]] = None,
-    #     json: Optional[Dict[str, Any]] = None,
-    #     params: Optional[Dict[str, Any]] = None,
-    #     **kwargs
-    # ) -> requests.Response:
-    #     """
-    #     Make a POST request using the configured session.
-        
-    #     Args:
-    #         url: URL to request
-    #         data: Form data
-    #         json: JSON data
-    #         params: Query parameters
-    #         **kwargs: Additional parameters to override session defaults
-            
-    #     Returns:
-    #         Response object
-            
-    #     Raises:
-    #         DownloadError: If the request fails after retries
-    #     """
-    #     return self._request_with_retry("POST", url, data=data, json=json, params=params, **kwargs)
-    
     def _request_with_retry(
         self,
         method: str,
@@ -341,7 +325,6 @@ class NetworkClient:
         if 'timeout' not in kwargs:
             kwargs['timeout'] = self.timeout
 
-        
         # 尝试重试
         tries = 0
         timeout = kwargs['timeout']
@@ -421,7 +404,7 @@ class NetworkClient:
                 time.sleep(sleep_time)
         
         # 如果所有重试都失败了
-        raise DownloadError(f"Failed to {method.lower()} {url} after {self.max_retries} attempts")
+        raise RetryError(f"Failed to {method.lower()} {url} after {self.max_retries} attempts")
     
     def download_file(
         self,
@@ -486,6 +469,31 @@ class NetworkClient:
                     time.sleep(sleep_time)
                 else:
                     raise DownloadError(f"Failed to download {url} after {self.max_retries} attempts: {e}")
+    # def post(
+    #     self,
+    #     url: str,
+    #     data: Optional[Dict[str, Any]] = None,
+    #     json: Optional[Dict[str, Any]] = None,
+    #     params: Optional[Dict[str, Any]] = None,
+    #     **kwargs
+    # ) -> requests.Response:
+    #     """
+    #     Make a POST request using the configured session.
+        
+    #     Args:
+    #         url: URL to request
+    #         data: Form data
+    #         json: JSON data
+    #         params: Query parameters
+    #         **kwargs: Additional parameters to override session defaults
+            
+    #     Returns:
+    #         Response object
+            
+    #     Raises:
+    #         DownloadError: If the request fails after retries
+    #     """
+    #     return self._request_with_retry("POST", url, data=data, json=json, params=params, **kwargs)
     
 # Singleton instance of NetworkClient
 _default_client = None
