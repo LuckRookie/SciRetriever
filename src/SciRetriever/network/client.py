@@ -1,12 +1,12 @@
 """
 对所有爬虫类网络请求都适用的对象
 """
-from http.client import USE_PROXY
 import time
 from pathlib import Path
-from typing import Dict, Optional, Union, Any
+from typing import Any
 import random
 import requests
+from requests.sessions import Session
 
 try:
     from fake_useragent import UserAgent
@@ -15,18 +15,19 @@ except Exception:
     FAKE_USERAGENT = False
     DEFAULT_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36'
 
-from ..utils.config import get_config
+from ..utils.config import Config, get_config
 from ..utils.exceptions import DownloadError, RateLimitError,RetryError
 from ..utils.logging import get_logger,setup_logging
 
-setup_logging(log_file=Path.cwd()/'logs/sciretriever.log')
+log_ = Path.cwd() / 'logs / sciretriever.log'
+setup_logging(log_file = log_)
 logger = get_logger(__name__)
 
 
 class RateLimiter:
     """限制对服务器请求速率的类"""
     
-    def __init__(self, rate_limit: float = None):
+    def __init__(self, rate_limit: float|None = None):
         """
         Initialize rate limiter.
         
@@ -34,8 +35,8 @@ class RateLimiter:
             rate_limit: Minimum seconds between requests, None to use config
         """
         self.config = get_config()
-        self.rate_limit = rate_limit or self.config.get("network.rate_limit", 5.0)
-        self.last_request_time = 0.0
+        self.rate_limit:float = rate_limit or self.config.get("network.rate_limit", 5.0)
+        self.last_request_time:float = 0.0
     
     def wait(self):
         """Wait if necessary to respect rate limit."""
@@ -61,17 +62,17 @@ class Proxy:
     
     """
     
-    def __init__(self,http:str=None,https:str=None):
+    def __init__(self,http:str|None=None,https:str|None=None):
         self.http = http
         self.https = https
         self._proxies = {
             'http': self.http,
             'https': self.https
         }
-    def get_proxies(self) -> Dict[str, str]:
+    def get_proxies(self) -> dict[str, str]:
         return self._proxies
     @classmethod
-    def from_config(cls, config: Dict[str, str]) -> 'Proxy':
+    def from_config(cls, config: dict[str, str]|Config) -> 'Proxy':
         return cls(
             http=config.get('proxy.http', None),
             https=config.get('proxy.https', None)
@@ -83,16 +84,16 @@ class NetworkClient:
     
     def __init__(
         self,
-        rate_limit: Optional[RateLimiter] = None,
-        max_retries: Optional[int] = None,
-        retry_delay: Optional[float] = None,
-        timeout: Optional[float] = None,
-        user_agent: Optional[str] = None,
+        rate_limit: float | None = None,
+        max_retries: int | None = None,
+        retry_delay: float | None = None,
+        timeout: float | None = None,
+        user_agent: str | None = None,
         use_proxy: bool = False,
-        proxy: Optional[Proxy] = None,
-        headers: Optional[Dict[str, str]] = None,
+        proxy: Proxy | None = None,
+        headers: dict[str, str] | None = None,
         allow_redirects: bool = True,
-        cookie: Optional[Dict[str, str]] = None,
+        cookie: dict[str, str] | None = None,
         verify: bool = False
     ):
         """
@@ -109,20 +110,20 @@ class NetworkClient:
             allow_redirects: 是否默认跟随重定向
             verify: 是否默认验证SSL证书
         """
-        self.config = get_config()
-        self.rate_limiter = RateLimiter(rate_limit)
-        self.max_retries = max_retries or self.config.get("session.max_retries", 3)
-        self.retry_delay = retry_delay or self.config.get("session.retry_delay", 2.0)
-        self.timeout = timeout or self.config.get("session.timeout", 30.0)
-        self.use_proxy = use_proxy
-        self.proxy = proxy or Proxy.from_config(self.config)
+        self.config:Config = get_config()
+        self.rate_limiter:RateLimiter = RateLimiter(rate_limit)
+        self.max_retries:int = max_retries or self.config.get("session.max_retries", 3)
+        self.retry_delay:float = retry_delay or self.config.get("session.retry_delay", 2.0)
+        self.timeout:float = timeout or self.config.get("session.timeout", 30.0)
+        self.use_proxy:bool = use_proxy
+        self.proxy:Proxy = proxy or Proxy.from_config(self.config)
         # 设置代理
         if not user_agent:
             user_agent = self._get_user_agent()
-        self.user_agent = user_agent
+        self.user_agent:str = user_agent
         
         # Set default request settings
-        self.default_headers = headers or {}
+        self.default_headers:dict[str,str] = headers or {}
         if 'User-Agent' not in self.default_headers:
             self.default_headers['User-Agent'] = self.user_agent
             
@@ -132,11 +133,11 @@ class NetworkClient:
         if 'accept' not in self.default_headers:
             self.default_headers['accept'] = 'text/html,application/xhtml+xml,application/xml'
         
-        self.allow_redirects = allow_redirects
-        self.verify = verify
-        self.cookie = cookie
+        self.allow_redirects:bool = allow_redirects
+        self.verify:bool = verify
+        self.cookie:dict[str,str] | None = cookie
         # 创建session
-        self.session = self._create_session()
+        self.session:Session = self._create_session()
     
     def _get_version(self) -> str:
         """Get SciRetriever version."""
@@ -152,7 +153,7 @@ class NetworkClient:
             # Suppress the misleading traceback from UserAgent()
             # To implement this properly, you would need a context manager to suppress logger
             try:
-                user_agent = UserAgent().random
+                user_agent:str = UserAgent().random
             except Exception:
                 user_agent = DEFAULT_USER_AGENT
         else:
@@ -160,13 +161,13 @@ class NetworkClient:
             
         return user_agent
         
-    def update_cookie(self,cookie:Dict[str,str]) -> None:
+    def update_cookie(self,cookie:dict[str,str]) -> None:
         """
         更新session的cookie
         """
         self.session.cookies.update(cookie)
 
-    def update_headers(self,headers:Dict[str,str]) -> None:
+    def update_headers(self,headers:dict[str,str]) -> None:
         """
         更新session的headers
         """
@@ -198,7 +199,7 @@ class NetworkClient:
     def get(
         self,
         url: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any]|None = None,
         **kwargs
     ) -> requests.Response:
         """
@@ -409,7 +410,7 @@ class NetworkClient:
     def download_file(
         self,
         url: str,
-        save_path: Union[str, Path],
+        save_path: str | Path,
         chunk_size: int = 8192,
         **kwargs
     ) -> Path:

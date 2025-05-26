@@ -4,7 +4,7 @@ This module provides an abstract base class for different search engine implemen
 """
 
 import abc
-from typing import List,TypeVar,Type
+from typing import TypeVar
 
 from ..models.paper import Paper
 from ..network import NetworkClient
@@ -13,28 +13,25 @@ from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
+T = TypeVar('T', bound='NetworkClient')
 class BaseSearcher(abc.ABC):
     """Abstract base class for search engine implementations."""
-    
     def __init__(
         self,
-        client:TypeVar("T",bound=NetworkClient) = None,
+        client: NetworkClient,
         ):
         """
         Initialize the searcher.
         """
         self.client = client
         
-    
-    
     @abc.abstractmethod
     def search(
         self, 
         query: str, 
         limit: int = 10, 
         **kwargs
-    ) -> List[Paper]:
+    ) -> list[Paper]:
         """
         Search for papers matching the given query.
         

@@ -16,3 +16,12 @@
 2025-05-21 09:12:32,590 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
 2025-05-21 09:12:32,592 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
 2025-05-21 09:12:47,693 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-21 11:09:05,489 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:09:05,634 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:09:05,635 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-21 11:09:36,574 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:09:36,715 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:09:36,717 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-21 11:12:13,727 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:12:13,881 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/test/logs/sciretriever.log
+2025-05-21 11:12:13,883 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults

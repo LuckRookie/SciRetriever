@@ -1,3 +1,15 @@
 {
-    "extraPaths": ["."]
+    "extraPaths": ["."],
+    "strict": [
+        "reportUnknownMemberType",
+        "reportAttributeAccessIssue",
+        "reportAssignmentType"
+    ],
+    "reportOptionalSubscript": false,
+    "reportOptionalMemberAccess": false,
+    // "reportUnknownMemberType": false,
+    // "reportAttributeAccessIssue": false,
+    // "reportAssignmentType": false,
+    // "reportArgumentType": false,
+    // "reportPossiblyUnboundVariable": false
 }
