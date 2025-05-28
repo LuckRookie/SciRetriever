@@ -19,7 +19,7 @@ from ..utils.config import Config, get_config
 from ..utils.exceptions import DownloadError, RateLimitError,RetryError
 from ..utils.logging import get_logger,setup_logging
 
-log_ = Path.cwd() / 'logs / sciretriever.log'
+log_ = Path.cwd() / 'logs' / 'sciretriever.log'
 setup_logging(log_file = log_)
 logger = get_logger(__name__)
 
@@ -128,10 +128,10 @@ class NetworkClient:
             self.default_headers['User-Agent'] = self.user_agent
             
         # 添加相同的请求头
-        if 'accept-language' not in self.default_headers:
+        if 'Accept-Language' not in self.default_headers:
             self.default_headers['accept-language'] = 'en-US,en'
-        if 'accept' not in self.default_headers:
-            self.default_headers['accept'] = 'text/html,application/xhtml+xml,application/xml'
+        if 'Accept' not in self.default_headers:
+            self.default_headers['accept'] = 'text/html,application/xhtml+xml,application/xml,application/json'
         
         self.allow_redirects:bool = allow_redirects
         self.verify:bool = verify

@@ -3,16 +3,15 @@ Logging configuration for SciRetriever.
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Optional
+
 
 
 def setup_logging(
     log_level: str = "INFO",
-    log_file: Optional[str] = None,
-    log_format: Optional[str] = None
+    log_file: str|Path|None = None,
+    log_format: str|None = None
 ) -> logging.Logger:
     """
     Set up logging for SciRetriever.

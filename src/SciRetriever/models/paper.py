@@ -5,8 +5,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
-
+from typing import Any
 
 @dataclass
 class Paper:
@@ -14,32 +13,32 @@ class Paper:
     
     # Required fields
     title: str
-    authors: List[str]
+    authors: list[str]
     
     # Optional metadata
-    abstract: Optional[str] = None   
-    doi: Optional[str] = None
-    url: Optional[str] = None
-    publisher: Optional[str] = None
-    year: Optional[int] = None
-    journal: Optional[str] = None
-    volume: Optional[str] = None
-    issue: Optional[str] = None
-    pages: Optional[str] = None
-    keywords: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    abstract: str|None = None   
+    doi: str|None = None
+    url: str|None = None
+    publisher: str|None = None
+    year: int|None = None
+    journal: str|None = None
+    volume: str|None = None
+    issue: str|None = None
+    pages: str|None = None
+    keywords: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # PDF information
     downloaded: bool = False
-    pdf_path: Optional[Union[str, Path]] = None
-    download_date: Optional[datetime] = None
-    pdf_url: Optional[str] = None
+    pdf_path: str|Path|None = None
+    download_data: str|None = None
+    pdf_url: str|None = None
     
     # Additional data
-    references: List["Paper"] = field(default_factory=list)
-    citations: List["Paper"] = field(default_factory=list)
-    citations_num: int = None
-    notes: Optional[str] = None
+    references: list["Paper"] = field(default_factory=list)
+    citations: list["Paper"] = field(default_factory=list)
+    citations_num: int|None = None
+    notes: str|None = None
     
     def __post_init__(self):
         """Normalize fields after initialization."""
@@ -88,7 +87,7 @@ class Paper:
             
         return citation
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert the paper to a dictionary.
         
@@ -110,12 +109,12 @@ class Paper:
             "keywords": self.keywords,
             "downloaded": self.downloaded,
             "pdf_path": str(self.pdf_path) if self.pdf_path else None,
-            "download_date": self.download_date.isoformat() if self.download_date else None,
+            "download_data": self.download_data.isoformat() if self.download_data else None,
             "notes": self.notes
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Paper":
+    def from_dict(cls, data: dict[str, Any]) -> "Paper":
         """
         Create a Paper instance from a dictionary.
         
@@ -134,11 +133,11 @@ class Paper:
         
         return cls(**data)
     
-    def add_keywords(self, keywords: List[str]) -> None:
+    def add_keywords(self, keywords: list[str]) -> None:
         if keywords not in self.keywords:
             self.keywords.extend(keywords)
             
-    def update_keywords(self, keywords: List[str]) -> None:
+    def update_keywords(self, keywords: list[str]) -> None:
         self.keywords = keywords
         
     def update_note(self, note: str) -> None:

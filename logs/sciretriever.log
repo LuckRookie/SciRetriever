@@ -1,26 +1,28 @@
-2025-05-26 10:47:47,842 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 10:48:50,850 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 10:48:51,853 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 10:48:51,857 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:31:20,266 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:32:12,677 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:32:17,482 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:32:53,359 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:32:53,360 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:39:14,307 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:39:14,309 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:40:11,381 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:40:11,382 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:40:11,472 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
-2025-05-26 19:40:47,484 - SciRetriever.network.client - WARNING - Access denied (403) for https://scholar.aigrogu.com/scholar?hl=en&q=energetic%20materials&as_vis=0&as_sdt=0,33
-2025-05-26 19:40:47,485 - SciRetriever.network.client - INFO - Creating a new session and retrying...
-2025-05-26 19:40:47,485 - SciRetriever.network.client - INFO - Waiting 2.0 seconds before retry...
-2025-05-26 19:41:35,010 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:41:35,012 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:41:35,100 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
-2025-05-26 19:41:43,188 - SciRetriever.network.client - WARNING - Access denied (403) for https://scholar.aigrogu.com/scholar?hl=en&q=energetic%20materials&as_vis=0&as_sdt=0,33
-2025-05-26 19:41:43,189 - SciRetriever.network.client - INFO - Creating a new session and retrying...
-2025-05-26 19:41:43,189 - SciRetriever.network.client - INFO - Waiting 2.0 seconds before retry...
-2025-05-26 19:43:54,945 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
-2025-05-26 19:43:54,947 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
-2025-05-26 19:43:55,036 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
+2025-05-28 13:53:13,833 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 13:53:13,838 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 13:53:28,137 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 13:53:28,139 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:40:15,983 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:40:15,985 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:43:42,156 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:43:42,157 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:50:44,638 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:50:44,640 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:50:44,641 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-28 14:50:44,730 - SciRetriever.network.client - INFO - Applied proxy: {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
+2025-05-28 14:50:47,311 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
+2025-05-28 14:51:15,782 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:51:15,784 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:51:15,785 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-28 14:51:15,874 - SciRetriever.network.client - INFO - Applied proxy: {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
+2025-05-28 14:51:15,874 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
+2025-05-28 14:51:55,551 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:51:55,553 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:51:55,554 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-28 14:51:55,643 - SciRetriever.network.client - INFO - Applied proxy: {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
+2025-05-28 14:51:55,643 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
+2025-05-28 14:54:43,910 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:54:43,912 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-28 14:54:43,913 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-28 14:54:44,039 - SciRetriever.network.client - INFO - Applied proxy: {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
+2025-05-28 14:54:44,039 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher

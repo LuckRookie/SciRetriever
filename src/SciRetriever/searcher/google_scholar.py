@@ -2,10 +2,11 @@
 Google Scholar searcher implementation.
 """
 
-from multiprocessing import Value
-from sys import path
+import random
+from urllib.parse import quote
 from typing_extensions import override
 import requests
+
 import time
 from typing import Any
 import json
@@ -17,8 +18,8 @@ import re
 # from bibtexparser.bibdatabase import BibDatabase
 
 from ..models.paper import Paper
-from ..network import NetworkClient, Proxy, RateLimiter
-from ..utils.exceptions import SearchError, RateLimitError,SciRetrieverError
+from ..network import NetworkClient, Proxy
+from ..utils.exceptions import SciRetrieverError
 from ..utils.logging import get_logger,setup_logging
 from .searcher import BaseSearcher
 
@@ -33,7 +34,8 @@ _GoogleScholar = [
     "https://scholar.google.com",
     "https://scholar.aigrogu.com"
 ]
-setup_logging(log_file=Path.cwd()/'logs/sciretriever.log')
+log_ = Path.cwd() / 'logs' / 'sciretriever.log'
+setup_logging(log_file = log_)
 logger = get_logger(__name__)
 
 _SCHOLARPUBRE = r'cites=([\d,]*)'
@@ -65,9 +67,7 @@ class GSClient(NetworkClient):
     基于爬虫类通用客户端,编写处理GoogleScholar网络请求的客户端
     仅接受网址后面的,而不需要全部网址
 
-    参数：
-        use_proxy: 是否使用代理
-        proxy: 代理对象
+    额外参数：
         mirror: 镜像网站,0为官方网站
     """
     def __init__(
@@ -148,10 +148,11 @@ class GSClient(NetworkClient):
                 soup = BeautifulSoup(response.text, "html.parser")
                 return soup,response.text
             else:
-                logger.warning("Google Scholar has detected a captcha,auto switch website to mirror=1")
-                self.mirror = 1
-                self.base_url = _GoogleScholar[self.mirror]
-                return self.get_page_soup(scholar_url=scholar_url)
+                logger.error("Google Scholar has detected a captcha,auto switch website to mirror=1")
+                raise GSCaptchaError("Google Scholar has detected a captcha.")
+                # self.mirror = 1
+                # self.base_url = _GoogleScholar[self.mirror]
+                # return self.get_page_soup(scholar_url=scholar_url)
             
     def search_pubs(self,url:str):
         """
@@ -207,211 +208,7 @@ class GoogleScholarSearcher(BaseSearcher):
     
     def search(self, query: str, limit: int = 10, **kwargs) -> list[Paper]:
         return super().search(query, limit, **kwargs)
-    # def _configure_scholarly(self):
-    #     """Configure scholarly library settings."""
-    #     # This method can be extended to configure proxies or other settings
-    #     # scholarly.use_proxy(...)
-    #     self.scholarly = scholarly
-        
-    #     if self.client.proxy:
-    #         logger.info(f"Setting proxy for scholarly: {self.client.proxy}")
-    #         proxy = self.client.proxy.get_proxies()
-    #         pg1 = ProxyGenerator()
-    #         pg2 = ProxyGenerator()
-            
-    #         success1 = pg1.SingleProxy(http=proxy['http'])
-    #         success2 = pg2.SingleProxy(http=proxy['http'])
-    #         if success1 and success2:
-    #             logger.info("Successfully set proxies for scholarly")
-    #             self.scholarly.use_proxy(pg1,pg2)
-    #         else:
-    #             logger.warning("Failed to set proxies for scholarly")
-
-    # def search(
-    #     self, 
-    #     query: str, 
-    #     limit: int = 10, 
-    #     fields: Optional[List[str]] = None, 
-    #     **kwargs
-    # ) -> List[Paper]:
-    #     """
-    #     Google Scholar搜索的通用方法
-        
-    #     Args:
-    #         query: 搜索的关键词
-    #         limit: 默认限制返回的文献数量,设置为0则不限制
-    #         fields: 默认不用
-    #         **kwargs: 附加参数:
-    #             year_start: 起始日期
-    #             year_end: 结束日期
-                
-    #     Returns:
-    #         返回一个Paper对象列表(暂定)
-            
-    #     Raises:
-    #         SearchError: If the search fails
-    #     """
-    #     logger.info(f"Searching Google Scholar for: {query}")
-        
-    #     year_start = kwargs.get('year_start')
-    #     year_end = kwargs.get('year_end')
-        
-    #     # Build the query with year filters if provided
-    #     full_query = query
-    #     if year_start and year_end:
-    #         logger.info(f"Filtering by year range: {year_start} to {year_end}")
-    #         full_query = f"{query} year_lo:{year_start} year_hi:{year_end}"
-    #     elif year_start:
-    #         logger.info(f"Filtering by start year: {year_start}")
-    #         full_query = f"{query} year_lo:{year_start}"
-    #     elif year_end:
-    #         logger.info(f"Filtering by end year: {year_end}")
-    #         full_query = f"{query} year_hi:{year_end}"
-        
-    #     papers = []
-    #     try:
-    #         search_query = self.scholarly.search_pubs(full_query)
-            
-    #         # Collect the specified number of results
-    #         for _ in range(limit):
-    #             try:
-    #                 pub = next(search_query)
-    #                 papers.append(self._convert_to_paper(pub))
-    #                 # Add a small delay to avoid being blocked
-    #                 time.sleep(1)
-    #             except StopIteration:
-    #                 logger.info("No more results from Google Scholar")
-    #                 break
-    #             except Exception as e:
-    #                 logger.error(f"Error processing publication: {e}")
-    #                 continue
-            
-    #         logger.info(f"Found {len(papers)} papers on Google Scholar")
-    #         return papers
-            
-    #     except Exception as e:
-    #         logger.error(f"Error searching Google Scholar: {e}")
-    #         raise SearchError(f"Failed to search Google Scholar: {e}")
-    
-    # def get_citations(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-    #     """
-    #     获取引用改文献的其他论文
-        
-    #     Args:
-    #         paper: A Paper object or DOI string
-    #         limit: Maximum number of results to return
-
-    #     Returns:
-    #         A list of Paper objects
-    #     """
-    #     if isinstance(paper, str):
-    #         # If only DOI is provided, try to get the paper first
-    #         paper_obj = self.get_paper_by_doi(paper)
-    #         if not paper_obj or 'cluster_id' not in paper_obj.metadata:
-    #             logger.error(f"Could not find paper with DOI: {paper}")
-    #             raise SearchError(f"Could not find paper with DOI: {paper}")
-    #         cluster_id = paper_obj.metadata.get('cluster_id')
-    #     else:
-    #         if 'cluster_id' not in paper.metadata:
-    #             logger.error("Paper object does not contain Google Scholar cluster_id")
-    #             raise SearchError("Paper object does not contain Google Scholar cluster_id")
-    #         cluster_id = paper.metadata.get('cluster_id')
-        
-    #     logger.info(f"Retrieving citations for cluster_id: {cluster_id}")
-    #     try:
-    #         citations = []
-    #         citation_query = scholarly.get_citedby(cluster_id)
-            
-    #         for _ in range(limit):
-    #             try:
-    #                 citation = next(citation_query)
-    #                 citations.append(self._convert_to_paper(citation))
-    #                 # Add a small delay to avoid being blocked
-    #                 time.sleep(1)
-    #             except StopIteration:
-    #                 logger.info("No more citation results")
-    #                 break
-    #             except Exception as e:
-    #                 logger.error(f"Error processing citation: {e}")
-    #                 continue
-            
-    #         logger.info(f"Found {len(citations)} citations")
-    #         return citations
-            
-    #     except Exception as e:
-    #         logger.error(f"Error retrieving citations: {e}")
-    #         raise SearchError(f"Failed to retrieve citations for {cluster_id}: {e}")
-    
-    # def get_references(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-    #     """
-    #     获取该文献引用的论文的信息
-
-    #     Args:
-    #         paper: A Paper object or DOI string
-    #         limit: Maximum number of results to return
-            
-    #     Returns:
-    #         A list of Paper objects
-    #     """
-    #     logger.warning("Google Scholar doesn't support retrieving references directly")
-    #     return []
-    
-    # def _convert_to_paper(self, data: Dict[str, Any]) -> Paper:
-    #     """将获取到的页面转化为Paper类型"""
-    #     # Extract authors
-    #     authors = []
-    #     if "bib" in data and "author" in data["bib"]:
-    #         authors = data["bib"]["author"]
-        
-    #     # Extract year
-    #     year = None
-    #     if "bib" in data and "pub_year" in data["bib"]:
-    #         try:
-    #             year = int(data["bib"]["pub_year"])
-    #         except (ValueError, TypeError):
-    #             pass
-        
-    #     # Extract journal/venue
-    #     journal = None
-    #     if "bib" in data and "venue" in data["bib"]:
-    #         journal = data["bib"]["venue"]
-        
-    #     # Extract title
-    #     title = "Untitled"
-    #     if "bib" in data and "title" in data["bib"]:
-    #         title = data["bib"]["title"]
-        
-    #     # Extract abstract (Google Scholar often doesn't provide this)
-    #     abstract = None
-    #     if "bib" in data and "abstract" in data["bib"]:
-    #         abstract = data["bib"]["abstract"]
-        
-        
-    #     # # Extract DOI from URL if available
-    #     # doi = None
-    #     # if "pub_url" in data:
-    #     #     url = data["pub_url"]
-    #     #     # Try to extract DOI from URL
-    #     #     if "doi.org/" in url:
-    #     #         doi = url.split("doi.org/")[-1]
-        
-    #     # # Also check for DOI in the bib data
-    #     # if not doi and "bib" in data and "doi" in data["bib"]:
-    #     #     doi = data["bib"]["doi"]
-        
-    #     return Paper(
-    #         title=title,
-    #         authors=authors,
-    #         abstract=abstract,
-    #         doi=doi,
-    #         url=data.get("pub_url"),
-    #         publisher=None,  # Google Scholar doesn't provide publisher info
-    #         year=year,
-    #         journal=journal,
-    #         tags=[],  # Google Scholar doesn't provide tags/fields
-    #         downloaded=False,
-    #         metadata=data,
-    #     )
+  
     @staticmethod
     def _build_url(baseurl: str, patents: bool = True,
                     citations: bool = True, year_low: int|None=None,
@@ -464,7 +261,7 @@ class GoogleScholarSearcher(BaseSearcher):
                             start_index: int = 0
                             )-> "GoogleScholar":
         url = self._build_url(
-            baseurl = _PUBSEARCH.format(requests.utils.quote(query)),
+            baseurl = _PUBSEARCH.format(quote(query)),
             patents = patents,
             citations = citations,
             year_low = year_low,
@@ -476,151 +273,39 @@ class GoogleScholarSearcher(BaseSearcher):
 
         return self.client.search_pubs(url)
         
-class Total_GoogleScholar():
-    """
-    Google Scholar的总对象,针对每一次查询。还需要用于与外界交互。
-    """
-    def __init__(
-        self,
-        start_page: "GoogleScholar",
-        root_dir:Path|None = None,
-        
-        ) -> None:
-        self._pages:list[GoogleScholar] = []
-        self.root_dir:Path = root_dir if root_dir else Path.cwd()
-        json_list = list(self.root_dir.glob("page_*.json"))
-        self.num_list:list[int] = [int(json.stem.split("_")[-1]) for json in json_list]
-        
-        if start_page.page_num in self.num_list:
-            self.start_page:GoogleScholar = GoogleScholar.from_json(self.root_dir / f"page_{self.start_page.page_num}.json")
-        else:
-            self.start_page = start_page
 
-        self.totle_num:int = self.start_page.totle_results
-    @classmethod
-    def from_root_dir(cls,root_dir:Path):
-        json_list:list[Path] = list(root_dir.glob("page_*.json"))
-        num_list:list[int] = [int(path.stem.split("_")[-1]) for path in json_list]
-        num_list.sort()
-        page_list:list[GoogleScholar] = []
-        for num in num_list:
-            json_file = root_dir / f"page_{num}.json"
-            page = GoogleScholar.from_json(json_file)
-            page_list.append(page)
-        return cls(
-            start_page = page_list[0],
-            root_dir = root_dir,
-            
-        )
-    def append(self,page:"GoogleScholar"):
-        self._pages.append(page)
-        
-    def __iter__(self):
-        return self
-    
-    def __len__(self):
-        return len(self._pages)
-    
-    def __getitem__(self,index:int):
-        return self._pages[index]
-    
-    def __next__(self):
-        if self._pages == []:
-            if self.start_page:
-                self.append(self.start_page)
-                return self.start_page
-            else:
-                raise ValueError("ERROR: 请提供start_page")
-            
-        end_pages = self._pages[-1]
-        if end_pages.next_url:
-            next_page = next(end_pages)
-            self.append(next_page)
-            return next_page
-        else:
-            raise StopIteration
-    
-    def fill_all_bib(self):
-        for page in self._pages:
-            page.fill_all_bib()
-    
-    def dump_dict(self) -> dict[str,str|int|list[Any]]:
-        TGS_dict = {
-            "totle_num":self.totle_num,
-            "root_dir":str(self.root_dir),
-            "pages":[page.dump_dict() for page in self._pages],
-        }
-        return TGS_dict
-    
-    def dump_json(self):
-        return json.dumps(self.dump_dict(),indent=4)
-    
-    def export_json(self):
-        for num,page in enumerate(self._pages):
-            page.export_json(self.root_dir / f"page{num}.json")
-
-            
-    # @classmethod
-    # def load_json(cls,json_path:Union[str,Path],session:GSClient):
-    #     # 从json中加载
-    #     if isinstance(json_path,str):
-    #         json_path = Path(json_path)
-    #     with open(json_path, "r", encoding="uft-8") as f:
-    #         TGS_dict = json.load(f)
-        
-    #     TGS = Total_GoogleScholar(start_page=None)
-        
 class GoogleScholar():
     """
     Google Scholar的页面对象
     """
     def __init__(
         self,
+        rows:list["GSRow"],
+        page_num:int,
+        totle_results:int,
+        
         url:str|None = None,
         session: GSClient|None = None,
-        html:str|None = None,
         soup:BeautifulSoup|None = None,
-        rows:list["GSRow"]|None = None,
+        html:str|None = None,
         param_list:list[str]|None = None,
-        page_num:int|None = None,
         next_url:str|None = None,
-        totle_results:int|None = None,
         ) -> None:
         if not session:
             logger.warning("未提供session,将使用默认session")
             session = GSClient()
         self.session:GSClient = session
+        self.rows:list["GSRow"] = rows
+        self.page_num:int = page_num
+        self.param_list:list[str]|None = param_list
+        
         self.url:str|None = url
         self.soup:BeautifulSoup|None = soup
         self.html:str|None = html
-        self.rows:list["GSRow"]|None = rows
-        self.page_num:int|None = page_num
-        self.param_list:list[str]|None = param_list
+
         self.next_url:str|None = next_url
         self.totle_results:int = totle_results if totle_results else 0
         
-        # if html:
-        #     # 优先从html中获得soup
-        #     self.soup = BeautifulSoup(html, "html.parser")
-        #     self.html = html
-        # else:
-        #     self.soup,self.html = self.session.get_page_soup(url)
-
-        # # 文章的rows
-        # self.rows = self.soup.find_all('div', class_='gs_r gs_or gs_scl') + self.soup.find_all('div', class_='gsc_mpat_ttl')
-        # if self.rows == []:
-        #     raise GSRowError("未找到任何文章")
-        # # 删除一些没有data-cid的文章或者广告
-        # self.rows = [GSRow(row,self.session) for row in self.rows if row.get("data-cid")]
-        
-        # param = self.url.split("?")[-1] if url else ""
-        # self.param_list = param.split("&")
-        
-        # self.page_num = self._get_page_num()
-        # # 下一页的按钮
-        # self.next_url = self.soup.find(class_='gs_ico gs_ico_nav_next').parent['href'] if self.soup.find(class_='gs_ico gs_ico_nav_next') else None
-        # self.totle_results = self._get_total_results()
-    
     @classmethod
     def from_url(
         cls,
@@ -646,25 +331,36 @@ class GoogleScholar():
             raise GSRowError("未找到任何文章")
         # 删除一些没有data-cid的文章或者广告
         rows = [GSRow.from_row(row,session) for row in html_rows if row.get("data-cid")]
-        param = url.split("?")[-1] if url else ""
-        param_list = param.split("&")
         
-        page_num = 1
-        for param in param_list:
-            if "start=" in param:
-                page_num = int(int(param.split("=")[-1]) / 10 + 1)
-                break
         html_next_url = None
         next_link = soup.find(class_='gs_ico gs_ico_nav_next')
         if next_link and next_link.parent and 'href' in next_link.parent.attrs:
             html_next_url = next_link.parent['href']
-        
+            
         if session.mirror == 1 and isinstance(html_next_url, str):
             next_url = html_next_url.replace("/extdomains/scholar.google.com","")
+        elif session.mirror == 0 and isinstance(html_next_url, str):
+            next_url = html_next_url
         else:
             next_url = None
         
+
+        param = url.split("?")[-1] if url else ""
+        param_list = param.split("&") if url is not None else None
+
+        page_num = int(soup.find(class_="gs_ico gs_ico_nav_current").parent.text.strip())
+        
+        # 检查page_num是否正确
+        if param_list is not None:
+            for param in param_list:
+                if "start=" in param:
+                    page_num2 = int(int(param.split("=")[-1]) / 10 + 1)
+                    assert page_num == page_num2,ValueError("page_num is not equal to page_num2")
+                    break
+            
+            
         totle_results = cls._get_total_results(soup)
+        
         return cls(
             url = url,
             session = session,
@@ -676,7 +372,7 @@ class GoogleScholar():
             next_url = next_url,
             totle_results = totle_results,
             )
-        
+    
     @classmethod
     def from_html(
         cls,
@@ -716,6 +412,7 @@ class GoogleScholar():
             next_url = next_url,
             totle_results = totle_results,
         )
+        
     @classmethod
     def from_json(cls,json_path:str|Path,session:GSClient|None=None) -> "GoogleScholar":
         if isinstance(json_path,str):
@@ -728,11 +425,12 @@ class GoogleScholar():
             data = page_dict,
             session = session,
         )
+    
         
     @staticmethod
     def _get_total_results(soup:BeautifulSoup):
         if soup.find("div", class_="gs_pda"):
-            return None
+            return 0
 
         for x in soup.find_all('div', class_='gs_ab_mdw'):
             # Accounting for different thousands separators:
@@ -744,6 +442,24 @@ class GoogleScholar():
                     return int(re.sub(pattern=r'[,\.\s’]',repl='', string=match.group(2)))
         return 0
     
+    def check_rows_num(self):
+        # 检查rows的数量是否正确
+        
+        if len(self.rows) == 20:
+            # 修正page_num
+            if self.param_list is not None:
+                for param in self.param_list:
+                    if "start=" in param:
+                        self.page_num = int(int(param.split("=")[-1]) / 10 + 1)
+                        break
+
+            next_page_num = self.page_num + 1
+            next_rows = self.rows[11:20]
+            next_param_list = self.param_list.copy()
+            
+            next_page = GoogleScholar.from_dict(
+                
+            )
     def fill_all_bib(self):
         # 填充所有的row
         if self.rows is not None:
@@ -760,6 +476,12 @@ class GoogleScholar():
     
     def __iter__(self):
         return self
+    
+    @staticmethod
+    def get_url_from_param_list(param_list:list[str]) -> str:
+        # 从参数列表中获取url
+        url = "/scholar?"
+        return url + "&".join(param_list)
     
     @override
     def __repr__(self) -> str:
@@ -808,7 +530,8 @@ class GoogleScholar():
         if isinstance(html_path,str):
             html_path = Path(html_path)
         with open(html_path, "w", encoding="utf-8") as f:
-            f.write(self.soup.prettify())
+            html = str(self.soup.prettify())
+            f.write(html)
 
 class GSRow():
     """
@@ -895,7 +618,7 @@ class GSRow():
         cid:str = row_dict["cid"]
         pos:int = row_dict["pos"]
         title:str = row_dict["title"]
-        pub_url:str = row_dict["pub_url"]
+        pub_url:str = row_dict["pub_url"] if row_dict["pub_url"] else ""
         abstract:str = row_dict["abstract"]
         author:list[str] = row_dict["author"]
         publisher:str = row_dict["publisher"]
@@ -904,9 +627,9 @@ class GSRow():
         pub_year:str = row_dict["pub_year"]
         url_scholarbib:str = row_dict["url_scholarbib"]
         num_citations:int = row_dict["num_citations"]
-        cite_url:str = row_dict["cite_url"]
-        related_url:str = row_dict["related_url"]
-        pdf_url:str = row_dict["pdf_url"]
+        cite_url:str = row_dict["cite_url"] if row_dict["cite_url"] else ""
+        related_url:str = row_dict["related_url"] if row_dict["related_url"] else ""
+        pdf_url:str = row_dict["pdf_url"] if row_dict["pdf_url"] else ""
         filled:bool = False
         bib:dict[str,str] = {}
         
@@ -915,11 +638,13 @@ class GSRow():
             pass
         elif session.mirror == 1:
             pop_str = "/extdomains/scholar.google.com"
+                
             if (pop_str in cite_url) or (pop_str in related_url):
                 cite_url = cite_url.replace(pop_str, "")
                 related_url = related_url.replace(pop_str, "")
             else:
                 print(f"Error url:{cid}_{title}: 请检查cite_url和related_url")
+            
             if "javascript:void(0)" in pub_url:
                 pub_url = ""
             if "javascript:void(0)" in pdf_url:
@@ -988,17 +713,17 @@ class GSRow():
         """根据row加载信息"""
         row = row
         # databox是每一个文章的box而不是整个页面的box
-        databox:Tag = row.find('div', class_='gs_ri')
+        databox = row.find('div', class_='gs_ri')
         title = databox.find('h3', class_='gs_rt')
         
         if title.find('a'):
-            pub_url:str = title.find('a')['href']
+            pub_url = title.find('a')['href']
         else:
             pub_url = ""
         cid:str = row.get('data-cid')
         pos:int = row.get('data-rp')
 
-        pub_type:str = None
+        pub_type = None
         if title.find('span', class_='gs_ctu'):  # A citation
             title.span.extract()
         elif title.find('span', class_='gs_ctc'):  # A book or PDF
@@ -1012,13 +737,13 @@ class GSRow():
         else:
             pub_type = 'ARTICLE'
         
-        title:str = title.text.strip()
+        title = title.text.strip()
         # 提取作者等基本信息
         author_div_element = databox.find('div', class_='gs_a')
         authorinfo = author_div_element.text
         authorinfo = authorinfo.replace(u'\xa0', u' ')       # NBSP
         authorinfo = authorinfo.replace(u'&amp;', u'&')      # Ampersand
-        author:list[str] = cls._get_authorlist(authorinfo)
+        author = cls._get_authorlist(authorinfo)
         # 获取author_id
         # authorinfo_html = author_div_element.decode_contents()
         # self.author_id = self._get_author_id_list(authorinfo_html)
@@ -1029,9 +754,9 @@ class GSRow():
         #  (C) authors - venue - host
         #  (D) authors - year - host
         venueyear = authorinfo.split(' - ')
-        publisher:str = venueyear[-1].strip()
-        journal:str = None
-        pub_year:str = None
+        publisher = venueyear[-1].strip()
+        journal = None
+        pub_year = None
         # If there is no middle part (A) then venue and year are unknown.
         if len(venueyear) > 2:
             venueyear = venueyear[1].split(',')
@@ -1047,7 +772,7 @@ class GSRow():
             journal = journal
         
         # abstract 有可能不全
-        abstract:str = None
+        abstract = None
         if databox.find('div', class_='gs_rs'):
             abstract = databox.find('div', class_='gs_rs').text
             abstract = abstract.replace(u'\u2026', u'')
@@ -1067,10 +792,10 @@ class GSRow():
         # cite and related
         lowerlinks = databox.find('div', class_='gs_fl').find_all('a')
 
-        num_citations:int = 0
-        cite_url:str = None
-        related_url:str = None
-        pdf_url:str = None
+        num_citations = 0
+        cite_url = None
+        related_url = None
+        pdf_url = None
         for link in lowerlinks:
             if 'Cited by' in link.text:
                 num_citations = int(re.findall(r'\d+', link.text)[0].strip())
@@ -1106,10 +831,13 @@ class GSRow():
         bibtex_url:str = self._get_bibtex(self.url_scholarbib)
         bibtex_url = bibtex_url.replace(self.session.base_url,"")
         if bibtex_url:
-            # bibtex_url = self.session.base_url + bibtex_url
-            _, bibtex_text = self.session.get_page_soup(bibtex_url.replace(self.session.base_url,""))
+            while True:
+                _, bibtex_text = self.session.get_page_soup(bibtex_url)
+                if "AutoJump" not in bibtex_text:
+                    break
+                time.sleep(self.session.retry_delay)
             parser = bibtexparser.bparser.BibTexParser(common_strings=True)
-            parsed_bib:dict = self.remap_bib(bibtexparser.loads(bibtex_text,parser).entries[-1], _BIB_MAPPING, _BIB_DATATYPES)
+            parsed_bib = self.remap_bib(bibtexparser.loads(bibtex_text,parser).entries[-1], _BIB_MAPPING, _BIB_DATATYPES)
             # author: str -> list
             parsed_bib_author:str = parsed_bib.pop('author')
             parsed_bib_author = parsed_bib_author.split(' and ')
@@ -1142,7 +870,7 @@ class GSRow():
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(self.dump_dict(), f, indent=4)
             
-    def dump_dict(self) -> dict:
+    def dump_dict(self) -> dict[str,Any]:
         # 导出时以bib为优先
         paper_dict = self.__dict__.copy()
         paper_dict.pop("row")
@@ -1153,12 +881,16 @@ class GSRow():
         #     paper_dict.update(bib)
         return paper_dict
     
-    def dump_json(self) -> json:
+    def dump_json(self):
         # 导出为json
         return json.dumps(self.dump_dict(), indent=4)
     
     @staticmethod
-    def remap_bib(parsed_bib: dict, mapping: dict, data_types:dict ={}) -> dict:
+    def remap_bib(
+        parsed_bib: dict[str,Any], 
+        mapping: dict[str,Any], 
+        data_types:dict[str,Any] ={}
+        ) -> dict[str,Any]:
         for key, value in mapping.items():
             if key in parsed_bib:
                 parsed_bib[value] = parsed_bib.pop(key)
@@ -1174,16 +906,206 @@ class GSRow():
         # 打印对象
         return f"GSRow({','.join(self.author)}-{self.pub_year}-{self.title}-{self.publisher})"
     
+    def export_paper(self):
+        pass
     # def __dict__(self):
     #     return self.__dict__
     
-# class GoogleScholarParser():
-#     """
-#     给一个GoogleScholar返回的页面，解析出论文信息
-#     """
-#     def __init__(
-#         self,
+class GSWorkplace():
+    """
+    Google Scholar的总对象,针对每一次查询。还需要用于与外界交互。
+    """
+    def __init__(
+        self,
+        start_page: GoogleScholar,
+        root_dir:Path,
+        ) -> None:
         
-#         ) -> None:
-#         pass
-#     pass
+        if not root_dir.exists():
+            logger.warning("root_dir不存在,将创建")
+            root_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 将基础的信息加载完成
+        self.start_page:GoogleScholar = start_page
+        self.root_dir:Path = root_dir
+
+        self._pages:list[GoogleScholar] = []
+        # num_list 理应是一个从1开始的连续的数字列表
+        self.num_list:list[int] = []
+        
+        json_list = list(self.root_dir.glob("page_*.json"))
+
+        self.num_list = [int(json.stem.split("_")[-1]) for json in json_list]
+        self.num_list.sort()
+        
+        # 用于保证start_page是第一个page
+        self.check_start_page()
+        
+        # 已经保证了start_page是第一个page,但是还是没有num_list,说明情况是第一次运行
+        if self.num_list == []:
+            # 没有任何page,则直接从start_page开始
+            self.num_list = [1]
+            self.start_page.export_json(self.root_dir / f"page_{self.start_page.page_num}.json")
+            
+        # 加载所有的page
+        for num in self.num_list:
+            self._pages.append(GoogleScholar.from_json(self.root_dir / f"page_{num}.json",session = self.start_page.session))
+
+        self.totle_num:int = self.start_page.totle_results
+        
+    def check_start_page(self):
+        """检查start_page是否为1"""
+        # 如果正常从start_page开始,则必须是第一个page，如果不是第1个page开始，则警告并强制转换
+        if self.start_page.page_num != 1:
+            logger.warning("start_page不是第1个page,将强制转换")
+            if 1 not in self.num_list:
+                logger.warning("page_1.json不存在,将强制进行下载")
+                param_list = self.start_page.param_list
+                if param_list is None:
+                    raise ValueError("param_list is None")
+                # 从param_list中删除start
+                for param in param_list:
+                    if "start" in param:
+                        param_list.pop(param_list.index(param))
+                        break
+                url = GoogleScholar.get_url_from_param_list(param_list)
+                start_page = GoogleScholar.from_url(url,session=self.start_page.session)
+            else:
+                # 从page_1.json中获取start_page
+                start_page = GoogleScholar.from_json(self.root_dir / f"page_{self.num_list[0]}.json",session = self.start_page.session)
+            self.start_page = start_page
+            
+            self.num_list.append(1)
+            self.num_list.sort()
+            
+            self.start_page.export_json(self.root_dir / f"page_{self.start_page.page_num}.json")
+
+
+    @classmethod
+    def from_root_dir(cls,root_dir:Path,session:GSClient):
+        # 如果从root_dir来进行实例化，必须有page_1.json,否则就报错
+        if not (root_dir / "page_1.json").exists():
+            raise FileNotFoundError("page_1.json not found")
+        start_page = GoogleScholar.from_json(root_dir / "page_1.json",session=session)
+        return cls(
+            start_page = start_page,
+            root_dir = root_dir,
+        )
+    
+    def append(self,page:"GoogleScholar"):
+        self._pages.append(page)
+        self.num_list.append(page.page_num)
+        
+    def __iter__(self):
+        return self
+    
+    def __len__(self):
+        return len(self._pages)
+    
+    def __getitem__(self,index:int):
+        return self._pages[index]
+    
+    def __next__(self):
+        if self._pages == []:
+            if self.start_page:
+                self.append(self.start_page)
+                return self.start_page
+            else:
+                raise ValueError("ERROR: 请提供start_page")
+            
+        end_pages = self._pages[-1]
+        if end_pages.next_url:
+            next_page = next(end_pages)
+            self.append(next_page)
+            return next_page
+        else:
+            raise StopIteration
+    
+    def fill_all_bib(self):
+        for page in self._pages:
+            page.fill_all_bib()
+    
+    def dump_dict(self) -> dict[str,str|int|list[Any]]:
+        TGS_dict = {
+            "totle_num":self.totle_num,
+            "root_dir":str(self.root_dir),
+            "pages":[page.dump_dict() for page in self._pages],
+        }
+        return TGS_dict
+    
+    def dump_json(self):
+        return json.dumps(self.dump_dict(),indent=4)
+    
+    def export_json(self):
+        for _,page in enumerate(self._pages):
+            json_file = f"page_{page.page_num}.json"
+            # page_old = GoogleScholar.from_json(self.root_dir / json_file,session=page.session)
+            page.export_json(self.root_dir / json_file)
+
+    def check_and_rest(self, crawl_start_time, continuous_crawl_limit=300, rest_duration=180):
+        """检查是否需要休息，如果需要则休息指定时间
+        
+        Args:
+            crawl_start_time: 爬虫开始时间
+            continuous_crawl_limit: 连续爬取时间限制（默认5分钟）
+            rest_duration: 休息时长（默认3分钟）
+            
+        Returns:
+            bool: 是否进行了休息
+            float: 新的爬虫开始时间
+        """
+        current_time = time.time()
+        if current_time - crawl_start_time > continuous_crawl_limit:
+            logger.info(f"已连续爬取{continuous_crawl_limit/60}分钟，休息{rest_duration/60}分钟")
+            time.sleep(rest_duration)
+            return True, time.time()
+        return False, crawl_start_time
+    
+    def run(self,is_fill:bool = False):
+        logger.info(f"开始运行:{self.root_dir}")
+        
+        # 添加爬虫休息功能的变量
+        crawl_start_time = time.time()
+        # check all pages
+        if is_fill:
+            logger.info("开始检查所有page的bib")
+            for page in self._pages:
+                if all([row.filled for row in page.rows]):
+                    continue
+                else:
+                    # 检查是否需要休息
+                    _, crawl_start_time = self.check_and_rest(crawl_start_time)
+                    w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
+                    time.sleep(w)
+                    page.fill_all_bib()
+                    page.export_json(self.root_dir / f"page_{page.page_num}.json")
+                    
+        logger.info(f"当前以下载到第{self._pages[-1].page_num}页,继续下载")
+        while True:
+            try:
+                # 检查是否需要休息
+                _, crawl_start_time = self.check_and_rest(crawl_start_time)
+                
+                w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
+                time.sleep(w)
+                next_page = next(self)
+            except GSRowError as e:
+                logger.warning(f"page_{self._pages[-1].page_num + 1}下载失败,重试")
+                continue
+
+            next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
+            if is_fill:
+                _, crawl_start_time = self.check_and_rest(crawl_start_time)
+                next_page.fill_all_bib()
+                next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
+            logger.info(f"page_{next_page.page_num}下载完成")
+            
+        # for page in self:
+        #     page.export_json(self.root_dir / f"page_{page.page_num}.json")
+            
+        #     if is_fill:
+        #         page.fill_all_bib()
+        #         page.export_json(self.root_dir / f"page_{page.page_num}.json")
+        #     logger.info(f"page_{page.page_num}下载完成")
+    
+        
