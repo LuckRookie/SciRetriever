@@ -5,8 +5,7 @@ This module provides an abstract base class for different search engine implemen
 
 import abc
 from typing import TypeVar
-
-from ..models.paper import Paper
+from ..database.model import Paper
 from ..network import NetworkClient
 from ..utils.exceptions import SearchError
 from ..utils.logging import get_logger

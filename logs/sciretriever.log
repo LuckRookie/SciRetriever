@@ -26,3 +26,88 @@
 2025-05-28 14:54:43,913 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
 2025-05-28 14:54:44,039 - SciRetriever.network.client - INFO - Applied proxy: {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
 2025-05-28 14:54:44,039 - SciRetriever.searcher.google_scholar - INFO - Initialized Google Scholar searcher
+2025-05-29 14:56:16,278 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 14:56:16,279 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:00:32,126 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:00:32,128 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:04:09,302 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:04:09,304 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:06:56,073 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:06:56,081 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:08:52,386 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 15:08:52,388 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 16:54:34,543 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 16:55:01,049 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 16:55:01,054 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 17:00:53,931 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 17:00:53,932 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 17:02:54,265 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 17:02:54,267 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 17:02:54,415 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,415 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-29 17:02:54,473 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,527 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,580 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,635 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,685 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,735 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,784 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,823 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,865 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 17:02:54,895 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:05,962 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:06:05,964 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:06:06,115 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,115 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-29 18:06:06,185 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,223 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,258 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,289 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,320 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,350 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,383 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,415 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,458 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:06:06,488 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,713 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:01,714 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:01,717 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,717 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-29 18:08:01,754 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,787 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,821 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,853 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,884 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,918 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,951 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:01,984 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:02,029 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:02,063 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:34,939 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:34,941 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:34,946 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:34,946 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-29 18:08:35,004 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,057 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,109 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,160 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,211 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,261 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,310 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,360 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,423 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:35,472 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:49,948 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:49,950 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-05-29 18:08:49,953 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:49,953 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-05-29 18:08:49,991 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,023 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,054 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,084 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,118 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,148 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,181 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,213 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,255 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session
+2025-05-29 18:08:50,287 - SciRetriever.searcher.google_scholar - WARNING - 未提供session,将使用默认session

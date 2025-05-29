@@ -17,12 +17,12 @@ import re
 # from scholarly import scholarly,ProxyGenerator
 # from bibtexparser.bibdatabase import BibDatabase
 
-from ..models.paper import Paper
+from ..database.model import Paper
 from ..network import NetworkClient, Proxy
 from ..utils.exceptions import SciRetrieverError
 from ..utils.logging import get_logger,setup_logging
 from .searcher import BaseSearcher
-
+from ..database.optera import Insert
 
 class GSRowError(SciRetrieverError):
     """Raised when there is an error parsing a row."""
@@ -62,6 +62,18 @@ _BIB_REVERSE_MAPPING = {
     'pub_type': 'ENTRYTYPE',
     'bib_id': 'ID',
 }
+_BIB_STR = [
+    "title",
+    "pub_type",
+    "bib_id",
+    "publisher",
+    "pages",
+    "number",
+    "volume",
+    "journal",
+    "pub_year",
+    "author"
+]
 class GSClient(NetworkClient):
     """
     基于爬虫类通用客户端,编写处理GoogleScholar网络请求的客户端
@@ -122,6 +134,8 @@ class GSClient(NetworkClient):
                 
                 # 再次请求
                 response = self.get(url=url)
+                # if 'AutoJump' in response.text:
+                #     logger.warning("仍包含AutoJump，再试一次。")
         # 处理响应
         if response.status_code == 200:
             return response
@@ -442,24 +456,6 @@ class GoogleScholar():
                     return int(re.sub(pattern=r'[,\.\s’]',repl='', string=match.group(2)))
         return 0
     
-    def check_rows_num(self):
-        # 检查rows的数量是否正确
-        
-        if len(self.rows) == 20:
-            # 修正page_num
-            if self.param_list is not None:
-                for param in self.param_list:
-                    if "start=" in param:
-                        self.page_num = int(int(param.split("=")[-1]) / 10 + 1)
-                        break
-
-            next_page_num = self.page_num + 1
-            next_rows = self.rows[11:20]
-            next_param_list = self.param_list.copy()
-            
-            next_page = GoogleScholar.from_dict(
-                
-            )
     def fill_all_bib(self):
         # 填充所有的row
         if self.rows is not None:
@@ -532,7 +528,16 @@ class GoogleScholar():
         with open(html_path, "w", encoding="utf-8") as f:
             html = str(self.soup.prettify())
             f.write(html)
-
+    def export_paper(self)-> list[Paper]:
+        # 导出为Paper对象
+        papers = []
+        for row in self.rows:
+            if row.filled:
+                papers.append(row.export_paper)
+            else:
+                row.load_bib()
+                papers.append(row.export_paper)
+        return papers
 class GSRow():
     """
     GoogleScholar中一个文章的对象
@@ -622,7 +627,7 @@ class GSRow():
         abstract:str = row_dict["abstract"]
         author:list[str] = row_dict["author"]
         publisher:str = row_dict["publisher"]
-        journal:str = row_dict["journal"]
+        journal:str = row_dict["journal"] if row_dict["journal"] else ""
         pub_type:str = row_dict["pub_type"]
         pub_year:str = row_dict["pub_year"]
         url_scholarbib:str = row_dict["url_scholarbib"]
@@ -721,7 +726,7 @@ class GSRow():
         else:
             pub_url = ""
         cid:str = row.get('data-cid')
-        pos:int = row.get('data-rp')
+        pos:int = int(row.get('data-rp'))
 
         pub_type = None
         if title.find('span', class_='gs_ctu'):  # A citation
@@ -763,7 +768,7 @@ class GSRow():
             journal = None
             year = venueyear[-1].strip()
             if year.isnumeric() and len(year) == 4:
-                pub_year = year
+                pub_year = int(year)
                 if len(venueyear) >= 2:
                     journal = ','.join(venueyear[0:-1]) # everything but last
             else:
@@ -858,9 +863,6 @@ class GSRow():
                 return link.get('href')
         return ''
 
-    def export_Paper(self):
-        """导出为Paper对象"""
-        pass
     
     def export_json(self,json_path:str|Path) -> None:
         # 导出为json
@@ -906,11 +908,45 @@ class GSRow():
         # 打印对象
         return f"GSRow({','.join(self.author)}-{self.pub_year}-{self.title}-{self.publisher})"
     
-    def export_paper(self):
-        pass
+    def export_paper(self) -> Paper:
+        # 导出为paper对象
+        
+        page_dict = self.dump_dict()
+        if not self.filled:
+            raise ValueError("bib is not filled")
+        bib = page_dict.pop("bib")
+        
+        for key,value in page_dict.items():
+            if value == "":
+                page_dict[key] = None
+        for key in _BIB_STR:
+            if key not in bib:
+                bib[key] = None
+            
+        paper = Paper(
+            title=bib["title"],
+            authors=bib["author"],
+            abstract=page_dict["abstract"],
+            doi=None,
+            url=page_dict["pub_url"],
+            publisher=bib["publisher"],
+            pub_year=int(bib["pub_year"]),
+            journal=bib["journal"],
+            volume=bib["volume"],
+            issue=bib["number"],
+            pages=bib['pages'],
+            keywords=None,
+            paper_metadata=bib,
+            pdf_downloaded=False,
+            pdf_path=None,
+            pdf_url=page_dict["pdf_url"],
+            notes=None,
+            citations_num=page_dict["num_citations"],
+            type=bib["pub_type"]
+        )
+        return paper
     # def __dict__(self):
     #     return self.__dict__
-    
 class GSWorkplace():
     """
     Google Scholar的总对象,针对每一次查询。还需要用于与外界交互。
@@ -982,7 +1018,7 @@ class GSWorkplace():
 
 
     @classmethod
-    def from_root_dir(cls,root_dir:Path,session:GSClient):
+    def from_root_dir(cls,root_dir:Path,session:GSClient|None = None):
         # 如果从root_dir来进行实例化，必须有page_1.json,否则就报错
         if not (root_dir / "page_1.json").exists():
             raise FileNotFoundError("page_1.json not found")
@@ -1079,7 +1115,7 @@ class GSWorkplace():
                     time.sleep(w)
                     page.fill_all_bib()
                     page.export_json(self.root_dir / f"page_{page.page_num}.json")
-                    
+                    logger.info(f"page_{page.page_num}的bib检查完成")
         logger.info(f"当前以下载到第{self._pages[-1].page_num}页,继续下载")
         while True:
             try:
@@ -1099,13 +1135,9 @@ class GSWorkplace():
                 next_page.fill_all_bib()
                 next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
             logger.info(f"page_{next_page.page_num}下载完成")
-            
-        # for page in self:
-        #     page.export_json(self.root_dir / f"page_{page.page_num}.json")
-            
-        #     if is_fill:
-        #         page.fill_all_bib()
-        #         page.export_json(self.root_dir / f"page_{page.page_num}.json")
-        #     logger.info(f"page_{page.page_num}下载完成")
     
-        
+    def Insert_database(self,insert:Insert) -> None:
+        """将全部插入到数据库中"""
+        for page in self._pages:
+            for row in page.rows:
+                insert.from_paper(row.export_paper())

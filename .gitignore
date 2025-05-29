@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+paper.db
+page_1.json
+test.html

@@ -1,15 +1,10 @@
 
-from typing import Any, Generator
-
-
-from bs4 import BeautifulSoup
-from bibtexparser.bibdatabase import BibDatabase
-import bibtexparser
-import re
+from typing import Any
+from collections.abc import Generator
 
 import requests
 from ..models.paper import Paper
-from ..network import NetworkClient, Proxy, RateLimiter
+from ..network import NetworkClient, Proxy
 from ..utils.exceptions import SearchError, RateLimitError,SciRetrieverError
 from ..utils.logging import get_logger,setup_logging
 from .searcher import BaseSearcher
