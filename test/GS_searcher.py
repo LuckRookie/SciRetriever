@@ -1,6 +1,6 @@
 # %%
 from unittest import result
-from SciRetriever.searcher import GSClient,GoogleScholarSearcher,GSRowError,GSWorkplace
+from SciRetriever.searcher import GSClient,GoogleScholarSearcher,GSPageError,GSWorkplace
 from SciRetriever.network import Proxy
 from SciRetriever.searcher.google_scholar import GoogleScholar
 from SciRetriever.utils.exceptions import RetryError
@@ -33,7 +33,7 @@ except RetryError as e:
     print("page error")
     results = searcher.search_publication(query = 'energetic materials')
     
-except GSRowError as e:
+except GSPageError as e:
     """再来一次"""
     print("page error")
     results = searcher.search_publication(query = 'energetic materials')

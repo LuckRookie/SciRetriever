@@ -4,7 +4,6 @@
 import time
 from pathlib import Path
 from typing import Any
-import random
 import requests
 from requests.sessions import Session
 
@@ -19,10 +18,9 @@ from ..utils.config import Config, get_config
 from ..utils.exceptions import DownloadError, RateLimitError,RetryError
 from ..utils.logging import get_logger,setup_logging
 
-log_ = Path.cwd() / 'logs' / 'sciretriever.log'
-setup_logging(log_file = log_)
+# log_ = Path.cwd() / 'logs' / 'sciretriever.log'
+# setup_logging(log_file = log_)
 logger = get_logger(__name__)
-
 
 class RateLimiter:
     """限制对服务器请求速率的类"""
@@ -45,7 +43,7 @@ class RateLimiter:
         
         if elapsed < self.rate_limit:
             sleep_time = self.rate_limit - elapsed
-            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            logger.info(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
             time.sleep(sleep_time)
         
         self.last_request_time = time.time()
@@ -319,8 +317,7 @@ class NetworkClient:
                 json={"status": "completed"}
             )
         """
-        # 速率限制
-        self.rate_limiter.wait()
+        
         
         # 设置默认的超时时间
         if 'timeout' not in kwargs:
@@ -332,9 +329,8 @@ class NetworkClient:
         
         while tries < self.max_retries:
             try:
-                # 添加随机睡眠，避免请求过于频繁
-                w = random.uniform(0.5, 1.5)
-                time.sleep(w)
+                # 速率限制
+                self.rate_limiter.wait()
                 
                 logger.debug(f"Requesting {method} {url} (attempt {tries+1}/{self.max_retries})")
                 response = self.session.request(method, url, **kwargs)

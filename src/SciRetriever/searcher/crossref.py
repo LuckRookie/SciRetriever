@@ -3,7 +3,8 @@ from typing import Any
 from collections.abc import Generator
 
 import requests
-from ..models.paper import Paper
+from ..model.paper import PaperMetadata
+from ..database.model import Paper
 from ..network import NetworkClient, Proxy
 from ..utils.exceptions import SearchError, RateLimitError,SciRetrieverError
 from ..utils.logging import get_logger,setup_logging
@@ -56,27 +57,27 @@ class CRClient(NetworkClient):
         self.session = self._create_session()
         
 
-    def get_work(self, doi: str) -> Paper:
-        """
-        获取单篇论文完整元数据
-        参数：
-            doi: 标准DOI标识符（如"10.1038/nature12345"）
-        返回：
-            Paper对象（来自models.paper）
-        异常：
-            SearchError: DOI不存在或请求失败
-        """
-        endpoint = f"/works/{doi}"
+    # def get_work(self, doi: str) -> "Crossref":
+    #     """
+    #     获取单篇论文完整元数据
+    #     参数：
+    #         doi: 标准DOI标识符（如"10.1038/nature12345"）
+    #     返回：
+    #         Crossref对象
+    #     异常：
+    #         SearchError: DOI不存在或请求失败
+    #     """
+    #     endpoint = f"/works/{doi}"
         
-        try:
-            response = self.get(self.base_url+endpoint)
-            if response.status_code == 404:
-                raise SearchError(f"DOI {doi} 不存在")
-            response.raise_for_status()
-            return self._parse_work(response.json()['message'])
+    #     try:
+    #         response = self.get(self.base_url+endpoint)
+    #         if response.status_code == 404:
+    #             raise SearchError(f"DOI {doi} 不存在")
+    #         response.raise_for_status()
+    #         return self._parse_work(response.json()['message'])
             
-        except Exception as e:
-            self._handle_api_error(e)
+    #     except Exception as e:
+    #         self._handle_api_error(e)
 
 
     def get_works(
@@ -175,9 +176,9 @@ class CRClient(NetworkClient):
 
         return params
     
-    def _parse_work(self, work_data: dict[str, Any]) -> Paper:
+    def _parse_work(self, work_data: dict[str, Any]) -> PaperMetadata:
         """将Crossref的work数据转换为Paper对象"""
-        return Paper(
+        return PaperMetadata(
             title=' '.join(work_data.get('title', [''])),
             authors=[f"{a.get('given', '')} {a.get('family', '')}".strip() 
                     for a in work_data.get('author', [])],
@@ -209,3 +210,14 @@ class CRClient(NetworkClient):
             elif 400 <= error.response.status_code < 500:
                 raise SearchError(f"请求错误：{error.response.text}") from error
         raise SciRetrieverError(f"Crossref API请求失败：{str(error)}") from error
+    
+class Crossref():
+    def __init__(
+        self,
+        response: requests.Response,
+        method:str,
+        ):
+        
+        pass
+    def parser_work(self,response: requests.Response):
+        pass

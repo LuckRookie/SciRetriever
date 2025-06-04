@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+.vscode
+logs
 paper.db
 page_1.json
 test.html

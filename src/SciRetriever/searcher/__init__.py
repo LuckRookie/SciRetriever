@@ -1,11 +1,12 @@
-from .google_scholar import GSClient,GoogleScholarSearcher,GoogleScholar,GSRowError,GSRow,GSWorkplace
+from .google_scholar import GSClient,GoogleScholarSearcher,GoogleScholar,GSPageError,GSRow,GSWorkplace,run_year
 
 
 __all__ = [
     "GSClient",
     "GoogleScholarSearcher",
     "GoogleScholar",
-    "GSRowError",
+    "GSPageError",
     "GSRow",
-    "GSWorkplace"
+    "GSWorkplace",
+    "run_year"
 ]

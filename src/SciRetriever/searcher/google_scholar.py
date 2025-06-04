@@ -14,28 +14,33 @@ from bs4 import BeautifulSoup, Tag
 import bibtexparser
 from pathlib import Path
 import re
-# from scholarly import scholarly,ProxyGenerator
-# from bibtexparser.bibdatabase import BibDatabase
 
 from ..database.model import Paper
+from ..model.paper import PaperMetadata
 from ..network import NetworkClient, Proxy
 from ..utils.exceptions import SciRetrieverError
-from ..utils.logging import get_logger,setup_logging
+from ..utils.logging import get_logger
 from .searcher import BaseSearcher
-from ..database.optera import Insert
 
-class GSRowError(SciRetrieverError):
-    """Raised when there is an error parsing a row."""
+
+class GSPageError(SciRetrieverError):
+    """Raised when None a Google Scholar pages."""
     pass
 class GSCaptchaError(SciRetrieverError):
     """Raised when google scholar have Captcha"""
     pass
+class GSRowsError(SciRetrieverError):
+    """Raised when google scholar not have row"""
+    pass
+
 _GoogleScholar = [
     "https://scholar.google.com",
     "https://scholar.aigrogu.com"
 ]
-log_ = Path.cwd() / 'logs' / 'sciretriever.log'
-setup_logging(log_file = log_)
+
+# log_ = Path.cwd() / 'logs' / 'sciretriever.log'
+# setup_logging(log_file = log_)
+
 logger = get_logger(__name__)
 
 _SCHOLARPUBRE = r'cites=([\d,]*)'
@@ -339,10 +344,14 @@ class GoogleScholar():
             soup = BeautifulSoup(html, "html.parser")
         else:
             raise ValueError("url and html cannot both be set to None")
-            
+        
+        if not soup.find("div",id="gs_bdy_ccl"):
+            raise GSPageError("Not is Google Scholar Page.")
+        
         html_rows = soup.find_all('div', class_='gs_r gs_or gs_scl') + soup.find_all('div', class_='gsc_mpat_ttl')
         if html_rows == []:
-            raise GSRowError("未找到任何文章")
+            raise GSRowsError("未找到任何文章")
+
         # 删除一些没有data-cid的文章或者广告
         rows = [GSRow.from_row(row,session) for row in html_rows if row.get("data-cid")]
         
@@ -462,6 +471,9 @@ class GoogleScholar():
             for row in self.rows:
                 if not row.filled:
                     row.load_bib()
+    @property
+    def filled(self):
+        return all([row.filled for row in self.rows])
     
     def __next__(self):
         # 下一个页面
@@ -528,15 +540,13 @@ class GoogleScholar():
         with open(html_path, "w", encoding="utf-8") as f:
             html = str(self.soup.prettify())
             f.write(html)
-    def export_paper(self)-> list[Paper]:
+    def export_paper(self,filled:bool = True)-> list[PaperMetadata]:
         # 导出为Paper对象
         papers = []
         for row in self.rows:
-            if row.filled:
-                papers.append(row.export_paper)
-            else:
+            if filled:
                 row.load_bib()
-                papers.append(row.export_paper)
+            papers.append(row.export_paper)
         return papers
 class GSRow():
     """
@@ -837,10 +847,10 @@ class GSRow():
         bibtex_url = bibtex_url.replace(self.session.base_url,"")
         if bibtex_url:
             while True:
+                # time.sleep(self.session.retry_delay)
                 _, bibtex_text = self.session.get_page_soup(bibtex_url)
                 if "AutoJump" not in bibtex_text:
                     break
-                time.sleep(self.session.retry_delay)
             parser = bibtexparser.bparser.BibTexParser(common_strings=True)
             parsed_bib = self.remap_bib(bibtexparser.loads(bibtex_text,parser).entries[-1], _BIB_MAPPING, _BIB_DATATYPES)
             # author: str -> list
@@ -908,7 +918,7 @@ class GSRow():
         # 打印对象
         return f"GSRow({','.join(self.author)}-{self.pub_year}-{self.title}-{self.publisher})"
     
-    def export_paper(self) -> Paper:
+    def export_paper(self) -> PaperMetadata:
         # 导出为paper对象
         
         page_dict = self.dump_dict()
@@ -923,7 +933,7 @@ class GSRow():
             if key not in bib:
                 bib[key] = None
             
-        paper = Paper(
+        paper = PaperMetadata(
             title=bib["title"],
             authors=bib["author"],
             abstract=page_dict["abstract"],
@@ -937,16 +947,15 @@ class GSRow():
             pages=bib['pages'],
             keywords=None,
             paper_metadata=bib,
+            type=page_dict["pub_type"].lower(),
             pdf_downloaded=False,
             pdf_path=None,
             pdf_url=page_dict["pdf_url"],
             notes=None,
             citations_num=page_dict["num_citations"],
-            type=bib["pub_type"]
         )
         return paper
-    # def __dict__(self):
-    #     return self.__dict__
+
 class GSWorkplace():
     """
     Google Scholar的总对象,针对每一次查询。还需要用于与外界交互。
@@ -1027,6 +1036,10 @@ class GSWorkplace():
             start_page = start_page,
             root_dir = root_dir,
         )
+
+    @property
+    def pages(self):
+        return self._pages.copy()
     
     def append(self,page:"GoogleScholar"):
         self._pages.append(page)
@@ -1051,7 +1064,12 @@ class GSWorkplace():
             
         end_pages = self._pages[-1]
         if end_pages.next_url:
-            next_page = next(end_pages)
+            try:
+                next_page = next(end_pages)
+            except GSRowsError as e:
+                logger.info(f"共{len(self._pages)}页,后面没有文章了")
+                self._pages[-1].next_url = None
+                raise StopIteration
             self.append(next_page)
             return next_page
         else:
@@ -1111,33 +1129,78 @@ class GSWorkplace():
                 else:
                     # 检查是否需要休息
                     _, crawl_start_time = self.check_and_rest(crawl_start_time)
-                    w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
-                    time.sleep(w)
+                    # w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
+                    # time.sleep(w)
                     page.fill_all_bib()
                     page.export_json(self.root_dir / f"page_{page.page_num}.json")
                     logger.info(f"page_{page.page_num}的bib检查完成")
-        logger.info(f"当前以下载到第{self._pages[-1].page_num}页,继续下载")
+        logger.info(f"当前已下载到第{self._pages[-1].page_num}页,继续下载")
         while True:
             try:
                 # 检查是否需要休息
                 _, crawl_start_time = self.check_and_rest(crawl_start_time)
-                
-                w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
-                time.sleep(w)
+                # w = random.uniform(self.start_page.session.retry_delay, self.start_page.session.retry_delay+5)
+                # time.sleep(w)
                 next_page = next(self)
-            except GSRowError as e:
+            except GSPageError as e:
                 logger.warning(f"page_{self._pages[-1].page_num + 1}下载失败,重试")
                 continue
-
+            except StopIteration as e:
+                logger.info("所有page下载完成")
+                self._pages[-1].export_json(self.root_dir / f"page_{self._pages[-1].page_num}.json")
+                raise StopIteration
             next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
             if is_fill:
                 _, crawl_start_time = self.check_and_rest(crawl_start_time)
                 next_page.fill_all_bib()
                 next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
             logger.info(f"page_{next_page.page_num}下载完成")
+
+
+            
+def run_year(
+    query:str,
+    is_fill:bool=False,
+    start_year:int = 2000,
+    cut_year:int = 2025,
+    session:GSClient|None = None,
+    root_dir:str|Path|None = None,
+    max_cycles:int = 5,
+    ):
+    if root_dir is None:
+        root_dir = Path.cwd()
+    if isinstance(root_dir,str):
+        root_dir = Path(root_dir)
+    searcher = GoogleScholarSearcher(client=session)
     
-    def Insert_database(self,insert:Insert) -> None:
-        """将全部插入到数据库中"""
-        for page in self._pages:
-            for row in page.rows:
-                insert.from_paper(row.export_paper())
+    for year in range(cut_year,start_year-1,-1):
+        year_dir = root_dir / f"{year}"
+        logger.info(f"开始下载{year}年")
+        if not year_dir.exists():
+            logger.warning(f"{year_dir}不存在,将创建")
+            year_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            totle_GS = GSWorkplace.from_root_dir(year_dir,session=session)
+        except FileNotFoundError:
+            logger.info("未找到page_1.json,将重新下载")
+            result = searcher.search_publication(query,year_low=year,year_high=year)
+            totle_GS = GSWorkplace(start_page=result,root_dir=year_dir)
+
+        if not totle_GS.pages[-1].next_url and not (is_fill and not all([page.filled for page in totle_GS.pages])):
+            logger.info(f"{year}年已经下载完成")
+            continue
+        
+        for _ in range(max_cycles):
+            try:
+                totle_GS.run(is_fill=is_fill)
+
+            except IndexError as e:
+                logger.error(f"{year}年下载失败,错误信息:{e}")
+                logger.error(f"重新下载{year}年")
+            except StopIteration as e:
+                break
+            
+        logger.info(f"{year}年下载完成")
+        time.sleep(60)
+        continue
+        

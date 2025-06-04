@@ -1,4 +1,3 @@
-from typing import Any
 from sqlalchemy.exc import NoResultFound
 import os
 from sqlalchemy.engine.base import Engine
@@ -8,6 +7,7 @@ from abc import ABC
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Generator
+from typing import Any
 
 from .model import Paper,Base
 '''
@@ -80,6 +80,7 @@ class Insert(Optera):
         从paper中插入数据
         '''
         self._Insert(paper)
+    
     def from_dict(self,pager_dict:dict[str,Any]):
         '''
         从字典中插入数据
