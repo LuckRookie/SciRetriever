@@ -258,6 +258,7 @@ class NetworkClient:
         self,
         method: str,
         url: str,
+        params: dict[str, Any]|None = None,
         **kwargs
     ) -> requests.Response:
         """
@@ -333,7 +334,7 @@ class NetworkClient:
                 self.rate_limiter.wait()
                 
                 logger.debug(f"Requesting {method} {url} (attempt {tries+1}/{self.max_retries})")
-                response = self.session.request(method, url, **kwargs)
+                response = self.session.request(method, url, params=params, **kwargs)
                 
                 # 处理常见的HTTP状态码
                 if response.status_code == 200:

@@ -50,6 +50,7 @@ class Paper(Base):
     citations_num:Mapped[int] = mapped_column(Integer, nullable=True)
     notes:Mapped[str] = mapped_column(String, nullable=True)
     type:Mapped[str] = mapped_column(String, nullable=True) # article or book
+    source:Mapped[str] = mapped_column(String, nullable=True) # GS or Crossref or other
     cited_papers = relationship(
         'Paper',  # 关联到自身
         secondary=paper_citation_association,

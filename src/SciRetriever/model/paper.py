@@ -32,15 +32,15 @@ class PaperMetadata():
     keywords: list[str]|None = field(default_factory=list)
     paper_metadata: dict[str, Any]|None = field(default_factory=dict)
     type: str|None = None
+    source: str|None = None
     # PDF information
     pdf_downloaded: bool = False
     pdf_path: str|Path|None = None
-    download_data: str|None = None
     pdf_url: str|None = None
     
     # Additional data
-    references: list["PaperMetadata"] = field(default_factory=list)
-    citations: list["PaperMetadata"] = field(default_factory=list)
+    references: list["PaperMetadata"]|None = field(default_factory=list)
+    citations: list["PaperMetadata"]|None = field(default_factory=list)
     citations_num: int|None = None
     notes: str|None = None
     
@@ -100,7 +100,16 @@ class PaperMetadata():
             citation += f" DOI: {self.doi}"
             
         return citation
-    
+    @property
+    def check_paper(self) -> bool:
+        """
+        Check if the paper has all required fields.
+
+        Returns:
+            True if all required fields are present, False otherwise
+        """
+        required_fields = ["title", "authors", "pub_year"]
+        pass
     # def to_dict(self) -> dict[str, Any]:
     #     """
     #     Convert the paper to a dictionary.

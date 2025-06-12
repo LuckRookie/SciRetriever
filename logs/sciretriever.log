@@ -310,3 +310,7 @@
 2025-06-04 14:35:17,507 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
 2025-06-04 14:35:58,650 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
 2025-06-04 14:35:58,652 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-06-04 14:48:01,961 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-06-04 14:48:01,962 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults
+2025-06-04 14:53:46,779 - root - INFO - Logging to file: /workplace/duanjw/project/SciRetriever/logs/sciretriever.log
+2025-06-04 14:53:46,780 - SciRetriever.utils.config - INFO - Config file not found at /home/duanjunwen/.sciretriever/config.json, using defaults

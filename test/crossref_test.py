@@ -19,24 +19,25 @@ query_params: 查询参数字典，支持以下形式：
 '''
 
 query = {
-    "query": "energetic materials",
+    "title": "Testing and evaluation of the thermal damage caused by an explosion of energetic materials",
+    
 }
 
 result = Client.get_works(
     query_params=query,
     )
-insert = Insert.connect_db(
-    db_dir='/workplace/duanjw/project/SciRetriever/crossref.db',
-    create_db=True
-    )
-while True:
-    if result is None:
-        break
-    paper_list = result.export_papers()
-    for paper in paper_list:
-        paper.Insert_database(insert)
+# insert = Insert.connect_db(
+#     db_dir='/workplace/duanjw/project/SciRetriever/crossref.db',
+#     create_db=True
+#     )
+# while True:
+#     if result is None:
+#         break
+#     paper_list = result.export_papers()
+#     for paper in paper_list:
+#         paper.Insert_database(insert)
 
-    result = next(result)
+#     result = next(result)
     
     
 # print(result)

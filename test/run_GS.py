@@ -17,7 +17,7 @@ headers = {
     "Upgrade-Insecure-Requests": "1",
 
     # Cookie处理（必须替换）
-    "Cookie": "GSP=A=W74LKA:CPTS=1749016130:LM=1749016130:S=o4wvaggitIHAcGCP; NID=524=Y06GEvX8-bQiauciZyxnA63SlsEklv6ky2ivA3zEYjbXL6pGLW154QAN_Ag5AMjVZhlXmT9RfYcGROiqwrHU8vOoWh8NXJaC5GRp9nZYdax54siFrZbCe9Dyr8R9SxWZ_bc5OWOfcz5ueRzgr41cfVZLMX4Ic2A95LtScdQ0_hl4Ogg66WqfQTKMA-o99pKXjXAUdQk4Xhk",
+    "Cookie": "NID=524=oGID11dYbn0PPeYwyXVjgAtFeZAW0VlGxAN-Pbz-VfTbyNgDAxxph9yG5X7hXXYz_4eQoWAb1lZ9IgncmRNBtYBVb6YLJLjhyCI61lG8eCBKsVbKUjnqwgILbbZ4X6RI_JBuEGvbxxWiumufPTUAnyb3BxwbecKBqntmVU1D1cZjDi4FWn-EYxtaWCQwEsks56uROBovZHNehtwJ0iE7srwXLg; GSP=A=W74LKA:CPTS=1749111683:LM=1749111683:S=F6EunZMmE_j0wnux",
     # 用户代理
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
 }
