@@ -9,7 +9,11 @@ wheels/
 # Virtual environments
 .venv
 .vscode
+
+# other files
 logs
-paper.db
+*.db
+*.html
 page_1.json
-test.html
+
+test/

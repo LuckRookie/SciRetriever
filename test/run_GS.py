@@ -17,7 +17,7 @@ headers = {
     "Upgrade-Insecure-Requests": "1",
 
     # Cookie处理（必须替换）
-    "Cookie": "NID=524=oGID11dYbn0PPeYwyXVjgAtFeZAW0VlGxAN-Pbz-VfTbyNgDAxxph9yG5X7hXXYz_4eQoWAb1lZ9IgncmRNBtYBVb6YLJLjhyCI61lG8eCBKsVbKUjnqwgILbbZ4X6RI_JBuEGvbxxWiumufPTUAnyb3BxwbecKBqntmVU1D1cZjDi4FWn-EYxtaWCQwEsks56uROBovZHNehtwJ0iE7srwXLg; GSP=A=W74LKA:CPTS=1749111683:LM=1749111683:S=F6EunZMmE_j0wnux",
+    "Cookie": "GSP=A=U5R5BQ:CPTS=1750313436:LM=1750313436:S=GiD5YrmEEKPjf0_r; NID=525=UGe5y93-2SQAWhB3_kboa3B797H8SfhHhnx9iGZnKaF4azFlRKSfDCfu5CH1AKyAc8sIXYdJ2YiwgFkHw5szb8odJJOtnJYHDlQfwR5uYC644dfx4HwDFtLqeeMp5x3l3OvVVNpzK3VSAiB_x1zlag4yyASxSGVM0p8KATPvtfuGqaIRG2UPHuBkFQ2_3RJT_8JWG8s7G_Y",
     # 用户代理
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
 }
@@ -28,18 +28,18 @@ session = GSClient(
     proxy = Proxy(http="127.0.0.1:7890",https='127.0.0.1:7890'),
     max_retries = 5,
     retry_delay = 5,
-    rate_limit=60,
+    rate_limit=10,
     verify=True,
     headers=headers
     )
 #%%
-export_path = Path("/workplace/duanjw/project/google/energetic_materials")
+export_path = Path("/workplace/duanjw/project/google/Experimental_synthesis_of_energetic_materials")
 
 log_ = export_path / "logs" / 'sciretriever.log'
 setup_logging(log_file = log_)
 
 run_year(
-    query="energetic materials",
+    query="Experimental synthesis of energetic materials",
     is_fill=False,
     session=session,
     root_dir=export_path,

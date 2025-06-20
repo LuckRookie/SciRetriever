@@ -179,6 +179,7 @@ class Crossref():
             self.params.update({"cursor":self.next_cursor})
             next_response = self.session.get(self.base_url,params=self.params)
             return self.from_works(next_response,self.params,self.session)
+        
     @classmethod
     def from_works(cls,response: requests.Response,params:dict[str,str],session:CRClient):
         

@@ -33,9 +33,9 @@ while True:
     if result is None:
         break
     paper_list = result.export_papers()
-    for paper in paper_list:
-        paper.Insert_database(insert)
-
+    paper_list = [paper.export_paper() for paper in paper_list if (paper.doi is not None) and (paper.title is not None) and (paper.type == "journal-article")]
+    insert.from_paper_list(paper_list)
+    
     result = next(result)
     
     

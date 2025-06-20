@@ -74,13 +74,27 @@ class Insert(Optera):
         with self.transaction() as session:
             session.add(paper)
             print(f"Successfully insert paper: {paper.title}")
-
+    def _Insert_bulk(
+        self,
+        paper_list:list[Paper]
+    ):
+        '''
+        批量插入数据
+        '''
+        with self.transaction() as session:
+            session.add_all(paper_list)
+            print(f"Successfully insert {len(paper_list)} papers")
     def from_paper(self,paper:Paper):
         '''
         从paper中插入数据
         '''
         self._Insert(paper)
-    
+    def from_paper_list(self,paper_list:list[Paper]):
+        '''
+        从paper列表中插入数据
+        '''
+        self._Insert_bulk(paper_list)
+        
     def from_dict(self,pager_dict:dict[str,Any]):
         '''
         从字典中插入数据

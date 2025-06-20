@@ -59,14 +59,23 @@ class PaperMetadata():
                 
     def Insert_database(self,insert:Insert) -> None:
         """将全部插入到数据库中"""
+        paper = self.export_paper()
+        insert.from_paper(paper)
+        logger.info(f"paper_{self.title}插入完成")
+    
+
+    def export_paper(self) -> Paper:
+        """
+        Generate a Paper instance from the metadata.
+        
+        Returns:
+            Paper instance
+        """
         paper_dict = self.__dict__.copy()
         paper_dict.pop("references")
         paper_dict.pop("citations")
-        
-        paper = Paper(**paper_dict)
-        insert.from_paper(paper)
-        logger.info(f"paper_{self.title}插入完成")
-        
+        return Paper(**paper_dict)
+    
     @property
     def full_citation(self) -> str:
         """
