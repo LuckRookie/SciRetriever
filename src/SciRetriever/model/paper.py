@@ -62,7 +62,6 @@ class PaperMetadata():
         paper = self.export_paper()
         insert.from_paper(paper)
         logger.info(f"paper_{self.title}插入完成")
-    
 
     def export_paper(self) -> Paper:
         """
@@ -109,16 +108,6 @@ class PaperMetadata():
             citation += f" DOI: {self.doi}"
             
         return citation
-    @property
-    def check_paper(self) -> bool:
-        """
-        Check if the paper has all required fields.
-
-        Returns:
-            True if all required fields are present, False otherwise
-        """
-        required_fields = ["title", "authors", "pub_year"]
-        pass
     # def to_dict(self) -> dict[str, Any]:
     #     """
     #     Convert the paper to a dictionary.

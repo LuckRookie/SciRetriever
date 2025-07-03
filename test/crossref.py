@@ -19,14 +19,19 @@ query_params: 查询参数字典，支持以下形式：
 '''
 
 query = {
-    "query": "energetic materials",
+    "query": "Organic synthesis",
 }
-
+filters = {
+    "type":"journal-article",
+    "from-pub-date":"2000-01-01",
+    "until-pub-date":"2025-12-31"
+}
 result = Client.get_works(
     query_params=query,
+    filters=filters,
     )
 insert = Insert.connect_db(
-    db_dir='/workplace/duanjw/project/SciRetriever/crossref.db',
+    db_dir='/workplace/duanjw/project/SciRetriever/Organic_synthesis.db',
     create_db=True
     )
 while True:

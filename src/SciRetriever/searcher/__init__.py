@@ -1,4 +1,4 @@
-from .google_scholar import GSClient,GoogleScholarSearcher,GoogleScholar,GSPageError,GSRow,GSWorkplace,run_year
+from .google_scholar import GSClient,GoogleScholarSearcher,GoogleScholar,GSPageError,GSRow,GSWorkplace
 
 
 __all__ = [
@@ -8,5 +8,4 @@ __all__ = [
     "GSPageError",
     "GSRow",
     "GSWorkplace",
-    "run_year"
 ]

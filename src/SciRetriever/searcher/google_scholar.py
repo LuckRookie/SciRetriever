@@ -79,6 +79,10 @@ _BIB_STR = [
     "pub_year",
     "author"
 ]
+
+_MAP_KEYWORD={
+    "Wiley Online Library":"Wiley"
+}
 class GSClient(NetworkClient):
     """
     基于爬虫类通用客户端,编写处理GoogleScholar网络请求的客户端
@@ -540,13 +544,13 @@ class GoogleScholar():
         with open(html_path, "w", encoding="utf-8") as f:
             html = str(self.soup.prettify())
             f.write(html)
-    def export_paper(self,filled:bool = True)-> list[PaperMetadata]:
+    def export_paper(self,filled:bool = False)-> list[PaperMetadata]:
         # 导出为Paper对象
         papers = []
         for row in self.rows:
             if filled:
                 row.load_bib()
-            papers.append(row.export_paper)
+            papers.append(row.export_paper())
         return papers
 class GSRow():
     """
@@ -630,21 +634,21 @@ class GSRow():
     def from_row(cls,row,session: GSClient) -> "GSRow":
         # 从row中加载信息
         row_dict = cls.load_information(row=row)
-        cid:str = row_dict["cid"]
-        pos:int = row_dict["pos"]
-        title:str = row_dict["title"]
-        pub_url:str = row_dict["pub_url"] if row_dict["pub_url"] else ""
-        abstract:str = row_dict["abstract"]
-        author:list[str] = row_dict["author"]
-        publisher:str = row_dict["publisher"]
-        journal:str = row_dict["journal"] if row_dict["journal"] else ""
-        pub_type:str = row_dict["pub_type"]
-        pub_year:str = row_dict["pub_year"]
-        url_scholarbib:str = row_dict["url_scholarbib"]
-        num_citations:int = row_dict["num_citations"]
-        cite_url:str = row_dict["cite_url"] if row_dict["cite_url"] else ""
-        related_url:str = row_dict["related_url"] if row_dict["related_url"] else ""
-        pdf_url:str = row_dict["pdf_url"] if row_dict["pdf_url"] else ""
+        cid:str|None = row_dict.get("cid")
+        pos:int|None = row_dict.get("pos")
+        title:str|None = row_dict.get("title")
+        pub_url:str|None = row_dict.get("pub_url")
+        abstract:str|None = row_dict.get("abstract")
+        author:list[str]|None = row_dict.get("author")
+        publisher:str|None = row_dict.get("publisher")
+        journal:str|None = row_dict.get("journal")
+        pub_type:str|None = row_dict.get("pub_type")
+        pub_year:str|None = row_dict.get("pub_year")
+        url_scholarbib:str|None = row_dict.get("url_scholarbib")
+        num_citations:int|None = row_dict.get("num_citations")
+        cite_url:str|None = row_dict.get("cite_url")
+        related_url:str|None = row_dict.get("related_url")
+        pdf_url:str|None = row_dict.get("pdf_url")
         filled:bool = False
         bib:dict[str,str] = {}
         
@@ -653,19 +657,22 @@ class GSRow():
             pass
         elif session.mirror == 1:
             pop_str = "/extdomains/scholar.google.com"
-                
-            if (pop_str in cite_url) or (pop_str in related_url):
+            if cite_url is not None and (pop_str in cite_url):
                 cite_url = cite_url.replace(pop_str, "")
+            else:
+                logger.error(f"Error url:{cid}_{title}: 请检查cite_url")
+                
+            if related_url is not None and (pop_str in related_url):
                 related_url = related_url.replace(pop_str, "")
             else:
-                print(f"Error url:{cid}_{title}: 请检查cite_url和related_url")
+                logger.error(f"Error url:{cid}_{title}: 请检查related_url")
             
-            if "javascript:void(0)" in pub_url:
-                pub_url = ""
-            if "javascript:void(0)" in pdf_url:
-                pdf_url = ""
+            if pub_url is not None and "javascript:void(0)" in pub_url:
+                pub_url = None
+            if pdf_url is not None and "javascript:void(0)" in pdf_url:
+                pdf_url = None
         else:
-            print(f"Error mirror website")
+            logger.error(f"Error mirror website")
         
         
         return cls(
@@ -692,7 +699,10 @@ class GSRow():
     
     @classmethod
     def from_dict(cls,data:dict[str,Any],session: GSClient|None) -> "GSRow":
-
+        for key,value in data.items():
+            if value == "":
+                data[key] = None
+                
         return cls(
             row = None,
             session = session,
@@ -923,7 +933,29 @@ class GSRow():
         
         page_dict = self.dump_dict()
         if not self.filled:
-            raise ValueError("bib is not filled")
+            # raise ValueError("bib is not filled")
+            paper = PaperMetadata(
+                title=page_dict.get('title'),
+                authors=page_dict.get('author'),
+                abstract=page_dict.get('abstract'),
+                doi=None,
+                url=page_dict.get('pub_url'),
+                publisher=page_dict.get('publisher'),
+                pub_year=page_dict.get('pub_year'),
+                journal=page_dict.get('journal'),
+                volume=page_dict.get('volume'),
+                issue=page_dict.get('number'),
+                pages=page_dict.get('pages'),
+                keywords=None,
+                paper_metadata=page_dict.copy(),
+                type=page_dict.get('pub_type').lower() if page_dict.get('pub_type') else None,
+                pdf_downloaded=False,
+                pdf_path=None,
+                pdf_url=page_dict.get('pdf_url'),
+                notes=None,
+                citations_num=page_dict.get('num_citations'),
+            )
+            return paper
         bib = page_dict.pop("bib")
         
         for key,value in page_dict.items():
@@ -947,7 +979,7 @@ class GSRow():
             pages=bib['pages'],
             keywords=None,
             paper_metadata=bib,
-            type=page_dict["pub_type"].lower(),
+            type=page_dict.get('pub_type').lower() if page_dict.get('pub_type') else None,
             pdf_downloaded=False,
             pdf_path=None,
             pdf_url=page_dict["pdf_url"],
@@ -1040,6 +1072,9 @@ class GSWorkplace():
     @property
     def pages(self):
         return self._pages.copy()
+    @property
+    def papers(self):
+        return [page.export_paper() for page in self._pages]
     
     def append(self,page:"GoogleScholar"):
         self._pages.append(page)
@@ -1155,52 +1190,3 @@ class GSWorkplace():
                 next_page.fill_all_bib()
                 next_page.export_json(self.root_dir / f"page_{next_page.page_num}.json")
             logger.info(f"page_{next_page.page_num}下载完成")
-
-
-            
-def run_year(
-    query:str,
-    is_fill:bool=False,
-    start_year:int = 2000,
-    cut_year:int = 2025,
-    session:GSClient|None = None,
-    root_dir:str|Path|None = None,
-    max_cycles:int = 5,
-    ):
-    if root_dir is None:
-        root_dir = Path.cwd()
-    if isinstance(root_dir,str):
-        root_dir = Path(root_dir)
-    searcher = GoogleScholarSearcher(client=session)
-    
-    for year in range(cut_year,start_year-1,-1):
-        year_dir = root_dir / f"{year}"
-        logger.info(f"开始下载{year}年")
-        if not year_dir.exists():
-            logger.warning(f"{year_dir}不存在,将创建")
-            year_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            totle_GS = GSWorkplace.from_root_dir(year_dir,session=session)
-        except FileNotFoundError:
-            logger.info("未找到page_1.json,将重新下载")
-            result = searcher.search_publication(query,year_low=year,year_high=year)
-            totle_GS = GSWorkplace(start_page=result,root_dir=year_dir)
-
-        if not totle_GS.pages[-1].next_url and not (is_fill and not all([page.filled for page in totle_GS.pages])):
-            logger.info(f"{year}年已经下载完成")
-            continue
-        
-        for _ in range(max_cycles):
-            try:
-                totle_GS.run(is_fill=is_fill)
-
-            except IndexError as e:
-                logger.error(f"{year}年下载失败,错误信息:{e}")
-                logger.error(f"重新下载{year}年")
-            except StopIteration as e:
-                break
-            
-        logger.info(f"{year}年下载完成")
-        time.sleep(60)
-        continue
-        

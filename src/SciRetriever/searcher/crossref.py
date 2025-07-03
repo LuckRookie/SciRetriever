@@ -59,7 +59,7 @@ class CRClient(NetworkClient):
     def get_works(
         self,
         query_params: dict[str, str]|None = None,
-        filters: dict[str, str|list[str]]|None = None,
+        filters: dict[str, Any]|None = None,
         sort: dict[str, str]|None = None,
         max_results: int = 1000,
         cursor: str|None = None
@@ -73,7 +73,7 @@ class CRClient(NetworkClient):
             - 字段级搜索: {'title': '纳米材料', 'author': 'Smith'}
             - 混合模式: {'query': 'combustion', 'abstract': '爆炸'}
         filters: 过滤条件字典，支持多值：
-            - {'type': 'journal-article', 'from-pub-date': '2020'}
+            - {'type': 'journal-article', 'from-pub-date': '2020-01-01',"until-pub-date:'2025-12-31'"}
             - {'license': ['cc-by', 'cc-by-nc']}
         sort: 排序规则 {'field': 'published', 'order': 'desc'}
         max_results: 单次获取数量
@@ -98,7 +98,29 @@ class CRClient(NetworkClient):
         """
         根据DOI获取论文信息
         """
-        pass
+        response = self.get(url = self.base_url+f"/works?{doi}")
+        crossref = Crossref.from_works(response=response,params={'doi':doi},session=self)
+        return crossref
+    
+    def get_works_by_title(self,title:str)->"Crossref":
+        """
+        根据DOI获取论文信息
+        """
+        query = {
+            "query.title":title
+        }
+        params = self._build_params(
+            query_params=query,
+            filters=None,
+            sort=None,
+            max_results=1,
+            cursor=None
+        )
+        
+        response = self.get(url = self.base_url+"/works",params=params)
+        crossref = Crossref.from_works(response=response,params=params,session=self)
+        return crossref
+    
     def _build_params(
         self,
         query_params: dict[str,str]|None = None,
@@ -168,6 +190,8 @@ class Crossref():
         self.total_results = total_results
         self.method = method
         self.items = items
+        
+        logger.info(f"Crossref total_results:{self.total_results}")
     def __len__(self):
         if self.items is None:
             return 0
