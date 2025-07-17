@@ -19,13 +19,19 @@ query_params: 查询参数字典，支持以下形式：
 '''
 
 query = {
-    "title": "Testing and evaluation of the thermal damage caused by an explosion of energetic materials",
+    "title": "energetic materials",# "Testing and evaluation of the thermal damage caused by an explosion of energetic materials"
     
 }
-
+filters = {
+    "type":"journal-article",
+    "from-pub-date":"2000-01-01",
+    "until-pub-date":"2025-12-31"
+}
 result = Client.get_works(
     query_params=query,
+    filters=filters,
     )
+pass
 # insert = Insert.connect_db(
 #     db_dir='/workplace/duanjw/project/SciRetriever/crossref.db',
 #     create_db=True

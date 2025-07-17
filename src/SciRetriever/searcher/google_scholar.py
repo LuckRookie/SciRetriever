@@ -972,7 +972,7 @@ class GSRow():
             doi=None,
             url=page_dict["pub_url"],
             publisher=bib["publisher"],
-            pub_year=int(bib["pub_year"]),
+            pub_year=int(bib["pub_year"]) if bib["pub_year"] else None,
             journal=bib["journal"],
             volume=bib["volume"],
             issue=bib["number"],

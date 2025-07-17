@@ -156,7 +156,22 @@ class PaperMetadata():
     # def add_keywords(self, keywords: list[str]) -> None:
     #     if keywords not in self.keywords:
     #         self.keywords.extend(keywords)
+    @classmethod
+    def from_paper(cls, paper: Paper) -> "PaperMetadata":
+        """
+        Create a PaperMetadata instance from a Paper instance.
+        
+        Args:
+            paper: Paper instance
             
+        Returns:
+            PaperMetadata instance
+        """
+        data = paper.dump_dict()
+        data.pop("created_at")
+        data["notes"] = str(data.pop("id"))
+        return cls(**data)
+    
     def update_keywords(self, keywords: list[str]) -> None:
         self.keywords = keywords
         

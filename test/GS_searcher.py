@@ -10,7 +10,7 @@ from pathlib import Path
 #         result.fill_all_bib()
 #     except IndexError as e:
 #         fill_result(result)
-export_path = Path("/workplace/duanjw/project/google/energetic_material")
+export_path = Path("/workplace/duanjw/project/google/cyclo-N5")
         
 session = GSClient(
     mirror=0,
@@ -26,17 +26,17 @@ searcher = GoogleScholarSearcher(client=session)
 # 本次查询的第一个页面
 
 try:
-    results = searcher.search_publication(query = 'energetic materials',start_index=340)
+    results = searcher.search_publication(query = 'cyclo-N5',start_index=340)
     
 except RetryError as e:
     """再来一次"""
     print("page error")
-    results = searcher.search_publication(query = 'energetic materials')
+    results = searcher.search_publication(query = 'cyclo-N5')
     
 except GSPageError as e:
     """再来一次"""
     print("page error")
-    results = searcher.search_publication(query = 'energetic materials')
+    results = searcher.search_publication(query = 'cyclo-N5')
 
 print(results)
 # totle_GS = Total_GoogleScholar(start_page=results,root_dir=export_path)

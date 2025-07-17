@@ -15,5 +15,6 @@ logs
 *.db
 *.html
 page_1.json
+*.ipynb
 
-test/
+test/*
