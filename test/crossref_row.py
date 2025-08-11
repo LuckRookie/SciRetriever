@@ -4,7 +4,7 @@ BASE_URL = "https://api.crossref.org/works"
 params = {
     "query": "energetic materials",
     "rows": 1000,
-    # "mailto": "1017379159@qq.com",
+    "mailto": "xxxx@xxxx.com",
     "cursor": "*"
 }
 sesssion = requests.Session()

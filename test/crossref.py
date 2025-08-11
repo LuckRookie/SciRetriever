@@ -4,7 +4,7 @@ from SciRetriever.network import Proxy
 from SciRetriever.database.optera import Insert
 from SciRetriever.searcher.filter import filter_title
 Client = CRClient(
-    email = "1017379159@qq.com",
+    email = "xxxx@xxxx.com",
     use_proxy = False,
     proxy = Proxy(http="127.0.0.1:7890",https='127.0.0.1:7890'),
     max_retries = 5,
