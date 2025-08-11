@@ -69,17 +69,14 @@ class WileyRetriver(BaseRetriver):
         super().__init__(client)
         self.client = client
         
-    def download_pdf(self,doi:str,file_path:str|Path|None):
+    def download_pdf(self,doi:str,file_path:str|Path|None=None):
         '''
         doi: 文章doi号
         file_path: pdf下载地址，默认为当前路径下的{doi}.pdf
-        create_folder: 是否创建以该doi为名的文件夹，默认为True
         '''
+        if '/' in doi:
+            doi_path = doi.replace('/','_')
         if file_path is None:
-            file_path = Path.cwd() / f"{doi}.pdf"
+            file_path = Path.cwd() / f"{doi_path}.pdf"
         file_path = Path(file_path)
-        # 如果不是pdf结尾，那么就默认为是地址
-        if not file_path.name.endswith(".pdf"):
-            file_path = file_path.with_suffix(".pdf")
-            
         self.client.download_doi(doi=doi,file_path=file_path)

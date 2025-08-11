@@ -67,12 +67,19 @@ class ElsevierRetriver(BaseRetriver):
         super().__init__(client)
         self.client = client
         
-    def download_xml(self,doi:str,path:str|Path):
-        path = Path(path)
-        path.mkdir(parents=True,exist_ok=True)
+    def download_xml(self,doi:str,file_path:str|Path|None = None):
+        """
+        doi: 文章doi号
+        file_path: pdf下载地址，默认为当前路径下的{doi}.xml
+        """
+        if '/' in doi:
+            doi_path = doi.replace('/','_')
+        if file_path is None:
+            file_path = Path.cwd() / f"{doi_path}.xml"
+        file_path = Path(file_path)
+        # file_path.mkdir(parents=True,exist_ok=True)
         
         response = self.client.get_doi(doi)
-        
-        with open(path / f"{doi}.xml","w") as f:
+        with open(file_path,"w") as f:
             f.write(response.text)
             
