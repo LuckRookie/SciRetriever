@@ -129,7 +129,18 @@ class CRClient(NetworkClient):
         max_results: int = 1000,
         cursor: str|None = None
     ) -> dict[str,Any]:
-        """构建请求参数字典"""
+        """
+        query_params: 查询参数字典，支持以下形式：
+        - 自由搜索: {'query': '关键词'}
+        - 字段级搜索: {'title': '纳米材料', 'author': 'Smith'}
+        - 混合模式: {'query': 'combustion', 'abstract': '爆炸'}
+
+        filters: {
+            "type":"journal-article",
+            "from-pub-date":"2000-01-01",
+            "until-pub-date":"2025-12-31"
+        }
+        """
         params = {
             'rows': min(1000, max_results),
             'cursor': cursor or "*"
@@ -181,7 +192,6 @@ class Crossref():
         total_results:int|None=None,
         method:str|None=None,
         items:list[dict[str,Any]]|None=None,
-        
         ):
         self.session = session
         self.params = params

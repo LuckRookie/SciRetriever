@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 import requests
 from requests.sessions import Session
+from bs4 import BeautifulSoup
 
 try:
     from fake_useragent import UserAgent
@@ -467,6 +468,8 @@ class NetworkClient:
                     time.sleep(sleep_time)
                 else:
                     raise e
+    def get_soup(self,html:bytes) -> BeautifulSoup:
+        return BeautifulSoup(html, 'html.parser')
     # def post(
     #     self,
     #     url: str,

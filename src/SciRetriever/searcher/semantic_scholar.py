@@ -3,23 +3,160 @@ Semantic Scholar searcher implementation.
 """
 
 import logging
-from typing import Dict, List, Optional, Union, Any
+from typing import Any
 
-from semanticscholar import SemanticScholar
-
-from ..models.paper import Paper
+from ..model.paper import Paper
+from ..network import NetworkClient, Proxy
 from ..utils.config import get_config
 from ..utils.exceptions import SearchError
 from ..utils.logging import get_logger
 from .searcher import BaseSearcher
 
 logger = get_logger(__name__)
+"""
+https://www.semanticscholar.org/product/api
+申请api key.Semanticscholar的速率限制为1秒1次
+"""
+class SemanticScholarClient(NetworkClient):
+    """
+    基于爬虫类通用客户端,编写处理Semantic Scholar网络请求的客户端
+    仅接受网址后面的,而不需要全部网址
 
+    额外参数：
+        mirror: 镜像网站,0为官方网站
+    """
+    def __init__(
+        self,
+        api_key:str,
+        rate_limit:float|None = None,
+        max_retries:int|None = None,
+        retry_delay:float|None = None,
+        timeout:float|None = None,
+        user_agent: str|None = None,
+        use_proxy: bool = False,
+        proxy:Proxy|None=None,
+        headers: dict[str, str]|None = None,
+        allow_redirects: bool = True,
+        cookie: dict[str, str]|None = None,
+        verify: bool = False,
+        ) -> None:
+        super().__init__(
+            use_proxy=use_proxy,
+            proxy=proxy,
+            headers=headers,
+            allow_redirects=allow_redirects,
+            cookie=cookie,
+            verify=verify,
+            rate_limit=rate_limit,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            timeout=timeout,
+            user_agent=user_agent,
+        )
+        self.api_key = api_key
+        headers = {
+            "x-api-key":api_key,
+        }
+        self.update_headers(headers)
 
+        self.graph_url:str = "https://api.semanticscholar.org/graph/v1"
+        self.recommendations_url:str = "https://api.semanticscholar.org/recommendations/v1"
+        self.datasets_url:str = "https://api.semanticscholar.org/datasets/v1"
+
+    def get_search(
+        self,
+        query:str,
+        publicationTypes:str | None = None,
+        openAccessPdf: bool | None = None,
+        publicationDateOrYear: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ):
+        """
+        query: 搜索查询字符串
+        publicationTypes: 出版物类型列表.
+                                Review  评论
+                                JournalArticle  期刊文章
+                                CaseReport  病例报告
+                                ClinicalTrial  临床试验
+                                Conference  会议
+                                Dataset  数据集
+                                Editorial  编辑
+                                LettersAndComments  通信与评论
+                                MetaAnalysis
+                                News 新闻
+                                Study 研究
+                                Book  书
+                                BookSection  书的章节
+        openAccessPdf: 是否仅包含公开论文
+        publicationDateOrYear: 出版物日期或年份. 格式为YYYY-MM-DD或YYYY.
+        offset: 偏移量,用于分页查询. 默认为0.
+        limit: 每页返回的最大结果数. 默认为100. 最大为100.
+        """
+        params = {
+            'query': query,
+            'publicationTypes': publicationTypes,
+            'openAccessPdf': openAccessPdf,
+            'publicationDateOrYear': publicationDateOrYear,
+            'offset': offset,
+            'limit': limit,
+        }
+        response = self.get(
+            url=f"{self.graph_url}/paper/search",
+            params=params,
+        )
+        return response
+    def get_bulk(
+        self,
+        query:str,
+        publicationTypes:str | None = None,
+        openAccessPdf: bool | None = None,
+        publicationDateOrYear: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ):
+        """
+        query: 搜索查询字符串
+        publicationTypes: 出版物类型列表.
+                                Review  评论
+                                JournalArticle  期刊文章
+                                CaseReport  病例报告
+                                ClinicalTrial  临床试验
+                                Conference  会议
+                                Dataset  数据集
+                                Editorial  编辑
+                                LettersAndComments  通信与评论
+                                MetaAnalysis
+                                News 新闻
+                                Study 研究
+                                Book  书
+                                BookSection  书的章节
+        openAccessPdf: 是否仅包含公开论文
+        publicationDateOrYear: 出版物日期或年份. 格式为YYYY-MM-DD或YYYY.
+        offset: 偏移量,用于分页查询. 默认为0.
+        limit: 每页返回的最大结果数. 默认为100. 最大为100.
+        """
+        params = {
+            'query': query,
+            'publicationTypes': publicationTypes,
+            'openAccessPdf': openAccessPdf,
+            'publicationDateOrYear': publicationDateOrYear,
+            'offset': offset,
+            'limit': limit,
+        }
+        response = self.get(
+            url=f"{self.graph_url}/paper/search",
+            params=params,
+        )
+        return response
 class SemanticScholarSearcher(BaseSearcher):
     """Implementation of BaseSearcher for Semantic Scholar."""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        session:SemanticScholarClient,
+
+        ):
         """
         Initialize the Semantic Scholar searcher.
         
@@ -27,152 +164,22 @@ class SemanticScholarSearcher(BaseSearcher):
             api_key: API key for Semantic Scholar (optional)
         """
         # Get API key from config if not provided
-        if api_key is None:
-            config = get_config()
-            api_key = config.get_api_key("semantic_scholar")
-        
-        super().__init__(api_key)
-        
-        try:
-            self.sch = SemanticScholar(api_key=api_key)
-            logger.info("Initialized Semantic Scholar searcher")
-        except Exception as e:
-            logger.error(f"Error initializing Semantic Scholar API: {e}")
-            raise SearchError(f"Failed to initialize Semantic Scholar API: {e}")
-    
+        super().__init__(client=self.client)
+
+        self.api_key = api_key
+        self.client = SemanticScholarClient(api_key=api_key)
+        logger.info("Initialized Semantic Scholar searcher")
+
     def search(
         self, 
         query: str, 
         limit: int = 10, 
-        fields: Optional[List[str]] = None, 
+        fields: list[str] | None = None, 
         **kwargs
-    ) -> List[Paper]:
-        """
-        Search for papers using Semantic Scholar API.
-        
-        Args:
-            query: The search query
-            limit: Maximum number of results to return
-            fields: Specific fields to retrieve
-            **kwargs: Additional parameters for the Semantic Scholar API
-                year_start: Start year for filtering
-                year_end: End year for filtering
-            
-        Returns:
-            A list of Paper objects
-            
-        Raises:
-            SearchError: If the search fails
-        """
-        logger.info(f"Searching Semantic Scholar for: {query}")
-        
-        # Default fields if none specified
-        if fields is None:
-            fields = [
-                'title', 'authors', 'abstract', 'year', 'venue', 'url', 
-                'paperId', 'externalIds', 'fieldsOfStudy'
-            ]
-        
-        # Handle year filtering
-        year_start = kwargs.get('year_start')
-        year_end = kwargs.get('year_end')
-        
-        if year_start and year_end:
-            logger.info(f"Filtering by year range: {year_start} to {year_end}")
-            query = f"{query} year:{year_start}-{year_end}"
-        elif year_start:
-            logger.info(f"Filtering by start year: {year_start}")
-            query = f"{query} year>={year_start}"
-        elif year_end:
-            logger.info(f"Filtering by end year: {year_end}")
-            query = f"{query} year<={year_end}"
-        
-        try:
-            results = self.sch.search_paper(query, limit=limit, fields=fields, **kwargs)
-            papers = [self._convert_to_paper(paper) for paper in results]
-            logger.info(f"Found {len(papers)} papers on Semantic Scholar")
-            return papers
-        except Exception as e:
-            logger.error(f"Error searching Semantic Scholar: {e}")
-            raise SearchError(f"Failed to search Semantic Scholar: {e}")
-    
-    def get_paper_by_doi(self, doi: str) -> Optional[Paper]:
-        """
-        Retrieve a specific paper by its DOI.
-        
-        Args:
-            doi: The DOI of the paper
-            
-        Returns:
-            A Paper object or None if not found
-            
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        logger.info(f"Retrieving paper with DOI: {doi}")
-        try:
-            paper_data = self.sch.get_paper(f"DOI:{doi}")
-            if paper_data:
-                return self._convert_to_paper(paper_data)
-            logger.info(f"No paper found with DOI: {doi}")
-            return None
-        except Exception as e:
-            logger.error(f"Error retrieving paper by DOI: {e}")
-            raise SearchError(f"Failed to retrieve paper with DOI {doi}: {e}")
-    
-    def get_citations(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-        """
-        Get papers that cite the given paper.
-        
-        Args:
-            paper: A Paper object or DOI string
-            limit: Maximum number of results to return
-            
-        Returns:
-            A list of Paper objects
-            
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        paper_id = paper.doi if isinstance(paper, Paper) else paper
-        if not paper_id.startswith("DOI:") and ":" not in paper_id:
-            paper_id = f"DOI:{paper_id}"
-        
-        logger.info(f"Retrieving citations for: {paper_id}")
-        try:
-            citations = self.sch.get_paper_citations(paper_id, limit=limit)
-            return [self._convert_to_paper(citation) for citation in citations]
-        except Exception as e:
-            logger.error(f"Error retrieving citations: {e}")
-            raise SearchError(f"Failed to retrieve citations for {paper_id}: {e}")
-    
-    def get_references(self, paper: Union[Paper, str], limit: int = 10) -> List[Paper]:
-        """
-        Get papers cited by the given paper.
-        
-        Args:
-            paper: A Paper object or DOI string
-            limit: Maximum number of results to return
-            
-        Returns:
-            A list of Paper objects
-            
-        Raises:
-            SearchError: If the retrieval fails
-        """
-        paper_id = paper.doi if isinstance(paper, Paper) else paper
-        if not paper_id.startswith("DOI:") and ":" not in paper_id:
-            paper_id = f"DOI:{paper_id}"
-        
-        logger.info(f"Retrieving references for: {paper_id}")
-        try:
-            references = self.sch.get_paper_references(paper_id, limit=limit)
-            return [self._convert_to_paper(reference) for reference in references]
-        except Exception as e:
-            logger.error(f"Error retrieving references: {e}")
-            raise SearchError(f"Failed to retrieve references for {paper_id}: {e}")
-    
-    def _convert_to_paper(self, data: Dict[str, Any]) -> Paper:
+    ) -> list[Paper]:
+        pass
+
+    def _convert_to_paper(self, data: dict[str, Any]) -> Paper:
         """Convert Semantic Scholar paper data to a Paper object."""
         # Extract DOI if available in externalIds
         doi = None
