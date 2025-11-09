@@ -8,6 +8,9 @@ dependencies = [
     "bibtexparser>=1.4.3",
     "bs4>=0.0.2",
     "fake-useragent>=2.2.0",
+    "ipykernel>=6.30.1",
+    "playwright>=1.55.0",
+    "pypdf2>=3.0.1",
     "requests>=2.32.3",
     "sqlalchemy>=2.0.41",
 ]
@@ -18,4 +21,4 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-librorum = "sciretriever.main:main"
+sciretriever = "sciretriever.main:main"

@@ -466,7 +466,7 @@ class NetworkClient:
                     logger.info(f"Retrying in {sleep_time} seconds...")
                     time.sleep(sleep_time)
                 else:
-                    raise DownloadError(f"Failed to download {url} after {self.max_retries} attempts: {e}")
+                    raise e
     # def post(
     #     self,
     #     url: str,

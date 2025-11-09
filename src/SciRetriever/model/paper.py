@@ -177,3 +177,23 @@ class PaperMetadata():
         
     def update_note(self, note: str) -> None:
         self.notes = note
+        
+    def from_reaxys(cls, data: dict[str, Any]) -> "PaperMetadata":
+        """
+        Create a PaperMetadata instance from a Reaxys dictionary.
+        
+        Args:
+            data: Dictionary representation of a paper from Reaxys
+            
+        Returns:
+            PaperMetadata instance
+        """
+        citation = data["Citation Number"]
+        link_url = data["Citation Number: Links to Reaxys"]
+        data_count = data["Data Count"]
+        doc_type = data["Citation: Document Type"]
+        current_patent = data["Current Patent Assignee"]
+        
+        author = data["Authors"]
+        journal = data["Journal Title"]
+        

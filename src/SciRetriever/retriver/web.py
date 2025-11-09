@@ -1,28 +1,21 @@
 from pathlib import Path
-import requests
+
 from .retriver import BaseRetriver
 from ..network import NetworkClient, Proxy
 from ..utils.logging import get_logger
-import urllib
 logger = get_logger(__name__)
 
 '''
-https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining#accordionHeader-2
-wiley最多每秒3个请求，每10分钟60个请求，请注意速率限制！
+https://dev.elsevier.com/apikey/manage
+Elsevier的API申请地址，一般需要学校或组织认证才能申请
 '''
-
-
-class WileyClient(NetworkClient):
+class WebClient(NetworkClient):
     """
-    基于爬虫类通用客户端,编写处理elsevier网络请求的客户端
-    仅接受条件，自动构建url
-
-    额外参数：
-        api_key: elsevier api key
+    基于爬虫类通用客户端,编写处理web网络请求的客户端
+    接受文献的URL，返回文献的HTML内容
     """
     def __init__(
         self,
-        api_key:str,
         rate_limit:float|None = None,
         max_retries:int|None = None,
         retry_delay:float|None = None,
@@ -48,40 +41,42 @@ class WileyClient(NetworkClient):
             timeout=timeout,
             user_agent=user_agent,
         )
-        self.api_key = api_key
-        self.base_url = "https://api.wiley.com/onlinelibrary/tdm/v1/articles/"
-        headers = {
-            "Wiley-TDM-Client-Token":api_key,
-        }
-        self.update_headers(headers)
-        
-    def download_doi(self,doi,file_path:Path|str):
+    def download_pdf(self,url:str,file_path:Path|str):
         path = Path(file_path)
-        url = self.base_url + urllib.parse.quote(doi)
         self.download_file(url=url,save_path=path)
 
-# 目前是多余的
-class WileyRetriver(BaseRetriver):
+class WebRetriver(BaseRetriver):
     def __init__(
         self,
-        client: WileyClient,
+        client: WebClient,
         ) -> None:
         super().__init__(client)
         self.client = client
         
-    def download_pdf(self,doi:str,name:str|None=None,download_path:str|Path|None=None):
-        '''
-        doi: 文章doi号
-        file_path: pdf下载地址，默认为当前路径下的{doi}.pdf
-        '''
-        if '/' in doi:
-            doi_path = doi.replace('/','_')
-        else:
-            doi_path = doi
+    def download_html(self,url:str,name:str,download_path:str|Path|None = None):
+        """
+        url: 文章url
+        name: 文章名称
+        download_path: html下载地址，默认为当前路径下的{name}.html
+        """
         if download_path is None:
             download_path = Path.cwd()
         download_path = Path(download_path)
-        if name is None:
-            name = doi_path
+        file_path = download_path / f"{name}.html"
+        # download_path.mkdir(parents=True,exist_ok=True)
+        
+        response = self.client.get(url)
+        with open(file_path,"w") as f:
+            f.write(response.text)
+    def download_pdf(self,url:str,name:str,download_path:str|Path|None = None):
+        """
+        url: 文章url
+        name: 文章名称
+        download_path: pdf下载地址，默认为当前路径下的{name}.pdf
+        """
+        if download_path is None:
+            download_path = Path.cwd()
+        download_path = Path(download_path)
         file_path = download_path / f"{name}.pdf"
-        self.client.download_doi(doi=doi,file_path=file_path)
+        # download_path.mkdir(parents=True,exist_ok=True)
+        self.client.download_pdf(url=url,file_path=file_path)

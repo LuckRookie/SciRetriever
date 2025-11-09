@@ -145,19 +145,23 @@ class Query(Optera):
         DB_engine:Engine,
         ) -> None:
         super().__init__(DB_engine)
-        
+        self._active_sessions = []
     @contextmanager
     def transaction(self) -> Generator[Session, None, None]:
         session = self.sessionfactory()
+        self._active_sessions.append(session)
         try:
             yield session
         except Exception as e:
             session.rollback()
+            self._active_sessions.remove(session)  # 发生异常时移除
+            session.close()
             raise e
         # finally:
-        #     session.close()
+        #     self._active_sessions.remove(session)
+        #     session.close() 
         
-    def query_paper_id(self, id:list[int]|int, eager_load: bool = False):
+    def query_paper_id(self, id:list[int]|int, eager_load: bool = True):
         if not isinstance(id, list):
             id = [id]
         if not all(isinstance(i, int) for i in id):

@@ -16,5 +16,7 @@ logs
 *.html
 page_1.json
 *.ipynb
+*.txt
 
 work/*
+
