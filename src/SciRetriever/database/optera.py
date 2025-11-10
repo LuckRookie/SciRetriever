@@ -23,7 +23,7 @@ class Optera(ABC):
 
 
     @classmethod
-    def connect_db(cls,db_dir:str,create_db:bool = False):
+    def connect_db(cls,db_dir:str,create_db:bool = True):
         
         if isinstance(db_dir,Path):
             db_dir = str(db_dir)

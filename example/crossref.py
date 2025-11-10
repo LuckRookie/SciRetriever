@@ -32,7 +32,7 @@ result = Client.get_works(
     filters=filters,
     )
 insert = Insert.connect_db(
-    db_dir='/workplace/duanjw/project/SciRetriever/CR_energetic_materials_synthesis.db',
+    db_dir='/home/xxx/CR_catalytic.db',
     create_db=True
     )
 while True:
