@@ -16,6 +16,16 @@ def run_year(
     ):
     """
     从start_year开始,下载query在start_year到cut_year年之间的所有相关论文
+    
+    Args:
+        query (str): 搜索关键词
+        is_fill (bool, optional): 是否填充已下载的论文, 该项如果开启会极大增加被GS封禁的风险. Defaults to False. 
+        start_year (int, optional): 开始年份. Defaults to 2000.
+        cut_year (int, optional): 结束年份. Defaults to 2025.
+        session (GSClient|None, optional): Google Scholar客户端. Defaults to None.
+        root_dir (str|Path|None, optional): 保存路径. Defaults to None.
+        max_cycles (int, optional): 最大重试次数. Defaults to 5.
+        log_path (str|Path|None, optional): 日志路径. Defaults to None.
     """
     if root_dir is None:
         root_dir = Path.cwd()
