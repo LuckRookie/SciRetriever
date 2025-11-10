@@ -14,6 +14,9 @@ def run_year(
     max_cycles:int = 5,
     log_path:str|Path|None = None,
     ):
+    """
+    从start_year开始,下载query在start_year到cut_year年之间的所有相关论文
+    """
     if root_dir is None:
         root_dir = Path.cwd()
         
