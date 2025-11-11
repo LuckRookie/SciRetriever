@@ -7,7 +7,6 @@ from SciRetriever.database.optera import Optera
 from SciRetriever.retriver.scihub import ScihubClient,ScihubRetriver
 api_key = "xxx"
 client = ScihubClient(
-    api_key=api_key,
     rate_limit=30,
 )
 retriver = ScihubRetriver(
