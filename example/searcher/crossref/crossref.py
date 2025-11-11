@@ -18,15 +18,17 @@ query_params: 查询参数字典，支持以下形式：
     - 字段级搜索: {'title': '纳米材料', 'author': 'Smith'}
     - 混合模式: {'query': 'combustion', 'abstract': '爆炸'}
 '''
-
+# 查询参数
 query = {
-    "query": "energetic materials synthesis",
+    "query": "catalytic",
 }
+# 筛选条件
 filters = {
     "type":"journal-article",
     "from-pub-date":"2000-01-01",
     "until-pub-date":"2025-12-31"
 }
+# 由于crossref的api返回的结果是分页的,所以需要循环查询
 result = Client.get_works(
     query_params=query,
     filters=filters,
@@ -35,12 +37,20 @@ insert = Insert.connect_db(
     db_dir='/home/xxx/CR_catalytic.db',
     create_db=True
     )
+# 过滤title
+words = ["catalytic","catalytic material","catalytic component","catalytic crystal","catalytic molecule"]
+
 while True:
     if result is None:
         break
     paper_list = result.export_papers()
-    paper_list = [paper.export_paper() for paper in paper_list 
-                  if (paper.doi is not None) and (paper.title is not None) and (paper.type == "journal-article") and filter_title(paper.title)]
+    paper_list = [
+        paper.export_paper() for paper in paper_list 
+                  if (paper.doi is not None) and 
+                  (paper.title is not None) and 
+                  (paper.type == "journal-article") and 
+                  filter_title(words,paper.title)
+        ]
     insert.from_paper_list(paper_list)
     
     result = next(result)

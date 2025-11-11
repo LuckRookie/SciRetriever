@@ -1,9 +1,4 @@
-
-
-words = ["energetic material","energetic component","energetic crystal","energetic molecule","explosive",
-         'propellant',"hmx","tnt",'rdx','cl-20','tatb','cyclo-N5',"polymeric nitrogen","pentazolate"]
-
-def filter_title(title:str) -> bool:
+def filter_title(words:list[str],title:str) -> bool:
     if any(word in title.lower() for word in words):
         return True
     else:

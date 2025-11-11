@@ -230,7 +230,7 @@ class Crossref():
             items = items,
             method="works",
         )
-    def items2papers(self,item) -> PaperMetadata:
+    def items2papers(self,item:dict[str,Any]) -> PaperMetadata:
         title = item.get("title",[None])[0]
         authors = self.get_authors(item.get("author",[]))
         abstract = item.get("abstract")
