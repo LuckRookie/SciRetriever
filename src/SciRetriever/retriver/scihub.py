@@ -84,6 +84,8 @@ class ScihubClient(NetworkClient):
         if frame:
             url = frame.get('src') if not frame.get('src').startswith('//') else 'http:' + frame.get('src')
             self.download_file(url=url,save_path=path)
+        else:
+            logger.info(f"scihub中没有文章{doi}，跳过下载")
 
 class ScihubRetriver(BaseRetriver):
     def __init__(
