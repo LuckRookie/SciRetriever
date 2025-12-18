@@ -3,7 +3,7 @@ from SciRetriever.database.optera import Query, Delete
 
 def filter_duplicate_paper(db_dir: str):
     """
-    根据论文标题和DOI去重，只要同时重复就判定为重复数据
+    根据论文标题和DOI去重，只要DOI相同直接去重
     对于DOI为空的情况，仅比较标题
     
     Args:
@@ -29,10 +29,9 @@ def filter_duplicate_paper(db_dir: str):
                 seen_titles.add(title)
         # DOI不为空时比较标题或DOI
         else:
-            if title in seen_titles and doi in seen_dois:
+            if doi in seen_dois:
                 duplicate_ids.append(paper.id)
             else:
-                seen_titles.add(title)
                 seen_dois.add(doi)
 
     # 执行删除

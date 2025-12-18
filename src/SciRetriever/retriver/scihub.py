@@ -59,7 +59,7 @@ class ScihubClient(NetworkClient):
         res = self.session.get(url="http://tool.yovisun.com/scihub/")
         s = self.get_soup(res.content)
         for a in s.find_all("a", href=True):
-            if "sci-hub." in a["href"]:
+            if "sci-hub." in a["href"] and "https" in a["href"]:
                 urls.append(a["href"])
         return urls
 
@@ -79,13 +79,22 @@ class ScihubClient(NetworkClient):
             raise Exception('http://tool.yovisun.com/scihub/中各个链接均无法在程序中正常运行，下载失败！')
 
         logger.info(f"获取 {self.base_url + urllib.parse.quote(doi)} 中...")
-        s = self.get_soup(res.content)
-        frame = s.find('iframe') or s.find('embed')
-        if frame:
-            url = frame.get('src') if not frame.get('src').startswith('//') else 'http:' + frame.get('src')
+        s: BeautifulSoup = self.get_soup(res.content)
+        # frame = s.find('iframe') or s.find('embed') 
+        # if frame:
+        #     url = frame.get('src') if not frame.get('src').startswith('//') else 'http:' + frame.get('src')
+        #     self.download_file(url=url,save_path=path)
+        # else:
+        #     logger.info(f"scihub中没有文章{doi}，跳过下载")
+        download_panel = s.find('div', class_='panel')
+        if download_panel:
+            download_button = download_panel.find('div', class_='download')
+            a = download_button.find('a')
+            url = a.get('href') if not a.get('href').startswith('/') else self.base_url.rstrip("/") + a.get('href')
             self.download_file(url=url,save_path=path)
         else:
             logger.info(f"scihub中没有文章{doi}，跳过下载")
+            raise Exception(f"scihub中没有文章{doi}，跳过下载")
 
 class ScihubRetriver(BaseRetriver):
     def __init__(
@@ -113,6 +122,7 @@ class ScihubRetriver(BaseRetriver):
             name = doi_path
         file_path = download_path / f"{name}.pdf"
         self.client.download_doi(doi=doi,file_path=file_path)
+        return file_path
         # file_path.mkdir(parents=True,exist_ok=True)
 
         

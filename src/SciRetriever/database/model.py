@@ -81,6 +81,8 @@ class Paper(Base):
             "issue": self.issue,
             "pages": self.pages,
             "keywords": self.keywords,
+            "type": self.type,
+            "source": self.source,
             "paper_metadata": self.paper_metadata,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "pdf_downloaded": self.pdf_downloaded,
