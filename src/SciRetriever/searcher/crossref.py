@@ -99,8 +99,8 @@ class CRClient(NetworkClient):
         根据DOI获取论文信息
         """
         response = self.get(url=self.base_url + f"/works/{doi}")
-
-        return response.json()
+        crossref = Crossref.from_works(response=response, params=params, session=self)
+        return crossref
 
     def get_works_by_title(self, title: str) -> "Crossref":
         """
