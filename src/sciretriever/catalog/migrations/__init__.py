@@ -1,0 +1,1 @@
+"""Ordered catalog schema migrations."""

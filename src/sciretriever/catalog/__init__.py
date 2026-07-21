@@ -1,0 +1,99 @@
+"""Stable catalog engine and migration API."""
+
+from importlib import import_module
+
+from .engine import (
+    DEFAULT_BUSY_TIMEOUT_MS,
+    CatalogEngine,
+    create_catalog_engine,
+    open_catalog_engine,
+    open_read_only_catalog_engine,
+)
+from .assets import AssetRepository
+from .identity import IdentityResolver
+from .migrate import applied_migrations, apply_migrations
+from .records import (
+    AcquisitionAttemptRecord,
+    AcquisitionJobRecord,
+    AttemptRecord,
+    ArtifactRegistration,
+    AssetIntentRecord,
+    DomainRunRecord,
+    DownloadRequestRecord,
+    EventRecord,
+    FailureRecord,
+    IdentityResolution,
+    IdentityResolutionResult,
+    IdentityReviewRecord,
+    JobRecord,
+    MetadataLabelRecord,
+    CitationRecord,
+    LightStructureRecord,
+    NormalizedArtifactRecord,
+    PackageVersionRecord,
+    ProcessingRunRecord,
+    RawAssetRecord,
+    WorkRecord,
+    WorkAssetRecord,
+)
+from .repository import CatalogRepository, ReadOnlyCatalogView, canonical_json
+from .artifacts import ArtifactRepository
+from .enrichment import CitationRepository, EnrichmentRepository
+from .packages import PackageSourceRepository, PackageVersionRepository
+from .processing import ProcessingRunRepository
+
+
+_domain_runs_api = import_module(f"{__name__}.domain_runs")
+DomainRunRepository = getattr(_domain_runs_api, "DomainRunRepository")
+LEGAL_DOMAIN_RUN_TRANSITIONS = getattr(_domain_runs_api, "LEGAL_DOMAIN_RUN_TRANSITIONS")
+_jobs_api = import_module(f"{__name__}.jobs")
+JobRepository = getattr(_jobs_api, "JobRepository")
+LEGAL_JOB_STATE_TRANSITIONS = getattr(_jobs_api, "LEGAL_JOB_STATE_TRANSITIONS")
+
+
+__all__ = (
+    "DEFAULT_BUSY_TIMEOUT_MS",
+    "AcquisitionAttemptRecord",
+    "AcquisitionJobRecord",
+    "AttemptRecord",
+    "AssetIntentRecord",
+    "ArtifactRegistration",
+    "ArtifactRepository",
+    "AssetRepository",
+    "CatalogEngine",
+    "CatalogRepository",
+    "CitationRecord",
+    "CitationRepository",
+    "DomainRunRecord",
+    "DomainRunRepository",
+    "DownloadRequestRecord",
+    "EventRecord",
+    "FailureRecord",
+    "EnrichmentRepository",
+    "IdentityResolution",
+    "IdentityResolutionResult",
+    "IdentityResolver",
+    "IdentityReviewRecord",
+    "JobRecord",
+    "JobRepository",
+    "LEGAL_DOMAIN_RUN_TRANSITIONS",
+    "LEGAL_JOB_STATE_TRANSITIONS",
+    "MetadataLabelRecord",
+    "LightStructureRecord",
+    "NormalizedArtifactRecord",
+    "PackageSourceRepository",
+    "PackageVersionRecord",
+    "PackageVersionRepository",
+    "ProcessingRunRecord",
+    "ProcessingRunRepository",
+    "RawAssetRecord",
+    "ReadOnlyCatalogView",
+    "WorkRecord",
+    "WorkAssetRecord",
+    "applied_migrations",
+    "apply_migrations",
+    "canonical_json",
+    "create_catalog_engine",
+    "open_catalog_engine",
+    "open_read_only_catalog_engine",
+)
