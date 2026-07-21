@@ -1,0 +1,52 @@
+# Copy to config.toml and keep only the settings you need.
+schema_version = 1
+
+[paths]
+catalog = "./catalog.sqlite"
+storage_root = "./storage"
+
+# Uncomment only the credentials you use and replace every placeholder.
+# On POSIX, a config containing this section must have mode 0600 or stricter.
+# [credentials]
+# unpaywall_email = "YOUR_UNPAYWALL_EMAIL"
+# semantic_scholar_api_key = "YOUR_SEMANTIC_SCHOLAR_API_KEY"
+# elsevier_api_key = "YOUR_ELSEVIER_API_KEY"
+# wiley_api_key = "YOUR_WILEY_API_KEY"
+# springer_api_key = "YOUR_SPRINGER_API_KEY"
+
+[discovery]
+sources = ["crossref", "europe-pmc", "arxiv"]
+# Also supported: "openalex", "semantic-scholar", "elsevier", "springer".
+# Elsevier and Springer require their credentials above when selected.
+limit = 100
+timeout = 30.0
+taxonomy = "literature-topic"
+taxonomy_version = "1"
+crossref_mailto = "researcher@example.org"
+
+[discovery.filters]
+year_from = 2020
+year_to = 2026
+
+[discovery.label_rules]
+battery = ["electrolyte", "lithium"]
+
+[acquisition]
+providers = ["openalex", "semantic-scholar"]
+# source_plan = "./plans/source-plan.json" # Use instead of providers, never with it.
+routing = "serial"
+asset_role = "primary_pdf"
+timeout = 30.0
+host_concurrency = 2
+host_min_interval = 0.25
+forbidden_urls = "./rules/forbidden-urls.txt"
+
+[package]
+max_input_bytes = 67108864
+max_pages = 2000
+max_structural_units = 100000
+max_depth = 256
+max_elements = 500000
+max_text_characters = 20000000
+summary_max_characters = 1000
+enrichment = true

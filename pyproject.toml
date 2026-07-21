@@ -1,7 +1,7 @@
 [project]
 name = "sciretriever"
 version = "0.1.0"
-description = "Add your description here"
+description = "Scientific-literature acquisition, cataloging, normalization, and light-structuring system that stops at a versioned, provenance-bearing DocumentPackage; domain-specific extraction is out of scope."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "pypdf2>=3.0.1",
     "requests>=2.32.3",
     "sqlalchemy>=2.0.41",
+    "tomli>=1.1.0; python_version < '3.11'",
 ]
 
 
@@ -22,4 +23,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-sciretriever = "sciretriever.main:main"
+sciretriever = "sciretriever.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

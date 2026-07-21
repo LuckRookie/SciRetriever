@@ -1,5 +1,5 @@
 {
-    "extraPaths": ["."],
+    "extraPaths": ["src"],
     "strict": [
         "reportUnknownMemberType",
         "reportAttributeAccessIssue",
