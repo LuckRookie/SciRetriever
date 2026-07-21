@@ -1,5 +1,13 @@
-from SciRetriever.retriver.elsevier import ElsevierClient,ElsevierRetriver
-api_key = "xxxx"
+import importlib
+import os
+
+api_key = os.environ.get("ELSEVIER_API_KEY")
+if not api_key:
+    raise RuntimeError("ELSEVIER_API_KEY is required.")
+
+elsevier = importlib.import_module("SciRetriever.retriver.elsevier")
+ElsevierClient = elsevier.ElsevierClient
+ElsevierRetriver = elsevier.ElsevierRetriver
 client = ElsevierClient(
     api_key=api_key,
     rate_limit=10,

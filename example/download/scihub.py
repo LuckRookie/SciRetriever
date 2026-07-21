@@ -1,11 +1,20 @@
+import importlib
+import os
 from pathlib import Path
 from time import sleep
 import requests
 
-from SciRetriever.database.model import Paper
-from SciRetriever.database.optera import Optera
-from SciRetriever.retriver.scihub import ScihubClient,ScihubRetriver
-api_key = "xxx"
+api_key = os.environ.get("SCIHUB_API_KEY")
+if not api_key:
+    raise RuntimeError("SCIHUB_API_KEY is required.")
+
+database_model = importlib.import_module("SciRetriever.database.model")
+optera_module = importlib.import_module("SciRetriever.database.optera")
+scihub = importlib.import_module("SciRetriever.retriver.scihub")
+Paper = database_model.Paper
+Optera = optera_module.Optera
+ScihubClient = scihub.ScihubClient
+ScihubRetriver = scihub.ScihubRetriver
 client = ScihubClient(
     rate_limit=30,
 )
@@ -13,7 +22,10 @@ retriver = ScihubRetriver(
     client=client,
 )
 
-optera = Optera.connect_db("all.db")
+database = os.environ.get("SCIRETRIEVER_DOWNLOAD_DB")
+if not database:
+    raise RuntimeError("SCIRETRIEVER_DOWNLOAD_DB must name an existing database.")
+optera = Optera.connect_db(database, create_db=False)
 pdf_download_path = Path("./scihub")
 
 session = optera.sessionfactory()

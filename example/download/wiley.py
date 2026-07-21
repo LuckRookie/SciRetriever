@@ -1,11 +1,20 @@
+import importlib
+import os
 from pathlib import Path
 from time import sleep
 import requests
 
-from SciRetriever.database.model import Paper
-from SciRetriever.database.optera import Optera
-from SciRetriever.retriver.wiley import WileyClient,WileyRetriver
-api_key = "xxx"
+api_key = os.environ.get("WILEY_TDM_API_KEY")
+if not api_key:
+    raise RuntimeError("WILEY_TDM_API_KEY is required.")
+
+database_model = importlib.import_module("SciRetriever.database.model")
+optera_module = importlib.import_module("SciRetriever.database.optera")
+wiley = importlib.import_module("SciRetriever.retriver.wiley")
+Paper = database_model.Paper
+Optera = optera_module.Optera
+WileyClient = wiley.WileyClient
+WileyRetriver = wiley.WileyRetriver
 client = WileyClient(
     api_key=api_key,
     rate_limit=30,
@@ -14,7 +23,10 @@ retriver = WileyRetriver(
     client=client,
 )
 
-optera = Optera.connect_db("all.db")
+database = os.environ.get("SCIRETRIEVER_DOWNLOAD_DB")
+if not database:
+    raise RuntimeError("SCIRETRIEVER_DOWNLOAD_DB must name an existing database.")
+optera = Optera.connect_db(database, create_db=False)
 pdf_download_path = Path("./wiley")
 
 session = optera.sessionfactory()

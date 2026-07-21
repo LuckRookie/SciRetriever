@@ -1,5 +1,5 @@
 from sqlalchemy.exc import NoResultFound
-import os
+import sqlite3
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.orm import joinedload, sessionmaker,Session
 from sqlalchemy import create_engine, inspect
@@ -10,6 +10,7 @@ from collections.abc import Generator
 from typing import Any
 
 from .model import Paper,Base
+from SciRetriever.database.retired_paths import reject_retired_database_creation
 '''
 对于每一个数据库都有一个操作单元,使用操作单元可以进行增删改查
 '''
@@ -23,18 +24,19 @@ class Optera(ABC):
 
 
     @classmethod
-    def connect_db(cls,db_dir:str,create_db:bool = True):
-        
-        if isinstance(db_dir,Path):
-            db_dir = str(db_dir)
-        
-        engine = create_engine(f'sqlite:///{db_dir}')
-        
+    def connect_db(cls, db_dir: str | Path, create_db: bool = False):
+        database = Path(db_dir).expanduser().resolve()
         if create_db:
+            reject_retired_database_creation(database, Path(__file__))
+            if not database.parent.is_dir():
+                raise FileNotFoundError(f"Database parent directory not found: {database.parent}")
+            engine = create_engine(f"sqlite:///{database}")
             Base.metadata.create_all(engine)
-            
-        if not os.path.exists(db_dir):
-            raise FileNotFoundError("Database directory not found: {db_dir}")
+        else:
+            if not database.is_file():
+                raise FileNotFoundError(f"Database file not found: {database}")
+            uri = f"file:{database}?mode=rw"
+            engine = create_engine("sqlite://", creator=lambda: sqlite3.connect(uri, uri=True))
                 
         return cls(
             DB_engine=engine,
