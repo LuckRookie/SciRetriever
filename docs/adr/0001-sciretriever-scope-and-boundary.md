@@ -120,11 +120,11 @@ The vertical line is the domain boundary. Everything left of it remains generic 
 
 ## Compatibility strategy
 
-This ADR does not itself delete or rewrite current scripts, providers, or retired-database safeguards. [ADR 0002](0002-work-centered-literature-library.md) later supersedes the compatibility promise for unwanted download-task behavior: its approved WP0 may delete or decouple task-centered CLI, configuration, durable control state, retry-child and candidate-checkpoint behavior while preserving the scope boundary, immutable evidence and retired-database safeguards defined here.
+This ADR does not require preserving pre-v1 implementation shapes. [ADR 0002](0002-work-centered-literature-library.md) supersedes compatibility promises for unwanted task-centered and legacy-catalog behavior: its approved work may directly delete incompatible CLI, configuration, schema, adapters and control state while preserving the scope boundary and immutable evidence defined here.
 
-Retained migration work follows an adapter pattern. The old `Paper` ORM or `Optera` rows are wrapped only when approved migration still needs them; removed behavior receives no compatibility adapter. Legacy shapes never become the v2 schema. The chemistry `synthsis` script remains only a candidate downstream domain pack, not a first-release commitment or core capability.
+The current pre-v1 product has no supported legacy catalog and therefore no migration adapter boundary. Old `Paper` ORM, `Optera` rows, retired-database guards and incompatible legacy shapes may be deleted directly. If a future supported input requires migration, its contract and safeguards require a new explicit owner decision. The chemistry `synthsis` script remains outside the SciRetriever core boundary.
 
-Legacy shapes that remain part of the approved product enter through adapters and must not define the v2 schema. Behavior explicitly removed or decoupled by ADR 0002 does not require a compatibility adapter. This ADR still does not authorize changes outside that later decision; it sets the scope boundary every retained or replacement implementation must satisfy. See the [architecture principles](../architecture/principles.md) for the responsibility matrix and the `DocumentPackage` minimum contract.
+No legacy shape is part of the approved pre-v1 product. ADR 0002 authorizes direct replacement within its Work-centered scope; this ADR continues to set the domain and `DocumentPackage` boundary every replacement implementation must satisfy. See the [architecture principles](../architecture/principles.md) for the responsibility matrix and minimum contract.
 
 ## When a new ADR is required
 
