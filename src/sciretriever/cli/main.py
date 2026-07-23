@@ -6,12 +6,12 @@ from pathlib import Path
 import sys
 
 from sciretriever import __version__
-from sciretriever.cli import acquire, catalog, discover, package, preflight, report
+from sciretriever.cli import acquire, catalog, discover, library, package, preflight, report, search
 from sciretriever.config import CONFIG_ENV, SciRetrieverConfig, load_config
 from sciretriever.errors import ConfigError
 
 
-COMMANDS = ("discover", "acquire", "preflight", "catalog", "package", "report")
+COMMANDS = ("discover", "search", "library", "acquire", "preflight", "catalog", "package", "report")
 PLACEHOLDER_COMMANDS: tuple[str, ...] = ()
 
 
@@ -38,6 +38,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "discover", help="discover literature metadata and write a JSONL manifest"
     )
     discover.configure_parser(discover_parser)
+    search_parser = subparsers.add_parser(
+        "search", help="search metadata providers and persist canonical Works"
+    )
+    search.configure_parser(search_parser)
+    library_parser = subparsers.add_parser(
+        "library", help="read canonical Work library projections"
+    )
+    library.configure_parser(library_parser)
     acquire_parser = subparsers.add_parser(
         "acquire", help="acquire and preserve a role-specific raw asset"
     )
@@ -165,6 +173,26 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
             for label, terms in values.label_rules:
                 for term in terms:
                     injected.extend(("--label-rule", f"{label}={term}"))
+    elif command == "search":
+        values = config.search
+        _add_scalar(injected, present, "--catalog", config.paths.catalog)
+        _add_scalar(injected, present, "--level", values.level)
+        _add_scalar(injected, present, "--limit", values.limit)
+        _add_scalar(injected, present, "--provider-timeout", values.provider_timeout)
+        _add_scalar(injected, present, "--max-concurrency", values.max_concurrency)
+        _add_scalar(injected, present, "--crossref-mailto", values.crossref_mailto)
+        if "--provider" not in present and values.providers is not None:
+            for provider in values.providers:
+                injected.extend(("--provider", provider))
+        if (
+            "--provider" not in present
+            and "--precedence" not in present
+            and values.precedence is not None
+        ):
+            for provider in values.precedence:
+                injected.extend(("--precedence", provider))
+    elif command == "library":
+        _add_scalar(injected, present, "--catalog", config.paths.catalog)
     elif command == "acquire":
         values = config.acquisition
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
@@ -234,6 +262,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "discover":
         discover.validate_arguments(parser, args)
         return discover.run(args)
+
+    if args.command == "search":
+        search.validate_arguments(parser, args)
+        return search.run(args)
+
+    if args.command == "library":
+        return library.run(args)
 
     if args.command == "acquire":
         acquire.validate_arguments(parser, args)
