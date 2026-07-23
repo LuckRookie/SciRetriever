@@ -1,6 +1,6 @@
 # Copy to config.toml and keep only the settings you need.
 # This file lists only fields accepted by the current strict parser.
-# Planned library, LLM, Sci-Hub, translator, and browser fields are unsupported.
+# Planned LLM, Sci-Hub, translator, and browser fields are unsupported.
 schema_version = 1
 
 [paths]
@@ -32,6 +32,16 @@ year_to = 2026
 
 [discovery.label_rules]
 battery = ["electrolyte", "lithium"]
+
+[search]
+level = "metadata"
+limit = 100
+providers = ["crossref", "europe-pmc", "arxiv"]
+# Precedence must contain every configured provider exactly once.
+precedence = ["crossref", "europe-pmc", "arxiv"]
+provider_timeout = 30.0
+max_concurrency = 8
+crossref_mailto = "researcher@example.org"
 
 [acquisition]
 providers = ["openalex", "semantic-scholar"]

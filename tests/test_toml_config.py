@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever.cli import acquire as acquire_cli
-from sciretriever.cli.main import _extract_config_selectors, main
+from sciretriever.cli.main import _extract_config_selectors, _inject_config, main
 from sciretriever.config import MAX_CONFIG_BYTES, load_config
 from sciretriever.errors import ConfigError
 from sciretriever.normalization.contracts import NormalizationParameters
@@ -210,6 +210,56 @@ enrichment = false
             (self.base / "plans/source-plan.json").resolve(),
         )
 
+    def test_search_config_accepts_only_wp2_metadata_settings(self) -> None:
+        config = load_config(self.write(
+            """schema_version = 1
+[search]
+level = "metadata"
+limit = 100
+providers = ["crossref", "openalex", "semantic-scholar"]
+precedence = ["semantic-scholar", "crossref", "openalex"]
+provider_timeout = 8.5
+max_concurrency = 3
+crossref_mailto = "reader@example.org"
+"""
+        ))
+        self.assertEqual(config.search.level, "metadata")
+        self.assertEqual(config.search.limit, 100)
+        self.assertEqual(config.search.providers, ("crossref", "openalex", "semantic-scholar"))
+        self.assertEqual(config.search.precedence, ("semantic-scholar", "crossref", "openalex"))
+        self.assertEqual(config.search.provider_timeout, 8.5)
+        self.assertEqual(config.search.max_concurrency, 3)
+        self.assertEqual(config.search.crossref_mailto, "reader@example.org")
+
+    def test_search_config_rejects_unknown_wrong_and_future_values(self) -> None:
+        cases = {
+            "unknown.toml": "unknown = true",
+            "level.toml": 'level = "download"',
+            "limit.toml": "limit = 0",
+            "timeout.toml": "provider_timeout = inf",
+            "concurrency.toml": "max_concurrency = true",
+            "mailto.toml": 'crossref_mailto = "   "',
+            "providers-type.toml": 'providers = "crossref"\nprecedence = ["crossref"]',
+            "unsupported-provider.toml": 'providers = ["unknown"]\nprecedence = ["unknown"]',
+            "duplicate-precedence.toml": 'providers = ["crossref", "arxiv"]\nprecedence = ["crossref", "crossref"]',
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n[search]\n{body}", name))
+
+    def test_search_provider_precedence_must_be_complete_and_exact(self) -> None:
+        cases = {
+            "providers-only.toml": 'providers = ["crossref"]',
+            "precedence-only.toml": 'precedence = ["crossref"]',
+            "missing.toml": 'providers = ["crossref", "arxiv"]\nprecedence = ["crossref"]',
+            "extra.toml": 'providers = ["crossref"]\nprecedence = ["crossref", "arxiv"]',
+            "duplicate-provider.toml": 'providers = ["crossref", "crossref"]\nprecedence = ["crossref"]',
+            "empty.toml": "providers = []\nprecedence = []",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n[search]\n{body}", name))
+
     def test_preflight_defaults_are_bounded(self) -> None:
         config = load_config(self.write("schema_version = 1"))
         self.assertEqual(config.acquisition.preflight.readiness, "none")
@@ -357,6 +407,50 @@ host_min_interval = 0.5
         args = run.call_args.args[0]
         self.assertEqual(args.provider, "crossref")
         self.assertIsNone(args.providers)
+
+    def test_search_config_injection_and_cli_values_replace_config(self) -> None:
+        config = load_config(self.write(
+            """schema_version = 1
+[paths]
+catalog = "catalog.sqlite"
+[search]
+level = "metadata"
+limit = 100
+providers = ["crossref", "openalex"]
+precedence = ["openalex", "crossref"]
+provider_timeout = 9.5
+max_concurrency = 4
+crossref_mailto = "configured@example.org"
+"""
+        ))
+        injected = _inject_config(["search", "catalysis"], config)
+        self.assertEqual(injected, [
+            "search", "catalysis", "--catalog", str(self.catalog),
+            "--level", "metadata", "--limit", "100", "--provider-timeout", "9.5",
+            "--max-concurrency", "4", "--crossref-mailto", "configured@example.org",
+            "--provider", "crossref", "--provider", "openalex",
+            "--precedence", "openalex", "--precedence", "crossref",
+        ])
+
+        explicit = [
+            "search", "catalysis", "--catalog", "explicit.sqlite", "--level", "metadata",
+            "--limit=7", "--provider-timeout", "2", "--max-concurrency=2",
+            "--crossref-mailto", "explicit@example.org", "--provider", "arxiv",
+            "--precedence", "arxiv",
+        ]
+        self.assertEqual(_inject_config(explicit, config), explicit)
+
+        provider_only = ["search", "catalysis", "--provider", "arxiv"]
+        provider_only_result = _inject_config(provider_only, config)
+        self.assertNotIn("--precedence", provider_only_result)
+        self.assertEqual(provider_only_result[:4], provider_only)
+
+        precedence_only = ["search", "catalysis", "--precedence", "arxiv"]
+        precedence_only_result = _inject_config(precedence_only, config)
+        self.assertEqual(precedence_only_result.count("--precedence"), 1)
+        self.assertEqual(precedence_only_result[-4:], [
+            "--provider", "crossref", "--provider", "openalex",
+        ])
 
     def test_environment_credentials_override_toml_and_all_five_reach_constructors(self) -> None:
         config_path = self.write(

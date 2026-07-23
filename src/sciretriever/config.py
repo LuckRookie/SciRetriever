@@ -24,7 +24,7 @@ STORAGE_ROOT_ENV = "SCIRETRIEVER_STORAGE_ROOT"
 CONFIG_ENV = "SCIRETRIEVER_CONFIG"
 MAX_CONFIG_BYTES = 1024 * 1024
 
-_ROOT_KEYS = {"schema_version", "paths", "credentials", "discovery", "acquisition", "package"}
+_ROOT_KEYS = {"schema_version", "paths", "credentials", "discovery", "search", "acquisition", "package"}
 _CREDENTIAL_KEYS = {
     "unpaywall_email",
     "semantic_scholar_api_key",
@@ -36,6 +36,7 @@ _DISCOVERY_SOURCES = {
     "crossref", "europe-pmc", "arxiv", "openalex", "semantic-scholar",
     "elsevier", "springer",
 }
+METADATA_PROVIDERS = frozenset(_DISCOVERY_SOURCES)
 ACQUISITION_PROVIDERS = frozenset({
     "direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex",
     "semantic-scholar", "elsevier", "wiley", "springer",
@@ -73,6 +74,17 @@ class DiscoveryConfig:
     crossref_mailto: str | None = None
     filters: tuple[tuple[str, str], ...] = ()
     label_rules: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SearchConfig:
+    level: str | None = None
+    limit: int | None = None
+    providers: tuple[str, ...] | None = None
+    precedence: tuple[str, ...] | None = None
+    provider_timeout: float | None = None
+    max_concurrency: int | None = None
+    crossref_mailto: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +126,7 @@ class SciRetrieverConfig:
     paths: PathsConfig = PathsConfig()
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig, repr=False)
     discovery: DiscoveryConfig = DiscoveryConfig()
+    search: SearchConfig = SearchConfig()
     acquisition: AcquisitionConfig = AcquisitionConfig()
     package: PackageConfig = PackageConfig()
 
@@ -258,6 +271,42 @@ def _parse_discovery(root: Mapping[str, Any]) -> DiscoveryConfig:
     )
 
 
+def _parse_search(root: Mapping[str, Any]) -> SearchConfig:
+    allowed = {
+        "level", "limit", "providers", "precedence", "provider_timeout",
+        "max_concurrency", "crossref_mailto",
+    }
+    table = _table(root, "search", allowed)
+    has_providers = "providers" in table
+    has_precedence = "precedence" in table
+    if has_providers != has_precedence:
+        raise _error("search", "must define providers and precedence together")
+    providers = None
+    precedence = None
+    if has_providers:
+        providers = _string_list(table["providers"], "search.providers", nonempty=True)
+        precedence = _string_list(table["precedence"], "search.precedence", nonempty=True)
+        if any(provider not in METADATA_PROVIDERS for provider in providers):
+            raise _error("search.providers", "contains an unsupported provider")
+        if any(provider not in METADATA_PROVIDERS for provider in precedence):
+            raise _error("search.precedence", "contains an unsupported provider")
+        if set(precedence) != set(providers):
+            raise _error("search.precedence", "must contain every configured provider exactly once")
+    return SearchConfig(
+        level=None if "level" not in table else _choice(table["level"], "search.level", {"metadata"}),
+        limit=None if "limit" not in table else _positive_int(table["limit"], "search.limit"),
+        providers=providers,
+        precedence=precedence,
+        provider_timeout=None if "provider_timeout" not in table else _positive_number(
+            table["provider_timeout"], "search.provider_timeout"
+        ),
+        max_concurrency=None if "max_concurrency" not in table else _positive_int(
+            table["max_concurrency"], "search.max_concurrency"
+        ),
+        crossref_mailto=_optional_string(table, "crossref_mailto", "search"),
+    )
+
+
 def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConfig:
     allowed = {"providers", "source_plan", "routing", "asset_role", "timeout", "host_concurrency", "host_min_interval", "forbidden_urls", "preflight"}
     table = _table(root, "acquisition", allowed)
@@ -397,6 +446,7 @@ def load_config(path: str | os.PathLike[str]) -> SciRetrieverConfig:
         paths=_parse_paths(root, parent),
         credentials=credentials,
         discovery=_parse_discovery(root),
+        search=_parse_search(root),
         acquisition=_parse_acquisition(root, parent),
         package=_parse_package(root),
     )
@@ -429,7 +479,7 @@ def get_credential(env_var: str, *, env: Mapping[str, str] | None = None) -> str
 
 __all__ = (
     "CONFIG_ENV", "MAX_CONFIG_BYTES", "STORAGE_ROOT_ENV", "AcquisitionConfig",
-    "ACQUISITION_PROVIDERS", "PreflightConfig",
+    "ACQUISITION_PROVIDERS", "METADATA_PROVIDERS", "PreflightConfig",
     "CredentialsConfig", "DiscoveryConfig", "PackageConfig", "PathsConfig",
-    "SciRetrieverConfig", "get_credential", "load_config", "resolve_storage_root",
+    "SciRetrieverConfig", "SearchConfig", "get_credential", "load_config", "resolve_storage_root",
 )
