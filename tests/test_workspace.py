@@ -18,6 +18,7 @@ WORKSPACE_MARKER_CONTENT = workspace.WORKSPACE_MARKER_CONTENT
 WORKSPACE_ROOT_ENV = workspace.WORKSPACE_ROOT_ENV
 find_repository_root = workspace.find_repository_root
 find_workspace_root = workspace.find_workspace_root
+require_staged_write_override = workspace.require_staged_write_override
 
 
 class WorkspaceResolverTests(TestCase):
@@ -136,17 +137,71 @@ class WorkspaceResolverTests(TestCase):
             package.mkdir(parents=True)
             self.assertEqual(find_repository_root(nested), root)
 
-    def test_real_repository_matches_legacy_resolver(self) -> None:
-        from SciRetriever.workspace_paths import (
-            WORKSPACE_MARKER_CONTENT as LEGACY_MARKER_CONTENT,
-            find_repository_root as find_legacy_repository_root,
-            find_workspace_root as find_legacy_workspace_root,
+    def test_staged_write_requires_explicit_override(self) -> None:
+        target = REPOSITORY / "guarded.sqlite"
+        with self.assertRaisesRegex(PermissionError, "staged SciRetriever repository"):
+            require_staged_write_override(
+                target,
+                allow_staged_write=False,
+                start=REPOSITORY,
+            )
+        self.assertEqual(
+            require_staged_write_override(
+                target,
+                allow_staged_write=True,
+                start=REPOSITORY,
+            ),
+            target.resolve(),
         )
 
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(find_repository_root(REPOSITORY), find_legacy_repository_root(REPOSITORY))
-            self.assertEqual(find_workspace_root(REPOSITORY), find_legacy_workspace_root(REPOSITORY))
-        self.assertEqual(WORKSPACE_MARKER_CONTENT, LEGACY_MARKER_CONTENT)
+    def test_staged_write_check_fails_closed_for_invalid_markers(self) -> None:
+        marker_cases = (None, b"wrong\n", "symlink")
+        for marker_case in marker_cases:
+            with self.subTest(marker_case=marker_case), tempfile.TemporaryDirectory() as directory:
+                workspace_root = Path(directory)
+                marker = workspace_root / WORKSPACE_MARKER
+                if isinstance(marker_case, bytes):
+                    marker.write_bytes(marker_case)
+                elif marker_case == "symlink":
+                    target = workspace_root / "marker-target"
+                    target.write_bytes(WORKSPACE_MARKER_CONTENT)
+                    marker.symlink_to(target)
+
+                with mock.patch.dict(
+                    os.environ,
+                    {WORKSPACE_ROOT_ENV: str(workspace_root)},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(PermissionError, "workspace could not be verified"):
+                        require_staged_write_override(
+                            REPOSITORY / "guarded.sqlite",
+                            allow_staged_write=False,
+                            start=REPOSITORY,
+                        )
+
+    def test_staged_write_check_works_without_source_repository_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace_root = Path(directory)
+            staged_root = workspace_root / "literature" / "retrieval" / "SciRetriever"
+            staged_root.mkdir(parents=True)
+            (workspace_root / WORKSPACE_MARKER).write_bytes(WORKSPACE_MARKER_CONTENT)
+            target = staged_root / "guarded.sqlite"
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(PermissionError, "staged SciRetriever repository"):
+                    require_staged_write_override(
+                        target,
+                        allow_staged_write=False,
+                        start=workspace_root / "installed-package",
+                    )
+                self.assertEqual(
+                    require_staged_write_override(
+                        target,
+                        allow_staged_write=True,
+                        start=workspace_root / "installed-package",
+                    ),
+                    target.resolve(),
+                )
 
     def test_runtime_module_has_no_legacy_import(self) -> None:
         module_path = REPOSITORY / "src" / "sciretriever" / "workspace.py"

@@ -12,9 +12,8 @@ from urllib.parse import quote
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Connection, Engine
 
-from SciRetriever.database.retired_paths import reject_retired_database_creation
-from SciRetriever.workspace_paths import require_staged_write_override
 from sciretriever.errors import CatalogError
+from sciretriever.workspace import require_staged_write_override
 
 
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
@@ -143,9 +142,8 @@ def create_catalog_engine(
     allow_repository_write: bool = False,
     busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
 ) -> CatalogEngine:
-    """Create a new writable catalog file after all retained safety checks."""
+    """Create a new writable catalog file after repository-write safety checks."""
     resolved = _resolved_file(path)
-    reject_retired_database_creation(resolved)
     require_staged_write_override(
         resolved,
         allow_staged_write=allow_repository_write,
@@ -177,7 +175,6 @@ def open_catalog_engine(
     resolved = _resolved_file(path)
     if not resolved.is_file():
         raise FileNotFoundError(f"Catalog does not exist: {resolved}")
-    reject_retired_database_creation(resolved)
     require_staged_write_override(
         resolved,
         allow_staged_write=allow_repository_write,

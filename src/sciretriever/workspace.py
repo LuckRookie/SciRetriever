@@ -73,3 +73,58 @@ def find_repository_root(start: Path | None = None) -> Path:
         if (candidate / "pyproject.toml").is_file() and (candidate / "src" / "sciretriever").is_dir():
             return candidate
     raise RuntimeError("Unable to find the SciRetriever repository root.")
+
+
+def find_workspace_root_for_target(path: Path) -> Path | None:
+    """Find a valid workspace marker by walking upward from an explicit target."""
+    resolved = path.expanduser().resolve()
+    current = resolved if resolved.is_dir() else resolved.parent
+    for candidate in (current, *current.parents):
+        if _has_valid_workspace_marker(candidate):
+            expected = candidate / "literature" / "retrieval" / "SciRetriever"
+            if not expected.is_dir() or expected.is_symlink():
+                raise RuntimeError(
+                    f"Workspace {candidate} does not contain a real SciRetriever repository at {expected}."
+                )
+            return candidate
+    return None
+
+
+def require_staged_write_override(
+    path: Path,
+    *,
+    allow_staged_write: bool,
+    start: Path | None = None,
+) -> Path:
+    """Reject writes into the staged repository unless explicitly overridden."""
+    resolved = path.expanduser().resolve()
+    try:
+        repository_root = find_repository_root(start)
+    except RuntimeError:
+        target_workspace = find_workspace_root_for_target(resolved)
+        if target_workspace is None:
+            return resolved
+        staged_root = (
+            target_workspace / "literature" / "retrieval" / "SciRetriever"
+        ).resolve()
+        if resolved.is_relative_to(staged_root) and not allow_staged_write:
+            raise PermissionError(
+                f"Refusing to write staged SciRetriever repository path: {resolved}. "
+                "Use a scratch output outside the staged repository, or pass "
+                "--allow-staged-write for an explicitly controlled copy."
+            )
+        return resolved
+    try:
+        workspace_root = find_workspace_root(repository_root)
+    except RuntimeError as error:
+        raise PermissionError(
+            f"Refusing write because the SciRetriever workspace could not be verified: {error}"
+        ) from error
+    staged_root = (workspace_root / "literature" / "retrieval" / "SciRetriever").resolve()
+    if repository_root == staged_root and resolved.is_relative_to(staged_root) and not allow_staged_write:
+        raise PermissionError(
+            f"Refusing to write staged SciRetriever repository path: {resolved}. "
+            "Use a scratch output outside the staged repository, or pass "
+            "--allow-staged-write for an explicitly controlled copy."
+        )
+    return resolved
