@@ -18,6 +18,7 @@ domain_runs_api = importlib.import_module("sciretriever.catalog.domain_runs")
 jobs_api = importlib.import_module("sciretriever.catalog.jobs")
 enums = importlib.import_module("sciretriever.core.enums")
 CatalogError = importlib.import_module("sciretriever.errors").CatalogError
+IntegrityError = importlib.import_module("sqlalchemy.exc").IntegrityError
 
 
 class JobTests(TestCase):
@@ -27,11 +28,11 @@ class JobTests(TestCase):
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         self.catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(self.catalog.dispose)
-        catalog_api.apply_migrations(self.catalog)
+        catalog_api.initialize_catalog(self.catalog)
         resolution = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work(
             {"doi": "10.1000/jobs"}
         )
-        self.work_id = resolution.work.id
+        self.work_version_id = resolution.work_version.id
         self.jobs = jobs_api.JobRepository(self.catalog)
 
     def table_count(self, table: str) -> int:
@@ -54,7 +55,7 @@ class JobTests(TestCase):
         def attach(index: int):
             return jobs_api.attach_or_create_job(
                 self.catalog,
-                self.work_id,
+                self.work_version_id,
                 enums.AssetRole.PRIMARY_PDF,
                 f"request-{index}",
             )
@@ -69,9 +70,7 @@ class JobTests(TestCase):
 
     def test_concurrent_same_doi_flow_creates_one_work_and_one_job(self) -> None:
         def acquire(index: int):
-            work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work(
-                {"doi": "10.1000/concurrent-flow"}
-            ).work
+            work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1000/concurrent-flow"}).work_version
             job = jobs_api.JobRepository(self.catalog).attach_or_create_job(
                 work.id,
                 "primary_pdf",
@@ -88,12 +87,12 @@ class JobTests(TestCase):
         work_id = next(iter(work_ids))
         with self.catalog.connect() as connection:
             identifier_count = connection.exec_driver_sql(
-                "SELECT count(*) FROM identifiers WHERE work_id = ?",
+                "SELECT count(*) FROM identifiers JOIN work_versions ON work_versions.work_id = identifiers.work_id WHERE work_versions.id = ?",
                 (work_id,),
             ).scalar_one()
             nonterminal_job_count = connection.exec_driver_sql(
                 "SELECT count(*) FROM acquisition_jobs "
-                "WHERE work_id = ? AND state IN ('pending', 'active')",
+                "WHERE work_version_id = ? AND state IN ('pending', 'active')",
                 (work_id,),
             ).scalar_one()
         self.assertEqual(identifier_count, 1)
@@ -101,95 +100,48 @@ class JobTests(TestCase):
 
     def test_duplicate_request_key_is_idempotent_and_conflicts_are_rejected(self) -> None:
         first = self.jobs.attach_or_create_job(
-            self.work_id,
+            self.work_version_id,
             "primary_pdf",
             "stable-key",
             request_provenance={"provider": "example"},
         )
         counts = (self.table_count("acquisition_jobs"), self.table_count("download_requests"), self.table_count("events"))
-        second = self.jobs.attach_or_create_job(self.work_id, "primary_pdf", "stable-key")
+        second = self.jobs.attach_or_create_job(self.work_version_id, "primary_pdf", "stable-key")
         self.assertEqual(second, first)
         self.assertEqual(
             (self.table_count("acquisition_jobs"), self.table_count("download_requests"), self.table_count("events")),
             counts,
         )
-        other_work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work(
-            {"doi": "10.1000/other"}
-        ).work
+        other_work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1000/other"}).work_version
         with self.assertRaises(CatalogError):
             self.jobs.attach_or_create_job(other_work.id, "primary_pdf", "stable-key")
 
     def test_foreground_restart_and_terminal_history(self) -> None:
-        first = self.jobs.attach_or_create_job(self.work_id, "primary_pdf")
+        first = self.jobs.attach_or_create_job(self.work_version_id, "primary_pdf")
         active = self.jobs.restart_foreground_job(first.id)
         self.assertEqual(active.state, enums.JobState.ACTIVE)
         succeeded = self.jobs.complete_job_and_requests(first.id, "succeeded")
         self.assertEqual(succeeded.state, enums.JobState.SUCCEEDED)
         with self.assertRaises(CatalogError):
             self.jobs.complete_job_and_requests(first.id, "failed")
-        second = self.jobs.attach_or_create_job(self.work_id, "primary_pdf")
+        second = self.jobs.attach_or_create_job(self.work_version_id, "primary_pdf")
         self.assertNotEqual(second.id, first.id)
         self.assertEqual(self.table_count("acquisition_jobs"), 2)
 
-    def test_historical_control_state_is_retired_before_current_admission(self) -> None:
-        historical = self.jobs.attach_or_create_job(
-            self.work_id, "primary_pdf", "historical-request"
-        )
-        attached = self.jobs.attach_or_create_job(
-            self.work_id, "primary_pdf", "second-historical-request"
-        )
-        self.assertEqual(attached.id, historical.id)
-        with self.catalog.critical_transaction() as connection:
-            connection.exec_driver_sql(
-                "UPDATE acquisition_jobs SET state = 'paused' WHERE id = ?",
-                (historical.id,),
-            )
-
-        current = self.jobs.attach_or_create_job(
-            self.work_id, "primary_pdf", "historical-request"
-        )
-
-        self.assertNotEqual(current.id, historical.id)
-        self.assertEqual(current.state, enums.JobState.PENDING)
-        self.assertEqual(
-            self.jobs.get_job(historical.id).state,
-            enums.JobState.CANCELLED,
-        )
-        request = self.jobs.get_request("historical-request")
-        assert request is not None
-        self.assertEqual(request.job_id, current.id)
-        self.assertEqual(request.status, "attached")
-        second_request = self.jobs.get_request("second-historical-request")
-        assert second_request is not None
-        self.assertEqual(second_request.job_id, current.id)
-        self.assertEqual(second_request.status, "attached")
-        repeated = self.jobs.attach_or_create_job(
-            self.work_id, "primary_pdf", "second-historical-request"
-        )
-        self.assertEqual(repeated.id, current.id)
-        self.assertEqual(
-            self.jobs.list_nonterminal_jobs_for_work(
-                self.work_id, enums.AssetRole.PRIMARY_PDF
-            ),
-            (current,),
-        )
-
-    def test_historical_control_states_cannot_be_restarted_directly(self) -> None:
-        for state, role in (("paused", "xml"), ("retryable", "html")):
-            with self.subTest(state=state):
-                job = self.jobs.attach_or_create_job(self.work_id, role)
+    def test_retired_job_control_states_are_absent_and_rejected(self) -> None:
+        self.assertFalse(hasattr(enums.JobState, "PAUSED"))
+        self.assertFalse(hasattr(enums.JobState, "RETRYABLE"))
+        job = self.jobs.attach_or_create_job(self.work_version_id, "xml")
+        for state in ("paused", "retryable"):
+            with self.subTest(state=state), self.assertRaises(IntegrityError):
                 with self.catalog.critical_transaction() as connection:
                     connection.exec_driver_sql(
                         "UPDATE acquisition_jobs SET state = ? WHERE id = ?",
                         (state, job.id),
                     )
-                with self.assertRaisesRegex(
-                    CatalogError, "historical retryable/paused"
-                ):
-                    self.jobs.restart_foreground_job(job.id)
 
     def test_attempt_start_finish_events_and_failures(self) -> None:
-        job = self.jobs.attach_or_create_job(self.work_id, "xml")
+        job = self.jobs.attach_or_create_job(self.work_version_id, "xml")
         with self.assertRaises(CatalogError):
             self.jobs.start_attempt(job.id, "provider")
         self.jobs.restart_foreground_job(job.id)
@@ -214,7 +166,7 @@ class JobTests(TestCase):
         failure = self.jobs.append_failure(
             "provider_error",
             "temporary provider failure",
-            work_id=self.work_id,
+            work_version_id=self.work_version_id,
             job_id=job.id,
             attempt_id=attempt.id,
             retryable=True,
@@ -233,7 +185,7 @@ class JobTests(TestCase):
         path_marker = "PATH-CREDENTIAL-MARKER"
         arbitrary_marker = "ARBITRARY-RAW-EXCEPTION-BODY"
         job = self.jobs.attach_or_create_job(
-            self.work_id,
+            self.work_version_id,
             "xml",
             "redaction-key",
             request_provenance={"session": marker, "source_url": f"https://x.test/access/{path_marker}?token={marker}"},
@@ -286,7 +238,7 @@ class JobTests(TestCase):
 
     def test_atomic_job_cancellation_closes_all_unfinished_attempts_idempotently(self) -> None:
         job = self.jobs.attach_or_create_job(
-            self.work_id, "primary_pdf", "cancel-all"
+            self.work_version_id, "primary_pdf", "cancel-all"
         )
         self.jobs.restart_foreground_job(job.id)
         finished = self.jobs.start_attempt(job.id, "finished")
@@ -322,7 +274,7 @@ class JobTests(TestCase):
         self.assertIn("job.completed", event_types)
 
     def test_job_cancellation_does_not_rewrite_terminal_job(self) -> None:
-        job = self.jobs.attach_or_create_job(self.work_id, "xml")
+        job = self.jobs.attach_or_create_job(self.work_version_id, "xml")
         self.jobs.restart_foreground_job(job.id)
         attempt = self.jobs.start_attempt(job.id, "provider")
         self.jobs.finish_attempt_and_job(attempt.id, "succeeded", "succeeded")

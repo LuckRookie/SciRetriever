@@ -49,8 +49,6 @@ LEGAL_JOB_STATE_TRANSITIONS: Mapping[JobState, frozenset[JobState]] = MappingPro
                 JobState.CANCELLED,
             }
         ),
-        JobState.RETRYABLE: frozenset(),
-        JobState.PAUSED: frozenset(),
         JobState.SUCCEEDED: frozenset(),
         JobState.FAILED: frozenset(),
         JobState.CANCELLED: frozenset(),
@@ -99,7 +97,7 @@ def _failure_message(details: object | None) -> str:
 def _job_record(row: Mapping[Any, Any]) -> JobRecord:
     return JobRecord(
         id=row["id"],
-        work_id=row["work_id"],
+        work_version_id=row["work_version_id"],
         asset_role=AssetRole(row["asset_role"]),
         state=JobState(row["state"]),
         source_plan_json=row["source_plan_json"],
@@ -112,7 +110,7 @@ def _job_record(row: Mapping[Any, Any]) -> JobRecord:
 def _request_record(row: Mapping[Any, Any]) -> DownloadRequestRecord:
     return DownloadRequestRecord(
         id=row["id"],
-        work_id=row["work_id"],
+        work_version_id=row["work_version_id"],
         job_id=row["job_id"],
         request_key=row["request_key"],
         asset_role=AssetRole(row["asset_role"]),
@@ -135,75 +133,6 @@ def _attempt_record(row: Mapping[Any, Any]) -> AttemptRecord:
         started_at=row["started_at"],
         finished_at=row["finished_at"],
     )
-
-
-def _retire_historical_control_jobs(
-    connection: Connection,
-    work_id: str,
-    role: AssetRole,
-) -> frozenset[str]:
-    rows = connection.execute(
-        select(acquisition_jobs).where(
-            acquisition_jobs.c.work_id == work_id,
-            acquisition_jobs.c.asset_role == role.value,
-            acquisition_jobs.c.state.in_(
-                (JobState.RETRYABLE.value, JobState.PAUSED.value)
-            ),
-        )
-    ).mappings().all()
-    if not rows:
-        return frozenset()
-    now = utc_now_rfc3339()
-    retired_ids: set[str] = set()
-    for row in rows:
-        job_id = row["id"]
-        retired_ids.add(job_id)
-        attempt_ids = connection.execute(
-            select(acquisition_attempts.c.id).where(
-                acquisition_attempts.c.job_id == job_id,
-                acquisition_attempts.c.finished_at.is_(None),
-            )
-        ).scalars().all()
-        connection.execute(
-            update(acquisition_attempts)
-            .where(
-                acquisition_attempts.c.job_id == job_id,
-                acquisition_attempts.c.finished_at.is_(None),
-            )
-            .values(
-                outcome=AttemptOutcome.CANCELLED.value,
-                finished_at=now,
-                details_json=canonical_json(
-                    {"diagnostic": {"reason": "historical_control_state_retired"}}
-                ),
-            )
-        )
-        for attempt_id in attempt_ids:
-            _append_event(
-                connection,
-                subject_type="acquisition_attempt",
-                subject_id=attempt_id,
-                event_type="attempt.finished",
-                details={"outcome": AttemptOutcome.CANCELLED.value},
-            )
-        connection.execute(
-            update(acquisition_jobs)
-            .where(acquisition_jobs.c.id == job_id)
-            .values(state=JobState.CANCELLED.value, updated_at=now)
-        )
-        connection.execute(
-            update(download_requests)
-            .where(download_requests.c.job_id == job_id)
-            .values(status=JobState.CANCELLED.value, updated_at=now)
-        )
-        _append_event(
-            connection,
-            subject_type="acquisition_job",
-            subject_id=job_id,
-            event_type="job.historical_control_retired",
-            details={"from": row["state"], "to": JobState.CANCELLED.value},
-        )
-    return frozenset(retired_ids)
 
 
 class JobRepository:
@@ -266,13 +195,13 @@ class JobRepository:
 
     def attach_or_create_job(
         self,
-        work_id: str,
+        work_version_id: str,
         asset_role: AssetRole | str,
         request_key: str | None = None,
         *,
         request_provenance: object | None = None,
     ) -> JobRecord:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         role = _asset_role(asset_role)
         normalized_key = None if request_key is None else _required_text(request_key, "request_key")
         provenance_json = (
@@ -280,9 +209,6 @@ class JobRepository:
         )
         with catalog_operation("job admission"):
             with self.__catalog.critical_transaction() as connection:
-                retired_ids = _retire_historical_control_jobs(
-                    connection, work_id, role
-                )
                 request = None
                 if normalized_key is not None:
                     request = (
@@ -295,7 +221,7 @@ class JobRepository:
                         .one_or_none()
                     )
                     if request is not None:
-                        if request["work_id"] != work_id or request["asset_role"] != role.value:
+                        if request["work_version_id"] != work_version_id or request["asset_role"] != role.value:
                             raise CatalogError(
                                 "request_key is already bound to a different work or asset role"
                             )
@@ -310,14 +236,13 @@ class JobRepository:
                             .mappings()
                             .one()
                         )
-                        if row["id"] not in retired_ids:
-                            return _job_record(row)
+                        return _job_record(row)
 
                 nonterminal_values = tuple(state.value for state in NONTERMINAL_JOB_STATES)
                 row = (
                     connection.execute(
                         select(acquisition_jobs).where(
-                            acquisition_jobs.c.work_id == work_id,
+                            acquisition_jobs.c.work_version_id == work_version_id,
                             acquisition_jobs.c.asset_role == role.value,
                             acquisition_jobs.c.state.in_(nonterminal_values),
                         )
@@ -330,7 +255,7 @@ class JobRepository:
                     now = utc_now_rfc3339()
                     values = {
                         "id": new_uuid4(),
-                        "work_id": work_id,
+                    "work_version_id": work_version_id,
                         "asset_role": role.value,
                         "state": JobState.PENDING.value,
                         "created_at": now,
@@ -344,25 +269,13 @@ class JobRepository:
                 else:
                     job = _job_record(row)
 
-                if retired_ids:
-                    now = utc_now_rfc3339()
-                    connection.execute(
-                        update(download_requests)
-                        .where(download_requests.c.job_id.in_(retired_ids))
-                        .values(
-                            job_id=job.id,
-                            status="attached",
-                            updated_at=now,
-                        )
-                    )
-
                 if normalized_key is not None:
                     now = utc_now_rfc3339()
                     if request is None:
                         connection.execute(
                             insert(download_requests).values(
                                 id=new_uuid4(),
-                                work_id=work_id,
+                                work_version_id=work_version_id,
                                 job_id=job.id,
                                 request_key=normalized_key,
                                 asset_role=role.value,
@@ -394,10 +307,10 @@ class JobRepository:
                 )
                 return job
 
-    def begin_legacy_import(self, job_id: str) -> bool:
-        """Atomically begin one explicit legacy import without durable resume semantics."""
+    def begin_existing_asset_import(self, job_id: str) -> bool:
+        """Atomically begin one explicit asset import without durable resume semantics."""
         job_id = validate_uuid(job_id, "job_id")
-        with catalog_operation("legacy import start"):
+        with catalog_operation("existing asset import start"):
             with self.__catalog.critical_transaction() as connection:
                 row = connection.execute(
                     select(acquisition_jobs).where(acquisition_jobs.c.id == job_id)
@@ -420,7 +333,7 @@ class JobRepository:
                     connection,
                     subject_type="acquisition_job",
                     subject_id=job_id,
-                    event_type="legacy_import.started",
+                    event_type="existing_asset_import.started",
                     details={"from": state.value},
                 )
                 return True
@@ -437,10 +350,6 @@ class JobRepository:
                 if row is None:
                     raise CatalogError(f"acquisition job does not exist: {job_id}")
                 current = JobState(row["state"])
-                if current in {JobState.RETRYABLE, JobState.PAUSED}:
-                    raise CatalogError(
-                        "historical retryable/paused jobs cannot be restarted"
-                    )
                 now = utc_now_rfc3339()
                 unfinished = connection.execute(
                     select(acquisition_attempts.c.id).where(
@@ -521,12 +430,12 @@ class JobRepository:
 
     def list_nonterminal_jobs_for_work(
         self,
-        work_id: str,
+        work_version_id: str,
         asset_role: AssetRole | str,
     ) -> tuple[JobRecord, ...]:
         """List unfinished jobs for one Work and asset role without changing ownership."""
 
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         role = _asset_role(asset_role)
         nonterminal = tuple(state.value for state in NONTERMINAL_JOB_STATES)
         with catalog_operation("work nonterminal job listing"):
@@ -534,7 +443,7 @@ class JobRepository:
                 rows = connection.execute(
                     select(acquisition_jobs)
                     .where(
-                        acquisition_jobs.c.work_id == work_id,
+                        acquisition_jobs.c.work_version_id == work_version_id,
                         acquisition_jobs.c.asset_role == role.value,
                         acquisition_jobs.c.state.in_(nonterminal),
                     )
@@ -699,18 +608,18 @@ class JobRepository:
 
     def succeed_nonterminal_jobs_for_work(
         self,
-        work_id: str,
+        work_version_id: str,
         asset_role: AssetRole | str,
     ) -> tuple[JobRecord, ...]:
         """Repair dangling work-role jobs after an accepted asset is observed."""
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         role = _asset_role(asset_role)
         nonterminal = tuple(state.value for state in NONTERMINAL_JOB_STATES)
         with catalog_operation("work job repair"):
             with self.__catalog.critical_transaction() as connection:
                 rows = connection.execute(
                     select(acquisition_jobs).where(
-                        acquisition_jobs.c.work_id == work_id,
+                        acquisition_jobs.c.work_version_id == work_version_id,
                         acquisition_jobs.c.asset_role == role.value,
                         acquisition_jobs.c.state.in_(nonterminal),
                     )
@@ -972,7 +881,7 @@ class JobRepository:
         category: str,
         message: str,
         *,
-        work_id: str | None = None,
+        work_version_id: str | None = None,
         job_id: str | None = None,
         attempt_id: str | None = None,
         processing_run_id: str | None = None,
@@ -982,7 +891,7 @@ class JobRepository:
         return self.__repository.append_failure(
             category,
             _failure_message(details),
-            work_id=work_id,
+            work_version_id=work_version_id,
             job_id=job_id,
             attempt_id=attempt_id,
             processing_run_id=processing_run_id,
@@ -993,7 +902,7 @@ class JobRepository:
 
 def attach_or_create_job(
     catalog: CatalogEngine | CatalogRepository,
-    work_id: str,
+    work_version_id: str,
     asset_role: AssetRole | str,
     request_key: str | None = None,
     *,
@@ -1001,7 +910,7 @@ def attach_or_create_job(
 ) -> JobRecord:
     """Convenience boundary for callers that do not retain a JobRepository."""
     return JobRepository(catalog).attach_or_create_job(
-        work_id,
+        work_version_id,
         asset_role,
         request_key,
         request_provenance=request_provenance,
