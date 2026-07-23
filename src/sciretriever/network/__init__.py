@@ -3,6 +3,8 @@
 from .http import (
     DEFAULT_MAX_RESPONSE_BYTES,
     HttpResponse,
+    HeadersResponse,
+    HeadersTransport,
     QueryParams,
     ResponseTooLargeError,
     Transport,
@@ -15,6 +17,8 @@ from .secure import SecureHttpsTransport
 __all__ = (
     "DEFAULT_MAX_RESPONSE_BYTES",
     "HttpResponse",
+    "HeadersResponse",
+    "HeadersTransport",
     "QueryParams",
     "NetworkPolicyError",
     "ResponseTooLargeError",

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import http.client
+import math
 import socket
 import ssl
+import time
 from types import MappingProxyType
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping, Protocol, runtime_checkable
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from sciretriever.network.http import HttpResponse, QueryParams, url_with_params
+from sciretriever.network.http import HeadersResponse, HttpResponse, QueryParams, url_with_params
 from sciretriever.network.policy import NetworkPolicyError, UrlPolicy
 
 NetworkError = NetworkPolicyError
+
+
+class _ResponseBodyTooLarge(NetworkError):
+    pass
 
 
 MAX_RESPONSE_BYTES = 100 * 1024 * 1024
@@ -20,7 +26,7 @@ MAX_ERROR_BODY_BYTES = 64 * 1024
 READ_CHUNK_SIZE = 64 * 1024
 MAX_REDIRECTS = 5
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "cookie", "cookie2"})
+_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "cookie", "cookie2", "referer"})
 
 
 def _sensitive_header(name: str) -> bool:
@@ -42,13 +48,22 @@ def _content_length(headers: Mapping[str, str]) -> int | None:
     value = next((value for key, value in headers.items() if key.lower() == "content-length"), None)
     if value is None:
         return None
-    try:
-        length = int(value)
-    except ValueError as error:
-        raise NetworkError("invalid HTTP Content-Length") from error
-    if length < 0:
+    candidate = value.strip()
+    if not candidate or not candidate.isascii() or not candidate.isdecimal():
         raise NetworkError("invalid HTTP Content-Length")
-    return length
+    return int(candidate)
+
+
+def _response_headers(values: list[tuple[str, str]]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for key, value in values:
+        normalized = key.lower()
+        if normalized == "content-length" and normalized in headers:
+            if headers[normalized].strip() != value.strip():
+                raise NetworkError("conflicting HTTP Content-Length")
+            continue
+        headers[normalized] = value
+    return headers
 
 
 class _Readable(Protocol):
@@ -60,16 +75,18 @@ def _read_bounded(stream: _Readable, headers: Mapping[str, str], max_bytes: int)
         raise ValueError("max_bytes must be positive")
     declared = _content_length(headers)
     if declared is not None and declared > max_bytes:
-        raise NetworkError(f"HTTP response exceeds {max_bytes} bytes")
+        raise _ResponseBodyTooLarge(f"HTTP response exceeds {max_bytes} bytes")
     chunks: list[bytes] = []
     size = 0
     while True:
         chunk = stream.read(min(READ_CHUNK_SIZE, max_bytes - size + 1))
         if not chunk:
+            if declared is not None and size != declared:
+                raise NetworkError("HTTP Content-Length does not match response body")
             return b"".join(chunks)
         size += len(chunk)
         if size > max_bytes:
-            raise NetworkError(f"HTTP response exceeds {max_bytes} bytes")
+            raise _ResponseBodyTooLarge(f"HTTP response exceeds {max_bytes} bytes")
         chunks.append(chunk)
 
 
@@ -85,6 +102,20 @@ class DialResponse(Protocol):
 
 class HttpsDialer(Protocol):
     def get(
+        self,
+        hostname: str,
+        address: str,
+        port: int,
+        target: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> DialResponse: ...
+
+
+@runtime_checkable
+class HeadersHttpsDialer(Protocol):
+    def head(
         self,
         hostname: str,
         address: str,
@@ -152,6 +183,24 @@ class PinnedHttpsDialer:
             connection.close()
             raise
 
+    def head(
+        self,
+        hostname: str,
+        address: str,
+        port: int,
+        target: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> DialResponse:
+        connection = _PinnedHTTPSConnection(hostname, address, port, timeout)
+        try:
+            connection.request("HEAD", target, headers=dict(headers))
+            return _ConnectionResponse(connection, connection.getresponse())
+        except Exception:
+            connection.close()
+            raise
+
 
 def _system_resolver(hostname: str) -> tuple[str, ...]:
     return tuple(sorted({str(item[4][0]) for item in socket.getaddrinfo(hostname, 443)}))
@@ -174,8 +223,10 @@ class SecureHttpsTransport:
             raise ValueError("max_bytes must be a positive integer")
         if not isinstance(max_redirects, int) or isinstance(max_redirects, bool) or max_redirects < 0:
             raise ValueError("max_redirects must be a nonnegative integer")
-        if default_timeout <= 0:
-            raise ValueError("default_timeout must be positive")
+        if not isinstance(default_timeout, (int, float)) or isinstance(default_timeout, bool):
+            raise TypeError("default_timeout must be a number")
+        if not math.isfinite(float(default_timeout)) or default_timeout <= 0:
+            raise ValueError("default_timeout must be positive and finite")
         self.policy = policy or UrlPolicy()
         self.max_bytes = max_bytes
         self.max_redirects = max_redirects
@@ -214,12 +265,23 @@ class SecureHttpsTransport:
     ) -> HttpResponse:
         current = url_with_params(url, params)
         request_timeout = self.default_timeout if timeout is None else timeout
+        if not isinstance(request_timeout, (int, float)) or isinstance(request_timeout, bool):
+            raise TypeError("timeout must be a number")
+        if not math.isfinite(float(request_timeout)) or request_timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        deadline = time.monotonic() + float(request_timeout)
         request_headers = self._headers(headers)
         for redirect_count in range(self.max_redirects + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise NetworkError("HTTP request deadline exceeded")
             parsed = urlsplit(current)
             hostname = parsed.hostname or ""
             addresses = self.resolve_host(hostname)
             self.policy.validate(current, addresses)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise NetworkError("HTTP request deadline exceeded during DNS resolution")
             response = None
             try:
                 response = self._dialer.get(
@@ -227,10 +289,10 @@ class SecureHttpsTransport:
                     addresses[0],
                     parsed.port or 443,
                     self._request_target(current),
-                    timeout=request_timeout,
+                    timeout=remaining,
                     headers=request_headers,
                 )
-                headers = {key.lower(): value for key, value in response.getheaders()}
+                headers = _response_headers(response.getheaders())
                 if response.status in REDIRECT_STATUSES:
                     location = headers.get("location")
                     if not location:
@@ -249,7 +311,7 @@ class SecureHttpsTransport:
                 limit = self.max_bytes if success else MAX_ERROR_BODY_BYTES
                 try:
                     body = _read_bounded(response, headers, limit)
-                except NetworkError:
+                except _ResponseBodyTooLarge:
                     if success:
                         raise
                     body = b""
@@ -259,6 +321,69 @@ class SecureHttpsTransport:
                     headers,
                     body,
                 )
+            except (http.client.HTTPException, OSError, ssl.SSLError) as error:
+                raise NetworkError(f"HTTP transport failed: {error}") from error
+            finally:
+                if response is not None:
+                    response.close()
+        raise NetworkError("HTTP redirect limit exceeded")
+
+    def head(
+        self,
+        url: str,
+        *,
+        params: QueryParams | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> HeadersResponse:
+        current = url_with_params(url, params)
+        request_timeout = self.default_timeout if timeout is None else timeout
+        if not isinstance(request_timeout, (int, float)) or isinstance(request_timeout, bool):
+            raise TypeError("timeout must be a number")
+        if not math.isfinite(float(request_timeout)) or request_timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        deadline = time.monotonic() + float(request_timeout)
+        request_headers = self._headers(headers)
+        for redirect_count in range(self.max_redirects + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise NetworkError("HTTP request deadline exceeded")
+            parsed = urlsplit(current)
+            hostname = parsed.hostname or ""
+            addresses = self.resolve_host(hostname)
+            self.policy.validate(current, addresses)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise NetworkError("HTTP request deadline exceeded during DNS resolution")
+            response = None
+            try:
+                if not isinstance(self._dialer, HeadersHttpsDialer):
+                    raise NetworkError("headers-only transport is unavailable")
+                response = self._dialer.head(
+                    hostname,
+                    addresses[0],
+                    parsed.port or 443,
+                    self._request_target(current),
+                    timeout=remaining,
+                    headers=request_headers,
+                )
+                response_headers = _response_headers(response.getheaders())
+                if response.status in REDIRECT_STATUSES:
+                    location = response_headers.get("location")
+                    if not location:
+                        raise NetworkError("redirect response is missing Location")
+                    if redirect_count >= self.max_redirects:
+                        raise NetworkError("HTTP redirect limit exceeded")
+                    redirected = urljoin(current, location)
+                    redirect_parts = urlsplit(redirected)
+                    if (redirect_parts.hostname, redirect_parts.port or 443) != (parsed.hostname, parsed.port or 443):
+                        request_headers = _without_sensitive_headers(request_headers)
+                    current = redirected
+                    continue
+                declared = _content_length(response_headers)
+                if declared is not None and declared > self.max_bytes:
+                    raise NetworkError(f"HTTP response exceeds {self.max_bytes} bytes")
+                return HeadersResponse(response.status, current, response_headers)
             except (http.client.HTTPException, OSError, ssl.SSLError) as error:
                 raise NetworkError(f"HTTP transport failed: {error}") from error
             finally:

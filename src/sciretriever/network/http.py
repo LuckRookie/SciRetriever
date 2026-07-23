@@ -71,10 +71,35 @@ class HttpResponse:
         return self.headers.get(name)
 
 
+@dataclass(frozen=True, slots=True)
+class HeadersResponse:
+    status: int
+    url: str
+    headers: Headers
+
+    def __init__(self, status: int, url: str, headers: Mapping[str, str] | Sequence[tuple[str, str]]) -> None:
+        if not isinstance(status, int) or isinstance(status, bool):
+            raise TypeError("HTTP status must be an integer")
+        if not isinstance(url, str):
+            raise TypeError("HTTP response URL must be a string")
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "url", url)
+        object.__setattr__(self, "headers", Headers(headers))
+
+    def header(self, name: str) -> str | None:
+        return self.headers.get(name)
+
+
 class Transport(Protocol):
     def get(self, url: str, *, params: QueryParams | None = None,
             headers: Mapping[str, str] | None = None,
-            timeout: float | None = None) -> HttpResponse: ...
+             timeout: float | None = None) -> HttpResponse: ...
+
+
+class HeadersTransport(Protocol):
+    def head(self, url: str, *, params: QueryParams | None = None,
+             headers: Mapping[str, str] | None = None,
+             timeout: float | None = None) -> HeadersResponse: ...
 
 
 class _ReadableResponse(Protocol):

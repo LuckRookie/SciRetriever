@@ -85,18 +85,33 @@ class FakeOpener:
 class FakeDialResponse:
     status: int
 
-    def __init__(self, status: int, headers: dict[str, str], body: bytes = b"") -> None:
+    def __init__(self, status: int, headers: dict[str, str] | list[tuple[str, str]], body: bytes = b"", *, fail_on_read: bool = False, read_error: BaseException | None = None, headers_error: BaseException | None = None) -> None:
         self.status = status
-        self._headers = headers
+        self._headers = list(headers.items()) if isinstance(headers, dict) else list(headers)
         self._body = BytesIO(body)
+        self.closed = False
+        self.close_count = 0
+        self.read_called = False
+        self.fail_on_read = fail_on_read
+        self.read_error = read_error
+        self.headers_error = headers_error
 
     def getheaders(self) -> list[tuple[str, str]]:
-        return list(self._headers.items())
+        if self.headers_error is not None:
+            raise self.headers_error
+        return list(self._headers)
 
     def read(self, n: int = -1) -> bytes:
+        self.read_called = True
+        if self.read_error is not None:
+            raise self.read_error
+        if self.fail_on_read:
+            raise AssertionError("headers-only transport read a response body")
         return self._body.read(n)
 
     def close(self) -> None:
+        self.closed = True
+        self.close_count += 1
         self._body.close()
 
 
@@ -119,6 +134,18 @@ class FakeDialer:
         self.calls.append((hostname, address, target))
         self.headers.append(dict(headers))
         return self.responses.pop(0)
+
+    def head(
+        self,
+        hostname: str,
+        address: str,
+        port: int,
+        target: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> FakeDialResponse:
+        return self.get(hostname, address, port, target, timeout=timeout, headers=headers)
 
 
 class FakeProvider:
@@ -222,6 +249,90 @@ class TransportTests(TestCase):
             {"User-Agent": "SciRetriever/2", "Accept": "application/json"},
         )
 
+    def test_secure_transport_requires_exact_declared_body_length(self) -> None:
+        cases = (
+            (b"", "0"),
+            (b"exact", "5"),
+            (b"x" * (64 * 1024 + 3), str(64 * 1024 + 3)),
+        )
+        for body, declared in cases:
+            with self.subTest(length=len(body)):
+                response = FakeDialResponse(200, {"content-length": declared}, body)
+                result = SecureHttpsTransport(
+                    resolver=lambda _hostname: ("93.184.216.34",),
+                    dialer=FakeDialer([response]),
+                ).get("https://example.test/body", timeout=1)
+                self.assertEqual(result.body, body)
+                self.assertEqual(response.close_count, 1)
+
+    def test_secure_transport_rejects_declared_length_mismatches_and_closes(self) -> None:
+        for body, declared in ((b"short", "6"), (b"longer", "4")):
+            with self.subTest(body=body, declared=declared):
+                response = FakeDialResponse(200, {"content-length": declared}, body)
+                transport = SecureHttpsTransport(
+                    resolver=lambda _hostname: ("93.184.216.34",),
+                    dialer=FakeDialer([response]),
+                )
+                with self.assertRaisesRegex(NetworkPolicyError, "Content-Length does not match"):
+                    transport.get("https://example.test/body", timeout=1)
+                self.assertEqual(response.close_count, 1)
+
+        error_response = FakeDialResponse(
+            503, {"content-length": "8"}, b"short"
+        )
+        with self.assertRaisesRegex(
+            NetworkPolicyError, "Content-Length does not match"
+        ):
+            SecureHttpsTransport(
+                resolver=lambda _hostname: ("93.184.216.34",),
+                dialer=FakeDialer([error_response]),
+            ).get("https://example.test/body", timeout=1)
+        self.assertEqual(error_response.close_count, 1)
+
+        for declared in ("invalid", "-1", "+4", "1_0", "４", "4, 4", "4, 5"):
+            with self.subTest(declared=declared):
+                response = FakeDialResponse(200, {"content-length": declared}, b"body")
+                with self.assertRaisesRegex(NetworkPolicyError, "invalid HTTP Content-Length"):
+                    SecureHttpsTransport(
+                        resolver=lambda _hostname: ("93.184.216.34",),
+                        dialer=FakeDialer([response]),
+                    ).get("https://example.test/body", timeout=1)
+                self.assertEqual(response.close_count, 1)
+
+        conflicting = FakeDialResponse(
+            200,
+            [("Content-Length", "4"), ("content-length", "5")],
+            b"body",
+        )
+        with self.assertRaisesRegex(NetworkPolicyError, "conflicting HTTP Content-Length"):
+            SecureHttpsTransport(
+                resolver=lambda _hostname: ("93.184.216.34",),
+                dialer=FakeDialer([conflicting]),
+            ).get("https://example.test/body", timeout=1)
+        self.assertEqual(conflicting.close_count, 1)
+
+    def test_secure_transport_closes_response_on_read_base_exception(self) -> None:
+        failure = KeyboardInterrupt("injected read interruption")
+        response = FakeDialResponse(200, {}, read_error=failure)
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            SecureHttpsTransport(
+                resolver=lambda _hostname: ("93.184.216.34",),
+                dialer=FakeDialer([response]),
+            ).get("https://example.test/body", timeout=1)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(response.close_count, 1)
+
+    def test_headers_transport_closes_response_on_base_exception(self) -> None:
+        failure = KeyboardInterrupt("injected headers interruption")
+        response = FakeDialResponse(200, {}, headers_error=failure)
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            SecureHttpsTransport(
+                resolver=lambda _hostname: ("93.184.216.34",),
+                dialer=FakeDialer([response]),
+            ).head("https://example.test/body", timeout=1)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(response.close_count, 1)
+
     def test_secure_discovery_rejects_http_and_private_redirect_destinations(self) -> None:
         cases = (
             ("http://cdn.example/final", "93.184.216.34"),
@@ -229,9 +340,8 @@ class TransportTests(TestCase):
         )
         for location, redirected_address in cases:
             with self.subTest(location=location):
-                dialer = FakeDialer(
-                    [FakeDialResponse(302, {"location": location})]
-                )
+                redirect = FakeDialResponse(302, {"location": location})
+                dialer = FakeDialer([redirect])
 
                 def resolver(hostname: str) -> tuple[str, ...]:
                     if hostname == "api.example":
@@ -242,6 +352,46 @@ class TransportTests(TestCase):
                 with self.assertRaises(NetworkPolicyError):
                     transport.get("https://api.example/start", timeout=1)
                 self.assertEqual(len(dialer.calls), 1)
+                self.assertEqual(redirect.close_count, 1)
+
+    def test_headers_only_transport_redirects_closes_and_never_reads(self) -> None:
+        redirect = FakeDialResponse(302, {"location": "https://cdn.example/final"}, fail_on_read=True)
+        final = FakeDialResponse(200, {"content-length": "10", "content-type": "application/pdf"}, fail_on_read=True)
+        dialer = FakeDialer([redirect, final])
+        resolved: list[str] = []
+
+        def resolver(hostname: str) -> tuple[str, ...]:
+            resolved.append(hostname)
+            return ("93.184.216.34",)
+
+        response = SecureHttpsTransport(
+            resolver=resolver, dialer=dialer, max_bytes=10
+        ).head(
+            "https://api.example/start",
+            headers={"Authorization": "secret", "Accept": "application/pdf"},
+            timeout=1,
+        )
+        self.assertEqual(response.url, "https://cdn.example/final")
+        self.assertEqual(response.header("content-length"), "10")
+        self.assertEqual(resolved, ["api.example", "cdn.example"])
+        self.assertNotIn("Authorization", dialer.headers[1])
+        self.assertTrue(redirect.closed)
+        self.assertTrue(final.closed)
+        self.assertEqual((redirect.close_count, final.close_count), (1, 1))
+        self.assertFalse(redirect.read_called)
+        self.assertFalse(final.read_called)
+
+    def test_headers_only_transport_rejects_oversized_declaration_without_read(self) -> None:
+        response = FakeDialResponse(200, {"content-length": "11"}, fail_on_read=True)
+        transport = SecureHttpsTransport(
+            resolver=lambda _hostname: ("93.184.216.34",),
+            dialer=FakeDialer([response]),
+            max_bytes=10,
+        )
+        with self.assertRaisesRegex(NetworkPolicyError, "exceeds 10"):
+            transport.head("https://example.test/paper", timeout=1)
+        self.assertTrue(response.closed)
+        self.assertFalse(response.read_called)
 
     def test_get_encodes_params_existing_query_headers_and_timeout(self) -> None:
         response_headers = Message()
