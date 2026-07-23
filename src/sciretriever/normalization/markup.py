@@ -198,13 +198,14 @@ def extract_html_units(
             if cell is not None:
                 kind = "table_cell"
                 row = cell.find_parent("tr")
+                row_tag = row if isinstance(row, Tag) else None
                 rows = [
                     candidate
                     for candidate in table.find_all("tr")
                     if candidate.find_parent("table") is table
                 ]
-                row_index = rows.index(row) if row is not None and row in rows else 0
-                cells = row.find_all(["th", "td"], recursive=False) if row is not None else [cell]
+                row_index = rows.index(row_tag) if row_tag is not None and row_tag in rows else 0
+                cells = row_tag.find_all(["th", "td"], recursive=False) if row_tag is not None else [cell]
                 column_index = cells.index(cell) if cell in cells else 0
                 is_header = cell.name.lower() == "th"
                 row_span = _positive_span(cell.get("rowspan"))

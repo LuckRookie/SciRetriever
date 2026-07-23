@@ -9,7 +9,17 @@ from urllib.parse import urlsplit
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_MEDIA_TYPE = re.compile(r"^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$")
+_MEDIA_TYPE = re.compile(
+    r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+)
+_MEDIA_COMPONENT = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*"
+_MIME_TOKEN = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
+_MIME_QUOTED_VALUE = r'"(?:[\t !#-\[\]-~]|\\[\t -~])+"'
+_PARAMETERIZED_MEDIA_TYPE = re.compile(
+    rf"^[ \t]*({_MEDIA_COMPONENT})/({_MEDIA_COMPONENT})"
+    rf"(?:[ \t]*;[ \t]*{_MIME_TOKEN}[ \t]*=[ \t]*"
+    rf"(?:{_MIME_TOKEN}|{_MIME_QUOTED_VALUE}))*[ \t]*$"
+)
 _TOKEN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -44,6 +54,16 @@ def validate_media_type(value: str) -> str:
     if _MEDIA_TYPE.fullmatch(value) is None:
         raise ValueError("media_type must be a lowercase MIME type without parameters")
     return value
+
+
+def normalize_media_type(value: str) -> str:
+    """Return the canonical base MIME type after validating all parameters."""
+    if not isinstance(value, str):
+        raise TypeError("media_type must be a string")
+    match = _PARAMETERIZED_MEDIA_TYPE.fullmatch(value)
+    if match is None:
+        raise ValueError("media_type must be a valid MIME type with valid parameters")
+    return validate_media_type(f"{match.group(1).lower()}/{match.group(2).lower()}")
 
 
 def validate_storage_path(value: str) -> str:
