@@ -151,6 +151,9 @@ class EuropePmcClient(BaseClient):
             )
             if value
         )
+        open_access = item.get("isOpenAccess")
+        if open_access not in {None, "Y", "N"}:
+            raise TypeError("isOpenAccess must be Y or N")
         return VendorWork(
             raw_id=doi or pmid or pmcid or "",
             title=cls._optional_string(item, "title"),
@@ -162,6 +165,11 @@ class EuropePmcClient(BaseClient):
             open_access_url=cls._pdf_route(item, pmcid) if include_route else None,
             identifiers=identifiers,
             keywords=cls._keywords(item),
+            open_access_status=(
+                None
+                if open_access is None
+                else "open" if open_access == "Y" else "closed"
+            ),
         )
 
     @staticmethod

@@ -58,6 +58,10 @@ def _record(work: VendorWork, rank: int) -> ProviderRecord:
         year=work.year,
         venue=work.venue,
         keywords=work.keywords,
+        publisher=work.publisher,
+        publication_date=work.publication_date,
+        open_access_status=work.open_access_status,
+        provider_record_id=work.raw_id or None,
     )
 
 
