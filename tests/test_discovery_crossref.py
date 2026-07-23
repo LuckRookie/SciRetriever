@@ -76,6 +76,8 @@ class CrossrefProviderTests(TestCase):
         self.assertEqual(records[0].authors, ("Ada Lovelace", "Research Group"))
         self.assertEqual(records[0].year, 2024)
         self.assertEqual(records[0].venue, "Journal A")
+        self.assertEqual(records[0].publisher, "Known Press")
+        self.assertEqual(records[0].publication_date, "2024-03-02")
         self.assertEqual(records[0].keywords, ("Retrieval", "Science"))
         self.assertIsNone(records[1].abstract)
         self.assertEqual(records[2].year, 2022)

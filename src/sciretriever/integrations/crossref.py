@@ -162,10 +162,32 @@ class CrossrefClient(BaseClient):
             doi=doi,
             authors=cls._authors(item),
             year=cls._year(item),
+            publication_date=cls._publication_date(item),
             venue=cls._first_string(item, "container-title"),
             identifiers=(("doi", doi),) if doi else (),
             keywords=cls._string_tuple(item, "subject"),
+            publisher=cls._optional_string(item, "publisher"),
         )
+
+    @classmethod
+    def _publication_date(cls, item: Mapping[str, Any]) -> str | None:
+        for key in ("published", "published-print", "published-online", "issued"):
+            value = item.get(key)
+            if not isinstance(value, dict):
+                continue
+            parts = value.get("date-parts")
+            if (
+                isinstance(parts, list)
+                and parts
+                and isinstance(parts[0], list)
+                and parts[0]
+                and all(isinstance(part, int) and not isinstance(part, bool) for part in parts[0])
+            ):
+                date = parts[0]
+                if len(date) >= 3:
+                    return f"{date[0]:04d}-{date[1]:02d}-{date[2]:02d}"
+                return f"{date[0]:04d}"
+        return None
 
     @staticmethod
     def _filters(year_from: int | None, year_to: int | None) -> str:
