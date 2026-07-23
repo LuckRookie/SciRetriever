@@ -23,7 +23,7 @@
 
 ## 2. 总体状态
 
-截至 2026-07-23，SciRetriever 已具备 Work-centered catalog 基础、文献发现、前台全文采集、安全网络边界、不可变保存、确定性归一化和 `DocumentPackageVersion` 处理快照能力。WP0 和 WP1 已完成实现，WP2-WP5 尚未进入已验证完成状态。
+截至 2026-07-23，SciRetriever 已具备 Work-centered catalog、多来源 metadata 入库、本地 library 读取、文献发现、前台全文采集、安全网络边界、不可变保存、确定性归一化和 `DocumentPackageVersion` 处理快照能力。WP0、WP1 和 WP2 已完成，WP3-WP5 尚未开始。
 
 当前主交接仍是：
 
@@ -38,7 +38,7 @@ SearchSpec
   -> DocumentPackageVersion processing snapshot
 ```
 
-当前用户主要观察 manifest、下载/处理状态、资产和报告；WorkVersion 已成为 catalog 书目与内容所有权基础，但 current PDF analysis、library curation 和 citation expansion 尚未形成完整用户面。
+当前用户可以观察 canonical search JSON、library JSON/JSONL、manifest、下载/处理状态、资产和报告；WorkVersion 已成为 catalog 书目与内容所有权基础，但 current PDF analysis、library curation 和 citation expansion 尚未形成完整用户面。
 
 ## 3. 当前命令与配置
 
@@ -46,6 +46,8 @@ SearchSpec
 
 ```text
 discover
+search
+library show|search|references|cited-by|export
 acquire
 preflight
 catalog create|import-asset
@@ -53,7 +55,7 @@ package
 report
 ```
 
-严格配置 parser 当前接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`acquisition`、`package`。当前凭据字段覆盖 Unpaywall、Semantic Scholar、Elsevier、Wiley 和 Springer。provider precedence、LLM、Sci-Hub、translator、browser、引用扩展和 canonical tag registry 等理想配置尚未进入 accepted parser。
+严格配置 parser 当前接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`package`。`search` 接受 metadata-only level/limit、enabled providers、exact precedence、provider timeout、max concurrency 和 Crossref mailto。当前凭据字段覆盖 Unpaywall、Semantic Scholar、Elsevier、Wiley 和 Springer。LLM、Sci-Hub、translator、browser 和引用扩展等后续配置尚未进入 accepted parser。
 
 证据：`README.md`、`config.example.toml`、`src/sciretriever/config.py`、`src/sciretriever/cli/main.py`。最后核对：2026-07-23。
 
@@ -63,7 +65,7 @@ report
 |---|---|
 | `core/` | 中性契约、标识符、枚举、hash、`DocumentPackageVersion` |
 | `catalog/` | Work/WorkVersion identity、metadata observations、authorship、registries/aliases、tags、version relations/references、version-owned jobs/assets/processing 和 package snapshots |
-| `discovery/` | provider 查询、清洗、去重、合并、只读 catalog 比对、确定性标签和 manifest writer |
+| `discovery/` | provider 查询、清洗、去重、确定性合并、并发 metadata catalog ingestion、只读 catalog 比对、确定性标签和 manifest writer |
 | `integrations/` | 外部 provider client 和中性 DTO |
 | `network/` | HTTPS、DNS pinning、redirect、header、有限读取和 timeout |
 | `acquisition/` | admission、SourcePlan、provider、前台 serial/race、candidate execution、诊断和验收调用 |
@@ -71,7 +73,7 @@ report
 | `normalization/` | PDF/XML/HTML 到 sections、tables、references、source map 和 evidence |
 | `enrichment/` | 确定性 summary、tags 和 citation links |
 | `packaging/` | quality gate 与 `DocumentPackageVersion` 处理快照发布 |
-| `cli/` | 当前命令的 composition root |
+| `cli/` | 当前命令的 composition root，包括 metadata `search` 和只读 `library` |
 
 当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 仍保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references；single current generated result 属于后续 WP4。
 
@@ -83,12 +85,12 @@ report
 |---|---|---|---|
 | Work identity | 已覆盖 WP1 | Work identity、identifier aliases、preferred WorkVersion ranking/manual override | WP1 |
 | 书目 WorkVersion | 已覆盖 WP1 | `work_versions` 与 processing `package_versions` 分离；内容运行时归属 WorkVersion | WP1 |
-| MetadataObservation | 已覆盖 WP1 基础 | provider record 幂等 observation 与 WorkVersion ingest | WP1-WP2 |
+| MetadataObservation | 已覆盖 WP2 | provider record 幂等 observation、provenance、precedence/fill-missing 与 canonical reprojection | WP1-WP2 |
 | Author/Authorship | 已覆盖 WP1 | typed author/authorship repository，ORCID 保守复用 | WP1 |
 | Publisher/Venue registries | 已覆盖 WP1 | typed registry 与 alias repository | WP1-WP2 |
 | Canonical tags | 已覆盖 WP1 基础 | canonical tag/alias、manual Work tag、generated WorkVersion tag 分离 | WP1/WP4 |
-| Metadata discovery | 部分覆盖 | 多 provider 清洗、去重、manifest；尚未 placeholder 入库 | WP2 |
-| Local library search/curation | 未实现 | catalog 只有有限读取入口 | WP2/WP5 |
+| Metadata discovery | 已覆盖 WP2 | 多 provider 有界并发、独立 timeout、确定性合并、OA status、observations 和 canonical WorkVersion 入库；manifest 入口仍保持只读 | WP2 |
+| Local library search/curation | WP2 读取面已覆盖 | exact lookup、keyword/filters、references/cited-by、safe JSON/JSONL export；人工整理属于 WP5 | WP2/WP5 |
 | Primary PDF acquisition | 部分覆盖 | direct/official/OA providers、serial/race | WP3 |
 | Sci-Hub / translator / browser | 未实现 | 无 accepted 配置和完整运行路径 | WP3 |
 | Immutable RawAsset | 已覆盖基础 | validation、hash、create-if-absent、reconciliation | WP3 保留边界 |
@@ -98,7 +100,7 @@ report
 | Version references | 已覆盖 WP1 基础 | ordered `version_references`、目标 Work link 与 reverse citation query | WP1/WP4 |
 | Reference expansion | 未实现 | 无 `expand` 产品命令 | WP5 |
 | Failures UX | 部分覆盖 | 当前 report 展示 acquisition job/attempt/failure | WP3/WP5 |
-| Strict product config | 未实现 | 当前 schema v1 不含理想产品全部字段 | WP5 |
+| Strict product config | 部分覆盖 | schema v1 已加入 WP2 search defaults/providers/precedence；后续产品字段属于 WP3-WP5 | WP2-WP5 |
 | Foreground stop/idempotent rerun | 已覆盖 WP0 | signal cooperative stop、记录间停止、整记录重跑、资产复用直接测试 | WP0 |
 | 旧任务控制移除 | 已完成 | download、pause/resume/due、retry scheduling、daily reservation、source plan persistence、candidate checkpoint 公开面和运行依赖已删除 | WP0 |
 | Domain pack boundary | 已批准并有基础 | `DocumentPackageVersion`、stable references、ADR 0001 | 持续约束 |
@@ -111,8 +113,8 @@ report
 |---|---|---|---|---|
 | WP0 旧架构收缩 | approved | completed | `test_acquisition_p5.py` 覆盖记录间 stop、rerun、reuse、serial/race、stale attempt 和无 checkpoint；`test_candidate_executor.py` 覆盖有界执行、验证和安全投影；CLI/config removal 有直接测试 | 无 |
 | WP1 文献模型 | approved | completed | direct fresh schema bootstrap、typed WP1 repositories、WorkVersion-owned runtime persistence 和 `test_catalog_wp1.py` 直接验收；完整 unittest 与 Pyright 通过 | 无 |
-| WP2 搜索与本地库 | approved | not started | 无目标 search/library 完成证据 | 等待 WP1 验收 |
-| WP3 PDF 获取 | approved | not started | 只有可复用的现有 acquisition 基础 | 等待 WP2 验收 |
+| WP2 搜索与本地库 | approved | completed | `test_search_wp2.py`、`test_library_wp2.py`、`test_cli_wp2.py` 覆盖并发/timeout/确定性入库、preferred/non-preferred 读取、filters、引用遍历、安全导出和 CLI/config precedence；完整 harness 511 项通过 | 无 |
+| WP3 PDF 获取 | approved | not started | 只有可复用的现有 acquisition 基础 | 无 |
 | WP4 PDF 分析 | approved | not started | 只有可复用的 normalization/evidence 基础 | 等待 WP3 验收 |
 | WP5 引用与产品收口 | approved | not started | 无目标 expand/CLI/config 收口证据 | 等待 WP4 验收 |
 
@@ -127,6 +129,13 @@ report
 - `test_catalog_wp1.py` 直接验收：9 项通过；WP1/schema/P9/identity/asset/package 聚焦回归：57 项通过。
 - `uv run --frozen python scripts/harness.py full`：通过。
 - documentation、architecture、compile、Pyright、完整 unittest、wheel 构建和 wheel contents 门禁均通过。
+
+2026-07-23 WP2 聚焦验证：
+
+- `test_search_wp2.py`：25 项通过；`test_library_wp2.py`：11 项通过；`test_cli_wp2.py`：13 项通过。
+- `test_toml_config.py`：26 项通过；`test_cli.py`：25 项通过；provider adapter 聚焦回归通过。
+- Pyright：0 errors、0 warnings、0 informations。
+- `uv run --frozen python scripts/harness.py full`：511 项测试通过；documentation、architecture、compile、Pyright、wheel build 和 wheel contents 全部通过。
 
 ## 8. 更新规则
 
