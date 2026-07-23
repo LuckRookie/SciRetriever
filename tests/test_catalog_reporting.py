@@ -12,10 +12,8 @@ from sciretriever.catalog import (
     CatalogReportingRepository,
     CatalogEngine,
     IdentityResolver,
-    JobRepository,
-    apply_migrations,
-    create_catalog_engine,
-    open_read_only_catalog_engine,
+    JobRepository, initialize_catalog, create_catalog_engine,
+open_read_only_catalog_engine,
 )
 from sciretriever.catalog.models import events, failures
 from sciretriever.catalog.repository import canonical_json
@@ -33,9 +31,9 @@ class CatalogReportingTests(TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         writable = create_catalog_engine(self.path)
-        apply_migrations(writable)
-        self.work_id = IdentityResolver(writable).create_or_reuse_work({"doi": "10.1000/report"}).work.id
-        self.other_work_id = IdentityResolver(writable).create_or_reuse_work({"doi": "10.1000/report-2"}).work.id
+        initialize_catalog(writable)
+        self.work_id = IdentityResolver(writable).create_or_reuse_work({"doi": "10.1000/report"}).work_version.id
+        self.other_work_id = IdentityResolver(writable).create_or_reuse_work({"doi": "10.1000/report-2"}).work_version.id
         jobs = JobRepository(writable)
         self.job = jobs.attach_or_create_job(self.work_id, "primary_pdf")
         jobs.restart_foreground_job(self.job.id)
@@ -54,7 +52,7 @@ class CatalogReportingTests(TestCase):
         self.failure = jobs.append_failure(
             "rate_limit",
             "RAW_EXCEPTION",
-            work_id=self.work_id,
+            work_version_id=self.work_id,
             job_id=self.job.id,
             attempt_id=attempt.id,
             retryable=True,
@@ -68,7 +66,7 @@ class CatalogReportingTests(TestCase):
         with writable.transaction() as connection:
             connection.execute(
                 insert(failures).values(
-                    id=new_uuid4(), work_id=self.other_work_id, job_id=second.id,
+                    id=new_uuid4(), work_version_id=self.other_work_id, job_id=second.id,
                     attempt_id=None, processing_run_id=None, category="future_category",
                     message="SIGNED_URL https://host/path?signature=SECRET", retryable=0,
                     details_json=canonical_json({"diagnostic": {"schema_version": 999, "token": "SECRET"}}),

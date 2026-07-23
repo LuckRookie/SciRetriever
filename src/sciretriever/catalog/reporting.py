@@ -52,7 +52,7 @@ class CatalogReportingRepository:
         limit = _limit(limit)
         statement = select(acquisition_jobs)
         if work_id is not None:
-            statement = statement.where(acquisition_jobs.c.work_id == validate_uuid(work_id, "work_id"))
+            statement = statement.where(acquisition_jobs.c.work_version_id == validate_uuid(work_id, "work_id"))
         if state is not None:
             try:
                 normalized_state = state if isinstance(state, JobState) else JobState(state)
@@ -125,10 +125,7 @@ class CatalogReportingRepository:
             retryable = row["retryable"] == 1
             provider = providers_by_attempt.get(str(row["attempt_id"]))
             diagnostic = safe_diagnostic_from_details(
-                _optional_text(row["details_json"]),
-                category=category,
-                retryable=retryable,
-                provider=provider,
+                _optional_text(row["details_json"])
             )
             failures_by_job[job_id].append(
                 FailureProjection(str(row["id"]), _optional_text(row["occurred_at"]), category, diagnostic)
@@ -143,7 +140,7 @@ class CatalogReportingRepository:
         return tuple(
             JobProjection(
                 job_id=str(row["id"]),
-                work_id=str(row["work_id"]),
+                work_id=str(row["work_version_id"]),
                 asset_role=_safe_token(row["asset_role"], "unknown"),
                 state=_safe_token(row["state"], "unknown"),
                 created_at=_optional_text(row["created_at"]),

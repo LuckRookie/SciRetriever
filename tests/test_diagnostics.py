@@ -64,13 +64,24 @@ class DiagnosticTests(TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 decode_diagnostic(payload)
 
-    def test_legacy_projection_is_stable_and_does_not_require_mutation(self):
-        details = '{"provider":"legacy"}'
-        first = diagnostic_from_details(details, category="transport", retryable=True, provider="legacy")
-        second = diagnostic_from_details(details, category="transport", retryable=True, provider="legacy")
+    def test_projection_requires_current_envelope_and_does_not_mutate_details(self):
+        envelope = map_exception(
+            ProviderAcquisitionError.for_status("example", 503),
+            attempt=AttemptMetadata("candidate-1", 1, 20),
+        )
+        details = json.dumps(
+            {"diagnostic": envelope.to_dict()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        first = diagnostic_from_details(details)
+        second = diagnostic_from_details(details)
         self.assertEqual(first, second)
         self.assertEqual(first.reason_code, ReasonCode.PROVIDER_UNAVAILABLE)
-        self.assertEqual(details, '{"provider":"legacy"}')
+        self.assertEqual(json.loads(details), {"diagnostic": envelope.to_dict()})
+        for invalid in (None, "{}", '{"provider":"old"}', "not-json"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                diagnostic_from_details(invalid)
 
     def test_cancellation_and_untrusted_source_identifiers_are_closed(self):
         cancelled = map_exception(asyncio.CancelledError(), provider="example")

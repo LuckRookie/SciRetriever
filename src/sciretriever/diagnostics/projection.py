@@ -1,4 +1,4 @@
-"""Read-time diagnostic projection for new envelopes and untouched legacy rows."""
+"""Read-time diagnostic projection for current catalog failure rows."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Mapping
 from sciretriever.diagnostics.codec import decode_diagnostic
 from sciretriever.diagnostics.contracts import AttemptMetadata, DiagnosticEnvelope
 from sciretriever.diagnostics.mapping import map_exception
-from sciretriever.errors import CatalogError, ProviderErrorCategory, ProviderSearchError
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,60 +73,36 @@ class JobProjection:
 
 def diagnostic_from_details(
     details_json: str | None,
-    *,
-    category: str,
-    retryable: bool,
-    provider: str | None = None,
-    attempt: AttemptMetadata | None = None,
 ) -> DiagnosticEnvelope:
-    if details_json is not None:
-        try:
-            value = json.loads(details_json)
-        except (TypeError, ValueError):
-            value = None
-        if isinstance(value, Mapping) and "diagnostic" in value:
-            diagnostic = value["diagnostic"]
-            if not isinstance(diagnostic, Mapping):
-                raise ValueError("diagnostic details must contain an object")
-            encoded = json.dumps(diagnostic, ensure_ascii=True, allow_nan=False, separators=(",", ":"), sort_keys=True)
-            return decode_diagnostic(encoded)
-    error = _legacy_error(category, provider, retryable)
-    return map_exception(error, provider=provider, retryable=retryable, attempt=attempt)
+    if details_json is None:
+        raise ValueError("diagnostic details are required")
+    try:
+        value = json.loads(details_json)
+    except (TypeError, ValueError) as error:
+        raise ValueError("diagnostic details must be valid JSON") from error
+    if not isinstance(value, Mapping):
+        raise ValueError("diagnostic details must contain an object")
+    diagnostic = value.get("diagnostic")
+    if not isinstance(diagnostic, Mapping):
+        raise ValueError("diagnostic details must contain a diagnostic object")
+    encoded = json.dumps(
+        diagnostic,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return decode_diagnostic(encoded)
 
 
 def safe_diagnostic_from_details(
     details_json: str | None,
-    *,
-    category: str,
-    retryable: bool,
-    provider: str | None = None,
 ) -> DiagnosticEnvelope:
     """Decode a diagnostic while closing malformed or unknown envelopes."""
     try:
-        return diagnostic_from_details(
-            details_json,
-            category=category,
-            retryable=retryable,
-            provider=provider,
-        )
+        return diagnostic_from_details(details_json)
     except (TypeError, ValueError):
-        return map_exception(RuntimeError("invalid historical diagnostic"), retryable=False)
-
-
-def _legacy_error(category: str, provider: str | None, retryable: bool) -> BaseException:
-    normalized = category.lower()
-    provider_category = {
-        "authentication": ProviderErrorCategory.AUTHENTICATION,
-        "rate_limit": ProviderErrorCategory.RATE_LIMIT,
-        "transport": ProviderErrorCategory.TRANSPORT,
-        "server": ProviderErrorCategory.SERVER,
-        "invalid_response": ProviderErrorCategory.INVALID_RESPONSE,
-    }.get(normalized)
-    if provider_category is not None:
-        return ProviderSearchError(provider or "unknown", provider_category, "legacy failure", retryable=retryable)
-    if "catalog" in normalized:
-        return CatalogError("legacy failure")
-    return RuntimeError("legacy failure")
+        return map_exception(RuntimeError("invalid diagnostic payload"), retryable=False)
 
 
 __all__ = (
