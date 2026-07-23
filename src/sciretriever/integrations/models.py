@@ -18,6 +18,8 @@ class VendorWork:
     venue: str | None = None
     identifiers: tuple[tuple[str, str], ...] = ()
     keywords: tuple[str, ...] = ()
+    open_access_status: str | None = None
+    publisher: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
