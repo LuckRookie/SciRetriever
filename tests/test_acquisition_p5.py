@@ -19,7 +19,7 @@ if str(SRC) not in sys.path:
 from sciretriever.acquisition import AcquisitionTarget, AdmissionService, ProviderContent
 from sciretriever.acquisition.multi_orchestrator import MultiSourceOrchestrator
 from sciretriever.acquisition.plan import RoutingMode, SourceEntry, SourcePlan
-from sciretriever.catalog import AssetRepository, IdentityResolver, JobRepository, apply_migrations, create_catalog_engine, open_catalog_engine
+from sciretriever.catalog import AssetRepository, IdentityResolver, JobRepository, initialize_catalog, create_catalog_engine, open_catalog_engine
 from sciretriever.cli import acquire as acquire_cli
 from sciretriever.core.contracts import CandidateMetadata, DownloadManifestEntry, Identifier, Provenance
 from sciretriever.core.enums import AssetRole, AttemptOutcome, JobState
@@ -72,7 +72,7 @@ class ForegroundAcquisitionTests(TestCase):
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.engine = create_catalog_engine(self.base / "catalog.sqlite")
-        apply_migrations(self.engine)
+        initialize_catalog(self.engine)
         self.addCleanup(self.engine.dispose)
         self.jobs = JobRepository(self.engine)
         assets = AssetRepository(self.engine)
@@ -162,7 +162,7 @@ class ForegroundAcquisitionTests(TestCase):
         plan = self.plan("fast", "slow", mode=RoutingMode.RACE)
         admission, result = self.run_plan("10.1/race", {"fast": fast, "slow": slow}, plan)
         self.assertEqual(result.status, "succeeded")
-        links = AssetRepository(self.engine).get_work_assets(admission.work_id)
+        links = AssetRepository(self.engine).get_work_version_assets(admission.work_version_id)
         self.assertEqual(len(links), 1)
         attempts = self.jobs.list_attempts(admission.job_id)
         self.assertEqual(sum(item.outcome is AttemptOutcome.SUCCEEDED for item in attempts), 1)
@@ -240,7 +240,7 @@ class ForegroundAcquisitionTests(TestCase):
             _config_credentials=None,
         )
         catalog = create_catalog_engine(args.catalog)
-        apply_migrations(catalog)
+        initialize_catalog(catalog)
         catalog.dispose()
         args.storage_root.mkdir()
 
@@ -270,8 +270,10 @@ class ForegroundAcquisitionTests(TestCase):
         catalog = open_catalog_engine(args.catalog)
         self.addCleanup(catalog.dispose)
         with catalog.connect() as connection:
-            first_work_id = connection.exec_driver_sql(
-                "SELECT work_id FROM identifiers WHERE namespace = ? AND value = ?",
+            first_work_version_id = connection.exec_driver_sql(
+                "SELECT works.preferred_work_version_id FROM identifiers "
+                "JOIN works ON works.id = identifiers.work_id "
+                "WHERE identifiers.namespace = ? AND identifiers.value = ?",
                 ("doi", "10.1/stop-first"),
             ).scalar_one()
             second_count = connection.exec_driver_sql(
@@ -286,7 +288,7 @@ class ForegroundAcquisitionTests(TestCase):
                 "SELECT outcome, finished_at, details_json FROM acquisition_attempts"
             ).one()
         assets = AssetRepository(catalog)
-        links = assets.get_work_assets(first_work_id)
+        links = assets.get_work_version_assets(first_work_version_id)
         self.assertEqual(len(links), 1)
         raw_asset = assets.get_raw_asset(links[0].raw_asset_id)
         assert raw_asset is not None

@@ -304,15 +304,16 @@ class MultiSourceOrchestrator:
         self.jobs.append_failure(
             diagnostic.reason_code.value,
             diagnostic.summary,
-            work_id=admission.work_id,
+            work_version_id=admission.work_version_id,
             job_id=admission.job_id,
             retryable=diagnostic.retryable,
             details={"diagnostic": diagnostic.to_dict()},
         )
         self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
         return AcquisitionResult(
-            admission.work_id, admission.job_id, JobState.FAILED.value,
+            admission.work_version_id, admission.job_id, JobState.FAILED.value,
             error=diagnostic.summary,
+            work_id=admission.work_id,
         )
 
     def _accept_winner(
@@ -336,7 +337,7 @@ class MultiSourceOrchestrator:
         try:
             accepted = self.coordinator.accept(
                 BytesIO(content.data),
-                admission.work_id,
+                admission.work_version_id,
                 admission.job_id,
                 admission.asset_role,
                 content.media_type,
@@ -360,17 +361,19 @@ class MultiSourceOrchestrator:
                 | {"raw_asset_id": accepted_id},
             )
             return AcquisitionResult(
-                admission.work_id, admission.job_id, "succeeded", accepted_id,
+                admission.work_version_id, admission.job_id, "succeeded", accepted_id,
                 winner.attempt.id,
+                work_id=admission.work_id,
             )
         except Exception as error:
             if accepted_id is not None:
                 self.jobs.succeed_nonterminal_jobs_for_work(
-                    admission.work_id, admission.asset_role
+                    admission.work_version_id, admission.asset_role
                 )
                 return AcquisitionResult(
-                    admission.work_id, admission.job_id, "succeeded", accepted_id,
+                    admission.work_version_id, admission.job_id, "succeeded", accepted_id,
                     winner.attempt.id,
+                    work_id=admission.work_id,
                 )
             mapped = StorageError("asset acceptance storage failure") if isinstance(error, OSError) else error
             failed = _CandidateResult(
@@ -385,9 +388,10 @@ class MultiSourceOrchestrator:
             )
             self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
             return AcquisitionResult(
-                admission.work_id, admission.job_id, "failed",
+                admission.work_version_id, admission.job_id, "failed",
                 attempt_id=winner.attempt.id,
                 error=self._diagnostic(failed).summary,
+                work_id=admission.work_id,
             )
 
     async def acquire(
@@ -400,19 +404,21 @@ class MultiSourceOrchestrator:
     ) -> AcquisitionResult:
         if admission.reused_asset_id is not None:
             return AcquisitionResult(
-                admission.work_id, None, "reused", admission.reused_asset_id
+                admission.work_version_id, None, "reused", admission.reused_asset_id,
+                work_id=admission.work_id,
             )
         async with self._invocation_lock:
             async with self._foreground_lock:
                 existing = self.coordinator.existing_asset_id(
-                    admission.work_id, admission.asset_role
+                    admission.work_version_id, admission.asset_role
                 )
                 if existing is not None:
                     self.jobs.succeed_nonterminal_jobs_for_work(
-                        admission.work_id, admission.asset_role
+                        admission.work_version_id, admission.asset_role
                     )
                     return AcquisitionResult(
-                        admission.work_id, None, "reused", existing
+                        admission.work_version_id, None, "reused", existing,
+                        work_id=admission.work_id,
                     )
                 return await self._acquire_locked(admission, target, plan, timeout)
 
