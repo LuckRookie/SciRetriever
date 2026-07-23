@@ -12,7 +12,7 @@
 | `src/sciretriever/storage/` | [架构原则](../architecture/principles.md)、[系统设计](../specs/system-design.md) | 不可变存储、hash、路径、权限、发布和对账 |
 | `src/sciretriever/normalization/`、`src/sciretriever/enrichment/`、`src/sciretriever/packaging/` | [需求](../specs/requirements.md)、[系统设计](../specs/system-design.md)、[架构原则](../architecture/principles.md)、[实施进度](implementation-progress.md) | 理想 PDF analysis/current replacement/package boundary 和当前 deterministic processing 覆盖 |
 | `src/sciretriever/cli/`、`src/sciretriever/config.py`、`config.example.toml` | [README](../../README.md)、[需求](../specs/requirements.md)、[实施进度](implementation-progress.md) | 已发布命令、参数、accepted keys/defaults，理想 CLI/config contract 和当前差距 |
-| `src/sciretriever/legacy/`、`src/SciRetriever/` | [ADR 索引](../adr/README.md)、[ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md)、[ADR 0002](../adr/0002-work-centered-literature-library.md)、[技术架构](../specs/technical-architecture.md) | 仅 retained/migration legacy shape 使用受限 adapter；被删除的旧任务行为无兼容义务；退休路径保护继续有效 |
+| legacy 或已废弃代码 | [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md)、[ADR 0002](../adr/0002-work-centered-literature-library.md)、[实施进度](implementation-progress.md) | pre-v1 不保留 legacy catalog adapter、旧 schema 或退休路径 guard；不符合目标框架的代码直接删除，未来兼容需求必须由 owner 重新授权 |
 | `scripts/harness.py`、`.github/workflows/ci.yml` | [AGENTS.md](../../AGENTS.md)、[HARNESS.md](../../HARNESS.md) | 检查命令、规则强度、CI 和完成标准 |
 | 产品方向与删除兼容策略 | [ADR 0002](../adr/0002-work-centered-literature-library.md)、[产品提案](../proposals/literature-library-product.md) | Work-centered 产品、前台幂等重跑、旧任务行为无兼容义务 |
 | owner 产品决策追踪 | [产品决策追踪](product-decision-trace.md) | 只做对话索引到权威文档的覆盖审计；不作为独立规范或当前行为来源 |
@@ -27,6 +27,6 @@
 2. `WorkVersion` 与 processing/package version 必须始终使用不同术语和所有权。
 3. target analysis 只保留 single current result；`package_versions` 不得解释为 analysis history。
 4. 理想能力只在三份规格定义；未实现状态只在实施进度记录，不得进入当前命令示例或 accepted config。
-5. 不兼容的 `DocumentPackage` 或项目边界变化必须新增 ADR。ADR 0002 已允许删除不需要的旧任务行为，但实际 schema/data 删除仍需迁移审批。
+5. 不兼容的 `DocumentPackage` 或项目边界变化必须新增 ADR。ADR 0002 已批准 pre-v1 WP1 直接替换 schema 并删除不需要的 legacy catalog 代码；未来存在受支持数据后再由 owner 明确迁移和兼容门禁。
 6. proposal 不是实施授权，execution plan 不是当前行为或进度真相源，progress 不是产品规范。完成、取消或被替代的计划移入 archive。
 7. provider 或访问方法变化不得绕过 secure transport、有限 timeout、validation、immutable storage 和 redaction。
