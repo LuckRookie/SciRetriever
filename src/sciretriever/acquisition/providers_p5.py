@@ -250,7 +250,7 @@ class ElsevierProvider(_CredentialedProvider):
             _identifier(target, "doi"), accept="application/xml", timeout=timeout
         )
         if article.status != 200:
-            raise ProviderAcquisitionError.for_status(self.name, article.status)
+            raise ProviderAcquisitionError.for_response(self.name, article)
         if target.role is AssetRole.XML:
             return self._profile_content(article, target)
         eid = self._attachment_eid(article.body, target.role)
@@ -260,7 +260,7 @@ class ElsevierProvider(_CredentialedProvider):
             eid, accept="application/pdf", timeout=timeout
         )
         if response.status != 200:
-            raise ProviderAcquisitionError.for_status(self.name, response.status)
+            raise ProviderAcquisitionError.for_response(self.name, response)
         return self._profile_content(response, target, provenance={"resolver_url": article.url, "attachment_eid": eid})
 
 
@@ -300,7 +300,7 @@ class SpringerProvider(_CredentialedProvider):
                 timeout=timeout,
             )
             if response.status != 200:
-                raise ProviderAcquisitionError.for_status(self.name, response.status)
+                raise ProviderAcquisitionError.for_response(self.name, response)
             return self._profile_content(response, target)
         try:
             work, clean_url = self._client.lookup_doi(

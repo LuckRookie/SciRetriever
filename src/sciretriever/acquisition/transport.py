@@ -5,7 +5,7 @@ from typing import Callable, Mapping, Protocol
 from sciretriever.acquisition.url_policy import UrlPolicy
 from sciretriever.errors import AcquisitionError
 from sciretriever.network.policy import NetworkPolicyError
-from sciretriever.network import HttpResponse, QueryParams
+from sciretriever.network import HeadersResponse, HttpResponse, QueryParams
 from sciretriever.network.secure import (
     MAX_REDIRECTS, MAX_RESPONSE_BYTES, HttpsDialer, PinnedHttpsDialer,
     SecureHttpsTransport, _read_bounded as _shared_read_bounded,
@@ -48,6 +48,19 @@ class UrllibAcquisitionTransport(SecureHttpsTransport):
             return super().get(
                 url, params=params, timeout=timeout, headers=headers
             )
+        except NetworkPolicyError as error:
+            raise AcquisitionError(str(error)) from error
+
+    def head(
+        self,
+        url: str,
+        *,
+        params: QueryParams | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> HeadersResponse:
+        try:
+            return super().head(url, params=params, timeout=timeout, headers=headers)
         except NetworkPolicyError as error:
             raise AcquisitionError(str(error)) from error
 

@@ -41,7 +41,7 @@ def _primary_pdf_only(target: AcquisitionTarget, provider: str) -> None:
 
 def _json(response: HttpResponse, provider: str) -> object:
     if response.status != 200:
-        raise ProviderAcquisitionError.for_status(provider, response.status)
+        raise ProviderAcquisitionError.for_response(provider, response)
     try:
         return json.loads(response.body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -54,17 +54,31 @@ def _json(response: HttpResponse, provider: str) -> object:
 
 
 class ProviderAcquisitionError(AcquisitionError):
-    def __init__(self, provider: str, category: ProviderErrorCategory, message: str, retryable: bool, status: int | None = None) -> None:
+    def __init__(self, provider: str, category: ProviderErrorCategory, message: str, retryable: bool, status: int | None = None, retry_after: int | None = None) -> None:
         super().__init__(message)
         self.provider = provider
         self.category = category
         self.retryable = retryable
         self.status = status
+        self.retry_after = retry_after if retryable else None
 
     @classmethod
     def for_status(cls, provider: str, status: int) -> "ProviderAcquisitionError":
         category, retryable = classify_provider_http_status(status)
         return cls(provider, category, f"{provider} returned HTTP {status}", retryable, status)
+
+    @classmethod
+    def for_response(cls, provider: str, response: HttpResponse) -> "ProviderAcquisitionError":
+        category, retryable = classify_provider_http_status(response.status)
+        retry_after = _retry_after_delta(response.header("retry-after")) if retryable else None
+        return cls(
+            provider,
+            category,
+            f"{provider} returned HTTP {response.status}",
+            retryable,
+            response.status,
+            retry_after,
+        )
 
     @classmethod
     def invalid_response(cls, provider: str, message: str) -> "ProviderAcquisitionError":
@@ -90,7 +104,7 @@ class _BaseProvider:
             else self.transport.get(url, timeout=timeout, headers=headers)
         )
         if response.status != 200:
-            raise ProviderAcquisitionError.for_status(self.name, response.status)
+            raise ProviderAcquisitionError.for_response(self.name, response)
         return response
 
     def _content(
@@ -115,6 +129,18 @@ class _BaseProvider:
             response.body,
             provenance or {},
         )
+
+
+def _retry_after_delta(value: str | None) -> int | None:
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not candidate or not candidate.isascii() or not candidate.isdecimal():
+        return None
+    if len(candidate) > 10:
+        return None
+    parsed = int(candidate)
+    return parsed if parsed <= 2_147_483_647 else None
 
 
 class DirectHttpsProvider(_BaseProvider):
