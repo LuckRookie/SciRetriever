@@ -8,6 +8,7 @@ from typing import Mapping, Protocol
 
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import AssetRole
+from sciretriever.core.validation import normalize_media_type
 from sciretriever.network import HttpResponse, Transport
 
 
@@ -46,6 +47,9 @@ class ProviderContent:
     provider: str
     data: bytes
     provenance: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "media_type", normalize_media_type(self.media_type))
 
 
 class AcquisitionProvider(Protocol):
