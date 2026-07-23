@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import contextlib
 from importlib import import_module
@@ -40,6 +41,7 @@ from sciretriever.cli import acquire as acquire_cli
 from sciretriever.cli.main import main
 from sciretriever.core.contracts import CandidateMetadata, DownloadManifestEntry, Identifier, Provenance
 from sciretriever.core.enums import AssetRole, JobState
+from sciretriever.core.validation import normalize_media_type
 from sciretriever.errors import AcquisitionError, CatalogError, ProviderErrorCategory, ValidationError
 from sciretriever.integrations import ArxivClient, CrossrefClient, EuropePmcClient
 from sciretriever.network import url_with_params
@@ -185,6 +187,43 @@ class AcquisitionTests(TestCase):
         with self.assertRaisesRegex(ValidationError, "format"):
             validate_primary_pdf(ProviderContent(AssetRole.PRIMARY_PDF, "application/pdf", "PDF", "https://example.test/a", "fake", good))
 
+    def test_media_type_normalization_is_strict(self):
+        accepted = {
+            "Application/PDF; charset=utf-8": "application/pdf",
+            ' text/HTML ; charset="utf-8" ': "text/html",
+            'application/xml; profile="a\\\"b"': "application/xml",
+        }
+        for value, expected in accepted.items():
+            with self.subTest(value=value):
+                self.assertEqual(normalize_media_type(value), expected)
+
+        rejected = (
+            "application/",
+            "/pdf",
+            "application//pdf",
+            "!application/pdf",
+            "application/!pdf",
+            "application/pdf; charset",
+            "application/pdf; charset=",
+            'application/pdf; charset=""',
+            'application/pdf; charset="unterminated',
+            "application/pdf, text/html",
+            "application/pdf\r\nX-Test: injected",
+        )
+        for value in rejected:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    normalize_media_type(value)
+                with self.assertRaises(ValueError):
+                    ProviderContent(
+                        AssetRole.PRIMARY_PDF,
+                        value,
+                        "pdf",
+                        "https://example.test/a",
+                        "fake",
+                        b"not staged",
+                    )
+
     def test_url_policy_rejects_unsafe_urls_and_redirect_targets(self):
         policy = UrlPolicy(forbidden_urls=("https://blocked.example/",))
         for url, addresses in (
@@ -213,7 +252,13 @@ class AcquisitionTests(TestCase):
             dialer=dialer,
         )
         transport.get("https://example.test/paper?q=1", timeout=2)
-        self.assertEqual(dialer.calls[0], ("example.test", "93.184.216.34", 443, "/paper?q=1", 2))
+        hostname, address, port, target, remaining = dialer.calls[0]
+        self.assertEqual(
+            (hostname, address, port, target),
+            ("example.test", "93.184.216.34", 443, "/paper?q=1"),
+        )
+        self.assertGreater(remaining, 0)
+        self.assertLessEqual(remaining, 2)
         looping = FakeDialer([FakeDialResponse(302, {"location": "/again"}, b"") for _ in range(2)])
         limited = UrllibAcquisitionTransport(
             max_redirects=1,
@@ -394,15 +439,30 @@ class AcquisitionTests(TestCase):
     def test_end_to_end_success_and_no_network_replay(self):
         identifiers = (Identifier("doi", "10.1/acquire"),)
         first = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/paper.pdf")
-        provider = DirectHttpsProvider(FakeTransport([response("https://example.test/paper.pdf")]))
+        provider = DirectHttpsProvider(
+            FakeTransport(
+                [
+                    response(
+                        "https://example.test/paper.pdf",
+                        content_type="Application/PDF; charset=utf-8",
+                    )
+                ]
+            )
+        )
         target = AcquisitionTarget(identifiers, "https://example.test/paper.pdf")
         result = asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(first, target, provider, timeout=2))
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(self.jobs.get_job(first.job_id).state, JobState.SUCCEEDED)
         self.assertEqual(self.jobs.list_requests(first.job_id)[0].status, "succeeded")
         self.assertIsNotNone(self.jobs.list_attempts(first.job_id)[0].finished_at)
-        self.assertEqual(self.jobs.list_attempts(first.job_id)[0].source_url, "https://example.test/paper.pdf")
-        self.assertIn('"final_url":"https://example.test/paper.pdf"', self.jobs.list_attempts(first.job_id)[0].details_json)
+        attempt = self.jobs.list_attempts(first.job_id)[0]
+        self.assertIsNone(attempt.source_url)
+        self.assertNotIn("https://example.test/paper.pdf", attempt.details_json)
+        self.assertEqual(json.loads(attempt.details_json)["schema_version"], 1)
+        self.assertNotIn("candidates", json.loads(attempt.details_json))
+        work_asset = self.assets.get_work_assets(first.work_id)[0]
+        raw_asset = self.assets.get_raw_asset(work_asset.raw_asset_id)
+        self.assertEqual(raw_asset.media_type, "application/pdf")
         replay = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/paper.pdf")
         self.assertEqual(replay.reused_asset_id, result.raw_asset_id)
         replay_transport = FakeTransport([AssertionError("network called")])
@@ -411,7 +471,7 @@ class AcquisitionTests(TestCase):
         self.assertEqual(replay_result.status, "reused")
         self.assertEqual(replay_transport.urls, [])
 
-    def test_resolver_attempt_records_initial_and_final_urls(self):
+    def test_resolver_attempt_and_asset_provenance_exclude_runtime_urls(self):
         identifiers = (Identifier("doi", "10.1/provenance"),)
         admission = self.admission.admit(identifiers, provider="crossref")
         resolver = response(
@@ -423,14 +483,17 @@ class AcquisitionTests(TestCase):
         result = asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(admission, AcquisitionTarget(identifiers), provider, timeout=1))
         self.assertEqual(result.status, "succeeded")
         attempt = self.jobs.list_attempts(admission.job_id)[0]
-        self.assertEqual(attempt.source_url, "https://api.crossref.org/works/10.1%2Fprovenance")
-        self.assertIn('"final_url":"https://files.example/final.pdf"', attempt.details_json)
+        self.assertIsNone(attempt.source_url)
+        self.assertNotIn("https://api.crossref.org/works/10.1%2Fprovenance", attempt.details_json)
+        self.assertNotIn("https://files.example/final.pdf", attempt.details_json)
         raw = self.assets.get_work_assets(admission.work_id)[0]
         raw_asset = self.assets.get_raw_asset(raw.raw_asset_id)
-        self.assertIn('"source_url":"https://files.example/final.pdf"', raw_asset.provenance_json)
+        self.assertNotIn("https://files.example/final.pdf", raw_asset.provenance_json)
+        self.assertIn('"candidate_id":"p4"', raw_asset.provenance_json)
+        self.assertIn('"resolver":"legacy_single"', raw_asset.provenance_json)
 
     def test_provider_failures_close_or_retry_job(self):
-        for status, expected in ((404, JobState.FAILED), (503, JobState.RETRYABLE)):
+        for status, expected in ((404, JobState.FAILED), (503, JobState.FAILED)):
             identifiers = (Identifier("doi", f"10.1/fail-{status}"),)
             admission = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
             provider = DirectHttpsProvider(FakeTransport([response("https://example.test/a", status=status)]))
@@ -478,27 +541,31 @@ class AcquisitionTests(TestCase):
         provider = BlockingProvider()
 
         async def run_both():
-            orchestrator = AcquisitionOrchestrator(self.jobs, self.coordinator)
-            first = asyncio.create_task(orchestrator.acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=2))
+            first_orchestrator = AcquisitionOrchestrator(self.jobs, self.coordinator)
+            second_orchestrator = AcquisitionOrchestrator(self.jobs, self.coordinator)
+            first = asyncio.create_task(first_orchestrator.acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=2))
             await asyncio.to_thread(started.wait, 1)
-            second = await orchestrator.acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=2)
-            release.set()
+            async def unblock():
+                await asyncio.sleep(0.02)
+                release.set()
+            asyncio.create_task(unblock())
+            second = await second_orchestrator.acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=2)
             return await first, second
 
         first, second = asyncio.run(run_both())
         self.assertEqual(first.status, "succeeded")
-        self.assertEqual(second.status, "in_progress")
+        self.assertEqual(second.status, "reused")
         self.assertEqual(provider.calls, 1)
         self.assertEqual(len(self.jobs.list_attempts(admission.job_id)), 1)
 
-    def test_active_attachment_invokes_no_provider(self):
+    def test_stale_active_attachment_is_reentered(self):
         identifiers = (Identifier("doi", "10.1/active"),)
         admission = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
-        self.assertTrue(self.jobs.claim_job(admission.job_id))
-        transport = FakeTransport([AssertionError("provider called")])
+        self.jobs.restart_foreground_job(admission.job_id)
+        transport = FakeTransport([response("https://example.test/a")])
         result = asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), DirectHttpsProvider(transport), timeout=1))
-        self.assertEqual(result.status, "in_progress")
-        self.assertEqual(transport.urls, [])
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(transport.urls), 1)
 
     def test_timeout_and_cancellation_close_attempts_coherently(self):
         drained = threading.Event()
@@ -516,9 +583,11 @@ class AcquisitionTests(TestCase):
 
         timed = self.admission.admit((Identifier("doi", "10.1/timeout"),), provider="slow")
         result = asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(timed, AcquisitionTarget((Identifier("doi", "10.1/timeout"),)), SlowProvider(), timeout=0.01))
-        self.assertEqual(result.status, "retryable")
-        self.assertEqual(self.jobs.get_job(timed.job_id).state, JobState.RETRYABLE)
-        self.assertTrue(drained.is_set())
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(self.jobs.get_job(timed.job_id).state, JobState.FAILED)
+        self.assertFalse(drained.is_set())
+        self.assertEqual(self.assets.get_work_assets(timed.work_id), ())
+        self.assertTrue(drained.wait(0.2))
         self.assertEqual(self.assets.get_work_assets(timed.work_id), ())
 
         cancelled = self.admission.admit((Identifier("doi", "10.1/cancel"),), provider="slow")
@@ -554,26 +623,31 @@ class AcquisitionTests(TestCase):
             "finish_attempt_and_job",
             side_effect=CatalogError("injected closure failure"),
         ) as close:
-            with self.assertRaisesRegex(CatalogError, "injected closure"):
-                asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(admission, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=1))
+            result = asyncio.run(
+                AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(
+                    admission,
+                    AcquisitionTarget(identifiers, "https://example.test/a"),
+                    provider,
+                    timeout=1,
+                )
+            )
         close.assert_called_once()
+        self.assertEqual(result.status, JobState.SUCCEEDED.value)
         attempt = self.jobs.list_attempts(admission.job_id)[0]
-        self.assertIsNone(attempt.finished_at)
-        self.assertEqual(self.jobs.get_job(admission.job_id).state, JobState.ACTIVE)
+        self.assertEqual(attempt.outcome.value, "succeeded")
+        self.assertIsNotNone(attempt.finished_at)
+        self.assertEqual(self.jobs.get_job(admission.job_id).state, JobState.SUCCEEDED)
+        self.assertEqual(self.jobs.list_requests(admission.job_id)[0].status, "succeeded")
         self.assertEqual(len(self.assets.get_work_assets(admission.work_id)), 1)
 
         replay = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
         self.assertIsNotNone(replay.reused_asset_id)
-        repaired_attempt = self.jobs.list_attempts(admission.job_id)[0]
-        self.assertEqual(repaired_attempt.outcome.value, "succeeded")
-        self.assertIsNotNone(repaired_attempt.finished_at)
-        self.assertEqual(self.jobs.get_job(admission.job_id).state, JobState.SUCCEEDED)
-        self.assertEqual(self.jobs.list_requests(admission.job_id)[0].status, "succeeded")
+        self.assertEqual(len(self.assets.get_work_assets(admission.work_id)), 1)
 
     def test_terminal_completion_is_idempotent_but_not_rewritable(self):
         identifiers = (Identifier("doi", "10.1/terminal"),)
         admission = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
-        self.assertTrue(self.jobs.claim_job(admission.job_id))
+        self.jobs.restart_foreground_job(admission.job_id)
         first = self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
         second = self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
         self.assertEqual(first, second)
@@ -614,7 +688,7 @@ class AcquisitionTests(TestCase):
     def test_cli_forbidden_file_and_partial_manifest_continue(self):
         forbidden = self.base / "forbidden.txt"
         forbidden.write_text("# comment\n\nhttps://blocked.example/\n", encoding="utf-8")
-        self.assertEqual(acquire_cli._read_forbidden_urls(forbidden), ("https://blocked.example/",))
+        self.assertEqual(acquire_cli.read_forbidden_urls(forbidden), ("https://blocked.example/",))
 
         entries = (
             DownloadManifestEntry((Identifier("doi", "10.1/first"),), CandidateMetadata(title="First"), (), True, False, None, Provenance(("crossref",), "2026-07-20T00:00:00Z", "run")),

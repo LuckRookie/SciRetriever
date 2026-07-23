@@ -1,26 +1,34 @@
-"""Python 3.10-compatible deterministic P5 multi-source orchestration."""
+"""Bounded foreground multi-source acquisition orchestration."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import fcntl
 from io import BytesIO
+import os
+from pathlib import Path
+import stat
 import time
+from types import TracebackType
 from typing import Mapping
 from urllib.parse import urlsplit
 
 from sciretriever.acquisition.attempt_details import CandidateAttemptDetails
-from sciretriever.acquisition.controls import CircuitBreaker, HostBudgetManager, ProviderHealth, RetryPolicy
+from sciretriever.acquisition.candidate_executor import CandidateExecutionStatus, CandidateExecutor
+from sciretriever.acquisition.candidate_resolution import CandidateResolver, validate_resolved_candidates
+from sciretriever.acquisition.candidates import RuntimeDownloadCandidate
+from sciretriever.acquisition.controls import CircuitBreaker, HostBudgetManager, ProviderHealth
+from sciretriever.acquisition.legacy_candidates import LegacySingleCandidateResolver
 from sciretriever.acquisition.models import AcquisitionProvider, AcquisitionResult, AcquisitionTarget, AdmissionResult, ProviderContent
 from sciretriever.acquisition.plan import RoutingMode, SourceEntry, SourcePlan
 from sciretriever.acquisition.providers import ProviderAcquisitionError
-from sciretriever.acquisition.routing import next_attempt_sequence, resume_candidates, tiers
-from sciretriever.acquisition.validation import validate_content
+from sciretriever.acquisition.routing import tiers
 from sciretriever.catalog.jobs import JobRepository
 from sciretriever.catalog.records import AttemptRecord
 from sciretriever.core.enums import AttemptOutcome, JobState
-from sciretriever.core.timestamps import utc_now_rfc3339
-from sciretriever.errors import AcquisitionError
+from sciretriever.diagnostics import AttemptMetadata, DiagnosticEnvelope, map_exception, redact
+from sciretriever.errors import AcquisitionError, ConfigError, ProviderErrorCategory, StorageError
 from sciretriever.storage.coordinator import AssetAcceptanceCoordinator
 
 
@@ -32,8 +40,73 @@ class _CandidateResult:
     error: Exception | None
     retryable: bool
     latency: float
-    attempt_sequence: int | None
+    sequence: int
     skipped: str | None = None
+
+
+class _ForegroundInvocationFileLock:
+    """Crash-releasing catalog-wide lock for foreground acquisition invocations."""
+
+    def __init__(self, catalog_path: Path) -> None:
+        self._path = catalog_path.with_name(f".{catalog_path.name}.acquisition.lock")
+        self._descriptor: int | None = None
+
+    async def __aenter__(self) -> None:
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(self._path, flags, 0o600)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                os.close(descriptor)
+                descriptor = None
+                raise AcquisitionError("foreground acquisition lock is not a regular file")
+            os.fchmod(descriptor, 0o600)
+        except OSError as error:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise AcquisitionError("could not open foreground acquisition lock") from error
+        if descriptor is None:
+            raise AcquisitionError("could not open foreground acquisition lock")
+        self._descriptor = descriptor
+        try:
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return
+                except BlockingIOError:
+                    await asyncio.sleep(0.02)
+                except OSError as error:
+                    raise AcquisitionError(
+                        "could not acquire foreground acquisition lock"
+                    ) from error
+        except BaseException:
+            os.close(descriptor)
+            self._descriptor = None
+            raise
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        descriptor = self._descriptor
+        self._descriptor = None
+        if descriptor is None:
+            return
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError as error:
+            if exc_type is None:
+                raise AcquisitionError(
+                    "could not release foreground acquisition lock"
+                ) from error
+        finally:
+            os.close(descriptor)
 
 
 class MultiSourceOrchestrator:
@@ -46,8 +119,9 @@ class MultiSourceOrchestrator:
         budgets: HostBudgetManager | None = None,
         health: ProviderHealth | None = None,
         circuits: CircuitBreaker | None = None,
-        retry_policy: RetryPolicy | None = None,
         monotonic=time.monotonic,
+        candidate_resolvers: Mapping[str, CandidateResolver] | None = None,
+        candidate_executor: CandidateExecutor | None = None,
     ) -> None:
         self.jobs = jobs
         self.coordinator = coordinator
@@ -55,179 +129,210 @@ class MultiSourceOrchestrator:
         self.budgets = budgets or HostBudgetManager()
         self.health = health or ProviderHealth()
         self.circuits = circuits or CircuitBreaker()
-        self.retry_policy = retry_policy or RetryPolicy()
-        self._clock = monotonic
+        self._executor = candidate_executor or CandidateExecutor(
+            budgets=self.budgets, monotonic=monotonic
+        )
+        self._candidate_resolvers = dict(candidate_resolvers or {})
+        self._invocation_lock = asyncio.Lock()
+        self._foreground_lock = _ForegroundInvocationFileLock(jobs.catalog_path)
+
+    @staticmethod
+    def _deduplicate(
+        candidates: tuple[RuntimeDownloadCandidate, ...],
+    ) -> tuple[RuntimeDownloadCandidate, ...]:
+        seen: set[tuple[str, object]] = set()
+        selected: list[RuntimeDownloadCandidate] = []
+        for candidate in candidates:
+            identity = (candidate.redacted_url_identity, candidate.role)
+            if identity not in seen:
+                seen.add(identity)
+                selected.append(candidate)
+        return tuple(selected)
 
     async def _candidate(
         self,
         job_id: str,
         target: AcquisitionTarget,
         entry: SourceEntry,
-        attempt_sequence: int,
+        sequence: int,
         timeout: float,
+        stop_event: asyncio.Event | None = None,
     ) -> _CandidateResult:
         provider = self.providers.get(entry.provider)
-        if provider is None:
-            self.jobs.append_event("acquisition_job", job_id, "source.skipped", {"candidate_id": entry.candidate_id, "provider": entry.provider, "reason": "provider_unavailable"})
-            return _CandidateResult(entry, None, None, None, False, 0.0, None, "provider_unavailable")
-        try:
-            initial_url = provider.initial_url(target)
-            host = urlsplit(initial_url).hostname or ""
-        except Exception as error:
-            self.jobs.append_event("acquisition_job", job_id, "source.skipped", {"candidate_id": entry.candidate_id, "provider": entry.provider, "reason": "incompatible_target"})
-            return _CandidateResult(entry, None, None, error, False, 0.0, None, "incompatible_target")
-        if not self.circuits.allow(host):
-            self.jobs.append_event("acquisition_job", job_id, "source.skipped", {"candidate_id": entry.candidate_id, "provider": entry.provider, "host": host, "reason": "circuit_open"})
-            return _CandidateResult(entry, None, None, None, True, 0.0, None, "circuit_open")
-        async with self.budgets.acquire(host):
-            attempt = self.jobs.start_attempt(
+        resolver = self._candidate_resolvers.get(
+            entry.candidate_id, self._candidate_resolvers.get(entry.provider)
+        )
+        if resolver is None and provider is not None:
+            resolver = LegacySingleCandidateResolver(provider)
+        if resolver is None:
+            self.jobs.append_event(
+                "acquisition_job",
                 job_id,
-                entry.provider,
-                source_url=initial_url,
-                details=CandidateAttemptDetails(entry.candidate_id, attempt_sequence).to_dict(
-                    priority=entry.priority,
-                    tier=entry.tier,
-                ),
+                "source.skipped",
+                {"candidate_id": entry.candidate_id, "provider": entry.provider, "reason": "provider_unavailable"},
             )
-            started = self._clock()
-            worker = asyncio.create_task(asyncio.to_thread(provider.acquire, target, timeout=timeout))
-            try:
-                try:
-                    content = await asyncio.wait_for(asyncio.shield(worker), timeout=timeout)
-                except (asyncio.TimeoutError, TimeoutError):
-                    await asyncio.gather(worker, return_exceptions=True)
-                    raise
-                validate_content(content, target.role)
-                latency = max(0.0, self._clock() - started)
-                self.health.record(entry.provider, succeeded=True, latency=latency)
-                self.circuits.record_success(host)
-                return _CandidateResult(entry, attempt, content, None, False, latency, attempt_sequence)
-            except asyncio.CancelledError:
-                await asyncio.gather(worker, return_exceptions=True)
-                latency = max(0.0, self._clock() - started)
-                self.jobs.finish_attempt_and_job(
-                    attempt.id,
-                    AttemptOutcome.CANCELLED,
-                    None,
-                    details=CandidateAttemptDetails(
-                        entry.candidate_id,
-                        attempt_sequence,
-                        outcome=AttemptOutcome.CANCELLED,
-                    ).to_dict(reason="orchestrator_cancelled"),
+            return _CandidateResult(entry, None, None, None, False, 0.0, sequence, "provider_unavailable")
+        try:
+            candidates = self._deduplicate(
+                validate_resolved_candidates(
+                    entry, target.role, resolver.resolver_id,
+                    resolver.resolve(target, entry, target.role),
                 )
-                raise
-            except Exception as error:
-                latency = max(0.0, self._clock() - started)
-                retryable = isinstance(error, (asyncio.TimeoutError, TimeoutError, OSError)) or (
-                    isinstance(error, ProviderAcquisitionError) and error.retryable
-                )
-                self.health.record(entry.provider, succeeded=False, latency=latency)
-                self.circuits.record_failure(host)
-                return _CandidateResult(entry, attempt, None, error, retryable, latency, attempt_sequence)
+            )
+        except Exception as error:
+            self.jobs.append_event(
+                "acquisition_job",
+                job_id,
+                "source.skipped",
+                {"candidate_id": entry.candidate_id, "provider": entry.provider, "reason": "incompatible_target"},
+            )
+            return _CandidateResult(entry, None, None, error, False, 0.0, sequence, "incompatible_target")
 
-    def _finish_intermediate(self, job_id: str, result: _CandidateResult, outcome: AttemptOutcome | None = None) -> None:
+        attempt = self.jobs.start_attempt(
+            job_id,
+            entry.provider,
+            details=CandidateAttemptDetails(entry.candidate_id, sequence).to_dict(
+                priority=entry.priority, tier=entry.tier
+            ),
+        )
+        total_latency = 0.0
+        last_error: Exception | None = None
+        retryable = False
+        for candidate in candidates:
+            if stop_event is not None and stop_event.is_set():
+                return _CandidateResult(entry, attempt, None, None, False, total_latency, sequence, "race_lost")
+            host = urlsplit(candidate.execution_url).hostname or ""
+            if not self.circuits.allow(host):
+                last_error = TimeoutError("candidate host circuit is unavailable")
+                retryable = True
+                await asyncio.sleep(0)
+                continue
+            operation = (
+                resolver.operation_for(candidate, target)
+                if isinstance(resolver, LegacySingleCandidateResolver)
+                else None
+            )
+            try:
+                execution = await self._executor.execute(
+                    candidate, timeout=timeout, operation=operation
+                )
+            except asyncio.CancelledError:
+                if stop_event is not None and stop_event.is_set():
+                    return _CandidateResult(entry, attempt, None, None, False, total_latency, sequence, "race_lost")
+                raise
+            total_latency += execution.latency
+            if stop_event is not None and stop_event.is_set():
+                return _CandidateResult(entry, attempt, None, None, False, total_latency, sequence, "race_lost")
+            if execution.status is CandidateExecutionStatus.VALIDATED:
+                self.health.record(entry.provider, succeeded=True, latency=execution.latency)
+                self.circuits.record_success(host)
+                return _CandidateResult(entry, attempt, execution.content, None, False, total_latency, sequence)
+            last_error = execution.error or AcquisitionError("candidate execution failed")
+            retryable = retryable or execution.retryable
+            self.health.record(entry.provider, succeeded=False, latency=execution.latency)
+            self.circuits.record_failure(host)
+            if (
+                isinstance(last_error, ProviderAcquisitionError)
+                and last_error.category is ProviderErrorCategory.RATE_LIMIT
+            ):
+                break
+            await asyncio.sleep(0)
+        return _CandidateResult(entry, attempt, None, last_error, retryable, total_latency, sequence)
+
+    @staticmethod
+    def _diagnostic(result: _CandidateResult) -> DiagnosticEnvelope:
+        if result.error is None:
+            raise ValueError("cannot map an empty candidate error")
+        return map_exception(
+            result.error,
+            provider=result.entry.provider,
+            retryable=result.retryable,
+            attempt=AttemptMetadata(
+                candidate_id=result.entry.candidate_id,
+                attempt_sequence=result.sequence,
+                latency_ms=max(0, round(result.latency * 1000)),
+            ),
+        )
+
+    def _details(
+        self, result: _CandidateResult, outcome: AttemptOutcome
+    ) -> dict[str, object]:
+        diagnostic = self._diagnostic(result) if result.error is not None else None
+        return CandidateAttemptDetails(
+            result.entry.candidate_id,
+            result.sequence,
+            outcome=outcome,
+            error=None if diagnostic is None else diagnostic.summary,
+        ).to_dict(
+            latency=result.latency,
+            **({} if diagnostic is None else {"diagnostic": diagnostic.to_dict()}),
+        )
+
+    def _finish_attempt(
+        self, job_id: str, result: _CandidateResult, outcome: AttemptOutcome
+    ) -> None:
         if result.attempt is None:
             return
-        actual = outcome or (AttemptOutcome.RETRYABLE if result.retryable else AttemptOutcome.FAILED)
-        if result.attempt_sequence is None:
-            raise AcquisitionError("attempt result is missing its durable sequence")
-        details = CandidateAttemptDetails(
-            result.entry.candidate_id,
-            result.attempt_sequence,
-            outcome=actual,
-            error=None if result.error is None else str(result.error),
-        ).to_dict(latency=result.latency)
         if result.error is not None:
+            diagnostic = self._diagnostic(result)
+            details = {"diagnostic": diagnostic.to_dict()}
             self.jobs.append_failure(
-                getattr(result.error, "category", "acquisition_failure"),
-                str(result.error) or type(result.error).__name__,
+                str(getattr(getattr(result.error, "category", "acquisition_failure"), "value", getattr(result.error, "category", "acquisition_failure"))),
+                diagnostic.summary,
                 job_id=job_id,
                 attempt_id=result.attempt.id,
-                retryable=result.retryable,
-                details={"candidate_id": result.entry.candidate_id, "provider": result.entry.provider},
+                retryable=diagnostic.retryable,
+                details=details,
             )
-        self.jobs.finish_attempt_and_job(result.attempt.id, actual, None, details=details)
+            self.jobs.append_event(
+                "acquisition_attempt", result.attempt.id, "acquisition.failure", details
+            )
+        self.jobs.finish_attempt(
+            result.attempt.id, outcome, details=self._details(result, outcome)
+        )
 
-    def _finish_exhausted(self, job_id: str, results: list[_CandidateResult]) -> AcquisitionResult:
-        attempts = sorted(
-            (result for result in results if result.attempt is not None),
-            key=lambda result: result.attempt_sequence or 0,
+    def _finish_exhausted(
+        self, admission: AdmissionResult, results: list[_CandidateResult]
+    ) -> AcquisitionResult:
+        if admission.job_id is None:
+            raise AcquisitionError("exhausted acquisition has no diagnostic job")
+        for result in results:
+            outcome = AttemptOutcome.RETRYABLE if result.retryable else AttemptOutcome.FAILED
+            self._finish_attempt(admission.job_id, result, outcome)
+        error = ConfigError("all source candidates were exhausted")
+        diagnostic = map_exception(error, retryable=any(result.retryable for result in results))
+        self.jobs.append_failure(
+            diagnostic.reason_code.value,
+            diagnostic.summary,
+            work_id=admission.work_id,
+            job_id=admission.job_id,
+            retryable=diagnostic.retryable,
+            details={"diagnostic": diagnostic.to_dict()},
         )
-        retryable = any(result.retryable for result in results)
-        if not attempts:
-            target_state = JobState.RETRYABLE if retryable else JobState.PAUSED
-            next_retry_at = None
-            if retryable:
-                next_retry_at = self.retry_policy.next_retry_at(
-                    utc_now_rfc3339(), 1, jitter_key=job_id
-                )
-            self.jobs.transition_job(job_id, target_state, next_retry_at=next_retry_at)
-            job = self.jobs.get_job(job_id)
-            return AcquisitionResult(job.work_id, job_id, target_state.value, error="all sources skipped")
-        target_state = JobState.RETRYABLE if retryable else JobState.FAILED
-        eligible = (
-            [result for result in attempts if result.retryable]
-            if retryable
-            else [result for result in attempts if not result.retryable]
+        self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
+        return AcquisitionResult(
+            admission.work_id, admission.job_id, JobState.FAILED.value,
+            error=diagnostic.summary,
         )
-        closer = eligible[-1] if eligible else None
-        for result in attempts:
-            if result is not closer:
-                self._finish_intermediate(job_id, result)
-        attempt_count = len(self.jobs.list_attempts(job_id))
-        next_retry_at = (
-            self.retry_policy.next_retry_at(utc_now_rfc3339(), max(1, attempt_count), jitter_key=job_id)
-            if retryable
-            else None
-        )
-        if closer is None:
-            self.jobs.transition_job(job_id, target_state, next_retry_at=next_retry_at)
-            job = self.jobs.get_job(job_id)
-            return AcquisitionResult(job.work_id, job_id, target_state.value, error="all sources exhausted")
-        if closer.error is not None:
-            self.jobs.append_failure(
-                getattr(closer.error, "category", "acquisition_failure"),
-                str(closer.error) or type(closer.error).__name__,
-                job_id=job_id,
-                attempt_id=closer.attempt.id,
-                retryable=closer.retryable,
-                details={"candidate_id": closer.entry.candidate_id, "provider": closer.entry.provider},
-            )
-        actual = AttemptOutcome.RETRYABLE if target_state is JobState.RETRYABLE else AttemptOutcome.FAILED
-        if closer.attempt_sequence is None:
-            raise AcquisitionError("closure attempt is missing its durable sequence")
-        self.jobs.finish_attempt_and_job(
-            closer.attempt.id,
-            actual,
-            target_state,
-            details=CandidateAttemptDetails(
-                closer.entry.candidate_id,
-                closer.attempt_sequence,
-                outcome=actual,
-                error=None if closer.error is None else str(closer.error),
-            ).to_dict(latency=closer.latency),
-            next_retry_at=next_retry_at,
-        )
-        job = self.jobs.get_job(job_id)
-        return AcquisitionResult(job.work_id, job_id, target_state.value, error="all sources exhausted")
 
     def _accept_winner(
         self,
         admission: AdmissionResult,
-        result: _CandidateResult,
+        winner: _CandidateResult,
         losers: list[_CandidateResult],
     ) -> AcquisitionResult:
-        if admission.job_id is None or result.attempt is None or result.content is None:
-            raise AcquisitionError("winner is missing durable acquisition state")
+        if admission.job_id is None or winner.attempt is None or winner.content is None:
+            raise AcquisitionError("winner is missing acquisition diagnostic state")
         for loser in losers:
-            if loser.content is not None:
-                self._finish_intermediate(admission.job_id, loser, AttemptOutcome.CANCELLED)
-            else:
-                self._finish_intermediate(admission.job_id, loser)
-        content = result.content
-        if result.attempt_sequence is None:
-            raise AcquisitionError("winner is missing its durable attempt sequence")
-        accepted_raw_asset_id: str | None = None
+            self._finish_attempt(
+                admission.job_id,
+                loser,
+                AttemptOutcome.CANCELLED if loser.skipped == "race_lost" else (
+                    AttemptOutcome.RETRYABLE if loser.retryable else AttemptOutcome.FAILED
+                ),
+            )
+        content = winner.content
+        accepted_id: str | None = None
         try:
             accepted = self.coordinator.accept(
                 BytesIO(content.data),
@@ -236,64 +341,53 @@ class MultiSourceOrchestrator:
                 admission.asset_role,
                 content.media_type,
                 content.format,
-                {"provider": content.provider, "source_url": content.source_url, "candidate_id": result.entry.candidate_id, **dict(content.provenance)},
-                attempt_id=result.attempt.id,
+                redact(
+                    {
+                        "provider": content.provider,
+                        "source_url": content.source_url,
+                        "candidate_id": winner.entry.candidate_id,
+                        **dict(content.provenance),
+                    }
+                ),
+                attempt_id=winner.attempt.id,
             )
-            accepted_raw_asset_id = accepted.raw_asset.id
+            accepted_id = accepted.raw_asset.id
             self.jobs.finish_attempt_and_job(
-                result.attempt.id,
+                winner.attempt.id,
                 AttemptOutcome.SUCCEEDED,
                 JobState.SUCCEEDED,
-                details=CandidateAttemptDetails(
-                    result.entry.candidate_id,
-                    result.attempt_sequence,
-                    outcome=AttemptOutcome.SUCCEEDED,
-                ).to_dict(
-                    raw_asset_id=accepted.raw_asset.id,
-                    final_url=content.source_url,
-                    latency=result.latency,
-                ),
-            )
-            return AcquisitionResult(admission.work_id, admission.job_id, "succeeded", accepted.raw_asset.id, result.attempt.id)
-        except Exception as error:
-            if accepted_raw_asset_id is not None:
-                raise
-            retryable = isinstance(error, (asyncio.TimeoutError, TimeoutError, OSError))
-            outcome = AttemptOutcome.RETRYABLE if retryable else AttemptOutcome.FAILED
-            target_state = JobState.RETRYABLE if retryable else JobState.FAILED
-            next_retry_at = None
-            if retryable:
-                attempt_count = len(self.jobs.list_attempts(admission.job_id))
-                next_retry_at = self.retry_policy.next_retry_at(
-                    utc_now_rfc3339(), max(1, attempt_count), jitter_key=admission.job_id
-                )
-            self.jobs.append_failure(
-                getattr(error, "category", "acquisition_failure"),
-                str(error) or type(error).__name__,
-                work_id=admission.work_id,
-                job_id=admission.job_id,
-                attempt_id=result.attempt.id,
-                retryable=retryable,
-                details={"candidate_id": result.entry.candidate_id, "provider": result.entry.provider},
-            )
-            self.jobs.finish_attempt_and_job(
-                result.attempt.id,
-                outcome,
-                target_state,
-                details=CandidateAttemptDetails(
-                    result.entry.candidate_id,
-                    result.attempt_sequence,
-                    outcome=outcome,
-                    error=str(error),
-                ).to_dict(latency=result.latency),
-                next_retry_at=next_retry_at,
+                details=self._details(winner, AttemptOutcome.SUCCEEDED)
+                | {"raw_asset_id": accepted_id},
             )
             return AcquisitionResult(
-                admission.work_id,
+                admission.work_id, admission.job_id, "succeeded", accepted_id,
+                winner.attempt.id,
+            )
+        except Exception as error:
+            if accepted_id is not None:
+                self.jobs.succeed_nonterminal_jobs_for_work(
+                    admission.work_id, admission.asset_role
+                )
+                return AcquisitionResult(
+                    admission.work_id, admission.job_id, "succeeded", accepted_id,
+                    winner.attempt.id,
+                )
+            mapped = StorageError("asset acceptance storage failure") if isinstance(error, OSError) else error
+            failed = _CandidateResult(
+                winner.entry, winner.attempt, None, mapped,
+                isinstance(error, (asyncio.TimeoutError, TimeoutError, OSError)),
+                winner.latency, winner.sequence,
+            )
+            self._finish_attempt(
                 admission.job_id,
-                outcome.value,
-                attempt_id=result.attempt.id,
-                error=str(error),
+                failed,
+                AttemptOutcome.RETRYABLE if failed.retryable else AttemptOutcome.FAILED,
+            )
+            self.jobs.complete_job_and_requests(admission.job_id, JobState.FAILED)
+            return AcquisitionResult(
+                admission.work_id, admission.job_id, "failed",
+                attempt_id=winner.attempt.id,
+                error=self._diagnostic(failed).summary,
             )
 
     async def acquire(
@@ -303,62 +397,87 @@ class MultiSourceOrchestrator:
         plan: SourcePlan,
         *,
         timeout: float,
-        resume_paused: bool = False,
     ) -> AcquisitionResult:
         if admission.reused_asset_id is not None:
-            return AcquisitionResult(admission.work_id, None, "reused", admission.reused_asset_id)
+            return AcquisitionResult(
+                admission.work_id, None, "reused", admission.reused_asset_id
+            )
+        async with self._invocation_lock:
+            async with self._foreground_lock:
+                existing = self.coordinator.existing_asset_id(
+                    admission.work_id, admission.asset_role
+                )
+                if existing is not None:
+                    self.jobs.succeed_nonterminal_jobs_for_work(
+                        admission.work_id, admission.asset_role
+                    )
+                    return AcquisitionResult(
+                        admission.work_id, None, "reused", existing
+                    )
+                return await self._acquire_locked(admission, target, plan, timeout)
+
+    async def _acquire_locked(
+        self,
+        admission: AdmissionResult,
+        target: AcquisitionTarget,
+        plan: SourcePlan,
+        timeout: float,
+    ) -> AcquisitionResult:
         if admission.job_id is None:
             raise AcquisitionError("multi-source admission did not supply a job")
         if plan.role is not admission.asset_role or target.role is not plan.role:
             raise AcquisitionError("source plan, admission, and target roles must match")
-        job = self.jobs.set_source_plan_json_if_absent(
-            admission.job_id,
-            plan.to_json(),
-            asset_role=plan.role,
-            schema_version=plan.schema_version,
-        )
-        if not self.jobs.claim_job(job.id, allow_paused=resume_paused):
-            current = self.jobs.get_job(job.id)
-            return AcquisitionResult(admission.work_id, job.id, "in_progress" if current.state is JobState.ACTIVE else current.state.value)
+        job = self.jobs.restart_foreground_job(admission.job_id)
         try:
-            attempts = self.jobs.list_attempts(job.id)
-            decision = resume_candidates(plan, attempts, retry_due=True)
-            if not decision.runnable:
-                self.jobs.transition_job(job.id, JobState.PAUSED)
-                return AcquisitionResult(admission.work_id, job.id, "paused", error="no runnable source candidates")
-
-            all_results: list[_CandidateResult] = []
-            sequence = next_attempt_sequence(attempts)
+            results: list[_CandidateResult] = []
+            sequence = 1
             if plan.mode is RoutingMode.SERIAL:
-                for tier_entries in tiers(decision.runnable):
+                for tier_entries in tiers(plan.entries):
                     for entry in self.health.order(tier_entries):
-                        result = await self._candidate(job.id, target, entry, sequence, timeout)
+                        result = await self._candidate(
+                            job.id, target, entry, sequence, timeout
+                        )
                         sequence += 1
-                        all_results.append(result)
+                        results.append(result)
                         if result.content is not None:
-                            return self._accept_winner(admission, result, all_results[:-1])
-                return self._finish_exhausted(job.id, all_results)
+                            return self._accept_winner(admission, result, results[:-1])
+                return self._finish_exhausted(admission, results)
 
-            for tier_entries in tiers(decision.runnable):
+            for tier_entries in tiers(plan.entries):
                 ordered = self.health.order(tier_entries)
+                stop_event = asyncio.Event()
                 tasks = [
-                    asyncio.create_task(self._candidate(job.id, target, entry, sequence + index, timeout))
+                    asyncio.create_task(
+                        self._candidate(
+                            job.id, target, entry, sequence + index, timeout, stop_event
+                        )
+                    )
                     for index, entry in enumerate(ordered)
                 ]
-                sequence += len(ordered)
+                sequence += len(tasks)
                 pending = set(tasks)
+                tier_results: list[_CandidateResult] = []
                 winner: _CandidateResult | None = None
                 try:
                     while pending and winner is None:
-                        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                        done, pending = await asyncio.wait(
+                            pending, return_when=asyncio.FIRST_COMPLETED
+                        )
                         completed = await asyncio.gather(*done)
-                        all_results.extend(completed)
-                        valid = [result for result in completed if result.content is not None]
+                        tier_results.extend(completed)
+                        valid = [item for item in completed if item.content is not None]
                         if valid:
-                            winner = min(valid, key=lambda item: (item.entry.priority, item.entry.candidate_id))
+                            winner = min(
+                                valid,
+                                key=lambda item: (
+                                    item.entry.priority, item.entry.candidate_id
+                                ),
+                            )
+                            stop_event.set()
+                            for task in pending:
+                                task.cancel()
                     if pending:
-                        drained = await asyncio.gather(*pending)
-                        all_results.extend(drained)
+                        tier_results.extend(await asyncio.gather(*pending))
                 except asyncio.CancelledError:
                     for task in tasks:
                         if not task.done():
@@ -366,13 +485,26 @@ class MultiSourceOrchestrator:
                     await asyncio.gather(*tasks, return_exceptions=True)
                     raise
                 if winner is not None:
-                    losers = [result for result in all_results if result is not winner]
+                    losers = [
+                        *results,
+                        *(
+                            _CandidateResult(
+                                item.entry, item.attempt, None, item.error,
+                                item.retryable, item.latency, item.sequence,
+                                "race_lost",
+                            )
+                            for item in tier_results
+                            if item is not winner
+                        ),
+                    ]
                     return self._accept_winner(admission, winner, losers)
-            return self._finish_exhausted(job.id, all_results)
+                results.extend(tier_results)
+            return self._finish_exhausted(admission, results)
         except asyncio.CancelledError:
-            current = self.jobs.get_job(job.id)
-            if current is not None and current.state is JobState.ACTIVE:
-                self.jobs.complete_job_and_requests(job.id, JobState.CANCELLED)
+            diagnostic = map_exception(asyncio.CancelledError(), retryable=False)
+            self.jobs.cancel_job_and_requests(
+                job.id, details={"diagnostic": diagnostic.to_dict()}
+            )
             raise
 
 

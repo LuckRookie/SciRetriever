@@ -1,11 +1,12 @@
-"""P4 compatibility adapter over the canonical P5 lifecycle owner."""
+"""Single-source foreground acquisition adapter."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Callable, Mapping
 
 from sciretriever.acquisition.models import AcquisitionProvider, AcquisitionResult, AcquisitionTarget, AdmissionResult
-from sciretriever.acquisition.controls import CircuitBreaker, HostBudget, HostBudgetManager, ProviderHealth, RetryPolicy
+from sciretriever.acquisition.controls import CircuitBreaker, HostBudget, HostBudgetManager, ProviderHealth
 from sciretriever.acquisition.multi_orchestrator import MultiSourceOrchestrator
 from sciretriever.acquisition.plan import RoutingMode, SourceEntry, SourcePlan
 from sciretriever.catalog.jobs import JobRepository
@@ -14,7 +15,7 @@ from sciretriever.storage.coordinator import AssetAcceptanceCoordinator
 
 
 class AcquisitionOrchestrator:
-    """Preserve the P4 API by translating it to a one-entry serial plan."""
+    """Execute one provider through the canonical foreground orchestrator."""
 
     def __init__(
         self,
@@ -24,14 +25,13 @@ class AcquisitionOrchestrator:
         budgets: HostBudgetManager | None = None,
         health: ProviderHealth | None = None,
         circuits: CircuitBreaker | None = None,
-        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.jobs = jobs
         self.coordinator = coordinator
         self.budgets = budgets
         self.health = health
         self.circuits = circuits
-        self.retry_policy = retry_policy
+        self._invocation_lock = asyncio.Lock()
 
     async def acquire(
         self,
@@ -52,15 +52,15 @@ class AcquisitionOrchestrator:
             mode=RoutingMode.SERIAL,
             entries=(SourceEntry("p4", provider.name, 0),),
         )
-        return await MultiSourceOrchestrator(
-            self.jobs,
-            self.coordinator,
-            {provider.name: provider},
-            budgets=self.budgets,
-            health=self.health,
-            circuits=self.circuits,
-            retry_policy=self.retry_policy,
-        ).acquire(admission, target, plan, timeout=timeout)
+        async with self._invocation_lock:
+            return await MultiSourceOrchestrator(
+                self.jobs,
+                self.coordinator,
+                {provider.name: provider},
+                budgets=self.budgets,
+                health=self.health,
+                circuits=self.circuits,
+            ).acquire(admission, target, plan, timeout=timeout)
 
 
 ProviderLoader = Callable[[tuple[str, ...]], Mapping[str, AcquisitionProvider]]
@@ -85,7 +85,6 @@ class AcquisitionRuntime:
         self.budgets = HostBudgetManager(default_budget, dict(budget_overrides or {}))
         self.health = ProviderHealth()
         self.circuits = CircuitBreaker()
-        self.retry_policy = RetryPolicy()
         self._multi: dict[tuple[str, ...], MultiSourceOrchestrator] = {}
         self._single: AcquisitionOrchestrator | None = None
 
@@ -111,7 +110,6 @@ class AcquisitionRuntime:
                 budgets=self.budgets,
                 health=self.health,
                 circuits=self.circuits,
-                retry_policy=self.retry_policy,
             )
         return self._multi[key]
 
@@ -123,7 +121,6 @@ class AcquisitionRuntime:
                 budgets=self.budgets,
                 health=self.health,
                 circuits=self.circuits,
-                retry_policy=self.retry_policy,
             )
         return self._single
 
