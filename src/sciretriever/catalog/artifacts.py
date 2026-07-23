@@ -38,22 +38,22 @@ class ArtifactRepository:
     def find_derivation(self, artifact_id: str) -> NormalizedArtifactRecord | None:
         return self.get(artifact_id)
 
-    def list_for_work(self, work_id: str) -> tuple[NormalizedArtifactRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+    def list_for_work(self, work_version_id: str) -> tuple[NormalizedArtifactRecord, ...]:
+        work_version_id = validate_uuid(work_version_id, "work_id")
         with catalog_operation("work artifact listing"):
             with self._catalog.connect() as connection:
                 rows = connection.execute(
-                    select(normalized_artifacts).where(normalized_artifacts.c.work_id == work_id).order_by(normalized_artifacts.c.kind, normalized_artifacts.c.id)
+                    select(normalized_artifacts).where(normalized_artifacts.c.work_version_id == work_version_id).order_by(normalized_artifacts.c.kind, normalized_artifacts.c.id)
                 ).mappings().all()
         return tuple(NormalizedArtifactRecord.from_row(row) for row in rows)
 
     def register_pair_after_publication(
         self,
-        work_id: str,
+        work_version_id: str,
         raw_asset_id: str,
         artifacts: tuple[ArtifactRegistration, ...],
     ) -> tuple[NormalizedArtifactRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         raw_asset_id = validate_uuid(raw_asset_id, "raw_asset_id")
         if not artifacts:
             raise ValueError("artifacts must not be empty")
@@ -62,7 +62,7 @@ class ArtifactRepository:
             if not isinstance(artifact, ArtifactRegistration):
                 raise TypeError("artifacts must contain ArtifactRegistration values")
             prepared.append({
-                "id": validate_uuid(artifact.id, "artifact_id"), "work_id": work_id,
+                "id": validate_uuid(artifact.id, "artifact_id"), "work_version_id": work_version_id,
                 "raw_asset_id": raw_asset_id, "kind": validate_token(artifact.kind, "kind"),
                 "schema_version": _required_text(artifact.schema_version, "schema_version"),
                 "storage_path": validate_storage_path(artifact.storage_path),

@@ -10,7 +10,7 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.catalog import ArtifactRegistration, ArtifactRepository, IdentityResolver, apply_migrations, create_catalog_engine
+from sciretriever.catalog import ArtifactRegistration, ArtifactRepository, IdentityResolver, initialize_catalog, create_catalog_engine
 
 
 class ArtifactRepositoryTests(TestCase):
@@ -19,8 +19,8 @@ class ArtifactRepositoryTests(TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.catalog = create_catalog_engine(Path(self.temporary.name) / "catalog.sqlite")
         self.addCleanup(self.catalog.dispose)
-        apply_migrations(self.catalog)
-        self.work_id = IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1/artifact"}).work.id
+        initialize_catalog(self.catalog)
+        self.work_version_id = IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1/artifact"}).work_version.id
         self.raw_id = str(uuid4())
         sha = "a" * 64
         with self.catalog.transaction() as connection:
@@ -38,10 +38,10 @@ class ArtifactRepositoryTests(TestCase):
             )
             for index, kind in enumerate(("normalized_content", "source_map"))
         )
-        first = self.repository.register_pair_after_publication(self.work_id, self.raw_id, artifacts)
-        second = self.repository.register_pair_after_publication(self.work_id, self.raw_id, artifacts)
+        first = self.repository.register_pair_after_publication(self.work_version_id, self.raw_id, artifacts)
+        second = self.repository.register_pair_after_publication(self.work_version_id, self.raw_id, artifacts)
         self.assertEqual(first, second)
-        self.assertEqual(self.repository.list_for_work(self.work_id), first)
+        self.assertEqual(self.repository.list_for_work(self.work_version_id), first)
         self.assertEqual(self.repository.get(first[0].id), first[0])
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM normalized_artifacts").scalar_one(), 2)
