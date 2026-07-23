@@ -280,7 +280,7 @@ class P9AcceptanceTests(TestCase):
         _, _, jobs, importer = self.importer()
         identifiers = (Identifier("doi", "10.1/failed-winner"),)
         admitted = importer.admission.admit(identifiers, provider="legacy-import", asset_role=AssetRole.XML)
-        self.assertTrue(jobs.claim_job(cast(str, admitted.job_id)))
+        jobs.restart_foreground_job(cast(str, admitted.job_id))
         attempt = jobs.start_attempt(cast(str, admitted.job_id), "legacy-import")
         jobs.finish_attempt_and_job(attempt.id, AttemptOutcome.FAILED, JobState.FAILED)
         started = time.monotonic()

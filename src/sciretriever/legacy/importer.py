@@ -168,7 +168,7 @@ class ExistingAssetImporter:
             if raw is None:
                 raise RuntimeError("authoritative reused asset is missing")
             return ExistingAssetImportResult("replayed", admission.work_id, raw.id, raw.sha256)
-        if admission.job_id is None or not self.jobs.claim_job(admission.job_id):
+        if admission.job_id is None or not self.jobs.begin_legacy_import(admission.job_id):
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 replay = self._authoritative_replay(identifiers, role)
