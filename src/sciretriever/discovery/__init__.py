@@ -17,6 +17,16 @@ from .manifest import discover_to_jsonl, write_manifest
 from .models import Candidate, MergedCandidate, ProviderRecord
 from .normalize import clean_text, identifier_sort_key, normalize_record, normalize_records
 from .pipeline import discover
+from .search import (
+    DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+    DEFAULT_SEARCH_LIMIT,
+    MetadataSearchFailure,
+    MetadataSearchOutput,
+    MetadataSearchRequest,
+    MetadataSearchResult,
+    MetadataSearchService,
+)
 from .providers import (
     DEFAULT_MAX_RESPONSE_BYTES,
     ArxivProvider,
@@ -42,6 +52,9 @@ from .providers import (
 
 __all__ = (
     "DEFAULT_MAX_RESPONSE_BYTES",
+    "DEFAULT_MAX_CONCURRENCY",
+    "DEFAULT_PROVIDER_TIMEOUT_SECONDS",
+    "DEFAULT_SEARCH_LIMIT",
     "ArxivProvider",
     "Candidate",
     "CrossrefProvider",
@@ -59,6 +72,11 @@ __all__ = (
     "LabeledCandidate",
     "Labeler",
     "MergedCandidate",
+    "MetadataSearchFailure",
+    "MetadataSearchOutput",
+    "MetadataSearchRequest",
+    "MetadataSearchResult",
+    "MetadataSearchService",
     "ProviderErrorCategory",
     "ProviderRecord",
     "ProviderSearchError",

@@ -192,6 +192,10 @@ class DiscoveryModelTests(TestCase):
                 "year",
                 "venue",
                 "keywords",
+                "publisher",
+                "publication_date",
+                "open_access_status",
+                "provider_record_id",
             ),
         )
         self.assertEqual(record.raw_identifiers[0][1], "10.1000/RAW")
@@ -559,6 +563,9 @@ class ProviderSearchErrorTests(TestCase):
             discovery.__all__,
             (
                 "DEFAULT_MAX_RESPONSE_BYTES",
+                "DEFAULT_MAX_CONCURRENCY",
+                "DEFAULT_PROVIDER_TIMEOUT_SECONDS",
+                "DEFAULT_SEARCH_LIMIT",
                 "ArxivProvider",
                 "Candidate",
                 "CrossrefProvider",
@@ -576,6 +583,11 @@ class ProviderSearchErrorTests(TestCase):
                 "LabeledCandidate",
                 "Labeler",
                 "MergedCandidate",
+                "MetadataSearchFailure",
+                "MetadataSearchOutput",
+                "MetadataSearchRequest",
+                "MetadataSearchResult",
+                "MetadataSearchService",
                 "ProviderErrorCategory",
                 "ProviderRecord",
                 "ProviderSearchError",
