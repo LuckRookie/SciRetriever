@@ -1,4 +1,4 @@
-"""Stable catalog engine and migration API."""
+"""Stable catalog engine and fresh-schema API."""
 
 from importlib import import_module
 
@@ -11,7 +11,15 @@ from .engine import (
 )
 from .assets import AssetRepository
 from .identity import IdentityResolver
-from .migrate import applied_migrations, apply_migrations
+from .library import (
+    AuthorRepository,
+    ReferenceRepository,
+    RegistryRepository,
+    TagRepository,
+    WorkRepository,
+    normalize_title,
+)
+from .schema import initialize_catalog
 from .records import (
     AcquisitionAttemptRecord,
     AcquisitionJobRecord,
@@ -27,14 +35,21 @@ from .records import (
     IdentityReviewRecord,
     JobRecord,
     MetadataLabelRecord,
-    CitationRecord,
     LightStructureRecord,
     NormalizedArtifactRecord,
     PackageVersionRecord,
     ProcessingRunRecord,
     RawAssetRecord,
     WorkRecord,
-    WorkAssetRecord,
+    WorkVersionAssetRecord,
+    WorkVersionRecord,
+    MetadataObservationRecord,
+    AuthorRecord,
+    AuthorshipRecord,
+    RegistryRecord,
+    TagRecord,
+    VersionRelationRecord,
+    VersionReferenceRecord,
 )
 from .repository import CatalogRepository, ReadOnlyCatalogView, canonical_json
 from .artifacts import ArtifactRepository
@@ -61,10 +76,12 @@ __all__ = (
     "ArtifactRegistration",
     "ArtifactRepository",
     "AssetRepository",
+    "AuthorRepository",
+    "AuthorRecord",
+    "AuthorshipRecord",
     "CatalogEngine",
     "CatalogRepository",
     "CatalogReportingRepository",
-    "CitationRecord",
     "CitationRepository",
     "DomainRunRecord",
     "DomainRunRepository",
@@ -81,6 +98,7 @@ __all__ = (
     "LEGAL_DOMAIN_RUN_TRANSITIONS",
     "LEGAL_JOB_STATE_TRANSITIONS",
     "MetadataLabelRecord",
+    "MetadataObservationRecord",
     "LightStructureRecord",
     "NormalizedArtifactRecord",
     "PackageSourceRepository",
@@ -90,12 +108,21 @@ __all__ = (
     "ProcessingRunRepository",
     "RawAssetRecord",
     "ReadOnlyCatalogView",
+    "ReferenceRepository",
+    "RegistryRecord",
+    "RegistryRepository",
+    "TagRecord",
+    "TagRepository",
+    "VersionRelationRecord",
+    "VersionReferenceRecord",
     "WorkRecord",
-    "WorkAssetRecord",
-    "applied_migrations",
-    "apply_migrations",
+    "WorkRepository",
+    "WorkVersionRecord",
+    "WorkVersionAssetRecord",
+    "initialize_catalog",
     "canonical_json",
     "create_catalog_engine",
     "open_catalog_engine",
     "open_read_only_catalog_engine",
+    "normalize_title",
 )
