@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from sciretriever.catalog.assets import AssetRepository
-from sciretriever.catalog.records import AssetIntentRecord, RawAssetRecord, WorkAssetRecord
+from sciretriever.catalog.records import AssetIntentRecord, RawAssetRecord, WorkVersionAssetRecord
 from sciretriever.core.enums import AssetIntentState, AssetRole
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.errors import CatalogError, StorageCorruptionError, StorageError
@@ -29,7 +29,7 @@ class AssetAcceptanceContext:
     intent: AssetIntentRecord | None = None
     publication: PublicationResult | None = None
     raw_asset: RawAssetRecord | None = None
-    work_asset: WorkAssetRecord | None = None
+    work_asset: WorkVersionAssetRecord | None = None
     reused_content: bool | None = None
 
     def __post_init__(self) -> None:
@@ -63,7 +63,7 @@ class AssetAcceptanceResult:
 
     intent: AssetIntentRecord
     raw_asset: RawAssetRecord
-    work_asset: WorkAssetRecord
+    work_asset: WorkVersionAssetRecord
     publication: PublicationResult
     reused_content: bool
 
@@ -106,12 +106,12 @@ def _validate_publication_staged(
 def _validate_catalog_records(
     intent: AssetIntentRecord,
     raw_asset: RawAssetRecord,
-    work_asset: WorkAssetRecord,
+    work_asset: WorkVersionAssetRecord,
     publication: PublicationResult,
 ) -> None:
     if intent.raw_asset_id != raw_asset.id:
         raise ValueError("intent does not reference the returned raw asset")
-    if work_asset.work_id != intent.work_id:
+    if work_asset.work_version_id != intent.work_version_id:
         raise ValueError("work asset does not reference the intent work")
     if work_asset.raw_asset_id != raw_asset.id:
         raise ValueError("work asset does not reference the returned raw asset")
@@ -143,14 +143,14 @@ class AssetAcceptanceCoordinator:
         self._store = store
 
     def existing_asset_id(
-        self, work_id: str, asset_role: AssetRole
+        self, work_version_id: str, asset_role: AssetRole
     ) -> str | None:
         """Return an already accepted immutable asset for invocation-local convergence."""
 
         return next(
             (
                 link.raw_asset_id
-                for link in self._repository.get_work_assets(work_id)
+                for link in self._repository.get_work_version_assets(work_version_id)
                 if link.asset_role is asset_role
             ),
             None,
@@ -159,7 +159,7 @@ class AssetAcceptanceCoordinator:
     def accept(
         self,
         stream: BinaryIO,
-        work_id: str,
+        work_version_id: str,
         job_id: str,
         asset_role: AssetRole | str,
         media_type: str,
@@ -190,7 +190,7 @@ class AssetAcceptanceCoordinator:
                         phase = "explicit_intent_validation"
                         existing = self._repository.create_intent(
                             identifier,
-                            work_id,
+                            work_version_id,
                             job_id,
                             asset_role,
                             existing.expected_sha256,
@@ -215,7 +215,7 @@ class AssetAcceptanceCoordinator:
                 phase = "intent_creation"
                 intent = self._repository.create_intent(
                     identifier,
-                    work_id,
+                    work_version_id,
                     job_id,
                     asset_role,
                     staged.sha256,
@@ -314,7 +314,7 @@ class AssetAcceptanceCoordinator:
         self,
         intent: AssetIntentRecord,
         publication: PublicationResult,
-    ) -> tuple[RawAssetRecord, WorkAssetRecord]:
+    ) -> tuple[RawAssetRecord, WorkVersionAssetRecord]:
         if intent.raw_asset_id is None:
             raise CatalogError("published intent does not reference a raw asset")
         raw_asset = self._repository.get_raw_asset(intent.raw_asset_id)
@@ -323,7 +323,7 @@ class AssetAcceptanceCoordinator:
         work_asset = next(
             (
                 item
-                for item in self._repository.get_work_assets(intent.work_id)
+                for item in self._repository.get_work_version_assets(intent.work_version_id)
                 if item.raw_asset_id == raw_asset.id and item.asset_role is intent.asset_role
             ),
             None,

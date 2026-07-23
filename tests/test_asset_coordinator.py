@@ -66,17 +66,17 @@ class CoordinatorFixture:
         self.storage_root = base / "storage"
         self.storage_root.mkdir()
         self.catalog = catalog_api.create_catalog_engine(self.catalog_path)
-        catalog_api.apply_migrations(self.catalog)
+        catalog_api.initialize_catalog(self.catalog)
         self.repository = assets_api.AssetRepository(self.catalog)
         self.store = RawAssetStore(self.storage_root, chunk_size=5)
         self.coordinator = AssetAcceptanceCoordinator(self.repository, self.store)
-        self.work_id, self.job_id = self.create_work_and_job(doi)
+        self.work_version_id, self.job_id = self.create_work_and_job(doi)
 
     def close(self) -> None:
         self.catalog.dispose()
 
     def create_work_and_job(self, doi: str) -> tuple[str, str]:
-        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": doi}).work
+        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": doi}).work_version
         job = catalog_api.JobRepository(self.catalog).attach_or_create_job(
             work.id,
             enums.AssetRole.PRIMARY_PDF,
@@ -94,7 +94,7 @@ class CoordinatorFixture:
     ) -> AssetAcceptanceResult:
         return self.coordinator.accept(
             BytesIO(data),
-            work_id or self.work_id,
+            work_id or self.work_version_id,
             job_id or self.job_id,
             enums.AssetRole.PRIMARY_PDF,
             "application/pdf",
@@ -173,7 +173,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(stat.S_IMODE(target.parent.stat().st_mode), 0o700)
         self.assertEqual(self.fixture.count("asset_intents"), 1)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
-        self.assertEqual(self.fixture.count("work_assets"), 1)
+        self.assertEqual(self.fixture.count("work_version_assets"), 1)
         self.assertEqual(self.fixture.count("failures"), 0)
         self.assertEqual(
             self.fixture.intent_events(intent_id),
@@ -198,7 +198,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(first.raw_asset.id, second.raw_asset.id)
         self.assertEqual(first.publication.storage_path, second.publication.storage_path)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
-        self.assertEqual(self.fixture.count("work_assets"), 2)
+        self.assertEqual(self.fixture.count("work_version_assets"), 2)
         self.assertEqual(self.fixture.count("asset_intents"), 2)
 
     def test_explicit_finalized_intent_replay_is_idempotent_and_reverified(self) -> None:
@@ -206,7 +206,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         first = self.fixture.accept(intent_id=intent_id)
         counts = tuple(
             self.fixture.count(table)
-            for table in ("asset_intents", "raw_assets", "work_assets", "events")
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
         )
 
         replay = self.fixture.accept(intent_id=intent_id)
@@ -219,7 +219,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(
             tuple(
                 self.fixture.count(table)
-                for table in ("asset_intents", "raw_assets", "work_assets", "events")
+                for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
             ),
             counts,
         )
@@ -231,7 +231,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         colliding_id = new_id()
         counts = tuple(
             self.fixture.count(table)
-            for table in ("asset_intents", "raw_assets", "work_assets", "events")
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
         )
 
         replay = self.fixture.accept(data, intent_id=colliding_id)
@@ -244,7 +244,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(
             tuple(
                 self.fixture.count(table)
-                for table in ("asset_intents", "raw_assets", "work_assets", "events")
+                for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
             ),
             counts,
         )
@@ -322,7 +322,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         intent_id = new_id()
         self.fixture.repository.create_intent(
             intent_id,
-            self.fixture.work_id,
+            self.fixture.work_version_id,
             self.fixture.job_id,
             "primary_pdf",
             digest,
@@ -341,7 +341,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         with self.assertRaisesRegex(errors.CatalogError, "abandoned"):
             self.fixture.coordinator.accept(
                 stream,
-                self.fixture.work_id,
+                self.fixture.work_version_id,
                 self.fixture.job_id,
                 "primary_pdf",
                 "application/pdf",
@@ -365,7 +365,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         existing_id = new_id()
         self.fixture.repository.create_intent(
             existing_id,
-            self.fixture.work_id,
+            self.fixture.work_version_id,
             self.fixture.job_id,
             "primary_pdf",
             digest,
@@ -465,7 +465,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                         raw_count,
                     )
                     self.assertEqual(
-                        connection.exec_driver_sql("SELECT count(*) FROM work_assets").scalar_one(),
+                        connection.exec_driver_sql("SELECT count(*) FROM work_version_assets").scalar_one(),
                         link_count,
                     )
                     self.assertEqual(
@@ -487,7 +487,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         with self.assertRaisesRegex(errors.StorageError, "injected asset stream"):
             self.fixture.coordinator.accept(
                 FailingStream(),
-                self.fixture.work_id,
+                self.fixture.work_version_id,
                 self.fixture.job_id,
                 "primary_pdf",
                 "application/pdf",
@@ -613,7 +613,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         existing_id = new_id()
         existing = self.fixture.repository.create_intent(
             existing_id,
-            self.fixture.work_id,
+            self.fixture.work_version_id,
             self.fixture.job_id,
             "primary_pdf",
             digest,
@@ -639,7 +639,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(self.fixture.store.enumerate_staging(), ((), ()))
         self.assertEqual(self.fixture.count("failures"), 0)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
-        self.assertEqual(self.fixture.count("work_assets"), 1)
+        self.assertEqual(self.fixture.count("work_version_assets"), 1)
         target = self.fixture.storage_root / result.publication.storage_path
         self.assertEqual(target.read_bytes(), data)
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o400)
@@ -679,7 +679,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         existing_id = new_id()
         self.fixture.repository.create_intent(
             existing_id,
-            self.fixture.work_id,
+            self.fixture.work_version_id,
             self.fixture.job_id,
             "primary_pdf",
             digest,
@@ -800,7 +800,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertIsNone(intent.raw_asset_id)
         self.assertTrue((self.fixture.storage_root / intent.temporary_path).exists())
         self.assertEqual(self.fixture.count("raw_assets"), 0)
-        self.assertEqual(self.fixture.count("work_assets"), 0)
+        self.assertEqual(self.fixture.count("work_version_assets"), 0)
         self.assertEqual(
             self.fixture.count(
                 "events",
@@ -844,7 +844,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertIs(intent.state, enums.AssetIntentState.PENDING)
         self.assertIsNone(intent.raw_asset_id)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
-        self.assertEqual(self.fixture.count("work_assets"), 0)
+        self.assertEqual(self.fixture.count("work_version_assets"), 0)
         self.assertEqual(
             self.fixture.count(
                 "events", "WHERE subject_id = ? AND event_type = ?", (intent_id, "asset_intent.published")
@@ -877,7 +877,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
     def test_incoherent_work_and_role_fail_before_intent_creation(self) -> None:
         other_work, other_job = self.fixture.create_work_and_job("10.1000/coordinator-other")
         cases = (
-            (self.fixture.work_id, other_job, enums.AssetRole.PRIMARY_PDF, "does not belong"),
+            (self.fixture.work_version_id, other_job, enums.AssetRole.PRIMARY_PDF, "does not belong"),
             (other_work, other_job, enums.AssetRole.XML, "role does not match"),
         )
         for work_id, job_id, role, message in cases:
