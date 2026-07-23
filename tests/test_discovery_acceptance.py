@@ -16,10 +16,8 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (
     CatalogRepository,
     IdentityResolver,
-    ReadOnlyCatalogView,
-    apply_migrations,
-    create_catalog_engine,
-    open_read_only_catalog_engine,
+    ReadOnlyCatalogView, initialize_catalog, create_catalog_engine,
+open_read_only_catalog_engine,
 )
 from sciretriever.core.contracts import (
     CandidateMetadata,
@@ -235,14 +233,14 @@ class DiscoveryAcceptanceTests(TestCase):
         self.catalog_path = self.directory / "catalog.sqlite"
 
         writable = create_catalog_engine(self.catalog_path)
-        apply_migrations(writable)
+        initialize_catalog(writable)
         repository = CatalogRepository(writable)
         resolution = IdentityResolver(repository).create_or_reuse_work(
             (Identifier("doi", "10.1000/cached"),)
         )
         cached_metadata = CandidateMetadata("Cached Study", "Cached abstract")
         repository.add_metadata_label(
-            resolution.work.id,
+            resolution.work_version.id,
             "topic",
             "v1",
             label_input_sha256(cached_metadata),

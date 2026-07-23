@@ -12,10 +12,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever.catalog import (
-    ReadOnlyCatalogView,
-    apply_migrations,
-    create_catalog_engine,
-    open_read_only_catalog_engine,
+    ReadOnlyCatalogView, initialize_catalog, create_catalog_engine,
+open_read_only_catalog_engine,
 )
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.records import WorkRecord
@@ -106,7 +104,7 @@ class DiscoveryPipelineTests(TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.catalog_path = Path(self.temporary_directory.name) / "catalog.sqlite"
         writable = create_catalog_engine(self.catalog_path)
-        apply_migrations(writable)
+        initialize_catalog(writable)
         writable.dispose()
         engine = open_read_only_catalog_engine(self.catalog_path)
         self.addCleanup(engine.dispose)
