@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Connection, insert, select, update
+from sqlalchemy import Connection, delete, insert, select, tuple_, update
 
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.models import (
@@ -42,7 +44,7 @@ from sciretriever.catalog.records import (
     WorkVersionRecord,
 )
 from sciretriever.catalog.repository import _append_event, _required_text, _work_record, canonical_json, catalog_operation
-from sciretriever.core.contracts import Identifier
+from sciretriever.core.contracts import CandidateMetadata, Identifier
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
 from sciretriever.errors import CatalogError
@@ -50,6 +52,23 @@ from sciretriever.errors import CatalogError
 
 _TITLE_RULE_VERSION = "title-v1"
 _CLASS_RANK = {"formal_publication": 0, "accepted_manuscript": 1, "preprint": 2, "unknown": 3, "other": 3}
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataIngestionObservation:
+    provider: str
+    provider_record_id: str
+    fields: tuple[tuple[str, object], ...]
+    provenance: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataIngestionBatch:
+    title: str
+    identifiers: tuple[Identifier, ...]
+    observations: tuple[MetadataIngestionObservation, ...]
+    provider_precedence: tuple[str, ...]
+    review_reason: str | None = None
 
 
 def normalize_title(value: str) -> str:
@@ -132,8 +151,10 @@ class WorkRepository:
         related_work_version_id: str | None = None,
         relation_type: str = "is_version_of",
         relation_evidence: Mapping[str, object] | None = None,
+        observation_provenance: Mapping[str, object] | None = None,
         _connection: Connection | None = None,
         _work_id: str | None = None,
+        _force_new_work: bool = False,
     ) -> tuple[WorkVersionRecord, bool]:
         provider = _required_text(provider, "provider")
         provider_record_id = _required_text(provider_record_id, "provider_record_id")
@@ -175,11 +196,15 @@ class WorkRepository:
                     work_id = (
                         _work_id
                         if _work_id is not None
-                        else self._choose_work(
-                            connection,
-                            normalized_title,
-                            normalized_doi,
-                            related_work_version_id,
+                        else (
+                            None
+                            if _force_new_work
+                            else self._choose_work(
+                                connection,
+                                normalized_title,
+                                normalized_doi,
+                                related_work_version_id,
+                            )
                         )
                     )
                     if work_id is None:
@@ -272,7 +297,12 @@ class WorkRepository:
                         connection.execute(insert(metadata_observations).values(
                             id=new_uuid4(), work_version_id=version_id, provider=provider,
                             provider_record_id=provider_record_id, field_name=field_name,
-                            value_json=value_json, provenance_json=canonical_json({"provider": provider}),
+                            value_json=value_json,
+                            provenance_json=canonical_json(
+                                {"provider": provider}
+                                if observation_provenance is None
+                                else observation_provenance
+                            ),
                             observed_at=utc_now_rfc3339(),
                         ))
                 if observed is None:
@@ -290,6 +320,443 @@ class WorkRepository:
                     ).mappings().one()
                 )
                 return record, work_created
+
+    def ingest_metadata_batch(
+        self,
+        *,
+        title: str,
+        identifiers_to_persist: Sequence[Identifier],
+        observations: Sequence[MetadataIngestionObservation],
+        provider_precedence: Sequence[str],
+        review_reason: str | None = None,
+        _connection: Connection | None = None,
+    ) -> WorkVersionRecord:
+        """Persist one merged metadata result and all source evidence atomically."""
+        title = _required_text(title, "title")
+        if not observations:
+            raise ValueError("observations must not be empty")
+        precedence = tuple(provider_precedence)
+        if (
+            not precedence
+            or len(set(precedence)) != len(precedence)
+            or not all(isinstance(provider, str) and provider.strip() for provider in precedence)
+        ):
+            raise ValueError("provider_precedence must contain unique non-blank provider names")
+        ordered_identifiers = tuple(sorted(set(identifiers_to_persist), key=lambda item: (item.namespace, item.value)))
+        dois = {item.value for item in ordered_identifiers if item.namespace == "doi"}
+        if len(dois) > 1:
+            raise CatalogError("different DOI values cannot identify one WorkVersion")
+        doi = next(iter(dois), None)
+        primary = next(
+            (
+                observation
+                for observation in observations
+                if any(name == "doi" and value == doi for name, value in observation.fields)
+            ),
+            observations[0],
+        )
+        primary_fields = dict(primary.fields)
+        primary_title = primary_fields.get("title")
+        if not isinstance(primary_title, str) or not primary_title.strip():
+            primary_title = title
+        primary_doi = primary_fields.get("doi")
+        if not isinstance(primary_doi, str):
+            primary_doi = doi
+
+        provider_rank = {provider: index for index, provider in enumerate(precedence)}
+        selected_fields: dict[str, object] = {}
+        for observation in sorted(
+            observations,
+            key=lambda item: (
+                provider_rank.get(item.provider, len(provider_rank)),
+                item.provider,
+                item.provider_record_id,
+            ),
+        ):
+            for field_name, value in observation.fields:
+                if field_name not in selected_fields and self._provider_value_present(value):
+                    selected_fields[field_name] = value
+        selected_date = selected_fields.get("publication_date")
+        publication_date = (
+            selected_date
+            if isinstance(selected_date, str)
+            and re.fullmatch(r"\d{4}(?:-\d{2}-\d{2})?", selected_date)
+            else None
+        )
+
+        transaction = (
+            self._catalog.critical_transaction()
+            if _connection is None
+            else nullcontext(_connection)
+        )
+        with transaction as connection:
+            publisher_id = self._resolve_registry_id(
+                connection, "publisher", selected_fields.get("publisher")
+            )
+            venue_id = self._resolve_registry_id(
+                connection, "venue", selected_fields.get("venue")
+            )
+            identifier_owner_ids = set(connection.execute(
+                select(work_version_identifiers.c.work_version_id).where(
+                    tuple_(work_version_identifiers.c.namespace, work_version_identifiers.c.value).in_(
+                        [(item.namespace, item.value) for item in ordered_identifiers]
+                    )
+                )
+            ).scalars()) if ordered_identifiers else set()
+            if doi is not None:
+                identifier_owner_ids = {
+                    version_id
+                    for version_id in identifier_owner_ids
+                    if (
+                        (owner_doi := connection.execute(
+                            select(work_version_identifiers.c.value).where(
+                                work_version_identifiers.c.work_version_id == version_id,
+                                work_version_identifiers.c.namespace == "doi",
+                            )
+                        ).scalar_one_or_none())
+                        is None
+                        or owner_doi == doi
+                    )
+                }
+            if len(identifier_owner_ids) > 1:
+                raise CatalogError("metadata identifiers belong to different WorkVersions")
+            observation_keys = tuple(sorted({
+                (observation.provider, observation.provider_record_id)
+                for observation in observations
+            }))
+            observation_owner_ids = set(connection.execute(
+                select(metadata_observations.c.work_version_id).where(
+                    tuple_(
+                        metadata_observations.c.provider,
+                        metadata_observations.c.provider_record_id,
+                    ).in_(observation_keys)
+                )
+            ).scalars())
+            if len(observation_owner_ids) > 1:
+                raise CatalogError("metadata observations belong to different WorkVersions")
+            if identifier_owner_ids and observation_owner_ids != identifier_owner_ids and observation_owner_ids:
+                raise CatalogError("metadata observation owner conflicts with identifier owner")
+            owner_ids = identifier_owner_ids | observation_owner_ids
+            if owner_ids:
+                version = _version_record(connection.execute(
+                    select(work_versions).where(
+                        work_versions.c.id == next(iter(owner_ids))
+                    )
+                ).mappings().one())
+                existing_doi = connection.execute(select(work_version_identifiers.c.value).where(
+                    work_version_identifiers.c.work_version_id == version.id,
+                    work_version_identifiers.c.namespace == "doi",
+                )).scalar_one_or_none()
+                if doi is not None and existing_doi is not None and doi != existing_doi:
+                    raise CatalogError("different DOI values cannot identify one WorkVersion")
+            else:
+                provisional_candidates = ()
+                if doi is not None:
+                    provisional_candidates = tuple(connection.execute(
+                        select(work_versions.c.id).select_from(
+                            work_versions.join(works, works.c.id == work_versions.c.work_id)
+                        ).where(
+                            work_versions.c.normalized_title == normalize_title(title),
+                            works.c.needs_review == 0,
+                            work_versions.c.is_provisional == 1,
+                            ~work_versions.c.id.in_(
+                                select(work_version_identifiers.c.work_version_id).where(
+                                    work_version_identifiers.c.namespace == "doi"
+                                )
+                            ),
+                        ).order_by(work_versions.c.id)
+                    ).scalars())
+                if len(provisional_candidates) == 1:
+                    version = _version_record(connection.execute(
+                        select(work_versions).where(
+                            work_versions.c.id == provisional_candidates[0]
+                        )
+                    ).mappings().one())
+                else:
+                    metadata_fields = {
+                        key: value
+                        for key, value in primary.fields
+                        if key not in {
+                            "title", "doi", "publication_date", "publisher", "venue"
+                        }
+                    }
+                    version, _ = self.ingest_version_with_disposition(
+                        provider=primary.provider,
+                        provider_record_id=primary.provider_record_id,
+                        title=primary_title,
+                        doi=primary_doi,
+                        publication_date=publication_date,
+                        publisher_id=publisher_id,
+                        venue_id=venue_id,
+                        provider_precedence=precedence.index(primary.provider),
+                        metadata=metadata_fields,
+                        observation_provenance=dict(primary.provenance),
+                        _connection=connection,
+                        _force_new_work=review_reason is not None,
+                    )
+                    if len(provisional_candidates) > 1:
+                        ambiguous_work_ids = set(connection.execute(
+                            select(work_versions.c.work_id).where(
+                                work_versions.c.id.in_(provisional_candidates)
+                            )
+                        ).scalars())
+                        ambiguous_work_ids.add(version.work_id)
+                        connection.execute(update(works).where(
+                            works.c.id.in_(ambiguous_work_ids)
+                        ).values(
+                            needs_review=1,
+                            review_reason="ambiguous exact-title DOI enrichment",
+                            updated_at=utc_now_rfc3339(),
+                        ))
+            for identifier in ordered_identifiers:
+                exists = connection.execute(select(work_version_identifiers.c.id).where(
+                    work_version_identifiers.c.namespace == identifier.namespace,
+                    work_version_identifiers.c.value == identifier.value,
+                )).scalar_one_or_none()
+                if exists is None:
+                    connection.execute(insert(work_version_identifiers).values(
+                        id=new_uuid4(), work_version_id=version.id, namespace=identifier.namespace,
+                        value=identifier.value, created_at=utc_now_rfc3339(),
+                    ))
+                work_identifier = connection.execute(select(identifiers.c.id).where(
+                    identifiers.c.namespace == identifier.namespace,
+                    identifiers.c.value == identifier.value,
+                )).scalar_one_or_none()
+                if work_identifier is None:
+                    connection.execute(insert(identifiers).values(
+                        id=new_uuid4(), work_id=version.work_id, namespace=identifier.namespace,
+                        value=identifier.value, created_at=utc_now_rfc3339(),
+                    ))
+            if doi is not None:
+                connection.execute(update(work_versions).where(
+                    work_versions.c.id == version.id
+                ).values(
+                    stable_version_key=f"doi:{doi}",
+                    is_provisional=0,
+                    updated_at=utc_now_rfc3339(),
+                ))
+
+            for observation in observations:
+                provider = _required_text(observation.provider, "provider")
+                record_id = _required_text(observation.provider_record_id, "provider_record_id")
+                provenance_json = canonical_json(dict(observation.provenance))
+                for field_name, value in observation.fields:
+                    value_json = canonical_json(value)
+                    exists = connection.execute(select(metadata_observations.c.id).where(
+                        metadata_observations.c.provider == provider,
+                        metadata_observations.c.provider_record_id == record_id,
+                        metadata_observations.c.field_name == field_name,
+                        metadata_observations.c.value_json == value_json,
+                    )).scalar_one_or_none()
+                    if exists is None:
+                        connection.execute(insert(metadata_observations).values(
+                            id=new_uuid4(), work_version_id=version.id, provider=provider,
+                            provider_record_id=record_id, field_name=field_name,
+                            value_json=value_json, provenance_json=provenance_json,
+                            observed_at=utc_now_rfc3339(),
+                        ))
+            self._project_provider_observations(connection, version.id, precedence)
+            self._recompute_preferred(connection, version.work_id)
+            if review_reason is not None:
+                connection.execute(update(works).where(
+                    works.c.id == version.work_id
+                ).values(
+                    needs_review=1,
+                    review_reason=_required_text(review_reason, "review_reason"),
+                    updated_at=utc_now_rfc3339(),
+                ))
+            row = connection.execute(select(work_versions).where(work_versions.c.id == version.id)).mappings().one()
+            return _version_record(row)
+
+    def ingest_metadata_batches(
+        self, batches: Sequence[MetadataIngestionBatch]
+    ) -> tuple[WorkVersionRecord, ...]:
+        """Persist one metadata search result set in a single transaction."""
+        if not batches:
+            return ()
+        with self._catalog.critical_transaction() as connection:
+            return tuple(
+                self.ingest_metadata_batch(
+                    title=batch.title,
+                    identifiers_to_persist=batch.identifiers,
+                    observations=batch.observations,
+                    provider_precedence=batch.provider_precedence,
+                    review_reason=batch.review_reason,
+                    _connection=connection,
+                )
+                for batch in batches
+            )
+
+    def get_canonical_metadata(self, work_version_id: str) -> CandidateMetadata:
+        """Read the persisted provider-canonical metadata for one WorkVersion."""
+        version_id = validate_uuid(work_version_id, "work_version_id")
+        with self._catalog.connect() as connection:
+            row = connection.execute(
+                select(work_versions).where(work_versions.c.id == version_id)
+            ).mappings().one_or_none()
+            if row is None:
+                raise CatalogError(f"unknown WorkVersion: {version_id}")
+            venue_name = None
+            if row["venue_id"] is not None:
+                venue_name = connection.execute(
+                    select(venues.c.canonical_name).where(venues.c.id == row["venue_id"])
+                ).scalar_one()
+            author_names = tuple(connection.execute(
+                select(authors.c.display_name)
+                .join(authorships, authorships.c.author_id == authors.c.id)
+                .where(authorships.c.work_version_id == version_id)
+                .order_by(authorships.c.position)
+            ).scalars())
+        return CandidateMetadata(
+            title=row["title"],
+            abstract=row["abstract"],
+            authors=author_names,
+            year=row["publication_year"],
+            venue=venue_name,
+            keywords=(),
+        )
+
+    def _project_provider_observations(
+        self,
+        connection: Connection,
+        work_version_id: str,
+        precedence: tuple[str, ...],
+    ) -> None:
+        rank = {provider: index for index, provider in enumerate(precedence)}
+        rows = connection.execute(
+            select(
+                metadata_observations.c.provider,
+                metadata_observations.c.provider_record_id,
+                metadata_observations.c.field_name,
+                metadata_observations.c.value_json,
+            ).where(
+                metadata_observations.c.work_version_id == work_version_id,
+                metadata_observations.c.provider.in_(precedence),
+            )
+        ).all()
+        choices: dict[str, list[tuple[tuple[object, ...], object]]] = {}
+        for row in rows:
+            value = json.loads(row.value_json)
+            if not self._provider_value_present(value):
+                continue
+            key = (rank[row.provider], row.provider_record_id, row.value_json)
+            choices.setdefault(row.field_name, []).append((key, value))
+        for values in choices.values():
+            values.sort(key=lambda item: item[0])
+
+        projected: dict[str, object] = {}
+        selected_title = self._provider_choice(choices, "title", str)
+        if selected_title is not None:
+            projected["title"] = selected_title
+            projected["normalized_title"] = normalize_title(selected_title)
+        publication_date = self._provider_choice(choices, "publication_date", str)
+        if publication_date is not None and re.fullmatch(
+            r"\d{4}(?:-\d{2}-\d{2})?", publication_date
+        ):
+            projected["publication_date"] = publication_date
+        for field_name in (
+            "abstract",
+            "language",
+            "work_type",
+            "volume",
+            "issue",
+            "pages",
+            "article_number",
+            "open_access_status",
+        ):
+            value = self._provider_choice(choices, field_name, str)
+            if value is not None:
+                projected[field_name] = " ".join(value.split())
+        year = self._provider_choice(choices, "publication_year", int)
+        if year is None:
+            year = self._provider_choice(choices, "year", int)
+        if year is not None and not isinstance(year, bool) and year >= 0:
+            projected["publication_year"] = year
+        elif publication_date is not None and re.fullmatch(
+            r"\d{4}(?:-\d{2}-\d{2})?", publication_date
+        ):
+            projected["publication_year"] = int(publication_date[:4])
+
+        for kind in ("publisher", "venue"):
+            for _, value in choices.get(kind, ()):
+                registry_id = self._resolve_registry_id(connection, kind, value)
+                if registry_id is not None:
+                    projected[f"{kind}_id"] = registry_id
+                    break
+        observed_ranks = [rank[row.provider] for row in rows]
+        if observed_ranks:
+            projected["provider_precedence"] = min(observed_ranks)
+        projected["updated_at"] = utc_now_rfc3339()
+        connection.execute(
+            update(work_versions).where(work_versions.c.id == work_version_id).values(**projected)
+        )
+
+        author_value = self._provider_choice(choices, "authors", list)
+        if author_value is not None and all(isinstance(item, str) for item in author_value):
+            self._sync_authorships(connection, work_version_id, tuple(author_value))
+
+    @staticmethod
+    def _provider_value_present(value: object) -> bool:
+        if value is None or value == []:
+            return False
+        return not isinstance(value, str) or bool(value.strip())
+
+    @staticmethod
+    def _provider_choice(
+        choices: Mapping[str, Sequence[tuple[tuple[object, ...], object]]],
+        field_name: str,
+        expected_type: type[Any],
+    ) -> Any | None:
+        for _, value in choices.get(field_name, ()):
+            if isinstance(value, expected_type):
+                return value
+        return None
+
+    @staticmethod
+    def _resolve_registry_id(connection: Connection, kind: str, value: object) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        table, alias_table, foreign_key = RegistryRepository._tables(kind)
+        normalized = normalize_title(value)
+        record_id = connection.execute(select(table.c.id).where(
+            table.c.normalized_name == normalized
+        )).scalar_one_or_none()
+        if record_id is not None:
+            return record_id
+        return connection.execute(select(alias_table.c[foreign_key]).where(
+            alias_table.c.normalized_alias == normalized
+        )).scalar_one_or_none()
+
+    @staticmethod
+    def _sync_authorships(connection: Connection, work_version_id: str, value: object) -> None:
+        if not isinstance(value, tuple) or not all(isinstance(item, str) for item in value):
+            return
+        existing = {
+            row.position: row
+            for row in connection.execute(
+                select(authorships.c.id, authorships.c.position, authors.c.id.label("author_id"), authors.c.display_name)
+                .join(authors, authors.c.id == authorships.c.author_id)
+                .where(authorships.c.work_version_id == work_version_id)
+            )
+        }
+        for position, display_name in enumerate(value):
+            current = existing.pop(position, None)
+            if current is not None and current.display_name == display_name:
+                continue
+            if current is not None:
+                connection.execute(delete(authorships).where(authorships.c.id == current.id))
+            author_id = new_uuid4()
+            connection.execute(insert(authors).values(
+                id=author_id, display_name=display_name, normalized_name=display_name.casefold(),
+                orcid=None, created_at=utc_now_rfc3339(),
+            ))
+            connection.execute(insert(authorships).values(
+                id=new_uuid4(), work_version_id=work_version_id, author_id=author_id,
+                position=position, role=None, is_corresponding=0, affiliation=None,
+                created_at=utc_now_rfc3339(),
+            ))
+        for row in existing.values():
+            connection.execute(delete(authorships).where(authorships.c.id == row.id))
 
     @staticmethod
     def _canonical_metadata(metadata: Mapping[str, object]) -> dict[str, object]:
@@ -760,4 +1227,4 @@ class ReferenceRepository:
         return tuple(VersionReferenceRecord(**{field: row[field] for field in VersionReferenceRecord.__dataclass_fields__}) for row in rows)
 
 
-__all__ = ("AuthorRepository", "ReferenceRepository", "RegistryRepository", "TagRepository", "WorkRepository", "normalize_title")
+__all__ = ("AuthorRepository", "MetadataIngestionObservation", "ReferenceRepository", "RegistryRepository", "TagRepository", "WorkRepository", "normalize_title")

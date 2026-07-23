@@ -13,6 +13,8 @@ from .assets import AssetRepository
 from .identity import IdentityResolver
 from .library import (
     AuthorRepository,
+    MetadataIngestionBatch,
+    MetadataIngestionObservation,
     ReferenceRepository,
     RegistryRepository,
     TagRepository,
@@ -65,6 +67,11 @@ LEGAL_DOMAIN_RUN_TRANSITIONS = getattr(_domain_runs_api, "LEGAL_DOMAIN_RUN_TRANS
 _jobs_api = import_module(f"{__name__}.jobs")
 JobRepository = getattr(_jobs_api, "JobRepository")
 LEGAL_JOB_STATE_TRANSITIONS = getattr(_jobs_api, "LEGAL_JOB_STATE_TRANSITIONS")
+_library_read_api = import_module(f"{__name__}.library_read")
+LibraryFilters = getattr(_library_read_api, "LibraryFilters")
+LibraryItem = getattr(_library_read_api, "LibraryItem")
+LibraryReadRepository = getattr(_library_read_api, "LibraryReadRepository")
+LibraryResult = getattr(_library_read_api, "LibraryResult")
 
 
 __all__ = (
@@ -97,7 +104,13 @@ __all__ = (
     "JobRepository",
     "LEGAL_DOMAIN_RUN_TRANSITIONS",
     "LEGAL_JOB_STATE_TRANSITIONS",
+    "LibraryFilters",
+    "LibraryItem",
+    "LibraryReadRepository",
+    "LibraryResult",
     "MetadataLabelRecord",
+    "MetadataIngestionBatch",
+    "MetadataIngestionObservation",
     "MetadataObservationRecord",
     "LightStructureRecord",
     "NormalizedArtifactRecord",
