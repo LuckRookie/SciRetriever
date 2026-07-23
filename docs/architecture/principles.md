@@ -95,9 +95,9 @@ Run this checklist on any change before merging. A single "no" answer blocks the
 - [ ] Is the catalog free of any domain field (no reaction, molecule, route, or yield columns)?
 - [ ] Do any new domain outputs land as external JSONL/CSV plus schema, manifest, and validation report, and not as catalog rows?
 - [ ] Does downstream integration use stable ids, hashes, and provenance rather than internal ORM tables?
-- [ ] Does legacy code (`Paper`, `Optera`, standalone scripts) enter through an adapter rather than shaping the v2 schema?
+- [ ] If a future owner-approved migration accepts legacy input, does it enter through an adapter rather than shaping the target schema?
 - [ ] Are all data paths read from configuration, with no hardcoded workspace paths and no corpora committed to the repo?
 - [ ] Is provenance preserved and extended, never dropped?
 - [ ] Does the change avoid premature microservices, workflow platforms, vector stores, and web UI?
 
-See the [local AGENTS.md](../../AGENTS.md) for the directive form of these rules that applies to coding agents, and the [project README](../../README.md) for current operational commands and the legacy code that still awaits adaptation.
+See the [local AGENTS.md](../../AGENTS.md) for the directive form of these rules that applies to coding agents, and the [project README](../../README.md) for current operational commands.
