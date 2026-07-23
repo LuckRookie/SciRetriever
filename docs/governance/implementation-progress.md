@@ -23,7 +23,7 @@
 
 ## 2. 总体状态
 
-截至 2026-07-23，SciRetriever 已具备文献发现、前台全文采集、安全网络边界、不可变保存、确定性归一化和 `DocumentPackageVersion` 处理快照能力，但尚未成为三份规格描述的 Work-centered 本地文献库。WP0 已完成实现，WP1-WP5 尚未进入已验证完成状态。
+截至 2026-07-23，SciRetriever 已具备 Work-centered catalog 基础、文献发现、前台全文采集、安全网络边界、不可变保存、确定性归一化和 `DocumentPackageVersion` 处理快照能力。WP0 和 WP1 已完成实现，WP2-WP5 尚未进入已验证完成状态。
 
 当前主交接仍是：
 
@@ -38,7 +38,7 @@ SearchSpec
   -> DocumentPackageVersion processing snapshot
 ```
 
-当前用户主要观察 manifest、下载/处理状态、资产和报告；理想产品中的 WorkVersion、current PDF analysis、library curation 和 citation expansion 尚未形成完整用户面。
+当前用户主要观察 manifest、下载/处理状态、资产和报告；WorkVersion 已成为 catalog 书目与内容所有权基础，但 current PDF analysis、library curation 和 citation expansion 尚未形成完整用户面。
 
 ## 3. 当前命令与配置
 
@@ -48,7 +48,7 @@ SearchSpec
 discover
 acquire
 preflight
-catalog create|import-asset|import-legacy-db
+catalog create|import-asset
 package
 report
 ```
@@ -62,7 +62,7 @@ report
 | 当前模块 | 已验证职责 |
 |---|---|
 | `core/` | 中性契约、标识符、枚举、hash、`DocumentPackageVersion` |
-| `catalog/` | SQLite schema/migrations、Work acquisition identity、jobs/attempts/failures、assets、processing、citations、package snapshots |
+| `catalog/` | Work/WorkVersion identity、metadata observations、authorship、registries/aliases、tags、version relations/references、version-owned jobs/assets/processing 和 package snapshots |
 | `discovery/` | provider 查询、清洗、去重、合并、只读 catalog 比对、确定性标签和 manifest writer |
 | `integrations/` | 外部 provider client 和中性 DTO |
 | `network/` | HTTPS、DNS pinning、redirect、header、有限读取和 timeout |
@@ -72,9 +72,8 @@ report
 | `enrichment/` | 确定性 summary、tags 和 citation links |
 | `packaging/` | quality gate 与 `DocumentPackageVersion` 处理快照发布 |
 | `cli/` | 当前命令的 composition root |
-| `legacy/` | 受限只读适配器和退休路径保护 |
 
-当前 `package_versions` 保存处理快照，不是书目 `WorkVersion`。`works` 直接保存部分 metadata；当前 catalog 没有完整的 `WorkVersion`、`MetadataObservation`、`Author`/`Authorship`、canonical tag alias 或 single current generated result 模型。
+当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 仍保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references；single current generated result 属于后续 WP4。
 
 证据：`src/sciretriever/`、`docs/governance/code-doc-map.md`。最后核对：2026-07-23。
 
@@ -82,12 +81,12 @@ report
 
 | 能力 | 实施状态 | 当前证据 | 对应计划 |
 |---|---|---|---|
-| Work identity | 部分覆盖 | Work + identifiers 主要服务 acquisition | WP1 |
-| 书目 WorkVersion | 未实现 | `package_versions` 仅为处理快照 | WP1 |
-| MetadataObservation | 未实现 | discovery/manifest 保存合并结果，无 observation 模型 | WP1-WP2 |
-| Author/Authorship | 未实现 | 作者仍是输入或输出字符串 | WP1 |
-| Publisher/Venue registries | 未实现 | 当前为字符串字段 | WP1-WP2 |
-| Canonical tags | 部分覆盖 | metadata labels 和 deterministic tags，不是目标 registry | WP1/WP4 |
+| Work identity | 已覆盖 WP1 | Work identity、identifier aliases、preferred WorkVersion ranking/manual override | WP1 |
+| 书目 WorkVersion | 已覆盖 WP1 | `work_versions` 与 processing `package_versions` 分离；内容运行时归属 WorkVersion | WP1 |
+| MetadataObservation | 已覆盖 WP1 基础 | provider record 幂等 observation 与 WorkVersion ingest | WP1-WP2 |
+| Author/Authorship | 已覆盖 WP1 | typed author/authorship repository，ORCID 保守复用 | WP1 |
+| Publisher/Venue registries | 已覆盖 WP1 | typed registry 与 alias repository | WP1-WP2 |
+| Canonical tags | 已覆盖 WP1 基础 | canonical tag/alias、manual Work tag、generated WorkVersion tag 分离 | WP1/WP4 |
 | Metadata discovery | 部分覆盖 | 多 provider 清洗、去重、manifest；尚未 placeholder 入库 | WP2 |
 | Local library search/curation | 未实现 | catalog 只有有限读取入口 | WP2/WP5 |
 | Primary PDF acquisition | 部分覆盖 | direct/official/OA providers、serial/race | WP3 |
@@ -96,7 +95,7 @@ report
 | PDF normalization/OCR | 部分覆盖 | 已有 PDF normalization，尚未覆盖目标 LLM 输入和 locator 合同 | WP4 |
 | Current LLM analysis | 未实现 | 当前是 deterministic enrichment | WP4 |
 | Atomic current replacement | 未实现 | 当前是 processing/package snapshots | WP4 |
-| Version references | 部分覆盖 | package citations，不是完整 WorkVersion reference 模型 | WP1/WP4 |
+| Version references | 已覆盖 WP1 基础 | ordered `version_references`、目标 Work link 与 reverse citation query | WP1/WP4 |
 | Reference expansion | 未实现 | 无 `expand` 产品命令 | WP5 |
 | Failures UX | 部分覆盖 | 当前 report 展示 acquisition job/attempt/failure | WP3/WP5 |
 | Strict product config | 未实现 | 当前 schema v1 不含理想产品全部字段 | WP5 |
@@ -111,7 +110,7 @@ report
 | 工作包 | 计划生命周期 | 实施进度 | 已完成证据 | 阻塞 |
 |---|---|---|---|---|
 | WP0 旧架构收缩 | approved | completed | `test_acquisition_p5.py` 覆盖记录间 stop、rerun、reuse、serial/race、stale attempt 和无 checkpoint；`test_candidate_executor.py` 覆盖有界执行、验证和安全投影；CLI/config removal 有直接测试 | 无 |
-| WP1 文献模型 | approved | not started | 无 schema/migration 完成证据 | 等待 WP0 验收 |
+| WP1 文献模型 | approved | completed | direct fresh schema bootstrap、typed WP1 repositories、WorkVersion-owned runtime persistence 和 `test_catalog_wp1.py` 直接验收；完整 unittest 与 Pyright 通过 | 无 |
 | WP2 搜索与本地库 | approved | not started | 无目标 search/library 完成证据 | 等待 WP1 验收 |
 | WP3 PDF 获取 | approved | not started | 只有可复用的现有 acquisition 基础 | 等待 WP2 验收 |
 | WP4 PDF 分析 | approved | not started | 只有可复用的 normalization/evidence 基础 | 等待 WP3 验收 |
@@ -121,14 +120,13 @@ report
 
 ## 7. 最近验证
 
-2026-07-23 WP0 架构重置后的验证：
+2026-07-23 WP1 fresh-catalog cutover 验证：
 
-- `uv run --frozen python scripts/harness.py full`：通过。
-- documentation、architecture、compile、Pyright、完整 unittest 和 wheel 构建门禁均通过。
 - Pyright：0 errors、0 warnings、0 informations。
-- 单元与验收测试：465 项通过。
-- wheel 从干净 `build/` staging 构建，源码与 wheel 的 Python 模块清单一致；已删除的 `download.py`、`automatic.py` 和 `scheduler.py` 未进入发布物。
-- WP0 目标/质量与安全/QA 两路独立审查均通过，无剩余 blocker。
+- 单元与验收测试：458 项通过。
+- `test_catalog_wp1.py` 直接验收：9 项通过；WP1/schema/P9/identity/asset/package 聚焦回归：57 项通过。
+- `uv run --frozen python scripts/harness.py full`：通过。
+- documentation、architecture、compile、Pyright、完整 unittest、wheel 构建和 wheel contents 门禁均通过。
 
 ## 8. 更新规则
 
