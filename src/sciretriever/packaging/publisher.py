@@ -9,7 +9,13 @@ from urllib.parse import quote
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.packages import PackageSourceRepository, PackageVersionRepository
 from sciretriever.catalog.processing import ProcessingRunRepository
-from sciretriever.catalog.records import AssetIntentRecord, PackageVersionRecord, ProcessingRunRecord, RawAssetRecord, WorkAssetRecord
+from sciretriever.catalog.records import (
+    AssetIntentRecord,
+    PackageVersionRecord,
+    ProcessingRunRecord,
+    RawAssetRecord,
+    WorkVersionAssetRecord,
+)
 from sciretriever.catalog.repository import canonical_json
 from sciretriever.core.derivation import canonical_sha256, stable_derivation_id
 from sciretriever.core.enums import ProcessingRunState, ProcessingStage
@@ -77,7 +83,7 @@ class PackagePublisher:
             raise PackagingError("package storage is missing or mismatched")
         payload = self.derived_store.read_verified(publication).decode("utf-8")
         package = DocumentPackageVersion.from_json(payload)
-        if package.document_id != record.work_id or package.package_version != record.version:
+        if package.document_id != record.work_version_id or package.package_version != record.version:
             raise PackagingError("package identity conflicts with catalog")
         if package.package_sha256 != record.sha256 or package.quality is not record.quality:
             raise PackagingError("package metadata conflicts with catalog")
@@ -94,13 +100,13 @@ class PackagePublisher:
         return self.load_verified(record)
 
     def _files_and_provenance(
-        self, work_id: str
+        self, work_version_id: str
     ) -> tuple[
         tuple[FileRecord, ...],
         tuple[SourceProvenance, ...],
-        tuple[tuple[WorkAssetRecord, RawAssetRecord, AssetIntentRecord | None], ...],
+        tuple[tuple[WorkVersionAssetRecord, RawAssetRecord, AssetIntentRecord | None], ...],
     ]:
-        source_rows = self.sources.list_files_with_intent(work_id)
+        source_rows = self.sources.list_files_with_intent(work_version_id)
         files = []
         provenance = []
         for link, raw, intent in source_rows:
@@ -109,11 +115,15 @@ class PackagePublisher:
             acquisition_method = str(data.get("acquisition_method") or data.get("method") or "acquire")
             provider = str(
                 data.get("provider")
-                or ("legacy-import" if acquisition_method == "existing-asset-import" else "catalog")
+                or (
+                    "existing-asset-import"
+                    if acquisition_method == "existing-asset-import"
+                    else "catalog"
+                )
             )
             source_uri = data.get("source_uri") or data.get("source_url")
             if source_uri is None and data.get("source_id") is not None:
-                source_uri = f"urn:sciretriever:legacy-source:{quote(str(data['source_id']), safe='')}"
+                source_uri = f"urn:sciretriever:source:{quote(str(data['source_id']), safe='')}"
             timestamp_source = raw if intent is None else intent
             provenance_identity = {"file_id": raw.id, "sha256": raw.sha256}
             if intent is not None:
@@ -129,23 +139,23 @@ class PackagePublisher:
 
     def publish(
         self,
-        work_id: str,
+        work_version_id: str,
         raw_acceptance_run: ProcessingRunRecord,
         normalized: NormalizationResult,
         enrichment: EnrichmentResult | None,
     ) -> PackagePublicationResult:
-        lock_id = stable_derivation_id("package_publication_lock", {"work_id": work_id})
+        lock_id = stable_derivation_id("package_publication_lock", {"work_id": work_version_id})
         with self.derived_store.run_lock(lock_id):
-            return self._publish_locked(work_id, raw_acceptance_run, normalized, enrichment)
+            return self._publish_locked(work_version_id, raw_acceptance_run, normalized, enrichment)
 
     def _publish_locked(
         self,
-        work_id: str,
+        work_version_id: str,
         raw_acceptance_run: ProcessingRunRecord,
         normalized: NormalizationResult,
         enrichment: EnrichmentResult | None,
     ) -> PackagePublicationResult:
-        files, provenance, source_rows = self._files_and_provenance(work_id)
+        files, provenance, source_rows = self._files_and_provenance(work_version_id)
         draft = NormalizationDraft(normalized.content, normalized.evidence, normalized.source_units, normalized.source_map_artifact.id)
         decision = self.quality.validate(tuple(link.asset_role for link, _, _ in source_rows), draft)
         artifacts = [normalized.content_artifact, normalized.source_map_artifact]
@@ -154,7 +164,7 @@ class PackagePublisher:
         artifact_contracts = tuple(ArtifactRecord(item.id, item.kind, item.media_type, item.storage_path, item.sha256, item.byte_size) for item in artifacts)
         artifact_ids = tuple(item.id for item in artifacts)
         validation = self.runs.claim_or_resume(
-            work_id, "package_validation", "sciretriever.package_validator", PUBLISHER_VERSION,
+            work_version_id, "package_validation", "sciretriever.package_validator", PUBLISHER_VERSION,
             {"schema_version": "1", "quality": decision.quality.value}, input_artifact_ids=artifact_ids,
         )
         if validation.state.value != "succeeded":
@@ -172,8 +182,8 @@ class PackagePublisher:
             "candidate": canonical_sha256({"artifacts": artifact_ids, "quality": decision.quality.value})
         }
         provisional_run = ProcessingRunRecord(
-            stable_derivation_id("processing_run", {"provisional_package": work_id}),
-            work_id,
+            stable_derivation_id("processing_run", {"provisional_package": work_version_id}),
+            work_version_id,
             ProcessingStage.PUBLICATION,
             ProcessingRunState.ACTIVE,
             None,
@@ -191,35 +201,35 @@ class PackagePublisher:
             None,
         )
         provisional_package = DocumentPackageVersion.create(
-            document_id=work_id, package_version=1, published_at=provisional_run.started_at,
+            document_id=work_version_id, package_version=1, published_at=provisional_run.started_at,
             quality=decision.quality, limitations=decision.limitations,
-            identifiers=self.sources.list_identifiers(work_id), source_provenance=provenance, files=files,
+            identifiers=self.sources.list_identifiers(work_version_id), source_provenance=provenance, files=files,
             normalized_content=normalized.content, evidence=normalized.evidence, light_structure=light,
             artifacts=artifact_contracts, lineage=tuple(nonpublication_lineage + [_lineage(provisional_run, output_artifact_ids=())]),
         )
         material_hash = canonical_sha256(_material(provisional_package))
-        latest = self.versions.latest(work_id)
+        latest = self.versions.latest(work_version_id)
         if latest is not None:
             existing = self.load_verified(latest)
             if canonical_sha256(_material(existing)) == material_hash:
                 return PackagePublicationResult(existing, latest, False)
         version = 1 if latest is None else latest.version + 1
         publication_run = self.runs.claim_or_resume(
-            work_id, "publication", "sciretriever.package_publisher", PUBLISHER_VERSION,
+            work_version_id, "publication", "sciretriever.package_publisher", PUBLISHER_VERSION,
             {"material_sha256": material_hash, "version": version}, input_artifact_ids=artifact_ids,
         )
         package = DocumentPackageVersion.create(
-            document_id=work_id, package_version=version, published_at=publication_run.started_at,
+            document_id=work_version_id, package_version=version, published_at=publication_run.started_at,
             quality=decision.quality, limitations=decision.limitations,
-            identifiers=self.sources.list_identifiers(work_id), source_provenance=provenance, files=files,
+            identifiers=self.sources.list_identifiers(work_version_id), source_provenance=provenance, files=files,
             normalized_content=normalized.content, evidence=normalized.evidence, light_structure=light,
             artifacts=artifact_contracts, lineage=tuple(nonpublication_lineage + [_lineage(publication_run, output_artifact_ids=())]),
         )
         package = DocumentPackageVersion.from_json(package.to_json())
-        package_id = stable_derivation_id("package_version", {"work_id": work_id, "version": version, "sha256": package.package_sha256})
+        package_id = stable_derivation_id("package_version", {"work_id": work_version_id, "version": version, "sha256": package.package_sha256})
         publication = self.derived_store.publish_bytes("document_package", package_id, package.to_json().encode("utf-8"))
         record = self.versions.register_published(
-            work_id, publication_run.id, version, package.schema_version, package.quality,
+            work_version_id, publication_run.id, version, package.schema_version, package.quality,
             publication.storage_path, package.package_sha256, package.published_at,
         )
         return PackagePublicationResult(package, record, True)

@@ -23,10 +23,8 @@ from sciretriever.catalog import (
     AssetRepository,
     IdentityResolver,
     JobRepository,
-    ReadOnlyCatalogView,
-    apply_migrations,
-    create_catalog_engine,
-    open_read_only_catalog_engine,
+    ReadOnlyCatalogView, initialize_catalog, create_catalog_engine,
+open_read_only_catalog_engine,
 )
 from sciretriever.core.contracts import SearchSpec
 from sciretriever.core.enums import AssetRole, PackageQuality
@@ -95,7 +93,7 @@ class OfflinePackageAcceptanceTests(TestCase):
             storage_root.mkdir()
             catalog = create_catalog_engine(base / "catalog.sqlite")
             self.addCleanup(catalog.dispose)
-            apply_migrations(catalog)
+            initialize_catalog(catalog)
 
             read_only_engine = open_read_only_catalog_engine(base / "catalog.sqlite")
             try:
@@ -116,7 +114,8 @@ class OfflinePackageAcceptanceTests(TestCase):
 
             assets = AssetRepository(catalog)
             jobs = JobRepository(catalog)
-            admission = AdmissionService(IdentityResolver(catalog), jobs, assets).admit(
+            identity = IdentityResolver(catalog)
+            admission = AdmissionService(identity, jobs, assets).admit(
                 entry.identifiers,
                 entry.metadata,
                 provider="multi-source",
@@ -148,8 +147,9 @@ class OfflinePackageAcceptanceTests(TestCase):
             self.assertEqual(acquisition.status, "succeeded")
 
             pipeline = PackagePipeline(catalog, raw_store, DerivedArtifactStore(storage_root))
-            first = pipeline.run(work_id=admission.work_id)
-            replay = pipeline.run(work_id=admission.work_id)
+            resolution = identity.create_or_reuse_work(entry.identifiers, entry.metadata)
+            first = pipeline.run(work_id=resolution.work.id)
+            replay = pipeline.run(work_id=resolution.work.id)
             self.assertTrue(first.created)
             self.assertFalse(replay.created)
             self.assertEqual(replay.package, first.package)
