@@ -5,8 +5,8 @@ from __future__ import annotations
 from sqlalchemy import insert, select
 
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.models import citations, identifiers, light_structures
-from sciretriever.catalog.records import CitationRecord, LightStructureRecord
+from sciretriever.catalog.models import identifiers, light_structures, version_references
+from sciretriever.catalog.records import LightStructureRecord, VersionReferenceRecord
 from sciretriever.catalog.repository import _required_text, canonical_json, catalog_operation
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.derivation import stable_derivation_id
@@ -26,14 +26,14 @@ class EnrichmentRepository:
 
     def register_result(
         self,
-        work_id: str,
+        work_version_id: str,
         normalized_artifact_id: str,
         kind: str,
         schema_version: str,
         input_sha256: str,
         content: object,
     ) -> LightStructureRecord:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
         normalized_artifact_id = validate_uuid(normalized_artifact_id, "normalized_artifact_id")
         kind = validate_token(kind, "kind")
         if kind not in {"summary", "tags"}:
@@ -41,7 +41,7 @@ class EnrichmentRepository:
         schema_version = _required_text(schema_version, "schema_version")
         input_sha256 = validate_sha256(input_sha256, "input_sha256")
         content_json = canonical_json(content)
-        key = {"work_id": work_id, "kind": kind, "schema_version": schema_version, "input_sha256": input_sha256}
+        key = {"work_version_id": work_version_id, "kind": kind, "schema_version": schema_version, "input_sha256": input_sha256}
         record_id = stable_derivation_id("light_structure_row", key)
         with catalog_operation("light structure registration"):
             with self._catalog.critical_transaction() as connection:
@@ -65,31 +65,33 @@ class CitationRepository:
 
     def register_identifier_links(
         self,
-        citing_work_id: str,
+        citing_work_version_id: str,
         source_artifact_id: str,
         identifier_values: tuple[Identifier, ...],
-    ) -> tuple[CitationRecord, ...]:
-        citing_work_id = validate_uuid(citing_work_id, "citing_work_id")
+    ) -> tuple[VersionReferenceRecord, ...]:
+        citing_work_version_id = validate_uuid(citing_work_version_id, "citing_work_version_id")
         source_artifact_id = validate_uuid(source_artifact_id, "source_artifact_id")
         normalized = tuple(sorted(set(Identifier(item.namespace, item.value) for item in identifier_values), key=lambda item: (item.namespace, item.value)))
         with catalog_operation("citation registration"):
             with self._catalog.critical_transaction() as connection:
                 result = []
-                for identifier in normalized:
+                for reference_order, identifier in enumerate(normalized):
                     matched = connection.execute(select(identifiers.c.work_id).where(identifiers.c.namespace == identifier.namespace, identifiers.c.value == identifier.value)).scalar_one_or_none()
-                    key = {"citing_work_id": citing_work_id, "source_artifact_id": source_artifact_id, "namespace": identifier.namespace, "value": identifier.value}
+                    key = {"citing_work_version_id": citing_work_version_id, "source_artifact_id": source_artifact_id, "namespace": identifier.namespace, "value": identifier.value}
                     record_id = stable_derivation_id("citation", key)
-                    row = connection.execute(select(citations).where(citations.c.id == record_id)).mappings().one_or_none()
+                    row = connection.execute(select(version_references).where(version_references.c.id == record_id)).mappings().one_or_none()
                     if row is None:
                         values = {
-                            "id": record_id, "citing_work_id": citing_work_id,
+                            "id": record_id, "citing_work_version_id": citing_work_version_id,
                             "cited_work_id": matched, "cited_namespace": identifier.namespace,
                             "cited_value": identifier.value, "source_artifact_id": source_artifact_id,
+                            "reference_order": reference_order,
+                            "raw_reference": f"{identifier.namespace}:{identifier.value}",
                             "locator_json": None, "created_at": utc_now_rfc3339(),
                         }
-                        connection.execute(insert(citations).values(**values))
+                        connection.execute(insert(version_references).values(**values))
                         row = values
-                    result.append(CitationRecord.from_row(row))
+                    result.append(VersionReferenceRecord(**{field: row[field] for field in VersionReferenceRecord.__dataclass_fields__}))
                 return tuple(result)
 
 
