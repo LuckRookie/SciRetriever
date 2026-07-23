@@ -14,7 +14,7 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.catalog import IdentityResolver, apply_migrations, create_catalog_engine
+from sciretriever.catalog import IdentityResolver, initialize_catalog, create_catalog_engine
 from sciretriever.core.enums import PackageQuality
 from sciretriever.packaging import PackagePipeline
 from sciretriever.storage import DerivedArtifactStore, RawAssetStore
@@ -31,8 +31,10 @@ class PackagePublicationTests(TestCase):
         self.derived = DerivedArtifactStore(self.root)
         self.catalog = create_catalog_engine(base / "catalog.sqlite")
         self.addCleanup(self.catalog.dispose)
-        apply_migrations(self.catalog)
-        self.work_id = IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1/published"}).work.id
+        initialize_catalog(self.catalog)
+        resolution = IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1/published"})
+        self.work_id = resolution.work.id
+        self.work_version_id = resolution.work_version.id
         payload = b"<article><title>Title</title><p>Full text</p><ref>doi:10.1/published</ref></article>"
         staged = self.raw.stage(BytesIO(payload), intent_id=str(uuid4()))
         publication = self.raw.publish(staged)
@@ -40,7 +42,7 @@ class PackagePublicationTests(TestCase):
         raw_id = str(uuid4())
         with self.catalog.transaction() as connection:
             connection.exec_driver_sql("INSERT INTO raw_assets (id, sha256, storage_path, media_type, format, byte_size, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?)", (raw_id, publication.sha256, publication.storage_path, "application/xml", "xml", publication.byte_size, "{}"))
-            connection.exec_driver_sql("INSERT INTO work_assets (work_id, raw_asset_id, asset_role) VALUES (?, ?, ?)", (self.work_id, raw_id, "xml"))
+            connection.exec_driver_sql("INSERT INTO work_version_assets (work_version_id, raw_asset_id, asset_role) VALUES (?, ?, ?)", (self.work_version_id, raw_id, "xml"))
         self.pipeline = PackagePipeline(self.catalog, self.raw, self.derived)
 
     def test_xml_only_publication_and_exact_replay(self) -> None:

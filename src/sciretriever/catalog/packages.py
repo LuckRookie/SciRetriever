@@ -5,8 +5,8 @@ from __future__ import annotations
 from sqlalchemy import case, insert, select, update
 
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.models import asset_intents, identifiers, package_versions, processing_runs, raw_assets, work_assets, works
-from sciretriever.catalog.records import AssetIntentRecord, PackageVersionRecord, RawAssetRecord, WorkAssetRecord
+from sciretriever.catalog.models import asset_intents, package_versions, processing_runs, raw_assets, work_version_assets, work_version_identifiers, works
+from sciretriever.catalog.records import AssetIntentRecord, PackageVersionRecord, RawAssetRecord, WorkVersionAssetRecord
 from sciretriever.catalog.repository import _append_event, _required_text, catalog_operation
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.derivation import stable_derivation_id
@@ -23,59 +23,73 @@ class PackageSourceRepository:
             raise TypeError("catalog must be a CatalogEngine")
         self._catalog = catalog
 
-    def resolve_work(self, *, work_id: str | None = None, raw_asset_id: str | None = None) -> str:
+    def resolve_work(
+        self,
+        *,
+        work_id: str | None = None,
+        raw_asset_id: str | None = None,
+        work_version_id: str | None = None,
+    ) -> str:
         if (work_id is None) == (raw_asset_id is None):
             raise ValueError("provide exactly one of work_id or raw_asset_id")
         if work_id is not None:
+            if work_version_id is not None:
+                raise ValueError("work_version_id only disambiguates raw_asset_id")
             work_id = validate_uuid(work_id, "work_id")
             with self._catalog.connect() as connection:
-                found = connection.execute(select(works.c.id).where(works.c.id == work_id)).scalar_one_or_none()
+                found = connection.execute(select(works.c.preferred_work_version_id).where(works.c.id == work_id)).scalar_one_or_none()
             if found is None:
-                raise CatalogError(f"work does not exist: {work_id}")
-            return work_id
+                raise CatalogError(f"work does not exist or has no preferred version: {work_id}")
+            return found
         if raw_asset_id is None:
             raise ValueError("raw_asset_id is required")
         raw_asset_id = validate_uuid(raw_asset_id, "raw_asset_id")
+        if work_version_id is not None:
+            work_version_id = validate_uuid(work_version_id, "work_version_id")
         with self._catalog.connect() as connection:
-            rows = connection.execute(select(work_assets.c.work_id).where(work_assets.c.raw_asset_id == raw_asset_id).order_by(work_assets.c.work_id)).scalars().all()
+            rows = connection.execute(select(work_version_assets.c.work_version_id).where(work_version_assets.c.raw_asset_id == raw_asset_id).order_by(work_version_assets.c.work_version_id)).scalars().all()
         unique = tuple(dict.fromkeys(rows))
+        if work_version_id is not None:
+            if work_version_id not in unique:
+                raise CatalogError("raw asset is not linked to the selected WorkVersion")
+            return work_version_id
         if len(unique) != 1:
-            raise CatalogError("raw asset must belong to exactly one work")
+            raise CatalogError("shared raw asset requires work_version_id")
         return unique[0]
 
-    def list_files(self, work_id: str) -> tuple[tuple[WorkAssetRecord, RawAssetRecord], ...]:
-        work_id = validate_uuid(work_id, "work_id")
+    def list_files(self, work_version_id: str) -> tuple[tuple[WorkVersionAssetRecord, RawAssetRecord], ...]:
+        work_version_id = validate_uuid(work_version_id, "work_id")
         with self._catalog.connect() as connection:
             rows = connection.execute(
-                select(work_assets, raw_assets).join(raw_assets, raw_assets.c.id == work_assets.c.raw_asset_id).where(work_assets.c.work_id == work_id).order_by(work_assets.c.asset_role, raw_assets.c.sha256)
+                select(work_version_assets, raw_assets).join(raw_assets, raw_assets.c.id == work_version_assets.c.raw_asset_id).where(work_version_assets.c.work_version_id == work_version_id).order_by(work_version_assets.c.asset_role, raw_assets.c.sha256)
             ).mappings().all()
         return tuple(
-            (WorkAssetRecord.from_row(dict(row)), RawAssetRecord.from_row(dict(row)))
+            (WorkVersionAssetRecord.from_row(dict(row)), RawAssetRecord.from_row(dict(row)))
             for row in rows
         )
 
     def list_files_with_intent(
         self,
-        work_id: str,
-    ) -> tuple[tuple[WorkAssetRecord, RawAssetRecord, AssetIntentRecord | None], ...]:
+        work_version_id: str,
+    ) -> tuple[tuple[WorkVersionAssetRecord, RawAssetRecord, AssetIntentRecord | None], ...]:
         """Return package sources with their work-specific immutable provenance."""
 
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         resolved = []
         with self._catalog.connect() as connection:
             rows = connection.execute(
-                select(work_assets, raw_assets)
-                .join(raw_assets, raw_assets.c.id == work_assets.c.raw_asset_id)
-                .where(work_assets.c.work_id == work_id)
-                .order_by(work_assets.c.asset_role, raw_assets.c.sha256)
+                select(work_version_assets, raw_assets)
+                .join(raw_assets, raw_assets.c.id == work_version_assets.c.raw_asset_id)
+                .where(work_version_assets.c.work_version_id == work_version_id)
+                .order_by(work_version_assets.c.asset_role, raw_assets.c.sha256)
             ).mappings().all()
             for row in rows:
-                link = WorkAssetRecord.from_row(dict(row))
+                link = WorkVersionAssetRecord.from_row(dict(row))
                 raw = RawAssetRecord.from_row(dict(row))
                 intent_row = connection.execute(
                     select(asset_intents)
                     .where(
-                        asset_intents.c.work_id == link.work_id,
+                        asset_intents.c.work_version_id == link.work_version_id,
                         asset_intents.c.raw_asset_id == link.raw_asset_id,
                         asset_intents.c.asset_role == link.asset_role.value,
                         asset_intents.c.state.in_(
@@ -99,13 +113,21 @@ class PackageSourceRepository:
                 resolved.append((link, raw, intent))
         return tuple(resolved)
 
-    def list_identifiers(self, work_id: str) -> tuple[Identifier, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+    def list_identifiers(self, work_version_id: str) -> tuple[Identifier, ...]:
+        work_version_id = validate_uuid(work_version_id, "work_id")
         with self._catalog.connect() as connection:
             rows = connection.execute(
-                select(identifiers.c.namespace, identifiers.c.value)
-                .where(identifiers.c.work_id == work_id)
-                .order_by(identifiers.c.namespace, identifiers.c.value)
+                select(
+                    work_version_identifiers.c.namespace,
+                    work_version_identifiers.c.value,
+                )
+                .where(
+                    work_version_identifiers.c.work_version_id == work_version_id
+                )
+                .order_by(
+                    work_version_identifiers.c.namespace,
+                    work_version_identifiers.c.value,
+                )
             ).all()
         return tuple(Identifier(namespace, value) for namespace, value in rows)
 
@@ -124,10 +146,10 @@ class PackageVersionRepository:
             row = connection.execute(select(package_versions).where(package_versions.c.id == package_id)).mappings().one_or_none()
         return None if row is None else PackageVersionRecord.from_row(row)
 
-    def latest(self, work_id: str) -> PackageVersionRecord | None:
-        work_id = validate_uuid(work_id, "work_id")
+    def latest(self, work_version_id: str) -> PackageVersionRecord | None:
+        work_version_id = validate_uuid(work_version_id, "work_id")
         with self._catalog.connect() as connection:
-            row = connection.execute(select(package_versions).where(package_versions.c.work_id == work_id).order_by(package_versions.c.version.desc()).limit(1)).mappings().one_or_none()
+            row = connection.execute(select(package_versions).where(package_versions.c.work_version_id == work_version_id).order_by(package_versions.c.version.desc()).limit(1)).mappings().one_or_none()
         return None if row is None else PackageVersionRecord.from_row(row)
 
     def get_by_document_hash(
@@ -141,7 +163,7 @@ class PackageVersionRepository:
             row = connection.execute(
                 select(package_versions)
                 .where(
-                    package_versions.c.work_id == document_id,
+                    package_versions.c.work_version_id == document_id,
                     package_versions.c.sha256 == package_sha256,
                 )
                 .order_by(package_versions.c.version.desc())
@@ -151,7 +173,7 @@ class PackageVersionRepository:
 
     def register_published(
         self,
-        work_id: str,
+        work_version_id: str,
         processing_run_id: str,
         version: int,
         schema_version: str,
@@ -160,7 +182,7 @@ class PackageVersionRepository:
         sha256: str,
         published_at: str,
     ) -> PackageVersionRecord:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         processing_run_id = validate_uuid(processing_run_id, "processing_run_id")
         if not isinstance(version, int) or isinstance(version, bool) or version <= 0:
             raise ValueError("version must be a positive integer")
@@ -169,12 +191,12 @@ class PackageVersionRepository:
         storage_path = validate_storage_path(storage_path)
         sha256 = validate_sha256(sha256)
         parse_rfc3339(published_at)
-        package_id = stable_derivation_id("package_version", {"work_id": work_id, "version": version, "sha256": sha256})
+        package_id = stable_derivation_id("package_version", {"work_version_id": work_version_id, "version": version, "sha256": sha256})
         with catalog_operation("package registration"):
             with self._catalog.critical_transaction() as connection:
-                existing = connection.execute(select(package_versions).where((package_versions.c.id == package_id) | ((package_versions.c.work_id == work_id) & (package_versions.c.version == version)))).mappings().one_or_none()
+                existing = connection.execute(select(package_versions).where((package_versions.c.id == package_id) | ((package_versions.c.work_version_id == work_version_id) & (package_versions.c.version == version)))).mappings().one_or_none()
                 values = {
-                    "id": package_id, "work_id": work_id, "processing_run_id": processing_run_id,
+                    "id": package_id, "work_version_id": work_version_id, "processing_run_id": processing_run_id,
                     "version": version, "schema_version": schema_version, "quality": quality.value,
                     "storage_path": storage_path, "sha256": sha256, "published_at": published_at,
                 }
@@ -183,7 +205,7 @@ class PackageVersionRepository:
                         raise CatalogError("package version replay metadata conflicts")
                     return PackageVersionRecord.from_row(existing)
                 run = connection.execute(select(processing_runs).where(processing_runs.c.id == processing_run_id)).mappings().one_or_none()
-                if run is None or run["work_id"] != work_id or run["stage"] != "publication":
+                if run is None or run["work_version_id"] != work_version_id or run["stage"] != "publication":
                     raise CatalogError("package publication run is missing or incompatible")
                 if ProcessingRunState(run["state"]) is not ProcessingRunState.ACTIVE:
                     raise CatalogError("package publication run must be active")
