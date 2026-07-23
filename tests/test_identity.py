@@ -26,7 +26,7 @@ class IdentityTests(TestCase):
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         self.catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(self.catalog.dispose)
-        catalog_api.apply_migrations(self.catalog)
+        catalog_api.initialize_catalog(self.catalog)
         self.repository = catalog_api.CatalogRepository(self.catalog)
         self.resolver = catalog_api.IdentityResolver(self.repository)
 
@@ -52,25 +52,40 @@ class IdentityTests(TestCase):
         self.assertEqual(created.identifiers[0].value, "10.1000/example")
         self.assertIsNotNone(created.work)
         with self.assertRaises(FrozenInstanceError):
-            created.work.title = "changed"
+            created.work_version.title = "changed"
 
         reused = self.resolver.create_or_reuse_work(
             (
                 contracts.Identifier("doi", "10.1000/example"),
                 contracts.Identifier("pmid", "123"),
             ),
-            {"title": "Replacement title", "abstract": "New abstract", "year": 2026},
+            {
+                "title": "Replacement title",
+                "abstract": "New abstract",
+                "authors": ("Alex Kim", "Sam Lee"),
+                "year": 2026,
+                "venue": "Journal of Identity",
+                "keywords": ("catalog", "identity"),
+            },
         )
         self.assertEqual(reused.decision, "reused")
-        self.assertEqual(reused.work.id, created.work.id)
-        self.assertEqual(reused.work.title, "Original title")
-        self.assertEqual(reused.work.abstract, "New abstract")
-        self.assertEqual(reused.work.publication_year, 2026)
+        self.assertEqual(reused.work_version.id, created.work_version.id)
+        self.assertEqual(reused.work_version.title, "Original title")
+        self.assertEqual(reused.work_version.abstract, "New abstract")
+        self.assertEqual(reused.work_version.publication_year, 2026)
+        self.assertIsNotNone(reused.work_version.venue_id)
         self.assertEqual(self.repository.lookup_work(contracts.Identifier("pmid", "123")).id, created.work.id)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM identifiers").scalar_one(), 2)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM authorships").scalar_one(), 2)
+            observed_fields = set(
+                connection.exec_driver_sql(
+                    "SELECT field_name FROM metadata_observations"
+                ).scalars()
+            )
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM events").scalar_one(), 2)
+        self.assertTrue({"authors", "keywords", "venue"}.issubset(observed_fields))
 
     def test_ambiguity_creates_review_without_merge_alias_or_new_work(self) -> None:
         first = self.resolver.create_or_reuse_work({"doi": "10.1000/one"})
@@ -126,9 +141,49 @@ class IdentityTests(TestCase):
             results = tuple(executor.map(resolve, range(16)))
         self.assertEqual(len({result.work.id for result in results}), 1)
         self.assertEqual(sum(result.decision == "created" for result in results), 1)
+        self.assertEqual(sum(result.decision == "reused" for result in results), 15)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM identifiers").scalar_one(), 1)
+
+    def test_threaded_shared_alias_is_atomic_and_version_identifiers_stay_scoped(self) -> None:
+        identifier_sets = (
+            {"doi": "10.1000/version-a", "pmid": "shared-100"},
+            {"doi": "10.1000/version-b", "pmid": "shared-100"},
+        )
+
+        def resolve(index: int):
+            return catalog_api.IdentityResolver(self.catalog).create_or_reuse_work(
+                identifier_sets[index % len(identifier_sets)]
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = tuple(executor.map(resolve, range(16)))
+        self.assertEqual(len({result.work.id for result in results}), 1)
+        self.assertEqual(len({result.work_version.id for result in results}), 2)
+        self.assertEqual(sum(result.decision == "created" for result in results), 1)
+        with self.catalog.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM work_versions").scalar_one(), 2)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM identifiers").scalar_one(), 3)
+            self.assertEqual(
+                connection.exec_driver_sql(
+                    "SELECT count(*) FROM work_version_identifiers"
+                ).scalar_one(),
+                3,
+            )
+        sources = catalog_api.PackageSourceRepository(self.catalog)
+        identifiers_by_version = {
+            result.work_version.id: sources.list_identifiers(result.work_version.id)
+            for result in results
+        }
+        for version_identifiers in identifiers_by_version.values():
+            doi_values = {
+                identifier.value
+                for identifier in version_identifiers
+                if identifier.namespace == "doi"
+            }
+            self.assertEqual(len(doi_values), 1)
 
     def test_threaded_arxiv_url_and_prefix_forms_converge_to_one_work(self) -> None:
         forms = (
@@ -147,6 +202,7 @@ class IdentityTests(TestCase):
             results = tuple(executor.map(resolve, range(16)))
         self.assertEqual(len({result.work.id for result in results}), 1)
         self.assertEqual(sum(result.decision == "created" for result in results), 1)
+        self.assertEqual(sum(result.decision == "reused" for result in results), 15)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM identifiers").scalar_one(), 1)
@@ -156,7 +212,7 @@ class IdentityTests(TestCase):
     def test_read_only_view_lookup_labels_and_row_counts_are_unchanged(self) -> None:
         resolution = self.resolver.create_or_reuse_work({"doi": "10.1000/read-only"})
         label = self.repository.add_metadata_label(
-            resolution.work.id,
+            resolution.work_version.id,
             "topic",
             "v1",
             "a" * 64,
@@ -168,7 +224,7 @@ class IdentityTests(TestCase):
         view = catalog_api.ReadOnlyCatalogView(read_only_engine)
         self.assertEqual(view.lookup_work(contracts.Identifier("doi", "10.1000/read-only")), resolution.work)
         self.assertEqual(
-            view.get_reusable_metadata_labels(resolution.work.id, "topic", "v1", "a" * 64),
+            view.get_reusable_metadata_labels(resolution.work_version.id, "topic", "v1", "a" * 64),
             (label,),
         )
         for method in ("add_metadata_label", "append_event", "append_failure", "create_or_reuse_work"):

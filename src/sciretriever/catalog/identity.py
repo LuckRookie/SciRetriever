@@ -5,15 +5,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from sqlalchemy import Connection, insert, or_, select, update
+from sqlalchemy import Connection, insert, or_, select
 
 from sciretriever.catalog.engine import CatalogEngine
+from sciretriever.catalog.library import RegistryRepository, WorkRepository
 from sciretriever.catalog.models import identifiers as identifier_table
-from sciretriever.catalog.models import identity_reviews, works
+from sciretriever.catalog.models import authors, authorships, identity_reviews, work_version_identifiers, work_versions, works
 from sciretriever.catalog.records import (
     IdentityResolution,
     IdentityReviewRecord,
-    WorkRecord,
 )
 from sciretriever.catalog.repository import (
     CatalogRepository,
@@ -104,6 +104,8 @@ def _metadata_values(
         "abstract": candidate.abstract,
         "publication_year": candidate.year,
         "venue": candidate.venue,
+        "authors": candidate.authors or None,
+        "keywords": candidate.keywords or None,
     }
 
 
@@ -180,14 +182,72 @@ class IdentityResolver:
                 matches = _matching_work_ids(connection, normalized)
                 if len(matches) > 1:
                     return self._create_review(connection, normalized, matches)
-                if not matches:
-                    return self._create_work(connection, normalized, metadata_values)
-                return self._reuse_work(
-                    connection,
-                    normalized,
-                    metadata_values,
-                    next(iter(matches)),
+                matched_work_id = next(iter(matches)) if matches else None
+                title_value = metadata_values.get("title")
+                title = title_value if isinstance(title_value, str) else normalized[0].value
+                doi = next(
+                    (item.value for item in normalized if item.namespace == "doi"),
+                    None,
                 )
+                venue_value = metadata_values.get("venue")
+                venue_id = (
+                    RegistryRepository(self.__catalog)
+                    .add("venue", venue_value, _connection=connection)
+                    .id
+                    if isinstance(venue_value, str)
+                    else None
+                )
+                version, work_created = WorkRepository(
+                    self.__catalog
+                ).ingest_version_with_disposition(
+                    provider="acquisition",
+                    provider_record_id="|".join(
+                        f"{item.namespace}:{item.value}" for item in normalized
+                    ),
+                    title=title,
+                    doi=doi,
+                    venue_id=venue_id,
+                    metadata={
+                        key: value
+                        for key, value in metadata_values.items()
+                        if value is not None
+                    },
+                    _connection=connection,
+                    _work_id=matched_work_id,
+                )
+                existing_aliases = set(
+                    connection.execute(
+                        select(
+                            identifier_table.c.namespace,
+                            identifier_table.c.value,
+                        ).where(identifier_table.c.work_id == version.work_id)
+                    ).tuples()
+                )
+                _insert_aliases(
+                    connection,
+                    version.work_id,
+                    normalized,
+                    existing_aliases,
+                )
+                self._attach_version_identifiers(connection, version.id, normalized)
+                author_values = metadata_values.get("authors")
+                if isinstance(author_values, tuple):
+                    self._attach_authors(connection, version.id, author_values)
+                work = _work_record(
+                    connection.execute(
+                        select(works).where(works.c.id == version.work_id)
+                    ).mappings().one()
+                )
+                return IdentityResolution(
+                    decision="created" if work_created else "reused",
+                    identifiers=normalized,
+                    work=work,
+                    work_version=version,
+                )
+
+    def lookup_existing(self, normalized: tuple[Identifier, ...]) -> bool:
+        with self.__catalog.connect() as connection:
+            return bool(_matching_work_ids(connection, normalized))
 
     def list_identifiers(self, work_id: str) -> tuple[Identifier, ...]:
         work_id = validate_uuid(work_id, "work_id")
@@ -199,6 +259,82 @@ class IdentityResolver:
                     .order_by(identifier_table.c.namespace, identifier_table.c.value)
                 ).tuples().all()
         return tuple(Identifier(namespace, value) for namespace, value in rows)
+
+    @staticmethod
+    def _attach_version_identifiers(
+        connection: Connection,
+        work_version_id: str,
+        normalized: tuple[Identifier, ...],
+    ) -> None:
+        work_id = connection.execute(
+            select(work_versions.c.work_id).where(work_versions.c.id == work_version_id)
+        ).scalar_one()
+        created_at = utc_now_rfc3339()
+        for item in normalized:
+            owner_version_id = connection.execute(
+                select(work_version_identifiers.c.work_version_id).where(
+                    work_version_identifiers.c.namespace == item.namespace,
+                    work_version_identifiers.c.value == item.value,
+                )
+            ).scalar_one_or_none()
+            if owner_version_id is not None:
+                owner_work_id = connection.execute(
+                    select(work_versions.c.work_id).where(
+                        work_versions.c.id == owner_version_id
+                    )
+                ).scalar_one()
+                if owner_work_id != work_id:
+                    raise RuntimeError("identifier owner changed during identity resolution")
+                continue
+            connection.execute(
+                insert(work_version_identifiers).values(
+                    id=new_uuid4(),
+                    work_version_id=work_version_id,
+                    namespace=item.namespace,
+                    value=item.value,
+                    created_at=created_at,
+                )
+            )
+
+    @staticmethod
+    def _attach_authors(
+        connection: Connection,
+        work_version_id: str,
+        author_names: tuple[str, ...],
+    ) -> None:
+        existing_positions = set(
+            connection.execute(
+                select(authorships.c.position).where(
+                    authorships.c.work_version_id == work_version_id
+                )
+            ).scalars()
+        )
+        created_at = utc_now_rfc3339()
+        for position, display_name in enumerate(author_names):
+            if position in existing_positions:
+                continue
+            author_id = new_uuid4()
+            connection.execute(
+                insert(authors).values(
+                    id=author_id,
+                    display_name=display_name,
+                    normalized_name=display_name.casefold(),
+                    orcid=None,
+                    created_at=created_at,
+                )
+            )
+            connection.execute(
+                insert(authorships).values(
+                    id=new_uuid4(),
+                    work_version_id=work_version_id,
+                    author_id=author_id,
+                    position=position,
+                    role=None,
+                    is_corresponding=0,
+                    affiliation=None,
+                    created_at=created_at,
+                )
+            )
 
     @staticmethod
     def _create_review(
@@ -256,86 +392,5 @@ class IdentityResolver:
             identifiers=normalized,
             review=_review_record(values),
         )
-
-    @staticmethod
-    def _create_work(
-        connection: Connection,
-        normalized: tuple[Identifier, ...],
-        metadata_values: Mapping[str, object],
-    ) -> IdentityResolution:
-        now = utc_now_rfc3339()
-        values = {
-            "id": new_uuid4(),
-            "status": "active",
-            "title": metadata_values.get("title"),
-            "abstract": metadata_values.get("abstract"),
-            "publication_year": metadata_values.get("publication_year"),
-            "venue": metadata_values.get("venue"),
-            "needs_review": 0,
-            "review_reason": None,
-            "merged_into_work_id": None,
-            "created_at": now,
-            "updated_at": now,
-        }
-        connection.execute(insert(works).values(**values))
-        _insert_aliases(connection, values["id"], normalized, set())
-        _append_event(
-            connection,
-            subject_type="work",
-            subject_id=values["id"],
-            event_type="identity.work_created",
-            details={"identifiers": [item.to_dict() for item in normalized]},
-        )
-        return IdentityResolution(
-            decision="created",
-            identifiers=normalized,
-            work=_work_record(values),
-        )
-
-    @staticmethod
-    def _reuse_work(
-        connection: Connection,
-        normalized: tuple[Identifier, ...],
-        metadata_values: Mapping[str, object],
-        work_id: str,
-    ) -> IdentityResolution:
-        work_row = connection.execute(select(works).where(works.c.id == work_id)).mappings().one()
-        existing_aliases = set(
-            connection.execute(
-                select(identifier_table.c.namespace, identifier_table.c.value).where(
-                    identifier_table.c.work_id == work_id
-                )
-            ).tuples()
-        )
-        _insert_aliases(connection, work_id, normalized, existing_aliases)
-        updates = {
-            name: value
-            for name, value in metadata_values.items()
-            if work_row[name] is None and value is not None
-        }
-        if updates:
-            updates["updated_at"] = utc_now_rfc3339()
-            connection.execute(update(works).where(works.c.id == work_id).values(**updates))
-            work_row = {**dict(work_row), **updates}
-        _append_event(
-            connection,
-            subject_type="work",
-            subject_id=work_id,
-            event_type="identity.work_reused",
-            details={
-                "attached_identifiers": [
-                    item.to_dict()
-                    for item in normalized
-                    if (item.namespace, item.value) not in existing_aliases
-                ],
-                "filled_metadata": sorted(updates.keys() - {"updated_at"}),
-            },
-        )
-        return IdentityResolution(
-            decision="reused",
-            identifiers=normalized,
-            work=_work_record(work_row),
-        )
-
 
 __all__ = ("IdentityResolver",)
