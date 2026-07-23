@@ -18,6 +18,10 @@ class ProviderRecord:
     year: int | None = None
     venue: str | None = None
     keywords: tuple[str, ...] = ()
+    publisher: str | None = None
+    publication_date: str | None = None
+    open_access_status: str | None = None
+    provider_record_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.provider, str) or not self.provider.strip():
@@ -47,6 +51,20 @@ class ProviderRecord:
             not isinstance(self.year, int) or isinstance(self.year, bool)
         ):
             raise TypeError("year must be an integer or None")
+        if self.publisher is not None and not isinstance(self.publisher, str):
+            raise TypeError("publisher must be a string or None")
+        if self.publication_date is not None and not isinstance(
+            self.publication_date, str
+        ):
+            raise TypeError("publication_date must be a string or None")
+        if self.open_access_status is not None and not isinstance(
+            self.open_access_status, str
+        ):
+            raise TypeError("open_access_status must be a string or None")
+        if self.provider_record_id is not None and not isinstance(
+            self.provider_record_id, str
+        ):
+            raise TypeError("provider_record_id must be a string or None")
 
 
 @dataclass(frozen=True, slots=True)
