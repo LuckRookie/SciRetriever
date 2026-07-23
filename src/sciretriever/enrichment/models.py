@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sciretriever.catalog.records import CitationRecord, NormalizedArtifactRecord, ProcessingRunRecord
+from sciretriever.catalog.records import NormalizedArtifactRecord, ProcessingRunRecord, VersionReferenceRecord
 from sciretriever.core.package import LightStructure
 
 
@@ -22,7 +22,7 @@ class EnrichmentResult:
     run: ProcessingRunRecord
     light_structure: LightStructure
     artifact: NormalizedArtifactRecord | None
-    citations: tuple[CitationRecord, ...]
+    citations: tuple[VersionReferenceRecord, ...]
 
 
 __all__ = ("EnrichmentResult", "Summarizer")

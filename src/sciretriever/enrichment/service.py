@@ -116,7 +116,7 @@ class GenericEnricher:
 
     def enrich(
         self,
-        work_id: str,
+        work_version_id: str,
         normalized_result: NormalizationResultLike,
         summarizer: Summarizer | None = None,
     ) -> EnrichmentResult:
@@ -129,7 +129,7 @@ class GenericEnricher:
             "summarizer_version": summarizer_version,
         }
         run = self.runs.claim_or_resume(
-            work_id, "enrichment", "sciretriever.generic_enricher", ENRICHER_VERSION,
+            work_version_id, "enrichment", "sciretriever.generic_enricher", ENRICHER_VERSION,
             parameters, input_artifact_ids=(normalized_result.content_artifact.id,),
         )
         with self.derived_store.run_lock(run.id):
@@ -140,7 +140,7 @@ class GenericEnricher:
                 return self._load(current)
             if current.state.value == "failed":
                 current = self.runs.claim_or_resume(
-                    work_id, "enrichment", "sciretriever.generic_enricher", ENRICHER_VERSION,
+                    work_version_id, "enrichment", "sciretriever.generic_enricher", ENRICHER_VERSION,
                     parameters, input_artifact_ids=(normalized_result.content_artifact.id,),
                 )
             summary_input = build_summary_input(normalized_result.content)[: self.summary_input_max_characters]
@@ -157,7 +157,7 @@ class GenericEnricher:
                 summary = deterministic_summary(normalized_result.content, self.summary_max_characters)
             tags = normalize_tags(tuple(section.title for section in normalized_result.content.sections if section.title))
             identifiers = tuple(identifier for reference in normalized_result.content.references for identifier in reference.identifiers)
-            citations = self.citation_repository.register_identifier_links(work_id, normalized_result.content_artifact.id, identifiers)
+            citations = self.citation_repository.register_identifier_links(work_version_id, normalized_result.content_artifact.id, identifiers)
             cited_ids = tuple(sorted({item.cited_work_id for item in citations if item.cited_work_id is not None}))
             if summary is None and not tags and not cited_ids:
                 succeeded = self.runs.succeed(current.id)
@@ -167,14 +167,14 @@ class GenericEnricher:
             payload = canonical_json_bytes(light.to_dict())
             publication = self.derived_store.publish_bytes("light_structure", artifact_id, payload)
             record = self.artifacts.register_pair_after_publication(
-                work_id, normalized_result.content_artifact.raw_asset_id,
+                work_version_id, normalized_result.content_artifact.raw_asset_id,
                 (ArtifactRegistration(artifact_id, "light_structure", "1", publication.storage_path, publication.sha256, LIGHT_STRUCTURE_MEDIA_TYPE, publication.byte_size, {"processing_run_id": current.id, "input_artifact_id": normalized_result.content_artifact.id}),),
             )[0]
             input_sha = canonical_sha256(normalized_result.content.to_dict())
             if summary is not None:
-                self.enrichment.register_result(work_id, normalized_result.content_artifact.id, "summary", "1", input_sha, {"summary": summary})
+                self.enrichment.register_result(work_version_id, normalized_result.content_artifact.id, "summary", "1", input_sha, {"summary": summary})
             if tags:
-                self.enrichment.register_result(work_id, normalized_result.content_artifact.id, "tags", "1", input_sha, {"tags": list(tags)})
+                self.enrichment.register_result(work_version_id, normalized_result.content_artifact.id, "tags", "1", input_sha, {"tags": list(tags)})
             succeeded = self.runs.succeed(current.id, output_artifact_ids=(record.id,))
             return EnrichmentResult(succeeded, light, record, citations)
 
