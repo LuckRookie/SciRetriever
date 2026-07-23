@@ -21,26 +21,26 @@ requirements = ["../specs/requirements.md", "../specs/system-design.md"]
 
 ## 工作包
 
-工作包必须按顺序进入。每个包完成责任 spec、实现、迁移或删除说明、直接测试和适用门禁后，下一包才能开始。
+工作包必须按顺序进入。每个包完成责任 spec、实现、替换或删除说明、直接测试和适用门禁后，下一包才能开始。
 
 ### WP0：删除或解耦旧任务中心架构
 
 - 盘点 `download` 自动任务入口、durable pause/resume/safe-stop control state、retry child、candidate checkpoint、candidate codec 和 task-centered report 对新产品是否有必要。invocation-local Ctrl+C/cooperative stop 不是删除对象。
 - 删除无必要的产品入口和状态语义，或把仍有诊断价值的 attempt/failure/event 降为内部支持记录。
 - 保留 secure transport、有限 timeout、进程内 serial/race、内容验证、不可变接收、hash 去重、redaction 和基本失败分类。
-- 明确现有 catalog 数据如何只读保留、迁移或废弃。无数据删除操作可在缺少单独批准时执行。
+- 当前项目处于 pre-v1 且没有受支持的旧 catalog；不符合目标框架的旧 catalog 代码可以直接删除，不建立兼容层。
 
 **验收门**：目标运行时不依赖 lease、fencing、daemon ownership、durable pause/resume/safe-stop control state、精确 candidate crash resume 或 retry-child 才能正确完成前台幂等重跑；Ctrl+C 停止领取新记录，安全排空或取消当前有限操作并保留已完成记录；重跑跳过已完成内容；被删除公开面已从 README、配置和测试移除；安全与不可变存储回归通过。
 
 ### WP1：文献库 schema 与身份
 
 - 新增独立的书目 `WorkVersion`、版本资产关系、`MetadataObservation`、`Author`、`Authorship`、独立扁平 `Publisher`/`Venue` registries 及 aliases、canonical tag/tag alias、manual/generated tag 来源和版本引用模型。
-- 为 processing/package snapshots 设计与书目版本不混淆的迁移命名和关系，不把它们直接升级为 `WorkVersion`。
+- 直接替换初始 catalog schema；删除或重构与目标模型冲突的 processing/package snapshot schema，不把它们重命名或升级为 `WorkVersion`。
 - 实现 DOI/稳定标识符优先、无稳定标识符时规范化标题的确定性去重，及保守作者合并。不同非空 DOI 不因标题相同合并；DOI 记录可与无 DOI、exact normalized-title 记录合并；不做 fuzzy/LLM 去重。
 - provider record 只作为 observation；实现稳定版本标识符优先、无标识符时按 title/version class/publication date/Venue 精确匹配的保守 `WorkVersion` 身份，证据不足时保留 provisional version。
 - 增加 preferred version 确定性总排序、显式用户覆盖和 unresolved raw reference 保存；同级 tie-break 不依赖 provider 返回或完成顺序。不同 DOI 的预印本/正式版只有在明确 provider/registry 版本关系或用户确认时归入同一 Work，不能只凭标题跨版本归组。
 
-**验收门**：schema、迁移、备份和回退经人工批准；多版本、provider observations 不按来源膨胀版本、版本 DOI 冲突、缺失版本证据形成 provisional version、preferred tie-break、Work DOI 补全、作者同名不误合并、Publisher/Venue alias、tag alias、引用反向派生和旧 catalog 迁移使用离线 fixture 验证；没有 LLM 参与身份判断。
+**验收门**：本次 pre-v1 schema 直接替换已获 owner 批准；多版本、provider observations 不按来源膨胀版本、版本 DOI 冲突、缺失版本证据形成 provisional version、preferred tie-break、Work DOI 补全、作者同名不误合并、Publisher/Venue alias、tag alias 和引用反向派生使用全新离线 catalog fixture 验证；旧 schema、legacy read path、迁移、备份、回退和兼容层均不属于验收范围；没有 LLM 参与身份判断。
 
 ### WP2：多来源 metadata 与本地库读取面
 
@@ -83,7 +83,7 @@ requirements = ["../specs/requirements.md", "../specs/system-design.md"]
 
 ## 验收与验证
 
-每个工作包至少运行受影响单元和集成测试、Pyright、documentation harness、architecture harness 和 full harness。schema、公开契约、网络安全、browser/session、不可变存储和数据迁移继续经过对应人工门禁。
+每个工作包至少运行受影响单元和集成测试、Pyright、documentation harness、architecture harness 和 full harness。公开契约、网络安全、browser/session、不可变存储和未来涉及受支持数据的迁移继续经过对应人工门禁；本次 pre-v1 WP1 schema 直接替换已获 owner 批准。
 
 产品级验收使用离线 provider、固定时钟、程序化最小全文和本地 catalog fixture，证明：
 
@@ -96,7 +96,7 @@ requirements = ["../specs/requirements.md", "../specs/system-design.md"]
 
 ## 发布与回退
 
-WP0 先缩小旧架构，再开始 additive schema 工作。后续每个工作包使用可验证的小步迁移，迁移前保留备份和只读检查；回退代码时不覆盖或删除已接受 RawAsset。旧下载任务行为没有兼容保证，但实际删除 catalog 数据、原始资产或用户配置仍需单独批准。
+WP0 先缩小旧架构，WP1 直接建立全新目标 schema。当前没有受支持旧 catalog，因此不做 additive migration、备份、回退、旧数据读取或兼容适配；不符合目标框架的旧 schema 和代码直接删除。运行时失败仍不得覆盖或删除已接受 RawAsset。未来存在真实受支持数据后，迁移与兼容要求由 owner 另行明确。
 
 新增 CLI 和配置字段只能随实现发布。某个 provider、translator、browser 或 LLM 路径失败时关闭该路径并回到已验证的前台流程，不放宽 transport、validation、immutable storage 或 redaction。
 
