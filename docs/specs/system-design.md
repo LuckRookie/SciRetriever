@@ -1,178 +1,383 @@
-# SciRetriever v2 系统设计
+# SciRetriever 系统设计
 
-- 状态：P0-P9 BUILT
-- 目的：讲清 v2 的运行时数据流：一次检索或一个下载请求如何流经两个阶段的数据对象与状态，最终产出发布的 `DocumentPackageVersion`。
-- 规范引用：[需求](./requirements.md)、[技术架构](./technical-architecture.md)、[ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md)、[架构原则](../architecture/principles.md)、[README](../../README.md)。
-- 当前态声明：P0-P9 的契约、catalog / identity、Discovery、不可变 Raw / derived 存储、角色化网络采集、确定性归一化、通用轻结构、质量门、版本发布、显式已有资产导入与只读 legacy SQLite 适配均已交付。导入一次性且可重放，不自动扫描或迁移 corpus；小写 `sciretriever` 为 v2 主路径，大写 `SciRetriever` 保留兼容。无替代文献库存在。多来源路由借鉴 `third_party/scansci-pdf`（仅本地设计参考，**不被调用、不导入、不 vendoring**），全部原生重写。
+本文从模块责任、数据所有权、状态和端到端流程四个侧面描述理想中的 SciRetriever。产品决策见 [ADR 0002](../adr/0002-work-centered-literature-library.md)，产品合同见[需求规格](requirements.md)，代码模块和依赖边界见[技术架构](technical-architecture.md)。本文不记录现有代码能力或执行进度；这些信息见[实施进度](../governance/implementation-progress.md)。
 
-## 1. 两个阶段与交接边界
+## 0. 本文回答什么
 
-v2 是一条线性流水线，分两段，中间用一份 JSONL 清单显式交接：
+本文面向产品 owner 和需要理解全局协作方式的读者，回答三个问题：产品由哪些能力模块组成；每个模块负责和拥有什么；一篇文献的数据如何从查询流到本地库、PDF、分析、引用图和下游导出。规范性功能和验收条件以[产品需求与验收规格](requirements.md)为准。
 
-```
-阶段一 Discovery（发现，只读 catalog）
-  SearchSpec ─▶ 多来源元数据检索 ─▶ 清洗剔除无效记录 ─▶ 批内去重
-             ─▶ 跨来源元数据合并 ─▶ 读 catalog 比对 ─▶ 主要基于 title+abstract 标注
-             ─▶ DownloadManifest (JSONL)
-                        │
-        ════════════════╪════════════  JSONL 交接边界（内部采集清单）
-                        ▼
-阶段二 Acquisition（采集，写 catalog）
-  Work admission / create-or-reuse ─▶ DownloadRequest ─▶ AcquisitionJob ─▶ 校验后的 RawAsset
-             ─▶ normalization ─▶ DocumentPackageVersion
-```
+### 0.1 文档权威层级
 
-**关键分工**：Discovery 只**读** catalog 做比对去重，**不创建 canonical `Work`**；`Work` 只在 Acquisition 下载前 create-or-reuse。清洗与所有去重都在消耗 token 的标注**之前**完成，catalog 已有可复用标签的候选不再重复标注。`DownloadManifest` 是**内部采集清单**（一行一条候选记录的 JSONL，不是单个大 JSON 数组），与下游领域 JSONL 数据集无关。
+| 信息 | 权威来源 |
+|---|---|
+| 产品领域边界 | [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) |
+| Work-centered 产品方向和执行模型 | [ADR 0002](../adr/0002-work-centered-literature-library.md) |
+| 产品功能、规则和验收 | [requirements.md](requirements.md) |
+| 数据流、模块协作和产品状态模型 | 本文 |
+| 代码模块和技术依赖 | [technical-architecture.md](technical-architecture.md) |
+| 当前实现与差距 | [implementation-progress.md](../governance/implementation-progress.md) |
+| 实施顺序和工作包批准 | [文献库执行计划](../planning/literature-library-execution.md) |
 
-## 2. 三条入口
+系统设计描述的都是产品应有形态，不因某项能力是否已经实现而改变。README 只公布已发布行为，实施进度文档负责记录覆盖情况。
 
-| 入口 | 起点 | 是否经完整 Discovery |
-| --- | --- | --- |
-| 主题 / 领域发现 | `SearchSpec` | 是：检索 -> 清洗 -> 去重 -> 合并 -> 比对 -> 标注 -> 清单 |
-| 直接 DOI / 标识符 | 标识符列表 | 否：跳过检索，可选做轻量清洗 / 比对后直接进采集 |
-| 导入现成清单 | 外部清单 / 列表 | 否：规整成 `DownloadManifest` 后直接进采集 |
+## 1. 产品全景
 
-三条入口最终都汇入同一段 Acquisition：先 create-or-reuse `Work`，再下载。
-
-## 3. 数据对象
-
-沿一条链推进，但持久化位置不同：Discovery 对象属于本次检索的运行上下文与工作文件，`DownloadManifest` 持久化为 JSONL；Acquisition 从 `Work` 开始写 catalog DB；文献字节始终存于文件系统。
-
-**阶段一 Discovery**
-
-| 对象 | 含义 | 关键不变量 |
-| --- | --- | --- |
-| `SearchSpec` | 一次检索的声明：主题 / 领域查询、过滤条件、来源集合、上限 | 声明式；决定检索什么、用哪些 provider |
-| `IntakeRun` | 一次发现批次的执行上下文 | 记录 SearchSpec / 来源与产出候选数；可写运行日志与工作文件，但全程只读 catalog |
-| `CandidateWork` | 身份解析前的候选记录 | 携带合并后的元数据与标签；**不是 canonical `Work`** |
-| `DownloadManifest` | 发现段到采集段的 JSONL 交接清单 | 一行一条候选；内部采集清单，非下游领域数据集 |
-
-**阶段二 Acquisition 与发布**
-
-| 对象 | 含义 | 关键不变量 |
-| --- | --- | --- |
-| `Identifier` | `Work` 的外部标识别名（DOI / arXiv / PMID / provider URL） | `(namespace, value)` 唯一；多别名指向一个 `Work` |
-| `Work` | 规范化的文献身份 | 采集段 create-or-reuse；歧义转 review；合并 / 拆分显式可审计 |
-| `DownloadRequest` | 对某 `Work` 获取全文的请求 | 幂等；同一 `Work` 的并发请求收敛 |
-| `AcquisitionJob` | 某 (`Work`, 资产目标) 的采集工作单元 | 每 (`Work`, 资产目标) 至多一个非终结 job |
-| `AcquisitionAttempt` | 针对一个来源的一次尝试 | 记录来源、结果、耗时、失败类型 |
-| `AssetIntent` | Raw 硬链接发布前的不可变重放意图 | 含 Work / job / attempt / role / 相对 staging / target path / expected hash + size / media type / format / provenance |
-| `RawAsset` | 已接受的不可变文件 | 每个 SHA 一条；相对 `path + SHA-256 + format + size`，字节不入 BLOB |
-| `NormalizedArtifact` | 由 Raw 派生的规范化内容 | 可对同一 Raw 重跑重建 |
-| `LightStructure` | 下载后的摘要 / 标签 / 引用关系 | 显式有损；**区别于 Discovery 的元数据预标注** |
-| `ProcessingRun` | 发布前处理流水线运行 | 各阶段可续跑、带失败态 |
-| `DocumentPackageVersion` | 发布的带版本包 | 含 `schema_version` 与 lineage |
-
-## 4. 阶段一：发现（Discovery）
-
-Discovery 线性推进，产出干净、带标签的采集清单，全程只读 catalog：
-
-1. **检索**：按 `SearchSpec` 向当前内置来源（Crossref / Europe PMC / arXiv，可插拔）拉元数据，得到一批 `CandidateWork`；OpenAlex / Semantic Scholar 属于后续采集段全文定位来源。
-2. **清洗**：规范字段并剔除明显损坏或完全无法识别的记录。缺 DOI 或缺摘要本身不构成无效；只要仍有标题或其它可用标识符，就进入后续合并与补全。
-3. **批内去重**：同一批结果内按标识符与规范化标题收敛重复候选。
-4. **跨来源合并**：把指向同一文献的多来源记录合并成一条，互补字段（补齐缺失的 abstract / keywords / 标识符）。
-5. **catalog 比对**：读 catalog 判断候选是否已在库、是否已有可复用标签；**只读，不写、不建 `Work`**。
-6. **标注**：对清洗去重后的候选，主要基于 title + abstract 打标签；命中 catalog 中同一标签体系下可复用标签的直接复用，不再消耗 token。
-7. **写清单**：产出 `DownloadManifest`（JSONL，一行一条）。
-
-**缺摘要的线性处理**：候选缺 abstract 时，先在第 4 步从其它来源合并 / 富化补齐；若仍缺，则用 title 加可得的 keywords / topics 标注，并在该行标 `missing_abstract`。**不编造摘要，也不因仅缺摘要就自动丢弃。** 标注保持简单：标签，加证据不足时的 `missing_abstract` / 复核标记；不引入置信度、相关性状态机、优先级、主动学习或复杂打分。
-
-## 5. 阶段二：采集与请求处理（P4+ 目标态）
-
-清单（或直接 DOI）进入采集段。每个 `DownloadRequest` 在一个事务内决策，保证并发幂等：
-
-1. **规范化标识符**：统一 DOI 大小写、剥离 URL、解析 arXiv id 等，得到 canonical id。
-2. **身份 create-or-reuse**：事务化 lookup/upsert 到唯一 `Work`，并发同 id 收敛。跨标识符歧义不自动合并，转 review / merge 候选；内容 hash 相同也绝不静默合并；合并 / 拆分显式可审计。
-3. **已有合格 PDF**：跳过采集，仍检查并续跑缺失的下游阶段，已发布则返回其 `DocumentPackageVersion`。
-4. **仅有 XML / HTML**：调度 primary PDF 补全 job；补全期间仍可提供 XML / HTML 与受限包。
-5. **已有非终结 job**：同 (`Work`, 资产目标) 存在在途 job，attach 到该 job，不新建。
-6. **可重试失败**：按退避重新激活同一 job 重试。
-7. **受限 / 需复核**：job 挂起，对用户暴露状态，不自动重试（新请求仍 attach）。
-8. **均不满足**：新建 `Work`（若需）+ `DownloadRequest` + `AcquisitionJob`。
-
-`AcquisitionJob` 的非终结态（pending / active / retryable / paused）在每 (`Work`, 资产目标) 上唯一，新请求一律 attach；仅终结态下才按显式策略对同一资产目标开新 job。
-
-## 6. 来源规划与路由（P5 已交付边界）
-
-路由原生实现，借鉴 `scansci-pdf` 的分层与自适应思想。**采集按资产目标分别推进**：primary PDF、Supplementary PDF、XML / HTML 各有独立目标与完成判据。每次尝试产生一条 `AcquisitionAttempt`。免费 / OA 层内 primary PDF 可并行竞速，先得合格 PDF 者胜出并**只取消其它 primary-PDF 尝试**；Supplementary PDF 独立进行；机构 / 受限层作回退：
-
-| 来源层 | 说明 |
-| --- | --- |
-| 本地 cache | 已有 `RawAsset` 或近期尝试结果，先命中避免重复网络 |
-| OA APIs | 开放获取解析（Unpaywall / OpenAlex / Semantic Scholar / Europe PMC / arXiv 等）拿直链 |
-| 出版商 direct / API | 按 publisher profile 走授权 API 或直链（Elsevier / Wiley 等） |
-| HTML discovery | 抓落地页，发现正文 PDF 与 Supplementary PDF 链接 |
-| browser / institutional | Playwright 或机构 / 代理通道，处理 JS 渲染与受限访问（回退层） |
-
-PDF 路由全部耗尽仍无 PDF，则 PDF 目标标记为 explicitly missing 且可重开，此时 XML / HTML 可支撑“有限制”达标，但不改变 PDF 优先、不掩盖 PDF 缺失。自适应控制：
-
-- **per-host budget**：按 host / 域的最小间隔 + 并发上限 + 可选礼貌延时；遵守 `forbidden_urls`。
-- **adaptive source health**：按 EMA 成功率与时延给来源打分排序，优先高健康来源。
-- **circuit breaking**：按 host / 域失败连击熔断退避，后续 job 暂时跳过。
-- **resume**：source plan 进度与每条 attempt 都落 catalog DB，中断后从下一个未尝试来源续跑，不重跑已成功步骤。
-
-P5 已交付 strict canonical `SourcePlan`、serial / same-tier race、restart resume、due retry jobs、per-host budget、health EMA、circuit breaker、角色校验，以及 OpenAlex / Semantic Scholar / Elsevier / Wiley / Springer 原生 provider。source plan、attempt、retry time 与状态持久化；budget / health / circuit 为进程内状态。凭证只从环境 / 配置注入且不进入 durable catalog 数据。
-
-生命周期只有一个 owner：`MultiSourceOrchestrator` 负责 claim、attempt、资产接受、重试、暂停、取消与终态；P4 `AcquisitionOrchestrator` 仅把原 API 转换为单 entry serial plan。catalog 不导入 acquisition 类型，仅保存 acquisition 边界已校验的 canonical plan JSON 与通用 role / schema version metadata。candidate attempt details 使用严格版本化 JSON codec；含 candidate 字段但缺失或破损的 codec metadata 显式失败，无关 legacy details 可忽略。混合耗尽状态由全部 candidate 的聚合结果决定，不依赖 race 完成顺序；任一 retryable failure 或 open circuit 均保留 job 的 retryability。
-
-每次 CLI 调用只创建一个 acquisition runtime，复用 provider、orchestrator、per-host budget、health EMA、circuit breaker 与 retry policy。publisher provider 的 credential env 和 host budget hint 来自声明式 profile；显式 CLI budget 参数覆盖 profile hint。
-
-publisher profile 是声明式数据（非硬编码逻辑），控制每个出版商 / host 的入口、角色、端点模板、媒体类型、限速与 credential env 名。当前 P5 不实现 browser / institutional automation，也不执行 profile selector / script；表中该层仍为后续目标态。
-
-## 7. P3 资产存储与接受边界（已交付）
-
-P3 从调用方提供的二进制流开始，不联网、不选择 provider、不验证 PDF 业务格式，也不增加 CLI 命令。P4 已在调用 P3 前完成网络获取与内容接受校验。因此，**网络成功不等于资产接受**：HTTP 200 且有响应体只是采集步骤成功；PRIMARY_PDF role、magic bytes（`%PDF-`）、`%%EOF` trailer、content-type、正数大小上下限、PyPDF2 可解析且至少一页均须先通过。失败 HTTP body 不会成为 `RawAsset`。
-
-P3 已交付的持久化流程为：
-
-```
-binary stream ─▶ durable staging + SHA-256 / size ─▶ persist AssetIntent(pending)
-              ─▶ os.link create-if-absent ─▶ durable target verification
-              ─▶ register RawAsset + Work role link + intent(published)
-              ─▶ durable staging removal ─▶ intent(finalized) ─▶ final target verification
+```text
+                           foreground CLI
+               search / download / analyze / expand
+                  library / failures / config check
+                               |
+                               v
+                    Work-centered local library
+                 Work -> WorkVersion -> current view
+                    |          |             |
+        metadata observations  |      canonical metadata
+                    |          |      Markdown/tags/refs
+                    |          |
+                    |          +-> primary PDF -> PDF analysis
+                    |          +-> optional XML/HTML supplements
+                    |
+        concurrent metadata providers      acquisition tiers
+                    |                  race -> translator -> browser
+                    v                           |
+              deterministic merge              v
+                                        immutable asset storage
+                               |
+                               v
+               DocumentPackage + stable IDs/provenance
+                               |
+                       downstream domain packs
 ```
 
-- **存储根与布局**：根目录必须预先存在、必须是真实目录，路径任一段不得是 symlink。P3 只管理相对路径 `staging/<intent-id>.part`、`staging/.lock` 与 `raw/<sha256[:2]>/<sha256>`；不把绝对路径写入 catalog。
-- **权限与 staging durability**：`staging`、`raw` 与 hash shard 为 `0700`，锁文件为 `0600`，staged / raw 文件为只读 `0400`。staging 对输入流只读一遍，同时计算 SHA-256 与严格正数 byte size；文件内容、chmod 后文件和目录均严格 fsync，任一 durability 失败均 fail closed。
-- **不可变 intent**：在发布前持久化 Work / job / optional attempt / role、temp / target 相对路径、expected SHA-256 / size、media type、format 与每次采集自己的 provenance。重放元数据不可修改，状态只允许 `pending -> published -> finalized` 或 `pending -> abandoned`。
-- **硬链接发布**：发布只调用同一文件系统上的 `os.link` create-if-absent；绝不 rename、replace、copy、fallback copy 或 overwrite。跨文件系统明确失败。新目标与 `EEXIST` 目标都必须按 expected size 重读 SHA-256，并 fsync 目标文件、shard 与 `raw` 目录；既有错误目标保留原 inode 与字节并报 corruption。
-- **catalog 登记边界**：仅在目标通过 durability 与 hash / size 验证后，事务化创建或复用每 SHA 唯一的 `RawAsset`，增加 per-Work + role link，并将 intent 置 `published`。同字节的并发接收收敛为一个 target / raw row；每个 Work link 与每个 intent provenance 仍保留。staging 耐久删除后 intent 才 `finalized`，随后再次验证目标。
-- **关系库存元数据，不存字节**：catalog 只保存相对路径、hash、size、media type / format、关系、provenance、event 与 failure；无 Raw BLOB、无绝对路径。精确 intent 重放、状态 event 与相同 failure 重放均幂等。
+设计把 catalog 中的长期文献事实放在中心。搜索、下载、分析、引用扩展和导出都只是围绕同一 Work/WorkVersion 数据逐步补全的操作，不各自产生互不相干的任务产品。
 
-正常 coordinator 从 stage 到最终验证全程持 shared lock；reconciler 扫描 intent 与 staging、修复、清理期间持 exclusive lock。对账只使用不可变 intent 元数据和确定性相对路径，不猜 provenance，也不把损坏证据当作 missing。恢复矩阵如下，表内动作均以 catalog 元数据匹配为前提；不匹配时保持原状态与所有文件并记录 failure：
+### 1.1 能力模块与责任
 
-| intent 状态 | target valid | target missing | target corrupt |
-| --- | --- | --- | --- |
-| `pending` | 登记 / 复用 Raw + Work link；valid staged 删除，missing staged 无需处理，corrupt staged 保留并记 failure；最终 `finalized` | valid staged 经硬链接发布、登记、删除后 `finalized`；missing staged 因证据全失转 `abandoned`；corrupt staged 保留并转 `abandoned` | target 与 staged 均保留，记 failure，转 `abandoned` |
-| `published` | valid staged 删除，missing staged 无需处理，corrupt staged 保留并记 failure；最终 `finalized` | valid staged 重建 target、删除后 `finalized`；missing / corrupt staged 保持 `published` 并记 missing target，corrupt staged 另记 corruption | target 与 staged 均保留，保持 `published` 并记 failure |
-| `finalized` | valid staged 作为冗余删除；missing staged 不动作；corrupt staged 保留并记 failure | 保持 `finalized`，保留任意 staged，记 integrity failure，不猜测或降级 | 保持 `finalized`，target 与任意 staged 均保留，记 integrity failure |
-| `abandoned` | 不发布、不删除、不改变状态 | 不发布、不删除、不改变状态 | 不发布、不删除、不改变状态 |
+| 能力模块 | 责任 | 拥有或写入 | 明确不负责 |
+|---|---|---|---|
+| 前台交互与配置 | 解释命令、选择器、defaults、进度和 cooperative stop | invocation 参数；不拥有业务事实 | daemon、后台 ownership、持久化任务恢复 |
+| Search/Metadata | 并发查询、规范化、身份匹配、placeholder 入库 | 通过 catalog 写 observations 和 canonical projection | 下载正文、调用 LLM、保留 vendor dict 作为产品字段 |
+| Provider adapters | 把外部 metadata 或 asset candidate 转为中性形状 | provider record id、locator 和 provenance | 决定 Work/版本身份或 canonical 值 |
+| Network boundary | 执行通用 HTTP 安全与有限资源约束 | 非敏感 transport diagnostics | 业务重试策略、资产验收和 browser 内部实现 |
+| Catalog/Library | 维护 Work、WorkVersion、canonical metadata、observations、authors、registries、tags、references、current result 和 lineage | 文献业务事实与关系 | 存储大型 BLOB、绝对路径或领域 payload |
+| Acquisition | 为具体 WorkVersion 填补 primary PDF asset gap，编排竞速和回退 | acquisition overall/per-source diagnostics | 直接发布文件、生成分析或改变书目身份 |
+| Storage | 验证 hash 后不可变发布 RawAsset 和派生产物 | 文件字节、相对路径、hash | 决定哪个版本 preferred 或哪个 metadata canonical |
+| PDF normalization/OCR | 从 accepted PDF 产生可分析全文、结构和 evidence | normalized/OCR artifacts 与 PDF locators | 网络获取、身份去重或领域抽取 |
+| Analysis | 只基于合格 PDF 生成原文语言 current result，并形成受约束 proposals | current sections、fulltext metadata、references、generated tags | 获取 PDF、修改 RawAsset、删除 manual 数据、保留分析历史 |
+| References/Expansion | 维护版本级引用、unresolved、cited-by 派生和逐层扩展 | VersionReference、visited/层级结果和诊断 | 猜测创建 Work 或设置隐藏文献数上限 |
+| Library Query/Curation/Export | 提供 exact/keyword/filter/traversal、待复核项、人工修订和显式导出 | manual overrides、可撤销审计、派生视图和 export artifact | 暴露 backend observations、删除来源证据或建立首版 vector index |
+| Failures/Diagnostics | 汇总 metadata、acquisition、analysis、expansion 的对象级 reason/action；acquisition 提供脱敏 source details | 诊断历史、failure 和 lineage | 成为产品导航中心或泄漏 secret |
+| Packaging/Boundary | 形成稳定下游文献表示和 export snapshot | DocumentPackage/导出产物 | 充当 WorkVersion 身份或领域数据库 |
+| Compatibility/Migration Boundary | 受限读取获准迁移的数据并保留退休路径 guard | 迁移证据 | 让历史数据形状定义产品模型或为排除行为提供永久兼容层 |
+| Downstream Domain Pack | 从 DocumentPackage 生成领域数据 | 下游 JSONL/CSV/schema/manifest | 把领域字段写回 SciRetriever catalog |
 
-staging 扫描只把符合 `staging/<uuid>.part` 且为普通文件、同时没有对应 intent 的条目视为 recognized orphan，并可在 exclusive lock 下 unlink + fsync 目录。未知文件、目录、symlink 与所有 corrupt staging 均保留并报告，绝不自动删除；corrupt target 同样绝不覆盖或删除。
+## 2. 核心关系
 
-P3 验收覆盖六个 durability crash checkpoints、重启后的两轮对账收敛、并发相同字节只产生一个 target / raw row、每个 intent provenance 与 per-Work role link 不丢失，以及 SQLite `integrity_check=ok`、`foreign_key_check` 为空。P4 acquisition / CLI 已通过该公开 API 闭合端到端下载；job 的完成判据是已接受资产、`RawAsset` 注册且无未决 intent。
+```text
+Work
+  |-- identifiers
+  |-- preferred_work_version_id
+  |-- canonical tags
+  `-- WorkVersion[]
+        |-- version identifiers and canonical metadata
+        |-- MetadataObservation[]
+        |-- Authorship[] -> Author
+        |-- Publisher -> flat registry
+        |-- Venue -> independent flat registry
+        |-- primary PDF
+        |-- optional supplemental XML / HTML
+        |-- VersionReference[] -> Work or UnresolvedReference
+        `-- current generated result only
+```
 
-## 8. 归一化、编目、发布（P6-P8 已交付）
+`Work` 聚合同一学术工作。`WorkVersion` 表达实际书目版本；provider record 只是 observation，不按 provider 一条记录创建一个版本。版本先按规范化稳定版本标识符精确匹配；不同非空 DOI 永不属于同一版本。无稳定标识符时，只有 normalized title、version class、publication date 和规范化 Venue 全部精确相同且没有标识符冲突才自动合并，否则保留独立 provisional version。不同 DOI 的预印本和正式版只有在 provider/registry 给出明确版本关系或用户确认时才归入同一 Work；标题相似本身不能触发跨版本归组。版本拥有全文资产、作者顺序、版本 metadata 和引用。处理快照和 `DocumentPackage` 导出快照始终使用独立身份，不承担书目版本职责。
 
-发布前处理由确定性 `ProcessingRun` 编排为持久化、可续跑的阶段链：`raw acceptance → normalization → enrichment → package validation → publication`；阶段使用 active / succeeded / failed 等现有状态，精确 replay 复用已完成产物。文件系统持久发布先于 catalog 登记，事务不跨文件 I/O。
+preferred version 使用确定性总排序：`formal publication > accepted manuscript > preprint > unknown/other`，同级依次比较 DOI 是否存在、完整 publication date（较新优先）、configured provider precedence，最后用规范化稳定 version key 升序打破平局。新增 observation 时在同一次原子 catalog 更新中重算 preferred pointer；排序不得依赖 provider 返回或完成顺序。
 
-- **归一化与证据**：对同一 Raw 运行归一化，产出 `NormalizedArtifact`（完整章节 / 表格 / 参考文献）与 `evidence[]`（片段回指源文件与位置）。可重跑，损失感知。
-- **下载后轻结构**：`LightStructure` 产出摘要 / 标签 / 引用关系，仅作发现辅助、显式有损。**这是采集后基于全文的富化，区别于 Discovery 段基于元数据的预标注，两者不混用。** search projection 可从 catalog 重建，非权威源。
-- **质量门与达标**：有合格 PDF 主证据为一种达标；无合格 PDF、靠 XML / HTML 支撑为“有限制”达标，并在包内记明缺失与限制。二者皆可发布，状态不同。
-- **包版本化**：达标后发布带 `schema_version` 与 lineage 的 `DocumentPackageVersion`；草稿包不是已发布包；契约变更须新 ADR。
-- **引用关系**：只按精确规范标识符链接 catalog 中既有 `Work`；未命中项保留为 unresolved citation，富化阶段不创建新 `Work`。
-- **用户可见状态与恢复**：每个 `Work` 对外暴露 job 状态（active / paused / succeeded / failed）；paused 场景在外部条件满足后可恢复续跑。
+## 3. Metadata 写入流
 
-## 9. <a id="responsibility"></a>职责表
+```text
+query
+  -> launch configured metadata providers concurrently with bounded fan-out and per-provider timeout
+  -> collect each response or terminal deadline
+  -> provider-neutral observations
+  -> normalize identifiers and titles
+  -> reject auto-merge when both nonempty DOI values differ
+  -> allow DOI + no-DOI exact normalized-title merge and DOI enrichment
+  -> deterministic Work/WorkVersion match
+  -> save MetadataObservation
+  -> provider precedence, then fill missing
+  -> canonical metadata + OA status
+  -> conservative Author/Authorship match
+  -> existing Publisher/Venue alias mapping + provider precedence
+  -> unresolved Publisher/Venue when no deterministic match
+```
 
-| 关注点 | catalog DB | Raw store | derived store | search projection | 下游 domain pack |
-| --- | --- | --- | --- | --- | --- |
-| 控制平面状态（requests/jobs/attempts/status/关系） | 拥有 | 无 | 无 | 无 | 无 |
-| 不可变原始字节（PDF / suppl / XML / HTML） | 仅存 path+hash | 拥有 | 无 | 无 | 无 |
-| 派生字节（归一化 / 结构化中间物） | 仅存 path+hash | 无 | 拥有 | 无 | 无 |
-| 发现 / 检索索引 | 权威元数据 | 无 | 无 | 拥有（可重建） | 无 |
-| 身份 / 去重 / lineage / failures | 拥有 | 无 | 无 | 无 | 无 |
-| 达标与包版本 | 拥有 | 无 | 存包体字节 | 无 | 读 |
-| 领域数据集（JSONL / CSV / schema / manifest） | 仅记 run 指针+hash | 无 | 无 | 无 | 拥有 |
+查询默认合并为最多 100 个 Work。所有启用的 metadata provider 在有界并发下启动并各自受有限 timeout 约束；合并只依赖收集到的响应集合、规范化规则和 configured precedence，不依赖完成顺序。两个不同非空 DOI 永不因标题相同自动合并；一个 DOI 记录与一个无 DOI 记录可以在 exact normalized-title match 时合并并补 DOI；两个无稳定标识符记录只按采用版本化规则生成的 exact normalized-title key 合并。不做 fuzzy 或 LLM 去重。明确的跨版本关系进入待验证关系并可把不同 WorkVersion 归入同一 Work；没有关系证据时保持独立。低优先级 provider 只补空字段，冲突 observation 仍保留。metadata source keywords 只作为 observations 保存，不在该层生成 canonical tags。
 
-`DownloadManifest` 是使用 Discovery 时到 Acquisition 的内部交接文件（JSONL）；直接 DOI / 标识符可跳过该交接。它既不是权威控制平面状态，也不是下游领域数据集。一句话：**库存状态与关系，文件系统存字节，下游存领域数据集。** 每个已接受文件都有 DB 记录，但不是每个失败响应都成为 `RawAsset`。SciRetriever 止于已发布的 `DocumentPackageVersion`，领域抽取在边界外由下游进行，只有 domain-run 记账这一条线回穿边界。
+search limit 的内置默认是 100 个合并 Work，TOML 可修改，CLI `--limit` 只覆盖当前 invocation。provider observations 和原始 shape 只保存在后端供审计和重算，普通 library/search/export 只读取 canonical projection。
+
+## 4. 前台执行层级
+
+命令在单进程前台执行：
+
+```text
+metadata: query -> merge -> persist library records
+download: explicit IDs/query/tags/all-missing -> acquire -> validate -> immutable publish
+analyze: explicit IDs/query/tags/all-pending or explicit force -> require accepted primary PDF -> PDF-based analysis -> atomic current swap
+```
+
+每层可独立 backfill。一次 download 已穷尽来源并记录 PDF missing 时，该 invocation 可以正常结束，但该版本的 primary PDF 缺口没有完成，不能计为 accepted/success，后续仍由 all-missing 选择。失败后用户重跑同一命令，系统按稳定身份、目标角色、输入 hash 和 current 指针幂等收敛。不引入 daemon、lease、fencing 或网络请求级 exactly-once。
+
+普通 search 接受 `metadata/download/analyze` level 并使用 TOML 默认值。`download`/`analyze` 没有任何 ID 或 selection 时 fail closed，不隐式处理全库；全库补全与强制重析必须使用显式 all/force 语义。
+
+Ctrl+C/cooperative stop 是前台 invocation 的必要行为，不是 durable task control：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，然后退出。重跑通过幂等选择跳过已完成内容。
+
+## 5. Acquisition 流
+
+```text
+WorkVersion needs primary PDF
+  -> direct official + publisher + open + configured Sci-Hub, in-process race
+  -> if no accepted PDF: bounded landing-page translator
+  -> if still missing: configured browser path
+  -> validation and identity check
+  -> immutable RawAsset linked to WorkVersion
+  -> optional XML / HTML according to config
+```
+
+每种 direct、official/open、Sci-Hub、translator 和 browser 路径都必须具有明确配置、安全边界、离线 fixture 和用户文档。所有路径共享 secure transport 或经批准的等价边界、有限 timeout、validation、immutable acceptance 和 redaction。
+
+如果所有来源都失败，用户看到一个 overall reason/action，并可展开每个来源的脱敏 details。某一 provider 失败但其它 provider 赢得合格资产时，该失败只进入 diagnostic details，不改变最终 acquisition success。所有 overall 和 source-level 输出都经过 redaction。
+
+## 6. 分析流
+
+```text
+accepted WorkVersion primary PDF
+  -> validate PDF identity, completeness and content
+  -> use PDF-derived normalized/OCR content as authoritative analysis source
+  -> optionally use XML/HTML for structure hints or corroboration, never as replacement authority
+  -> block analyze when no accepted PDF exists, even if XML/HTML exists
+  -> parse references when useful to fulltext processing
+  -> fulltext-only LLM in original language
+  -> extract original Abstract, generate only if absent
+  -> allowed Publisher/Venue IDs + tag registry candidates
+  -> ten stable section IDs + localized headings + flexible Markdown
+  -> build and validate complete replacement off to the side
+  -> attach primary-PDF page/span evidence locators to derived sections, fields and references
+  -> atomic replacement of current sections, canonical projection, references and generated tags
+  -> delete/replace old generated content, no analysis history
+  -> replace generated tags, preserve manual tags
+```
+
+PDF 是分析事实和 evidence 的基准。XML/HTML 与 PDF 一致时可补充结构定位；发生冲突时 PDF 控制生成内容和 canonical projection，补充资产只保留 provenance/diagnostic evidence。十个 stable section IDs/core sections 为 `document_information`（Document Information/Metadata）、`abstract`（Abstract）、`research_background`（Research Background）、`research_question_and_objectives`（Research Question and Objectives）、`research_approach`（Research Approach）、`methods`（Methods）、`data_and_materials`（Data and Materials）、`results`（Results）、`conclusion`（Conclusion）、`limitations`（Limitations）。heading 使用论文语言；metadata 是普通正文 section/table，不是 YAML front matter；section 内可使用段落、列表、表格和子标题；Data/Materials 不强制表格；证据不足时明确说明，不得幻觉。完整 reference list 默认不进入 light Markdown，可选追加或导出，但不禁止 references 参与解析或 LLM context。
+
+失败发生在 replacement 前，因此旧 current result 保持可用。replacement 成功后旧 generated content 被删除或替换，不保留 analysis history。RawAsset、current parser/model/schema metadata、provider observations 和 manual tags 保留。
+
+canonical projection 在同一次原子 replacement 中按 `manual edit > current validated fulltext-derived nonempty value > provider precedence/fill-missing` 重建。新分析没有给出某字段时回退到 placeholder observation，不写空值，也不继续保留没有当前证据的旧 generated 值。stable identifier 必须通过程序验证，不能仅凭 LLM 字符串创建。首版只建 open-access canonical 状态，不建 license/retraction/correction/erratum 模型。
+
+## 7. 引用扩展流
+
+```text
+seed Work set
+  -> direction references | cited-by | both
+  -> stable visited Work identity set prevents cycles/re-enqueue
+  -> depth layer 1 metadata for all new Works
+  -> layer 1 download all
+  -> layer 1 analyze versions with accepted primary PDF
+  -> count missing/invalid-PDF versions as blocked/failed, not analysis success
+  -> next layer
+```
+
+默认方向是 references。用户只控制 depth，产品不设置 maximum-new-documents cap。每层报告计数。一个 branch 失败只停止该 branch，其它 branches 继续。Ctrl+C 停止新记录并安全闭合当前有限操作；重跑跳过完成内容。resolved 引用连接目标 Work，cited-by 从 VersionReference 反向派生；未解析项保留原始文本和可得标识符，等待后续重跑补全。
+
+## 8. 标签与作者
+
+canonical tags 是扁平英文集合。analysis 向 LLM 提供整个 registry 或相关候选，LLM 选择 stable IDs，并可输出带 English canonical name、definition 和 multilingual aliases 的 separate new-tag proposal。normalization comparison 合并 synonym/alias 或创建新扁平 tag。用户 tag 使用同一 registry；manual/generated links 分开，重新分析只替换 generated links。metadata source keywords 只作为 observations 保存。
+
+Publisher 和 Venue 分属两个扁平 registry，各有 official/canonical name 和 aliases，无层级。metadata 只按现有 alias mapping 与 precedence 解析。analysis 只允许 LLM 从给定 IDs/names 中选择；未知值保持 unresolved 或形成 separate new-entity proposal，不能静默创建 spelling variants。
+
+Author 独立存在，Authorship 属于 WorkVersion。ORCID 等稳定标识符允许确定合并，姓名相似只形成候选或保持分离。
+
+## 9. 本地 Library Search
+
+local search 支持 exact DOI/title/internal-ID lookup；title、Abstract、light Markdown keyword search；author、year、publisher、venue/journal、tag filters；references/cited-by traversal。首版不建立 vector index，vector semantic search 明确延后。
+
+## 10. 数据所有权与普通用户视图
+
+| 数据 | 权威所有者 | 普通用户看到 | 后台保留但默认不展示 |
+|---|---|---|---|
+| Work/WorkVersion identity | catalog | 一个 Work、版本列表和 preferred version | 匹配过程与 provisional evidence |
+| canonical metadata | catalog projection | 当前标题、Abstract、日期、Publisher/Venue 等 | provider 字段冲突和重算输入 |
+| provider metadata | MetadataObservation | 不直接展示 | provider、时间、字段值、record id、provenance |
+| primary PDF | immutable storage + catalog link | 可阅读/导出的版本 PDF | hash、接收来源和验证证据 |
+| XML/HTML | supplemental asset links | 按需查看或不展示 | 结构补充、交叉核对和 provenance |
+| current analysis | WorkVersion current pointer | 原文语言 light Markdown、生成标签和引用视图 | parser/model/schema/input hash |
+| manual metadata/tags/preferred/version relations | catalog | 与 current view 合并后的人工内容和选择 | 前后值、操作者时间、关系证据和撤销记录 |
+| references | VersionReference | references/cited-by traversal | unresolved 原文、匹配证据和重跑状态 |
+| failures | diagnostics | overall reason/action，按需展开 source details | 脱敏 attempt/event history |
+| 文件字节 | storage | 通过 catalog 关系访问 | 实际存储路径细节不进入普通视图 |
+
+canonical metadata 不是简单选一个 provider 值，而是当前投影：
+
+```text
+manual edit
+  > current validated PDF-derived nonempty value
+  > metadata observations by configured precedence and fill-missing
+```
+
+新分析没有给出某字段时回退到 manual/provider 值，不写成空，也不保留已经失去当前证据的旧 generated 值。普通 search/library/export 读取 canonical projection，不读取原始 provider shape。
+
+## 11. 关键跨模块决策门
+
+| 决策门 | 输入 | 决定 | 失败或不确定时 |
+|---|---|---|---|
+| Work identity | 稳定 ID、normalized title、明确跨版本关系 | 合并到现有 Work、把版本归入同一 Work 或创建新 Work | DOI 冲突且无关系证据时保持分离/人工复核 |
+| WorkVersion identity | version ID、class、date、Venue | 连接现有版本或创建 provisional version | 不按 provider 条数创建版本 |
+| preferred version | version class、DOI、日期、provider precedence、manual override | 主视图使用哪个版本 | 保留所有非 preferred 版本；manual override 优先 |
+| canonical field | manual、PDF-derived、provider observations | 当前用户可见字段 | unresolved 保留，低优先级只补空 |
+| Author match | ORCID 和明确佐证 | 合并 Author 或新建 Authorship | 姓名相似但证据不足时不合并 |
+| Registry match | allowed Publisher/Venue/tag IDs 和 aliases | 使用现有实体或提交 proposal | 不静默创建拼写变体 |
+| Acquisition tier | 前层是否已有 accepted PDF | 停止、进入 translator 或进入 browser | 耗尽后记录 overall failure |
+| Race acceptance | candidate 内容、角色、身份、hash | 接受唯一 winner | loser/无效内容不得 late accept |
+| Analyze eligibility | accepted primary PDF | 允许 PDF-based analysis | XML/HTML-only 保持 blocked |
+| Result promotion | 完整 payload、schema、PDF locators | 原子切换 current result | 任一验证失败则保留旧 current |
+| Reference resolution | DOI/稳定 ID/确定性 identity | 链接目标 Work | 保存 unresolved raw reference，不猜测 |
+| Expansion scheduling | depth、direction、visited set、完成状态 | 当前层新 Work 和下一层 | branch failure 隔离，循环不重复入队 |
+| Backfill selection | IDs、query/filter、tags、显式 all/force | 本次处理范围 | 无 selector 时 fail closed |
+
+## 12. 失败、状态与恢复模型
+
+产品不把复杂 job 状态机暴露给用户，而用每个数据层是否完成来表达文献状态：
+
+| 状态 | 含义 | 用户下一步 |
+|---|---|---|
+| metadata complete | identity、版本和 placeholder 已入库 | 可查询、下载或继续补 metadata |
+| PDF missing | 本次来源已耗尽且没有 accepted primary PDF；命令已终止但资产缺口未完成 | 由 all-missing 重跑 download、调整 provider/config 或查看 failure |
+| PDF accepted | primary PDF 已验证并不可变保存 | 可阅读、导出或 analyze |
+| analysis pending | 有 PDF 但没有 current result | 运行 analyze |
+| analysis current | 当前 PDF 输入已有完整 current result | 查询/导出；仅显式 force 才重析 |
+| blocked | 当前记录无法继续，例如无 PDF 或配置缺失 | 查看 reason/action，修复后重跑 |
+| partial branch failure | expansion 某分支失败 | 其它分支继续；失败分支后续补全 |
+
+```text
+provider/source attempt failure
+  -> another source succeeds? -- yes -> overall success + losing diagnostic detail
+  |                              no
+  v
+all sources exhausted
+  -> one redacted overall reason/action
+  -> expandable redacted per-source details
+  -> fix config/source condition
+  -> rerun idempotently
+```
+
+`failures` 把 metadata、acquisition、analysis 和 expansion 统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时形成 search failure。acquisition 可展开脱敏 per-source details。analysis replacement 失败保留旧 current result，同时形成可查询失败。expansion 记录失败 branch 和层级，但不阻塞其它 branch。PDF missing 与 accepted 分开计数，不能以“本次已记录终态”为由算作下载成功。
+
+Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安全排空或取消当前有限操作，保留已经提交的 Work、资产和 current result，然后退出。下一次命令通过 catalog 完成状态跳过已完成内容。
+
+## 13. 完整用户旅程
+
+#### 从关键词到可用文献
+
+```text
+search query + level=analyze
+  -> concurrent metadata providers
+  -> deterministic Work/WorkVersion merge
+  -> placeholder library record
+  -> primary PDF acquisition
+  -> PDF normalization/OCR
+  -> fulltext LLM + PDF evidence validation
+  -> atomic current result
+  -> searchable Work view
+```
+
+#### 从已有库补齐缺失层
+
+```text
+library selection / tag / query / explicit all-missing
+  -> download only versions missing PDF
+  -> preserve already accepted assets
+  -> explicit all-pending
+  -> analyze only accepted PDFs without current result
+```
+
+#### 整理冲突、版本与人工内容
+
+```text
+library review
+  -> 查看 identifier/版本/作者待复核项
+  -> 显式 merge Works 或把 WorkVersion 归入已有 Work
+  -> 设置/清除 preferred version
+  -> 设置/清除 manual metadata，增删 manual tags
+  -> [有明确证据] merge Authors
+  -> 写入前后值与关系证据，可撤销
+  -> 重新计算 canonical Work view，但不删除 observations/RawAsset
+```
+
+#### 从种子论文扩展引用图
+
+```text
+seed Works + direction + depth
+  -> layer metadata convergence
+  -> layer PDF acquisition
+  -> layer PDF analysis
+  -> derive next-layer identities from references/cited-by
+  -> visited dedup + branch isolation
+  -> repeat until requested depth
+```
+
+#### 从本地库到下游领域数据
+
+```text
+WorkVersion + primary PDF + current generic result
+  -> explicit library export as versioned DocumentPackage
+  -> bind selected version/current inputs + stable IDs/hashes/provenance
+  -> immutable export snapshot; later changes require a new export
+  -> downstream Prompt + Schema + optional Validator
+  -> authoritative domain JSONL + optional CSV
+  -> consumer-owned database
+```
+
+领域数据不沿箭头反向写回 SciRetriever catalog；首版也不把 domain-run bookkeeping 作为产品能力。
+
+## 14. 长期设计边界
+
+| 长期保留原则 | 产品中不得存在 | 延后或排除 |
+|---|---|---|
+| Work identity 与稳定 identifiers | durable pause/resume/safe-stop control state | vector semantic search/index |
+| RawAsset、hash 和不可变发布 | lease、fencing、后台 owner 协议 | Web UI、多用户权限和协作审批 |
+| HTTPS/DNS/redirect/timeout/response bounds | retry-child 和 candidate checkpoint 产品语义 | institution registry/affiliation 消歧 |
+| provider-neutral DTO 与 adapter 边界 | task-centered CLI、配置和导航 | license/retraction/correction canonical models |
+| 进程内 acquisition race 和 validation | manifest 或 job 作为产品中心 | BibTeX/RIS/Zotero/local-directory import |
+| normalization/evidence 与 package boundary | 将处理/导出快照伪装成 WorkVersion | domain extraction/schema/database |
+| redaction、diagnostic history 和 retired-path guards | legacy shape 反向定义产品模型 | daemon、外部 workflow、微服务 |
+
+“延后”不等于自动批准，进入首版必须更新 requirements；“排除”涉及领域或架构边界时需要新 ADR。
+
+## 15. 用户视图
+
+```text
+Local Literature Library
+  Work: stable research identity
+    Preferred WorkVersion: formal publication
+      Canonical metadata
+      Primary PDF
+      Current PDF-based Markdown analysis
+      Manual + generated tags
+      Authors / Publisher / Venue
+      References / cited-by
+    Other WorkVersions
+      Preprint / accepted manuscript / other evidence
+
+User actions
+  search -> persist -> download -> analyze
+  library lookup/filter/traverse/review/curate/export
+  expand references/cited-by by depth
+  failures inspect -> fix -> rerun
+```
+
+产品不是一个“下载成功列表”，而是一套可以逐步补全、反复查询、沿引用扩展、用 PDF 证据核对并安全交给下游的本地文献知识底座。
+
+## 16. 文档责任边界
+
+产品 owner 日常只需阅读本文和[产品需求与验收规格](requirements.md)：本文解释模块责任、数据流和状态模型，requirements 定义功能、边界和验收。两份文档已经吸收适用 accepted ADR；ADR 仍保存决策授权与变更记录。工程团队另外维护[技术架构](technical-architecture.md)、[架构原则](../architecture/principles.md)、[provider 运维手册](../guides/provider-operations.md)和[代码文档责任映射](../governance/code-doc-map.md)。实现覆盖和差距只记录在[实施进度](../governance/implementation-progress.md)，不得反向改变三份规格定义的理想产品。
