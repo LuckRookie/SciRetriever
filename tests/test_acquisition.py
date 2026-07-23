@@ -36,7 +36,7 @@ from sciretriever.acquisition import (
 from sciretriever.acquisition.providers import ProviderAcquisitionError
 from sciretriever.acquisition.transport import UrllibAcquisitionTransport, _read_bounded
 from sciretriever.catalog.jobs import attach_or_create_job
-from sciretriever.catalog import AssetRepository, IdentityResolver, JobRepository, apply_migrations, create_catalog_engine
+from sciretriever.catalog import AssetRepository, IdentityResolver, JobRepository, initialize_catalog, create_catalog_engine
 from sciretriever.cli import acquire as acquire_cli
 from sciretriever.cli.main import main
 from sciretriever.core.contracts import CandidateMetadata, DownloadManifestEntry, Identifier, Provenance
@@ -136,7 +136,7 @@ class AcquisitionTests(TestCase):
         self.storage.mkdir()
         self.catalog = create_catalog_engine(self.base / "catalog.sqlite")
         self.addCleanup(self.catalog.dispose)
-        apply_migrations(self.catalog)
+        initialize_catalog(self.catalog)
         self.assets = AssetRepository(self.catalog)
         self.jobs = JobRepository(self.catalog)
         self.admission = AdmissionService(IdentityResolver(self.catalog), self.jobs, self.assets)
@@ -390,7 +390,7 @@ class AcquisitionTests(TestCase):
             )
         )
         self.assertNotEqual(result.status, "succeeded")
-        self.assertEqual(self.assets.get_work_assets(admission.work_id), ())
+        self.assertEqual(self.assets.get_work_version_assets(admission.work_version_id), ())
         self.assertEqual(crossref_transport.urls, [])
 
     def test_provider_malformed_shapes_are_classified(self):
@@ -460,7 +460,7 @@ class AcquisitionTests(TestCase):
         self.assertNotIn("https://example.test/paper.pdf", attempt.details_json)
         self.assertEqual(json.loads(attempt.details_json)["schema_version"], 1)
         self.assertNotIn("candidates", json.loads(attempt.details_json))
-        work_asset = self.assets.get_work_assets(first.work_id)[0]
+        work_asset = self.assets.get_work_version_assets(first.work_version_id)[0]
         raw_asset = self.assets.get_raw_asset(work_asset.raw_asset_id)
         self.assertEqual(raw_asset.media_type, "application/pdf")
         replay = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/paper.pdf")
@@ -486,7 +486,7 @@ class AcquisitionTests(TestCase):
         self.assertIsNone(attempt.source_url)
         self.assertNotIn("https://api.crossref.org/works/10.1%2Fprovenance", attempt.details_json)
         self.assertNotIn("https://files.example/final.pdf", attempt.details_json)
-        raw = self.assets.get_work_assets(admission.work_id)[0]
+        raw = self.assets.get_work_version_assets(admission.work_version_id)[0]
         raw_asset = self.assets.get_raw_asset(raw.raw_asset_id)
         self.assertNotIn("https://files.example/final.pdf", raw_asset.provenance_json)
         self.assertIn('"candidate_id":"p4"', raw_asset.provenance_json)
@@ -586,9 +586,9 @@ class AcquisitionTests(TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(self.jobs.get_job(timed.job_id).state, JobState.FAILED)
         self.assertFalse(drained.is_set())
-        self.assertEqual(self.assets.get_work_assets(timed.work_id), ())
+        self.assertEqual(self.assets.get_work_version_assets(timed.work_version_id), ())
         self.assertTrue(drained.wait(0.2))
-        self.assertEqual(self.assets.get_work_assets(timed.work_id), ())
+        self.assertEqual(self.assets.get_work_version_assets(timed.work_version_id), ())
 
         cancelled = self.admission.admit((Identifier("doi", "10.1/cancel"),), provider="slow")
 
@@ -608,7 +608,7 @@ class AcquisitionTests(TestCase):
         initial = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
         provider = DirectHttpsProvider(FakeTransport([response("https://example.test/a")]))
         asyncio.run(AcquisitionOrchestrator(self.jobs, self.coordinator).acquire(initial, AcquisitionTarget(identifiers, "https://example.test/a"), provider, timeout=1))
-        dangling = attach_or_create_job(self.catalog, initial.work_id, AssetRole.PRIMARY_PDF, "manual-dangling")
+        dangling = attach_or_create_job(self.catalog, initial.work_version_id, AssetRole.PRIMARY_PDF, "manual-dangling")
         replay = self.admission.admit(identifiers, provider="crossref")
         self.assertIsNotNone(replay.reused_asset_id)
         self.assertEqual(self.jobs.get_job(dangling.id).state, JobState.SUCCEEDED)
@@ -638,11 +638,11 @@ class AcquisitionTests(TestCase):
         self.assertIsNotNone(attempt.finished_at)
         self.assertEqual(self.jobs.get_job(admission.job_id).state, JobState.SUCCEEDED)
         self.assertEqual(self.jobs.list_requests(admission.job_id)[0].status, "succeeded")
-        self.assertEqual(len(self.assets.get_work_assets(admission.work_id)), 1)
+        self.assertEqual(len(self.assets.get_work_version_assets(admission.work_version_id)), 1)
 
         replay = self.admission.admit(identifiers, provider="direct", direct_url="https://example.test/a")
         self.assertIsNotNone(replay.reused_asset_id)
-        self.assertEqual(len(self.assets.get_work_assets(admission.work_id)), 1)
+        self.assertEqual(len(self.assets.get_work_version_assets(admission.work_version_id)), 1)
 
     def test_terminal_completion_is_idempotent_but_not_rewritable(self):
         identifiers = (Identifier("doi", "10.1/terminal"),)

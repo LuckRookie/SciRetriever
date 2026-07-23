@@ -49,35 +49,37 @@ class AdmissionService:
         provenance: object | None = None,
     ) -> AdmissionResult:
         resolution = self.identity.create_or_reuse_work(identifiers, metadata)
-        if resolution.work is None:
+        if resolution.work_version is None:
             raise AcquisitionError("identity resolution requires review")
+        work_version_id = resolution.work_version.id
         provider = validate_provider_name(provider)
         if not isinstance(asset_role, AssetRole):
             raise TypeError("asset_role must be an AssetRole")
         if source_plan is not None and source_plan.role is not asset_role:
             raise ValueError("source plan role does not match admission role")
         key = request_key_for(identifiers, provider, direct_url, asset_role)
-        for link in self.assets.get_work_assets(resolution.work.id):
+        for link in self.assets.get_work_version_assets(work_version_id):
             if link.asset_role is asset_role:
                 self.jobs.succeed_nonterminal_jobs_for_work(
-                    resolution.work.id,
+                    work_version_id,
                     asset_role,
                 )
                 return AdmissionResult(
-                    resolution.work.id,
+                    work_version_id,
                     None,
                     key,
                     provider,
                     asset_role,
                     link.raw_asset_id,
+                    resolution.work.id,
                 )
         job = self.jobs.attach_or_create_job(
-            resolution.work.id,
+            work_version_id,
             asset_role,
             key,
             request_provenance=redact(provenance),
         )
-        return AdmissionResult(resolution.work.id, job.id, key, provider, asset_role)
+        return AdmissionResult(work_version_id, job.id, key, provider, asset_role, work_id=resolution.work.id)
 
 
 __all__ = ("AdmissionService", "request_key_for")

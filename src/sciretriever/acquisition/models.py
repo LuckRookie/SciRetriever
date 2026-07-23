@@ -62,12 +62,13 @@ class AcquisitionProvider(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AdmissionResult:
-    work_id: str
+    work_version_id: str
     job_id: str | None
     request_key: str
     provider: str
     asset_role: AssetRole = AssetRole.PRIMARY_PDF
     reused_asset_id: str | None = None
+    work_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", validate_provider_name(self.provider))
@@ -77,9 +78,10 @@ class AdmissionResult:
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionResult:
-    work_id: str
+    work_version_id: str
     job_id: str | None
     status: str
     raw_asset_id: str | None = None
     attempt_id: str | None = None
     error: str | None = None
+    work_id: str | None = None
