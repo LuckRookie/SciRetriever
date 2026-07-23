@@ -4,7 +4,7 @@
 - Date: 2026-07-23
 - Supersedes: 2026-07-22 下载任务产品路线；ADR 0001 的产品中心与旧功能兼容策略部分
 - Superseded by: none
-- Approval reference: `conversation-2026-07-23-literature-library-reset`
+- Approval reference: `conversation-2026-07-23-literature-library-reset`、`conversation-2026-07-23-pre-v1-schema-replacement`
 - Related: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[产品提案](../proposals/literature-library-product.md)、[需求规格](../specs/requirements.md)、[执行计划](../planning/literature-library-execution.md)、[产品决策追踪](../governance/product-decision-trace.md)
 
 ## 背景
@@ -29,16 +29,17 @@
 8. 当前代码中的 `package_versions` 和 `DocumentPackageVersion.package_version` 是处理结果快照，不是书目 `WorkVersion`。后续实现不得复用名称掩盖两者差异。
 9. ADR 0001 的科研文献边界、不可变原始资产、通用轻结构、稳定引用和领域抽取下游化继续有效。本 ADR 只替换产品中心、执行模型和不必要旧功能的兼容策略。
 10. 每个 `WorkVersion` 只保留一份 current LLM analysis。系统先在旁路构建完整新结果；构建失败时旧结果继续可用；原子替换成功后删除或替换旧的 light content、fulltext-derived canonical metadata projection、fulltext-derived references 和 generated tags，不保留分析历史。任何 promoted section、canonical field 或 resolved reference 都必须具有 primary PDF page/span evidence locator；缺少 PDF locator 的输出不得进入 current result。不可变 RawAsset、current parser/model/schema metadata、后端 provider observations、manual metadata 和 manual tags 不随分析覆盖。
+11. 当前项目处于 pre-v1，尚无受支持的旧 catalog。WP1 直接替换初始 schema，并删除不符合目标框架的旧 catalog、legacy import 和兼容代码；不实现 migration、backup、rollback、legacy-read path 或 compatibility layer。未来何时开始承担兼容义务由 owner 另行明确。
 
 ## 后果
 
 - 先删除或解耦旧任务中心架构，再增加新的书目版本、作者、观察值、标签和引用模型。
-- schema 与公开契约变化仍需单独的人审、迁移和验证，但无需为被认定为不需要的旧功能设计兼容层。
+- 本次 WP1 schema 直接替换已经 owner 人工批准；使用全新离线 catalog fixture 验证，不设计旧 schema 迁移、备份、回退或兼容层。未来受支持数据或公开契约变化仍需对应人审。
 - README 必须只描述当前命令；requirements、system design 和 technical architecture 只描述理想产品；implementation progress 单独记录覆盖与差距。
 - 失败恢复以稳定身份、不可变资产和幂等重跑为基础。系统不承诺从崩溃点继续每个内部步骤，也不引入后台 owner 协议来模拟该能力。
 - 删除的是 durable 任务控制状态，不是前台进程的安全中断。任何长操作都必须在 Ctrl+C 后停止领取新记录，并安全闭合当前有限操作。
 - current analysis 是直接覆盖模型，不建立 generated-result history。`package_versions` 可以作为当前实现的处理快照保留，但不能成为目标分析历史模型。
-- 下载历史可以保留用于排障和迁移审计，但不决定目标 CLI、目标 schema 或工作包顺序。
+- 诊断事实只有在目标产品仍需要时才保留；旧下载历史和 legacy catalog import 不承担迁移审计或兼容职责。
 
 ## 被拒绝的替代方案
 
