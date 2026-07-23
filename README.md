@@ -15,7 +15,7 @@ SciRetriever 当前是一套本地科研文献发现、采集、不可变保存�
 | `sciretriever discover` | 查询、清洗、去重和合并 metadata，输出 JSONL manifest |
 | `sciretriever acquire` | 在当前进程内通过明确 provider 或 source plan 获取一个角色资产 |
 | `sciretriever preflight` | 只读检查当前 acquisition 配置，不下载响应正文 |
-| `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产/legacy SQLite |
+| `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产 |
 | `sciretriever package` | 离线归一化并发布 `DocumentPackageVersion` 处理快照 |
 | `sciretriever report` | 只读查看 acquisition job、attempt 和脱敏失败 |
 
@@ -223,7 +223,6 @@ src/sciretriever/
   normalization/    PDF/XML/HTML normalization and evidence
   enrichment/       current deterministic light structure
   packaging/        quality gate and processing snapshot publication
-  legacy/           restricted adapters and retired-path guards
   cli/              current composition root
 ```
 
