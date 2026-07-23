@@ -72,10 +72,8 @@ def _work_record(row: Mapping[Any, Any]) -> WorkRecord:
     return WorkRecord(
         id=row["id"],
         status=row["status"],
-        title=row["title"],
-        abstract=row["abstract"],
-        publication_year=row["publication_year"],
-        venue=row["venue"],
+        preferred_work_version_id=row["preferred_work_version_id"],
+        preferred_version_is_manual=bool(row["preferred_version_is_manual"]),
         needs_review=bool(row["needs_review"]),
         review_reason=row["review_reason"],
         merged_into_work_id=row["merged_into_work_id"],
@@ -87,7 +85,7 @@ def _work_record(row: Mapping[Any, Any]) -> WorkRecord:
 def _label_record(row: Mapping[Any, Any]) -> MetadataLabelRecord:
     return MetadataLabelRecord(
         id=row["id"],
-        work_id=row["work_id"],
+        work_version_id=row["work_version_id"],
         taxonomy=row["taxonomy"],
         taxonomy_version=row["taxonomy_version"],
         input_sha256=row["input_sha256"],
@@ -111,7 +109,7 @@ def _event_record(row: Mapping[Any, Any]) -> EventRecord:
 def _failure_record(row: Mapping[Any, Any]) -> FailureRecord:
     return FailureRecord(
         id=row["id"],
-        work_id=row["work_id"],
+        work_version_id=row["work_version_id"],
         job_id=row["job_id"],
         attempt_id=row["attempt_id"],
         processing_run_id=row["processing_run_id"],
@@ -150,7 +148,7 @@ def _select_work_by_identifier(
 def _select_labels(
     connection: Connection,
     *,
-    work_id: str,
+    work_version_id: str,
     taxonomy: str,
     taxonomy_version: str,
     input_sha256: str,
@@ -159,7 +157,7 @@ def _select_labels(
         connection.execute(
             select(metadata_labels)
             .where(
-                metadata_labels.c.work_id == work_id,
+                metadata_labels.c.work_version_id == work_version_id,
                 metadata_labels.c.taxonomy == taxonomy,
                 metadata_labels.c.taxonomy_version == taxonomy_version,
                 metadata_labels.c.input_sha256 == input_sha256,
@@ -218,7 +216,7 @@ class CatalogRepository:
 
     def add_metadata_label(
         self,
-        work_id: str,
+        work_version_id: str,
         taxonomy: str,
         taxonomy_version: str,
         input_sha256: str,
@@ -226,7 +224,7 @@ class CatalogRepository:
         *,
         needs_review: bool = False,
     ) -> MetadataLabelRecord:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
         taxonomy = _required_text(taxonomy, "taxonomy")
         taxonomy_version = _required_text(taxonomy_version, "taxonomy_version")
         input_sha256 = validate_sha256(input_sha256, "input_sha256")
@@ -238,7 +236,7 @@ class CatalogRepository:
                 existing = (
                     connection.execute(
                         select(metadata_labels).where(
-                            metadata_labels.c.work_id == work_id,
+                            metadata_labels.c.work_version_id == work_version_id,
                             metadata_labels.c.taxonomy == taxonomy,
                             metadata_labels.c.taxonomy_version == taxonomy_version,
                             metadata_labels.c.input_sha256 == input_sha256,
@@ -252,7 +250,7 @@ class CatalogRepository:
                     return _label_record(existing)
                 values = {
                     "id": new_uuid4(),
-                    "work_id": work_id,
+                    "work_version_id": work_version_id,
                     "taxonomy": taxonomy,
                     "taxonomy_version": taxonomy_version,
                     "input_sha256": input_sha256,
@@ -267,12 +265,12 @@ class CatalogRepository:
 
     def get_reusable_metadata_labels(
         self,
-        work_id: str,
+        work_version_id: str,
         taxonomy: str,
         taxonomy_version: str,
         input_sha256: str,
     ) -> tuple[MetadataLabelRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
         taxonomy = _required_text(taxonomy, "taxonomy")
         taxonomy_version = _required_text(taxonomy_version, "taxonomy_version")
         input_sha256 = validate_sha256(input_sha256, "input_sha256")
@@ -280,7 +278,7 @@ class CatalogRepository:
             with self._catalog.connect() as connection:
                 return _select_labels(
                     connection,
-                    work_id=work_id,
+                    work_version_id=work_version_id,
                     taxonomy=taxonomy,
                     taxonomy_version=taxonomy_version,
                     input_sha256=input_sha256,
@@ -310,7 +308,7 @@ class CatalogRepository:
         category: str,
         message: str,
         *,
-        work_id: str | None = None,
+        work_version_id: str | None = None,
         job_id: str | None = None,
         attempt_id: str | None = None,
         processing_run_id: str | None = None,
@@ -318,7 +316,7 @@ class CatalogRepository:
         details: object | None = None,
     ) -> FailureRecord:
         contexts = {
-            "work_id": work_id,
+            "work_version_id": work_version_id,
             "job_id": job_id,
             "attempt_id": attempt_id,
             "processing_run_id": processing_run_id,
@@ -371,12 +369,12 @@ class ReadOnlyCatalogView:
 
     def get_reusable_metadata_labels(
         self,
-        work_id: str,
+        work_version_id: str,
         taxonomy: str,
         taxonomy_version: str,
         input_sha256: str,
     ) -> tuple[MetadataLabelRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
         taxonomy = _required_text(taxonomy, "taxonomy")
         taxonomy_version = _required_text(taxonomy_version, "taxonomy_version")
         input_sha256 = validate_sha256(input_sha256, "input_sha256")
@@ -384,7 +382,7 @@ class ReadOnlyCatalogView:
             with self.__catalog.connect() as connection:
                 return _select_labels(
                     connection,
-                    work_id=work_id,
+                    work_version_id=work_version_id,
                     taxonomy=taxonomy,
                     taxonomy_version=taxonomy_version,
                     input_sha256=input_sha256,
