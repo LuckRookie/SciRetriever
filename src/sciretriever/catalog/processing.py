@@ -41,7 +41,7 @@ class ProcessingRunRepository:
 
     def claim_or_resume(
         self,
-        work_id: str,
+        work_version_id: str,
         stage: ProcessingStage | str,
         producer: str,
         producer_version: str,
@@ -50,21 +50,18 @@ class ProcessingRunRepository:
         input_raw_asset_ids: tuple[str, ...] = (),
         input_artifact_ids: tuple[str, ...] = (),
     ) -> ProcessingRunRecord:
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         normalized_stage = _stage(stage)
         producer = _required_text(producer, "producer")
         producer_version = _required_text(producer_version, "producer_version")
         raw_ids = tuple(sorted(validate_uuid(value, "input_raw_asset_id") for value in input_raw_asset_ids))
         artifact_ids = tuple(sorted(validate_uuid(value, "input_artifact_id") for value in input_artifact_ids))
-        key = {
-            "work_id": work_id,
-            "stage": normalized_stage.value,
-            "producer": producer,
-            "producer_version": producer_version,
-            "parameters": parameters,
-            "input_raw_asset_ids": list(raw_ids),
-            "input_artifact_ids": list(artifact_ids),
-        }
+        key = {"work_version_id": work_version_id, "stage": normalized_stage.value,
+        "producer": producer,
+        "producer_version": producer_version,
+        "parameters": parameters,
+        "input_raw_asset_ids": list(raw_ids),
+        "input_artifact_ids": list(artifact_ids),}
         run_id = stable_derivation_id("processing_run", key)
         details = {
             **key,
@@ -89,7 +86,7 @@ class ProcessingRunRepository:
                     return ProcessingRunRecord.from_row({**dict(row), "state": "active", "started_at": now, "finished_at": None})
                 now = utc_now_rfc3339()
                 values = {
-                    "id": run_id, "work_id": work_id, "stage": normalized_stage.value,
+                    "id": run_id, "work_version_id": work_version_id, "stage": normalized_stage.value,
                     "state": "active", "input_raw_asset_id": raw_ids[0] if raw_ids else None,
                     "input_artifact_id": artifact_ids[0] if artifact_ids else None,
                     "output_artifact_id": None, "details_json": details_json,
@@ -140,7 +137,7 @@ class ProcessingRunRepository:
                 connection.execute(update(processing_runs).where(processing_runs.c.id == run_id).values(state="failed", finished_at=now))
                 failure_values = {
                     "id": stable_derivation_id("processing_failure", {"run_id": run_id, "category": category, "message": message, "details": details}),
-                    "work_id": row["work_id"], "job_id": None, "attempt_id": None,
+                    "work_version_id": row["work_version_id"], "job_id": None, "attempt_id": None,
                     "processing_run_id": run_id, "category": category, "message": message,
                     "retryable": int(retryable), "details_json": details_json, "occurred_at": now,
                 }
@@ -175,7 +172,7 @@ class ProcessingRunRepository:
                     return
                 now = utc_now_rfc3339()
                 connection.execute(insert(failures).values(
-                    id=failure_id, work_id=run["work_id"], job_id=None, attempt_id=None,
+                    id=failure_id, work_version_id=run["work_version_id"], job_id=None, attempt_id=None,
                     processing_run_id=run_id, category=category, message=message,
                     retryable=0, details_json=None if details is None else canonical_json(details),
                     occurred_at=now,
