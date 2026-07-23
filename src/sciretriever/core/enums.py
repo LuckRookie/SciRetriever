@@ -29,8 +29,6 @@ NONTERMINAL_JOB_STATES = frozenset(
     {
         JobState.PENDING,
         JobState.ACTIVE,
-        JobState.RETRYABLE,
-        JobState.PAUSED,
     }
 )
 

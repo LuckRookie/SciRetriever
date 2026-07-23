@@ -41,6 +41,7 @@ from .artifacts import ArtifactRepository
 from .enrichment import CitationRepository, EnrichmentRepository
 from .packages import PackageSourceRepository, PackageVersionRepository
 from .processing import ProcessingRunRepository
+from .reporting import CatalogReportingRepository
 
 
 _domain_runs_api = import_module(f"{__name__}.domain_runs")
@@ -62,6 +63,7 @@ __all__ = (
     "AssetRepository",
     "CatalogEngine",
     "CatalogRepository",
+    "CatalogReportingRepository",
     "CitationRecord",
     "CitationRepository",
     "DomainRunRecord",

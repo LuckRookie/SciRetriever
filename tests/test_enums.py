@@ -57,8 +57,6 @@ class EnumTests(TestCase):
             {
                 enums.JobState.PENDING,
                 enums.JobState.ACTIVE,
-                enums.JobState.RETRYABLE,
-                enums.JobState.PAUSED,
             }
         )
         self.assertIsInstance(enums.NONTERMINAL_JOB_STATES, frozenset)
