@@ -15,10 +15,8 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (
     CatalogRepository,
     IdentityResolver,
-    ReadOnlyCatalogView,
-    apply_migrations,
-    create_catalog_engine,
-    open_read_only_catalog_engine,
+    ReadOnlyCatalogView, initialize_catalog, create_catalog_engine,
+open_read_only_catalog_engine,
 )
 from sciretriever.core.contracts import CandidateMetadata, Identifier
 from sciretriever.discovery.models import MergedCandidate
@@ -174,7 +172,7 @@ class CatalogLabelReuseTests(TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         self.catalog = create_catalog_engine(self.path)
-        apply_migrations(self.catalog)
+        initialize_catalog(self.catalog)
         self.repository = CatalogRepository(self.catalog)
         self.resolver = IdentityResolver(self.repository)
 
@@ -193,7 +191,7 @@ class CatalogLabelReuseTests(TestCase):
 
     def create_work(self, identifiers: tuple[Identifier, ...]) -> str:
         resolution = self.resolver.create_or_reuse_work(identifiers)
-        return resolution.work.id
+        return resolution.work_version.id
 
     def test_no_catalog_work_calls_labeler_and_preserves_merged_review_reason(self) -> None:
         candidate = merged_candidate(abstract=None, reasons=("missing_abstract",))

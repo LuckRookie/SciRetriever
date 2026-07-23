@@ -200,8 +200,9 @@ def compare_candidate_with_catalog(
 
     if len(works) == 1:
         work_id = next(iter(works))
-        cached = catalog.get_reusable_metadata_labels(
-            work_id,
+        preferred_work_version_id = works[work_id].preferred_work_version_id
+        cached = () if preferred_work_version_id is None else catalog.get_reusable_metadata_labels(
+            preferred_work_version_id,
             taxonomy,
             taxonomy_version,
             label_input_sha256(candidate.metadata),
