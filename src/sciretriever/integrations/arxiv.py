@@ -141,6 +141,7 @@ class ArxivClient(BaseClient):
             venue=cls._optional_text(entry, f"{{{ARXIV}}}journal_ref"),
             identifiers=identifiers,
             keywords=cls._categories(entry),
+            open_access_status="open",
         )
 
     @classmethod

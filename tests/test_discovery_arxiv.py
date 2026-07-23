@@ -81,6 +81,7 @@ class ArxivProviderTests(TestCase):
         self.assertEqual(records[0].year, 2024)
         self.assertEqual(records[0].venue, "Journal X 12 (2024)")
         self.assertEqual(records[0].keywords, ("cs.IR", "cs.DL"))
+        self.assertEqual(records[0].open_access_status, "open")
         self.assertIsNone(records[1].abstract)
         self.assertEqual(sleeps, [3.0])
         self.assertEqual(
