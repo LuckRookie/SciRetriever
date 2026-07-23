@@ -395,4 +395,4 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 5. local library 查询、人工整理、复核、可撤销审计和阅读版/`DocumentPackage` 显式 export 可用。
 6. failures 能覆盖 metadata、acquisition、analysis 和 expansion，config check 能给出脱敏、可行动的结果。
 7. README、示例配置和 `--help` 只声明已发布能力，并与[实施进度](../governance/implementation-progress.md)中的验证证据一致。
-8. 任何适用的数据迁移、备份、回退、不可变资产和 retired-database safeguards 均通过相应人工门禁。
+8. 不可变资产、安全和完整性边界通过相应人工门禁；当前 pre-v1 WP1 直接建立新 schema，不要求旧 catalog 迁移、备份、回退、legacy read path 或 retired-database safeguard。
