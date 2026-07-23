@@ -1,4 +1,4 @@
-"""Compatibility shim for running SciRetriever from the repository root."""
+"""Repository-root entry point for SciRetriever."""
 
 import sys
 from pathlib import Path
