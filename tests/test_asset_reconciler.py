@@ -21,10 +21,8 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository,
-    apply_migrations,
-    create_catalog_engine,
-    open_catalog_engine,
+    JobRepository, initialize_catalog, create_catalog_engine,
+open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
 from sciretriever.errors import (  # noqa: E402
@@ -52,17 +50,15 @@ class ReconciliationEnvironment:
         self.storage_root.mkdir()
         self.catalog_path = self.base / "catalog.sqlite"
         self.catalog = create_catalog_engine(self.catalog_path)
-        apply_migrations(self.catalog)
+        initialize_catalog(self.catalog)
         self.store = RawAssetStore(self.storage_root)
         self.assets = AssetRepository(self.catalog)
         self.reconciler = RawAssetReconciler(self.store, self.assets)
-        work = IdentityResolver(self.catalog).create_or_reuse_work(
-            {"doi": f"10.1000/{new_id()}"}
-        ).work
+        work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/{new_id()}"}).work_version
         job = JobRepository(self.catalog).attach_or_create_job(
             work.id, AssetRole.PRIMARY_PDF
         )
-        self.work_id = work.id
+        self.work_version_id = work.id
         self.job_id = job.id
 
     def close(self) -> None:
@@ -80,7 +76,7 @@ class ReconciliationEnvironment:
         sha256 = hashlib.sha256(data).hexdigest()
         intent = self.assets.create_intent(
             intent_id,
-            self.work_id,
+            self.work_version_id,
             self.job_id,
             AssetRole.PRIMARY_PDF,
             sha256,
@@ -374,7 +370,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
         self.assertIs(reconciled.state, AssetIntentState.ABANDONED)
         self.assertIsNone(reconciled.raw_asset_id)
         self.assertEqual(self.environment.count("raw_assets"), 0)
-        self.assertEqual(self.environment.count("work_assets"), 0)
+        self.assertEqual(self.environment.count("work_version_assets"), 0)
         self.assertEqual(first.items[0].action, "abandoned_corrupt_target")
         self.assertEqual(second.items[0].action, "terminal_abandoned")
         self.assertEqual(
@@ -489,7 +485,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
             self.environment.count("failures"),
             self.environment.count("events"),
             self.environment.count("raw_assets"),
-            self.environment.count("work_assets"),
+            self.environment.count("work_version_assets"),
         )
 
         second = self.environment.reconciler.reconcile_all()
@@ -501,7 +497,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
                 self.environment.count("failures"),
                 self.environment.count("events"),
                 self.environment.count("raw_assets"),
-                self.environment.count("work_assets"),
+                self.environment.count("work_version_assets"),
             ),
             counts,
         )
@@ -588,7 +584,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
             (self.environment.storage_root / staged.temporary_path).exists()
         )
         self.assertEqual(self.environment.count("raw_assets"), 1)
-        self.assertEqual(self.environment.count("work_assets"), 1)
+        self.assertEqual(self.environment.count("work_version_assets"), 1)
         with self.environment.catalog.connect() as connection:
             self.assertEqual(
                 connection.exec_driver_sql("PRAGMA integrity_check").scalar_one(),
