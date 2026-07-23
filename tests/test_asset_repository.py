@@ -31,12 +31,12 @@ class AssetRepositoryTests(TestCase):
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         self.catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(self.catalog.dispose)
-        catalog_api.apply_migrations(self.catalog)
+        catalog_api.initialize_catalog(self.catalog)
         self.assets = assets_api.AssetRepository(self.catalog)
-        self.work_id, self.job_id = self.create_work_and_job("10.1000/assets-one")
+        self.work_version_id, self.job_id = self.create_work_and_job("10.1000/assets-one")
 
     def create_work_and_job(self, doi: str, role: str = "primary_pdf") -> tuple[str, str]:
-        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": doi}).work
+        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": doi}).work_version
         job = catalog_api.JobRepository(self.catalog).attach_or_create_job(work.id, role)
         return work.id, job.id
 
@@ -52,7 +52,7 @@ class AssetRepositoryTests(TestCase):
     ):
         return self.assets.create_intent(
             intent_id or new_id(),
-            work_id or self.work_id,
+            work_id or self.work_version_id,
             job_id or self.job_id,
             enums.AssetRole.PRIMARY_PDF,
             sha256,
@@ -81,9 +81,9 @@ class AssetRepositoryTests(TestCase):
         raw = self.assets.get_raw_asset(published.raw_asset_id)
         self.assertIsInstance(raw, catalog_api.RawAssetRecord)
         self.assertEqual(self.assets.get_raw_asset_by_sha256(intent.expected_sha256), raw)
-        links = self.assets.get_work_assets(self.work_id)
+        links = self.assets.get_work_version_assets(self.work_version_id)
         self.assertEqual(len(links), 1)
-        self.assertIsInstance(links[0], catalog_api.WorkAssetRecord)
+        self.assertIsInstance(links[0], catalog_api.WorkVersionAssetRecord)
         self.assertIs(links[0].asset_role, enums.AssetRole.PRIMARY_PDF)
         self.assertIsNone(self.assets.get_raw_asset(new_id()))
         self.assertIsNone(self.assets.get_raw_asset_by_sha256("f" * 64))
@@ -117,7 +117,7 @@ class AssetRepositoryTests(TestCase):
         work_two, job_two = self.create_work_and_job("10.1000/assets-two")
         sha256 = "b" * 64
         first = self.create_intent(
-            work_id=self.work_id,
+            work_id=self.work_version_id,
             job_id=self.job_id,
             sha256=sha256,
             provenance={"provider": "first"},
@@ -139,7 +139,7 @@ class AssetRepositoryTests(TestCase):
 
         self.assertEqual({item.raw_asset_id for item in published}, {published[0].raw_asset_id})
         self.assertEqual(self.count("raw_assets"), 1)
-        self.assertEqual(self.count("work_assets"), 2)
+        self.assertEqual(self.count("work_version_assets"), 2)
         self.assertEqual(self.count("asset_intents"), 2)
         raw = self.assets.get_raw_asset(published[0].raw_asset_id)
         self.assertIn(raw.provenance_json, ('{"provider":"first"}', '{"provider":"second"}'))
@@ -171,9 +171,9 @@ class AssetRepositoryTests(TestCase):
         self.assertEqual((self.count("failures"), self.count("events")), counts)
         with self.catalog.connect() as connection:
             failure = connection.exec_driver_sql(
-                "SELECT work_id, job_id, category, retryable, details_json FROM failures"
+                "SELECT work_version_id, job_id, category, retryable, details_json FROM failures"
             ).mappings().one()
-        self.assertEqual(failure["work_id"], self.work_id)
+        self.assertEqual(failure["work_version_id"], self.work_version_id)
         self.assertEqual(failure["job_id"], self.job_id)
         self.assertEqual(failure["category"], "verification_failed")
         self.assertEqual(failure["retryable"], 1)
@@ -218,7 +218,7 @@ class AssetRepositoryTests(TestCase):
                     details={"state": intent.state.value},
                 )
                 self.assertIsInstance(failure, catalog_api.FailureRecord)
-                self.assertEqual(failure.work_id, intent.work_id)
+                self.assertEqual(failure.work_version_id, intent.work_version_id)
                 self.assertEqual(failure.job_id, intent.job_id)
                 self.assertEqual(
                     json.loads(failure.details_json),
@@ -344,10 +344,10 @@ class AssetRepositoryTests(TestCase):
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (new_id(), "3" * 64, f"raw/33/{'3' * 64}", "application/pdf", "pdf", 99, "{}"),
             )
-        counts = (self.count("work_assets"), self.count("events"))
+        counts = (self.count("work_version_assets"), self.count("events"))
         with self.assertRaisesRegex(CatalogError, "metadata conflicts"):
             self.assets.register_verified_published_intent(intent.id)
-        self.assertEqual((self.count("work_assets"), self.count("events")), counts)
+        self.assertEqual((self.count("work_version_assets"), self.count("events")), counts)
         self.assertIs(self.assets.get_intent(intent.id).state, enums.AssetIntentState.PENDING)
 
     def test_create_intent_rejects_incoherent_job_work_role_and_attempt(self) -> None:
@@ -361,9 +361,9 @@ class AssetRepositoryTests(TestCase):
             )
 
         cases = (
-            (self.work_id, job_two, "primary_pdf", None, "does not belong"),
+            (self.work_version_id, job_two, "primary_pdf", None, "does not belong"),
             (xml_work, xml_job, "primary_pdf", None, "role does not match"),
-            (self.work_id, self.job_id, "primary_pdf", attempt_id, "attempt does not belong"),
+            (self.work_version_id, self.job_id, "primary_pdf", attempt_id, "attempt does not belong"),
         )
         for work_id, job_id, role, attempt, message in cases:
             with self.subTest(message=message):

@@ -18,10 +18,8 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository,
-    apply_migrations,
-    create_catalog_engine,
-    open_catalog_engine,
+    JobRepository, initialize_catalog, create_catalog_engine,
+open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
 from sciretriever.storage import (  # noqa: E402
@@ -46,13 +44,11 @@ class RawAssetConcurrencyTests(TestCase):
         self.storage_root = self.base / "storage"
         self.storage_root.mkdir()
         self.catalog = create_catalog_engine(self.catalog_path)
-        apply_migrations(self.catalog)
+        initialize_catalog(self.catalog)
         self.addCleanup(self.catalog.dispose)
 
     def create_work_and_job(self, index: int) -> tuple[str, str]:
-        work = IdentityResolver(self.catalog).create_or_reuse_work(
-            {"doi": f"10.1000/concurrent-{index}"}
-        ).work
+        work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/concurrent-{index}"}).work_version
         job = JobRepository(self.catalog).attach_or_create_job(
             work.id, AssetRole.PRIMARY_PDF
         )
@@ -182,7 +178,7 @@ class RawAssetConcurrencyTests(TestCase):
                 connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 1
             )
             self.assertEqual(
-                connection.exec_driver_sql("SELECT count(*) FROM work_assets").scalar_one(),
+                        connection.exec_driver_sql("SELECT count(*) FROM work_version_assets").scalar_one(),
                 len(work_jobs),
             )
             event_rows = connection.exec_driver_sql(
@@ -232,7 +228,7 @@ class RawAssetConcurrencyTests(TestCase):
         RawAssetReconciler(store, assets).reconcile_all()
         counts = {}
         with self.catalog.connect() as connection:
-            for table in ("asset_intents", "raw_assets", "work_assets", "events", "failures"):
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "events", "failures"):
                 counts[table] = connection.exec_driver_sql(
                     f'SELECT count(*) FROM "{table}"'
                 ).scalar_one()
@@ -243,7 +239,7 @@ class RawAssetConcurrencyTests(TestCase):
         self.assertIs(intents[0].state, AssetIntentState.FINALIZED)
         self.assertEqual(json.loads(intents[0].provenance_json), provenance)
         self.assertEqual(counts["raw_assets"], 1)
-        self.assertEqual(counts["work_assets"], 1)
+        self.assertEqual(counts["work_version_assets"], 1)
         self.assertEqual(counts["failures"], 0)
         self.assertEqual(store.enumerate_staging(), ((), ()))
         with self.catalog.connect() as connection:

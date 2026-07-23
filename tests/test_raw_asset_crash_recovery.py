@@ -19,10 +19,8 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository,
-    apply_migrations,
-    create_catalog_engine,
-    open_catalog_engine,
+    JobRepository, initialize_catalog, create_catalog_engine,
+open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
 from sciretriever.errors import CatalogError, DurabilityError, StorageError  # noqa: E402
@@ -49,14 +47,12 @@ class RecoveryEnvironment:
         self.storage_root = self.base / "storage"
         self.storage_root.mkdir()
         self.catalog = create_catalog_engine(self.catalog_path)
-        apply_migrations(self.catalog)
-        work = IdentityResolver(self.catalog).create_or_reuse_work(
-            {"doi": f"10.1000/recovery-{label}"}
-        ).work
+        initialize_catalog(self.catalog)
+        work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/recovery-{label}"}).work_version
         job = JobRepository(self.catalog).attach_or_create_job(
             work.id, AssetRole.PRIMARY_PDF
         )
-        self.work_id = work.id
+        self.work_version_id = work.id
         self.job_id = job.id
         self._rebuild_components()
 
@@ -80,7 +76,7 @@ class RecoveryEnvironment:
             arguments["checkpoint"] = checkpoint
         return self.coordinator.accept(
             BytesIO(data),
-            self.work_id,
+            self.work_version_id,
             self.job_id,
             AssetRole.PRIMARY_PDF,
             "application/pdf",
@@ -176,7 +172,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                         for table in (
                             "asset_intents",
                             "raw_assets",
-                            "work_assets",
+                            "work_version_assets",
                             "events",
                             "failures",
                         )
@@ -198,7 +194,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                         self.assertIsNotNone(intent.raw_asset_id)
                         self.assertEqual(counts["asset_intents"], 1)
                         self.assertEqual(counts["raw_assets"], 1)
-                        self.assertEqual(counts["work_assets"], 1)
+                        self.assertEqual(counts["work_version_assets"], 1)
                         self.assertEqual(
                             environment.event_types(intent_id),
                             (
@@ -213,7 +209,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                         raw = environment.assets.get_raw_asset(raw_asset_id)
                         self.assertIsNotNone(raw)
                         self.assertEqual(raw.sha256, digest)
-                        links = environment.assets.get_work_assets(environment.work_id)
+                        links = environment.assets.get_work_version_assets(environment.work_version_id)
                         self.assertEqual(len(links), 1)
                         self.assertEqual(links[0].raw_asset_id, intent.raw_asset_id)
                         self.assertIs(links[0].asset_role, AssetRole.PRIMARY_PDF)
@@ -284,7 +280,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                     assert intent is not None
                     self.assertIs(intent.state, AssetIntentState.FINALIZED)
                     self.assertEqual(environment.count("raw_assets"), 1)
-                    self.assertEqual(environment.count("work_assets"), 1)
+                    self.assertEqual(environment.count("work_version_assets"), 1)
                     self.assertEqual(
                         (environment.count("events"), environment.count("failures")),
                         counts,
@@ -337,7 +333,7 @@ class RawAssetCrashRecoveryTests(TestCase):
             staged = environment.store.stage(BytesIO(data), intent_id=intent_id)
             intent = environment.assets.create_intent(
                 intent_id,
-                environment.work_id,
+                environment.work_version_id,
                 environment.job_id,
                 AssetRole.PRIMARY_PDF,
                 staged.sha256,
@@ -360,7 +356,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                 self.assertEqual(first.items[0].action, "registered_target_finalized")
                 self.assertEqual(second.items[0].action, "terminal_valid")
                 self.assertEqual(environment.count("raw_assets"), 1)
-                self.assertEqual(environment.count("work_assets"), 1)
+                self.assertEqual(environment.count("work_version_assets"), 1)
                 self.assertEqual(
                     (environment.count("events"), environment.count("failures")), counts
                 )

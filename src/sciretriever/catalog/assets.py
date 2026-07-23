@@ -13,13 +13,13 @@ from sciretriever.catalog.models import (
     asset_intents,
     failures,
     raw_assets,
-    work_assets,
+    work_version_assets,
 )
 from sciretriever.catalog.records import (
     AssetIntentRecord,
     FailureRecord,
     RawAssetRecord,
-    WorkAssetRecord,
+    WorkVersionAssetRecord,
 )
 from sciretriever.catalog.repository import (
     _append_event,
@@ -58,8 +58,8 @@ def _raw_asset_record(row: Mapping[Any, Any]) -> RawAssetRecord:
     return RawAssetRecord.from_row(row)
 
 
-def _work_asset_record(row: Mapping[Any, Any]) -> WorkAssetRecord:
-    return WorkAssetRecord.from_row(row)
+def _work_asset_record(row: Mapping[Any, Any]) -> WorkVersionAssetRecord:
+    return WorkVersionAssetRecord.from_row(row)
 
 
 def _select_intent(connection: Any, intent_id: str) -> AssetIntentRecord | None:
@@ -72,7 +72,7 @@ def _select_intent(connection: Any, intent_id: str) -> AssetIntentRecord | None:
 
 
 _REPLAY_FIELDS = (
-    "work_id",
+    "work_version_id",
     "job_id",
     "attempt_id",
     "asset_role",
@@ -109,7 +109,7 @@ def _record_intent_failure(
         connection.execute(
             select(failures)
             .where(
-                failures.c.work_id == intent["work_id"],
+                failures.c.work_version_id == intent["work_version_id"],
                 failures.c.job_id == intent["job_id"],
                 failures.c.attempt_id == intent["attempt_id"],
                 failures.c.processing_run_id.is_(None),
@@ -127,7 +127,7 @@ def _record_intent_failure(
         return _failure_record(existing), False
     values = {
         "id": new_uuid4(),
-        "work_id": intent["work_id"],
+        "work_version_id": intent["work_version_id"],
         "job_id": intent["job_id"],
         "attempt_id": intent["attempt_id"],
         "processing_run_id": None,
@@ -213,15 +213,18 @@ class AssetRepository:
                 )
         return None if row is None else _raw_asset_record(row)
 
-    def get_work_assets(self, work_id: str) -> tuple[WorkAssetRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
+    def get_work_version_assets(
+        self,
+        work_version_id: str,
+    ) -> tuple[WorkVersionAssetRecord, ...]:
+        work_version_id = validate_uuid(work_version_id, "work_id")
         with catalog_operation("work asset lookup"):
             with self.__catalog.connect() as connection:
                 rows = (
                     connection.execute(
-                        select(work_assets)
-                        .where(work_assets.c.work_id == work_id)
-                        .order_by(work_assets.c.asset_role, work_assets.c.raw_asset_id)
+                        select(work_version_assets)
+                        .where(work_version_assets.c.work_version_id == work_version_id)
+                        .order_by(work_version_assets.c.asset_role, work_version_assets.c.raw_asset_id)
                     )
                     .mappings()
                     .all()
@@ -231,7 +234,7 @@ class AssetRepository:
     def create_intent(
         self,
         intent_id: str,
-        work_id: str,
+        work_version_id: str,
         job_id: str,
         asset_role: AssetRole | str,
         expected_sha256: str,
@@ -243,7 +246,7 @@ class AssetRepository:
         attempt_id: str | None = None,
     ) -> AssetIntentRecord:
         intent_id = validate_uuid(intent_id, "intent_id")
-        work_id = validate_uuid(work_id, "work_id")
+        work_version_id = validate_uuid(work_version_id, "work_id")
         job_id = validate_uuid(job_id, "job_id")
         if attempt_id is not None:
             attempt_id = validate_uuid(attempt_id, "attempt_id")
@@ -256,7 +259,7 @@ class AssetRepository:
         now = utc_now_rfc3339()
         values = {
             "id": intent_id,
-            "work_id": work_id,
+            "work_version_id": work_version_id,
             "job_id": job_id,
             "attempt_id": attempt_id,
             "raw_asset_id": None,
@@ -283,7 +286,7 @@ class AssetRepository:
                 )
                 if job is None:
                     raise CatalogError(f"acquisition job does not exist: {job_id}")
-                if job["work_id"] != work_id:
+                if job["work_version_id"] != work_version_id:
                     raise CatalogError("acquisition job does not belong to the requested work")
                 if job["asset_role"] != role.value:
                     raise CatalogError("acquisition job asset role does not match the intent")
@@ -388,10 +391,10 @@ class AssetRepository:
 
                 link = (
                     connection.execute(
-                        select(work_assets).where(
-                            work_assets.c.work_id == row["work_id"],
-                            work_assets.c.raw_asset_id == raw_row["id"],
-                            work_assets.c.asset_role == row["asset_role"],
+                        select(work_version_assets).where(
+                            work_version_assets.c.work_version_id == row["work_version_id"],
+                            work_version_assets.c.raw_asset_id == raw_row["id"],
+                            work_version_assets.c.asset_role == row["asset_role"],
                         )
                     )
                     .mappings()
@@ -399,8 +402,8 @@ class AssetRepository:
                 )
                 if link is None:
                     connection.execute(
-                        insert(work_assets).values(
-                            work_id=row["work_id"],
+                        insert(work_version_assets).values(
+                            work_version_id=row["work_version_id"],
                             raw_asset_id=raw_row["id"],
                             asset_role=row["asset_role"],
                             linked_at=utc_now_rfc3339(),
