@@ -1,4 +1,4 @@
-"""P9 adapter/security tests plus product AC-5 through AC-9 coverage."""
+"""Existing-asset security tests plus product AC-5 through AC-9 coverage."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import io
 import json
 import os
 from pathlib import Path
-import sqlite3
 import stat
 import sys
 import threading
@@ -16,7 +15,6 @@ import time
 from tempfile import TemporaryDirectory
 from typing import cast
 from unittest import TestCase, mock
-from PyPDF2 import PdfWriter
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SRC = REPOSITORY / "src"
@@ -24,19 +22,19 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever.acquisition.admission import AdmissionService
-from sciretriever.catalog import apply_migrations, create_catalog_engine
+from sciretriever.acquisition.existing_asset import ExistingAssetImporter
+from sciretriever.catalog import create_catalog_engine, initialize_catalog
 from sciretriever.catalog.assets import AssetRepository
 from sciretriever.catalog.identity import IdentityResolver
 from sciretriever.catalog.jobs import JobRepository
 from sciretriever.catalog.models import metadata as catalog_metadata
-from sciretriever.catalog.packages import PackageVersionRepository
+from sciretriever.catalog.packages import PackageSourceRepository, PackageVersionRepository
 from sciretriever.catalog.records import PackageVersionRecord
 from sciretriever.catalog.repository import CatalogRepository
 from sciretriever.cli.main import main
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import AssetRole, AttemptOutcome, JobState, PackageQuality
 from sciretriever.errors import SciRetrieverError
-from sciretriever.legacy import ExistingAssetImporter, LegacyPaperAdapter, LegacySQLiteReader
 from sciretriever.packaging import PackagePipeline
 from sciretriever.packaging.publisher import PackagePublisher
 from sciretriever.storage.coordinator import AssetAcceptanceCoordinator
@@ -45,33 +43,6 @@ from sciretriever.storage.manager import RawAssetStore
 
 
 XML_BYTES = b"<article><front><title-group><article-title>P9</article-title></title-group></front><body><p>Evidence text.</p></body></article>"
-
-
-def valid_pdf() -> bytes:
-    stream = io.BytesIO()
-    writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
-    writer.add_blank_page(width=612, height=792)
-    writer.add_metadata({"/Subject": "P9 acceptance evidence " * 100})
-    writer.write(stream)
-    return stream.getvalue()
-
-
-def create_legacy(path: Path, count: int = 1) -> None:
-    connection = sqlite3.connect(path)
-    try:
-        connection.execute(
-            "CREATE TABLE papers (id INTEGER PRIMARY KEY, title TEXT, authors JSON, abstract TEXT, "
-            "doi TEXT, url TEXT, pub_year INTEGER, journal TEXT, keywords JSON, pdf_path TEXT)"
-        )
-        connection.executemany(
-            "INSERT INTO papers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ((index, f"Title {index}", '["A"]', "Abstract", None, None, 2024, "Venue", '["key"]', None)
-             for index in range(1, count + 1)),
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 class P9AcceptanceTests(TestCase):
@@ -87,7 +58,7 @@ class P9AcceptanceTests(TestCase):
 
     def importer(self):
         catalog = create_catalog_engine(self.catalog_path)
-        apply_migrations(catalog)
+        initialize_catalog(catalog)
         assets = AssetRepository(catalog)
         jobs = JobRepository(catalog)
         repository = CatalogRepository(catalog)
@@ -103,35 +74,13 @@ class P9AcceptanceTests(TestCase):
         tables = (
             "works", "identifiers", "identity_reviews", "acquisition_jobs",
             "download_requests", "acquisition_attempts", "asset_intents",
-            "raw_assets", "work_assets",
+            "raw_assets", "work_version_assets",
         )
         with catalog.connect() as connection:
             return tuple(
                 connection.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one()
                 for table in tables
             )
-
-    def test_neutral_adapter_mapping_and_malformed_values(self) -> None:
-        row = {"id": 7, "title": " A title ", "authors": '["One", "Two"]', "abstract": "A", "doi": "DOI:10.1/X", "url": "https://example.test/p", "pub_year": 2020, "journal": "J", "keywords": '["k"]', "pdf_path": "paper.pdf", "notes": "excluded", "paper_metadata": '{"secret": 1}'}
-        record = LegacyPaperAdapter.map(row, "source-a")
-        self.assertEqual(record.metadata.authors, ("One", "Two"))
-        self.assertEqual(record.metadata.venue, "J")
-        self.assertEqual(record.identifiers[0], Identifier("legacy-paper", "source-a:7"))
-        self.assertFalse(hasattr(record, "notes"))
-        with self.assertRaises((TypeError, ValueError)):
-            LegacyPaperAdapter.map({**row, "authors": "not-json"}, "source-a")
-
-    def test_read_only_streaming_over_1000_and_schema_errors(self) -> None:
-        database = self.root / "legacy.sqlite"
-        create_legacy(database, 1005)
-        before = database.read_bytes()
-        rows = list(LegacySQLiteReader(database, batch_size=37).rows())
-        self.assertEqual((len(rows), rows[0]["id"], rows[-1]["id"]), (1005, 1, 1005))
-        self.assertEqual(database.read_bytes(), before)
-        malformed = self.root / "malformed.sqlite"
-        sqlite3.connect(malformed).close()
-        with self.assertRaisesRegex(ValueError, "papers table"):
-            list(LegacySQLiteReader(malformed).rows())
 
     def test_invalid_sources_have_zero_catalog_side_effects(self) -> None:
         catalog, _, _, importer = self.importer()
@@ -184,12 +133,62 @@ class P9AcceptanceTests(TestCase):
         with self.assertRaisesRegex(ValueError, "symlink components"):
             importer.resolve_asset(real / "paper.xml", asset_root=root_alias)
 
+    def test_parent_swap_between_resolution_and_open_is_rejected(self) -> None:
+        catalog, _, _, importer = self.importer()
+        asset_root = self.root / "assets"
+        parent = asset_root / "incoming"
+        parent.mkdir(parents=True)
+        candidate = parent / "paper.xml"
+        candidate.write_bytes(XML_BYTES)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "paper.xml").write_bytes(XML_BYTES)
+        original_snapshot = importer._snapshot
+
+        def swap_parent(path: Path, *, expected_identity) -> bytes:
+            parent.rename(asset_root / "original")
+            parent.symlink_to(outside, target_is_directory=True)
+            return original_snapshot(path, expected_identity=expected_identity)
+
+        with mock.patch.object(importer, "_snapshot", side_effect=swap_parent):
+            with self.assertRaises(OSError):
+                importer.import_asset(
+                    candidate,
+                    (Identifier("doi", "10.1/parent-swap"),),
+                    AssetRole.XML,
+                    asset_root=asset_root,
+                )
+        self.assertEqual(self.catalog_counts(catalog), (0,) * 9)
+
+    def test_regular_file_replacement_between_resolution_and_open_is_rejected(self) -> None:
+        catalog, _, _, importer = self.importer()
+        asset_root = self.root / "assets"
+        asset_root.mkdir()
+        candidate = asset_root / "paper.xml"
+        candidate.write_bytes(XML_BYTES)
+        original_snapshot = importer._snapshot
+
+        def replace_file(path: Path, *, expected_identity) -> bytes:
+            path.rename(asset_root / "original.xml")
+            path.write_bytes(XML_BYTES)
+            return original_snapshot(path, expected_identity=expected_identity)
+
+        with mock.patch.object(importer, "_snapshot", side_effect=replace_file):
+            with self.assertRaisesRegex(ValueError, "changed after path validation"):
+                importer.import_asset(
+                    candidate,
+                    (Identifier("doi", "10.1/file-replacement"),),
+                    AssetRole.XML,
+                    asset_root=asset_root,
+                )
+        self.assertEqual(self.catalog_counts(catalog), (0,) * 9)
+
     def test_exact_replay_raw_hash_mode_and_neutral_provenance(self) -> None:
-        _, assets, _, importer = self.importer()
+        catalog, assets, _, importer = self.importer()
         identifier = (Identifier("doi", "10.1/replay"),)
-        first = importer.import_asset(self.asset, identifier, AssetRole.XML, source_id="legacy-a")
+        first = importer.import_asset(self.asset, identifier, AssetRole.XML, source_id="manual-a")
         conflicting = self.root / "missing.xml"
-        second = importer.import_asset(conflicting, identifier, AssetRole.XML, source_id="legacy-a")
+        second = importer.import_asset(conflicting, identifier, AssetRole.XML, source_id="manual-a")
         self.assertEqual((first.work_id, first.raw_asset_id, first.sha256), (second.work_id, second.raw_asset_id, second.sha256))
         self.assertEqual(second.disposition, "replayed")
         raw = assets.get_raw_asset(first.raw_asset_id)
@@ -198,8 +197,16 @@ class P9AcceptanceTests(TestCase):
         self.assertEqual(stored.read_bytes(), XML_BYTES)
         self.assertEqual(stat.S_IMODE(stored.stat().st_mode), 0o400)
         provenance = json.loads(raw.provenance_json)
-        self.assertEqual(provenance, {"method": "existing-asset-import", "source_id": "legacy-a"})
+        self.assertEqual(provenance, {"method": "existing-asset-import", "source_id": "manual-a"})
         self.assertNotIn(str(self.root), raw.provenance_json)
+        with catalog.connect() as connection:
+            event_types = tuple(
+                connection.exec_driver_sql(
+                    "SELECT event_type FROM events ORDER BY occurred_at, id"
+                ).scalars()
+            )
+        self.assertIn("existing_asset_import.started", event_types)
+        self.assertNotIn("legacy_import.started", event_types)
 
     def test_product_ac9_concurrent_imports_converge_to_one_work_and_role_asset(self) -> None:
         catalog, assets, _, importer = self.importer()
@@ -225,7 +232,7 @@ class P9AcceptanceTests(TestCase):
         self.assertEqual({item.raw_asset_id for item in results}, {results[0].raw_asset_id})
         self.assertEqual({item.sha256 for item in results}, {results[0].sha256})
         self.assertEqual({item.work_id for item in results}, {results[0].work_id})
-        self.assertEqual(len(assets.get_work_assets(results[0].work_id)), 1)
+        self.assertEqual(len(assets.get_work_version_assets(results[0].work_version_id)), 1)
         with catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM acquisition_jobs WHERE state IN ('pending','active','retryable','paused')").scalar_one(), 0)
@@ -239,7 +246,10 @@ class P9AcceptanceTests(TestCase):
         work = CatalogRepository(catalog).lookup_work(Identifier("doi", "10.1/fail"))
         self.assertIsNotNone(work)
         with catalog.connect() as connection:
-            job_id = connection.exec_driver_sql("SELECT id FROM acquisition_jobs WHERE work_id = ?", (work.id,)).scalar_one()
+            job_id = connection.exec_driver_sql(
+                "SELECT id FROM acquisition_jobs WHERE work_version_id = ?",
+                (work.preferred_work_version_id,),
+            ).scalar_one()
         job = jobs.get_job(job_id)
         self.assertIsNotNone(job)
         self.assertEqual(job.state, JobState.FAILED)
@@ -279,9 +289,13 @@ class P9AcceptanceTests(TestCase):
     def test_failed_winner_is_detected_without_full_wait(self) -> None:
         _, _, jobs, importer = self.importer()
         identifiers = (Identifier("doi", "10.1/failed-winner"),)
-        admitted = importer.admission.admit(identifiers, provider="legacy-import", asset_role=AssetRole.XML)
+        admitted = importer.admission.admit(
+            identifiers,
+            provider="existing-asset-import",
+            asset_role=AssetRole.XML,
+        )
         jobs.restart_foreground_job(cast(str, admitted.job_id))
-        attempt = jobs.start_attempt(cast(str, admitted.job_id), "legacy-import")
+        attempt = jobs.start_attempt(cast(str, admitted.job_id), "existing-asset-import")
         jobs.finish_attempt_and_job(attempt.id, AttemptOutcome.FAILED, JobState.FAILED)
         started = time.monotonic()
         with self.assertRaisesRegex(RuntimeError, "failed"):
@@ -311,47 +325,20 @@ class P9AcceptanceTests(TestCase):
             self.assertEqual(raised.exception.code, 2)
             self.assertNotIn("Traceback", error.getvalue())
 
-    def test_legacy_batch_one_shot_replay_and_integrity(self) -> None:
-        database = self.root / "legacy.sqlite"
-        asset_root = self.root / "assets"
-        asset_root.mkdir()
-        (asset_root / "paper.pdf").write_bytes(valid_pdf())
-        create_legacy(database)
-        connection = sqlite3.connect(database)
-        connection.execute("UPDATE papers SET doi=?, pdf_path=? WHERE id=1", ("10.1/batch", "paper.pdf"))
-        connection.commit()
-        connection.close()
-        self.assertEqual(main(["catalog", "create", "--catalog", str(self.catalog_path)]), 0)
-        command = ["catalog", "import-legacy-db", "--catalog", str(self.catalog_path), "--storage-root", str(self.storage_root), "--legacy-db", str(database), "--asset-root", str(asset_root), "--legacy-source-id", "db-a"]
-        first = io.StringIO()
-        with contextlib.redirect_stdout(first), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(main(command), 0)
-        self.assertIn("imported=1 replayed=0 skipped=0 failed=0", first.getvalue())
-        second = io.StringIO()
-        with contextlib.redirect_stdout(second), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(main(command), 0)
-        self.assertIn("imported=0 replayed=1 skipped=0 failed=0", second.getvalue())
-        check = sqlite3.connect(self.catalog_path)
-        try:
-            self.assertEqual(check.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-            self.assertEqual(check.execute("PRAGMA foreign_key_check").fetchall(), [])
-        finally:
-            check.close()
-
-    def test_retired_alias_refusal_and_no_legacy_orm_dependency(self) -> None:
-        retired = REPOSITORY / "all.db"
-        with self.assertRaises(PermissionError):
-            LegacySQLiteReader(retired)
-        source = (SRC / "sciretriever" / "legacy" / "importer.py").read_text(encoding="utf-8")
-        self.assertNotIn("SciRetriever.database.model", source)
-        self.assertNotIn("Optera", source)
-
     def test_product_ac5_duplicate_doi_has_one_work_and_no_duplicate_nonterminal_job(self) -> None:
         catalog, assets, jobs, _ = self.importer()
         service = AdmissionService(IdentityResolver(catalog), jobs, assets)
         identifier = (Identifier("doi", "10.1/ac5"),)
-        first = service.admit(identifier, provider="legacy-import", asset_role=AssetRole.PRIMARY_PDF)
-        second = service.admit(identifier, provider="legacy-import", asset_role=AssetRole.PRIMARY_PDF)
+        first = service.admit(
+            identifier,
+            provider="existing-asset-import",
+            asset_role=AssetRole.PRIMARY_PDF,
+        )
+        second = service.admit(
+            identifier,
+            provider="existing-asset-import",
+            asset_role=AssetRole.PRIMARY_PDF,
+        )
         self.assertEqual((first.work_id, first.job_id), (second.work_id, second.job_id))
         with catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 1)
@@ -369,12 +356,12 @@ class P9AcceptanceTests(TestCase):
         catalog, assets, _, imported, _, publication = self._publish_imported_xml()
         self.assertIs(publication.package.quality, PackageQuality.LIMITED_XML_HTML)
         self.assertIn("missing_primary_pdf", publication.package.limitations)
-        self.assertEqual(len(assets.get_work_assets(imported.work_id)), 1)
+        self.assertEqual(len(assets.get_work_version_assets(imported.work_version_id)), 1)
         with catalog.connect() as connection:
             pending = connection.exec_driver_sql(
                 "SELECT asset_role, state FROM acquisition_jobs "
-                "WHERE work_id = ? AND asset_role = ?",
-                (imported.work_id, AssetRole.PRIMARY_PDF.value),
+                "WHERE work_version_id = ? AND asset_role = ?",
+                (imported.work_version_id, AssetRole.PRIMARY_PDF.value),
             ).all()
         self.assertEqual(pending, [(AssetRole.PRIMARY_PDF.value, JobState.PENDING.value)])
 
@@ -397,24 +384,24 @@ class P9AcceptanceTests(TestCase):
         for forbidden in ("reaction", "molecule", "yield"):
             self.assertNotIn(forbidden, columns)
         record = PackageVersionRepository(catalog).get_by_document_hash(
-            imported.work_id,
+            imported.work_version_id,
             publication.package.package_sha256,
         )
         self.assertIsNotNone(record)
         package_record = cast(PackageVersionRecord, record)
         self.assertEqual(package_record.sha256, publication.package.package_sha256)
         loaded = PackagePublisher(catalog, derived_store).load_by_document_hash(
-            imported.work_id,
+            imported.work_version_id,
             publication.package.package_sha256,
         )
-        self.assertEqual(loaded.document_id, imported.work_id)
+        self.assertEqual(loaded.document_id, imported.work_version_id)
         self.assertEqual(loaded.package_sha256, publication.package.package_sha256)
         retrieval_sources = (
-            (SRC / "sciretriever" / "legacy" / "importer.py").read_text(encoding="utf-8"),
+            (SRC / "sciretriever" / "acquisition" / "existing_asset.py").read_text(encoding="utf-8"),
             (SRC / "sciretriever" / "packaging" / "publisher.py").read_text(encoding="utf-8"),
             (SRC / "sciretriever" / "catalog" / "packages.py").read_text(encoding="utf-8"),
         )
-        self.assertTrue(all("SciRetriever.database.model" not in source for source in retrieval_sources))
+        self.assertTrue(all("SciRetriever." not in source for source in retrieval_sources))
 
     def test_same_raw_asset_preserves_each_work_import_provenance_in_package(self) -> None:
         catalog, _, _, importer = self.importer()
@@ -432,6 +419,16 @@ class P9AcceptanceTests(TestCase):
         )
         self.assertNotEqual(first.work_id, second.work_id)
         self.assertEqual(first.raw_asset_id, second.raw_asset_id)
+        sources = PackageSourceRepository(catalog)
+        with self.assertRaisesRegex(SciRetrieverError, "requires work_version_id"):
+            sources.resolve_work(raw_asset_id=first.raw_asset_id)
+        self.assertEqual(
+            sources.resolve_work(
+                raw_asset_id=first.raw_asset_id,
+                work_version_id=first.work_version_id,
+            ),
+            first.work_version_id,
+        )
 
         pipeline = PackagePipeline(
             catalog,
@@ -443,12 +440,12 @@ class P9AcceptanceTests(TestCase):
         first_source = first_package.source_provenance[0]
         second_source = second_package.source_provenance[0]
 
-        self.assertEqual(first_source.provider, "legacy-import")
-        self.assertEqual(second_source.provider, "legacy-import")
+        self.assertEqual(first_source.provider, "existing-asset-import")
+        self.assertEqual(second_source.provider, "existing-asset-import")
         self.assertEqual(first_source.acquisition_method, "existing-asset-import")
         self.assertEqual(second_source.acquisition_method, "existing-asset-import")
-        self.assertEqual(first_source.source_uri, "urn:sciretriever:legacy-source:archive-a")
-        self.assertEqual(second_source.source_uri, "urn:sciretriever:legacy-source:archive-b")
+        self.assertEqual(first_source.source_uri, "urn:sciretriever:source:archive-a")
+        self.assertEqual(second_source.source_uri, "urn:sciretriever:source:archive-b")
         self.assertNotEqual(first_source.provenance_id, second_source.provenance_id)
         first_artifacts = {item.kind: item.artifact_id for item in first_package.artifacts}
         second_artifacts = {item.kind: item.artifact_id for item in second_package.artifacts}
