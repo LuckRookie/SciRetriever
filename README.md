@@ -6,20 +6,22 @@
 
 ## 当前实现
 
-SciRetriever 当前是一套本地科研文献发现、采集、不可变保存、归一化和文献包发布工具。它能把多来源检索结果写成 JSONL manifest，按 DOI、HTTPS URL 或 manifest 获取 PDF/XML/HTML，将已接受文件保存为不可变 `RawAsset`，再发布确定性的 `DocumentPackageVersion` 处理快照。
+SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。它能并发查询多个 metadata provider，把确定性合并后的 canonical metadata、观察值和 open-access status 写入 catalog，也能生成只读 JSONL manifest、查询本地 library、采集并不可变保存 PDF/XML/HTML，以及发布确定性的 `DocumentPackageVersion` 处理快照。
 
 当前命令树如下：
 
 | 命令 | 当前行为 |
 |---|---|
 | `sciretriever discover` | 查询、清洗、去重和合并 metadata，输出 JSONL manifest |
+| `sciretriever search` | 并发查询 metadata provider，确定性合并并写入 Work-centered catalog |
+| `sciretriever library` | 只读精确查找、关键词/字段过滤、引用遍历和安全导出 |
 | `sciretriever acquire` | 在当前进程内通过明确 provider 或 source plan 获取一个角色资产 |
 | `sciretriever preflight` | 只读检查当前 acquisition 配置，不下载响应正文 |
 | `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产 |
 | `sciretriever package` | 离线归一化并发布 `DocumentPackageVersion` 处理快照 |
 | `sciretriever report` | 只读查看 acquisition job、attempt 和脱敏失败 |
 
-当前没有书目 `WorkVersion`、本地 library 查询、作者/作者关系、metadata observation、canonical tag alias、全文 LLM、引用扩展、Sci-Hub、landing-page translator 或 browser acquisition。`package_versions` 是处理结果快照，不是书目版本。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
+当前已有独立书目 `WorkVersion`、metadata observations、Author/Authorship、Publisher/Venue aliases、canonical tags 和版本引用。尚未实现全文 LLM、引用扩展、library 人工整理、Sci-Hub、landing-page translator 或 browser acquisition。`package_versions` 是处理结果快照，不是书目版本。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 产品方向
 
@@ -29,6 +31,8 @@ SciRetriever 当前是一套本地科研文献发现、采集、不可变保存�
 
 - 多来源 metadata discovery，内置 Crossref、Europe PMC、arXiv、OpenAlex、Semantic Scholar、Elsevier 和 Springer。
 - 确定性清洗、批内去重、跨来源合并和 JSONL manifest 发布。
+- 有界并发 metadata search、provider 独立 timeout、configured precedence/fill-missing 和 canonical catalog 入库。
+- DOI/title/internal ID 本地查找、关键词/字段过滤、references/cited-by 和 JSON/JSONL 安全导出。
 - Direct HTTPS、开放来源和出版社 provider 的 serial fallback 或同层 race。
 - primary PDF、supplementary PDF、XML 和 HTML 的角色化内容验证。
 - HTTPS、DNS pinning、redirect 复检、敏感 header 处理、有限 timeout 和有界响应读取。
@@ -48,6 +52,12 @@ SearchSpec
   -> deterministic labels
   -> DownloadManifest JSONL
 
+search query
+  -> enabled metadata providers in bounded concurrency
+  -> deterministic merge / precedence / fill missing
+  -> Work + WorkVersion + backend observations
+  -> canonical JSON result
+
 DOI / HTTPS URL / manifest
   -> Work admission
   -> acquisition provider serial/race
@@ -57,7 +67,7 @@ DOI / HTTPS URL / manifest
   -> DocumentPackageVersion processing snapshot
 ```
 
-`discover` 只读 catalog，不为搜索结果创建 placeholder `Work`。`Work` 在 acquisition admission 时创建或复用。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
+`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。`search --level metadata` 是写入型入口，会创建或复用 Work/WorkVersion 并保存 provider observations；`download` 和 `analyze` level 尚未发布。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 数据来源
 
@@ -165,11 +175,48 @@ uv run --frozen sciretriever package \
 
 默认 enrichment 是当前确定性通用轻结构，不是目标全文 LLM。可用 `--no-enrichment` 关闭。
 
+### 搜索并写入本地文献库
+
+```bash
+uv run --frozen sciretriever search "solid-state electrolytes" \
+  --catalog runtime/catalog.sqlite \
+  --provider crossref \
+  --provider europe-pmc \
+  --precedence crossref \
+  --precedence europe-pmc \
+  --limit 100
+```
+
+当前只支持 `--level metadata`。多个 provider 同时启动，各自有有限 timeout；部分 provider 失败时成功结果仍会入库，失败条目以脱敏形式出现在 JSON 输出中。
+
+### 查询与导出本地文献库
+
+```bash
+uv run --frozen sciretriever library show \
+  --catalog runtime/catalog.sqlite \
+  --doi 10.1000/example
+
+uv run --frozen sciretriever library search "electrolyte" \
+  --catalog runtime/catalog.sqlite \
+  --year 2024 \
+  --tag battery
+
+uv run --frozen sciretriever library export \
+  --catalog runtime/catalog.sqlite \
+  --work-id <WORK_ID> \
+  --output runtime/library.jsonl \
+  --format jsonl
+```
+
+`library` 通过只读 SQLite 连接运行。主视图返回 preferred WorkVersion；显式 `--work-version-id` 可读取非 preferred 版本。导出只包含 canonical projection 和显式请求的 light content，不包含 provider record ID、observation provenance、存储路径或 raw reference。
+
 ### 查看参数
 
 ```bash
 uv run --frozen sciretriever --help
 uv run --frozen sciretriever discover --help
+uv run --frozen sciretriever search --help
+uv run --frozen sciretriever library --help
 uv run --frozen sciretriever acquire --help
 uv run --frozen sciretriever preflight --help
 uv run --frozen sciretriever catalog --help
@@ -195,7 +242,7 @@ chmod 600 config.toml
 
 当前 `preflight` 要求实际选择一份 TOML。`acquire` 保留当前 CLI 参数覆盖配置的行为。含 `[credentials]` 的文件在 POSIX 上必须为 `0600` 或更严格。
 
-当前 parser 会拒绝未知字段。不要提前加入 provider precedence、LLM、Sci-Hub、translator、browser、reference expansion 或目标 library 字段，它们尚未实现。
+当前 parser 会拒绝未知字段。`[search]` 接受 `level`、`limit`、`providers`、`precedence`、`provider_timeout`、`max_concurrency` 和 `crossref_mailto`；provider 与 precedence 必须同时定义且包含完全相同的名称。CLI 值只覆盖当前 invocation。不要提前加入 LLM、Sci-Hub、translator、browser 或 reference expansion 字段，它们尚未实现。
 
 ### 当前凭据环境变量
 

@@ -34,7 +34,7 @@
 ### 1.3 当前实现与批准目标
 
 - 当前 provider 能力只以代码和 [README](../../README.md) 为准，覆盖与差距见[实施进度](../governance/implementation-progress.md)；本手册中的理想语义不表示对应配置或运行路径已经可用。
-- 批准目标中，metadata provider 在有界并发和各自有限 timeout 下返回 provider-neutral observations；系统按确定性身份规则与 configured precedence/fill-missing 合并，结果不得依赖完成顺序。provider record 不天然等于 `WorkVersion`。
+- 当前 `search --level metadata` 在有界并发和各自有限 timeout 下接收 provider-neutral observations，并按确定性身份规则与 configured precedence/fill-missing 入库；结果不依赖完成顺序。已提供的 OA evidence 会规范化为 canonical open-access status，provider record 仍不天然等于 `WorkVersion`。
 - acquisition provider 面向具体 `WorkVersion` 的资产缺口。direct official、publisher、open provider 与显式配置的 Sci-Hub 属于第一层进程内竞速；translator 和 browser 是前层耗尽后的顺序回退。
 - Sci-Hub、translator 和 browser 当前均未实现。在各自配置、安全边界、离线 fixture 和用户文档完成前，不得把它们登记为 active capability。
 - 全文分析不是 provider 职责；只有已保存并通过验证的 primary PDF 才能进入后续 PDF-based fulltext analysis。XML/HTML 可作为补充资产，但不能在缺少 PDF 时满足 analyze，也不能在冲突时覆盖 PDF。
