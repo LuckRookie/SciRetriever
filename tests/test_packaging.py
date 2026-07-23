@@ -12,12 +12,10 @@ if str(SRC) not in sys.path:
 
 
 class PackagingTests(TestCase):
-    def test_legacy_and_lowercase_packages_are_importable(self) -> None:
-        legacy_package = importlib.import_module("SciRetriever")
+    def test_lowercase_packages_are_importable(self) -> None:
         package = importlib.import_module("sciretriever")
         core = importlib.import_module("sciretriever.core")
 
-        self.assertEqual(legacy_package.__name__, "SciRetriever")
         self.assertEqual(package.__version__, "0.1.0")
         self.assertEqual(core.__name__, "sciretriever.core")
 

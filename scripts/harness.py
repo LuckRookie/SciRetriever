@@ -23,7 +23,7 @@ else:  # pragma: no cover - exercised on Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "src" / "sciretriever"
-_PACKAGE_ROOTS = ("sciretriever", "SciRetriever")
+_PACKAGE_ROOTS = ("sciretriever",)
 
 _MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 _MARKDOWN_REFERENCE_TARGET = re.compile(
@@ -60,7 +60,6 @@ _FORBIDDEN_IMPORTS = {
         "sciretriever.discovery",
         "sciretriever.enrichment",
         "sciretriever.integrations",
-        "sciretriever.legacy",
         "sciretriever.network",
         "sciretriever.normalization",
         "sciretriever.packaging",
@@ -72,7 +71,6 @@ _FORBIDDEN_IMPORTS = {
         "sciretriever.discovery",
         "sciretriever.enrichment",
         "sciretriever.integrations",
-        "sciretriever.legacy",
         "sciretriever.network",
         "sciretriever.normalization",
         "sciretriever.packaging",
@@ -81,11 +79,7 @@ _FORBIDDEN_IMPORTS = {
     "discovery": ("sciretriever.acquisition",),
     "acquisition": ("sciretriever.discovery",),
 }
-_UPPERCASE_IMPORT_ALLOWLIST = {
-    ("catalog/engine.py", "SciRetriever.database.retired_paths"),
-    ("catalog/engine.py", "SciRetriever.workspace_paths"),
-    ("legacy/sqlite_reader.py", "SciRetriever.database.retired_paths"),
-}
+_UPPERCASE_IMPORT_ALLOWLIST: set[tuple[str, str]] = set()
 _PROPOSAL_STATUSES = frozenset(
     {"draft", "under-review", "direction-confirmed", "rejected", "superseded"}
 )
