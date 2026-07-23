@@ -20,7 +20,6 @@
 | 包管理器 | uv；锁文件 `uv.lock` |
 | 默认分支 | `master` |
 | v2 源码 | `src/sciretriever/` |
-| legacy 源码 | `src/SciRetriever/` |
 | 测试 | `tests/`，标准库 `unittest` |
 | Harness | `scripts/harness.py` |
 | CI | `.github/workflows/ci.yml`，Python 3.10/3.12 |
@@ -47,7 +46,7 @@
 | L1-L2 | 文档检查 | `uv run --frozen python scripts/harness.py docs` | LOCAL GATE / CI GATE |
 | L1-L2 | 架构检查 | `uv run --frozen python scripts/harness.py architecture` | LOCAL GATE / CI GATE |
 | L4 | 语义审查 | 对照原始需求、ADR、责任映射和最终 diff | POLICY |
-| L5 | 人工审批 | 新 ADR、schema/迁移、边界变化、数据操作 | HUMAN GATE |
+| L5 | 人工审批 | 新 ADR、受支持数据迁移、边界变化、生产数据操作 | HUMAN GATE |
 
 ### 环境约束
 
@@ -61,7 +60,7 @@
 | 路径 | 职责 | 稳定性/风险 |
 |---|---|---|
 | `src/sciretriever/core/` | 中性契约、枚举、ID、hash、文献包 | stable / 公开契约高风险 |
-| `src/sciretriever/catalog/` | SQLite schema、迁移、身份、状态、关系 | stable / 持久化高风险 |
+| `src/sciretriever/catalog/` | SQLite schema、身份、状态、关系 | stable / 持久化高风险 |
 | `src/sciretriever/discovery/` | 元数据清洗、去重、合并、标注和清单 | stable |
 | `src/sciretriever/integrations/` | 供应商共享 client 和中性 DTO | evolving / 外部 API 风险 |
 | `src/sciretriever/network/` | HTTPS、DNS、重定向和响应边界 | stable / 安全高风险 |
@@ -71,8 +70,6 @@
 | `src/sciretriever/enrichment/` | 通用摘要、标签和引用 | stable |
 | `src/sciretriever/packaging/` | 质量门与版本化发布 | stable |
 | `src/sciretriever/cli/` | composition root 和配置装配 | evolving |
-| `src/sciretriever/legacy/` | v2 受限兼容适配器 | compatibility boundary |
-| `src/SciRetriever/`、`example/` | 保留的旧实现和脚本 | legacy；不得作为 v2 模板 |
 
 ## 5. 架构边界
 
@@ -92,7 +89,6 @@ CLI / adapters
 - `catalog` 不依赖 discovery、acquisition、storage、normalization、enrichment 或 packaging 类型。
 - `core` 不依赖任一工作流或基础设施模块。
 - 供应商响应在 `integrations` 转换为中性 DTO；vendor dict 不进入 core/catalog。
-- 小写 v2 不导入大写 legacy，只有退休路径安全 guard 和 `legacy/` 适配器的显式 allowlist 例外。
 - Composition root：`src/sciretriever/cli/main.py`。
 - 自动门禁：`python scripts/harness.py architecture`。
 
@@ -113,7 +109,7 @@ CLI / adapters
 |---|---|
 | ADR 权威范围与阅读顺序 | `docs/adr/README.md` |
 | 领域边界与 `DocumentPackage` | `docs/adr/0001-sciretriever-scope-and-boundary.md` |
-| 产品中心、WorkVersion、PDF analysis 与旧任务兼容 | `docs/adr/0002-work-centered-literature-library.md` |
+| 产品中心、WorkVersion、PDF analysis 与 pre-v1 删除策略 | `docs/adr/0002-work-centered-literature-library.md` |
 | 数据所有权与 `DocumentPackage` | `docs/architecture/principles.md` |
 | 理想产品数据流与模块责任 | `docs/specs/system-design.md` |
 | 理想代码模块与依赖边界 | `docs/specs/technical-architecture.md` |
@@ -138,9 +134,8 @@ requirements、system design 和 technical architecture 只描述理想产品，
 
 ## 9. 雷区和遗留代码
 
-- `src/SciRetriever/`、`example/`：只作兼容和迁移证据，不塑造 v2 API。
-- 九个退休数据库路径由 guard 永久拒绝创建；不得移除或削弱 guard。
-- `catalog/models.py`、migration、`core/package.py`：修改前必须读 ADR、系统设计和直接测试。
+- 当前 pre-v1 无受支持旧 catalog；不保留 legacy import、旧 schema、迁移 adapter 或退休数据库 guard。
+- `catalog/models.py`、schema bootstrap、`core/package.py`：修改前必须读 ADR、系统设计和直接测试。
 - `network/secure.py`、URL policy、credential plumbing：修改必须做安全专项检查。
 - `dist/`、`build/`、`.venv/`、运行时 catalog、下载资产和语料不得提交。
 
@@ -151,7 +146,7 @@ requirements、system design 和 technical architecture 只描述理想产品，
 - 实现、直接测试和必要契约文档应在同一原子提交；纯用户指南可独立提交。
 - 只有用户明确要求时执行 commit、push、rebase、PR 或发布。
 - 完成后的集中审查最多使用 2 个 reviewer；按实际风险选择目标/质量和安全/QA 角色。
-- schema、公开契约、不可变存储、网络安全和边界变化需要人工判断；无法取得批准时停止实施并报告。
+- 公开契约、不可变存储、网络安全、边界变化和未来受支持数据迁移需要人工判断。本次 WP1 pre-v1 schema 直接替换已获 owner 批准。
 
 ## 11. 完成检查
 
