@@ -36,8 +36,7 @@ def validate_primary_pdf(
     data = content.data
     if not min_bytes <= len(data) <= max_bytes:
         raise ValidationError("PDF byte size is outside configured bounds")
-    media_type = content.media_type.lower().split(";", 1)[0].strip()
-    if media_type in {"text/html", "application/xhtml+xml"}:
+    if content.media_type in {"text/html", "application/xhtml+xml"}:
         raise ValidationError("HTML content cannot be accepted as PDF")
     if not data.startswith(b"%PDF-"):
         raise ValidationError("PDF header is missing")
@@ -70,8 +69,7 @@ def validate_xml(content: ProviderContent, *, min_bytes: int = 32, max_bytes: in
         raise ValidationError("XML content role and format must match the target")
     if not min_bytes <= len(content.data) <= max_bytes:
         raise ValidationError("XML byte size is outside configured bounds")
-    media_type = content.media_type.lower().split(";", 1)[0].strip()
-    if media_type not in {"application/xml", "text/xml", "application/jats+xml"}:
+    if content.media_type not in {"application/xml", "text/xml", "application/jats+xml"}:
         raise ValidationError("XML content type is not accepted")
     try:
         root = ET.fromstring(content.data)
@@ -86,8 +84,7 @@ def validate_html(content: ProviderContent, *, min_bytes: int = 64, max_bytes: i
         raise ValidationError("HTML content role and format must match the target")
     if not min_bytes <= len(content.data) <= max_bytes:
         raise ValidationError("HTML byte size is outside configured bounds")
-    media_type = content.media_type.lower().split(";", 1)[0].strip()
-    if media_type not in {"text/html", "application/xhtml+xml"}:
+    if content.media_type not in {"text/html", "application/xhtml+xml"}:
         raise ValidationError("HTML content type is not accepted")
     try:
         text = content.data.decode("utf-8")

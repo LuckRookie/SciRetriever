@@ -1,17 +1,14 @@
-"""Process-local P5 budgets, health, circuits, and retry policy."""
+"""Process-local acquisition budgets, health tracking, and circuits."""
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
-import hashlib
 import time
 from typing import AsyncIterator, Awaitable, Callable
 
 from sciretriever.acquisition.plan import SourceEntry
-from sciretriever.core.timestamps import parse_rfc3339
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,27 +138,4 @@ class CircuitBreaker:
         return self._circuits.get(host, _Circuit()).state
 
 
-class RetryPolicy:
-    def __init__(self, base_delay: float = 5.0, max_delay: float = 300.0, jitter: float = 0.1) -> None:
-        if base_delay <= 0 or max_delay < base_delay or not 0 <= jitter <= 1:
-            raise ValueError("invalid retry policy")
-        self.base_delay = base_delay
-        self.max_delay = max_delay
-        self.jitter = jitter
-
-    def delay(self, attempt_number: int, *, jitter_key: str = "") -> float:
-        if attempt_number <= 0:
-            raise ValueError("attempt_number must be positive")
-        capped = min(self.max_delay, self.base_delay * (2 ** (attempt_number - 1)))
-        if self.jitter == 0:
-            return capped
-        digest = hashlib.sha256(f"{jitter_key}:{attempt_number}".encode("utf-8")).digest()
-        unit = int.from_bytes(digest[:8], "big") / (2**64 - 1)
-        return capped * (1 - self.jitter + 2 * self.jitter * unit)
-
-    def next_retry_at(self, now: str, attempt_number: int, *, jitter_key: str = "") -> str:
-        value = parse_rfc3339(now) + timedelta(seconds=self.delay(attempt_number, jitter_key=jitter_key))
-        return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-__all__ = ("CircuitBreaker", "CircuitState", "HostBudget", "HostBudgetManager", "ProviderHealth", "RetryPolicy")
+__all__ = ("CircuitBreaker", "CircuitState", "HostBudget", "HostBudgetManager", "ProviderHealth")
