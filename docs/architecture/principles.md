@@ -1,8 +1,10 @@
 # SciRetriever Architecture Principles
 
-This is the working reference for how SciRetriever is built. It turns the decisions in [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. The ADR is authoritative. If this file and the ADR ever disagree, follow the ADR and fix this file.
+This is the working reference for how SciRetriever is built. It turns the domain-boundary decisions in [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) and the product reset in [ADR 0002](../adr/0002-work-centered-literature-library.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. Apply each ADR only to the topics listed in the [ADR index](../adr/README.md): ADR 0001 controls the domain boundary, while ADR 0002 controls product shape and execution. If this file disagrees with the applicable ADR, follow that ADR and fix this file.
 
 The one sentence to remember: **SciRetriever acquires, catalogs, normalizes, and lightly structures literature, and it stops at a versioned, provenance-bearing `DocumentPackage`.** Domains live downstream.
+
+The product center is a local literature library organized by `Work` and bibliographic `WorkVersion`; processing and export snapshots are separate identities. The ideal design is defined in the [system design](../specs/system-design.md), while current coverage is tracked in [implementation progress](../governance/implementation-progress.md).
 
 ## Layered view
 
@@ -14,7 +16,7 @@ The one sentence to remember: **SciRetriever acquires, catalogs, normalizes, and
   |  Preservation     immutable raw assets on the filesystem (path+hash) |
   |  Normalization    raw (PDF | XML | HTML) -> one DocumentPackage       |
   |  Light structure  summaries, tags, citation links (loss-aware)       |
-  |  Catalog          identity, ids, files, artifacts, workflow, lineage |
+  |  Catalog          Work/versions, files, artifacts, analysis, lineage |
   |                                                                      |
   +===================== BOUNDARY: DocumentPackage ======================+
   |                                                                      |
@@ -73,7 +75,7 @@ Two rules make the contract safe:
 
 1. **Raw assets are immutable evidence.** Write once to a configured storage root, record the hash, never edit in place. To fix a normalization error, re-run against the same raw asset. Do not patch outputs by hand.
 2. **No large BLOBs in the relational store.** Documents and images are referenced by path and hash. The catalog stores metadata and pointers, not file bytes.
-3. **The catalog owns a fixed list.** Identity, identifiers, files, acquisition, normalized artifacts, generic summaries and tags and citations, workflow state, failures, and lineage. Nothing else.
+3. **The catalog owns a fixed list.** Work/WorkVersion identity, identifiers, files, asset availability, normalized artifacts, current generic analysis, tags, citations, diagnostic acquisition records, failures, and lineage. Task/attempt/failure/event history may remain as non-navigational diagnostic evidence, but lease, fencing, durable pause/resume, candidate checkpoints and retry-child control state do not enter the WorkVersion product model. Nothing else.
 4. **No domain fields in the catalog, ever.** No reaction, molecule, route, yield, or other domain column. The catalog may hold a domain-run row with a status, an output pointer, and a hash. That row carries no domain payload.
 5. **Domain output is external and portable.** JSONL is authoritative, CSV is an optional flattened export, and both ship with a schema, a manifest, and a validation report. These files are not catalog records. A consumer may load them into its own database; that database is not part of SciRetriever.
 6. **Integration is by reference.** Consumers depend on `document_id`, `file_id`, `artifact_id`, hashes, and provenance. They never query internal ORM tables. Internal storage may be refactored as long as those references and the package contract hold.
