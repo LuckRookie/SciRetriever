@@ -20,7 +20,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever import __version__
-from sciretriever.catalog import IdentityResolver, JobRepository, apply_migrations, create_catalog_engine
+from sciretriever.catalog import IdentityResolver, JobRepository, initialize_catalog, create_catalog_engine
 from sciretriever.cli.main import PLACEHOLDER_COMMANDS, main
 from sciretriever.cli import acquire as acquire_cli
 from sciretriever.cli import preflight as preflight_cli
@@ -99,8 +99,9 @@ class CliTests(TestCase):
             with self.assertRaises(SystemExit) as raised:
                 main(["catalog", "--help"])
         self.assertEqual(raised.exception.code, 0)
-        for command in ("create", "import-asset", "import-legacy-db"):
+        for command in ("create", "import-asset"):
             self.assertIn(command, output.getvalue())
+        self.assertNotIn("import-legacy-db", output.getvalue())
 
     def test_report_help_lists_read_only_filters_and_formats(self) -> None:
         output = io.StringIO()
@@ -166,6 +167,7 @@ class CliTests(TestCase):
         self.assertEqual(raised.exception.code, 0)
         for option in (
             "--catalog", "--storage-root", "--work-id", "--raw-asset-id",
+            "--work-version-id",
             "--max-pages", "--max-structural-units", "--max-depth", "--max-elements",
             "--no-enrichment",
         ):
@@ -208,6 +210,7 @@ class CliTests(TestCase):
 
     def test_acquire_output_reports_package_selection_ids(self) -> None:
         acquisition = AcquisitionResult(
+            work_version_id="00000000-0000-4000-8000-000000000004",
             work_id=EXPLICIT_RUN_ID,
             job_id="00000000-0000-4000-8000-000000000002",
             status="succeeded",
@@ -238,7 +241,7 @@ class CliTests(TestCase):
         storage = self.directory / "storage"
         storage.mkdir()
         engine = create_catalog_engine(self.catalog)
-        apply_migrations(engine)
+        initialize_catalog(engine)
         engine.dispose()
         forbidden = self.directory / "forbidden.txt"
         forbidden.write_text("# local policy\nhttps://blocked.example/\n", encoding="utf-8")
@@ -463,7 +466,7 @@ max_asset_bytes = 1
 
     def test_discover_writes_real_manifest_with_fake_provider(self) -> None:
         writable = create_catalog_engine(self.catalog)
-        apply_migrations(writable)
+        initialize_catalog(writable)
         writable.dispose()
         output = io.StringIO()
 

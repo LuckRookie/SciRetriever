@@ -185,10 +185,10 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
     elif command == "catalog":
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
         catalog_command = next(
-            (token for token in argv if token in {"create", "import-asset", "import-legacy-db"}),
+            (token for token in argv if token in {"create", "import-asset"}),
             None,
         )
-        if catalog_command in {"import-asset", "import-legacy-db"}:
+        if catalog_command == "import-asset":
             _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
     elif command == "package":
         values = config.package

@@ -319,7 +319,7 @@ async def _execute_async(
 def _print_success(result: AcquisitionResult) -> None:
     raw_asset_id = result.raw_asset_id or "-"
     print(
-        f"status={result.status} work_id={result.work_id} "
+        f"status={result.status} work_id={result.work_id or result.work_version_id} "
         f"raw_asset_id={raw_asset_id}"
     )
 
