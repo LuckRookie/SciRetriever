@@ -68,7 +68,6 @@
 | Library Query/Curation/Export | 提供 exact/keyword/filter/traversal、待复核项、人工修订和显式导出 | manual overrides、可撤销审计、派生视图和 export artifact | 暴露 backend observations、删除来源证据或建立首版 vector index |
 | Failures/Diagnostics | 汇总 metadata、acquisition、analysis、expansion 的对象级 reason/action；acquisition 提供脱敏 source details | 诊断历史、failure 和 lineage | 成为产品导航中心或泄漏 secret |
 | Packaging/Boundary | 形成稳定下游文献表示和 export snapshot | DocumentPackage/导出产物 | 充当 WorkVersion 身份或领域数据库 |
-| Compatibility/Migration Boundary | 受限读取获准迁移的数据并保留退休路径 guard | 迁移证据 | 让历史数据形状定义产品模型或为排除行为提供永久兼容层 |
 | Downstream Domain Pack | 从 DocumentPackage 生成领域数据 | 下游 JSONL/CSV/schema/manifest | 把领域字段写回 SciRetriever catalog |
 
 ## 2. 核心关系
@@ -350,7 +349,7 @@ WorkVersion + primary PDF + current generic result
 | provider-neutral DTO 与 adapter 边界 | task-centered CLI、配置和导航 | license/retraction/correction canonical models |
 | 进程内 acquisition race 和 validation | manifest 或 job 作为产品中心 | BibTeX/RIS/Zotero/local-directory import |
 | normalization/evidence 与 package boundary | 将处理/导出快照伪装成 WorkVersion | domain extraction/schema/database |
-| redaction、diagnostic history 和 retired-path guards | legacy shape 反向定义产品模型 | daemon、外部 workflow、微服务 |
+| redaction 和 diagnostic history | legacy shape 反向定义产品模型 | daemon、外部 workflow、微服务 |
 
 “延后”不等于自动批准，进入首版必须更新 requirements；“排除”涉及领域或架构边界时需要新 ADR。
 
