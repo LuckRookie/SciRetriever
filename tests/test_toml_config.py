@@ -179,6 +179,8 @@ enrichment = false
         self.assertEqual(loaded.package.max_depth, defaults.max_depth)
         self.assertEqual(loaded.package.max_elements, defaults.max_elements)
         self.assertEqual(loaded.package.max_text_characters, defaults.max_text_characters)
+        self.assertIsNotNone(loaded.acquisition.forbidden_urls)
+        self.assertTrue(loaded.acquisition.forbidden_urls.is_file())
 
     def test_credential_mode_is_enforced_without_exposing_value(self) -> None:
         secret = "DO-NOT-PRINT"
@@ -207,6 +209,42 @@ enrichment = false
             load_config(source_plan).acquisition.source_plan,
             (self.base / "plans/source-plan.json").resolve(),
         )
+
+    def test_preflight_defaults_are_bounded(self) -> None:
+        config = load_config(self.write("schema_version = 1"))
+        self.assertEqual(config.acquisition.preflight.readiness, "none")
+        self.assertEqual(config.acquisition.preflight.timeout, 10.0)
+        self.assertGreaterEqual(
+            config.acquisition.preflight.min_free_bytes,
+            config.acquisition.preflight.max_asset_bytes,
+        )
+
+    def test_removed_automatic_config_and_strict_preflight(self) -> None:
+        config = load_config(self.write(
+            """schema_version = 1
+[acquisition.preflight]
+min_free_bytes = 2000
+max_asset_bytes = 1000
+readiness = "headers"
+timeout = 2.5
+"""
+        ))
+        self.assertEqual(config.acquisition.preflight.readiness, "headers")
+
+        with self.assertRaisesRegex(ConfigError, "acquisition.automatic"):
+            load_config(self.write(
+                "schema_version = 1\n[acquisition.automatic]\nworkers = 1",
+                "automatic.toml",
+            ))
+
+        invalid = {
+            "readiness.toml": '[acquisition.preflight]\nreadiness = "body"',
+            "timeout.toml": "[acquisition.preflight]\ntimeout = inf",
+            "capacity.toml": "[acquisition.preflight]\nmin_free_bytes = 1\nmax_asset_bytes = 2",
+        }
+        for name, body in invalid.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n{body}", name))
 
 
 class ConfigCliTests(TestCase):

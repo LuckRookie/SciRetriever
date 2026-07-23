@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Callable
 import math
 from pathlib import Path
+import signal
 import sys
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,17 +25,17 @@ from sciretriever.acquisition import (
     read_manifest,
 )
 from sciretriever.acquisition.url_policy import UrlPolicy
-from sciretriever.acquisition.models import AcquisitionProvider, AcquisitionTransport
+from sciretriever.acquisition.models import AcquisitionProvider, AcquisitionResult, AcquisitionTransport
 from sciretriever.acquisition.controls import HostBudget
 from sciretriever.acquisition.plan import RoutingMode, SourceEntry, SourcePlan
 from sciretriever.acquisition.providers_p5 import ElsevierProvider, OpenAlexProvider, SemanticScholarProvider, SpringerProvider, WileyProvider
 from sciretriever.acquisition.profiles import PUBLISHER_PROFILES, PublisherProfile, profile_for_provider
 from sciretriever.acquisition.orchestrator import AcquisitionRuntime
-from sciretriever.catalog import AssetRepository, IdentityResolver, JobRepository, open_catalog_engine
+from sciretriever.catalog import AssetRepository, IdentityResolver, open_catalog_engine
+from sciretriever.catalog.jobs import JobRepository
 from sciretriever.config import CredentialsConfig, get_credential
 from sciretriever.core.contracts import DownloadManifestEntry, Identifier
 from sciretriever.core.enums import AssetRole
-from sciretriever.core.timestamps import utc_now_rfc3339
 from sciretriever.errors import AcquisitionError, SciRetrieverError, ValidationError
 from sciretriever.storage import AssetAcceptanceCoordinator, RawAssetStore
 
@@ -63,7 +65,7 @@ def _positive_float(value: str) -> float:
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    parser.description = "Acquire one role-specific asset per input through a single provider or durable source plan."
+    parser.description = "Acquire one role-specific asset per input through a bounded foreground source plan."
     intake = parser.add_mutually_exclusive_group()
     intake.add_argument("--manifest", type=Path, metavar="PATH")
     intake.add_argument("--doi", metavar="DOI")
@@ -74,9 +76,6 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     sources.add_argument("--provider", choices=PROVIDERS)
     sources.add_argument("--providers", action="append", choices=PROVIDERS, metavar="PROVIDER")
     sources.add_argument("--source-plan", type=Path, metavar="PATH")
-    resume = parser.add_mutually_exclusive_group()
-    resume.add_argument("--resume-job", metavar="UUID")
-    resume.add_argument("--due-jobs", action="store_true")
     parser.add_argument("--asset-role", choices=tuple(role.value for role in AssetRole), default=AssetRole.PRIMARY_PDF.value)
     parser.add_argument("--routing", choices=tuple(mode.value for mode in RoutingMode), default=RoutingMode.SERIAL.value)
     parser.add_argument("--host-concurrency", type=int)
@@ -86,11 +85,9 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if args.resume_job is None and not args.due_jobs and args.manifest is None and args.doi is None and args.url is None:
-        parser.error("one intake or --resume-job/--due-jobs is required")
-    if (args.resume_job is not None or args.due_jobs) and any(value is not None for value in (args.manifest, args.doi, args.url)):
-        parser.error("resume controls cannot be combined with new intake")
-    if args.resume_job is None and not args.due_jobs and args.provider is None and args.providers is None and args.source_plan is None:
+    if args.manifest is None and args.doi is None and args.url is None:
+        parser.error("one of --manifest, --doi, or --url is required")
+    if args.provider is None and args.providers is None and args.source_plan is None:
         parser.error("one of --provider, --providers, or --source-plan is required")
     if args.url is not None and args.provider != "direct" and args.providers != ["direct"]:
         parser.error("--url requires --provider direct")
@@ -174,7 +171,7 @@ def _load_source_plan(args: argparse.Namespace) -> SourcePlan | None:
     return None
 
 
-def _provider_registry(
+def provider_registry(
     names: tuple[str, ...],
     transport: AcquisitionTransport,
     policy: UrlPolicy,
@@ -214,7 +211,7 @@ def _batch_inputs(args: argparse.Namespace):
         yield None, error
 
 
-def _read_forbidden_urls(path: Path | None) -> tuple[str, ...]:
+def read_forbidden_urls(path: Path | None) -> tuple[str, ...]:
     if path is None:
         return ()
     values: list[str] = []
@@ -226,8 +223,12 @@ def _read_forbidden_urls(path: Path | None) -> tuple[str, ...]:
     return tuple(values)
 
 
-async def _execute_async(args: argparse.Namespace) -> tuple[int, int]:
-    policy = UrlPolicy(forbidden_urls=_read_forbidden_urls(args.forbidden_urls))
+async def _execute_async(
+    args: argparse.Namespace,
+    *,
+    on_success: Callable[[AcquisitionResult], None] | None = None,
+) -> tuple[int, int]:
+    policy = UrlPolicy(forbidden_urls=read_forbidden_urls(args.forbidden_urls))
     engine = open_catalog_engine(args.catalog)
     try:
         assets = AssetRepository(engine)
@@ -251,7 +252,7 @@ async def _execute_async(args: argparse.Namespace) -> tuple[int, int]:
         runtime = AcquisitionRuntime(
             jobs,
             coordinator,
-            lambda names: _provider_registry(
+            lambda names: provider_registry(
                 names,
                 transport,
                 policy,
@@ -269,37 +270,9 @@ async def _execute_async(args: argparse.Namespace) -> tuple[int, int]:
         )
         succeeded = 0
         failed = 0
-        if args.resume_job is not None or args.due_jobs:
-            resume_jobs = (
-                (jobs.get_job(args.resume_job),)
-                if args.resume_job is not None
-                else jobs.list_due_retryable_jobs(utc_now_rfc3339())
-            )
-            for job in resume_jobs:
-                if job is None:
-                    failed += 1
-                    continue
-                try:
-                    durable_plan = SourcePlan.from_json(job.source_plan_json)
-                    identifiers = IdentityResolver(engine).list_identifiers(job.work_id)
-                    multi = runtime.multi(tuple(entry.provider for entry in durable_plan.entries))
-                    result = await multi.acquire(
-                        AdmissionResult(job.work_id, job.id, f"resume:{job.id}", "multi-source", job.asset_role),
-                        AcquisitionTarget(identifiers, role=job.asset_role),
-                        durable_plan,
-                        timeout=args.timeout,
-                        resume_paused=args.resume_job is not None,
-                    )
-                except (AcquisitionError, ValidationError, TypeError, ValueError):
-                    failed += 1
-                    continue
-                if result.status in {"succeeded", "reused"}:
-                    succeeded += 1
-                else:
-                    failed += 1
-            return succeeded, failed
-
         for item, input_error in _batch_inputs(args):
+            if getattr(args, "_stop_requested", False) is True:
+                break
             if input_error is not None:
                 failed += 1
                 continue
@@ -334,6 +307,8 @@ async def _execute_async(args: argparse.Namespace) -> tuple[int, int]:
                 continue
             if result.status in {"succeeded", "reused"}:
                 succeeded += 1
+                if on_success is not None:
+                    on_success(result)
             else:
                 failed += 1
         return succeeded, failed
@@ -341,15 +316,36 @@ async def _execute_async(args: argparse.Namespace) -> tuple[int, int]:
         engine.dispose()
 
 
+def _print_success(result: AcquisitionResult) -> None:
+    raw_asset_id = result.raw_asset_id or "-"
+    print(
+        f"status={result.status} work_id={result.work_id} "
+        f"raw_asset_id={raw_asset_id}"
+    )
+
+
 def run(args: argparse.Namespace) -> int:
+    def request_stop(_signum: int, _frame: object) -> None:
+        args._stop_requested = True
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     try:
-        succeeded, failed = asyncio.run(_execute_async(args))
+        succeeded, failed = asyncio.run(_execute_async(args, on_success=_print_success))
     except (SciRetrieverError, SQLAlchemyError, OSError, ValueError) as error:
         detail = str(error).splitlines()[0] if str(error) else type(error).__name__
         print(f"sciretriever: error: {detail}", file=sys.stderr)
         return 1
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
     print(f"Acquisition complete: {succeeded} succeeded, {failed} failed")
     return 0 if failed == 0 else 1
 
 
-__all__ = ("PROVIDERS", "UNPAYWALL_EMAIL_ENV", "configure_parser", "run", "validate_arguments")
+__all__ = (
+    "PROVIDERS", "UNPAYWALL_EMAIL_ENV", "configure_parser", "provider_registry",
+    "read_forbidden_urls", "run", "validate_arguments",
+)

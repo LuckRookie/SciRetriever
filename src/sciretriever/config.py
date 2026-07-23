@@ -5,15 +5,16 @@ from __future__ import annotations
 import math
 import os
 import stat
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+else:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib
 
 from sciretriever.errors import ConfigError
@@ -35,10 +36,10 @@ _DISCOVERY_SOURCES = {
     "crossref", "europe-pmc", "arxiv", "openalex", "semantic-scholar",
     "elsevier", "springer",
 }
-_ACQUISITION_PROVIDERS = {
+ACQUISITION_PROVIDERS = frozenset({
     "direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex",
     "semantic-scholar", "elsevier", "wiley", "springer",
-}
+})
 _ASSET_ROLES = {"primary_pdf", "supplementary_pdf", "xml", "html"}
 
 
@@ -75,6 +76,14 @@ class DiscoveryConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PreflightConfig:
+    min_free_bytes: int = 1024 * 1024 * 1024
+    max_asset_bytes: int = 100 * 1024 * 1024
+    readiness: str = "none"
+    timeout: float = 10.0
+
+
+@dataclass(frozen=True, slots=True)
 class AcquisitionConfig:
     providers: tuple[str, ...] | None = None
     source_plan: Path | None = None
@@ -84,6 +93,7 @@ class AcquisitionConfig:
     host_concurrency: int | None = None
     host_min_interval: float | None = None
     forbidden_urls: Path | None = None
+    preflight: PreflightConfig = PreflightConfig()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +147,18 @@ def _positive_int(value: Any, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _error(name, "must be a positive integer")
     return value
+
+
+def _nonnegative_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _error(name, "must be a nonnegative integer")
+    return value
+
+
+def _optional_limit(value: Any, name: str) -> int | None:
+    if value is False:
+        return None
+    return _positive_int(value, name)
 
 
 def _positive_number(value: Any, name: str) -> float:
@@ -237,15 +259,37 @@ def _parse_discovery(root: Mapping[str, Any]) -> DiscoveryConfig:
 
 
 def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConfig:
-    allowed = {"providers", "source_plan", "routing", "asset_role", "timeout", "host_concurrency", "host_min_interval", "forbidden_urls"}
+    allowed = {"providers", "source_plan", "routing", "asset_role", "timeout", "host_concurrency", "host_min_interval", "forbidden_urls", "preflight"}
     table = _table(root, "acquisition", allowed)
     if "providers" in table and "source_plan" in table:
         raise _error("acquisition", "must not define both providers and source_plan")
     providers = None
     if "providers" in table:
         providers = _string_list(table["providers"], "acquisition.providers", nonempty=True)
-        if any(provider not in _ACQUISITION_PROVIDERS for provider in providers):
+        if any(provider not in ACQUISITION_PROVIDERS for provider in providers):
             raise _error("acquisition.providers", "contains an unsupported provider")
+    preflight_table = _table(
+        table, "preflight", {"min_free_bytes", "max_asset_bytes", "readiness", "timeout"}
+    )
+    preflight = PreflightConfig(
+        min_free_bytes=1024 * 1024 * 1024 if "min_free_bytes" not in preflight_table else _nonnegative_int(
+            preflight_table["min_free_bytes"], "acquisition.preflight.min_free_bytes"
+        ),
+        max_asset_bytes=100 * 1024 * 1024 if "max_asset_bytes" not in preflight_table else _positive_int(
+            preflight_table["max_asset_bytes"], "acquisition.preflight.max_asset_bytes"
+        ),
+        readiness="none" if "readiness" not in preflight_table else _choice(
+            preflight_table["readiness"], "acquisition.preflight.readiness", {"none", "headers"}
+        ),
+        timeout=10.0 if "timeout" not in preflight_table else _positive_number(
+            preflight_table["timeout"], "acquisition.preflight.timeout"
+        ),
+    )
+    if preflight.min_free_bytes < preflight.max_asset_bytes:
+        raise _error(
+            "acquisition.preflight.min_free_bytes",
+            "must be at least max_asset_bytes",
+        )
     return AcquisitionConfig(
         providers=providers,
         source_plan=None if "source_plan" not in table else _config_path(table["source_plan"], "acquisition.source_plan", parent),
@@ -255,6 +299,7 @@ def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConf
         host_concurrency=None if "host_concurrency" not in table else _positive_int(table["host_concurrency"], "acquisition.host_concurrency"),
         host_min_interval=None if "host_min_interval" not in table else _nonnegative_number(table["host_min_interval"], "acquisition.host_min_interval"),
         forbidden_urls=None if "forbidden_urls" not in table else _config_path(table["forbidden_urls"], "acquisition.forbidden_urls", parent),
+        preflight=preflight,
     )
 
 
@@ -384,6 +429,7 @@ def get_credential(env_var: str, *, env: Mapping[str, str] | None = None) -> str
 
 __all__ = (
     "CONFIG_ENV", "MAX_CONFIG_BYTES", "STORAGE_ROOT_ENV", "AcquisitionConfig",
+    "ACQUISITION_PROVIDERS", "PreflightConfig",
     "CredentialsConfig", "DiscoveryConfig", "PackageConfig", "PathsConfig",
     "SciRetrieverConfig", "get_credential", "load_config", "resolve_storage_root",
 )

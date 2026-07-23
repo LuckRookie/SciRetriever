@@ -1,6 +1,9 @@
 import contextlib
 import io
 import argparse
+import json
+import sqlite3
+import stat
 from types import SimpleNamespace
 import subprocess
 import sys
@@ -17,9 +20,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever import __version__
-from sciretriever.catalog import apply_migrations, create_catalog_engine
+from sciretriever.catalog import IdentityResolver, JobRepository, apply_migrations, create_catalog_engine
 from sciretriever.cli.main import PLACEHOLDER_COMMANDS, main
+from sciretriever.cli import acquire as acquire_cli
+from sciretriever.cli import preflight as preflight_cli
 from sciretriever.cli import package as package_cli
+from sciretriever.acquisition.models import AcquisitionResult
+from sciretriever.network import HeadersResponse
 from sciretriever.core.contracts import DownloadManifestEntry
 from sciretriever.core.enums import PackageQuality
 from sciretriever.discovery import LabelInput, ProviderRecord
@@ -95,6 +102,44 @@ class CliTests(TestCase):
         for command in ("create", "import-asset", "import-legacy-db"):
             self.assertIn(command, output.getvalue())
 
+    def test_report_help_lists_read_only_filters_and_formats(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as raised:
+                main(["report", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+        for option in ("--catalog", "--job-id", "--work-id", "--state", "--retryable", "--category", "--format"):
+            self.assertIn(option, output.getvalue())
+
+    def test_download_and_durable_acquire_controls_are_removed(self) -> None:
+        commands = (
+            ["download", "--help"],
+            ["acquire", "--resume-job", "00000000-0000-4000-8000-000000000001"],
+            ["acquire", "--due-jobs"],
+        )
+        for command in commands:
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    main(command)
+            self.assertEqual(raised.exception.code, 2)
+
+    def test_report_missing_catalog_fails_without_traceback(self) -> None:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            result = main(
+                [
+                    "--no-config",
+                    "report",
+                    "--catalog",
+                    str(self.directory / "missing.sqlite"),
+                    "--format",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(error.getvalue(), "sciretriever: error: catalog report is unavailable\n")
+
     def test_discover_help_lists_bounded_options(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -160,6 +205,163 @@ class CliTests(TestCase):
             parameters = pipeline_type.call_args.kwargs["normalization_parameters"]
             self.assertEqual((parameters.max_depth, parameters.max_elements), (30, 40))
             catalog.dispose.assert_called_once_with()
+
+    def test_acquire_output_reports_package_selection_ids(self) -> None:
+        acquisition = AcquisitionResult(
+            work_id=EXPLICIT_RUN_ID,
+            job_id="00000000-0000-4000-8000-000000000002",
+            status="succeeded",
+            raw_asset_id="00000000-0000-4000-8000-000000000003",
+        )
+        output = io.StringIO()
+
+        async def execute(_args, *, on_success):
+            on_success(acquisition)
+            return 1, 0
+
+        with (
+            mock.patch.object(
+                acquire_cli,
+                "_execute_async",
+                new=execute,
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            result = acquire_cli.run(argparse.Namespace())
+
+        self.assertEqual(result, 0)
+        self.assertIn(f"work_id={EXPLICIT_RUN_ID}", output.getvalue())
+        self.assertIn(f"raw_asset_id={acquisition.raw_asset_id}", output.getvalue())
+        self.assertIn("Acquisition complete: 1 succeeded, 0 failed", output.getvalue())
+
+    def test_preflight_is_read_only_and_indirect_provider_is_not_checked(self) -> None:
+        storage = self.directory / "storage"
+        storage.mkdir()
+        engine = create_catalog_engine(self.catalog)
+        apply_migrations(engine)
+        engine.dispose()
+        forbidden = self.directory / "forbidden.txt"
+        forbidden.write_text("# local policy\nhttps://blocked.example/\n", encoding="utf-8")
+        config = self.directory / "config.toml"
+        config.write_text(
+            """schema_version = 1
+[paths]
+catalog = "catalog.sqlite"
+storage_root = "storage"
+[acquisition]
+providers = ["crossref"]
+forbidden_urls = "forbidden.txt"
+[acquisition.preflight]
+min_free_bytes = 1
+max_asset_bytes = 1
+readiness = "headers"
+timeout = 1
+""",
+            encoding="utf-8",
+        )
+        config.chmod(0o600)
+
+        def snapshot() -> tuple[tuple[str, int, int, int], ...]:
+            return tuple(sorted(
+                (str(path.relative_to(self.directory)), path.lstat().st_mode, path.lstat().st_size, path.lstat().st_mtime_ns)
+                for path in self.directory.rglob("*")
+            ))
+
+        before = snapshot()
+        config_bytes = config.read_bytes()
+        config_mode = stat.S_IMODE(config.stat().st_mode)
+        output = io.StringIO()
+        with (
+            mock.patch.object(acquire_cli, "open_catalog_engine", side_effect=AssertionError("runtime constructed")),
+            mock.patch.object(acquire_cli, "AdmissionService", side_effect=AssertionError("admission constructed")),
+            mock.patch.object(acquire_cli, "RawAssetStore", side_effect=AssertionError("storage constructed")),
+            mock.patch.object(acquire_cli, "AcquisitionRuntime", side_effect=AssertionError("runtime constructed")),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(main(["preflight", "--config", str(config)]), 0)
+        report = json.loads(output.getvalue())
+        provider = next(check for check in report["checks"] if check["name"] == "provider:crossref")
+        self.assertEqual(provider["status"], "not_checked")
+        self.assertNotIn("workers", report["policy"])
+        self.assertNotIn("document_interval_seconds", report["policy"])
+        self.assertNotIn(str(config), output.getvalue())
+        self.assertEqual(config.read_bytes(), config_bytes)
+        self.assertEqual(stat.S_IMODE(config.stat().st_mode), config_mode)
+        self.assertEqual(snapshot(), before)
+        with sqlite3.connect(self.catalog) as connection:
+            for table in ("works", "acquisition_jobs", "acquisition_attempts", "failures", "raw_assets"):
+                self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0)
+
+    def test_preflight_direct_uses_headers_transport_and_has_no_policy_overrides(self) -> None:
+        storage = self.directory / "storage"
+        storage.mkdir()
+        config = self.directory / "direct.toml"
+        config.write_text(
+            """schema_version = 1
+[paths]
+catalog = "catalog.sqlite"
+storage_root = "storage"
+[acquisition]
+providers = ["direct"]
+[acquisition.preflight]
+min_free_bytes = 10
+max_asset_bytes = 10
+readiness = "headers"
+timeout = 2
+""",
+            encoding="utf-8",
+        )
+
+        class FakeHeadersTransport:
+            def __init__(self, *_args, **_kwargs):
+                self.calls: list[tuple[str, float | None]] = []
+
+            def head(self, url, *, params=None, headers=None, timeout=None):
+                self.calls.append((url, timeout))
+                return HeadersResponse(200, url, {"content-length": "10"})
+
+        fake = FakeHeadersTransport()
+        output = io.StringIO()
+        with (
+            mock.patch.object(preflight_cli, "UrllibAcquisitionTransport", return_value=fake),
+            contextlib.redirect_stdout(output),
+        ):
+            result = main(["preflight", "--url", "https://example.test/paper", "--config", str(config)])
+        self.assertEqual(result, 0)
+        report = json.loads(output.getvalue())
+        direct = next(check for check in report["checks"] if check["name"] == "provider:direct")
+        self.assertEqual(direct["status"], "ready")
+        self.assertEqual(fake.calls, [("https://example.test/paper", 2.0)])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["preflight", "--workers", "2", "--config", str(config)])
+
+    def test_preflight_rejects_unwritable_catalog_and_storage_paths(self) -> None:
+        storage = self.directory / "storage"
+        storage.mkdir()
+        config = self.directory / "permissions.toml"
+        config.write_text(
+            """schema_version = 1
+[paths]
+catalog = "catalog.sqlite"
+storage_root = "storage"
+[acquisition]
+providers = ["crossref"]
+[acquisition.preflight]
+min_free_bytes = 1
+max_asset_bytes = 1
+""",
+            encoding="utf-8",
+        )
+        output = io.StringIO()
+        with (
+            mock.patch("sciretriever.acquisition.preflight.os.access", return_value=False),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(main(["preflight", "--config", str(config)]), 1)
+        report = json.loads(output.getvalue())
+        checks = {check["name"]: check["status"] for check in report["checks"]}
+        self.assertEqual(checks["catalog"], "invalid")
+        self.assertEqual(checks["storage_root"], "invalid")
 
     def test_package_requires_exactly_one_selection(self) -> None:
         base = ["package", "--catalog", str(self.catalog), "--storage-root", str(self.directory)]

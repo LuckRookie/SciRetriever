@@ -6,12 +6,12 @@ from pathlib import Path
 import sys
 
 from sciretriever import __version__
-from sciretriever.cli import acquire, catalog, discover, package
+from sciretriever.cli import acquire, catalog, discover, package, preflight, report
 from sciretriever.config import CONFIG_ENV, SciRetrieverConfig, load_config
 from sciretriever.errors import ConfigError
 
 
-COMMANDS = ("discover", "acquire", "catalog", "package")
+COMMANDS = ("discover", "acquire", "preflight", "catalog", "package", "report")
 PLACEHOLDER_COMMANDS: tuple[str, ...] = ()
 
 
@@ -42,6 +42,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "acquire", help="acquire and preserve a role-specific raw asset"
     )
     acquire.configure_parser(acquire_parser)
+    preflight_parser = subparsers.add_parser(
+        "preflight", help="validate acquisition policy without downloading a body"
+    )
+    preflight.configure_parser(preflight_parser)
     catalog_parser = subparsers.add_parser(
         "catalog", help="create a v2 catalog or import explicit existing assets"
     )
@@ -50,6 +54,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "package", help="normalize and publish an offline DocumentPackageVersion"
     )
     package.configure_parser(package_parser)
+    report_parser = subparsers.add_parser(
+        "report", help="report acquisition status and failures read-only"
+    )
+    report.configure_parser(report_parser)
     for command in PLACEHOLDER_COMMANDS:
         subparsers.add_parser(command, help="reserved for a later implementation phase")
     return parser
@@ -193,6 +201,8 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
             _add_scalar(injected, present, "--" + name.replace("_", "-"), getattr(values, name))
         if not present.intersection({"--enrichment", "--no-enrichment"}) and values.enrichment is not None:
             injected.append("--enrichment" if values.enrichment else "--no-enrichment")
+    elif command == "report":
+        _add_scalar(injected, present, "--catalog", config.paths.catalog)
     return [*argv, *injected]
 
 
@@ -213,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if loaded_config is not None:
                 args._config_credentials = loaded_config.credentials
+                args._loaded_config = loaded_config
     except ConfigError as error:
         parser.error(str(error))
 
@@ -228,11 +239,17 @@ def main(argv: list[str] | None = None) -> int:
         acquire.validate_arguments(parser, args)
         return acquire.run(args)
 
+    if args.command == "preflight":
+        return preflight.run(args)
+
     if args.command == "catalog":
         return catalog.run(args)
 
     if args.command == "package":
         return package.run(args)
+
+    if args.command == "report":
+        return report.run(args)
 
     if args.command is not None:
         print(
