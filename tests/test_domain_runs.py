@@ -27,15 +27,13 @@ class DomainRunTests(TestCase):
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
         self.catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(self.catalog.dispose)
-        catalog_api.apply_migrations(self.catalog)
-        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work(
-            {"doi": "10.1000/domain-run"}
-        ).work
+        catalog_api.initialize_catalog(self.catalog)
+        work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": "10.1000/domain-run"}).work_version
         self.package_version_id = str(uuid4())
         with self.catalog.transaction() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO package_versions "
-                "(id, work_id, version, schema_version, quality, storage_path, sha256) "
+                "(id, work_version_id, version, schema_version, quality, storage_path, sha256) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     self.package_version_id,
