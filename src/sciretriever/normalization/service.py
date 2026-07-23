@@ -85,10 +85,10 @@ class NormalizationService:
 
     def run(
         self,
-        work_id: str,
+        work_version_id: str,
         checkpoint: Callable[[str], None] | None = None,
     ) -> NormalizationResult:
-        files = self.sources.list_files(work_id)
+        files = self.sources.list_files(work_version_id)
         if not files:
             raise NormalizationError("work has no raw assets")
         identities = [(link.raw_asset_id, link.asset_role) for link, _ in files]
@@ -107,7 +107,7 @@ class NormalizationService:
             for link, raw in files
         )
         run = self.runs.claim_or_resume(
-            work_id,
+            work_version_id,
             "normalization",
             "sciretriever.normalizer",
             NORMALIZER_VERSION,
@@ -122,7 +122,7 @@ class NormalizationService:
                 return self._load_result(current)
             if current.state.value == "failed":
                 current = self.runs.claim_or_resume(
-                    work_id,
+                    work_version_id,
                     "normalization",
                     "sciretriever.normalizer",
                     NORMALIZER_VERSION,
@@ -130,7 +130,7 @@ class NormalizationService:
                     input_raw_asset_ids=tuple(item.file_id for item in inputs),
                 )
             try:
-                draft = normalize_inputs(inputs, self.parameters, work_id=work_id)
+                draft = normalize_inputs(inputs, self.parameters, work_version_id=work_version_id)
                 content_payload = canonical_json_bytes(draft.content.to_dict())
                 source_payload = canonical_json_bytes(draft.source_map_dict())
                 content_publication = self.derived_store.publish_bytes(
@@ -148,7 +148,7 @@ class NormalizationService:
                     "input_file_ids": [item.file_id for item in inputs],
                 }
                 registered = self.artifacts.register_pair_after_publication(
-                    work_id,
+                    work_version_id,
                     anchor,
                     (
                         ArtifactRegistration(

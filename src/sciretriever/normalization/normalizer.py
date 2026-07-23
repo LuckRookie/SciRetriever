@@ -131,11 +131,11 @@ def normalize_inputs(
     inputs: tuple[RawNormalizationInput, ...],
     parameters: NormalizationParameters | None = None,
     *,
-    work_id: str | None = None,
+    work_version_id: str | None = None,
 ) -> NormalizationDraft:
     params = parameters or NormalizationParameters()
-    if work_id is not None:
-        work_id = validate_uuid(work_id, "work_id")
+    if work_version_id is not None:
+        work_version_id = validate_uuid(work_version_id, "work_id")
     if not isinstance(inputs, tuple) or not inputs:
         raise ValueError("inputs must be a non-empty tuple")
     if not all(isinstance(value, RawNormalizationInput) for value in inputs):
@@ -147,7 +147,7 @@ def normalize_inputs(
         "normalization_run",
         {
             "normalizer_version": NORMALIZER_VERSION,
-            "work_id": work_id,
+            "work_id": work_version_id,
             "parameters": params.to_dict(),
             "inputs": [
                 {
