@@ -35,7 +35,7 @@ class _VendorProvider:
         return tuple(self._record(work, rank) for rank, work in enumerate(works, 1))
 
     def _record(self, work: VendorWork, rank: int) -> ProviderRecord:
-        identifiers: list[tuple[str, str]] = [(self.name, work.raw_id)]
+        identifiers: list[tuple[str, str]] = []
         if work.doi:
             identifiers.append(("doi", work.doi))
         if work.canonical_url:
@@ -49,6 +49,14 @@ class _VendorProvider:
             authors=work.authors,
             year=work.year,
             venue=work.venue,
+            publisher=work.publisher,
+            publication_date=work.publication_date,
+            open_access_status=(
+                work.open_access_status
+                if work.open_access_status is not None
+                else "open" if work.open_access_url is not None else None
+            ),
+            provider_record_id=work.raw_id,
         )
 
 

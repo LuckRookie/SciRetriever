@@ -134,6 +134,9 @@ class SemanticScholarClient(BaseClient):
         )
         pdf = value.get("openAccessPdf")
         date = string_value(value.get("publicationDate"))
+        is_open_access = value.get("isOpenAccess")
+        if is_open_access is not None and not isinstance(is_open_access, bool):
+            raise IntegrationError("semantic-scholar returned malformed open-access status")
         return VendorWork(
             raw_id,
             string_value(value.get("title")),
@@ -145,6 +148,11 @@ class SemanticScholarClient(BaseClient):
             integer_value(value.get("citationCount")),
             string_value(value.get("url")),
             string_value(pdf.get("url")) if isinstance(pdf, dict) else None,
+            open_access_status=(
+                None
+                if is_open_access is None
+                else "open" if is_open_access else "closed"
+            ),
         )
 
 

@@ -142,6 +142,14 @@ class OpenAlexClient(BaseClient):
             doi = doi[16:]
         best = value.get("best_oa_location") or value.get("primary_location")
         oa_url = string_value(best.get("pdf_url")) if isinstance(best, dict) else None
+        open_access = value.get("open_access")
+        if open_access is not None and not isinstance(open_access, dict):
+            raise IntegrationError("openalex returned malformed open-access status")
+        is_open_access = (
+            open_access.get("is_oa") if isinstance(open_access, dict) else None
+        )
+        if is_open_access is not None and not isinstance(is_open_access, bool):
+            raise IntegrationError("openalex returned malformed open-access status")
         date = string_value(value.get("publication_date"))
         title = string_value(value.get("title"))
         title = title or string_value(value.get("display_name"))
@@ -156,6 +164,11 @@ class OpenAlexClient(BaseClient):
             integer_value(value.get("cited_by_count")),
             raw_id,
             oa_url,
+            open_access_status=(
+                "open"
+                if is_open_access is True or oa_url is not None
+                else "closed" if is_open_access is False else None
+            ),
         )
 
 

@@ -58,6 +58,8 @@ class VendorDiscoveryTests(TestCase):
                 self.assertEqual(records[0].provider, name)
                 self.assertIn(("doi", doi), records[0].raw_identifiers)
                 self.assertIn(query_name, transport.calls[0][1])
+                if name in {"openalex", "semantic-scholar"}:
+                    self.assertEqual(records[0].open_access_status, "open")
                 if name == "semantic-scholar":
                     self.assertEqual(transport.calls[0][2]["x-api-key"], "s2-key")
                 if name == "elsevier":
@@ -177,7 +179,7 @@ class VendorDiscoveryTests(TestCase):
                     ),
                 }
                 self.assertEqual(
-                    tuple(record.raw_identifiers[0][1] for record in records),
+                    tuple(record.provider_record_id for record in records),
                     expected_ids[fixture_name],
                 )
                 self.assertEqual(len(transport.calls), 2)
