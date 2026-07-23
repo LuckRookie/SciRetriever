@@ -76,7 +76,6 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 - storage 的 immutable create-if-absent、hash、相对路径、权限和 reconciliation；
 - durable write 前和用户输出前的 secret redaction；
 - provider-neutral DTO、provenance 和 lineage；
-- retired-database path guard；
 - `DocumentPackage` 的领域中立边界，除非后续 ADR 明确修改。
 
 ## 6. 架构验收
