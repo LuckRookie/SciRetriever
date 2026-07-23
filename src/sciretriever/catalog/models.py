@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -101,10 +102,8 @@ works = Table(
     metadata,
     _id_column(),
     Column("status", Text, nullable=False, server_default="active"),
-    Column("title", Text),
-    Column("abstract", Text),
-    Column("publication_year", Integer),
-    Column("venue", Text),
+    Column("preferred_work_version_id", String(36)),
+    Column("preferred_version_is_manual", Integer, nullable=False, server_default="0"),
     Column("needs_review", Integer, nullable=False, server_default="0"),
     Column("review_reason", Text),
     Column("merged_into_work_id", String(36), ForeignKey("works.id", ondelete="RESTRICT")),
@@ -112,8 +111,8 @@ works = Table(
     _created_at_column("updated_at"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
     CheckConstraint("status IN ('active', 'review', 'merged')", name="status"),
-    CheckConstraint("publication_year IS NULL OR publication_year >= 0", name="publication_year"),
     CheckConstraint("needs_review IN (0, 1)", name="needs_review_boolean"),
+    CheckConstraint("preferred_version_is_manual IN (0, 1)", name="preferred_version_is_manual_boolean"),
     CheckConstraint("needs_review = 1 OR review_reason IS NULL", name="review_reason_state"),
     CheckConstraint(
         "(status = 'review' AND needs_review = 1) OR status <> 'review'",
@@ -127,6 +126,142 @@ works = Table(
     CheckConstraint("merged_into_work_id IS NULL OR merged_into_work_id <> id", name="not_self_merged"),
     CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
     CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
+)
+
+publishers = Table(
+    "publishers", metadata, _id_column(), Column("canonical_name", Text, nullable=False),
+    Column("normalized_name", Text, nullable=False, unique=True),
+    _created_at_column(), CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(canonical_name)) > 0", name="canonical_name_not_blank"),
+)
+publisher_aliases = Table(
+    "publisher_aliases", metadata, _id_column(),
+    Column("publisher_id", String(36), ForeignKey("publishers.id", ondelete="CASCADE"), nullable=False),
+    Column("alias", Text, nullable=False), Column("normalized_alias", Text, nullable=False, unique=True),
+    _created_at_column(),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(alias)) > 0", name="alias_not_blank"),
+)
+venues = Table(
+    "venues", metadata, _id_column(), Column("canonical_name", Text, nullable=False),
+    Column("normalized_name", Text, nullable=False, unique=True),
+    _created_at_column(), CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(canonical_name)) > 0", name="canonical_name_not_blank"),
+)
+venue_aliases = Table(
+    "venue_aliases", metadata, _id_column(),
+    Column("venue_id", String(36), ForeignKey("venues.id", ondelete="CASCADE"), nullable=False),
+    Column("alias", Text, nullable=False), Column("normalized_alias", Text, nullable=False, unique=True),
+    _created_at_column(),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(alias)) > 0", name="alias_not_blank"),
+)
+
+work_versions = Table(
+    "work_versions", metadata, _id_column(),
+    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("version_class", Text, nullable=False, server_default="unknown"),
+    Column("normalized_title", Text, nullable=False), Column("title", Text, nullable=False),
+    Column("abstract", Text), Column("language", Text), Column("work_type", Text),
+    Column("publication_date", Text), Column("publication_year", Integer),
+    Column("publisher_id", String(36), ForeignKey("publishers.id", ondelete="SET NULL")),
+    Column("venue_id", String(36), ForeignKey("venues.id", ondelete="SET NULL")),
+    Column("volume", Text), Column("issue", Text), Column("pages", Text),
+    Column("article_number", Text), Column("open_access_status", Text),
+    Column("provider_precedence", Integer), Column("stable_version_key", Text, nullable=False),
+    Column("is_provisional", Integer, nullable=False, server_default="0"),
+    _created_at_column(), _created_at_column("updated_at"),
+    UniqueConstraint("work_id", "stable_version_key", name="work_stable_version"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"), CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint("version_class IN ('formal_publication', 'accepted_manuscript', 'preprint', 'unknown', 'other')", name="version_class"),
+    CheckConstraint("publication_year IS NULL OR publication_year >= 0", name="publication_year"),
+    CheckConstraint("length(trim(normalized_title)) > 0", name="normalized_title_not_blank"),
+    CheckConstraint("length(trim(title)) > 0", name="title_not_blank"),
+    CheckConstraint("length(trim(stable_version_key)) > 0", name="stable_version_key_not_blank"),
+    CheckConstraint("is_provisional IN (0, 1)", name="is_provisional_boolean"),
+)
+
+# The circular preferred pointer is declared after both tables exist.
+works.append_constraint(ForeignKeyConstraint([works.c.preferred_work_version_id], [work_versions.c.id], ondelete="SET NULL", name="fk_works_preferred_work_version_id_work_versions"))
+
+work_version_identifiers = Table(
+    "work_version_identifiers", metadata, _id_column(),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("namespace", Text, nullable=False), Column("value", Text, nullable=False), _created_at_column(),
+    UniqueConstraint("namespace", "value", name="work_version_identifier_namespace_value"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(namespace)) > 0", name="namespace_not_blank"),
+    CheckConstraint("length(trim(value)) > 0", name="value_not_blank"),
+)
+
+metadata_observations = Table(
+    "metadata_observations", metadata, _id_column(),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("provider", Text, nullable=False), Column("provider_record_id", Text, nullable=False),
+    Column("field_name", Text, nullable=False), Column("value_json", Text, nullable=False),
+    Column("provenance_json", Text, nullable=False), _created_at_column("observed_at"),
+    UniqueConstraint("provider", "provider_record_id", "field_name", "value_json", name="provider_field_observation"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint(_json_check("value_json"), name="value_json"),
+    CheckConstraint(_json_check("provenance_json"), name="provenance_json"),
+)
+
+authors = Table(
+    "authors", metadata, _id_column(), Column("display_name", Text, nullable=False),
+    Column("normalized_name", Text, nullable=False), Column("orcid", Text, unique=True), _created_at_column(),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(display_name)) > 0", name="display_name_not_blank"),
+    CheckConstraint("length(trim(normalized_name)) > 0", name="normalized_name_not_blank"),
+)
+authorships = Table(
+    "authorships", metadata, _id_column(),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("author_id", String(36), ForeignKey("authors.id", ondelete="RESTRICT"), nullable=False),
+    Column("position", Integer, nullable=False), Column("role", Text),
+    Column("is_corresponding", Integer, nullable=False, server_default="0"), Column("affiliation", Text),
+    _created_at_column(), UniqueConstraint("work_version_id", "position", name="version_author_position"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"), CheckConstraint("position >= 0", name="position"),
+    CheckConstraint("is_corresponding IN (0, 1)", name="is_corresponding_boolean"),
+)
+
+tags = Table(
+    "tags", metadata, _id_column(), Column("canonical_name", Text, nullable=False),
+    Column("normalized_name", Text, nullable=False, unique=True),
+    Column("definition", Text), _created_at_column(), CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("length(trim(canonical_name)) > 0", name="canonical_name_not_blank"),
+)
+tag_aliases = Table(
+    "tag_aliases", metadata, _id_column(),
+    Column("tag_id", String(36), ForeignKey("tags.id", ondelete="CASCADE"), nullable=False),
+    Column("alias", Text, nullable=False), Column("normalized_alias", Text, nullable=False, unique=True),
+    Column("language", Text), _created_at_column(),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"), CheckConstraint("length(trim(alias)) > 0", name="alias_not_blank"),
+)
+manual_work_tags = Table(
+    "manual_work_tags", metadata,
+    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", String(36), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+    _created_at_column("linked_at"),
+)
+generated_work_version_tags = Table(
+    "generated_work_version_tags", metadata,
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", String(36), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+    Column("source_artifact_id", String(36), ForeignKey("normalized_artifacts.id", ondelete="CASCADE"), primary_key=True),
+    _created_at_column("linked_at"),
+)
+
+version_relations = Table(
+    "version_relations", metadata, _id_column(),
+    Column("source_work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("target_work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("relation_type", Text, nullable=False), Column("evidence_json", Text, nullable=False), _created_at_column(),
+    UniqueConstraint("source_work_version_id", "target_work_version_id", "relation_type", name="version_relation"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("source_work_version_id <> target_work_version_id", name="different_versions"),
+    CheckConstraint("length(trim(relation_type)) > 0", name="relation_type_not_blank"),
+    CheckConstraint(_json_check("evidence_json"), name="evidence_json"),
+    CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
 )
 
 identifiers = Table(
@@ -176,7 +311,7 @@ metadata_labels = Table(
     "metadata_labels",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("taxonomy", Text, nullable=False),
     Column("taxonomy_version", Text, nullable=False),
     Column("input_sha256", String(64), nullable=False),
@@ -184,7 +319,7 @@ metadata_labels = Table(
     Column("needs_review", Integer, nullable=False, server_default="0"),
     _created_at_column(),
     UniqueConstraint(
-        "work_id",
+        "work_version_id",
         "taxonomy",
         "taxonomy_version",
         "input_sha256",
@@ -192,7 +327,7 @@ metadata_labels = Table(
         name="reusable_metadata_label",
     ),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(_sha256_check("input_sha256"), name="input_sha256"),
     CheckConstraint("length(trim(taxonomy)) > 0", name="taxonomy_not_blank"),
     CheckConstraint("length(trim(taxonomy_version)) > 0", name="taxonomy_version_not_blank"),
@@ -203,7 +338,7 @@ metadata_labels = Table(
 
 Index(
     "ix_metadata_labels_reusable_key",
-    metadata_labels.c.work_id,
+    metadata_labels.c.work_version_id,
     metadata_labels.c.taxonomy,
     metadata_labels.c.taxonomy_version,
     metadata_labels.c.input_sha256,
@@ -213,7 +348,7 @@ download_requests = Table(
     "download_requests",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="SET NULL")),
     Column("request_key", Text, nullable=False, unique=True),
     Column("asset_role", Text, nullable=False),
@@ -222,7 +357,7 @@ download_requests = Table(
     _created_at_column(),
     _created_at_column("updated_at"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
     CheckConstraint(
         "status IN ('pending', 'attached', 'succeeded', 'failed', 'cancelled')",
@@ -238,7 +373,7 @@ acquisition_jobs = Table(
     "acquisition_jobs",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("asset_role", Text, nullable=False),
     Column("state", Text, nullable=False, server_default=JobState.PENDING.value),
     Column("source_plan_json", Text),
@@ -246,7 +381,7 @@ acquisition_jobs = Table(
     _created_at_column(),
     _created_at_column("updated_at"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
     CheckConstraint(f"state IN ({_values(_JOB_STATES)})", name="state"),
     CheckConstraint(_json_check("source_plan_json", nullable=True), name="source_plan_json"),
@@ -257,15 +392,13 @@ acquisition_jobs = Table(
 
 Index(
     "uq_acquisition_jobs_nonterminal",
-    acquisition_jobs.c.work_id,
+    acquisition_jobs.c.work_version_id,
     acquisition_jobs.c.asset_role,
     unique=True,
     sqlite_where=acquisition_jobs.c.state.in_(
         (
             JobState.PENDING.value,
             JobState.ACTIVE.value,
-            JobState.RETRYABLE.value,
-            JobState.PAUSED.value,
         )
     ),
 )
@@ -325,10 +458,10 @@ raw_assets = Table(
     CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
 )
 
-work_assets = Table(
-    "work_assets",
+work_version_assets = Table(
+    "work_version_assets",
     metadata,
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), primary_key=True),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), primary_key=True),
     Column(
         "raw_asset_id",
         String(36),
@@ -337,7 +470,7 @@ work_assets = Table(
     ),
     Column("asset_role", Text, primary_key=True),
     _created_at_column("linked_at"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(_uuid_check("raw_asset_id"), name="raw_asset_id_uuid"),
     CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
     CheckConstraint(_timestamp_check("linked_at"), name="linked_at_rfc3339"),
@@ -347,7 +480,7 @@ asset_intents = Table(
     "asset_intents",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="CASCADE"), nullable=False),
     Column("attempt_id", String(36), ForeignKey("acquisition_attempts.id", ondelete="SET NULL")),
     Column("raw_asset_id", String(36), ForeignKey("raw_assets.id", ondelete="SET NULL")),
@@ -364,7 +497,7 @@ asset_intents = Table(
     _created_at_column("updated_at"),
     UniqueConstraint("job_id", "asset_role", "expected_sha256", name="job_asset_intent"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(_uuid_check("job_id"), name="job_id_uuid"),
     CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
     CheckConstraint(f"state IN ({_values(_ASSET_INTENT_STATES)})", name="state"),
@@ -401,7 +534,7 @@ normalized_artifacts = Table(
     "normalized_artifacts",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("raw_asset_id", String(36), ForeignKey("raw_assets.id", ondelete="RESTRICT"), nullable=False),
     Column("kind", Text, nullable=False),
     Column("schema_version", Text, nullable=False),
@@ -415,7 +548,7 @@ normalized_artifacts = Table(
         "raw_asset_id", "kind", "schema_version", "sha256", name="normalized_derivation"
     ),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(_uuid_check("raw_asset_id"), name="raw_asset_id_uuid"),
     CheckConstraint("length(trim(kind)) > 0", name="kind_not_blank"),
     CheckConstraint("length(trim(schema_version)) > 0", name="schema_version_not_blank"),
@@ -434,7 +567,7 @@ light_structures = Table(
     "light_structures",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column(
         "normalized_artifact_id",
         String(36),
@@ -447,10 +580,10 @@ light_structures = Table(
     Column("content_json", Text, nullable=False),
     _created_at_column(),
     UniqueConstraint(
-        "work_id", "kind", "schema_version", "input_sha256", name="light_structure_input"
+        "work_version_id", "kind", "schema_version", "input_sha256", name="light_structure_input"
     ),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(_uuid_check("normalized_artifact_id"), name="normalized_artifact_id_uuid"),
     CheckConstraint("kind IN ('summary', 'tags')", name="kind"),
     CheckConstraint("length(trim(schema_version)) > 0", name="schema_version_not_blank"),
@@ -459,27 +592,28 @@ light_structures = Table(
     CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
 )
 
-citations = Table(
-    "citations",
+version_references = Table(
+    "version_references",
     metadata,
     _id_column(),
-    Column("citing_work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("citing_work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("cited_work_id", String(36), ForeignKey("works.id", ondelete="SET NULL")),
-    Column("cited_namespace", Text),
-    Column("cited_value", Text),
+    Column("reference_order", Integer, nullable=False),
+    Column("raw_reference", Text, nullable=False),
+    Column("cited_namespace", Text), Column("cited_value", Text),
     Column(
         "source_artifact_id",
         String(36),
         ForeignKey("normalized_artifacts.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     ),
     Column("locator_json", Text),
     _created_at_column(),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("citing_work_id"), name="citing_work_id_uuid"),
+    CheckConstraint(_uuid_check("citing_work_version_id"), name="citing_work_version_id_uuid"),
     CheckConstraint(_uuid_check("source_artifact_id"), name="source_artifact_id_uuid"),
     CheckConstraint(
-        "cited_work_id IS NOT NULL OR (cited_namespace IS NOT NULL AND cited_value IS NOT NULL)",
+        "cited_work_id IS NOT NULL OR length(trim(raw_reference)) > 0",
         name="cited_reference",
     ),
     CheckConstraint(
@@ -492,29 +626,28 @@ citations = Table(
 )
 
 Index(
-    "uq_citations_resolved",
-    citations.c.citing_work_id,
-    citations.c.cited_work_id,
-    citations.c.source_artifact_id,
+    "uq_version_references_resolved",
+    version_references.c.citing_work_version_id,
+    version_references.c.cited_work_id,
+    version_references.c.reference_order,
     unique=True,
-    sqlite_where=citations.c.cited_work_id.is_not(None),
+    sqlite_where=version_references.c.cited_work_id.is_not(None),
 )
 
 Index(
-    "uq_citations_unresolved",
-    citations.c.citing_work_id,
-    citations.c.cited_namespace,
-    citations.c.cited_value,
-    citations.c.source_artifact_id,
+    "uq_version_references_unresolved",
+    version_references.c.citing_work_version_id,
+    version_references.c.reference_order,
+    version_references.c.source_artifact_id,
     unique=True,
-    sqlite_where=citations.c.cited_work_id.is_(None),
+    sqlite_where=version_references.c.cited_work_id.is_(None),
 )
 
 processing_runs = Table(
     "processing_runs",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("stage", Text, nullable=False),
     Column("state", Text, nullable=False, server_default="pending"),
     Column("input_raw_asset_id", String(36), ForeignKey("raw_assets.id", ondelete="RESTRICT")),
@@ -532,7 +665,7 @@ processing_runs = Table(
     _created_at_column("started_at"),
     Column("finished_at", Text),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint(f"stage IN ({_values(_PROCESSING_STAGES)})", name="stage"),
     CheckConstraint("state IN ('pending', 'active', 'succeeded', 'failed', 'cancelled')", name="state"),
     CheckConstraint(_json_check("details_json", nullable=True), name="details_json"),
@@ -562,7 +695,7 @@ failures = Table(
     "failures",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE")),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE")),
     Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="CASCADE")),
     Column("attempt_id", String(36), ForeignKey("acquisition_attempts.id", ondelete="CASCADE")),
     Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="CASCADE")),
@@ -573,7 +706,7 @@ failures = Table(
     _created_at_column("occurred_at"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
     CheckConstraint(
-        "work_id IS NOT NULL OR job_id IS NOT NULL OR attempt_id IS NOT NULL "
+        "work_version_id IS NOT NULL OR job_id IS NOT NULL OR attempt_id IS NOT NULL "
         "OR processing_run_id IS NOT NULL",
         name="context",
     ),
@@ -588,7 +721,7 @@ package_versions = Table(
     "package_versions",
     metadata,
     _id_column(),
-    Column("work_id", String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
     Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="RESTRICT")),
     Column("version", Integer, nullable=False),
     Column("schema_version", Text, nullable=False),
@@ -596,9 +729,9 @@ package_versions = Table(
     Column("storage_path", Text, nullable=False, unique=True),
     Column("sha256", String(64), nullable=False),
     _created_at_column("published_at"),
-    UniqueConstraint("work_id", "version", name="work_package_version"),
+    UniqueConstraint("work_version_id", "version", name="work_version_package_version"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_id"), name="work_id_uuid"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
     CheckConstraint("version > 0", name="version_positive"),
     CheckConstraint("length(trim(schema_version)) > 0", name="schema_version_not_blank"),
     CheckConstraint(f"quality IN ({_values(_PACKAGE_QUALITIES)})", name="quality"),

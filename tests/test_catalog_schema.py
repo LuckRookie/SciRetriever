@@ -4,7 +4,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 from uuid import uuid4
@@ -19,7 +18,7 @@ if str(SRC) not in sys.path:
 
 catalog_api = importlib.import_module("sciretriever.catalog")
 catalog_engine = importlib.import_module("sciretriever.catalog.engine")
-catalog_migrate = importlib.import_module("sciretriever.catalog.migrate")
+catalog_schema = importlib.import_module("sciretriever.catalog.schema")
 CatalogError = importlib.import_module("sciretriever.errors").CatalogError
 
 
@@ -27,7 +26,7 @@ EXPECTED_TABLES = {
     "acquisition_attempts",
     "acquisition_jobs",
     "asset_intents",
-    "citations",
+    "version_references",
     "domain_runs",
     "download_requests",
     "events",
@@ -40,8 +39,21 @@ EXPECTED_TABLES = {
     "package_versions",
     "processing_runs",
     "raw_assets",
-    "schema_migrations",
-    "work_assets",
+    "work_version_assets",
+    "work_versions",
+    "work_version_identifiers",
+    "metadata_observations",
+    "authors",
+    "authorships",
+    "publishers",
+    "publisher_aliases",
+    "venues",
+    "venue_aliases",
+    "tags",
+    "tag_aliases",
+    "manual_work_tags",
+    "generated_work_version_tags",
+    "version_relations",
     "works",
 }
 
@@ -56,13 +68,13 @@ class CatalogSchemaTests(TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
 
-    def create_migrated_catalog(self, *, busy_timeout_ms: int = 5_000):
+    def create_initialized_catalog(self, *, busy_timeout_ms: int = 5_000):
         catalog = catalog_api.create_catalog_engine(
             self.path,
             busy_timeout_ms=busy_timeout_ms,
         )
         self.addCleanup(catalog.dispose)
-        self.assertEqual(catalog_api.apply_migrations(catalog), ("0001", "0002"))
+        self.assertIsNone(catalog_api.initialize_catalog(catalog))
         return catalog
 
     def insert_work(self, catalog, *, work_id: str | None = None) -> str:
@@ -70,6 +82,11 @@ class CatalogSchemaTests(TestCase):
         with catalog.transaction() as connection:
             connection.exec_driver_sql("INSERT INTO works (id) VALUES (?)", (work_id,))
         return work_id
+
+    def insert_work_version(self, catalog) -> str:
+        return catalog_api.WorkRepository(catalog).ingest_version(
+            provider="fixture", provider_record_id=new_id(), title=f"Fixture {new_id()}"
+        ).id
 
     def test_creation_existing_and_read_only_modes_are_explicit(self) -> None:
         missing = self.path
@@ -84,7 +101,7 @@ class CatalogSchemaTests(TestCase):
         self.assertTrue(missing.is_file())
         with self.assertRaises(FileExistsError):
             catalog_api.create_catalog_engine(missing)
-        catalog_api.apply_migrations(created)
+        catalog_api.initialize_catalog(created)
         created.dispose()
 
         existing = catalog_api.open_catalog_engine(missing)
@@ -97,7 +114,7 @@ class CatalogSchemaTests(TestCase):
             with read_only.transaction() as connection:
                 connection.exec_driver_sql("INSERT INTO works (id) VALUES (?)", (new_id(),))
         with self.assertRaises(CatalogError):
-            catalog_api.apply_migrations(read_only)
+            catalog_api.initialize_catalog(read_only)
 
     def test_concurrent_catalog_creation_has_exactly_one_winner(self) -> None:
         def create(_: int):
@@ -113,7 +130,7 @@ class CatalogSchemaTests(TestCase):
         winner = winners[0]
         self.addCleanup(winner.dispose)
         self.assertEqual(self.path.stat().st_mode & 0o077, 0)
-        self.assertEqual(catalog_api.apply_migrations(winner), ("0001", "0002"))
+        self.assertIsNone(catalog_api.initialize_catalog(winner))
         with winner.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM works").scalar_one(), 0)
 
@@ -132,18 +149,14 @@ class CatalogSchemaTests(TestCase):
                 catalog_api.create_catalog_engine(self.path)
         self.assertEqual(self.path.read_bytes(), b"claimed by another owner")
 
-    def test_creation_runs_retired_and_repository_write_guards(self) -> None:
+    def test_creation_runs_repository_write_guard(self) -> None:
         repository_target = REPOSITORY / f".catalog-guard-{new_id()}.sqlite"
         with self.assertRaisesRegex(PermissionError, "staged SciRetriever repository"):
             catalog_api.create_catalog_engine(repository_target)
         self.assertFalse(repository_target.exists())
 
-        retired_target = REPOSITORY / "all.db"
-        with self.assertRaisesRegex(PermissionError, "retired database"):
-            catalog_api.create_catalog_engine(retired_target, allow_repository_write=True)
-
     def test_sqlite_pragmas_and_critical_transaction_locking(self) -> None:
-        catalog = self.create_migrated_catalog(busy_timeout_ms=73)
+        catalog = self.create_initialized_catalog(busy_timeout_ms=73)
         with catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one(), 73)
@@ -161,34 +174,33 @@ class CatalogSchemaTests(TestCase):
                 with contender.critical_transaction():
                     pass
 
-    def test_migration_ledger_is_idempotent(self) -> None:
+    def test_fresh_schema_initialization_refuses_existing_catalog(self) -> None:
         catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(catalog.dispose)
 
-        self.assertEqual(catalog_api.applied_migrations(catalog), ())
-        self.assertEqual(catalog_api.apply_migrations(catalog), ("0001", "0002"))
-        self.assertEqual(catalog_api.apply_migrations(catalog), ())
-        self.assertEqual(catalog_api.applied_migrations(catalog), ("0001", "0002"))
+        self.assertIsNone(catalog_api.initialize_catalog(catalog))
+        with self.assertRaisesRegex(CatalogError, "empty database"):
+            catalog_api.initialize_catalog(catalog)
         with catalog.connect() as connection:
-            count = connection.exec_driver_sql("SELECT count(*) FROM schema_migrations").scalar_one()
-        self.assertEqual(count, 2)
+            tables = {
+                row[0]
+                for row in connection.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        self.assertNotIn("schema_migrations", tables)
 
-    def test_failed_migration_rolls_back_schema_and_ledger(self) -> None:
+    def test_failed_initialization_rolls_back_schema(self) -> None:
         catalog = catalog_api.create_catalog_engine(self.path)
         self.addCleanup(catalog.dispose)
 
-        def fail_upgrade(connection) -> None:
+        def fail_initialization(connection) -> None:
             connection.exec_driver_sql("CREATE TABLE should_rollback (id TEXT PRIMARY KEY)")
-            raise RuntimeError("migration failed")
+            raise RuntimeError("initialization failed")
 
-        failing_migration = SimpleNamespace(
-            REVISION="0001",
-            DESCRIPTION="failing migration",
-            upgrade=fail_upgrade,
-        )
-        with patch.object(catalog_migrate, "_migrations", return_value=(failing_migration,)):
-            with self.assertRaisesRegex(RuntimeError, "migration failed"):
-                catalog_api.apply_migrations(catalog)
+        with patch.object(catalog_schema, "initialize_schema", side_effect=fail_initialization):
+            with self.assertRaisesRegex(RuntimeError, "initialization failed"):
+                catalog_api.initialize_catalog(catalog)
 
         with catalog.connect() as connection:
             tables = {
@@ -201,7 +213,7 @@ class CatalogSchemaTests(TestCase):
         self.assertNotIn("schema_migrations", tables)
 
     def test_schema_contains_required_neutral_tables_without_blobs(self) -> None:
-        catalog = self.create_migrated_catalog()
+        catalog = self.create_initialized_catalog()
         with catalog.connect() as connection:
             tables = {
                 row[0]
@@ -245,7 +257,7 @@ class CatalogSchemaTests(TestCase):
             self.assertIn("byte_size", normalized_columns)
 
     def test_identifier_foreign_key_and_uniqueness_are_enforced(self) -> None:
-        catalog = self.create_migrated_catalog()
+        catalog = self.create_initialized_catalog()
         work_one = self.insert_work(catalog)
         work_two = self.insert_work(catalog)
 
@@ -268,24 +280,24 @@ class CatalogSchemaTests(TestCase):
                 )
 
     def test_nonterminal_acquisition_job_partial_unique_index(self) -> None:
-        catalog = self.create_migrated_catalog()
-        work_id = self.insert_work(catalog)
+        catalog = self.create_initialized_catalog()
+        work_id = self.insert_work_version(catalog)
         with catalog.transaction() as connection:
             connection.exec_driver_sql(
-                "INSERT INTO acquisition_jobs (id, work_id, asset_role, state) VALUES (?, ?, ?, ?)",
+                "INSERT INTO acquisition_jobs (id, work_version_id, asset_role, state) VALUES (?, ?, ?, ?)",
                 (new_id(), work_id, "primary_pdf", "pending"),
             )
         with self.assertRaises(IntegrityError):
             with catalog.transaction() as connection:
                 connection.exec_driver_sql(
-                    "INSERT INTO acquisition_jobs (id, work_id, asset_role, state) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO acquisition_jobs (id, work_version_id, asset_role, state) VALUES (?, ?, ?, ?)",
                     (new_id(), work_id, "primary_pdf", "paused"),
                 )
 
         with catalog.transaction() as connection:
             for state in ("succeeded", "failed", "cancelled"):
                 connection.exec_driver_sql(
-                    "INSERT INTO acquisition_jobs (id, work_id, asset_role, state) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO acquisition_jobs (id, work_version_id, asset_role, state) VALUES (?, ?, ?, ?)",
                     (new_id(), work_id, "primary_pdf", state),
                 )
             index_sql = connection.exec_driver_sql(
@@ -295,8 +307,8 @@ class CatalogSchemaTests(TestCase):
         self.assertIn("WHERE state IN", index_sql)
 
     def test_domain_run_output_state_constraints_are_enforced_by_sql(self) -> None:
-        catalog = self.create_migrated_catalog()
-        work_id = self.insert_work(catalog)
+        catalog = self.create_initialized_catalog()
+        work_id = self.insert_work_version(catalog)
         package_version_id = new_id()
         statement = (
             "INSERT INTO domain_runs "
@@ -306,7 +318,7 @@ class CatalogSchemaTests(TestCase):
         with catalog.transaction() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO package_versions "
-                "(id, work_id, version, schema_version, quality, storage_path, sha256) "
+                "(id, work_version_id, version, schema_version, quality, storage_path, sha256) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     package_version_id,
@@ -349,8 +361,8 @@ class CatalogSchemaTests(TestCase):
                         )
 
     def test_hash_json_timestamp_and_review_constraints_are_enforced(self) -> None:
-        catalog = self.create_migrated_catalog()
-        work_id = self.insert_work(catalog)
+        catalog = self.create_initialized_catalog()
+        work_id = self.insert_work_version(catalog)
         sha256 = "a" * 64
         with catalog.transaction() as connection:
             connection.exec_driver_sql(
@@ -413,7 +425,7 @@ class CatalogSchemaTests(TestCase):
         with catalog.transaction() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO metadata_labels "
-                "(id, work_id, taxonomy, taxonomy_version, input_sha256, label) "
+                "(id, work_version_id, taxonomy, taxonomy_version, input_sha256, label) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (new_id(), work_id, "topic", "v1", "c" * 64, "candidate"),
             )
@@ -421,14 +433,14 @@ class CatalogSchemaTests(TestCase):
             with catalog.transaction() as connection:
                 connection.exec_driver_sql(
                     "INSERT INTO metadata_labels "
-                    "(id, work_id, taxonomy, taxonomy_version, input_sha256, label) "
+                    "(id, work_version_id, taxonomy, taxonomy_version, input_sha256, label) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (new_id(), work_id, "topic", "v1", "c" * 64, "candidate"),
                 )
 
     def test_asset_intent_sql_invariants_and_immutability(self) -> None:
-        catalog = self.create_migrated_catalog()
-        work_id = self.insert_work(catalog)
+        catalog = self.create_initialized_catalog()
+        work_id = self.insert_work_version(catalog)
         job_id = new_id()
         attempt_id = new_id()
         intent_id = new_id()
@@ -438,7 +450,7 @@ class CatalogSchemaTests(TestCase):
         storage_path = f"raw/{sha256[:2]}/{sha256}"
         insert_intent = (
             "INSERT INTO asset_intents "
-            "(id, work_id, job_id, attempt_id, raw_asset_id, asset_role, state, "
+            "(id, work_version_id, job_id, attempt_id, raw_asset_id, asset_role, state, "
             "temporary_path, storage_path, expected_sha256, media_type, format, "
             "expected_byte_size, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
@@ -454,7 +466,7 @@ class CatalogSchemaTests(TestCase):
         )
         with catalog.transaction() as connection:
             connection.exec_driver_sql(
-                "INSERT INTO acquisition_jobs (id, work_id, asset_role) VALUES (?, ?, ?)",
+                "INSERT INTO acquisition_jobs (id, work_version_id, asset_role) VALUES (?, ?, ?)",
                 (job_id, work_id, "primary_pdf"),
             )
             connection.exec_driver_sql(
@@ -571,7 +583,7 @@ class CatalogSchemaTests(TestCase):
         ]
         immutable_changes = {
             "id": new_id(),
-            "work_id": new_id(),
+            "work_version_id": new_id(),
             "job_id": new_id(),
             "attempt_id": None,
             "asset_role": "html",
@@ -594,11 +606,9 @@ class CatalogSchemaTests(TestCase):
                     with catalog.transaction() as connection:
                         connection.exec_driver_sql(statement, parameters)
 
-    def test_asset_triggers_are_present_and_migration_upgrade_is_idempotent(self) -> None:
-        catalog = self.create_migrated_catalog()
-        migration = importlib.import_module("sciretriever.catalog.migrations.0001_initial")
-        with catalog.transaction() as connection:
-            migration.upgrade(connection)
+    def test_asset_triggers_are_present_after_initialization(self) -> None:
+        catalog = self.create_initialized_catalog()
+        with catalog.connect() as connection:
             triggers = {
                 row[0]
                 for row in connection.exec_driver_sql(
@@ -608,6 +618,8 @@ class CatalogSchemaTests(TestCase):
         self.assertEqual(
             triggers,
             {
+                "trg_works_preferred_version_insert",
+                "trg_works_preferred_version_update",
                 "trg_raw_assets_immutable_update",
                 "trg_raw_assets_immutable_delete",
                 "trg_raw_assets_insert_coherence",
@@ -619,9 +631,9 @@ class CatalogSchemaTests(TestCase):
         )
 
     def test_asset_intent_cross_row_invariants_reject_adversarial_sql(self) -> None:
-        catalog = self.create_migrated_catalog()
-        work_a = self.insert_work(catalog)
-        work_b = self.insert_work(catalog)
+        catalog = self.create_initialized_catalog()
+        work_a = self.insert_work_version(catalog)
+        work_b = self.insert_work_version(catalog)
         job_a = new_id()
         job_b = new_id()
         job_xml = new_id()
@@ -634,7 +646,7 @@ class CatalogSchemaTests(TestCase):
                 (job_xml, work_a, "xml"),
             ):
                 connection.exec_driver_sql(
-                    "INSERT INTO acquisition_jobs (id, work_id, asset_role) VALUES (?, ?, ?)",
+                    "INSERT INTO acquisition_jobs (id, work_version_id, asset_role) VALUES (?, ?, ?)",
                     (job_id, work_id, role),
                 )
             connection.exec_driver_sql(
@@ -648,7 +660,7 @@ class CatalogSchemaTests(TestCase):
 
         statement = (
             "INSERT INTO asset_intents "
-            "(id, work_id, job_id, attempt_id, raw_asset_id, asset_role, state, "
+            "(id, work_version_id, job_id, attempt_id, raw_asset_id, asset_role, state, "
             "temporary_path, storage_path, expected_sha256, media_type, format, "
             "expected_byte_size, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
