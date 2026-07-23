@@ -96,6 +96,17 @@ class AssetRecordTests(TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     catalog.RawAssetRecord(**values)
 
+        for media_type in (
+            "application/pdf; charset=utf-8",
+            "!application/pdf",
+            "application/!pdf",
+        ):
+            with self.subTest(media_type=media_type):
+                values = self.raw_values()
+                values["media_type"] = media_type
+                with self.assertRaises(ValueError):
+                    catalog.RawAssetRecord(**values)
+
     def test_asset_intent_record_rejects_invalid_shapes_and_state_coupling(self) -> None:
         changes = (
             ("temporary_path", "staging/wrong.part"),
@@ -111,6 +122,13 @@ class AssetRecordTests(TestCase):
                 values = self.intent_values()
                 values[field] = value
                 with self.assertRaises((TypeError, ValueError)):
+                    catalog.AssetIntentRecord(**values)
+
+        for media_type in ("Application/PDF", "!application/pdf", "application/!pdf"):
+            with self.subTest(media_type=media_type):
+                values = self.intent_values()
+                values["media_type"] = media_type
+                with self.assertRaises(ValueError):
                     catalog.AssetIntentRecord(**values)
 
         values = self.intent_values()

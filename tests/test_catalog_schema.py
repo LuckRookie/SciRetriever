@@ -442,6 +442,11 @@ class CatalogSchemaTests(TestCase):
             "temporary_path, storage_path, expected_sha256, media_type, format, "
             "expected_byte_size, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
+        insert_raw = (
+            "INSERT INTO raw_assets "
+            "(id, sha256, storage_path, media_type, format, byte_size, provenance_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
         valid = (
             intent_id, work_id, job_id, attempt_id, None, "primary_pdf", "pending",
             temporary_path, storage_path, sha256, "application/pdf", "pdf_v1", 42,
@@ -458,9 +463,7 @@ class CatalogSchemaTests(TestCase):
             )
             connection.exec_driver_sql(insert_intent, valid)
             connection.exec_driver_sql(
-                "INSERT INTO raw_assets "
-                "(id, sha256, storage_path, media_type, format, byte_size, provenance_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                insert_raw,
                 (raw_id, sha256, storage_path, "application/pdf", "pdf_v1", 42, '{"provider":"example"}'),
             )
 
@@ -488,7 +491,14 @@ class CatalogSchemaTests(TestCase):
                     with catalog.transaction() as connection:
                         connection.exec_driver_sql(insert_intent, tuple(parameters))
 
-        for media_type in ("application/", "/pdf", "application//pdf"):
+        for media_type in (
+            "application/",
+            "/pdf",
+            "application//pdf",
+            "application/pdf; charset=utf-8",
+            "!application/pdf",
+            "application/!pdf",
+        ):
             with self.subTest(media_type=media_type):
                 parameters = list(valid)
                 parameters[0] = new_id()
@@ -497,6 +507,22 @@ class CatalogSchemaTests(TestCase):
                 with self.assertRaises(IntegrityError):
                     with catalog.transaction() as connection:
                         connection.exec_driver_sql(insert_intent, tuple(parameters))
+
+                raw_sha = format(8 + len(media_type), "x")[-1] * 64
+                with self.assertRaises(IntegrityError):
+                    with catalog.transaction() as connection:
+                        connection.exec_driver_sql(
+                            insert_raw,
+                            (
+                                new_id(),
+                                raw_sha,
+                                f"raw/{raw_sha[:2]}/{raw_sha}",
+                                media_type,
+                                "pdf_v1",
+                                42,
+                                '{"provider":"example"}',
+                            ),
+                        )
 
         one_character_format = list(valid)
         one_character_format[0] = new_id()

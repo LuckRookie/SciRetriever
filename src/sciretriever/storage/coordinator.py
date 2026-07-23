@@ -10,7 +10,8 @@ from sciretriever.catalog.assets import AssetRepository
 from sciretriever.catalog.records import AssetIntentRecord, RawAssetRecord, WorkAssetRecord
 from sciretriever.core.enums import AssetIntentState, AssetRole
 from sciretriever.core.ids import new_uuid4, validate_uuid
-from sciretriever.errors import CatalogError, StorageCorruptionError
+from sciretriever.errors import CatalogError, StorageCorruptionError, StorageError
+from sciretriever.diagnostics import map_exception
 
 from .manager import RawAssetStore
 from .records import PublicationResult, StagedAsset
@@ -140,6 +141,20 @@ class AssetAcceptanceCoordinator:
             raise TypeError("store must be a RawAssetStore")
         self._repository = repository
         self._store = store
+
+    def existing_asset_id(
+        self, work_id: str, asset_role: AssetRole
+    ) -> str | None:
+        """Return an already accepted immutable asset for invocation-local convergence."""
+
+        return next(
+            (
+                link.raw_asset_id
+                for link in self._repository.get_work_assets(work_id)
+                if link.asset_role is asset_role
+            ),
+            None,
+        )
 
     def accept(
         self,
@@ -408,13 +423,18 @@ class AssetAcceptanceCoordinator:
 
     def _record_failure(self, intent_id: str, phase: str, error: Exception) -> None:
         category = _failure_category(phase, error)
+        mapped_error = StorageError("storage operation failed") if isinstance(error, OSError) else error
+        diagnostic = map_exception(
+            mapped_error,
+            retryable=not isinstance(error, (CatalogError, StorageCorruptionError)),
+        )
         self._repository.record_intent_failure(
             intent_id,
             category,
-            f"asset acceptance failed during {phase}: {type(error).__name__}: {error}",
-            retryable=not isinstance(error, (CatalogError, StorageCorruptionError)),
+            diagnostic.summary,
+            retryable=diagnostic.retryable,
             details={
-                "error": str(error),
+                "diagnostic": diagnostic.to_dict(),
                 "error_type": type(error).__name__,
                 "phase": phase,
             },
