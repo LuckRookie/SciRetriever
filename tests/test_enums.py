@@ -20,8 +20,6 @@ class EnumTests(TestCase):
         enums.JobState: (
             "pending",
             "active",
-            "retryable",
-            "paused",
             "succeeded",
             "failed",
             "cancelled",

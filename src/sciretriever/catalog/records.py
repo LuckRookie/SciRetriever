@@ -67,10 +67,8 @@ def _timestamp(value: str, field_name: str) -> str:
 class WorkRecord:
     id: str
     status: str
-    title: str | None
-    abstract: str | None
-    publication_year: int | None
-    venue: str | None
+    preferred_work_version_id: str | None
+    preferred_version_is_manual: bool
     needs_review: bool
     review_reason: str | None
     merged_into_work_id: str | None
@@ -96,22 +94,121 @@ class IdentityResolution:
     decision: str
     identifiers: tuple[Identifier, ...]
     work: WorkRecord | None = None
+    work_version: WorkVersionRecord | None = None
     review: IdentityReviewRecord | None = None
 
     def __post_init__(self) -> None:
         if self.decision not in {"created", "reused", "review_required"}:
             raise ValueError(f"unsupported identity decision: {self.decision!r}")
         if self.decision == "review_required":
-            if self.work is not None or self.review is None:
+            if self.work is not None or self.work_version is not None or self.review is None:
                 raise ValueError("review_required requires only a review record")
         elif self.work is None or self.review is not None:
             raise ValueError("created and reused decisions require only a work record")
 
 
 @dataclass(frozen=True, slots=True)
-class MetadataLabelRecord:
+class WorkVersionRecord:
     id: str
     work_id: str
+    version_class: str
+    normalized_title: str
+    title: str
+    abstract: str | None
+    language: str | None
+    work_type: str | None
+    publication_date: str | None
+    publication_year: int | None
+    publisher_id: str | None
+    venue_id: str | None
+    volume: str | None
+    issue: str | None
+    pages: str | None
+    article_number: str | None
+    open_access_status: str | None
+    provider_precedence: int | None
+    stable_version_key: str
+    is_provisional: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataObservationRecord:
+    id: str
+    work_version_id: str
+    provider: str
+    provider_record_id: str
+    field_name: str
+    value_json: str
+    provenance_json: str
+    observed_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorRecord:
+    id: str
+    display_name: str
+    normalized_name: str
+    orcid: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorshipRecord:
+    id: str
+    work_version_id: str
+    author_id: str
+    position: int
+    role: str | None
+    is_corresponding: bool
+    affiliation: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryRecord:
+    id: str
+    canonical_name: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TagRecord:
+    id: str
+    canonical_name: str
+    definition: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class VersionRelationRecord:
+    id: str
+    source_work_version_id: str
+    target_work_version_id: str
+    relation_type: str
+    evidence_json: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class VersionReferenceRecord:
+    id: str
+    citing_work_version_id: str
+    cited_work_id: str | None
+    reference_order: int
+    raw_reference: str
+    cited_namespace: str | None
+    cited_value: str | None
+    source_artifact_id: str | None
+    locator_json: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataLabelRecord:
+    id: str
+    work_version_id: str
     taxonomy: str
     taxonomy_version: str
     input_sha256: str
@@ -123,7 +220,7 @@ class MetadataLabelRecord:
 @dataclass(frozen=True, slots=True)
 class JobRecord:
     id: str
-    work_id: str
+    work_version_id: str
     asset_role: AssetRole
     state: JobState
     source_plan_json: str | None
@@ -138,7 +235,7 @@ AcquisitionJobRecord = JobRecord
 @dataclass(frozen=True, slots=True)
 class DownloadRequestRecord:
     id: str
-    work_id: str
+    work_version_id: str
     job_id: str | None
     request_key: str
     asset_role: AssetRole
@@ -199,21 +296,21 @@ class RawAssetRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkAssetRecord:
-    work_id: str
+class WorkVersionAssetRecord:
+    work_version_id: str
     raw_asset_id: str
     asset_role: AssetRole
     linked_at: str
 
     def __post_init__(self) -> None:
-        validate_uuid(self.work_id, "work_id")
+        validate_uuid(self.work_version_id, "work_id")
         validate_uuid(self.raw_asset_id, "raw_asset_id")
         if not isinstance(self.asset_role, AssetRole):
             raise TypeError("asset_role must be an AssetRole")
         _timestamp(self.linked_at, "linked_at")
 
     @classmethod
-    def from_row(cls, row: Mapping[str, Any]) -> "WorkAssetRecord":
+    def from_row(cls, row: Mapping[str, Any]) -> "WorkVersionAssetRecord":
         values = {field: row[field] for field in cls.__dataclass_fields__}
         values["asset_role"] = AssetRole(values["asset_role"])
         return cls(**values)
@@ -222,7 +319,7 @@ class WorkAssetRecord:
 @dataclass(frozen=True, slots=True)
 class AssetIntentRecord:
     id: str
-    work_id: str
+    work_version_id: str
     job_id: str
     attempt_id: str | None
     raw_asset_id: str | None
@@ -240,7 +337,7 @@ class AssetIntentRecord:
 
     def __post_init__(self) -> None:
         validate_uuid(self.id, "id")
-        validate_uuid(self.work_id, "work_id")
+        validate_uuid(self.work_version_id, "work_id")
         validate_uuid(self.job_id, "job_id")
         if self.attempt_id is not None:
             validate_uuid(self.attempt_id, "attempt_id")
@@ -288,7 +385,7 @@ class EventRecord:
 @dataclass(frozen=True, slots=True)
 class FailureRecord:
     id: str
-    work_id: str | None
+    work_version_id: str | None
     job_id: str | None
     attempt_id: str | None
     processing_run_id: str | None
@@ -313,7 +410,7 @@ class DomainRunRecord:
 @dataclass(frozen=True, slots=True)
 class ProcessingRunRecord:
     id: str
-    work_id: str
+    work_version_id: str
     stage: ProcessingStage
     state: ProcessingRunState
     input_raw_asset_id: str | None
@@ -334,7 +431,7 @@ class ProcessingRunRecord:
 @dataclass(frozen=True, slots=True)
 class NormalizedArtifactRecord:
     id: str
-    work_id: str
+    work_version_id: str
     raw_asset_id: str
     kind: str
     schema_version: str
@@ -365,7 +462,7 @@ class ArtifactRegistration:
 @dataclass(frozen=True, slots=True)
 class LightStructureRecord:
     id: str
-    work_id: str
+    work_version_id: str
     normalized_artifact_id: str
     kind: str
     schema_version: str
@@ -379,25 +476,9 @@ class LightStructureRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class CitationRecord:
-    id: str
-    citing_work_id: str
-    cited_work_id: str | None
-    cited_namespace: str | None
-    cited_value: str | None
-    source_artifact_id: str
-    locator_json: str | None
-    created_at: str
-
-    @classmethod
-    def from_row(cls, row: Mapping[Any, Any]) -> "CitationRecord":
-        return cls(**{field: row[field] for field in cls.__dataclass_fields__})
-
-
-@dataclass(frozen=True, slots=True)
 class PackageVersionRecord:
     id: str
-    work_id: str
+    work_version_id: str
     processing_run_id: str | None
     version: int
     schema_version: str
@@ -420,6 +501,8 @@ __all__ = (
     "AcquisitionAttemptRecord",
     "AcquisitionJobRecord",
     "AttemptRecord",
+    "AuthorRecord",
+    "AuthorshipRecord",
     "AssetIntentRecord",
     "DomainRunRecord",
     "DownloadRequestRecord",
@@ -430,13 +513,18 @@ __all__ = (
     "IdentityReviewRecord",
     "JobRecord",
     "MetadataLabelRecord",
+    "MetadataObservationRecord",
     "ArtifactRegistration",
-    "CitationRecord",
     "LightStructureRecord",
     "NormalizedArtifactRecord",
     "PackageVersionRecord",
     "ProcessingRunRecord",
     "RawAssetRecord",
+    "RegistryRecord",
+    "TagRecord",
+    "VersionRelationRecord",
+    "VersionReferenceRecord",
     "WorkRecord",
-    "WorkAssetRecord",
+    "WorkVersionRecord",
+    "WorkVersionAssetRecord",
 )

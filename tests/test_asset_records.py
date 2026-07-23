@@ -38,7 +38,7 @@ class AssetRecordTests(TestCase):
         sha256 = "b" * 64
         return {
             "id": intent_id,
-            "work_id": new_id(),
+            "work_version_id": new_id(),
             "job_id": new_id(),
             "attempt_id": None,
             "raw_asset_id": None,
@@ -61,9 +61,9 @@ class AssetRecordTests(TestCase):
         with self.assertRaises(FrozenInstanceError):
             raw.byte_size = 1
 
-        work_asset = catalog.WorkAssetRecord.from_row(
+        work_asset = catalog.WorkVersionAssetRecord.from_row(
             {
-                "work_id": new_id(),
+                "work_version_id": new_id(),
                 "raw_asset_id": raw.id,
                 "asset_role": "primary_pdf",
                 "linked_at": raw.created_at,

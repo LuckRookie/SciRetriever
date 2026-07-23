@@ -18,8 +18,6 @@ class AssetIntentState(str, Enum):
 class JobState(str, Enum):
     PENDING = "pending"
     ACTIVE = "active"
-    RETRYABLE = "retryable"
-    PAUSED = "paused"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
