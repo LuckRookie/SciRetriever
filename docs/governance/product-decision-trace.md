@@ -1,8 +1,8 @@
 # 产品决策追踪
 
-本文是 2026-07-23 产品讨论的非规范性追踪表，用于证明 owner 的细粒度选择已经进入活动真相源。accepted ADR 保存决策授权和边界，[需求规格](../specs/requirements.md)、[系统设计](../specs/system-design.md)和[技术架构](../specs/technical-architecture.md)从不同侧面定义理想产品；[产品提案](../proposals/literature-library-product.md)只提供方向背景，[执行计划](../planning/literature-library-execution.md)只授权实施顺序，[实施进度](implementation-progress.md)只记录当前覆盖。本文不独立定义行为、重复授权能力或描述当前实现。
+本文是 2026-07-23 产品讨论及后续 owner 决策的非规范性追踪表，用于证明 owner 的细粒度选择已经进入活动真相源。accepted ADR 保存决策授权和边界，[需求规格](../specs/requirements.md)、[系统设计](../specs/system-design.md)和[技术架构](../specs/technical-architecture.md)从不同侧面定义理想产品；[产品提案](../proposals/literature-library-product.md)只提供方向背景，[执行计划](../planning/literature-library-execution.md)只授权实施顺序，[实施进度](implementation-progress.md)只记录当前覆盖。本文不独立定义行为、重复授权能力或描述当前实现。
 
-来源是本地会话导出 `lit.json`，session `ses_077a0787affespmLO6Unc3oh5I`。导出包含凭据无关但体量较大的完整对话和工具记录，不进入仓库。下面的 `message` 是该导出 `messages` 数组的稳定索引；问答工具结果也按其所属 assistant message 索引记录。
+初始来源是本地会话导出 `lit.json`，session `ses_077a0787affespmLO6Unc3oh5I`。导出包含凭据无关但体量较大的完整对话和工具记录，不进入仓库。下面的 `message` 是该导出 `messages` 数组的稳定索引；问答工具结果也按其所属 assistant message 索引记录。导出后的决定使用日期和会话主题记录，不虚构旧导出中的 message 索引。
 
 ## 决策映射
 
@@ -45,6 +45,12 @@
 | 446 | TOML 与 secret | 统一 strict TOML 管理 catalog/assets、defaults、metadata/acquisition、LLM、formats 和 browser profile；secret 可直写或引用环境变量；CLI 只覆盖当前 invocation；`config check` 检查未知字段、目录权限及已启用能力所需配置 | requirements FR-19 |
 | 447 | search limit 与进度 | limit 内置默认 100，TOML 可配置，CLI 可覆盖；前台统一报告 provider、去重、新建/复用、下载和分析的适用计数 | requirements FR-9、FR-18、FR-19 |
 | 448 | 实施入口 | 先只读盘点当前代码，再按保留/简化/删除/缺失分类 | execution plan WP0 |
+
+## 后续 owner 决策
+
+| 日期/来源 | 主题 | owner 确认或最终处置 | 权威位置 |
+|---|---|---|---|
+| 2026-07-24 / WP3 三方方案对比会话 | 第一层全文获取调度 | 采用两级调度：providers 有界竞速；每个 provider 内对去重候选按确定性顺序逐个执行和回退；不把全部候选扁平化为无界竞速 | requirements FR-11；system design Acquisition 流；technical architecture 前台运行模型；execution plan WP3 |
 
 ## 覆盖规则
 
