@@ -23,7 +23,7 @@
 
 ## 2. 总体状态
 
-截至 2026-07-24，SciRetriever 已具备 Work-centered catalog、多来源 metadata 入库、本地 library 读取、WorkVersion selector、三层全文获取、安全网络边界、文章身份验证、不可变保存、确定性归一化和 `DocumentPackageVersion` 处理快照能力。WP0、WP1、WP2 和 WP3 已完成；WP4、WP5 尚未开始。
+截至 2026-07-24，SciRetriever 已具备 Work-centered catalog、多来源 metadata 入库、本地 library 读取、WorkVersion selector、三层全文获取、安全网络边界、不可变保存、MinerU PDF 解析、十节 current analysis、前台 analyze backfill 和包含 current analysis 的不可变 `DocumentPackageVersion`。WP0-WP4 已完成；WP5 尚未开始。
 
 当前主交接是：
 
@@ -36,11 +36,11 @@ SearchSpec
   -> provider race / translator / browser
   -> content and article identity validation
   -> immutable RawAsset
-  -> normalization / deterministic enrichment
+  -> MinerU parsing / evidence / current analysis
   -> DocumentPackageVersion processing snapshot
 ```
 
-当前用户可以观察 canonical search JSON、library JSON/JSONL、manifest，以及 `download`/`search --level download` 的稳定脱敏 JSON 计数和逐 WorkVersion details。WorkVersion 已成为 catalog 书目与内容所有权基础；current PDF analysis、library curation、citation expansion、`failures` 和 `config check` 用户面尚未实现。
+当前用户可以观察 canonical search JSON、library JSON/JSONL、manifest，以及 `download`、`analyze` 和相应 search level 的稳定脱敏结果。WorkVersion 是书目与内容所有权基础；library curation、citation expansion、独立 `failures` 和 `config check` 属于尚未实施的 WP5。
 
 ## 3. 当前命令与配置
 
@@ -50,13 +50,14 @@ SearchSpec
 discover
 search
 download
+analyze
 library show|search|references|cited-by|export
 preflight
 catalog create|import-asset
 package
 ```
 
-严格配置 parser 当前接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`package`。`search.level` 接受 `metadata`/`download`；`[acquisition]` 接受 first-tier providers、timeout/concurrency/host budget、响应上限、forbidden URL 文件和 XML/HTML 开关，并含严格的 `preflight`、`sci_hub`、`translator`、`browser` 子表。Sci-Hub 要求 provider 列表与 enabled 状态一致且没有默认 endpoint；translator/browser 默认关闭并按规则启用，browser profile 在运行前做 owner/mode/storage-tree 验证。当前凭据字段覆盖 Unpaywall、Semantic Scholar、Elsevier、Wiley 和 Springer。LLM、analysis、reference expansion、`failures` 和 `config check` 字段尚未进入 accepted parser。
+严格配置 parser 接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`analysis`、`package`。`search.level` 接受 `metadata`、`download`、`analyze`；`[analysis.mineru]` 和 `[analysis.llm]` 使用严格 endpoint、运行时 credential-env 和资源上限。Reference expansion、独立 `failures` 和 `config check` 仍属于 WP5，未进入当前命令面。
 
 证据：`README.md`、`config.example.toml`、`src/sciretriever/config.py`、`src/sciretriever/cli/main.py`、`sciretriever --help`、`download/search/preflight --help`。最后核对：2026-07-24。
 
@@ -72,11 +73,11 @@ package
 | `acquisition/` | WorkVersion target/resolver、provider 有界竞速、provider 内去重候选顺序执行、translator/browser tier、身份/内容校验、脱敏诊断和不可变验收调用 |
 | `storage/` | Raw/Derived staging、不可变 create-if-absent 发布、hash 验证和 reconciliation |
 | `normalization/` | PDF/XML/HTML 到 sections、tables、references、source map 和 evidence |
-| `enrichment/` | 确定性 summary、tags 和 citation links |
+| `analysis/` | PDF-backed 十节分析、严格 evidence、current replacement 和前台 backfill |
 | `packaging/` | quality gate 与 `DocumentPackageVersion` 处理快照发布 |
-| `cli/` | 当前命令的 composition root，包括 metadata/download `search`、独立 `download` 和只读 `library` |
+| `cli/` | 当前命令的 composition root，包括 metadata/download/analyze `search`、独立 `download`/`analyze` 和只读 `library` |
 
-当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 仍保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references；single current generated result 属于后续 WP4。
+当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references，以及原子替换的 single current analysis。
 
 证据：`src/sciretriever/`、`docs/governance/code-doc-map.md`。最后核对：2026-07-24。
 
@@ -96,13 +97,13 @@ package
 | Sci-Hub / translator / browser | 已覆盖 WP3 | Sci-Hub first-tier 显式 opt-in；restricted translator second-tier；默认关闭的 profile-copy browser third-tier；全部使用离线 fixture | WP3 |
 | Article identity validation | 已覆盖 WP3 | PDF/XML/HTML 的 DOI 或保守标题/佐证确认；mismatch/unconfirmed 均 reject 且不进入 RawAsset | WP3 |
 | Immutable RawAsset | 已覆盖 WP3 | validation、hash、create-if-absent、同角色并发收敛、reconciliation | WP3 |
-| PDF normalization | 部分覆盖 | 已有确定性 PDF normalization，尚未覆盖目标 LLM 输入和 locator 合同；WP3 不提供 OCR | WP4 |
-| Current LLM analysis | 未实现 | 当前是 deterministic enrichment | WP4 |
-| Atomic current replacement | 未实现 | 当前是 processing/package snapshots | WP4 |
+| PDF normalization | 已覆盖 WP4 | MinerU 3.4.4 connector、async attempt、hostile ZIP admission、source map 和 PDF locators | WP4 |
+| Current LLM analysis | 已覆盖 WP4 | 十个稳定 section、严格 evidence、OpenAI-compatible provider 和脱敏 provenance | WP4 |
+| Atomic current replacement | 已覆盖 WP4 | single current revision、force convergence、失败保留旧 current、immutable package snapshot | WP4 |
 | Version references | 已覆盖 WP1 基础 | ordered `version_references`、目标 Work link 与 reverse citation query | WP1/WP4 |
 | Reference expansion | 未实现 | 无 `expand` 产品命令 | WP5 |
 | Failures UX | 部分覆盖 | `download` 返回稳定脱敏 counts/details 并持久化 acquisition diagnostics；独立 `failures` 命令属于 WP5 | WP3/WP5 |
-| Strict product config | 部分覆盖 | schema v1 已覆盖 WP2 search 和 WP3 acquisition/sci_hub/translator/browser/preflight；WP4-WP5 字段尚缺 | WP2-WP5 |
+| Strict product config | 已覆盖 WP2-WP4 | schema v1 覆盖 search、acquisition 和 analysis MinerU/LLM；WP5 字段仍未实现 | WP2-WP5 |
 | Foreground stop/idempotent rerun | 已覆盖 WP0/WP3 | Ctrl+C 保留完成项和 interrupted 计数；已有角色资产直接 reuse；整批重跑收敛 | WP0/WP3 |
 | 旧任务控制移除 | 已完成 | 已删除旧 `acquire`/`report`、durable task/job、pause/resume/due、retry scheduling、source-plan persistence 和 candidate checkpoint 当前运行路径 | WP0 |
 | Domain pack boundary | 已批准并有基础 | `DocumentPackageVersion`、stable references、ADR 0001 | 持续约束 |
@@ -117,12 +118,19 @@ package
 | WP1 文献模型 | approved | completed | direct fresh schema bootstrap、typed WP1 repositories、WorkVersion-owned runtime persistence 和 `test_catalog_wp1.py` 直接验收；完整 unittest 与 Pyright 通过 | 无 |
 | WP2 搜索与本地库 | approved | completed | `test_search_wp2.py`、`test_library_wp2.py`、`test_cli_wp2.py` 覆盖并发/timeout/确定性入库、preferred/non-preferred 读取、filters、引用遍历、安全导出和 CLI/config precedence；完整 harness 511 项通过 | 无 |
 | WP3 PDF 获取 | approved | completed | `test_wp3_foundation.py`、`test_download_wp3.py`、`test_cli_download_wp3.py`、`test_sci_hub_wp3.py`、`test_translator_wp3.py`、`test_browser_wp3.py`、`test_acquisition_identity_validation.py` 覆盖 selector/tier/candidate/identity/profile/中断/脱敏/不可变验收；完整 harness 522 项通过 | 无 |
-| WP4 PDF 分析 | approved | not started | 只有可复用的 normalization/evidence 基础 | 等待 WP3 验收 |
+| WP4 PDF 分析 | complete | WP4.1-WP4.5 已实现：严格配置、MinerU connector/admission、PDF source map、current replacement、analyze/search backfill 与 package snapshot | 离线 WP4、CLI、config、package、架构、文档和 full harness 验证 | 无；WP5 另行实施 |
 | WP5 引用与产品收口 | approved | not started | 无目标 expand/CLI/config 收口证据 | 等待 WP4 验收 |
 
 `approved` 只表示执行计划获得授权，不等于代码已经实现。实施顺序和验收门只在[执行计划](../planning/literature-library-execution.md)定义。
 
 ## 7. 最近验证
+
+2026-07-24 WP4 完成验证：
+
+- 聚焦 core package、publication、WP4.4/WP4.5 和 strict config 测试 71 项通过。
+- 完整单元与验收测试：582 项通过。
+- Pyright：0 errors、0 warnings、0 informations。
+- `quick`、`docs`、`architecture` 和 `full` harness 全部通过；wheel build 与 wheel contents 通过。
 
 2026-07-24 WP3 完成验证：
 
@@ -132,6 +140,13 @@ package
 - `uv run --frozen python scripts/harness.py docs`：通过。
 - `uv run --frozen python scripts/harness.py architecture`：通过。
 - `uv run --frozen python scripts/harness.py full`：通过；documentation、architecture、compile、Pyright、完整 unittest、wheel build 和 wheel contents 全部通过。
+
+2026-07-24 WP4 完成核对：
+
+- 本地 parser comparison 确认 MinerU 3.4.4 `vlm-engine` 在目标科学 PDF 上的布局、公式和损坏文本层恢复优势；具体 parser 缺陷和样本观察保留在 comparison 报告，不提升为产品 requirements。
+- 已核对 MinerU 3.4.4 API protocol 2 的 health/async task/result、process-local retention、model preload/cache、no-cancel/no-idempotency 和无内置 TLS/auth/upload-limit 边界。
+- 已将 WP4 执行顺序细化为 current-result/attempt/config contracts、connector/result admission、PDF source units/evidence、LLM analysis/current replacement、CLI/package/release surface 五个内部阶段；该细化不改变 ADR 或产品规格。
+- MinerU connector、配置、source map、current analysis、`analyze`/`search --level analyze` 和 package snapshot 均已实现并由离线测试覆盖。
 
 ## 8. 更新规则
 
