@@ -16,8 +16,10 @@ if str(SRC) not in sys.path:
 from PyPDF2 import PdfWriter
 
 from sciretriever.acquisition.candidate_executor import CandidateExecutionStatus, CandidateExecutor
+from sciretriever.acquisition.identity_validation import ContentIdentityValidator
 from sciretriever.acquisition.candidates import RuntimeDownloadCandidate, make_download_candidate_id
-from sciretriever.acquisition.models import HttpResponse
+from sciretriever.acquisition.models import AcquisitionTarget, HttpResponse
+from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import AssetRole
 from sciretriever.network import QueryParams
 
@@ -108,6 +110,38 @@ class CandidateExecutorTests(TestCase):
         result = asyncio.run(CandidateExecutor(transport).execute(candidate(), timeout=1.0))
         self.assertEqual(result.status, CandidateExecutionStatus.FAILED)
         self.assertIsNone(result.content)
+
+    def test_identity_failures_use_stable_generic_messages(self) -> None:
+        cases = (
+            (pdf_bytes(), "article identity could not be confirmed"),
+            (pdf_bytes(), "article identity does not match acquisition target"),
+        )
+        targets = (
+            AcquisitionTarget((Identifier("doi", "10.1000/expected"),)),
+            AcquisitionTarget((Identifier("doi", "10.1000/expected"),)),
+        )
+        bodies = [cases[0][0], self._pdf_with_doi("10.1000/wrong")]
+        for body, expected_message, target in zip(bodies, (item[1] for item in cases), targets):
+            with self.subTest(message=expected_message):
+                transport = FakeTransport(HttpResponse(
+                    200, "https://origin.test", {"content-type": "application/pdf"}, body
+                ))
+                result = asyncio.run(CandidateExecutor(
+                    transport, identity_validator=ContentIdentityValidator()
+                ).execute(candidate(), timeout=1.0, target=target))
+                self.assertEqual(result.status, CandidateExecutionStatus.FAILED)
+                self.assertEqual(str(result.error), expected_message)
+                self.assertNotIn("10.1000", repr(result))
+
+    @staticmethod
+    def _pdf_with_doi(doi: str) -> bytes:
+        stream = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.add_blank_page(width=72, height=72)
+        writer.add_metadata({"/Subject": f"doi: {doi} " + "evidence" * 200})
+        writer.write(stream)
+        return stream.getvalue()
 
     def test_http_retryability_and_retry_after_are_projected(self) -> None:
         cases = (

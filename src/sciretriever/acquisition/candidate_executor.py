@@ -9,13 +9,13 @@ import math
 from queue import Empty, Queue
 import threading
 import time
-from typing import Callable
+from typing import Callable, Protocol
 from urllib.parse import urlsplit
 
 from sciretriever.acquisition.candidates import RuntimeDownloadCandidate
 from sciretriever.acquisition.controls import HostBudgetManager
-from sciretriever.acquisition.legacy_candidates import LegacyCandidateOperation
-from sciretriever.acquisition.models import AcquisitionTransport, ProviderContent
+from sciretriever.acquisition.identity_validation import IdentityDisposition, IdentityValidator
+from sciretriever.acquisition.models import AcquisitionTarget, AcquisitionTransport, ProviderContent
 from sciretriever.acquisition.providers import ProviderAcquisitionError
 from sciretriever.acquisition.validation import validate_content
 from sciretriever.errors import ValidationError
@@ -50,16 +50,29 @@ class _WorkerOutcome:
     error: BaseException | None = None
 
 
+class BrowserRunner(Protocol):
+    def run(
+        self,
+        candidate: RuntimeDownloadCandidate,
+        timeout: float,
+        target: AcquisitionTarget | None,
+    ) -> ProviderContent: ...
+
+
 class CandidateExecutor:
     def __init__(
         self,
         transport: AcquisitionTransport | None = None,
         *,
         budgets: HostBudgetManager | None = None,
+        browser_runner: BrowserRunner | None = None,
+        identity_validator: IdentityValidator | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._transport = transport
         self._budgets = budgets or HostBudgetManager(monotonic=monotonic)
+        self._browser_runner = browser_runner
+        self._identity_validator = identity_validator
         self._clock = monotonic
 
     async def execute(
@@ -67,7 +80,7 @@ class CandidateExecutor:
         candidate: RuntimeDownloadCandidate,
         *,
         timeout: float,
-        operation: LegacyCandidateOperation | None = None,
+        target: AcquisitionTarget | None = None,
     ) -> CandidateExecutionResult:
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
             raise TypeError("candidate timeout must be a number")
@@ -83,7 +96,7 @@ class CandidateExecutor:
                     host=host,
                     deadline=deadline,
                     started=started,
-                    operation=operation,
+                    target=target,
                 ),
                 timeout=timeout,
             )
@@ -99,7 +112,7 @@ class CandidateExecutor:
         host: str,
         deadline: float,
         started: float,
-        operation: LegacyCandidateOperation | None,
+        target: AcquisitionTarget | None,
     ) -> CandidateExecutionResult:
         async with self._budgets.acquire(host):
             remaining = deadline - self._clock()
@@ -111,21 +124,13 @@ class CandidateExecutor:
                 )
             try:
                 content = await self._run_bounded(
-                    candidate, remaining, deadline, operation
+                    candidate, remaining, deadline, target
                 )
                 if self._clock() >= deadline:
                     return self._result(
                         CandidateExecutionStatus.INTERRUPTED,
                         started,
-                        error=TimeoutError("candidate completed after deadline"),
-                    )
-                content = self._sanitize_content(candidate, content)
-                validate_content(content, candidate.role)
-                if self._clock() >= deadline:
-                    return self._result(
-                        CandidateExecutionStatus.INTERRUPTED,
-                        started,
-                        error=TimeoutError("candidate validation exceeded deadline"),
+                        error=TimeoutError("candidate worker completed after deadline"),
                     )
                 return self._result(
                     CandidateExecutionStatus.VALIDATED, started, content=content
@@ -152,13 +157,25 @@ class CandidateExecutor:
         candidate: RuntimeDownloadCandidate,
         timeout: float,
         deadline: float,
-        operation: LegacyCandidateOperation | None,
+        target: AcquisitionTarget | None,
     ) -> ProviderContent:
         outcomes: Queue[_WorkerOutcome] = Queue(maxsize=1)
 
         def run() -> None:
             try:
-                outcomes.put(_WorkerOutcome(content=self._run(candidate, timeout, operation)))
+                content = self._sanitize_content(
+                    candidate, self._run(candidate, timeout, target)
+                )
+                if target is not None:
+                    if self._identity_validator is None:
+                        raise ValidationError("article identity could not be confirmed")
+                    identity = self._identity_validator.validate(content, target)
+                    if identity.disposition is IdentityDisposition.MISMATCH:
+                        raise ValidationError("article identity does not match acquisition target")
+                    if identity.disposition is not IdentityDisposition.PASS:
+                        raise ValidationError("article identity could not be confirmed")
+                validate_content(content, candidate.role)
+                outcomes.put(_WorkerOutcome(content=content))
             except BaseException as error:
                 outcomes.put(_WorkerOutcome(error=error))
 
@@ -186,14 +203,19 @@ class CandidateExecutor:
         self,
         candidate: RuntimeDownloadCandidate,
         timeout: float,
-        operation: LegacyCandidateOperation | None,
+        target: AcquisitionTarget | None,
     ) -> ProviderContent:
-        if operation is not None:
-            return operation.run(timeout)
+        if candidate.transport == "browser":
+            if self._browser_runner is None:
+                raise ValueError("browser candidate execution is unavailable")
+            return self._browser_runner.run(candidate, timeout, target)
+        if candidate.transport != "https":
+            raise ValueError("candidate transport is unsupported")
         if self._transport is None:
             raise ValueError("direct candidate execution requires a transport")
         response = self._transport.get(
             candidate.execution_url,
+            params=candidate.request_params,
             headers=candidate.request_headers,
             timeout=timeout,
         )
@@ -261,4 +283,4 @@ class CandidateExecutor:
         )
 
 
-__all__ = ()
+__all__ = ("BrowserRunner", "CandidateExecutionResult", "CandidateExecutionStatus", "CandidateExecutor")

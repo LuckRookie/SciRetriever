@@ -8,7 +8,6 @@ from dataclasses import dataclass
 import time
 from typing import AsyncIterator, Awaitable, Callable
 
-from sciretriever.acquisition.plan import SourceEntry
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +83,8 @@ class ProviderHealth:
         state = self._states.get(provider, _HealthState())
         return state.success, state.latency
 
-    def order(self, entries: tuple[SourceEntry, ...]) -> tuple[SourceEntry, ...]:
-        return tuple(sorted(entries, key=lambda entry: (-self.score(entry.provider)[0], self.score(entry.provider)[1], entry.priority, entry.candidate_id)))
+    def order(self, providers: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted(providers, key=lambda provider: (-self.score(provider)[0], self.score(provider)[1], providers.index(provider), provider)))
 
 
 class CircuitState(str):
