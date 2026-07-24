@@ -6,21 +6,22 @@
 
 ## 当前实现
 
-SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。它能并发查询多个 metadata provider，把确定性合并后的 canonical metadata、观察值和 open-access status 写入 catalog，也能生成只读 JSONL manifest、查询本地 library、采集并不可变保存 PDF/XML/HTML，以及发布确定性的 `DocumentPackageVersion` 处理快照。
+SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。它能检索 metadata、采集并不可变保存 PDF/XML/HTML、通过 operator-managed MinerU 和严格 LLM target 生成 PDF-backed current analysis，并发布确定性的 `DocumentPackageVersion` 处理快照。
 
 当前命令树如下：
 
 | 命令 | 当前行为 |
 |---|---|
 | `sciretriever discover` | 查询、清洗、去重和合并 metadata，输出 JSONL manifest |
-| `sciretriever search` | 以 `metadata` 或 `download` level 查询 provider、写入 canonical Work，并按需继续补全文 |
+| `sciretriever search` | 以 `metadata`、`download` 或 `analyze` level 查询 provider、写入 canonical Work，并按需继续补全文和分析 |
 | `sciretriever download` | 通过显式 WorkVersion selector 为现有版本补 primary PDF，并可选补 XML/HTML |
+| `sciretriever analyze` | 通过显式 selector 为恰有一份 accepted primary PDF 的版本补 current analysis |
 | `sciretriever library` | 只读精确查找、关键词/字段过滤、引用遍历和安全导出 |
 | `sciretriever preflight` | 只读检查当前 acquisition 配置，不下载响应正文 |
 | `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产 |
 | `sciretriever package` | 离线归一化并发布 `DocumentPackageVersion` 处理快照 |
 
-当前已有独立书目 `WorkVersion`、metadata observations、Author/Authorship、Publisher/Venue aliases、canonical tags、版本引用和 WP3 全文补全。全文 LLM/current analysis、引用扩展和 library 人工整理尚未实现；`analyze` level 也未发布。`package_versions` 是处理结果快照，不是书目版本。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
+当前已有独立书目 `WorkVersion`、WP3 全文补全和 WP4 PDF current analysis。引用扩展和 library 人工整理尚未实现。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 产品方向
 
@@ -37,7 +38,7 @@ SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。�
 - primary PDF、supplementary PDF、XML 和 HTML 的角色化内容验证。
 - HTTPS、DNS pinning、redirect 复检、敏感 header 处理、有限 timeout 和有界响应读取。
 - SHA-256 内容寻址、create-if-absent 发布和不可变 `RawAsset`。
-- PDF/XML/HTML 的确定性归一化、evidence、通用轻结构和版本化处理快照。
+- PDF/XML/HTML 的确定性归一化、PDF-backed current analysis、evidence 和版本化处理快照。
 - SQLite catalog 中的 Work identity、标识符、资产、处理、引用、失败和 lineage。
 
 SciRetriever 的通用处理边界止于带 provenance 的 `DocumentPackageVersion`。反应、分子、路线、产率和其它领域数据由下游系统处理，不进入 catalog。
@@ -64,11 +65,11 @@ existing WorkVersion selector
   -> restricted translator, then configured browser
   -> role/content/article identity validation
   -> immutable RawAsset
-  -> normalization and deterministic enrichment
+  -> PDF parsing and current analysis when explicitly requested
   -> DocumentPackageVersion processing snapshot
 ```
 
-`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。`search --level metadata` 会创建或复用 Work/WorkVersion 并保存 provider observations；`search --level download` 对同批结果继续运行与独立 `download` 相同的全文补全服务。`analyze` level 尚未实现。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
+`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。`search --level metadata` 会创建或复用 Work/WorkVersion 并保存 provider observations；`download` 和 `analyze` level 只继续处理该批返回的 WorkVersion IDs，不会隐式扩展到全库。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 数据来源
 
@@ -104,7 +105,7 @@ existing WorkVersion selector
 
 上表 provider 构成第一层：已配置 provider 有界竞速，每个 provider 的候选先去重，再按确定性顺序最多执行 8 个。Unpaywall 按 `best_oa_location` 后接其它 OA locations 形成有序去重候选；OpenAlex 按 best/primary/locations 顺序选择首个 HTTPS PDF locator。第一层没有合格 primary PDF 时，系统依次运行显式配置的 translator rules；仍未命中时才运行 browser rules。translator 和 browser 不参与第一层竞速。
 
-provider 返回候选或 HTTP 200 不等于资产成功。primary PDF 是必需角色；XML/HTML 仅在 primary PDF 已成功或复用后按配置补充，不能替代 primary PDF。PDF/XML/HTML 都必须通过角色、MIME、大小、格式、解析和目标文章身份校验。精确 DOI 一致可通过；没有可用 DOI 时，保守标题匹配或标题加作者/年份佐证可通过。明确身份不符或无法确认身份（包括无法确认的扫描件）会被拒绝并保持 missing；系统不声称执行 OCR。
+provider 返回候选或 HTTP 200 不等于资产成功。primary PDF 是必需角色；XML/HTML 仅在 primary PDF 已成功或复用后按配置补充，不能替代 primary PDF。PDF/XML/HTML 都必须通过角色、MIME、大小、格式、解析和目标文章身份校验。精确 DOI 一致可通过；没有可用 DOI 时，保守标题匹配或标题加作者/年份佐证可通过。明确身份不符或无法确认身份（包括无法确认的扫描件）会被拒绝并保持 missing；acquisition 身份校验不执行 OCR。WP4 `analyze` 会把已 accepted primary PDF 交给配置的 MinerU parser，解析/OCR 结果只在严格 evidence 和 current-replacement 门后生效。
 
 `download` 是有界前台 backfill。已有合格角色资产时直接复用，不重复联网或覆盖；重复运行按 WorkVersion、角色和不可变资产收敛。Ctrl+C 保留已完成记录并在稳定 JSON 中报告 `selected`、`accepted`、`reused`、`missing` 和 `interrupted` 计数；每个 WorkVersion 的角色状态与失败 details 均经过脱敏，不包含运行时 URL、header、query、profile 或 session 数据。运维事实见 [Provider 运维手册](docs/guides/provider-operations.md)。
 
@@ -190,6 +191,19 @@ uv run --frozen sciretriever download \
 
 没有 exact ID、query/filter/tag 或 `--all-missing` 时命令在构造 runtime 前 fail closed。exact ID 和 `--all-missing` 不能与 query/filter 混用。
 
+### 分析 accepted primary PDF
+
+`analyze` 是有界前台 backfill，支持显式 Work/WorkVersion ID、library query/filter、`--all-pending` 或 `--all-current --force`。它要求恰好一份 accepted primary PDF，以及完整启用的 `[analysis.mineru]` 和 `[analysis.llm]` 配置；XML/HTML-only 版本报告 blocked。凭据只在运行时从配置指定的环境变量读取。
+
+```bash
+uv run --frozen sciretriever analyze --work-version-id <WORK_VERSION_ID>
+uv run --frozen sciretriever analyze --all-pending --limit 100
+uv run --frozen sciretriever analyze --all-current --force --limit 100
+uv run --frozen sciretriever search "query" --level analyze
+```
+
+SciRetriever 不启动、停止、重载或升级 MinerU。普通重跑复用合格结果；强制重析稳定收敛到 current 的下一个 revision，完整替换成功前旧 current 持续可用。
+
 ### 发布当前处理快照
 
 使用 `search` 或 `library` 返回的真实 Work ID 运行：
@@ -201,7 +215,7 @@ uv run --frozen sciretriever package \
   --work-id <WORK_ID>
 ```
 
-默认 enrichment 是当前确定性通用轻结构，不是目标全文 LLM。可用 `--no-enrichment` 关闭。
+若所选 WorkVersion 已有 current analysis，包会冻结其 revision、完整十节内容、canonical proposals、references、generated tags、PDF locators、artifact hashes 和 run lineage。重导出相同输入复用包；current replacement 后生成新包，旧包保持可加载。
 
 ### 搜索并写入本地文献库
 
@@ -215,7 +229,7 @@ uv run --frozen sciretriever search "solid-state electrolytes" \
   --limit 100
 ```
 
-当前支持 `--level metadata` 和 `--level download`；后者还要求 `--storage-root`，并可使用 `--download-provider`、`--xml` 和 `--html` 等 acquisition 参数。多个 metadata provider 同时启动，各自有有限 timeout；部分 provider 失败时成功结果仍会入库，失败条目以脱敏形式出现在 JSON 输出中。`--level analyze` 尚未实现。
+当前支持 `--level metadata`、`--level download` 和 `--level analyze`；后两者要求 `--storage-root`。`analyze` 先下载该批结果，再只分析这些 WorkVersion；缺少 accepted primary PDF 的项报告 blocked，不计成功。多个 metadata provider 同时启动，各自有有限 timeout；部分 provider 失败时成功结果仍会入库，失败条目以脱敏形式出现在 JSON 输出中。
 
 ### 查询与导出本地文献库
 
@@ -244,6 +258,7 @@ uv run --frozen sciretriever library export \
 uv run --frozen sciretriever --help
 uv run --frozen sciretriever discover --help
 uv run --frozen sciretriever search --help
+uv run --frozen sciretriever analyze --help
 uv run --frozen sciretriever download --help
 uv run --frozen sciretriever library --help
 uv run --frozen sciretriever preflight --help
@@ -279,6 +294,10 @@ browser 默认关闭。启用时 `profile_dir` 必须是已存在的真实目录
 
 ### 当前凭据环境变量
 
+Acquisition 的固定变量如下。除此之外，`analysis.mineru.auth_env`（仅 remote mode）和
+`analysis.llm.credential_env` 接受 operator 选择的环境变量名称，配置只保存名称、不保存秘密值；
+`config.example.toml` 的 LLM 示例使用 `SCIRETRIEVER_LLM_API_KEY`。
+
 | 变量 | 用途 |
 |---|---|
 | `SCIRETRIEVER_UNPAYWALL_EMAIL` | Unpaywall 请求身份 |
@@ -300,8 +319,8 @@ src/sciretriever/
   acquisition/      WorkVersion targets, resolvers, tier orchestration, identity validation
   catalog/          SQLite identity, state, assets, processing, lineage
   storage/          immutable Raw/Derived publication and recovery
-  normalization/    PDF/XML/HTML normalization and evidence
-  enrichment/       current deterministic light structure
+  normalization/    PDF/XML/HTML normalization, MinerU parsing and evidence
+  analysis/         PDF-backed LLM analysis and atomic current replacement
   packaging/        quality gate and processing snapshot publication
   cli/              current composition root
 ```
@@ -317,7 +336,7 @@ src/sciretriever/
 - 领域数据不进入 SciRetriever catalog。
 - 文献数据和运行时 catalog 不提交到代码仓库。
 
-ADR 的权威范围和阅读顺序见 [ADR 索引](docs/adr/README.md)：ADR 0001 控制领域边界，ADR 0002 控制当前批准的 Work-centered 产品方向和旧任务兼容策略。
+ADR 的权威范围和阅读顺序见 [ADR 索引](docs/adr/README.md)：ADR 0001 控制领域边界，ADR 0002 控制 Work-centered 产品方向，ADR 0003 控制 operator-managed MinerU 服务边界。
 
 ## 开发与验证
 
@@ -338,8 +357,10 @@ uv run --frozen python scripts/harness.py architecture
 - [ADR 索引与权威范围](docs/adr/README.md)
 - [ADR 0001，范围与边界](docs/adr/0001-sciretriever-scope-and-boundary.md)
 - [ADR 0002，文献库产品重置](docs/adr/0002-work-centered-literature-library.md)
+- [ADR 0003，operator-managed MinerU 服务](docs/adr/0003-operator-managed-mineru-service.md)
 - [方向确认提案](docs/proposals/literature-library-product.md)
 - [获批执行计划](docs/planning/literature-library-execution.md)
 - [Provider 运维手册](docs/guides/provider-operations.md)
+- [MinerU 服务运维指南](docs/guides/mineru-service-operations.md)
 - [WP3 acquisition 准入记录](docs/guides/wp3-acquisition-admission.md)
 - [实施进度](docs/governance/implementation-progress.md)
