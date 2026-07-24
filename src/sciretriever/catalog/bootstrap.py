@@ -67,23 +67,6 @@ _TRIGGERS = (
             WHEN NEW.state <> 'pending' OR NEW.raw_asset_id IS NOT NULL
             THEN RAISE(ABORT, 'asset intent must start pending without a raw asset')
         END;
-        SELECT CASE
-            WHEN NOT EXISTS (
-                SELECT 1 FROM acquisition_jobs AS job
-                WHERE job.id = NEW.job_id
-                  AND job.work_version_id = NEW.work_version_id
-                  AND job.asset_role = NEW.asset_role
-            )
-            THEN RAISE(ABORT, 'asset intent job must match work and asset role')
-        END;
-        SELECT CASE
-            WHEN NEW.attempt_id IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM acquisition_attempts AS attempt
-                WHERE attempt.id = NEW.attempt_id
-                  AND attempt.job_id = NEW.job_id
-            )
-            THEN RAISE(ABORT, 'asset intent attempt must belong to its job')
-        END;
     END
     """,
     """
@@ -91,8 +74,6 @@ _TRIGGERS = (
     BEFORE UPDATE ON asset_intents
     WHEN NEW.id IS NOT OLD.id
       OR NEW.work_version_id IS NOT OLD.work_version_id
-      OR NEW.job_id IS NOT OLD.job_id
-      OR NEW.attempt_id IS NOT OLD.attempt_id
       OR NEW.asset_role IS NOT OLD.asset_role
       OR NEW.temporary_path IS NOT OLD.temporary_path
       OR NEW.storage_path IS NOT OLD.storage_path

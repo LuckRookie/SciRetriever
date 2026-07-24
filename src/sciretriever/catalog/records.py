@@ -10,9 +10,7 @@ from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import (
     AssetIntentState,
     AssetRole,
-    AttemptOutcome,
     DomainRunStatus,
-    JobState,
     PackageQuality,
     ProcessingRunState,
     ProcessingStage,
@@ -218,56 +216,6 @@ class MetadataLabelRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class JobRecord:
-    id: str
-    work_version_id: str
-    asset_role: AssetRole
-    state: JobState
-    source_plan_json: str | None
-    next_retry_at: str | None
-    created_at: str
-    updated_at: str
-
-
-AcquisitionJobRecord = JobRecord
-
-
-@dataclass(frozen=True, slots=True)
-class DownloadRequestRecord:
-    id: str
-    work_version_id: str
-    job_id: str | None
-    request_key: str
-    asset_role: AssetRole
-    status: str
-    provenance_json: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class AttemptRecord:
-    id: str
-    job_id: str
-    provider: str
-    outcome: AttemptOutcome | None
-    source_url: str | None
-    details_json: str | None
-    started_at: str
-    finished_at: str | None
-
-
-AcquisitionAttemptRecord = AttemptRecord
-
-
-@dataclass(frozen=True, slots=True)
-class JobResumeState:
-    job: JobRecord
-    attempts: tuple[AttemptRecord, ...]
-    requests: tuple[DownloadRequestRecord, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class RawAssetRecord:
     id: str
     sha256: str
@@ -320,8 +268,6 @@ class WorkVersionAssetRecord:
 class AssetIntentRecord:
     id: str
     work_version_id: str
-    job_id: str
-    attempt_id: str | None
     raw_asset_id: str | None
     asset_role: AssetRole
     state: AssetIntentState
@@ -338,9 +284,6 @@ class AssetIntentRecord:
     def __post_init__(self) -> None:
         validate_uuid(self.id, "id")
         validate_uuid(self.work_version_id, "work_id")
-        validate_uuid(self.job_id, "job_id")
-        if self.attempt_id is not None:
-            validate_uuid(self.attempt_id, "attempt_id")
         if self.raw_asset_id is not None:
             validate_uuid(self.raw_asset_id, "raw_asset_id")
         if not isinstance(self.asset_role, AssetRole):
@@ -386,8 +329,6 @@ class EventRecord:
 class FailureRecord:
     id: str
     work_version_id: str | None
-    job_id: str | None
-    attempt_id: str | None
     processing_run_id: str | None
     category: str
     message: str
@@ -498,20 +439,15 @@ IdentityResolutionResult = IdentityResolution
 
 
 __all__ = (
-    "AcquisitionAttemptRecord",
-    "AcquisitionJobRecord",
-    "AttemptRecord",
     "AuthorRecord",
     "AuthorshipRecord",
     "AssetIntentRecord",
     "DomainRunRecord",
-    "DownloadRequestRecord",
     "EventRecord",
     "FailureRecord",
     "IdentityResolution",
     "IdentityResolutionResult",
     "IdentityReviewRecord",
-    "JobRecord",
     "MetadataLabelRecord",
     "MetadataObservationRecord",
     "ArtifactRegistration",

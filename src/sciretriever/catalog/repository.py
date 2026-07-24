@@ -110,8 +110,6 @@ def _failure_record(row: Mapping[Any, Any]) -> FailureRecord:
     return FailureRecord(
         id=row["id"],
         work_version_id=row["work_version_id"],
-        job_id=row["job_id"],
-        attempt_id=row["attempt_id"],
         processing_run_id=row["processing_run_id"],
         category=row["category"],
         message=row["message"],
@@ -309,16 +307,12 @@ class CatalogRepository:
         message: str,
         *,
         work_version_id: str | None = None,
-        job_id: str | None = None,
-        attempt_id: str | None = None,
         processing_run_id: str | None = None,
         retryable: bool = False,
         details: object | None = None,
     ) -> FailureRecord:
         contexts = {
             "work_version_id": work_version_id,
-            "job_id": job_id,
-            "attempt_id": attempt_id,
             "processing_run_id": processing_run_id,
         }
         if all(value is None for value in contexts.values()):
