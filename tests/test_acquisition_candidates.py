@@ -13,7 +13,6 @@ if str(SRC) not in sys.path:
 
 from sciretriever.acquisition.candidate_resolution import validate_resolved_candidates
 from sciretriever.acquisition.candidates import RuntimeDownloadCandidate, make_download_candidate_id, validate_resolver_cursor
-from sciretriever.acquisition.plan import SourceEntry
 from sciretriever.core.enums import AssetRole
 
 
@@ -23,11 +22,11 @@ def runtime(
     priority: int = 0,
 ) -> RuntimeDownloadCandidate:
     candidate_id = make_download_candidate_id(
-        "source_1", "resolver_1", AssetRole.PRIMARY_PDF, cursor
+        "example", "resolver_1", AssetRole.PRIMARY_PDF, cursor
     )
     return RuntimeDownloadCandidate(
         download_candidate_id=candidate_id,
-        source_candidate_id="source_1",
+        source_candidate_id="example",
         resolver_id="resolver_1",
         provider="example",
         resolver_cursor=cursor,
@@ -116,23 +115,36 @@ class CandidateModelTests(TestCase):
         with self.assertRaises(TypeError):
             cast(MutableMapping[str, object], candidate.sanitized_provenance)["new"] = "value"
 
+    def test_runtime_credentials_are_excluded_from_repr(self) -> None:
+        value = runtime()
+        fields = {name: getattr(value, name) for name in value.__slots__}
+        fields.update({
+            "execution_url": "https://files.example.test/a.pdf?api_key=url-secret",
+            "request_headers": {"Authorization": "Bearer header-secret"},
+            "request_params": {"api_key": "parameter-secret"},
+        })
+        rendered = repr(RuntimeDownloadCandidate(**fields))
+        for secret in ("url-secret", "header-secret", "parameter-secret"):
+            self.assertNotIn(secret, rendered)
+
     def test_fresh_resolver_output_is_deterministic_and_strict(self) -> None:
-        source = SourceEntry("source_1", "example", 0)
         first = runtime(cursor="rc1:record-1", priority=1)
         second = runtime(cursor="rc1:record-2", priority=0)
         self.assertEqual(
             validate_resolved_candidates(
-                source, AssetRole.PRIMARY_PDF, "resolver_1", (first, second)
+                "example", AssetRole.PRIMARY_PDF, "resolver_1", (first, second)
             ),
             (second, first),
         )
+        self.assertEqual(
+            validate_resolved_candidates(
+                "example", AssetRole.PRIMARY_PDF, "resolver_1", (first, first)
+            ),
+            (first,),
+        )
         with self.assertRaises(ValueError):
             validate_resolved_candidates(
-                source, AssetRole.PRIMARY_PDF, "resolver_1", (first, first)
-            )
-        with self.assertRaises(ValueError):
-            validate_resolved_candidates(
-                SourceEntry("source_1", "other", 0),
+                "other",
                 AssetRole.PRIMARY_PDF,
                 "resolver_1",
                 (first,),

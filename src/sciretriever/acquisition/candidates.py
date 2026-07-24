@@ -115,6 +115,32 @@ def _headers(value: Mapping[str, str]) -> Mapping[str, str]:
     return MappingProxyType(normalized)
 
 
+def _request_params(value: Mapping[str, str]) -> Mapping[str, str]:
+    if not isinstance(value, Mapping):
+        raise TypeError("request_params must be a mapping")
+    if len(value) > 16:
+        raise ValueError("request_params has too many entries")
+    normalized: dict[str, str] = {}
+    for name, parameter_value in value.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or len(name.encode("utf-8")) > 64
+            or any(character in name for character in "\r\n&=")
+        ):
+            raise ValueError("request parameter name is invalid")
+        if (
+            not isinstance(parameter_value, str)
+            or not parameter_value
+            or len(parameter_value.encode("utf-8")) > 4096
+            or "\r" in parameter_value
+            or "\n" in parameter_value
+        ):
+            raise ValueError("request parameter value is invalid")
+        normalized[name] = parameter_value
+    return MappingProxyType(normalized)
+
+
 def _sanitize(value: object, *, depth: int = 0) -> object:
     if depth > _MAX_PROVENANCE_DEPTH:
         raise ValueError("sanitized_provenance is too deeply nested")
@@ -183,17 +209,18 @@ class RuntimeDownloadCandidate:
     resolver_id: str
     provider: str
     resolver_cursor: str
-    execution_url: str
+    execution_url: str = field(repr=False)
     role: AssetRole
     priority: int
     transport: str
     access_method: str
     redacted_url_identity: str
     sanitized_provenance: Mapping[str, object]
-    page_url: str | None = None
-    request_headers: Mapping[str, str] = field(default_factory=dict)
-    referrer: str | None = None
-    auth_context_ref: str | None = None
+    page_url: str | None = field(default=None, repr=False)
+    request_headers: Mapping[str, str] = field(default_factory=dict, repr=False)
+    request_params: Mapping[str, str] = field(default_factory=dict, repr=False)
+    referrer: str | None = field(default=None, repr=False)
+    auth_context_ref: str | None = field(default=None, repr=False)
     media_type_hint: str | None = None
     expires_at: str | None = None
 
@@ -214,6 +241,7 @@ class RuntimeDownloadCandidate:
         object.__setattr__(self, "page_url", _https_url(self.page_url, "page_url", required=False))
         object.__setattr__(self, "referrer", _https_url(self.referrer, "referrer", required=False))
         object.__setattr__(self, "request_headers", _headers(self.request_headers))
+        object.__setattr__(self, "request_params", _request_params(self.request_params))
         object.__setattr__(self, "transport", _token(self.transport, "transport"))
         object.__setattr__(self, "access_method", _token(self.access_method, "access_method"))
         object.__setattr__(self, "redacted_url_identity", _validate_redacted_identity(self.redacted_url_identity))

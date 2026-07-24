@@ -1,4 +1,4 @@
-"""Typed contracts for single-provider P4 acquisition."""
+"""Typed contracts for WorkVersion-native acquisition."""
 
 from __future__ import annotations
 
@@ -32,6 +32,11 @@ class AcquisitionTarget:
     identifiers: tuple[Identifier, ...]
     direct_url: str | None = None
     role: AssetRole = AssetRole.PRIMARY_PDF
+    title: str | None = None
+    authors: tuple[str, ...] = ()
+    publication_year: int | None = None
+    publisher: str | None = None
+    venue: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, AssetRole):
@@ -52,36 +57,10 @@ class ProviderContent:
         object.__setattr__(self, "media_type", normalize_media_type(self.media_type))
 
 
-class AcquisitionProvider(Protocol):
-    name: str
-
-    def initial_url(self, target: AcquisitionTarget) -> str: ...
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent: ...
-
-
-@dataclass(frozen=True, slots=True)
-class AdmissionResult:
-    work_version_id: str
-    job_id: str | None
-    request_key: str
-    provider: str
-    asset_role: AssetRole = AssetRole.PRIMARY_PDF
-    reused_asset_id: str | None = None
-    work_id: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "provider", validate_provider_name(self.provider))
-        if not isinstance(self.asset_role, AssetRole):
-            raise TypeError("asset_role must be an AssetRole")
-
-
 @dataclass(frozen=True, slots=True)
 class AcquisitionResult:
     work_version_id: str
-    job_id: str | None
     status: str
     raw_asset_id: str | None = None
-    attempt_id: str | None = None
     error: str | None = None
-    work_id: str | None = None
+    source_failures: tuple[Mapping[str, object], ...] = ()
