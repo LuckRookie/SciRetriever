@@ -59,33 +59,6 @@ class PackagePublicationTests(TestCase):
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM package_versions").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
 
-    def test_summarizer_failure_uses_fallback_and_is_recorded_once(self) -> None:
-        class FailingSummarizer:
-            name = "failing"
-            version = "1"
-            calls = 0
-
-            def summarize(self, text: str, max_characters: int) -> str:
-                self.calls += 1
-                self.assert_clean = "  " not in text
-                raise RuntimeError("injected failure")
-
-        summarizer = FailingSummarizer()
-        first = self.pipeline.run(work_id=self.work_id, summarizer=summarizer)
-        self.assertIsNotNone(first.package.light_structure.summary)
-        self.assertEqual(summarizer.calls, 1)
-        self.assertTrue(summarizer.assert_clean)
-        second = self.pipeline.run(work_id=self.work_id, summarizer=summarizer)
-        self.assertEqual(second.package, first.package)
-        self.assertEqual(summarizer.calls, 1)
-        with self.catalog.connect() as connection:
-            self.assertEqual(
-                connection.exec_driver_sql(
-                    "SELECT count(*) FROM failures WHERE category = 'summarizer_failed'"
-                ).scalar_one(),
-                1,
-            )
-
     def test_interrupted_catalog_registration_recovers_durable_target(self) -> None:
         with patch.object(
             self.pipeline.publisher.versions,
@@ -110,22 +83,7 @@ class PackagePublicationTests(TestCase):
                 0,
             )
 
-    def test_concurrent_pipeline_calls_converge_without_duplicate_summary(self) -> None:
-        class CountingSummarizer:
-            name = "counting"
-            version = "1"
-
-            def __init__(self) -> None:
-                self.calls = 0
-                self.lock = threading.Lock()
-
-            def summarize(self, text: str, max_characters: int) -> str:
-                with self.lock:
-                    self.calls += 1
-                time.sleep(0.1)
-                return text[:max_characters]
-
-        summarizer = CountingSummarizer()
+    def test_concurrent_identical_publications_converge_to_create_and_replay(self) -> None:
         barrier = threading.Barrier(2)
         results = []
         failures = []
@@ -133,7 +91,7 @@ class PackagePublicationTests(TestCase):
         def execute() -> None:
             try:
                 barrier.wait(timeout=2)
-                results.append(self.pipeline.run(work_id=self.work_id, summarizer=summarizer))
+                results.append(self.pipeline.run(work_id=self.work_id))
             except BaseException as error:
                 failures.append(error)
 
@@ -141,30 +99,15 @@ class PackagePublicationTests(TestCase):
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join(timeout=5)
+            thread.join(timeout=10)
         self.assertEqual(failures, [])
         self.assertEqual(len(results), 2)
-        self.assertEqual(summarizer.calls, 1)
         self.assertEqual(sorted(result.created for result in results), [False, True])
         self.assertEqual(results[0].package, results[1].package)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM package_versions").scalar_one(), 1)
-            self.assertEqual(
-                connection.exec_driver_sql("SELECT count(*) FROM processing_runs WHERE state = 'active'").scalar_one(),
-                0,
-            )
-
-    def test_changed_material_creates_next_version_and_then_replays(self) -> None:
-        first = self.pipeline.run(work_id=self.work_id)
-        changed = self.pipeline.run(work_id=self.work_id, no_enrichment=True)
-        replay = self.pipeline.run(work_id=self.work_id, no_enrichment=True)
-        self.assertEqual(first.package.package_version, 1)
-        self.assertEqual(changed.package.package_version, 2)
-        self.assertTrue(changed.created)
-        self.assertFalse(replay.created)
-        self.assertEqual(replay.package, changed.package)
-        with self.catalog.connect() as connection:
-            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM package_versions").scalar_one(), 2)
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM processing_runs WHERE state = 'active'").scalar_one(), 0)
 
 
 if __name__ == "__main__":

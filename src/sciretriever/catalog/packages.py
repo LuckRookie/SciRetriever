@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import case, insert, select, update
 
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.models import asset_intents, package_versions, processing_runs, raw_assets, work_version_assets, work_version_identifiers, works
-from sciretriever.catalog.records import AssetIntentRecord, PackageVersionRecord, RawAssetRecord, WorkVersionAssetRecord
+from sciretriever.catalog.models import asset_intents, current_analyses, normalized_artifacts, package_versions, processing_runs, raw_assets, work_version_assets, work_version_identifiers, works
+from sciretriever.catalog.records import AssetIntentRecord, NormalizedArtifactRecord, PackageVersionRecord, ProcessingRunRecord, RawAssetRecord, WorkVersionAssetRecord
 from sciretriever.catalog.repository import _append_event, _required_text, catalog_operation
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.derivation import stable_derivation_id
 from sciretriever.core.enums import AssetIntentState, PackageQuality, ProcessingRunState
 from sciretriever.core.ids import validate_uuid
 from sciretriever.core.timestamps import parse_rfc3339
+from sciretriever.core.package import CurrentAnalysisSnapshot
 from sciretriever.core.validation import validate_sha256, validate_storage_path, validate_token
 from sciretriever.errors import CatalogError
 
@@ -142,6 +145,57 @@ class PackageSourceRepository:
                 )
             ).all()
         return tuple(Identifier(namespace, value) for namespace, value in rows)
+
+    def current_analysis_snapshot(self, work_version_id: str) -> tuple[
+        CurrentAnalysisSnapshot, tuple[NormalizedArtifactRecord, ...], tuple[ProcessingRunRecord, ...]
+    ] | None:
+        try:
+            return self._load_current_analysis_snapshot(work_version_id)
+        except CatalogError:
+            raise
+        except Exception as error:
+            raise CatalogError("current analysis snapshot is incomplete or malformed") from error
+
+    def _load_current_analysis_snapshot(self, work_version_id: str) -> tuple[
+        CurrentAnalysisSnapshot, tuple[NormalizedArtifactRecord, ...], tuple[ProcessingRunRecord, ...]
+    ] | None:
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
+        with self._catalog.connect() as connection:
+            current = connection.execute(select(current_analyses).where(
+                current_analyses.c.work_version_id == work_version_id)).mappings().one_or_none()
+            if current is None:
+                return None
+            analysis_run = connection.execute(select(processing_runs).where(
+                processing_runs.c.id == current["processing_run_id"])).mappings().one()
+            source_map_id = analysis_run["input_artifact_id"]
+            artifact_rows = list(connection.execute(select(normalized_artifacts).where(normalized_artifacts.c.id.in_((
+                current["parser_artifact_id"], source_map_id, current["analysis_artifact_id"]))).order_by(
+                    normalized_artifacts.c.kind)).mappings().all())
+            source_map = next(row for row in artifact_rows if row["id"] == source_map_id)
+            source_provenance = json.loads(source_map["provenance_json"])
+            parsing_run = connection.execute(select(processing_runs).where(
+                processing_runs.c.id == source_provenance["parsing_run_id"])).mappings().one()
+            normalization_run = connection.execute(select(processing_runs).where(
+                processing_runs.c.id == source_provenance["normalization_run_id"])).mappings().one()
+            parsing_details = json.loads(parsing_run["details_json"])
+            extra_ids = tuple(parsing_details.get("output_artifact_ids", ()))
+            present_ids = {row["id"] for row in artifact_rows}
+            if extra_ids:
+                artifact_rows.extend(connection.execute(select(normalized_artifacts).where(
+                    normalized_artifacts.c.id.in_(tuple(identifier for identifier in extra_ids if identifier not in present_ids))
+                )).mappings().all())
+        by_id = {row["id"]: row for row in artifact_rows}
+        snapshot = CurrentAnalysisSnapshot.from_current(
+            current_id=current["id"], revision=current["revision"], run_id=current["processing_run_id"],
+            parser_artifact_id=current["parser_artifact_id"], parser_artifact_sha256=by_id[current["parser_artifact_id"]]["sha256"],
+            source_map_artifact_id=source_map_id, source_map_artifact_sha256=by_id[source_map_id]["sha256"],
+            analysis_artifact_id=current["analysis_artifact_id"], analysis_artifact_sha256=by_id[current["analysis_artifact_id"]]["sha256"],
+            content=json.loads(current["content_json"]), provenance=json.loads(current["provenance_json"]),
+        )
+        return snapshot, tuple(NormalizedArtifactRecord.from_row(row) for row in artifact_rows), (
+            ProcessingRunRecord.from_row(parsing_run), ProcessingRunRecord.from_row(normalization_run),
+            ProcessingRunRecord.from_row(analysis_run),
+        )
 
 
 class PackageVersionRepository:

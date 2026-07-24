@@ -14,6 +14,7 @@ from sciretriever.catalog.records import (
     PackageVersionRecord,
     ProcessingRunRecord,
     RawAssetRecord,
+    NormalizedArtifactRecord,
     WorkVersionAssetRecord,
 )
 from sciretriever.catalog.repository import canonical_json
@@ -23,16 +24,15 @@ from sciretriever.core.package import (
     ArtifactRecord,
     DocumentPackageVersion,
     FileRecord,
-    LightStructure,
+    CurrentAnalysisSnapshot,
     Lineage,
     SourceProvenance,
 )
-from sciretriever.errors import PackagingError
+from sciretriever.errors import PackagingError, StorageError
 from sciretriever.storage import DerivedArtifactStore
 from sciretriever.core.timestamps import utc_now_rfc3339
 
 from .quality import QualityGate
-from ..enrichment.models import EnrichmentResult
 from ..normalization.contracts import NormalizationDraft
 from ..normalization.service import NormalizationResult
 
@@ -99,6 +99,27 @@ class PackagePublisher:
             raise PackagingError("document package does not exist for the supplied document ID and hash")
         return self.load_verified(record)
 
+    def _verify_artifacts(
+        self, artifacts: tuple[NormalizedArtifactRecord, ...]
+    ) -> None:
+        for artifact in artifacts:
+            try:
+                publication = self.derived_store.find_published(
+                    artifact.kind, artifact.id
+                )
+                if publication is not None:
+                    self.derived_store.read_verified(publication)
+            except StorageError as error:
+                raise PackagingError(
+                    "package artifact storage failed integrity validation"
+                ) from error
+            if publication is None or (
+                publication.storage_path,
+                publication.sha256,
+                publication.byte_size,
+            ) != (artifact.storage_path, artifact.sha256, artifact.byte_size):
+                raise PackagingError("package artifact storage is missing or mismatched")
+
     def _files_and_provenance(
         self, work_version_id: str
     ) -> tuple[
@@ -142,25 +163,25 @@ class PackagePublisher:
         work_version_id: str,
         raw_acceptance_run: ProcessingRunRecord,
         normalized: NormalizationResult,
-        enrichment: EnrichmentResult | None,
     ) -> PackagePublicationResult:
         lock_id = stable_derivation_id("package_publication_lock", {"work_id": work_version_id})
         with self.derived_store.run_lock(lock_id):
-            return self._publish_locked(work_version_id, raw_acceptance_run, normalized, enrichment)
+            return self._publish_locked(work_version_id, raw_acceptance_run, normalized)
 
     def _publish_locked(
         self,
         work_version_id: str,
         raw_acceptance_run: ProcessingRunRecord,
         normalized: NormalizationResult,
-        enrichment: EnrichmentResult | None,
     ) -> PackagePublicationResult:
         files, provenance, source_rows = self._files_and_provenance(work_version_id)
         draft = NormalizationDraft(normalized.content, normalized.evidence, normalized.source_units, normalized.source_map_artifact.id)
         decision = self.quality.validate(tuple(link.asset_role for link, _, _ in source_rows), draft)
         artifacts = [normalized.content_artifact, normalized.source_map_artifact]
-        if enrichment is not None and enrichment.artifact is not None:
-            artifacts.append(enrichment.artifact)
+        current = self.sources.current_analysis_snapshot(work_version_id)
+        if current is not None:
+            artifacts.extend(current[1])
+        self._verify_artifacts(tuple(artifacts))
         artifact_contracts = tuple(ArtifactRecord(item.id, item.kind, item.media_type, item.storage_path, item.sha256, item.byte_size) for item in artifacts)
         artifact_ids = tuple(item.id for item in artifacts)
         validation = self.runs.claim_or_resume(
@@ -173,9 +194,10 @@ class PackagePublisher:
             _lineage(raw_acceptance_run, output_file_ids=tuple(item.file_id for item in files)),
             _lineage(normalized.run),
         ]
-        light = enrichment.light_structure if enrichment is not None else LightStructure()
-        if enrichment is not None and enrichment.artifact is not None:
-            nonpublication_lineage.append(_lineage(enrichment.run))
+        snapshot = None
+        if current is not None:
+            snapshot, _, analysis_runs = current
+            nonpublication_lineage.extend(_lineage(run) for run in analysis_runs)
         nonpublication_lineage.append(_lineage(validation, output_artifact_ids=()))
         provisional_time = utc_now_rfc3339()
         provisional_parameters = {
@@ -204,7 +226,7 @@ class PackagePublisher:
             document_id=work_version_id, package_version=1, published_at=provisional_run.started_at,
             quality=decision.quality, limitations=decision.limitations,
             identifiers=self.sources.list_identifiers(work_version_id), source_provenance=provenance, files=files,
-            normalized_content=normalized.content, evidence=normalized.evidence, light_structure=light,
+            normalized_content=normalized.content, evidence=normalized.evidence, current_analysis=snapshot,
             artifacts=artifact_contracts, lineage=tuple(nonpublication_lineage + [_lineage(provisional_run, output_artifact_ids=())]),
         )
         material_hash = canonical_sha256(_material(provisional_package))
@@ -222,7 +244,7 @@ class PackagePublisher:
             document_id=work_version_id, package_version=version, published_at=publication_run.started_at,
             quality=decision.quality, limitations=decision.limitations,
             identifiers=self.sources.list_identifiers(work_version_id), source_provenance=provenance, files=files,
-            normalized_content=normalized.content, evidence=normalized.evidence, light_structure=light,
+            normalized_content=normalized.content, evidence=normalized.evidence, current_analysis=snapshot,
             artifacts=artifact_contracts, lineage=tuple(nonpublication_lineage + [_lineage(publication_run, output_artifact_ids=())]),
         )
         package = DocumentPackageVersion.from_json(package.to_json())

@@ -108,8 +108,8 @@ class OfflinePackageAcceptanceTests(TestCase):
                 DerivedArtifactStore(storage_root),
                 normalization_parameters=NormalizationParameters(),
             )
-            first = pipeline.run(work_version_id=version_id, no_enrichment=True)
-            replay = pipeline.run(work_version_id=version_id, no_enrichment=True)
+            first = pipeline.run(work_version_id=version_id)
+            replay = pipeline.run(work_version_id=version_id)
             self.assertEqual(first.record.id, replay.record.id)
             self.assertEqual(first.record.work_version_id, version_id)
             self.assertEqual(len(first.package.files), 1)
