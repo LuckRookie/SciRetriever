@@ -30,5 +30,6 @@ updated = "2026-07-23"
 ## 当前提案
 
 - [以 Work 为中心的文献库产品提案](literature-library-product.md)，状态 `direction-confirmed`。
+- [WP3 全文获取三方方案对比](wp3-acquisition-reference-comparison.md)，状态 `under-review`，保留 Zotero、`scansci-pdf` 与 SciRetriever 的设计对照，并记录批准 WP3 计划下已经落实的实现处置；实现状态仍以实施进度为准。
 
 旧下载产品提案已移入 [2026-07 下载路线归档](../archive/2026-07-download-roadmap/README.md)，不在活动索引中列为当前方向。
