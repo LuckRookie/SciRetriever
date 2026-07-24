@@ -31,7 +31,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 
 **SciRetriever 把分散在多个来源的论文线索收敛成一个可持续维护的本地文献库，并以 PDF 为证据基准完成全文分析、检索、引用扩展和可审计导出。**
 
-产品中心是文献及其版本，不是下载任务、provider 响应、单个 PDF 文件或后台 job。任务和失败记录只用于解释一次处理发生了什么；用户日常面对的是 Work、WorkVersion、全文、分析、标签和引用关系。
+产品中心是文献及其版本，不是 provider 响应、单个 PDF 文件或后台下载任务。旧 task/job 产品面不属于目标合同；诊断记录只用于解释一次处理发生了什么。用户日常面对的是 Work、WorkVersion、全文、分析、标签和引用关系。
 
 ### 1.2 主要使用角色
 
@@ -60,7 +60,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 
 项目边界继续止于通用、带 provenance 的文献表示。反应、分子、路线、材料属性等领域 schema 和数据库仍属于下游，见 [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md)。
 
-执行模型是有界的前台命令和幂等重跑。产品不包含 daemon、lease、fencing、后台 worker ownership、durable pause/resume/safe-stop control state 或逐内部步骤的精确崩溃续跑。前台 invocation 必须支持 Ctrl+C/cooperative stop：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，随后重跑跳过已完成内容。task、attempt、failure 和 event 只支撑诊断与审计。
+执行模型是有界的前台命令和幂等重跑。产品不包含 daemon、lease、fencing、后台 worker ownership、durable pause/resume/safe-stop control state、旧 task/job/attempt/event 生命周期或逐内部步骤的精确崩溃续跑。前台 invocation 必须支持 Ctrl+C/cooperative stop：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，随后重跑跳过已完成内容。脱敏 failure/diagnostic records 只支撑诊断与审计。
 
 ### 1.4 产品边界总览
 
@@ -223,7 +223,7 @@ metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext 
 
 ### FR-11 获取顺序
 
-1. direct official、publisher、open providers 和用户配置的 Sci-Hub provider 在同一 primary PDF 目标内进行进程内竞速。
+1. direct official、publisher、open providers 和用户配置的 Sci-Hub provider 在同一 primary PDF 目标内进行有界的进程内竞速。每个 provider 产生 provider-neutral runtime candidate；candidate 可携带受控请求凭据或 auth reference，但这些敏感字段不得持久化或进入 diagnostics。系统在该 provider 内去重并按确定性顺序逐个执行候选，当前候选失败后才回退到同 provider 的下一个候选。不同 provider 的候选不得扁平化为无界全量竞速。
 2. 第一层没有合格 PDF 时，运行受限 translator，从文章 landing page 提取候选。
 3. translator 耗尽后，运行显式配置的 browser 路径。
 4. PDF 优先。XML 和 HTML 是否同时获取由配置决定。
