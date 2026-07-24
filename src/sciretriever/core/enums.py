@@ -41,7 +41,8 @@ class AttemptOutcome(str, Enum):
 class ProcessingStage(str, Enum):
     RAW_ACCEPTANCE = "raw_acceptance"
     NORMALIZATION = "normalization"
-    ENRICHMENT = "enrichment"
+    PARSING = "parsing"
+    ANALYSIS = "analysis"
     PACKAGE_VALIDATION = "package_validation"
     PUBLICATION = "publication"
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import hashlib
 import json
+import math
+import re
 from typing import Any, ClassVar, Iterable, TypeVar
 
 from sciretriever.core.contracts import Identifier
@@ -72,6 +74,15 @@ def _uuid_tuple(value: tuple[str, ...], field_name: str) -> tuple[str, ...]:
     if not isinstance(value, tuple):
         raise TypeError(f"{field_name} must be a tuple")
     result = tuple(sorted(validate_uuid(item, f"{field_name} item") for item in value))
+    if len(result) != len(set(result)):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return result
+
+
+def _ordered_uuid_tuple(value: tuple[str, ...], field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{field_name} must be a tuple")
+    result = tuple(validate_uuid(item, f"{field_name} item") for item in value)
     if len(result) != len(set(result)):
         raise ValueError(f"{field_name} must not contain duplicates")
     return result
@@ -544,43 +555,445 @@ def _invalid_json_pointer(pointer: str) -> bool:
     return False
 
 
-@dataclass(frozen=True, slots=True)
-class LightStructure:
-    summary: str | None = None
-    tags: tuple[str, ...] = ()
-    citation_document_ids: tuple[str, ...] = ()
-    artifact_id: str | None = None
+ANALYSIS_SECTION_IDS = (
+    "document_information", "abstract", "research_background",
+    "research_question_and_objectives", "research_approach", "methods",
+    "data_and_materials", "results", "conclusion", "limitations",
+)
+ANALYSIS_CANONICAL_FIELDS = frozenset({
+    "title", "abstract", "language", "work_type", "publication_date",
+    "publication_year", "publisher_id", "venue_id", "volume", "issue",
+    "pages", "article_number", "open_access_status",
+})
+ANALYSIS_IDENTIFIER_NAMESPACES = frozenset({"doi", "arxiv", "pmid", "pmcid", "isbn", "issn"})
 
-    _FIELDS: ClassVar[frozenset[str]] = frozenset(
-        {"artifact_id", "summary", "tags", "citation_document_ids"}
-    )
+
+@dataclass(frozen=True, slots=True)
+class PdfAnalysisLocator:
+    evidence_id: str
+    raw_asset_id: str
+    raw_asset_sha256: str
+    parser_artifact_id: str
+    source_map_artifact_id: str
+    source_unit_id: str
+    page_index: int
+    structural_span_path: str
+    bbox: tuple[float, float, float, float]
+    source_start: int
+    source_end: int
+    document_start: int
+    document_end: int
+
+    _FIELDS: ClassVar[frozenset[str]] = frozenset({
+        "evidence_id", "raw_asset_id", "raw_asset_sha256", "parser_artifact_id",
+        "source_map_artifact_id", "source_unit_id", "page_index", "structural_span_path",
+        "bbox", "source_start", "source_end", "document_start", "document_end",
+    })
 
     def __post_init__(self) -> None:
-        if self.artifact_id is not None:
-            object.__setattr__(self, "artifact_id", validate_uuid(self.artifact_id, "artifact_id"))
-        if self.summary is not None:
-            object.__setattr__(self, "summary", normalize_content_text(self.summary, "summary"))
-        tags = tuple(sorted(_string_tuple(self.tags, "tags")))
-        if len(tags) != len(set(tags)):
-            raise ValueError("tags must not contain duplicates")
-        object.__setattr__(self, "tags", tags)
-        object.__setattr__(self, "citation_document_ids", _uuid_tuple(self.citation_document_ids, "citation_document_ids"))
+        for name in ("evidence_id", "raw_asset_id", "parser_artifact_id", "source_map_artifact_id"):
+            object.__setattr__(self, name, validate_uuid(getattr(self, name), name))
+        object.__setattr__(self, "raw_asset_sha256", validate_sha256(self.raw_asset_sha256, "raw_asset_sha256"))
+        object.__setattr__(self, "source_unit_id", require_string(self.source_unit_id, "source_unit_id"))
+        object.__setattr__(self, "structural_span_path", require_string(self.structural_span_path, "structural_span_path"))
+        for name in ("page_index", "source_start", "source_end", "document_start", "document_end"):
+            validate_nonnegative_int(getattr(self, name), name)
+        if self.source_end <= self.source_start or self.document_end <= self.document_start:
+            raise ValueError("analysis locator spans must satisfy start < end")
+        if self.source_end - self.source_start != self.document_end - self.document_start:
+            raise ValueError("analysis locator source and document spans must have equal length")
+        if not isinstance(self.bbox, tuple) or len(self.bbox) != 4 or any(
+            not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+            or value < 0 for value in self.bbox
+        ):
+            raise TypeError("analysis locator bbox must contain four finite nonnegative numbers")
+        if self.bbox[2] <= self.bbox[0] or self.bbox[3] <= self.bbox[1]:
+            raise ValueError("analysis locator bbox must have positive area")
+        object.__setattr__(self, "bbox", tuple(float(value) for value in self.bbox))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: list(self.bbox) if name == "bbox" else getattr(self, name) for name in self._FIELDS}
+
+    @classmethod
+    def from_dict(cls, data: object) -> PdfAnalysisLocator:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, cls._FIELDS)
+        return cls(**{**values, "bbox": tuple(_array(values["bbox"], "bbox"))})
+
+
+def _snapshot_locators(values: object, name: str) -> tuple[PdfAnalysisLocator, ...]:
+    return tuple(PdfAnalysisLocator.from_dict(item) for item in _array(values, name))
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisSectionSnapshot:
+    section_id: str
+    heading: str
+    content: str
+    insufficient_evidence: bool
+    evidence_ids: tuple[str, ...]
+    locators: tuple[PdfAnalysisLocator, ...]
+
+    _FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"section_id", "heading", "content", "insufficient_evidence", "evidence_ids", "locators"})
+
+    def __post_init__(self) -> None:
+        if self.section_id not in ANALYSIS_SECTION_IDS:
+            raise ValueError("unsupported analysis section ID")
+        object.__setattr__(self, "heading", normalize_content_text(self.heading, "heading"))
+        object.__setattr__(self, "content", normalize_content_text(self.content, "content"))
+        if not isinstance(self.insufficient_evidence, bool):
+            raise TypeError("insufficient_evidence must be boolean")
+        _validate_snapshot_evidence(self.evidence_ids, self.locators)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"section_id": self.section_id, "heading": self.heading, "content": self.content,
+                "insufficient_evidence": self.insufficient_evidence, "evidence_ids": list(self.evidence_ids),
+                "locators": [item.to_dict() for item in self.locators]}
+
+    @classmethod
+    def from_dict(cls, data: object) -> AnalysisSectionSnapshot:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, cls._FIELDS)
+        return cls(values["section_id"], values["heading"], values["content"], values["insufficient_evidence"],
+                   tuple(_array(values["evidence_ids"], "evidence_ids")), _snapshot_locators(values["locators"], "locators"))
+
+
+def _validate_snapshot_evidence(evidence_ids: tuple[str, ...], locators: tuple[PdfAnalysisLocator, ...]) -> None:
+    identifiers = _ordered_uuid_tuple(evidence_ids, "evidence_ids")
+    locators = _tuple_of(locators, PdfAnalysisLocator, "locators")
+    if not identifiers or identifiers != tuple(item.evidence_id for item in locators):
+        raise ValueError("promoted analysis values require matching PDF locators")
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalFieldSnapshot:
+    field_name: str
+    value: str | int
+    evidence_ids: tuple[str, ...]
+    locators: tuple[PdfAnalysisLocator, ...]
+
+    def __post_init__(self) -> None:
+        field_name = require_string(self.field_name, "field_name")
+        if field_name not in ANALYSIS_CANONICAL_FIELDS:
+            raise ValueError("unsupported canonical field")
+        object.__setattr__(self, "field_name", field_name)
+        if isinstance(self.value, str):
+            value = require_string(self.value, "canonical value")
+            if field_name == "publication_year":
+                raise TypeError("publication_year must be a nonnegative integer")
+            if field_name == "publication_date" and re.fullmatch(r"\d{4}(?:-\d{2}-\d{2})?", value) is None:
+                raise ValueError("publication_date must be YYYY or YYYY-MM-DD")
+            if field_name in {"publisher_id", "venue_id"}:
+                value = validate_uuid(value, field_name)
+            object.__setattr__(self, "value", value)
+        elif type(self.value) is not int or field_name != "publication_year" or self.value < 0:
+            raise TypeError("canonical field value has an invalid type")
+        _validate_snapshot_evidence(self.evidence_ids, self.locators)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"field_name": self.field_name, "value": self.value, "evidence_ids": list(self.evidence_ids),
+                "locators": [item.to_dict() for item in self.locators]}
+
+    @classmethod
+    def from_dict(cls, data: object) -> CanonicalFieldSnapshot:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, frozenset({"field_name", "value", "evidence_ids", "locators"}))
+        return cls(values["field_name"], values["value"], tuple(_array(values["evidence_ids"], "evidence_ids")),
+                   _snapshot_locators(values["locators"], "locators"))
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisReferenceSnapshot:
+    reference_id: str
+    order: int
+    raw_reference: str
+    resolved_work_id: str | None
+    identifier_namespace: str | None
+    identifier_value: str | None
+    evidence_ids: tuple[str, ...]
+    locators: tuple[PdfAnalysisLocator, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "reference_id", validate_uuid(self.reference_id, "reference_id"))
+        validate_nonnegative_int(self.order, "order")
+        object.__setattr__(self, "raw_reference", normalize_content_text(self.raw_reference, "raw_reference"))
+        if self.resolved_work_id is not None:
+            object.__setattr__(self, "resolved_work_id", validate_uuid(self.resolved_work_id, "resolved_work_id"))
+        if (self.identifier_namespace is None) != (self.identifier_value is None):
+            raise ValueError("reference identifier namespace and value must be paired")
+        if self.identifier_namespace is not None and self.identifier_value is not None:
+            identifier = Identifier(self.identifier_namespace, self.identifier_value)
+            if identifier.namespace not in ANALYSIS_IDENTIFIER_NAMESPACES:
+                raise ValueError("unsupported reference identifier namespace")
+            object.__setattr__(self, "identifier_namespace", identifier.namespace)
+            object.__setattr__(self, "identifier_value", identifier.value)
+        _validate_snapshot_evidence(self.evidence_ids, self.locators)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"reference_id": self.reference_id, "order": self.order, "raw_reference": self.raw_reference,
+                "resolved_work_id": self.resolved_work_id, "identifier_namespace": self.identifier_namespace,
+                "identifier_value": self.identifier_value, "evidence_ids": list(self.evidence_ids),
+                "locators": [item.to_dict() for item in self.locators]}
+
+    @classmethod
+    def from_dict(cls, data: object) -> AnalysisReferenceSnapshot:
+        values = _mapping(data, cls.__name__)
+        fields_ = frozenset({"reference_id", "order", "raw_reference", "resolved_work_id",
+            "identifier_namespace", "identifier_value", "evidence_ids", "locators"})
+        _exact_fields(values, cls.__name__, fields_)
+        return cls(values["reference_id"], values["order"], values["raw_reference"], values["resolved_work_id"],
+            values["identifier_namespace"], values["identifier_value"], tuple(_array(values["evidence_ids"], "evidence_ids")),
+            _snapshot_locators(values["locators"], "locators"))
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedTagSnapshot:
+    tag_id: str
+    evidence_ids: tuple[str, ...]
+    locators: tuple[PdfAnalysisLocator, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tag_id", validate_uuid(self.tag_id, "tag_id"))
+        _validate_snapshot_evidence(self.evidence_ids, self.locators)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"tag_id": self.tag_id, "evidence_ids": list(self.evidence_ids),
+                "locators": [item.to_dict() for item in self.locators]}
+
+    @classmethod
+    def from_dict(cls, data: object) -> GeneratedTagSnapshot:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, frozenset({"tag_id", "evidence_ids", "locators"}))
+        return cls(values["tag_id"], tuple(_array(values["evidence_ids"], "evidence_ids")),
+                   _snapshot_locators(values["locators"], "locators"))
+
+
+@dataclass(frozen=True, slots=True)
+class NewTagProposalSnapshot:
+    canonical_name: str
+    definition: str
+    aliases: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "canonical_name", require_string(self.canonical_name, "canonical_name"))
+        object.__setattr__(self, "definition", require_string(self.definition, "definition"))
+        object.__setattr__(self, "aliases", _string_tuple(self.aliases, "aliases"))
+        if len(self.aliases) != len(set(self.aliases)):
+            raise ValueError("aliases must not contain duplicates")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"canonical_name": self.canonical_name, "definition": self.definition, "aliases": list(self.aliases)}
+
+    @classmethod
+    def from_dict(cls, data: object) -> NewTagProposalSnapshot:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, frozenset({"canonical_name", "definition", "aliases"}))
+        return cls(values["canonical_name"], values["definition"], tuple(_array(values["aliases"], "aliases")))
+
+
+@dataclass(frozen=True, slots=True)
+class NewEntityProposalSnapshot:
+    entity_type: str
+    canonical_name: str
+
+    def __post_init__(self) -> None:
+        if self.entity_type not in {"publisher", "venue"}:
+            raise ValueError("unsupported proposed entity type")
+        object.__setattr__(self, "canonical_name", require_string(self.canonical_name, "canonical_name"))
+
+    def to_dict(self) -> dict[str, str]:
+        return {"entity_type": self.entity_type, "canonical_name": self.canonical_name}
+
+    @classmethod
+    def from_dict(cls, data: object) -> NewEntityProposalSnapshot:
+        values = _mapping(data, cls.__name__)
+        _exact_fields(values, cls.__name__, frozenset({"entity_type", "canonical_name"}))
+        return cls(values["entity_type"], values["canonical_name"])
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisProvenanceSnapshot:
+    values: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        required = {"analysis_run_id", "provider", "model", "schema_version", "schema_sha256",
+            "provider_sha256", "model_sha256", "configuration_sha256", "input_sha256", "raw_asset_id",
+            "raw_asset_sha256", "parser_artifact_id", "parser_artifact_sha256", "source_map_artifact_id",
+            "source_map_artifact_sha256", "document_sha256", "analysis_artifact_sha256"}
+        if (not isinstance(self.values, tuple) or any(not isinstance(item, tuple) or len(item) != 2 for item in self.values)
+                or len(self.values) != len(required) or {key for key, _ in self.values} != required):
+            raise ValueError("analysis provenance fields are incomplete")
+        for key, value in self.values:
+            if not isinstance(key, str) or not isinstance(value, str) or not value:
+                raise TypeError("analysis provenance values must be nonblank strings")
+        parsed = dict(self.values)
+        for key in ("analysis_run_id", "raw_asset_id", "parser_artifact_id", "source_map_artifact_id"):
+            parsed[key] = validate_uuid(parsed[key], key)
+        for key in required:
+            if key.endswith("_sha256"):
+                parsed[key] = validate_sha256(parsed[key], key)
+        if parsed["schema_version"] != "1":
+            raise ValueError("analysis provenance schema_version must be 1")
+        parsed["provider"] = require_string(parsed["provider"], "provider")
+        parsed["model"] = require_string(parsed["model"], "model")
+        object.__setattr__(self, "values", tuple(sorted(parsed.items())))
+
+    def to_dict(self) -> dict[str, str]:
+        return dict(self.values)
+
+    @classmethod
+    def from_dict(cls, data: object) -> AnalysisProvenanceSnapshot:
+        values = _mapping(data, cls.__name__)
+        return cls(tuple(sorted((key, value) for key, value in values.items())))
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentAnalysisSnapshot:
+    current_id: str
+    revision: int
+    run_id: str
+    parser_artifact_id: str
+    parser_artifact_sha256: str
+    source_map_artifact_id: str
+    source_map_artifact_sha256: str
+    analysis_artifact_id: str
+    analysis_artifact_sha256: str
+    sections: tuple[AnalysisSectionSnapshot, ...]
+    canonical_fields: tuple[CanonicalFieldSnapshot, ...]
+    references: tuple[AnalysisReferenceSnapshot, ...]
+    generated_tags: tuple[GeneratedTagSnapshot, ...]
+    new_tag_proposals: tuple[NewTagProposalSnapshot, ...]
+    new_entity_proposals: tuple[NewEntityProposalSnapshot, ...]
+    evidence: tuple[PdfAnalysisLocator, ...]
+    provenance: AnalysisProvenanceSnapshot
+
+    _FIELDS: ClassVar[frozenset[str]] = frozenset({
+        "current_id", "revision", "run_id", "parser_artifact_id", "parser_artifact_sha256",
+        "source_map_artifact_id", "source_map_artifact_sha256", "analysis_artifact_id",
+        "analysis_artifact_sha256", "sections", "canonical_fields", "references", "generated_tags",
+        "new_tag_proposals", "new_entity_proposals", "evidence", "provenance",
+    })
+
+    def __post_init__(self) -> None:
+        for name in ("current_id", "run_id", "parser_artifact_id", "source_map_artifact_id", "analysis_artifact_id"):
+            object.__setattr__(self, name, validate_uuid(getattr(self, name), name))
+        validate_nonnegative_int(self.revision, "revision")
+        if self.revision == 0:
+            raise ValueError("current analysis revision must be positive")
+        for name in ("parser_artifact_sha256", "source_map_artifact_sha256", "analysis_artifact_sha256"):
+            object.__setattr__(self, name, validate_sha256(getattr(self, name), name))
+        sections = _tuple_of(self.sections, AnalysisSectionSnapshot, "sections")
+        canonical_fields = _tuple_of(self.canonical_fields, CanonicalFieldSnapshot, "canonical_fields")
+        references = _tuple_of(self.references, AnalysisReferenceSnapshot, "references")
+        generated_tags = _tuple_of(self.generated_tags, GeneratedTagSnapshot, "generated_tags")
+        tag_proposals = _tuple_of(self.new_tag_proposals, NewTagProposalSnapshot, "new_tag_proposals")
+        entity_proposals = _tuple_of(self.new_entity_proposals, NewEntityProposalSnapshot, "new_entity_proposals")
+        evidence = _tuple_of(self.evidence, PdfAnalysisLocator, "evidence")
+        if tuple(item.section_id for item in sections) != ANALYSIS_SECTION_IDS:
+            raise ValueError("current analysis snapshot requires ten stable ordered sections")
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        if len(evidence_by_id) != len(evidence):
+            raise ValueError("current analysis snapshot evidence IDs must be unique")
+        promoted = (*sections, *canonical_fields, *references, *generated_tags)
+        for values, attribute, message in (
+            (canonical_fields, "field_name", "current analysis snapshot canonical fields must be unique"),
+            (references, "reference_id", "current analysis snapshot reference IDs must be unique"),
+            (references, "order", "current analysis snapshot reference orders must be unique"),
+            (generated_tags, "tag_id", "current analysis snapshot generated tag IDs must be unique"),
+        ):
+            identifiers = tuple(getattr(item, attribute) for item in values)
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError(message)
+        used = {identifier for item in promoted for identifier in item.evidence_ids}
+        if used != set(evidence_by_id) or any(
+            tuple(evidence_by_id[identifier] for identifier in item.evidence_ids) != item.locators
+            for item in promoted
+        ):
+            raise ValueError("current analysis snapshot PDF evidence coverage is invalid")
+        if not isinstance(self.provenance, AnalysisProvenanceSnapshot):
+            raise TypeError("provenance must be AnalysisProvenanceSnapshot")
+        provenance = self.provenance.to_dict()
+        expected_provenance = {
+            "analysis_run_id": self.run_id,
+            "parser_artifact_id": self.parser_artifact_id,
+            "parser_artifact_sha256": self.parser_artifact_sha256,
+            "source_map_artifact_id": self.source_map_artifact_id,
+            "source_map_artifact_sha256": self.source_map_artifact_sha256,
+            "analysis_artifact_sha256": self.analysis_artifact_sha256,
+        }
+        if any(provenance[key] != value for key, value in expected_provenance.items()):
+            raise ValueError("current analysis snapshot provenance does not match snapshot lineage")
+        raw_identity = (provenance["raw_asset_id"], provenance["raw_asset_sha256"])
+        if any((item.raw_asset_id, item.raw_asset_sha256) != raw_identity
+               or item.parser_artifact_id != self.parser_artifact_id
+               or item.source_map_artifact_id != self.source_map_artifact_id for item in evidence):
+            raise ValueError("current analysis snapshot locator lineage is inconsistent")
+        document = {
+            "sections": [item.to_dict() for item in sections],
+            "canonical_fields": [item.to_dict() for item in canonical_fields],
+            "references": [item.to_dict() for item in references],
+            "generated_tags": [item.to_dict() for item in generated_tags],
+            "new_tag_proposals": [item.to_dict() for item in tag_proposals],
+            "new_entity_proposals": [item.to_dict() for item in entity_proposals],
+            "evidence": [item.to_dict() for item in evidence],
+        }
+        if provenance["document_sha256"] != hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest():
+            raise ValueError("current analysis snapshot document_sha256 does not match document payload")
+        for name, value in (("sections", sections), ("canonical_fields", canonical_fields),
+                ("references", references), ("generated_tags", generated_tags),
+                ("new_tag_proposals", tag_proposals), ("new_entity_proposals", entity_proposals),
+                ("evidence", evidence)):
+            object.__setattr__(self, name, value)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "artifact_id": self.artifact_id, "summary": self.summary, "tags": list(self.tags),
-            "citation_document_ids": list(self.citation_document_ids),
+            "current_id": self.current_id, "revision": self.revision, "run_id": self.run_id,
+            "parser_artifact_id": self.parser_artifact_id, "parser_artifact_sha256": self.parser_artifact_sha256,
+            "source_map_artifact_id": self.source_map_artifact_id, "source_map_artifact_sha256": self.source_map_artifact_sha256,
+            "analysis_artifact_id": self.analysis_artifact_id, "analysis_artifact_sha256": self.analysis_artifact_sha256,
+            "sections": [item.to_dict() for item in self.sections],
+            "canonical_fields": [item.to_dict() for item in self.canonical_fields],
+            "references": [item.to_dict() for item in self.references],
+            "generated_tags": [item.to_dict() for item in self.generated_tags],
+            "new_tag_proposals": [item.to_dict() for item in self.new_tag_proposals],
+            "new_entity_proposals": [item.to_dict() for item in self.new_entity_proposals],
+            "evidence": [item.to_dict() for item in self.evidence], "provenance": self.provenance.to_dict(),
         }
 
     @classmethod
-    def from_dict(cls, data: object) -> LightStructure:
+    def from_dict(cls, data: object) -> CurrentAnalysisSnapshot:
         values = _mapping(data, cls.__name__)
         _exact_fields(values, cls.__name__, cls._FIELDS)
-        return cls(
-            artifact_id=values["artifact_id"], summary=values["summary"],
-            tags=tuple(_array(values["tags"], "tags")),
-            citation_document_ids=tuple(_array(values["citation_document_ids"], "citation_document_ids")),
-        )
+        return cls(values["current_id"], values["revision"], values["run_id"], values["parser_artifact_id"],
+            values["parser_artifact_sha256"], values["source_map_artifact_id"], values["source_map_artifact_sha256"],
+            values["analysis_artifact_id"], values["analysis_artifact_sha256"],
+            tuple(AnalysisSectionSnapshot.from_dict(item) for item in _array(values["sections"], "sections")),
+            tuple(CanonicalFieldSnapshot.from_dict(item) for item in _array(values["canonical_fields"], "canonical_fields")),
+            tuple(AnalysisReferenceSnapshot.from_dict(item) for item in _array(values["references"], "references")),
+            tuple(GeneratedTagSnapshot.from_dict(item) for item in _array(values["generated_tags"], "generated_tags")),
+            tuple(NewTagProposalSnapshot.from_dict(item) for item in _array(values["new_tag_proposals"], "new_tag_proposals")),
+            tuple(NewEntityProposalSnapshot.from_dict(item) for item in _array(values["new_entity_proposals"], "new_entity_proposals")),
+            _snapshot_locators(values["evidence"], "evidence"), AnalysisProvenanceSnapshot.from_dict(values["provenance"]))
+
+    @classmethod
+    def from_current(cls, *, current_id: str, revision: int, run_id: str, parser_artifact_id: str,
+                     parser_artifact_sha256: str, source_map_artifact_id: str, source_map_artifact_sha256: str,
+                     analysis_artifact_id: str, analysis_artifact_sha256: str, content: object,
+                     provenance: object) -> CurrentAnalysisSnapshot:
+        value = _mapping(content, "current analysis content")
+        fields_ = frozenset({"sections", "canonical_fields", "references", "generated_tags",
+                             "new_tag_proposals", "new_entity_proposals", "evidence"})
+        _exact_fields(value, "current analysis content", fields_)
+        return cls(current_id, revision, run_id, parser_artifact_id, parser_artifact_sha256,
+            source_map_artifact_id, source_map_artifact_sha256, analysis_artifact_id, analysis_artifact_sha256,
+            tuple(AnalysisSectionSnapshot.from_dict(item) for item in _array(value["sections"], "sections")),
+            tuple(CanonicalFieldSnapshot.from_dict(item) for item in _array(value["canonical_fields"], "canonical_fields")),
+            tuple(AnalysisReferenceSnapshot.from_dict(item) for item in _array(value["references"], "references")),
+            tuple(GeneratedTagSnapshot.from_dict(item) for item in _array(value["generated_tags"], "generated_tags")),
+            tuple(NewTagProposalSnapshot.from_dict(item) for item in _array(value["new_tag_proposals"], "new_tag_proposals")),
+            tuple(NewEntityProposalSnapshot.from_dict(item) for item in _array(value["new_entity_proposals"], "new_entity_proposals")),
+            _snapshot_locators(value["evidence"], "evidence"), AnalysisProvenanceSnapshot.from_dict(provenance))
 
 
 @dataclass(frozen=True, slots=True)
@@ -666,7 +1079,7 @@ class DocumentPackageVersion:
     files: tuple[FileRecord, ...]
     normalized_content: NormalizedContent
     evidence: tuple[EvidenceLocator, ...]
-    light_structure: LightStructure
+    current_analysis: CurrentAnalysisSnapshot | None
     artifacts: tuple[ArtifactRecord, ...]
     lineage: tuple[Lineage, ...]
     _unknown_top_level: tuple[tuple[str, str], ...] = field(default=(), repr=False)
@@ -675,7 +1088,7 @@ class DocumentPackageVersion:
         {
             "schema_version", "document_id", "package_version", "package_sha256", "published_at",
             "quality", "limitations", "identifiers", "source_provenance", "files",
-            "normalized_content", "evidence", "light_structure", "artifacts", "lineage",
+            "normalized_content", "evidence", "current_analysis", "artifacts", "lineage",
         }
     )
 
@@ -704,8 +1117,8 @@ class DocumentPackageVersion:
         lineage = tuple(sorted(_tuple_of(self.lineage, Lineage, "lineage"), key=lambda item: (_STAGE_ORDER[item.stage], item.lineage_id)))
         if not isinstance(self.normalized_content, NormalizedContent):
             raise TypeError("normalized_content must be NormalizedContent")
-        if not isinstance(self.light_structure, LightStructure):
-            raise TypeError("light_structure must be LightStructure")
+        if self.current_analysis is not None and not isinstance(self.current_analysis, CurrentAnalysisSnapshot):
+            raise TypeError("current_analysis must be CurrentAnalysisSnapshot or None")
         for values, id_name in ((provenance, "provenance_id"), (files, "file_id"), (evidence, "evidence_id"), (artifacts, "artifact_id"), (lineage, "lineage_id")):
             _unique_ids(values, id_name)
         object.__setattr__(self, "source_provenance", provenance)
@@ -759,17 +1172,15 @@ class DocumentPackageVersion:
         normalized_artifact = artifact_by_id.get(self.normalized_content.artifact_id)
         if normalized_artifact is None or normalized_artifact.kind != "normalized_content":
             raise ValueError("NormalizedContent artifact_id must reference a normalized_content artifact")
-        has_light_data = (
-            self.light_structure.summary is not None
-            or bool(self.light_structure.tags)
-            or bool(self.light_structure.citation_document_ids)
-        )
-        if has_light_data and self.light_structure.artifact_id is None:
-            raise ValueError("light data requires a LightStructure artifact_id")
-        if self.light_structure.artifact_id is not None:
-            light_artifact = artifact_by_id.get(self.light_structure.artifact_id)
-            if light_artifact is None or light_artifact.kind != "light_structure":
-                raise ValueError("LightStructure artifact_id must reference a light_structure artifact")
+        if self.current_analysis is not None:
+            snapshot = self.current_analysis
+            expected = {snapshot.parser_artifact_id: ("mineru_parser", snapshot.parser_artifact_sha256),
+                        snapshot.source_map_artifact_id: ("mineru_source_map", snapshot.source_map_artifact_sha256),
+                        snapshot.analysis_artifact_id: ("analysis", snapshot.analysis_artifact_sha256)}
+            if any(identifier not in artifact_by_id or
+                   (artifact_by_id[identifier].kind, artifact_by_id[identifier].sha256) != contract
+                   for identifier, contract in expected.items()):
+                raise ValueError("current analysis snapshot artifact lineage is incomplete")
         content_dict = self.normalized_content.to_dict()
         text_targets = _normalized_text_targets(self.normalized_content)
         coverage: dict[str, list[tuple[int, int]]] = {path: [] for path in text_targets}
@@ -824,8 +1235,8 @@ class DocumentPackageVersion:
             ProcessingStage.PACKAGE_VALIDATION,
             ProcessingStage.PUBLICATION,
         }
-        if self.light_structure.summary is not None or self.light_structure.tags or self.light_structure.citation_document_ids:
-            required.add(ProcessingStage.ENRICHMENT)
+        if self.current_analysis is not None:
+            required.update({ProcessingStage.PARSING, ProcessingStage.ANALYSIS})
         if not required.issubset(stages):
             missing = sorted(stage.value for stage in required - stages)
             raise ValueError(f"lineage is missing required stages: {', '.join(missing)}")
@@ -840,8 +1251,6 @@ class DocumentPackageVersion:
                 raise ValueError("normalization lineage requires input files and output artifacts")
             if item.stage in {ProcessingStage.PACKAGE_VALIDATION, ProcessingStage.PUBLICATION} and not item.input_artifact_ids:
                 raise ValueError(f"{item.stage.value} lineage requires input artifacts")
-            if item.stage is ProcessingStage.ENRICHMENT and (not item.input_artifact_ids or not item.output_artifact_ids):
-                raise ValueError("enrichment lineage requires input and output artifacts")
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -857,7 +1266,7 @@ class DocumentPackageVersion:
             "files": [item.to_dict() for item in self.files],
             "normalized_content": self.normalized_content.to_dict(),
             "evidence": [item.to_dict() for item in self.evidence],
-            "light_structure": self.light_structure.to_dict(),
+            "current_analysis": None if self.current_analysis is None else self.current_analysis.to_dict(),
             "artifacts": [item.to_dict() for item in self.artifacts],
             "lineage": [item.to_dict() for item in self.lineage],
         }
@@ -888,7 +1297,7 @@ class DocumentPackageVersion:
         files: tuple[FileRecord, ...],
         normalized_content: NormalizedContent,
         evidence: tuple[EvidenceLocator, ...],
-        light_structure: LightStructure,
+        current_analysis: CurrentAnalysisSnapshot | None,
         artifacts: tuple[ArtifactRecord, ...],
         lineage: tuple[Lineage, ...],
         schema_version: str = DOCUMENT_PACKAGE_SCHEMA_VERSION,
@@ -906,7 +1315,7 @@ class DocumentPackageVersion:
             files=files,
             normalized_content=normalized_content,
             evidence=evidence,
-            light_structure=light_structure,
+            current_analysis=current_analysis,
             artifacts=artifacts,
             lineage=lineage,
         )
@@ -931,7 +1340,7 @@ class DocumentPackageVersion:
             files=tuple(FileRecord.from_dict(item) for item in _array(values["files"], "files")),
             normalized_content=NormalizedContent.from_dict(values["normalized_content"]),
             evidence=tuple(EvidenceLocator.from_dict(item) for item in _array(values["evidence"], "evidence")),
-            light_structure=LightStructure.from_dict(values["light_structure"]),
+            current_analysis=None if values["current_analysis"] is None else CurrentAnalysisSnapshot.from_dict(values["current_analysis"]),
             artifacts=tuple(ArtifactRecord.from_dict(item) for item in _array(values["artifacts"], "artifacts")),
             lineage=tuple(Lineage.from_dict(item) for item in _array(values["lineage"], "lineage")),
             _unknown_top_level=tuple(

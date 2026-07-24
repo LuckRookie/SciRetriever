@@ -28,7 +28,8 @@ class EnumTests(TestCase):
         enums.ProcessingStage: (
             "raw_acceptance",
             "normalization",
-            "enrichment",
+            "parsing",
+            "analysis",
             "package_validation",
             "publication",
         ),
