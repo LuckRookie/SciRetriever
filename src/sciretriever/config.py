@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+import ipaddress
 import os
+import re
 import stat
 import sys
 from collections.abc import Mapping
@@ -11,6 +13,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -39,9 +42,8 @@ _DISCOVERY_SOURCES = {
 METADATA_PROVIDERS = frozenset(_DISCOVERY_SOURCES)
 ACQUISITION_PROVIDERS = frozenset({
     "direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex",
-    "semantic-scholar", "elsevier", "wiley", "springer",
+    "semantic-scholar", "elsevier", "wiley", "springer", "sci-hub",
 })
-_ASSET_ROLES = {"primary_pdf", "supplementary_pdf", "xml", "html"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,16 +98,59 @@ class PreflightConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SciHubConfig:
+    enabled: bool = False
+    base_url: str | None = None
+    allowed_pdf_hosts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TranslatorRuleConfig:
+    name: str
+    landing_url_template: str
+    allowed_landing_hosts: tuple[str, ...] = ()
+    allowed_pdf_hosts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TranslatorConfig:
+    enabled: bool = False
+    rules: tuple[TranslatorRuleConfig, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserRuleConfig:
+    name: str
+    landing_url_template: str
+    allowed_landing_hosts: tuple[str, ...]
+    allowed_pdf_hosts: tuple[str, ...]
+    allowed_network_hosts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserConfig:
+    enabled: bool = False
+    profile_dir: Path | None = field(default=None, repr=False)
+    max_profile_bytes: int = 512 * 1024 * 1024
+    max_profile_files: int = 20_000
+    rules: tuple[BrowserRuleConfig, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AcquisitionConfig:
     providers: tuple[str, ...] | None = None
-    source_plan: Path | None = None
-    routing: str | None = None
-    asset_role: str | None = None
     timeout: float | None = None
+    provider_concurrency: int | None = None
     host_concurrency: int | None = None
     host_min_interval: float | None = None
+    max_asset_bytes: int | None = None
     forbidden_urls: Path | None = None
+    include_xml: bool | None = None
+    include_html: bool | None = None
     preflight: PreflightConfig = PreflightConfig()
+    sci_hub: SciHubConfig = SciHubConfig()
+    translator: TranslatorConfig = TranslatorConfig()
+    browser: BrowserConfig = BrowserConfig()
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +254,236 @@ def _choice(value: Any, name: str, choices: set[str]) -> str:
     return parsed
 
 
+def _boolean(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise _error(name, "must be a boolean")
+    return value
+
+
+def _sci_hub_hostname(value: Any, name: str) -> str:
+    hostname = _nonblank(value, name)
+    if (
+        hostname != hostname.lower()
+        or hostname.startswith(".")
+        or hostname.endswith(".")
+        or "*" in hostname
+        or re.fullmatch(
+            r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            hostname,
+        ) is None
+        or urlsplit(f"https://{hostname}").hostname != hostname
+        or any(character in hostname for character in "/:@?#[]")
+    ):
+        raise _error(name, "must contain exact lowercase hostnames")
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        raise _error(name, "must contain exact lowercase hostnames")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise _error(name, "must contain exact lowercase hostnames")
+    return hostname
+
+
+def _safe_doi_template(value: Any, name: str) -> tuple[str, str]:
+    template = _nonblank(value, name)
+    parsed = urlsplit(template)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise _error(name, "must be a safe HTTPS template") from error
+    braces = re.findall(r"\{[^{}]*\}", template)
+    if (
+        parsed.scheme != "https" or not parsed.hostname
+        or parsed.netloc != parsed.netloc.lower()
+        or parsed.username is not None or parsed.password is not None
+        or parsed.fragment or port not in (None, 443)
+        or any(character in parsed.netloc for character in "{}")
+        or braces not in (["{doi}"], ["{doi_path}"])
+        or template.count("{") != 1 or template.count("}") != 1
+    ):
+        raise _error(name, "must be a safe HTTPS template with exactly one supported DOI placeholder")
+    return template, _sci_hub_hostname(parsed.hostname, name)
+
+
+def _parse_browser(table: Mapping[str, Any], parent: Path) -> BrowserConfig:
+    nested = _table(table, "browser", {
+        "enabled", "profile_dir", "max_profile_bytes", "max_profile_files", "rules",
+    })
+    enabled = False if "enabled" not in nested else _boolean(
+        nested["enabled"], "acquisition.browser.enabled"
+    )
+    profile = None if "profile_dir" not in nested else _config_path(
+        nested["profile_dir"], "acquisition.browser.profile_dir", parent
+    )
+    max_bytes = 512 * 1024 * 1024 if "max_profile_bytes" not in nested else _positive_int(
+        nested["max_profile_bytes"], "acquisition.browser.max_profile_bytes"
+    )
+    max_files = 20_000 if "max_profile_files" not in nested else _positive_int(
+        nested["max_profile_files"], "acquisition.browser.max_profile_files"
+    )
+    if max_bytes > 4 * 1024 * 1024 * 1024:
+        raise _error("acquisition.browser.max_profile_bytes", "exceeds the supported bound")
+    if max_files > 100_000:
+        raise _error("acquisition.browser.max_profile_files", "exceeds the supported bound")
+    raw_rules = nested.get("rules", [])
+    if not isinstance(raw_rules, list):
+        raise _error("acquisition.browser.rules", "must be an array of tables")
+    rules: list[BrowserRuleConfig] = []
+    names: set[str] = set()
+    required = {"name", "landing_url_template", "allowed_landing_hosts", "allowed_pdf_hosts", "allowed_network_hosts"}
+    for index, raw_rule in enumerate(raw_rules):
+        prefix = f"acquisition.browser.rules[{index}]"
+        if not isinstance(raw_rule, dict):
+            raise _error(prefix, "must be a table")
+        unknown = sorted(set(raw_rule) - required)
+        if unknown:
+            raise ConfigError(f"unknown config field: {prefix}.{unknown[0]}")
+        missing = sorted(required - set(raw_rule))
+        if missing:
+            raise _error(f"{prefix}.{missing[0]}", "is required")
+        rule_name = _nonblank(raw_rule["name"], f"{prefix}.name")
+        if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", rule_name) is None:
+            raise _error(f"{prefix}.name", "must be a bounded lowercase name")
+        if rule_name in names:
+            raise _error("acquisition.browser.rules", "must have unique names")
+        names.add(rule_name)
+        template, template_host = _safe_doi_template(
+            raw_rule["landing_url_template"], f"{prefix}.landing_url_template"
+        )
+        def hosts(field_name: str) -> tuple[str, ...]:
+            raw = raw_rule[field_name]
+            if not isinstance(raw, list):
+                raise _error(f"{prefix}.{field_name}", "must be a string list")
+            result = tuple(_sci_hub_hostname(item, f"{prefix}.{field_name}") for item in raw)
+            if len(set(result)) != len(result):
+                raise _error(f"{prefix}.{field_name}", "must not contain duplicate values")
+            return result
+        landing = tuple(dict.fromkeys((template_host, *hosts("allowed_landing_hosts"))))
+        pdf = hosts("allowed_pdf_hosts")
+        network = tuple(dict.fromkeys((template_host, *hosts("allowed_network_hosts"), *pdf)))
+        rules.append(BrowserRuleConfig(rule_name, template, landing, pdf, network))
+    if enabled and profile is None:
+        raise _error("acquisition.browser.profile_dir", "is required when enabled")
+    if enabled and not rules:
+        raise _error("acquisition.browser.rules", "must be nonempty when enabled")
+    if not enabled and (profile is not None or rules):
+        raise _error("acquisition.browser", "must not configure profile or rules when disabled")
+    return BrowserConfig(enabled, profile, max_bytes, max_files, tuple(rules))
+
+
+def _parse_translator(table: Mapping[str, Any]) -> TranslatorConfig:
+    nested = _table(table, "translator", {"enabled", "rules"})
+    enabled = False if "enabled" not in nested else _boolean(
+        nested["enabled"], "acquisition.translator.enabled"
+    )
+    raw_rules = nested.get("rules", [])
+    if not isinstance(raw_rules, list):
+        raise _error("acquisition.translator.rules", "must be an array of tables")
+    rules: list[TranslatorRuleConfig] = []
+    names: set[str] = set()
+    for index, raw_rule in enumerate(raw_rules):
+        prefix = f"acquisition.translator.rules[{index}]"
+        if not isinstance(raw_rule, dict):
+            raise _error(prefix, "must be a table")
+        unknown = sorted(set(raw_rule) - {
+            "name", "landing_url_template", "allowed_landing_hosts", "allowed_pdf_hosts",
+        })
+        if unknown:
+            raise ConfigError(f"unknown config field: {prefix}.{unknown[0]}")
+        if set(raw_rule) < {"name", "landing_url_template"}:
+            missing = "name" if "name" not in raw_rule else "landing_url_template"
+            raise _error(f"{prefix}.{missing}", "is required")
+        name = _nonblank(raw_rule["name"], f"{prefix}.name")
+        if re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name) is None:
+            raise _error(f"{prefix}.name", "must be a bounded lowercase name")
+        if name in names:
+            raise _error("acquisition.translator.rules", "must have unique names")
+        names.add(name)
+        template = _nonblank(raw_rule["landing_url_template"], f"{prefix}.landing_url_template")
+        parsed = urlsplit(template)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise _error(f"{prefix}.landing_url_template", "must be a safe HTTPS template") from error
+        braces = re.findall(r"\{[^{}]*\}", template)
+        if (
+            parsed.scheme != "https" or not parsed.hostname
+            or parsed.netloc != parsed.netloc.lower()
+            or parsed.username is not None or parsed.password is not None
+            or parsed.fragment or port not in (None, 443)
+            or any(character in parsed.netloc for character in "{}")
+            or braces not in (["{doi}"], ["{doi_path}"])
+            or template.count("{") != 1 or template.count("}") != 1
+        ):
+            raise _error(f"{prefix}.landing_url_template", "must be a safe HTTPS template with exactly one supported DOI placeholder")
+        def hosts(field_name: str) -> tuple[str, ...]:
+            raw = raw_rule.get(field_name, [])
+            if not isinstance(raw, list):
+                raise _error(f"{prefix}.{field_name}", "must be a string list")
+            result = tuple(_sci_hub_hostname(item, f"{prefix}.{field_name}") for item in raw)
+            if len(set(result)) != len(result):
+                raise _error(f"{prefix}.{field_name}", "must not contain duplicate values")
+            return result
+        rules.append(TranslatorRuleConfig(
+            name, template, hosts("allowed_landing_hosts"), hosts("allowed_pdf_hosts")
+        ))
+    if enabled and not rules:
+        raise _error("acquisition.translator.rules", "must be nonempty when enabled")
+    if not enabled and rules:
+        raise _error("acquisition.translator.rules", "must be empty when disabled")
+    return TranslatorConfig(enabled, tuple(rules))
+
+
+def _sci_hub_base_url(value: Any) -> str:
+    base_url = _nonblank(value, "acquisition.sci_hub.base_url")
+    parsed = urlsplit(base_url)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise _error("acquisition.sci_hub.base_url", "must be an authorized HTTPS URL") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or port not in (None, 443)
+    ):
+        raise _error("acquisition.sci_hub.base_url", "must be an authorized HTTPS URL")
+    return base_url
+
+
+def _parse_sci_hub(table: Mapping[str, Any], providers: tuple[str, ...] | None) -> SciHubConfig:
+    nested = _table(table, "sci_hub", {"enabled", "base_url", "allowed_pdf_hosts"})
+    enabled = False if "enabled" not in nested else _boolean(
+        nested["enabled"], "acquisition.sci_hub.enabled"
+    )
+    base_url = None if "base_url" not in nested else _sci_hub_base_url(nested["base_url"])
+    allowed_hosts: tuple[str, ...] = ()
+    if "allowed_pdf_hosts" in nested:
+        raw_hosts = nested["allowed_pdf_hosts"]
+        if not isinstance(raw_hosts, list):
+            raise _error("acquisition.sci_hub.allowed_pdf_hosts", "must be a string list")
+        allowed_hosts = tuple(
+            _sci_hub_hostname(item, "acquisition.sci_hub.allowed_pdf_hosts")
+            for item in raw_hosts
+        )
+        if len(set(allowed_hosts)) != len(allowed_hosts):
+            raise _error("acquisition.sci_hub.allowed_pdf_hosts", "must not contain duplicate values")
+    selected = providers is not None and "sci-hub" in providers
+    if selected != enabled:
+        raise _error(
+            "acquisition.sci_hub.enabled",
+            "must be true exactly when sci-hub is listed in acquisition.providers",
+        )
+    if enabled and base_url is None:
+        raise _error("acquisition.sci_hub.base_url", "is required when enabled")
+    return SciHubConfig(enabled, base_url, allowed_hosts)
+
+
 def _config_path(value: Any, name: str, parent: Path) -> Path:
     raw = _nonblank(value, name)
     expanded = Path(raw).expanduser()
@@ -293,7 +568,7 @@ def _parse_search(root: Mapping[str, Any]) -> SearchConfig:
         if set(precedence) != set(providers):
             raise _error("search.precedence", "must contain every configured provider exactly once")
     return SearchConfig(
-        level=None if "level" not in table else _choice(table["level"], "search.level", {"metadata"}),
+        level=None if "level" not in table else _choice(table["level"], "search.level", {"metadata", "download"}),
         limit=None if "limit" not in table else _positive_int(table["limit"], "search.limit"),
         providers=providers,
         precedence=precedence,
@@ -308,15 +583,20 @@ def _parse_search(root: Mapping[str, Any]) -> SearchConfig:
 
 
 def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConfig:
-    allowed = {"providers", "source_plan", "routing", "asset_role", "timeout", "host_concurrency", "host_min_interval", "forbidden_urls", "preflight"}
+    allowed = {
+        "providers", "timeout", "provider_concurrency", "host_concurrency",
+        "host_min_interval", "max_asset_bytes", "forbidden_urls", "include_xml",
+        "include_html", "preflight", "sci_hub", "translator", "browser",
+    }
     table = _table(root, "acquisition", allowed)
-    if "providers" in table and "source_plan" in table:
-        raise _error("acquisition", "must not define both providers and source_plan")
     providers = None
     if "providers" in table:
         providers = _string_list(table["providers"], "acquisition.providers", nonempty=True)
         if any(provider not in ACQUISITION_PROVIDERS for provider in providers):
             raise _error("acquisition.providers", "contains an unsupported provider")
+    sci_hub = _parse_sci_hub(table, providers)
+    translator = _parse_translator(table)
+    browser = _parse_browser(table, parent)
     preflight_table = _table(
         table, "preflight", {"min_free_bytes", "max_asset_bytes", "readiness", "timeout"}
     )
@@ -341,14 +621,18 @@ def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConf
         )
     return AcquisitionConfig(
         providers=providers,
-        source_plan=None if "source_plan" not in table else _config_path(table["source_plan"], "acquisition.source_plan", parent),
-        routing=None if "routing" not in table else _choice(table["routing"], "acquisition.routing", {"serial", "race"}),
-        asset_role=None if "asset_role" not in table else _choice(table["asset_role"], "acquisition.asset_role", _ASSET_ROLES),
         timeout=None if "timeout" not in table else _positive_number(table["timeout"], "acquisition.timeout"),
+        provider_concurrency=None if "provider_concurrency" not in table else _positive_int(table["provider_concurrency"], "acquisition.provider_concurrency"),
         host_concurrency=None if "host_concurrency" not in table else _positive_int(table["host_concurrency"], "acquisition.host_concurrency"),
         host_min_interval=None if "host_min_interval" not in table else _nonnegative_number(table["host_min_interval"], "acquisition.host_min_interval"),
+        max_asset_bytes=None if "max_asset_bytes" not in table else _positive_int(table["max_asset_bytes"], "acquisition.max_asset_bytes"),
         forbidden_urls=None if "forbidden_urls" not in table else _config_path(table["forbidden_urls"], "acquisition.forbidden_urls", parent),
+        include_xml=None if "include_xml" not in table else _boolean(table["include_xml"], "acquisition.include_xml"),
+        include_html=None if "include_html" not in table else _boolean(table["include_html"], "acquisition.include_html"),
         preflight=preflight,
+        sci_hub=sci_hub,
+        translator=translator,
+        browser=browser,
     )
 
 
@@ -480,6 +764,7 @@ def get_credential(env_var: str, *, env: Mapping[str, str] | None = None) -> str
 __all__ = (
     "CONFIG_ENV", "MAX_CONFIG_BYTES", "STORAGE_ROOT_ENV", "AcquisitionConfig",
     "ACQUISITION_PROVIDERS", "METADATA_PROVIDERS", "PreflightConfig",
-    "CredentialsConfig", "DiscoveryConfig", "PackageConfig", "PathsConfig",
+    "CredentialsConfig", "DiscoveryConfig", "PackageConfig", "PathsConfig", "SciHubConfig",
+    "TranslatorConfig", "TranslatorRuleConfig", "BrowserConfig", "BrowserRuleConfig",
     "SciRetrieverConfig", "SearchConfig", "get_credential", "load_config", "resolve_storage_root",
 )

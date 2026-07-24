@@ -1,6 +1,6 @@
 # Copy to config.toml and keep only the settings you need.
 # This file lists only fields accepted by the current strict parser.
-# Planned LLM, Sci-Hub, translator, and browser fields are unsupported.
+# Planned LLM fields are unsupported. Optional acquisition adapters are disabled by default.
 schema_version = 1
 
 [paths]
@@ -35,6 +35,7 @@ battery = ["electrolyte", "lithium"]
 
 [search]
 level = "metadata"
+# Also supported: "download"; it requires paths.storage_root or --storage-root.
 limit = 100
 providers = ["crossref", "europe-pmc", "arxiv"]
 # Precedence must contain every configured provider exactly once.
@@ -44,14 +45,51 @@ max_concurrency = 8
 crossref_mailto = "researcher@example.org"
 
 [acquisition]
-providers = ["openalex", "semantic-scholar"]
-# source_plan = "./plans/source-plan.json" # Use instead of providers, never with it.
-routing = "serial"
-asset_role = "primary_pdf"
+providers = ["direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex", "semantic-scholar", "elsevier", "wiley", "springer"]
 timeout = 30.0
+provider_concurrency = 4
 host_concurrency = 2
 host_min_interval = 0.25
+max_asset_bytes = 104857600
 forbidden_urls = "./forbidden_urls.txt"
+include_xml = false
+include_html = false
+
+# Sci-Hub has no default endpoint. Enable it only for an operator-authorized HTTPS
+# endpoint and add "sci-hub" to acquisition.providers in the same configuration.
+# Omit this table entirely when the capability is disabled.
+# [acquisition.sci_hub]
+# enabled = true
+# base_url = "https://authorized-endpoint.example"
+# allowed_pdf_hosts = ["authorized-pdf-host.example"]
+
+# Restricted landing-page translation is the sequential second tier. Rules use
+# exact host allowlists and the fixed static HTML whitelist; arbitrary scripts do not run.
+# Omit this table entirely when disabled; disabled translator rules are rejected.
+# [acquisition.translator]
+# enabled = true
+# [[acquisition.translator.rules]]
+# name = "example-publisher"
+# landing_url_template = "https://landing.example/article?doi={doi}"
+# allowed_landing_hosts = ["redirect.example"]
+# allowed_pdf_hosts = ["pdf.example"]
+
+# Browser fallback is the sequential third tier. The existing profile directory
+# must be owner-only 0700, outside the storage tree, and prepared without SciRetriever.
+# Each invocation uses a temporary copy, does not call storage_state, and cleans it.
+# Interactive login and CAPTCHA handling are unsupported.
+# Omit this table entirely when disabled; disabled profile/rules are rejected.
+# [acquisition.browser]
+# enabled = true
+# profile_dir = "./private-browser-profile"
+# max_profile_bytes = 536870912
+# max_profile_files = 20000
+# [[acquisition.browser.rules]]
+# name = "example-publisher"
+# landing_url_template = "https://landing.example/article?doi={doi}"
+# allowed_landing_hosts = ["landing.example"]
+# allowed_pdf_hosts = ["pdf.example"]
+# allowed_network_hosts = ["landing.example", "pdf.example", "assets.example"]
 
 [acquisition.preflight]
 min_free_bytes = 1073741824

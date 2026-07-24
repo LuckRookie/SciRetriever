@@ -13,7 +13,6 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.cli import acquire as acquire_cli
 from sciretriever.cli.main import _extract_config_selectors, _inject_config, main
 from sciretriever.config import MAX_CONFIG_BYTES, load_config
 from sciretriever.errors import ConfigError
@@ -58,12 +57,14 @@ year_to = 2025
 chemistry = ["catalysis", "kinetics"]
 [acquisition]
 providers = ["openalex", "semantic-scholar"]
-routing = "race"
-asset_role = "primary_pdf"
 timeout = 12
+provider_concurrency = 4
 host_concurrency = 3
 host_min_interval = 0.25
+max_asset_bytes = 100000
 forbidden_urls = "rules/forbidden.txt"
+include_xml = true
+include_html = false
 [package]
 max_input_bytes = 1000
 max_pages = 10
@@ -195,20 +196,15 @@ enrichment = false
             path.chmod(stat.S_IRUSR | stat.S_IWUSR)
         self.assertEqual(load_config(path).credentials.wiley_api_key, secret)
 
-    def test_acquisition_providers_and_source_plan_are_mutually_exclusive(self) -> None:
-        path = self.write(
-            'schema_version = 1\n[acquisition]\nproviders = ["crossref"]\nsource_plan = "plan.json"'
-        )
-        with self.assertRaisesRegex(ConfigError, "providers and source_plan"):
-            load_config(path)
-        source_plan = self.write(
-            'schema_version = 1\n[acquisition]\nsource_plan = "plans/source-plan.json"',
-            "source-plan.toml",
-        )
-        self.assertEqual(
-            load_config(source_plan).acquisition.source_plan,
-            (self.base / "plans/source-plan.json").resolve(),
-        )
+    def test_removed_acquisition_task_keys_are_strictly_rejected(self) -> None:
+        for name in ("source_plan", "routing", "asset_role"):
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ConfigError, f"unknown config field: acquisition.{name}"
+            ):
+                load_config(self.write(
+                    f'schema_version = 1\n[acquisition]\n{name} = "removed"',
+                    f"{name}.toml",
+                ))
 
     def test_search_config_accepts_only_wp2_metadata_settings(self) -> None:
         config = load_config(self.write(
@@ -231,10 +227,17 @@ crossref_mailto = "reader@example.org"
         self.assertEqual(config.search.max_concurrency, 3)
         self.assertEqual(config.search.crossref_mailto, "reader@example.org")
 
+    def test_search_config_accepts_download_level(self) -> None:
+        config = load_config(self.write(
+            'schema_version = 1\n[search]\nlevel = "download"',
+            "download-level.toml",
+        ))
+        self.assertEqual(config.search.level, "download")
+
     def test_search_config_rejects_unknown_wrong_and_future_values(self) -> None:
         cases = {
             "unknown.toml": "unknown = true",
-            "level.toml": 'level = "download"',
+            "level.toml": 'level = "analyze"',
             "limit.toml": "limit = 0",
             "timeout.toml": "provider_timeout = inf",
             "concurrency.toml": "max_concurrency = true",
@@ -268,6 +271,114 @@ crossref_mailto = "reader@example.org"
             config.acquisition.preflight.min_free_bytes,
             config.acquisition.preflight.max_asset_bytes,
         )
+
+    def test_sci_hub_config_is_strict_opt_in_and_cross_field_consistent(self) -> None:
+        disabled = load_config(self.write("schema_version = 1", "sci-disabled.toml"))
+        self.assertFalse(disabled.acquisition.sci_hub.enabled)
+        self.assertIsNone(disabled.acquisition.sci_hub.base_url)
+        enabled = load_config(self.write(
+            '''schema_version = 1
+[acquisition]
+providers = ["crossref", "sci-hub"]
+[acquisition.sci_hub]
+enabled = true
+base_url = "https://authorized.test:443/base"
+allowed_pdf_hosts = ["pdf.authorized.test"]
+''',
+            "sci-enabled.toml",
+        ))
+        self.assertEqual(enabled.acquisition.sci_hub.allowed_pdf_hosts, ("pdf.authorized.test",))
+
+        invalid = {
+            "selected-disabled": '[acquisition]\nproviders = ["sci-hub"]',
+            "enabled-unselected": '[acquisition.sci_hub]\nenabled = true\nbase_url = "https://authorized.test"',
+            "missing-url": '[acquisition]\nproviders = ["sci-hub"]\n[acquisition.sci_hub]\nenabled = true',
+            "unknown": '[acquisition.sci_hub]\nunknown = true',
+            "wrong-enabled": '[acquisition.sci_hub]\nenabled = "true"',
+            "wrong-hosts": '[acquisition.sci_hub]\nallowed_pdf_hosts = "pdf.test"',
+            "uppercase-host": '[acquisition.sci_hub]\nallowed_pdf_hosts = ["PDF.test"]',
+            "scheme-host": '[acquisition.sci_hub]\nallowed_pdf_hosts = ["https://pdf.test"]',
+            "wildcard-host": '[acquisition.sci_hub]\nallowed_pdf_hosts = ["*.pdf.test"]',
+            "duplicate-host": '[acquisition.sci_hub]\nallowed_pdf_hosts = ["pdf.test", "pdf.test"]',
+            "http-base": '[acquisition]\nproviders = ["sci-hub"]\n[acquisition.sci_hub]\nenabled = true\nbase_url = "http://authorized.test"',
+            "userinfo-base": '[acquisition]\nproviders = ["sci-hub"]\n[acquisition.sci_hub]\nenabled = true\nbase_url = "https://user:secret@authorized.test"',
+            "query-base": '[acquisition]\nproviders = ["sci-hub"]\n[acquisition.sci_hub]\nenabled = true\nbase_url = "https://authorized.test?secret=x"',
+            "port-base": '[acquisition]\nproviders = ["sci-hub"]\n[acquisition.sci_hub]\nenabled = true\nbase_url = "https://authorized.test:8443"',
+        }
+        for name, body in invalid.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n{body}", f"sci-{name}.toml"))
+
+    def test_translator_config_is_strict_opt_in_and_validates_templates(self) -> None:
+        default = load_config(self.write("schema_version = 1", "translator-default.toml"))
+        self.assertFalse(default.acquisition.translator.enabled)
+        self.assertEqual(default.acquisition.translator.rules, ())
+        enabled = load_config(self.write('''schema_version = 1
+[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "publisher-one"
+landing_url_template = "https://landing.example/article?doi={doi}"
+allowed_landing_hosts = ["redirect.example"]
+allowed_pdf_hosts = ["pdf.example"]
+''', "translator-enabled.toml"))
+        self.assertEqual(enabled.acquisition.translator.rules[0].name, "publisher-one")
+        invalid = {
+            "disabled-rules": '''[acquisition.translator]
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{doi}"''',
+            "enabled-empty": "[acquisition.translator]\nenabled = true",
+            "unknown": "[acquisition.translator]\nunknown = true",
+            "wrong-enabled": '[acquisition.translator]\nenabled = "true"',
+            "duplicate-name": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{doi}"
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{doi_path}"''',
+            "uppercase-name": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "One"
+landing_url_template = "https://landing.example/{doi}"''',
+            "http": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "http://landing.example/{doi}"''',
+            "uppercase-host": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://Landing.example/{doi}"''',
+            "authority-placeholder": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://{doi}.example/article"''',
+            "both": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{doi}/{doi_path}"''',
+            "unknown-placeholder": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{title}"''',
+            "wildcard-host": '''[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "one"
+landing_url_template = "https://landing.example/{doi}"
+allowed_pdf_hosts = ["*.example"]''',
+        }
+        for name, body in invalid.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n{body}", f"translator-{name}.toml"))
 
     def test_removed_automatic_config_and_strict_preflight(self) -> None:
         config = load_config(self.write(
@@ -380,34 +491,6 @@ configured = ["term"]
         self.assertEqual(args.filter, [("year_to", "2025")])
         self.assertEqual(args.label_rule, [("explicit", "value")])
 
-    def test_acquisition_config_supplies_paths_defaults_and_cli_source_replaces_plan(self) -> None:
-        config = self.write(
-            """schema_version = 1
-[paths]
-catalog = "catalog.sqlite"
-storage_root = "storage"
-[acquisition]
-providers = ["openalex", "semantic-scholar"]
-routing = "race"
-asset_role = "xml"
-timeout = 9
-host_concurrency = 4
-host_min_interval = 0.5
-"""
-        )
-        with mock.patch("sciretriever.cli.acquire.run", return_value=0) as run:
-            self.assertEqual(main(["acquire", "--doi", "10.1/config", "--config", str(config)]), 0)
-        args = run.call_args.args[0]
-        self.assertEqual(args.providers, ["openalex", "semantic-scholar"])
-        self.assertEqual((args.routing, args.asset_role, args.timeout), ("race", "xml", 9.0))
-        self.assertEqual((args.catalog, args.storage_root), (self.catalog, self.storage))
-
-        with mock.patch("sciretriever.cli.acquire.run", return_value=0) as run:
-            self.assertEqual(main(["acquire", "--doi", "10.1/config", "--provider", "crossref", "--config", str(config)]), 0)
-        args = run.call_args.args[0]
-        self.assertEqual(args.provider, "crossref")
-        self.assertIsNone(args.providers)
-
     def test_search_config_injection_and_cli_values_replace_config(self) -> None:
         config = load_config(self.write(
             """schema_version = 1
@@ -452,35 +535,6 @@ crossref_mailto = "configured@example.org"
             "--provider", "crossref", "--provider", "openalex",
         ])
 
-    def test_environment_credentials_override_toml_and_all_five_reach_constructors(self) -> None:
-        config_path = self.write(
-            """schema_version = 1
-[credentials]
-unpaywall_email = "toml-email"
-semantic_scholar_api_key = "toml-s2"
-elsevier_api_key = "toml-elsevier"
-wiley_api_key = "toml-wiley"
-springer_api_key = "toml-springer"
-"""
-        )
-        credentials = load_config(config_path).credentials
-        policy = mock.sentinel.policy
-        transport = mock.sentinel.transport
-        constructors = {
-            "unpaywall": ("UnpaywallProvider", "toml-email"),
-            "semantic-scholar": ("SemanticScholarProvider", "toml-s2"),
-            "elsevier": ("ElsevierProvider", "toml-elsevier"),
-            "wiley": ("WileyProvider", "toml-wiley"),
-            "springer": ("SpringerProvider", "toml-springer"),
-        }
-        for provider, (constructor_name, expected) in constructors.items():
-            with self.subTest(provider=provider), mock.patch.object(acquire_cli, constructor_name, return_value=mock.sentinel.provider) as constructor, mock.patch.dict(os.environ, {}, clear=True):
-                acquire_cli._provider(provider, transport, policy, credentials=credentials)
-                self.assertEqual(constructor.call_args.args[1], expected)
-        with mock.patch.object(acquire_cli, "WileyProvider", return_value=mock.sentinel.provider) as constructor, mock.patch.dict(os.environ, {"SCIRETRIEVER_WILEY_API_KEY": "environment-wiley"}, clear=True):
-            acquire_cli._provider("wiley", transport, policy, credentials=credentials)
-        self.assertEqual(constructor.call_args.args[1], "environment-wiley")
-
     def test_package_enrichment_can_be_overridden_in_both_directions(self) -> None:
         for configured, option, expected in (
             (False, "--enrichment", False),
@@ -519,7 +573,7 @@ springer_api_key = "toml-springer"
         with mock.patch("sciretriever.cli.catalog.run", return_value=0) as run:
             result = main([
                 "catalog", "import-asset", "--asset", "article.xml", "--asset-role", "xml",
-                "--identifier", "doi=10.1/example", "--config", str(config),
+                "--work-version-id", "00000000-0000-4000-8000-000000000001", "--config", str(config),
             ])
         self.assertEqual(result, 0)
         args = run.call_args.args[0]
