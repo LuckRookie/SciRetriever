@@ -20,12 +20,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever import __version__
-from sciretriever.catalog import IdentityResolver, JobRepository, initialize_catalog, create_catalog_engine
+from sciretriever.catalog import IdentityResolver, initialize_catalog, create_catalog_engine
 from sciretriever.cli.main import PLACEHOLDER_COMMANDS, main
-from sciretriever.cli import acquire as acquire_cli
 from sciretriever.cli import preflight as preflight_cli
 from sciretriever.cli import package as package_cli
-from sciretriever.acquisition.models import AcquisitionResult
 from sciretriever.network import HeadersResponse
 from sciretriever.core.contracts import DownloadManifestEntry
 from sciretriever.core.enums import PackageQuality
@@ -103,18 +101,13 @@ class CliTests(TestCase):
             self.assertIn(command, output.getvalue())
         self.assertNotIn("import-legacy-db", output.getvalue())
 
-    def test_report_help_lists_read_only_filters_and_formats(self) -> None:
+    def test_download_exists_and_durable_acquire_controls_are_removed(self) -> None:
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            with self.assertRaises(SystemExit) as raised:
-                main(["report", "--help"])
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            main(["download", "--help"])
         self.assertEqual(raised.exception.code, 0)
-        for option in ("--catalog", "--job-id", "--work-id", "--state", "--retryable", "--category", "--format"):
-            self.assertIn(option, output.getvalue())
-
-    def test_download_and_durable_acquire_controls_are_removed(self) -> None:
+        self.assertIn("--all-missing", output.getvalue())
         commands = (
-            ["download", "--help"],
             ["acquire", "--resume-job", "00000000-0000-4000-8000-000000000001"],
             ["acquire", "--due-jobs"],
         )
@@ -123,23 +116,6 @@ class CliTests(TestCase):
                 with self.assertRaises(SystemExit) as raised:
                     main(command)
             self.assertEqual(raised.exception.code, 2)
-
-    def test_report_missing_catalog_fails_without_traceback(self) -> None:
-        error = io.StringIO()
-        with contextlib.redirect_stderr(error):
-            result = main(
-                [
-                    "--no-config",
-                    "report",
-                    "--catalog",
-                    str(self.directory / "missing.sqlite"),
-                    "--format",
-                    "json",
-                ]
-            )
-
-        self.assertEqual(result, 2)
-        self.assertEqual(error.getvalue(), "sciretriever: error: catalog report is unavailable\n")
 
     def test_discover_help_lists_bounded_options(self) -> None:
         output = io.StringIO()
@@ -208,35 +184,6 @@ class CliTests(TestCase):
             self.assertEqual((parameters.max_depth, parameters.max_elements), (30, 40))
             catalog.dispose.assert_called_once_with()
 
-    def test_acquire_output_reports_package_selection_ids(self) -> None:
-        acquisition = AcquisitionResult(
-            work_version_id="00000000-0000-4000-8000-000000000004",
-            work_id=EXPLICIT_RUN_ID,
-            job_id="00000000-0000-4000-8000-000000000002",
-            status="succeeded",
-            raw_asset_id="00000000-0000-4000-8000-000000000003",
-        )
-        output = io.StringIO()
-
-        async def execute(_args, *, on_success):
-            on_success(acquisition)
-            return 1, 0
-
-        with (
-            mock.patch.object(
-                acquire_cli,
-                "_execute_async",
-                new=execute,
-            ),
-            contextlib.redirect_stdout(output),
-        ):
-            result = acquire_cli.run(argparse.Namespace())
-
-        self.assertEqual(result, 0)
-        self.assertIn(f"work_id={EXPLICIT_RUN_ID}", output.getvalue())
-        self.assertIn(f"raw_asset_id={acquisition.raw_asset_id}", output.getvalue())
-        self.assertIn("Acquisition complete: 1 succeeded, 0 failed", output.getvalue())
-
     def test_preflight_is_read_only_and_indirect_provider_is_not_checked(self) -> None:
         storage = self.directory / "storage"
         storage.mkdir()
@@ -274,13 +221,7 @@ timeout = 1
         config_bytes = config.read_bytes()
         config_mode = stat.S_IMODE(config.stat().st_mode)
         output = io.StringIO()
-        with (
-            mock.patch.object(acquire_cli, "open_catalog_engine", side_effect=AssertionError("runtime constructed")),
-            mock.patch.object(acquire_cli, "AdmissionService", side_effect=AssertionError("admission constructed")),
-            mock.patch.object(acquire_cli, "RawAssetStore", side_effect=AssertionError("storage constructed")),
-            mock.patch.object(acquire_cli, "AcquisitionRuntime", side_effect=AssertionError("runtime constructed")),
-            contextlib.redirect_stdout(output),
-        ):
+        with contextlib.redirect_stdout(output):
             self.assertEqual(main(["preflight", "--config", str(config)]), 0)
         report = json.loads(output.getvalue())
         provider = next(check for check in report["checks"] if check["name"] == "provider:crossref")
@@ -292,7 +233,7 @@ timeout = 1
         self.assertEqual(stat.S_IMODE(config.stat().st_mode), config_mode)
         self.assertEqual(snapshot(), before)
         with sqlite3.connect(self.catalog) as connection:
-            for table in ("works", "acquisition_jobs", "acquisition_attempts", "failures", "raw_assets"):
+            for table in ("works", "acquisition_diagnostics", "failures", "raw_assets"):
                 self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0)
 
     def test_preflight_direct_uses_headers_transport_and_has_no_policy_overrides(self) -> None:

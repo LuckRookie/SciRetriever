@@ -6,14 +6,9 @@ import argparse
 from pathlib import Path
 import sys
 
-from sciretriever.acquisition.admission import AdmissionService
 from sciretriever.catalog.assets import AssetRepository
 from sciretriever.catalog.engine import create_catalog_engine, open_catalog_engine
-from sciretriever.catalog.identity import IdentityResolver
-from sciretriever.catalog.jobs import JobRepository
-from sciretriever.catalog.repository import CatalogRepository
 from sciretriever.catalog.schema import initialize_catalog
-from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import AssetRole
 from sciretriever.acquisition.existing_asset import ExistingAssetImporter
 from sciretriever.errors import SciRetrieverError
@@ -30,21 +25,11 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     _add_import_paths(asset)
     asset.add_argument("--asset", required=True)
     asset.add_argument("--asset-role", required=True, choices=tuple(role.value for role in AssetRole))
-    asset.add_argument("--identifier", required=True, action="append", type=_identifier)
+    asset.add_argument("--work-version-id", required=True)
 
 def _add_import_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--storage-root", required=True)
-
-
-def _identifier(value: str) -> Identifier:
-    namespace, separator, identifier_value = value.partition("=")
-    if not separator or not namespace.strip() or not identifier_value.strip():
-        raise argparse.ArgumentTypeError("identifier must use NAMESPACE=VALUE")
-    try:
-        return Identifier(namespace, identifier_value)
-    except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _importer(catalog_path: str, storage_root: str):
@@ -54,12 +39,7 @@ def _importer(catalog_path: str, storage_root: str):
         if not root.is_dir() or root.is_symlink():
             raise ValueError("storage root must be an existing real directory")
         assets = AssetRepository(catalog)
-        jobs = JobRepository(catalog)
-        repository = CatalogRepository(catalog)
         importer = ExistingAssetImporter(
-            AdmissionService(IdentityResolver(catalog), jobs, assets),
-            repository,
-            jobs,
             assets,
             AssetAcceptanceCoordinator(assets, RawAssetStore(root)),
         )
@@ -80,12 +60,13 @@ def _create(args: argparse.Namespace) -> int:
 
 
 def _import_asset(args: argparse.Namespace) -> int:
-    identifiers = tuple(args.identifier)
     catalog, importer = _importer(args.catalog, args.storage_root)
     try:
-        result = importer.import_asset(args.asset, identifiers, AssetRole(args.asset_role))
+        result = importer.import_asset(
+            args.asset, args.work_version_id, AssetRole(args.asset_role)
+        )
         print(
-            f"disposition={result.disposition} work_id={result.work_id} "
+            f"disposition={result.disposition} work_version_id={result.work_version_id} "
             f"raw_asset_id={result.raw_asset_id} sha256={result.sha256}"
         )
         return 0

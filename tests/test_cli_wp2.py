@@ -103,7 +103,7 @@ class CliWp2Tests(TestCase):
             self.assertEqual(raised.exception.code, 0)
             for value in expected:
                 self.assertIn(value, output.getvalue())
-        self.assertIn("invalid choice", self.parse_error([
+        self.assertIn("requires --storage-root", self.parse_error([
             "search", "query", "--catalog", str(self.catalog), "--level", "download"
         ]))
 

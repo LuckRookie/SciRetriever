@@ -6,12 +6,12 @@ from pathlib import Path
 import sys
 
 from sciretriever import __version__
-from sciretriever.cli import acquire, catalog, discover, library, package, preflight, report, search
+from sciretriever.cli import catalog, discover, download, library, package, preflight, search
 from sciretriever.config import CONFIG_ENV, SciRetrieverConfig, load_config
 from sciretriever.errors import ConfigError
 
 
-COMMANDS = ("discover", "search", "library", "acquire", "preflight", "catalog", "package", "report")
+COMMANDS = ("discover", "search", "download", "library", "preflight", "catalog", "package")
 PLACEHOLDER_COMMANDS: tuple[str, ...] = ()
 
 
@@ -42,14 +42,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "search", help="search metadata providers and persist canonical Works"
     )
     search.configure_parser(search_parser)
+    download_parser = subparsers.add_parser(
+        "download", help="backfill assets for existing WorkVersions"
+    )
+    download.configure_parser(download_parser)
     library_parser = subparsers.add_parser(
         "library", help="read canonical Work library projections"
     )
     library.configure_parser(library_parser)
-    acquire_parser = subparsers.add_parser(
-        "acquire", help="acquire and preserve a role-specific raw asset"
-    )
-    acquire.configure_parser(acquire_parser)
     preflight_parser = subparsers.add_parser(
         "preflight", help="validate acquisition policy without downloading a body"
     )
@@ -62,10 +62,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "package", help="normalize and publish an offline DocumentPackageVersion"
     )
     package.configure_parser(package_parser)
-    report_parser = subparsers.add_parser(
-        "report", help="report acquisition status and failures read-only"
-    )
-    report.configure_parser(report_parser)
     for command in PLACEHOLDER_COMMANDS:
         subparsers.add_parser(command, help="reserved for a later implementation phase")
     return parser
@@ -149,6 +145,15 @@ def _add_scalar(tokens: list[str], present: set[str], option: str, value: object
         tokens.extend((option, str(value)))
 
 
+def _option_value(argv: list[str], option: str) -> str | None:
+    for index, token in enumerate(argv):
+        if token.startswith(option + "="):
+            return token.split("=", 1)[1]
+        if token == option and index + 1 < len(argv):
+            return argv[index + 1]
+    return None
+
+
 def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
     if not argv:
         return argv
@@ -191,25 +196,42 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
         ):
             for provider in values.precedence:
                 injected.extend(("--precedence", provider))
-    elif command == "library":
-        _add_scalar(injected, present, "--catalog", config.paths.catalog)
-    elif command == "acquire":
+        effective_level = _option_value(argv, "--level") or values.level
+        if effective_level == "download":
+            acquisition = config.acquisition
+            _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
+            _add_scalar(injected, present, "--download-timeout", acquisition.timeout)
+            _add_scalar(injected, present, "--download-provider-concurrency", acquisition.provider_concurrency)
+            _add_scalar(injected, present, "--host-concurrency", acquisition.host_concurrency)
+            _add_scalar(injected, present, "--host-min-interval", acquisition.host_min_interval)
+            _add_scalar(injected, present, "--max-asset-bytes", acquisition.max_asset_bytes)
+            _add_scalar(injected, present, "--forbidden-urls", acquisition.forbidden_urls)
+            if "--download-provider" not in present and acquisition.providers is not None:
+                for provider in acquisition.providers:
+                    injected.extend(("--download-provider", provider))
+            if not present.intersection({"--xml", "--no-xml"}) and acquisition.include_xml is not None:
+                injected.append("--xml" if acquisition.include_xml else "--no-xml")
+            if not present.intersection({"--html", "--no-html"}) and acquisition.include_html is not None:
+                injected.append("--html" if acquisition.include_html else "--no-html")
+    elif command == "download":
         values = config.acquisition
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
         _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
-        _add_scalar(injected, present, "--routing", values.routing)
-        _add_scalar(injected, present, "--asset-role", values.asset_role)
         _add_scalar(injected, present, "--timeout", values.timeout)
+        _add_scalar(injected, present, "--provider-concurrency", values.provider_concurrency)
         _add_scalar(injected, present, "--host-concurrency", values.host_concurrency)
         _add_scalar(injected, present, "--host-min-interval", values.host_min_interval)
+        _add_scalar(injected, present, "--max-asset-bytes", values.max_asset_bytes)
         _add_scalar(injected, present, "--forbidden-urls", values.forbidden_urls)
-        source_options = {"--provider", "--providers", "--source-plan"}
-        if not present.intersection(source_options):
-            if values.source_plan is not None:
-                injected.extend(("--source-plan", str(values.source_plan)))
-            elif values.providers is not None:
-                for provider in values.providers:
-                    injected.extend(("--providers", provider))
+        if "--provider" not in present and values.providers is not None:
+            for provider in values.providers:
+                injected.extend(("--provider", provider))
+        if not present.intersection({"--xml", "--no-xml"}) and values.include_xml is not None:
+            injected.append("--xml" if values.include_xml else "--no-xml")
+        if not present.intersection({"--html", "--no-html"}) and values.include_html is not None:
+            injected.append("--html" if values.include_html else "--no-html")
+    elif command == "library":
+        _add_scalar(injected, present, "--catalog", config.paths.catalog)
     elif command == "catalog":
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
         catalog_command = next(
@@ -229,8 +251,6 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
             _add_scalar(injected, present, "--" + name.replace("_", "-"), getattr(values, name))
         if not present.intersection({"--enrichment", "--no-enrichment"}) and values.enrichment is not None:
             injected.append("--enrichment" if values.enrichment else "--no-enrichment")
-    elif command == "report":
-        _add_scalar(injected, present, "--catalog", config.paths.catalog)
     return [*argv, *injected]
 
 
@@ -251,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             if loaded_config is not None:
                 args._config_credentials = loaded_config.credentials
+                args._config_sci_hub = loaded_config.acquisition.sci_hub
+                args._config_translator = loaded_config.acquisition.translator
+                args._config_browser = loaded_config.acquisition.browser
                 args._loaded_config = loaded_config
     except ConfigError as error:
         parser.error(str(error))
@@ -267,12 +290,13 @@ def main(argv: list[str] | None = None) -> int:
         search.validate_arguments(parser, args)
         return search.run(args)
 
+    if args.command == "download":
+        download.validate_arguments(parser, args)
+        return download.run(args)
+
     if args.command == "library":
         return library.run(args)
 
-    if args.command == "acquire":
-        acquire.validate_arguments(parser, args)
-        return acquire.run(args)
 
     if args.command == "preflight":
         return preflight.run(args)
@@ -282,9 +306,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "package":
         return package.run(args)
-
-    if args.command == "report":
-        return report.run(args)
 
     if args.command is not None:
         print(

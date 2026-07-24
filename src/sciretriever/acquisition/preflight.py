@@ -10,9 +10,10 @@ import shutil
 import stat
 from urllib.parse import urlsplit
 
-from sciretriever.acquisition.plan import SourcePlan
 from sciretriever.acquisition.url_policy import UrlPolicy
+from sciretriever.acquisition.policy_files import read_policy_lines
 from sciretriever.config import ACQUISITION_PROVIDERS, CredentialsConfig, SciRetrieverConfig, get_credential
+from sciretriever.acquisition.browser import validate_browser_profile
 from sciretriever.core.enums import AssetRole
 from sciretriever.network import HeadersTransport
 from sciretriever.errors import SciRetrieverError
@@ -100,24 +101,12 @@ def _regular_file(path: Path, name: str) -> PreflightCheck:
 
 def _providers(config: SciRetrieverConfig) -> tuple[tuple[str, ...], str, PreflightCheck | None]:
     acquisition = config.acquisition
-    if acquisition.source_plan is None:
-        providers = acquisition.providers or ()
-        if not providers:
-            return (), acquisition.asset_role or AssetRole.PRIMARY_PDF.value, PreflightCheck("providers", "missing", "no providers are configured")
-        return providers, acquisition.asset_role or AssetRole.PRIMARY_PDF.value, None
-    file_check = _regular_file(acquisition.source_plan, "source_plan")
-    if file_check.status != "ready":
-        return (), acquisition.asset_role or AssetRole.PRIMARY_PDF.value, file_check
-    try:
-        plan = SourcePlan.from_json(acquisition.source_plan.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError):
-        return (), acquisition.asset_role or AssetRole.PRIMARY_PDF.value, PreflightCheck("source_plan", "invalid", "source plan is invalid")
-    if acquisition.asset_role is not None and plan.role is not AssetRole(acquisition.asset_role):
-        return (), plan.role.value, PreflightCheck("source_plan", "invalid", "source plan role conflicts with acquisition role")
-    providers = tuple(dict.fromkeys(entry.provider for entry in plan.entries))
-    if any(provider not in ACQUISITION_PROVIDERS for provider in providers):
-        return (), plan.role.value, PreflightCheck("source_plan", "invalid", "source plan contains an unsupported provider")
-    return providers, plan.role.value, file_check
+    providers = acquisition.providers or ()
+    if not providers:
+        return (), AssetRole.PRIMARY_PDF.value, PreflightCheck(
+            "providers", "missing", "no providers are configured"
+        )
+    return providers, AssetRole.PRIMARY_PDF.value, None
 
 
 def _validate_forbidden_values(values: tuple[str, ...]) -> None:
@@ -204,6 +193,19 @@ def run_preflight(
                 status = "ready" if free >= required else "invalid"
                 reason = "free space satisfies policy" if status == "ready" else "free space is below policy minimum"
                 checks.append(PreflightCheck("storage_capacity", status, reason))
+    browser = config.acquisition.browser
+    if browser.enabled:
+        if storage is None:
+            checks.append(PreflightCheck("browser_profile", "invalid", "browser profile is invalid"))
+        else:
+            try:
+                validate_browser_profile(browser, storage)
+            except (OSError, SciRetrieverError, ValueError):
+                checks.append(PreflightCheck("browser_profile", "invalid", "browser profile is invalid"))
+            else:
+                checks.append(PreflightCheck("browser_profile", "ready", "browser profile is ready"))
+    else:
+        checks.append(PreflightCheck("browser_profile", "not_checked", "browser is disabled"))
     forbidden = config.acquisition.forbidden_urls
     forbidden_values: tuple[str, ...] = ()
     forbidden_valid = True
@@ -212,10 +214,7 @@ def run_preflight(
         checks.append(file_check)
         if file_check.status == "ready":
             try:
-                forbidden_values = tuple(
-                    line.strip() for line in forbidden.read_text(encoding="utf-8").splitlines()
-                    if line.strip() and not line.lstrip().startswith("#")
-                )
+                forbidden_values = read_policy_lines(forbidden)
                 _validate_forbidden_values(forbidden_values)
             except (OSError, UnicodeError, ValueError):
                 checks[-1] = PreflightCheck("forbidden_urls", "invalid", "forbidden URL file is invalid")
