@@ -14,7 +14,7 @@
 | `acquisition` | WorkVersion 资产缺口、跨 provider 有界竞速、provider 内候选去重与确定性顺序回退、translator/browser 回退、validation 前编排 |
 | `network` | 所有非浏览器 HTTP 的安全 transport、有限 timeout、redirect、响应上限和敏感 header 策略 |
 | `storage` | RawAsset 和 normalization artifacts 的不可变发布、hash、相对路径与对账；current generated analysis 的替换由 `analysis`/`catalog` 拥有 |
-| `normalization` | 全文到通用、损失感知结构和 evidence |
+| `normalization` | operator-managed MinerU service adapter、外部 attempt recovery、result archive/schema/page geometry validation，以及全文到通用、损失感知结构和 PDF evidence |
 | `analysis` | primary PDF 必需且权威、PDF normalized/OCR content、PDF evidence locators、XML/HTML 仅补充、固定 section IDs、本地化 headings、registry-constrained entity/tag selection、灵活 Markdown、旁路构建和直接原子替换 current result/canonical projection/references/generated tags |
 | `references` | 版本引用解析、unresolved 保留、cited-by 派生和仅按 depth 分层扩展编排 |
 | `library` | exact DOI/title/internal-ID lookup、title/Abstract/light Markdown keyword search、author/year/publisher/venue/tag filters、引用遍历和导出；首版不含 vector semantic search |
@@ -29,7 +29,7 @@
 2. `catalog` 不导入 search、acquisition、analysis、references、storage 或 vendor 类型。repository 接受 catalog 自有 record 或 core 中性值。
 3. provider 响应在 `integrations` 或 provider adapter 转成 observation/candidate DTO，vendor dict 不进入 core/catalog。
 4. search 不导入 acquisition；acquisition 不导入 search。两者通过 Work/WorkVersion id 和 catalog repository 协作，不通过对方内部类型。
-5. analysis 只读取已接受 primary PDF、其 normalized/OCR artifacts、可选补充 XML/HTML 和 catalog 中性记录，不发起全文获取；无合格 PDF 时拒绝运行。
+5. normalization 只把已接受 primary PDF 上传到显式配置的 operator-managed MinerU service，并把验证后的 parser output 转换为中性 source units/evidence；不把 MinerU task、vendor JSON 或 Markdown 直接写入 current result。analysis 只读取已接受 primary PDF、其 validated normalized/OCR artifacts、可选补充 XML/HTML 和 catalog 中性记录，不发起全文获取或直接依赖 MinerU vendor types；无合格 PDF 时拒绝运行。
 6. references 只编排公开的 search/download/analyze 服务边界，不直接改写其内部状态。
 7. library query 和 failures query 不复制权威状态；library curation 只能通过 catalog 的显式 mutation contract 写入可审计 manual 数据。failures 聚合 overall reason/action 与可展开的脱敏 per-source details；losing provider failure 在成功竞速中只作诊断。
 8. CLI 是唯一 composition root。模块不得自行读取另一份 TOML 或散落 secret。
@@ -37,7 +37,7 @@
 
 ## 3. 前台运行模型
 
-每次 CLI invocation 构造一次配置、catalog、provider registry 和所需服务，在当前进程内完成有界操作后退出。长批次通过 stable selection 和幂等重跑恢复，不建立 daemon run owner。
+每次 CLI invocation 构造一次配置、catalog、provider registry 和所需 adapter，在当前进程内完成有界编排后退出。长批次通过 stable selection、processing-run identity 和幂等重跑恢复，不建立 SciRetriever daemon run owner。WP4 可以连接 independently operated persistent MinerU parser service；该服务不由 SciRetriever 启停、升级、监控容量或拥有 task lifecycle，不能成为产品导航或状态真相源。
 
 明确不引入：
 
@@ -47,6 +47,8 @@
 - network exactly-once；
 - 为恢复单个 URL 执行而持久化的 candidate checkpoint；
 - 外部工作流平台。
+
+MinerU external task ID 是唯一获批例外：它作为 normalization processing attempt 的恢复句柄，支持 foreground invocation 在 service task 仍保留时继续 polling。它不建立通用任务中心、retry-child、lease、后台 owner 或 network exactly-once；service `404`/过期后可以在同一 deterministic processing run 下提交新 attempt。
 
 进程内 acquisition 使用两级调度：配置的 providers 在 tier 内进行有界竞速；每个 provider 进行有界 resolution 并输出 provider-neutral runtime candidate DTO，DTO 可携带受控请求凭据或 auth reference，但敏感字段不得持久化或进入 diagnostics。候选在 provider 内去重并按确定性顺序逐个交给共享 candidate executor，直到内容与身份 validation 成功或该 provider 耗尽。translator 和 browser 作为后续 tier，不与第一层一起启动。只有验证合格的 winner 可以进入 storage acceptance。
 
@@ -61,13 +63,14 @@
 - acquisition provider priority 和配置 Sci-Hub；
 - translator/browser enablement 与安全引用；
 - LLM provider/model/参数和 secret 引用；
+- MinerU parser service mode/base URL、expected service/protocol/model/backend identity、remote-upload opt-in、auth reference、polling/timeouts/concurrency 和 request/result/archive/schema bounds；
 - PDF/XML/HTML 策略；
 - full reference list 是否追加到 light Markdown/export 和扩展默认方向；
 - 默认 30 秒文献启动间隔。
 
 CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 的 ID/query/filter/tag/all selectors 和 force 语义属于 CLI contract，不得藏入另一套 task policy。`config check` 只要求启用能力的 secret/runtime，并检查目录权限、模型和 browser profile。
 
-直接 secret 和环境变量都先在 composition root 解析成不回显的 typed config。
+直接 secret 和环境变量都先在 composition root 解析成不回显的 typed config。MinerU loopback mode 只接受显式 loopback HTTP origin；remote mode 只接受显式 HTTPS origin，并要求独立 remote-PDF-upload opt-in。两种模式都拒绝 userinfo、query/fragment、跨 origin redirect 和响应提供的任意 absolute status/result URL。
 
 ## 5. 强制架构边界
 
@@ -78,6 +81,8 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 - storage 的 immutable create-if-absent、hash、相对路径、权限和 reconciliation；
 - durable write 前和用户输出前的 secret redaction；
 - provider-neutral DTO、provenance 和 lineage；
+- 外部 parser POST/upload、polling 和 result download 的 overall deadline、DNS/origin policy、bounded streaming、archive bomb/path/symlink/file/schema limits；
+- MinerU service/version/protocol/backend 和 operator-attested model revision provenance；
 - `DocumentPackage` 的领域中立边界，除非后续 ADR 明确修改。
 
 ## 6. 架构验收
@@ -89,7 +94,8 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 - 没有模块绕过 catalog/storage ownership。
 - search、acquisition、analysis 和 references 只通过稳定 service/repository contract 协作，不导入彼此内部类型。
 - CLI 保持唯一 composition root，所有模块共享同一 typed config 和 secret redaction 边界。
-- 运行时不依赖 daemon、lease、fencing、durable pause/resume 或 process-isolation 才能正确完成。
+- SciRetriever 运行时不拥有 daemon、lease、fencing、durable pause/resume 或后台 worker；operator-managed MinerU service 只能经批准的 capability adapter 使用，service task state 不成为产品状态。
+- MinerU adapter 不信任 response-provided URLs、redirect、ZIP 或 vendor JSON；只有 validated and immutably published parser artifacts 可以进入 analysis。
 - RawAsset 和 `DocumentPackage` 快照只通过各自所有者发布，不允许旁路覆盖或原地改写。
 - 任何功能替换或退役都必须保持 secure transport、timeout、race、validation、immutable storage 和 redaction 回归性质。
 - 需求中的产品验收场景由产品测试证明，本节只验证代码所有权、依赖方向和技术不变量。
