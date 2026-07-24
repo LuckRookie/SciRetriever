@@ -153,6 +153,30 @@ class NormalizationError(SciRetrieverError):
     """Raised when content normalization fails."""
 
 
+class AnalysisError(SciRetrieverError):
+    """Raised when full-text analysis cannot be validated or completed."""
+
+
+class MinerUErrorCategory(str, Enum):
+    CONFIGURATION = "configuration"
+    AUTHENTICATION = "authentication"
+    TRANSPORT = "transport"
+    PROTOCOL = "protocol"
+    REMOTE_FAILED = "remote_failed"
+    TIMEOUT = "timeout"
+    ARCHIVE_REJECTED = "archive_rejected"
+    INTERRUPTED = "interrupted"
+
+
+class MinerUError(NormalizationError):
+    """Stable, redacted MinerU connector failure."""
+
+    def __init__(self, category: MinerUErrorCategory, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.category = category
+        self.retryable = retryable
+
+
 class PackagingError(SciRetrieverError):
     """Raised when package creation or validation fails."""
 
