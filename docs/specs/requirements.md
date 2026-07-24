@@ -1,7 +1,7 @@
 # SciRetriever 产品需求与验收规格
 
 - 文档效力：2026-07-23 owner 批准的产品需求
-- 决策依据：[ADR 0002](../adr/0002-work-centered-literature-library.md)
+- 决策依据：[ADR 0002](../adr/0002-work-centered-literature-library.md)、[ADR 0003](../adr/0003-operator-managed-mineru-service.md)
 - 方向背景：[文献库产品提案](../proposals/literature-library-product.md)
 - 产品设计：[系统设计](system-design.md)
 - 实施顺序：[文献库执行计划](../planning/literature-library-execution.md)
@@ -60,7 +60,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 
 项目边界继续止于通用、带 provenance 的文献表示。反应、分子、路线、材料属性等领域 schema 和数据库仍属于下游，见 [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md)。
 
-执行模型是有界的前台命令和幂等重跑。产品不包含 daemon、lease、fencing、后台 worker ownership、durable pause/resume/safe-stop control state、旧 task/job/attempt/event 生命周期或逐内部步骤的精确崩溃续跑。前台 invocation 必须支持 Ctrl+C/cooperative stop：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，随后重跑跳过已完成内容。脱敏 failure/diagnostic records 只支撑诊断与审计。
+执行模型是有界的前台命令和幂等重跑。产品不包含 SciRetriever-owned daemon、lease、fencing、后台 worker ownership、durable pause/resume/safe-stop control state、旧 task/job/attempt/event 生命周期或逐内部步骤的精确崩溃续跑。前台 invocation 必须支持 Ctrl+C/cooperative stop：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，随后重跑跳过已完成内容。脱敏 failure/diagnostic records 只支撑诊断与审计。WP4 可以通过显式 adapter 调用 operator-managed MinerU parser service；该外部能力不属于 SciRetriever 产品服务或任务中心，其 task ID 只能作为 processing attempt 恢复元数据。
 
 ### 1.4 产品边界总览
 
@@ -69,7 +69,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 | 文献检索、身份、书目版本、元数据和来源观察 | 化学、生物、材料等领域抽取 schema |
 | primary PDF 获取、验证、不可变保存和 PDF-based analysis | 反应、分子、路线、产率或领域数据库 |
 | 通用 Markdown、标签、作者、引用和本地查询 | 下游预测、规划、统计分析或知识推理 |
-| 失败诊断、配置检查、幂等补全和导出 | Web UI、daemon、外部 workflow engine 或微服务 |
+| 失败诊断、配置检查、幂等补全和导出；连接显式配置的 operator-managed parser capability | Web UI、SciRetriever-owned daemon/microservice、外部 workflow engine 或任务中心 |
 | `DocumentPackage`、稳定 ID、hash 和 provenance 下游边界 | 下游直接查询 SciRetriever 内部存储结构或把领域字段写回 catalog |
 
 ## 2. 用户任务与完整工作流
@@ -243,6 +243,10 @@ metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext 
 - LLM 只消费已保存并通过验证的 primary PDF 及从该 PDF 得到的 normalized/OCR content；可选 XML/HTML 只能补充结构或交叉核对，不用标题、搜索摘要、provider snippet 或 XML/HTML-only 内容代替 PDF 分析。
 - 输出保持原文语言。
 - 优先从全文抽取原始 Abstract。全文没有 Abstract 时才生成，并明确记录 `generated`；不得把生成文本冒充原始 Abstract。
+- WP4 primary parser 固定为 MinerU 3.4.4 `vlm-engine`，通过 operator-managed persistent `mineru-api` 调用。SciRetriever 不启动、停止、升级或拥有该服务、GPU、模型、并发和 retention；MinerU 版本、API protocol、模型 ID/revision、backend 和解析参数必须进入 provenance。升级 MinerU 或模型前必须重跑 parser acceptance fixtures。
+- connector 使用 `GET /health`、`POST /tasks`、`GET /tasks/{task_id}` 和 `GET /tasks/{task_id}/result` 的异步协议。外部 task ID 只作为 processing attempt handle；服务重启、task 过期或返回 `404` 时允许在同一 deterministic processing run 下创建新 attempt，不恢复旧 task/job 产品模型，也不承诺 network exactly-once。
+- loopback mode 只允许显式 loopback HTTP endpoint；remote mode 必须使用 HTTPS、精确 endpoint policy、显式 remote-PDF-upload opt-in 和运行时认证。不得信任响应返回的绝对 status/result URL、redirect 或 caller-controlled MinerU `server_url`；status/result path 从配置 origin 与经过验证的 task ID 构造。
+- MinerU result ZIP、`middle.json`、`content_list.json`、model output 和 images 都是不可信输入，必须经过下载/展开/文件数/压缩比/JSON 深度/page/block/text/image bounds、schema、page index、page size 和 bbox validation 后才能发布。`middle.json` 是 primary structural input；Markdown 只是派生视图。
 
 ### FR-14 固定核心与灵活 Markdown
 
@@ -293,7 +297,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 
 ### FR-19 严格 TOML
 
-- 一份严格 TOML 管理 catalog database/assets 路径、普通 search 默认 level/limit、metadata enabled providers 与 precedence、acquisition tier/order、LLM、Sci-Hub、translator、browser profile、资产格式、引用导出和默认 30 秒文献启动间隔。
+- 一份严格 TOML 管理 catalog database/assets 路径、普通 search 默认 level/limit、metadata enabled providers 与 precedence、acquisition tier/order、LLM、Sci-Hub、translator、browser profile、MinerU service connection、资产格式、引用导出和默认 30 秒文献启动间隔。MinerU 配置至少区分 loopback/remote mode、固定 base URL、expected service/protocol/model/backend identity、认证引用、remote upload opt-in、connect/upload/task/download timeout、poll interval、并发和 input/result/archive/schema bounds。
 - secret 可以直接写入权限合格的 TOML，也可以通过明确支持的环境变量提供。
 - 未知字段、错误类型和冲突设置 fail closed。程序不自动改写 TOML。
 - CLI 参数只能覆盖本次 invocation，不持久修改 TOML。`config check` 至少验证未知字段、类型和冲突、所需 secret 引用、目录存在性/权限、provider/模型必填配置和启用 browser 的 profile；未启用能力不强制要求其 secret 或运行时。
@@ -307,6 +311,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 - 不可变：RawAsset 永不原地修改；current generated analysis 按 FR-15 直接原子覆盖，不建立分析历史。
 - 可审计：canonical 值、current 生成结果、标签和引用能追溯当前来源与输入 hash；provider observations 独立保留。
 - 安全：获取路径不绕过 transport、timeout、validation、redaction 和 immutable acceptance。
+- 外部解析：MinerU service 只产生待验证的派生候选；服务 task 完成不等于 normalization 或 analyze 成功，只有本地验证、不可变发布和 current replacement 完成后才计为成功。
 - 文档真相分离：README 只描述已发布行为；本规格只描述理想产品；实施覆盖和差距只在独立进度文档记录。
 
 ## 11. 关键产品决策及理由
@@ -321,6 +326,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 | preferred version | 正式版优先的确定性排序，可由用户显式覆盖 | 自动删除其它版本或让 provider 完成顺序决定主版本均不可接受 |
 | 元数据来源 | canonical projection + backend observations | 只保留一个 provider 会丢 provenance；把所有原始字段展示给用户会污染产品模型 |
 | 全文基准 | primary PDF 是保存、阅读、导出和分析的权威资产 | XML 很难稳定获得且不能代表用户看到的版面；XML/HTML 只作补充 |
+| PDF parser | MinerU 3.4.4 `vlm-engine`，由 operator-managed persistent `mineru-api` 提供，SciRetriever 只连接并验证结果 | invocation-local VLM 重复加载代价高；SciRetriever-owned parser daemon 会破坏前台产品边界；Markdown-only 丢失结构 provenance |
 | LLM 使用边界 | 仅处理 PDF 全文，不参与 Work/版本/作者身份去重 | 标题、摘要或 provider snippet 不足以支撑正文结论；LLM 身份判断不可审计 |
 | 分析输出 | 十个稳定核心 section，内部 Markdown 灵活并保留 PDF evidence | 完全自由结构难以检索；固定领域 schema 又会越过通用文献边界 |
 | 重新分析 | 每个 WorkVersion 一份 current result，旁路构建后原子替换 | 保存分析历史增加产品和迁移复杂度，owner 已明确不需要 |
@@ -346,7 +352,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 
 - 反应、分子、合成路线、产率、材料性质等领域字段、schema 或 catalog 表。
 - 下游领域数据库、预测、规划、统计分析或领域知识推理。
-- daemon、外部 workflow engine、微服务、lease、fencing、后台 worker ownership 和逐内部步骤 exactly-once。
+- SciRetriever-owned daemon/microservice、外部 workflow engine、lease、fencing、后台 worker ownership 和逐内部步骤 exactly-once。ADR 0003 批准的 operator-managed MinerU parser capability 不属于该排除项，但不能成为 SciRetriever 产品或任务 owner。
 - durable pause/resume、retry-child、candidate checkpoint 或任务中心产品导航。
 - 对旧下载任务 CLI、配置、状态和 codec 的完整向后兼容承诺。
 - 把实际文献语料、运行时 catalog、secret 或用户身份写入代码仓库。
@@ -369,6 +375,9 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 | PDF missing 重跑 | 某版本上次来源耗尽并记录 missing，随后运行 `download --all-missing` | 该版本重新进入获取；本次 accepted 与 missing 分开计数 | 把 missing 当作成功或永久跳过 |
 | PDF 与补充资产冲突 | PDF 与 XML/HTML 内容不一致 | PDF 控制分析与 canonical projection，补充 provenance 保留 | XML/HTML 覆盖 PDF 事实 |
 | 全文分析 | 合格 PDF 含可定位证据 | 原文语言、十个稳定 section、PDF page/span locators | 用标题/摘要替代全文或生成无证据结论 |
+| MinerU service readiness | 配置 loopback 或 remote MinerU endpoint 并运行 config check/analyze | 验证 health、service 3.4.4、protocol 2、endpoint mode、认证和显式 bounds；不启动服务 | SciRetriever 自动拉起 MinerU、接受错误版本、remote 明文 HTTP 或输出 secret |
+| MinerU task 恢复 | async task 在 polling 期间 Ctrl+C、过期或服务重启 | 保留 attempt handle；可恢复时继续 polling，`404` 时在同一 processing run 创建新 attempt；旧 current 不变 | 把外部 task 当产品 job、声称已取消或重复发布结果 |
+| MinerU 结果验收 | 固定 ZIP 含合法与恶意路径、超限文件、错误 page/bbox 和 schema | 只接受有界且可回到 primary PDF 的结构化结果；恶意/超限结果 fail closed | 直接解压、信任 Markdown 或把 service completed 当 analyze success |
 | Abstract 缺失 | PDF 确实没有 Abstract | 生成并标记 `generated` | 把生成文本冒充原始 Abstract |
 | 重新分析成功 | 已有 current result，新的完整结果通过验证 | light content、fulltext metadata、references、generated tags 整体替换 | 保留旧 generated payload 形成隐式历史 |
 | 重新分析失败 | 新结果构建或验证失败 | 旧 current result 继续完整可用 | 留下半个新结果或破坏 manual 数据 |
