@@ -1,6 +1,6 @@
 # SciRetriever 系统设计
 
-本文从模块责任、数据所有权、状态和端到端流程四个侧面描述理想中的 SciRetriever。产品决策见 [ADR 0002](../adr/0002-work-centered-literature-library.md)，产品合同见[需求规格](requirements.md)，代码模块和依赖边界见[技术架构](technical-architecture.md)。本文不记录现有代码能力或执行进度；这些信息见[实施进度](../governance/implementation-progress.md)。
+本文从模块责任、数据所有权、状态和端到端流程四个侧面描述理想中的 SciRetriever。Work-centered 产品决策见 [ADR 0002](../adr/0002-work-centered-literature-library.md)，WP4 MinerU 服务边界见 [ADR 0003](../adr/0003-operator-managed-mineru-service.md)，产品合同见[需求规格](requirements.md)，代码模块和依赖边界见[技术架构](technical-architecture.md)。本文不记录现有代码能力或执行进度；这些信息见[实施进度](../governance/implementation-progress.md)。
 
 ## 0. 本文回答什么
 
@@ -12,6 +12,7 @@
 |---|---|
 | 产品领域边界 | [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) |
 | Work-centered 产品方向和执行模型 | [ADR 0002](../adr/0002-work-centered-literature-library.md) |
+| WP4 MinerU parser/service ownership、连接和 attempt/evidence 边界 | [ADR 0003](../adr/0003-operator-managed-mineru-service.md) |
 | 产品功能、规则和验收 | [requirements.md](requirements.md) |
 | 数据流、模块协作和产品状态模型 | 本文 |
 | 代码模块和技术依赖 | [technical-architecture.md](technical-architecture.md) |
@@ -62,7 +63,7 @@
 | Catalog/Library | 维护 Work、WorkVersion、canonical metadata、observations、authors、registries、tags、references、current result 和 lineage | 文献业务事实与关系 | 存储大型 BLOB、绝对路径或领域 payload |
 | Acquisition | 为具体 WorkVersion 填补 primary PDF asset gap，编排竞速和回退 | acquisition overall/per-source diagnostics | 直接发布文件、生成分析或改变书目身份 |
 | Storage | 验证 hash 后不可变发布 RawAsset 和派生产物 | 文件字节、相对路径、hash | 决定哪个版本 preferred 或哪个 metadata canonical |
-| PDF normalization/OCR | 从 accepted PDF 产生可分析全文、结构和 evidence | normalized/OCR artifacts 与 PDF locators | 网络获取、身份去重或领域抽取 |
+| PDF normalization/OCR | 通过 operator-managed MinerU 3.4.4 service 从 accepted PDF 产生可分析全文、结构和 evidence，并验证 service result | immutable parser artifacts、normalized content、PDF locators 与 external attempt metadata | 启停/升级 MinerU、拥有 GPU/model/capacity、网络获取、身份去重或领域抽取 |
 | Analysis | 只基于合格 PDF 生成原文语言 current result，并形成受约束 proposals | current sections、fulltext metadata、references、generated tags | 获取 PDF、修改 RawAsset、删除 manual 数据、保留分析历史 |
 | References/Expansion | 维护版本级引用、unresolved、cited-by 派生和逐层扩展 | VersionReference、visited/层级结果和诊断 | 猜测创建 Work 或设置隐藏文献数上限 |
 | Library Query/Curation/Export | 提供 exact/keyword/filter/traversal、待复核项、人工修订和显式导出 | manual overrides、可撤销审计、派生视图和 export artifact | 暴露 backend observations、删除来源证据或建立首版 vector index |
@@ -156,7 +157,11 @@ WorkVersion needs primary PDF
 ```text
 accepted WorkVersion primary PDF
   -> validate PDF identity, completeness and content
-  -> use PDF-derived normalized/OCR content as authoritative analysis source
+  -> deterministic processing-run claim by PDF hash + parser/model/config identity
+  -> fixed MinerU service health/version/protocol check
+  -> async submit/poll/result download; never start or own the service
+  -> validate bounded result archive, middle/content/model JSON, page geometry and evidence
+  -> publish immutable parser artifacts and PDF-derived normalized/OCR content
   -> optionally use XML/HTML for structure hints or corroboration, never as replacement authority
   -> block analyze when no accepted PDF exists, even if XML/HTML exists
   -> parse references when useful to fulltext processing
@@ -172,6 +177,14 @@ accepted WorkVersion primary PDF
 ```
 
 PDF 是分析事实和 evidence 的基准。XML/HTML 与 PDF 一致时可补充结构定位；发生冲突时 PDF 控制生成内容和 canonical projection，补充资产只保留 provenance/diagnostic evidence。十个 stable section IDs/core sections 为 `document_information`（Document Information/Metadata）、`abstract`（Abstract）、`research_background`（Research Background）、`research_question_and_objectives`（Research Question and Objectives）、`research_approach`（Research Approach）、`methods`（Methods）、`data_and_materials`（Data and Materials）、`results`（Results）、`conclusion`（Conclusion）、`limitations`（Limitations）。heading 使用论文语言；metadata 是普通正文 section/table，不是 YAML front matter；section 内可使用段落、列表、表格和子标题；Data/Materials 不强制表格；证据不足时明确说明，不得幻觉。完整 reference list 默认不进入 light Markdown，可选追加或导出，但不禁止 references 参与解析或 LLM context。
+
+WP4 primary parser 是 pinned MinerU 3.4.4 `vlm-engine`，SciRetriever 只连接 operator-managed persistent `mineru-api`。`normalization` owns connector、service result validation、source-unit/evidence conversion 和 immutable parser artifacts；`analysis` 只消费验证后的 normalized artifacts。MinerU task、Markdown、VLM text 或 bbox 本身都不构成 current result，也不改变 primary PDF 的权威性。
+
+connector 使用 async `/tasks` lifecycle。loopback endpoint 可使用固定 loopback HTTP；remote endpoint 必须为明确授权的 HTTPS origin，认证由运行时 secret reference 和 reverse proxy/private transport 提供。客户端不跟随 redirect，不使用响应返回的任意 absolute task URL，也不把 `server_url` 交给调用者。result ZIP 在临时边界内做路径、symlink、压缩比、文件数、字节数、schema、page/bbox 和内容 limits 后才进入 immutable publication。
+
+MinerU 3.4.4 没有 cancel 或 idempotency API，task state 也只在 service process memory 中保存。SciRetriever 把 task ID 作为 processing attempt metadata，而不是产品 job。Ctrl+C 停止新提交和 polling；远程 task 可能继续执行。重跑先恢复仍存在的 task，`404`/过期时在同一 deterministic processing run 下创建新 attempt。只有本地 result validation 和 publication 成功才把 normalization 计为完成。
+
+parser/service/model/backend/config/input/output hashes 和 operator-attested model revision 进入 provenance；service 版本或模型升级必须重新通过 acceptance corpus。
 
 失败发生在 replacement 前，因此旧 current result 保持可用。replacement 成功后旧 generated content 被删除或替换，不保留 analysis history。RawAsset、current parser/model/schema metadata、provider observations 和 manual tags 保留。
 
@@ -242,6 +255,8 @@ manual edit
 | Acquisition tier | 前层是否已有 accepted PDF | 停止、进入 translator 或进入 browser | 耗尽后记录 overall failure |
 | Race acceptance | candidate 内容、角色、身份、hash | 接受唯一 winner | loser/无效内容不得 late accept |
 | Analyze eligibility | accepted primary PDF | 允许 PDF-based analysis | XML/HTML-only 保持 blocked |
+| Parser service readiness | fixed endpoint、mode、health/version/protocol、auth、bounds | 允许提交 MinerU async task | 不启动服务；错误版本、不安全 endpoint 或缺配置时 blocked |
+| Parser result admission | task result ZIP、schema、page geometry、PDF locators、hash/limits | 发布 immutable parser artifacts 和 normalized source units | service completed 不等于成功；任一边界失败时拒绝 |
 | Result promotion | 完整 payload、schema、PDF locators | 原子切换 current result | 任一验证失败则保留旧 current |
 | Reference resolution | DOI/稳定 ID/确定性 identity | 链接目标 Work | 保存 unresolved raw reference，不猜测 |
 | Expansion scheduling | depth、direction、visited set、完成状态 | 当前层新 Work 和下一层 | branch failure 隔离，循环不重复入队 |
@@ -275,7 +290,7 @@ all sources exhausted
 
 `failures` 把 metadata、acquisition、analysis 和 expansion 统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时形成 search failure。acquisition 可展开脱敏 per-source details。analysis replacement 失败保留旧 current result，同时形成可查询失败。expansion 记录失败 branch 和层级，但不阻塞其它 branch。PDF missing 与 accepted 分开计数，不能以“本次已记录终态”为由算作下载成功。
 
-Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安全排空或取消当前有限操作，保留已经提交的 Work、资产和 current result，然后退出。下一次命令通过 catalog 完成状态跳过已完成内容。
+Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安全排空或取消当前有限本地操作，保留已经提交的 Work、资产和 current result，然后退出。MinerU 3.4.4 没有 cancel endpoint，已提交的外部 parse task 可能继续运行；其 handle 仅保存在 processing attempt metadata 中供下次 invocation 恢复 polling，不能据此声称任务已取消、exactly-once 或 durable workflow ownership。下一次命令通过 catalog 完成状态和 processing run identity 跳过已完成内容。
 
 ## 13. 完整用户旅程
 
@@ -287,7 +302,7 @@ search query + level=analyze
   -> deterministic Work/WorkVersion merge
   -> placeholder library record
   -> primary PDF acquisition
-  -> PDF normalization/OCR
+  -> operator-managed MinerU service normalization/OCR + PDF evidence gate
   -> fulltext LLM + PDF evidence validation
   -> atomic current result
   -> searchable Work view
@@ -352,7 +367,7 @@ WorkVersion + primary PDF + current generic result
 | provider-neutral DTO 与 adapter 边界 | task-centered CLI、配置和导航 | license/retraction/correction canonical models |
 | 进程内 acquisition race 和 validation | manifest 或 job 作为产品中心 | BibTeX/RIS/Zotero/local-directory import |
 | normalization/evidence 与 package boundary | 将处理/导出快照伪装成 WorkVersion | domain extraction/schema/database |
-| redaction 和 diagnostic history | legacy shape 反向定义产品模型 | daemon、外部 workflow、微服务 |
+| redaction、diagnostic history 和显式外部 parser adapter | legacy shape 反向定义产品模型 | SciRetriever-owned daemon/microservice、外部 workflow |
 
 “延后”不等于自动批准，进入首版必须更新 requirements；“排除”涉及领域或架构边界时需要新 ADR。
 
