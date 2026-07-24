@@ -53,11 +53,11 @@ requirements = ["../specs/requirements.md", "../specs/system-design.md"]
 ### WP3：版本全文获取与独立 backfill
 
 - 将获取目标从 task/job 中心切换为 `WorkVersion` 资产缺口。
-- 保留通过架构门的直接官方、开放来源和 provider 进程内竞速，并按批准设计加入配置的 Sci-Hub 路径。
+- 保留通过架构门的中性 candidate resolver/executor 和两级调度：直接官方、开放来源、出版社及配置 Sci-Hub providers 在第一层有界竞速；每个 provider 内对去重后的候选按确定性顺序逐个执行并回退，不把全部候选扁平化为无界竞速。
 - 第一层耗尽后再加入 translator，最后加入 browser。三类新增能力分别完成安全设计和 fixture。
 - 实现前台 `download` backfill，以 primary PDF 为必需目标并支持配置的补充 XML/HTML 获取；支持显式 ID/query/filter/tag/all-missing 选择器，无选择器时不得处理全库。
 
-**验收门**：重复运行不重复保存资产；竞速 loser 不 late accept；losing provider failure 在其它来源成功时只作为脱敏诊断细节；最终失败产生一个 overall reason/action 和可展开的 per-source details；primary PDF 和补充资产分别通过角色、HTTPS/获批 transport、timeout、redirect、大小、内容、身份和不可变接收门；XML/HTML 不能被登记为 primary PDF；未通过验收的回退层不出现在 accepted config 或 README。
+**验收门**：离线 fixture 证明 providers 有界并发启动，同 provider 的第一个候选失败后才执行第二个候选，重复候选只执行一次，不同完成顺序不改变 provider 内的确定性候选顺序，且全局始终只接受一个通过 validation 的 winner；重复运行不重复保存资产；竞速 loser 不 late accept；losing provider failure 在其它来源成功时只作为脱敏诊断细节；最终失败产生一个 overall reason/action 和可展开的 per-source details；primary PDF 和补充资产分别通过角色、HTTPS/获批 transport、timeout、redirect、大小、内容、身份和不可变接收门；XML/HTML 不能被登记为 primary PDF；未通过验收的回退层不出现在 accepted config 或 README。
 
 ### WP4：全文分析与原子 current result
 
