@@ -6,12 +6,12 @@ from pathlib import Path
 import sys
 
 from sciretriever import __version__
-from sciretriever.cli import catalog, discover, download, library, package, preflight, search
+from sciretriever.cli import analyze, catalog, discover, download, library, package, preflight, search
 from sciretriever.config import CONFIG_ENV, SciRetrieverConfig, load_config
 from sciretriever.errors import ConfigError
 
 
-COMMANDS = ("discover", "search", "download", "library", "preflight", "catalog", "package")
+COMMANDS = ("discover", "search", "download", "analyze", "library", "preflight", "catalog", "package")
 PLACEHOLDER_COMMANDS: tuple[str, ...] = ()
 
 
@@ -46,6 +46,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "download", help="backfill assets for existing WorkVersions"
     )
     download.configure_parser(download_parser)
+    analyze_parser = subparsers.add_parser(
+        "analyze", help="backfill current analysis for existing WorkVersions"
+    )
+    analyze.configure_parser(analyze_parser)
     library_parser = subparsers.add_parser(
         "library", help="read canonical Work library projections"
     )
@@ -197,7 +201,7 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
             for provider in values.precedence:
                 injected.extend(("--precedence", provider))
         effective_level = _option_value(argv, "--level") or values.level
-        if effective_level == "download":
+        if effective_level in {"download", "analyze"}:
             acquisition = config.acquisition
             _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
             _add_scalar(injected, present, "--download-timeout", acquisition.timeout)
@@ -230,6 +234,9 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
             injected.append("--xml" if values.include_xml else "--no-xml")
         if not present.intersection({"--html", "--no-html"}) and values.include_html is not None:
             injected.append("--html" if values.include_html else "--no-html")
+    elif command == "analyze":
+        _add_scalar(injected, present, "--catalog", config.paths.catalog)
+        _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
     elif command == "library":
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
     elif command == "catalog":
@@ -246,11 +253,9 @@ def _inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
         _add_scalar(injected, present, "--storage-root", config.paths.storage_root)
         for name in (
             "max_input_bytes", "max_pages", "max_structural_units", "max_depth",
-            "max_elements", "max_text_characters", "summary_max_characters",
+            "max_elements", "max_text_characters",
         ):
             _add_scalar(injected, present, "--" + name.replace("_", "-"), getattr(values, name))
-        if not present.intersection({"--enrichment", "--no-enrichment"}) and values.enrichment is not None:
-            injected.append("--enrichment" if values.enrichment else "--no-enrichment")
     return [*argv, *injected]
 
 
@@ -274,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
                 args._config_sci_hub = loaded_config.acquisition.sci_hub
                 args._config_translator = loaded_config.acquisition.translator
                 args._config_browser = loaded_config.acquisition.browser
+                args._config_analysis = loaded_config.analysis
                 args._loaded_config = loaded_config
     except ConfigError as error:
         parser.error(str(error))
@@ -293,6 +299,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "download":
         download.validate_arguments(parser, args)
         return download.run(args)
+
+    if args.command == "analyze":
+        analyze.validate_arguments(parser, args)
+        return analyze.run(args)
 
     if args.command == "library":
         return library.run(args)
