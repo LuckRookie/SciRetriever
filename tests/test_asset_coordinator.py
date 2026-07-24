@@ -70,32 +70,26 @@ class CoordinatorFixture:
         self.repository = assets_api.AssetRepository(self.catalog)
         self.store = RawAssetStore(self.storage_root, chunk_size=5)
         self.coordinator = AssetAcceptanceCoordinator(self.repository, self.store)
-        self.work_version_id, self.job_id = self.create_work_and_job(doi)
+        self.work_version_id = self.create_work(doi)
 
     def close(self) -> None:
         self.catalog.dispose()
 
-    def create_work_and_job(self, doi: str) -> tuple[str, str]:
+    def create_work(self, doi: str) -> str:
         work = catalog_api.IdentityResolver(self.catalog).create_or_reuse_work({"doi": doi}).work_version
-        job = catalog_api.JobRepository(self.catalog).attach_or_create_job(
-            work.id,
-            enums.AssetRole.PRIMARY_PDF,
-        )
-        return work.id, job.id
+        return work.id
 
     def accept(
         self,
         data: bytes = b"immutable evidence",
         *,
         work_id: str | None = None,
-        job_id: str | None = None,
         intent_id: str | None = None,
         checkpoint=coordinator_api._noop_checkpoint,
     ) -> AssetAcceptanceResult:
         return self.coordinator.accept(
             BytesIO(data),
             work_id or self.work_version_id,
-            job_id or self.job_id,
             enums.AssetRole.PRIMARY_PDF,
             "application/pdf",
             "pdf",
@@ -187,9 +181,9 @@ class AssetAcceptanceCoordinatorTests(TestCase):
     def test_same_content_for_different_works_reuses_one_target_and_raw_row(self) -> None:
         data = b"shared immutable bytes"
         first = self.fixture.accept(data)
-        work_two, job_two = self.fixture.create_work_and_job("10.1000/coordinator-two")
+        work_two = self.fixture.create_work("10.1000/coordinator-two")
 
-        second = self.fixture.accept(data, work_id=work_two, job_id=job_two)
+        second = self.fixture.accept(data, work_id=work_two)
 
         self.assertTrue(first.publication.created)
         self.assertFalse(first.reused_content)
@@ -323,7 +317,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.fixture.repository.create_intent(
             intent_id,
             self.fixture.work_version_id,
-            self.fixture.job_id,
             "primary_pdf",
             digest,
             "application/pdf",
@@ -342,7 +335,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             self.fixture.coordinator.accept(
                 stream,
                 self.fixture.work_version_id,
-                self.fixture.job_id,
                 "primary_pdf",
                 "application/pdf",
                 "pdf",
@@ -366,7 +358,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.fixture.repository.create_intent(
             existing_id,
             self.fixture.work_version_id,
-            self.fixture.job_id,
             "primary_pdf",
             digest,
             "application/pdf",
@@ -488,7 +479,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             self.fixture.coordinator.accept(
                 FailingStream(),
                 self.fixture.work_version_id,
-                self.fixture.job_id,
                 "primary_pdf",
                 "application/pdf",
                 "pdf",
@@ -614,7 +604,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         existing = self.fixture.repository.create_intent(
             existing_id,
             self.fixture.work_version_id,
-            self.fixture.job_id,
             "primary_pdf",
             digest,
             "application/pdf",
@@ -680,7 +669,6 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.fixture.repository.create_intent(
             existing_id,
             self.fixture.work_version_id,
-            self.fixture.job_id,
             "primary_pdf",
             digest,
             "application/pdf",
@@ -874,30 +862,20 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 True,
             )
 
-    def test_incoherent_work_and_role_fail_before_intent_creation(self) -> None:
-        other_work, other_job = self.fixture.create_work_and_job("10.1000/coordinator-other")
-        cases = (
-            (self.fixture.work_version_id, other_job, enums.AssetRole.PRIMARY_PDF, "does not belong"),
-            (other_work, other_job, enums.AssetRole.XML, "role does not match"),
-        )
-        for work_id, job_id, role, message in cases:
-            with self.subTest(message=message):
-                intent_id = new_id()
-                with self.assertRaisesRegex(errors.CatalogError, message):
-                    self.fixture.coordinator.accept(
-                        BytesIO(b"incoherent request"),
-                        work_id,
-                        job_id,
-                        role,
-                        "application/pdf",
-                        "pdf",
-                        {"provider": "test"},
-                        intent_id=intent_id,
-                    )
-                self.assertIsNone(self.fixture.repository.get_intent(intent_id))
-                self.assertFalse(
-                    (self.fixture.storage_root / f"staging/{intent_id}.part").exists()
-                )
+    def test_missing_work_version_fails_without_durable_residue(self) -> None:
+        intent_id = new_id()
+        with self.assertRaises(errors.CatalogError):
+            self.fixture.coordinator.accept(
+                BytesIO(b"incoherent request"),
+                new_id(),
+                enums.AssetRole.PRIMARY_PDF,
+                "application/pdf",
+                "pdf",
+                {"provider": "test"},
+                intent_id=intent_id,
+            )
+        self.assertIsNone(self.fixture.repository.get_intent(intent_id))
+        self.assertFalse((self.fixture.storage_root / f"staging/{intent_id}.part").exists())
 
 
 if __name__ == "__main__":

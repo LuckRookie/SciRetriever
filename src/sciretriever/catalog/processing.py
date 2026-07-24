@@ -137,7 +137,7 @@ class ProcessingRunRepository:
                 connection.execute(update(processing_runs).where(processing_runs.c.id == run_id).values(state="failed", finished_at=now))
                 failure_values = {
                     "id": stable_derivation_id("processing_failure", {"run_id": run_id, "category": category, "message": message, "details": details}),
-                    "work_version_id": row["work_version_id"], "job_id": None, "attempt_id": None,
+            "work_version_id": row["work_version_id"],
                     "processing_run_id": run_id, "category": category, "message": message,
                     "retryable": int(retryable), "details_json": details_json, "occurred_at": now,
                 }
@@ -172,7 +172,7 @@ class ProcessingRunRepository:
                     return
                 now = utc_now_rfc3339()
                 connection.execute(insert(failures).values(
-                    id=failure_id, work_version_id=run["work_version_id"], job_id=None, attempt_id=None,
+                id=failure_id, work_version_id=run["work_version_id"],
                     processing_run_id=run_id, category=category, message=message,
                     retryable=0, details_json=None if details is None else canonical_json(details),
                     occurred_at=now,

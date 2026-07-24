@@ -21,7 +21,7 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository, initialize_catalog, create_catalog_engine,
+    initialize_catalog, create_catalog_engine,
 open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
@@ -55,11 +55,7 @@ class ReconciliationEnvironment:
         self.assets = AssetRepository(self.catalog)
         self.reconciler = RawAssetReconciler(self.store, self.assets)
         work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/{new_id()}"}).work_version
-        job = JobRepository(self.catalog).attach_or_create_job(
-            work.id, AssetRole.PRIMARY_PDF
-        )
         self.work_version_id = work.id
-        self.job_id = job.id
 
     def close(self) -> None:
         self.catalog.dispose()
@@ -77,7 +73,6 @@ class ReconciliationEnvironment:
         intent = self.assets.create_intent(
             intent_id,
             self.work_version_id,
-            self.job_id,
             AssetRole.PRIMARY_PDF,
             sha256,
             "application/pdf",

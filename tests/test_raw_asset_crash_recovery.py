@@ -19,7 +19,7 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository, initialize_catalog, create_catalog_engine,
+    initialize_catalog, create_catalog_engine,
 open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
@@ -49,11 +49,7 @@ class RecoveryEnvironment:
         self.catalog = create_catalog_engine(self.catalog_path)
         initialize_catalog(self.catalog)
         work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/recovery-{label}"}).work_version
-        job = JobRepository(self.catalog).attach_or_create_job(
-            work.id, AssetRole.PRIMARY_PDF
-        )
         self.work_version_id = work.id
-        self.job_id = job.id
         self._rebuild_components()
 
     def _rebuild_components(self) -> None:
@@ -77,7 +73,6 @@ class RecoveryEnvironment:
         return self.coordinator.accept(
             BytesIO(data),
             self.work_version_id,
-            self.job_id,
             AssetRole.PRIMARY_PDF,
             "application/pdf",
             "pdf",
@@ -334,7 +329,6 @@ class RawAssetCrashRecoveryTests(TestCase):
             intent = environment.assets.create_intent(
                 intent_id,
                 environment.work_version_id,
-                environment.job_id,
                 AssetRole.PRIMARY_PDF,
                 staged.sha256,
                 "application/pdf",

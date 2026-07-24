@@ -30,8 +30,20 @@ class PackageSourceRepository:
         raw_asset_id: str | None = None,
         work_version_id: str | None = None,
     ) -> str:
-        if (work_id is None) == (raw_asset_id is None):
-            raise ValueError("provide exactly one of work_id or raw_asset_id")
+        selections = sum(value is not None for value in (work_id, raw_asset_id, work_version_id))
+        if selections != 1 and not (raw_asset_id is not None and work_version_id is not None and work_id is None):
+            raise ValueError("provide exactly one Work, WorkVersion, or RawAsset selection")
+        if work_version_id is not None and raw_asset_id is None:
+            work_version_id = validate_uuid(work_version_id, "work_version_id")
+            with self._catalog.connect() as connection:
+                found = connection.execute(
+                    select(work_version_assets.c.work_version_id)
+                    .where(work_version_assets.c.work_version_id == work_version_id)
+                    .limit(1)
+                ).scalar_one_or_none()
+            if found is None:
+                raise CatalogError(f"WorkVersion does not exist or has no assets: {work_version_id}")
+            return work_version_id
         if work_id is not None:
             if work_version_id is not None:
                 raise ValueError("work_version_id only disambiguates raw_asset_id")

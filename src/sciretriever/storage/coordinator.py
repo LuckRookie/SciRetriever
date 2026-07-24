@@ -160,13 +160,11 @@ class AssetAcceptanceCoordinator:
         self,
         stream: BinaryIO,
         work_version_id: str,
-        job_id: str,
         asset_role: AssetRole | str,
         media_type: str,
         format: str,
         provenance: object,
         *,
-        attempt_id: str | None = None,
         intent_id: str | None = None,
         checkpoint: Callable[[str, object], None] = _noop_checkpoint,
     ) -> AssetAcceptanceResult:
@@ -191,14 +189,12 @@ class AssetAcceptanceCoordinator:
                         existing = self._repository.create_intent(
                             identifier,
                             work_version_id,
-                            job_id,
                             asset_role,
                             existing.expected_sha256,
                             media_type,
                             format,
                             existing.expected_byte_size,
                             provenance,
-                            attempt_id=attempt_id,
                         )
                         if existing.state is AssetIntentState.ABANDONED:
                             raise CatalogError(
@@ -216,14 +212,12 @@ class AssetAcceptanceCoordinator:
                 intent = self._repository.create_intent(
                     identifier,
                     work_version_id,
-                    job_id,
                     asset_role,
                     staged.sha256,
                     media_type,
                     format,
                     staged.byte_size,
                     provenance,
-                    attempt_id=attempt_id,
                 )
                 failure_subject_id = intent.id
                 if intent.id != identifier:

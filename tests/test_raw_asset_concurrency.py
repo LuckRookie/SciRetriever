@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
 from sciretriever.catalog import (  # noqa: E402
     AssetRepository,
     IdentityResolver,
-    JobRepository, initialize_catalog, create_catalog_engine,
+    initialize_catalog, create_catalog_engine,
 open_catalog_engine,
 )
 from sciretriever.core.enums import AssetIntentState, AssetRole  # noqa: E402
@@ -47,16 +47,13 @@ class RawAssetConcurrencyTests(TestCase):
         initialize_catalog(self.catalog)
         self.addCleanup(self.catalog.dispose)
 
-    def create_work_and_job(self, index: int) -> tuple[str, str]:
+    def create_work(self, index: int) -> str:
         work = IdentityResolver(self.catalog).create_or_reuse_work({"doi": f"10.1000/concurrent-{index}"}).work_version
-        job = JobRepository(self.catalog).attach_or_create_job(
-            work.id, AssetRole.PRIMARY_PDF
-        )
-        return work.id, job.id
+        return work.id
 
     def run_workers(
         self,
-        acquisitions: tuple[tuple[str, str, str, dict[str, object]], ...],
+        acquisitions: tuple[tuple[str, str, dict[str, object]], ...],
         data: bytes,
     ) -> tuple[list[AssetAcceptanceResult], list[BaseException]]:
         barrier = threading.Barrier(len(acquisitions))
@@ -64,8 +61,8 @@ class RawAssetConcurrencyTests(TestCase):
         failures: list[BaseException] = []
         result_lock = threading.Lock()
 
-        def accept(item: tuple[str, str, str, dict[str, object]]) -> None:
-            work_id, job_id, intent_id, provenance = item
+        def accept(item: tuple[str, str, dict[str, object]]) -> None:
+            work_id, intent_id, provenance = item
             catalog = open_catalog_engine(self.catalog_path, busy_timeout_ms=10_000)
             try:
                 assets = AssetRepository(catalog)
@@ -75,7 +72,6 @@ class RawAssetConcurrencyTests(TestCase):
                 result = coordinator.accept(
                     BytesIO(data),
                     work_id,
-                    job_id,
                     AssetRole.PRIMARY_PDF,
                     "application/pdf",
                     "pdf",
@@ -140,15 +136,14 @@ class RawAssetConcurrencyTests(TestCase):
     def test_identical_content_from_independent_engines_converges(self) -> None:
         data = b"one immutable concurrent raw asset"
         digest = hashlib.sha256(data).hexdigest()
-        work_jobs = tuple(self.create_work_and_job(index) for index in range(6))
+        work_versions = tuple(self.create_work(index) for index in range(6))
         acquisitions = tuple(
             (
                 work_id,
-                job_id,
                 new_id(),
                 {"provider": "thread", "worker": index},
             )
-            for index, (work_id, job_id) in enumerate(work_jobs)
+            for index, work_id in enumerate(work_versions)
         )
 
         results, failures = self.run_workers(acquisitions, data)
@@ -179,7 +174,7 @@ class RawAssetConcurrencyTests(TestCase):
             )
             self.assertEqual(
                         connection.exec_driver_sql("SELECT count(*) FROM work_version_assets").scalar_one(),
-                len(work_jobs),
+                len(work_versions),
             )
             event_rows = connection.exec_driver_sql(
                 "SELECT subject_id, event_type FROM events "
@@ -206,13 +201,13 @@ class RawAssetConcurrencyTests(TestCase):
 
     def test_concurrent_same_job_retries_obey_intent_uniqueness(self) -> None:
         data = b"same job retry bytes"
-        work_id, job_id = self.create_work_and_job(100)
+        work_id = self.create_work(100)
         provenance: dict[str, object] = {
             "provider": "retry",
             "request": "same-job",
         }
         acquisitions = tuple(
-            (work_id, job_id, new_id(), provenance) for _ in range(5)
+            (work_id, new_id(), provenance) for _ in range(5)
         )
 
         results, failures = self.run_workers(acquisitions, data)

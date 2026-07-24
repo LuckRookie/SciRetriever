@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from sciretriever.acquisition.admission import AdmissionService
-from sciretriever.catalog.assets import AssetRepository
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.identity import IdentityResolver
-from sciretriever.catalog.jobs import JobRepository
 from sciretriever.catalog.packages import PackageSourceRepository
 from sciretriever.catalog.processing import ProcessingRunRepository
-from sciretriever.core.enums import AssetRole, PackageQuality
 from sciretriever.storage import DerivedArtifactStore, RawAssetStore
 
 from ..enrichment.models import Summarizer
@@ -31,11 +26,6 @@ class PackagePipeline:
     ) -> None:
         self.sources = PackageSourceRepository(catalog)
         self.runs = ProcessingRunRepository(catalog)
-        self.completion_admission = AdmissionService(
-            IdentityResolver(catalog),
-            JobRepository(catalog),
-            AssetRepository(catalog),
-        )
         self.normalization = NormalizationService(catalog, raw_store, derived_store, normalization_parameters)
         self.enrichment = GenericEnricher(catalog, derived_store, summary_max_characters=summary_max_characters)
         self.publisher = PackagePublisher(catalog, derived_store)
@@ -65,13 +55,6 @@ class PackagePipeline:
         normalized = self.normalization.run(resolved)
         enrichment = None if no_enrichment else self.enrichment.enrich(resolved, normalized, summarizer)
         publication = self.publisher.publish(resolved, acceptance, normalized, enrichment)
-        if publication.package.quality is PackageQuality.LIMITED_XML_HTML:
-            self.completion_admission.admit(
-                self.sources.list_identifiers(resolved),
-                provider="package-completion",
-                asset_role=AssetRole.PRIMARY_PDF,
-                provenance={"method": "package-quality-completion"},
-            )
         return publication
 
 
