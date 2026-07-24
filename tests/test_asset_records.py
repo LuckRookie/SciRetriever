@@ -39,8 +39,6 @@ class AssetRecordTests(TestCase):
         return {
             "id": intent_id,
             "work_version_id": new_id(),
-            "job_id": new_id(),
-            "attempt_id": None,
             "raw_asset_id": None,
             "asset_role": enums.AssetRole.PRIMARY_PDF,
             "state": enums.AssetIntentState.PENDING,

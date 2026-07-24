@@ -20,9 +20,7 @@ from sqlalchemy import (
 from sciretriever.core.enums import (
     AssetIntentState,
     AssetRole,
-    AttemptOutcome,
     DomainRunStatus,
-    JobState,
     PackageQuality,
     ProcessingStage,
 )
@@ -47,9 +45,7 @@ def _values(values: tuple[str, ...]) -> str:
 
 _ASSET_ROLES = tuple(value.value for value in AssetRole)
 _ASSET_INTENT_STATES = tuple(value.value for value in AssetIntentState)
-_ATTEMPT_OUTCOMES = tuple(value.value for value in AttemptOutcome)
 _DOMAIN_RUN_STATUSES = tuple(value.value for value in DomainRunStatus)
-_JOB_STATES = tuple(value.value for value in JobState)
 _PACKAGE_QUALITIES = tuple(value.value for value in PackageQuality)
 _PROCESSING_STAGES = tuple(value.value for value in ProcessingStage)
 
@@ -344,89 +340,6 @@ Index(
     metadata_labels.c.input_sha256,
 )
 
-download_requests = Table(
-    "download_requests",
-    metadata,
-    _id_column(),
-    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
-    Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="SET NULL")),
-    Column("request_key", Text, nullable=False, unique=True),
-    Column("asset_role", Text, nullable=False),
-    Column("status", Text, nullable=False, server_default="pending"),
-    Column("provenance_json", Text),
-    _created_at_column(),
-    _created_at_column("updated_at"),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
-    CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
-    CheckConstraint(
-        "status IN ('pending', 'attached', 'succeeded', 'failed', 'cancelled')",
-        name="status",
-    ),
-    CheckConstraint("length(trim(request_key)) > 0", name="request_key_not_blank"),
-    CheckConstraint(_json_check("provenance_json", nullable=True), name="provenance_json"),
-    CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
-    CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
-)
-
-acquisition_jobs = Table(
-    "acquisition_jobs",
-    metadata,
-    _id_column(),
-    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
-    Column("asset_role", Text, nullable=False),
-    Column("state", Text, nullable=False, server_default=JobState.PENDING.value),
-    Column("source_plan_json", Text),
-    Column("next_retry_at", Text),
-    _created_at_column(),
-    _created_at_column("updated_at"),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
-    CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
-    CheckConstraint(f"state IN ({_values(_JOB_STATES)})", name="state"),
-    CheckConstraint(_json_check("source_plan_json", nullable=True), name="source_plan_json"),
-    CheckConstraint(_timestamp_check("next_retry_at", nullable=True), name="next_retry_at_rfc3339"),
-    CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
-    CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
-)
-
-Index(
-    "uq_acquisition_jobs_nonterminal",
-    acquisition_jobs.c.work_version_id,
-    acquisition_jobs.c.asset_role,
-    unique=True,
-    sqlite_where=acquisition_jobs.c.state.in_(
-        (
-            JobState.PENDING.value,
-            JobState.ACTIVE.value,
-        )
-    ),
-)
-
-acquisition_attempts = Table(
-    "acquisition_attempts",
-    metadata,
-    _id_column(),
-    Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="CASCADE"), nullable=False),
-    Column("provider", Text, nullable=False),
-    Column("outcome", Text),
-    Column("source_url", Text),
-    Column("details_json", Text),
-    _created_at_column("started_at"),
-    Column("finished_at", Text),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("job_id"), name="job_id_uuid"),
-    CheckConstraint("length(trim(provider)) > 0", name="provider_not_blank"),
-    CheckConstraint(
-        f"outcome IS NULL OR outcome IN ({_values(_ATTEMPT_OUTCOMES)})",
-        name="outcome",
-    ),
-    CheckConstraint(_json_check("details_json", nullable=True), name="details_json"),
-    CheckConstraint(_timestamp_check("started_at"), name="started_at_rfc3339"),
-    CheckConstraint(_timestamp_check("finished_at", nullable=True), name="finished_at_rfc3339"),
-    CheckConstraint("finished_at IS NULL OR outcome IS NOT NULL", name="finished_outcome"),
-)
-
 raw_assets = Table(
     "raw_assets",
     metadata,
@@ -481,8 +394,6 @@ asset_intents = Table(
     metadata,
     _id_column(),
     Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
-    Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="CASCADE"), nullable=False),
-    Column("attempt_id", String(36), ForeignKey("acquisition_attempts.id", ondelete="SET NULL")),
     Column("raw_asset_id", String(36), ForeignKey("raw_assets.id", ondelete="SET NULL")),
     Column("asset_role", Text, nullable=False),
     Column("state", Text, nullable=False, server_default="pending"),
@@ -495,10 +406,9 @@ asset_intents = Table(
     Column("provenance_json", Text, nullable=False),
     _created_at_column(),
     _created_at_column("updated_at"),
-    UniqueConstraint("job_id", "asset_role", "expected_sha256", name="job_asset_intent"),
+    UniqueConstraint("work_version_id", "asset_role", "expected_sha256", name="version_role_asset_intent"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
     CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
-    CheckConstraint(_uuid_check("job_id"), name="job_id_uuid"),
     CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
     CheckConstraint(f"state IN ({_values(_ASSET_INTENT_STATES)})", name="state"),
     CheckConstraint("temporary_path = 'staging/' || id || '.part'", name="temporary_path"),
@@ -691,13 +601,27 @@ events = Table(
     CheckConstraint(_timestamp_check("occurred_at"), name="occurred_at_rfc3339"),
 )
 
+acquisition_diagnostics = Table(
+    "acquisition_diagnostics",
+    metadata,
+    _id_column(),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("asset_role", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("details_json", Text, nullable=False),
+    _created_at_column("occurred_at"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
+    CheckConstraint("outcome IN ('succeeded', 'failed')", name="outcome"),
+    CheckConstraint(_json_check("details_json"), name="details_json"),
+    CheckConstraint(_timestamp_check("occurred_at"), name="occurred_at_rfc3339"),
+)
+
 failures = Table(
     "failures",
     metadata,
     _id_column(),
     Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE")),
-    Column("job_id", String(36), ForeignKey("acquisition_jobs.id", ondelete="CASCADE")),
-    Column("attempt_id", String(36), ForeignKey("acquisition_attempts.id", ondelete="CASCADE")),
     Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="CASCADE")),
     Column("category", Text, nullable=False),
     Column("message", Text, nullable=False),
@@ -706,8 +630,7 @@ failures = Table(
     _created_at_column("occurred_at"),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
     CheckConstraint(
-        "work_version_id IS NOT NULL OR job_id IS NOT NULL OR attempt_id IS NOT NULL "
-        "OR processing_run_id IS NOT NULL",
+        "work_version_id IS NOT NULL OR processing_run_id IS NOT NULL",
         name="context",
     ),
     CheckConstraint("length(trim(category)) > 0", name="category_not_blank"),

@@ -8,11 +8,11 @@ from sqlalchemy import Connection, insert, select, update
 
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.models import (
-    acquisition_attempts,
-    acquisition_jobs,
+    acquisition_diagnostics,
     asset_intents,
     failures,
     raw_assets,
+    work_versions,
     work_version_assets,
 )
 from sciretriever.catalog.records import (
@@ -73,8 +73,6 @@ def _select_intent(connection: Any, intent_id: str) -> AssetIntentRecord | None:
 
 _REPLAY_FIELDS = (
     "work_version_id",
-    "job_id",
-    "attempt_id",
     "asset_role",
     "storage_path",
     "expected_sha256",
@@ -110,8 +108,6 @@ def _record_intent_failure(
             select(failures)
             .where(
                 failures.c.work_version_id == intent["work_version_id"],
-                failures.c.job_id == intent["job_id"],
-                failures.c.attempt_id == intent["attempt_id"],
                 failures.c.processing_run_id.is_(None),
                 failures.c.category == category,
                 failures.c.message == message,
@@ -128,8 +124,6 @@ def _record_intent_failure(
     values = {
         "id": new_uuid4(),
         "work_version_id": intent["work_version_id"],
-        "job_id": intent["job_id"],
-        "attempt_id": intent["attempt_id"],
         "processing_run_id": None,
         "category": category,
         "message": message,
@@ -202,6 +196,14 @@ class AssetRepository:
                 )
         return None if row is None else _raw_asset_record(row)
 
+    def work_version_exists(self, work_version_id: str) -> bool:
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
+        with catalog_operation("WorkVersion lookup"):
+            with self.__catalog.connect() as connection:
+                return connection.execute(
+                    select(work_versions.c.id).where(work_versions.c.id == work_version_id)
+                ).scalar_one_or_none() is not None
+
     def get_raw_asset_by_sha256(self, sha256: str) -> RawAssetRecord | None:
         sha256 = validate_sha256(sha256)
         with catalog_operation("raw asset hash lookup"):
@@ -235,21 +237,15 @@ class AssetRepository:
         self,
         intent_id: str,
         work_version_id: str,
-        job_id: str,
         asset_role: AssetRole | str,
         expected_sha256: str,
         media_type: str,
         format: str,
         expected_byte_size: int,
         provenance: object,
-        *,
-        attempt_id: str | None = None,
     ) -> AssetIntentRecord:
         intent_id = validate_uuid(intent_id, "intent_id")
         work_version_id = validate_uuid(work_version_id, "work_id")
-        job_id = validate_uuid(job_id, "job_id")
-        if attempt_id is not None:
-            attempt_id = validate_uuid(attempt_id, "attempt_id")
         role = _asset_role(asset_role)
         expected_sha256 = validate_sha256(expected_sha256, "expected_sha256")
         media_type = validate_media_type(media_type)
@@ -260,8 +256,6 @@ class AssetRepository:
         values = {
             "id": intent_id,
             "work_version_id": work_version_id,
-            "job_id": job_id,
-            "attempt_id": attempt_id,
             "raw_asset_id": None,
             "asset_role": role.value,
             "state": AssetIntentState.PENDING.value,
@@ -277,39 +271,12 @@ class AssetRepository:
         }
         with catalog_operation("asset intent creation"):
             with self.__catalog.critical_transaction() as connection:
-                job = (
-                    connection.execute(
-                        select(acquisition_jobs).where(acquisition_jobs.c.id == job_id)
-                    )
-                    .mappings()
-                    .one_or_none()
-                )
-                if job is None:
-                    raise CatalogError(f"acquisition job does not exist: {job_id}")
-                if job["work_version_id"] != work_version_id:
-                    raise CatalogError("acquisition job does not belong to the requested work")
-                if job["asset_role"] != role.value:
-                    raise CatalogError("acquisition job asset role does not match the intent")
-                if attempt_id is not None:
-                    attempt = (
-                        connection.execute(
-                            select(acquisition_attempts).where(
-                                acquisition_attempts.c.id == attempt_id
-                            )
-                        )
-                        .mappings()
-                        .one_or_none()
-                    )
-                    if attempt is None:
-                        raise CatalogError(f"acquisition attempt does not exist: {attempt_id}")
-                    if attempt["job_id"] != job_id:
-                        raise CatalogError("acquisition attempt does not belong to the intent job")
                 existing = (
                     connection.execute(
                         select(asset_intents).where(
                             (asset_intents.c.id == intent_id)
                             | (
-                                (asset_intents.c.job_id == job_id)
+                                (asset_intents.c.work_version_id == work_version_id)
                                 & (asset_intents.c.asset_role == role.value)
                                 & (asset_intents.c.expected_sha256 == expected_sha256)
                             )
@@ -500,6 +467,30 @@ class AssetRepository:
                         details={"failure_id": failure.id},
                     )
                 return failure
+
+    def append_acquisition_diagnostic(
+        self,
+        work_version_id: str,
+        asset_role: AssetRole | str,
+        outcome: str,
+        details: object,
+    ) -> str:
+        work_version_id = validate_uuid(work_version_id, "work_version_id")
+        role = _asset_role(asset_role)
+        if outcome not in {"succeeded", "failed"}:
+            raise ValueError("diagnostic outcome must be succeeded or failed")
+        diagnostic_id = new_uuid4()
+        with catalog_operation("acquisition diagnostic append"):
+            with self.__catalog.transaction() as connection:
+                connection.execute(insert(acquisition_diagnostics).values(
+                    id=diagnostic_id,
+                    work_version_id=work_version_id,
+                    asset_role=role.value,
+                    outcome=outcome,
+                    details_json=canonical_json(details),
+                    occurred_at=utc_now_rfc3339(),
+                ))
+        return diagnostic_id
 
     def abandon_pending_intent(
         self,
