@@ -1,6 +1,6 @@
 # SciRetriever Architecture Principles
 
-This is the working reference for how SciRetriever is built. It turns the domain-boundary decisions in [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) and the product reset in [ADR 0002](../adr/0002-work-centered-literature-library.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. Apply each ADR only to the topics listed in the [ADR index](../adr/README.md): ADR 0001 controls the domain boundary, while ADR 0002 controls product shape and execution. If this file disagrees with the applicable ADR, follow that ADR and fix this file.
+This is the working reference for how SciRetriever is built. It turns the domain-boundary decisions in [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md), the product reset in [ADR 0002](../adr/0002-work-centered-literature-library.md), and the external parser boundary in [ADR 0003](../adr/0003-operator-managed-mineru-service.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. Apply each ADR only to the topics listed in the [ADR index](../adr/README.md): ADR 0001 controls the domain boundary, ADR 0002 controls product shape and execution, and ADR 0003 controls the operator-managed MinerU connection. If this file disagrees with the applicable ADR, follow that ADR and fix this file.
 
 The one sentence to remember: **SciRetriever acquires, catalogs, normalizes, and lightly structures literature, and it stops at a versioned, provenance-bearing `DocumentPackage`.** Domains live downstream.
 
@@ -81,6 +81,7 @@ Two rules make the contract safe:
 6. **Integration is by reference.** Consumers depend on `document_id`, `file_id`, `artifact_id`, hashes, and provenance. They never query internal ORM tables. Internal storage may be refactored as long as those references and the package contract hold.
 7. **Data lives outside the repository.** Corpora and datasets sit under configured storage roots, never inside the code tree. Paths come from configuration, never from hardcoded strings.
 8. **Provenance survives every step.** Acquisition, normalization, and light structuring each add to lineage. No step erases where a thing came from.
+9. **External parser capability is not product ownership.** SciRetriever may submit an accepted primary PDF to the explicitly configured operator-managed MinerU service, but it never owns that service, GPU, model, queue or task lifecycle. MinerU output is untrusted derived input until local schema, resource, page/bbox and evidence validation succeeds.
 
 ## Review checklist
 
@@ -98,6 +99,6 @@ Run this checklist on any change before merging. A single "no" answer blocks the
 - [ ] If a future owner-approved migration accepts legacy input, does it enter through an adapter rather than shaping the target schema?
 - [ ] Are all data paths read from configuration, with no hardcoded workspace paths and no corpora committed to the repo?
 - [ ] Is provenance preserved and extended, never dropped?
-- [ ] Does the change avoid premature microservices, workflow platforms, vector stores, and web UI?
+- [ ] Does the change avoid SciRetriever-owned microservices, workflow platforms, vector stores, and web UI, while keeping any ADR-approved external parser behind a strict capability adapter?
 
 See the [local AGENTS.md](../../AGENTS.md) for the directive form of these rules that applies to coding agents, and the [project README](../../README.md) for current operational commands.

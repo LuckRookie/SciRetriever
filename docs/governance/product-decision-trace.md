@@ -51,6 +51,7 @@
 | 日期/来源 | 主题 | owner 确认或最终处置 | 权威位置 |
 |---|---|---|---|
 | 2026-07-24 / WP3 三方方案对比会话 | 第一层全文获取调度 | 采用两级调度：providers 有界竞速；每个 provider 内对去重候选按确定性顺序逐个执行和回退；不把全部候选扁平化为无界竞速 | requirements FR-11；system design Acquisition 流；technical architecture 前台运行模型；execution plan WP3 |
+| 2026-07-24 / WP4 PDF parser 对比与服务模式会话 | PDF parser 与运行所有权 | 采用 pinned MinerU 3.4.4 `vlm-engine` 作为 WP4 primary parser，通过 operator-managed persistent `mineru-api` 的 local/remote connection 使用；SciRetriever 不启停或拥有服务，async task 只作 processing attempt，result 必须经过通用 schema/resource/PDF evidence validation | ADR 0003；requirements FR-13/FR-19；system design 分析流；technical architecture；execution plan WP4 |
 
 ## 覆盖规则
 
