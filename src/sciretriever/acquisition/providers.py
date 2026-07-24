@@ -1,56 +1,67 @@
-"""Native synchronous P4 acquisition providers."""
+"""Direct and open-access candidate resolvers."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
-from sciretriever.acquisition.models import (
-    AcquisitionTarget,
-    AcquisitionTransport,
-    HttpResponse,
-    ProviderContent,
-)
-from sciretriever.acquisition.url_policy import UrlPolicy
+from sciretriever.acquisition.candidates import RuntimeDownloadCandidate, make_download_candidate_id
+from sciretriever.acquisition.models import AcquisitionTarget, AcquisitionTransport
 from sciretriever.core.enums import AssetRole
-from sciretriever.errors import (
-    AcquisitionError,
-    ProviderErrorCategory,
-    classify_provider_http_status,
-)
-from sciretriever.integrations import (
-    ArxivClient,
-    CrossrefClient,
-    EuropePmcClient,
-    IntegrationError,
-)
+from sciretriever.errors import AcquisitionError, ProviderErrorCategory, classify_provider_http_status
+from sciretriever.integrations import ArxivClient, CrossrefClient, EuropePmcClient, IntegrationError
+from sciretriever.integrations import OpenAlexClient, SemanticScholarClient
 
 
 def _identifier(target: AcquisitionTarget, namespace: str) -> str:
-    for item in target.identifiers:
-        if item.namespace == namespace:
-            return item.value
-    raise AcquisitionError(f"provider requires a {namespace} identifier")
+    value = next((item.value for item in target.identifiers if item.namespace == namespace), None)
+    if value is None:
+        raise AcquisitionError(f"provider requires a {namespace} identifier")
+    return value
 
 
-def _primary_pdf_only(target: AcquisitionTarget, provider: str) -> None:
-    if target.role is not AssetRole.PRIMARY_PDF:
-        raise AcquisitionError(f"{provider} supports primary PDF acquisition only")
+def _pdf_only(role: AssetRole, provider: str) -> None:
+    if role is not AssetRole.PRIMARY_PDF:
+        raise AcquisitionError(f"{provider} does not support {role.value}")
 
 
-def _json(response: HttpResponse, provider: str) -> object:
-    if response.status != 200:
-        raise ProviderAcquisitionError.for_response(provider, response)
-    try:
-        return json.loads(response.body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ProviderAcquisitionError(
-            provider,
-            ProviderErrorCategory.INVALID_RESPONSE,
-            "invalid JSON response",
-            False,
-        ) from error
+def _identity(provider: str, url: str) -> str:
+    host = urlsplit(url).hostname or "unknown"
+    digest = hashlib.sha256(url.encode()).hexdigest()[:16]
+    return f"host:{provider}-{host.replace('.', '-')}-{digest}"[:223]
+
+
+def _candidate(
+    provider: str,
+    resolver_id: str,
+    role: AssetRole,
+    url: str,
+    priority: int,
+    *,
+    headers: Mapping[str, str] | None = None,
+    params: Mapping[str, str] | None = None,
+    media_type: str | None = None,
+) -> RuntimeDownloadCandidate:
+    cursor = f"rc1:item-{priority}"
+    return RuntimeDownloadCandidate(
+        make_download_candidate_id(provider, resolver_id, role, cursor),
+        provider,
+        resolver_id,
+        provider,
+        cursor,
+        url,
+        role,
+        priority,
+        "https",
+        "resolver",
+        _identity(provider, url),
+        {"provider": provider, "candidate_index": priority},
+        request_headers=headers or {},
+        request_params=params or {},
+        media_type_hint=media_type,
+    )
 
 
 class ProviderAcquisitionError(AcquisitionError):
@@ -68,16 +79,19 @@ class ProviderAcquisitionError(AcquisitionError):
         return cls(provider, category, f"{provider} returned HTTP {status}", retryable, status)
 
     @classmethod
-    def for_response(cls, provider: str, response: HttpResponse) -> "ProviderAcquisitionError":
+    def for_response(cls, provider: str, response) -> "ProviderAcquisitionError":
         category, retryable = classify_provider_http_status(response.status)
-        retry_after = _retry_after_delta(response.header("retry-after")) if retryable else None
+        retry_after = None
+        if retryable:
+            value = response.headers.get("retry-after")
+            if isinstance(value, str):
+                candidate = value.strip()
+                if candidate.isascii() and candidate.isdecimal() and len(candidate) <= 10:
+                    parsed = int(candidate)
+                    retry_after = parsed if parsed <= 2_147_483_647 else None
         return cls(
-            provider,
-            category,
-            f"{provider} returned HTTP {response.status}",
-            retryable,
-            response.status,
-            retry_after,
+            provider, category, f"{provider} returned HTTP {response.status}",
+            retryable, response.status, retry_after,
         )
 
     @classmethod
@@ -85,205 +99,138 @@ class ProviderAcquisitionError(AcquisitionError):
         return cls(provider, ProviderErrorCategory.INVALID_RESPONSE, message, False)
 
 
-class _BaseProvider:
-    name = "base"
+class DirectHttpsResolver:
+    provider = resolver_id = "direct"
 
-    def __init__(self, transport: AcquisitionTransport, policy: UrlPolicy | None = None) -> None:
-        self.transport = transport
-        self.policy = policy or UrlPolicy()
-
-    def _get(
-        self,
-        url: str,
-        timeout: float,
-        headers: Mapping[str, str] | None = None,
-    ) -> HttpResponse:
-        response = (
-            self.transport.get(url, timeout=timeout)
-            if headers is None
-            else self.transport.get(url, timeout=timeout, headers=headers)
-        )
-        if response.status != 200:
-            raise ProviderAcquisitionError.for_response(self.name, response)
-        return response
-
-    def _content(
-        self,
-        response: HttpResponse,
-        target: AcquisitionTarget,
-        *,
-        provenance: dict[str, object] | None = None,
-    ) -> ProviderContent:
-        format_by_role = {
-            AssetRole.PRIMARY_PDF: "pdf",
-            AssetRole.SUPPLEMENTARY_PDF: "pdf",
-            AssetRole.XML: "xml",
-            AssetRole.HTML: "html",
-        }
-        return ProviderContent(
-            target.role,
-            response.headers.get("content-type", "application/octet-stream"),
-            format_by_role[target.role],
-            response.url,
-            self.name,
-            response.body,
-            provenance or {},
-        )
-
-
-def _retry_after_delta(value: str | None) -> int | None:
-    if value is None:
-        return None
-    candidate = value.strip()
-    if not candidate or not candidate.isascii() or not candidate.isdecimal():
-        return None
-    if len(candidate) > 10:
-        return None
-    parsed = int(candidate)
-    return parsed if parsed <= 2_147_483_647 else None
-
-
-class DirectHttpsProvider(_BaseProvider):
-    name = "direct"
-
-    def initial_url(self, target: AcquisitionTarget) -> str:
+    def resolve(self, target: AcquisitionTarget, role: AssetRole, *, timeout: float) -> tuple[RuntimeDownloadCandidate, ...]:
+        del timeout
         if target.direct_url is None:
-            raise AcquisitionError("direct provider requires a URL")
-        return target.direct_url
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
-        return self._content(self._get(self.initial_url(target), timeout), target)
+            raise AcquisitionError("direct provider requires a persisted HTTPS locator")
+        return (_candidate(self.provider, self.resolver_id, role, target.direct_url, 0),)
 
 
-class ArxivProvider(_BaseProvider):
-    name = "arxiv"
+class ArxivResolver:
+    provider = resolver_id = "arxiv"
 
-    def __init__(
-        self, transport: AcquisitionTransport, policy: UrlPolicy | None = None
-    ) -> None:
-        super().__init__(transport, policy)
-        self._client = ArxivClient(transport, user_agent=None)
-
-    def initial_url(self, target: AcquisitionTarget) -> str:
-        return self._client.pdf_url(_identifier(target, "arxiv"))
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
-        _primary_pdf_only(target, "arXiv")
-        return self._content(self._get(self.initial_url(target), timeout), target)
+    def resolve(self, target: AcquisitionTarget, role: AssetRole, *, timeout: float) -> tuple[RuntimeDownloadCandidate, ...]:
+        del timeout
+        _pdf_only(role, self.provider)
+        url = ArxivClient.pdf_url(_identifier(target, "arxiv"))
+        return (_candidate(self.provider, self.resolver_id, role, url, 0, media_type="application/pdf"),)
 
 
-class CrossrefProvider(_BaseProvider):
-    name = "crossref"
+class _DoiLookupResolver:
+    provider = "base"
+    resolver_id = "base"
 
-    def __init__(
-        self, transport: AcquisitionTransport, policy: UrlPolicy | None = None
-    ) -> None:
-        super().__init__(transport, policy)
+    def _resolve_url(self, doi: str, timeout: float) -> str:
+        raise NotImplementedError
+
+    def resolve(self, target: AcquisitionTarget, role: AssetRole, *, timeout: float) -> tuple[RuntimeDownloadCandidate, ...]:
+        _pdf_only(role, self.provider)
+        try:
+            url = self._resolve_url(_identifier(target, "doi"), timeout)
+        except IntegrationError as error:
+            if error.status is not None:
+                raise ProviderAcquisitionError.for_status(self.provider, error.status) from error
+            raise ProviderAcquisitionError.invalid_response(self.provider, str(error)) from error
+        return (_candidate(self.provider, self.resolver_id, role, url, 0, media_type="application/pdf"),)
+
+
+class CrossrefResolver(_DoiLookupResolver):
+    provider = resolver_id = "crossref"
+
+    def __init__(self, transport: AcquisitionTransport) -> None:
         self._client = CrossrefClient(transport, user_agent=None)
 
-    def initial_url(self, target: AcquisitionTarget) -> str:
-        return self._client.work_url(_identifier(target, "doi"))
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
-        _primary_pdf_only(target, "Crossref")
-        try:
-            url, resolver_url = self._client.resolve_pdf_doi(
-                _identifier(target, "doi"), timeout=timeout
-            )
-        except IntegrationError as error:
-            raise _integration_acquisition_error(self.name, error) from error
-        return self._content(
-            self._get(url, timeout),
-            target,
-            provenance={"resolver_url": resolver_url},
-        )
+    def _resolve_url(self, doi: str, timeout: float) -> str:
+        return self._client.resolve_pdf_doi(doi, timeout=timeout)[0]
 
 
-class UnpaywallProvider(_BaseProvider):
-    name = "unpaywall"
+class EuropePmcResolver:
+    provider = resolver_id = "europe-pmc"
 
-    def __init__(self, transport: AcquisitionTransport, email: str, policy: UrlPolicy | None = None) -> None:
-        super().__init__(transport, policy)
-        if not email.strip():
-            raise ValueError("Unpaywall email must not be blank")
-        self.email = email.strip()
-
-    def initial_url(self, target: AcquisitionTarget) -> str:
-        doi = _identifier(target, "doi")
-        return f"https://api.unpaywall.org/v2/{quote(doi, safe='')}"
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
-        _primary_pdf_only(target, "Unpaywall")
-        clean_url = self.initial_url(target)
-        request_url = f"{clean_url}?{urlencode({'email': self.email})}"
-        response = self._get(request_url, timeout)
-        api = HttpResponse(
-            response.status,
-            clean_url,
-            response.headers,
-            response.body,
-        )
-        payload = _json(api, self.name)
-        if not isinstance(payload, dict):
-            raise ProviderAcquisitionError.invalid_response(self.name, "invalid Unpaywall response")
-        best = payload.get("best_oa_location")
-        others = payload.get("oa_locations")
-        if best is not None and not isinstance(best, dict):
-            raise ProviderAcquisitionError.invalid_response(self.name, "invalid Unpaywall best location")
-        if not isinstance(others, list):
-            raise ProviderAcquisitionError.invalid_response(self.name, "invalid Unpaywall location list")
-        if any(not isinstance(item, dict) for item in others):
-            raise ProviderAcquisitionError.invalid_response(self.name, "invalid Unpaywall location entry")
-        locations = [best, *others]
-        for location in locations:
-            if isinstance(location, dict) and isinstance(location.get("url_for_pdf"), str):
-                return self._content(self._get(location["url_for_pdf"], timeout), target, provenance={"resolver_url": api.url})
-        raise ProviderAcquisitionError.invalid_response(self.name, "Unpaywall supplied no PDF location")
-
-
-class EuropePmcProvider(_BaseProvider):
-    name = "europe-pmc"
-
-    def __init__(
-        self, transport: AcquisitionTransport, policy: UrlPolicy | None = None
-    ) -> None:
-        super().__init__(transport, policy)
+    def __init__(self, transport: AcquisitionTransport) -> None:
         self._client = EuropePmcClient(transport, user_agent=None)
 
-    def initial_url(self, target: AcquisitionTarget) -> str:
-        namespace = "pmid" if any(item.namespace == "pmid" for item in target.identifiers) else "doi"
-        value = _identifier(target, namespace)
-        return self._client.lookup_url(
-            pmid=value if namespace == "pmid" else None,
-            doi=value if namespace == "doi" else None,
-        )
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
-        _primary_pdf_only(target, "Europe PMC")
-        pmid = next(
-            (item.value for item in target.identifiers if item.namespace == "pmid"),
-            None,
-        )
+    def resolve(self, target: AcquisitionTarget, role: AssetRole, *, timeout: float) -> tuple[RuntimeDownloadCandidate, ...]:
+        _pdf_only(role, self.provider)
+        pmid = next((item.value for item in target.identifiers if item.namespace == "pmid"), None)
         doi = None if pmid is not None else _identifier(target, "doi")
         try:
-            pdf_url, resolver_url = self._client.resolve_pdf_route(
-                doi=doi, pmid=pmid, timeout=timeout
-            )
+            url = self._client.resolve_pdf_route(doi=doi, pmid=pmid, timeout=timeout)[0]
         except IntegrationError as error:
-            raise _integration_acquisition_error(self.name, error) from error
-        return self._content(
-            self._get(pdf_url, timeout),
-            target,
-            provenance={"resolver_url": resolver_url},
+            if error.status is not None:
+                raise ProviderAcquisitionError.for_status(self.provider, error.status) from error
+            raise ProviderAcquisitionError.invalid_response(self.provider, str(error)) from error
+        return (_candidate(self.provider, self.resolver_id, role, url, 0, media_type="application/pdf"),)
+
+
+class OpenAlexResolver(_DoiLookupResolver):
+    provider = resolver_id = "openalex"
+
+    def __init__(self, transport: AcquisitionTransport) -> None:
+        self._client = OpenAlexClient(transport)
+
+    def _resolve_url(self, doi: str, timeout: float) -> str:
+        return self._client.resolve_pdf_doi(doi, timeout=timeout)[0]
+
+
+class SemanticScholarResolver(_DoiLookupResolver):
+    provider = resolver_id = "semantic-scholar"
+
+    def __init__(self, transport: AcquisitionTransport, api_key: str | None = None) -> None:
+        self._client = SemanticScholarClient(transport, api_key=api_key)
+
+    def _resolve_url(self, doi: str, timeout: float) -> str:
+        return self._client.resolve_pdf_doi(doi, timeout=timeout)[0]
+
+
+class UnpaywallResolver:
+    provider = resolver_id = "unpaywall"
+
+    def __init__(self, transport: AcquisitionTransport, email: str) -> None:
+        if not isinstance(email, str) or not email.strip():
+            raise ValueError("Unpaywall email must not be blank")
+        self._transport = transport
+        self._email = email.strip()
+
+    def resolve(self, target: AcquisitionTarget, role: AssetRole, *, timeout: float) -> tuple[RuntimeDownloadCandidate, ...]:
+        _pdf_only(role, self.provider)
+        doi = _identifier(target, "doi")
+        clean = f"https://api.unpaywall.org/v2/{quote(doi, safe='')}"
+        response = self._transport.get(
+            f"{clean}?{urlencode({'email': self._email})}", timeout=timeout
+        )
+        if response.status != 200:
+            raise ProviderAcquisitionError.for_response(self.provider, response)
+        try:
+            payload = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ProviderAcquisitionError.invalid_response(self.provider, "invalid Unpaywall response") from error
+        if not isinstance(payload, dict):
+            raise ProviderAcquisitionError.invalid_response(self.provider, "invalid Unpaywall response")
+        best = payload.get("best_oa_location")
+        others = payload.get("oa_locations", [])
+        if best is not None and not isinstance(best, dict):
+            raise ProviderAcquisitionError.invalid_response(self.provider, "invalid Unpaywall best location")
+        if not isinstance(others, list) or any(not isinstance(item, dict) for item in others):
+            raise ProviderAcquisitionError.invalid_response(self.provider, "invalid Unpaywall locations")
+        urls: list[str] = []
+        for location in (best, *others):
+            url = location.get("url_for_pdf") if isinstance(location, dict) else None
+            if isinstance(url, str) and url.startswith("https://") and url not in urls:
+                urls.append(url)
+        if not urls:
+            raise ProviderAcquisitionError.invalid_response(self.provider, "Unpaywall supplied no PDF location")
+        return tuple(
+            _candidate(self.provider, self.resolver_id, role, url, index, media_type="application/pdf")
+            for index, url in enumerate(urls[:8])
         )
 
 
-def _integration_acquisition_error(
-    provider: str, error: IntegrationError
-) -> ProviderAcquisitionError:
-    if error.status is not None:
-        return ProviderAcquisitionError.for_status(provider, error.status)
-    return ProviderAcquisitionError.invalid_response(provider, str(error))
-
-
-__all__ = ("ArxivProvider", "CrossrefProvider", "DirectHttpsProvider", "EuropePmcProvider", "ProviderAcquisitionError", "UnpaywallProvider")
+__all__ = (
+    "ArxivResolver", "CrossrefResolver", "DirectHttpsResolver", "EuropePmcResolver",
+    "OpenAlexResolver", "ProviderAcquisitionError", "SemanticScholarResolver",
+    "UnpaywallResolver", "_candidate", "_identifier",
+)
