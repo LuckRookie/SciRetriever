@@ -370,6 +370,40 @@ class ProcessingRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalParserAttemptRecord:
+    id: str
+    processing_run_id: str
+    sequence: int
+    state: str
+    external_task_id: str | None
+    metadata_json: str
+    started_at: str
+    finished_at: str | None
+
+    @classmethod
+    def from_row(cls, row: Mapping[Any, Any]) -> "ExternalParserAttemptRecord":
+        return cls(**{field: row[field] for field in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentAnalysisRecord:
+    id: str
+    work_version_id: str
+    revision: int
+    processing_run_id: str
+    parser_artifact_id: str
+    analysis_artifact_id: str
+    content_json: str
+    provenance_json: str
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_row(cls, row: Mapping[Any, Any]) -> "CurrentAnalysisRecord":
+        return cls(**{field: row[field] for field in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedArtifactRecord:
     id: str
     work_version_id: str
@@ -401,22 +435,6 @@ class ArtifactRegistration:
 
 
 @dataclass(frozen=True, slots=True)
-class LightStructureRecord:
-    id: str
-    work_version_id: str
-    normalized_artifact_id: str
-    kind: str
-    schema_version: str
-    input_sha256: str
-    content_json: str
-    created_at: str
-
-    @classmethod
-    def from_row(cls, row: Mapping[Any, Any]) -> "LightStructureRecord":
-        return cls(**{field: row[field] for field in cls.__dataclass_fields__})
-
-
-@dataclass(frozen=True, slots=True)
 class PackageVersionRecord:
     id: str
     work_version_id: str
@@ -443,6 +461,8 @@ __all__ = (
     "AuthorshipRecord",
     "AssetIntentRecord",
     "DomainRunRecord",
+    "CurrentAnalysisRecord",
+    "ExternalParserAttemptRecord",
     "EventRecord",
     "FailureRecord",
     "IdentityResolution",
@@ -451,7 +471,6 @@ __all__ = (
     "MetadataLabelRecord",
     "MetadataObservationRecord",
     "ArtifactRegistration",
-    "LightStructureRecord",
     "NormalizedArtifactRecord",
     "PackageVersionRecord",
     "ProcessingRunRecord",

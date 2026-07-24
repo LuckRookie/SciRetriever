@@ -202,6 +202,28 @@ metadata_observations = Table(
     CheckConstraint(_json_check("provenance_json"), name="provenance_json"),
 )
 
+manual_metadata_overrides = Table(
+    "manual_metadata_overrides", metadata,
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), primary_key=True),
+    Column("field_name", Text, primary_key=True), Column("value_json", Text, nullable=False),
+    _created_at_column("updated_at"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
+    CheckConstraint("length(trim(field_name)) > 0", name="field_name_not_blank"),
+    CheckConstraint(_json_check("value_json"), name="value_json"),
+    CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
+)
+
+provider_canonical_projections = Table(
+    "provider_canonical_projections", metadata,
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), primary_key=True),
+    Column("field_name", Text, primary_key=True), Column("value_json", Text, nullable=False),
+    _created_at_column("projected_at"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
+    CheckConstraint("length(trim(field_name)) > 0", name="field_name_not_blank"),
+    CheckConstraint(_json_check("value_json"), name="value_json"),
+    CheckConstraint(_timestamp_check("projected_at"), name="projected_at_rfc3339"),
+)
+
 authors = Table(
     "authors", metadata, _id_column(), Column("display_name", Text, nullable=False),
     Column("normalized_name", Text, nullable=False), Column("orcid", Text, unique=True), _created_at_column(),
@@ -245,6 +267,17 @@ generated_work_version_tags = Table(
     Column("tag_id", String(36), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
     Column("source_artifact_id", String(36), ForeignKey("normalized_artifacts.id", ondelete="CASCADE"), primary_key=True),
     _created_at_column("linked_at"),
+)
+generated_work_version_metadata = Table(
+    "generated_work_version_metadata", metadata,
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), primary_key=True),
+    Column("field_name", Text, primary_key=True),
+    Column("source_artifact_id", String(36), ForeignKey("normalized_artifacts.id", ondelete="CASCADE"), nullable=False),
+    Column("value_json", Text, nullable=False), _created_at_column("projected_at"),
+    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
+    CheckConstraint(_uuid_check("source_artifact_id"), name="source_artifact_id_uuid"),
+    CheckConstraint("length(trim(field_name)) > 0", name="field_name_not_blank"),
+    CheckConstraint(_json_check("value_json"), name="value_json"),
 )
 
 version_relations = Table(
@@ -473,35 +506,6 @@ normalized_artifacts = Table(
     CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
 )
 
-light_structures = Table(
-    "light_structures",
-    metadata,
-    _id_column(),
-    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
-    Column(
-        "normalized_artifact_id",
-        String(36),
-        ForeignKey("normalized_artifacts.id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    Column("kind", Text, nullable=False),
-    Column("schema_version", Text, nullable=False),
-    Column("input_sha256", String(64), nullable=False),
-    Column("content_json", Text, nullable=False),
-    _created_at_column(),
-    UniqueConstraint(
-        "work_version_id", "kind", "schema_version", "input_sha256", name="light_structure_input"
-    ),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("work_version_id"), name="work_version_id_uuid"),
-    CheckConstraint(_uuid_check("normalized_artifact_id"), name="normalized_artifact_id_uuid"),
-    CheckConstraint("kind IN ('summary', 'tags')", name="kind"),
-    CheckConstraint("length(trim(schema_version)) > 0", name="schema_version_not_blank"),
-    CheckConstraint(_sha256_check("input_sha256"), name="input_sha256"),
-    CheckConstraint(_json_check("content_json"), name="content_json"),
-    CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
-)
-
 version_references = Table(
     "version_references",
     metadata,
@@ -582,6 +586,56 @@ processing_runs = Table(
     CheckConstraint(_timestamp_check("started_at"), name="started_at_rfc3339"),
     CheckConstraint(_timestamp_check("finished_at", nullable=True), name="finished_at_rfc3339"),
     CheckConstraint("finished_at IS NULL OR state IN ('succeeded', 'failed', 'cancelled')", name="finished_state"),
+)
+
+external_parser_attempts = Table(
+    "external_parser_attempts",
+    metadata,
+    _id_column(),
+    Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="CASCADE"), nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("state", Text, nullable=False, server_default="active"),
+    Column("external_task_id", Text),
+    Column("metadata_json", Text, nullable=False),
+    _created_at_column("started_at"),
+    Column("finished_at", Text),
+    UniqueConstraint("processing_run_id", "sequence", name="parser_run_attempt_sequence"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("sequence > 0", name="sequence_positive"),
+    CheckConstraint("state IN ('active', 'succeeded', 'failed', 'expired', 'cancelled')", name="state"),
+    CheckConstraint("external_task_id IS NULL OR length(trim(external_task_id)) > 0", name="external_task_id_not_blank"),
+    CheckConstraint(_json_check("metadata_json"), name="metadata_json"),
+    CheckConstraint(_timestamp_check("started_at"), name="started_at_rfc3339"),
+    CheckConstraint(_timestamp_check("finished_at", nullable=True), name="finished_at_rfc3339"),
+    CheckConstraint("(state = 'active' AND finished_at IS NULL) OR (state <> 'active' AND finished_at IS NOT NULL)", name="finished_state"),
+)
+
+Index(
+    "uq_external_parser_attempts_active_run",
+    external_parser_attempts.c.processing_run_id,
+    unique=True,
+    sqlite_where=external_parser_attempts.c.state == "active",
+)
+
+current_analyses = Table(
+    "current_analyses",
+    metadata,
+    _id_column(),
+    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False, unique=True),
+    Column("revision", Integer, nullable=False),
+    Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="RESTRICT"), nullable=False),
+    Column("parser_artifact_id", String(36), ForeignKey("normalized_artifacts.id", ondelete="RESTRICT"), nullable=False),
+    Column("analysis_artifact_id", String(36), ForeignKey("normalized_artifacts.id", ondelete="RESTRICT"), nullable=False),
+    Column("content_json", Text, nullable=False),
+    Column("provenance_json", Text, nullable=False),
+    _created_at_column(),
+    _created_at_column("updated_at"),
+    CheckConstraint(_uuid_check("id"), name="id_uuid"),
+    CheckConstraint("revision > 0", name="revision_positive"),
+    CheckConstraint(_json_check("content_json"), name="content_json"),
+    CheckConstraint(_json_check("provenance_json"), name="provenance_json"),
+    CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
+    CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
 )
 
 events = Table(

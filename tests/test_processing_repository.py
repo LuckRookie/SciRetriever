@@ -43,13 +43,13 @@ class ProcessingRepositoryTests(TestCase):
 
     def test_failure_is_recorded_once_and_can_resume(self) -> None:
         run = self.repository.claim_or_resume(
-            self.work_version_id, "enrichment", "enricher", "1", {"summary": 200}
+            self.work_version_id, "analysis", "analyzer", "1", {"max_output_tokens": 200}
         )
         failed = self.repository.fail(run.id, "summarizer_failed", "offline failure")
         self.assertIs(failed.state, ProcessingRunState.FAILED)
         self.assertEqual(self.repository.fail(run.id, "ignored", "ignored"), failed)
         resumed = self.repository.claim_or_resume(
-            self.work_version_id, "enrichment", "enricher", "1", {"summary": 200}
+            self.work_version_id, "analysis", "analyzer", "1", {"max_output_tokens": 200}
         )
         self.assertIs(resumed.state, ProcessingRunState.ACTIVE)
         with self.catalog.connect() as connection:
