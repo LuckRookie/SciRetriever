@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import Connection, delete, insert, select, tuple_, update
 
 from sciretriever.catalog.engine import CatalogEngine
+from sciretriever.catalog.canonical_projection import recompute_canonical_projection
 from sciretriever.catalog.models import (
     authors,
     authorships,
@@ -20,6 +21,7 @@ from sciretriever.catalog.models import (
     identifiers,
     manual_work_tags,
     metadata_observations,
+    provider_canonical_projections,
     publisher_aliases,
     publishers,
     tag_aliases,
@@ -171,6 +173,14 @@ class WorkRepository:
             _work_id = validate_uuid(_work_id, "work_id")
         metadata_values = dict(metadata) if metadata is not None else {}
         canonical_values = self._canonical_metadata(metadata_values)
+        direct_projection: dict[str, object] = {"title": title, **canonical_values}
+        if publication_date is not None:
+            direct_projection["publication_date"] = publication_date
+            direct_projection.setdefault("publication_year", self._year(publication_date))
+        if publisher_id is not None:
+            direct_projection["publisher_id"] = publisher_id
+        if venue_id is not None:
+            direct_projection["venue_id"] = venue_id
         transaction = (
             self._catalog.critical_transaction()
             if _connection is None
@@ -305,6 +315,7 @@ class WorkRepository:
                             ),
                             observed_at=utc_now_rfc3339(),
                         ))
+                self._refresh_direct_provider_projection(connection, version_id, direct_projection, provider_precedence)
                 if observed is None:
                     _append_event(
                         connection,
@@ -648,7 +659,6 @@ class WorkRepository:
         selected_title = self._provider_choice(choices, "title", str)
         if selected_title is not None:
             projected["title"] = selected_title
-            projected["normalized_title"] = normalize_title(selected_title)
         publication_date = self._provider_choice(choices, "publication_date", str)
         if publication_date is not None and re.fullmatch(
             r"\d{4}(?:-\d{2}-\d{2})?", publication_date
@@ -686,14 +696,39 @@ class WorkRepository:
         observed_ranks = [rank[row.provider] for row in rows]
         if observed_ranks:
             projected["provider_precedence"] = min(observed_ranks)
-        projected["updated_at"] = utc_now_rfc3339()
-        connection.execute(
-            update(work_versions).where(work_versions.c.id == work_version_id).values(**projected)
-        )
+        provider_precedence = projected.pop("provider_precedence", None)
+        now = utc_now_rfc3339()
+        connection.execute(delete(provider_canonical_projections).where(
+            provider_canonical_projections.c.work_version_id == work_version_id))
+        for field_name, value in projected.items():
+            connection.execute(insert(provider_canonical_projections).values(
+                work_version_id=work_version_id, field_name=field_name,
+                value_json=canonical_json(value), projected_at=now))
+        if provider_precedence is not None:
+            connection.execute(update(work_versions).where(work_versions.c.id == work_version_id).values(
+                provider_precedence=provider_precedence, updated_at=now))
+        recompute_canonical_projection(connection, work_version_id)
 
         author_value = self._provider_choice(choices, "authors", list)
         if author_value is not None and all(isinstance(item, str) for item in author_value):
             self._sync_authorships(connection, work_version_id, tuple(author_value))
+
+    @staticmethod
+    def _refresh_direct_provider_projection(connection: Connection, work_version_id: str,
+                                            values: Mapping[str, object], precedence: int | None) -> None:
+        current_precedence = connection.execute(select(work_versions.c.provider_precedence).where(
+            work_versions.c.id == work_version_id)).scalar_one()
+        existing = set(connection.execute(select(provider_canonical_projections.c.field_name).where(
+            provider_canonical_projections.c.work_version_id == work_version_id)).scalars())
+        may_replace = not existing or (precedence is not None and (current_precedence is None or precedence <= current_precedence))
+        now = utc_now_rfc3339()
+        for field_name, value in values.items():
+            if value is None or (field_name in existing and not may_replace):
+                continue
+            connection.execute(insert(provider_canonical_projections).prefix_with("OR REPLACE").values(
+                work_version_id=work_version_id, field_name=field_name,
+                value_json=canonical_json(value), projected_at=now))
+        recompute_canonical_projection(connection, work_version_id)
 
     @staticmethod
     def _provider_value_present(value: object) -> bool:

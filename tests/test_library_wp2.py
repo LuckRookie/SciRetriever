@@ -25,7 +25,7 @@ from sciretriever.catalog import (
     initialize_catalog,
     open_read_only_catalog_engine,
 )
-from sciretriever.catalog.models import light_structures, metadata_observations, normalized_artifacts, raw_assets
+from sciretriever.catalog.models import metadata_observations
 from sciretriever.catalog.repository import canonical_json
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.ids import new_uuid4
@@ -102,7 +102,6 @@ class LibraryWp2Tests(TestCase):
             self.citing_preprint.id, 0, "target from nonpreferred version",
             cited_work_id=self.target.work_id,
         )
-        self._add_light(writable, self.target.id)
         with writable.critical_transaction() as connection:
             connection.execute(insert(metadata_observations).values(
                 id=new_uuid4(), work_version_id=self.target.id, provider="leaking-provider",
@@ -116,38 +115,11 @@ class LibraryWp2Tests(TestCase):
         self.addCleanup(self.catalog.dispose)
         self.library = LibraryReadRepository(self.catalog)
 
-    def _add_light(self, catalog, work_version_id: str) -> None:
-        raw_id, artifact_id = new_uuid4(), new_uuid4()
-        raw_hash, artifact_hash = "a" * 64, "b" * 64
-        now = utc_now_rfc3339()
-        with catalog.critical_transaction() as connection:
-            connection.execute(insert(raw_assets).values(
-                id=raw_id, sha256=raw_hash, storage_path=f"raw/aa/{raw_hash}",
-                media_type="application/pdf", format="pdf", byte_size=1,
-                provenance_json=canonical_json({"provider": "SECRET-LIGHT-PROVIDER"}), created_at=now,
-            ))
-            connection.execute(insert(normalized_artifacts).values(
-                id=artifact_id, work_version_id=work_version_id, raw_asset_id=raw_id,
-                kind="markdown", schema_version="1", storage_path="derived/private.md",
-                sha256=artifact_hash, media_type="text/markdown", byte_size=10,
-                provenance_json=canonical_json({"hash": "SECRET-ARTIFACT-HASH"}), created_at=now,
-            ))
-            connection.execute(insert(light_structures).values(
-                id=new_uuid4(), work_version_id=work_version_id, normalized_artifact_id=artifact_id,
-                kind="summary", schema_version="1", input_sha256=artifact_hash,
-                content_json=canonical_json({
-                    "summary": "Explicit light text about solid electrolyte behavior",
-                    "markdown": "Markdown with literal 90% and cell_name and C:\\data",
-                    "backend_secret": "NEVER-EXPORT arbitrary content_json value",
-                    "provider": "NEVER-EXPORT provider key",
-                }), created_at=now,
-            ))
-
     def counts(self) -> dict[str, int]:
         names = (
             "works", "work_versions", "work_version_identifiers", "metadata_observations",
             "authors", "authorships", "publishers", "venues", "tags", "manual_work_tags",
-            "version_references", "raw_assets", "normalized_artifacts", "light_structures",
+            "version_references", "raw_assets", "normalized_artifacts",
         )
         with self.catalog.connect() as connection:
             return {name: connection.exec_driver_sql(f'SELECT count(*) FROM "{name}"').scalar_one()
@@ -186,20 +158,16 @@ class LibraryWp2Tests(TestCase):
         self.assertEqual([item.work_id for item in matches], [self.target.work_id])
         self.assertEqual(self.library.search("hidden observation").items, ())
         self.assertEqual(self.library.search("NEVER-EXPORT").items, ())
-        self.assertEqual(self.library.search("SECRET-LIGHT-PROVIDER").items, ())
 
     def test_keyword_treats_percent_underscore_and_backslash_literally(self) -> None:
         self.assertEqual([item.work_id for item in self.library.search("100%").items], [self.literal.work_id])
         self.assertEqual([item.work_id for item in self.library.search("Under_score").items], [self.literal.work_id])
         self.assertEqual([item.work_id for item in self.library.search(r"Back\slash").items], [self.literal.work_id])
-        self.assertEqual([item.work_id for item in self.library.search("90%").items], [self.target.work_id])
-        self.assertEqual([item.work_id for item in self.library.search("cell_name").items], [self.target.work_id])
-        self.assertEqual([item.work_id for item in self.library.search(r"C:\data").items], [self.target.work_id])
         self.assertEqual({item.work_id for item in self.library.search("%").items}, {
-            self.literal.work_id, self.target.work_id,
+            self.literal.work_id,
         })
         self.assertEqual({item.work_id for item in self.library.search("_").items}, {
-            self.ambiguous_one.work_id, self.literal.work_id, self.target.work_id,
+            self.ambiguous_one.work_id, self.literal.work_id,
         })
 
     def test_each_filter_and_combined_filters_use_normalized_exact_values(self) -> None:
@@ -266,13 +234,13 @@ class LibraryWp2Tests(TestCase):
         self.assertEqual(row["publisher"], "Science Press")
         self.assertEqual(row["venue"], "Journal of Energy")
         self.assertEqual(row["tags"], ["battery materials"])
-        self.assertEqual(len(cast(list[object], row["light_content"])), 2)
+        self.assertEqual(len(cast(list[object], row["light_content"])), 0)
         self.assertEqual(result.to_json(), result.to_json())
         self.assertEqual(json.loads(result.to_json()), list(result.to_rows()))
         self.assertEqual([json.loads(line) for line in result.to_jsonl().splitlines()], list(result.to_rows()))
         serialized = result.to_json()
         forbidden = (
-            "SECRET-RECORD", "SECRET-HASH", "SECRET-LIGHT-PROVIDER", "SECRET-ARTIFACT-HASH",
+            "SECRET-RECORD", "SECRET-HASH",
             "NEVER-EXPORT", "provider_record_id", "provenance_json", "storage_path",
             "sha256", "content_json", "raw_reference", "locator_json",
         )

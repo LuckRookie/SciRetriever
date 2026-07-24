@@ -26,13 +26,14 @@ from .records import (
     ArtifactRegistration,
     AssetIntentRecord,
     DomainRunRecord,
+    CurrentAnalysisRecord,
     EventRecord,
+    ExternalParserAttemptRecord,
     FailureRecord,
     IdentityResolution,
     IdentityResolutionResult,
     IdentityReviewRecord,
     MetadataLabelRecord,
-    LightStructureRecord,
     NormalizedArtifactRecord,
     PackageVersionRecord,
     ProcessingRunRecord,
@@ -50,14 +51,15 @@ from .records import (
 )
 from .repository import CatalogRepository, ReadOnlyCatalogView, canonical_json
 from .artifacts import ArtifactRepository
-from .enrichment import CitationRepository, EnrichmentRepository
 from .packages import PackageSourceRepository, PackageVersionRepository
 from .processing import ProcessingRunRepository
+from .analysis import CurrentAnalysisRepository, ExternalParserAttemptRepository, ManualMetadataRepository
 from .download_selection import (
     DownloadSelection,
     WorkVersionDownloadRecord,
     WorkVersionDownloadRepository,
 )
+from .analysis_selection import AnalysisSelection, WorkVersionAnalysisRecord, WorkVersionAnalysisRepository
 
 
 _domain_runs_api = import_module(f"{__name__}.domain_runs")
@@ -81,12 +83,14 @@ __all__ = (
     "AuthorshipRecord",
     "CatalogEngine",
     "CatalogRepository",
-    "CitationRepository",
     "DomainRunRecord",
+    "CurrentAnalysisRecord",
+    "CurrentAnalysisRepository",
     "DomainRunRepository",
     "EventRecord",
+    "ExternalParserAttemptRecord",
+    "ExternalParserAttemptRepository",
     "FailureRecord",
-    "EnrichmentRepository",
     "IdentityResolution",
     "IdentityResolutionResult",
     "IdentityResolver",
@@ -97,10 +101,10 @@ __all__ = (
     "LibraryReadRepository",
     "LibraryResult",
     "MetadataLabelRecord",
+    "ManualMetadataRepository",
     "MetadataIngestionBatch",
     "MetadataIngestionObservation",
     "MetadataObservationRecord",
-    "LightStructureRecord",
     "NormalizedArtifactRecord",
     "PackageSourceRepository",
     "PackageVersionRecord",
@@ -123,6 +127,9 @@ __all__ = (
     "DownloadSelection",
     "WorkVersionDownloadRecord",
     "WorkVersionDownloadRepository",
+    "AnalysisSelection",
+    "WorkVersionAnalysisRecord",
+    "WorkVersionAnalysisRepository",
     "initialize_catalog",
     "canonical_json",
     "create_catalog_engine",

@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Connection, Select, and_, exists, func, literal, or_, select, union_all
+from sqlalchemy import Connection, Select, and_, exists, func, literal, or_, select, true, union_all
 
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.library import normalize_title
@@ -14,7 +14,7 @@ from sciretriever.catalog.models import (
     authors,
     authorships,
     generated_work_version_tags,
-    light_structures,
+    current_analyses,
     manual_work_tags,
     publisher_aliases,
     publishers,
@@ -33,7 +33,6 @@ from sciretriever.core.ids import validate_uuid
 
 
 _DEFAULT_LIMIT = 100
-_LIGHT_TEXT_KEYS = ("summary", "markdown", "text")
 
 
 def _limit(value: int) -> int:
@@ -212,19 +211,24 @@ class LibraryReadRepository:
         statement = self._base_select()
         if keyword is not None:
             pattern = _literal_pattern(_required_text(keyword, "keyword").casefold())
-            light_matches = [
-                func.lower(func.json_extract(light_structures.c.content_json, f"$.{key}"))
-                .like(pattern, escape="\\")
-                for key in _LIGHT_TEXT_KEYS
-            ]
+            analysis_sections = func.json_each(
+                current_analyses.c.content_json, "$.sections"
+            ).table_valued("value").alias("analysis_sections")
             statement = statement.where(or_(
                 func.lower(work_versions.c.title).like(pattern, escape="\\"),
                 func.lower(work_versions.c.abstract).like(pattern, escape="\\"),
-                exists(select(literal(1)).where(
-                    light_structures.c.work_version_id == work_versions.c.id,
-                    light_structures.c.kind == "summary",
-                    or_(*light_matches),
-                )),
+                exists(
+                    select(literal(1))
+                    .select_from(current_analyses.join(analysis_sections, true()))
+                    .where(
+                        current_analyses.c.work_version_id == work_versions.c.id,
+                        func.lower(
+                            func.json_extract(
+                                analysis_sections.c.value, "$.content"
+                            )
+                        ).like(pattern, escape="\\"),
+                    )
+                ),
             ))
         if filters is not None:
             statement = self._apply_filters(statement, filters)
@@ -405,17 +409,13 @@ class LibraryReadRepository:
         content = ()
         if include_light_content:
             values: list[str] = []
-            content_rows = connection.execute(select(light_structures.c.content_json).where(
-                light_structures.c.work_version_id == version_id,
-                light_structures.c.kind == "summary",
-            ).order_by(light_structures.c.created_at, light_structures.c.id)).scalars()
-            for content_json in content_rows:
-                decoded = json.loads(content_json)
-                if isinstance(decoded, dict):
-                    for key in _LIGHT_TEXT_KEYS:
-                        value = decoded.get(key)
-                        if isinstance(value, str) and value.strip():
-                            values.append(value)
+            content_json = connection.execute(select(current_analyses.c.content_json).where(
+                current_analyses.c.work_version_id == version_id)).scalar_one_or_none()
+            decoded = None if content_json is None else json.loads(content_json)
+            if isinstance(decoded, dict) and isinstance(decoded.get("sections"), list):
+                for section in decoded["sections"]:
+                    if isinstance(section, dict) and isinstance(section.get("content"), str) and section["content"].strip():
+                        values.append(section["content"])
             content = tuple(dict.fromkeys(values))
         preferred_id = row["preferred_work_version_id"]
         if preferred_id is None:
