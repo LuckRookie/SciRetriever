@@ -11,7 +11,7 @@
 | `core` | 稳定 Work/WorkVersion 引用、provider-neutral 输入输出、hash 和通用文献边界，不含 ORM 与 vendor 字段 |
 | `catalog` | Work、书目版本、canonical metadata、observations、authors/authorships、独立扁平 Publisher/Venue registries、tags/aliases、version assets、references、single current generated analysis、failures |
 | `search` | 有界并发的多 provider metadata 查询、独立 provider timeout、观察值规范化、Work/WorkVersion 确定性身份、DOI 冲突保护、exact normalized-title 匹配、precedence/fill-missing |
-| `acquisition` | WorkVersion 资产缺口、直接/开放/出版社/配置 Sci-Hub 竞速、translator/browser 回退、validation 前编排 |
+| `acquisition` | WorkVersion 资产缺口、跨 provider 有界竞速、provider 内候选去重与确定性顺序回退、translator/browser 回退、validation 前编排 |
 | `network` | 所有非浏览器 HTTP 的安全 transport、有限 timeout、redirect、响应上限和敏感 header 策略 |
 | `storage` | RawAsset 和 normalization artifacts 的不可变发布、hash、相对路径与对账；current generated analysis 的替换由 `analysis`/`catalog` 拥有 |
 | `normalization` | 全文到通用、损失感知结构和 evidence |
@@ -48,7 +48,9 @@
 - 为恢复单个 URL 执行而持久化的 candidate checkpoint；
 - 外部工作流平台。
 
-进程内 acquisition race 可以保留。有限 timeout 定义内容可被接受的最晚边界，race loser 必须清理且不能 late accept。Ctrl+C 停止启动新记录，安全排空或取消当前有限操作并保留已完成记录；重跑幂等跳过已完成内容。幂等性来自 Work/WorkVersion identity、目标角色、hash、immutable publication 和原子 catalog transaction，不依赖 durable pause/resume/safe-stop control state。
+进程内 acquisition 使用两级调度：配置的 providers 在 tier 内进行有界竞速；每个 provider 进行有界 resolution 并输出 provider-neutral runtime candidate DTO，DTO 可携带受控请求凭据或 auth reference，但敏感字段不得持久化或进入 diagnostics。候选在 provider 内去重并按确定性顺序逐个交给共享 candidate executor，直到内容与身份 validation 成功或该 provider 耗尽。translator 和 browser 作为后续 tier，不与第一层一起启动。只有验证合格的 winner 可以进入 storage acceptance。
+
+有限 timeout 定义内容可被接受的最晚边界，race loser 必须清理且不能 late accept。Ctrl+C 停止启动新记录，安全排空或取消当前有限操作并保留已完成记录；重跑幂等跳过已完成内容。幂等性来自 Work/WorkVersion identity、目标角色、hash、immutable publication 和原子 catalog transaction，不依赖 durable pause/resume/safe-stop control state。
 
 ## 4. 配置边界
 
@@ -71,7 +73,7 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 
 - HTTPS、DNS、redirect、header 和有界读取原则；
 - 每个网络与分析操作的有限 timeout；
-- acquisition 进程内 serial/race 和 loser 清理；
+- acquisition 跨 provider 有界 race、provider 内确定性候选回退和 loser 清理；
 - 资产角色、MIME、magic、EOF、解析和身份 validation；
 - storage 的 immutable create-if-absent、hash、相对路径、权限和 reconciliation；
 - durable write 前和用户输出前的 secret redaction；
