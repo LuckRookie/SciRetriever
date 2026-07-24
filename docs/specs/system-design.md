@@ -122,7 +122,7 @@ search limit 的内置默认是 100 个合并 Work，TOML 可修改，CLI `--lim
 
 ```text
 metadata: query -> merge -> persist library records
-download: explicit IDs/query/tags/all-missing -> acquire -> validate -> immutable publish
+download: explicit IDs/query/tags/all-missing -> resolve/execute -> validate -> immutable publish
 analyze: explicit IDs/query/tags/all-pending or explicit force -> require accepted primary PDF -> PDF-based analysis -> atomic current swap
 ```
 
@@ -136,13 +136,16 @@ Ctrl+C/cooperative stop 是前台 invocation 的必要行为，不是 durable ta
 
 ```text
 WorkVersion needs primary PDF
-  -> direct official + publisher + open + configured Sci-Hub, in-process race
+  -> direct official + publisher + open + configured Sci-Hub providers, bounded in-process race
+     -> inside each provider: resolve -> deduplicate -> deterministic candidate fallback
   -> if no accepted PDF: bounded landing-page translator
   -> if still missing: configured browser path
   -> validation and identity check
   -> immutable RawAsset linked to WorkVersion
   -> optional XML / HTML according to config
 ```
+
+第一层使用两级调度：配置的 providers 进行有界竞速；每个 provider 进行有界 resolution 并产生 provider-neutral runtime candidate，候选可携带受控请求凭据或 auth reference，但这些敏感字段不得持久化或进入 diagnostics。候选在 provider 内去重并按确定性顺序逐个执行和回退。共享 candidate executor 统一执行候选 transport、预算、内容与身份 validation；只有第一个验证合格的 winner 可以进入 immutable acceptance，loser 即使稍后完成也不能发布。translator 和 browser 不参加第一层竞速。
 
 每种 direct、official/open、Sci-Hub、translator 和 browser 路径都必须具有明确配置、安全边界、离线 fixture 和用户文档。所有路径共享 secure transport 或经批准的等价边界、有限 timeout、validation、immutable acceptance 和 redaction。
 
@@ -213,7 +216,7 @@ local search 支持 exact DOI/title/internal-ID lookup；title、Abstract、ligh
 | current analysis | WorkVersion current pointer | 原文语言 light Markdown、生成标签和引用视图 | parser/model/schema/input hash |
 | manual metadata/tags/preferred/version relations | catalog | 与 current view 合并后的人工内容和选择 | 前后值、操作者时间、关系证据和撤销记录 |
 | references | VersionReference | references/cited-by traversal | unresolved 原文、匹配证据和重跑状态 |
-| failures | diagnostics | overall reason/action，按需展开 source details | 脱敏 attempt/event history |
+| failures | diagnostics | overall reason/action，按需展开 source details | 脱敏 acquisition diagnostic records |
 | 文件字节 | storage | 通过 catalog 关系访问 | 实际存储路径细节不进入普通视图 |
 
 canonical metadata 不是简单选一个 provider 值，而是当前投影：
@@ -246,7 +249,7 @@ manual edit
 
 ## 12. 失败、状态与恢复模型
 
-产品不把复杂 job 状态机暴露给用户，而用每个数据层是否完成来表达文献状态：
+产品不建立或暴露后台 job 状态机，而用每个数据层是否完成来表达文献状态：
 
 | 状态 | 含义 | 用户下一步 |
 |---|---|---|
@@ -259,7 +262,7 @@ manual edit
 | partial branch failure | expansion 某分支失败 | 其它分支继续；失败分支后续补全 |
 
 ```text
-provider/source attempt failure
+provider/source diagnostic failure
   -> another source succeeds? -- yes -> overall success + losing diagnostic detail
   |                              no
   v
