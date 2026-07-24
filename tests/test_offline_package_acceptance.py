@@ -1,178 +1,121 @@
 import asyncio
+from io import BytesIO
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+from PyPDF2 import PdfWriter
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.acquisition import (
-    AcquisitionTarget,
-    AdmissionService,
-    MultiSourceOrchestrator,
-    ProviderContent,
-    RoutingMode,
-    SourceEntry,
-    SourcePlan,
-)
-from sciretriever.catalog import (
-    AssetRepository,
-    IdentityResolver,
-    JobRepository,
-    ReadOnlyCatalogView, initialize_catalog, create_catalog_engine,
-open_read_only_catalog_engine,
-)
-from sciretriever.core.contracts import SearchSpec
-from sciretriever.core.enums import AssetRole, PackageQuality
-from sciretriever.discovery import discover
-from sciretriever.discovery.labeling import KeywordRuleLabeler
-from sciretriever.discovery.models import ProviderRecord
-from sciretriever.packaging import PackagePipeline
+from sciretriever.acquisition.candidate_executor import CandidateExecutor
+from sciretriever.acquisition.identity_validation import ContentIdentityValidator
+from sciretriever.acquisition.candidates import RuntimeDownloadCandidate, make_download_candidate_id
+from sciretriever.acquisition.models import AcquisitionTarget
+from sciretriever.acquisition.service import WorkVersionAcquisitionService
+from sciretriever.catalog import AssetRepository, IdentityResolver, create_catalog_engine, initialize_catalog
+from sciretriever.core.contracts import Identifier
+from sciretriever.core.enums import AssetRole
+from sciretriever.network import HttpResponse
+from sciretriever.normalization.contracts import NormalizationParameters
+from sciretriever.packaging.pipeline import PackagePipeline
 from sciretriever.storage import AssetAcceptanceCoordinator, DerivedArtifactStore, RawAssetStore
 
 
-RUN_ID = "00000000-0000-4000-8000-000000000001"
-RETRIEVED_AT = "2026-07-21T12:00:00Z"
+def pdf_bytes() -> bytes:
+    stream = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_blank_page(width=72, height=72)
+    writer.add_metadata({
+        "/Title": "Offline package acceptance",
+        "/Subject": "doi: 10.1000/offline-package " + "evidence" * 200,
+    })
+    writer.write(stream)
+    return stream.getvalue()
 
 
-class FakeDiscoveryProvider:
-    name = "offline"
+class Resolver:
+    resolver_id = "offline"
+    provider = "offline"
 
-    def search(self, spec: SearchSpec) -> tuple[ProviderRecord, ...]:
-        if spec.query != "offline package acceptance":
-            raise AssertionError("unexpected search specification")
-        return (
-            ProviderRecord(
-                "offline",
-                1,
-                (("doi", "10.1000/offline-package"),),
-                title="Offline Package Study",
-                abstract="Complete offline acceptance article",
-                authors=("Test Author",),
-                year=2026,
-                venue="Offline Journal",
-            ),
-        )
-
-
-class FakeAcquisitionProvider:
-    name = "offline-xml"
-
-    def initial_url(self, target: AcquisitionTarget) -> str:
-        return "https://offline.example/article.xml"
-
-    def acquire(self, target: AcquisitionTarget, *, timeout: float) -> ProviderContent:
+    def resolve(self, target, role, *, timeout):
         del target, timeout
-        payload = (
-            b"<article><title>Offline Package Study</title><p>Complete body text.</p>"
-            b"<table-wrap><caption><title>Measurements</title></caption><table>"
-            b"<tr><th>Label</th><th>Value</th></tr><tr><td>A</td><td>1</td></tr>"
-            b"</table><table-wrap-foot><p>Measured offline.</p></table-wrap-foot>"
-            b"</table-wrap><ref>doi:10.1000/offline-package</ref></article>"
-        )
-        return ProviderContent(
-            AssetRole.XML,
-            "application/xml",
-            "xml",
-            "https://offline.example/article.xml",
-            self.name,
-            payload,
-            {"agent": "offline-acceptance"},
-        )
+        cursor = "rc1:offline"
+        return (RuntimeDownloadCandidate(
+            make_download_candidate_id(self.provider, self.resolver_id, role, cursor),
+            self.provider, self.resolver_id, self.provider, cursor,
+            "https://offline.test/article.pdf", role, 0, "https", "resolver",
+            "host:offline.test", {"fixture": "offline"}, media_type_hint="application/pdf",
+        ),)
+
+
+class Transport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get(self, url, *, params=None, headers=None, timeout=None):
+        del params, headers, timeout
+        self.calls += 1
+        return HttpResponse(200, url, {"content-type": "application/pdf"}, pdf_bytes())
+
+    def resolve_host(self, hostname):
+        del hostname
+        return ("192.0.2.1",)
 
 
 class OfflinePackageAcceptanceTests(TestCase):
-    def test_search_spec_through_acquisition_to_document_package(self) -> None:
-        with TemporaryDirectory() as temporary:
-            base = Path(temporary)
+    def test_existing_workversion_acquisition_to_document_package_and_replay(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
             storage_root = base / "storage"
             storage_root.mkdir()
             catalog = create_catalog_engine(base / "catalog.sqlite")
-            self.addCleanup(catalog.dispose)
             initialize_catalog(catalog)
-
-            read_only_engine = open_read_only_catalog_engine(base / "catalog.sqlite")
-            try:
-                entries = discover(
-                    SearchSpec("offline package acceptance", ("offline",), 1),
-                    providers={"offline": FakeDiscoveryProvider()},
-                    catalog=ReadOnlyCatalogView(read_only_engine),
-                    labeler=KeywordRuleLabeler(
-                        "topic", "1", {"offline": ("offline",)},
-                    ),
-                    intake_run_id=RUN_ID,
-                    retrieved_at=RETRIEVED_AT,
-                )
-            finally:
-                read_only_engine.dispose()
-            self.assertEqual(len(entries), 1)
-            entry = entries[0]
-
+            self.addCleanup(catalog.dispose)
+            resolution = IdentityResolver(catalog).create_or_reuse_work(
+                (Identifier("doi", "10.1000/offline-package"),)
+            )
+            assert resolution.work_version is not None
+            version_id = resolution.work_version.id
             assets = AssetRepository(catalog)
-            jobs = JobRepository(catalog)
-            identity = IdentityResolver(catalog)
-            admission = AdmissionService(identity, jobs, assets).admit(
-                entry.identifiers,
-                entry.metadata,
-                provider="multi-source",
-                asset_role=AssetRole.XML,
-                source_plan=SourcePlan(
-                    AssetRole.XML,
-                    RoutingMode.SERIAL,
-                    (SourceEntry("offline-xml", "offline-xml", 0),),
-                ),
-                provenance=entry.provenance.to_dict(),
-            )
             raw_store = RawAssetStore(storage_root)
-            acquisition = asyncio.run(
-                MultiSourceOrchestrator(
-                    jobs,
-                    AssetAcceptanceCoordinator(assets, raw_store),
-                    {"offline-xml": FakeAcquisitionProvider()},
-                ).acquire(
-                    admission,
-                    AcquisitionTarget(entry.identifiers, role=AssetRole.XML),
-                    SourcePlan(
-                        AssetRole.XML,
-                        RoutingMode.SERIAL,
-                        (SourceEntry("offline-xml", "offline-xml", 0),),
-                    ),
-                    timeout=1,
-                )
+            transport = Transport()
+            service = WorkVersionAcquisitionService(
+                assets,
+                AssetAcceptanceCoordinator(assets, raw_store),
+                {"offline": Resolver()},
+                CandidateExecutor(transport, identity_validator=ContentIdentityValidator()),
             )
-            self.assertEqual(acquisition.status, "succeeded")
+            target = AcquisitionTarget((Identifier("doi", "10.1000/offline-package"),))
+            acquired = asyncio.run(service.acquire(
+                version_id, AssetRole.PRIMARY_PDF, target, ("offline",), timeout=1.0
+            ))
+            replayed = asyncio.run(service.acquire(
+                version_id, AssetRole.PRIMARY_PDF, target, ("offline",), timeout=1.0
+            ))
+            self.assertEqual(acquired.status, "succeeded")
+            self.assertEqual(replayed.status, "reused")
+            self.assertEqual(transport.calls, 1)
 
-            pipeline = PackagePipeline(catalog, raw_store, DerivedArtifactStore(storage_root))
-            resolution = identity.create_or_reuse_work(entry.identifiers, entry.metadata)
-            first = pipeline.run(work_id=resolution.work.id)
-            replay = pipeline.run(work_id=resolution.work.id)
-            self.assertTrue(first.created)
-            self.assertFalse(replay.created)
-            self.assertEqual(replay.package, first.package)
-            package = first.package
-            package.validate_hash()
-            self.assertIs(package.quality, PackageQuality.LIMITED_XML_HTML)
-            self.assertEqual(package.identifiers, entry.identifiers)
-            self.assertEqual(package.normalized_content.tables[0].caption, "Measurements")
-            self.assertEqual(
-                tuple(cell.text for cell in package.normalized_content.tables[0].cells),
-                ("Label", "Value", "A", "1"),
+            pipeline = PackagePipeline(
+                catalog,
+                raw_store,
+                DerivedArtifactStore(storage_root),
+                normalization_parameters=NormalizationParameters(),
             )
-            self.assertTrue(package.evidence)
-            self.assertIsNotNone(package.light_structure.summary)
-            self.assertEqual({artifact.kind for artifact in package.artifacts}, {
-                "light_structure", "normalized_content", "source_map",
-            })
-            with catalog.connect() as connection:
-                self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM package_versions").scalar_one(), 1)
-                self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+            first = pipeline.run(work_version_id=version_id, no_enrichment=True)
+            replay = pipeline.run(work_version_id=version_id, no_enrichment=True)
+            self.assertEqual(first.record.id, replay.record.id)
+            self.assertEqual(first.record.work_version_id, version_id)
+            self.assertEqual(len(first.package.files), 1)
+            self.assertEqual(first.package.files[0].file_id, acquired.raw_asset_id)
 
 
 if __name__ == "__main__":
     import unittest
-
     unittest.main()
