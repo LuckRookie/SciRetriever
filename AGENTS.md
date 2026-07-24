@@ -5,7 +5,7 @@
 ## 1. 主规范
 
 1. 阅读 [`HARNESS.md`](HARNESS.md) 的工作流、质量、Git 和完成标准。
-2. 先按 [ADR 索引](docs/adr/README.md)判断权威范围：项目领域边界或 `DocumentPackage` 适用 ADR 0001；产品中心、WorkVersion、PDF analysis、CLI 方向或旧任务行为删除适用 ADR 0002。
+2. 先按 [ADR 索引](docs/adr/README.md)判断权威范围：项目领域边界或 `DocumentPackage` 适用 ADR 0001；产品中心、WorkVersion、PDF analysis、CLI 方向或旧任务行为删除适用 ADR 0002；WP4 MinerU parser/service ownership、连接和 attempt/evidence 边界适用 ADR 0003。
 3. 涉及模块边界、数据所有权或持久化时读[架构原则](docs/architecture/principles.md)和[系统设计](docs/specs/system-design.md)。
 4. 按[代码与文档责任映射](docs/governance/code-doc-map.md)判断文档同步范围。
 5. 默认沟通和项目文档使用中文；代码标识符、异常和提交信息使用英文。
@@ -67,7 +67,6 @@
 | `src/sciretriever/acquisition/` | WorkVersion resolver、tier 编排、候选执行、身份/内容验证和验收 | evolving / 生命周期高风险 |
 | `src/sciretriever/storage/` | Raw/Derived 不可变发布和恢复 | stable / durability 高风险 |
 | `src/sciretriever/normalization/` | PDF/XML/HTML 统一归一化 | stable |
-| `src/sciretriever/enrichment/` | 通用摘要、标签和引用 | stable |
 | `src/sciretriever/packaging/` | 质量门与版本化发布 | stable |
 | `src/sciretriever/cli/` | composition root 和配置装配 | evolving |
 
@@ -79,7 +78,7 @@ CLI / adapters
       ├── Discovery ──▶ shared integrations/network
       ├── Acquisition ─▶ shared integrations/network
       ├── Catalog / Storage
-      └── Normalization ─▶ Enrichment ─▶ Packaging
+      └── Normalization / current analysis ─▶ Packaging
                          │
                          ▼
               core contracts / DocumentPackage
@@ -101,7 +100,7 @@ CLI / adapters
 - 清洗、去重和 catalog 比对必须先于可能消耗 token 的标注。
 - Acquisition、Normalization 和 Packaging 不得丢失来源、输入、hash 或 lineage。
 - 下游通过稳定 ID、hash 和包契约集成，不直接依赖内部 ORM 表。
-- 不添加微服务、外部工作流平台、向量库或 Web UI，除非新 ADR 明确授权。
+- 不添加 SciRetriever-owned 微服务、外部工作流平台、向量库或 Web UI，除非新 ADR 明确授权。ADR 0003 只批准通过严格 adapter 连接 operator-managed MinerU parser capability，不授权 SciRetriever 启停或拥有该服务。
 
 ## 7. 真相源
 
@@ -110,6 +109,7 @@ CLI / adapters
 | ADR 权威范围与阅读顺序 | `docs/adr/README.md` |
 | 领域边界与 `DocumentPackage` | `docs/adr/0001-sciretriever-scope-and-boundary.md` |
 | 产品中心、WorkVersion、PDF analysis 与 pre-v1 删除策略 | `docs/adr/0002-work-centered-literature-library.md` |
+| WP4 MinerU parser/service connection 与外部 attempt/evidence 边界 | `docs/adr/0003-operator-managed-mineru-service.md` |
 | 数据所有权与 `DocumentPackage` | `docs/architecture/principles.md` |
 | 理想产品数据流与模块责任 | `docs/specs/system-design.md` |
 | 理想代码模块与依赖边界 | `docs/specs/technical-architecture.md` |
@@ -132,6 +132,7 @@ requirements、system design 和 technical architecture 只描述理想产品，
 - `tests/test_download_wp3.py`：WorkVersion selector、三层 acquisition、身份拒绝、幂等复用和脱敏诊断。
 - `tests/test_browser_wp3.py`：browser profile snapshot、网络边界、deadline 和 cleanup。
 - `tests/test_raw_asset_crash_recovery.py`：崩溃恢复与证据保留模式。
+- WP4 已实现；MinerU 服务运维合同见 `docs/guides/mineru-service-operations.md`，SciRetriever 只连接 operator-managed 服务。
 
 ## 9. 雷区和遗留代码
 
