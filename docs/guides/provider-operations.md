@@ -29,15 +29,17 @@
 5. 返回内容、授权范围和常见失败不能混为一谈的边界。
 6. 最后核对日期、证据等级和已知但尚未解决的实现限制。
 
-下文各机构的“当前接入”均属于 `implementation`；“运维知识”中的事实必须单独标注证据等级。新增或实质修改 provider / resolver 还必须填写 [Provider 准入与退役模板](provider-admission-template.md)，记录请求预算、有限 timeout、验证、脱敏和退役证据。
+下文各机构的“当前接入”均属于 `implementation`；“运维知识”中的事实必须单独标注证据等级。新增或实质修改 provider / resolver 还必须填写 [Provider 准入与退役模板](provider-admission-template.md)，记录请求预算、有限 timeout、验证、脱敏和退役证据。当前 WP3 adapters 的已填记录见 [WP3 acquisition 准入记录](wp3-acquisition-admission.md)。
 
 ### 1.3 当前实现与批准目标
 
 - 当前 provider 能力只以代码和 [README](../../README.md) 为准，覆盖与差距见[实施进度](../governance/implementation-progress.md)；本手册中的理想语义不表示对应配置或运行路径已经可用。
-- 当前 `search --level metadata` 在有界并发和各自有限 timeout 下接收 provider-neutral observations，并按确定性身份规则与 configured precedence/fill-missing 入库；结果不依赖完成顺序。已提供的 OA evidence 会规范化为 canonical open-access status，provider record 仍不天然等于 `WorkVersion`。
+- 当前 `search --level metadata` 在有界并发和各自有限 timeout 下接收 provider-neutral observations，并按确定性身份规则与 configured precedence/fill-missing 入库；结果不依赖完成顺序。`search --level download` 会对本次返回的 WorkVersion 继续运行与独立 `download` 相同的补全服务。已提供的 OA evidence 会规范化为 canonical open-access status，provider record 仍不天然等于 `WorkVersion`。
 - acquisition provider 面向具体 `WorkVersion` 的资产缺口。direct official、publisher、open provider 与显式配置的 Sci-Hub 属于第一层进程内竞速；translator 和 browser 是前层耗尽后的顺序回退。
-- Sci-Hub、translator 和 browser 当前均未实现。在各自配置、安全边界、离线 fixture 和用户文档完成前，不得把它们登记为 active capability。
+- Sci-Hub、translator 和 browser 均是已实现、默认关闭的 capability。Sci-Hub 必须显式配置且与 first-tier provider 列表一致；translator 只使用严格 rule template、精确 host allowlist 和固定静态 HTML whitelist；browser 只使用经过权限检查的 profile 临时副本。禁用这些 capability 时不要求 endpoint、rule、profile 或运行时。
 - 全文分析不是 provider 职责；只有已保存并通过验证的 primary PDF 才能进入后续 PDF-based fulltext analysis。XML/HTML 可作为补充资产，但不能在缺少 PDF 时满足 analyze，也不能在冲突时覆盖 PDF。
+- 第一层 providers 有界竞速；每个 provider 的候选先去重并按确定性顺序最多执行 8 个。第一层全部耗尽后才顺序运行 translator rules，再运行 browser rules。所有 PDF/XML/HTML 都必须通过目标文章身份验证；明确不符或无法确认均拒绝并保持缺口。
+- Sci-Hub 和 browser 没有 live 验证证据，本轮只有离线 fixture/adapter 测试；仓库不提供默认 Sci-Hub mirror，也不支持交互登录或 CAPTCHA。operator 负责确认 endpoint、会话和内容访问的授权范围，本手册不作官方或法律结论。
 
 ### 1.4 通用排障顺序
 
@@ -63,8 +65,11 @@
 | Elsevier | `elsevier` | 是 | 主文 PDF、补充 PDF、XML | API key 必需，内容授权另计 |
 | Wiley | `wiley` | 否 | 主文 PDF | TDM token 必需，内容授权另计 |
 | Springer Nature | `springer` | 是 | XML、HTML | API key 必需，端点授权另计 |
+| Configured Sci-Hub | `sci-hub` | 否 | 第一层主文 PDF | 默认关闭；无默认 endpoint |
+| Restricted translator | rule name | 否 | 第二层主文 PDF 候选 | 默认关闭；无凭据字段 |
+| Profile-copy browser | rule name | 否 | 第三层主文 PDF | 默认关闭；使用 operator 准备的 profile 副本 |
 
-`direct` 是对明确 HTTPS 资产地址的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。
+`direct` 是对 WorkVersion 已持久化 HTTPS locator 的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。Sci-Hub、translator 和 browser 的共同安全/退役事实集中在 [WP3 acquisition 准入记录](wp3-acquisition-admission.md)，不在本文写入 endpoint、profile path 或 session 数据。
 
 ## 3. Semantic Scholar
 
@@ -101,7 +106,7 @@
 
 ### 已知实现边界
 
-- 当前 acquisition 只采用一个 `openAccessPdf.url`，不会从 landing page 提取其它候选。
+- 当前 acquisition 采用 `openAccessPdf.url`；该 provider 自身不解析 landing page，只有第一层全部耗尽后才可能进入独立 translator/browser tier。
 - API 返回元数据成功不代表存在全文，也不代表具备版权内容访问权。
 - 当前 profile 尚未把官方 1 RPS 明确建模为 Semantic Scholar 专属预算；运行时应保守控制请求速率。
 
@@ -180,14 +185,14 @@
 
 - 当前实现不使用 API key，也没有对应凭据配置。
 - Discovery 使用 cursor 分页。
-- Acquisition 按 `best_oa_location`、`primary_location`、`locations` 的顺序寻找第一个 HTTPS `pdf_url`。
+- Acquisition 按 `best_oa_location`、`primary_location`、`locations` 的顺序选择首个 HTTPS `pdf_url`，再交给共享 executor。
 
 ### 运维知识
 
 - `official`，2026-07-21：当前 OpenAlex 文档说明 API 需要免费 API key，并提供每日免费额度。SciRetriever 尚未接入该 key；匿名访问即使暂时可用，也不应视为稳定契约。
 - `inferred`：OpenAlex 的开放状态和 PDF 地址来自聚合元数据，可能滞后或与目标站点实际可访问性不一致；需用 resolver 响应和最终下载结果对照复核。
 - `verified`，2026-07-21：真实样本中，标记为 `closed` 的记录仍出现可公开下载的直链；有 `pdf_url` 的候选也可能返回 `403`、HTML 或失效内容。
-- `implementation`：当前实现找到第一个候选后即返回；若该候选下载失败，不会继续同一记录的其它 location。
+- `implementation`：当前 OpenAlex client 对 location 列表做确定性顺序扫描并返回首个 HTTPS locator；该 locator 下载或验证失败时，当前 invocation 不继续同一 OpenAlex record 的其它 locations。
 
 ### 检查重点
 
@@ -243,8 +248,8 @@
 ### 运维知识
 
 - `implementation`：Email 用于构造 API 请求身份，不是访问付费全文的凭据。
-- `implementation`：当前实现按 location 顺序找到第一个 PDF URL 后立即下载；下载失败时不会继续尝试其余 OA location。
-- `implementation`：“无 OA location”与“第一个 location 已失效”必须分开记录，后者属于候选回退能力不足。
+- `implementation`：当前 resolver 按 `best_oa_location` 后接 `oa_locations` 的顺序形成去重候选；首候选下载或验证失败后继续下一候选，单来源最多执行 8 个。
+- `implementation`：“无 OA location”与“候选均已耗尽”分别映射为脱敏来源诊断；运行时请求 Email 和候选 URL 不进入 durable diagnostics。
 
 ### 检查重点
 
