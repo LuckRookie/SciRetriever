@@ -1,6 +1,6 @@
 # Copy to config.toml and keep only the settings you need.
 # This file lists only fields accepted by the current strict parser.
-# Planned LLM fields are unsupported. Optional acquisition adapters are disabled by default.
+# Optional acquisition adapters are disabled by default.
 schema_version = 1
 
 [paths]
@@ -35,7 +35,7 @@ battery = ["electrolyte", "lithium"]
 
 [search]
 level = "metadata"
-# Also supported: "download"; it requires paths.storage_root or --storage-root.
+# Also supported: "download" and "analyze"; both require paths.storage_root.
 limit = 100
 providers = ["crossref", "europe-pmc", "arxiv"]
 # Precedence must contain every configured provider exactly once.
@@ -97,6 +97,44 @@ max_asset_bytes = 104857600
 readiness = "none" # "headers" enables body-free HEAD readiness for direct URLs only.
 timeout = 10.0
 
+[analysis.mineru]
+# Loopback forbids auth_env and remote_upload. Remote mode requires an HTTPS
+# origin, auth_env, and remote_upload=true because PDFs leave the local host.
+mode = "loopback"
+endpoint = "http://127.0.0.1:8000"
+service_version = "3.4.4"
+api_protocol = 2
+backend = "vlm-engine"
+model = "operator/model@revision"
+overall_deadline = 900.0
+poll_interval = 2.0
+max_archive_bytes = 536870912
+max_json_bytes = 134217728
+max_pages = 2000
+max_blocks = 500000
+max_spans = 2000000
+max_text_characters = 100000000
+max_image_bytes = 67108864
+max_archive_files = 10000
+max_extracted_bytes = 1073741824
+max_file_bytes = 268435456
+max_compression_ratio = 200
+max_images = 5000
+max_json_depth = 100
+max_json_elements = 2000000
+max_json_string_characters = 100000000
+max_upload_bytes = 104857600
+max_attempts = 3
+
+[analysis.llm]
+endpoint = "https://llm.example.org/v1"
+model = "analysis-model"
+credential_env = "SCIRETRIEVER_LLM_API_KEY"
+timeout = 120.0
+max_output_tokens = 16384
+max_input_characters = 200000
+max_source_units = 5000
+
 [package]
 max_input_bytes = 67108864
 max_pages = 2000
@@ -104,5 +142,3 @@ max_structural_units = 100000
 max_depth = 256
 max_elements = 500000
 max_text_characters = 20000000
-summary_max_characters = 1000
-enrichment = true

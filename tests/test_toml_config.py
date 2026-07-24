@@ -72,8 +72,6 @@ max_structural_units = 20
 max_depth = 30
 max_elements = 40
 max_text_characters = 50
-summary_max_characters = 60
-enrichment = false
 """
         )
         loaded = load_config(path)
@@ -227,17 +225,19 @@ crossref_mailto = "reader@example.org"
         self.assertEqual(config.search.max_concurrency, 3)
         self.assertEqual(config.search.crossref_mailto, "reader@example.org")
 
-    def test_search_config_accepts_download_level(self) -> None:
-        config = load_config(self.write(
-            'schema_version = 1\n[search]\nlevel = "download"',
-            "download-level.toml",
-        ))
-        self.assertEqual(config.search.level, "download")
+    def test_search_config_accepts_processing_levels(self) -> None:
+        for level in ("download", "analyze"):
+            with self.subTest(level=level):
+                config = load_config(self.write(
+                    f'schema_version = 1\n[search]\nlevel = "{level}"',
+                    f"{level}-level.toml",
+                ))
+                self.assertEqual(config.search.level, level)
 
     def test_search_config_rejects_unknown_wrong_and_future_values(self) -> None:
         cases = {
             "unknown.toml": "unknown = true",
-            "level.toml": 'level = "analyze"',
+            "level.toml": 'level = "future"',
             "limit.toml": "limit = 0",
             "timeout.toml": "provider_timeout = inf",
             "concurrency.toml": "max_concurrency = true",
@@ -407,6 +407,69 @@ timeout = 2.5
             with self.subTest(name=name), self.assertRaises(ConfigError):
                 load_config(self.write(f"schema_version = 1\n{body}", name))
 
+    def test_analysis_targets_are_strict_bounded_and_redacted(self) -> None:
+        config = load_config(self.write('''schema_version = 1
+[analysis.mineru]
+mode = "remote"
+endpoint = "https://mineru.example"
+auth_env = "MINERU_TOKEN"
+remote_upload = true
+service_version = "3.4.4"
+api_protocol = 2
+backend = "vlm-engine"
+model = "operator-attested-model"
+max_attempts = 4
+max_spans = 12345
+[analysis.llm]
+        endpoint = "https://llm.example/v1/"
+model = "analysis-model"
+credential_env = "LLM_SECRET"
+timeout = 30
+max_output_tokens = 4096
+max_input_characters = 123456
+max_source_units = 2345
+''', "analysis.toml"))
+        self.assertEqual(config.analysis.mineru.backend, "vlm-engine")
+        self.assertEqual(config.analysis.mineru.api_protocol, 2)
+        self.assertEqual(config.analysis.mineru.max_attempts, 4)
+        self.assertEqual(config.analysis.mineru.max_spans, 12345)
+        self.assertNotIn("MINERU_TOKEN", repr(config))
+        self.assertNotIn("LLM_SECRET", repr(config))
+        self.assertGreater(config.analysis.mineru.max_archive_bytes, 0)
+        self.assertEqual((config.analysis.llm.max_input_characters, config.analysis.llm.max_source_units),
+                         (123456, 2345))
+        self.assertEqual(config.analysis.llm.endpoint, "https://llm.example/v1")
+
+    def test_analysis_targets_fail_closed(self) -> None:
+        invalid = {
+            "loopback-host": '[analysis.mineru]\nmode="loopback"\nendpoint="http://192.168.1.2"\nmodel="m"',
+            "loopback-https": '[analysis.mineru]\nmode="loopback"\nendpoint="https://127.0.0.1"\nmodel="m"',
+            "remote-http": '[analysis.mineru]\nmode="remote"\nendpoint="http://mineru.example"\nauth_env="TOKEN"\nremote_upload=true\nmodel="m"',
+            "remote-no-upload": '[analysis.mineru]\nmode="remote"\nendpoint="https://mineru.example"\nauth_env="TOKEN"\nmodel="m"',
+            "wrong-version": '[analysis.mineru]\nservice_version="4.0.0"',
+            "attempts": '[analysis.mineru]\nmax_attempts=101',
+            "unknown": '[analysis.mineru]\nfuture=true',
+            "llm-missing-secret": '[analysis.llm]\nendpoint="https://llm.example"\nmodel="m"',
+            "llm-output": '[analysis.llm]\nendpoint="https://llm.example"\nmodel="m"\ncredential_env="TOKEN"\nmax_output_tokens=999999',
+            "llm-userinfo": '[analysis.llm]\nendpoint="https://user@llm.example/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-query": '[analysis.llm]\nendpoint="https://llm.example/v1?q=x"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-fragment": '[analysis.llm]\nendpoint="https://llm.example/v1#x"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-port": '[analysis.llm]\nendpoint="https://llm.example:8443/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-dot": '[analysis.llm]\nendpoint="https://llm.example/a/../v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-slashes": '[analysis.llm]\nendpoint="https://llm.example/a//v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-http": '[analysis.llm]\nendpoint="http://llm.example/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-ipv4": '[analysis.llm]\nendpoint="https://192.0.2.1/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-ipv6": '[analysis.llm]\nendpoint="https://[2001:db8::1]/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-backslash": '[analysis.llm]\nendpoint="https://llm.example\\\\v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-control": '[analysis.llm]\nendpoint="https://llm.example/v1\\t"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-encoded-dot": '[analysis.llm]\nendpoint="https://llm.example/a/%2e%2e/v1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-encoded-slash": '[analysis.llm]\nendpoint="https://llm.example/a%2Fv1"\nmodel="m"\ncredential_env="TOKEN"',
+            "llm-encoded-backslash": '[analysis.llm]\nendpoint="https://llm.example/a%5cv1"\nmodel="m"\ncredential_env="TOKEN"',
+        }
+        for name, body in invalid.items():
+            with self.subTest(name=name), self.assertRaises(ConfigError):
+                load_config(self.write(f"schema_version = 1\n{body}", f"analysis-{name}.toml"))
+
 
 class ConfigCliTests(TestCase):
     def setUp(self) -> None:
@@ -535,19 +598,15 @@ crossref_mailto = "configured@example.org"
             "--provider", "crossref", "--provider", "openalex",
         ])
 
-    def test_package_enrichment_can_be_overridden_in_both_directions(self) -> None:
-        for configured, option, expected in (
-            (False, "--enrichment", False),
-            (True, "--no-enrichment", True),
-        ):
-            config = self.write(
-                f'schema_version = 1\n[paths]\ncatalog = "catalog.sqlite"\nstorage_root = "storage"\n[package]\nenrichment = {str(configured).lower()}',
-                f"package-{configured}.toml",
-            )
-            with self.subTest(configured=configured), mock.patch("sciretriever.cli.package.run", return_value=0) as run:
-                result = main(["package", "--work-id", "id", option, "--config", str(config)])
-            self.assertEqual(result, 0)
-            self.assertIs(run.call_args.args[0].no_enrichment, expected)
+        analyze_config = load_config(self.write(
+            'schema_version = 1\n[paths]\ncatalog="catalog.sqlite"\nstorage_root="storage"\n'
+            '[search]\nlevel="analyze"\nlimit=40', "search-analyze.toml"))
+        configured_analyze = _inject_config(["search", "q"], analyze_config)
+        self.assertIn("analyze", configured_analyze)
+        self.assertIn("--storage-root", configured_analyze)
+        explicit_analyze = _inject_config(["search", "q", "--level", "analyze", "--limit", "3"], analyze_config)
+        self.assertEqual(explicit_analyze[:6], ["search", "q", "--level", "analyze", "--limit", "3"])
+        self.assertIn("--storage-root", explicit_analyze)
 
     def test_catalog_create_uses_config_path_and_config_errors_have_no_side_effects(self) -> None:
         config = self.write('schema_version = 1\n[paths]\ncatalog = "created.sqlite"')

@@ -27,7 +27,7 @@ STORAGE_ROOT_ENV = "SCIRETRIEVER_STORAGE_ROOT"
 CONFIG_ENV = "SCIRETRIEVER_CONFIG"
 MAX_CONFIG_BYTES = 1024 * 1024
 
-_ROOT_KEYS = {"schema_version", "paths", "credentials", "discovery", "search", "acquisition", "package"}
+_ROOT_KEYS = {"schema_version", "paths", "credentials", "discovery", "search", "acquisition", "analysis", "package"}
 _CREDENTIAL_KEYS = {
     "unpaywall_email",
     "semantic_scholar_api_key",
@@ -161,8 +161,54 @@ class PackageConfig:
     max_depth: int | None = None
     max_elements: int | None = None
     max_text_characters: int | None = None
-    summary_max_characters: int | None = None
-    enrichment: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MinerUConfig:
+    mode: str = "disabled"
+    endpoint: str | None = None
+    auth_env: str | None = field(default=None, repr=False)
+    remote_upload: bool = False
+    service_version: str = "3.4.4"
+    api_protocol: int = 2
+    backend: str = "vlm-engine"
+    model: str | None = None
+    overall_deadline: float = 900.0
+    poll_interval: float = 2.0
+    max_archive_bytes: int = 512 * 1024 * 1024
+    max_json_bytes: int = 128 * 1024 * 1024
+    max_pages: int = 2000
+    max_blocks: int = 500_000
+    max_spans: int = 2_000_000
+    max_text_characters: int = 100_000_000
+    max_image_bytes: int = 64 * 1024 * 1024
+    max_archive_files: int = 10_000
+    max_extracted_bytes: int = 1024 * 1024 * 1024
+    max_file_bytes: int = 256 * 1024 * 1024
+    max_compression_ratio: int = 200
+    max_images: int = 5000
+    max_json_depth: int = 100
+    max_json_elements: int = 2_000_000
+    max_json_string_characters: int = 100_000_000
+    max_upload_bytes: int = 100 * 1024 * 1024
+    max_attempts: int = 3
+
+
+@dataclass(frozen=True, slots=True)
+class LLMConfig:
+    endpoint: str | None = None
+    model: str | None = None
+    credential_env: str | None = field(default=None, repr=False)
+    timeout: float = 120.0
+    max_output_tokens: int = 16_384
+    max_input_characters: int = 200_000
+    max_source_units: int = 5_000
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisConfig:
+    mineru: MinerUConfig = MinerUConfig()
+    llm: LLMConfig = LLMConfig()
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +219,7 @@ class SciRetrieverConfig:
     discovery: DiscoveryConfig = DiscoveryConfig()
     search: SearchConfig = SearchConfig()
     acquisition: AcquisitionConfig = AcquisitionConfig()
+    analysis: AnalysisConfig = AnalysisConfig()
     package: PackageConfig = PackageConfig()
 
 
@@ -568,7 +615,9 @@ def _parse_search(root: Mapping[str, Any]) -> SearchConfig:
         if set(precedence) != set(providers):
             raise _error("search.precedence", "must contain every configured provider exactly once")
     return SearchConfig(
-        level=None if "level" not in table else _choice(table["level"], "search.level", {"metadata", "download"}),
+        level=None if "level" not in table else _choice(
+            table["level"], "search.level", {"metadata", "download", "analyze"}
+        ),
         limit=None if "limit" not in table else _positive_int(table["limit"], "search.limit"),
         providers=providers,
         precedence=precedence,
@@ -639,19 +688,157 @@ def _parse_acquisition(root: Mapping[str, Any], parent: Path) -> AcquisitionConf
 def _parse_package(root: Mapping[str, Any]) -> PackageConfig:
     integer_fields = {
         "max_input_bytes", "max_pages", "max_structural_units", "max_depth",
-        "max_elements", "max_text_characters", "summary_max_characters",
+        "max_elements", "max_text_characters",
     }
-    table = _table(root, "package", integer_fields | {"enrichment"})
+    table = _table(root, "package", integer_fields)
     values: dict[str, Any] = {
         name: _positive_int(table[name], f"package.{name}")
         for name in integer_fields
         if name in table
     }
-    if "enrichment" in table:
-        if not isinstance(table["enrichment"], bool):
-            raise _error("package.enrichment", "must be a boolean")
-        values["enrichment"] = table["enrichment"]
     return PackageConfig(**values)
+
+
+def _env_name(value: Any, name: str) -> str:
+    parsed = _nonblank(value, name)
+    if re.fullmatch(r"[A-Z_][A-Z0-9_]{0,127}", parsed) is None:
+        raise _error(name, "must be an environment variable name")
+    return parsed
+
+
+def _fixed_origin(value: Any, name: str, *, loopback: bool) -> str:
+    endpoint = _nonblank(value, name)
+    parsed = urlsplit(endpoint)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise _error(name, "must be a fixed-origin endpoint") from error
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment or not parsed.hostname:
+        raise _error(name, "must be a fixed-origin endpoint")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+        is_loopback = address.is_loopback
+    except ValueError:
+        is_loopback = parsed.hostname == "localhost"
+    if loopback:
+        if parsed.scheme != "http" or not is_loopback:
+            raise _error(name, "must be explicit loopback HTTP in loopback mode")
+    elif parsed.scheme != "https" or is_loopback or port not in (None, 443):
+        raise _error(name, "must be remote HTTPS on the default port")
+    if parsed.path not in ("", "/"):
+        raise _error(name, "must contain only an origin")
+    return endpoint.rstrip("/")
+
+
+def _https_base_url(value: Any, name: str) -> str:
+    endpoint = _nonblank(value, name)
+    if any(ord(character) < 33 or ord(character) == 127 for character in endpoint) or "\\" in endpoint:
+        raise _error(name, "must be a safe remote HTTPS base URL")
+    parsed = urlsplit(endpoint)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise _error(name, "must be a safe remote HTTPS base URL") from error
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or port not in (None, 443)):
+        raise _error(name, "must be a safe remote HTTPS base URL")
+    try:
+        ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        is_loopback = parsed.hostname == "localhost"
+    else:
+        raise _error(name, "must use a DNS hostname, not an IP literal")
+    segments = parsed.path.split("/")
+    lowered_path = parsed.path.lower()
+    if (is_loopback or "" in segments[1:-1]
+            or any(segment in {".", ".."} for segment in segments)
+            or any(encoded in lowered_path for encoded in ("%2e", "%2f", "%5c"))):
+        raise _error(name, "must be a safe remote HTTPS base URL")
+    path = parsed.path.rstrip("/")
+    return f"https://{parsed.hostname.lower()}{path}"
+
+
+def _bounded_positive(table: Mapping[str, Any], name: str, prefix: str, default: int, maximum: int) -> int:
+    value = default if name not in table else _positive_int(table[name], f"{prefix}.{name}")
+    if value > maximum:
+        raise _error(f"{prefix}.{name}", "exceeds the supported bound")
+    return value
+
+
+def _parse_analysis(root: Mapping[str, Any]) -> AnalysisConfig:
+    analysis = _table(root, "analysis", {"mineru", "llm"})
+    mineru_table = _table(analysis, "mineru", {
+        "mode", "endpoint", "auth_env", "remote_upload", "service_version", "api_protocol",
+        "backend", "model", "overall_deadline", "poll_interval", "max_archive_bytes",
+        "max_json_bytes", "max_pages", "max_blocks", "max_spans", "max_text_characters", "max_image_bytes",
+        "max_archive_files", "max_extracted_bytes", "max_file_bytes",
+        "max_compression_ratio", "max_images", "max_json_depth",
+        "max_json_elements", "max_json_string_characters",
+        "max_upload_bytes", "max_attempts",
+    })
+    mode = "disabled" if "mode" not in mineru_table else _choice(mineru_table["mode"], "analysis.mineru.mode", {"disabled", "loopback", "remote"})
+    endpoint = None if "endpoint" not in mineru_table else _fixed_origin(mineru_table["endpoint"], "analysis.mineru.endpoint", loopback=mode == "loopback")
+    auth_env = None if "auth_env" not in mineru_table else _env_name(mineru_table["auth_env"], "analysis.mineru.auth_env")
+    remote_upload = False if "remote_upload" not in mineru_table else _boolean(mineru_table["remote_upload"], "analysis.mineru.remote_upload")
+    service_version = str(mineru_table.get("service_version", "3.4.4"))
+    api_protocol = mineru_table.get("api_protocol", 2)
+    backend = str(mineru_table.get("backend", "vlm-engine"))
+    model = _optional_string(mineru_table, "model", "analysis.mineru")
+    if service_version != "3.4.4" or api_protocol != 2 or isinstance(api_protocol, bool) or backend != "vlm-engine":
+        raise _error("analysis.mineru", "must pin service_version 3.4.4, api_protocol 2, and backend vlm-engine")
+    if mode == "disabled" and (endpoint is not None or auth_env is not None or remote_upload or model is not None):
+        raise _error("analysis.mineru", "must not configure a disabled target")
+    if mode in {"loopback", "remote"} and (endpoint is None or model is None):
+        raise _error("analysis.mineru", "requires endpoint and model when enabled")
+    if mode == "loopback" and (auth_env is not None or remote_upload):
+        raise _error("analysis.mineru", "loopback mode forbids auth_env and remote_upload")
+    if mode == "remote" and (auth_env is None or not remote_upload):
+        raise _error("analysis.mineru", "remote mode requires auth_env and remote_upload=true")
+    mineru = MinerUConfig(
+        mode, endpoint, auth_env, remote_upload, service_version, 2, backend, model,
+        900.0 if "overall_deadline" not in mineru_table else _positive_number(mineru_table["overall_deadline"], "analysis.mineru.overall_deadline"),
+        2.0 if "poll_interval" not in mineru_table else _positive_number(mineru_table["poll_interval"], "analysis.mineru.poll_interval"),
+        _bounded_positive(mineru_table, "max_archive_bytes", "analysis.mineru", 512 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_json_bytes", "analysis.mineru", 128 * 1024 * 1024, 512 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_pages", "analysis.mineru", 2000, 10_000),
+        _bounded_positive(mineru_table, "max_blocks", "analysis.mineru", 500_000, 2_000_000),
+        _bounded_positive(mineru_table, "max_spans", "analysis.mineru", 2_000_000, 10_000_000),
+        _bounded_positive(mineru_table, "max_text_characters", "analysis.mineru", 100_000_000, 500_000_000),
+        _bounded_positive(mineru_table, "max_image_bytes", "analysis.mineru", 64 * 1024 * 1024, 256 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_archive_files", "analysis.mineru", 10_000, 100_000),
+        _bounded_positive(mineru_table, "max_extracted_bytes", "analysis.mineru", 1024 * 1024 * 1024, 4 * 1024 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_file_bytes", "analysis.mineru", 256 * 1024 * 1024, 1024 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_compression_ratio", "analysis.mineru", 200, 1000),
+        _bounded_positive(mineru_table, "max_images", "analysis.mineru", 5000, 50_000),
+        _bounded_positive(mineru_table, "max_json_depth", "analysis.mineru", 100, 500),
+        _bounded_positive(mineru_table, "max_json_elements", "analysis.mineru", 2_000_000, 10_000_000),
+        _bounded_positive(mineru_table, "max_json_string_characters", "analysis.mineru", 100_000_000, 500_000_000),
+        _bounded_positive(mineru_table, "max_upload_bytes", "analysis.mineru", 100 * 1024 * 1024, 1024 * 1024 * 1024),
+        _bounded_positive(mineru_table, "max_attempts", "analysis.mineru", 3, 100),
+    )
+    if mineru.max_file_bytes > mineru.max_extracted_bytes:
+        raise _error("analysis.mineru.max_file_bytes", "must not exceed max_extracted_bytes")
+    if mineru.poll_interval > mineru.overall_deadline:
+        raise _error("analysis.mineru.poll_interval", "must not exceed overall_deadline")
+    llm_table = _table(analysis, "llm", {"endpoint", "model", "credential_env", "timeout", "max_output_tokens",
+                                                   "max_input_characters", "max_source_units"})
+    llm_endpoint = None if "endpoint" not in llm_table else _https_base_url(llm_table["endpoint"], "analysis.llm.endpoint")
+    llm_model = _optional_string(llm_table, "model", "analysis.llm")
+    credential_env = None if "credential_env" not in llm_table else _env_name(llm_table["credential_env"], "analysis.llm.credential_env")
+    configured = bool(llm_table)
+    if configured and (llm_endpoint is None or llm_model is None or credential_env is None):
+        raise _error("analysis.llm", "requires endpoint, model, and credential_env")
+    llm = LLMConfig(
+        llm_endpoint, llm_model, credential_env,
+        120.0 if "timeout" not in llm_table else _positive_number(llm_table["timeout"], "analysis.llm.timeout"),
+        _bounded_positive(llm_table, "max_output_tokens", "analysis.llm", 16_384, 131_072),
+        _bounded_positive(llm_table, "max_input_characters", "analysis.llm", 200_000, 2_000_000),
+        _bounded_positive(llm_table, "max_source_units", "analysis.llm", 5_000, 100_000),
+    )
+    if llm.timeout > 600:
+        raise _error("analysis.llm.timeout", "exceeds the supported bound")
+    return AnalysisConfig(mineru, llm)
 
 
 def _read_config_snapshot(config_path: Path) -> tuple[os.stat_result, bytes, Path]:
@@ -732,6 +919,7 @@ def load_config(path: str | os.PathLike[str]) -> SciRetrieverConfig:
         discovery=_parse_discovery(root),
         search=_parse_search(root),
         acquisition=_parse_acquisition(root, parent),
+        analysis=_parse_analysis(root),
         package=_parse_package(root),
     )
 
@@ -764,7 +952,7 @@ def get_credential(env_var: str, *, env: Mapping[str, str] | None = None) -> str
 __all__ = (
     "CONFIG_ENV", "MAX_CONFIG_BYTES", "STORAGE_ROOT_ENV", "AcquisitionConfig",
     "ACQUISITION_PROVIDERS", "METADATA_PROVIDERS", "PreflightConfig",
-    "CredentialsConfig", "DiscoveryConfig", "PackageConfig", "PathsConfig", "SciHubConfig",
+    "CredentialsConfig", "DiscoveryConfig", "AnalysisConfig", "MinerUConfig", "LLMConfig", "PackageConfig", "PathsConfig", "SciHubConfig",
     "TranslatorConfig", "TranslatorRuleConfig", "BrowserConfig", "BrowserRuleConfig",
     "SciRetrieverConfig", "SearchConfig", "get_credential", "load_config", "resolve_storage_root",
 )
