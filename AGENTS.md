@@ -64,7 +64,7 @@
 | `src/sciretriever/discovery/` | 元数据清洗、去重、合并、标注和清单 | stable |
 | `src/sciretriever/integrations/` | 供应商共享 client 和中性 DTO | evolving / 外部 API 风险 |
 | `src/sciretriever/network/` | HTTPS、DNS、重定向和响应边界 | stable / 安全高风险 |
-| `src/sciretriever/acquisition/` | provider、路由、重试、熔断和验收 | evolving / 生命周期高风险 |
+| `src/sciretriever/acquisition/` | WorkVersion resolver、tier 编排、候选执行、身份/内容验证和验收 | evolving / 生命周期高风险 |
 | `src/sciretriever/storage/` | Raw/Derived 不可变发布和恢复 | stable / durability 高风险 |
 | `src/sciretriever/normalization/` | PDF/XML/HTML 统一归一化 | stable |
 | `src/sciretriever/enrichment/` | 通用摘要、标签和引用 | stable |
@@ -85,7 +85,7 @@ CLI / adapters
               core contracts / DocumentPackage
 ```
 
-- `discovery` 和 `acquisition` 互不导入，只通过 `DownloadManifest` 文件契约交接。
+- `discovery` 和 `acquisition` 互不导入；写入型 `search` 由 CLI composition root 把已持久化 WorkVersion IDs 交给 download 服务，`discover` 的 `DownloadManifest` 仍是独立只读文件输出。
 - `catalog` 不依赖 discovery、acquisition、storage、normalization、enrichment 或 packaging 类型。
 - `core` 不依赖任一工作流或基础设施模块。
 - 供应商响应在 `integrations` 转换为中性 DTO；vendor dict 不进入 core/catalog。
@@ -95,7 +95,7 @@ CLI / adapters
 ## 6. 不可协商的数据边界
 
 - SciRetriever 止于 `DocumentPackageVersion`；不得加入反应、分子、路线、产率等领域 schema。
-- 当前 `package_versions` 是处理快照，不是批准目标中的书目 `WorkVersion`。
+- `package_versions` 是处理快照，不是已经实现的书目 `WorkVersion`。
 - catalog 不存大型 BLOB，不存绝对资产路径；文件系统存字节，catalog 存相对路径、hash、关系和 provenance。
 - RawAsset 永不原地修改；发布只允许 create-if-absent，不覆盖冲突证据。
 - 清洗、去重和 catalog 比对必须先于可能消耗 token 的标注。
@@ -129,7 +129,8 @@ requirements、system design 和 technical architecture 只描述理想产品，
 - `src/sciretriever/network/secure.py`：有界读取、DNS pinning、重定向复检和敏感 header 处理。
 - `src/sciretriever/storage/coordinator.py`：durability 优先的不可变发布。
 - `tests/test_discovery_acceptance.py`：离线端到端 Discovery 验收。
-- `tests/test_acquisition_p5.py`：多来源生命周期与出版商能力测试。
+- `tests/test_download_wp3.py`：WorkVersion selector、三层 acquisition、身份拒绝、幂等复用和脱敏诊断。
+- `tests/test_browser_wp3.py`：browser profile snapshot、网络边界、deadline 和 cleanup。
 - `tests/test_raw_asset_crash_recovery.py`：崩溃恢复与证据保留模式。
 
 ## 9. 雷区和遗留代码
