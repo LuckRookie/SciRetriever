@@ -11,7 +11,7 @@ import sys
 from sqlalchemy.exc import SQLAlchemyError
 
 from sciretriever.catalog import WorkRepository, canonical_json, open_catalog_engine
-from sciretriever.cli import discover, download
+from sciretriever.cli import analyze, discover, download
 from sciretriever.discovery import (
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_PROVIDER_TIMEOUT_SECONDS,
@@ -21,8 +21,10 @@ from sciretriever.discovery import (
     MetadataSearchService,
 )
 from sciretriever.errors import CatalogError, SearchError
-from sciretriever.config import ACQUISITION_PROVIDERS
+from sciretriever.config import ACQUISITION_PROVIDERS, get_credential
 from sciretriever.acquisition.transport import MAX_RESPONSE_BYTES
+from sciretriever.analysis import AnalysisBackfillResult, OpenAICompatibleAnalysisProvider
+from sciretriever.normalization import MinerUClient
 
 
 DEFAULT_PROVIDERS = discover.DEFAULT_SOURCES
@@ -35,7 +37,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.description = "Search metadata providers and persist canonical Works."
     parser.add_argument("query", type=discover._nonblank, metavar="QUERY")
     parser.add_argument("--catalog", required=True, type=Path, metavar="PATH")
-    parser.add_argument("--level", choices=("metadata", "download"), default="metadata")
+    parser.add_argument("--level", choices=("metadata", "download", "analyze"), default="metadata")
     parser.add_argument("--provider", action="append", choices=ALL_PROVIDERS)
     parser.add_argument("--precedence", action="append", choices=ALL_PROVIDERS)
     parser.add_argument("--limit", type=discover._positive_int, default=DEFAULT_SEARCH_LIMIT)
@@ -74,8 +76,13 @@ def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace
         parser.error("precedence must contain every selected provider exactly once")
     args.provider = providers
     args.precedence = precedence
-    if args.level == "download" and args.storage_root is None:
-        parser.error("search --level download requires --storage-root")
+    if args.level in {"download", "analyze"} and args.storage_root is None:
+        parser.error(f"search --level {args.level} requires --storage-root")
+    if args.level == "analyze":
+        config = getattr(args, "_config_analysis", None)
+        if (config is None or config.mineru.mode == "disabled" or config.llm.endpoint is None
+                or config.llm.model is None or config.llm.credential_env is None):
+            parser.error("search --level analyze requires fully enabled analysis config")
     if args.host_min_interval < 0:
         parser.error("--host-min-interval must be nonnegative")
     download_providers = list(args.download_provider or download.DEFAULT_PROVIDERS)
@@ -169,15 +176,24 @@ def _download_args(args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
+def _analysis_args(args: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(catalog=args.catalog, storage_root=args.storage_root, force=False,
+        _config_analysis=getattr(args, "_config_analysis", None),
+        _mineru_client_factory=getattr(args, "_mineru_client_factory", MinerUClient) if hasattr(args, "_mineru_client_factory") else MinerUClient,
+        _analysis_provider_factory=getattr(args, "_analysis_provider_factory", OpenAICompatibleAnalysisProvider) if hasattr(args, "_analysis_provider_factory") else OpenAICompatibleAnalysisProvider,
+        _credential_reader=getattr(args, "_credential_reader", get_credential))
+
+
 def run(args: argparse.Namespace) -> int:
     """Run metadata search with stable, sanitized operational failures."""
     payload: str | None = None
     download_args: argparse.Namespace | None = None
+    analysis_args: argparse.Namespace | None = None
     try:
         output = _execute(args)
         payload = _serialize(output)
         interrupted = False
-        if args.level == "download":
+        if args.level in {"download", "analyze"}:
             selected = tuple(item.work_version.id for item in output.results)
             download_args = _download_args(args)
             acquisition = asyncio.run(
@@ -187,6 +203,13 @@ def run(args: argparse.Namespace) -> int:
             decoded["download"] = acquisition.to_dict()
             payload = canonical_json(decoded)
             interrupted = acquisition.interrupted > 0
+            if args.level == "analyze":
+                analysis_args = _analysis_args(args)
+                analyzed = (AnalysisBackfillResult(len(selected), 0, 0, 0, 0, len(selected), ())
+                            if interrupted else analyze.execute_work_versions(analysis_args, selected))
+                decoded["analysis"] = analyzed.to_dict()
+                payload = canonical_json(decoded)
+                interrupted = interrupted or analyzed.interrupted > 0
     except KeyboardInterrupt:
         acquisition = download.interrupted_result(
             download_args if download_args is not None else argparse.Namespace()
@@ -197,6 +220,9 @@ def run(args: argparse.Namespace) -> int:
             else {"counts": {"failures": 0, "results": 0}, "failures": [], "results": []}
         )
         decoded["download"] = acquisition.to_dict()
+        if args.level == "analyze":
+            decoded["analysis"] = analyze.interrupted_result(
+                analysis_args if analysis_args is not None else argparse.Namespace()).to_dict()
         print(canonical_json(decoded))
         return 130
     except (SearchError, CatalogError, SQLAlchemyError, OSError, ValueError) as error:

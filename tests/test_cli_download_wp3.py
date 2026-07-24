@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever.acquisition.backfill import DownloadBackfillResult, WorkVersionDownloadOutcome
+from sciretriever.analysis import AnalysisBackfillResult, WorkVersionAnalysisOutcome
 from sciretriever.cli import download, search
 from sciretriever.cli.main import main
 from sciretriever.core.contracts import CandidateMetadata, Identifier
@@ -281,6 +282,68 @@ allowed_pdf_hosts = ["pdf.example"]
             code = search.run(args)
         self.assertEqual(code, 130)
         self.assertEqual(json.loads(output.getvalue())["download"]["counts"]["interrupted"], 1)
+
+    def test_search_analyze_chains_only_returned_versions_and_serializes_partial_block(self):
+        identifier = "00000000-0000-4000-8000-000000000001"
+        metadata_output = MetadataSearchOutput((MetadataSearchResult(
+            version(identifier), ("crossref",), (Identifier("doi", "10.1000/test"),),
+            CandidateMetadata("Title", None, (), 2024, None, ()),
+        ),), ())
+        acquisition = DownloadBackfillResult(1, 0, 0, 1, 0, ())
+        analyzed = AnalysisBackfillResult(1, 0, 0, 1, 0, 0, (
+            WorkVersionAnalysisOutcome(identifier, "blocked", "primary_pdf_missing", "download_primary_pdf"),))
+
+        async def execute_download(args, ids):
+            self.assertEqual(ids, (identifier,))
+            return acquisition
+
+        def execute_analysis(args, ids):
+            self.assertEqual(ids, (identifier,))
+            return analyzed
+
+        args = argparse.Namespace(level="analyze", storage_root=self.storage, catalog=self.catalog,
+            download_provider=list(download.DEFAULT_PROVIDERS), download_timeout=1.0,
+            download_provider_concurrency=2, host_concurrency=2, host_min_interval=0.0,
+            max_asset_bytes=1000, forbidden_urls=None, xml=False, html=False,
+            _config_analysis=SimpleNamespace())
+        output = io.StringIO()
+        with mock.patch("sciretriever.cli.search._execute", return_value=metadata_output), \
+             mock.patch("sciretriever.cli.download.execute_work_versions", side_effect=execute_download), \
+             mock.patch("sciretriever.cli.analyze.execute_work_versions", side_effect=execute_analysis), \
+             contextlib.redirect_stdout(output):
+            code = search.run(args)
+        self.assertEqual(code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["download"]["counts"]["missing"], 1)
+        self.assertEqual(payload["analysis"]["counts"]["blocked"], 1)
+
+    def test_search_analyze_download_interrupt_always_serializes_analysis_counts(self):
+        identifier = "00000000-0000-4000-8000-000000000001"
+        metadata_output = MetadataSearchOutput((MetadataSearchResult(
+            version(identifier), ("crossref",), (Identifier("doi", "10.1000/test"),),
+            CandidateMetadata("Title", None, (), 2024, None, ()),
+        ),), ())
+
+        async def interrupted_download(args, ids):
+            self.assertEqual(ids, (identifier,))
+            return DownloadBackfillResult(1, 0, 0, 0, 1, ())
+
+        args = argparse.Namespace(level="analyze", storage_root=self.storage, catalog=self.catalog,
+            download_provider=list(download.DEFAULT_PROVIDERS), download_timeout=1.0,
+            download_provider_concurrency=2, host_concurrency=2, host_min_interval=0.0,
+            max_asset_bytes=1000, forbidden_urls=None, xml=False, html=False,
+            _config_analysis=SimpleNamespace())
+        output = io.StringIO()
+        with mock.patch("sciretriever.cli.search._execute", return_value=metadata_output), \
+             mock.patch("sciretriever.cli.download.execute_work_versions", side_effect=interrupted_download), \
+             mock.patch("sciretriever.cli.analyze.execute_work_versions") as execute_analysis, \
+             contextlib.redirect_stdout(output):
+            code = search.run(args)
+        self.assertEqual(code, 130)
+        execute_analysis.assert_not_called()
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["analysis"]["counts"], {
+            "selected": 1, "analyzed": 0, "reused": 0, "blocked": 0, "failed": 0, "interrupted": 1})
 
 
 if __name__ == "__main__":
