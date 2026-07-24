@@ -145,7 +145,6 @@ class CliTests(TestCase):
             "--catalog", "--storage-root", "--work-id", "--raw-asset-id",
             "--work-version-id",
             "--max-pages", "--max-structural-units", "--max-depth", "--max-elements",
-            "--no-enrichment",
         ):
             self.assertIn(option, output.getvalue())
 
@@ -168,7 +167,6 @@ class CliTests(TestCase):
                 work_id=EXPLICIT_RUN_ID, raw_asset_id=None,
                 max_input_bytes=1024, max_pages=10, max_structural_units=20,
                 max_depth=30, max_elements=40, max_text_characters=50,
-                summary_max_characters=60, no_enrichment=False,
             )
             with (
                 mock.patch.object(package_cli, "open_catalog_engine", return_value=catalog),
