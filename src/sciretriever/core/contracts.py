@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 import re
 from typing import Any, ClassVar
-from urllib.parse import urlsplit
+
+from sciretriever.core.identifier_normalization import normalize_arxiv
+from sciretriever.core.contract_support import (
+    compact_json as _compact_json, fields as _fields, json_object as _json_object,
+    mapping as _mapping, normalized_text as _normalized_text,
+    optional_text as _optional_text, string_tuple as _string_tuple,
+)
 
 
 MANIFEST_ENTRY_SCHEMA_VERSION = "1"
@@ -19,95 +24,6 @@ IDENTIFIER_NAMESPACE_OPENALEX = "openalex"
 IDENTIFIER_NAMESPACE_S2 = "s2"
 
 _DOI_PREFIX = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.IGNORECASE)
-_ARXIV_PREFIX = re.compile(r"^arxiv:\s*", re.IGNORECASE)
-_ARXIV_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
-
-
-def _normalize_arxiv(value: str) -> str:
-    candidate = _ARXIV_PREFIX.sub("", value).strip()
-    try:
-        parsed = urlsplit(candidate)
-        hostname = (parsed.hostname or "").lower()
-    except ValueError:
-        return candidate.lower()
-    if parsed.scheme.lower() in {"http", "https"} and hostname in _ARXIV_HOSTS:
-        route, separator, identifier = parsed.path.strip("/").partition("/")
-        if separator and route.lower() in {"abs", "pdf"}:
-            candidate = identifier
-            if route.lower() == "pdf" and candidate.lower().endswith(".pdf"):
-                candidate = candidate[:-4]
-    return candidate.strip().lower()
-
-
-def _normalized_text(value: str, field_name: str, *, allow_blank: bool = False) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string")
-    normalized = " ".join(value.split())
-    if not normalized and not allow_blank:
-        raise ValueError(f"{field_name} must not be blank")
-    return normalized
-
-
-def _optional_text(value: str | None, field_name: str) -> str | None:
-    if value is None:
-        return None
-    return _normalized_text(value, field_name)
-
-
-def _string_tuple(value: tuple[str, ...], field_name: str) -> tuple[str, ...]:
-    if not isinstance(value, tuple):
-        raise TypeError(f"{field_name} must be a tuple")
-    return tuple(_normalized_text(item, f"{field_name} item") for item in value)
-
-
-def _mapping(data: object, type_name: str) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        raise TypeError(f"{type_name} must be a dictionary")
-    if not all(isinstance(key, str) for key in data):
-        raise TypeError(f"{type_name} keys must be strings")
-    return data
-
-
-def _fields(data: dict[str, Any], type_name: str, expected: frozenset[str]) -> None:
-    unknown = data.keys() - expected
-    missing = expected - data.keys()
-    if unknown:
-        raise ValueError(f"{type_name} has unknown fields: {', '.join(sorted(unknown))}")
-    if missing:
-        raise ValueError(f"{type_name} is missing fields: {', '.join(sorted(missing))}")
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON object key: {key!r}")
-        result[key] = value
-    return result
-
-
-def _json_object(line: str, type_name: str) -> dict[str, Any]:
-    if not isinstance(line, str):
-        raise TypeError("JSON line must be a string")
-    if line.endswith("\r\n"):
-        line = line[:-2]
-    elif line.endswith("\n"):
-        line = line[:-1]
-    if not line.strip():
-        raise ValueError("JSON input must not be blank")
-    if "\n" in line or "\r" in line:
-        raise ValueError("JSON input must contain exactly one line")
-    try:
-        value = json.loads(line, object_pairs_hook=_unique_json_object)
-    except json.JSONDecodeError as error:
-        raise ValueError(f"invalid JSON: {error.msg}") from error
-    return _mapping(value, type_name)
-
-
-def _compact_json(data: dict[str, Any]) -> str:
-    return json.dumps(data, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-
-
 @dataclass(frozen=True, slots=True)
 class Identifier:
     namespace: str
@@ -123,7 +39,7 @@ class Identifier:
             if not value:
                 raise ValueError("DOI value must not be blank")
         elif namespace == IDENTIFIER_NAMESPACE_ARXIV:
-            value = _normalize_arxiv(value)
+            value = normalize_arxiv(value)
             if not value:
                 raise ValueError("arXiv value must not be blank")
         object.__setattr__(self, "namespace", namespace)
@@ -336,7 +252,8 @@ class SearchSpec:
             if not isinstance(item, tuple) or len(item) != 2:
                 raise TypeError("filters must contain (name, value) tuples")
             normalized_filters.append(
-                (_normalized_text(item[0], "filter name"), _normalized_text(item[1], "filter value"))
+                (_normalized_text(item[0], "filter name"),
+                 _normalized_text(item[1], "filter value"))
             )
         names = [name for name, _ in normalized_filters]
         if len(names) != len(set(names)):
@@ -346,12 +263,8 @@ class SearchSpec:
         object.__setattr__(self, "filters", tuple(sorted(normalized_filters)))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "query": self.query,
-            "sources": list(self.sources),
-            "limit": self.limit,
-            "filters": dict(self.filters),
-        }
+        return {"query": self.query, "sources": list(self.sources),
+                "limit": self.limit, "filters": dict(self.filters)}
 
     @classmethod
     def from_dict(cls, data: object) -> SearchSpec:
@@ -363,12 +276,7 @@ class SearchSpec:
             raise TypeError("sources must be an array")
         if not isinstance(filters, dict):
             raise TypeError("filters must be an object")
-        return cls(
-            query=values["query"],
-            sources=tuple(sources),
-            limit=values["limit"],
-            filters=tuple(filters.items()),
-        )
+        return cls(values["query"], tuple(sources), values["limit"], tuple(filters.items()))
 
     def to_json_line(self) -> str:
         return _compact_json(self.to_dict())
