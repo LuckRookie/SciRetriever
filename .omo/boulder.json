@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "active_work_id": null,
+  "works": {
+    "wp5-completion": {
+      "work_id": "wp5-completion",
+      "active_plan": ".omo/plans/wp5-completion.md",
+      "plan_name": "wp5-completion",
+      "session_ids": ["codex:current"],
+      "status": "completed",
+      "worktree_path": null
+    }
+  }
+}
