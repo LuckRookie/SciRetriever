@@ -187,6 +187,7 @@ class PackagePublisher:
         validation = self.runs.claim_or_resume(
             work_version_id, "package_validation", "sciretriever.package_validator", PUBLISHER_VERSION,
             {"schema_version": "1", "quality": decision.quality.value}, input_artifact_ids=artifact_ids,
+            input_artifact_anchor_id=normalized.source_map_artifact.id,
         )
         if validation.state.value != "succeeded":
             validation = self.runs.succeed(validation.id)
@@ -239,6 +240,7 @@ class PackagePublisher:
         publication_run = self.runs.claim_or_resume(
             work_version_id, "publication", "sciretriever.package_publisher", PUBLISHER_VERSION,
             {"material_sha256": material_hash, "version": version}, input_artifact_ids=artifact_ids,
+            input_artifact_anchor_id=normalized.source_map_artifact.id,
         )
         package = DocumentPackageVersion.create(
             document_id=work_version_id, package_version=version, published_at=publication_run.started_at,

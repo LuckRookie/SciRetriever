@@ -49,6 +49,7 @@ class ProcessingRunRepository:
         *,
         input_raw_asset_ids: tuple[str, ...] = (),
         input_artifact_ids: tuple[str, ...] = (),
+        input_artifact_anchor_id: str | None = None,
     ) -> ProcessingRunRecord:
         work_version_id = validate_uuid(work_version_id, "work_id")
         normalized_stage = _stage(stage)
@@ -56,6 +57,15 @@ class ProcessingRunRepository:
         producer_version = _required_text(producer_version, "producer_version")
         raw_ids = tuple(sorted(validate_uuid(value, "input_raw_asset_id") for value in input_raw_asset_ids))
         artifact_ids = tuple(sorted(validate_uuid(value, "input_artifact_id") for value in input_artifact_ids))
+        if len(artifact_ids) > 1 and input_artifact_anchor_id is None:
+            raise ValueError("input_artifact_anchor_id is required for multiple input artifacts")
+        artifact_anchor_id = (
+            validate_uuid(input_artifact_anchor_id, "input_artifact_anchor_id")
+            if input_artifact_anchor_id is not None
+            else (artifact_ids[0] if artifact_ids else None)
+        )
+        if artifact_anchor_id is not None and artifact_anchor_id not in artifact_ids:
+            raise ValueError("input_artifact_anchor_id must identify an input artifact")
         key = {"work_version_id": work_version_id, "stage": normalized_stage.value,
         "producer": producer,
         "producer_version": producer_version,
@@ -76,6 +86,8 @@ class ProcessingRunRepository:
                     existing = json.loads(row["details_json"])
                     if {key_: existing[key_] for key_ in key} != key:
                         raise CatalogError("processing run replay metadata conflicts")
+                    if row["input_artifact_id"] != artifact_anchor_id:
+                        raise CatalogError("processing run input artifact anchor conflicts")
                     state = ProcessingRunState(row["state"])
                     if state is ProcessingRunState.SUCCEEDED or state is ProcessingRunState.ACTIVE:
                         return ProcessingRunRecord.from_row(row)
@@ -88,7 +100,7 @@ class ProcessingRunRepository:
                 values = {
                     "id": run_id, "work_version_id": work_version_id, "stage": normalized_stage.value,
                     "state": "active", "input_raw_asset_id": raw_ids[0] if raw_ids else None,
-                    "input_artifact_id": artifact_ids[0] if artifact_ids else None,
+                    "input_artifact_id": artifact_anchor_id,
                     "output_artifact_id": None, "details_json": details_json,
                     "started_at": now, "finished_at": None,
                 }

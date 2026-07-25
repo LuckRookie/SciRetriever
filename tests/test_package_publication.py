@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 
 from sciretriever.catalog import IdentityResolver, initialize_catalog, create_catalog_engine
 from sciretriever.core.enums import PackageQuality
+from sciretriever.core.package import SOURCE_MAP_KIND
 from sciretriever.packaging import PackagePipeline
 from sciretriever.storage import DerivedArtifactStore, RawAssetStore
 
@@ -55,8 +56,31 @@ class PackagePublicationTests(TestCase):
         self.assertFalse(second.created)
         self.assertEqual(second.package, first.package)
         self.assertEqual(second.record, first.record)
+        source_map_id = next(
+            artifact.artifact_id
+            for artifact in first.package.artifacts
+            if artifact.kind == SOURCE_MAP_KIND
+        )
+        artifact_ids = {artifact.artifact_id for artifact in first.package.artifacts}
+        package_lineage = {
+            item.stage.value: set(item.input_artifact_ids)
+            for item in first.package.lineage
+            if item.stage.value in {"package_validation", "publication"}
+        }
+        self.assertEqual(
+            package_lineage,
+            {"package_validation": artifact_ids, "publication": artifact_ids},
+        )
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM package_versions").scalar_one(), 1)
+            anchors = connection.exec_driver_sql(
+                "SELECT stage, input_artifact_id FROM processing_runs "
+                "WHERE stage IN ('package_validation', 'publication')"
+            ).all()
+            self.assertEqual(
+                set(anchors),
+                {("package_validation", source_map_id), ("publication", source_map_id)},
+            )
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
 
     def test_interrupted_catalog_registration_recovers_durable_target(self) -> None:

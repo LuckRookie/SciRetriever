@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from uuid import uuid4
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -54,6 +55,17 @@ class ProcessingRepositoryTests(TestCase):
         self.assertIs(resumed.state, ProcessingRunState.ACTIVE)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM failures").scalar_one(), 1)
+
+    def test_multiple_artifact_inputs_require_an_explicit_relation_anchor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "required for multiple input artifacts"):
+            self.repository.claim_or_resume(
+                self.work_version_id,
+                "publication",
+                "publisher",
+                "1",
+                {},
+                input_artifact_ids=(str(uuid4()), str(uuid4())),
+            )
 
 
 if __name__ == "__main__":
