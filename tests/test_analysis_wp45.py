@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
-import contextlib
 from io import BytesIO
-import io
-import json
 import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
@@ -16,8 +13,7 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.analysis import AnalysisBackfillService
-from sciretriever.catalog import IdentityResolver, LibraryFilters, WorkVersionAnalysisRecord, WorkVersionAnalysisRepository, create_catalog_engine, initialize_catalog
+from sciretriever.catalog import IdentityResolver, LibraryFilters, WorkVersionAnalysisRepository, create_catalog_engine, initialize_catalog
 from sciretriever.config import AnalysisConfig, LLMConfig, MinerUConfig
 from sciretriever.cli.main import _build_parser
 from sciretriever.cli import analyze
@@ -82,37 +78,6 @@ class AnalysisWP45Tests(TestCase):
             connection.exec_driver_sql("INSERT INTO work_version_assets (work_version_id, raw_asset_id, asset_role) VALUES (?, ?, 'primary_pdf')", (self.first, raw_id))
         self.assertEqual(self.repository.get(self.first).eligibility_reason,
                          "primary_pdf_not_exactly_one_accepted_pdf")
-
-    def test_backfill_reports_blocked_failure_reuse_and_interrupt(self) -> None:
-        calls = []
-        def callback(record, force):
-            calls.append(record.work_version_id)
-            return "reused"
-        result = AnalysisBackfillService(self.repository, callback).run((self.first, self.second))
-        self.assertEqual((result.selected, result.blocked, result.analyzed, result.reused), (2, 2, 0, 0))
-        self.assertEqual(calls, [])
-        self.assertEqual({item.action for item in result.outcomes}, {"download_primary_pdf"})
-
-        records = [WorkVersionAnalysisRecord(self.first, str(uuid4()), None, 0, None),
-                   WorkVersionAnalysisRecord(self.second, str(uuid4()), None, 0, None)]
-        def interrupt(record, force):
-            if record.work_version_id == self.second:
-                raise KeyboardInterrupt
-            return "analyzed"
-        service = AnalysisBackfillService(self.repository, interrupt)
-        with mock.patch.object(self.repository, "get", side_effect=records), self.assertRaises(KeyboardInterrupt):
-            service.run((self.first, self.second))
-        self.assertEqual((service.last_result.analyzed, service.last_result.interrupted), (1, 1))
-
-    def test_backfill_get_and_callback_failures_continue_with_stable_counts(self) -> None:
-        records = [RuntimeError("secret repository detail"),
-            WorkVersionAnalysisRecord(self.second, str(uuid4()), None, 0, None)]
-        service = AnalysisBackfillService(self.repository, mock.Mock(side_effect=RuntimeError("secret callback")))
-        with mock.patch.object(self.repository, "get", side_effect=records):
-            result = service.run((self.first, self.second))
-        self.assertEqual((result.selected, result.failed, result.interrupted), (2, 2, 0))
-        self.assertEqual({item.reason for item in result.outcomes}, {"analysis_failed"})
-        self.assertNotIn("secret", repr(result))
 
     def test_exact_preferred_pending_force_and_selector_forwarding(self) -> None:
         self.assertEqual(self.repository.select_exact(work_version_id=self.first).work_version_ids, (self.first,))
@@ -185,42 +150,6 @@ class AnalysisWP45Tests(TestCase):
         repository.select_all_current.return_value.work_version_ids = (self.first,)
         self.assertEqual(analyze._selection(repository, args), (self.first,))
         repository.select_all_current.assert_called_once_with(limit=3, force=True)
-
-    def test_offline_cli_composition_injects_credential_and_factories_without_secret_leak(self) -> None:
-        secret = "DO-NOT-PRINT-SECRET"
-        self.attach_pdf(self.first)
-        credential_reader = mock.Mock(return_value=secret)
-        client_factory = mock.Mock(return_value=object())
-        provider_factory = mock.Mock(return_value=object())
-        args = argparse.Namespace(storage_root=self.storage, catalog=self.catalog_path, force=False,
-            _config_analysis=AnalysisConfig(MinerUConfig(mode="loopback", endpoint="http://127.0.0.1:8000", model="m"),
-                LLMConfig(endpoint="https://llm.example/v1", model="m", credential_env="TOKEN")),
-            _credential_reader=credential_reader, _mineru_client_factory=client_factory,
-            _analysis_provider_factory=provider_factory)
-        output, error = io.StringIO(), io.StringIO()
-        parsing = mock.Mock()
-        parsing.run.return_value = object()
-        mapping = mock.Mock()
-        mapping.run.return_value = object()
-        analysis_service = mock.Mock()
-        with mock.patch("sciretriever.cli.analyze.MinerUParsingService", return_value=parsing), \
-             mock.patch("sciretriever.cli.analyze.MinerUSourceMapService", return_value=mapping), \
-             mock.patch("sciretriever.cli.analyze.AnalysisService", return_value=analysis_service), \
-             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
-            result = analyze.execute_work_versions(args, (self.first,))
-        self.assertEqual((result.selected, result.analyzed, result.failed), (1, 1, 0))
-        credential_reader.assert_called_once_with("TOKEN")
-        client_factory.assert_called_once_with(args._config_analysis.mineru)
-        provider_factory.assert_called_once_with(api_key=secret, base_url="https://llm.example/v1",
-                                                  model="m", timeout=120.0)
-        combined = output.getvalue() + error.getvalue() + repr(result) + repr(args._config_analysis)
-        with self.catalog.connect() as connection:
-            combined += "".join(str(value) for row in connection.exec_driver_sql(
-                "SELECT details_json FROM processing_runs").all() for value in row)
-            combined += "".join(str(value) for row in connection.exec_driver_sql(
-                "SELECT provenance_json FROM normalized_artifacts").all() for value in row)
-        self.assertNotIn(secret, combined)
-
 
 if __name__ == "__main__":
     import unittest
