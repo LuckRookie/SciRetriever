@@ -10,13 +10,14 @@
 |---|---|
 | `core` | 稳定 Work/WorkVersion 引用、provider-neutral 输入输出、hash 和通用文献边界，不含 ORM 与 vendor 字段 |
 | `catalog` | Work、书目版本、canonical metadata、observations、authors/authorships、独立扁平 Publisher/Venue registries、tags/aliases、version assets、references、single current generated analysis、failures |
-| `search` | 有界并发的多 provider metadata 查询、独立 provider timeout、观察值规范化、Work/WorkVersion 确定性身份、DOI 冲突保护、exact normalized-title 匹配、precedence/fill-missing |
+| `completion` | 应用层全局完成编排；从 catalog 事实派生 `METADATA_PENDING -> ASSET_PENDING -> ANALYSIS_PENDING -> COMPLETE`，调用下一缺失阶段并返回统一结果，不持久化第二套状态 |
+| `search` | 有界并发的多 provider metadata 查询、独立 provider timeout、观察值规范化、Work/WorkVersion 确定性身份、DOI 冲突保护、exact normalized-title 匹配、precedence/fill-missing 和 provisional provider projection |
 | `acquisition` | WorkVersion 资产缺口、跨 provider 有界竞速、provider 内候选去重与确定性顺序回退、translator/browser 回退、validation 前编排 |
 | `network` | 所有非浏览器 HTTP 的安全 transport、有限 timeout、redirect、响应上限和敏感 header 策略 |
 | `storage` | RawAsset 和 normalization artifacts 的不可变发布、hash、相对路径与对账；current generated analysis 的替换由 `analysis`/`catalog` 拥有 |
 | `normalization` | operator-managed MinerU service adapter、外部 attempt recovery、result archive/schema/page geometry validation，以及全文到通用、损失感知结构和 PDF evidence |
 | `analysis` | primary PDF 必需且权威、PDF normalized/OCR content、PDF evidence locators、XML/HTML 仅补充、固定 section IDs、本地化 headings、registry-constrained entity/tag selection、灵活 Markdown、旁路构建和直接原子替换 current result/canonical projection/references/generated tags |
-| `references` | 版本引用解析、unresolved 保留、cited-by 派生和仅按 depth 分层扩展编排 |
+| `references` | 版本引用解析、unresolved 保留、cited-by 派生和仅按 depth 分层扩展；每个图节点通过 `completion` 公开契约补全 |
 | `library` | exact DOI/title/internal-ID lookup、title/Abstract/light Markdown keyword search、author/year/publisher/venue/tag filters、引用遍历和导出；首版不含 vector semantic search |
 | `packaging` | 从选定 WorkVersion、资产和 current result 生成不可变、版本化的 `DocumentPackage` 导出快照；不拥有书目版本身份 |
 | `cli` | `search/expand/download/analyze/library/failures/config check` 前台 composition root |
@@ -30,14 +31,26 @@
 3. provider 响应在 `integrations` 或 provider adapter 转成 observation/candidate DTO，vendor dict 不进入 core/catalog。
 4. search 不导入 acquisition；acquisition 不导入 search。两者通过 Work/WorkVersion id 和 catalog repository 协作，不通过对方内部类型。
 5. normalization 只把已接受 primary PDF 上传到显式配置的 operator-managed MinerU service，并把验证后的 parser output 转换为中性 source units/evidence；不把 MinerU task、vendor JSON 或 Markdown 直接写入 current result。analysis 只读取已接受 primary PDF、其 validated normalized/OCR artifacts、可选补充 XML/HTML 和 catalog 中性记录，不发起全文获取或直接依赖 MinerU vendor types；无合格 PDF 时拒绝运行。
-6. references 只编排公开的 search/download/analyze 服务边界，不直接改写其内部状态。
-7. library query 和 failures query 不复制权威状态；library curation 只能通过 catalog 的显式 mutation contract 写入可审计 manual 数据。failures 聚合 overall reason/action 与可展开的脱敏 per-source details；losing provider failure 在成功竞速中只作诊断。
-8. CLI 是唯一 composition root。模块不得自行读取另一份 TOML 或散落 secret。
-9. RawAsset 字节只由 storage 发布。任何 provider、browser 或 analysis 路径都不能直接覆盖目标文件。
+6. `completion` 位于应用层，可以依赖 catalog 的阶段查询和 search、acquisition、analysis 的公开 service contract；这些阶段模块不得反向导入 `completion`，也不得相互导入。`completion` 只决定当前阶段和下一次调用，不复制 provider、transport、parser、LLM、storage 或 atomic replacement 实现。
+7. references 只通过 `completion` 公开契约让图节点收敛到 `COMPLETE`，不分别编排或直接改写 search/download/analyze 内部状态；只有 `COMPLETE` 节点的 current references 可以产生下一层。
+8. library query 和 failures query 不复制权威状态；library curation 只能通过 catalog 的显式 mutation contract 写入可审计 manual 数据。failures 聚合 overall reason/action 与可展开的脱敏 per-source details；losing provider failure 在成功竞速中只作诊断，failure 不成为 completion state。
+9. CLI 是 composition root。它装配一次 typed config、catalog、阶段 services 和共享 `completion`；模块不得自行读取另一份 TOML 或散落 secret。
+10. RawAsset 字节只由 storage 发布。任何 provider、browser 或 analysis 路径都不能直接覆盖目标文件。
 
 ## 3. 前台运行模型
 
 每次 CLI invocation 构造一次配置、catalog、provider registry 和所需 adapter，在当前进程内完成有界编排后退出。长批次通过 stable selection、processing-run identity 和幂等重跑恢复，不建立 SciRetriever daemon run owner。WP4 可以连接 independently operated persistent MinerU parser service；该服务不由 SciRetriever 启停、升级、监控容量或拥有 task lifecycle，不能成为产品导航或状态真相源。
+
+写入型 invocation 统一装配一个 `CompletionPipeline`（名称可在实现时按同一所有权调整）。输入 target 可以是规范化稳定标识符或已有 WorkVersion ID；它查询 catalog 事实并得到以下唯一阶段，然后只调用下一缺失阶段：
+
+```text
+no usable provider identity/projection -> METADATA_PENDING
+provider projection, no accepted primary PDF -> ASSET_PENDING
+accepted primary PDF, no aligned current result -> ANALYSIS_PENDING
+current analysis + final canonical projection + references/tags -> COMPLETE
+```
+
+阶段是从 target 和权威事实派生的领域结果，不要求新增 mutable status column。WorkVersion 尚不存在时，规范化 DOI 只存在于当前 invocation，metadata 全部失败也不为记录失败创建 placeholder 或 job。阶段调用失败、来源耗尽或 Ctrl+C 时不写入 `failed/blocked/stale/interrupted` 文献状态；下次 invocation 重新查询相同事实并继续。stage-local processing run、attempt 和 diagnostic records 可以保留恢复与解释价值，但不能成为 completion 的第二真相源。
 
 明确不引入：
 
@@ -81,6 +94,7 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 - storage 的 immutable create-if-absent、hash、相对路径、权限和 reconciliation；
 - durable write 前和用户输出前的 secret redaction；
 - provider-neutral DTO、provenance 和 lineage；
+- 全局 completion 只编排稳定 service contract，阶段事实仍由各所有者写入；
 - 外部 parser POST/upload、polling 和 result download 的 overall deadline、DNS/origin policy、bounded streaming、archive bomb/path/symlink/file/schema limits；
 - MinerU service/version/protocol/backend 和 operator-attested model revision provenance；
 - `DocumentPackage` 的领域中立边界，除非后续 ADR 明确修改。
@@ -92,8 +106,11 @@ CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 
 - 每个系统设计能力模块都映射到一个明确的代码所有者；一个事实没有两个写入所有者。
 - provider 响应只在 adapter 边界转换为中性 observation/candidate DTO，vendor 类型不穿透 core/catalog。
 - 没有模块绕过 catalog/storage ownership。
-- search、acquisition、analysis 和 references 只通过稳定 service/repository contract 协作，不导入彼此内部类型。
-- CLI 保持唯一 composition root，所有模块共享同一 typed config 和 secret redaction 边界。
+- search、acquisition 和 analysis 不导入彼此或 `completion`；`completion` 只依赖它们的稳定公开 contract，references 只依赖 completion contract。
+- CLI 保持 composition root，所有写入型入口共享同一 completion 装配、typed config 和 secret redaction 边界。
+- DOI/search、已有 WorkVersion、已有 accepted PDF 和已有 current result 分别进入同一完成管线并得到确定的四阶段；各 CLI 不维护平行完成条件。
+- provider projection 在 `COMPLETE` 前保持临时性质；最终 canonical metadata 只随 validated current analysis、references 和 generated tags 原子 promotion。
+- failure、diagnostic、processing run 和 MinerU attempt 不增加 completion state；失败重跑从 catalog 当前事实继续。
 - SciRetriever 运行时不拥有 daemon、lease、fencing、durable pause/resume 或后台 worker；operator-managed MinerU service 只能经批准的 capability adapter 使用，service task state 不成为产品状态。
 - MinerU adapter 不信任 response-provided URLs、redirect、ZIP 或 vendor JSON；只有 validated and immutably published parser artifacts 可以进入 analysis。
 - RawAsset 和 `DocumentPackage` 快照只通过各自所有者发布，不允许旁路覆盖或原地改写。
