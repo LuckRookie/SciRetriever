@@ -103,6 +103,15 @@ class P9AcceptanceTests(TestCase):
         self.assertNotIn(str(self.asset), json.dumps(provenance))
         self.assertEqual(self.counts(), (1, 1, 1))
 
+    def test_replay_still_rejects_symlink_input(self) -> None:
+        self.importer.import_asset(self.asset, self.work_version_id, AssetRole.PRIMARY_PDF)
+        link = self.asset_root / "replay-link.pdf"
+        link.symlink_to(self.asset)
+
+        with self.assertRaisesRegex(ValueError, "not a symlink"):
+            self.importer.import_asset(link, self.work_version_id, AssetRole.PRIMARY_PDF)
+        self.assertEqual(self.counts(), (1, 1, 1))
+
     def test_concurrent_same_role_imports_converge(self) -> None:
         with ThreadPoolExecutor(max_workers=4) as executor:
             results = tuple(executor.map(
