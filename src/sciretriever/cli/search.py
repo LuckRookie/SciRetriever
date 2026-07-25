@@ -5,58 +5,94 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 from pathlib import Path
 import sys
 
-from sqlalchemy.exc import SQLAlchemyError
-
-from sciretriever.catalog import WorkRepository, canonical_json, open_catalog_engine
-from sciretriever.cli import analyze, discover, download
-from sciretriever.discovery import (
-    DEFAULT_MAX_CONCURRENCY,
-    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-    DEFAULT_SEARCH_LIMIT,
-    MetadataSearchOutput,
-    MetadataSearchRequest,
-    MetadataSearchService,
+from sciretriever.catalog import canonical_json
+from sciretriever.cli.acquisition_runtime import (
+    DEFAULT_ACQUISITION_PROVIDERS, MAX_RESPONSE_BYTES, AcquisitionCliConfig,
 )
-from sciretriever.errors import CatalogError, SearchError
-from sciretriever.config import ACQUISITION_PROVIDERS, get_credential
-from sciretriever.acquisition.transport import MAX_RESPONSE_BYTES
-from sciretriever.analysis import AnalysisBackfillResult, OpenAICompatibleAnalysisProvider
-from sciretriever.normalization import MinerUClient
+from sciretriever.cli.analysis_runtime import AnalysisCliRuntime
+from sciretriever.cli.metadata_runtime import (
+    ALL_METADATA_PROVIDERS, DEFAULT_METADATA_PROVIDERS, MetadataCliConfig,
+    MetadataSearchOutput,
+)
+from .search_completion_runtime import (
+    SearchCliRuntime,
+    build_search_completion_runtime,
+)
+from sciretriever.completion import (
+    BatchItemStatus, CompletionStop, DoiTarget, OptionalAssetKind, OptionalAssetRequest,
+    WorkVersionTarget, run_completion_batch,
+)
+from sciretriever.config import (
+    ACQUISITION_PROVIDERS, AnalysisConfig, BrowserConfig, CredentialsConfig,
+    SciHubConfig, TranslatorConfig,
+)
+from sciretriever.errors import SciRetrieverError, SearchError
+from sciretriever.core.public_identifiers import PUBLIC_IDENTIFIER_NAMESPACES
 
 
-DEFAULT_PROVIDERS = discover.DEFAULT_SOURCES
-ALL_PROVIDERS = discover.ALL_SOURCES
-_PUBLIC_IDENTIFIER_NAMESPACES = frozenset({"arxiv", "doi", "pmcid", "pmid"})
+DEFAULT_PROVIDERS = DEFAULT_METADATA_PROVIDERS
+ALL_PROVIDERS = ALL_METADATA_PROVIDERS
+DEFAULT_SEARCH_LIMIT = 100
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_CONCURRENCY = 8
+
+
+def _nonblank(value: str) -> str:
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise argparse.ArgumentTypeError("value must not be blank")
+    return normalized
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive number") from error
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number")
+    return parsed
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     """Configure the implemented metadata-only ``search`` command."""
     parser.description = "Search metadata providers and persist canonical Works."
-    parser.add_argument("query", type=discover._nonblank, metavar="QUERY")
+    parser.add_argument("query", type=_nonblank, metavar="QUERY")
     parser.add_argument("--catalog", required=True, type=Path, metavar="PATH")
     parser.add_argument("--level", choices=("metadata", "download", "analyze"), default="metadata")
     parser.add_argument("--provider", action="append", choices=ALL_PROVIDERS)
     parser.add_argument("--precedence", action="append", choices=ALL_PROVIDERS)
-    parser.add_argument("--limit", type=discover._positive_int, default=DEFAULT_SEARCH_LIMIT)
+    parser.add_argument("--limit", type=_positive_int, default=DEFAULT_SEARCH_LIMIT)
     parser.add_argument(
         "--provider-timeout",
-        type=discover._positive_float,
+        type=_positive_float,
         default=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
     )
     parser.add_argument(
-        "--max-concurrency", type=discover._positive_int, default=DEFAULT_MAX_CONCURRENCY
+        "--max-concurrency", type=_positive_int, default=DEFAULT_MAX_CONCURRENCY
     )
-    parser.add_argument("--crossref-mailto", type=discover._nonblank, metavar="EMAIL")
+    parser.add_argument("--crossref-mailto", type=_nonblank, metavar="EMAIL")
     parser.add_argument("--storage-root", type=Path)
     parser.add_argument("--download-provider", action="append", choices=tuple(sorted(ACQUISITION_PROVIDERS)))
-    parser.add_argument("--download-timeout", type=discover._positive_float, default=30.0)
-    parser.add_argument("--download-provider-concurrency", type=discover._positive_int, default=4)
-    parser.add_argument("--host-concurrency", type=discover._positive_int, default=2)
+    parser.add_argument("--download-timeout", type=_positive_float, default=30.0)
+    parser.add_argument("--download-provider-concurrency", type=_positive_int, default=4)
+    parser.add_argument("--host-concurrency", type=_positive_int, default=2)
     parser.add_argument("--host-min-interval", type=float, default=0.0)
-    parser.add_argument("--max-asset-bytes", type=discover._positive_int, default=MAX_RESPONSE_BYTES)
+    parser.add_argument("--max-asset-bytes", type=_positive_int, default=MAX_RESPONSE_BYTES)
     parser.add_argument("--forbidden-urls", type=Path)
     parser.add_argument("--xml", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--html", action=argparse.BooleanOptionalAction, default=False)
@@ -85,24 +121,13 @@ def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace
             parser.error("search --level analyze requires fully enabled analysis config")
     if args.host_min_interval < 0:
         parser.error("--host-min-interval must be nonnegative")
-    download_providers = list(args.download_provider or download.DEFAULT_PROVIDERS)
+    download_providers = list(args.download_provider or DEFAULT_ACQUISITION_PROVIDERS)
     if len(download_providers) != len(set(download_providers)):
         parser.error("duplicate download provider")
     args.download_provider = download_providers
     sci_hub = getattr(args, "_config_sci_hub", None)
     if "sci-hub" in download_providers and (sci_hub is None or not sci_hub.enabled):
         parser.error("sci-hub requires an explicitly enabled [acquisition.sci_hub] config")
-
-
-def _providers(args: argparse.Namespace):
-    provider_args = argparse.Namespace(
-        source=args.provider,
-        timeout=args.provider_timeout,
-        crossref_mailto=args.crossref_mailto,
-        _config_credentials=getattr(args, "_config_credentials", None),
-        _config_sci_hub=getattr(args, "_config_sci_hub", None),
-    )
-    return discover._providers(provider_args, discover._production_transport())
 
 
 def _serialize(output: MetadataSearchOutput) -> str:
@@ -113,7 +138,7 @@ def _serialize(output: MetadataSearchOutput) -> str:
             "identifiers": [
                 {"namespace": identifier.namespace, "value": identifier.value}
                 for identifier in result.identifiers
-                if identifier.namespace in _PUBLIC_IDENTIFIER_NAMESPACES
+                if identifier.namespace in PUBLIC_IDENTIFIER_NAMESPACES
             ],
             "metadata": {
                 "abstract": metadata.abstract,
@@ -139,93 +164,76 @@ def _serialize(output: MetadataSearchOutput) -> str:
     })
 
 
-def _execute(args: argparse.Namespace) -> MetadataSearchOutput:
-    engine = open_catalog_engine(args.catalog)
-    try:
-        service = MetadataSearchService(_providers(args), WorkRepository(engine))
-        output = service.search(MetadataSearchRequest(
-            query=args.query,
-            providers=tuple(args.provider),
-            precedence=tuple(args.precedence),
-            limit=args.limit,
-            provider_timeout_seconds=args.provider_timeout,
-            max_concurrency=args.max_concurrency,
-        ))
-    finally:
-        engine.dispose()
-    return output
-
-
-def _download_args(args: argparse.Namespace) -> argparse.Namespace:
-    return argparse.Namespace(
-        catalog=args.catalog,
-        storage_root=args.storage_root,
-        provider=args.download_provider,
-        timeout=args.download_timeout,
-        provider_concurrency=args.download_provider_concurrency,
-        host_concurrency=args.host_concurrency,
-        host_min_interval=args.host_min_interval,
-        max_asset_bytes=args.max_asset_bytes,
-        forbidden_urls=args.forbidden_urls,
-        xml=args.xml,
-        html=args.html,
-        _config_credentials=getattr(args, "_config_credentials", None),
-        _config_sci_hub=getattr(args, "_config_sci_hub", None),
-        _config_translator=getattr(args, "_config_translator", None),
-        _config_browser=getattr(args, "_config_browser", None),
-    )
-
-
-def _analysis_args(args: argparse.Namespace) -> argparse.Namespace:
-    return argparse.Namespace(catalog=args.catalog, storage_root=args.storage_root, force=False,
-        _config_analysis=getattr(args, "_config_analysis", None),
-        _mineru_client_factory=getattr(args, "_mineru_client_factory", MinerUClient) if hasattr(args, "_mineru_client_factory") else MinerUClient,
-        _analysis_provider_factory=getattr(args, "_analysis_provider_factory", OpenAICompatibleAnalysisProvider) if hasattr(args, "_analysis_provider_factory") else OpenAICompatibleAnalysisProvider,
-        _credential_reader=getattr(args, "_credential_reader", get_credential))
+_STOPS = {
+    "metadata": CompletionStop.METADATA,
+    "download": CompletionStop.ASSET,
+    "analyze": CompletionStop.COMPLETE,
+}
 
 
 def run(args: argparse.Namespace) -> int:
     """Run metadata search with stable, sanitized operational failures."""
-    payload: str | None = None
-    download_args: argparse.Namespace | None = None
-    analysis_args: argparse.Namespace | None = None
+    runtime = None
     try:
-        output = _execute(args)
-        payload = _serialize(output)
-        interrupted = False
-        if args.level in {"download", "analyze"}:
-            selected = tuple(item.work_version.id for item in output.results)
-            download_args = _download_args(args)
-            acquisition = asyncio.run(
-                download.execute_work_versions(download_args, selected)
-            )
-            decoded = json.loads(payload)
-            decoded["download"] = acquisition.to_dict()
-            payload = canonical_json(decoded)
-            interrupted = acquisition.interrupted > 0
-            if args.level == "analyze":
-                analysis_args = _analysis_args(args)
-                analyzed = (AnalysisBackfillResult(len(selected), 0, 0, 0, 0, len(selected), ())
-                            if interrupted else analyze.execute_work_versions(analysis_args, selected))
-                decoded["analysis"] = analyzed.to_dict()
-                payload = canonical_json(decoded)
-                interrupted = interrupted or analyzed.interrupted > 0
+        credentials = getattr(args, "_config_credentials", None) or CredentialsConfig()
+        metadata = MetadataCliConfig(
+            args.query, tuple(args.provider), tuple(args.precedence), args.limit,
+            args.provider_timeout, args.max_concurrency, args.crossref_mailto, credentials,
+        )
+        acquisition = AcquisitionCliConfig(
+            tuple(args.download_provider), args.download_provider_concurrency,
+            args.host_concurrency, args.host_min_interval, args.max_asset_bytes,
+            args.forbidden_urls, credentials,
+            getattr(args, "_config_sci_hub", None) or SciHubConfig(),
+            getattr(args, "_config_translator", None) or TranslatorConfig(),
+            getattr(args, "_config_browser", None) or BrowserConfig(),
+        )
+        analysis_config = getattr(args, "_config_analysis", None)
+        analysis = None if analysis_config is None else AnalysisCliRuntime(analysis_config)
+        runtime = build_search_completion_runtime(SearchCliRuntime(
+            args.catalog, args.level, metadata, args.storage_root, acquisition,
+            args.download_timeout, analysis,
+        ))
+        try:
+            doi = DoiTarget(args.query)
+        except ValueError:
+            output = runtime.search()
+            targets = tuple(WorkVersionTarget(value) for value in runtime.targets(output))
+            payload = json.loads(_serialize(output))
+            exact = False
+        else:
+            targets = (doi,)
+            payload = {"counts": {"failures": 0, "results": 0}, "failures": [], "results": []}
+            exact = True
+        batch = asyncio.run(run_completion_batch(runtime.completion.pipeline, targets, _STOPS[args.level]))
+        if exact:
+            failures = runtime.exact_failures()
+            payload["failures"] = failures
+            payload["counts"]["failures"] = len(failures)
+        payload["completion"] = batch.to_dict()
+        optional = []
+        if args.xml or args.html:
+            for item in batch.items:
+                if item.status is not BatchItemStatus.SUCCEEDED or item.work_version_id is None:
+                    continue
+                target = WorkVersionTarget(item.work_version_id)
+                for kind, enabled in ((OptionalAssetKind.XML, args.xml), (OptionalAssetKind.HTML, args.html)):
+                    if enabled:
+                        optional.append(asyncio.run(runtime.completion.pipeline.acquire_optional(
+                            OptionalAssetRequest(target, kind))).to_dict())
+        payload["optional_assets"] = optional
+        print(canonical_json(payload))
+        if batch.interrupted:
+            return 130
+        if (exact and batch.succeeded == 0
+                and any(item.status is BatchItemStatus.EXHAUSTED for item in batch.items)):
+            return 1
+        return 0
     except KeyboardInterrupt:
-        acquisition = download.interrupted_result(
-            download_args if download_args is not None else argparse.Namespace()
-        )
-        decoded = (
-            json.loads(payload)
-            if payload is not None
-            else {"counts": {"failures": 0, "results": 0}, "failures": [], "results": []}
-        )
-        decoded["download"] = acquisition.to_dict()
-        if args.level == "analyze":
-            decoded["analysis"] = analyze.interrupted_result(
-                analysis_args if analysis_args is not None else argparse.Namespace()).to_dict()
-        print(canonical_json(decoded))
+        print(canonical_json({"completion": {"items": [], "succeeded": 0, "failed": 0,
+              "duplicates": 0, "interrupted": True}, "optional_assets": []}))
         return 130
-    except (SearchError, CatalogError, SQLAlchemyError, OSError, ValueError) as error:
+    except (SearchError, SciRetrieverError, OSError, TypeError, ValueError) as error:
         if isinstance(error, SearchError) and str(error).startswith("all metadata search providers failed:"):
             detail = "all metadata search providers failed"
         else:
@@ -235,8 +243,9 @@ def run(args: argparse.Namespace) -> int:
     except Exception:
         print("sciretriever: error: metadata search failed", file=sys.stderr)
         return 1
-    print(payload)
-    return 130 if interrupted else 0
+    finally:
+        if runtime is not None:
+            runtime.close()
 
 
 __all__ = ("ALL_PROVIDERS", "DEFAULT_PROVIDERS", "configure_parser", "run", "validate_arguments")
