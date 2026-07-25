@@ -2,32 +2,27 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Connection, Select, and_, exists, func, literal, or_, select, true, union_all
+from sqlalchemy import Select, exists, func, literal, or_, select, true
 
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.library import normalize_title
 from sciretriever.catalog.models import (
-    authors,
-    authorships,
-    generated_work_version_tags,
     current_analyses,
-    manual_work_tags,
-    publisher_aliases,
     publishers,
-    tag_aliases,
-    tags,
-    venue_aliases,
     venues,
     version_references,
     work_version_identifiers,
     work_versions,
     works,
 )
-from sciretriever.catalog.repository import _required_text, canonical_json, catalog_operation
+from sciretriever.catalog.library_projection import (
+    LibraryItem, LibraryResult, project_item,
+)
+from sciretriever.catalog.library_query import apply_filters
+from sciretriever.catalog.repository import _required_text, catalog_operation
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.ids import validate_uuid
 
@@ -47,10 +42,6 @@ def _include_light_content(value: bool) -> bool:
     if not isinstance(value, bool):
         raise TypeError("include_light_content must be a boolean")
     return value
-
-
-def _normalized_author(value: str) -> str:
-    return _required_text(value, "author").casefold()
 
 
 def _literal_pattern(value: str) -> str:
@@ -78,69 +69,6 @@ class LibraryFilters:
                 _required_text(value, field_name)
 
 
-@dataclass(frozen=True, slots=True)
-class LibraryItem:
-    work_id: str
-    work_version_id: str
-    preferred_work_version_id: str
-    is_preferred: bool
-    version_class: str
-    title: str
-    abstract: str | None
-    language: str | None
-    work_type: str | None
-    publication_date: str | None
-    publication_year: int | None
-    publisher: str | None
-    venue: str | None
-    volume: str | None
-    issue: str | None
-    pages: str | None
-    article_number: str | None
-    open_access_status: str | None
-    authors: tuple[str, ...]
-    tags: tuple[str, ...]
-    light_content: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "abstract": self.abstract,
-            "article_number": self.article_number,
-            "authors": list(self.authors),
-            "is_preferred": self.is_preferred,
-            "language": self.language,
-            "light_content": list(self.light_content),
-            "open_access_status": self.open_access_status,
-            "pages": self.pages,
-            "preferred_work_version_id": self.preferred_work_version_id,
-            "publication_date": self.publication_date,
-            "publication_year": self.publication_year,
-            "publisher": self.publisher,
-            "tags": list(self.tags),
-            "title": self.title,
-            "venue": self.venue,
-            "version_class": self.version_class,
-            "volume": self.volume,
-            "work_id": self.work_id,
-            "work_type": self.work_type,
-            "work_version_id": self.work_version_id,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class LibraryResult:
-    items: tuple[LibraryItem, ...]
-
-    def to_rows(self) -> tuple[dict[str, object], ...]:
-        return tuple(item.to_dict() for item in self.items)
-
-    def to_json(self) -> str:
-        return canonical_json(list(self.to_rows()))
-
-    def to_jsonl(self) -> str:
-        return "".join(f"{canonical_json(row)}\n" for row in self.to_rows())
-
-
 class LibraryReadRepository:
     """Bounded, side-effect-free queries over canonical library projections."""
 
@@ -166,15 +94,9 @@ class LibraryReadRepository:
         include_light_content = _include_light_content(include_light_content)
         if doi is not None:
             normalized_doi = Identifier("doi", doi).value
-            identified_versions = work_versions.alias("identified_versions")
-            statement = self._base_select().where(exists(
-                select(literal(1)).select_from(
-                    work_version_identifiers.join(
-                        identified_versions,
-                        identified_versions.c.id == work_version_identifiers.c.work_version_id,
-                    )
-                ).where(
-                    identified_versions.c.work_id == works.c.id,
+            statement = self._base_select(preferred_only=False).where(exists(
+                select(literal(1)).select_from(work_version_identifiers).where(
+                    work_version_identifiers.c.work_version_id == work_versions.c.id,
                     work_version_identifiers.c.namespace == "doi",
                     work_version_identifiers.c.value == normalized_doi,
                 )
@@ -231,7 +153,7 @@ class LibraryReadRepository:
                 ),
             ))
         if filters is not None:
-            statement = self._apply_filters(statement, filters)
+            statement = apply_filters(statement, filters)
         return self._execute(statement, checked_limit, include_light_content)
 
     def references(
@@ -293,57 +215,6 @@ class LibraryReadRepository:
             statement = statement.where(work_versions.c.id == works.c.preferred_work_version_id)
         return statement
 
-    @staticmethod
-    def _apply_filters(statement: Select[Any], filters: LibraryFilters) -> Select[Any]:
-        conditions = []
-        if filters.author is not None:
-            conditions.append(exists(select(literal(1)).select_from(
-                authorships.join(authors, authors.c.id == authorships.c.author_id)
-            ).where(
-                authorships.c.work_version_id == work_versions.c.id,
-                authors.c.normalized_name == _normalized_author(filters.author),
-            )))
-        if filters.publication_year is not None:
-            conditions.append(work_versions.c.publication_year == filters.publication_year)
-        if filters.publisher is not None:
-            normalized = normalize_title(filters.publisher)
-            conditions.append(or_(
-                publishers.c.normalized_name == normalized,
-                exists(select(literal(1)).where(
-                    publisher_aliases.c.publisher_id == publishers.c.id,
-                    publisher_aliases.c.normalized_alias == normalized,
-                )),
-            ))
-        if filters.venue is not None:
-            normalized = normalize_title(filters.venue)
-            conditions.append(or_(
-                venues.c.normalized_name == normalized,
-                exists(select(literal(1)).where(
-                    venue_aliases.c.venue_id == venues.c.id,
-                    venue_aliases.c.normalized_alias == normalized,
-                )),
-            ))
-        if filters.tag is not None:
-            normalized = normalize_title(filters.tag)
-            tag_ids = select(tags.c.id).where(or_(
-                tags.c.normalized_name == normalized,
-                exists(select(literal(1)).where(
-                    tag_aliases.c.tag_id == tags.c.id,
-                    tag_aliases.c.normalized_alias == normalized,
-                )),
-            ))
-            conditions.append(or_(
-                exists(select(literal(1)).where(
-                    manual_work_tags.c.work_id == works.c.id,
-                    manual_work_tags.c.tag_id.in_(tag_ids),
-                )),
-                exists(select(literal(1)).where(
-                    generated_work_version_tags.c.work_version_id == work_versions.c.id,
-                    generated_work_version_tags.c.tag_id.in_(tag_ids),
-                )),
-            ))
-        return statement.where(and_(*conditions)) if conditions else statement
-
     def _source_version(self, work_id: str | None, work_version_id: str | None) -> str:
         if (work_id is None) == (work_version_id is None):
             raise ValueError("references requires exactly one Work or WorkVersion ID")
@@ -376,62 +247,9 @@ class LibraryReadRepository:
             with self._catalog.connect() as connection:
                 rows = connection.execute(statement.distinct().limit(limit)).mappings().all()
                 items = tuple(
-                    self._item(connection, row, include_light_content)
+                    project_item(connection, row, include_light_content)
                     for row in rows
                 )
         return LibraryResult(items)
-
-    @staticmethod
-    def _item(
-        connection: Connection,
-        row: Any,
-        include_light_content: bool,
-    ) -> LibraryItem:
-        version_id = row["id"]
-        author_names = tuple(connection.execute(
-            select(authors.c.display_name)
-            .join(authorships, authorships.c.author_id == authors.c.id)
-            .where(authorships.c.work_version_id == version_id)
-            .order_by(authorships.c.position, authorships.c.id)
-        ).scalars())
-        tag_query = union_all(
-            select(tags.c.canonical_name).join(
-                manual_work_tags, manual_work_tags.c.tag_id == tags.c.id
-            ).where(manual_work_tags.c.work_id == row["work_id"]),
-            select(tags.c.canonical_name).join(
-                generated_work_version_tags,
-                generated_work_version_tags.c.tag_id == tags.c.id,
-            ).where(generated_work_version_tags.c.work_version_id == version_id),
-        ).subquery()
-        tag_names = tuple(connection.execute(
-            select(tag_query.c.canonical_name).distinct().order_by(tag_query.c.canonical_name)
-        ).scalars())
-        content = ()
-        if include_light_content:
-            values: list[str] = []
-            content_json = connection.execute(select(current_analyses.c.content_json).where(
-                current_analyses.c.work_version_id == version_id)).scalar_one_or_none()
-            decoded = None if content_json is None else json.loads(content_json)
-            if isinstance(decoded, dict) and isinstance(decoded.get("sections"), list):
-                for section in decoded["sections"]:
-                    if isinstance(section, dict) and isinstance(section.get("content"), str) and section["content"].strip():
-                        values.append(section["content"])
-            content = tuple(dict.fromkeys(values))
-        preferred_id = row["preferred_work_version_id"]
-        if preferred_id is None:
-            raise ValueError("Work has no preferred WorkVersion")
-        return LibraryItem(
-            work_id=row["work_id"], work_version_id=version_id,
-            preferred_work_version_id=preferred_id,
-            is_preferred=version_id == preferred_id,
-            version_class=row["version_class"], title=row["title"], abstract=row["abstract"],
-            language=row["language"], work_type=row["work_type"],
-            publication_date=row["publication_date"], publication_year=row["publication_year"],
-            publisher=row["publisher_name"], venue=row["venue_name"], volume=row["volume"],
-            issue=row["issue"], pages=row["pages"], article_number=row["article_number"],
-            open_access_status=row["open_access_status"], authors=author_names,
-            tags=tag_names, light_content=content,
-        )
-
 
 __all__ = ("LibraryFilters", "LibraryItem", "LibraryReadRepository", "LibraryResult")
