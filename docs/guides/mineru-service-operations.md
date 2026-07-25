@@ -225,4 +225,4 @@ Before changing MinerU, model, backend, engine or output schema:
 6. Keep the old service available until the new parser artifacts pass local validation; parser service availability must never force replacement of an existing current result.
 ## SciRetriever invocation
 
-Configure the pinned target under `[analysis.mineru]`, configure the OpenAI-compatible analysis target under `[analysis.llm]`, export only the named credential variables at runtime, and run `sciretriever analyze` with an explicit selector. `search --level analyze` analyzes only WorkVersions returned by that metadata search after its download phase. SciRetriever does not own service lifecycle operations.
+Configure the pinned target under `[analysis.mineru]`, configure the OpenAI-compatible analysis target under `[analysis.llm]`, export only the named credential variables at runtime, and run `sciretriever analyze` with an explicit selector. `search --level analyze` sends only that invocation's targets through the shared completion pipeline to the COMPLETE stop. SciRetriever does not own service lifecycle operations.

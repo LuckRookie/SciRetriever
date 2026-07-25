@@ -1,6 +1,6 @@
 # SciRetriever 实施进度
 
-- 最后核对：2026-07-24
+- 最后核对：2026-07-25
 - 进度依据：[文献库执行计划](../planning/literature-library-execution.md)
 - 理想产品：[需求规格](../specs/requirements.md)、[系统设计](../specs/system-design.md)、[技术架构](../specs/technical-architecture.md)
 - 当前用户行为：[README](../../README.md)、`sciretriever --help`
@@ -23,7 +23,7 @@
 
 ## 2. 总体状态
 
-截至 2026-07-24，SciRetriever 已具备 Work-centered catalog、多来源 metadata 入库、本地 library 读取、WorkVersion selector、三层全文获取、安全网络边界、不可变保存、MinerU PDF 解析、十节 current analysis、前台 analyze backfill 和包含 current analysis 的不可变 `DocumentPackageVersion`。WP0-WP4 已完成；WP5 尚未开始。
+截至 2026-07-25，SciRetriever 已具备 Work-centered catalog、多来源 metadata 入库、本地 library 读取、WorkVersion selector、三层全文获取、安全网络边界、不可变保存、MinerU PDF 解析、十节 current analysis、包含 current analysis 的不可变 `DocumentPackageVersion`，以及从 catalog 事实派生四阶段的共享 completion 管线。WP0-WP5 已完成；引用扩展与产品收口顺延到 WP6。
 
 当前主交接是：
 
@@ -31,16 +31,14 @@
 SearchSpec
   -> discovery providers
   -> clean / deduplicate / merge
-  -> Work + WorkVersion + observations
-  -> explicit WorkVersion download selection
-  -> provider race / translator / browser
-  -> content and article identity validation
-  -> immutable RawAsset
-  -> MinerU parsing / evidence / current analysis
+  -> shared completion: METADATA_PENDING -> ASSET_PENDING
+  -> provider race / validation / immutable RawAsset
+  -> ANALYSIS_PENDING -> MinerU / evidence / atomic current promotion
+  -> COMPLETE
   -> DocumentPackageVersion processing snapshot
 ```
 
-当前用户可以观察 canonical search JSON、library JSON/JSONL、manifest，以及 `download`、`analyze` 和相应 search level 的稳定脱敏结果。WorkVersion 是书目与内容所有权基础；library curation、citation expansion、独立 `failures` 和 `config check` 属于尚未实施的 WP5。
+当前用户可以观察 canonical search JSON、library JSON/JSONL、manifest，以及共享 completion batch 驱动的 `search`、`download`、`analyze` 和 primary-PDF import 结果。WorkVersion 是书目与内容所有权基础；completion 只决定下一缺失阶段，不保存状态或复制 WP2-WP4 写入逻辑。library curation、citation expansion、独立 `failures` 和 `config check` 属于尚未实施的 WP6。
 
 ## 3. 当前命令与配置
 
@@ -57,7 +55,7 @@ catalog create|import-asset
 package
 ```
 
-严格配置 parser 接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`analysis`、`package`。`search.level` 接受 `metadata`、`download`、`analyze`；`[analysis.mineru]` 和 `[analysis.llm]` 使用严格 endpoint、运行时 credential-env 和资源上限。Reference expansion、独立 `failures` 和 `config check` 仍属于 WP5，未进入当前命令面。
+严格配置 parser 接受 `schema_version = 1` 以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`analysis`、`package`。`search.level` 接受 `metadata`、`download`、`analyze`；`[analysis.mineru]` 和 `[analysis.llm]` 使用严格 endpoint、运行时 credential-env 和资源上限。Reference expansion、独立 `failures` 和 `config check` 已顺延到 WP6，未进入当前命令面。
 
 证据：`README.md`、`config.example.toml`、`src/sciretriever/config.py`、`src/sciretriever/cli/main.py`、`sciretriever --help`、`download/search/preflight --help`。最后核对：2026-07-24。
 
@@ -74,8 +72,9 @@ package
 | `storage/` | Raw/Derived staging、不可变 create-if-absent 发布、hash 验证和 reconciliation |
 | `normalization/` | PDF/XML/HTML 到 sections、tables、references、source map 和 evidence |
 | `analysis/` | PDF-backed 十节分析、严格 evidence、current replacement 和前台 backfill |
+| `completion/` | DOI/WorkVersion targets、四阶段事实驱动管线、稳定 batch、中断后缀、force analysis 和正交 optional assets |
 | `packaging/` | quality gate 与 `DocumentPackageVersion` 处理快照发布 |
-| `cli/` | 当前命令的 composition root，包括 metadata/download/analyze `search`、独立 `download`/`analyze` 和只读 `library` |
+| `cli/` | invocation composition root；统一装配 completion runtime，命令只选择 target、stop、force 或 optional operation |
 
 当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references，以及原子替换的 single current analysis。
 
@@ -92,7 +91,7 @@ package
 | Publisher/Venue registries | 已覆盖 WP1 | typed registry 与 alias repository | WP1-WP2 |
 | Canonical tags | 已覆盖 WP1 基础 | canonical tag/alias、manual Work tag、generated WorkVersion tag 分离 | WP1/WP4 |
 | Metadata discovery | 已覆盖 WP2 | 多 provider 有界并发、独立 timeout、确定性合并、OA status、observations 和 canonical WorkVersion 入库；manifest 入口仍保持只读 | WP2 |
-| Local library search/curation | WP2 读取面已覆盖 | exact lookup、keyword/filters、references/cited-by、safe JSON/JSONL export；人工整理属于 WP5 | WP2/WP5 |
+| Local library search/curation | WP2 读取面已覆盖 | exact lookup、keyword/filters、references/cited-by、safe JSON/JSONL export；人工整理属于 WP6 | WP2/WP6 |
 | Primary PDF acquisition | 已覆盖 WP3 | 显式 WorkVersion selectors、first-tier provider race、每来源 8 个去重候选顺序回退、accepted/missing/reused/interrupted 输出 | WP3 |
 | Sci-Hub / translator / browser | 已覆盖 WP3 | Sci-Hub first-tier 显式 opt-in；restricted translator second-tier；默认关闭的 profile-copy browser third-tier；全部使用离线 fixture | WP3 |
 | Article identity validation | 已覆盖 WP3 | PDF/XML/HTML 的 DOI 或保守标题/佐证确认；mismatch/unconfirmed 均 reject 且不进入 RawAsset | WP3 |
@@ -100,11 +99,13 @@ package
 | PDF normalization | 已覆盖 WP4 | MinerU 3.4.4 connector、async attempt、hostile ZIP admission、source map 和 PDF locators | WP4 |
 | Current LLM analysis | 已覆盖 WP4 | 十个稳定 section、严格 evidence、OpenAI-compatible provider 和脱敏 provenance | WP4 |
 | Atomic current replacement | 已覆盖 WP4 | single current revision、force convergence、失败保留旧 current、immutable package snapshot | WP4 |
+| Global completion pipeline | 已覆盖 WP5 | 四阶段由 catalog 事实派生；DOI/WorkVersion/accepted PDF/COMPLETE 入口只执行缺失后缀；无 mutable completion state | WP5 |
+| Shared write entry points | 已覆盖 WP5 | search/download/analyze/primary-PDF import 共享 completion；metadata/asset/complete stops、force 与 XML/HTML 正交操作有直接 CLI 测试 | WP5 |
 | Version references | 已覆盖 WP1 基础 | ordered `version_references`、目标 Work link 与 reverse citation query | WP1/WP4 |
-| Reference expansion | 未实现 | 无 `expand` 产品命令 | WP5 |
-| Failures UX | 部分覆盖 | `download` 返回稳定脱敏 counts/details 并持久化 acquisition diagnostics；独立 `failures` 命令属于 WP5 | WP3/WP5 |
-| Strict product config | 已覆盖 WP2-WP4 | schema v1 覆盖 search、acquisition 和 analysis MinerU/LLM；WP5 字段仍未实现 | WP2-WP5 |
-| Foreground stop/idempotent rerun | 已覆盖 WP0/WP3 | Ctrl+C 保留完成项和 interrupted 计数；已有角色资产直接 reuse；整批重跑收敛 | WP0/WP3 |
+| Reference expansion | 未实现 | 无 `expand` 产品命令 | WP6 |
+| Failures UX | 部分覆盖 | `download` 返回稳定脱敏 counts/details 并持久化 acquisition diagnostics；独立 `failures` 命令属于 WP6 | WP3/WP6 |
+| Strict product config | 已覆盖 WP2-WP4 | schema v1 覆盖 search、acquisition 和 analysis MinerU/LLM；WP6 expansion/curation/export 字段仍未实现 | WP2-WP6 |
+| Foreground stop/idempotent rerun | 已覆盖 WP0/WP3/WP5 | batch 保留稳定顺序和完成项，Ctrl+C 标记当前/未启动后缀；事实重读只执行缺失阶段，重复运行不复制 observations/assets/current | WP0/WP3/WP5 |
 | 旧任务控制移除 | 已完成 | 已删除旧 `acquire`/`report`、durable task/job、pause/resume/due、retry scheduling、source-plan persistence 和 candidate checkpoint 当前运行路径 | WP0 |
 | Domain pack boundary | 已批准并有基础 | `DocumentPackageVersion`、stable references、ADR 0001 | 持续约束 |
 
@@ -118,12 +119,20 @@ package
 | WP1 文献模型 | approved | completed | direct fresh schema bootstrap、typed WP1 repositories、WorkVersion-owned runtime persistence 和 `test_catalog_wp1.py` 直接验收；完整 unittest 与 Pyright 通过 | 无 |
 | WP2 搜索与本地库 | approved | completed | `test_search_wp2.py`、`test_library_wp2.py`、`test_cli_wp2.py` 覆盖并发/timeout/确定性入库、preferred/non-preferred 读取、filters、引用遍历、安全导出和 CLI/config precedence；完整 harness 511 项通过 | 无 |
 | WP3 PDF 获取 | approved | completed | `test_wp3_foundation.py`、`test_download_wp3.py`、`test_cli_download_wp3.py`、`test_sci_hub_wp3.py`、`test_translator_wp3.py`、`test_browser_wp3.py`、`test_acquisition_identity_validation.py` 覆盖 selector/tier/candidate/identity/profile/中断/脱敏/不可变验收；完整 harness 522 项通过 | 无 |
-| WP4 PDF 分析 | complete | WP4.1-WP4.5 已实现：严格配置、MinerU connector/admission、PDF source map、current replacement、analyze/search backfill 与 package snapshot | 离线 WP4、CLI、config、package、架构、文档和 full harness 验证 | 无；WP5 另行实施 |
-| WP5 引用与产品收口 | approved | not started | 无目标 expand/CLI/config 收口证据 | 等待 WP4 验收 |
+| WP4 PDF 分析 | complete | completed | 严格配置、MinerU connector/admission、PDF source map、current replacement、analyze/search 与 package snapshot 离线验收 | 无 |
+| WP5 全局文献信息完成管线 | approved | completed | `completion/`、catalog facts、exact DOI、四入口 cutover、真实 SQLite/storage acceptance、十个 promotion rollback failpoints、架构/删除/wheel gates；`test_completion*_wp5.py` 74 项与 Todo 8 full harness 681 项通过 | 无 |
+| WP6 引用扩展与产品收口 | approved | not started | 无目标 expand/CLI/config 收口证据 | 无；可在 WP5 发布门通过后进入 |
 
 `approved` 只表示执行计划获得授权，不等于代码已经实现。实施顺序和验收门只在[执行计划](../planning/literature-library-execution.md)定义。
 
 ## 7. 最近验证
+
+2026-07-25 WP5 实现验收：
+
+- `test_completion*_wp5.py` 74 项、`test_cli_completion*_wp5.py` 19 项和受影响 WP1-WP4 回归 103 项通过。
+- 真实临时 SQLite/不可变存储 fixture 覆盖 DOI、provider WorkVersion、accepted PDF、COMPLETE、重启、部分失败、并发收敛和十个原子 promotion 回滚 failpoint。
+- Todo 8 最终 `full` harness 681 项通过；Pyright 0 diagnostics，documentation、architecture、clean wheel/source parity 和退休 backfill module 删除检查通过。
+- Todo 8 精确手工 CLI QA 使用修正后的 `1 1 2 1` metadata 投影和有效双页 PDF fixture，symlink fail-closed、首次导入、幂等 replay、安全 library view、无 selector 拒绝及临时目录清理全部 PASS；证据记录在 `.omo/evidence/wp5/manual-qa.txt` 和 `final-f2.txt`。
 
 2026-07-24 WP4 完成验证：
 
