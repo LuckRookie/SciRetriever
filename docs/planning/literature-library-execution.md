@@ -3,8 +3,8 @@ document_type = "execution-plan"
 status = "approved"
 owner = "project owner"
 approved_by = "project owner"
-approved_on = "2026-07-23"
-approval_ref = "conversation-2026-07-23-literature-library-reset"
+approved_on = "2026-07-24"
+approval_ref = "conversation-2026-07-24-universal-completion-pipeline"
 source_proposal = "../proposals/literature-library-product.md"
 requirements = ["../specs/requirements.md", "../specs/system-design.md"]
 +++
@@ -108,13 +108,26 @@ WP4 保持一个工作包，但内部按以下五个门禁顺序实施。后一�
 
 **工作包验收门**：WP4.1-WP4.5 的阶段门全部通过；SciRetriever 从不启动 MinerU；相同 accepted PDF、parser/model/config 和 analysis schema 可得到可审计的 processing identity、artifact lineage 和 current result；任何 connector、admission、normalization、LLM、replacement 或 package 阶段失败都不污染 RawAsset、已发布 parser artifact、旧 current result 或旧 `DocumentPackage`；full harness 和对应人工安全/证据审查通过。
 
-### WP5：引用扩展与目标 CLI/config 收口
+### WP5：全局文献信息完成管线
+
+- 将 metadata、primary PDF 获取、MinerU/LLM 分析和最终 canonical promotion 收口为全系统共享的应用层完成管线；该管线是所有写入型入库、补全和后续扩展流程的统一主干，不属于某一个 CLI，也不在 catalog、discovery、acquisition、normalization 或 analysis 底层建立反向依赖。
+- 使用一个简单、可由 catalog 事实确定的单向完成阶段：`METADATA_PENDING -> ASSET_PENDING -> ANALYSIS_PENDING -> COMPLETE`。供应商全部失败、资产来源全部耗尽、MinerU/LLM 失败或 Ctrl+C 都不产生新的持久化文献状态；对象停留在当前未完成阶段，重跑时复用已提交事实并从该阶段继续。
+- `METADATA_PENDING` 表示尚无足以确定 `Work`/`WorkVersion` 身份和支持资产获取的供应商元数据；此时 completion target 可以只是当前 invocation 中的规范化 DOI，不要求先创建持久化文献状态。供应商 observations、configured precedence 和 provisional canonical projection 成功入库后进入 `ASSET_PENDING`。供应商元数据只是临时发现/获取输入，不得描述为文献最终元数据。
+- `ASSET_PENDING` 表示已有临时供应商元数据但没有 accepted primary PDF；WP3 的不可变资产验收成功后进入 `ANALYSIS_PENDING`。XML/HTML 和补充 PDF 不能替代 primary PDF 完成该阶段。
+- `ANALYSIS_PENDING` 表示已有 accepted primary PDF，但尚未完成当前 PDF 对应的 MinerU normalization、LLM 全文分析、PDF evidence 验证和 canonical promotion。MinerU artifact 可以在失败重跑时复用，但不单独增加用户层完成阶段。
+- `COMPLETE` 只在 current analysis、fulltext-derived canonical fields、references 和 generated tags 验证通过并原子发布后成立。最终 canonical metadata 按 `manual override > current PDF/LLM-derived value > provider projection` 逐字段统一；LLM 未可靠提取的字段继续使用 provider 值，provider observations、manual metadata 和 RawAsset 始终保留。
+- 建立统一的完成阶段判定和 `ensure_complete` 应用层契约。WP1 提供身份和 catalog 事实，WP2 提供临时供应商元数据，WP3 提供 accepted assets，WP4 提供 MinerU/LLM current result 与最终 canonical promotion；WP5 只编排并复用这些已验收能力，不复制各阶段实现，也不恢复 WP0 已删除的 task/job、daemon、lease、durable pause/resume 或后台状态机。
+- 将现有写入型入口接入同一完成管线：DOI/稳定标识符入库和 `search` 从 metadata 阶段进入，已有 WorkVersion 的 `download` 从资产阶段进入，已有 accepted PDF 的 `analyze` 和本地资产导入从分析阶段进入。命令可以按显式 level/selector 停在中间阶段，但 catalog 中的完成判定、后续补全和重跑必须使用同一契约；只读 `discover` manifest 和完成后的 package/export 不属于该管线。
+
+**验收门**：离线 fixture 分别从 DOI、供应商元数据、已有 WorkVersion 和已有 primary PDF 进入同一完成管线，并得到一致阶段判定；成功路径严格收敛到 `COMPLETE`，各阶段失败后重跑只执行缺失阶段且不重复保存 observation、RawAsset、parser artifact 或 current result；供应商元数据在 analysis 前明确保持临时性质，成功 analysis 在同一事务中切换 current result、fulltext-derived projection、references、generated tags 和最终 canonical metadata；字段优先级为 manual > PDF/LLM > provider；现有 `search`、`download`、`analyze` 和本地资产入口不维护平行完成逻辑；没有新增 durable job/task 状态机；受影响 WP1-WP4 回归、architecture harness 和 full harness 通过。
+
+### WP6：引用扩展与目标 CLI/config 收口
 
 - 实现 `expand`，默认 references，支持 cited-by/both，仅接受 depth 控制，并用 stable Work visited set 去环和阻止重复入队。
 - 每一层对所有新增 Work 完成 metadata、download 和 analyze 后再进入下一层。
 - expansion 只有 depth 边界，不设置 product-level maximum-new-documents cap；报告每层计数。分支失败只停止该分支，其它分支继续；Ctrl+C 停止新记录并安全闭合当前有限操作。
 - 实现 `failures` 和 `config check`，完成目标命令树、显式 backfill selectors、待复核项与可审计/可撤销的人工整理、阅读版与版本化 `DocumentPackage` export/`--include-references`，以及统一进度计数。`failures` 覆盖 metadata、acquisition、analysis 和 expansion 的对象级 reason/action，acquisition 另有脱敏 per-source details。
-- 收口严格 TOML：复用 WP2/WP3 已发布的 search/acquisition 配置和 WP4.5 已验收的 MinerU/LLM 配置，只增加 WP5 expansion/curation/export 所需默认值及尚缺的格式/间隔字段；沿用同一 secret 引用和 redaction 语义，不建立第二套配置路径，CLI 只覆盖当前 invocation。
+- 收口严格 TOML：复用 WP2/WP3 已发布的 search/acquisition 配置、WP4.5 已验收的 MinerU/LLM 配置和 WP5 全局完成管线，只增加 WP6 expansion/curation/export 所需默认值及尚缺的格式/间隔字段；沿用同一 secret 引用和 redaction 语义，不建立第二套配置路径，CLI 只覆盖当前 invocation。
 
 **验收门**：固定引用图按深度产生确定性层级且不受隐藏文档数上限截断；每层计数可对账；每层完整处理；单分支失败不阻塞其它分支；安全中断后重跑跳过完成内容；unresolved reference 可在重跑后解析；人工归组、preferred、metadata、tag 和 author 操作有前后值、可撤销且不删除 observations/RawAsset；更新 current 后重导出产生新 `DocumentPackage` 快照且旧快照不变；各阶段 failure 可按对象查询；未知 TOML 字段拒绝；secret 不进入输出、日志、catalog 或 lineage；README、示例配置和 `--help` 一致。
 
@@ -125,7 +138,8 @@ WP4 保持一个工作包，但内部按以下五个门禁顺序实施。后一�
 产品级验收使用离线 provider、固定时钟、程序化最小全文和本地 catalog fixture，证明：
 
 - 一个 Work 正确连接多个书目版本，正式版本优先但其它版本仍可读。
-- metadata、download、analyze 可分别 backfill，重复运行收敛。
+- 所有写入型入库和补全入口共享 `METADATA_PENDING -> ASSET_PENDING -> ANALYSIS_PENDING -> COMPLETE` 完成管线；metadata、download、analyze 可分别停在显式阶段或 backfill，重复运行从缺失阶段收敛。
+- provider metadata 在 analysis 前只是临时 projection；`COMPLETE` 的最终 canonical metadata 按 manual > PDF/LLM > provider 原子统一，并与 current analysis、references 和 generated tags 对齐。
 - 同层 acquisition race 安全，RawAsset 不可变，失败输出脱敏。
 - analyze 以 primary PDF 为必要基准；XML/HTML-only 被拒绝，补充资产冲突时 PDF 优先，evidence locator 回到 PDF。
 - manual tags、作者、引用、provider observations 和当前 parser/model/schema metadata 不被 analysis replacement 覆盖；旧生成分析在 replacement 成功后被删除或替换。
@@ -141,4 +155,4 @@ WP0 先缩小旧架构，WP1 直接建立全新目标 schema。当前没有受�
 
 ## 进度引用
 
-本计划的 front matter 只表示计划授权生命周期，不表示工作包完成程度。WP0-WP5 的实际状态、验证日期、证据和 blocker 统一见[实施进度](../governance/implementation-progress.md)；不得在本计划维护第二份进度台账。
+本计划的 front matter 只表示计划授权生命周期，不表示工作包完成程度。WP0-WP6 的实际状态、验证日期、证据和 blocker 统一见[实施进度](../governance/implementation-progress.md)；不得在本计划维护第二份进度台账。
