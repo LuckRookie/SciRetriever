@@ -1,18 +1,21 @@
-"""Foreground current-analysis backfill command."""
+"""Analyze selected WorkVersions through shared completion."""
 
 from __future__ import annotations
 
 import argparse
+import anyio
 from pathlib import Path
 import sys
-from typing import Any, cast
-
-from sciretriever.analysis import AnalysisBackfillResult, AnalysisBackfillService, AnalysisService, OpenAICompatibleAnalysisProvider
-from sciretriever.catalog import AssetRepository, LibraryFilters, WorkVersionAnalysisRepository, canonical_json, open_catalog_engine
-from sciretriever.config import AnalysisConfig, get_credential
+from sciretriever.catalog import LibraryFilters, WorkVersionAnalysisRepository, canonical_json
+from sciretriever.config import AnalysisConfig
 from sciretriever.errors import SciRetrieverError
-from sciretriever.normalization import MinerUClient, MinerUParsingService, MinerUSourceMapService
-from sciretriever.storage import DerivedArtifactStore, RawAssetStore
+from sciretriever.cli.analysis_runtime import AnalysisCliRuntime
+from sciretriever.cli.completion_context import CommandCompletionRuntime
+from sciretriever.cli.completion_runtime import build_command_completion_runtime
+from sciretriever.completion import (
+    BatchResult, CompletionStop, ForceAnalysisBatchResult, WorkVersionTarget,
+    run_completion_batch, run_force_analysis_batch,
+)
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -65,73 +68,45 @@ def _selection(repository: WorkVersionAnalysisRepository, args: argparse.Namespa
         limit=args.limit, force=args.force).work_version_ids
 
 
-def execute_work_versions(args: argparse.Namespace, selected: tuple[str, ...]) -> AnalysisBackfillResult:
-    root = args.storage_root.expanduser()
-    if not root.is_dir() or root.is_symlink():
-        raise ValueError("storage root must be an existing real directory")
+def build_analysis_completion_runtime(args: argparse.Namespace) -> CommandCompletionRuntime:
     config: AnalysisConfig = args._config_analysis
-    endpoint, model = config.llm.endpoint, config.llm.model
-    if endpoint is None or model is None:
-        raise ValueError("analysis LLM target is incomplete")
-    credential_reader = getattr(args, "_credential_reader", get_credential)
-    credential = credential_reader(config.llm.credential_env or "")
-    if credential is None:
-        raise ValueError("analysis LLM credential is unavailable")
-    engine = open_catalog_engine(args.catalog)
+    defaults = AnalysisCliRuntime(config)
+    analysis = AnalysisCliRuntime(
+        config,
+        getattr(args, "_credential_reader", None) or defaults.credential_reader,
+        getattr(args, "_mineru_client_factory", None) or defaults.mineru_client_factory,
+        getattr(args, "_analysis_provider_factory", None) or defaults.analysis_provider_factory,
+    )
+    return build_command_completion_runtime(
+        args.catalog, args.storage_root, analysis=analysis
+    )
+
+
+def _selected_targets(
+    repository: WorkVersionAnalysisRepository, args: argparse.Namespace,
+) -> tuple[WorkVersionTarget, ...]:
+    return tuple(WorkVersionTarget(value) for value in _selection(repository, args))
+
+
+def _execute(args: argparse.Namespace) -> BatchResult | ForceAnalysisBatchResult:
+    runtime = build_analysis_completion_runtime(args)
     try:
-        raw_store, derived_store = RawAssetStore(root), DerivedArtifactStore(root)
-        client_factory = getattr(args, "_mineru_client_factory", MinerUClient)
-        provider_factory = getattr(args, "_analysis_provider_factory", OpenAICompatibleAnalysisProvider)
-        client = client_factory(config.mineru)
-        provider = provider_factory(api_key=credential, base_url=endpoint,
-                                    model=model, timeout=config.llm.timeout)
-        assets = AssetRepository(engine)
-        parsing = MinerUParsingService(engine, derived_store, config.mineru, cast(Any, client))
-        mapping = MinerUSourceMapService(engine, raw_store, derived_store)
-        analysis = AnalysisService(engine, derived_store, provider,
-            max_input_characters=config.llm.max_input_characters,
-            max_source_units=config.llm.max_source_units,
-            max_completion_tokens=config.llm.max_output_tokens,
-            configuration={"endpoint": endpoint, "model": model,
-                           "timeout": config.llm.timeout})
-        repository = WorkVersionAnalysisRepository(engine)
-        def analyze_one(record, force: bool) -> str:
-            raw = assets.get_raw_asset(record.primary_pdf_id or "")
-            if raw is None:
-                raise ValueError("primary PDF record is missing")
-            pdf = raw_store.read_verified(raw.storage_path, raw.sha256, raw.byte_size, config.mineru.max_upload_bytes)
-            before = record.current_id
-            parsed = parsing.run(record.work_version_id, raw.id, pdf)
-            source = mapping.run(record.work_version_id, parsed)
-            analysis.run(record.work_version_id, source, expected_current_id=record.current_id,
-                         expected_revision=record.current_revision, force=force)
-            return "reused" if before is not None and not force else "analyzed"
-        service = AnalysisBackfillService(repository, analyze_one)
-        args._analysis_backfill_service = service
-        return service.run(selected, force=args.force)
+        targets = _selected_targets(WorkVersionAnalysisRepository(runtime.catalog), args)
+        if args.force:
+            return run_force_analysis_batch(runtime.completion.pipeline, targets)
+        return anyio.run(
+            run_completion_batch, runtime.completion.pipeline, targets,
+            CompletionStop.COMPLETE,
+        )
     finally:
-        engine.dispose()
-
-
-def interrupted_result(args: argparse.Namespace) -> AnalysisBackfillResult:
-    service = getattr(args, "_analysis_backfill_service", None)
-    if service is None:
-        return AnalysisBackfillResult(0, 0, 0, 0, 0, 0, ())
-    result = service.last_result
-    return AnalysisBackfillResult(result.selected, result.analyzed, result.reused, result.blocked,
-        result.failed, max(result.interrupted, result.selected - len(result.outcomes)), result.outcomes)
+        runtime.close()
 
 
 def run(args: argparse.Namespace) -> int:
     try:
-        engine = open_catalog_engine(args.catalog)
-        try:
-            selected = _selection(WorkVersionAnalysisRepository(engine), args)
-        finally:
-            engine.dispose()
-        result = execute_work_versions(args, selected)
+        result = _execute(args)
     except KeyboardInterrupt:
-        print(canonical_json(interrupted_result(args).to_dict()))
+        print(canonical_json({"items": [], "failed": 0, "interrupted": True}))
         return 130
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: analyze failed", file=sys.stderr)
@@ -140,4 +115,4 @@ def run(args: argparse.Namespace) -> int:
     return 130 if result.interrupted else 0
 
 
-__all__ = ("configure_parser", "execute_work_versions", "interrupted_result", "run", "validate_arguments")
+__all__ = ("configure_parser", "run", "validate_arguments")
