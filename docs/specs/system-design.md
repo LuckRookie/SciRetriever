@@ -29,6 +29,11 @@
                   library / failures / config check
                                |
                                v
+                 universal completion orchestration
+            METADATA_PENDING -> ASSET_PENDING
+            -> ANALYSIS_PENDING -> COMPLETE
+                                |
+                                v
                     Work-centered local library
                  Work -> WorkVersion -> current view
                     |          |             |
@@ -50,22 +55,23 @@
                        downstream domain packs
 ```
 
-设计把 catalog 中的长期文献事实放在中心。搜索、下载、分析、引用扩展和导出都只是围绕同一 Work/WorkVersion 数据逐步补全的操作，不各自产生互不相干的任务产品。
+设计把 catalog 中的长期文献事实放在中心。所有写入型入库和补全入口先进入共享应用层完成管线，再复用 metadata、acquisition、normalization 和 analysis 阶段能力。搜索、下载、分析和引用扩展不各自产生互不相干的任务产品；只读查询和完成后的导出不属于完成管线。
 
 ### 1.1 能力模块与责任
 
 | 能力模块 | 责任 | 拥有或写入 | 明确不负责 |
 |---|---|---|---|
 | 前台交互与配置 | 解释命令、选择器、defaults、进度和 cooperative stop | invocation 参数；不拥有业务事实 | daemon、后台 ownership、持久化任务恢复 |
-| Search/Metadata | 并发查询、规范化、身份匹配、placeholder 入库 | 通过 catalog 写 observations 和 canonical projection | 下载正文、调用 LLM、保留 vendor dict 作为产品字段 |
+| Completion Orchestration | 根据 catalog 事实确定四阶段并只调用下一缺失阶段；为 DOI/search/import/backfill/expansion 提供统一完成契约 | 不拥有新的业务事实；返回当前阶段和本次阶段结果 | 复制 metadata/acquisition/analysis 实现、保存第二套状态、建立后台 workflow |
+| Search/Metadata | 并发查询、规范化、身份匹配、provisional WorkVersion 入库 | 通过 catalog 写 observations 和 provisional provider projection | 宣称文献最终完成、下载正文、调用 LLM、保留 vendor dict 作为产品字段 |
 | Provider adapters | 把外部 metadata 或 asset candidate 转为中性形状 | provider record id、locator 和 provenance | 决定 Work/版本身份或 canonical 值 |
 | Network boundary | 执行通用 HTTP 安全与有限资源约束 | 非敏感 transport diagnostics | 业务重试策略、资产验收和 browser 内部实现 |
 | Catalog/Library | 维护 Work、WorkVersion、canonical metadata、observations、authors、registries、tags、references、current result 和 lineage | 文献业务事实与关系 | 存储大型 BLOB、绝对路径或领域 payload |
 | Acquisition | 为具体 WorkVersion 填补 primary PDF asset gap，编排竞速和回退 | acquisition overall/per-source diagnostics | 直接发布文件、生成分析或改变书目身份 |
 | Storage | 验证 hash 后不可变发布 RawAsset 和派生产物 | 文件字节、相对路径、hash | 决定哪个版本 preferred 或哪个 metadata canonical |
 | PDF normalization/OCR | 通过 operator-managed MinerU 3.4.4 service 从 accepted PDF 产生可分析全文、结构和 evidence，并验证 service result | immutable parser artifacts、normalized content、PDF locators 与 external attempt metadata | 启停/升级 MinerU、拥有 GPU/model/capacity、网络获取、身份去重或领域抽取 |
-| Analysis | 只基于合格 PDF 生成原文语言 current result，并形成受约束 proposals | current sections、fulltext metadata、references、generated tags | 获取 PDF、修改 RawAsset、删除 manual 数据、保留分析历史 |
-| References/Expansion | 维护版本级引用、unresolved、cited-by 派生和逐层扩展 | VersionReference、visited/层级结果和诊断 | 猜测创建 Work 或设置隐藏文献数上限 |
+| Analysis | 只基于合格 PDF 生成原文语言 current result，并形成受约束 proposals | current sections、最终 fulltext metadata、references、generated tags 的原子 promotion | 获取 PDF、修改 RawAsset、删除 manual 数据、保留分析历史 |
+| References/Expansion | 维护版本级引用、unresolved、cited-by 派生，并让每个图节点调用共享完成管线 | VersionReference、invocation-local visited/层级结果和诊断 | 复制完成逻辑、猜测创建 Work 或设置隐藏文献数上限 |
 | Library Query/Curation/Export | 提供 exact/keyword/filter/traversal、待复核项、人工修订和显式导出 | manual overrides、可撤销审计、派生视图和 export artifact | 暴露 backend observations、删除来源证据或建立首版 vector index |
 | Failures/Diagnostics | 汇总 metadata、acquisition、analysis、expansion 的对象级 reason/action；acquisition 提供脱敏 source details | 诊断历史、failure 和 lineage | 成为产品导航中心或泄漏 secret |
 | Packaging/Boundary | 形成稳定下游文献表示和 export snapshot | DocumentPackage/导出产物 | 充当 WorkVersion 身份或领域数据库 |
@@ -107,31 +113,37 @@ query
   -> deterministic Work/WorkVersion match
   -> save MetadataObservation
   -> provider precedence, then fill missing
-  -> canonical metadata + OA status
+  -> provisional provider metadata projection + OA status
   -> conservative Author/Authorship match
   -> existing Publisher/Venue alias mapping + provider precedence
   -> unresolved Publisher/Venue when no deterministic match
 ```
 
-查询默认合并为最多 100 个 Work。所有启用的 metadata provider 在有界并发下启动并各自受有限 timeout 约束；合并只依赖收集到的响应集合、规范化规则和 configured precedence，不依赖完成顺序。两个不同非空 DOI 永不因标题相同自动合并；一个 DOI 记录与一个无 DOI 记录可以在 exact normalized-title match 时合并并补 DOI；两个无稳定标识符记录只按采用版本化规则生成的 exact normalized-title key 合并。不做 fuzzy 或 LLM 去重。明确的跨版本关系进入待验证关系并可把不同 WorkVersion 归入同一 Work；没有关系证据时保持独立。低优先级 provider 只补空字段，冲突 observation 仍保留。metadata source keywords 只作为 observations 保存，不在该层生成 canonical tags。
+查询默认合并为最多 100 个 Work。所有启用的 metadata provider 在有界并发下启动并各自受有限 timeout 约束；合并只依赖收集到的响应集合、规范化规则和 configured precedence，不依赖完成顺序。两个不同非空 DOI 永不因标题相同自动合并；一个 DOI 记录与一个无 DOI 记录可以在 exact normalized-title match 时合并并补 DOI；两个无稳定标识符记录只按采用版本化规则生成的 exact normalized-title key 合并。不做 fuzzy 或 LLM 去重。明确的跨版本关系进入待验证关系并可把不同 WorkVersion 归入同一 Work；没有关系证据时保持独立。低优先级 provider 只补空字段，冲突 observation 仍保留。metadata source keywords 只作为 observations 保存，不在该层生成 canonical tags。该阶段产生的 projection 可供查询和资产获取，但在 PDF/LLM promotion 前始终是临时元数据。
 
 search limit 的内置默认是 100 个合并 Work，TOML 可修改，CLI `--limit` 只覆盖当前 invocation。provider observations 和原始 shape 只保存在后端供审计和重算，普通 library/search/export 只读取 canonical projection。
 
-## 4. 前台执行层级
+## 4. 全局完成管线与前台执行层级
 
-命令在单进程前台执行：
+所有写入型入口在单进程前台调用同一个 completion orchestration。它不保存新的 workflow 状态，而是根据 invocation target 和 catalog 权威事实确定当前阶段：
 
 ```text
-metadata: query -> merge -> persist library records
-download: explicit IDs/query/tags/all-missing -> resolve/execute -> validate -> immutable publish
-analyze: explicit IDs/query/tags/all-pending or explicit force -> require accepted primary PDF -> PDF-based analysis -> atomic current swap
+METADATA_PENDING
+  -> metadata providers + identity convergence + provisional provider projection
+ASSET_PENDING
+  -> primary PDF acquisition + validation + immutable acceptance
+ANALYSIS_PENDING
+  -> MinerU + LLM + PDF evidence + canonical promotion
+COMPLETE
 ```
 
-每层可独立 backfill。一次 download 已穷尽来源并记录 PDF missing 时，该 invocation 可以正常结束，但该版本的 primary PDF 缺口没有完成，不能计为 accepted/success，后续仍由 all-missing 选择。失败后用户重跑同一命令，系统按稳定身份、目标角色、输入 hash 和 current 指针幂等收敛。不引入 daemon、lease、fencing 或网络请求级 exactly-once。
+`METADATA_PENDING` target 可以只是当前 invocation 中的规范化 DOI，不要求预建 WorkVersion 或持久化 status；该阶段结束时只得到支持身份、查询和下载的临时 provider metadata。`ASSET_PENDING` 只在 accepted primary PDF 存在时结束；`ANALYSIS_PENDING` 只在 current analysis、最终 canonical metadata、references 和 generated tags 原子对齐后结束。`COMPLETE` 是唯一表示整篇 WorkVersion 文献信息已完成的阶段。
 
-普通 search 接受 `metadata/download/analyze` level 并使用 TOML 默认值。`download`/`analyze` 没有任何 ID 或 selection 时 fail closed，不隐式处理全库；全库补全与强制重析必须使用显式 all/force 语义。
+DOI/稳定标识符和普通 search 从 metadata 阶段进入；已有 WorkVersion 的 download 从资产阶段进入；已有 accepted PDF 的 analyze 或本地资产入口从分析阶段进入；已有 current result 和最终 projection 的对象直接复用 `COMPLETE`。metadata/download/analyze level 是 invocation 的显式停止点，不改变全局阶段语义。
 
-Ctrl+C/cooperative stop 是前台 invocation 的必要行为，不是 durable task control：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，然后退出。重跑通过幂等选择跳过已完成内容。
+供应商全部失败、资产来源耗尽、MinerU/LLM 失败或 Ctrl+C 都不产生新的文献状态；对象保持在当前阶段。一次 download 已穷尽来源时仍是 `ASSET_PENDING`，一次 analyze 失败时仍是 `ANALYSIS_PENDING`；已有有效 `COMPLETE` 的强制重析失败则保留旧 current 并继续为 `COMPLETE`。重跑按稳定身份、资产关系、输入 hash 和 current 指针只执行缺失阶段。
+
+普通 search 接受 `metadata/download/analyze` level 并使用 TOML 默认值。`download`/`analyze` 没有任何 ID 或 selection 时 fail closed，不隐式处理全库；全库补全与强制重析必须使用显式 all/force 语义。Ctrl+C/cooperative stop 只停止本次前台 invocation，不建立 durable task control。
 
 ## 5. Acquisition 流
 
@@ -172,6 +184,7 @@ accepted WorkVersion primary PDF
   -> build and validate complete replacement off to the side
   -> attach primary-PDF page/span evidence locators to derived sections, fields and references
   -> atomic replacement of current sections, canonical projection, references and generated tags
+  -> WorkVersion completion stage becomes COMPLETE
   -> delete/replace old generated content, no analysis history
   -> replace generated tags, preserve manual tags
 ```
@@ -188,7 +201,7 @@ parser/service/model/backend/config/input/output hashes 和 operator-attested mo
 
 失败发生在 replacement 前，因此旧 current result 保持可用。replacement 成功后旧 generated content 被删除或替换，不保留 analysis history。RawAsset、current parser/model/schema metadata、provider observations 和 manual tags 保留。
 
-canonical projection 在同一次原子 replacement 中按 `manual edit > current validated fulltext-derived nonempty value > provider precedence/fill-missing` 重建。新分析没有给出某字段时回退到 placeholder observation，不写空值，也不继续保留没有当前证据的旧 generated 值。stable identifier 必须通过程序验证，不能仅凭 LLM 字符串创建。首版只建 open-access canonical 状态，不建 license/retraction/correction/erratum 模型。
+canonical projection 在同一次原子 replacement 中按 `manual edit > current validated fulltext-derived nonempty value > provider precedence/fill-missing` 重建。新分析没有给出某字段时回退到 provider observation，不写空值，也不继续保留没有当前证据的旧 generated 值。stable identifier 必须通过程序验证，不能仅凭 LLM 字符串创建。首版只建 open-access canonical 状态，不建 license/retraction/correction/erratum 模型。
 
 ## 7. 引用扩展流
 
@@ -196,10 +209,9 @@ canonical projection 在同一次原子 replacement 中按 `manual edit > curren
 seed Work set
   -> direction references | cited-by | both
   -> stable visited Work identity set prevents cycles/re-enqueue
-  -> depth layer 1 metadata for all new Works
-  -> layer 1 download all
-  -> layer 1 analyze versions with accepted primary PDF
-  -> count missing/invalid-PDF versions as blocked/failed, not analysis success
+  -> each new node calls shared completion orchestration
+  -> only COMPLETE versions contribute their current references
+  -> incomplete nodes remain at METADATA_PENDING / ASSET_PENDING / ANALYSIS_PENDING
   -> next layer
 ```
 
@@ -222,8 +234,9 @@ local search 支持 exact DOI/title/internal-ID lookup；title、Abstract、ligh
 | 数据 | 权威所有者 | 普通用户看到 | 后台保留但默认不展示 |
 |---|---|---|---|
 | Work/WorkVersion identity | catalog | 一个 Work、版本列表和 preferred version | 匹配过程与 provisional evidence |
-| canonical metadata | catalog projection | 当前标题、Abstract、日期、Publisher/Venue 等 | provider 字段冲突和重算输入 |
-| provider metadata | MetadataObservation | 不直接展示 | provider、时间、字段值、record id、provenance |
+| canonical metadata | catalog projection | `COMPLETE` 后的当前标题、Abstract、日期、Publisher/Venue 等 | provider 字段冲突和重算输入 |
+| provider metadata | MetadataObservation + provisional provider projection | analysis 前可作为临时查询/获取视图 | provider、时间、字段值、record id、provenance |
+| completion stage | 由 catalog 事实派生 | `METADATA_PENDING`、`ASSET_PENDING`、`ANALYSIS_PENDING` 或 `COMPLETE` | 不保存第二套 workflow 状态 |
 | primary PDF | immutable storage + catalog link | 可阅读/导出的版本 PDF | hash、接收来源和验证证据 |
 | XML/HTML | supplemental asset links | 按需查看或不展示 | 结构补充、交叉核对和 provenance |
 | current analysis | WorkVersion current pointer | 原文语言 light Markdown、生成标签和引用视图 | parser/model/schema/input hash |
@@ -254,27 +267,25 @@ manual edit
 | Registry match | allowed Publisher/Venue/tag IDs 和 aliases | 使用现有实体或提交 proposal | 不静默创建拼写变体 |
 | Acquisition tier | 前层是否已有 accepted PDF | 停止、进入 translator 或进入 browser | 耗尽后记录 overall failure |
 | Race acceptance | candidate 内容、角色、身份、hash | 接受唯一 winner | loser/无效内容不得 late accept |
-| Analyze eligibility | accepted primary PDF | 允许 PDF-based analysis | XML/HTML-only 保持 blocked |
-| Parser service readiness | fixed endpoint、mode、health/version/protocol、auth、bounds | 允许提交 MinerU async task | 不启动服务；错误版本、不安全 endpoint 或缺配置时 blocked |
+| Analyze eligibility | accepted primary PDF | 允许 PDF-based analysis | XML/HTML-only 拒绝运行，对象保持 `ASSET_PENDING` |
+| Parser service readiness | fixed endpoint、mode、health/version/protocol、auth、bounds | 允许提交 MinerU async task | 不启动服务；错误版本、不安全 endpoint 或缺配置时拒绝提交，完成阶段不变 |
 | Parser result admission | task result ZIP、schema、page geometry、PDF locators、hash/limits | 发布 immutable parser artifacts 和 normalized source units | service completed 不等于成功；任一边界失败时拒绝 |
 | Result promotion | 完整 payload、schema、PDF locators | 原子切换 current result | 任一验证失败则保留旧 current |
+| Completion stage | provider projection、accepted primary PDF、current analysis/final projection | 下一缺失阶段或 `COMPLETE` | 失败保持原阶段，重跑同一管线 |
 | Reference resolution | DOI/稳定 ID/确定性 identity | 链接目标 Work | 保存 unresolved raw reference，不猜测 |
 | Expansion scheduling | depth、direction、visited set、完成状态 | 当前层新 Work 和下一层 | branch failure 隔离，循环不重复入队 |
 | Backfill selection | IDs、query/filter、tags、显式 all/force | 本次处理范围 | 无 selector 时 fail closed |
 
 ## 12. 失败、状态与恢复模型
 
-产品不建立或暴露后台 job 状态机，而用每个数据层是否完成来表达文献状态：
+产品不建立或暴露后台 job 状态机，只使用四个由数据事实确定的完成阶段：
 
 | 状态 | 含义 | 用户下一步 |
 |---|---|---|
-| metadata complete | identity、版本和 placeholder 已入库 | 可查询、下载或继续补 metadata |
-| PDF missing | 本次来源已耗尽且没有 accepted primary PDF；命令已终止但资产缺口未完成 | 由 all-missing 重跑 download、调整 provider/config 或查看 failure |
-| PDF accepted | primary PDF 已验证并不可变保存 | 可阅读、导出或 analyze |
-| analysis pending | 有 PDF 但没有 current result | 运行 analyze |
-| analysis current | 当前 PDF 输入已有完整 current result | 查询/导出；仅显式 force 才重析 |
-| blocked | 当前记录无法继续，例如无 PDF 或配置缺失 | 查看 reason/action，修复后重跑 |
-| partial branch failure | expansion 某分支失败 | 其它分支继续；失败分支后续补全 |
+| `METADATA_PENDING` | 尚无足以确定身份并支持资产获取的 provider metadata；target 可以只是 invocation-local DOI | 运行 metadata/search 阶段 |
+| `ASSET_PENDING` | 已有临时 provider projection，但没有 accepted primary PDF | 运行或重跑 download |
+| `ANALYSIS_PENDING` | 已有 accepted primary PDF，但没有完成 MinerU/LLM 与最终 projection | 运行或重跑 analyze |
+| `COMPLETE` | current analysis、最终 canonical metadata、references 和 generated tags 已原子对齐 | 查询、扩展、导出；仅显式 force 才重析 |
 
 ```text
 provider/source diagnostic failure
@@ -288,7 +299,7 @@ all sources exhausted
   -> rerun idempotently
 ```
 
-`failures` 把 metadata、acquisition、analysis 和 expansion 统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时形成 search failure。acquisition 可展开脱敏 per-source details。analysis replacement 失败保留旧 current result，同时形成可查询失败。expansion 记录失败 branch 和层级，但不阻塞其它 branch。PDF missing 与 accepted 分开计数，不能以“本次已记录终态”为由算作下载成功。
+`failures` 把 metadata、acquisition、analysis 和 expansion 的 invocation 失败统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”，但 failure record 不改变四阶段模型。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时对象保持 `METADATA_PENDING`。acquisition 可展开脱敏 per-source details，全部耗尽时对象保持 `ASSET_PENDING`。analysis replacement 失败保留旧 current；没有旧 current 的对象保持 `ANALYSIS_PENDING`。expansion 只停止该 branch，其它 branch 继续。
 
 Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安全排空或取消当前有限本地操作，保留已经提交的 Work、资产和 current result，然后退出。MinerU 3.4.4 没有 cancel endpoint，已提交的外部 parse task 可能继续运行；其 handle 仅保存在 processing attempt metadata 中供下次 invocation 恢复 polling，不能据此声称任务已取消、exactly-once 或 durable workflow ownership。下一次命令通过 catalog 完成状态和 processing run identity 跳过已完成内容。
 
@@ -298,14 +309,12 @@ Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安�
 
 ```text
 search query + level=analyze
-  -> concurrent metadata providers
-  -> deterministic Work/WorkVersion merge
-  -> placeholder library record
-  -> primary PDF acquisition
-  -> operator-managed MinerU service normalization/OCR + PDF evidence gate
-  -> fulltext LLM + PDF evidence validation
-  -> atomic current result
-  -> searchable Work view
+  -> shared completion orchestration
+  -> METADATA_PENDING: providers + deterministic Work/WorkVersion merge + provisional projection
+  -> ASSET_PENDING: primary PDF acquisition
+  -> ANALYSIS_PENDING: operator-managed MinerU + fulltext LLM + PDF evidence validation
+  -> atomic current result + final canonical metadata + references + tags
+  -> COMPLETE searchable Work view
 ```
 
 #### 从已有库补齐缺失层
@@ -335,9 +344,8 @@ library review
 
 ```text
 seed Works + direction + depth
-  -> layer metadata convergence
-  -> layer PDF acquisition
-  -> layer PDF analysis
+  -> every layer node calls shared completion orchestration
+  -> only COMPLETE nodes contribute outgoing references
   -> derive next-layer identities from references/cited-by
   -> visited dedup + branch isolation
   -> repeat until requested depth
@@ -387,7 +395,7 @@ Local Literature Library
       Preprint / accepted manuscript / other evidence
 
 User actions
-  search -> persist -> download -> analyze
+  search/import/backfill -> shared completion orchestration -> COMPLETE
   library lookup/filter/traverse/review/curate/export
   expand references/cited-by by depth
   failures inspect -> fix -> rerun
