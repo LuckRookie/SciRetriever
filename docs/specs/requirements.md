@@ -1,6 +1,6 @@
 # SciRetriever 产品需求与验收规格
 
-- 文档效力：2026-07-23 owner 批准的产品需求
+- 文档效力：2026-07-24 owner 批准的产品需求
 - 决策依据：[ADR 0002](../adr/0002-work-centered-literature-library.md)、[ADR 0003](../adr/0003-operator-managed-mineru-service.md)
 - 方向背景：[文献库产品提案](../proposals/literature-library-product.md)
 - 产品设计：[系统设计](system-design.md)
@@ -25,7 +25,7 @@
 
 ## 1. 产品目标与边界
 
-SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Work`、书目版本、全文资产、作者、标签、分析结果和引用关系组织数据。用户可以检索并合并多来源元数据，为已有文献补全文或补分析，再按引用图扩展文献库。
+SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Work`、书目版本、全文资产、作者、标签、分析结果和引用关系组织数据。用户可以检索并合并多来源元数据，为已有文献补全文或补分析，再按引用图扩展文献库。所有写入型入库和补全入口共享同一条从临时供应商元数据到最终统一文献数据的完成管线。
 
 ### 1.1 一句话定位
 
@@ -51,7 +51,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 | 成功结果 | 用户可观察的证明 |
 |---|---|
 | 文献身份稳定 | 多来源重复结果收敛到同一 Work；预印本与正式版作为不同 WorkVersion 保留 |
-| 数据可逐步补全 | metadata、download、analyze 可分别运行，重跑只处理缺失或显式强制项 |
+| 数据可逐步补全 | 所有入口使用同一完成阶段；metadata、download、analyze 可分别停在显式阶段，重跑只处理缺失或显式强制项 |
 | 全文可信 | analysis 必须基于验证合格的 primary PDF，每项提升结果可回到 PDF 页码/span |
 | 结果可持续维护 | canonical metadata、manual tags 和当前分析可更新，RawAsset 与 observations 不丢失 |
 | 文献关系可探索 | 用户可查 references/cited-by，并按 depth 逐层扩展、下载和分析 |
@@ -76,16 +76,17 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 
 ### 3.1 常规发现与入库
 
-用户输入关键词、标题、DOI 或其它受支持查询，选择处理到 `metadata`、`download` 或 `analyze` 层级。系统并发查询启用的 metadata providers，先清洗和确定性去重，再创建或更新 Work、WorkVersion、observations、authors 和 canonical placeholder。若选择更深层级，系统继续补 primary PDF 和 PDF-based analysis。
+用户输入关键词、标题、DOI 或其它受支持查询，选择处理到 `metadata`、`download` 或 `analyze` 层级。系统并发查询启用的 metadata providers，先清洗和确定性去重，再创建或更新 Work、WorkVersion、observations、authors 和 provisional provider projection。该投影只用于身份收敛、资产获取和分析前的临时展示，不是文献最终 canonical metadata。若选择更深层级，系统继续补 primary PDF、MinerU/LLM analysis，并在最后原子发布统一 canonical metadata。
 
 ```text
 查询
   -> 多来源 metadata
   -> 清洗、去重、版本识别
-  -> 写入本地文献库 placeholder
+  -> 写入临时 provider metadata projection
   -> [可选] 获取并验证 primary PDF
   -> [可选] PDF normalization/OCR + LLM analysis
-  -> 当前 canonical view、Markdown、tags、references
+  -> [analyze 成功] 原子发布最终 canonical metadata、Markdown、tags、references
+  -> COMPLETE
 ```
 
 ### 3.2 独立补全文与补分析
@@ -164,7 +165,7 @@ canonical metadata 只保存稳定产品字段：标题、原始 Abstract、语�
 
 open-access 只记录来源观察到的状态和 provenance，不表达项目对来源或用户行为的判断。
 
-metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext analysis 完成后，系统在同一次原子更新中按以下确定性投影重建 canonical metadata：手工修订优先；其次使用通过 schema、证据和 allowed-ID/identifier validation 的当前 fulltext-derived 非空值；仍缺失的字段按 provider precedence/fill-missing 回退到 observations。LLM 不得创造未经正文支持的标识符。新分析未提供某字段时，不把已有 placeholder 擦成空值。
+metadata 阶段的 provider projection 是可用但非权威的临时元数据，不得称为该文献已经完成。fulltext analysis 完成后，系统在同一次原子更新中按以下确定性投影重建最终 canonical metadata：手工修订优先；其次使用通过 schema、证据和 allowed-ID/identifier validation 的当前 fulltext-derived 非空值；仍缺失的字段按 provider precedence/fill-missing 回退到 observations。LLM 不得创造未经正文支持的标识符。新分析未提供某字段时，不把已有 provider 值擦成空值。只有该原子 promotion 与 current analysis、references 和 generated tags 一起成功后，WorkVersion 才进入 `COMPLETE`。
 
 ### FR-5 MetadataObservation
 
@@ -207,13 +208,28 @@ metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext 
 - TOML 可以修改默认上限，`search --limit` 只覆盖本次 invocation；优先级为 CLI 显式值、TOML 默认值、内置默认 `100`。任何覆盖都不改写 TOML。
 - 清洗、稳定标识符匹配和 normalized-title 去重必须在任何 LLM 调用前完成。
 
-### FR-10 三个处理层级
+### FR-10 全局完成管线与三个处理层级
+
+所有写入型入库、补全和引用扩展入口必须复用同一应用层完成契约。完成阶段只由已持久化的 WorkVersion 事实确定，不建立平行 task/job 状态机：
+
+| 完成阶段 | 含义 | 成功后的下一阶段 |
+|---|---|---|
+| `METADATA_PENDING` | 尚无足以确定 Work/WorkVersion 身份并支持资产获取的供应商元数据 | observations 和 provisional provider projection 入库后进入 `ASSET_PENDING` |
+| `ASSET_PENDING` | 已有临时供应商元数据，但没有 accepted primary PDF | primary PDF 验收并不可变保存后进入 `ANALYSIS_PENDING` |
+| `ANALYSIS_PENDING` | 已有 accepted primary PDF，但没有完成当前 PDF 对应的 MinerU、LLM、evidence validation 和 canonical promotion | 完整 payload 原子发布后进入 `COMPLETE` |
+| `COMPLETE` | current analysis、最终 canonical metadata、references 和 generated tags 已对齐并原子发布 | 普通重跑直接复用；只有显式 force 才重析 |
+
+在 WorkVersion 尚不存在时，`METADATA_PENDING` target 可以只是本次 invocation 中的规范化 DOI 或其它稳定标识符，不要求为了记录失败而预先创建 placeholder、status row 或 job。临时元数据成功后才建立或复用 Work/WorkVersion，后续阶段由其 catalog 事实确定。
+
+供应商全部失败、资产来源全部耗尽、MinerU/LLM 失败或 Ctrl+C 都不增加 `failed`、`blocked`、`stale` 或 `interrupted` 文献状态；对象保持在失败前的完成阶段，修复条件后重跑。已存在且仍有效的 `COMPLETE` 对象强制重析失败时继续保持 `COMPLETE`，旧 current payload 不变。
+
+命令处理层级只是本次 invocation 的显式停止点，不是另一套状态模型：
 
 | 层级 | 本次操作的终止条件与持久状态 |
 |---|---|
-| `metadata` | Work、版本、canonical metadata、observations、authors/authorships、Publisher/Venue placeholders/links 和标识符已入库；provider source keywords 可作为 observations 保存，但不产生 canonical generated tags |
-| `download` | 每个目标版本都得到 accepted primary PDF 或本次来源已耗尽并明确记录 PDF missing；只有前者计为下载成功和资产完备，后者仍是可由 all-missing 选择器重试的未完成资产缺口；按配置补 XML/HTML |
-| `analyze` | 目标版本已有基于合格 primary PDF 的 current generated result；XML/HTML-only 不算完成 |
+| `metadata` | Work、版本、provisional provider projection、observations、authors/authorships、Publisher/Venue placeholders/links 和标识符已入库，目标进入 `ASSET_PENDING`；provider source keywords 可作为 observations 保存，但不产生 canonical generated tags |
+| `download` | accepted primary PDF 使目标进入 `ANALYSIS_PENDING`；本次来源耗尽时仍保持 `ASSET_PENDING` 并可由 all-missing 选择器重试；按配置补 XML/HTML |
+| `analyze` | 基于合格 primary PDF 的 MinerU/LLM 结果和最终 projection 已原子发布，目标进入 `COMPLETE`；XML/HTML-only 不算完成 |
 
 `download` 和 `analyze` 必须可作为独立 backfill 运行。已有 metadata 不要求重新搜索，已有全文不要求重新下载。
 
@@ -263,7 +279,7 @@ metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext 
 - 每个 `WorkVersion` 只保留一份 current generated result，不建立 analysis history。
 - 系统先在旁路构建并验证完整新结果。构建或验证失败时旧 current result 继续可用，不能留下半个新结果。
 - replacement payload 包含 light Markdown/sections、fulltext-derived canonical metadata 投影、fulltext-derived references 和 generated tag links。原子 replacement 成功后旧 payload 被删除或替换，不保留旧分析内容或旧 generated-result lineage 作为历史。
-- RawAsset、current parser/model/schema metadata、后端 provider observations、手工 metadata 修订和 manual tag links 不随 analysis replacement 改变。新 payload 缺失的 canonical 字段按 FR-4 回退到手工值或 provider placeholder，而不是保留无来源的旧 generated 值。
+- RawAsset、current parser/model/schema metadata、后端 provider observations、手工 metadata 修订和 manual tag links 不随 analysis replacement 改变。新 payload 缺失的 canonical 字段按 FR-4 回退到手工值或 provisional provider value，而不是保留无来源的旧 generated 值。
 - 书目 `WorkVersion`、current analysis 和 `DocumentPackage` 导出快照必须使用不同名称、身份和生命周期；处理或导出快照不得充当 analysis history。
 
 ## 8. 引用与扩展
@@ -280,7 +296,7 @@ metadata 阶段的 canonical 值是可用但非权威的 placeholder。fulltext 
 - 用户只指定 depth。depth 0 只处理种子，depth N 扩展 N 层。
 - expansion 只由 depth 限制，不设置 product-level maximum-new-documents cap。
 - 每次 expansion 使用稳定 Work identity 维护 invocation visited set；已经访问、已排队或已在当前层收敛的 Work 不重复入队，循环引用不能造成重复处理。跨 invocation 由 catalog 完成状态和幂等选择跳过已完成节点。
-- 每一层必须先完成全部新 Work 的 metadata，然后完整执行该层的 download 和 analyze，再进入下一层。
+- 每一层必须让每个新增目标调用同一完成管线；只有到达 `COMPLETE` 的 WorkVersion 才产生下一层 reference frontier。仍停留在 `METADATA_PENDING`、`ASSET_PENDING` 或 `ANALYSIS_PENDING` 的目标只停止自己的 branch，其它 branches 继续。
 - 命令报告每层发现、已有、完成和失败数量。一个 branch 失败只停止该 branch，其它 branches 继续。
 - Ctrl+C 停止启动新记录并安全排空或取消当前有限操作；已完成记录保留，重跑跳过完成内容。
 - 单项失败不得伪装成功。失败项保留诊断，整层完成状态必须可查询和幂等重跑。
@@ -308,6 +324,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 - 确定性：相同 provider observations 和配置得到相同 Work、版本、metadata 和作者连接结果。
 - 保守合并：不因标题或姓名相似而静默误合并。
 - 幂等：search、download、analyze、expand 重跑不重复创建身份或资产。
+- 统一完成：所有写入型入口通过同一 `METADATA_PENDING -> ASSET_PENDING -> ANALYSIS_PENDING -> COMPLETE` 契约决定下一步，不复制阶段判断。
 - 不可变：RawAsset 永不原地修改；current generated analysis 按 FR-15 直接原子覆盖，不建立分析历史。
 - 可审计：canonical 值、current 生成结果、标签和引用能追溯当前来源与输入 hash；provider observations 独立保留。
 - 安全：获取路径不绕过 transport、timeout、validation、redaction 和 immutable acceptance。
@@ -325,6 +342,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 | 身份去重 | DOI/稳定 ID 和 exact normalized title 的确定性规则 | fuzzy/LLM 去重不可重复且容易错误合并 |
 | preferred version | 正式版优先的确定性排序，可由用户显式覆盖 | 自动删除其它版本或让 provider 完成顺序决定主版本均不可接受 |
 | 元数据来源 | canonical projection + backend observations | 只保留一个 provider 会丢 provenance；把所有原始字段展示给用户会污染产品模型 |
+| 文献完成模型 | 四个由 catalog 事实确定的单向阶段；失败保持原阶段并重跑 | 多维 workflow 状态和持久化失败状态增加复杂度，却不改变缺失事实或下一步动作 |
 | 全文基准 | primary PDF 是保存、阅读、导出和分析的权威资产 | XML 很难稳定获得且不能代表用户看到的版面；XML/HTML 只作补充 |
 | PDF parser | MinerU 3.4.4 `vlm-engine`，由 operator-managed persistent `mineru-api` 提供，SciRetriever 只连接并验证结果 | invocation-local VLM 重复加载代价高；SciRetriever-owned parser daemon 会破坏前台产品边界；Markdown-only 丢失结构 provenance |
 | LLM 使用边界 | 仅处理 PDF 全文，不参与 Work/版本/作者身份去重 | 标题、摘要或 provider snippet 不足以支撑正文结论；LLM 身份判断不可审计 |
@@ -346,7 +364,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 - 机构 registry、机构 alias 和 affiliation 消歧；首版只保存 affiliation observation。
 - 新的 license、retraction、correction 和 erratum canonical models；首版只增加 OA status。
 - 多用户权限、协作审批和 Web UI。Web UI 同时受 ADR 0001 约束，纳入前需要新 ADR。
-- BibTeX、RIS、Zotero library 和任意本地目录导入。本轮“入库”只指 metadata 候选清洗、去重并创建或更新 placeholder；新增导入格式需要单独输入契约和验收。
+- BibTeX、RIS、Zotero library 和任意本地目录导入。本轮“入库”只指 metadata 候选清洗、去重并创建或更新 provisional WorkVersion；新增导入格式需要单独输入契约和验收。
 
 ### 13.2 明确排除
 
@@ -371,7 +389,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 | 多书目版本 | 同一工作包含预印本和正式版 | 两个 WorkVersion 均可读，正式版默认 preferred | 删除预印本或把 processing snapshot 当版本 |
 | preferred override | 用户显式选择非默认版本后新增 observations | 显式选择保持；清除后恢复自动排序 | 后台重算覆盖用户选择 |
 | PDF 获取 | 多来源竞速，其中一个返回合格 PDF、其它失败或较慢 | 接受一个不可变 PDF；其它失败仅为诊断 | loser late accept 或保存无效内容 |
-| 无 PDF | 只有 XML/HTML 或所有 PDF 来源失败 | download 记录缺失；analyze pending/blocked | XML/HTML-only 被计为分析完成 |
+| 无 PDF | 只有 XML/HTML 或所有 PDF 来源失败 | 目标保持 `ASSET_PENDING`；修复来源后重跑 download | XML/HTML-only 被计为分析完成或新增持久化失败状态 |
 | PDF missing 重跑 | 某版本上次来源耗尽并记录 missing，随后运行 `download --all-missing` | 该版本重新进入获取；本次 accepted 与 missing 分开计数 | 把 missing 当作成功或永久跳过 |
 | PDF 与补充资产冲突 | PDF 与 XML/HTML 内容不一致 | PDF 控制分析与 canonical projection，补充 provenance 保留 | XML/HTML 覆盖 PDF 事实 |
 | 全文分析 | 合格 PDF 含可定位证据 | 原文语言、十个稳定 section、PDF page/span locators | 用标题/摘要替代全文或生成无证据结论 |
@@ -385,7 +403,8 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 | 人工整理 | 用户处理复核项、归组版本、修改 metadata/tag 或 preferred version | 立即反映在 canonical view，操作可审计并可撤销 | 删除 observations/资产或被自动重算静默覆盖 |
 | unresolved reference | 引用没有稳定标识符或确定性匹配 | 保存原文、顺序和可得 ID，后续可重跑解析 | 为图完整性猜测创建 Work |
 | 引用循环 | 固定引用图含循环和重复边 | 每个 Work 每次 invocation 只入队一次 | 无限循环或重复处理 |
-| 分支失败 | expansion 某 branch 缺 PDF，其它 branch 正常 | 失败 branch blocked，其他 branch 继续；层级计数可对账 | 单分支失败终止全部扩展 |
+| 分支失败 | expansion 某 branch 缺 PDF，其它 branch 正常 | 失败目标保持 `ASSET_PENDING`，其他 branch 继续；层级计数可对账 | 单分支失败终止全部扩展或创建额外 branch 状态机 |
+| 全局完成管线 | 分别从 DOI、临时 provider metadata、accepted PDF 和 current analysis 进入写入型流程 | 统一判定为 `METADATA_PENDING`、`ASSET_PENDING`、`ANALYSIS_PENDING` 或 `COMPLETE`，只执行缺失阶段 | 各 CLI 维护不同完成条件或把临时 provider metadata 当最终版本 |
 | 跨阶段失败查询 | 固定 metadata 全失败、acquisition 耗尽、analysis replacement 失败和 expansion branch 失败 | `failures` 可按阶段/对象给出脱敏 reason/action；旧 current 仍可用 | 只显示总失败数或泄漏原始异常/secret |
 | 无选择器 backfill | 运行 download/analyze 但不给 ID、query、tag 或 all selector | fail closed 并提示显式选择 | 隐式处理整个文献库 |
 | Ctrl+C 与重跑 | 长操作中断后再次运行同一命令 | 不再领取新记录，保留完成项，重跑跳过完成内容 | 依赖后台 lease 或重复创建资产 |
@@ -399,7 +418,7 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 
 1. CLI、schema 和用户流程以 Work/WorkVersion 为中心；任务历史只作为内部诊断，不形成任务中心产品面。
 2. Work/WorkVersion、版本资产、observations、authors、registries、tags 和 references 已按本文身份规则运行。
-3. search、download、analyze 和 expand 可独立、可组合、可中断并幂等重跑。
+3. search、download、analyze 和 expand 通过同一全局完成管线独立、组合、中断并幂等重跑；供应商元数据在 analysis 成功前始终只是临时输入。
 4. PDF 获取、PDF-based analysis、evidence locator 和原子 current replacement 通过离线验收。
 5. local library 查询、人工整理、复核、可撤销审计和阅读版/`DocumentPackage` 显式 export 可用。
 6. failures 能覆盖 metadata、acquisition、analysis 和 expansion，config check 能给出脱敏、可行动的结果。
