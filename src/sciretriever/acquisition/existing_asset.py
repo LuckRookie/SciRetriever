@@ -95,6 +95,7 @@ class ExistingAssetImporter:
             raise ValueError(f"WorkVersion does not exist: {work_version_id}")
         if role not in _ROLE_FORMAT:
             raise ValueError("unsupported asset role")
+        resolved_path = self.resolve_asset(path, asset_root=asset_root)
         existing = self.coordinator.existing_asset_id(work_version_id, role)
         if existing is not None:
             raw = self.assets.get_raw_asset(existing)
@@ -102,7 +103,7 @@ class ExistingAssetImporter:
                 raise RuntimeError("accepted asset link references a missing RawAsset")
             return ExistingAssetImportResult("replayed", work_version_id, raw.id, raw.sha256)
         media_type, format_name = _ROLE_FORMAT[role]
-        data = self._snapshot(self.resolve_asset(path, asset_root=asset_root))
+        data = self._snapshot(resolved_path)
         provenance = {"method": "existing-asset-import", "source_id": source_id}
         content = ProviderContent(
             role, media_type, format_name, "import://existing-asset",
