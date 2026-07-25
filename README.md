@@ -13,15 +13,15 @@ SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。�
 | 命令 | 当前行为 |
 |---|---|
 | `sciretriever discover` | 查询、清洗、去重和合并 metadata，输出 JSONL manifest |
-| `sciretriever search` | 以 `metadata`、`download` 或 `analyze` level 查询 provider、写入 canonical Work，并按需继续补全文和分析 |
-| `sciretriever download` | 通过显式 WorkVersion selector 为现有版本补 primary PDF，并可选补 XML/HTML |
-| `sciretriever analyze` | 通过显式 selector 为恰有一份 accepted primary PDF 的版本补 current analysis |
+| `sciretriever search` | 以 `metadata`、`download` 或 `analyze` 为显式停止点，通过共享 completion 管线补到 provider metadata、primary PDF 或 COMPLETE |
+| `sciretriever download` | 通过共享 completion 管线把显式选择的版本补到 asset stop；XML/HTML 是不改变完成阶段的可选操作 |
+| `sciretriever analyze` | 通过共享 completion 管线把显式选择的版本补到 COMPLETE；`--force` 独立替换已有 current analysis |
 | `sciretriever library` | 只读精确查找、关键词/字段过滤、引用遍历和安全导出 |
 | `sciretriever preflight` | 只读检查当前 acquisition 配置，不下载响应正文 |
 | `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产 |
 | `sciretriever package` | 离线归一化并发布 `DocumentPackageVersion` 处理快照 |
 
-当前已有独立书目 `WorkVersion`、WP3 全文补全和 WP4 PDF current analysis。引用扩展和 library 人工整理尚未实现。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
+当前已有独立书目 `WorkVersion`、WP3 全文补全、WP4 PDF current analysis 和 WP5 全局完成管线。引用扩展和 library 人工整理尚未实现。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 产品方向
 
@@ -53,23 +53,15 @@ SearchSpec
   -> deterministic labels
   -> DownloadManifest JSONL
 
-search query
-  -> enabled metadata providers in bounded concurrency
-  -> deterministic merge / precedence / fill missing
-  -> Work + WorkVersion + backend observations
-  -> canonical JSON result
-
-existing WorkVersion selector
-  -> first-tier provider bounded race
-  -> per-provider deduplicated sequential candidates
-  -> restricted translator, then configured browser
-  -> role/content/article identity validation
-  -> immutable RawAsset
-  -> PDF parsing and current analysis when explicitly requested
-  -> DocumentPackageVersion processing snapshot
+DOI / search result / existing WorkVersion / imported primary PDF
+  -> shared CompletionPipeline reads catalog facts
+  -> METADATA_PENDING: exact metadata resolution and provider observations
+  -> ASSET_PENDING: bounded acquisition, validation and immutable RawAsset
+  -> ANALYSIS_PENDING: MinerU, evidence, LLM and atomic current promotion
+  -> COMPLETE: aligned current analysis, canonical projection, references and tags
 ```
 
-`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。`search --level metadata` 会创建或复用 Work/WorkVersion 并保存 provider observations；`download` 和 `analyze` level 只继续处理该批返回的 WorkVersion IDs，不会隐式扩展到全库。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
+`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。completion 阶段只从 catalog 权威事实派生，不另存 workflow status。精确 DOI 在 metadata 成功前只存在于当前 invocation；失败不创建 placeholder。普通 search 只把本批持久化的 WorkVersion 交给共享管线，不会隐式扩展到全库。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
 
 ## 数据来源
 
@@ -107,7 +99,7 @@ existing WorkVersion selector
 
 provider 返回候选或 HTTP 200 不等于资产成功。primary PDF 是必需角色；XML/HTML 仅在 primary PDF 已成功或复用后按配置补充，不能替代 primary PDF。PDF/XML/HTML 都必须通过角色、MIME、大小、格式、解析和目标文章身份校验。精确 DOI 一致可通过；没有可用 DOI 时，保守标题匹配或标题加作者/年份佐证可通过。明确身份不符或无法确认身份（包括无法确认的扫描件）会被拒绝并保持 missing；acquisition 身份校验不执行 OCR。WP4 `analyze` 会把已 accepted primary PDF 交给配置的 MinerU parser，解析/OCR 结果只在严格 evidence 和 current-replacement 门后生效。
 
-`download` 是有界前台 backfill。已有合格角色资产时直接复用，不重复联网或覆盖；重复运行按 WorkVersion、角色和不可变资产收敛。Ctrl+C 保留已完成记录并在稳定 JSON 中报告 `selected`、`accepted`、`reused`、`missing` 和 `interrupted` 计数；每个 WorkVersion 的角色状态与失败 details 均经过脱敏，不包含运行时 URL、header、query、profile 或 session 数据。运维事实见 [Provider 运维手册](docs/guides/provider-operations.md)。
+`download` 是有界前台 completion batch，固定停在 asset ceiling。已有合格 primary PDF 时直接复用，不重复联网或覆盖；`--xml`/`--html` 在 required batch 后单独运行，成功或失败都不改变四阶段判定。Ctrl+C 保留已完成记录并在稳定、脱敏的 batch JSON 中报告逐目标结果和 interruption。运维事实见 [Provider 运维手册](docs/guides/provider-operations.md)。
 
 ## 快速开始
 
@@ -193,7 +185,7 @@ uv run --frozen sciretriever download \
 
 ### 分析 accepted primary PDF
 
-`analyze` 是有界前台 backfill，支持显式 Work/WorkVersion ID、library query/filter、`--all-pending` 或 `--all-current --force`。它要求恰好一份 accepted primary PDF，以及完整启用的 `[analysis.mineru]` 和 `[analysis.llm]` 配置；XML/HTML-only 版本报告 blocked。凭据只在运行时从配置指定的环境变量读取。
+`analyze` 是有界前台 backfill，支持显式 Work/WorkVersion ID、library query/filter、`--all-pending` 或 `--all-current --force`。它要求恰好一份 accepted primary PDF，以及完整启用的 `[analysis.mineru]` 和 `[analysis.llm]` 配置；XML/HTML-only 版本保持 `ASSET_PENDING`，命令返回未推进结果及脱敏的 reason/action，不存在额外的 blocked 状态。凭据只在运行时从配置指定的环境变量读取。
 
 ```bash
 uv run --frozen sciretriever analyze --work-version-id <WORK_VERSION_ID>
@@ -202,7 +194,7 @@ uv run --frozen sciretriever analyze --all-current --force --limit 100
 uv run --frozen sciretriever search "query" --level analyze
 ```
 
-SciRetriever 不启动、停止、重载或升级 MinerU。普通重跑复用合格结果；强制重析稳定收敛到 current 的下一个 revision，完整替换成功前旧 current 持续可用。
+SciRetriever 不启动、停止、重载或升级 MinerU。普通 `analyze` 补齐到 COMPLETE，已完成目标直接复用；`--force` 跳过 metadata/acquisition 并请求 current 的下一 revision，完整替换失败时旧 current 和 COMPLETE 阶段持续可用。
 
 ### 发布当前处理快照
 
@@ -229,7 +221,9 @@ uv run --frozen sciretriever search "solid-state electrolytes" \
   --limit 100
 ```
 
-当前支持 `--level metadata`、`--level download` 和 `--level analyze`；后两者要求 `--storage-root`。`analyze` 先下载该批结果，再只分析这些 WorkVersion；缺少 accepted primary PDF 的项报告 blocked，不计成功。多个 metadata provider 同时启动，各自有有限 timeout；部分 provider 失败时成功结果仍会入库，失败条目以脱敏形式出现在 JSON 输出中。
+当前支持 `--level metadata`、`--level download` 和 `--level analyze`；它们分别映射到 METADATA、ASSET 和 COMPLETE stop，后两者要求 `--storage-root`。共享管线每次重读事实并只调用缺失阶段；来源耗尽的目标停在当前阶段，不伪装成功。多个 metadata provider 同时启动，各自有有限 timeout；部分 provider 失败时成功结果仍会入库，失败条目以脱敏形式出现在 JSON 输出中。
+
+`catalog import-asset` 始终由现有资产 importer 验证并发布字节。primary PDF 导入在未配置 analysis 时默认停在 asset ceiling，也可显式 `--stop asset`；完整 analysis 配置可使默认 stop 为 complete，或显式使用 `--stop complete`。supplementary/XML/HTML 导入不推进 required completion stage；重复导入相同字节返回 `replayed` 并保留同一 asset ID/hash。
 
 ### 查询与导出本地文献库
 
@@ -250,7 +244,7 @@ uv run --frozen sciretriever library export \
   --format jsonl
 ```
 
-`library` 通过只读 SQLite 连接运行。主视图返回 preferred WorkVersion；显式 `--work-version-id` 可读取非 preferred 版本。导出只包含 canonical projection 和显式请求的 light content，不包含 provider record ID、observation provenance、存储路径或 raw reference。
+`library` 通过只读 SQLite 连接运行。Work/title 主视图返回 preferred WorkVersion；DOI 和显式 `--work-version-id` 返回精确匹配的版本。JSON 的 `identifiers` 只包含该 WorkVersion 的公开稳定标识符（DOI、PMID、PMCID、arXiv），并按确定性顺序输出。导出只包含 canonical projection、这些稳定标识符和显式请求的 light content，不包含 provider record ID、observation provenance、存储路径或 raw reference。
 
 ### 查看参数
 
@@ -317,6 +311,7 @@ src/sciretriever/
   integrations/     provider clients and neutral DTOs
   network/          secure bounded transport
   acquisition/      WorkVersion targets, resolvers, tier orchestration, identity validation
+  completion/       derived stages, missing-suffix pipeline, batch/force/optional operations
   catalog/          SQLite identity, state, assets, processing, lineage
   storage/          immutable Raw/Derived publication and recovery
   normalization/    PDF/XML/HTML normalization, MinerU parsing and evidence

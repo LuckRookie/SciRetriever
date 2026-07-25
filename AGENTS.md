@@ -65,6 +65,7 @@
 | `src/sciretriever/integrations/` | 供应商共享 client 和中性 DTO | evolving / 外部 API 风险 |
 | `src/sciretriever/network/` | HTTPS、DNS、重定向和响应边界 | stable / 安全高风险 |
 | `src/sciretriever/acquisition/` | WorkVersion resolver、tier 编排、候选执行、身份/内容验证和验收 | evolving / 生命周期高风险 |
+| `src/sciretriever/completion/` | 从 catalog 事实派生四阶段、只调用下一缺失阶段、批处理/中断、force analysis 与可选资产操作 | stable / 跨阶段应用契约高风险 |
 | `src/sciretriever/storage/` | Raw/Derived 不可变发布和恢复 | stable / durability 高风险 |
 | `src/sciretriever/normalization/` | PDF/XML/HTML 统一归一化 | stable |
 | `src/sciretriever/packaging/` | 质量门与版本化发布 | stable |
@@ -75,16 +76,19 @@
 ```text
 CLI / adapters
       │
-      ├── Discovery ──▶ shared integrations/network
-      ├── Acquisition ─▶ shared integrations/network
+      ├── Completion ──▶ Catalog facts
+      │       ├── Discovery ──▶ shared integrations/network
+      │       ├── Acquisition ─▶ shared integrations/network
+      │       └── Normalization / current analysis
       ├── Catalog / Storage
-      └── Normalization / current analysis ─▶ Packaging
+      └── Packaging
                          │
                          ▼
               core contracts / DocumentPackage
 ```
 
-- `discovery` 和 `acquisition` 互不导入；写入型 `search` 由 CLI composition root 把已持久化 WorkVersion IDs 交给 download 服务，`discover` 的 `DownloadManifest` 仍是独立只读文件输出。
+- `search`、`download`、`analyze` 和 primary-PDF import 由 CLI composition root 装配同一个 completion 契约；命令模块不得直接串接阶段服务。`discover` 的 `DownloadManifest` 仍是独立只读文件输出。
+- `discovery`、`acquisition`、`normalization`、`analysis` 和 `catalog` 不反向导入 `completion`；`completion` 不导入 CLI，也不写第二套完成状态。
 - `catalog` 不依赖 discovery、acquisition、storage、normalization、enrichment 或 packaging 类型。
 - `core` 不依赖任一工作流或基础设施模块。
 - 供应商响应在 `integrations` 转换为中性 DTO；vendor dict 不进入 core/catalog。
@@ -133,6 +137,7 @@ requirements、system design 和 technical architecture 只描述理想产品，
 - `tests/test_browser_wp3.py`：browser profile snapshot、网络边界、deadline 和 cleanup。
 - `tests/test_raw_asset_crash_recovery.py`：崩溃恢复与证据保留模式。
 - WP4 已实现；MinerU 服务运维合同见 `docs/guides/mineru-service-operations.md`，SciRetriever 只连接 operator-managed 服务。
+- `tests/test_completion_wp5.py`：真实临时 SQLite/不可变存储上的 DOI 到 COMPLETE、重启、并发和原子回滚验收。
 
 ## 9. 雷区和遗留代码
 
