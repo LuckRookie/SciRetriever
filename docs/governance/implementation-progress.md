@@ -120,7 +120,7 @@ package
 | WP2 搜索与本地库 | approved | completed | `test_search_wp2.py`、`test_library_wp2.py`、`test_cli_wp2.py` 覆盖并发/timeout/确定性入库、preferred/non-preferred 读取、filters、引用遍历、安全导出和 CLI/config precedence；完整 harness 511 项通过 | 无 |
 | WP3 PDF 获取 | approved | completed | `test_wp3_foundation.py`、`test_download_wp3.py`、`test_cli_download_wp3.py`、`test_sci_hub_wp3.py`、`test_translator_wp3.py`、`test_browser_wp3.py`、`test_acquisition_identity_validation.py` 覆盖 selector/tier/candidate/identity/profile/中断/脱敏/不可变验收；完整 harness 522 项通过 | 无 |
 | WP4 PDF 分析 | complete | completed | 严格配置、MinerU connector/admission、PDF source map、current replacement、analyze/search 与 package snapshot 离线验收 | 无 |
-| WP5 全局文献信息完成管线 | approved | completed | `completion/`、catalog facts、exact DOI、四入口 cutover、真实 SQLite/storage acceptance、十个 promotion rollback failpoints、架构/删除/wheel gates；`test_completion*_wp5.py` 74 项与 Todo 8 full harness 681 项通过 | 无 |
+| WP5 全局文献信息完成管线 | approved | completed | `completion/`、catalog facts、exact DOI、四入口 cutover、真实 SQLite/storage acceptance、十个 promotion rollback failpoints、架构/删除/wheel gates；`test_completion*_wp5.py` 74 项与 Todo 8 full harness 682 项通过 | 无 |
 | WP6 引用扩展与产品收口 | approved | not started | 无目标 expand/CLI/config 收口证据 | 无；可在 WP5 发布门通过后进入 |
 
 `approved` 只表示执行计划获得授权，不等于代码已经实现。实施顺序和验收门只在[执行计划](../planning/literature-library-execution.md)定义。
@@ -131,7 +131,7 @@ package
 
 - `test_completion*_wp5.py` 74 项、`test_cli_completion*_wp5.py` 19 项和受影响 WP1-WP4 回归 103 项通过。
 - 真实临时 SQLite/不可变存储 fixture 覆盖 DOI、provider WorkVersion、accepted PDF、COMPLETE、重启、部分失败、并发收敛和十个原子 promotion 回滚 failpoint。
-- Todo 8 最终 `full` harness 681 项通过；Pyright 0 diagnostics，documentation、architecture、clean wheel/source parity 和退休 backfill module 删除检查通过。
+- Todo 8 最终 `full` harness 682 项通过；Pyright 0 diagnostics，documentation、architecture、clean wheel/source parity 和退休 backfill module 删除检查通过。
 - Todo 8 精确手工 CLI QA 使用修正后的 `1 1 2 1` metadata 投影和有效双页 PDF fixture，symlink fail-closed、首次导入、幂等 replay、安全 library view、无 selector 拒绝及临时目录清理全部 PASS；证据记录在 `.omo/evidence/wp5/manual-qa.txt` 和 `final-f2.txt`。
 
 2026-07-24 WP4 完成验证：
