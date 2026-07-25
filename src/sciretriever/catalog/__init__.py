@@ -60,6 +60,7 @@ from .download_selection import (
     WorkVersionDownloadRepository,
 )
 from .analysis_selection import AnalysisSelection, WorkVersionAnalysisRecord, WorkVersionAnalysisRepository
+from .completion_facts import CompletionFacts, CompletionFactsRepository, CompletionStage
 
 
 _domain_runs_api = import_module(f"{__name__}.domain_runs")
@@ -83,6 +84,9 @@ __all__ = (
     "AuthorshipRecord",
     "CatalogEngine",
     "CatalogRepository",
+    "CompletionFacts",
+    "CompletionFactsRepository",
+    "CompletionStage",
     "DomainRunRecord",
     "CurrentAnalysisRecord",
     "CurrentAnalysisRepository",
