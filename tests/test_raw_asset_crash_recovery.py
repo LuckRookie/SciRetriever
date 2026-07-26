@@ -87,16 +87,6 @@ class RecoveryEnvironment:
                 f'SELECT count(*) FROM "{table}"'
             ).scalar_one()
 
-    def event_types(self, intent_id: str) -> tuple[str, ...]:
-        with self.catalog.connect() as connection:
-            return tuple(
-                connection.exec_driver_sql(
-                    "SELECT event_type FROM events WHERE subject_id = ? "
-                    "ORDER BY occurred_at, id",
-                    (intent_id,),
-                ).scalars()
-            )
-
     def assert_integral(self, test: TestCase) -> None:
         with self.catalog.connect() as connection:
             test.assertEqual(
@@ -125,8 +115,7 @@ class RecoveryEnvironment:
                     ).scalar_one()
                     test.assertEqual(blob_count, 0, f"BLOB found in {table}.{column}")
             payloads = connection.exec_driver_sql(
-                "SELECT details_json FROM events WHERE details_json IS NOT NULL "
-                "UNION ALL SELECT details_json FROM failures WHERE details_json IS NOT NULL "
+                "SELECT details_json FROM diagnostic_records WHERE details_json IS NOT NULL "
                 "UNION ALL SELECT provenance_json FROM asset_intents "
                 "UNION ALL SELECT provenance_json FROM raw_assets"
             ).scalars()
@@ -168,8 +157,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                             "asset_intents",
                             "raw_assets",
                             "work_version_assets",
-                            "events",
-                            "failures",
+                            "diagnostic_records",
                         )
                     }
                     second = environment.reconciler.reconcile_all()
@@ -190,14 +178,6 @@ class RawAssetCrashRecoveryTests(TestCase):
                         self.assertEqual(counts["asset_intents"], 1)
                         self.assertEqual(counts["raw_assets"], 1)
                         self.assertEqual(counts["work_version_assets"], 1)
-                        self.assertEqual(
-                            environment.event_types(intent_id),
-                            (
-                                "asset_intent.created",
-                                "asset_intent.published",
-                                "asset_intent.finalized",
-                            ),
-                        )
                         self.assertEqual(second.items[0].action, "terminal_valid")
                         raw_asset_id = intent.raw_asset_id
                         assert raw_asset_id is not None
@@ -264,10 +244,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                         environment.accept(data, intent_id)
                     environment.restart()
                     environment.reconciler.reconcile_all()
-                    counts = (
-                        environment.count("events"),
-                        environment.count("failures"),
-                    )
+                    diagnostic_count = environment.count("diagnostic_records")
                     environment.reconciler.reconcile_all()
 
                     intent = environment.assets.get_intent(intent_id)
@@ -277,8 +254,8 @@ class RawAssetCrashRecoveryTests(TestCase):
                     self.assertEqual(environment.count("raw_assets"), 1)
                     self.assertEqual(environment.count("work_version_assets"), 1)
                     self.assertEqual(
-                        (environment.count("events"), environment.count("failures")),
-                        counts,
+                        environment.count("diagnostic_records"),
+                        diagnostic_count,
                     )
                     environment.assert_integral(self)
                 finally:
@@ -300,7 +277,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                     environment.accept(data, intent_id)
                 environment.restart()
                 first = environment.reconciler.reconcile_all()
-                counts = (environment.count("events"), environment.count("failures"))
+                diagnostic_count = environment.count("diagnostic_records")
                 second = environment.reconciler.reconcile_all()
 
                 after = target.stat()
@@ -313,9 +290,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                 )
                 self.assertEqual(first.items[0].action, "abandoned_corrupt_target")
                 self.assertEqual(second.items[0].action, "terminal_abandoned")
-                self.assertEqual(
-                    (environment.count("events"), environment.count("failures")), counts
-                )
+                self.assertEqual(environment.count("diagnostic_records"), diagnostic_count)
                 environment.assert_integral(self)
             finally:
                 environment.close()
@@ -342,7 +317,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                 self.assertIsNone(environment.assets.get_raw_asset_by_sha256(staged.sha256))
                 environment.restart()
                 first = environment.reconciler.reconcile_all()
-                counts = (environment.count("events"), environment.count("failures"))
+                diagnostic_count = environment.count("diagnostic_records")
                 second = environment.reconciler.reconcile_all()
 
                 recovered = environment.assets.get_intent(intent.id)
@@ -351,9 +326,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                 self.assertEqual(second.items[0].action, "terminal_valid")
                 self.assertEqual(environment.count("raw_assets"), 1)
                 self.assertEqual(environment.count("work_version_assets"), 1)
-                self.assertEqual(
-                    (environment.count("events"), environment.count("failures")), counts
-                )
+                self.assertEqual(environment.count("diagnostic_records"), diagnostic_count)
                 environment.assert_integral(self)
             finally:
                 environment.close()
@@ -376,7 +349,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                 target.unlink()
                 environment.restart()
                 first = environment.reconciler.reconcile_all()
-                counts = (environment.count("events"), environment.count("failures"))
+                diagnostic_count = environment.count("diagnostic_records")
                 second = environment.reconciler.reconcile_all()
 
                 self.assertIs(
@@ -385,10 +358,11 @@ class RawAssetCrashRecoveryTests(TestCase):
                 )
                 self.assertEqual(first.items[0].action, "retained_missing_target")
                 self.assertEqual(second.items[0].action, "retained_missing_target")
-                self.assertEqual(first.items[0].failures, second.items[0].failures)
-                self.assertEqual(environment.count("failures"), 1)
+                self.assertEqual(len(first.items[0].failures), len(second.items[0].failures))
+                self.assertEqual(environment.count("diagnostic_records"), 2)
                 self.assertEqual(
-                    (environment.count("events"), environment.count("failures")), counts
+                    environment.count("diagnostic_records"),
+                    diagnostic_count + 1,
                 )
                 environment.assert_integral(self)
             finally:
@@ -415,7 +389,7 @@ class RawAssetCrashRecoveryTests(TestCase):
                         expected_inode = target.stat().st_ino
                     environment.restart()
                     first = environment.reconciler.reconcile_all()
-                    counts = (environment.count("events"), environment.count("failures"))
+                    diagnostic_count = environment.count("diagnostic_records")
                     second = environment.reconciler.reconcile_all()
 
                     self.assertIs(
@@ -424,11 +398,11 @@ class RawAssetCrashRecoveryTests(TestCase):
                     )
                     self.assertEqual(first.items[0].action, "retained_integrity_failure")
                     self.assertEqual(second.items[0].action, "retained_integrity_failure")
-                    self.assertEqual(first.items[0].failures, second.items[0].failures)
-                    self.assertEqual(environment.count("failures"), 1)
+                    self.assertEqual(len(first.items[0].failures), len(second.items[0].failures))
+                    self.assertEqual(environment.count("diagnostic_records"), 2)
                     self.assertEqual(
-                        (environment.count("events"), environment.count("failures")),
-                        counts,
+                        environment.count("diagnostic_records"),
+                        diagnostic_count + 1,
                     )
                     if condition == "missing":
                         self.assertFalse(target.exists())

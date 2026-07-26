@@ -102,24 +102,20 @@ class AssetRepositoryTests(TestCase):
             ),
             abandoned,
         )
-        self.assertEqual(self.count("failures"), 1)
+        self.assertEqual(self.count("diagnostic_records"), 1)
         with self.assertRaises(CatalogError):
             self.assets.register_verified_published_intent(intent.id)
 
-    def test_failure_exact_replay_deduplicates_but_distinct_details_persist(self) -> None:
+    def test_terminal_intent_replay_does_not_append_duplicate_diagnostics(self) -> None:
         intent = self.create_intent()
-        first = self.assets.record_intent_failure(
+        first = self.assets.abandon_pending_intent(
             intent.id, "storage", "failed", details={"phase": "one"}
         )
-        replay = self.assets.record_intent_failure(
+        replay = self.assets.abandon_pending_intent(
             intent.id, "storage", "failed", details={"phase": "one"}
         )
-        second = self.assets.record_intent_failure(
-            intent.id, "storage", "failed", details={"phase": "two"}
-        )
-        self.assertEqual(first.id, replay.id)
-        self.assertNotEqual(first.id, second.id)
-        self.assertEqual(self.count("failures"), 2)
+        self.assertEqual(first, replay)
+        self.assertEqual(self.count("diagnostic_records"), 1)
 
     def test_reconcilable_listing_is_deterministic_and_excludes_terminal(self) -> None:
         higher = self.create_intent(intent_id="ffffffff-ffff-4fff-8fff-ffffffffffff", sha256="b" * 64)

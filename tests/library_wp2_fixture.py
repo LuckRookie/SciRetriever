@@ -37,7 +37,7 @@ class LibraryWp2Fixture(TestCase):
         self.temporary_directory = TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.path = Path(self.temporary_directory.name) / "catalog.sqlite"
-        writable = create_catalog_engine(self.path)
+        writable = create_catalog_engine(self.path, allow_repository_write=True)
         initialize_catalog(writable)
         works = WorkRepository(writable)
         registries = RegistryRepository(writable)
@@ -54,7 +54,8 @@ class LibraryWp2Fixture(TestCase):
         )
         AuthorRepository(writable).add_authorship(self.target.id, "Ada Lovelace", 0)
         tag = TagRepository(writable).add("battery materials", aliases=("Battery",))
-        TagRepository(writable).add_manual(self.target.work_id, tag.id)
+        from manual_curation_fixture import add_manual_tag
+        add_manual_tag(writable, self.target.work_id, tag.id)
 
         self.preprint = works.ingest_version(
             provider="secret-provider", provider_record_id="provider-preprint",

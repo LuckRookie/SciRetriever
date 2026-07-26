@@ -6,7 +6,6 @@ import argparse
 import os
 from pathlib import Path
 import sys
-import tempfile
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,7 +16,10 @@ from sciretriever.catalog import (
     open_read_only_catalog_engine,
 )
 from sciretriever.cli import discover
+from sciretriever.cli import library_curation
 from sciretriever.errors import CatalogError
+from sciretriever.core.export_destination import ExportDestination
+from sciretriever.core.export_publication import ExportPublication, publish_export
 
 
 def _nonnegative_int(value: str) -> int:
@@ -73,10 +75,28 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     _common(cited_by)
     cited_by.add_argument("--work-id", required=True, type=discover._nonblank)
 
-    export = subparsers.add_parser("export", help="atomically export an exact projection")
-    _common(export)
-    _selector(export, include_doi_title=True)
+    export = subparsers.add_parser("export", help="export a reading view or immutable package")
+    export.add_argument("--catalog", required=True, type=Path, metavar="PATH")
+    export.add_argument("--mode", required=True, choices=("reading", "package"))
+    export.add_argument("--work-id", type=discover._nonblank)
+    export.add_argument("--work-version-id", type=discover._nonblank)
     export.add_argument("--output", required=True, type=Path, metavar="PATH")
+    export.add_argument("--format", choices=("json", "jsonl"))
+    export.add_argument("--limit", type=discover._positive_int)
+    export.add_argument("--include-light-content", action="store_true")
+    export.add_argument("--include-references", action="store_true")
+    export.add_argument("--storage-root", type=Path, metavar="PATH")
+    export.add_argument("--package-version", type=discover._positive_int)
+    export.add_argument("--package-sha256", type=discover._nonblank)
+    library_curation.configure_parser(subparsers)
+
+
+def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.library_command != "export":
+        return
+    from .library_export import validate_arguments as validate_export_arguments
+
+    validate_export_arguments(parser, args)
 
 
 def _render(result: Any, output_format: str) -> str:
@@ -89,62 +109,20 @@ def _fsync_directory(directory: Path) -> None:
     except OSError:
         return
     try:
-        try:
-            os.fsync(descriptor)
-        except OSError:
-            pass
+        os.fsync(descriptor)
+    except OSError:
+        return
     finally:
         os.close(descriptor)
 
 
-def _reject_catalog_destination(destination: Path, catalog_path: Path) -> None:
-    catalog = catalog_path.expanduser().resolve(strict=False)
-    protected = (
-        catalog,
-        Path(f"{catalog}-wal"),
-        Path(f"{catalog}-shm"),
-        Path(f"{catalog}-journal"),
-    )
-    candidate = destination.expanduser().resolve(strict=False)
-    for path in protected:
-        if candidate == path:
-            raise ValueError("export destination conflicts with catalog storage")
-        try:
-            if destination.exists() and path.exists() and os.path.samefile(destination, path):
-                raise ValueError("export destination conflicts with catalog storage")
-        except OSError as error:
-            raise ValueError("export destination could not be validated safely") from error
-
-
 def _atomic_write(destination: Path, content: str, catalog_path: Path) -> None:
-    destination = destination.expanduser()
-    parent = destination.parent
-    if not parent.is_dir():
-        raise FileNotFoundError(f"export parent directory does not exist: {parent}")
-    _reject_catalog_destination(destination, catalog_path)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _reject_catalog_destination(destination, catalog_path)
-        os.replace(temporary, destination)
-        _fsync_directory(parent)
-    except BaseException:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+    publish_export(ExportPublication(destination, catalog_path, content.encode("utf-8")))
 
 
 def _query(repository: Any, args: argparse.Namespace) -> Any:
     common = {"include_light_content": args.include_light_content, "limit": args.limit}
-    if args.library_command in {"show", "export"}:
+    if args.library_command == "show":
         return repository.exact_lookup(
             doi=args.doi,
             title=args.title,
@@ -185,6 +163,15 @@ def _execute(args: argparse.Namespace) -> tuple[Any, Path | None]:
 
 def run(args: argparse.Namespace) -> int:
     """Run a read-only library command with stable operational errors."""
+    if args.library_command in {
+        "review", "merge-work", "regroup-version", "preferred", "metadata", "tag",
+        "author", "audit", "undo",
+    }:
+        return library_curation.run(args)
+    if args.library_command == "export":
+        from .library_export import run as run_export
+
+        return run_export(args)
     try:
         result, destination = _execute(args)
     except (CatalogError, SQLAlchemyError, OSError, TypeError, ValueError):
@@ -197,4 +184,4 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-__all__ = ("configure_parser", "run")
+__all__ = ("configure_parser", "run", "validate_arguments")

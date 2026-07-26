@@ -106,8 +106,7 @@ class RawAssetConcurrencyTests(TestCase):
                 "SELECT count(*) FROM ("
                 "SELECT typeof(provenance_json) AS kind FROM asset_intents "
                 "UNION ALL SELECT typeof(provenance_json) FROM raw_assets "
-                "UNION ALL SELECT typeof(details_json) FROM events "
-                "UNION ALL SELECT typeof(details_json) FROM failures"
+                "UNION ALL SELECT typeof(details_json) FROM diagnostic_records"
                 ") WHERE kind = 'blob'"
             ).scalar_one()
             self.assertEqual(blob_count, 0)
@@ -176,25 +175,7 @@ class RawAssetConcurrencyTests(TestCase):
                         connection.exec_driver_sql("SELECT count(*) FROM work_version_assets").scalar_one(),
                 len(work_versions),
             )
-            event_rows = connection.exec_driver_sql(
-                "SELECT subject_id, event_type FROM events "
-                "WHERE subject_type = 'asset_intent' ORDER BY subject_id, occurred_at, id"
-            ).all()
-        events_by_intent = {
-            intent.id: tuple(row[1] for row in event_rows if row[0] == intent.id)
-            for intent in intents
-        }
-        self.assertTrue(
-            all(
-                event_types
-                == (
-                    "asset_intent.created",
-                    "asset_intent.published",
-                    "asset_intent.finalized",
-                )
-                for event_types in events_by_intent.values()
-            )
-        )
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
         after = target.stat()
         self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
         self.assert_integral()
@@ -223,7 +204,7 @@ class RawAssetConcurrencyTests(TestCase):
         RawAssetReconciler(store, assets).reconcile_all()
         counts = {}
         with self.catalog.connect() as connection:
-            for table in ("asset_intents", "raw_assets", "work_version_assets", "events", "failures"):
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "diagnostic_records"):
                 counts[table] = connection.exec_driver_sql(
                     f'SELECT count(*) FROM "{table}"'
                 ).scalar_one()
@@ -235,7 +216,7 @@ class RawAssetConcurrencyTests(TestCase):
         self.assertEqual(json.loads(intents[0].provenance_json), provenance)
         self.assertEqual(counts["raw_assets"], 1)
         self.assertEqual(counts["work_version_assets"], 1)
-        self.assertEqual(counts["failures"], 0)
+        self.assertEqual(counts["diagnostic_records"], 0)
         self.assertEqual(store.enumerate_staging(), ((), ()))
         with self.catalog.connect() as connection:
             self.assertEqual(

@@ -3,7 +3,7 @@ from cli_wp2_fixture import *
 
 class CliLibraryWp2Tests(CliWp2Fixture):
     def seed_library(self):
-        engine = open_catalog_engine(self.catalog)
+        engine = open_catalog_engine(self.catalog, allow_repository_write=True)
         works = WorkRepository(engine)
         draft = works.ingest_version(
             provider="private", provider_record_id="SECRET-DRAFT", title="Earlier Draft",
@@ -63,7 +63,7 @@ class CliLibraryWp2Tests(CliWp2Fixture):
         for output_format in ("json", "jsonl"):
             destination = self.base / f"export.{output_format}"
             code, output, error = self.invoke([
-                "library", "export", "--catalog", str(self.catalog), "--work-id", draft.work_id,
+                "library", "export", "--mode", "reading", "--catalog", str(self.catalog), "--work-id", draft.work_id,
                 "--output", str(destination), "--format", output_format,
             ])
             self.assertEqual((code, error), (0, ""))
@@ -75,7 +75,7 @@ class CliLibraryWp2Tests(CliWp2Fixture):
                 self.assertNotIn(forbidden, content)
         missing = self.base / "missing" / "export.json"
         code, output, error = self.invoke([
-            "library", "export", "--catalog", str(self.catalog), "--work-id", draft.work_id,
+            "library", "export", "--mode", "reading", "--catalog", str(self.catalog), "--work-id", draft.work_id,
             "--output", str(missing),
         ])
         self.assertEqual((code, output), (1, ""))
@@ -100,7 +100,7 @@ class CliLibraryWp2Tests(CliWp2Fixture):
         for destination in protected:
             with self.subTest(destination=destination):
                 code, output, error = self.invoke([
-                    "library", "export", "--catalog", str(self.catalog),
+                    "library", "export", "--mode", "reading", "--catalog", str(self.catalog),
                     "--work-id", draft.work_id, "--output", str(destination),
                 ])
                 self.assertEqual((code, output), (1, ""))
@@ -116,7 +116,7 @@ class CliLibraryWp2Tests(CliWp2Fixture):
             "sciretriever.cli.library.os.replace", side_effect=OSError("replace failed")
         ):
             code, output, error = self.invoke([
-                "library", "export", "--catalog", str(self.catalog),
+                "library", "export", "--mode", "reading", "--catalog", str(self.catalog),
                 "--work-id", draft.work_id, "--output", str(destination),
             ])
         self.assertEqual((code, output), (1, ""))
@@ -131,7 +131,7 @@ class CliLibraryWp2Tests(CliWp2Fixture):
             library_cli._fsync_directory(self.base)
         with mock.patch.object(library_cli, "_fsync_directory", return_value=None):
             code, output, error = self.invoke([
-                "library", "export", "--catalog", str(self.catalog), "--work-id", draft.work_id,
+                "library", "export", "--mode", "reading", "--catalog", str(self.catalog), "--work-id", draft.work_id,
                 "--output", str(destination),
             ])
         self.assertEqual((code, error), (0, ""))

@@ -104,15 +104,6 @@ class CoordinatorFixture:
                 f'SELECT count(*) FROM "{table}" {where}', parameters
             ).scalar_one()
 
-    def intent_events(self, intent_id: str) -> tuple[str, ...]:
-        with self.catalog.connect() as connection:
-            return tuple(
-                connection.exec_driver_sql(
-                    "SELECT event_type FROM events WHERE subject_id = ? ORDER BY occurred_at, id",
-                    (intent_id,),
-                ).scalars()
-            )
-
 
 class AssetAcceptanceCoordinatorTests(TestCase):
     def setUp(self) -> None:
@@ -168,15 +159,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(self.fixture.count("asset_intents"), 1)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
         self.assertEqual(self.fixture.count("work_version_assets"), 1)
-        self.assertEqual(self.fixture.count("failures"), 0)
-        self.assertEqual(
-            self.fixture.intent_events(intent_id),
-            (
-                "asset_intent.created",
-                "asset_intent.published",
-                "asset_intent.finalized",
-            ),
-        )
+        self.assertEqual(self.fixture.count("diagnostic_records"), 0)
 
     def test_same_content_for_different_works_reuses_one_target_and_raw_row(self) -> None:
         data = b"shared immutable bytes"
@@ -200,7 +183,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         first = self.fixture.accept(intent_id=intent_id)
         counts = tuple(
             self.fixture.count(table)
-            for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "diagnostic_records")
         )
 
         replay = self.fixture.accept(intent_id=intent_id)
@@ -213,7 +196,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(
             tuple(
                 self.fixture.count(table)
-                for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
+                for table in ("asset_intents", "raw_assets", "work_version_assets", "diagnostic_records")
             ),
             counts,
         )
@@ -225,7 +208,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         colliding_id = new_id()
         counts = tuple(
             self.fixture.count(table)
-            for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
+            for table in ("asset_intents", "raw_assets", "work_version_assets", "diagnostic_records")
         )
 
         replay = self.fixture.accept(data, intent_id=colliding_id)
@@ -238,7 +221,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(
             tuple(
                 self.fixture.count(table)
-                for table in ("asset_intents", "raw_assets", "work_version_assets", "events")
+                for table in ("asset_intents", "raw_assets", "work_version_assets", "diagnostic_records")
             ),
             counts,
         )
@@ -263,12 +246,12 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             (self.fixture.storage_root / f"staging/{colliding_id}.part").exists()
         )
         self.assertEqual(self.fixture.count("asset_intents"), 1)
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
         with self.fixture.catalog.connect() as connection:
             details = connection.exec_driver_sql(
-                "SELECT details_json FROM failures"
+                    "SELECT details_json FROM diagnostic_records"
             ).scalar_one()
-        self.assertEqual(json.loads(details)["intent_id"], first.intent.id)
+        self.assertEqual(json.loads(details)["details"]["intent_id"], first.intent.id)
 
     def test_finalized_collision_missing_target_preserves_incoming_stage_and_failure(self) -> None:
         data = b"finalized missing collision"
@@ -284,12 +267,12 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertTrue(
             (self.fixture.storage_root / f"staging/{colliding_id}.part").exists()
         )
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
         with self.fixture.catalog.connect() as connection:
             details = connection.exec_driver_sql(
-                "SELECT details_json FROM failures"
+                    "SELECT details_json FROM diagnostic_records"
             ).scalar_one()
-        self.assertEqual(json.loads(details)["intent_id"], first.intent.id)
+        self.assertEqual(json.loads(details)["details"]["intent_id"], first.intent.id)
 
     def test_finalized_collision_verifies_target_and_catalog_before_stage_deletion(self) -> None:
         data = b"verify finalized before cleanup"
@@ -371,7 +354,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             "test abandonment",
         )
         colliding_id = new_id()
-        counts = (self.fixture.count("events"), self.fixture.count("failures"))
+        diagnostic_count = self.fixture.count("diagnostic_records")
 
         with self.assertRaisesRegex(errors.CatalogError, "abandoned"):
             self.fixture.accept(data, intent_id=colliding_id)
@@ -388,10 +371,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             (self.fixture.storage_root / f"raw/{digest[:2]}/{digest}").exists()
         )
         self.assertEqual(self.fixture.count("raw_assets"), 0)
-        self.assertEqual(
-            (self.fixture.count("events"), self.fixture.count("failures")),
-            counts,
-        )
+        self.assertEqual(self.fixture.count("diagnostic_records"), diagnostic_count)
 
     def test_each_crash_checkpoint_leaves_exact_reconcilable_residue_after_reopen(self) -> None:
         expectations = {
@@ -404,7 +384,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 True,
                 1,
                 1,
-                2,
+                1,
             ),
             "after_staging_remove": (
                 enums.AssetIntentState.PUBLISHED,
@@ -412,7 +392,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 True,
                 1,
                 1,
-                2,
+                1,
             ),
             "after_finalize_commit": (
                 enums.AssetIntentState.FINALIZED,
@@ -420,7 +400,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 True,
                 1,
                 1,
-                3,
+                1,
             ),
         }
         for checkpoint_name, expected in expectations.items():
@@ -442,7 +422,14 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 self.addCleanup(reopened_catalog.dispose)
                 reopened_repository = assets_api.AssetRepository(reopened_catalog)
                 reopened_store = RawAssetStore(fixture.storage_root)
-                state, staged_exists, target_exists, raw_count, link_count, event_count = expected
+                (
+                    state,
+                    staged_exists,
+                    target_exists,
+                    raw_count,
+                    link_count,
+                    asset_intent_count,
+                ) = expected
                 intent = reopened_repository.get_intent(intent_id)
                 self.assertEqual(None if intent is None else intent.state, state)
                 self.assertEqual(
@@ -461,12 +448,12 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                     )
                     self.assertEqual(
                         connection.exec_driver_sql(
-                            "SELECT count(*) FROM events WHERE subject_id = ?", (intent_id,)
+                    "SELECT count(*) FROM asset_intents WHERE id = ?", (intent_id,)
                         ).scalar_one(),
-                        event_count,
+                        asset_intent_count,
                     )
                     self.assertEqual(
-                        connection.exec_driver_sql("SELECT count(*) FROM failures").scalar_one(),
+                connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(),
                         0,
                     )
                 if target_exists:
@@ -503,7 +490,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
 
         self.assertFalse((self.fixture.storage_root / f"staging/{intent_id}.part").exists())
         self.assertIsNone(self.fixture.repository.get_intent(intent_id))
-        self.assertEqual(self.fixture.count("failures"), 0)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 0)
 
     def test_normal_post_intent_failures_are_recorded_and_recoverable(self) -> None:
         cases = (
@@ -570,14 +557,16 @@ class AssetAcceptanceCoordinatorTests(TestCase):
                 self.assertEqual(
                     (fixture.storage_root / intent.storage_path).exists(), target_exists
                 )
-                self.assertEqual(fixture.count("failures"), 1)
+                self.assertEqual(fixture.count("diagnostic_records"), 1)
                 with fixture.catalog.connect() as connection:
                     failure = connection.exec_driver_sql(
-                        "SELECT category, details_json FROM failures"
+                    "SELECT reason, details_json FROM diagnostic_records"
                     ).mappings().one()
-                self.assertEqual(failure["category"], expected_category)
+                self.assertEqual(failure["reason"], "storage")
+                self.assertIn(expected_category, failure["details_json"])
                 self.assertIn(f'"phase":', failure["details_json"])
-                self.assertIn(type(injected).__name__, failure["details_json"])
+                self.assertNotIn(type(injected).__name__, failure["details_json"])
+                self.assertIn('"error_type":"[REDACTED]"', failure["details_json"])
                 self.assertIn(intent, fixture.repository.list_reconcilable_intents())
                 fixture.close()
 
@@ -595,7 +584,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertIs(intent.state, enums.AssetIntentState.PENDING)
         self.assertTrue((self.fixture.storage_root / intent.temporary_path).exists())
         self.assertTrue((self.fixture.storage_root / intent.storage_path).exists())
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
 
     def test_unique_pending_collision_without_evidence_converges_without_orphan(self) -> None:
         data = b"unique pending collision"
@@ -626,7 +615,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             (self.fixture.storage_root / f"staging/{new_intent_id}.part").exists()
         )
         self.assertEqual(self.fixture.store.enumerate_staging(), ((), ()))
-        self.assertEqual(self.fixture.count("failures"), 0)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 0)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
         self.assertEqual(self.fixture.count("work_version_assets"), 1)
         target = self.fixture.storage_root / result.publication.storage_path
@@ -660,7 +649,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertFalse(
             (self.fixture.storage_root / f"staging/{colliding_id}.part").exists()
         )
-        self.assertEqual(self.fixture.count("failures"), 0)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 0)
 
     def test_collision_corrupt_target_retains_stage_and_failure_is_retry_stable(self) -> None:
         data = b"pending collision corruption"
@@ -692,16 +681,16 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertEqual(stat.S_IMODE(after.st_mode), 0o400)
         self.assertEqual(target.read_bytes(), b"corrupt collision target")
         self.assertTrue(incoming.exists())
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
         with self.fixture.catalog.connect() as connection:
             details = connection.exec_driver_sql(
-                "SELECT details_json FROM failures"
+                    "SELECT details_json FROM diagnostic_records"
             ).scalar_one()
-        self.assertEqual(json.loads(details)["intent_id"], existing_id)
+        self.assertEqual(json.loads(details)["details"]["intent_id"], existing_id)
 
         with self.assertRaises(errors.StorageConflictError):
             self.fixture.accept(data, intent_id=colliding_id)
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
 
         reconciler_api = importlib.import_module("sciretriever.storage.reconciler")
         reconciler = reconciler_api.RawAssetReconciler(
@@ -709,12 +698,9 @@ class AssetAcceptanceCoordinatorTests(TestCase):
             self.fixture.repository,
         )
         reconciler.reconcile_all()
-        counts = (self.fixture.count("events"), self.fixture.count("failures"))
+        diagnostic_count = self.fixture.count("diagnostic_records")
         reconciler.reconcile_all()
-        self.assertEqual(
-            (self.fixture.count("events"), self.fixture.count("failures")),
-            counts,
-        )
+        self.assertEqual(self.fixture.count("diagnostic_records"), diagnostic_count)
 
     def test_shared_acceptance_lock_blocks_exclusive_reconciliation_until_return(self) -> None:
         attempted = threading.Event()
@@ -764,7 +750,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertIs(intent.state, enums.AssetIntentState.PENDING)
         self.assertTrue((self.fixture.storage_root / intent.temporary_path).exists())
         self.assertEqual(self.fixture.count("raw_assets"), 0)
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
 
     def test_writable_existing_target_blocks_registration_and_is_unchanged(self) -> None:
         data = b"correct bytes with writable target"
@@ -789,19 +775,11 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertTrue((self.fixture.storage_root / intent.temporary_path).exists())
         self.assertEqual(self.fixture.count("raw_assets"), 0)
         self.assertEqual(self.fixture.count("work_version_assets"), 0)
-        self.assertEqual(
-            self.fixture.count(
-                "events",
-                "WHERE subject_id = ? AND event_type = ?",
-                (intent_id, "asset_intent.published"),
-            ),
-            0,
-        )
         with self.fixture.catalog.connect() as connection:
             failure = connection.exec_driver_sql(
-                "SELECT category, retryable FROM failures"
+                    "SELECT reason, retryable FROM diagnostic_records"
             ).mappings().one()
-        self.assertEqual(failure["category"], "asset_storage_corruption")
+        self.assertEqual(failure["reason"], "storage")
         self.assertEqual(failure["retryable"], 0)
 
     def test_raw_metadata_mismatch_rolls_back_registration_without_partial_catalog_rows(self) -> None:
@@ -833,13 +811,7 @@ class AssetAcceptanceCoordinatorTests(TestCase):
         self.assertIsNone(intent.raw_asset_id)
         self.assertEqual(self.fixture.count("raw_assets"), 1)
         self.assertEqual(self.fixture.count("work_version_assets"), 0)
-        self.assertEqual(
-            self.fixture.count(
-                "events", "WHERE subject_id = ? AND event_type = ?", (intent_id, "asset_intent.published")
-            ),
-            0,
-        )
-        self.assertEqual(self.fixture.count("failures"), 1)
+        self.assertEqual(self.fixture.count("diagnostic_records"), 1)
         self.assertTrue((self.fixture.storage_root / intent.temporary_path).exists())
         self.assertTrue((self.fixture.storage_root / intent.storage_path).exists())
 

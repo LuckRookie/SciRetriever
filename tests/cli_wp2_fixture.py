@@ -66,7 +66,7 @@ class CliWp2Fixture(TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
         self.catalog = self.base / "catalog.sqlite"
-        engine = create_catalog_engine(self.catalog)
+        engine = create_catalog_engine(self.catalog, allow_repository_write=True)
         initialize_catalog(engine)
         engine.dispose()
 

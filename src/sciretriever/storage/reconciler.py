@@ -117,7 +117,7 @@ class RawAssetReconciler:
         }
         if extra is not None:
             details["metadata"] = extra
-        failure = self._assets.record_intent_failure(
+        failure = self._assets.append_intent_diagnostic(
             intent.id,
             category,
             message,
@@ -140,20 +140,15 @@ class RawAssetReconciler:
             "staged": staged.value,
             "target": target.value,
         }
-        abandoned = self._assets.abandon_pending_intent(
+        abandoned, failure = self._assets.abandon_pending_intent_with_diagnostic(
             intent.id,
             category,
             message,
             retryable=False,
             details=details,
         )
-        failure = self._assets.record_intent_failure(
-            intent.id,
-            category,
-            message,
-            retryable=False,
-            details=details,
-        )
+        if failure is None:
+            raise RuntimeError("pending abandonment did not produce a diagnostic")
         return abandoned, failure.id
 
     def _metadata_failure(

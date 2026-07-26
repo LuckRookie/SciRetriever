@@ -132,7 +132,7 @@ class RawAssetReconcilerMatrixTests(TestCase):
             target_before = os.path.lexists(target)
             target_inode = target.lstat().st_ino if target_before else None
             target_bytes = target.read_bytes() if target_before else None
-            failures_before = environment.count("failures")
+            diagnostics_before = environment.count("diagnostic_records")
 
             report = environment.reconciler.reconcile_all()
 
@@ -201,7 +201,7 @@ class RawAssetReconcilerMatrixTests(TestCase):
             self.assertEqual(os.path.lexists(staged_path), expected_stage)
             self.assertEqual(os.path.lexists(target), expected_target)
             self.assertEqual(
-                environment.count("failures") - failures_before,
+                environment.count("diagnostic_records") - diagnostics_before,
                 expected_new_failures,
             )
             self.assertEqual(len(item.failures), expected_new_failures)
@@ -237,8 +237,7 @@ class RawAssetReconcilerMatrixTests(TestCase):
                     before = (
                         os.path.lexists(staged_path),
                         os.path.lexists(target_path),
-                        environment.count("failures"),
-                        environment.count("events"),
+                        environment.count("diagnostic_records"),
                     )
 
                     report = environment.reconciler.reconcile_all()
@@ -252,8 +251,7 @@ class RawAssetReconcilerMatrixTests(TestCase):
                         (
                             os.path.lexists(staged_path),
                             os.path.lexists(target_path),
-                            environment.count("failures"),
-                            environment.count("events"),
+                            environment.count("diagnostic_records"),
                         ),
                         before,
                     )
@@ -351,10 +349,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
         content = target.read_bytes()
 
         first = self.environment.reconciler.reconcile_all()
-        counts = (
-            self.environment.count("events"),
-            self.environment.count("failures"),
-        )
+        diagnostic_count = self.environment.count("diagnostic_records")
         second = self.environment.reconciler.reconcile_all()
 
         after = target.stat()
@@ -368,13 +363,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
         self.assertEqual(self.environment.count("work_version_assets"), 0)
         self.assertEqual(first.items[0].action, "abandoned_corrupt_target")
         self.assertEqual(second.items[0].action, "terminal_abandoned")
-        self.assertEqual(
-            (
-                self.environment.count("events"),
-                self.environment.count("failures"),
-            ),
-            counts,
-        )
+        self.assertEqual(self.environment.count("diagnostic_records"), diagnostic_count)
         self.assertFalse(
             (self.environment.storage_root / staged.temporary_path).exists()
         )
@@ -443,21 +432,15 @@ class RawAssetReconcilerSafetyTests(TestCase):
         before = self.environment.assets.get_raw_asset(raw_asset_id)
 
         first = self.environment.reconciler.reconcile_all()
-        counts = (
-            self.environment.count("failures"),
-            self.environment.count("events"),
-        )
+        diagnostic_count = self.environment.count("diagnostic_records")
         second = self.environment.reconciler.reconcile_all()
 
         self.assertEqual(first.items[0].action, "retained_catalog_mismatch")
         self.assertEqual(second.items[0].action, "retained_catalog_mismatch")
-        self.assertEqual(first.items[0].failures, second.items[0].failures)
+        self.assertEqual(len(first.items[0].failures), len(second.items[0].failures))
         self.assertEqual(
-            (
-                self.environment.count("failures"),
-                self.environment.count("events"),
-            ),
-            counts,
+            self.environment.count("diagnostic_records"),
+            diagnostic_count + 1,
         )
         self.assertEqual(
             self.environment.assets.get_raw_asset(raw_asset_id), before
@@ -477,8 +460,7 @@ class RawAssetReconcilerSafetyTests(TestCase):
         )
         self.environment.reconciler.reconcile_all()
         counts = (
-            self.environment.count("failures"),
-            self.environment.count("events"),
+            self.environment.count("diagnostic_records"),
             self.environment.count("raw_assets"),
             self.environment.count("work_version_assets"),
         )
@@ -486,15 +468,15 @@ class RawAssetReconcilerSafetyTests(TestCase):
         second = self.environment.reconciler.reconcile_all()
         third = self.environment.reconciler.reconcile_all()
 
-        self.assertEqual(second, third)
+        self.assertEqual(second.items[0].action, third.items[0].action)
+        self.assertEqual(len(second.items[0].failures), len(third.items[0].failures))
         self.assertEqual(
             (
-                self.environment.count("failures"),
-                self.environment.count("events"),
+                self.environment.count("diagnostic_records"),
                 self.environment.count("raw_assets"),
                 self.environment.count("work_version_assets"),
             ),
-            counts,
+            (counts[0] + 2, counts[1], counts[2]),
         )
         self.assertIs(
             self.environment.assets.get_intent(intent.id).state,
