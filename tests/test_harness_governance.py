@@ -54,6 +54,56 @@ class HarnessGovernanceTests(unittest.TestCase):
                 violations = find_documentation_violations(root)
             self.assertIn("README.md: broken local link 'docs/missing.md'", violations)
 
+    def test_documentation_gate_detects_stale_wp6_command_surface(self) -> None:
+        # Given a README that still omits the final WP6 commands
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text(
+                "# 中文\n\n## 功能特性\n## 工作流程\n## 快速开始\n"
+                "## 数据来源\n## 配置\n## 开发与验证\n"
+                "`sciretriever search`\n",
+                encoding="utf-8",
+            )
+
+            # When the documentation gate runs
+            violations = find_documentation_violations(root)
+
+        # Then the stale command surface is rejected explicitly
+        self.assertIn("README.md: stale or incomplete WP6 command surface", violations)
+
+    def test_documentation_gate_rejects_unknown_example_config_key(self) -> None:
+        # Given an example TOML with one field outside the strict schema
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "config.example.toml").write_text(
+                "schema_version = 1\nfuture = true\n",
+                encoding="utf-8",
+            )
+
+            # When the documentation gate runs
+            violations = find_documentation_violations(root)
+
+        # Then the example/schema drift is rejected without echoing a value
+        self.assertIn("config.example.toml: strict parser rejected the example", violations)
+
+    def test_documentation_gate_rejects_duplicate_wp6_release_marker(self) -> None:
+        # Given two progress markers claiming the final release update
+        marker = "<!-- WP6_FINAL_RELEASE_RECEIPT: TODO31_940 -->"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            progress = root / "docs" / "governance" / "implementation-progress.md"
+            progress.parent.mkdir(parents=True)
+            progress.write_text(f"# Progress\n{marker}\n{marker}\n", encoding="utf-8")
+
+            # When the documentation gate runs
+            violations = find_documentation_violations(root)
+
+        # Then duplicated final-release truth is rejected
+        self.assertIn(
+            "docs/governance/implementation-progress.md: Todo 31 final release marker must appear exactly once",
+            violations,
+        )
+
     def test_document_governance_accepts_proposal_and_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

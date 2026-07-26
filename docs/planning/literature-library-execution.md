@@ -126,8 +126,8 @@ WP4 保持一个工作包，但内部按以下五个门禁顺序实施。后一�
 - 实现 `expand`，默认 references，支持 cited-by/both，仅接受 depth 控制，并用 stable Work visited set 去环和阻止重复入队。
 - 每一层对所有新增 Work 完成 metadata、download 和 analyze 后再进入下一层。
 - expansion 只有 depth 边界，不设置 product-level maximum-new-documents cap；报告每层计数。分支失败只停止该分支，其它分支继续；Ctrl+C 停止新记录并安全闭合当前有限操作。
-- 实现 `failures` 和 `config check`，完成目标命令树、显式 backfill selectors、待复核项与可审计/可撤销的人工整理、阅读版与版本化 `DocumentPackage` export/`--include-references`，以及统一进度计数。`failures` 覆盖 metadata、acquisition、analysis 和 expansion 的对象级 reason/action，acquisition 另有脱敏 per-source details。
-- 收口严格 TOML：复用 WP2/WP3 已发布的 search/acquisition 配置、WP4.5 已验收的 MinerU/LLM 配置和 WP5 全局完成管线，只增加 WP6 expansion/curation/export 所需默认值及尚缺的格式/间隔字段；沿用同一 secret 引用和 redaction 语义，不建立第二套配置路径，CLI 只覆盖当前 invocation。
+- 实现 `failures` 和 `config check`，完成目标命令树、显式 backfill selectors、待复核项与可审计/可撤销的人工整理、阅读版与版本化 `DocumentPackage` export/`--include-references`，以及统一进度计数。`failures` 覆盖 metadata、acquisition、analysis 和 expansion 的对象级 reason/action，acquisition 另有显式、脱敏 per-source details；`config check` 默认离线，显式 runtime 模式只做有界只读 capability probe。
+- 收口严格 TOML：复用 WP2/WP3 已发布的 search/acquisition 配置、WP4.5 已验收的 MinerU/LLM 配置和 WP5 全局完成管线，只增加 WP6 expansion/curation/export 所需默认值及尚缺的格式/默认 30 秒文献启动间隔字段；沿用同一 secret 引用和 redaction 语义，不建立第二套配置路径，CLI 只覆盖当前 invocation。
 
 **验收门**：固定引用图按深度产生确定性层级且不受隐藏文档数上限截断；每层计数可对账；每层完整处理；单分支失败不阻塞其它分支；安全中断后重跑跳过完成内容；unresolved reference 可在重跑后解析；人工归组、preferred、metadata、tag 和 author 操作有前后值、可撤销且不删除 observations/RawAsset；更新 current 后重导出产生新 `DocumentPackage` 快照且旧快照不变；各阶段 failure 可按对象查询；未知 TOML 字段拒绝；secret 不进入输出、日志、catalog 或 lineage；README、示例配置和 `--help` 一致。
 

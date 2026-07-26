@@ -18,7 +18,7 @@ SciRetriever 对当前已实现或活动 ADR、proposal 和 execution plan 明�
 
 - **文献来源接入**：接入公开 API、静默页面和用户配置的端点。项目对来源本身不做"合法/灰色/非法"的分类标签。
 - **下载执行**：用户配置的 provider 按指定策略执行下载。工具不对特定 provider（如 Sci-Hub）施加超越工程安全的使用限制。
-- **网络与访问方式**：批准目标包含显式配置的 browser fallback，但当前尚未实现；通用代理轮换和机构登录不在当前批准目标内。任何后续新增能力必须先进入活动 ADR/proposal/plan，并满足工程安全边界。
+- **网络与访问方式**：当前已实现显式配置、默认关闭的 profile-copy browser fallback，但不提供交互登录、CAPTCHA、通用代理轮换或机构登录编排。任何后续新增能力必须先进入活动 ADR/proposal/plan，并满足工程安全边界。
 
 ## 3. 工程约束 vs 使用限制
 

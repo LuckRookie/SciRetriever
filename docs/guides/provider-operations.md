@@ -39,6 +39,8 @@
 - Sci-Hub、translator 和 browser 均是已实现、默认关闭的 capability。Sci-Hub 必须显式配置且与 first-tier provider 列表一致；translator 只使用严格 rule template、精确 host allowlist 和固定静态 HTML whitelist；browser 只使用经过权限检查的 profile 临时副本。禁用这些 capability 时不要求 endpoint、rule、profile 或运行时。
 - 全文分析不是 provider 职责；只有已保存并通过验证的 primary PDF 才能进入后续 PDF-based fulltext analysis。XML/HTML 可作为补充资产，但不能在缺少 PDF 时满足 analyze，也不能在冲突时覆盖 PDF。
 - 第一层 providers 有界竞速；每个 provider 的候选先去重并按确定性顺序最多执行 8 个。第一层全部耗尽后才顺序运行 translator rules，再运行 browser rules。所有 PDF/XML/HTML 都必须通过目标文章身份验证；明确不符或无法确认均拒绝并保持缺口。
+- 引用扩展的 graph capabilities 与 acquisition providers 分开注册。当前只接受 `openalex` 和 `semantic-scholar`，默认 direction 为 references；provider call/page size 是有限资源预算，不是隐藏的图文献总数上限。
+- `config check` 默认不联网。显式 `--runtime` 才调用当前已装配的 acquisition、graph、MinerU 和 LLM readiness adapters；每次调用都有 timeout 上限且只读取 identity/capability，不下载文献正文。没有可用 adapter 或 identity 不匹配会报告 invalid，secret 与运行时 URL 不进入输出。
 - Sci-Hub 和 browser 没有 live 验证证据，本轮只有离线 fixture/adapter 测试；仓库不提供默认 Sci-Hub mirror，也不支持交互登录或 CAPTCHA。operator 负责确认 endpoint、会话和内容访问的授权范围，本手册不作官方或法律结论。
 
 ### 1.4 通用排障顺序

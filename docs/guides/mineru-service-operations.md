@@ -90,6 +90,8 @@ Do not expose plain `mineru-api --host 0.0.0.0` directly to an untrusted network
 
 SciRetriever checks the fixed service origin and requires health status `healthy`, version `3.4.4` and protocol `2` before submission. It does not currently validate the health response's concurrency, window or retention values. The API does not report model ID, model revision, CUDA/vLLM identity or a cryptographic deployment fingerprint; those remain operator-attested configuration and provenance.
 
+`sciretriever config check` is offline by default and does not contact MinerU. The explicit `config check --runtime` mode performs one bounded, read-only health identity probe for an enabled target. A ready probe confirms the configured service/version/protocol identity only; it does not prove model attestation, capacity, future task success or acceptance of parser output.
+
 The operator should record, outside the repository:
 
 - MinerU wheel/version and lock or container digest;

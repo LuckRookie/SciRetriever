@@ -2,6 +2,8 @@
 # This file lists only fields accepted by the current strict parser.
 # Optional acquisition adapters are disabled by default.
 schema_version = 1
+# Delay starts of network-backed document work across foreground batches.
+document_start_interval_seconds = 30.0
 
 [paths]
 catalog = "./catalog.sqlite"
@@ -43,6 +45,20 @@ precedence = ["crossref", "europe-pmc", "arxiv"]
 provider_timeout = 30.0
 max_concurrency = 8
 crossref_mailto = "researcher@example.org"
+
+[expansion]
+direction = "references" # Also supported: "cited-by" and "both".
+depth = 0
+providers = ["openalex", "semantic-scholar"]
+max_provider_calls = 10
+page_size = 100
+
+[curation]
+output_format = "json"
+
+[export]
+output_format = "jsonl"
+include_references = false
 
 [acquisition]
 providers = ["direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex", "semantic-scholar", "elsevier", "wiley", "springer"]

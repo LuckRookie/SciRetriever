@@ -109,7 +109,7 @@ SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Wor
 
 ### 3.6 配置与运行检查
 
-用户通过统一 TOML 配置数据位置、默认处理层级、provider 优先级、获取顺序、LLM、格式和启动间隔，通过 `config check` 在实际处理前发现未知字段、缺失 secret、不可写目录、模型或 browser profile 问题。
+用户通过统一 TOML 配置数据位置、默认处理层级、provider 优先级、获取顺序、LLM、格式和启动间隔。`config check` 默认只做离线 schema、secret reference、目录与权限检查；只有显式 runtime 模式才执行有界、只读的 capability identity probe，不下载文献正文或修改外部系统。
 
 ## 3. 核心实体与身份
 
@@ -294,7 +294,7 @@ metadata 阶段的 provider projection 是可用但非权威的临时元数据�
 
 - `expand` 默认方向为 `references`，支持 `cited-by` 和 `both`。
 - 用户只指定 depth。depth 0 只处理种子，depth N 扩展 N 层。
-- expansion 只由 depth 限制，不设置 product-level maximum-new-documents cap。
+- expansion 只由 depth 限制，不设置 product-level maximum-new-documents cap。provider call、page size、并发与启动间隔只限制资源使用，不截断已经进入产品 frontier 的文献总数。
 - 每次 expansion 使用稳定 Work identity 维护 invocation visited set；已经访问、已排队或已在当前层收敛的 Work 不重复入队，循环引用不能造成重复处理。跨 invocation 由 catalog 完成状态和幂等选择跳过已完成节点。
 - 每一层必须让每个新增目标调用同一完成管线；只有到达 `COMPLETE` 的 WorkVersion 才产生下一层 reference frontier。仍停留在 `METADATA_PENDING`、`ASSET_PENDING` 或 `ANALYSIS_PENDING` 的目标只停止自己的 branch，其它 branches 继续。
 - 命令报告每层发现、已有、完成和失败数量。一个 branch 失败只停止该 branch，其它 branches 继续。
@@ -313,10 +313,10 @@ CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择
 
 ### FR-19 严格 TOML
 
-- 一份严格 TOML 管理 catalog database/assets 路径、普通 search 默认 level/limit、metadata enabled providers 与 precedence、acquisition tier/order、LLM、Sci-Hub、translator、browser profile、MinerU service connection、资产格式、引用导出和默认 30 秒文献启动间隔。MinerU 配置至少区分 loopback/remote mode、固定 base URL、expected service/protocol/model/backend identity、认证引用、remote upload opt-in、connect/upload/task/download timeout、poll interval、并发和 input/result/archive/schema bounds。
-- secret 可以直接写入权限合格的 TOML，也可以通过明确支持的环境变量提供。
+- 一份严格 TOML 管理 catalog database/assets 路径、普通 search 默认 level/limit、metadata enabled providers 与 precedence、acquisition tier/order、LLM、Sci-Hub、translator、browser profile、MinerU service connection、资产格式、引用扩展、人工整理/导出格式、引用导出和默认 30 秒文献启动间隔。MinerU 配置至少区分 loopback/remote mode、固定 base URL、expected service/protocol/model/backend identity、认证引用、remote upload opt-in、connect/upload/task/download timeout、poll interval、并发和 input/result/archive/schema bounds。
+- 固定 acquisition credential 字段可以直接写入权限合格的 TOML。MinerU remote auth 与 LLM credential 只在 TOML 保存环境变量名称，secret value 只在运行时读取。
 - 未知字段、错误类型和冲突设置 fail closed。程序不自动改写 TOML。
-- CLI 参数只能覆盖本次 invocation，不持久修改 TOML。`config check` 至少验证未知字段、类型和冲突、所需 secret 引用、目录存在性/权限、provider/模型必填配置和启用 browser 的 profile；未启用能力不强制要求其 secret 或运行时。
+- CLI 参数只能覆盖本次 invocation，不持久修改 TOML。`config check` 的 offline 模式至少验证未知字段、类型和冲突、所需 secret 引用、目录存在性/权限、provider/模型必填配置和启用 browser 的 profile；未启用能力不强制要求其 secret 或运行时。显式 runtime 模式只对启用能力执行有限、只读 identity/capability probe。
 - secret 不进入终端、JSON、日志、catalog details、provenance 或生成结果。
 
 ## 10. 跨能力质量规则

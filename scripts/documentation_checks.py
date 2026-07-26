@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import re
 from urllib.parse import unquote
 
 from scripts.governance_checks import find_document_governance_violations
+from sciretriever.cli.main import _build_parser
+from sciretriever.config import load_config
+from sciretriever.errors import ConfigError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +30,15 @@ README_HEADINGS = (
     "## 功能特性", "## 工作流程", "## 快速开始",
     "## 数据来源", "## 配置", "## 开发与验证",
 )
+FINAL_RELEASE_MARKER = "<!-- WP6_FINAL_RELEASE_RECEIPT: TODO31_940 -->"
+FINAL_RELEASE_FACTS = (
+    "Todo 31 最终 `full` harness 940 项通过",
+    "`.omo/evidence/wp6/task-31.txt`",
+)
+WP6_CONFIG_DECLARATIONS = (
+    "document_start_interval_seconds =", "[expansion]", "[curation]", "[export]",
+    "max_provider_calls =", "page_size =",
+)
 
 
 def _markdown_files(root: Path) -> tuple[Path, ...]:
@@ -41,6 +54,73 @@ def _link_target(raw_target: str) -> str:
     elif " " in target and not target.startswith(("http://", "https://")):
         target = target.split(" ", 1)[0]
     return unquote(target.split("#", 1)[0].split("?", 1)[0])
+
+
+def _wp6_surface_violations(root: Path) -> tuple[str, ...]:
+    violations: list[str] = []
+    readme = root / "README.md"
+    if readme.is_file():
+        text = readme.read_text(encoding="utf-8")
+        parser = _build_parser()
+        subparsers = next(
+            action for action in parser._actions
+            if isinstance(action, argparse._SubParsersAction)
+        )
+        choices = subparsers.choices or {}
+        required = ("expand", "failures", "config")
+        if any(
+            command not in choices
+            or f"`sciretriever {command}{' check' if command == 'config' else ''}`" not in text
+            for command in required
+        ):
+            violations.append("README.md: stale or incomplete WP6 command surface")
+    example = root / "config.example.toml"
+    if example.is_file():
+        try:
+            config = load_config(example)
+        except (ConfigError, OSError):
+            violations.append("config.example.toml: strict parser rejected the example")
+        else:
+            text = example.read_text(encoding="utf-8")
+            declarations_are_unique = all(
+                text.count(declaration) == 1 for declaration in WP6_CONFIG_DECLARATIONS
+            )
+            defaults_are_exact = (
+                config.document_start_interval_seconds == 30.0
+                and config.expansion.direction == "references"
+                and config.expansion.depth == 0
+                and config.expansion.providers == ("openalex", "semantic-scholar")
+                and config.expansion.max_provider_calls == 10
+                and config.expansion.page_size == 100
+                and config.curation.output_format == "json"
+                and config.export.output_format == "jsonl"
+                and not config.export.include_references
+            )
+            if not declarations_are_unique or not defaults_are_exact:
+                violations.append(
+                    "config.example.toml: WP6 fields must appear once with exact defaults"
+                )
+    progress = root / "docs" / "governance" / "implementation-progress.md"
+    if progress.is_file():
+        text = progress.read_text(encoding="utf-8")
+        if text.count(FINAL_RELEASE_MARKER) != 1:
+            violations.append(
+                "docs/governance/implementation-progress.md: "
+                "Todo 31 final release marker must appear exactly once"
+            )
+        if any(text.count(fact) != 1 for fact in FINAL_RELEASE_FACTS):
+            violations.append(
+                "docs/governance/implementation-progress.md: "
+                "Todo 31 final count and receipt must appear exactly once"
+            )
+        if (
+            "Reference expansion | 未实现" in text
+            or "WP6 引用扩展与产品收口 | approved | not started" in text
+        ):
+            violations.append(
+                "docs/governance/implementation-progress.md: stale WP6 capability status"
+            )
+    return tuple(violations)
 
 
 def find_documentation_violations(root: Path = ROOT) -> tuple[str, ...]:
@@ -64,6 +144,7 @@ def find_documentation_violations(root: Path = ROOT) -> tuple[str, ...]:
         if len(text.splitlines()) > 200:
             violations.append("AGENTS.md must remain a project index of at most 200 lines")
     violations.extend(find_document_governance_violations(root))
+    violations.extend(_wp6_surface_violations(root))
     for document in _markdown_files(root):
         if not document.is_file():
             continue

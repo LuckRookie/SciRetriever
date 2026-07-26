@@ -61,7 +61,7 @@
 
 | 能力模块 | 责任 | 拥有或写入 | 明确不负责 |
 |---|---|---|---|
-| 前台交互与配置 | 解释命令、选择器、defaults、进度和 cooperative stop | invocation 参数；不拥有业务事实 | daemon、后台 ownership、持久化任务恢复 |
+| 前台交互与配置 | 解释命令、选择器、defaults、进度、cooperative stop，以及 offline/runtime config check 分界 | invocation 参数；不拥有业务事实 | daemon、后台 ownership、持久化任务恢复、默认联网检查 |
 | Completion Orchestration | 根据 catalog 事实确定四阶段并只调用下一缺失阶段；为 DOI/search/import/backfill/expansion 提供统一完成契约 | 不拥有新的业务事实；返回当前阶段和本次阶段结果 | 复制 metadata/acquisition/analysis 实现、保存第二套状态、建立后台 workflow |
 | Search/Metadata | 并发查询、规范化、身份匹配、provisional WorkVersion 入库 | 通过 catalog 写 observations 和 provisional provider projection | 宣称文献最终完成、下载正文、调用 LLM、保留 vendor dict 作为产品字段 |
 | Provider adapters | 把外部 metadata 或 asset candidate 转为中性形状 | provider record id、locator 和 provenance | 决定 Work/版本身份或 canonical 值 |
@@ -215,7 +215,7 @@ seed Work set
   -> next layer
 ```
 
-默认方向是 references。用户只控制 depth，产品不设置 maximum-new-documents cap。每层报告计数。一个 branch 失败只停止该 branch，其它 branches 继续。Ctrl+C 停止新记录并安全闭合当前有限操作；重跑跳过完成内容。resolved 引用连接目标 Work，cited-by 从 VersionReference 反向派生；未解析项保留原始文本和可得标识符，等待后续重跑补全。
+默认方向是 references。用户只控制 depth，产品不设置 maximum-new-documents cap。provider call、page size、并发和文献启动间隔是资源预算，不是 frontier 文献总数上限。每层报告计数。一个 branch 失败只停止该 branch，其它 branches 继续。Ctrl+C 停止新记录并安全闭合当前有限操作；重跑跳过完成内容。resolved 引用连接目标 Work，cited-by 从 VersionReference 反向派生；未解析项保留原始文本和可得标识符，等待后续重跑补全。
 
 ## 8. 标签与作者
 
@@ -299,7 +299,7 @@ all sources exhausted
   -> rerun idempotently
 ```
 
-`failures` 把 metadata、acquisition、analysis 和 expansion 的 invocation 失败统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”，但 failure record 不改变四阶段模型。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时对象保持 `METADATA_PENDING`。acquisition 可展开脱敏 per-source details，全部耗尽时对象保持 `ASSET_PENDING`。analysis replacement 失败保留旧 current；没有旧 current 的对象保持 `ANALYSIS_PENDING`。expansion 只停止该 branch，其它 branch 继续。
+`failures` 把 metadata、acquisition、analysis 和 expansion 的 invocation 失败统一投影为“阶段 + 对象 + overall reason/action + 重跑建议”，支持按对象与稳定分类筛选 latest/all；只有显式请求才展开 acquisition 的脱敏 per-source details。failure record 不改变四阶段模型。metadata 的单 provider 失败在仍有其它响应时只进入命令汇总；全部 provider 失败时对象保持 `METADATA_PENDING`。acquisition 全部耗尽时对象保持 `ASSET_PENDING`。analysis replacement 失败保留旧 current；没有旧 current 的对象保持 `ANALYSIS_PENDING`。expansion 只停止该 branch，其它 branch 继续。
 
 Ctrl+C 不是 durable pause。进程收到中断后停止领取新记录，安全排空或取消当前有限本地操作，保留已经提交的 Work、资产和 current result，然后退出。MinerU 3.4.4 没有 cancel endpoint，已提交的外部 parse task 可能继续运行；其 handle 仅保存在 processing attempt metadata 中供下次 invocation 恢复 polling，不能据此声称任务已取消、exactly-once 或 durable workflow ownership。下一次命令通过 catalog 完成状态和 processing run identity 跳过已完成内容。
 

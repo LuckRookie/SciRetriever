@@ -78,12 +78,12 @@ MinerU external task ID 是唯一获批例外：它作为 normalization processi
 - LLM provider/model/参数和 secret 引用；
 - MinerU parser service mode/base URL、expected service/protocol/model/backend identity、remote-upload opt-in、auth reference、polling/timeouts/concurrency 和 request/result/archive/schema bounds；
 - PDF/XML/HTML 策略；
-- full reference list 是否追加到 light Markdown/export 和扩展默认方向；
+- expansion direction/depth/provider paging、curation/export format 和 reading reference inclusion；
 - 默认 30 秒文献启动间隔。
 
-CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 的 ID/query/filter/tag/all selectors 和 force 语义属于 CLI contract，不得藏入另一套 task policy。`config check` 只要求启用能力的 secret/runtime，并检查目录权限、模型和 browser profile。
+CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 的 ID/query/filter/tag/all selectors 和 force 语义属于 CLI contract，不得藏入另一套 task policy。`config check` 默认离线检查 strict schema、启用能力的 secret reference、目录权限、模型和 browser profile；只有显式 runtime 模式才构造有界只读 probes。
 
-直接 secret 和环境变量都先在 composition root 解析成不回显的 typed config。MinerU loopback mode 只接受显式 loopback HTTP origin；remote mode 只接受显式 HTTPS origin，并要求独立 remote-PDF-upload opt-in。两种模式都拒绝 userinfo、query/fragment、跨 origin redirect 和响应提供的任意 absolute status/result URL。
+固定 acquisition credential 可由权限合格的 TOML 直接提供；MinerU remote auth 和 LLM credential 只以环境变量名称进入 typed config，并在 composition root 读取运行时 secret。所有 secret 都不得回显。MinerU loopback mode 只接受显式 loopback HTTP origin；remote mode 只接受显式 HTTPS origin，并要求独立 remote-PDF-upload opt-in。两种模式都拒绝 userinfo、query/fragment、跨 origin redirect 和响应提供的任意 absolute status/result URL。
 
 ## 5. 强制架构边界
 
