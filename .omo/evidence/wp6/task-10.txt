@@ -1,0 +1,185 @@
+WP6 Todo 10 evidence
+Date: 2026-07-25
+
+DoneClaim
+- Added opt-in `config check --runtime` readiness for explicitly enabled
+  acquisition, graph, MinerU, and LLM capabilities. Probes are read-only,
+  timeout-bounded, identity-checked, deterministic, and centrally sanitized.
+- Added a process-local monotonic document-start gate with a 30-second default.
+  Foreground acquisition enters it only after an existing asset is ruled out and
+  uses max(global interval, configured host interval, provider profile interval).
+- Added reusable pacing/readiness contracts for future foreground expansion.
+  No service start, document upload, graph implementation, completion semantic,
+  catalog/diagnostics owner, schema, dependency, docs, plan/state, or
+  core/package.py changes were made by Todo 10.
+
+Changed files
+- src/sciretriever/acquisition/pacing.py
+- src/sciretriever/acquisition/service.py
+- src/sciretriever/cli/acquisition_runtime.py
+- src/sciretriever/cli/runtime_readiness.py
+- src/sciretriever/cli/runtime_probe_http.py
+- src/sciretriever/cli/config_check.py
+- src/sciretriever/cli/download.py
+- src/sciretriever/cli/search.py
+- src/sciretriever/cli/main.py
+- src/sciretriever/cli/parser.py
+- tests/test_runtime_readiness_wp6.py
+- tests/test_runtime_probe_identity_wp6.py
+- tests/test_acquisition_p5.py
+- .omo/evidence/wp6/task-10.txt
+
+Characterization and RED
+- Before implementation, `test_config_check_wp6.py` exited 0 with 9 tests;
+  patched socket.create_connection remained at zero for repeated offline checks.
+- Existing `test_acquisition.py` exited 0 with 7 tests, `test_acquisition_p5.py`
+  exited 0 with 4 tests, `test_mineru_wp42.py` exited 0 with 20 tests, and
+  `test_analysis_wp45.py` exited 0 with 6 tests.
+- First `test_runtime_readiness_wp6.py` run exited 1 at import with the intended
+  `ModuleNotFoundError: sciretriever.acquisition.pacing`. No production code for
+  the new contract existed.
+- First green-stage run exposed a secret-bearing TimeoutError in report text;
+  the focused suite exited 1. Production reporting was repaired to retain only
+  the exception class, and the sentinel test then passed.
+
+Runtime readiness behavior
+- Offline `config check` remains the default and performs no runtime probes.
+- `--runtime` constructs adapters only for the opt-in command. Registered
+  acquisition and graph providers use bounded streamed GET probes with redirects
+  disabled and derive identity/capability only from explicit response markers or
+  recognized vendor schemas. Unregistered enabled providers emit an explicit
+  invalid check; MinerU calls only GET /health; LLM calls only models.retrieve(model).
+- Every timeout is explicit and capped at 30 seconds. Acquisition, graph, and
+  MinerU use acquisition.preflight.timeout; LLM uses its configured timeout.
+- Fake enabled driver exact calls:
+  [('acquisition:crossref',10.0,'GET/identity'),
+   ('mineru',10.0,'GET/identity'),('llm',7.0,'GET/identity')].
+- Ready driver report status was ready. Timeout plus wrong MinerU/LLM identity
+  produced statuses unreachable/invalid/invalid and exit semantics nonzero.
+  The SENTINEL-DO-NOT-LEAK token was absent from encoded JSON.
+- Disabled default config with the same populated fake registry recorded [] and
+  returned only the static config check. No disabled endpoint was probed.
+- Fakes expose only probe(timeout); there is no submit/upload method. MinerU
+  readiness uses health(), never submit(), and LLM readiness uses model identity,
+  never chat completion.
+
+Pacing behavior
+- Fake monotonic/sleeper mixed sequence new-a, reused-a, new-b, completed-b,
+  new-c recorded starts [('new-a',0.0),('new-b',45.0),('new-c',75.0)] and sleeps
+  [45.0,30.0]. Reused/completed items consumed no slot.
+- Adjacent starts honor the stricter applicable interval: provider/host 45
+  overrides global 30; global 30 overrides provider 5.
+- A stale clock changed from 100 to 90 after the first start. The gate slept 40
+  and admitted the next start at 130, so backward observation cannot bypass the
+  monotonic interval.
+- Existing-asset integration acquired once, replayed as reused, made no extra
+  transport call, and left the RecordingGate call list exactly [0.0].
+- No real sleep is used by Todo10 tests; Clock and Sleeper are injected.
+
+CLI manual outputs
+- Minimal offline CLI: exit 0, stderr empty:
+  {"checks":[{"name":"config","reason":"strict TOML loaded","status":"ready"}],"mode":"offline","status":"ready"}
+- Same selected config with `config check --runtime`: exit 0, stderr empty:
+  {"checks":[{"name":"config","reason":"strict TOML loaded","status":"ready"}],"mode":"runtime","status":"ready"}
+- Injected CLI runtime failure composition exited 1, recorded only
+  [('GET/identity',10.0),('GET/model',6.0)], rendered unreachable plus identity
+  mismatch, and reported sentinel_present=False. Its fake upload method raises if
+  called and was never invoked.
+- The temporary CLI directory was owned by TemporaryDirectory and removed on
+  exit. No config path or environment value appeared in either report.
+
+GREEN and regression commands
+- Focused `test_runtime_readiness_wp6.py`: exit 0, 6 tests, green on three
+  post-repair runs including the required repeated final run.
+- `test_config_check_wp6.py`: exit 0, 9 tests.
+- `test_toml_config.py`: exit 0, 28 tests.
+- `test_acquisition.py`: exit 0, 7 tests.
+- `test_acquisition_p5.py`: exit 0, 4 tests.
+- `test_mineru_wp42.py`: exit 0, 20 tests.
+- `test_analysis_wp45.py`: exit 0, 6 tests.
+- `uv run --frozen pyright src/sciretriever tests scripts`: exit 0,
+  0 errors, 0 warnings, 0 informations.
+- Editor LSP diagnostics: no findings in every changed source and test file.
+- `scripts/harness.py quick`: exit 0; compile, docs, architecture, harness tests,
+  and CLI tests passed.
+- `scripts/harness.py docs`: exit 0.
+- `scripts/harness.py architecture`: exit 0.
+- Full harness completed 780 tests plus typecheck and wheel gates. Typecheck,
+  docs, architecture, compile, wheel build, and wheel contents passed. Test phase
+  had only two pre-existing future-WP6 failures: missing expand/failures commands
+  and missing core.export.ExportMode. Todo10-focused and neighboring tests passed.
+
+Exact tokenize-physical-v1 pure LOC
+- src/sciretriever/acquisition/pacing.py: 38.
+- src/sciretriever/cli/runtime_readiness.py: 188.
+- src/sciretriever/acquisition/service.py: 249.
+- src/sciretriever/cli/acquisition_runtime.py: 115.
+- src/sciretriever/cli/config_check.py: 111.
+- src/sciretriever/cli/download.py: 151.
+- src/sciretriever/cli/search.py: 229 (pre-existing warning band; next edit should
+  split command validation/composition before adding more behavior).
+- src/sciretriever/cli/main.py: 89.
+- tests/test_runtime_readiness_wp6.py: 185.
+- tests/test_acquisition_p5.py: 147.
+
+Adversarial, scope, and cleanup
+- Malformed TOML/type/conflict/bounds and offline zero-network characterization
+  remain green in Todo9 tests. Runtime timeout, wrong identity, secret response,
+  disabled omission, stale monotonic state, deterministic output, and repeat-run
+  checks are green. Every command had a 120/600-second outer bound; none hung.
+- Repeated interruption is N/A for a serialized admission gate; the lock and
+  timestamp update are cancellation-safe. Prompt injection is N/A because probes
+  do not consume document/prose input and report no response body.
+- Worktree was dirty before Todo10 from concurrent WP6 owners. Todo10 did not
+  modify catalog or diagnostics owner files and did not revert concurrent work.
+- Full harness generated dist/ and reused pre-existing build/. Todo10 removed its
+  generated dist/ output and retained pre-existing build/ content. Manual drivers
+  used TemporaryDirectory or no files. No runtime catalog, upload, network body,
+  secret, prompt, or temporary script remains.
+
+Architectural self-review
+- Single responsibilities: pacing owns admission; runtime_readiness owns probe
+  selection/adapters/report outcomes; config_check owns CLI report composition.
+- Boundary purity: strict TOML remains the only config parser; probe identities
+  are frozen typed values and raw response bodies never cross the adapter.
+- No tagged-variant if/elif chain, type suppression, unchecked cast, redundant
+  post-action verification, speculative compatibility path, or negative-form
+  name was added. Existing dynamic OpenAI loading remains adapter-local.
+- New behavior is locked by failing-first unit, composition, CLI, acquisition
+  reuse, bounded failure, disabled omission, redaction, and manual surface checks.
+
+Todo10 verifier repair: response-derived readiness
+- RED command: `uv run --frozen python -m unittest discover -s tests -p
+  'test_runtime_readiness_wp6.py'` exited 1 with two intended failures. A 200
+  wrong-service response reported ready, and enabled expansion with `crossref`
+  plus an empty graph registry produced no graph checks and reported ready.
+- `ProbeIdentity` now carries response-derived `identity` and frozen
+  `capabilities`. The HTTP adapter accepts only an explicit `service` plus
+  string-list `capabilities` marker or recognized Crossref/OpenAlex/Semantic
+  Scholar schema fields. It streams at most 65,536 bytes, uses GET only,
+  disables redirects, retains the exact configured timeout, and never reports
+  body, marker detail, endpoint, environment, or secret values.
+- Acquisition requires `acquisition`. Graph requires `graph:references`,
+  `graph:cited-by`, or both according to configured expansion direction. Every
+  enabled search provider now yields exactly one graph check; a missing adapter
+  deterministically yields `invalid` / `enabled capability runtime adapter is
+  unavailable` without a network call.
+- Manual fake endpoint run recorded exactly two calls (Crossref acquisition and
+  OpenAlex graph), each timeout 10.0, redirects false, streaming true. Crossref
+  returned HTTP 200 with `service=wrong-service`; OpenAlex returned HTTP 200 with
+  identity correct but no graph direction capabilities. The report was invalid
+  with identity/capability mismatch, and `DO-NOT-EXPOSE-PROBE-BODY` was absent.
+- Manual unsupported run enabled graph expansion through `crossref` with an
+  empty graph registry. It emitted exactly one `runtime:graph:crossref` invalid
+  check, made zero network calls, and could not report ready.
+- Focused readiness suites passed twice: 8 tests each run. Direct named manual
+  counterexamples passed 2 tests. Neighbor regressions passed: config-check 9,
+  TOML 28, CLI 22, acquisition 29, MinerU 29, analysis 26, graph contracts 10.
+- `uv run --frozen pyright src/sciretriever tests scripts` passed with 0 errors,
+  warnings, or informations. Quick harness, architecture, documentation, and
+  compile gates passed. Per-file pure LOC: runtime_probe_http.py 94,
+  runtime_readiness.py 181, test_runtime_probe_identity_wp6.py 118,
+  test_runtime_readiness_wp6.py 197.
+- No upload, service start, LLM chat, document mutation, response-body output,
+  credential output, breakpoint, debug journal, dist artifact, temporary driver,
+  plan/state, commit, catalog, diagnostics-owner, or Todo7 file change remains.

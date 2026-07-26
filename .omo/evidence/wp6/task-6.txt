@@ -1,0 +1,122 @@
+WP6 Todo 6 - truthful completion outcomes and unified counts
+
+Scope
+- src/sciretriever/completion/counts.py
+- src/sciretriever/completion/outcomes.py
+- src/sciretriever/completion/batch.py
+- src/sciretriever/completion/runner.py
+- tests/test_completion_counts_wp6.py
+- .omo/evidence/wp6/task-6.txt
+- No config, CLI, catalog schema, diagnostics, graph, scripts, plan, Boulder, ledger, dependency, or core/package.py edit.
+
+Baseline characterization before edits
+- `uv run --frozen python -m unittest discover -s tests -p 'test_completion_batch_contracts_wp5.py'` -> exit 0, 13 tests OK.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_completion_pipeline_wp5.py'` -> exit 0, 8 tests OK.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_completion_results_wp5.py'` -> exit 0, 11 tests OK.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_completion_facts_wp5.py'` -> exit 0, 7 tests OK.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_completion_facts_alignment_wp5.py'` -> exit 0, 5 tests OK.
+- Existing succeeded/duplicate/failed/interrupted serialization, interruption suffix validation, result chains, and fact-stage snapshots were unchanged and green.
+
+RED
+- Command: `uv run --frozen python -m unittest discover -s tests -p 'test_completion_counts_wp6.py'`
+- Exit: 1.
+- Observed: import failed only because `sciretriever.completion.counts` did not exist. This was the intended missing shared count contract before production edits.
+
+Implementation
+- `CompletionResult.reached_stop` compares refreshed final fact stage with the requested stop ceiling.
+- The runner now emits resolved `EXHAUSTED` with identity, final stage, and aligned result when execution stops short; unresolved metadata exhaustion remains identity-free.
+- `InvocationCounts` is one frozen projection held by `BatchResult`; compatibility properties and JSON read from it rather than independently recounting.
+- Reconciliation is enforced at construction: `selected = succeeded + exhausted + failed + duplicates + interrupted`; `unique_targets = selected - duplicates`.
+- Asset aliases: `accepted = succeeded`, `missing = exhausted`. Analysis aliases: `analysis_succeeded = succeeded`, `analysis_failed = exhausted + failed`.
+- `ProgressCount` preserves the exact Todo 1 ordered vocabulary using Python-3.10-compatible `str, Enum`.
+- `CatalogCounts.from_snapshot` accepts one passed immutable fact sequence and derives only current stage totals; it has no status/history/diagnostic repository coupling.
+
+GREEN and affected regressions
+- Focused run 1: `uv run --frozen python -m unittest discover -s tests -p 'test_completion_counts_wp6.py'` -> exit 0, 7 tests OK.
+- Focused run 2: same command -> exit 0, 7 tests OK.
+- `test_completion_batch_contracts_wp5.py` -> exit 0, 13 tests OK.
+- `test_completion_pipeline_wp5.py` -> exit 0, 8 tests OK.
+- `test_completion_runtime_wp5.py` -> exit 0, 3 tests OK.
+- `test_completion_results_wp5.py` -> exit 0, 11 tests OK.
+- `test_completion_contracts_wp5.py` -> exit 0, 11 tests OK.
+- `test_completion_facts_wp5.py` -> exit 0, 7 tests OK.
+- `test_completion_facts_alignment_wp5.py` -> exit 0, 5 tests OK.
+- `test_completion_operations_wp5.py` -> exit 0, 9 tests OK.
+- `test_completion_wp5.py` -> exit 0, 3 real SQLite/storage acceptance tests OK.
+- Todo 1 contract: `uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py' -k progress_count` -> exit 0, 1 test OK.
+- Full Todo 1 module retains only expected future reds for config/expand/failures commands and export mode.
+- Aggregate `test_completion*.py` ran 81 tests; all completion behavior passed. Its only failure was the concurrent Todo 9 architecture assertion for `cli/config_composition.py` and `config_loader.py`.
+
+Manual mixed-batch library QA
+- Literal `uv run --frozen python -c` constructed success, exhausted, duplicate, failed, and interrupted items and printed deterministic compact sorted JSON.
+- Observed counts: `selected=5`, `unique_targets=4`, `succeeded=1`, `exhausted=1`, `failed=1`, `duplicates=1`, `interrupted=1`, `accepted=1`, `missing=1`, `analysis_succeeded=1`, `analysis_failed=2`.
+- Equations asserted in-process and passed: `5 = 1+1+1+1+1`; `4 = 5-1`. Exhausted was absent from succeeded.
+- Failure driver: literal `uv run --frozen python -c` constructed `selected=5, unique_targets=5, duplicates=1`; exit 0 after asserting rejection. Observed `ValueError:unique_targets must equal selected minus duplicates`.
+- Malformed/negative equations are also directly covered by the focused suite.
+
+Diagnostics, architecture, and LOC
+- LSP diagnostics on all five changed Python files: no diagnostics.
+- Scoped command: `uv run --frozen pyright src/sciretriever/completion/counts.py src/sciretriever/completion/outcomes.py src/sciretriever/completion/batch.py src/sciretriever/completion/runner.py tests/test_completion_counts_wp6.py` -> exit 0, 0 errors/warnings/informations.
+- Full merged pyright currently exits 1 only for three concurrent Todo 9 errors in `tests/test_config_check_wp6.py` (`object` not iterable at lines 140, 169, 180). No Todo 6 diagnostic.
+- Architecture currently exits 1 only for concurrent Todo 9-owned `cli/config_composition.py` and `config_loader.py`. Todo 6 adds no forbidden dependency; completion imports catalog facts as before and no CLI import.
+- Exact diff-scoped gate: `uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json` -> exit 0.
+- Exact tokenize-physical-v1 LOC: counts.py=121, outcomes.py=103, batch.py=142, runner.py=110, test_completion_counts_wp6.py=128. Every changed/new baseline-small Python file is <=250.
+
+Adversarial and cleanup
+- stale_state: catalog projection consumes one caller-passed immutable fact snapshot and never reads persistent status/history.
+- dirty_worktree: status inspection confirms Todo 6 source/test edits are limited to the listed completion files; concurrent Todo 9 and orchestrator files were not touched.
+- misleading success: direct object and canonical JSON inspection prove exhausted remains a distinct terminal disposition.
+- repeated interruptions: existing suffix contract stayed green; interruption is now an integer count while retaining truthiness compatibility.
+- flaky: focused suite passed twice.
+- hung commands: all commands used 120-second bounds; none hung.
+- generated artifacts: no build, dist, cache, temp script, database, or downloaded artifact was created by Todo 6.
+- prompt injection: N/A; no external content or prompt surface.
+- Architectural self-review: files own count projections, result semantics, batch results, runner execution, and focused tests respectively; no Any/cast/ignore, persistent state, defensive fallback, variant chain, new logging, or unrelated refactor.
+
+Residual risk
+- Full merged pyright and architecture cannot be green until the concurrent Todo 9 worker completes its config/CLI changes. The failures are outside Todo 6 ownership and were not repaired here to preserve disjoint scope.
+
+DoneClaim: WP6 Todo 6 implementation is complete and task-local verification is green; resolved stop-short targets are exhausted rather than succeeded, one immutable typed projection enforces canonical counts/aliases/equations, catalog counts use one passed fact snapshot, manual mixed-batch and rejection QA pass, exact LOC is clean, and only explicitly concurrent Todo 9 merged-tree gates remain pending.
+
+Todo 6 verifier repair - failed resolved identity and later duplicates
+
+Counterexample RED
+- Added `TruthfulRunnerOutcomeTests.test_failed_resolved_target_retains_identity_for_later_duplicate` before production edits. Its initial form drove two identical resolved WorkVersion targets while analysis raised RuntimeError.
+- Command: `uv run --frozen python -m unittest discover -s tests -p 'test_completion_counts_wp6.py'` -> exit 1, 8 tests run.
+- Exact observed failure: BatchResult raised `ValueError: duplicate must resolve to the earlier WorkVersion`; the first failed item had discarded the identity already recorded by `first_by_version`.
+- The counterexample was then strengthened to start at ASSET_PENDING so acquisition advances facts before analysis fails. Before the final-stage refresh it exited 1 with one focused assertion failure: failed JSON reported stale `asset_pending` instead of final `analysis_pending`. The final repair makes this stronger case green.
+
+Repair
+- `BatchItemResult.failed` now accepts optional `work_version_id` and `final_stage` as an aligned pair. These fields preserve resolved provenance only; status remains FAILED, result remains absent, and counts do not classify the item as succeeded or exhausted.
+- `run_completion_batch` initializes identity/stage to None for each input and fills them only after `resolve_target` returns resolved facts. At a caught owner/runtime failure it refreshes the resolved WorkVersion's catalog facts, preserving the actual final stage after partial advancement; a failure before facts resolve remains identityless.
+- Existing duplicate validation is unchanged: `duplicate_of` must reference an earlier input and the duplicate identity must equal that earlier item's WorkVersion. The focused suite now directly rejects a mismatched reference to a resolved failed item.
+
+GREEN and regressions
+- Focused run 1 after the final focused cases: `uv run --frozen python -m unittest discover -s tests -p 'test_completion_counts_wp6.py'` -> exit 0, 10 tests OK.
+- Focused run 2: same command -> exit 0, 10 tests OK.
+- WP5 batch: `test_completion_batch_contracts_wp5.py` -> exit 0, 13 tests OK.
+- WP5 pipeline: `test_completion_pipeline_wp5.py` -> exit 0, 8 tests OK.
+- WP5 runtime: `test_completion_runtime_wp5.py` -> exit 0, 3 tests OK.
+- WP5 facts: `test_completion_facts_wp5.py` -> exit 0, 7 tests OK.
+- WP5 alignment: `test_completion_facts_alignment_wp5.py` -> exit 0, 5 tests OK.
+- WP5 acceptance: `test_completion_wp5.py` -> exit 0, 3 real SQLite/storage tests OK.
+- Todo 1 count contract: `uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py' -k progress_count` -> exit 0, 1 test OK.
+- Compile check: `uv run --frozen python -m compileall -q src/sciretriever/completion tests/test_completion_counts_wp6.py` -> exit 0.
+
+Manual failure plus duplicate driver
+- A literal `uv run --frozen python -c` driver used the completion fixture and real `run_completion_batch` surface from ASSET_PENDING, advanced acquisition, forced analysis RuntimeError, asserted the equations and emitted compact sorted JSON -> exit 0.
+- Item JSON: first item `{status:"failed", work_version_id:"11111111-1111-4111-8111-111111111111", final_stage:"analysis_pending", result:null, reason:"unexpected_failure", duplicate_of:null}`; second item `{status:"duplicate", work_version_id:"11111111-1111-4111-8111-111111111111", final_stage:null, result:null, reason:null, duplicate_of:0}`.
+- Count JSON: `selected=2`, `unique_targets=1`, `succeeded=0`, `exhausted=0`, `failed=1`, `duplicates=1`, `interrupted=0`, `accepted=0`, `missing=0`, `analysis_succeeded=0`, `analysis_failed=1`.
+- One prior manual-driver invocation exited 1 with SyntaxError because `async def` followed a semicolon in Python `-c`; it did not import or execute product code. The corrected exec-defined async driver above is the manual QA result.
+
+Diagnostics, architecture, LOC, and cleanup
+- LSP diagnostics on batch.py, runner.py, and test_completion_counts_wp6.py: no diagnostics after each edit round.
+- Full merged command: `uv run --frozen pyright src/sciretriever tests scripts` -> exit 0, 0 errors/warnings/informations.
+- Full architecture command: `uv run --frozen python scripts/harness.py architecture` -> exit 0, `[harness] architecture: passed`.
+- Baseline-aware LOC command: `uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json` -> exit 0.
+- Exact tokenize-physical-v1 LOC: batch.py=147, runner.py=117, test_completion_counts_wp6.py=181; all are <=250.
+- Adversarial scan found no Any, cast, type/pyright ignore, broad exception, TODO, or FIXME in the repair surface. Failed-field pair validation rejects half-resolved states; unresolved failure and malformed duplicate tests are green.
+- Scoped diff/status inspection confirms this repair touched only Todo 6 batch/runner, focused test, and this evidence receipt. Todo 9, plan, Boulder/state, ledger, config, catalog, diagnostics, graph, and commit state were not edited. No temp script, database, build/dist output, or visible untracked verification artifact was created; verification used in-memory fixtures and command-local code.
+- Architectural self-review: batch.py owns batch result invariants, runner.py owns per-input execution context, and the test module owns count/outcome contracts. No new dependency direction, logging, fallback, persistent state, or unrelated refactor was introduced.
+
+DoneClaim: WP6 Todo 6 verifier repair is complete. The exact failed-first-resolved plus duplicate-second counterexample was red at the identity invariant and is now green; failed items can preserve optional aligned WorkVersion/fact-stage provenance without becoming successes, later duplicates reference index 0, terminal counts reconcile as selected=2/failed=1/duplicates=1, unresolved failures remain identityless, malformed duplicate references reject, requested focused/WP5/Todo1/static/architecture/LOC/manual gates pass, and cleanup is complete.

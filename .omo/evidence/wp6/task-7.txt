@@ -1,0 +1,194 @@
+WP6 Todo 7 - catalog-owned redacted diagnostic history boundary
+
+Changed files
+- src/sciretriever/catalog/diagnostics.py
+- src/sciretriever/catalog/__init__.py (minimal service re-export)
+- src/sciretriever/diagnostics/history.py
+- src/sciretriever/diagnostics/__init__.py (minimal typed contract re-exports)
+- tests/test_diagnostics_wp6.py
+- .omo/evidence/wp6/task-7.txt
+
+Scope
+- Added one CatalogDiagnosticService over Todo 2 diagnostic_records.
+- Added frozen typed write/query/projection values consuming Todo 3 ProductFailure classifications.
+- No failure-owner caller, runtime, acquisition, config, schema, completion, graph, script, CLI,
+  dependency, package, plan or orchestrator-state file was edited.
+
+Baseline characterization
+- uv run --frozen python -m unittest discover -s tests -p 'test_diagnostics.py': Ran 4; OK.
+- uv run --frozen python -m unittest discover -s tests -p 'test_redaction.py': Ran 6; OK.
+- uv run --frozen python -m unittest discover -s tests -p 'test_catalog_schema_wp6.py': Ran 11; OK.
+- Existing mapping/codec/projection/redaction and fresh catalog fact/schema behavior were green
+  before production edits.
+
+Failing-first evidence
+- RED 1: uv run --frozen python -m unittest discover -s tests -p 'test_diagnostics_wp6.py'.
+  Exit 1; loader failed only because CatalogDiagnosticService and typed request/query contracts
+  did not exist.
+- RED 2 after the initial general-redactor implementation: same command exited 1; the durable
+  projection still contained FIXED-SENTINEL-SECRET in provider_payload and runtime_path. This
+  established the need for a stricter persistence scrub before canonical encoding.
+- GREEN run 1: Ran 5; OK. GREEN run 2: Ran 5; OK. Final post-cleanup run: Ran 5; OK.
+
+Implemented behavior
+- Input subjects translate Todo 3 sha256:<64 hex> to the existing 64-hex schema field; Work and
+  expansion use work_id, WorkVersion uses work_version_id, and processing uses processing_run_id.
+- Append creates one immutable row; existing Todo 2 UPDATE/DELETE triggers remain authoritative.
+- Central durable redaction runs before JSON encoding and removes credentials, headers, cookies,
+  request/response payloads, exceptions, absolute runtime paths and raw signed URL paths.
+- Details are canonical JSON and fall back to a bounded truncation record before the 4096-byte
+  schema limit. No raw exception or caller summary is persisted; summary is reason-allowlisted.
+- Query order is occurred_at DESC then id DESC. Subject/stage/reason/action/retryability filters
+  compose deterministically; latest applies LIMIT 1 after filters; latest=false returns history.
+- Malformed or oversized historical details return a fixed bounded catalog/review corruption
+  projection with empty details and no hostile input.
+- No mutable current flag exists and no diagnostic read/write consults completion-stage selection.
+
+Automated verification
+- Focused Todo 7 passed twice independently: Ran 5; OK each time.
+- Existing diagnostics/redaction: Ran 10; OK.
+- Catalog schema/WP1/WP6 suites: Ran 29; OK.
+- Completion facts discovery suite: Ran 7; OK.
+- uv run --frozen pyright src/sciretriever tests scripts: 0 errors, 0 warnings, 0 informations.
+- LSP diagnostics: clean for catalog/diagnostics.py, diagnostics/history.py, both package init files,
+  and tests/test_diagnostics_wp6.py after the final import layout.
+- uv run --frozen python scripts/harness.py architecture: passed.
+- git diff --check over all Todo 7 files: passed.
+- Python 3.10 AST parse: passed for both new modules and focused test.
+- The merged diff-wide LOC command is currently blocked by unrelated dirty-scope
+  src/sciretriever/acquisition/service.py at 251 pure LOC; Todo 7's exact scoped LOC is below.
+
+Manual real-SQLite happy QA
+- Literal uv run --frozen python -c driver used TemporaryDirectory, a fresh catalog, real
+  Work/WorkVersion/processing rows and all four ProductFailureStage values.
+- Output: {"all_count":4,"completion_fact_unchanged":true,"exception_safe":true,
+  "filter_count":1,"latest_count":1,"raw_db_safe":true,
+  "stages":["metadata","acquisition","analysis","expansion"]}.
+- The driver scanned catalog.sqlite plus WAL/SHM bytes and its deterministic stdout. The fixed
+  sentinel, signed URL path, absolute /tmp path, headers and provider payload were absent.
+- A rejected orphan-subject write raised only stable CatalogError text; secret and host absent.
+- A separate canonical completion-fact snapshot comparison returned
+  {"byte_identical":true,"bytes":249} before and after diagnostic insertion.
+
+Manual corruption QA
+- A second literal driver enabled SQLite ignore_check_constraints only in its disposable catalog,
+  inserted malformed JSON containing the sentinel, signed URL and more than 5000 bytes, and queried
+  through CatalogDiagnosticService.
+- Output: {"action":"review","bounded":true,"corrupted":true,"details":{},
+  "reason":"catalog","secret_absent":true}.
+- Projected JSON was under 1024 bytes and excluded the sentinel and host.
+
+Pure LOC (tokenize-physical-v1)
+- src/sciretriever/catalog/__init__.py: 139
+- src/sciretriever/catalog/diagnostics.py: 164
+- src/sciretriever/diagnostics/__init__.py: 12
+- src/sciretriever/diagnostics/history.py: 117
+- tests/test_diagnostics_wp6.py: 152
+- Every changed/new Python file is <=250 pure LOC.
+
+Adversarial and cleanup
+- malformed_input: malformed/oversized historical JSON projects closed; invalid typed query/write
+  inputs reject; orphan FK write exposes no input.
+- untrusted_external_text: nested signed URL, credential header, exception, absolute path and
+  provider payload are redacted before persistence.
+- stale_state: history preserves both rows and latest returns the deterministic newest match.
+- dirty_scope: concurrent Todo 10/runtime/config/acquisition and orchestrator files were preserved.
+- misleading_success: tests and drivers inspect real rows, filters, DB/WAL bytes and fact snapshots.
+- flaky_twice: focused suite passed twice with identical count.
+- hung_bounded: all commands completed inside 120-second tool bounds.
+- generated_cleanup: /tmp/sciretriever-wp6-* has no matches; no catalog, script, capture, build,
+  dist, dependency, lockfile, environment or bytecode artifact remains.
+- repeated_interruptions and prompt injection: not applicable to this synchronous SQLite boundary.
+
+Architectural self-review
+- Single responsibility: catalog/diagnostics.py owns catalog diagnostic persistence; history.py owns
+  typed requests/projections and durable sanitization.
+- Boundary purity: only ProductFailure supplies stage/subject/reason/action/rerun classification;
+  untrusted detail values cross one redaction/canonicalization boundary.
+- No completion fact, current pointer, raw asset, package or schema definition is mutated.
+- No mutable failure state, compatibility writer, raw exception persistence, parameter bloat,
+  redundant post-write verification, logging change or negative-form API was introduced.
+
+DoneClaim: WP6 Todo 7 is complete. The catalog now has one typed append-only diagnostic service for
+pre-identity, Work, WorkVersion, processing and expansion subjects; durable values are centrally
+redacted and bounded; latest/history filters are deterministic; malformed rows project as safe
+corruption diagnostics; completion facts remain byte-identical; focused/legacy/catalog/facts tests,
+merged Pyright/LSP/architecture, manual DB-byte/output/exception scans, Python 3.10 parse, scoped LOC
+and cleanup all pass. Todo 8, 11, 25 and 28 may proceed to independent verification/cutover.
+
+Verifier repair - valid oversized historical JSON (2026-07-25)
+
+Repair scope
+- Edited only src/sciretriever/catalog/diagnostics.py, tests/test_diagnostics_wp6.py and this Todo 7
+  evidence file. Concurrent Todo 10, plans, state, schema, completion and commit history were untouched.
+- Historical details_json is now untrusted at the read boundary even when json.loads succeeds.
+  Every row is shape-parsed, rerun-parsed, passed through redact_diagnostic_details, canonically
+  encoded and checked against MAX_DIAGNOSTIC_DETAILS_BYTES before projection.
+- Valid bounded history retains its original failure classification and corrupted=false after
+  re-redaction. Malformed JSON, oversized raw JSON, or an oversized sanitized canonical form returns
+  the deterministic fixed catalog/review corruption projection. No stored row or completion fact is
+  rewritten.
+
+Exact failing-first and green evidence
+- RED command: uv run --frozen python -m unittest
+  tests.test_diagnostics_wp6.DiagnosticWp6Tests.test_valid_oversized_historical_details_project_as_bounded_safe_corruption
+- RED result: Ran 1; FAILED at assertTrue(projected[0].corrupted): False is not true. The directly
+  inserted syntactically valid canonical JSON exceeded 5000 bytes and contained literal
+  SECRET-SENTINEL, a signed URL, absolute runtime path, Authorization header and provider payload.
+- GREEN same command after the read-boundary repair: Ran 1; OK.
+- Final focused command run twice independently: uv run --frozen python -m unittest discover -s
+  tests -p 'test_diagnostics_wp6.py'. Each run: Ran 7; OK.
+- Added a second raw valid bounded-history case proving read-time re-redaction without corruption and
+  byte-for-byte preservation of the stored historical JSON.
+
+Legacy and static verification
+- test_diagnostics.py: Ran 4; OK. test_redaction.py: Ran 6; OK.
+- test_catalog_schema_wp6.py: Ran 11; OK.
+- test_completion_facts_wp5.py: Ran 7; OK.
+- test_completion_facts_alignment_wp5.py: Ran 5; OK.
+- uv run --frozen pyright src/sciretriever tests scripts: 0 errors, 0 warnings, 0 informations.
+- LSP diagnostics: clean for catalog/diagnostics.py and tests/test_diagnostics_wp6.py after final edit.
+- uv run --frozen python scripts/harness.py architecture: passed.
+- Python 3.10 grammar parse via ast.parse(feature_version=(3, 10)): passed for both changed Python
+  files. A python3.10 executable is not installed in this environment, so interpreter execution was
+  not available.
+- Pure LOC: catalog/diagnostics.py 175; tests/test_diagnostics_wp6.py 219. Both remain <=250.
+- Supplemental no-excuse audit reported seven existing-project-style findings in diagnostics.py
+  (three generic TypeError contracts and four Mapping[str, object]/values annotations); merged
+  project Pyright and repository architecture gates remain clean, and no unrelated type-contract
+  refactor was made in this repair.
+
+Manual real-SQLite/WAL/output evidence
+- A disposable real catalog received three direct historical rows with constraints bypassed only for
+  injection: malformed >5 KB, valid canonical >5 KB, and valid bounded. The payloads included literal
+  SECRET-SENTINEL, signed URL, absolute path, Authorization header and provider payload.
+- Driver result: {"bounded_historical_corrupted":false,"corruption_count":2,
+  "facts_unchanged":true,"filter_count":3,"latest_count":1,"malformed_corrupted":true,
+  "max_projected_bytes":387,"output_secret_absent":true,"oversized_corrupted":true,
+  "raw_db_retains_untrusted_history":true,"stored_history_unchanged":true}.
+- The raw DB/WAL scan intentionally finds the injected marker because immutable history is not
+  rewritten. The service projection/output scan is marker-free; the oversized and malformed rows are
+  fixed safe corruption records, while the bounded row is re-redacted and remains non-corrupt.
+- Query filtering still returns all three matching history rows and latest applies after filters.
+  CompletionFactsRepository snapshots compare equal before and after injection/query.
+
+Adversarial cleanup
+- malformed_input: fixed bounded corruption projection; valid_oversized: fixed bounded corruption
+  projection; valid_bounded_secret: re-redacted non-corrupt projection.
+- stale_state/filter_ordering: existing history/filter/latest assertions and manual 3/1 counts pass.
+- untrusted_external_text: sentinel, signed path/query, header, absolute path and payload are absent
+  from all projected JSON; maximum observed projection was 387 bytes versus the 4096-byte bound.
+- misleading_success: raw stored strings were compared byte-for-byte, DB/WAL bytes were scanned,
+  completion facts were compared and output was independently serialized/scanned.
+- flaky_twice/hung_bounded: final focused suite passed twice; every command completed within 120 s.
+- generated_cleanup: /tmp and repository scans found no sciretriever-wp6-* artifacts; no script,
+  catalog, capture, build, dist, dependency, lockfile, plan, state, commit or environment artifact was
+  created.
+
+DoneClaim: WP6 Todo 7 verifier repair is complete. All persisted historical diagnostic details are
+treated as untrusted on read, centrally re-parsed, re-redacted, canonically re-bounded and safely
+projected. The exact valid >5 KB SECRET-SENTINEL counterexample is RED then GREEN; bounded valid
+history and deterministic filter ordering are preserved; immutable stored history and completion
+facts are unchanged; focused/legacy/schema/facts tests, merged Pyright/LSP/architecture, Python 3.10
+grammar, LOC, real SQLite/WAL/output adversarial scans and cleanup pass. Todo 7 is ready for the same
+verifier role to recheck.

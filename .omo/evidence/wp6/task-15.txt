@@ -1,0 +1,118 @@
+WP6 Todo 15 evidence
+date=2026-07-26
+scope=evidence-backed reversible Author merge only
+
+CHANGED FILES
+- src/sciretriever/catalog/author_curation.py
+- src/sciretriever/catalog/author_curation_state.py
+- src/sciretriever/catalog/curation_contracts.py
+- src/sciretriever/catalog/models.py
+- src/sciretriever/catalog/records.py
+- src/sciretriever/catalog/library.py
+- src/sciretriever/catalog/__init__.py
+- tests/test_author_curation_wp6.py
+- tests/test_author_curation_failpoints_wp6.py
+- .omo/evidence/wp6/task-15.txt
+
+BASELINE CHARACTERIZATION
+command=uv run --frozen python -m unittest discover -s tests -p 'test_author_curation_wp6.py'
+result=PASS Ran 1 test
+observed=authorship rows persist deterministic position/id order and preserve affiliation strings byte-for-byte, including surrounding spaces and embedded newline
+
+RED
+command=uv run --frozen python -m unittest discover -s tests -p 'test_author_curation_wp6.py'
+result=FAIL exit 1
+reason=ModuleNotFoundError: sciretriever.catalog.author_curation; no Author merge handler existed
+production_edits_before_red=false
+
+GREEN DIRECT AND REPEAT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_author_curation*_wp6.py'
+result=PASS Ran 12 tests
+repeat=5 consecutive runs x 12 tests, all PASS
+asserted=exact source/target IDs; normalized compatible ORCID; bounded two-item manual evidence; source tombstone; append-only lineage; operation/audit ID equality; all authorship IDs/positions/roles/correspondence/affiliation bytes retained; deterministic same-version collision retains both ordered links; exact undo; stale apply/undo; substituted audit evidence; self/unknown/merged/repeat/no-op paths; malformed/secret/path/URL evidence; concurrent exactly-one undo child
+
+FAILPOINTS
+families=author_lineage,authorships,authors,audit
+apply=apply:before/after for every family plus before/after audit
+undo=undo:before/after in reverse family order plus before/after audit
+result=every injected failure restored byte-identical authors,authorships,author_merge_lineage,curation_operations state
+
+REGRESSIONS
+Todo11=uv run --frozen python -m unittest discover -s tests -p 'test_curation*_wp6.py'; PASS 10
+Todo12=uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'; PASS 21
+Todo13=uv run --frozen python -m unittest discover -s tests -p 'test_preferred_curation_wp6.py'; PASS 5
+Todo14=uv run --frozen python -m unittest discover -s tests -p 'test_manual*_curation_wp6.py'; PASS 12
+WP1_identity=patched only sciretriever.catalog.engine.require_staged_write_override because parent marker is absent; PASS 7
+WP6_schema=same scoped patch; PASS 11
+
+STATIC AND GOVERNANCE
+pyright=PASS 0 errors,0 warnings,0 informations
+compileall=PASS
+architecture=PASS
+documentation=PASS
+governance_changed_python_max_pure_loc_250=PASS
+no_excuse_rules=PASS 5 scoped files
+git_diff_check=PASS
+pure_loc=author_curation.py:153;author_curation_state.py:26;curation_contracts.py:110;test_author_curation_wp6.py:230;test_author_curation_failpoints_wp6.py:111
+LSP=directory scan reported 0 files with errors but retained two stale reportMissingImports entries for newly created untracked modules; standalone Pyright resolves both modules and is clean
+
+MANUAL REAL SQLITE QA
+surface=public CatalogEngine, AuthorMergeHandler, CurationOperationOwner over TemporaryDirectory SQLite
+orcid_path=source NULL,target 0000-0002-1825-0097 accepted
+collision_snapshot=reassigned:2:collisions:1
+merged_order=positions 0,1 both target Author; source affiliation exact '  Source bytes  '; target affiliation exact 'Target bytes'
+tombstone=status merged,merged_into target,source ORCID unchanged NULL
+lineage_operation_id_equals_audit_id=true
+undo=source link restored to exact source ID at position 0; target link remained position 1; affiliations byte-identical; undo_children=1
+rejections=fresh no-ORCID/name-only pair -> missing_evidence; distinct ORCIDs -> orcid_conflict
+stale_apply_and_stale_undo=direct focused real-SQLite tests PASS with zero misleading audit
+failpoint_values=all author_lineage/authorships/authors/audit before+after points tested against byte state
+cleanup=both TemporaryDirectory roots removed
+
+ULTRAQA NINE CLASSIFICATIONS
+1 functional=PASS compatible ORCID and explicit manual-evidence apply/undo
+2 identity_safety=PASS conflict,name-only,self,unknown,merged,cycle/repeat rejected
+3 persistence=PASS source tombstone and append-only lineage retained
+4 ordering_provenance=PASS authorship IDs,positions and affiliation bytes preserved through collision and undo
+5 concurrency=PASS stale load/apply,stale undo and exactly-one concurrent undo child
+6 atomicity=PASS all-family apply/undo failpoints byte-rollback
+7 audit_integrity=PASS handler/audit/lineage operation ID consistency and evidence substitution rejection
+8 boundary_security=PASS bounded SafeSnapshot rejects malformed,secret,path-like and URL-like evidence
+9 regression_governance=PASS focused repeats,Todo11-14,patched WP1/schema,Pyright,architecture,docs,LOC,diff/manual cleanup
+
+HARNESS ENVIRONMENT RECEIPT
+quick=FAIL only two existing test_cli setup errors at absent parent .workspace-root; 18 harness tests/docs/architecture/compile passed
+full=FAIL tests Ran 852 with 326 errors and 4 failures dominated by the same write-admission marker absence; typecheck,docs,architecture,compile,wheel build and wheel contents passed
+constraint=parent .workspace-root was absent and was not created
+generated_cleanup=full-created build/,dist/,src/sciretriever.egg-info removed
+
+SCOPE AND DIRTY WORKTREE
+unrelated_changes_preserved=true
+plan_ledger_boulder_modified=false
+todo16_plus_modified=false
+dependencies_lockfile_readme_specs_modified=false
+git_operations=inspection only; no commit,push,rebase,stage,reset,checkout
+temporary_repository_artifacts_remaining=false
+
+ARCHITECTURAL SELF REVIEW
+single_responsibility=author_curation owns Author merge policy; author_curation_state owns complete mutable Author footprint
+boundary_purity=SafeSnapshot validates evidence once; internal handler stores typed immutable state
+variant_and_escape_hatches=no new Any,cast,type-ignore,broad-except or non-exhaustive tagged dispatch
+defensive_layers=none added beyond external IDs,persisted ORCID,evidence and audit boundaries
+tests=reverting the handler/schema/evidence binding fails direct tests
+parameter_budget=public load has catalog plus three domain inputs; existing project curation loader shape retained
+
+BLOCKERS
+- Repository-wide quick/full cannot be green without the parent workspace marker, which the request explicitly forbids creating. This predates Todo 15 and is reproduced by unmodified tests.
+- LSP's persistent workspace index did not resolve the two newly created untracked modules despite clean standalone Pyright and executable imports.
+
+DONECLAIM
+todo=15
+status=IMPLEMENTED_AND_SCOPED_VERIFIED
+acceptance=compatible merge/order/collision/tombstone/lineage/audit/exact undo/stale/failpoints all PASS
+focused_repeat=true
+manual_sqlite=true
+cleanup=true
+forbidden_edits=false
+repository_gate_exception=absent .workspace-root only
+ready_for_independent_verifier=ses_065718f26ffecoa8DnsdJ96SWU

@@ -1,0 +1,146 @@
+WP6 Todo 13 evidence
+date=2026-07-26
+scope=audited preferred WorkVersion set/clear, deterministic clear recomputation, manual immunity, guarded undo, and unaudited public API removal only
+
+CHANGED FILES
+- src/sciretriever/catalog/preferred_curation.py
+- src/sciretriever/catalog/library.py
+- tests/test_preferred_curation_wp6.py
+- tests/test_catalog_wp1.py
+- tests/test_work_curation_wp6.py
+- tests/download_wp3_fixture.py
+- .omo/evidence/wp6/task-13.txt
+
+BASELINE CHARACTERIZATION BEFORE PRODUCTION EDIT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_preferred_curation_wp6.py'
+exit=0
+observed=Ran 1 test; OK
+asserted=existing automatic preference was independent of later observation order and selected the newer formal publication ahead of an older formal version despite provider precedence
+
+RED AFTER NEW TESTS, BEFORE PRODUCTION EDIT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_preferred_curation_wp6.py'
+exit=1
+observed=one loader error: ModuleNotFoundError: No module named 'sciretriever.catalog.preferred_curation'
+reason=explicit audited preferred set/clear handler contract did not exist
+
+GREEN DIRECT AND REPEAT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_preferred_curation_wp6.py'
+first_exit=0
+first_observed=Ran 5 tests; OK
+repeat_exit=0
+repeat_observed=Ran 5 tests; OK
+final_repeat_exit=0
+final_repeat_observed=Ran 5 tests; OK
+asserted=deterministic baseline; audited set/new-observation/clear/undo; exact before/after pointer and manual flag; malformed/unknown/foreign/merged IDs; set and clear no-op; load/apply state drift; stale undo; all works/audit apply and undo failpoints
+
+IMPLEMENTATION AND OWNERSHIP
+- PreferredSetHandler and PreferredClearHandler are frozen connection-level CurationHandler implementations consumed only through CurationOperationOwner.
+- Each load captures exact preferred pointer, manual flag, and updated_at footprint plus its SHA256; owner admission rejects state drift before mutation.
+- Set marks the selected same-Work version manual. Automatic ingestion calls shared recompute_preferred, which returns without mutation while manual is active.
+- Clear first removes the manual flag and invokes the same deterministic FR-1 selector used by automatic ingestion.
+- Compensation restores the exact prior pointer, flag, and timestamp. Todo 11 validates the post-state hash before undo and exact before-state hash after compensation.
+- WorkRepository.set_preferred and WorkRepository._recompute_preferred were deleted. Both ingestion paths use the shared connection helper; repository-wide search found no def/call of set_preferred or _recompute_preferred.
+- The sole affected WP3 test fixture now establishes manual preference through CurationOperationOwner, so no test-supported unaudited public mutation API remains.
+
+FOCUSED AND AFFECTED REGRESSIONS
+command=uv run --frozen python -m unittest discover -s tests -p 'test_curation*_wp6.py'
+exit=0
+observed=Ran 10 tests; OK (Todo 11 owner/rollback)
+command=uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+exit=0
+observed=Ran 21 tests; OK (Todo 12 review/merge/regroup/stale/failpoints)
+command=uv run --frozen python -c '[patched admission; discover test_catalog_wp1.py]'
+exit=0
+observed=Ran 9 tests; OK
+command=uv run --frozen python -c '[patched admission; discover test_identity.py]'
+exit=0
+observed=Ran 7 tests; OK
+command=uv run --frozen python -c '[patched admission; discover test_download_wp3.py]'
+exit=0
+observed=Ran 6 tests; OK
+admission_seam=unittest.mock.patch('sciretriever.catalog.engine.require_staged_write_override'); no .workspace-root was created
+
+MANUAL TEMPORARY SQLITE QA
+command=uv run --frozen python - <<'PY' [real CatalogEngine/SQLite driver under existing patched admission seam and TemporaryDirectory] PY
+exit=0
+preprint_id=1c16f9ea-8315-4112-ab84-3b308384bc5f
+formal_id=34a48062-879d-41fd-a120-42cf965615bd
+after_set=["1c16f9ea-8315-4112-ab84-3b308384bc5f",1,1]
+after_observation=["1c16f9ea-8315-4112-ab84-3b308384bc5f",1,1]
+after_clear=["34a48062-879d-41fd-a120-42cf965615bd",0,2]
+after_undo=["1c16f9ea-8315-4112-ab84-3b308384bc5f",1,3]
+set_operation=set_preferred
+clear_operation=clear_preferred
+undo_of_matches=true
+failure_code=foreign_version
+failure_audit_delta=0
+cleanup_removed=true
+
+ULTRAQA NINE-CLASS CLASSIFICATION
+1_malformed_or_foreign_ids=PASS; malformed, unknown Work, unknown version and foreign version reject before transaction/audit
+2_merged_work=PASS; set/clear load rejects non-active merged Work with code merged_work and zero audit
+3_concurrent_state_drift=PASS; load-time footprint mismatch raises CurationStaleError before first step and preserves the independent pointer/manual state
+4_stale_undo=PASS; post-apply pointer drift makes after-hash mismatch, raises CurationStaleError and appends no undo child
+5_noop_or_duplicate=PASS; clear while automatic and duplicate set raise CurationNoChangeError with zero misleading audit row
+6_failpoints=PASS; apply/undo before+after works and audit each rollback pointer, flag, timestamp, and audit bytes
+7_dirty_worktree_preservation=PASS; no reset/checkout/revert/stage/commit/push; Todos 1-12 and unrelated user changes retained
+8_misleading_success_output=PASS; invalid/no-op/stale paths raise typed failures and produce no success/audit record
+9_deterministic_repeat=PASS; focused suite passed three observed green runs and clear uses one stable total ordering
+prompt_injection=not_applicable; preferred curation accepts UUID selectors and allowlisted SafeSnapshot evidence, and executes no untrusted prose
+
+STATIC, ARCHITECTURE, DOCS, LOC, DIFF
+command=uv run --frozen pyright src/sciretriever tests scripts
+exit=0
+observed=0 errors, 0 warnings, 0 informations
+command=uv run --frozen python scripts/harness.py architecture
+exit=0
+observed=[harness] architecture: passed
+command=uv run --frozen python scripts/harness.py docs
+exit=0
+observed=[harness] documentation: passed
+command=uv run --frozen python -m compileall -q src tests scripts main.py
+exit=0
+observed=no output
+command=uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json
+exit=0
+observed=no violations; immutable Todo 1 baseline receipt accepted
+tokenize_physical_v1=src/sciretriever/catalog/preferred_curation.py:132;src/sciretriever/catalog/library.py:1157;tests/test_preferred_curation_wp6.py:213;tests/test_catalog_wp1.py:224;tests/test_work_curation_wp6.py:219;tests/download_wp3_fixture.py:149
+loc_interpretation=new/changed baseline-small files are <=250; grandfathered library.py strictly decreased and contains no new symbol, as proven by governance gate
+command=uv run programming/scripts/python/check-no-excuse-rules.py src/sciretriever/catalog/preferred_curation.py tests/test_preferred_curation_wp6.py
+exit=0
+observed=no violations in new production/direct-test modules
+fixture_audit=download_wp3_fixture.py retains a pre-existing asyncio import; Todo 13 added no asyncio code and Pyright/governance are green
+command=git diff --check
+exit=0
+observed=no output
+
+QUICK GATE ENVIRONMENT RECEIPT
+command=uv run --frozen python scripts/harness.py quick
+exit=1
+observed=documentation, architecture, compile, 18 harness tests passed; 2 pre-existing test_cli.py cases failed before task behavior because parent /workplace/home/duanjw/project lacks a valid .workspace-root marker
+failure_scope=test_discover_writes_real_manifest_with_fake_provider;test_preflight_is_read_only_and_indirect_provider_is_not_checked
+constraint=.workspace-root was not created; affected writable regressions used only the established patched admission seam
+
+CLEANUP AND SCOPE
+temporary_catalog_root_removed=true
+repository_generated_runtime_resources=false
+workspace_marker_created=false
+plan_ledger_boulder_modified_by_task13=false
+todo14_plus_modified=false
+dependencies_or_lockfile_modified=false
+readme_or_specs_modified=false; no public CLI/config/schema behavior was added in Todo 13
+git_writes=false; inspection only, no stage/commit/push/rebase/reset/checkout
+dirty_worktree_preserved=true
+
+RESIDUAL BLOCKERS
+- Repository-wide quick/full remain blocked by the pre-existing absent parent workspace marker. All task-scoped tests, affected patched-admission regressions, Pyright, architecture, docs, compile, LOC governance, diff, and manual SQLite QA are green.
+
+DONECLAIM
+todo=13
+status=done_with_environment_blocker
+acceptance=set survives observations;clear deterministically recomputes;undo restores exact pointer/flag;stale undo rejects;one audit per successful action;no unaudited public mutation API
+scoped_verification=confirmed
+manual_sqlite_qa=confirmed
+cleanup=confirmed
+forbidden_state_untouched=confirmed
+independent_verifier_ready=true

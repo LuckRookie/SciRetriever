@@ -1,0 +1,104 @@
+WP6 TODO 19 - VERIFIED IMMUTABLE PACKAGE SELECTION AND RE-EXPORT
+Date: 2026-07-26
+
+Scope and changed files
+- src/sciretriever/catalog/package_versions.py
+- src/sciretriever/catalog/packages.py
+- src/sciretriever/catalog/__init__.py (repository import only; concurrent edits preserved)
+- src/sciretriever/packaging/exporter.py
+- src/sciretriever/packaging/__init__.py
+- tests/test_package_export_wp6.py
+- .omo/evidence/wp6/task-19.txt
+- No core/package.py, reading projection, library output, CLI, docs, dependency, lockfile,
+  plan, ledger, Boulder or .workspace-root edit.
+
+TDD characterization / RED / GREEN
+- Existing package publisher and current-analysis tests established replay, changed-current
+  monotonic versioning, old-hash loading and concurrent publisher convergence before edits.
+- RED: uv run --frozen python -m unittest discover -s tests -p
+  'test_package_export_wp6.py'
+- RED failed only because sciretriever.packaging.PackageExporter did not exist.
+- GREEN direct and repeated: PASS, Ran 5 tests, twice.
+- Focused package pattern after final refactor: PASS, Ran 23 tests.
+- Full current-analysis regression: PASS, Ran 20 tests; its real replacement scenario proves
+  unchanged replay, current revision replacement, versions 1 -> 2, distinct package hashes,
+  failed registration recovery and exact old-hash loading.
+
+Implemented behavior
+- PackageVersionRepository selects latest or exact WorkVersion/version; PackageExporter
+  additionally requires the exact selector hash to match the selected catalog record.
+- Every selected package is loaded through PackagePublisher.load_verified; stored bytes are
+  independently verified by DerivedArtifactStore and must equal package canonical JSON bytes.
+- Export copies those exact canonical bytes. It never reconstructs package content, strips
+  intrinsic references, normalizes, reads internal library projections or mutates a snapshot.
+- Destination parent is opened without symlink following and directory-locked; destination is
+  revalidated immediately before and after a fsynced owner-only temporary write, then atomically
+  replaced and parent-fsynced. Symlink, hardlink, non-regular, catalog and sidecar targets reject.
+- Concurrent identical exports serialize at the real parent directory and converge on identical
+  bytes. Package creation remains exclusively in the existing PackagePublisher material-hash
+  lock path; exporter creates no package version.
+
+Manual TemporaryDirectory lifecycle QA
+- Used the real AnalysisWP44 temporary SQLite, RawAssetStore and DerivedArtifactStore fixture.
+- Published analysis/package version 1, replayed unchanged at version 1, replaced current
+  analysis with fixture-v2, and existing PackagePublisher created version 2.
+- Exact version-1/hash export after version 2 creation matched the original bytes exactly.
+- Old canonical-byte SHA-256 remained
+  e0ce15e8cb4539e303a620a8a4e77e42f2d1cf0e2fcb8a2ef9b26cd103c8bdfe.
+- Old embedded package hash remained
+  7af9e057d19d7e99012ab9ff0bbbb1d43bdc6418aecf114dc8ef2fb74a13f4ae.
+- Four concurrent latest exports converged on version 2 and one exact byte value.
+- A write-time hardlink target and catalog/WAL/SHM/journal values all rejected; the frozen
+  contract suite separately exercised symlink, hardlink, sidecar and missing-parent rejection.
+- Mutated stored version-2 bytes/mode rejected and produced no export.
+- Driver printed workspace_root_created=false and TemporaryDirectory cleanup completed.
+- First driver attempt stopped at the intentional missing-marker guard before fixture creation;
+  rerun used the established in-process repository-discovery override, with all writes in /tmp.
+
+Nine ultraqa classes
+1. Functionality: latest and paired exact version/hash select and export the expected snapshot.
+2. Boundary: missing, wrong-version and wrong-hash selectors fail closed without output.
+3. Security: package bytes come only from verified immutable storage; internal paths are absent
+   from the request/result API and errors use stable packaging messages.
+4. Filesystem: parent and target are revalidated under a directory lock; symlink, hardlink,
+   non-regular, catalog sidecar and missing-parent values reject.
+5. Data integrity: stored bytes must be canonical; old bytes and both old hashes remain exact.
+6. Determinism: latest/exact/repeated exports are byte-identical to immutable stored bytes.
+7. Compatibility: package repository, complete package pattern and analysis regressions pass.
+8. Concurrency/replay: publisher create/replay converges; four identical exports converge.
+9. Maintainability: repository responsibilities split below 250 pure LOC; Pyright, LSP source
+   diagnostics, compile, architecture, docs, no-excuse, LOC and diff gates pass.
+
+Static and governance evidence
+- Fresh scoped and full Pyright: 0 errors, 0 warnings, 0 informations.
+- LSP: package_versions.py, packages.py and exporter.py clean. The persistent LSP retained stale
+  missing-import diagnostics in import aggregators for the new modules; fresh full Pyright resolves
+  both modules with zero diagnostics.
+- compileall: PASS.
+- uv run --frozen python scripts/harness.py architecture: PASS.
+- uv run --frozen python scripts/harness.py docs: PASS.
+- Programming no-excuse audit on new/owned modules and test: no violations.
+- tokenize-physical-v1 pure LOC: package_versions.py=132, packages.py=183,
+  exporter.py=97, packaging/__init__.py=9, publisher.py=240,
+  test_package_export_wp6.py=117. Publisher is in the warning band and gained no logic.
+- git diff --check: PASS.
+- quick harness passed documentation, architecture, compile and harness tests, then failed only
+  the same two unrelated CLI fixtures because .workspace-root is intentionally absent.
+- No generated build/dist artifact or temporary manual-QA root remains.
+
+Architectural self-review
+- package_versions.py owns immutable version selection/registration; packages.py owns sources;
+  exporter.py owns verified exact-byte destination publication.
+- PackageExportResult exposes only package_version, package_sha256 and canonical bytes; it does
+  not expose the catalog record or storage path, with direct non-exposure assertions.
+- No untyped package data crosses the boundary, no package reconstruction or variant dispatch was
+  added, no type suppression/Any/cast/broad exception/logging/fallback exists in new code.
+- No new function exceeds three parameters except the pre-existing register_published contract,
+  moved unchanged during the responsibility split and still consumed only by PackagePublisher.
+- Every introduced behavior is locked by a direct failing-then-passing test and real lifecycle QA.
+
+DoneClaim: WP6 Todo 19 is complete. Latest and paired exact version/hash package selection,
+publisher/storage verification, canonical-byte exact atomic re-export, replay, changed-current
+monotonic publication through the existing publisher, old snapshot immutability, tamper and unsafe
+destination rejection, and concurrent convergence are implemented and verified. Todo 18 and
+Todos 20+ were not touched; orchestrator state was not edited; no marker, commit or push occurred.

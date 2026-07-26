@@ -1,0 +1,84 @@
+WP6 Todo 1 - target contracts and baseline
+
+baseline_commit=23d1539f120efbb0a078cbf2af095bec4d70f8b2
+baseline_pure_loc_sha256=e97116426b17687d2cd780c45d305ec3b3f17a8e41b0fd252152d07a66242b1f
+baseline_pure_loc_files=309
+baseline_pure_loc_bytes=19606
+baseline_pure_loc_algorithm=tokenize-physical-v1
+baseline_python=3.12
+
+Pre-edit commit pin
+command: git rev-parse --verify 'HEAD^{commit}'
+exit: 0
+stdout: 23d1539f120efbb0a078cbf2af095bec4d70f8b2
+assertion: output is one lowercase 40-hex commit object ID and was captured before any product or test edit.
+
+Commit object validation
+command: git cat-file -e '23d1539f120efbb0a078cbf2af095bec4d70f8b2^{commit}'
+exit: 0
+assertion: baseline_commit resolves to a commit.
+
+Untouched WP5 full-harness baseline
+command: uv run --frozen python scripts/harness.py full
+exit: 0
+result: Ran 682 tests in 42.748s; OK; documentation, architecture, compile, pyright, tests, wheel contents and wheel all passed.
+assertion: this run completed before tests/test_wp6_contracts.py was created; the observed count is 682, not an assumed count.
+hung_commands probe: command completed within the 600-second tool timeout.
+misleading_success_output probe: success is based on process exit 0 and unittest's parsed "Ran 682 tests" result, not harness prose alone.
+
+Baseline characterization and expected-red contract suite
+command: uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'
+run_1_exit: 1
+run_2_exit: 1
+run_1_result: Ran 8 tests in 0.010s; failures=7.
+run_2_result: Ran 8 tests in 0.009s; failures=7.
+passing_test: test_current_fact_and_recovery_contracts_remain_available
+failing_tests: test_config_check_modes_are_frozen; test_curation_action_vocabulary_is_frozen; test_final_product_command_tree_is_explicit; test_graph_direction_and_depth_contracts_are_frozen; test_product_failure_stage_reason_and_action_enums_are_frozen; test_progress_count_vocabulary_is_frozen; test_reading_and_package_export_modes_are_frozen
+failure_summary: missing WP6 commands config, expand and failures; missing WP6 symbols ConfigCheckMode, CurationAction, GraphDirection, ProductFailureStage, ProgressCount and ExportMode.
+assertion: both runs have exactly the same seven failing test names; all failures are explicit absent WP6 commands/symbols, with no import-time, syntax, discovery or fixture/setup failure.
+flaky_tests probe: repeated focused runs produced identical failing test names and counts.
+
+Manual Bash QA
+command: uv run --frozen sciretriever --version
+exit: 0
+binary_observable: stdout is exactly 0.1.0.
+command: uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'
+exit: 1
+binary_observable: one baseline characterization passes and seven named missing-WP6 contracts fail; unittest process exit is nonzero.
+
+Independent LOC recount and digest
+command: uv run --frozen python -c '<Python 3.12 pathlib/git-ls-files/tokenize recount; canonical json.dumps ensure_ascii=False separators=(",", ":") sort_keys=True; assert manifest bytes and files equal rebuilt values; print count/bytes/SHA>'
+exit: 0
+stdout: files=309 bytes=19606 sha256=e97116426b17687d2cd780c45d305ec3b3f17a8e41b0fd252152d07a66242b1f exact_bytes=true
+assertion: every sorted regular non-symlink tracked *.py path was read as bytes, tokenized by Python 3.12 tokenize, and counted by unique physical lines intersecting tokens other than ENCODING, NL, NEWLINE, INDENT, DEDENT, COMMENT and ENDMARKER. Decode/tokenization errors are fatal. Rebuilding twice yields the same bytes and digest.
+stale_state probe: generation and independent recount both produced 309 files, 19606 bytes and the identical SHA-256 above.
+
+Malformed-input adversarial probe
+command: uv run --frozen python -c '<load manifest as UTF-8 JSON, replace algorithm with malformed, apply exact schema/version/commit/python/algorithm predicate, assert predicate is false>'
+exit: 0
+stdout: malformed_manifest_rejected=true
+assertion: a malformed algorithm cannot satisfy the strict baseline-manifest contract.
+
+Scoped quality checks
+command: git diff --check -- tests/test_wp6_contracts.py .omo/evidence/wp6/baseline-pure-loc.json .omo/evidence/wp6/task-1.txt
+exit: 0
+diagnostics: tests/test_wp6_contracts.py has no LSP diagnostics.
+test_file_pure_loc: 121 by tokenize-physical-v1.
+
+Dirty-worktree receipt
+pre_status: M .omo/boulder.json; ?? .omo/drafts/wp6-product-closeout.md; ?? .omo/plans/wp6-product-closeout.md
+post_status_expected_existing: M .omo/boulder.json; ?? .omo/drafts/wp6-product-closeout.md; ?? .omo/plans/wp6-product-closeout.md
+post_status_task_scope: ?? tests/test_wp6_contracts.py; ?? .omo/evidence/wp6/baseline-pure-loc.json; ?? .omo/evidence/wp6/task-1.txt
+assertion: existing user/planning files were not edited; task writes are limited to the three authorized paths.
+
+Generated-artifact cleanup
+action: removed full-harness build/ and dist/ output after verification.
+receipt: no build/, dist/, temporary manifest, runtime catalog, downloaded asset or additional virtual environment is retained by Todo 1.
+
+Adversarial applicability
+repeated_interruptions: not applicable; Todo 1 has no long-running product flow.
+prompt_injection: not applicable; no untrusted text enters an LLM.
+
+Risks
+- The contract suite is intentionally red until Todos 2-30 implement the approved WP6 command and symbol surface.
+- Existing uncommitted planning/orchestrator files remain outside this task and must be preserved by downstream workers.

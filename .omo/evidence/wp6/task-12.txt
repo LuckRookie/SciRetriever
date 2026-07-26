@@ -1,0 +1,301 @@
+WP6 Todo 12 implementation evidence
+Date: 2026-07-25
+
+Scope and ownership
+- Added typed, bounded deterministic review query and audited identifier-review resolution.
+- Added reversible Work merge and explicit WorkVersion regroup handlers through CurationOperationOwner.
+- Added complete mutable topology footprints covering Works, WorkVersions, identifiers, manual tags, reference targets, review links, observations, asset links, current analyses, and package snapshots.
+- Work merge lineage and curation audit remain append-only evidence; undo restores mutable topology and appends exactly one immutable undo child.
+- No CLI, Author merge, metadata/tag mutation, Todo 13-16 behavior, README, progress, specs, plan, ledger, or boulder edits.
+
+Owned files
+- src/sciretriever/catalog/curation.py
+- src/sciretriever/catalog/curation_contracts.py
+- src/sciretriever/catalog/review_curation.py
+- src/sciretriever/catalog/work_curation.py
+- src/sciretriever/catalog/work_curation_state.py
+- tests/test_work_curation_wp6.py
+- tests/work_curation_failpoint_cases.py
+- tests/work_curation_stale_cases.py
+- tests/curation_wp6_fixture.py
+- .omo/evidence/wp6/task-12.txt
+
+Baseline characterization before production edits
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+Result: PASS, 3 tests. Characterized distinct Work/WorkVersion identifiers, formal preferred recomputation, and version ownership of observation/asset/current/package families.
+
+RED
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+Result: FAIL, exit 1, one loader error.
+Intended missing-contract reason: ModuleNotFoundError: No module named 'sciretriever.catalog.review_curation'.
+The same test import also named the absent WorkMergeHandler and WorkVersionRegroupHandler contracts. No production edit preceded this RED.
+
+GREEN and deterministic repeat
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+Result: PASS, 13 tests in 1.780s.
+Repeat 1: PASS, 13 tests in 1.727s.
+Repeat 2: PASS, 13 tests in 1.621s.
+Post-QA-fix/final matrix repeats: PASS, 14 tests in 1.547s and PASS, 14 tests in 2.067s.
+Coverage includes baseline characterization; merge/undo; regroup/undo; bounded ordered review query; resolve/undo; self, unknown, merged/no-change and stable DOI conflict guards; full-footprint stale rejection; all Work merge apply and undo failpoints.
+
+Todo 11 regressions
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_wp6.py'
+Result: PASS, 8 tests in 0.356s, including concurrent undo exactly-one-child.
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_rollback_wp6.py'
+Result: PASS, 2 tests in 0.135s.
+
+Failpoint coverage
+- Merge families: work_lineage, work_versions, work_identifiers, manual_work_tags, reference_targets, review_links, works, audit.
+- Every apply:before/apply:after and undo:before/undo:after point was injected independently, including the distinct identity_reviews family.
+- Each injected failure compared real SQLite works, work_versions, work_merge_lineage and curation_operations bytes/shapes with its pre-invocation state and observed exact rollback.
+- Regroup uses work_versions/works/audit families already covered by the merge matrix; review resolution uses the independently tested identity_reviews family and Todo 11 audit rollback contract.
+
+Affected regression observations
+- test_identity.py, test_catalog_wp1.py, test_catalog_schema*.py, package publication/repository, and analysis modules were invoked.
+- They fail before fixture setup with the same pre-existing completed-Todo workspace admission error: no valid .workspace-root marker exists in this checkout, so create_catalog_engine rejects writes. This is unrelated to Todo 12; no workspace/governance behavior or old tests were modified.
+- quick harness likewise reaches 18 initial passes, then fails only two test_cli.py cases at that same missing workspace marker admission boundary. Architecture/docs/compile portions pass.
+
+Static and governance gates
+Command: uv run --frozen pyright src/sciretriever tests scripts
+Result: PASS, 0 errors, 0 warnings, 0 informations.
+Command: uv run --frozen python scripts/harness.py architecture
+Result: PASS, [harness] architecture: passed.
+Command: uv run --frozen python scripts/harness.py docs
+Result: PASS, [harness] documentation: passed.
+Command: uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json
+Result: PASS, exit 0, no output; immutable Todo 1 baseline receipt accepted.
+Command: python -m compileall -q src tests scripts main.py
+Result: PASS, exit 0.
+Command: git diff --check
+Result: PASS, exit 0.
+
+Exact tokenize-physical-v1 pure LOC
+- src/sciretriever/catalog/curation.py=185
+- src/sciretriever/catalog/curation_contracts.py=94
+- src/sciretriever/catalog/review_curation.py=89
+- src/sciretriever/catalog/work_curation.py=221
+- src/sciretriever/catalog/work_curation_state.py=56
+- tests/test_work_curation_wp6.py=215
+- tests/work_curation_failpoint_cases.py=86
+
+Manual module-level driver
+Literal invocation shape (executed from repository root):
+uv run --frozen python - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from uuid import uuid4
+from sciretriever.catalog import create_catalog_engine, initialize_catalog
+from sciretriever.catalog.curation import CurationOperationOwner, CurationRequest
+from sciretriever.catalog.review_curation import ReviewQuery, ReviewRepository
+from sciretriever.catalog.work_curation import WorkCurationConflictError, WorkMergeHandler, WorkVersionRegroupHandler
+from sciretriever.core.curation import ReviewDecision
+from sciretriever.core.snapshots import SafeSnapshot
+# Inside a patched workspace-admission boundary and TemporaryDirectory: create two Works,
+# preprint/formal versions and preferred pointers; insert an identity review, metadata
+# observation, immutable RawAsset and version link; query review; apply/inspect/undo merge;
+# apply/inspect/undo explicit regroup; attempt self merge; print cleanup receipt.
+PY
+The exact expanded invocation used the statements recorded in the agent tool transcript; no script or database was written into the repository.
+
+Observed binary/database values
+- pending_review contained exactly the inserted review UUID.
+- merge source row: status=merged, preferred=NULL, merged_into=target.
+- merge target preferred=the formal WorkVersion UUID.
+- both WorkVersions had target ownership after merge.
+- before_sha256=c97e1eb136112c756fcf7859afc6eac54fcd1de43c8ae72018ad623cedceec79
+- after_sha256=e5f262c34100d488ea4e11eefc937d0a6c25ca7cde103dae81c7b2a9981ca13a
+- immutable tuple was identical before/after merge: observation count 1; RawAsset id:sha256 unchanged with sha256=64 'a' characters; WorkVersionAsset count 1; current count 0; package count 0.
+- merge undo restored preprint->source and formal->target exact IDs and restored both original preferred pointers.
+- merge undo child count=1; append-only lineage count=1.
+- regroup moved only preprint to target; undo restored preprint to source.
+- after merge+undo+regroup+undo audit row count=4.
+- bad self-merge emitted WorkCurationConflictError.code=self_merge and audit_delta=0.
+- final output: cleanup temporary_directory_removed.
+
+Manual QA defect and correction
+- First driver found SQLite trigger rejection when undo restored source preferred before its WorkVersion owner.
+- Root fix: undo clears preferred pointers first, restores version ownership, then restores exact Work status/preferred/manual/review/timestamp state in the same critical transaction.
+- Focused tests and all static/gate checks were rerun after the fix.
+
+Cleanup receipt
+- All test and driver catalogs used TemporaryDirectory with sciretriever-* prefixes and were removed by context-manager cleanup.
+- No build/, dist/, catalog, storage, byte payload, cache, or one-off script was created in the repository by Todo 12.
+- Existing dirty worktree changes from Todos 1-11 were preserved.
+
+Security/adversarial note
+- Prompt injection is not applicable: Todo 12 treats review text/identifier evidence as bounded data and executes no untrusted text.
+- Stable identifier conflicts, self/cycle/history, unknown/merged IDs, no-change regroup, stale state, concurrent undo, and family failpoints fail with transactional zero mutation.
+
+Residual risk
+- The checkout-wide quick/full and older affected modules remain blocked by the pre-existing missing .workspace-root marker introduced outside Todo 12. Todo 12 focused suites, pyright, architecture, docs, compile, LOC and diff gates are green.
+
+Replacement-worker repair: stale load/apply admission and operation identity
+Date: 2026-07-25
+
+Independent verifier blocker
+- Verifier session ses_06617f933ffeXyzUgJk5zzftUk proved that ReviewResolutionHandler.load could observe pending, an independent committed writer could resolve/reject and change timestamps, and CurationOperationOwner.apply would overwrite that intervening resolution.
+- The same root defect applied to WorkMergeHandler and WorkVersionRegroupHandler: apply captured current state only for audit and never compared it with the handler's load-time footprint before the first family mutation.
+- WorkMergeHandler separately generated lineage operation_id while CurationOperationOwner accepted a missing or different request operation_id, so lineage and audit identity could diverge or fail only at SQLite FK commit.
+- Work merge decoded persisted identity_reviews.candidate_work_ids_json as an unchecked list during mutation.
+
+Repair RED
+- Added failing-first cases in tests/work_curation_stale_cases.py before production edits for review resolved/rejected/timestamp replacement, source WorkVersion and review-candidate topology races, regroup preferred race, missing/mismatched merge operation IDs, exact lineage/audit ID equality, and malformed/noncanonical candidate lists.
+- Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+- Result: FAIL, exit 1, Ran 28 tests; 10 intended failures included every stale apply not raising CurationStaleError, missing merge operation ID not raising CurationBoundaryError, and malformed candidate payloads not raising WorkCurationConflictError. Eight additional errors came from the first test-mixin collection shape and one schema CHECK that blocked direct corrupt-row fixture insertion; those test-harness defects were corrected without changing production behavior.
+
+Root repair
+- CurationHandler now exposes typed operation_id and expected_before_sha256 contracts. Each Todo 12 loader records SHA256 of its canonical load-time capture: exact review tuple bytes or complete topology_bytes.
+- CurationOperationOwner.apply compares the current transaction-time capture with expected_before_sha256 immediately after BEGIN IMMEDIATE/capture and before the first failpoint or family mutation; mismatch raises CurationStaleError and rolls back with zero writes.
+- CurationRequest rejects missing or mismatched operation_id whenever a loaded handler requires one. Work merge lineage uses that same handler UUID, so the accepted request path makes lineage.operation_id and audit.id identical by construction.
+- identity review candidate lists are parsed during WorkMergeHandler.load as a bounded canonical JSON array of sorted, unique, validated UUID strings. Corrupt/noncanonical persisted rows raise typed WorkCurationConflictError before transaction writes and are never silently rewritten.
+
+Repair GREEN and focused regression
+- Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+- GREEN 1: PASS, 21 tests in 1.882s.
+- GREEN 2: PASS, 21 tests in 2.283s.
+- Final post-audit reruns: PASS, 21 tests in 1.936s and PASS, 21 tests in 1.704s.
+- Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_wp6.py'
+- Result: PASS, 8 tests in 0.382s.
+- Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_rollback_wp6.py'
+- Result: PASS, 2 tests in 0.138s.
+
+Independent TemporaryDirectory driver observations
+- Review race result: CurationStaleError; review_row_sha256=f2397448668a7c4b4c28829e8f6831026a5eb13ab9e3e4d1486cc774f3a5b657; exact row preserved=True; audit_delta=0.
+- Work merge source-version race result: CurationStaleError; topology_sha256=4ccc0f2dc1388ebe838147ca4a079ba959a77c5febffa5b4a855c8d77c5c02c8; exact topology bytes preserved=True; audit_delta=0; lineage_delta=0.
+- Accepted merge: audit.id=48859aef-3495-437b-96a1-554b3ac99c22; lineage.operation_id=48859aef-3495-437b-96a1-554b3ac99c22; ids_equal=True.
+- Driver used patched workspace admission plus one TemporaryDirectory, real CatalogEngine/SQLite transactions, and no repository script. Final receipt: cleanup=temporary_directory_removed.
+
+Repair static, architecture and cleanup gates
+- uv run --frozen pyright src/sciretriever tests scripts: PASS, 0 errors, 0 warnings, 0 informations.
+- uv run --frozen python scripts/harness.py architecture: PASS.
+- uv run --frozen python scripts/harness.py docs: PASS.
+- uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json: PASS, exit 0, no output.
+- python -m compileall -q src tests scripts main.py: PASS, exit 0.
+- git diff --check: PASS, exit 0.
+- Programming no-excuse audit over all changed Python files: PASS, no violations in 8 files.
+- LSP diagnostics over src/sciretriever/catalog: 38 files scanned, 0 files with errors, 0 diagnostics; all changed test files also reported no diagnostics.
+
+Repair exact tokenize-physical-v1 pure LOC
+- src/sciretriever/catalog/curation.py=188
+- src/sciretriever/catalog/curation_contracts.py=104
+- src/sciretriever/catalog/review_curation.py=95
+- src/sciretriever/catalog/work_curation.py=239
+- src/sciretriever/catalog/work_curation_state.py=83
+- tests/curation_wp6_fixture.py=88
+- tests/test_work_curation_wp6.py=219
+- tests/work_curation_stale_cases.py=171
+
+Repair cleanup and scope
+- Changed files are exactly the five Todo 12 catalog modules, tests/test_work_curation_wp6.py, new tests/work_curation_stale_cases.py, Todo 11's typed test fixture tests/curation_wp6_fixture.py, and this evidence receipt. tests/work_curation_failpoint_cases.py was read and rerun but not changed by the repair.
+- No plan, ledger, boulder, schema, CLI, Todo 13-16 source, dependency, lockfile, commit or push change was made.
+- No catalog, temporary driver, build/dist output, cache, or one-off script remains in the repository. Unrelated dirty changes were preserved.
+
+Independent verifier repair: load/apply stale admission
+Date: 2026-07-25
+
+Verifier blocker
+- Independent verifier session ses_06617f933ffeXyzUgJk5zzftUk reproduced a lost update: ReviewResolutionHandler loaded a pending review, an independent transaction resolved/rejected it, and the stale handler overwrote that row while appending a misleading successful audit.
+- Root cause: CurationOperationOwner captured transaction-time state for audit but did not compare it with the handler load-time state before the first mutation.
+- The same optimistic-concurrency gap affected WorkMergeHandler and WorkVersionRegroupHandler.
+- WorkMergeHandler also wrote handler.operation_id to append-only lineage while CurationOperationOwner could choose a different request/generated audit UUID.
+
+Repair-owned changed files
+- src/sciretriever/catalog/curation.py
+- src/sciretriever/catalog/curation_contracts.py
+- src/sciretriever/catalog/review_curation.py
+- src/sciretriever/catalog/work_curation.py
+- src/sciretriever/catalog/work_curation_state.py
+- tests/curation_wp6_fixture.py
+- tests/test_work_curation_wp6.py
+- tests/work_curation_stale_cases.py
+- .omo/evidence/wp6/task-12.txt
+
+Repair RED
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+Result: FAIL, exit 1.
+Intended production failures:
+- review stale load/apply: CurationStaleError not raised.
+- merge stale added WorkVersion: CurationStaleError not raised.
+- merge stale review candidate link: CurationStaleError not raised.
+- regroup stale preferred topology: CurationStaleError not raised.
+- operation ID omission: CurationBoundaryError not raised.
+- malformed candidate payloads {}, [1], duplicate/descending/non-UUID values: WorkCurationConflictError not raised.
+The initial RED also exposed test-helper discovery and a schema-rejected whitespace fixture; the helper was converted to a typing-only mixin and malformed rows are inserted under SQLite's scoped ignore_check_constraints test pragma so handler parsing is tested directly.
+
+Smallest root fix
+- Loaded Todo 12 handlers retain expected_before_sha256 over their exact canonical capture footprint.
+- CurationOperationOwner enters critical_transaction (BEGIN IMMEDIATE), captures current footprint, and compares its digest with expected_before_sha256 before executing any CurationStep.
+- A mismatch raises CurationStaleError keyed by the canonical handler/request operation UUID; transaction exits with zero writes.
+- CurationHandler exposes typed operation_id and expected_before_sha256 contracts. Generic Todo 11 ProbeHandler explicitly uses None for both, preserving its owner-level behavior.
+- CurationRequest rejects omission or mismatch whenever a handler owns an operation UUID. Therefore accepted Work merge requests use one UUID for handler lineage and curation audit.
+- identity_reviews candidate lists cross one strict parser: bounded payload/list size, list-only, string-only, valid UUIDs, unique sorted values, and exact canonical JSON. Malformed rows raise WorkCurationConflictError before mutation.
+
+Repair GREEN and deterministic repeat
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+Result 1: PASS, 21 tests in 2.016s.
+Result 2: PASS, 21 tests in 2.026s.
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_wp6.py'
+Result: PASS, 8 tests in 0.339s.
+Command: uv run --frozen python -m unittest discover -s tests -p 'test_curation_rollback_wp6.py'
+Result: PASS, 2 tests in 0.114s.
+
+Repair static and governance reruns
+Command: uv run --frozen pyright src/sciretriever tests scripts
+Result: PASS, 0 errors, 0 warnings, 0 informations.
+Changed-file LSP diagnostics: PASS, no diagnostics for curation.py, curation_contracts.py, review_curation.py, work_curation.py, work_curation_state.py, or work_curation_stale_cases.py.
+Command: uv run --frozen python scripts/harness.py architecture
+Result: PASS, [harness] architecture: passed.
+Command: uv run --frozen python scripts/harness.py docs
+Result: PASS, [harness] documentation: passed.
+Command: python -m compileall -q src tests scripts main.py
+Result: PASS, exit 0.
+Command: uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json
+Result: PASS, exit 0, no output.
+Command: git diff --check
+Result: PASS, exit 0, no output.
+
+Repair tokenize-physical-v1 pure LOC
+- src/sciretriever/catalog/curation.py=188
+- src/sciretriever/catalog/curation_contracts.py=101
+- src/sciretriever/catalog/review_curation.py=95
+- src/sciretriever/catalog/work_curation.py=239
+- src/sciretriever/catalog/work_curation_state.py=79
+- tests/curation_wp6_fixture.py=88
+- tests/test_work_curation_wp6.py=219
+- tests/work_curation_stale_cases.py=171
+
+Literal stale-race driver invocation
+Command form: uv run --frozen python - <<'PY' ... PY
+The executed inline module driver imported create_catalog_engine/initialize_catalog, CurationOperationOwner/CurationRequest/CurationStaleError, all three Todo 12 handlers, and SafeSnapshot. Under a patched workspace admission boundary and one TemporaryDirectory it created four independent fresh SQLite catalogs. It performed these literal sequences:
+1. load pending ReviewResolutionHandler; UPDATE identity_reviews to resolved/rejected with fixed timestamps; apply stale handler.
+2. load WorkMergeHandler; INSERT a new source WorkVersion and UPDATE its identity review candidate link; apply stale handler.
+3. load WorkVersionRegroupHandler; UPDATE source preferred_work_version_id and preferred_version_is_manual; apply stale handler.
+4. construct merge requests with None and a different UUID; then apply the exact handler UUID and compare handler/audit/lineage IDs.
+Logical database state was canonical JSON over works, work_versions, identity_reviews, work_merge_lineage and curation_operations, hashed with SHA-256 before and after each stale apply.
+
+Observed stale-race values
+- review operation ID aa7138f3-8bd8-4567-8173-cccfbd25380c rejected stale.
+- review state hash before=128103114d6f6c75477947cd1a0fd91b7bd4e12e3eb27e77d0fa67c27d0437bb; after identical.
+- review audit delta=0; independent row remained ('resolved','rejected').
+- merge operation ID 6f8ec5db-5d06-4002-be92-6fae13dbd8d5 rejected stale.
+- merge state hash before=d4b89707ac6e5fd0d1a7b79d98f30ebb9983761be29f4c7f336d434d93ba992d; after identical.
+- merge audit delta=0; lineage delta=0; independently added WorkVersion retained source owner 4b866f82-af63-41f3-aef9-dbf6a5e4fdb1.
+- regroup operation ID 4701c19d-29e3-44dc-9df4-056192f09764 rejected stale.
+- regroup state hash before=d2d4d691904f8d315de690c58a48e98b452938bbe700671affe81e9787b38d9d; after identical.
+- regroup audit delta=0; WorkVersion owner remained 604ce506-2148-46e2-ba24-7b6c3d78e486; independent preferred pointer remained a0a06edc-2d16-4b3d-9bb2-a633ddfb7a2a.
+- omitted request ID: typed CurationBoundaryError code=operation_id_mismatch.
+- explicit different request ID: typed CurationBoundaryError code=operation_id_mismatch.
+- accepted merge UUID b4146d6b-ea3d-42c5-be75-be6b82c49e0d was identical in handler.operation_id, CurationAuditRecord.id, and work_merge_lineage.operation_id; audit row count=1.
+- cleanup output: cleanup temporary_directory_removed.
+
+Repair cleanup and risks
+- All stale-race catalogs lived under TemporaryDirectory prefix sciretriever-task12-stale- and were removed.
+- No build, dist, catalog, storage, cache, corpus, service, or inline-driver file was created in the repository.
+- No plan, ledger, boulder, commit, or push operation was performed.
+- Residual risk remains the previously recorded repository-wide workspace-marker blocker outside Todo 12; all requested scoped repair suites and gates are green.
+
+Post-repair scoped review
+- Reviewer task bg_411858a1 returned PASS with no blockers.
+- Reviewer independently confirmed all three load-time digests are checked inside critical_transaction before mutation, candidate JSON is bounded/canonical, operation-ID omission/mismatch is typed zero-write, and accepted merge lineage/audit IDs are identical.
+- Reviewer reran 21 focused Work curation tests and 8 Todo 11 owner tests, with Pyright/LSP/compile checks clean.

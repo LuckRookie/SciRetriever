@@ -1,0 +1,103 @@
+WP6 Todo26 evidence
+date=2026-07-26
+scope=cooperative expansion interruption, canonical layer reports, safe diagnostics, rerun convergence
+
+CHANGED FILES
+- src/sciretriever/expansion/report.py
+- src/sciretriever/expansion/service.py
+- src/sciretriever/expansion/completion.py
+- src/sciretriever/expansion/__init__.py
+- tests/graph_expansion_fixture.py
+- tests/test_expansion_interrupt_wp6.py
+- tests/test_expansion_completion_wp6.py
+- .omo/evidence/wp6/task-26.txt
+
+CHARACTERIZATION / RED / GREEN
+- Characterization before production edits: graph expansion 5 PASS; real layer completion 1 PASS; completion count equations 10 PASS.
+- RED command: uv run --frozen python -m unittest discover -s tests -p 'test_expansion_interrupt_wp6.py'.
+- RED result: ImportError for missing ExpansionLayerCounts, proving the absent Todo26 report/stop contract.
+- GREEN direct: test_expansion_interrupt_wp6.py 2 PASS, repeated three times with identical results.
+- Fixed-hook GREEN: test_expansion_completion_wp6.py 2 PASS against real temporary SQLite/storage and shared CompletionPipeline.
+
+IMPLEMENTATION
+- Completion batch remains the canonical cooperative-stop owner: KeyboardInterrupt classifies the current and unstarted suffix interrupted while preserving the completed prefix.
+- PipelineLayerCompletion preserves INTERRUPTED as an expansion outcome and appends typed redacted expansion diagnostics; it never converts interruption to failure or success.
+- ExpansionEngine appends the interrupted layer and breaks before graph discovery/frontier construction, so no next layer can start.
+- ExpansionLayerCounts emits exactly provider_returned,deduplicated_works,created,reused,discovered,existing,selected,unique_targets,succeeded,completed,exhausted,failed,duplicates,interrupted.
+- InvocationCounts remains the single terminal equation owner: selected=succeeded+exhausted+failed+duplicates+interrupted and unique_targets=selected-duplicates.
+- completed equals the fact-verified COMPLETE/succeeded subset. Report values are immutable and serialize deterministically with bounded provider diagnostics.
+- No CLI parser/exit implementation, durable pause/resume/frontier/status, task/job state, dependencies, lockfile, docs or workspace marker was added.
+
+LITERAL INTERRUPT / RERUN VALUES
+- interrupted statuses=(complete,interrupted,interrupted).
+- interrupted counts=(selected=3,unique_targets=3,succeeded=1,completed=1,exhausted=0,failed=0,duplicates=0,interrupted=2).
+- selected equation=3=1+0+0+0+2; unique equation=3=3-0.
+- graph calls before interrupted depth-1 layer=(a); graph calls after interruption=none; layers emitted=2; no depth-2 layer.
+- completed prefix immutable ids/hash/current snapshot remained byte/identity equal.
+- catalog table snapshot at interruption=(3,3,9,6,1,1,1,3,6) for works,work_versions,metadata_observations,provider_canonical_projections,raw_assets,work_version_assets,current_analyses,processing_runs,normalized_artifacts.
+- catalog snapshot after rerun=(3,3,9,6,3,3,3,9,18); replay snapshot identical.
+- interruption diagnostic rows=2; diagnostic history did not alter completion facts.
+
+FOCUSED / REGRESSION / STATIC
+- Todo26 direct repeated=6 PASS total across three identical runs.
+- expansion completion=2 PASS; graph expansion=5 PASS; completion counts=10 PASS.
+- completion batch contracts=13 PASS; real WP5 completion=3 PASS.
+- reference resolution=6 PASS; expansion frontier=2 PASS; core diagnostics=4 PASS.
+- standalone test_diagnostics_wp6.py is blocked before setup by the pre-existing absent .workspace-root marker; marker was not created. This is the same Todo24/25 repository-gate exception.
+- full Pyright src/sciretriever tests scripts=PASS, 0 errors/warnings/informations.
+- changed-file fresh Pyright is authoritative and clean; persistent LSP retained stale missing-import notices for the newly created report.py despite full Pyright resolving it.
+- architecture=PASS; documentation=PASS; compileall=PASS; programming no-excuse audit=PASS.
+- quick: compile/docs/architecture/harness tests PASS; two unrelated CLI tests blocked only by absent .workspace-root.
+- diff-scoped WP6 pure-LOC gate=PASS.
+
+PURE LOC
+- expansion/report.py=131
+- expansion/service.py=189
+- expansion/completion.py=96
+- expansion/__init__.py=37
+- graph_expansion_fixture.py=183
+- test_expansion_interrupt_wp6.py=69
+- test_expansion_completion_wp6.py=186
+- references/service.py=248 after restoration of the pre-Todo26 resolution surface
+
+MANUAL TMUX-LIKE MODULE QA
+- A persistent tmux shell first ran an intentionally invalid direct module path and observed ModuleNotFoundError with no writes.
+- The same shell then ran uv run --frozen python -m unittest discover -v -s tests -p 'test_expansion_completion_wp6.py'.
+- Both real temporary SQLite/storage scenarios passed, including fixed-hook current/suffix interruption, completed-prefix preservation, rerun convergence and replay equality.
+- tmux session was killed after capture; TemporaryDirectory cleanup removed catalogs/storage.
+
+NINE ULTRAQA
+1.behavior=PASS cooperative current/suffix stop and no next layer.
+2.contracts=PASS immutable typed result/report and exact canonical fields.
+3.equations=PASS terminal and unique-target reconciliation plus completed subset.
+4.persistence=PASS completed facts/assets/current preserved; no mutable interruption state.
+5.rerun=PASS pending targets converge and COMPLETE targets replay without duplication.
+6.diagnostics=PASS two typed safe interruption records; history does not drive facts.
+7.regression=PASS expansion, completion, reference, frontier and diagnostic suites.
+8.static=PASS Pyright,architecture,docs,compile,no-excuse,pure-LOC.
+9.hygiene=PASS no Todo27 CLI/docs/dependency/marker/orchestrator-state edits; temp/tmux cleanup complete.
+
+ARCHITECTURAL SELF REVIEW
+- single responsibility: report.py owns immutable report values; service.py owns process-local BFS; completion.py owns pipeline adaptation.
+- boundary purity: typed graph/completion/diagnostic protocols only; no vendor dictionaries or arbitrary diagnostic payloads.
+- variants: interruption is a closed enum disposition and existing matches remain exhaustive.
+- escape hatches: no Any,object,cast,type-ignore or pyright-ignore.
+- defensive layers: none added beyond count/report construction invariants.
+- tests: removing the report/interrupt symbols restores the recorded RED.
+- parameters: no new function exceeds the existing domain-service parameter shape.
+- persistence: no scheduler/frontier/pause/resume/status or misleading success state.
+- logging: no logging added.
+
+CLEANUP / DONECLAIM
+- build/dist/runtime artifacts not created by focused verification; compile caches are repository-ignored.
+- temporary SQLite/storage and tmux session cleaned.
+- .workspace-root absent and not created.
+- plan/ledger/Boulder/orchestrator state untouched; no commit/push/rebase/stage/reset/checkout.
+- todo=26
+- status=IMPLEMENTED_AND_SCOPED_VERIFIED
+- acceptance=cooperative stop;canonical fields/equations;safe diagnostics;no next layer;preserved completed facts;exit-130-ready interrupted result;rerun convergence PASS
+- focused_repeat=true
+- manual_interrupt_rerun_qa=true
+- nine_ultraqa=PASS
+- cleanup=true
+- todo27_started=false

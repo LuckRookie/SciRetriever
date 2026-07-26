@@ -1,0 +1,279 @@
+WP6 Todo 3 - typed curation and diagnostic domain contracts
+
+Changed files
+- src/sciretriever/core/snapshots.py
+- src/sciretriever/core/curation.py
+- src/sciretriever/diagnostics/product.py
+- src/sciretriever/diagnostics/contracts.py (minimal ProductFailure enum re-exports)
+- tests/test_domain_contracts_wp6.py
+- .omo/evidence/wp6/task-3.txt
+
+Baseline characterization
+command: uv run --frozen python -m unittest tests.test_diagnostics tests.test_redaction
+pre_edit_exit: 0
+pre_edit_result: Ran 10 tests; OK.
+observable: existing ReasonCode/ActionCode mappings, diagnostic canonical codec rejection, and recursive redaction behavior remained green before edits.
+
+Failing-first contract test
+command: uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'
+red_exit: 1
+red_result: Ran 1 test loader case; ModuleNotFoundError for sciretriever.core.curation.
+assertion: failure was caused by the intended missing Todo 3 contract module, before production implementation existed.
+
+Focused green and flaky-test probe
+command: uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'
+green_run_1_exit: 0
+green_run_1_result: Ran 7 tests; OK.
+green_run_2_exit: 0
+green_run_2_result: Ran 7 tests; OK.
+assertion: both independent runs passed with identical count and no order, clock, filesystem or network dependency.
+
+Exact contract vocabulary
+ProductFailureStage: metadata,acquisition,analysis,expansion
+ProductFailureReason: configuration,provider,identity,content,storage,catalog,interrupted
+ProductFailureAction: check_configuration,check_credentials,retry,try_another_source,review,repair_storage,none
+DiagnosticSubjectKind: input,work,work_version,processing_run,expansion
+RerunGuidance: retry,after_configuration_change,after_credential_change,after_source_change,after_review,not_applicable
+CurationAction: resolve_review,merge_work,regroup_work_version,set_preferred,clear_preferred,set_metadata,clear_metadata,add_tag,remove_tag,merge_author,undo
+CurationSubjectKind: review,work,work_version,author
+CurationResult: applied,undone
+ReviewDecision: confirmed,rejected,deferred,not_required
+
+Required manual vocabulary QA
+command: uv run --frozen python -c "from sciretriever.diagnostics.contracts import ProductFailureStage; from sciretriever.core.curation import CurationAction; print(','.join(x.value for x in ProductFailureStage)); print(','.join(x.value for x in CurationAction))"
+exit: 0
+stdout_line_1: metadata,acquisition,analysis,expansion
+stdout_line_2: resolve_review,merge_work,regroup_work_version,set_preferred,clear_preferred,set_metadata,clear_metadata,add_tag,remove_tag,merge_author,undo
+
+Serialization, invalid-input and hash QA
+command: uv run --frozen python -c '<literal driver importing ProductFailure, SafeSnapshot and CurationOperation; parse unknown-key payload containing SECRET-SENTINEL; parse storage_path=/tmp/SECRET-SENTINEL; create/add-tag operation; encode/decode/encode; assert equality and hash>'
+exit: 0
+stdout: typed_rejections=ProductFailureBoundaryError,SnapshotBoundaryError
+stdout: canonical_twice=true hash=245291fc7e713c59d3c393cfa39c05d77275ea95afe132e851919353e5a229d1
+assertion: malformed and secret/path-bearing inputs failed closed with typed errors; neither error echoed SECRET-SENTINEL. Decoded values, canonical bytes and operation SHA-256 matched exactly.
+additional direct coverage: duplicate JSON keys, unknown enums/keys, non-public IDs, URL/path/secret-like snapshot values, strings over 512 bytes, over 16 fields, non-scalar values, noncanonical JSON and tampered hashes reject.
+
+Regression and static verification
+command: uv run --frozen python -m unittest tests.test_diagnostics tests.test_redaction
+exit: 0
+result: Ran 10 tests; OK.
+command: uv run --frozen pyright src/sciretriever/core/snapshots.py src/sciretriever/core/curation.py src/sciretriever/diagnostics/product.py src/sciretriever/diagnostics/contracts.py tests/test_domain_contracts_wp6.py
+exit: 0
+result: 0 errors, 0 warnings, 0 informations.
+LSP: all five changed Python files report no diagnostics.
+command: uv run --frozen python scripts/harness.py architecture
+exit: 0
+result: [harness] architecture: passed
+command: git diff --check -- src/sciretriever/core/snapshots.py src/sciretriever/core/curation.py src/sciretriever/diagnostics/product.py src/sciretriever/diagnostics/contracts.py tests/test_domain_contracts_wp6.py
+exit: 0
+
+Todo 1 contract-suite state
+command: uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'
+exit: 1
+result: Ran 8 tests; Todo 3 product-failure and curation enum tests pass. Four unrelated expected-red tests remain: final command tree, ProgressCount, export modes and ConfigCheckMode.
+assertion: this worker did not implement or weaken later-worker contracts.
+
+Pure LOC (tokenize-physical-v1)
+src/sciretriever/core/snapshots.py: 102
+src/sciretriever/core/curation.py: 167
+src/sciretriever/diagnostics/product.py: 105
+src/sciretriever/diagnostics/contracts.py: 134
+tests/test_domain_contracts_wp6.py: 188
+assertion: every changed/new Python file is <=250 pure LOC. New modules each own one noun phrase: snapshot values, curation operations, product failures.
+
+Adversarial probes
+- malformed_input: unknown keys, duplicate keys, noncanonical bytes, wrong scalar types and tampered hashes reject with typed bounded errors.
+- untrusted_external_text/redaction: URL, absolute path, sensitive field names and sentinel-bearing values reject before persistence; errors expose only stable codes.
+- stale_state: encode/decode/encode produced identical canonical bytes and the same SHA-256.
+- dirty_worktree_scope: concurrent schema, graph, governance, plan, Boulder and ledger changes were preserved; only listed Todo 3 paths were edited.
+- misleading_success_output: success requires command exit 0 plus decoded equality, canonical-byte equality and operation-hash equality, not printed prose alone.
+- flaky_tests: focused suite passed twice with identical seven-test result.
+- generated_artifacts: none created; no build/, dist/, runtime catalog, asset, temporary script or parallel environment retained.
+- repeated_interruptions: not applicable; contracts are synchronous bounded in-memory operations with no external work.
+- hung_commands: not applicable beyond bounded command timeouts; every command completed within its tool timeout.
+- prompt_injection: not applicable; no LLM or prompt consumes input.
+
+Architectural review
+- Single responsibility: each new module has one owner and is below the LOC ceiling.
+- Boundary purity: bytes parse once into exact frozen types; unknown/duplicate/noncanonical input rejects.
+- Variant handling: subject-kind discrimination uses exhaustive match; no Any, cast, type-ignore or pyright-ignore exists in new modules.
+- Defensive layers: validation exists only at public construction/serialization boundaries.
+- Tests: reversal/removal of the new contracts makes the focused suite fail.
+- No parameter bloat, redundant post-action verification, negative-form names or logging changes were introduced.
+
+Cleanup
+No temporary files or generated artifacts required removal. Concurrent workers' files and orchestrator-owned state were not changed.
+
+Original DoneClaim superseded by independent-verifier needs-fix and the revised receipt below.
+
+Independent verifier remediation
+
+Counterexample RED
+command: uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'
+exit: 1
+result: Ran 9 tests; failures=2.
+failure_1: test_undo_requires_an_operation_subject_and_explicit_target accepted CurationOperation.create(action=UNDO, subject_kind=WORK) without an undo target.
+failure_2: test_hostile_action_is_absent_from_the_complete_failure_traceback found SECRET-SENTINEL in the chained ProductFailureAction ValueError traceback.
+assertion: both independent-verifier counterexamples failed for the exact reported reasons before remediation.
+
+Exact compatibility and undo invariant
+- resolve_review -> identity_review
+- merge_work, set_preferred, clear_preferred, add_tag, remove_tag -> work
+- regroup_work_version, set_metadata, clear_metadata -> work_version
+- merge_author -> author
+- undo -> operation
+- CurationOperationId is a typed UUID string target.
+- UNDO requires subject_kind=operation, non-null undo_of, and subject_id == undo_of.
+- Every non-UNDO action forbids undo_of and operation subject.
+- undo_of is included in canonical serialization and operation SHA-256 identity.
+- Exhaustive action matching ends in assert_never; every approved pair and both undo constraints have direct tests.
+
+Remediation GREEN
+command: uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'
+green_run_1_exit: 0
+green_run_1_result: Ran 10 tests; OK.
+green_run_2_exit: 0
+green_run_2_result: Ran 10 tests; OK.
+
+Todo 2 schema alignment
+command: uv run --frozen python -m unittest discover -s tests -p 'test_catalog_schema_wp6.py'
+exit: 0
+result: Ran 8 tests; OK.
+assertion: in-memory action_subject and undo_state invariants exactly match curation_operations checks and unique/FK undo representation.
+
+Hostile uncaught subprocess
+command: output=$(uv run --frozen python -c '<uncaught ProductFailure parse with action SECRET-SENTINEL>' 2>&1); assert child exit nonzero and output excludes sentinel; print child exit and stderr
+wrapper_exit: 0
+child_exit: 1
+stdout_marker: sentinel_absent=true
+stderr_terminal_line: sciretriever.diagnostics.product.ProductFailureBoundaryError: invalid product failure: payload
+assertion: complete uncaught traceback contains no hostile enum value and no chained ValueError. ProductFailure, curation and strict JSON boundary conversions raise sanitized typed errors from None.
+
+Canonical UNDO manual driver
+command: uv run --frozen python -c '<create typed UNDO, encode/decode/encode, assert equality/hash/target, print canonical JSON>'
+exit: 0
+operation_sha256: cc7558523a575265c3547ed1c4a933704677204d7a21283d4f2448417e15bc2c
+observable: canonical_twice=true undo_target=123e4567-e89b-42d3-a456-426614174001
+serialized_invariant: subject_kind is operation and subject_id equals undo_of.
+
+Remediation regression/static gates
+command: uv run --frozen python -m unittest tests.test_diagnostics tests.test_redaction
+exit: 0
+result: Ran 10 tests; OK.
+command: uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'
+exit: 1
+result: Ran 8 tests; Todo 3 product-failure and curation vocabulary tests pass; only the same four unrelated later-WP6 command/count/export/config tests remain red.
+command: uv run --frozen pyright src/sciretriever/core/snapshots.py src/sciretriever/core/curation.py src/sciretriever/diagnostics/product.py src/sciretriever/diagnostics/contracts.py tests/test_domain_contracts_wp6.py
+exit: 0
+result: 0 errors, 0 warnings, 0 informations.
+LSP: snapshots.py, curation.py, product.py and test_domain_contracts_wp6.py report no diagnostics.
+command: uv run --frozen python scripts/harness.py architecture
+exit: 0
+result: [harness] architecture: passed
+command: exact manual ProductFailureStage/CurationAction invocation from request
+exit: 0
+stdout_line_1: metadata,acquisition,analysis,expansion
+stdout_line_2: resolve_review,merge_work,regroup_work_version,set_preferred,clear_preferred,set_metadata,clear_metadata,add_tag,remove_tag,merge_author,undo
+
+Remediation LOC and cleanup
+tokenize-physical-v1: snapshots.py=102; curation.py=167; product.py=105; contracts.py=134; test_domain_contracts_wp6.py=188.
+assertion: all changed Python files remain <=250 pure LOC; no Any, cast, type-ignore or pyright-ignore exists in new modules; git diff --check passes.
+dirty_worktree: concurrent Todo 2 schema, graph, governance, orchestrator plan/Boulder/ledger and later worker changes were preserved and not edited by remediation.
+generated_artifacts: none created; no build, dist, runtime catalog, temporary file, subprocess capture file or parallel environment remains.
+repeated_interruptions: not applicable; synchronous bounded contract parsing only.
+hung_commands: none; all commands completed within bounded tool timeouts.
+prompt_injection: not applicable; no LLM or prompt path.
+
+Revised DoneClaim: WP6 Todo 3 is complete after independent-verifier remediation. Both reported counterexamples were locked red then green; illegal action/subject and undo states are rejected before serialization; hostile enum values cannot escape through exception chaining; canonical UNDO bytes and SHA-256 are deterministic; Todo 3, Todo 2 schema integration, diagnostics/redaction, scoped typing and merged architecture gates pass; evidence and cleanup are complete. The same verifier may recheck with Todo 2 alignment.
+
+Replacement executor correction (2026-07-25)
+
+The remediation receipt above is superseded where it names `identity_review`. Todo 2's canonical shared vocabulary is `resolve_review:review`; Todo 3 now exposes `CurationSubjectKind.REVIEW = "review"` and the exhaustive compatibility map uses that pair.
+
+Changed files in this replacement pass
+- src/sciretriever/core/curation.py
+- tests/test_domain_contracts_wp6.py
+- .omo/evidence/wp6/task-3.txt
+
+Counterexample and vocabulary RED
+- The two independent-verifier counterexamples remain locked in `tests/test_domain_contracts_wp6.py`; their original exact RED run is preserved at lines 109-117 above: illegal `UNDO:WORK` without `undo_of` was accepted and `SECRET-SENTINEL` appeared in the chained enum traceback.
+- Fresh replacement RED command: `uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'`.
+- Fresh replacement RED result: exit 1, Ran 10 tests; `CurationSubjectKind.REVIEW` raised `AttributeError`, proving Todo 3 could not represent Todo 2's canonical `resolve_review:review` pair.
+
+Compatibility matrix and undo invariant
+- resolve_review -> review
+- merge_work, set_preferred, clear_preferred, add_tag, remove_tag -> work
+- regroup_work_version, set_metadata, clear_metadata -> work_version
+- merge_author -> author
+- undo -> operation
+- The focused suite iterates every action against every subject kind: exactly the approved pair constructs; all cross-pairs reject.
+- UNDO requires typed `CurationOperationId`, `subject_kind=operation`, and `subject_id == undo_of`; every non-UNDO action forbids `undo_of` and operation subject.
+- `undo_of` remains in canonical identity JSON and therefore in `operation_sha256`.
+
+GREEN and integration commands
+- `uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'` passed twice after the final edit: Ran 10 tests; OK on each run.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_catalog_schema_wp6.py'` passed after the concurrent Todo 2 repair: Ran 11 tests; OK.
+- `uv run --frozen python -m unittest tests.test_diagnostics tests.test_redaction` passed: Ran 10 tests; OK.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'` retained exactly four later-WP6 failures (command tree, ProgressCount, export modes, ConfigCheckMode); Todo 3 enum tests pass.
+- `uv run --frozen pyright src/sciretriever/core/snapshots.py src/sciretriever/core/curation.py src/sciretriever/diagnostics/product.py src/sciretriever/diagnostics/contracts.py tests/test_domain_contracts_wp6.py` passed with 0 errors, 0 warnings, 0 informations.
+- LSP diagnostics are clean for `curation.py` and `test_domain_contracts_wp6.py`.
+- `uv run .../check-no-excuse-rules.py src/sciretriever/core/curation.py tests/test_domain_contracts_wp6.py` passed with no violations.
+- `python -m compileall -q` on the touched contract/test surface passed.
+
+Manual adversarial QA
+- Illegal driver: `CurationOperation.create(UNDO, WORK, ...)` without a target raises `SnapshotBoundaryError: invalid safe snapshot: action_subject`.
+- Hostile uncaught subprocess: child exit 1; complete stderr contains only the sanitized terminal `ProductFailureBoundaryError: invalid product failure: payload`; `SECRET-SENTINEL` and a chained enum `ValueError` are absent.
+- Canonical UNDO driver: encode/decode/encode equality, object equality, typed target equality and hash equality all passed. Canonical SHA-256 is `cc7558523a575265c3547ed1c4a933704677204d7a21283d4f2448417e15bc2c`.
+- Manual vocabulary output ends with `review` for `CurationSubjectKind.REVIEW`; product-stage and curation-action sequences remain unchanged.
+
+LOC, architecture, and cleanup
+- tokenize-physical-v1 pure LOC after final edit: `curation.py=169`; `test_domain_contracts_wp6.py=202`; both are <=250.
+- Single responsibility: core file owns curation operation values; test file owns Todo 3 domain contract acceptance. Boundary input is parsed once, enum/action matches are exhaustive, and no Any/cast/type suppression, parameter mutation, redundant verification, negative naming, logging, dependency, schema, graph, script, plan, state or commit edits were introduced.
+- `uv run --frozen python scripts/harness.py architecture` passed on the final recheck after the concurrent Todo 5 repair: `[harness] architecture: passed`. This replacement pass did not edit that script.
+- No temporary script, capture file, build/dist output, runtime catalog, dependency, environment, or generated artifact was created. Concurrent changes were preserved.
+
+Replacement DoneClaim: WP6 Todo 3 is complete. Both exact verifier counterexamples are locked by tests and green; the complete action/subject matrix and typed undo invariant reject illegal states; hostile enum text is removed from complete uncaught exception chains; canonical serialization and SHA-256 are deterministic; canonical `resolve_review:review` aligns with the passing Todo 2 suite; focused tests, diagnostics/redaction, scoped Pyright/LSP, compile, merged architecture and adversarial drivers pass.
+
+Python 3.10 compatibility correction (2026-07-25)
+
+Scope
+- Edited only `src/sciretriever/core/curation.py`, `src/sciretriever/diagnostics/product.py`, `tests/test_domain_contracts_wp6.py`, and this receipt.
+- Removed `from enum import StrEnum` from both Todo 3 modules and `assert_never` from the `typing` import in `curation.py`.
+- Every public string enum now uses repository-compatible `class X(str, Enum)` with the same member names and values.
+- `curation.py` defines an unexported Python-3.10-compatible exhaustive helper with `NoReturn`; all three existing exhaustive match fallbacks still call `assert_never`.
+
+Failing-first Python 3.10 simulation
+- Added a subprocess test that deletes `enum.StrEnum` and `typing.assert_never` before fresh imports of both Todo 3 modules, plus AST assertions prohibiting imports of those two symbols.
+- RED command: `uv run --frozen python -m unittest discover -s tests -p 'test_domain_contracts_wp6.py'`.
+- RED result: exit 1; Ran 12 tests; failures=3. `curation.py` was reported importing both forbidden symbols, `product.py` was reported importing `StrEnum`, and the subprocess failed at `from enum import StrEnum` with `ImportError`.
+- This toggled green only after replacing the imports and enum bases and adding the local exhaustive helper.
+
+GREEN and compatibility output
+- Final focused run 1: exit 0; Ran 12 tests; OK.
+- Final focused run 2: exit 0; Ran 12 tests; OK.
+- Masked-import driver output: `imports=ok`.
+- Masked enum values: actions=`resolve_review,merge_work,regroup_work_version,set_preferred,clear_preferred,set_metadata,clear_metadata,add_tag,remove_tag,merge_author,undo`; subjects=`review,work,work_version,author,operation`; stages=`metadata,acquisition,analysis,expansion`.
+- Native `python3.10` is not installed in this workspace (`command not found`), so syntax compatibility was checked without installing dependencies: `ast.parse(..., feature_version=(3,10))` plus `compile(...)` passed for both modules and the test (`python310_parse=ok compile=ok files=3`).
+
+Contract preservation and adversarial QA
+- Enum member names/values, action-subject compatibility matrix, `.value` serialization, canonical JSON construction, and hash identity inputs were not changed.
+- Deterministic UNDO encode/decode/encode driver passed with the unchanged SHA-256 `cc7558523a575265c3547ed1c4a933704677204d7a21283d4f2448417e15bc2c`.
+- Hostile uncaught enum subprocess still exits 1 with sanitized terminal `ProductFailureBoundaryError: invalid product failure: payload`; `SECRET-SENTINEL` is absent from the traceback.
+- The AST guard proves neither Todo 3 module imports `enum.StrEnum` or `typing.assert_never`; unrelated WP5 modules using newer APIs were not edited.
+
+Merged regression and static gates
+- Todo 2 integration: `uv run --frozen python -m unittest discover -s tests -p 'test_catalog_schema_wp6.py'` -> Ran 11 tests; OK.
+- Diagnostics/redaction: `uv run --frozen python -m unittest tests.test_diagnostics tests.test_redaction` -> Ran 10 tests; OK.
+- Todo 1 contracts: `uv run --frozen python -m unittest discover -s tests -p 'test_wp6_contracts.py'` retains exactly the same four unrelated future-contract failures: command tree, `ProgressCount`, export modes, and `ConfigCheckMode`; Todo 3 assertions pass.
+- Full merged tests: Ran 750 tests; only those same four unrelated Todo 1 failures remain.
+- Full merged typing: `uv run --frozen pyright src/sciretriever tests scripts` -> 0 errors, 0 warnings, 0 informations.
+- LSP diagnostics: clean for `curation.py`, `product.py`, and `test_domain_contracts_wp6.py`.
+- Architecture: `uv run --frozen python scripts/harness.py architecture` -> `[harness] architecture: passed` after the final edit.
+- Strict-rule scan: curation and Todo 3 tests report `no violations in 2 file(s)`; `git diff --check` passes.
+
+LOC and cleanup
+- tokenize-physical-v1: `curation.py=171`, `product.py=105`, `test_domain_contracts_wp6.py=240`; all remain <=250 pure LOC. The test is in the 200-250 warning band and should be split before future additions.
+- Architectural review: each production module retains one responsibility; boundary parsing, exhaustive variant handling, compatibility matrix, serialization, and hashing are unchanged; no Any, cast, type suppression, fallback dependency, logging, parameter bloat, redundant verification, or negative naming was introduced.
+- No temporary scripts, captures, bytecode/build output, dependencies, plan/state edits, commits, or debug statements were created. Unrelated concurrent WP6 worktree changes were preserved.
+
+DoneClaim: WP6 Todo 3 now imports and behaves correctly with Python 3.11-only `StrEnum` and `typing.assert_never` unavailable. The failing-first compatibility simulation is red then green; public enum values, compatibility matrix, serialization, and deterministic UNDO hash are unchanged; focused Todo 3, Todo 2 integration, diagnostics/redaction, full merged Pyright, architecture, Python 3.10 parse/compile simulation, hostile subprocess, diagnostics, LOC, and cleanup gates are complete. The existing four unrelated Todo 1 future-contract failures are unchanged and outside this correction.

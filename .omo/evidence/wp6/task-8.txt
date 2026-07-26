@@ -1,0 +1,206 @@
+WP6 Todo 8 - failure-owner cutover and legacy diagnostic schema deletion
+
+Pre-edit inventory (CodeGraph callers + ast-grep + exact source scan)
+- `events` table: src/sciretriever/catalog/models.py; imported only by
+  catalog/repository.py. Generic `_event_record`, `_append_event`, and
+  CatalogRepository.append_event are defined in repository.py; EventRecord is defined/exported by
+  catalog/records.py and re-exported by catalog/__init__.py.
+- `_append_event` has 16 production callers: ArtifactRepository.register_pair_after_publication;
+  AssetRepository.create_intent/register_verified_published_intent/finalize_intent/
+  record_intent_failure/abandon_pending_intent; DomainRunRepository.create_domain_run/
+  transition_domain_run; IdentityRepository._create_review; WorkRepository metadata ingest;
+  PackageRepository.register_published; ProcessingRunRepository claim/succeed/fail/
+  record_nonblocking_failure; CatalogRepository.append_event.
+- `failures` table: src/sciretriever/catalog/models.py; imported by catalog/repository.py,
+  catalog/assets.py and catalog/processing.py. Generic `_failure_record` and
+  CatalogRepository.append_failure are defined in repository.py; FailureRecord is defined/exported
+  by catalog/records.py and re-exported by catalog/__init__.py.
+- Asset-intent generic failure path: `_record_intent_failure` is defined in catalog/assets.py and
+  called by AssetRepository.record_intent_failure and abandon_pending_intent. External callers are
+  storage/coordinator.py once and storage/reconciler.py twice.
+- Processing generic failure path: ProcessingRunRepository.fail writes `failures`; callers are
+  analysis/service.py, normalization/mineru_service.py, normalization/mineru_source_map.py and
+  normalization/service.py. ProcessingRunRepository.record_nonblocking_failure has no production
+  caller.
+- `acquisition_diagnostics` table and AssetRepository.append_acquisition_diagnostic are defined in
+  catalog/models.py and catalog/assets.py. WorkVersionAcquisitionService.acquire is the sole caller,
+  once for success and once for exhausted failure.
+- Parser attempt records are not legacy failure records: external_parser_attempts and
+  ExternalParserAttemptRecord preserve external task/sequence/state facts. Terminal failures flow
+  from MinerUParsingService through ProcessingRunRepository.fail and therefore require diagnostic
+  cutover while attempt rows remain.
+- Metadata provider-total failure currently has no durable owner: MetadataSearchService raises
+  SearchError when all providers fail; ExactMetadataResolver returns zero result plus failures.
+  Both are composed from CLI metadata runtime and must receive the shared catalog diagnostic owner.
+- Non-failure generic events currently duplicate facts already owned by asset_intents/raw_assets/
+  work_version_assets, normalized_artifacts, domain_runs, identity_reviews, WorkVersion metadata
+  observations, package_versions and processing_runs. Todo8 deletes those writes rather than adding
+  a replacement generic audit stream.
+
+Inventory commands
+- codegraph_context task query for Todo8 legacy writers/tables/records and completion facts.
+- codegraph_explore query for CatalogDiagnosticService, `_append_event`, `_record_intent_failure`,
+  `append_acquisition_diagnostic`, EventRecord, FailureRecord and parser attempts.
+- codegraph_callers: `_append_event`=16, `_record_intent_failure`=2,
+  `append_acquisition_diagnostic`=1; processing `fail` callers verified against AST output.
+- `ast-grep run -p '_append_event($$$ARGS)' -l python src` listed all call expressions above.
+- `ast-grep run -p '$OBJ.append_acquisition_diagnostic($$$ARGS)' -l python src` listed two calls in
+  acquisition/service.py.
+- `ast-grep run -p '$OBJ.record_intent_failure($$$ARGS)' -l python src` listed coordinator and
+  reconciler callers.
+- `ast-grep run -p '$OBJ.fail($$$ARGS)' -l python src/sciretriever` listed parser,
+  normalization/source-map and analysis callers.
+
+Changed files, RED/GREEN evidence, manual SQLite evidence, distribution scans, LOC and DoneClaim
+will be appended after implementation and verification.
+
+Implementation and regression repair
+- Added typed metadata, acquisition, and processing owner adapters in
+  `src/sciretriever/diagnostics/owners.py` and routed all owner failures through
+  `CatalogDiagnosticService`.
+- Metadata total failure uses a normalized-input SHA256 subject and creates no Work or WorkVersion.
+- Acquisition exhaustion uses WorkVersion ownership, bounded 50-source details, central redaction,
+  and storage lifecycle categories map to storage/repair guidance.
+- Processing failure transition and diagnostic append share one catalog transaction.
+- Removed fresh-schema tables `events`, `failures`, and `acquisition_diagnostics`, their records,
+  public exports, generic writers, and all production callers. Generic success events were not
+  replaced because asset intents, raw assets, links, runs, reviews, observations, packages, and
+  processing rows remain authoritative.
+- Reconciliation abandonment now returns the diagnostic written in its atomic state transition,
+  preventing a duplicate diagnostic append. Repeated unresolved integrity observations remain
+  append-only history with distinct IDs.
+
+RED/GREEN and SQLite evidence
+- RED before implementation: `tests/test_failure_owners_wp6.py` failed because
+  `sciretriever.diagnostics.owners` did not exist and acquisition details exceeded 50 entries.
+- GREEN: `test_failure_owners_wp6.py` 4/4; metadata owner produced zero Works/WorkVersions;
+  acquisition owner preserved completion facts and removed the sentinel secret; processing owner
+  preserved completion facts; fresh SQLite schema rejected all three retired tables/APIs.
+- Updated directly affected legacy tests to assert owning facts or `diagnostic_records`; focused
+  schema, acquisition, processing, coordinator, reconciler, crash-recovery, identity, and
+  concurrency suites all pass.
+- Full unittest result: 788 run, 786 pass. The only failures are out-of-scope future WP6 contracts:
+  missing Todo expansion/failures commands and missing Todo export `ExportMode`.
+
+Static, architecture, distribution, and cleanup evidence
+- Focused Pyright: 0 errors, 0 warnings, 0 information.
+- `python -m compileall -q src tests scripts main.py`: pass.
+- `scripts/harness.py architecture`: pass; `scripts/harness.py docs`: pass.
+- Wheel build succeeded: `dist/sciretriever-0.1.0-py3-none-any.whl`.
+- Source exact scan and wheel `zipgrep` found zero retired writer/record/table symbols.
+- `git diff --check`: pass. `sciretriever --version`: `0.1.0`.
+- No credentials, external services, production catalogs, or user corpora were accessed.
+
+DoneClaim
+- Todo8 owner cutover and pre-v1 legacy diagnostic deletion are implemented and verified.
+- Residual risk is limited to the two explicitly later-Todo contract tests above; no Todo8 test or
+  verification gate remains failing.
+
+Verifier repair - provider outcomes, metadata identity, and authoritative asset tests
+- RED command: `uv run --frozen python -m unittest tests.test_failure_owners_wp6`.
+  The new failed+successful-empty case raised `SearchError: all metadata search providers failed`,
+  and the normalized identity case observed three distinct SHA256 subjects for `Query`,
+  `  Query  `, and `qUeRy`.
+- `MetadataSearchService` now classifies total failure only when the number of failed invocations
+  equals the number of requested providers. A successful provider returning zero records is a
+  legitimate empty outcome; partial records still return the failed provider detail unchanged.
+- Metadata diagnostics receive `normalize_query(...)`, which reuses discovery `clean_text` for
+  NFKC/control/whitespace normalization and applies case folding once at the discovery boundary.
+  The diagnostic owner still hashes only normalized text and never persists query text.
+- Exact manual SQLite provider matrix:
+  `failed+empty results=0 failures=1 diagnostics=0`;
+  `failed+record results=1 failures=1 diagnostics=0`;
+  `all-failed raised=True diagnostics=1 secret_present=False`.
+- Exact manual SQLite identity evidence: history rows `3`, distinct identities `1`, digest
+  `a8b771920b8319e47251d1360f5e880bc18e8d329b0f0d003ea3c7e615558947` in every row, and
+  `query_text_present=False`.
+- Removed the quoted `events`/`failures` compatibility branches from
+  `test_asset_repository.py`, `test_asset_reconciler.py`, `test_asset_coordinator.py`, and
+  `test_raw_asset_crash_recovery.py`. Assertions now query `diagnostic_records`, intent state,
+  raw assets, and WorkVersion asset links directly. An all-active-test scan found no similar table
+  alias residue; remaining quoted retired names are only explicit absence assertions.
+
+Repair verification
+- Todo8 focused owner/asset/recovery set passed twice: 59/59 on both runs.
+- Discovery/exact metadata: 85/85; all asset/recovery/concurrency: 81/81;
+  diagnostics/schema: 48/48; parser/analysis/package/completion: 92/92;
+  security/config/redaction: 81/81.
+- Full unittest: 792 run, 790 pass, with exactly the two future WP6 contract failures already
+  documented above. Full Pyright: 0 errors, 0 warnings, 0 information.
+- Architecture, documentation, quick harness, compile, clean wheel build/source parity, and
+  `git diff --check` passed. Source and wheel scans found zero retired writer/record/table symbols
+  or compatibility aliases. The sentinel secret exists only in its test fixture and was absent
+  from SQLite bytes and the wheel.
+- Pure LOC for changed production owners: `discovery/search.py` 109 and
+  `discovery/normalize.py` 89. Todo8 failure tests are 203 (warning band); the four inherited large
+  asset suites decreased by removing compatibility helpers and added no production symbols.
+- Python 3.10 isolated execution is blocked before Todo8 tests by pre-existing
+  `from enum import StrEnum` imports (for example `catalog/completion_facts.py`, confirmed present
+  at HEAD); Python 3.10 has no `enum.StrEnum`. The repository's configured 3.12 gates above pass.
+
+DoneClaim repair
+- The three verifier counterexamples are red-to-green, the active test compatibility semantics are
+  removed, target owner/deletion/security behavior is preserved, and Todo 8 remains unchecked for
+  the orchestrator/verifier decision. No commit was created.
+
+Mechanical LOC/AST verifier repair
+- Pre-edit characterization passed before extraction: the exact Todo8 command
+  `tests.test_failure_owners_wp6 tests.test_asset_repository tests.test_asset_reconciler
+  tests.test_asset_coordinator tests.test_raw_asset_crash_recovery` ran 59/59; `test_cli.py`
+  discovered 22/22; `test_asset_coordinator.py` discovered 23/23. The exact governance command
+  reproduced only the four assigned blockers.
+- The baseline/current/final tokenize-physical-v1 counts are: `catalog/assets.py` 502/411/318,
+  `catalog/library.py` 1199/1194/1192, `storage/coordinator.py` 410/410/318, and
+  `tests/test_cli.py` 502/502/474. The final exact LOC/AST governance command exited 0 and the two
+  grandfathered catalog files add no WP6 AST definitions relative to Todo 1.
+- `CatalogOwner.catalog` moved to `catalog/catalog_owner.py` (9 pure LOC) and is shared by
+  `WorkRepository` and `AssetRepository`. `append_intent_diagnostic`,
+  `abandon_pending_intent`, and `abandon_pending_intent_with_diagnostic` moved as one atomic
+  asset-intent diagnostic responsibility to `catalog/asset_diagnostics.py` (108). No duplicate
+  execution path remains in `assets.py`.
+- `AssetAcceptanceContext`, `AssetAcceptanceResult`, and their complete validation responsibility
+  moved unchanged to `storage/acceptance_records.py` (103); coordinator imports those records and
+  strictly decreased without acquiring WP6 behavior.
+- Three complete entrypoint tests moved from `test_cli.py` to `test_cli_entrypoints.py` (40).
+  Discovery is unchanged at 19 + 3 = 22 tests; combined broad `test_cli*.py` discovery ran 61/61.
+- The crash-checkpoint matrix no longer names `event_count` or derives `min(event_count, 1)`.
+  Before: event totals 0/1/1/2/2/3 were treated as an asset-intent alias. After: literal
+  authoritative `asset_intent_count` expectations are 0/1/1/1/1/1, and the test independently
+  asserts zero `diagnostic_records`.
+
+Final characterization and broad verification
+- Exact Todo8 focused command passed twice after the final extraction: 59/59 and 59/59. Canonical
+  broad discovery passed assets/storage 81/81, library 18/18, completion 84/84, and CLI 61/61.
+  Config 28/28, redaction 6/6, browser security 19/19, WP3 download 12/12, and diagnostics 11/11
+  passed. One wildcard security command legitimately discovered zero files; the named security
+  suites above provide the actual coverage.
+- Full canonical unittest discovery ran 792 tests and produced exactly the two approved future
+  failures: missing `expand`/`failures` commands and missing `core.export.ExportMode`; 790 passed.
+  An initial full run also exposed the pre-existing absent ignored `forbidden_urls.txt` referenced
+  by `config.example.toml`; restoring the local example fixture made its 28-test suite green and
+  returned full discovery to exactly the two documented future failures.
+- Full Pyright exited 0 with 0 errors/warnings/information. Compileall, architecture, docs, quick,
+  `git diff --check`, package version smoke, and Python 3.10 `ast.parse(feature_version=(3, 10))`
+  for all nine changed Python files passed. A direct `python3.10` binary is not installed. The LSP
+  workspace cache transiently reported unresolved imports for newly created modules, while its
+  directory scan found no project-file errors and the authoritative fresh-process full Pyright was
+  clean.
+- Clean wheel build exited 0. Source/wheel Python parity is exact at 183/183 with no missing or
+  extra paths. Source and wheel scans contain none of `append_event`, `append_failure`,
+  `EventRecord`, `FailureRecord`, or `acquisition_diagnostics`; the coordinator test contains no
+  `event_count` or `min(event_count, 1)` alias. A generic wheel `event_count` remains only in the
+  unrelated typed diagnostics projection and is not a compatibility alias.
+- Adversarial command-shape note: directly naming fixture-dependent unittest modules as
+  `tests.test_*` produced expected import errors because those legacy tests require discovery to
+  place `tests/` on `sys.path`; an asset mega-command also exposed an existing order-sensitive
+  patched-store leak. Canonical discovery commands and the isolated exact Todo8 command are green.
+- No plan, Boulder/state, ledger, dependency, schema, `core/package.py`, or commit was changed by
+  this repair. Build/dist artifacts were removed after wheel verification; no external service,
+  production catalog, credential, user corpus, or runtime database was accessed.
+
+DoneClaim LOC repair
+- All assigned grandfathered files strictly decrease, all new files are at most 250 pure LOC, the
+  catalog grandfathered files contain no new WP6 symbols, CLI discovery/assertion coverage is
+  preserved, the asset-intent semantic alias is removed, Todo8 runtime/security/deletion behavior
+  is unchanged, final gates have only the two approved future failures, Todo 8 remains unchecked,
+  and no commit was created.

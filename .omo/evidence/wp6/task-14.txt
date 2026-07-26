@@ -1,0 +1,149 @@
+WP6 Todo 14 evidence
+date=2026-07-26
+scope=audited allowlisted manual metadata set/clear and manual tag add/remove through CurationOperationOwner only
+
+CHANGED FILES
+- src/sciretriever/catalog/manual_metadata_curation.py
+- src/sciretriever/catalog/manual_tag_curation.py
+- src/sciretriever/catalog/manual_metadata.py (deleted unaudited public owner)
+- src/sciretriever/catalog/library.py
+- src/sciretriever/catalog/analysis.py
+- src/sciretriever/catalog/__init__.py
+- tests/manual_curation_fixture.py
+- tests/test_manual_curation_wp6.py
+- tests/test_manual_tag_curation_wp6.py
+- tests/test_analysis_wp44.py
+- tests/test_catalog_wp1.py
+- tests/completion_facts_fixture.py
+- tests/test_completion_facts_wp5.py
+- tests/test_completion_facts_alignment_wp5.py
+- tests/test_completion_rollback_wp5.py
+- tests/download_wp3_fixture.py
+- tests/library_wp2_fixture.py
+- .omo/evidence/wp6/task-14.txt
+
+BASELINE CHARACTERIZATION BEFORE PRODUCTION EDIT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_manual_curation_wp6.py'
+exit=0
+observed=Ran 2 tests; OK
+asserted=provider observations remain backend evidence and provider projection returns after a manual override is cleared; generated tag replacement removes only generated links while a colliding manual Work tag remains
+
+RED BEFORE PRODUCTION EDIT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_manual*_curation_wp6.py'
+exit=1
+observed=2 loader errors
+failure_reason=ModuleNotFoundError for sciretriever.catalog.manual_metadata_curation and sciretriever.catalog.manual_tag_curation
+
+GREEN DIRECT AND REPEAT
+command=uv run --frozen python -m unittest discover -s tests -p 'test_manual*_curation_wp6.py'
+exit=0
+observed=Ran 12 tests; OK
+repeat_1=Ran 12 tests; OK
+repeat_2=Ran 12 tests; OK
+asserted=set/clear/add/remove canonical values and links; exact undo; unsupported field/value/tag and malformed/unknown IDs; duplicate/absent no-op; load/apply stale; stale undo; every apply/undo failpoint for manual_metadata_overrides,work_versions,manual_work_tags,audit; generated/manual collision separation
+
+IMPLEMENTATION
+- ManualMetadataSetHandler and ManualMetadataClearHandler are frozen CurationHandler values with allowlisted canonical fields, boundary value parsing, exact override/canonical footprints, canonical JSON, two table-family steps, deterministic recomputation and exact compensation.
+- ManualTagAddHandler and ManualTagRemoveHandler are frozen CurationHandler values with active Work/tag/link admission and one manual_work_tags family; generated_work_version_tags is never mutated.
+- CurationOperationOwner supplies BEGIN IMMEDIATE admission, load/apply SHA guard, complete after-hash no-op disposition, one append-only audit row, compensating undo, stale undo and before/after family failpoints.
+- Identical desired metadata suppresses both override and projection writes, so updated_at cannot manufacture a misleading success audit.
+- ManualMetadataRepository, its catalog export, analysis re-export and TagRepository.add_manual were deleted. Repository search found no ManualMetadataRepository, .add_manual( or manual_metadata import references.
+
+AFFECTED REGRESSIONS
+command=uv run --frozen python -m unittest discover -s tests -p 'test_curation*_wp6.py'
+exit=0; observed=Ran 10 tests; OK
+command=uv run --frozen python -m unittest discover -s tests -p 'test_work_curation_wp6.py'
+exit=0; observed=Ran 21 tests; OK
+command=uv run --frozen python -m unittest discover -s tests -p 'test_preferred_curation_wp6.py'
+exit=0; observed=Ran 5 tests; OK
+command=patched workspace admission + unittest discover test_catalog_wp1.py
+exit=0; observed=Ran 9 tests; OK
+command=patched workspace admission + unittest discover test_analysis_wp44.py
+exit=0; observed=Ran 20 tests; OK
+command=patched workspace admission + unittest discover test_completion_facts*_wp5.py
+exit=0; observed=Ran 12 tests; OK
+admission_seam=unittest.mock.patch('sciretriever.catalog.engine.require_staged_write_override'); parent .workspace-root was never created
+
+REAL TEMPORARY SQLITE QA
+command=uv run --frozen python - <<'PY' [real CatalogEngine driver under patched existing admission seam and TemporaryDirectory] PY
+exit=0
+after_metadata_set_and_tag_add=canonical language fr; manual override JSON exactly "fr"; manual collision tag link count 1
+simulated_reanalysis_promotion=generated language changed zh->de and generated collision tag replaced by generated-only tag; canonical remained fr; manual collision link remained; generated and manual tag IDs were distinct rows
+clear_remove=canonical fell back to generated de and both manual links were removed by their respective audited operations
+undo_each=undo remove restored exact manual tag linked_at; undo clear restored exact manual override JSON/link and canonical fr
+audit_count=6 exactly: set_metadata,add_tag,clear_metadata,remove_tag,undo_remove,undo_clear
+stale_path=loaded metadata set then independent canonical change to es; apply raised CurationStaleError; audit count remained 6
+noop_path=duplicate manual tag add raised CurationNoChangeError; audit count remained 6
+failpoint_path=apply:after:manual_work_tags raised injected RuntimeError; manual tag remained and audit count remained 6
+final_counts=metadata_observations:3;manual_metadata_overrides:1;manual_work_tags:1;generated_work_version_metadata:1;generated_work_version_tags:1;raw_assets:1;normalized_artifacts:1;curation_operations:6
+unrelated_family_invariance=provider observations, generated rows, RawAsset and normalized artifact counts unchanged across manual operations/undo/failure
+cleanup=TemporaryDirectory removed; no runtime catalog or driver file remains
+
+ULTRAQA NINE CLASSES
+1_malformed_unsupported_foreign=PASS; malformed/unknown WorkVersion and Work, unknown tag, unsupported canonical field and invalid canonical values reject with zero audit
+2_merged_ids=PASS; handlers require active owning Work and reject merged Work before mutation
+3_concurrent_load_apply_stale=PASS; exact load-time footprint mismatch rejects before first family failpoint and appends zero audit
+4_stale_undo=PASS; changed canonical/link after state rejects compensation and appends zero undo child
+5_duplicate_noop=PASS; duplicate set/add and absent clear/remove return CurationNoChangeError with zero misleading audit
+6_failpoints=PASS; every before/after apply and undo point for all three mutation table families plus audit rolls back exact state
+7_dirty_worktree=PASS; shared Todos 1-13 and unrelated user changes preserved; no reset,checkout,revert,stage,commit,push
+8_misleading_audit=PASS; invalid,no-op,stale and injected-failure paths append no success record
+9_deterministic_repeat=PASS; direct suite passed three green runs; canonical JSON, link selection, snapshots and dispositions are deterministic
+prompt_injection=not_applicable; handlers parse UUIDs, allowlisted field/value types and SafeSnapshot evidence and execute no untrusted prose
+
+STATIC ARCHITECTURE DOCS LOC DIFF
+command=uv run --frozen pyright src/sciretriever tests scripts
+exit=0; observed=0 errors, 0 warnings, 0 informations
+changed_file_lsp=production modules no diagnostics; standalone LSP test imports showed stale missing-import cache while repository-wide Pyright and executed imports were clean
+command=uv run --frozen python -m compileall -q src tests scripts main.py
+exit=0
+command=uv run --frozen python scripts/harness.py architecture
+exit=0; observed=[harness] architecture: passed
+command=uv run --frozen python scripts/harness.py docs
+exit=0; observed=[harness] documentation: passed
+command=uv run --frozen python scripts/governance_checks.py --changed-python-max-pure-loc 250 --baseline-pure-loc .omo/evidence/wp6/baseline-pure-loc.json
+exit=0; observed=no violations; immutable Todo 1 baseline accepted
+tokenize_physical_v1=src/sciretriever/catalog/manual_metadata_curation.py:162;src/sciretriever/catalog/manual_tag_curation.py:107;tests/manual_curation_fixture.py:23;tests/test_manual_curation_wp6.py:210;tests/test_manual_tag_curation_wp6.py:126;tests/test_analysis_wp44.py:574;src/sciretriever/catalog/library.py:1155
+loc_interpretation=all new files <=250; baseline-oversized analysis and library files strictly decreased; no new symbol was added inside grandfathered files
+command=programming check-no-excuse-rules.py [five new Todo 14 Python files]
+exit=0; observed=no violations
+command=git diff --check
+exit=0
+
+QUICK GATE ENVIRONMENT RECEIPT
+command=uv run --frozen python scripts/harness.py quick
+exit=1
+observed=documentation,architecture,compile and 18 harness tests passed; exactly 2 existing test_cli.py setup errors remain
+blocker=parent /workplace/home/duanjw/project lacks valid .workspace-root; create_catalog_engine rejects test setup before Todo 14 behavior
+constraint=.workspace-root was not created or modified
+
+ARCHITECTURAL SELF REVIEW
+single_responsibility=metadata module owns manual canonical overrides; tag module owns manual Work-tag links
+boundary_purity=UUID, field and canonical values parsed once at handler load; internal owner receives typed frozen handlers
+variant_and_escape_hatches=no new variant chain, Any, cast, type-ignore, broad except or defensive compatibility path
+parameter_budget=no new function exceeds three independent parameters except typed handler load boundary matching the explicit metadata command tuple
+tests=reverting either handler module restores the recorded RED import failure
+docs=no README/spec/progress change authorized or required; Todo 16/29 own public CLI/current implementation documentation
+
+CLEANUP AND SCOPE
+temporary_catalog_removed=true
+repository_driver_or_runtime_artifacts=false
+workspace_marker_created=false
+plan_ledger_boulder_modified_by_task14=false
+todo15_plus_modified=false
+dependencies_lockfile_readme_specs_modified=false
+git_writes=false
+
+RESIDUAL BLOCKER
+- Repository-wide quick/full remain blocked only by the pre-existing missing parent .workspace-root marker. Task-scoped tests, Todo 11-13, WP4 reanalysis, canonical completion/catalog regressions, Pyright, architecture, docs, compile, LOC, no-excuse, diff and real SQLite QA are green.
+
+DONECLAIM
+todo=14
+status=done_with_environment_blocker
+acceptance=audited set/clear/add/remove;canonical recomputation;manual/generated separation;reanalysis preservation;exact undo;load/apply and undo stale guards;deterministic zero-audit no-op;unaudited public methods removed
+scoped_verification=confirmed
+manual_sqlite_qa=confirmed
+all_nine_ultraqa_classes=confirmed
+cleanup=confirmed
+forbidden_state_untouched=confirmed
+independent_verifier_ready=true

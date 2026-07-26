@@ -1,0 +1,138 @@
+WP6 Todo 9 evidence
+Date: 2026-07-25
+
+DoneClaim
+- Extended the single strict TOML schema with ExpansionConfig, CurationConfig,
+  ExportConfig, ConfigCheckMode, and document_start_interval_seconds.
+- Added network-free `config check` through the existing selector precedence and
+  acquisition preflight/profile owners.
+- No completion, catalog, diagnostics, graph, governance, plan/state,
+  dependencies, core/package.py, config.example.toml, or documentation files
+  were changed by Todo 9.
+
+Changed files
+- src/sciretriever/config.py
+- src/sciretriever/config_loader.py
+- src/sciretriever/config_models.py
+- src/sciretriever/config_wp6.py
+- src/sciretriever/cli/main.py
+- src/sciretriever/cli/parser.py
+- src/sciretriever/cli/config_composition.py
+- src/sciretriever/cli/config_check.py
+- tests/test_config_check_wp6.py
+- .omo/evidence/wp6/task-9.txt
+
+Characterization and RED
+- `uv run --frozen python -m unittest discover -s tests -p 'test_toml_config.py'`
+  exit 0, 28 tests. Existing strict unknown/type behavior and selector precedence
+  remained green before implementation.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_config_check_wp6.py'`
+  exit 1 before production changes: ImportError for missing ConfigCheckMode. This
+  was the intended first missing WP6 contract.
+- `uv run --frozen python -m unittest tests.test_wp6_contracts`
+  before implementation failed ConfigCheckMode and future WP6 surfaces.
+
+Schema defaults and strictness
+- document_start_interval_seconds: 30.0; accepted range (0, 86400].
+- expansion: direction="references", depth=0; directions are references,
+  cited-by, both; depth is a nonnegative integer.
+- curation.output_format: "json"; formats are json and jsonl.
+- export.output_format: "jsonl"; formats are json and jsonl.
+- export.include_references: false boolean.
+- tests reject unknown section keys, wrong types, unsupported formats/direction,
+  negative depth, zero/non-finite/over-bound interval, malformed TOML, and
+  existing cross-field conflicts.
+- Selection remains `--config` > SCIRETRIEVER_CONFIG > ./config.toml, with
+  --no-config unchanged. The explicit-over-environment check is green.
+
+Offline report and security
+- Minimal installed CLI command:
+  `uv run --frozen sciretriever --config <temp>/config.toml config check`
+  exit 0 and exact JSON:
+  {"checks":[{"name":"config","reason":"strict TOML loaded","status":"ready"}],"mode":"offline","status":"ready"}
+- `uv run --frozen sciretriever config check --help` exit 0 and identifies
+  offline external-service behavior.
+- A patched socket.create_connection counter remained exactly 0 across two
+  identical minimal invocations; reports and exits were byte-equivalent.
+- Unknown key command exited 2 with `unknown config field: unknown`.
+- Mode-0644 TOML containing TASK9-SENTINEL-SECRET exited 2 with the permission
+  error; the sentinel was absent from stdout/stderr.
+- Enabled LLM with absent TASK9_MISSING_SECRET exited 1 with deterministic JSON
+  naming only analysis.llm.credential_env; no secret value or config path was
+  emitted. Supplying the environment reference exited 0 without emitting it.
+- Disabled LLM, MinerU, and browser produce no secret/profile checks and pass.
+- Existing browser validator accepts a mode-0700 real profile and rejects its
+  symlink replacement. Existing secure config snapshot tests reject config
+  symlink and canonical-directory replacement races.
+- A subprocess counterexample selected a symlink under uniquely named absolute
+  directory/file tokens. Before repair it exited 2 but stderr included the full
+  path and both tokens. After typed loader-failure projection at the CLI boundary,
+  it still exits 2 and names the regular non-symlink category while stdout,
+  stderr, and rendered exception text contain no full path or unique token.
+- Neighboring explicit missing-file, malformed-TOML, schema-type, and inline-
+  credential permission failures also exit 2, preserve their actionable category,
+  and emit neither absolute path/file tokens nor the credential sentinel.
+- Config check never rewrites TOML and does not construct a transport.
+
+GREEN and regression commands
+- Focused `test_config_check_wp6.py`: exit 0, 9 tests, run green twice after repair.
+- `test_toml_config.py`: exit 0, 28 tests.
+- `test_cli.py`: exit 0, 22 tests.
+- `test_acquisition.py`: exit 0, 7 tests.
+- `test_browser_wp3.py`: exit 0, 19 tests.
+- Isolated Todo 1 ConfigCheckMode test: exit 0, 1 test.
+- Full `tests.test_wp6_contracts`: ConfigCheckMode is green; only unrelated
+  future Todo failures remain for expand/failures and core.export.
+- `uv run --frozen pyright src/sciretriever tests scripts`: exit 0,
+  0 errors, 0 warnings, 0 informations.
+- `uv run --frozen python scripts/harness.py quick`: exit 0; documentation,
+  architecture, compile, harness tests, and CLI tests passed.
+- `uv run --frozen python scripts/harness.py docs`: exit 0.
+- `uv run --frozen python scripts/harness.py architecture`: exit 0 after owner
+  alignment retained TOML decoding in config.py and load invocation in main.py.
+- Final merged `scripts/harness.py full` completed documentation, architecture,
+  compile, pyright, wheel build, and wheel-content gates; its 769-test phase
+  exited 1 only for three concurrent non-Todo9 WP6 expectations: completion
+  stage alignment, future expand/failures commands, and core.export.ExportMode.
+
+Exact tokenize-physical-v1 pure LOC
+- src/sciretriever/config.py: 646 (Todo 1 baseline pure LOC 848; strictly shrunk,
+  no WP6 parser behavior beyond owner decoding and re-exports).
+- src/sciretriever/config_loader.py: 137.
+- src/sciretriever/config_models.py: 178.
+- src/sciretriever/config_wp6.py: 59.
+- src/sciretriever/cli/main.py: 88 (Todo 1 baseline pure LOC 296; strictly shrunk).
+- src/sciretriever/cli/parser.py: 39.
+- src/sciretriever/cli/config_composition.py: 163.
+- src/sciretriever/cli/config_check.py: 96.
+- tests/test_config_check_wp6.py: 242.
+
+Diagnostics, adversarial checks, and cleanup
+- Full repository pyright was clean. The persistent editor LSP index did not
+  discover newly added untracked CLI modules and retained four false
+  missing-import diagnostics in main.py/parser.py; direct and full pyright both
+  reported 0 errors, 0 warnings, 0 informations for the same files.
+- The exact Todo 1 `find_wp6_pure_loc_violations(..., 250)` gate printed PASS;
+  config.py defines no new WP6 class/function symbols.
+- Malformed TOML/type/conflict/bounds, config/profile stale symlinks, insecure
+  inline-secret file, missing enabled references, disabled omission, exact exit
+  and JSON, repeat runs, and zero-network behavior are covered.
+- Commands were bounded by 120-second tool timeouts; none hung or flaked.
+- The programming no-excuse audit reported no violations in the three changed
+  Python files; editor diagnostics reported no findings in each changed source
+  and test file. The 242-pure-LOC test remains below the 250 gate warning limit.
+- Worktree was dirty before Todo 9 from concurrent Todo 1-5 files; no unrelated
+  file was reverted or modified.
+- All task9-*.tmp.toml manual fixtures were deleted with apply_patch. No runtime
+  catalog, network artifact, build output, prompt injection input, or temporary
+  test file remains. Final-harness build/ and dist/ outputs were removed.
+
+Architectural self-review
+- Single responsibilities: models, snapshot loader, WP6 section parser, CLI
+  selection/injection, parser assembly, and offline checking are separated.
+- Untrusted TOML is decoded once and parsed through one strict schema.
+- No Any/object escape was added to public signatures; no type suppression,
+  broad catch, speculative fallback, destructive verification, or negative
+  boolean naming was added.
+- New behavior is locked by focused schema, CLI, filesystem, secret/redaction,
+  precedence, deterministic-output, and zero-network tests.

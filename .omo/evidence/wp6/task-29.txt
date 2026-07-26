@@ -1,0 +1,90 @@
+WP6 Todo 29 - command help, example TOML and responsibility documentation
+
+Scope
+- Synchronized the current CLI/config surface in README.md and config.example.toml.
+- Clarified only approved decisions in requirements.md, system-design.md and technical-architecture.md.
+- Cross-checked execution-plan language and synchronized code-doc ownership, provider/MinerU operations, tool neutrality and implementation-progress capability rows.
+- Added machine-consumed help/config/progress snapshots and documentation-gate failure fixtures.
+- This final Todo 29 completion step did not edit or tick the WP6 plan, ledger or Boulder and did not start Todo 30.
+
+Changed Todo 29 surfaces
+- README.md
+- config.example.toml
+- docs/specs/requirements.md
+- docs/specs/system-design.md
+- docs/specs/technical-architecture.md
+- docs/governance/code-doc-map.md
+- docs/governance/implementation-progress.md
+- docs/guides/provider-operations.md
+- docs/guides/mineru-service-operations.md
+- docs/tool-neutrality-statement.md
+- scripts/documentation_checks.py
+- tests/test_documentation_wp6.py
+- tests/test_harness_governance.py
+- src/sciretriever/workspace.py
+- tests/test_workspace.py
+- .omo/evidence/wp6/task-29.txt
+
+Characterization and RED
+- Installed help was inspected for root, expand, failures, config check and library before documentation edits.
+- tests/test_documentation_wp6.py first produced five expected failures: missing WP6 example fields/defaults, README omission and three absent documentation-gate controls.
+- After the gate controls were implemented, the focused run retained only the expected README/config failures.
+- Governance RED fixtures separately proved rejection of a stale WP6 command surface, an unknown example TOML key and a duplicated Todo 32 marker; the pre-existing broken-link fixture remained active.
+- No test asserts natural-language prose. Snapshots assert parser command structure, argparse defaults, strict parsed config values and the structural Todo 32 marker.
+
+GREEN documentation behavior
+- Root command order is discover, search, expand, download, analyze, failures, library, preflight, catalog, package, config.
+- Library exposes show, search, references, cited-by, export, review, merge-work, regroup-version, preferred, metadata, tag, author, audit and undo; config exposes only check.
+- Expand defaults are references, max-provider-calls=10 and provider-page-size=100; depth remains required without config injection. Failures defaults to latest with details disabled.
+- config.example.toml defines document_start_interval_seconds=30.0 once, expansion references/0/openalex+semantic-scholar/10/100 once, curation json once and export jsonl/false once. The real strict loader accepts the file.
+- README distinguishes current behavior from ideal specs. It explicitly records that curation/export fields are parser contracts not yet injected into command runtime; current curation output and reading-export flags remain explicit.
+- Implementation progress contains exactly one `WP6_FINAL_RELEASE_RECEIPT: PENDING_TODO32` marker. It does not contain a final WP6 count, release receipt or all-gates-passed claim.
+
+Focused verification
+- `uv run --frozen python -m unittest discover -s tests -p 'test_documentation_wp6.py'`: 3 passed.
+- `uv run --frozen python -m unittest discover -s tests -p 'test_harness_governance.py'`: 10 passed.
+- `uv run --frozen python scripts/harness.py docs`: passed.
+- `uv run --frozen python scripts/harness.py architecture`: passed.
+- LSP diagnostics for tests/test_documentation_wp6.py, tests/test_harness_governance.py and scripts/documentation_checks.py: no diagnostics.
+- `uv run --frozen python scripts/harness.py quick`: passed after the workspace boundary repair below.
+
+Workspace safety repair found by the gate
+- Initial quick found two real test errors: explicit catalogs under system temporary directories were rejected solely because the source checkout has no `.workspace-root` marker.
+- Direct RED: `WorkspaceResolverTests.test_external_write_is_allowed_without_a_workspace_marker` raised PermissionError at require_staged_write_override.
+- Root cause: the missing-marker branch did not distinguish a resolved target outside the repository from a staged repository target.
+- Minimal fix: a resolved external target is allowed; an in-repository target remains rejected with the stable staged-repository error; an explicitly configured but invalid workspace override still fails workspace verification.
+- Direct GREEN: the new boundary test passed; test_workspace.py passed 17/17; test_cli.py passed 19/19; LSP diagnostics for workspace.py and test_workspace.py were clean.
+- No `.workspace-root` marker was created and no production staged-repository bypass was introduced.
+
+Pre-Todo32 full regression
+- `uv run --frozen python scripts/harness.py full` completed with documentation, architecture, compile, Pyright, all tests, wheel contents and wheel build passing.
+- The test phase ran 930 tests and reported OK.
+- This 930 result is a pre-Todo32 nonfinal regression observation only. It is not the Todo 31 final release count and is not a Todo 32 release receipt; implementation-progress remains pending Todo 32 exactly as required.
+
+Real CLI QA
+- tmux root `sciretriever --no-config --help` exited 0 and displayed expand, failures and config.
+- Installed expand, failures, config check and library help each exited 0.
+- Installed expand with negative depth failed at argparse, printed `depth must be nonnegative` and exited 2 before runtime construction.
+- Observed help/defaults agree with tests/test_documentation_wp6.py and config.example.toml.
+
+Scoped review and cleanup
+- Documentation and architecture harnesses passed after the final text edits.
+- Reread covered every Todo 29 document, strict example fields, responsibility map, progress marker and the workspace repair pair.
+- Secret scan over the Todo 29 code/config/docs scope found no private key, password, token or credential value. Example hosts and placeholder environment-variable names remain non-secret.
+- Stale-text scan found no `Reference expansion | 未实现`, WP6 `not started`, old browser-not-implemented statement, invented final count, all-gates-passed claim or duplicate Todo 32 marker.
+- No Git command was used while producing or finalizing this evidence, and no commit, stage, reset, checkout, rebase or push was performed.
+- tmux session `todo29-qa`, four `/tmp/todo29-*-help` files and the temporary debug journal were removed. `build/` and `dist/` are absent.
+- Orchestrator-owned plan checkbox, ledger and Boulder were not modified by this completion step.
+
+Nine ultraqa
+1. behavior=PASS root/nested command trees and help defaults match the installed parser.
+2. config=PASS strict example parses and every WP6 declaration/default is unique and exact.
+3. current_truth=PASS README documents implemented behavior and explicitly names parser-only curation/export fields.
+4. ideal_scope=PASS specs contain approved clarifications without dynamic progress or new scope.
+5. governance=PASS stale command, unknown key, duplicate marker and broken-link failure fixtures all detect drift.
+6. security=PASS offline/runtime boundaries and secret-reference rules are documented without values; scoped secret scan is empty.
+7. regression=PASS focused tests, quick, docs, architecture, Pyright, 930-test pre-release regression and wheel gates pass.
+8. workspace_safety=PASS external scratch writes work while repository writes and invalid overrides still fail closed.
+9. hygiene=PASS no Todo30 work, orchestrator mutation, debug file, tmux session, Todo29 temp file, build or dist output remains.
+
+DoneClaim: WP6 Todo 29 is complete and scoped. Current help, strict example TOML, README, approved spec clarifications, responsibility documentation, operations guides and implementation-progress capability rows agree with implemented behavior. RED/GREEN drift fixtures, docs/architecture/quick/full verification, installed CLI QA, workspace safety repair and cleanup evidence pass. Todo 32 remains the sole owner of the final release count and release receipt.

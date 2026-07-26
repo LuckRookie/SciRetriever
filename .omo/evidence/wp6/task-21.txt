@@ -1,0 +1,165 @@
+WP6 TODO 21 - EXPORT REDACTION, FILESYSTEM AND IMMUTABILITY HARDENING
+Date: 2026-07-26
+
+Scope and changed files
+- src/sciretriever/core/export_publication.py
+- src/sciretriever/cli/library.py (reading writer delegation only)
+- src/sciretriever/packaging/exporter.py (package writer delegation only)
+- tests/test_export_wp6.py
+- .omo/evidence/wp6/task-21.txt
+- No expansion/Todo24, package contract, CLI semantics, docs, dependency, lockfile,
+  plan, ledger, Boulder, orchestrator state, or .workspace-root edit.
+
+TDD RED and GREEN
+- RED: uv run --frozen python -m unittest discover -s tests -p 'test_export_wp6.py'
+- RED result: import failed only because sciretriever.core.export_publication did not exist.
+- GREEN: PASS, Ran 4 tests; repeated after implementation and final cleanup, all PASS.
+- The required test_export_wp6.py covers fixed sentinel scans, crash checkpoints,
+  symlink/hardlink/catalog-sidecar swaps and concurrent exact package replay.
+
+Implemented boundary
+- Both export modes now delegate to one descriptor-relative publication owner.
+- It opens the admitted real parent with O_DIRECTORY/O_NOFOLLOW, takes the directory lock,
+  creates an owner-only O_EXCL/O_NOFOLLOW temporary file relative to that descriptor,
+  writes all bytes, fsyncs, sets 0400, revalidates destination and catalog aliases,
+  renames relative to the same descriptor and fsyncs the parent.
+- Crash before rename removes the temporary and leaves target absent. Crash after the
+  durable rename leaves the complete canonical target accepted. No partial target is visible.
+- A symlink, multi-link regular file or catalog-sidecar swap before final validation fails
+  closed, preserves unrelated bytes and removes temporary residue.
+- Package export still loads immutable stored bytes through PackagePublisher.load_verified
+  and DerivedArtifactStore verification; current replacement and concurrent exact replay
+  never mutate old stored package bytes.
+
+Security and real-value QA
+- Fixed sentinel: WP6-TODO21-FIXED-SENTINEL.
+- Reading CLI test persists a sentinel-bearing token/runtime path/provider payload through
+  CatalogDiagnosticService, then scans catalog bytes, exported bytes and terminal text.
+  The sentinel is absent from all three; export also excludes provider_record_id,
+  diagnostic, storage_path and provenance fields.
+- Package output and terminal scans contain no sentinel or temporary storage root.
+- Real TemporaryDirectory SQLite/storage manual driver ran reading and exact package CLI
+  modes: reading_code=0, reading_rows=1, package_code=0, package_exact=true,
+  sentinel_absent=true, temp_clean=true; all fixtures cleaned afterward.
+- Direct failpoint QA observed before_rename target absent and after_rename target equal to
+  the complete canonical payload, with zero .*.tmp files.
+
+Focused and regression evidence
+- test_export_wp6.py: PASS 4/4, repeated.
+- Todo 17 contracts: test_export_contracts_wp6.py PASS 6/6.
+- Todo 18 reading: test_reading_export_wp6.py PASS 3/3.
+- Todo 19 package export: test_package_export_wp6.py PASS 5/5.
+- Todo 20 CLI export: test_cli_export_wp6.py PASS 6/6.
+- Redaction: test_redaction.py PASS 6/6.
+- WP2 CLI library under established missing-marker isolation: PASS 7/7.
+- Raw asset crash recovery under the same isolation: PASS 7/7.
+- Package publication under the same isolation: PASS 3/3.
+- Core package serialization: test_package.py PASS 14/14.
+- Current replacement/package immutability: test_analysis_wp44.py PASS 20/20.
+
+Static, architecture and release gates
+- Full Pyright src/sciretriever tests scripts: 0 errors, 0 warnings, 0 informations.
+- LSP diagnostics: all four owned Python files clean.
+- compileall: PASS. Documentation harness: PASS. git diff --check: PASS.
+- Exact diff-scoped governance pure-LOC gate: PASS.
+- tokenize-physical-v1 pure LOC: export_publication.py=108, cli/library.py=152,
+  packaging/exporter.py=63, test_export_wp6.py=154; all <=250.
+- Programming no-excuse audit: no violations in four owned Python files.
+- Architecture, quick and full were run. They are blocked by concurrent Todo24's
+  expansion/service.py import of concrete integrations.graph_adapters. Quick/full also
+  retain the known absent-.workspace-root test_cli.py failures. Full still passed docs,
+  compile, merged Pyright, wheel build and wheel contents. No Todo21 focused test failed.
+- Generated build/ and dist/ were removed; no marker or manual temporary root remains.
+
+Nine ultraqa classes
+1. Functionality: real reading and exact package CLI modes emit parseable canonical bytes.
+2. Boundary: before/after rename outcomes are absent-or-complete and deterministic.
+3. Security: sentinel, diagnostics, provider observations and internal paths do not escape.
+4. Filesystem: symlink, hardlink and catalog-sidecar swaps fail closed without victim changes.
+5. Data integrity: canonical package bytes are independently verified before export.
+6. Determinism: reading/package replay bytes and package identity remain exact.
+7. Compatibility: Todos 17-20, WP2 library, redaction and package regressions pass.
+8. Concurrency/recovery: four exact exports converge; old package bytes remain unchanged;
+   crash checkpoints leave no accepted partial or temporary residue.
+9. Maintainability: one shared <=250-LOC owner; types, LSP, compile, docs, LOC and diff clean.
+
+Architectural self-review
+- export_publication.py owns one noun phrase: export byte publication.
+- ExportPublication is frozen and typed; no untrusted dict crosses the boundary.
+- No Any/cast/ignore, broad exception, variant chain, logging, package reconstruction,
+  fallback, function over three parameters, dependency or compatibility path was added.
+- Every introduced behavior is locked by a test that failed before implementation.
+
+DoneClaim: WP6 Todo 21 acceptance is complete. Both export modes share crash-consistent,
+descriptor-relative publication; fixed sentinel and backend/runtime material are absent from
+catalog/output/terminal scans; hostile target swaps fail closed; before/after rename outcomes
+are absent-or-canonical; concurrent exact package replay converges while old snapshots remain
+immutable. Focused and affected regressions, manual CLI QA, Pyright/LSP/docs/compile/LOC/diff
+gates and cleanup are complete. The only merged gates not green are the explicitly out-of-scope
+concurrent Todo24 architecture import and pre-existing missing-marker failures. No commit or push.
+
+INDEPENDENT VERIFIER REPAIR - 2026-07-26
+
+Verifier session and exact RED
+- Independent verifier: ses_065718f26ffecoa8DnsdJ96SWU.
+- Reproduction command: uv run --frozen python -m unittest discover -s tests -p
+  'test_export_characterization_wp6.py'.
+- RED observed the protected catalog hardlink classified as
+  "existing export destination must be a single-link regular file" instead of the frozen
+  "catalog storage" contract. While unittest rendered that failed subtest it assigned
+  exception.__traceback__, and frozen ExportContractError raised the secondary
+  TypeError "super(type, obj): obj must be an instance or subtype of type".
+- New direct RED: test_export_contracts_wp6.py added protected-versus-ordinary hardlink
+  precedence and normal traceback-assignment assertions; the run failed on the same two causes.
+
+Repair scope and root-cause fix
+- src/sciretriever/core/export_destination.py: protected catalog/WAL/SHM/journal path and
+  same-file identity classification now runs before generic symlink, regular-file and link-count
+  rejection. Catalog aliases retain the exact catalog-storage classification; unrelated
+  hardlinks still fail the single-link regular-file safety contract.
+- src/sciretriever/core/export_errors.py: ExportContractError is now a normal typed ValueError
+  subclass with typed reason and standard base-exception initialization. It remains stable and
+  redacted while allowing Python/unittest to assign __traceback__ normally.
+- tests/test_export_contracts_wp6.py: retained existing unsafe-destination coverage and added
+  exact regression tests for classification precedence and traceback compatibility.
+- No Todo22+, expansion, package/CLI contract, docs, dependencies, lockfile, marker, plan,
+  ledger, Boulder, Git or unrelated file was changed.
+
+Repair GREEN and affected regressions
+- test_export_characterization_wp6.py: PASS 2/2 twice.
+- test_export_contracts_wp6.py: PASS 8/8 twice.
+- test_export_wp6.py: PASS 4/4 twice.
+- test_reading_export_wp6.py: PASS 3/3.
+- test_package_export_wp6.py: PASS 5/5.
+- test_cli_export_wp6.py: PASS 6/6.
+- test_redaction.py: PASS 6/6.
+- Missing-marker-isolated raw-asset crash, package publication, package serialization,
+  current-replacement immutability and WP2 CLI library regressions: PASS 51/51.
+
+Manual hardlink, exception and crash values
+- catalog hardlink: "export destination conflicts with catalog storage".
+- ordinary hardlink: "existing export destination must be a single-link regular file".
+- Assigning ExportContractError.__traceback__ completed without suppression or secondary error.
+- crash before rename: before_absent=true.
+- crash after rename: after_canonical=true.
+- temporary residue: temp_clean=true.
+
+Repair static gates and cleanup
+- Full Pyright src/sciretriever tests scripts: 0 errors, 0 warnings, 0 informations.
+- LSP server status was available but its prior client was disposed; fresh full Pyright is clean.
+- Architecture harness: PASS. Documentation harness: PASS. compileall: PASS.
+- Exact diff-scoped governance pure-LOC gate: PASS. Direct tokenize-physical-v1 values:
+  export_destination.py=34, export_errors.py=9, test_export_contracts_wp6.py=207.
+- Programming no-excuse audit: no violations in the three repair-owned Python files.
+- git diff --check: PASS.
+- Quick/full were rerun: docs, architecture, compile, harness tests/typecheck and wheel checks pass.
+  Quick retains only two known absent-.workspace-root CLI errors. Full ran 906 tests and remains
+  blocked by 301 marker-driven errors plus six later shared-tree failures; no Todo17-21 test fails.
+- Full-generated build/ and dist/ were removed; no marker or manual temporary root remains.
+
+Repair DoneClaim: the verifier blockers are fixed at their roots. Protected catalog and sidecar
+aliases are classified before generic filesystem rejection, ordinary hardlinks remain fail-closed,
+and ExportContractError participates in normal Python traceback handling. Characterization and
+Todo17-21 security/filesystem/immutability tests repeat green, all affected storage/package/current
+regressions pass, manual hardlink/crash values are exact, static gates are clean, generated output
+is removed, and no Todo22+ or orchestrator state was touched.

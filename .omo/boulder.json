@@ -9,6 +9,14 @@
       "session_ids": ["codex:current"],
       "status": "completed",
       "worktree_path": null
+    },
+    "wp6-product-closeout": {
+      "work_id": "wp6-product-closeout",
+      "active_plan": ".omo/plans/wp6-product-closeout.md",
+      "plan_name": "wp6-product-closeout",
+      "session_ids": ["codex:current"],
+      "status": "completed",
+      "worktree_path": null
     }
   }
 }

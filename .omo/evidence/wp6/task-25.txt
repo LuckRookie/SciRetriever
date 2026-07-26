@@ -1,0 +1,47 @@
+WP6 Todo25 evidence
+Date: 2026-07-26
+
+Scope
+- Expansion layers complete through the existing WP5 CompletionPipeline and run_completion_batch.
+- No CLI/config/interruption contract, durable frontier/status, dependency, or user documentation change.
+
+TDD
+- Characterization: existing Todo24 cyclic/high-fanout/provider tests passed before the change.
+- RED: test_breadth_first_cycles_and_provider_duplicates_are_stable failed because COMPLETE(C) event index 10 followed local-edge(B) index 8.
+- GREEN: layer completion is now a full batch barrier; only fact-verified COMPLETE items collect edges.
+
+Real SQLite/storage acceptance
+- Layer statuses on first invocation: COMPLETE reuse, acquisition exhaustion at ASSET_PENDING, analysis runtime failure at ANALYSIS_PENDING.
+- Both pending siblings completed on rerun; the third replay remained all COMPLETE.
+- COMPLETE reuse consumed no pacing slot. New-document admission timestamps were exactly 0.0, 30.0, 60.0, 90.0 seconds.
+- Three enforced waits were exactly 30.0 seconds each.
+- Two typed expansion diagnostic rows were appended, one per stopped branch.
+- Catalog count tuple after successful rerun equaled replay exactly; metadata observations, raw assets, current analyses, processing runs, and normalized artifacts did not duplicate.
+- Completion count equations passed: selected equals all terminal dispositions; unique_targets equals selected minus duplicates.
+
+Nine ultraqa checks
+1. Layer barrier: PASS.
+2. COMPLETE-only frontier: PASS.
+3. Acquisition exhaustion branch stop: PASS.
+4. Analysis failure branch stop: PASS.
+5. Sibling continuation: PASS.
+6. Global document-start pacing: PASS.
+7. COMPLETE reuse bypasses pacing: PASS.
+8. Idempotent pending retry and COMPLETE replay: PASS.
+9. Typed redacted diagnostic persistence and count reconciliation: PASS.
+
+Commands
+- uv run --frozen python -m unittest discover -s tests -p 'test_expansion_completion_wp6.py' (3 repeats): PASS, 1 test each.
+- uv run --frozen python -m unittest discover -s tests -p 'test_graph_expansion_wp6.py': PASS, 5 tests.
+- uv run --frozen python -m unittest discover -s tests -p 'test_completion_operations_wp5.py': PASS, 9 tests.
+- uv run --frozen python -m unittest discover -s tests -p 'test_completion_counts_wp6.py': PASS, 10 tests.
+- uv run --frozen pyright src/sciretriever tests scripts: PASS, 0 errors/warnings.
+- uv run --frozen python scripts/harness.py architecture: PASS.
+- uv run --frozen python scripts/harness.py docs: PASS.
+- git diff --check: PASS.
+- python -m scripts.wp6_pure_loc: PASS.
+- uv run --frozen python scripts/harness.py quick: BLOCKED in pre-existing CLI temp-catalog setup (2 errors), missing workspace marker.
+- uv run --frozen python scripts/harness.py full: BLOCKED in pre-existing temp-catalog fixtures for the same missing workspace marker; compile, Pyright, architecture, documentation, and wheel-content subgates passed.
+
+Environment limitation
+- Wider SQLite fixture groups that do not opt into controlled temporary writes fail before test setup because this checkout has no valid .workspace-root marker. The marker was not created or modified. Todo25's real temporary fixture uses create_catalog_engine(..., allow_repository_write=True).
