@@ -39,6 +39,13 @@ def clean_text(value: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_query(value: str) -> str:
+    normalized = clean_text(value)
+    if normalized is None:
+        raise ValueError("query must contain visible text")
+    return normalized.casefold()
+
+
 def _stable_unique(values: tuple[str, ...]) -> tuple[str, ...]:
     result: list[str] = []
     seen: set[str] = set()
@@ -96,4 +103,10 @@ def normalize_records(records: Iterable[ProviderRecord]) -> tuple[Candidate, ...
     )
 
 
-__all__ = ("clean_text", "identifier_sort_key", "normalize_record", "normalize_records")
+__all__ = (
+    "clean_text",
+    "identifier_sort_key",
+    "normalize_query",
+    "normalize_record",
+    "normalize_records",
+)

@@ -179,6 +179,37 @@ class WorkspaceResolverTests(TestCase):
                             start=REPOSITORY,
                         )
 
+    def test_explicit_override_does_not_require_a_workspace_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {}, clear=True):
+            target = Path(directory) / "explicit.sqlite"
+
+            resolved = require_staged_write_override(
+                target,
+                allow_staged_write=True,
+                start=REPOSITORY,
+            )
+
+        self.assertEqual(resolved, target.resolve())
+
+    def test_external_write_is_allowed_without_a_workspace_marker(self) -> None:
+        # Given an explicit target outside the repository and no discoverable marker
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            workspace,
+            "find_workspace_root",
+            side_effect=RuntimeError("workspace marker is absent"),
+        ):
+            target = Path(directory) / "catalog.sqlite"
+
+            # When the staged-write guard evaluates the external target
+            resolved = require_staged_write_override(
+                target,
+                allow_staged_write=False,
+                start=REPOSITORY,
+            )
+
+        # Then normal scratch writes remain available without weakening repository writes
+        self.assertEqual(resolved, target.resolve())
+
     def test_staged_write_check_works_without_source_repository_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace_root = Path(directory)

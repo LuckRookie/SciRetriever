@@ -11,7 +11,6 @@ from sciretriever.analysis import AnalysisService
 from sciretriever.catalog import (
     CurrentAnalysisRepository,
     IdentityResolver,
-    ManualMetadataRepository,
     MetadataIngestionObservation,
     TagRepository,
     WorkRepository,
@@ -155,9 +154,8 @@ class CompletionRollbackTests(unittest.TestCase):
                 (self.work_version_id,),
             ).one()
         self.assertEqual(row, ("Provider title", "原文摘要", "en"))
-        ManualMetadataRepository(self.catalog).set(
-            self.work_version_id, "abstract", "Manual abstract"
-        )
+        from manual_curation_fixture import set_manual_metadata
+        set_manual_metadata(self.catalog, self.work_version_id, "abstract", "Manual abstract")
         with self.catalog.connect() as connection:
             abstract = connection.exec_driver_sql(
                 "SELECT abstract FROM work_versions WHERE id = ?", (self.work_version_id,)

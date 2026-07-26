@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
+from sciretriever.catalog.completion_facts import CompletionStage
 from sciretriever.errors import SciRetrieverError
 
 from .actions import CompletionStop
@@ -12,37 +14,55 @@ from .pipeline import CompletionInvariantError, CompletionPipeline, MetadataUnav
 from .targets import CompletionTarget, WorkVersionTarget
 
 
+class DocumentStartPacer(Protocol):
+    async def wait(self, applicable_interval: float = 0.0) -> float: ...
+
+
 async def run_completion_batch(
     pipeline: CompletionPipeline,
     targets: Sequence[CompletionTarget],
     stop: CompletionStop,
     *,
     policy: BatchPolicy = BatchPolicy(),
+    start_pacer: DocumentStartPacer | None = None,
 ) -> BatchResult:
     items: list[BatchItemResult] = []
     first_by_version: dict[str, int] = {}
     for index, target in enumerate(targets):
+        work_version_id: str | None = None
+        final_stage = None
         try:
             resolved = pipeline.resolve_target(target, stop)
             if isinstance(resolved, MetadataUnavailableResult):
                 items.append(BatchItemResult.exhausted(target))
                 continue
             work_version_id, initial = resolved
+            final_stage = initial.stage
             previous = first_by_version.get(work_version_id)
             if previous is not None:
                 items.append(BatchItemResult.duplicate(target, work_version_id, previous))
                 continue
             first_by_version[work_version_id] = index
+            if initial.stage is not CompletionStage.COMPLETE and start_pacer is not None:
+                await start_pacer.wait()
             result = await pipeline.ensure_resolved(target, stop, work_version_id, initial)
-            items.append(BatchItemResult.succeeded(target, work_version_id,
-                                                   result.final_stage, result))
+            if result.reached_stop:
+                items.append(BatchItemResult.succeeded(target, work_version_id,
+                                                       result.final_stage, result))
+            else:
+                items.append(BatchItemResult.exhausted(target, work_version_id,
+                                                       result.final_stage, result))
         except KeyboardInterrupt:
             items.extend(BatchItemResult.interrupted(value) for value in targets[index:])
             break
         except CompletionInvariantError:
             raise
         except (OSError, RuntimeError, SciRetrieverError):
-            items.append(BatchItemResult.failed(target, OutcomeReason.UNEXPECTED_FAILURE))
+            if work_version_id is not None:
+                final_stage = pipeline.services.facts.get(work_version_id).stage
+            items.append(BatchItemResult.failed(
+                target, OutcomeReason.UNEXPECTED_FAILURE, work_version_id, final_stage,
+            ))
     return BatchResult(policy, tuple(items))
 
 

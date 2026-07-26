@@ -9,6 +9,8 @@ from sciretriever.acquisition.browser import (
 from sciretriever.acquisition.candidate_executor import CandidateExecutor
 from sciretriever.acquisition.candidate_resolution import CandidateResolver
 from sciretriever.acquisition.controls import HostBudget, HostBudgetManager
+from sciretriever.acquisition.pacing import DocumentStartGate
+from sciretriever.acquisition.profiles import profile_for_provider
 from sciretriever.acquisition.identity_validation import ContentIdentityValidator
 from sciretriever.acquisition.policy_files import read_policy_lines
 from sciretriever.acquisition.providers import (
@@ -55,6 +57,7 @@ class AcquisitionCliConfig:
     sci_hub: SciHubConfig = SciHubConfig()
     translator: TranslatorConfig = TranslatorConfig()
     browser: BrowserConfig = BrowserConfig()
+    document_start_interval: float = 30.0
 
 
 def _credential(config: AcquisitionCliConfig, provider: str) -> str | None:
@@ -97,6 +100,11 @@ def build_acquisition_service(
     transport = UrllibAcquisitionTransport(
         UrlPolicy(forbidden_urls=forbidden), max_bytes=config.max_asset_bytes)
     budgets = HostBudgetManager(HostBudget(config.host_concurrency, config.host_min_interval))
+    provider_intervals: dict[str, float] = {}
+    for provider in config.providers:
+        profile = profile_for_provider(provider)
+        profile_interval = 0.0 if profile is None else profile.budget.min_interval
+        provider_intervals[provider] = max(config.host_min_interval, profile_interval)
     assets = AssetRepository(engine)
     runner = (PlaywrightBrowserRunner(config.browser, max_asset_bytes=config.max_asset_bytes)
               if config.browser.enabled else None)
@@ -110,6 +118,8 @@ def build_acquisition_service(
         browser_resolvers=build_browser_resolvers(config.browser.rules),
         provider_concurrency=config.provider_concurrency,
         budgets=budgets,
+        document_gate=DocumentStartGate(config.document_start_interval),
+        provider_start_intervals=provider_intervals,
     )
 
 

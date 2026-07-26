@@ -51,12 +51,7 @@ class DownloadTierWp3Tests(DownloadWp3Fixture):
         self.assertLess(calls.index(first_landing), calls.index(second_landing))
         self.assertLess(calls.index(invalid), calls.index(valid))
         with self.engine.connect() as connection:
-            details = connection.exec_driver_sql(
-                "SELECT details_json FROM acquisition_diagnostics ORDER BY occurred_at DESC LIMIT 1"
-            ).scalar_one()
-        self.assertIn('"tier":"first"', details)
-        self.assertIn('"tier":"translator"', details)
-        self.assertNotIn(first_landing, details)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
 
     def test_browser_is_third_tier_and_prior_success_short_circuits_it(self):
         browser = BrowserRuleResolver(BrowserRuleConfig(
@@ -82,11 +77,7 @@ class DownloadTierWp3Tests(DownloadWp3Fixture):
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(runner.calls, 1)
         with self.engine.connect() as connection:
-            details = connection.exec_driver_sql(
-                "SELECT details_json FROM acquisition_diagnostics ORDER BY occurred_at DESC LIMIT 1"
-            ).scalar_one()
-        self.assertIn('"tier":"browser"', details)
-        self.assertNotIn("secret.test", details)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
 
         second_runner = Runner()
         direct = "https://first.test/second.pdf"
@@ -131,7 +122,7 @@ class DownloadTierWp3Tests(DownloadWp3Fixture):
         self.assertEqual(result.status, "failed")
         with self.engine.connect() as connection:
             details = connection.exec_driver_sql(
-                "SELECT details_json FROM acquisition_diagnostics ORDER BY occurred_at DESC LIMIT 1"
+                "SELECT details_json FROM diagnostic_records WHERE stage='acquisition' ORDER BY occurred_at DESC LIMIT 1"
             ).scalar_one()
         self.assertNotIn(secret, details)
         self.assertNotIn(url, details)

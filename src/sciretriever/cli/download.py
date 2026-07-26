@@ -112,6 +112,7 @@ def build_download_completion_runtime(args: argparse.Namespace) -> CommandComple
         getattr(args, "_config_sci_hub", None) or SciHubConfig(),
         getattr(args, "_config_translator", None) or TranslatorConfig(),
         getattr(args, "_config_browser", None) or BrowserConfig(),
+        getattr(args, "_document_start_interval_seconds", 30.0),
     )
     return build_command_completion_runtime(
         args.catalog, args.storage_root, acquisition=acquisition,
@@ -162,7 +163,7 @@ def run(args: argparse.Namespace) -> int:
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: download failed", file=sys.stderr)
         return 1
-    print(canonical_json({**result.to_dict(), "optional_assets": optional}))
+    print(canonical_json({**result.to_dict(CompletionStop.ASSET), "optional_assets": optional}))
     return 130 if result.interrupted else 0
 
 

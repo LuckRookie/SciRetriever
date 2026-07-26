@@ -85,6 +85,12 @@ class CliCompletionWp5Tests(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertEqual(payload["completion"]["items"][0]["target"],
                              {"kind": "doi", "doi": "10.1234/example"})
+            if stop is CompletionStop.ASSET:
+                self.assertEqual(payload["completion"]["missing"], 1)
+                self.assertEqual(payload["completion"]["accepted"], 0)
+            elif stop is CompletionStop.COMPLETE:
+                self.assertEqual(payload["completion"]["analysis_failed"], 1)
+                self.assertEqual(payload["completion"]["analysis_succeeded"], 0)
 
     def test_exact_exhaustion_reports_provider_failures_without_generic_search(self) -> None:
         runtime = RuntimeFake()

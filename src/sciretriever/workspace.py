@@ -98,6 +98,8 @@ def require_staged_write_override(
 ) -> Path:
     """Reject writes into the staged repository unless explicitly overridden."""
     resolved = path.expanduser().resolve()
+    if allow_staged_write:
+        return resolved
     try:
         repository_root = find_repository_root(start)
     except RuntimeError:
@@ -117,6 +119,14 @@ def require_staged_write_override(
     try:
         workspace_root = find_workspace_root(repository_root)
     except RuntimeError as error:
+        if not resolved.is_relative_to(repository_root):
+            return resolved
+        if WORKSPACE_ROOT_ENV not in os.environ:
+            raise PermissionError(
+                f"Refusing to write staged SciRetriever repository path: {resolved}. "
+                "Use a scratch output outside the staged repository, or pass "
+                "--allow-staged-write for an explicitly controlled copy."
+            ) from error
         raise PermissionError(
             f"Refusing write because the SciRetriever workspace could not be verified: {error}"
         ) from error

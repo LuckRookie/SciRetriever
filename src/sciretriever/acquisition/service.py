@@ -14,11 +14,14 @@ from sciretriever.acquisition.candidate_resolution import CandidateResolver, val
 from sciretriever.acquisition.candidates import RuntimeDownloadCandidate
 from sciretriever.acquisition.controls import CircuitBreaker, HostBudgetManager, ProviderHealth
 from sciretriever.acquisition.models import AcquisitionResult, AcquisitionTarget, ProviderContent
+from sciretriever.acquisition.pacing import DocumentStartGate
 from sciretriever.acquisition.providers import ProviderAcquisitionError
 from sciretriever.catalog.assets import AssetRepository
+from sciretriever.catalog.diagnostics import CatalogDiagnosticService
 from sciretriever.core.enums import AssetRole
 from sciretriever.core.ids import validate_uuid
 from sciretriever.diagnostics import map_exception, redact
+from sciretriever.diagnostics.owners import AcquisitionFailureOwner
 from sciretriever.errors import AcquisitionError, ConfigError, ProviderErrorCategory
 from sciretriever.storage.coordinator import AssetAcceptanceCoordinator
 
@@ -46,6 +49,8 @@ class WorkVersionAcquisitionService:
         budgets: HostBudgetManager | None = None,
         health: ProviderHealth | None = None,
         circuits: CircuitBreaker | None = None,
+        document_gate: DocumentStartGate | None = None,
+        provider_start_intervals: Mapping[str, float] | None = None,
         monotonic=time.monotonic,
     ) -> None:
         self.assets = assets
@@ -60,12 +65,15 @@ class WorkVersionAcquisitionService:
         if len(set(browser_names)) != len(browser_names):
             raise ValueError("browser resolvers must have unique provider names")
         self.executor = executor
+        self._failure_owner = AcquisitionFailureOwner(CatalogDiagnosticService(assets.catalog))
         if not isinstance(provider_concurrency, int) or isinstance(provider_concurrency, bool) or provider_concurrency <= 0:
             raise ValueError("provider concurrency must be positive")
         self.provider_concurrency = provider_concurrency
         self.budgets = budgets or HostBudgetManager(monotonic=monotonic)
         self.health = health or ProviderHealth()
         self.circuits = circuits or CircuitBreaker()
+        self.document_gate = document_gate or DocumentStartGate(monotonic=monotonic)
+        self.provider_start_intervals = dict(provider_start_intervals or {})
 
     @staticmethod
     def _deduplicate(
@@ -170,6 +178,10 @@ class WorkVersionAcquisitionService:
         if existing is not None:
             return AcquisitionResult(work_version_id, "reused", existing)
 
+        applicable_interval = max((self.provider_start_intervals.get(
+            provider, 0.0) for provider in providers), default=0.0)
+        await self.document_gate.wait(applicable_interval)
+
         semaphore = asyncio.Semaphore(min(self.provider_concurrency, len(providers)))
 
         async def bounded(provider: str) -> _SourceResult:
@@ -236,18 +248,10 @@ class WorkVersionAcquisitionService:
                 BytesIO(content.data), work_version_id, role, content.media_type,
                 content.format, redact({"provider": content.provider, **dict(content.provenance)}),
             )
-            self.assets.append_acquisition_diagnostic(work_version_id, role, "succeeded", {
-                "winner": winner.provider,
-                "raw_asset_id": accepted.raw_asset.id,
-                "sources": source_details,
-            })
             return AcquisitionResult(work_version_id, "succeeded", accepted.raw_asset.id)
 
         diagnostic = map_exception(ConfigError("all source candidates were exhausted"), retryable=False)
-        self.assets.append_acquisition_diagnostic(work_version_id, role, "failed", {
-            "overall": diagnostic.to_dict(),
-            "sources": source_details,
-        })
+        self._failure_owner.exhausted(work_version_id, role.value, source_details)
         return AcquisitionResult(
             work_version_id,
             "failed",

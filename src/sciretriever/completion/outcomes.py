@@ -108,4 +108,8 @@ class CompletionResult:
                 "requested_stop": self.requested_stop.value, "initial_stage": self.initial_stage.value,
                 "final_stage": self.final_stage.value, "outcomes": [item.to_dict() for item in self.outcomes]}
 
+    @property
+    def reached_stop(self) -> bool:
+        return _STAGE_ORDER[self.final_stage] >= _STAGE_ORDER[_STOP_STAGES[self.requested_stop]]
+
 __all__ = ("CompletionResult", "OutcomeDisposition", "OutcomeReason", "StageOutcome")

@@ -34,6 +34,10 @@ from sciretriever.catalog import (
     create_catalog_engine,
     initialize_catalog,
 )
+from sciretriever.catalog.curation import CurationOperationOwner, CurationRequest
+from sciretriever.catalog.preferred_curation import PreferredSetHandler
+from sciretriever.core.curation import ReviewDecision
+from sciretriever.core.snapshots import SafeSnapshot
 from sciretriever.core.enums import AssetRole
 from sciretriever.config import BrowserRuleConfig, SciHubConfig, TranslatorRuleConfig
 from sciretriever.network import HttpResponse
@@ -126,10 +130,15 @@ class DownloadWp3Fixture(TestCase):
             related_work_version_id=self.first.id,
             relation_evidence={"provider": "fixture"},
         )
-        self.works.set_preferred(self.first.work_id, self.second.id)
+        preferred = PreferredSetHandler.load(self.engine, self.first.work_id, self.second.id)
+        CurationOperationOwner(self.engine).apply(CurationRequest(
+            preferred, ReviewDecision.NOT_REQUIRED, SafeSnapshot(()),
+            operation_id=preferred.operation_id,
+        ))
         AuthorRepository(self.engine).add_authorship(self.second.id, "Ada Lovelace", 0)
         tag = TagRepository(self.engine).add("kinetics")
-        TagRepository(self.engine).add_manual(self.first.work_id, tag.id)
+        from manual_curation_fixture import add_manual_tag
+        add_manual_tag(self.engine, self.first.work_id, tag.id)
         self.repository = WorkVersionDownloadRepository(self.engine)
         self.assets = AssetRepository(self.engine)
         asset_root = self.root / "assets"

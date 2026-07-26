@@ -109,10 +109,10 @@ class WP3FoundationTests(TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).scalars())
             intent_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(asset_intents)")}
-            failure_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(failures)")}
+            diagnostic_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(diagnostic_records)")}
         self.assertTrue({"download_requests", "acquisition_jobs", "acquisition_attempts"}.isdisjoint(tables))
         self.assertTrue({"job_id", "attempt_id"}.isdisjoint(intent_columns))
-        self.assertTrue({"job_id", "attempt_id"}.isdisjoint(failure_columns))
+        self.assertTrue({"job_id", "attempt_id"}.isdisjoint(diagnostic_columns))
 
     def test_provider_race_uses_sequential_candidates_and_has_one_winner(self) -> None:
         invalid = b"not a pdf"
@@ -145,11 +145,7 @@ class WP3FoundationTests(TestCase):
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM work_version_assets").scalar_one(), 1)
-            diagnostic = connection.exec_driver_sql(
-                "SELECT outcome, details_json FROM acquisition_diagnostics"
-            ).one()
-        self.assertEqual(diagnostic[0], "succeeded")
-        self.assertIn('"provider":"two"', diagnostic[1])
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
 
         reused = asyncio.run(service.acquire(
             self.work_version_id,
@@ -179,7 +175,10 @@ class WP3FoundationTests(TestCase):
         self.assertEqual(result.status, "failed")
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 0)
-            self.assertEqual(connection.exec_driver_sql("SELECT outcome FROM acquisition_diagnostics").scalar_one(), "failed")
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM diagnostic_records WHERE stage='acquisition' AND work_version_id=?",
+                (self.work_version_id,),
+            ).scalar_one(), 1)
 
     def test_concurrent_same_role_acceptance_converges(self) -> None:
         data = pdf_bytes("concurrent")

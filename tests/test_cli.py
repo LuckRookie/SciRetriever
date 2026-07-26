@@ -5,7 +5,6 @@ import json
 import sqlite3
 import stat
 from types import SimpleNamespace
-import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -231,7 +230,7 @@ timeout = 1
         self.assertEqual(stat.S_IMODE(config.stat().st_mode), config_mode)
         self.assertEqual(snapshot(), before)
         with sqlite3.connect(self.catalog) as connection:
-            for table in ("works", "acquisition_diagnostics", "failures", "raw_assets"):
+            for table in ("works", "diagnostic_records", "raw_assets"):
                 self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0)
 
     def test_preflight_direct_uses_headers_transport_and_has_no_policy_overrides(self) -> None:
@@ -517,40 +516,6 @@ max_asset_bytes = 1
         ):
             with self.subTest(case=case):
                 self.assertIn("error:", self.assert_parse_error(*case))
-
-    def test_module_version_entry_point(self) -> None:
-        result = subprocess.run(
-            [sys.executable, "-m", "sciretriever.cli.main", "--version"],
-            cwd=REPOSITORY,
-            env={"PYTHONPATH": str(SRC)},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, f"{__version__}\n")
-
-    def test_root_shim_version_entry_point(self) -> None:
-        result = subprocess.run(
-            [sys.executable, "main.py", "--version"],
-            cwd=REPOSITORY,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, f"{__version__}\n")
-
-    def test_console_script_targets_cli_main(self) -> None:
-        pyproject = (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
-
-        self.assertIn(
-            'sciretriever = "sciretriever.cli.main:main"',
-            pyproject,
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from sciretriever.catalog.diagnostics import CatalogDiagnosticService
 from sciretriever.catalog.library import WorkRepository
+from sciretriever.diagnostics.owners import MetadataFailureOwner
 from .metadata_ingestion import MetadataIngestor
 from .metadata_preparation import MetadataRecordPreparer
+from .normalize import normalize_query
 from .provider_collection import (
     ProviderCollectionRequest,
     ProviderCollector,
@@ -35,6 +38,7 @@ class MetadataSearchService:
         self._collector = ProviderCollector(providers)
         self._preparer = MetadataRecordPreparer()
         self._ingestor = MetadataIngestor(repository)
+        self._failures = MetadataFailureOwner(CatalogDiagnosticService(repository.catalog))
 
     def search(self, request: MetadataSearchRequest) -> MetadataSearchOutput:
         collected = self._collector.collect(ProviderCollectionRequest(
@@ -44,7 +48,12 @@ class MetadataSearchService:
             request.provider_timeout_seconds,
             request.max_concurrency,
         ))
-        if not collected.records and collected.failures:
+        if len(collected.failures) == len(request.providers):
+            self._failures.provider_total_failure(
+                normalize_query(request.query),
+                tuple(failure.provider for failure in collected.failures),
+                {"categories": tuple(failure.category for failure in collected.failures)},
+            )
             detail = "; ".join(
                 f"{failure.provider}:{failure.category}"
                 for failure in collected.failures
@@ -72,6 +81,7 @@ class ExactMetadataResolver:
         self._collector = ProviderCollector(providers)
         self._preparer = MetadataRecordPreparer()
         self._ingestor = MetadataIngestor(repository)
+        self._failures = MetadataFailureOwner(CatalogDiagnosticService(repository.catalog))
 
     def resolve(self, request: ExactMetadataRequest) -> ExactMetadataOutput:
         collected = self._collector.collect(ProviderCollectionRequest(
@@ -87,6 +97,12 @@ class ExactMetadataResolver:
             request.precedence,
         )
         result = None if prepared is None else self._ingestor.ingest_one(prepared)
+        if len(collected.failures) == len(request.providers):
+            self._failures.provider_total_failure(
+                normalize_query(request.doi),
+                tuple(failure.provider for failure in collected.failures),
+                {"categories": tuple(failure.category for failure in collected.failures)},
+            )
         return ExactMetadataOutput(request.doi, result, collected.failures)
 
 

@@ -111,7 +111,8 @@ def run(args: argparse.Namespace) -> int:
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: analyze failed", file=sys.stderr)
         return 1
-    print(canonical_json(result.to_dict()))
+    payload = result.to_dict() if isinstance(result, ForceAnalysisBatchResult) else result.to_dict(CompletionStop.COMPLETE)
+    print(canonical_json(payload))
     return 130 if result.interrupted else 0
 
 

@@ -17,6 +17,7 @@ from sciretriever.acquisition.candidate_executor import CandidateExecutor
 from sciretriever.acquisition.identity_validation import ContentIdentityValidator
 from sciretriever.acquisition.candidates import RuntimeDownloadCandidate, make_download_candidate_id
 from sciretriever.acquisition.models import AcquisitionTarget
+from sciretriever.acquisition.pacing import DocumentStartGate
 from sciretriever.acquisition.service import WorkVersionAcquisitionService
 from sciretriever.catalog import AssetRepository, IdentityResolver, create_catalog_engine, initialize_catalog
 from sciretriever.core.contracts import Identifier
@@ -71,6 +72,16 @@ class Transport:
         return ("192.0.2.1",)
 
 
+class RecordingGate(DocumentStartGate):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[float] = []
+
+    async def wait(self, applicable_interval: float = 0.0) -> float:
+        self.calls.append(applicable_interval)
+        return float(len(self.calls) - 1)
+
+
 class ForegroundAcquisitionTests(TestCase):
     def setUp(self) -> None:
         temporary = TemporaryDirectory()
@@ -87,10 +98,16 @@ class ForegroundAcquisitionTests(TestCase):
         assert resolution.work_version is not None
         self.work_version_id = resolution.work_version.id
 
-    def service(self, transport: Transport, resolvers: dict[str, Resolver]):
+    def service(
+        self,
+        transport: Transport,
+        resolvers: dict[str, Resolver],
+        gate: DocumentStartGate | None = None,
+    ):
         return WorkVersionAcquisitionService(
             self.assets, self.coordinator, resolvers,
             CandidateExecutor(transport, identity_validator=ContentIdentityValidator()),
+            document_gate=gate,
         )
 
     def run_acquisition(self, service, providers):
@@ -103,9 +120,10 @@ class ForegroundAcquisitionTests(TestCase):
     def test_serial_provider_fallback_and_idempotent_reuse(self) -> None:
         urls = ("https://first.test/file", "https://second.test/file")
         transport = Transport({urls[0]: (0, 404, b""), urls[1]: (0, 200, pdf_bytes("second"))})
+        gate = RecordingGate()
         service = self.service(transport, {
             "first": Resolver("first", (urls[0],)), "second": Resolver("second", (urls[1],)),
-        })
+        }, gate)
         result = self.run_acquisition(service, ("first", "second"))
         self.assertEqual(result.status, "succeeded")
         self.assertIn(urls[1], transport.calls)
@@ -113,6 +131,7 @@ class ForegroundAcquisitionTests(TestCase):
         replay = self.run_acquisition(service, ("first", "second"))
         self.assertEqual(replay.status, "reused")
         self.assertEqual(transport.calls, calls)
+        self.assertEqual(gate.calls, [0.0])
 
     def test_race_accepts_one_winner_and_late_loser_cannot_publish(self) -> None:
         fast = "https://fast.test/file"
@@ -125,8 +144,7 @@ class ForegroundAcquisitionTests(TestCase):
         time.sleep(0.25)
         with self.engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 1)
-            details = connection.exec_driver_sql("SELECT details_json FROM acquisition_diagnostics").scalar_one()
-        self.assertIn('"outcome":"race_lost"', details)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
 
     def test_exhaustion_records_one_workversion_failure_without_asset(self) -> None:
         url = "https://bad.test/file"
@@ -136,7 +154,10 @@ class ForegroundAcquisitionTests(TestCase):
         self.assertEqual(result.status, "failed")
         with self.engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 0)
-            self.assertEqual(connection.exec_driver_sql("SELECT outcome FROM acquisition_diagnostics").scalar_one(), "failed")
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM diagnostic_records WHERE stage='acquisition' AND work_version_id=?",
+                (self.work_version_id,),
+            ).scalar_one(), 1)
 
     def test_existing_workversion_is_required(self) -> None:
         service = self.service(Transport({}), {"missing": Resolver("missing", ())})

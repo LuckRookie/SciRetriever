@@ -187,6 +187,7 @@ def run(args: argparse.Namespace) -> int:
             getattr(args, "_config_sci_hub", None) or SciHubConfig(),
             getattr(args, "_config_translator", None) or TranslatorConfig(),
             getattr(args, "_config_browser", None) or BrowserConfig(),
+            getattr(args, "_document_start_interval_seconds", 30.0),
         )
         analysis_config = getattr(args, "_config_analysis", None)
         analysis = None if analysis_config is None else AnalysisCliRuntime(analysis_config)
@@ -210,7 +211,7 @@ def run(args: argparse.Namespace) -> int:
             failures = runtime.exact_failures()
             payload["failures"] = failures
             payload["counts"]["failures"] = len(failures)
-        payload["completion"] = batch.to_dict()
+        payload["completion"] = batch.to_dict(_STOPS[args.level])
         optional = []
         if args.xml or args.html:
             for item in batch.items:

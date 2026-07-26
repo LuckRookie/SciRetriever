@@ -33,6 +33,7 @@ class SearchCliRuntime:
     acquisition: AcquisitionCliConfig | None = None
     acquisition_timeout: float = 30.0
     analysis: AnalysisCliRuntime | None = None
+    allow_repository_write: bool = False
 
 
 @dataclass(slots=True)
@@ -63,7 +64,10 @@ class SearchCompletionRuntime:
 
 def build_search_completion_runtime(config: SearchCliRuntime) -> SearchCompletionRuntime:
     with ExitStack() as cleanup:
-        catalog = open_catalog_engine(config.catalog)
+        catalog = open_catalog_engine(
+            config.catalog,
+            allow_repository_write=config.allow_repository_write,
+        )
         cleanup.callback(catalog.dispose)
         providers = metadata_runtime.build_metadata_providers(config.metadata)
         repository = WorkRepository(catalog)

@@ -6,11 +6,8 @@ import math
 import ipaddress
 import os
 import re
-import stat
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,14 +17,34 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib
 
+from sciretriever.config_loader import MAX_CONFIG_BYTES, load_config
+from sciretriever.config_models import (
+    AcquisitionConfig,
+    AnalysisConfig,
+    BrowserConfig,
+    BrowserRuleConfig,
+    ConfigCheckMode,
+    CredentialsConfig,
+    CurationConfig,
+    DiscoveryConfig,
+    ExpansionConfig,
+    ExportConfig,
+    LLMConfig,
+    MinerUConfig,
+    PackageConfig,
+    PathsConfig,
+    PreflightConfig,
+    SciHubConfig,
+    SciRetrieverConfig,
+    SearchConfig,
+    TranslatorConfig,
+    TranslatorRuleConfig,
+)
 from sciretriever.errors import ConfigError
 
 
 STORAGE_ROOT_ENV = "SCIRETRIEVER_STORAGE_ROOT"
 CONFIG_ENV = "SCIRETRIEVER_CONFIG"
-MAX_CONFIG_BYTES = 1024 * 1024
-
-_ROOT_KEYS = {"schema_version", "paths", "credentials", "discovery", "search", "acquisition", "analysis", "package"}
 _CREDENTIAL_KEYS = {
     "unpaywall_email",
     "semantic_scholar_api_key",
@@ -35,6 +52,8 @@ _CREDENTIAL_KEYS = {
     "wiley_api_key",
     "springer_api_key",
 }
+TOML_LOAD = tomllib.load
+TOML_DECODE_ERROR = tomllib.TOMLDecodeError
 _DISCOVERY_SOURCES = {
     "crossref", "europe-pmc", "arxiv", "openalex", "semantic-scholar",
     "elsevier", "springer",
@@ -44,183 +63,6 @@ ACQUISITION_PROVIDERS = frozenset({
     "direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex",
     "semantic-scholar", "elsevier", "wiley", "springer", "sci-hub",
 })
-
-
-@dataclass(frozen=True, slots=True)
-class PathsConfig:
-    catalog: Path | None = None
-    storage_root: Path | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CredentialsConfig:
-    unpaywall_email: str | None = field(default=None, repr=False)
-    semantic_scholar_api_key: str | None = field(default=None, repr=False)
-    elsevier_api_key: str | None = field(default=None, repr=False)
-    wiley_api_key: str | None = field(default=None, repr=False)
-    springer_api_key: str | None = field(default=None, repr=False)
-
-    def get(self, name: str) -> str | None:
-        if name not in _CREDENTIAL_KEYS:
-            raise KeyError(name)
-        return getattr(self, name)
-
-
-@dataclass(frozen=True, slots=True)
-class DiscoveryConfig:
-    sources: tuple[str, ...] | None = None
-    limit: int | None = None
-    timeout: float | None = None
-    taxonomy: str | None = None
-    taxonomy_version: str | None = None
-    crossref_mailto: str | None = None
-    filters: tuple[tuple[str, str], ...] = ()
-    label_rules: tuple[tuple[str, tuple[str, ...]], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class SearchConfig:
-    level: str | None = None
-    limit: int | None = None
-    providers: tuple[str, ...] | None = None
-    precedence: tuple[str, ...] | None = None
-    provider_timeout: float | None = None
-    max_concurrency: int | None = None
-    crossref_mailto: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PreflightConfig:
-    min_free_bytes: int = 1024 * 1024 * 1024
-    max_asset_bytes: int = 100 * 1024 * 1024
-    readiness: str = "none"
-    timeout: float = 10.0
-
-
-@dataclass(frozen=True, slots=True)
-class SciHubConfig:
-    enabled: bool = False
-    base_url: str | None = None
-    allowed_pdf_hosts: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class TranslatorRuleConfig:
-    name: str
-    landing_url_template: str
-    allowed_landing_hosts: tuple[str, ...] = ()
-    allowed_pdf_hosts: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class TranslatorConfig:
-    enabled: bool = False
-    rules: tuple[TranslatorRuleConfig, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class BrowserRuleConfig:
-    name: str
-    landing_url_template: str
-    allowed_landing_hosts: tuple[str, ...]
-    allowed_pdf_hosts: tuple[str, ...]
-    allowed_network_hosts: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class BrowserConfig:
-    enabled: bool = False
-    profile_dir: Path | None = field(default=None, repr=False)
-    max_profile_bytes: int = 512 * 1024 * 1024
-    max_profile_files: int = 20_000
-    rules: tuple[BrowserRuleConfig, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionConfig:
-    providers: tuple[str, ...] | None = None
-    timeout: float | None = None
-    provider_concurrency: int | None = None
-    host_concurrency: int | None = None
-    host_min_interval: float | None = None
-    max_asset_bytes: int | None = None
-    forbidden_urls: Path | None = None
-    include_xml: bool | None = None
-    include_html: bool | None = None
-    preflight: PreflightConfig = PreflightConfig()
-    sci_hub: SciHubConfig = SciHubConfig()
-    translator: TranslatorConfig = TranslatorConfig()
-    browser: BrowserConfig = BrowserConfig()
-
-
-@dataclass(frozen=True, slots=True)
-class PackageConfig:
-    max_input_bytes: int | None = None
-    max_pages: int | None = None
-    max_structural_units: int | None = None
-    max_depth: int | None = None
-    max_elements: int | None = None
-    max_text_characters: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MinerUConfig:
-    mode: str = "disabled"
-    endpoint: str | None = None
-    auth_env: str | None = field(default=None, repr=False)
-    remote_upload: bool = False
-    service_version: str = "3.4.4"
-    api_protocol: int = 2
-    backend: str = "vlm-engine"
-    model: str | None = None
-    overall_deadline: float = 900.0
-    poll_interval: float = 2.0
-    max_archive_bytes: int = 512 * 1024 * 1024
-    max_json_bytes: int = 128 * 1024 * 1024
-    max_pages: int = 2000
-    max_blocks: int = 500_000
-    max_spans: int = 2_000_000
-    max_text_characters: int = 100_000_000
-    max_image_bytes: int = 64 * 1024 * 1024
-    max_archive_files: int = 10_000
-    max_extracted_bytes: int = 1024 * 1024 * 1024
-    max_file_bytes: int = 256 * 1024 * 1024
-    max_compression_ratio: int = 200
-    max_images: int = 5000
-    max_json_depth: int = 100
-    max_json_elements: int = 2_000_000
-    max_json_string_characters: int = 100_000_000
-    max_upload_bytes: int = 100 * 1024 * 1024
-    max_attempts: int = 3
-
-
-@dataclass(frozen=True, slots=True)
-class LLMConfig:
-    endpoint: str | None = None
-    model: str | None = None
-    credential_env: str | None = field(default=None, repr=False)
-    timeout: float = 120.0
-    max_output_tokens: int = 16_384
-    max_input_characters: int = 200_000
-    max_source_units: int = 5_000
-
-
-@dataclass(frozen=True, slots=True)
-class AnalysisConfig:
-    mineru: MinerUConfig = MinerUConfig()
-    llm: LLMConfig = LLMConfig()
-
-
-@dataclass(frozen=True, slots=True)
-class SciRetrieverConfig:
-    schema_version: int
-    paths: PathsConfig = PathsConfig()
-    credentials: CredentialsConfig = field(default_factory=CredentialsConfig, repr=False)
-    discovery: DiscoveryConfig = DiscoveryConfig()
-    search: SearchConfig = SearchConfig()
-    acquisition: AcquisitionConfig = AcquisitionConfig()
-    analysis: AnalysisConfig = AnalysisConfig()
-    package: PackageConfig = PackageConfig()
 
 
 def _error(field_name: str, requirement: str) -> ConfigError:
@@ -841,89 +683,6 @@ def _parse_analysis(root: Mapping[str, Any]) -> AnalysisConfig:
     return AnalysisConfig(mineru, llm)
 
 
-def _read_config_snapshot(config_path: Path) -> tuple[os.stat_result, bytes, Path]:
-    try:
-        before = config_path.lstat()
-    except OSError as error:
-        raise ConfigError(f"config file is not accessible: {config_path}") from error
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise ConfigError(f"config path must be a regular non-symlink file: {config_path}")
-    try:
-        canonical_path = config_path.resolve(strict=True)
-    except OSError as error:
-        raise ConfigError(f"config file is not accessible: {config_path}") from error
-    canonical_parent = canonical_path.parent
-    try:
-        parent_before = canonical_parent.lstat()
-    except OSError as error:
-        raise ConfigError(f"config directory is not accessible: {canonical_parent}") from error
-    if stat.S_ISLNK(parent_before.st_mode) or not stat.S_ISDIR(parent_before.st_mode):
-        raise ConfigError(f"config directory must be a real directory: {canonical_parent}")
-    flags = os.O_RDONLY
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(canonical_path, flags)
-    except OSError as error:
-        raise ConfigError(f"config file could not be opened safely: {config_path}") from error
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ConfigError(f"config path must be a regular non-symlink file: {config_path}")
-        if (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino):
-            raise ConfigError(f"config file changed while opening: {config_path}")
-        with os.fdopen(descriptor, "rb", closefd=True) as stream:
-            descriptor = -1
-            payload = stream.read(MAX_CONFIG_BYTES + 1)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if len(payload) > MAX_CONFIG_BYTES:
-        raise ConfigError(f"config file exceeds {MAX_CONFIG_BYTES} bytes: {config_path}")
-    try:
-        parent_after = canonical_parent.lstat()
-    except OSError as error:
-        raise ConfigError(f"config directory changed while reading: {canonical_parent}") from error
-    if (
-        stat.S_ISLNK(parent_after.st_mode)
-        or not stat.S_ISDIR(parent_after.st_mode)
-        or (parent_before.st_dev, parent_before.st_ino)
-        != (parent_after.st_dev, parent_after.st_ino)
-    ):
-        raise ConfigError(f"config directory changed while reading: {canonical_parent}")
-    return metadata, payload, canonical_parent
-
-
-def load_config(path: str | os.PathLike[str]) -> SciRetrieverConfig:
-    """Load one strict config file without creating or modifying filesystem entries."""
-    config_path = Path(path).expanduser()
-    metadata, payload, parent = _read_config_snapshot(config_path)
-    try:
-        root = tomllib.load(BytesIO(payload))
-    except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"config file is not valid TOML: {config_path}") from error
-    unknown = sorted(set(root) - _ROOT_KEYS)
-    if unknown:
-        raise ConfigError(f"unknown config field: {unknown[0]}")
-    version = root.get("schema_version")
-    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
-        raise _error("schema_version", "must be integer 1")
-    credentials = _parse_credentials(root)
-    if any(credentials.get(name) is not None for name in _CREDENTIAL_KEYS):
-        if os.name == "posix" and metadata.st_mode & 0o077:
-            raise ConfigError("config file containing credentials must have mode 0600 or stricter")
-    return SciRetrieverConfig(
-        schema_version=version,
-        paths=_parse_paths(root, parent),
-        credentials=credentials,
-        discovery=_parse_discovery(root),
-        search=_parse_search(root),
-        acquisition=_parse_acquisition(root, parent),
-        analysis=_parse_analysis(root),
-        package=_parse_package(root),
-    )
-
-
 def resolve_storage_root(
     explicit: str | os.PathLike[str] | None = None,
     *,
@@ -952,7 +711,8 @@ def get_credential(env_var: str, *, env: Mapping[str, str] | None = None) -> str
 __all__ = (
     "CONFIG_ENV", "MAX_CONFIG_BYTES", "STORAGE_ROOT_ENV", "AcquisitionConfig",
     "ACQUISITION_PROVIDERS", "METADATA_PROVIDERS", "PreflightConfig",
-    "CredentialsConfig", "DiscoveryConfig", "AnalysisConfig", "MinerUConfig", "LLMConfig", "PackageConfig", "PathsConfig", "SciHubConfig",
+    "ConfigCheckMode", "CredentialsConfig", "CurationConfig", "DiscoveryConfig",
+    "ExpansionConfig", "ExportConfig", "AnalysisConfig", "MinerUConfig", "LLMConfig", "PackageConfig", "PathsConfig", "SciHubConfig",
     "TranslatorConfig", "TranslatorRuleConfig", "BrowserConfig", "BrowserRuleConfig",
     "SciRetrieverConfig", "SearchConfig", "get_credential", "load_config", "resolve_storage_root",
 )

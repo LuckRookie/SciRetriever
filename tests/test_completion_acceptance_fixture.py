@@ -130,7 +130,9 @@ class RealCompletionFixture:
     def __init__(self) -> None:
         self.temporary = TemporaryDirectory(prefix="sciretriever-wp5-real-")
         root = Path(self.temporary.name)
-        self.catalog = create_catalog_engine(root / "catalog.sqlite")
+        self.catalog = create_catalog_engine(
+            root / "catalog.sqlite", allow_repository_write=True
+        )
         initialize_catalog(self.catalog)
         self.storage = root / "storage"
         self.storage.mkdir()

@@ -61,12 +61,7 @@ class DownloadWp3Tests(DownloadWp3Fixture):
         self.assertEqual(result.status, "succeeded")
         self.assertEqual([url for url, _ in transport.calls], [wrong, valid])
         with self.engine.connect() as connection:
-            details = connection.exec_driver_sql(
-                "SELECT details_json FROM acquisition_diagnostics ORDER BY occurred_at DESC LIMIT 1"
-            ).scalar_one()
-        self.assertIn('"reason_code":"content_invalid"', details)
-        self.assertNotIn("10.9999", details)
-        self.assertNotIn("geological", details.casefold())
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
 
     def test_wrong_first_tier_falls_through_to_translator(self):
         wrong = "https://first.test/wrong.pdf"
@@ -94,7 +89,9 @@ class DownloadWp3Tests(DownloadWp3Fixture):
         self.assertEqual(result.status, "failed")
         with self.engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM raw_assets").scalar_one(), 0)
-            details = connection.exec_driver_sql("SELECT details_json FROM acquisition_diagnostics").scalar_one()
+            details = connection.exec_driver_sql(
+                "SELECT details_json FROM diagnostic_records WHERE stage='acquisition'"
+            ).scalar_one()
         self.assertIn('"reason_code":"content_invalid"', details)
         self.assertNotIn(scanned, details)
 
