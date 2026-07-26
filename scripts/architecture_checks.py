@@ -6,6 +6,8 @@ import ast
 from collections.abc import Set
 from pathlib import Path
 
+from scripts.wp6_architecture import find_wp6_architecture_violations
+
 
 FORBIDDEN_IMPORTS = {
     "core": ("sciretriever.acquisition", "sciretriever.catalog", "sciretriever.cli",
@@ -102,6 +104,8 @@ def find_architecture_violations(
         relative = path.relative_to(source_root).as_posix()
         layer = Path(relative).parts[0]
         try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
             imported = imported_modules(path, source_root)
         except (OSError, SyntaxError) as error:
             violations.append(f"{relative}: cannot parse: {error}")
@@ -115,6 +119,9 @@ def find_architecture_violations(
                     violations.append(
                         f"{relative}: lowercase v2 must not import legacy module {module}"
                     )
+        violations.extend(
+            find_wp6_architecture_violations(path, source_root, imported, tree)
+        )
     violations.extend(find_completion_command_violations(source_root, cutover_commands))
     return tuple(sorted(set(violations)))
 
