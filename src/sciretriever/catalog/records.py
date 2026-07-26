@@ -149,6 +149,8 @@ class AuthorRecord:
     display_name: str
     normalized_name: str
     orcid: str | None
+    status: str
+    merged_into_author_id: str | None
     created_at: str
 
 
@@ -316,28 +318,6 @@ class AssetIntentRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class EventRecord:
-    id: str
-    subject_type: str
-    subject_id: str
-    event_type: str
-    details_json: str | None
-    occurred_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class FailureRecord:
-    id: str
-    work_version_id: str | None
-    processing_run_id: str | None
-    category: str
-    message: str
-    retryable: bool
-    details_json: str | None
-    occurred_at: str
-
-
-@dataclass(frozen=True, slots=True)
 class DomainRunRecord:
     id: str
     package_version_id: str
@@ -463,8 +443,6 @@ __all__ = (
     "DomainRunRecord",
     "CurrentAnalysisRecord",
     "ExternalParserAttemptRecord",
-    "EventRecord",
-    "FailureRecord",
     "IdentityResolution",
     "IdentityResolutionResult",
     "IdentityReviewRecord",

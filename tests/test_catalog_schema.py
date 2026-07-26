@@ -80,12 +80,13 @@ class CatalogSchemaTests(TestCase):
             tables = set(connection.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).scalars())
-            self.assertIn("acquisition_diagnostics", tables)
+            self.assertIn("diagnostic_records", tables)
+            self.assertTrue({"events", "failures", "acquisition_diagnostics"}.isdisjoint(tables))
             self.assertTrue(REMOVED_TASK_TABLES.isdisjoint(tables))
             for table in tables:
                 columns = {row[1] for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")')}
                 self.assertNotIn("BLOB", {str(row[2]).upper() for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")')})
-                if table in {"asset_intents", "failures"}:
+                if table == "asset_intents":
                     self.assertTrue({"job_id", "attempt_id"}.isdisjoint(columns))
 
     def test_foreign_keys_and_version_role_hash_intent_uniqueness(self) -> None:
@@ -154,19 +155,19 @@ class CatalogSchemaTests(TestCase):
                 with self.assertRaises(IntegrityError):
                     connection.exec_driver_sql(statement, (raw_id,))
 
-    def test_acquisition_diagnostics_are_workversion_scoped_and_json_checked(self) -> None:
+    def test_diagnostic_records_are_subject_scoped_and_json_checked(self) -> None:
         catalog = self.create_catalog()
         with catalog.transaction() as connection:
             version_id = self.insert_version(connection)
             connection.exec_driver_sql(
-                "INSERT INTO acquisition_diagnostics (id, work_version_id, asset_role, outcome, details_json) VALUES (?, ?, 'primary_pdf', 'failed', '{}')",
+                "INSERT INTO diagnostic_records (id, stage, subject_kind, work_version_id, reason, action, retryable, summary, details_json) VALUES (?, 'acquisition', 'work_version', ?, 'provider', 'try_another_source', 0, 'failed', '{\"details\":{},\"rerun\":\"after_source_change\"}')",
                 (new_id(), version_id),
             )
-            for outcome, details in (("pending", "{}"), ("failed", "not-json")):
+            for subject_kind, details in (("input", "{}"), ("work_version", "not-json")):
                 with self.assertRaises(IntegrityError):
                     connection.exec_driver_sql(
-                        "INSERT INTO acquisition_diagnostics (id, work_version_id, asset_role, outcome, details_json) VALUES (?, ?, 'primary_pdf', ?, ?)",
-                        (new_id(), version_id, outcome, details),
+                        "INSERT INTO diagnostic_records (id, stage, subject_kind, work_version_id, reason, action, retryable, summary, details_json) VALUES (?, 'acquisition', ?, ?, 'provider', 'try_another_source', 0, 'failed', ?)",
+                        (new_id(), subject_kind, version_id, details),
                     )
 
     def test_asset_triggers_exist_without_task_references(self) -> None:

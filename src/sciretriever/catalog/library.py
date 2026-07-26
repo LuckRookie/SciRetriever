@@ -12,8 +12,10 @@ from typing import Any
 
 from sqlalchemy import Connection, delete, insert, select, tuple_, update
 
+from sciretriever.catalog.catalog_owner import CatalogOwner
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.canonical_projection import recompute_canonical_projection
+from sciretriever.catalog.work_curation_state import recompute_preferred
 from sciretriever.catalog.models import (
     authors,
     authorships,
@@ -45,7 +47,7 @@ from sciretriever.catalog.records import (
     WorkRecord,
     WorkVersionRecord,
 )
-from sciretriever.catalog.repository import _append_event, _required_text, _work_record, canonical_json, catalog_operation
+from sciretriever.catalog.repository import _required_text, _work_record, canonical_json, catalog_operation
 from sciretriever.core.contracts import CandidateMetadata, Identifier
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
@@ -95,7 +97,7 @@ def _version_record(row: Mapping[Any, Any]) -> WorkVersionRecord:
     )
 
 
-class WorkRepository:
+class WorkRepository(CatalogOwner):
     """Resolve deterministic Work/WorkVersion identity and preferred versions."""
 
     def __init__(self, catalog: CatalogEngine) -> None:
@@ -316,15 +318,7 @@ class WorkRepository:
                             observed_at=utc_now_rfc3339(),
                         ))
                 self._refresh_direct_provider_projection(connection, version_id, direct_projection, provider_precedence)
-                if observed is None:
-                    _append_event(
-                        connection,
-                        subject_type="work_version",
-                        subject_id=version_id,
-                        event_type="metadata.observed",
-                        details={"provider": provider, "provider_record_id": provider_record_id},
-                    )
-                self._recompute_preferred(connection, row["work_id"])
+                recompute_preferred(connection, row["work_id"])
                 record = _version_record(
                     connection.execute(
                         select(work_versions).where(work_versions.c.id == version_id)
@@ -567,7 +561,7 @@ class WorkRepository:
                             observed_at=utc_now_rfc3339(),
                         ))
             self._project_provider_observations(connection, version.id, precedence)
-            self._recompute_preferred(connection, version.work_id)
+            recompute_preferred(connection, version.work_id)
             if review_reason is not None:
                 connection.execute(update(works).where(
                     works.c.id == version.work_id
@@ -990,45 +984,6 @@ class WorkRepository:
             for row in rows
         )
 
-    def set_preferred(self, work_id: str, work_version_id: str | None) -> WorkRecord:
-        work_id = validate_uuid(work_id, "work_id")
-        if work_version_id is not None:
-            work_version_id = validate_uuid(work_version_id, "work_version_id")
-        with self._catalog.critical_transaction() as connection:
-            if work_version_id is not None:
-                owner = connection.execute(select(work_versions.c.work_id).where(work_versions.c.id == work_version_id)).scalar_one_or_none()
-                if owner != work_id:
-                    raise CatalogError("preferred WorkVersion must belong to the Work")
-                connection.execute(update(works).where(works.c.id == work_id).values(
-                    preferred_work_version_id=work_version_id, preferred_version_is_manual=1,
-                    updated_at=utc_now_rfc3339(),
-                ))
-            else:
-                connection.execute(update(works).where(works.c.id == work_id).values(preferred_version_is_manual=0))
-                self._recompute_preferred(connection, work_id)
-            return _work_record(connection.execute(select(works).where(works.c.id == work_id)).mappings().one())
-
-    @staticmethod
-    def _recompute_preferred(connection, work_id: str) -> None:
-        work = connection.execute(select(works).where(works.c.id == work_id)).mappings().one()
-        if work["preferred_version_is_manual"]:
-            return
-        rows = connection.execute(select(work_versions).where(work_versions.c.work_id == work_id)).mappings().all()
-        doi_versions = set(connection.execute(select(work_version_identifiers.c.work_version_id).where(
-            work_version_identifiers.c.namespace == "doi",
-            work_version_identifiers.c.work_version_id.in_([row["id"] for row in rows]),
-        )).scalars())
-        def key(row):
-            date = row["publication_date"] or ""
-            precedence = row["provider_precedence"] if row["provider_precedence"] is not None else 2**31
-            return (_CLASS_RANK[row["version_class"]], row["id"] not in doi_versions,
-                    tuple(-ord(char) for char in date), precedence, row["stable_version_key"])
-        preferred = min(rows, key=key)
-        connection.execute(update(works).where(works.c.id == work_id).values(
-            preferred_work_version_id=preferred["id"], updated_at=utc_now_rfc3339(),
-        ))
-
-
 class RegistryRepository:
     def __init__(self, catalog: CatalogEngine) -> None:
         self._catalog = catalog
@@ -1134,7 +1089,8 @@ class AuthorRepository:
             row = None if orcid is None else connection.execute(select(authors).where(authors.c.orcid == orcid)).mappings().one_or_none()
             if row is None:
                 row = {"id": new_uuid4(), "display_name": display_name, "normalized_name": normalized_name,
-                       "orcid": orcid, "created_at": utc_now_rfc3339()}
+                       "orcid": orcid, "status": "active", "merged_into_author_id": None,
+                       "created_at": utc_now_rfc3339()}
                 connection.execute(insert(authors).values(**row))
             link = {"id": new_uuid4(), "work_version_id": work_version_id, "author_id": row["id"],
                     "position": position, "role": role, "is_corresponding": int(is_corresponding),
@@ -1193,9 +1149,6 @@ class TagRepository:
                 created_at=row["created_at"],
             )
 
-    def add_manual(self, work_id: str, tag_id: str) -> None:
-        self._link(manual_work_tags, "work_id", work_id, tag_id, None)
-
     def resolve(self, value: str) -> TagRecord | None:
         normalized_value = normalize_title(_required_text(value, "value"))
         with self._catalog.connect() as connection:
@@ -1243,7 +1196,7 @@ class ReferenceRepository:
             source_artifact_id = validate_uuid(source_artifact_id, "source_artifact_id")
         values = {"id": new_uuid4(), "citing_work_version_id": citing_work_version_id,
                   "cited_work_id": cited_work_id, "reference_order": reference_order,
-                  "raw_reference": _required_text(raw_reference, "raw_reference"),
+                  "raw_reference": raw_reference if isinstance(raw_reference, str) and raw_reference.strip() else _required_text(raw_reference, "raw_reference"),
                   "cited_namespace": None if identifier is None else identifier.namespace,
                   "cited_value": None if identifier is None else identifier.value,
                   "source_artifact_id": source_artifact_id,

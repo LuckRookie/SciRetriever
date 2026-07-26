@@ -4,27 +4,22 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from sqlalchemy import Connection, insert, select, update
+from sqlalchemy import insert, select, update
 
+from sciretriever.catalog.asset_diagnostics import AssetDiagnosticRepository
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.models import (
-    acquisition_diagnostics,
     asset_intents,
-    failures,
     raw_assets,
     work_versions,
     work_version_assets,
 )
 from sciretriever.catalog.records import (
     AssetIntentRecord,
-    FailureRecord,
     RawAssetRecord,
     WorkVersionAssetRecord,
 )
 from sciretriever.catalog.repository import (
-    _append_event,
-    _failure_record,
-    _required_text,
     canonical_json,
     catalog_operation,
 )
@@ -87,55 +82,7 @@ def _compatible_replay(row: Mapping[Any, Any], values: Mapping[str, object]) -> 
     return all(row[field] == values[field] for field in _REPLAY_FIELDS)
 
 
-def _failure_details_json(intent_id: str, details: object | None) -> str:
-    failure_details: dict[str, object] = {"intent_id": intent_id}
-    if details is not None:
-        failure_details["details"] = details
-    return canonical_json(failure_details)
-
-
-def _record_intent_failure(
-    connection: Connection,
-    intent: Mapping[Any, Any],
-    *,
-    category: str,
-    message: str,
-    retryable: bool,
-    details_json: str,
-) -> tuple[FailureRecord, bool]:
-    existing = (
-        connection.execute(
-            select(failures)
-            .where(
-                failures.c.work_version_id == intent["work_version_id"],
-                failures.c.processing_run_id.is_(None),
-                failures.c.category == category,
-                failures.c.message == message,
-                failures.c.retryable == int(retryable),
-                failures.c.details_json == details_json,
-            )
-            .order_by(failures.c.occurred_at, failures.c.id)
-        )
-        .mappings()
-        .first()
-    )
-    if existing is not None:
-        return _failure_record(existing), False
-    values = {
-        "id": new_uuid4(),
-        "work_version_id": intent["work_version_id"],
-        "processing_run_id": None,
-        "category": category,
-        "message": message,
-        "retryable": int(retryable),
-        "details_json": details_json,
-        "occurred_at": utc_now_rfc3339(),
-    }
-    connection.execute(insert(failures).values(**values))
-    return _failure_record(values), True
-
-
-class AssetRepository:
+class AssetRepository(AssetDiagnosticRepository):
     """Manage replayable asset publication records and immutable raw assets."""
 
     def __init__(self, catalog: CatalogEngine) -> None:
@@ -143,17 +90,17 @@ class AssetRepository:
             raise TypeError("catalog must be a CatalogEngine")
         if catalog.read_only:
             raise CatalogError("AssetRepository requires a writable catalog")
-        self.__catalog = catalog
+        self._catalog = catalog
 
     def get_intent(self, intent_id: str) -> AssetIntentRecord | None:
         intent_id = validate_uuid(intent_id, "intent_id")
         with catalog_operation("asset intent lookup"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 return _select_intent(connection, intent_id)
 
     def list_reconcilable_intents(self) -> tuple[AssetIntentRecord, ...]:
         with catalog_operation("reconcilable asset intent listing"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 rows = (
                     connection.execute(
                         select(asset_intents)
@@ -173,7 +120,7 @@ class AssetRepository:
         """Return every intent in deterministic reconciliation order."""
 
         with catalog_operation("asset intent listing"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 rows = (
                     connection.execute(
                         select(asset_intents).order_by(
@@ -188,7 +135,7 @@ class AssetRepository:
     def get_raw_asset(self, raw_asset_id: str) -> RawAssetRecord | None:
         raw_asset_id = validate_uuid(raw_asset_id, "raw_asset_id")
         with catalog_operation("raw asset lookup"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 row = (
                     connection.execute(select(raw_assets).where(raw_assets.c.id == raw_asset_id))
                     .mappings()
@@ -199,7 +146,7 @@ class AssetRepository:
     def work_version_exists(self, work_version_id: str) -> bool:
         work_version_id = validate_uuid(work_version_id, "work_version_id")
         with catalog_operation("WorkVersion lookup"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 return connection.execute(
                     select(work_versions.c.id).where(work_versions.c.id == work_version_id)
                 ).scalar_one_or_none() is not None
@@ -207,7 +154,7 @@ class AssetRepository:
     def get_raw_asset_by_sha256(self, sha256: str) -> RawAssetRecord | None:
         sha256 = validate_sha256(sha256)
         with catalog_operation("raw asset hash lookup"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 row = (
                     connection.execute(select(raw_assets).where(raw_assets.c.sha256 == sha256))
                     .mappings()
@@ -221,7 +168,7 @@ class AssetRepository:
     ) -> tuple[WorkVersionAssetRecord, ...]:
         work_version_id = validate_uuid(work_version_id, "work_id")
         with catalog_operation("work asset lookup"):
-            with self.__catalog.connect() as connection:
+            with self._catalog.connect() as connection:
                 rows = (
                     connection.execute(
                         select(work_version_assets)
@@ -270,7 +217,7 @@ class AssetRepository:
             "updated_at": now,
         }
         with catalog_operation("asset intent creation"):
-            with self.__catalog.critical_transaction() as connection:
+            with self._catalog.critical_transaction() as connection:
                 existing = (
                     connection.execute(
                         select(asset_intents).where(
@@ -292,12 +239,6 @@ class AssetRepository:
                         raise CatalogError("asset intent replay metadata conflicts with an existing intent")
                     return _intent_record(candidate)
                 connection.execute(insert(asset_intents).values(**values))
-                _append_event(
-                    connection,
-                    subject_type="asset_intent",
-                    subject_id=intent_id,
-                    event_type="asset_intent.created",
-                )
         return _intent_record(values)
 
     def register_verified_published_intent(self, intent_id: str) -> AssetIntentRecord:
@@ -305,7 +246,7 @@ class AssetRepository:
 
         intent_id = validate_uuid(intent_id, "intent_id")
         with catalog_operation("asset intent publication"):
-            with self.__catalog.critical_transaction() as connection:
+            with self._catalog.critical_transaction() as connection:
                 row = (
                     connection.execute(select(asset_intents).where(asset_intents.c.id == intent_id))
                     .mappings()
@@ -326,7 +267,6 @@ class AssetRepository:
                     .mappings()
                     .one_or_none()
                 )
-                reused = raw_row is not None
                 if raw_row is None:
                     raw_values = {
                         "id": new_uuid4(),
@@ -385,19 +325,12 @@ class AssetRepository:
                     update(asset_intents).where(asset_intents.c.id == intent_id).values(**changes)
                 )
                 updated = {**dict(row), **changes}
-                _append_event(
-                    connection,
-                    subject_type="asset_intent",
-                    subject_id=intent_id,
-                    event_type="asset_intent.published",
-                    details={"raw_asset_id": raw_row["id"], "reused": reused},
-                )
                 return _intent_record(updated)
 
     def finalize_intent(self, intent_id: str) -> AssetIntentRecord:
         intent_id = validate_uuid(intent_id, "intent_id")
         with catalog_operation("asset intent finalization"):
-            with self.__catalog.critical_transaction() as connection:
+            with self._catalog.critical_transaction() as connection:
                 row = (
                     connection.execute(select(asset_intents).where(asset_intents.c.id == intent_id))
                     .mappings()
@@ -418,131 +351,6 @@ class AssetRepository:
                     update(asset_intents).where(asset_intents.c.id == intent_id).values(**changes)
                 )
                 updated = {**dict(row), **changes}
-                _append_event(
-                    connection,
-                    subject_type="asset_intent",
-                    subject_id=intent_id,
-                    event_type="asset_intent.finalized",
-                )
                 return _intent_record(updated)
-
-    def record_intent_failure(
-        self,
-        intent_id: str,
-        category: str,
-        message: str,
-        *,
-        retryable: bool = False,
-        details: object | None = None,
-    ) -> FailureRecord:
-        intent_id = validate_uuid(intent_id, "intent_id")
-        category = _required_text(category, "category")
-        message = _required_text(message, "message")
-        if not isinstance(retryable, bool):
-            raise TypeError("retryable must be a boolean")
-        details_json = _failure_details_json(intent_id, details)
-        with catalog_operation("asset intent failure recording"):
-            with self.__catalog.critical_transaction() as connection:
-                row = (
-                    connection.execute(select(asset_intents).where(asset_intents.c.id == intent_id))
-                    .mappings()
-                    .one_or_none()
-                )
-                if row is None:
-                    raise CatalogError(f"asset intent does not exist: {intent_id}")
-                failure, created = _record_intent_failure(
-                    connection,
-                    row,
-                    category=category,
-                    message=message,
-                    retryable=retryable,
-                    details_json=details_json,
-                )
-                if created:
-                    _append_event(
-                        connection,
-                        subject_type="asset_intent",
-                        subject_id=intent_id,
-                        event_type="asset_intent.failure_recorded",
-                        details={"failure_id": failure.id},
-                    )
-                return failure
-
-    def append_acquisition_diagnostic(
-        self,
-        work_version_id: str,
-        asset_role: AssetRole | str,
-        outcome: str,
-        details: object,
-    ) -> str:
-        work_version_id = validate_uuid(work_version_id, "work_version_id")
-        role = _asset_role(asset_role)
-        if outcome not in {"succeeded", "failed"}:
-            raise ValueError("diagnostic outcome must be succeeded or failed")
-        diagnostic_id = new_uuid4()
-        with catalog_operation("acquisition diagnostic append"):
-            with self.__catalog.transaction() as connection:
-                connection.execute(insert(acquisition_diagnostics).values(
-                    id=diagnostic_id,
-                    work_version_id=work_version_id,
-                    asset_role=role.value,
-                    outcome=outcome,
-                    details_json=canonical_json(details),
-                    occurred_at=utc_now_rfc3339(),
-                ))
-        return diagnostic_id
-
-    def abandon_pending_intent(
-        self,
-        intent_id: str,
-        category: str,
-        message: str,
-        *,
-        retryable: bool = False,
-        details: object | None = None,
-    ) -> AssetIntentRecord:
-        intent_id = validate_uuid(intent_id, "intent_id")
-        category = _required_text(category, "category")
-        message = _required_text(message, "message")
-        if not isinstance(retryable, bool):
-            raise TypeError("retryable must be a boolean")
-        details_json = _failure_details_json(intent_id, details)
-        with catalog_operation("asset intent abandonment"):
-            with self.__catalog.critical_transaction() as connection:
-                row = (
-                    connection.execute(select(asset_intents).where(asset_intents.c.id == intent_id))
-                    .mappings()
-                    .one_or_none()
-                )
-                if row is None:
-                    raise CatalogError(f"asset intent does not exist: {intent_id}")
-                state = AssetIntentState(row["state"])
-                if state is AssetIntentState.ABANDONED:
-                    return _intent_record(row)
-                if state is not AssetIntentState.PENDING:
-                    raise CatalogError(f"cannot abandon an asset intent in state {state.value}")
-                now = utc_now_rfc3339()
-                changes = {"state": AssetIntentState.ABANDONED.value, "updated_at": now}
-                connection.execute(
-                    update(asset_intents).where(asset_intents.c.id == intent_id).values(**changes)
-                )
-                _record_intent_failure(
-                    connection,
-                    row,
-                    category=category,
-                    message=message,
-                    retryable=retryable,
-                    details_json=details_json,
-                )
-                updated = {**dict(row), **changes}
-                _append_event(
-                    connection,
-                    subject_type="asset_intent",
-                    subject_id=intent_id,
-                    event_type="asset_intent.abandoned",
-                    details={"category": category, "retryable": retryable},
-                )
-                return _intent_record(updated)
-
 
 __all__ = ("AssetRepository",)

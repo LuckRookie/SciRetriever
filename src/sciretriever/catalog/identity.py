@@ -17,7 +17,6 @@ from sciretriever.catalog.records import (
 )
 from sciretriever.catalog.repository import (
     CatalogRepository,
-    _append_event,
     _work_record,
     canonical_json,
     catalog_operation,
@@ -376,17 +375,6 @@ class IdentityResolver:
             "resolved_at": None,
         }
         connection.execute(insert(identity_reviews).values(**values))
-        _append_event(
-            connection,
-            subject_type="identity_review",
-            subject_id=values["id"],
-            event_type="identity.review_required",
-            details={
-                "candidate_work_ids": sorted(matches),
-                "identifiers": [item.to_dict() for item in normalized],
-                "reason": reason,
-            },
-        )
         return IdentityResolution(
             decision="review_required",
             identifiers=normalized,

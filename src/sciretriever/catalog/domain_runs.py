@@ -12,7 +12,6 @@ from sciretriever.catalog.models import domain_runs
 from sciretriever.catalog.records import DomainRunRecord
 from sciretriever.catalog.repository import (
     CatalogRepository,
-    _append_event,
     _required_text,
     catalog_operation,
 )
@@ -102,12 +101,6 @@ class DomainRunRepository:
         with catalog_operation("domain run creation"):
             with self.__catalog.critical_transaction() as connection:
                 connection.execute(insert(domain_runs).values(**values))
-                _append_event(
-                    connection,
-                    subject_type="domain_run",
-                    subject_id=values["id"],
-                    event_type="domain_run.created",
-                )
         return _domain_run_record(values)
 
     create = create_domain_run
@@ -157,13 +150,6 @@ class DomainRunRepository:
                     update(domain_runs).where(domain_runs.c.id == run_id).values(**values)
                 )
                 updated = {**dict(row), **values}
-                _append_event(
-                    connection,
-                    subject_type="domain_run",
-                    subject_id=run_id,
-                    event_type="domain_run.state_changed",
-                    details={"from": current.value, "to": target.value},
-                )
                 return _domain_run_record(updated)
 
     transition = transition_domain_run

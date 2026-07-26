@@ -15,7 +15,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sciretriever.analysis import AnalysisProviderRequest, AnalysisProviderResponse, AnalysisService, OpenAICompatibleAnalysisProvider, SECTION_IDS, analysis_response_schema
-from sciretriever.catalog import IdentityResolver, LibraryReadRepository, ManualMetadataRepository, MetadataIngestionObservation, RegistryRepository, TagRepository, WorkRepository, WorkVersionAnalysisRepository, create_catalog_engine, initialize_catalog
+from sciretriever.catalog import IdentityResolver, LibraryReadRepository, MetadataIngestionObservation, RegistryRepository, TagRepository, WorkRepository, WorkVersionAnalysisRepository, create_catalog_engine, initialize_catalog
+from sciretriever.catalog.manual_metadata_curation import ManualMetadataCurationConflictError, ManualMetadataSetHandler
+from manual_curation_fixture import add_manual_tag, clear_manual_metadata, set_manual_metadata
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.derivation import stable_derivation_id
 from sciretriever.config import MinerUConfig
@@ -318,7 +320,7 @@ class AnalysisWP44Tests(TestCase):
         manual_tag = TagRepository(self.catalog).add("manual")
         with self.catalog.connect() as connection:
             work_id = connection.exec_driver_sql("SELECT work_id FROM work_versions WHERE id = ?", (self.work_version_id,)).scalar_one()
-        TagRepository(self.catalog).add_manual(work_id, manual_tag.id)
+        add_manual_tag(self.catalog, work_id, manual_tag.id)
         def first_output(value, source):
             evidence = source["source_units"][0]["evidence_id"]
             value["generated_tags"] = [{"tag_id": tag_one.id, "evidence_ids": [evidence]}]
@@ -332,7 +334,7 @@ class AnalysisWP44Tests(TestCase):
         self.assertIsNotNone(current)
         if current is None:
             self.fail("current analysis is missing")
-        ManualMetadataRepository(self.catalog).set(self.work_version_id, "abstract", "人工摘要")
+        set_manual_metadata(self.catalog, self.work_version_id, "abstract", "人工摘要")
         with self.catalog.connect() as connection:
             observation_count = connection.exec_driver_sql("SELECT count(*) FROM metadata_observations").scalar_one()
         def second_output(value, source):
@@ -364,12 +366,12 @@ class AnalysisWP44Tests(TestCase):
         self.ingest_provider(language="en", abstract="Provider one")
         service = self.service(FixtureProvider())
         service.run(self.work_version_id, self.source)
-        ManualMetadataRepository(self.catalog).set(self.work_version_id, "language", "fr")
+        set_manual_metadata(self.catalog, self.work_version_id, "language", "fr")
         self.ingest_provider(language="de", abstract="Provider two", record_id="later-record")
         with self.catalog.connect() as connection:
             row = connection.exec_driver_sql("SELECT abstract, language FROM work_versions WHERE id = ?", (self.work_version_id,)).one()
         self.assertEqual(row, ("原文摘要", "fr"))
-        ManualMetadataRepository(self.catalog).remove(self.work_version_id, "language")
+        clear_manual_metadata(self.catalog, self.work_version_id, "language")
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT language FROM work_versions WHERE id = ?", (self.work_version_id,)).scalar_one(), "de")
 
@@ -378,7 +380,7 @@ class AnalysisWP44Tests(TestCase):
         manual_tag = TagRepository(self.catalog).add("manual-kept")
         with self.catalog.connect() as connection:
             work_id = connection.exec_driver_sql("SELECT work_id FROM work_versions WHERE id = ?", (self.work_version_id,)).scalar_one()
-        TagRepository(self.catalog).add_manual(work_id, manual_tag.id)
+        add_manual_tag(self.catalog, work_id, manual_tag.id)
         def first_output(value, source):
             evidence = source["source_units"][0]["evidence_id"]
             value["generated_tags"] = [{"tag_id": tag.id, "evidence_ids": [evidence]}]
@@ -535,15 +537,11 @@ class AnalysisWP44Tests(TestCase):
         self.assertEqual(self.projection_state(), before)
 
     def test_invalid_manual_registry_and_canonical_values_are_rejected(self) -> None:
-        manual = ManualMetadataRepository(self.catalog)
-        with self.assertRaises((CatalogError, ValueError)):
-            manual.set(self.work_version_id, "publisher_id", str(uuid4()))
-        with self.assertRaises((CatalogError, ValueError)):
-            manual.set(self.work_version_id, "venue_id", "not-a-uuid")
-        with self.assertRaises(ValueError):
-            manual.set(self.work_version_id, "publication_date", "2024/01/01")
-        with self.assertRaises(ValueError):
-            manual.set(self.work_version_id, "publication_year", "2024")
+        invalid = (("publisher_id", str(uuid4())), ("venue_id", "not-a-uuid"),
+                   ("publication_date", "2024/01/01"), ("publication_year", "2024"))
+        for field_name, value in invalid:
+            with self.assertRaises((CatalogError, ManualMetadataCurationConflictError)):
+                ManualMetadataSetHandler.load(self.catalog, self.work_version_id, field_name, value)
         with self.catalog.connect() as connection:
             self.assertEqual(connection.exec_driver_sql(
                 "SELECT count(*) FROM manual_metadata_overrides WHERE work_version_id = ?", (self.work_version_id,)).scalar_one(), 0)

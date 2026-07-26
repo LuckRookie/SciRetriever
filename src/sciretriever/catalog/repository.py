@@ -11,15 +11,11 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.models import (
-    events,
-    failures,
     identifiers,
     metadata_labels,
     works,
 )
 from sciretriever.catalog.records import (
-    EventRecord,
-    FailureRecord,
     MetadataLabelRecord,
     WorkRecord,
 )
@@ -95,30 +91,6 @@ def _label_record(row: Mapping[Any, Any]) -> MetadataLabelRecord:
     )
 
 
-def _event_record(row: Mapping[Any, Any]) -> EventRecord:
-    return EventRecord(
-        id=row["id"],
-        subject_type=row["subject_type"],
-        subject_id=row["subject_id"],
-        event_type=row["event_type"],
-        details_json=row["details_json"],
-        occurred_at=row["occurred_at"],
-    )
-
-
-def _failure_record(row: Mapping[Any, Any]) -> FailureRecord:
-    return FailureRecord(
-        id=row["id"],
-        work_version_id=row["work_version_id"],
-        processing_run_id=row["processing_run_id"],
-        category=row["category"],
-        message=row["message"],
-        retryable=bool(row["retryable"]),
-        details_json=row["details_json"],
-        occurred_at=row["occurred_at"],
-    )
-
-
 def _select_work(connection: Connection, work_id: str) -> WorkRecord | None:
     row = connection.execute(select(works).where(works.c.id == work_id)).mappings().one_or_none()
     return None if row is None else _work_record(row)
@@ -166,26 +138,6 @@ def _select_labels(
         .all()
     )
     return tuple(_label_record(row) for row in rows)
-
-
-def _append_event(
-    connection: Connection,
-    *,
-    subject_type: str,
-    subject_id: str,
-    event_type: str,
-    details: object | None = None,
-) -> EventRecord:
-    values = {
-        "id": new_uuid4(),
-        "subject_type": _required_text(subject_type, "subject_type"),
-        "subject_id": validate_uuid(subject_id, "subject_id"),
-        "event_type": _required_text(event_type, "event_type"),
-        "details_json": None if details is None else canonical_json(details),
-        "occurred_at": utc_now_rfc3339(),
-    }
-    connection.execute(insert(events).values(**values))
-    return _event_record(values)
 
 
 class CatalogRepository:
@@ -283,59 +235,6 @@ class CatalogRepository:
                 )
 
     get_metadata_labels = get_reusable_metadata_labels
-
-    def append_event(
-        self,
-        subject_type: str,
-        subject_id: str,
-        event_type: str,
-        details: object | None = None,
-    ) -> EventRecord:
-        with catalog_operation("event append"):
-            with self._catalog.transaction() as connection:
-                return _append_event(
-                    connection,
-                    subject_type=subject_type,
-                    subject_id=subject_id,
-                    event_type=event_type,
-                    details=details,
-                )
-
-    def append_failure(
-        self,
-        category: str,
-        message: str,
-        *,
-        work_version_id: str | None = None,
-        processing_run_id: str | None = None,
-        retryable: bool = False,
-        details: object | None = None,
-    ) -> FailureRecord:
-        contexts = {
-            "work_version_id": work_version_id,
-            "processing_run_id": processing_run_id,
-        }
-        if all(value is None for value in contexts.values()):
-            raise ValueError("a failure requires at least one catalog context")
-        for name, value in contexts.items():
-            if value is not None:
-                contexts[name] = validate_uuid(value, name)
-        if not isinstance(retryable, bool):
-            raise TypeError("retryable must be a boolean")
-        values = {
-            "id": new_uuid4(),
-            **contexts,
-            "category": _required_text(category, "category"),
-            "message": _required_text(message, "message"),
-            "retryable": int(retryable),
-            "details_json": None if details is None else canonical_json(details),
-            "occurred_at": utc_now_rfc3339(),
-        }
-        with catalog_operation("failure append"):
-            with self._catalog.transaction() as connection:
-                connection.execute(insert(failures).values(**values))
-        return _failure_record(values)
-
 
 class ReadOnlyCatalogView:
     """Discovery-facing catalog view with lookup-only capabilities."""

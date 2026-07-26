@@ -7,7 +7,7 @@ from sqlalchemy import insert, select
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.models import normalized_artifacts
 from sciretriever.catalog.records import ArtifactRegistration, NormalizedArtifactRecord
-from sciretriever.catalog.repository import _append_event, _required_text, canonical_json, catalog_operation
+from sciretriever.catalog.repository import _required_text, canonical_json, catalog_operation
 from sciretriever.core.ids import validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
 from sciretriever.core.validation import validate_media_type, validate_sha256, validate_storage_path, validate_token
@@ -84,7 +84,6 @@ class ArtifactRepository:
                         continue
                     values["created_at"] = utc_now_rfc3339()
                     connection.execute(insert(normalized_artifacts).values(**values))
-                    _append_event(connection, subject_type="normalized_artifact", subject_id=values["id"], event_type="normalized_artifact.registered")
                     result.append(NormalizedArtifactRecord.from_row(values))
                 return tuple(result)
 

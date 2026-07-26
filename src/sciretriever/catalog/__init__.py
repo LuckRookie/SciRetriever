@@ -27,9 +27,7 @@ from .records import (
     AssetIntentRecord,
     DomainRunRecord,
     CurrentAnalysisRecord,
-    EventRecord,
     ExternalParserAttemptRecord,
-    FailureRecord,
     IdentityResolution,
     IdentityResolutionResult,
     IdentityReviewRecord,
@@ -53,7 +51,7 @@ from .repository import CatalogRepository, ReadOnlyCatalogView, canonical_json
 from .artifacts import ArtifactRepository
 from .packages import PackageSourceRepository, PackageVersionRepository
 from .processing import ProcessingRunRepository
-from .analysis import CurrentAnalysisRepository, ExternalParserAttemptRepository, ManualMetadataRepository
+from .analysis import CurrentAnalysisRepository, ExternalParserAttemptRepository
 from .download_selection import (
     DownloadSelection,
     WorkVersionDownloadRecord,
@@ -61,6 +59,21 @@ from .download_selection import (
 )
 from .analysis_selection import AnalysisSelection, WorkVersionAnalysisRecord, WorkVersionAnalysisRepository
 from .completion_facts import CompletionFacts, CompletionFactsRepository, CompletionStage
+from .diagnostics import CatalogDiagnosticService
+from .curation import (
+    CurationAlreadyUndoneError,
+    CurationAuditCorruptError,
+    CurationBoundaryError,
+    CurationBusyError,
+    CurationCapture,
+    CurationCompensationError,
+    CurationNoChangeError,
+    CurationOperationOwner,
+    CurationRequest,
+    CurationStaleError,
+    CurationStep,
+)
+from .author_curation import AuthorCurationConflictError, AuthorMergeHandler
 
 
 _domain_runs_api = import_module(f"{__name__}.domain_runs")
@@ -80,10 +93,24 @@ __all__ = (
     "ArtifactRepository",
     "AssetRepository",
     "AuthorRepository",
+    "AuthorCurationConflictError",
+    "AuthorMergeHandler",
     "AuthorRecord",
     "AuthorshipRecord",
     "CatalogEngine",
     "CatalogRepository",
+    "CatalogDiagnosticService",
+    "CurationOperationOwner",
+    "CurationAlreadyUndoneError",
+    "CurationAuditCorruptError",
+    "CurationBoundaryError",
+    "CurationBusyError",
+    "CurationCapture",
+    "CurationCompensationError",
+    "CurationNoChangeError",
+    "CurationRequest",
+    "CurationStaleError",
+    "CurationStep",
     "CompletionFacts",
     "CompletionFactsRepository",
     "CompletionStage",
@@ -91,10 +118,8 @@ __all__ = (
     "CurrentAnalysisRecord",
     "CurrentAnalysisRepository",
     "DomainRunRepository",
-    "EventRecord",
     "ExternalParserAttemptRecord",
     "ExternalParserAttemptRepository",
-    "FailureRecord",
     "IdentityResolution",
     "IdentityResolutionResult",
     "IdentityResolver",
@@ -105,7 +130,6 @@ __all__ = (
     "LibraryReadRepository",
     "LibraryResult",
     "MetadataLabelRecord",
-    "ManualMetadataRepository",
     "MetadataIngestionBatch",
     "MetadataIngestionObservation",
     "MetadataObservationRecord",

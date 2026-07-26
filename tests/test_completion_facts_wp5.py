@@ -50,7 +50,8 @@ class CompletionFactsWP5Tests(CompletionFactsFixture):
             {"doi": "10.1234/identity-only"}).work_version.id
         manual_only = IdentityResolver(self.catalog).create_or_reuse_work(
             {"doi": "10.1234/manual-only"}).work_version.id
-        ManualMetadataRepository(self.catalog).set(manual_only, "title", "Manual title")
+        from manual_curation_fixture import set_manual_metadata
+        set_manual_metadata(self.catalog, manual_only, "title", "Manual title")
         projection_only = IdentityResolver(self.catalog).create_or_reuse_work(
             {"doi": "10.1234/projection-only"}).work_version.id
         with self.catalog.transaction() as connection:

@@ -14,7 +14,6 @@ from sciretriever.catalog.models import (
     normalized_artifacts, processing_runs,
     version_references, work_versions,
 )
-from sciretriever.catalog.manual_metadata import ManualMetadataRepository
 from sciretriever.catalog.records import CurrentAnalysisRecord
 from sciretriever.catalog.parser_attempts import ExternalParserAttemptRepository
 from sciretriever.catalog.promotion_failpoints import PROMOTION_FAILPOINTS, PromotionFailpoint
@@ -191,4 +190,4 @@ class CurrentAnalysisRepository:
                     )
                 return CurrentAnalysisRecord.from_row(values)
 
-__all__ = ("CurrentAnalysisRepository", "ExternalParserAttemptRepository", "ManualMetadataRepository")
+__all__ = ("CurrentAnalysisRepository", "ExternalParserAttemptRepository")

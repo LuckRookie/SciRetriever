@@ -107,10 +107,11 @@ class CompletionFactsAlignmentTests(CompletionFactsFixture):
 
     def test_manual_override_and_provider_fallback_follow_canonical_precedence(self) -> None:
         work_version_id, _, _ = self.complete()
-        ManualMetadataRepository(self.catalog).set(work_version_id, "language", "fr")
+        from manual_curation_fixture import clear_manual_metadata, set_manual_metadata
+        set_manual_metadata(self.catalog, work_version_id, "language", "fr")
         facts = self.repository.get(work_version_id)
         self.assertEqual(facts.stage, CompletionStage.COMPLETE)
-        ManualMetadataRepository(self.catalog).remove(work_version_id, "language")
+        clear_manual_metadata(self.catalog, work_version_id, "language")
         self.assertEqual(self.repository.get(work_version_id).stage, CompletionStage.COMPLETE)
 
 

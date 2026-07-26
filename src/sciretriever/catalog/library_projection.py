@@ -13,6 +13,7 @@ from sciretriever.catalog.models import (
     manual_work_tags, tags, work_version_identifiers,
 )
 from sciretriever.catalog.repository import canonical_json
+from .library_reference_projection import ReadingReference
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.public_identifiers import (
     PUBLIC_IDENTIFIER_NAMESPACES, public_identifier_sort_key,
@@ -43,9 +44,10 @@ class LibraryItem:
     authors: tuple[str, ...]
     tags: tuple[str, ...]
     light_content: tuple[str, ...] = ()
+    references: tuple[ReadingReference, ...] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "abstract": self.abstract, "article_number": self.article_number,
             "authors": list(self.authors), "is_preferred": self.is_preferred,
             "identifiers": [value.to_dict() for value in self.identifiers],
@@ -59,6 +61,9 @@ class LibraryItem:
             "work_id": self.work_id, "work_type": self.work_type,
             "work_version_id": self.work_version_id,
         }
+        if self.references is not None:
+            value["references"] = [reference.to_dict() for reference in self.references]
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +80,12 @@ class LibraryResult:
         return "".join(f"{canonical_json(row)}\n" for row in self.to_rows())
 
 
-def project_item(connection: Connection, row: Any, include_light_content: bool) -> LibraryItem:
+def project_item(
+    connection: Connection,
+    row: Any,
+    include_light_content: bool,
+    references: tuple[ReadingReference, ...] | None = None,
+) -> LibraryItem:
     version_id = row["id"]
     author_names = tuple(connection.execute(
         select(authors.c.display_name).join(
@@ -131,7 +141,7 @@ def project_item(connection: Connection, row: Any, include_light_content: bool) 
         publisher=row["publisher_name"], venue=row["venue_name"], volume=row["volume"],
         issue=row["issue"], pages=row["pages"], article_number=row["article_number"],
         open_access_status=row["open_access_status"], identifiers=identifiers,
-        authors=author_names, tags=tag_names, light_content=content,
+        authors=author_names, tags=tag_names, light_content=content, references=references,
     )
 
 

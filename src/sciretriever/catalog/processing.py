@@ -6,14 +6,17 @@ import json
 
 from sqlalchemy import insert, select, update
 
+from sciretriever.catalog.diagnostics import CatalogDiagnosticService
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.models import failures, processing_runs
+from sciretriever.catalog.models import processing_runs
 from sciretriever.catalog.records import ProcessingRunRecord
-from sciretriever.catalog.repository import _append_event, _required_text, canonical_json, catalog_operation
+from sciretriever.catalog.repository import _required_text, canonical_json, catalog_operation
 from sciretriever.core.derivation import canonical_sha256, stable_derivation_id
 from sciretriever.core.enums import ProcessingRunState, ProcessingStage
 from sciretriever.core.ids import validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
+from sciretriever.diagnostics.history import DiagnosticWriteRequest
+from sciretriever.diagnostics.owners import processing_failure
 from sciretriever.errors import CatalogError
 
 
@@ -31,6 +34,7 @@ class ProcessingRunRepository:
         if catalog.read_only:
             raise CatalogError("ProcessingRunRepository requires a writable catalog")
         self._catalog = catalog
+        self._diagnostics = CatalogDiagnosticService(catalog)
 
     def get(self, run_id: str) -> ProcessingRunRecord | None:
         run_id = validate_uuid(run_id, "run_id")
@@ -105,7 +109,6 @@ class ProcessingRunRepository:
                     "started_at": now, "finished_at": None,
                 }
                 connection.execute(insert(processing_runs).values(**values))
-                _append_event(connection, subject_type="processing_run", subject_id=run_id, event_type="processing_run.claimed")
                 return ProcessingRunRecord.from_row(values)
 
     def succeed(self, run_id: str, *, output_artifact_ids: tuple[str, ...] = ()) -> ProcessingRunRecord:
@@ -128,7 +131,6 @@ class ProcessingRunRepository:
                 now = utc_now_rfc3339()
                 changes = {"state": "succeeded", "output_artifact_id": outputs[0] if outputs else None, "details_json": canonical_json(details), "finished_at": now}
                 connection.execute(update(processing_runs).where(processing_runs.c.id == run_id).values(**changes))
-                _append_event(connection, subject_type="processing_run", subject_id=run_id, event_type="processing_run.succeeded", details={"output_artifact_ids": outputs})
                 return ProcessingRunRecord.from_row({**dict(row), **changes})
 
     def fail(self, run_id: str, category: str, message: str, *, retryable: bool = False, details: object | None = None) -> ProcessingRunRecord:
@@ -147,16 +149,11 @@ class ProcessingRunRepository:
                     raise CatalogError("only an active processing run can fail")
                 now = utc_now_rfc3339()
                 connection.execute(update(processing_runs).where(processing_runs.c.id == run_id).values(state="failed", finished_at=now))
-                failure_values = {
-                    "id": stable_derivation_id("processing_failure", {"run_id": run_id, "category": category, "message": message, "details": details}),
-            "work_version_id": row["work_version_id"],
-                    "processing_run_id": run_id, "category": category, "message": message,
-                    "retryable": int(retryable), "details_json": details_json, "occurred_at": now,
-                }
-                existing = connection.execute(select(failures).where(failures.c.id == failure_values["id"])).mappings().one_or_none()
-                if existing is None:
-                    connection.execute(insert(failures).values(**failure_values))
-                    _append_event(connection, subject_type="processing_run", subject_id=run_id, event_type="processing_run.failed", details={"failure_id": failure_values["id"]})
+                self._diagnostics.append_in_transaction(connection, DiagnosticWriteRequest(
+                    processing_failure(run_id, category, retryable),
+                    retryable,
+                    {"category": category, "details": details},
+                ))
                 return ProcessingRunRecord.from_row({**dict(row), "state": "failed", "finished_at": now})
 
     def record_nonblocking_failure(
@@ -170,26 +167,16 @@ class ProcessingRunRepository:
         run_id = validate_uuid(run_id, "run_id")
         category = _required_text(category, "category")
         message = _required_text(message, "message")
-        failure_id = stable_derivation_id(
-            "processing_failure",
-            {"run_id": run_id, "category": category, "message": message, "details": details},
-        )
         with catalog_operation("nonblocking processing failure"):
             with self._catalog.critical_transaction() as connection:
                 run = connection.execute(select(processing_runs).where(processing_runs.c.id == run_id)).mappings().one_or_none()
                 if run is None:
                     raise CatalogError(f"processing run does not exist: {run_id}")
-                existing = connection.execute(select(failures.c.id).where(failures.c.id == failure_id)).scalar_one_or_none()
-                if existing is not None:
-                    return
-                now = utc_now_rfc3339()
-                connection.execute(insert(failures).values(
-                id=failure_id, work_version_id=run["work_version_id"],
-                    processing_run_id=run_id, category=category, message=message,
-                    retryable=0, details_json=None if details is None else canonical_json(details),
-                    occurred_at=now,
+                self._diagnostics.append_in_transaction(connection, DiagnosticWriteRequest(
+                    processing_failure(run_id, category, False),
+                    False,
+                    {"category": category, "details": details},
                 ))
-                _append_event(connection, subject_type="processing_run", subject_id=run_id, event_type="processing_run.nonblocking_failure", details={"failure_id": failure_id})
 
 
 __all__ = ("ProcessingRunRepository",)

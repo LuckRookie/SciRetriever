@@ -22,6 +22,7 @@ from sciretriever.catalog.library_projection import (
     LibraryItem, LibraryResult, project_item,
 )
 from sciretriever.catalog.library_query import apply_filters
+from .library_reference_projection import project_reading_references
 from sciretriever.catalog.repository import _required_text, catalog_operation
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.ids import validate_uuid
@@ -41,6 +42,12 @@ def _limit(value: int) -> int:
 def _include_light_content(value: bool) -> bool:
     if not isinstance(value, bool):
         raise TypeError("include_light_content must be a boolean")
+    return value
+
+
+def _include_references(value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError("include_references must be a boolean")
     return value
 
 
@@ -85,6 +92,7 @@ class LibraryReadRepository:
         work_id: str | None = None,
         work_version_id: str | None = None,
         include_light_content: bool = False,
+        include_references: bool = False,
         limit: int = _DEFAULT_LIMIT,
     ) -> LibraryResult:
         selectors = tuple(value is not None for value in (doi, title, work_id, work_version_id))
@@ -92,6 +100,7 @@ class LibraryReadRepository:
             raise ValueError("exact lookup requires exactly one selector")
         checked_limit = _limit(limit)
         include_light_content = _include_light_content(include_light_content)
+        include_references = _include_references(include_references)
         if doi is not None:
             normalized_doi = Identifier("doi", doi).value
             statement = self._base_select(preferred_only=False).where(exists(
@@ -116,7 +125,12 @@ class LibraryReadRepository:
             statement = self._base_select(preferred_only=False).where(
                 work_versions.c.id == validate_uuid(work_version_id, "work_version_id")
             )
-        return self._execute(statement, checked_limit, include_light_content)
+        return self._execute(
+            statement,
+            checked_limit,
+            include_light_content,
+            include_references=include_references,
+        )
 
     def search(
         self,
@@ -240,16 +254,21 @@ class LibraryReadRepository:
         include_light_content: bool,
         *,
         preserve_order: bool = False,
+        include_references: bool = False,
     ) -> LibraryResult:
         if not preserve_order:
             statement = statement.order_by(work_versions.c.normalized_title, works.c.id, work_versions.c.id)
         with catalog_operation("library read"):
             with self._catalog.connect() as connection:
                 rows = connection.execute(statement.distinct().limit(limit)).mappings().all()
-                items = tuple(
-                    project_item(connection, row, include_light_content)
-                    for row in rows
-                )
+                items = tuple(project_item(
+                    connection,
+                    row,
+                    include_light_content,
+                    project_reading_references(
+                        connection, row["id"], limit,
+                    ) if include_references else None,
+                ) for row in rows)
         return LibraryResult(items)
 
 __all__ = ("LibraryFilters", "LibraryItem", "LibraryReadRepository", "LibraryResult")

@@ -226,10 +226,20 @@ provider_canonical_projections = Table(
 
 authors = Table(
     "authors", metadata, _id_column(), Column("display_name", Text, nullable=False),
-    Column("normalized_name", Text, nullable=False), Column("orcid", Text, unique=True), _created_at_column(),
+    Column("normalized_name", Text, nullable=False), Column("orcid", Text, unique=True),
+    Column("status", Text, nullable=False, server_default="active"),
+    Column("merged_into_author_id", String(36), ForeignKey("authors.id", ondelete="RESTRICT")),
+    _created_at_column(),
     CheckConstraint(_uuid_check("id"), name="id_uuid"),
     CheckConstraint("length(trim(display_name)) > 0", name="display_name_not_blank"),
     CheckConstraint("length(trim(normalized_name)) > 0", name="normalized_name_not_blank"),
+    CheckConstraint("status IN ('active', 'merged')", name="status"),
+    CheckConstraint(
+        "(status = 'merged' AND merged_into_author_id IS NOT NULL) "
+        "OR (status = 'active' AND merged_into_author_id IS NULL)",
+        name="merged_target_state",
+    ),
+    CheckConstraint("merged_into_author_id IS NULL OR merged_into_author_id <> id", name="not_self_merged"),
 )
 authorships = Table(
     "authorships", metadata, _id_column(),
@@ -636,62 +646,6 @@ current_analyses = Table(
     CheckConstraint(_json_check("provenance_json"), name="provenance_json"),
     CheckConstraint(_timestamp_check("created_at"), name="created_at_rfc3339"),
     CheckConstraint(_timestamp_check("updated_at"), name="updated_at_rfc3339"),
-)
-
-events = Table(
-    "events",
-    metadata,
-    _id_column(),
-    Column("subject_type", Text, nullable=False),
-    Column("subject_id", String(36), nullable=False),
-    Column("event_type", Text, nullable=False),
-    Column("details_json", Text),
-    _created_at_column("occurred_at"),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(_uuid_check("subject_id"), name="subject_id_uuid"),
-    CheckConstraint("length(trim(subject_type)) > 0", name="subject_type_not_blank"),
-    CheckConstraint("length(trim(event_type)) > 0", name="event_type_not_blank"),
-    CheckConstraint(_json_check("details_json", nullable=True), name="details_json"),
-    CheckConstraint(_timestamp_check("occurred_at"), name="occurred_at_rfc3339"),
-)
-
-acquisition_diagnostics = Table(
-    "acquisition_diagnostics",
-    metadata,
-    _id_column(),
-    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE"), nullable=False),
-    Column("asset_role", Text, nullable=False),
-    Column("outcome", Text, nullable=False),
-    Column("details_json", Text, nullable=False),
-    _created_at_column("occurred_at"),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(f"asset_role IN ({_values(_ASSET_ROLES)})", name="asset_role"),
-    CheckConstraint("outcome IN ('succeeded', 'failed')", name="outcome"),
-    CheckConstraint(_json_check("details_json"), name="details_json"),
-    CheckConstraint(_timestamp_check("occurred_at"), name="occurred_at_rfc3339"),
-)
-
-failures = Table(
-    "failures",
-    metadata,
-    _id_column(),
-    Column("work_version_id", String(36), ForeignKey("work_versions.id", ondelete="CASCADE")),
-    Column("processing_run_id", String(36), ForeignKey("processing_runs.id", ondelete="CASCADE")),
-    Column("category", Text, nullable=False),
-    Column("message", Text, nullable=False),
-    Column("retryable", Integer, nullable=False, server_default="0"),
-    Column("details_json", Text),
-    _created_at_column("occurred_at"),
-    CheckConstraint(_uuid_check("id"), name="id_uuid"),
-    CheckConstraint(
-        "work_version_id IS NOT NULL OR processing_run_id IS NOT NULL",
-        name="context",
-    ),
-    CheckConstraint("length(trim(category)) > 0", name="category_not_blank"),
-    CheckConstraint("length(trim(message)) > 0", name="message_not_blank"),
-    CheckConstraint("retryable IN (0, 1)", name="retryable_boolean"),
-    CheckConstraint(_json_check("details_json", nullable=True), name="details_json"),
-    CheckConstraint(_timestamp_check("occurred_at"), name="occurred_at_rfc3339"),
 )
 
 package_versions = Table(

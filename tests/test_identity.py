@@ -84,7 +84,7 @@ class IdentityTests(TestCase):
                     "SELECT field_name FROM metadata_observations"
                 ).scalars()
             )
-            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM events").scalar_one(), 2)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM diagnostic_records").scalar_one(), 0)
         self.assertTrue({"authors", "keywords", "venue"}.issubset(observed_fields))
 
     def test_ambiguity_creates_review_without_merge_alias_or_new_work(self) -> None:
@@ -115,7 +115,6 @@ class IdentityTests(TestCase):
         self.assertEqual(after["works"], before["works"])
         self.assertEqual(after["identifiers"], before["identifiers"])
         self.assertEqual(after["identity_reviews"], before["identity_reviews"] + 1)
-        self.assertEqual(after["events"], before["events"] + 1)
 
         repeated = self.resolver.create_or_reuse_work(
             {
@@ -126,7 +125,7 @@ class IdentityTests(TestCase):
         )
         self.assertEqual(repeated.review, result.review)
         repeated_counts = self.counts()
-        for table in ("identity_reviews", "events", "works", "identifiers"):
+        for table in ("identity_reviews", "works", "identifiers"):
             with self.subTest(table=table):
                 self.assertEqual(repeated_counts[table], after[table])
 

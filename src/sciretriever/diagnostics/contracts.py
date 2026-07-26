@@ -7,6 +7,12 @@ from enum import Enum
 import re
 from typing import Mapping
 
+from sciretriever.diagnostics.product import (
+    ProductFailureAction,
+    ProductFailureReason,
+    ProductFailureStage,
+)
+
 
 _SOURCE_TOKEN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _PROVIDER_TOKEN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -145,4 +151,7 @@ def attempt_metadata_from_mapping(value: Mapping[str, object]) -> AttemptMetadat
     return AttemptMetadata(candidate_id, attempt_sequence, latency_ms)
 
 
-__all__ = ("ActionCode", "AttemptMetadata", "DiagnosticEnvelope", "FailureStage", "ReasonCode")
+__all__ = (
+    "ActionCode", "AttemptMetadata", "DiagnosticEnvelope", "FailureStage",
+    "ProductFailureAction", "ProductFailureReason", "ProductFailureStage", "ReasonCode",
+)

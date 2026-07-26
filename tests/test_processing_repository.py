@@ -54,7 +54,10 @@ class ProcessingRepositoryTests(TestCase):
         )
         self.assertIs(resumed.state, ProcessingRunState.ACTIVE)
         with self.catalog.connect() as connection:
-            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM failures").scalar_one(), 1)
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM diagnostic_records WHERE stage='analysis' AND processing_run_id=?",
+                (run.id,),
+            ).scalar_one(), 1)
 
     def test_multiple_artifact_inputs_require_an_explicit_relation_anchor(self) -> None:
         with self.assertRaisesRegex(ValueError, "required for multiple input artifacts"):

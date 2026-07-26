@@ -17,7 +17,6 @@ from sciretriever.catalog import (
     CompletionFactsRepository,
     CompletionStage,
     IdentityResolver,
-    ManualMetadataRepository,
     MetadataIngestionObservation,
     TagRepository,
     WorkRepository,

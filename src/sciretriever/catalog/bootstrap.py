@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from sqlalchemy.engine import Connection
 
 from sciretriever.catalog.models import metadata
+
+
+import_module("sciretriever.catalog.wp6_models")
 
 
 _TRIGGERS = (
@@ -120,8 +125,89 @@ _TRIGGERS = (
     """,
 )
 
+_WP6_APPEND_ONLY_TABLES = (
+    "diagnostic_records",
+    "curation_operations",
+    "work_merge_lineage",
+    "author_merge_lineage",
+)
+
+_WP6_TRIGGERS = (
+    """
+    CREATE TRIGGER trg_curation_operations_subject_exists
+    BEFORE INSERT ON curation_operations
+    WHEN NOT (
+        (NEW.subject_kind = 'work' AND EXISTS (
+            SELECT 1 FROM works WHERE id = NEW.subject_id
+        )) OR
+        (NEW.subject_kind = 'work_version' AND EXISTS (
+            SELECT 1 FROM work_versions WHERE id = NEW.subject_id
+        )) OR
+        (NEW.subject_kind = 'author' AND EXISTS (
+            SELECT 1 FROM authors WHERE id = NEW.subject_id
+        )) OR
+        (NEW.subject_kind = 'review' AND EXISTS (
+            SELECT 1 FROM identity_reviews WHERE id = NEW.subject_id
+        )) OR
+        (NEW.subject_kind = 'operation' AND EXISTS (
+            SELECT 1 FROM curation_operations WHERE id = NEW.subject_id
+        ))
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'curation subject must exist');
+    END
+    """,
+    """
+    CREATE TRIGGER trg_work_merge_lineage_no_cycle
+    BEFORE INSERT ON work_merge_lineage
+    WHEN EXISTS (
+        WITH RECURSIVE targets(work_id) AS (
+            SELECT NEW.target_work_id
+            UNION ALL
+            SELECT lineage.target_work_id
+            FROM work_merge_lineage AS lineage
+            JOIN targets ON lineage.source_work_id = targets.work_id
+        )
+        SELECT 1 FROM targets WHERE work_id = NEW.source_work_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'Work merge would create a cycle');
+    END
+    """,
+    """
+    CREATE TRIGGER trg_author_merge_lineage_no_cycle
+    BEFORE INSERT ON author_merge_lineage
+    WHEN EXISTS (
+        WITH RECURSIVE targets(author_id) AS (
+            SELECT NEW.target_author_id
+            UNION ALL
+            SELECT lineage.target_author_id
+            FROM author_merge_lineage AS lineage
+            JOIN targets ON lineage.source_author_id = targets.author_id
+        )
+        SELECT 1 FROM targets WHERE author_id = NEW.source_author_id
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'Author merge would create a cycle');
+    END
+    """,
+)
+
 
 def initialize_schema(connection: Connection) -> None:
     metadata.create_all(connection, checkfirst=False)
     for statement in _TRIGGERS:
+        connection.exec_driver_sql(statement)
+    for table_name in _WP6_APPEND_ONLY_TABLES:
+        connection.exec_driver_sql(
+            f"CREATE TRIGGER trg_{table_name}_immutable_update "
+            f"BEFORE UPDATE ON {table_name} BEGIN "
+            "SELECT RAISE(ABORT, 'append-only record cannot be updated'); END"
+        )
+        connection.exec_driver_sql(
+            f"CREATE TRIGGER trg_{table_name}_immutable_delete "
+            f"BEFORE DELETE ON {table_name} BEGIN "
+            "SELECT RAISE(ABORT, 'append-only record cannot be deleted'); END"
+        )
+    for statement in _WP6_TRIGGERS:
         connection.exec_driver_sql(statement)

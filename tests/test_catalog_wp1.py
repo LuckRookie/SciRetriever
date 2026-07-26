@@ -113,7 +113,7 @@ class CatalogWp1Tests(TestCase):
         self.assertEqual(first.id, repeated.id)
         self.assertNotEqual(first.id, other.id)
 
-    def test_multiple_versions_preference_and_manual_override(self) -> None:
+    def test_multiple_versions_have_deterministic_automatic_preference(self) -> None:
         preprint = self.works.ingest_version(
             provider="arxiv", provider_record_id="a1", title="Versioned Work", doi="10.1/preprint",
             version_class="preprint",
@@ -134,13 +134,15 @@ class CatalogWp1Tests(TestCase):
                 "SELECT preferred_work_version_id FROM works WHERE id = ?", (preprint.work_id,)
             ).scalar_one()
         self.assertEqual(preferred, formal.id)
-        self.assertEqual(self.works.set_preferred(preprint.work_id, preprint.id).preferred_work_version_id, preprint.id)
         self.works.ingest_version(
             provider="openalex", provider_record_id="c2", title="Published Version", doi="10.1/formal",
             version_class="formal_publication",
         )
-        self.assertEqual(self.works.set_preferred(preprint.work_id, preprint.id).preferred_work_version_id, preprint.id)
-        self.assertEqual(self.works.set_preferred(preprint.work_id, None).preferred_work_version_id, formal.id)
+        with self.catalog.connect() as connection:
+            observed = connection.exec_driver_sql(
+                "SELECT preferred_work_version_id FROM works WHERE id = ?", (preprint.work_id,)
+            ).scalar_one()
+        self.assertEqual(observed, formal.id)
 
     def test_preferred_version_database_guard_rejects_cross_work_assignment(self) -> None:
         first = self.works.ingest_version(
@@ -191,7 +193,8 @@ class CatalogWp1Tests(TestCase):
             tags.add("ML")
         with self.assertRaisesRegex(CatalogError, "canonical name"):
             tags.add("statistics", aliases=("machine learning",))
-        tags.add_manual(source.work_id, tag.id)
+        from manual_curation_fixture import add_manual_tag
+        add_manual_tag(self.catalog, source.work_id, tag.id)
         self.assertEqual(self.counts("manual_work_tags", "generated_work_version_tags"), (1, 0))
 
         reference = ReferenceRepository(self.catalog).add(
