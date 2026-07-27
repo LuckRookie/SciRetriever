@@ -331,7 +331,7 @@ max_asset_bytes = 1
             mock.patch("sciretriever.cli.discover.utc_now_rfc3339", return_value=generated_time),
             mock.patch("sciretriever.cli.discover.discover_to_jsonl", return_value=()) as discover,
         ):
-            result = main(self.discover_args())
+            result = main(["--no-config", *self.discover_args()])
 
         self.assertEqual(result, 0)
         spec = discover.call_args.args[0]
