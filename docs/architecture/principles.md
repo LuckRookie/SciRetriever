@@ -1,10 +1,10 @@
 # SciRetriever Architecture Principles
 
-This is the working reference for how SciRetriever is built. It turns the domain-boundary decisions in [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md), the product reset in [ADR 0002](../adr/0002-work-centered-literature-library.md), and the external parser boundary in [ADR 0003](../adr/0003-operator-managed-mineru-service.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. Apply each ADR only to the topics listed in the [ADR index](../adr/README.md): ADR 0001 controls the domain boundary, ADR 0002 controls product shape and execution, and ADR 0003 controls the operator-managed MinerU connection. If this file disagrees with the applicable ADR, follow that ADR and fix this file.
+This is the working reference for how SciRetriever is built. It turns the domain-boundary decisions in [ADR 0001](decisions/0001-sciretriever-scope-and-boundary.md), the product reset in [ADR 0002](decisions/0002-work-centered-literature-library.md), and the external parser boundary in [ADR 0003](decisions/0003-operator-managed-mineru-service.md) into concrete responsibilities, a data contract, ownership rules, and a review checklist. Apply each ADR only to the topics listed in the [architecture decision index](decisions/README.md): ADR 0001 controls the domain boundary, ADR 0002 controls product shape and execution, and ADR 0003 controls the operator-managed MinerU connection. If this file disagrees with the applicable ADR, follow that ADR and fix this file.
 
 The one sentence to remember: **SciRetriever acquires, catalogs, normalizes, and lightly structures literature, and it stops at a versioned, provenance-bearing `DocumentPackage`.** Domains live downstream.
 
-The product center is a local literature library organized by `Work` and bibliographic `WorkVersion`; processing and export snapshots are separate identities. The ideal design is defined in the [system design](../specs/system-design.md), while current coverage is tracked in [implementation progress](../governance/implementation-progress.md).
+The product center is a local literature library organized by `Work` and bibliographic `WorkVersion`; processing and export snapshots are separate identities. The ideal design is defined in the [system design](system-design.md), while current behavior is documented by the project [README](../../README.md).
 
 ## Layered view
 
@@ -69,7 +69,7 @@ The `DocumentPackage` is the boundary object. Its shape is identical whether the
 Two rules make the contract safe:
 
 - **Format independence.** A consumer must be able to process a package without knowing whether it started as PDF, XML, or HTML. Any code branching on original format below the boundary is a smell.
-- **Loss awareness.** `light_structure` is a convenience. `normalized_content` and `evidence` are the truth. A domain pack that reads only the summary is violating [ADR 0001 decision 10](../adr/0001-sciretriever-scope-and-boundary.md#decision).
+- **Loss awareness.** `light_structure` is a convenience. `normalized_content` and `evidence` are the truth. A domain pack that reads only the summary is violating [ADR 0001 decision 10](decisions/0001-sciretriever-scope-and-boundary.md#decision).
 
 ## Data ownership rules
 

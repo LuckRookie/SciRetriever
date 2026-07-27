@@ -1,6 +1,6 @@
 # SciRetriever 技术架构
 
-本文从代码模块、依赖方向、运行模型、配置边界和架构验收五个侧面描述理想中的 SciRetriever。产品语义以[需求规格](requirements.md)和[系统设计](system-design.md)为准；本文不记录当前代码清单、实现差距或迁移进度，这些信息见[实施进度](../governance/implementation-progress.md)。
+本文从代码模块、依赖方向、运行模型、配置边界和架构验收五个侧面描述理想中的 SciRetriever。产品语义以[需求规格](requirements.md)和[系统设计](system-design.md)为准；本文不记录当前代码清单、实现差距或迁移进度，当前实现以 README、源码和测试为准。
 
 ## 1. 模块所有权图
 
@@ -39,7 +39,7 @@
 
 ## 3. 前台运行模型
 
-每次 CLI invocation 构造一次配置、catalog、provider registry 和所需 adapter，在当前进程内完成有界编排后退出。长批次通过 stable selection、processing-run identity 和幂等重跑恢复，不建立 SciRetriever daemon run owner。WP4 可以连接 independently operated persistent MinerU parser service；该服务不由 SciRetriever 启停、升级、监控容量或拥有 task lifecycle，不能成为产品导航或状态真相源。
+每次 CLI invocation 构造一次配置、catalog、provider registry 和所需 adapter，在当前进程内完成有界编排后退出。长批次通过 stable selection、processing-run identity 和幂等重跑恢复，不建立 SciRetriever daemon run owner。PDF analysis 可以连接 independently operated persistent MinerU parser service；该服务不由 SciRetriever 启停、升级、监控容量或拥有 task lifecycle，不能成为产品导航或状态真相源。
 
 写入型 invocation 统一装配一个 `CompletionPipeline`（名称可在实现时按同一所有权调整）。输入 target 可以是规范化稳定标识符或已有 WorkVersion ID；它查询 catalog 事实并得到以下唯一阶段，然后只调用下一缺失阶段：
 
@@ -69,7 +69,7 @@ MinerU external task ID 是唯一获批例外：它作为 normalization processi
 
 ## 4. 配置边界
 
-`sciretriever.config` 是 strict TOML 的唯一 parser，未知字段 fail closed。它负责以下配置：
+`sciretriever.config_loader` 与其 section parser 是 strict TOML 的唯一解析边界，`sciretriever.config` 只提供稳定公开 facade；未知字段 fail closed。解析边界负责以下配置：
 
 - metadata provider precedence；
 - catalog database/assets 路径、search 默认 level/limit；
@@ -78,7 +78,7 @@ MinerU external task ID 是唯一获批例外：它作为 normalization processi
 - LLM provider/model/参数和 secret 引用；
 - MinerU parser service mode/base URL、expected service/protocol/model/backend identity、remote-upload opt-in、auth reference、polling/timeouts/concurrency 和 request/result/archive/schema bounds；
 - PDF/XML/HTML 策略；
-- expansion direction/depth/provider paging、curation/export format 和 reading reference inclusion；
+- expansion direction/depth/provider paging；
 - 默认 30 秒文献启动间隔。
 
 CLI 显式值只覆盖当前 invocation，不回写 TOML。`download`/`analyze` 的 ID/query/filter/tag/all selectors 和 force 语义属于 CLI contract，不得藏入另一套 task policy。`config check` 默认离线检查 strict schema、启用能力的 secret reference、目录权限、模型和 browser profile；只有显式 runtime 模式才构造有界只读 probes。

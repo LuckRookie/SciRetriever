@@ -4,7 +4,7 @@
 - Date: 2026-07-20
 - Supersedes: none
 - Superseded by: [ADR 0002](0002-work-centered-literature-library.md) only for product center and compatibility of unwanted download-task behavior; the scope boundary remains accepted
-- Related: [ADR 0002](0002-work-centered-literature-library.md), [architecture principles](../architecture/principles.md), [project README](../../README.md), [local AGENTS.md](../../AGENTS.md)
+- Related: [ADR 0002](0002-work-centered-literature-library.md), [architecture principles](../principles.md), [project README](../../../README.md), [local AGENTS.md](../../../AGENTS.md)
 
 This ADR is the authoritative source of truth for SciRetriever's domain boundary and where it stops. Read it before writing code, reviewing a change, or proposing a new module. It wins on that boundary unless a later ADR explicitly supersedes it; for product center and compatibility of unwanted download-task behavior, ADR 0002 controls as declared above.
 
@@ -12,7 +12,7 @@ This ADR is the authoritative source of truth for SciRetriever's domain boundary
 
 This ADR remains accepted for the domain boundary, the `DocumentPackage` integration contract, immutable evidence, generic light structure, stable downstream references, and the separation of domain extraction. It is not the current product specification. [ADR 0002](0002-work-centered-literature-library.md) controls the Work-centered product, bibliographic `WorkVersion`, foreground execution, PDF-required analysis, and removal or decoupling of unwanted download-task behavior. The [ADR index](README.md) gives the complete authority and reading order.
 
-The `DocumentPackage` boundary describes what SciRetriever may expose to downstream domains; it does not make package generation the product navigation center or end the internal Work/WorkVersion lifecycle. Domain-run bookkeeping and portable domain-pack outputs below are permitted boundary contracts, not first-release SciRetriever requirements. Current implemented behavior is documented by the project [README](../../README.md), implementation coverage is tracked in [implementation progress](../governance/implementation-progress.md), and ideal product behavior is normative in the [requirements](../specs/requirements.md).
+The `DocumentPackage` boundary describes what SciRetriever may expose to downstream domains; it does not make package generation the product navigation center or end the internal Work/WorkVersion lifecycle. Domain-run bookkeeping and portable domain-pack outputs below are permitted boundary contracts, not first-release SciRetriever requirements. Current implemented behavior is documented by the project [README](../../../README.md), and ideal product behavior is normative in the [requirements](../requirements.md).
 
 ## Context
 
@@ -124,7 +124,7 @@ This ADR does not require preserving pre-v1 implementation shapes. [ADR 0002](00
 
 The current pre-v1 product has no supported legacy catalog and therefore no migration adapter boundary. Old `Paper` ORM, `Optera` rows, retired-database guards and incompatible legacy shapes may be deleted directly. If a future supported input requires migration, its contract and safeguards require a new explicit owner decision. The chemistry `synthsis` script remains outside the SciRetriever core boundary.
 
-No legacy shape is part of the approved pre-v1 product. ADR 0002 authorizes direct replacement within its Work-centered scope; this ADR continues to set the domain and `DocumentPackage` boundary every replacement implementation must satisfy. See the [architecture principles](../architecture/principles.md) for the responsibility matrix and minimum contract.
+No legacy shape is part of the approved pre-v1 product. ADR 0002 authorizes direct replacement within its Work-centered scope; this ADR continues to set the domain and `DocumentPackage` boundary every replacement implementation must satisfy. See the [architecture principles](../principles.md) for the responsibility matrix and minimum contract.
 
 ## When a new ADR is required
 

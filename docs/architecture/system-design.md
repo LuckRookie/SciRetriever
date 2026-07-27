@@ -1,6 +1,6 @@
 # SciRetriever 系统设计
 
-本文从模块责任、数据所有权、状态和端到端流程四个侧面描述理想中的 SciRetriever。Work-centered 产品决策见 [ADR 0002](../adr/0002-work-centered-literature-library.md)，WP4 MinerU 服务边界见 [ADR 0003](../adr/0003-operator-managed-mineru-service.md)，产品合同见[需求规格](requirements.md)，代码模块和依赖边界见[技术架构](technical-architecture.md)。本文不记录现有代码能力或执行进度；这些信息见[实施进度](../governance/implementation-progress.md)。
+本文从模块责任、数据所有权、状态和端到端流程四个侧面描述理想中的 SciRetriever。Work-centered 产品决策见 [ADR 0002](decisions/0002-work-centered-literature-library.md)，MinerU 服务边界见 [ADR 0003](decisions/0003-operator-managed-mineru-service.md)，产品合同见[需求规格](requirements.md)，代码模块和依赖边界见[技术架构](technical-architecture.md)。本文不记录现有代码能力或执行进度；当前行为见项目 [README](../../README.md)。
 
 ## 0. 本文回答什么
 
@@ -10,16 +10,16 @@
 
 | 信息 | 权威来源 |
 |---|---|
-| 产品领域边界 | [ADR 0001](../adr/0001-sciretriever-scope-and-boundary.md) |
-| Work-centered 产品方向和执行模型 | [ADR 0002](../adr/0002-work-centered-literature-library.md) |
-| WP4 MinerU parser/service ownership、连接和 attempt/evidence 边界 | [ADR 0003](../adr/0003-operator-managed-mineru-service.md) |
+| 产品领域边界 | [ADR 0001](decisions/0001-sciretriever-scope-and-boundary.md) |
+| Work-centered 产品方向和执行模型 | [ADR 0002](decisions/0002-work-centered-literature-library.md) |
+| MinerU parser/service ownership、连接和 attempt/evidence 边界 | [ADR 0003](decisions/0003-operator-managed-mineru-service.md) |
 | 产品功能、规则和验收 | [requirements.md](requirements.md) |
 | 数据流、模块协作和产品状态模型 | 本文 |
 | 代码模块和技术依赖 | [technical-architecture.md](technical-architecture.md) |
-| 当前实现与差距 | [implementation-progress.md](../governance/implementation-progress.md) |
-| 实施顺序和工作包批准 | [文献库执行计划](../planning/literature-library-execution.md) |
+| 当前实现 | 项目 [README](../../README.md)、源码与测试 |
+| 历史实施材料 | [文献库实施归档](../archive/2026-07-literature-library/README.md) |
 
-系统设计描述的都是产品应有形态，不因某项能力是否已经实现而改变。README 只公布已发布行为，实施进度文档负责记录覆盖情况。
+系统设计描述的都是产品应有形态，不因某项能力是否已经实现而改变。README 只公布已发布行为。
 
 ## 1. 产品全景
 
@@ -191,7 +191,7 @@ accepted WorkVersion primary PDF
 
 PDF 是分析事实和 evidence 的基准。XML/HTML 与 PDF 一致时可补充结构定位；发生冲突时 PDF 控制生成内容和 canonical projection，补充资产只保留 provenance/diagnostic evidence。十个 stable section IDs/core sections 为 `document_information`（Document Information/Metadata）、`abstract`（Abstract）、`research_background`（Research Background）、`research_question_and_objectives`（Research Question and Objectives）、`research_approach`（Research Approach）、`methods`（Methods）、`data_and_materials`（Data and Materials）、`results`（Results）、`conclusion`（Conclusion）、`limitations`（Limitations）。heading 使用论文语言；metadata 是普通正文 section/table，不是 YAML front matter；section 内可使用段落、列表、表格和子标题；Data/Materials 不强制表格；证据不足时明确说明，不得幻觉。完整 reference list 默认不进入 light Markdown，可选追加或导出，但不禁止 references 参与解析或 LLM context。
 
-WP4 primary parser 是 pinned MinerU 3.4.4 `vlm-engine`，SciRetriever 只连接 operator-managed persistent `mineru-api`。`normalization` owns connector、service result validation、source-unit/evidence conversion 和 immutable parser artifacts；`analysis` 只消费验证后的 normalized artifacts。MinerU task、Markdown、VLM text 或 bbox 本身都不构成 current result，也不改变 primary PDF 的权威性。
+PDF analysis primary parser 是 pinned MinerU 3.4.4 `vlm-engine`，SciRetriever 只连接 operator-managed persistent `mineru-api`。`normalization` owns connector、service result validation、source-unit/evidence conversion 和 immutable parser artifacts；`analysis` 只消费验证后的 normalized artifacts。MinerU task、Markdown、VLM text 或 bbox 本身都不构成 current result，也不改变 primary PDF 的权威性。
 
 connector 使用 async `/tasks` lifecycle。loopback endpoint 可使用固定 loopback HTTP；remote endpoint 必须为明确授权的 HTTPS origin，认证由运行时 secret reference 和 reverse proxy/private transport 提供。客户端不跟随 redirect，不使用响应返回的任意 absolute task URL，也不把 `server_url` 交给调用者。result ZIP 在临时边界内做路径、symlink、压缩比、文件数、字节数、schema、page/bbox 和内容 limits 后才进入 immutable publication。
 
@@ -405,4 +405,4 @@ User actions
 
 ## 16. 文档责任边界
 
-产品 owner 日常只需阅读本文和[产品需求与验收规格](requirements.md)：本文解释模块责任、数据流和状态模型，requirements 定义功能、边界和验收。两份文档已经吸收适用 accepted ADR；ADR 仍保存决策授权与变更记录。工程团队另外维护[技术架构](technical-architecture.md)、[架构原则](../architecture/principles.md)、[provider 运维手册](../guides/provider-operations.md)和[代码文档责任映射](../governance/code-doc-map.md)。实现覆盖和差距只记录在[实施进度](../governance/implementation-progress.md)，不得反向改变三份规格定义的理想产品。
+产品 owner 日常只需阅读本文和[产品需求与验收规格](requirements.md)：本文解释模块责任、数据流和状态模型，requirements 定义功能、边界和验收。两份文档已经吸收适用 accepted ADR；ADR 仍保存决策授权与变更记录。工程团队另外维护[技术架构](technical-architecture.md)、[架构原则](principles.md)、[Provider 注意事项](../notes/providers.md)和[代码文档同步映射](../development/documentation-map.md)。当前实现只由 README、源码和测试说明，不在架构目录维护动态进度。
