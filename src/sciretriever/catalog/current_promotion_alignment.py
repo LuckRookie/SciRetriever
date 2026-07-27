@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
 from sciretriever.catalog.canonical_projection import CANONICAL_FIELDS
-from sciretriever.catalog.library import normalize_title
+from sciretriever.catalog.text import normalize_title
 from sciretriever.catalog.models import (
     generated_work_version_metadata,
     generated_work_version_tags,

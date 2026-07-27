@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 from sqlalchemy import Select, and_, exists, literal, or_, select
 
-from sciretriever.catalog.library import normalize_title
+from sciretriever.catalog.text import normalize_title
 from sciretriever.catalog.models import (
     authors, authorships, generated_work_version_tags, manual_work_tags,
     publisher_aliases, publishers, tag_aliases, tags, venue_aliases, venues,

@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 
 from .current_promotion_alignment import PrimaryPdf, current_promotion_aligns
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.library import normalize_title
+from sciretriever.catalog.text import normalize_title
 from sciretriever.catalog.models import (
     current_analyses,
     metadata_observations,
