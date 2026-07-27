@@ -6,11 +6,11 @@ created = "2026-07-22"
 
 # SciRetriever 能力差距台账
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的评估，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)和[文献库执行计划](../../planning/literature-library-execution.md)。下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的评估，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 对比基线：SciRetriever 当前 v2 实现、工作区中的 `scansci-pdf` 参考快照与 Zotero 客户端/translators
-- 权威边界：[ADR 0001](../../adr/0001-sciretriever-scope-and-boundary.md)
+- 权威边界：[ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)
 - 下载专项评估：[下载能力对比与吸收评估](download-capability-comparison.md)
 - 下载产品方向：[文献自动下载产品方案](download-product-shape.md)
 - 下载实施草案：[文献下载实施提案](download-implementation-proposal.md)
@@ -55,7 +55,7 @@ SciRetriever 已具备 7 个 Discovery 来源、10 个 Acquisition provider、�
 
 我们不需要管任何版权问题，我们只是提供一种技术手段去下载文献。所以无论手段是否涉及版权问题，都不是我们应当考虑的。
 
-完整立场见[工具中立性声明](../../tool-neutrality-statement.md)。
+完整立场见[工具中立性声明](../../notes/tool-neutrality.md)。
 
 ## 5. 后续排序需要回答的问题
 

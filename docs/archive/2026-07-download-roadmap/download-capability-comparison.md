@@ -6,11 +6,11 @@ created = "2026-07-22"
 
 # 下载能力对比与吸收评估
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的对比证据，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)和[文献库执行计划](../../planning/literature-library-execution.md)。下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的对比证据，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 对比对象：SciRetriever 当前 v2、`scansci-pdf`、Zotero 客户端与 translators
-- 权威边界：[ADR 0001](../../adr/0001-sciretriever-scope-and-boundary.md)
+- 权威边界：[ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)
 - 相关台账：[能力差距台账](capability-gaps.md)
 - 产品方向：[文献自动下载产品方案](download-product-shape.md)
 - 实施草案：[文献下载实施提案](download-implementation-proposal.md)

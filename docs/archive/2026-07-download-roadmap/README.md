@@ -1,12 +1,11 @@
 # 2026-07 下载路线归档
 
-本目录保存 2026-07-23 产品重置前的下载任务路线、四份下载提案和请求放大基线。材料用于审计历史，不是当前需求、产品方向或执行授权，也不应从活动计划和提案索引进入实施。
+本目录保存 2026-07-23 产品重置前完成或被替代的下载提案、评估和请求放大基线。材料用于审计历史，不是当前需求、产品方向或执行授权，也不应从活动提案索引进入实施。旧执行计划不作为项目文档保留。
 
-当前决策见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)，产品形态见[文献库产品提案](../../proposals/literature-library-product.md)，获批执行顺序见[文献库执行计划](../../planning/literature-library-execution.md)。当前实现与批准目标的差异以[需求规格](../../specs/requirements.md)和[系统设计](../../specs/system-design.md)为准。
+当前决策见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)，历史产品形态见[文献库产品提案](../2026-07-literature-library/literature-library-product.md)。当前实现与批准目标的差异以[需求规格](../../architecture/requirements.md)和[系统设计](../../architecture/system-design.md)为准。
 
 ## 归档内容
 
-- [旧下载产品执行计划](download-product-execution.md)
 - [旧自动下载产品方案](download-product-shape.md)
 - [旧下载实施提案](download-implementation-proposal.md)
 - [旧下载能力对比](download-capability-comparison.md)

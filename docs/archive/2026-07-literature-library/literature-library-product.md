@@ -7,7 +7,7 @@ updated = "2026-07-23"
 
 # 以 Work 为中心的文献库产品提案
 
-本提案记录 owner 已确认的产品形态。它提供方向背景，不描述当前代码。当前行为见 [README](../../README.md)，覆盖与差距见[实施进度](../governance/implementation-progress.md)，实施顺序见[获批执行计划](../planning/literature-library-execution.md)。
+本提案记录 owner 已确认的产品形态。它提供方向背景，不描述当前代码。当前行为见 [README](../../../README.md)，覆盖与差距见[实施进度](implementation-progress.md)；当时的实施顺序由 OMO 执行计划管理，该计划不作为项目文档保留。
 
 ## 1. 产品定位
 
@@ -115,7 +115,7 @@ SciRetriever 是本地、前台 CLI 驱动的科研文献库。核心体验是�
 | `failures` | 查看每个最终 acquisition 失败的 overall reason/action，并展开各来源的脱敏细节 |
 | `config check` | 检查严格 TOML、凭据引用、provider 顺序、路径和可选运行时 |
 
-这些命令均为目标，当前命令树不同，详见 [README](../../README.md)。
+这些命令均为目标，当前命令树不同，详见 [README](../../../README.md)。
 
 本地搜索首版不包含 vector semantic search。向量语义检索明确延后；首版只实现 exact lookup、关键词、过滤和引用遍历。
 

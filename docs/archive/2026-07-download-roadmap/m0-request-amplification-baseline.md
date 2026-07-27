@@ -1,6 +1,6 @@
 # M0 Request Amplification Baseline v1
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的历史测量和批准证据，不是当前请求预算、需求或实施授权。当前方向见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)和[文献库执行计划](../../planning/literature-library-execution.md)。下文状态与数值保持原样，仅用于审计。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的历史测量和批准证据，不是当前请求预算、需求或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文状态与数值保持原样，仅用于审计。
 
 ## 状态
 

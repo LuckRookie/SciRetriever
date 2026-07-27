@@ -6,12 +6,12 @@ created = "2026-07-22"
 
 # 文献自动下载产品方案
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的旧产品方向，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)和[文献库执行计划](../../planning/literature-library-execution.md)。下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的旧产品方向，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 面向读者：产品 owner、普通用户、后续实施者
 - 技术实施草案：[文献下载实施提案](download-implementation-proposal.md)
-- 当前行为真相源：[README](../../../README.md)、[系统设计](../../specs/system-design.md)
+- 当前行为真相源：[README](../../../README.md)、[系统设计](../../architecture/system-design.md)
 
 ## 1. 产品目标
 

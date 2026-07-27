@@ -1,6 +1,6 @@
 # 产品决策追踪
 
-本文是 2026-07-23 产品讨论及后续 owner 决策的非规范性追踪表，用于证明 owner 的细粒度选择已经进入活动真相源。accepted ADR 保存决策授权和边界，[需求规格](../specs/requirements.md)、[系统设计](../specs/system-design.md)和[技术架构](../specs/technical-architecture.md)从不同侧面定义理想产品；[产品提案](../proposals/literature-library-product.md)只提供方向背景，[执行计划](../planning/literature-library-execution.md)只授权实施顺序，[实施进度](implementation-progress.md)只记录当前覆盖。本文不独立定义行为、重复授权能力或描述当前实现。
+本文是 2026-07-23 产品讨论及后续 owner 决策的非规范性追踪表，用于证明 owner 的细粒度选择已经进入活动真相源。accepted ADR 保存决策授权和边界，[需求规格](../../architecture/requirements.md)、[系统设计](../../architecture/system-design.md)和[技术架构](../../architecture/technical-architecture.md)从不同侧面定义理想产品；[产品提案](literature-library-product.md)只提供方向背景，[实施进度](implementation-progress.md)只记录实现覆盖。当时的实施顺序由 OMO 执行计划管理，该计划不作为项目文档保留。本文不独立定义行为、重复授权能力或描述当前实现。
 
 初始来源是本地会话导出 `lit.json`，session `ses_077a0787affespmLO6Unc3oh5I`。导出包含凭据无关但体量较大的完整对话和工具记录，不进入仓库。下面的 `message` 是该导出 `messages` 数组的稳定索引；问答工具结果也按其所属 assistant message 索引记录。导出后的决定使用日期和会话主题记录，不虚构旧导出中的 message 索引。
 

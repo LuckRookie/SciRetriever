@@ -1,9 +1,9 @@
 # SciRetriever 实施进度
 
 - 最后核对：2026-07-26
-- 进度依据：[文献库执行计划](../planning/literature-library-execution.md)
-- 理想产品：[需求规格](../specs/requirements.md)、[系统设计](../specs/system-design.md)、[技术架构](../specs/technical-architecture.md)
-- 当前用户行为：[README](../../README.md)、`sciretriever --help`
+- 进度依据：当时的 OMO 执行计划与下列代码、测试和发布证据；执行计划不作为项目文档保留
+- 理想产品：[需求规格](../../architecture/requirements.md)、[系统设计](../../architecture/system-design.md)、[技术架构](../../architecture/technical-architecture.md)
+- 当前用户行为：[README](../../../README.md)、`sciretriever --help`
 
 ## 1. 文档职责
 
@@ -15,7 +15,7 @@
 |---|---|
 | 理想产品必须是什么 | requirements、system design、technical architecture |
 | 为什么采用这些边界 | accepted ADR |
-| 按什么顺序实施 | approved execution plan |
+| 按什么顺序实施 | 当时的 OMO 执行计划 |
 | 当前用户能运行什么 | README、CLI help 和代码 |
 | 已实现多少、差距在哪里 | 本文 |
 
@@ -42,7 +42,7 @@ SearchSpec
 
 ## 3. 当前命令与配置
 
-当前命令树由 [README](../../README.md) 和 `sciretriever --help` 定义：
+当前命令树由 [README](../../../README.md) 和 `sciretriever --help` 定义：
 
 ```text
 discover
@@ -58,9 +58,9 @@ catalog create|import-asset
 package
 ```
 
-严格配置 parser 接受 `schema_version = 1`、根级 `document_start_interval_seconds`，以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`analysis`、`package`、`expansion`、`curation` 和 `export`。`search.level` 接受 `metadata`、`download`、`analyze`；`[analysis.mineru]` 和 `[analysis.llm]` 使用严格 endpoint、运行时 credential-env 和资源上限；`[expansion]` 使用封闭 direction/provider 集合和有界 provider paging。expansion 和既有命令的 CLI 显式值只覆盖当前 invocation；`[curation]`/`[export]` 当前只有 parser contract，尚未注入对应命令 runtime。
+严格配置 parser 接受 `schema_version = 1`、根级 `document_start_interval_seconds`，以及 `paths`、`credentials`、`discovery`、`search`、`acquisition`、`analysis`、`package` 和 `expansion`。`search.level` 接受 `metadata`、`download`、`analyze`；`[analysis.mineru]` 和 `[analysis.llm]` 使用严格 endpoint、运行时 credential-env 和资源上限；`[expansion]` 使用封闭 direction/provider 集合和有界 provider paging。expansion 和既有命令的 CLI 显式值只覆盖当前 invocation；未接入命令 runtime 的整理或导出配置字段由 parser fail closed。
 
-证据：`README.md`、`config.example.toml`、`src/sciretriever/config_loader.py`、`src/sciretriever/config_wp6.py`、`src/sciretriever/cli/parser.py`、`src/sciretriever/cli/main.py`、`tests/test_documentation_wp6.py`。最后核对：2026-07-26。
+证据：`README.md`、`config.example.toml`、`src/sciretriever/config.py`、`src/sciretriever/config_loader.py`、`src/sciretriever/config_models.py`、`src/sciretriever/config_parsing/`、`src/sciretriever/cli/parser.py`、`src/sciretriever/cli/main.py`、`tests/test_config_check_wp6.py`、`tests/test_documentation_wp6.py`。最后核对：2026-07-26。
 
 ## 4. 当前模块事实
 
@@ -83,7 +83,7 @@ package
 
 当前 `work_versions` 保存书目版本身份和 metadata，`works` 只保存作品身份、状态和首选版本指针；`package_versions` 保存处理/导出快照，不是书目 `WorkVersion`。Catalog 已覆盖 metadata observations、Author/Authorship、Publisher/Venue registry 与 alias、canonical tag 与 manual/generated links、version relations/assets/references，以及原子替换的 single current analysis。
 
-证据：`src/sciretriever/`、`docs/governance/code-doc-map.md`。最后核对：2026-07-24。
+证据：`src/sciretriever/`、`docs/development/documentation-map.md`。最后核对：2026-07-24。
 
 ## 5. 能力覆盖与差距
 
@@ -110,7 +110,7 @@ package
 | Reference expansion | 已覆盖 WP6 | 显式单种子、references/cited-by/both、depth-only 图边界、visited 去环、逐层 completion、branch failure 隔离和 exit 130 | WP6 |
 | Failures UX | 已覆盖 WP6 | 独立只读 `failures` 按对象/stage/role/source/reason/action/retryability/outcome 和 latest/all 查询；acquisition details 显式且脱敏 | WP3/WP6 |
 | Deterministic progress counts | 已覆盖 WP6 | search/download/analyze/expand 共享终态计数等式和 stop-specific aliases；PDF missing 保持 exhausted/missing | WP6 |
-| Strict product config | WP2-WP6 parser 与主要 runtime 已覆盖 | schema v1 覆盖 search、acquisition、analysis、expansion、curation、export 和 30 秒 document start interval；offline/runtime config check 已暴露；curation/export 字段尚未注入对应命令 | WP2-WP6 |
+| Strict product config | WP2-WP6 parser 与主要 runtime 已覆盖 | schema v1 覆盖 search、acquisition、analysis、expansion 和 30 秒 document start interval；未接入 runtime 的配置字段 fail closed；offline/runtime config check 已暴露 | WP2-WP6 |
 | Foreground stop/idempotent rerun | 已覆盖 WP0/WP3/WP5/WP6 | batch/expansion 保留稳定顺序和完成项，Ctrl+C 停止新工作；事实重读只执行缺失阶段，重复运行不复制 observations/assets/current/frontier | WP0/WP3/WP5/WP6 |
 | 旧任务控制移除 | 已完成 | 已删除旧 `acquire`/`report`、durable task/job、pause/resume/due、retry scheduling、source-plan persistence 和 candidate checkpoint 当前运行路径 | WP0 |
 | Domain pack boundary | 已批准并有基础 | `DocumentPackageVersion`、stable references、ADR 0001 | 持续约束 |
@@ -129,7 +129,7 @@ package
 | WP5 全局文献信息完成管线 | approved | completed | `completion/`、catalog facts、exact DOI、四入口 cutover、真实 SQLite/storage acceptance、十个 promotion rollback failpoints、架构/删除/wheel gates；`test_completion*_wp5.py` 74 项与 Todo 8 full harness 682 项通过 | 无 |
 | WP6 引用扩展与产品收口 | approved | completed | graph/reference/curation/export/diagnostics/config/count/CLI 直接测试、当前 README/config/help 同步证据和 Todo 31 发布门回执 | 无 |
 
-`approved` 只表示执行计划获得授权，不等于代码已经实现。实施顺序和验收门只在[执行计划](../planning/literature-library-execution.md)定义。
+`approved` 只表示当时的 OMO 执行计划获得授权，不等于代码已经实现；本归档只以代码、测试和发布记录证明完成事实。
 
 ## 7. 最近验证
 
@@ -178,7 +178,7 @@ Todo 31 最终 `full` harness 940 项通过；documentation、architecture、com
 ## 8. 更新规则
 
 1. 代码或测试改变实现覆盖时更新本文和 README；规格不随进度更新。
-2. 工作包顺序、依赖或验收门变化时更新执行计划；本文只同步新的计划引用和事实状态。
+2. 工作包顺序、依赖或验收门变化时更新 `.omo/plans/` 中的活动计划；本文只保存收口时的事实状态。
 3. 产品行为或边界变化时先更新 ADR/requirements/system design/technical architecture，再调整计划和进度映射。
 4. 每个“已实现”或“已验证”状态必须附具体代码、测试或命令证据及核对日期。
 5. 本文不得新增需求、重写验收条件、安排任务 owner/工期或把计划授权解释为实现完成。

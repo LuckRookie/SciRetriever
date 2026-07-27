@@ -6,18 +6,18 @@ created = "2026-07-22"
 
 # 文献下载实施提案
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的候选工作包，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../adr/0002-work-centered-literature-library.md)和[文献库执行计划](../../planning/literature-library-execution.md)。下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的候选工作包，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 适用范围：v2 `src/sciretriever/` 的全文候选发现、下载执行、验证、调度和运维
 - 产品方向：[文献自动下载产品方案](download-product-shape.md)
 - 评估输入：[下载能力对比](download-capability-comparison.md)、[能力差距台账](capability-gaps.md)
-- 当前行为真相源：[系统设计](../../specs/system-design.md)、[需求](../../specs/requirements.md)、[README](../../../README.md)
-- 权威边界：[ADR 0001](../../adr/0001-sciretriever-scope-and-boundary.md)
+- 当前行为真相源：[系统设计](../../architecture/system-design.md)、[需求](../../architecture/requirements.md)、[README](../../../README.md)
+- 权威边界：[ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)
 
 ## 1. 文档定位
 
-本文件把下载专项评估转换为可排序、可验收的候选工作包。它是 proposal，不会仅因写入本文件而改变当前产品行为或授权实施。某个阶段获准进入开发前，必须先把已批准的行为、配置、契约和验收标准同步到 requirements/spec，再在 `docs/planning/` 新建带批准记录的执行计划；涉及公开契约、持久化 schema、网络安全或项目边界时，继续执行对应人工门禁。
+本文件把下载专项评估转换为可排序、可验收的候选工作包。它是 proposal，不会仅因写入本文件而改变当前产品行为或授权实施。某个阶段获准进入开发前，必须先把已批准的行为、配置、契约和验收标准同步到 requirements/spec，再由 OMO 在 `.omo/plans/` 建立执行计划；涉及公开契约、持久化 schema、网络安全或项目边界时，继续执行对应人工门禁。
 
 四份 proposal 文档的职责如下：
 
