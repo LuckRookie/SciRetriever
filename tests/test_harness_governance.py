@@ -2,40 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.harness import (
-    find_document_governance_violations,
-    find_documentation_violations,
-)
-
-
-def proposal(root: Path) -> None:
-    path = root / "docs" / "proposals" / "idea.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "+++\ndocument_type = \"proposal\"\nstatus = \"direction-confirmed\"\n"
-        "created = \"2026-07-22\"\n+++\n\n# Idea\n",
-        encoding="utf-8",
-    )
-
-
-def requirement(root: Path) -> None:
-    path = root / "docs" / "specs" / "requirements.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# Requirements\n", encoding="utf-8")
-
-
-def plan_text(status: str = "approved", *, progress: bool = True) -> str:
-    final_heading = "\n## 进度引用\n" if progress else ""
-    return (
-        "+++\ndocument_type = \"execution-plan\"\n"
-        f"status = \"{status}\"\nowner = \"maintainer\"\n"
-        "approved_by = \"project-owner\"\napproved_on = \"2026-07-22\"\n"
-        "approval_ref = \"owner-confirmation:2026-07-22\"\n"
-        "source_proposal = \"../proposals/idea.md\"\n"
-        "requirements = [\"../specs/requirements.md\"]\n+++\n\n# Work\n\n"
-        "## 目标与非目标\n\n## 工作包\n\n## 验收与验证\n\n## 发布与回退\n"
-        f"{final_heading}"
-    )
+from scripts.harness import find_document_governance_violations, find_documentation_violations
 
 
 class HarnessGovernanceTests(unittest.TestCase):
@@ -91,7 +58,10 @@ class HarnessGovernanceTests(unittest.TestCase):
         marker = "<!-- WP6_FINAL_RELEASE_RECEIPT: TODO31_940 -->"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            progress = root / "docs" / "governance" / "implementation-progress.md"
+            progress = (
+                root / "docs" / "archive" / "2026-07-literature-library"
+                / "implementation-progress.md"
+            )
             progress.parent.mkdir(parents=True)
             progress.write_text(f"# Progress\n{marker}\n{marker}\n", encoding="utf-8")
 
@@ -100,90 +70,93 @@ class HarnessGovernanceTests(unittest.TestCase):
 
         # Then duplicated final-release truth is rejected
         self.assertIn(
-            "docs/governance/implementation-progress.md: Todo 31 final release marker must appear exactly once",
+            "docs/archive/2026-07-literature-library/implementation-progress.md: "
+            "Todo 31 final release marker must appear exactly once",
             violations,
         )
 
-    def test_document_governance_accepts_proposal_and_plan(self) -> None:
+    def test_document_governance_accepts_current_categories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            proposal(root)
-            self.assertEqual(find_document_governance_violations(root), ())
-            requirement(root)
-            plan = root / "docs" / "planning" / "work.md"
-            plan.parent.mkdir(parents=True)
-            plan.write_text(plan_text(), encoding="utf-8")
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "README.md").write_text("# Documentation\n", encoding="utf-8")
+            for directory in (
+                "guides",
+                "development",
+                "architecture",
+                "notes",
+                "proposals",
+                "archive",
+            ):
+                (docs / directory).mkdir()
             self.assertEqual(find_document_governance_violations(root), ())
 
-    def test_document_governance_requires_progress_heading(self) -> None:
+    def test_document_governance_accepts_active_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            proposal(root)
-            requirement(root)
-            plan = root / "docs" / "planning" / "work.md"
-            plan.parent.mkdir(parents=True)
-            plan.write_text(plan_text(progress=False), encoding="utf-8")
-            violations = find_document_governance_violations(root)
-        self.assertIn(
-            "docs/planning/work.md: execution plan missing heading: ## 进度引用",
-            violations,
-        )
-
-    def test_document_governance_rejects_wrong_type_and_status(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            path = root / "docs" / "planning" / "wrong.md"
-            path.parent.mkdir(parents=True)
-            path.write_text(
-                "+++\ndocument_type = \"proposal\"\nstatus = \"under-review\"\n"
-                "created = \"2026-07-22\"\n+++\n\n# Wrong\n",
+            proposal = root / "docs" / "proposals" / "idea.md"
+            proposal.parent.mkdir(parents=True)
+            proposal.write_text(
+                "+++\ndocument_type = \"proposal\"\nstatus = \"draft\"\n+++\n\n# Idea\n",
                 encoding="utf-8",
             )
             violations = find_document_governance_violations(root)
-        self.assertIn("docs/planning/wrong.md: docs/planning requires document_type = 'execution-plan'", violations)
-        self.assertIn("docs/planning/wrong.md: unsupported execution-plan status 'under-review'", violations)
+        self.assertEqual(violations, ())
 
-    def test_document_governance_requires_approval_metadata(self) -> None:
+    def test_document_governance_requires_completed_proposal_to_be_archived(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            path = root / "docs" / "planning" / "incomplete.md"
-            path.parent.mkdir(parents=True)
-            path.write_text(
+            proposal = root / "docs" / "proposals" / "implemented.md"
+            proposal.parent.mkdir(parents=True)
+            proposal.write_text(
+                "+++\ndocument_type = \"proposal\"\nstatus = \"implemented\"\n+++\n",
+                encoding="utf-8",
+            )
+            violations = find_document_governance_violations(root)
+        self.assertIn(
+            "docs/proposals/implemented.md: proposal status 'implemented' is not active; "
+            "move the document to docs/archive",
+            violations,
+        )
+
+    def test_document_governance_rejects_execution_plan_in_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan = root / "docs" / "archive" / "execution.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
                 "+++\ndocument_type = \"execution-plan\"\nstatus = \"approved\"\n+++\n",
                 encoding="utf-8",
             )
             violations = find_document_governance_violations(root)
-        for field in ("owner", "approved_by", "approval_ref", "approved_on", "source_proposal", "requirements"):
-            self.assertTrue(any(field in item for item in violations), field)
-
-    def test_document_governance_rejects_blocked_status(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            proposal(root)
-            requirement(root)
-            path = root / "docs" / "planning" / "blocked.md"
-            path.parent.mkdir(parents=True)
-            path.write_text(plan_text("blocked"), encoding="utf-8")
-            violations = find_document_governance_violations(root)
-        self.assertIn("docs/planning/blocked.md: unsupported execution-plan status 'blocked'", violations)
-
-    def test_document_governance_rejects_malformed_and_unknown_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            proposals = root / "docs" / "proposals"
-            proposals.mkdir(parents=True)
-            (proposals / "malformed.md").write_text("+++\nstatus =\n+++\n", encoding="utf-8")
-            (proposals / "unknown.md").write_text(
-                "+++\ndocument_type = \"proposal\"\nstatus = \"draft\"\n"
-                "created = \"2026-07-22\"\napproved_by = \"nobody\"\n+++\n",
-                encoding="utf-8",
-            )
-            violations = find_document_governance_violations(root)
-        self.assertTrue(any(item.startswith(
-            "docs/proposals/malformed.md: invalid TOML front matter:"
-        ) for item in violations))
         self.assertIn(
-            "docs/proposals/unknown.md: unknown proposal metadata field 'approved_by'",
+            "docs/archive/execution.md: execution plans belong in .omo/plans, not docs",
+            violations,
+        )
+
+    def test_document_governance_rejects_retired_process_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "docs" / "planning"
+            path.mkdir(parents=True)
+            violations = find_document_governance_violations(root)
+        self.assertIn(
+            "docs/planning: unexpected documentation category; "
+            "use guides, development, architecture, notes, proposals, or archive",
+            violations,
+        )
+
+    def test_document_governance_rejects_document_at_docs_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "docs" / "proposal.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("# Proposal\n", encoding="utf-8")
+            violations = find_document_governance_violations(root)
+        self.assertIn(
+            "docs/proposal.md: docs root may contain only README.md; "
+            "move the document into its owning category",
             violations,
         )
 

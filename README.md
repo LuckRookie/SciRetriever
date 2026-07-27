@@ -24,11 +24,11 @@ SciRetriever 当前是一套以 Work 为中心的本地科研文献库工具。�
 | `sciretriever catalog` | 创建 catalog，或导入明确指定的现有资产 |
 | `sciretriever package` | 离线归一化并发布 `DocumentPackageVersion` 处理快照 |
 
-当前已有独立书目 `WorkVersion`、全文补全、PDF current analysis、全局完成管线、引用扩展、统一失败查询、library 人工整理和两类安全导出。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。完整覆盖与差距见[实施进度](docs/governance/implementation-progress.md)。
+当前已有独立书目 `WorkVersion`、全文补全、PDF current analysis、全局完成管线、引用扩展、统一失败查询、library 人工整理和两类安全导出。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。
 
 ## 产品方向
 
-产品按[需求规格](docs/specs/requirements.md)、[系统设计](docs/specs/system-design.md)和[技术架构](docs/specs/technical-architecture.md)定义为以 Work 为中心的本地文献库。当前使用者只应依赖上表、`--help` 和 `config.example.toml` 中已经发布的入口；理想产品描述不是当前操作说明。
+产品按[需求规格](docs/architecture/requirements.md)、[系统设计](docs/architecture/system-design.md)和[技术架构](docs/architecture/technical-architecture.md)定义为以 Work 为中心的本地文献库。当前使用者只应依赖上表、`--help` 和 `config.example.toml` 中已经发布的入口；理想产品描述不是当前操作说明。
 
 ## 功能特性
 
@@ -68,7 +68,7 @@ DOI / search result / existing WorkVersion / imported primary PDF
   -> COMPLETE: aligned current analysis, canonical projection, references and tags
 ```
 
-`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。completion 阶段只从 catalog 权威事实派生，不另存 workflow status。精确 DOI 在 metadata 成功前只存在于当前 invocation；失败不创建 placeholder。普通 search 只把本批持久化的 WorkVersion 交给共享管线，不会隐式扩展到全库。完整当前实现概览见[实施进度](docs/governance/implementation-progress.md)。
+`discover` 仍是只读 manifest 流程，不为结果创建 placeholder `Work`。completion 阶段只从 catalog 权威事实派生，不另存 workflow status。精确 DOI 在 metadata 成功前只存在于当前 invocation；失败不创建 placeholder。普通 search 只把本批持久化的 WorkVersion 交给共享管线，不会隐式扩展到全库。
 
 `expand` 只接受一个显式种子。depth 0 仅核对种子当前事实，不调用 graph provider；更深层逐层调用同一 completion 管线，只有 COMPLETE 节点产生下一层 frontier。默认方向是 references，不存在隐藏的 product-level 文献数上限；provider 调用数和单页大小仍有显式资源边界。
 
@@ -106,11 +106,13 @@ DOI / search result / existing WorkVersion / imported primary PDF
 
 上表 provider 构成第一层：已配置 provider 有界竞速，每个 provider 的候选先去重，再按确定性顺序最多执行 8 个。Unpaywall 按 `best_oa_location` 后接其它 OA locations 形成有序去重候选；OpenAlex 按 best/primary/locations 顺序选择首个 HTTPS PDF locator。第一层没有合格 primary PDF 时，系统依次运行显式配置的 translator rules；仍未命中时才运行 browser rules。translator 和 browser 不参与第一层竞速。
 
-provider 返回候选或 HTTP 200 不等于资产成功。primary PDF 是必需角色；XML/HTML 仅在 primary PDF 已成功或复用后按配置补充，不能替代 primary PDF。PDF/XML/HTML 都必须通过角色、MIME、大小、格式、解析和目标文章身份校验。精确 DOI 一致可通过；没有可用 DOI 时，保守标题匹配或标题加作者/年份佐证可通过。明确身份不符或无法确认身份（包括无法确认的扫描件）会被拒绝并保持 missing；acquisition 身份校验不执行 OCR。WP4 `analyze` 会把已 accepted primary PDF 交给配置的 MinerU parser，解析/OCR 结果只在严格 evidence 和 current-replacement 门后生效。
+provider 返回候选或 HTTP 200 不等于资产成功。primary PDF 是必需角色；XML/HTML 仅在 primary PDF 已成功或复用后按配置补充，不能替代 primary PDF。PDF/XML/HTML 都必须通过角色、MIME、大小、格式、解析和目标文章身份校验。精确 DOI 一致可通过；没有可用 DOI 时，保守标题匹配或标题加作者/年份佐证可通过。明确身份不符或无法确认身份（包括无法确认的扫描件）会被拒绝并保持 missing；acquisition 身份校验不执行 OCR。`analyze` 会把已 accepted primary PDF 交给配置的 MinerU parser，解析/OCR 结果只在严格 evidence 和 current-replacement 门后生效。
 
-`download` 是有界前台 completion batch，固定停在 asset ceiling。已有合格 primary PDF 时直接复用，不重复联网或覆盖；`--xml`/`--html` 在 required batch 后单独运行，成功或失败都不改变四阶段判定。Ctrl+C 保留已完成记录并在稳定、脱敏的 batch JSON 中报告逐目标结果和 interruption。运维事实见 [Provider 运维手册](docs/guides/provider-operations.md)。
+`download` 是有界前台 completion batch，固定停在 asset ceiling。已有合格 primary PDF 时直接复用，不重复联网或覆盖；`--xml`/`--html` 在 required batch 后单独运行，成功或失败都不改变四阶段判定。Ctrl+C 保留已完成记录并在稳定、脱敏的 batch JSON 中报告逐目标结果和 interruption。供应商事实见 [Provider 接入注意事项](docs/notes/providers.md)。
 
 ## 快速开始
+
+完整的安装、配置、metadata 建库、全文获取、PDF 分析、引用扩展、整理、导出和排障步骤见[用户手册](docs/guides/user-manual.md)。
 
 ### 安装
 
@@ -361,7 +363,7 @@ chmod 600 config.toml
 
 当前 parser 会拒绝未知字段。`[search]` 接受 `level`、`limit`、`providers`、`precedence`、`provider_timeout`、`max_concurrency` 和 `crossref_mailto`；provider 与 precedence 必须同时定义且包含完全相同的名称。
 
-WP6 字段只在 [`config.example.toml`](config.example.toml) 定义一次：`document_start_interval_seconds` 内置默认 30 秒，用于限制前台 batch 中文献网络工作的启动节奏；`[expansion]` 定义 direction、depth、graph providers、每 provider 调用预算和 page size。无配置的 `expand` 仍要求显式 `--depth`；加载 TOML 时 expansion 对应 CLI 参数只覆盖本次运行。`[curation]` 与 `[export]` 当前是 strict parser 接受的保留字段，尚未注入整理或导出命令；当前整理输出固定为 JSON，reading export 仍以显式 `--format` 和 `--include-references` 为准。
+当前配置字段只在 [`config.example.toml`](config.example.toml) 定义一次：`document_start_interval_seconds` 内置默认 30 秒，用于限制前台 batch 中文献网络工作的启动节奏；`[expansion]` 定义 direction、depth、graph providers、每 provider 调用预算和 page size。无配置的 `expand` 仍要求显式 `--depth`；加载 TOML 时 expansion 对应 CLI 参数只覆盖本次运行。整理输出固定为 JSON，reading export 仍以显式 `--format` 和 `--include-references` 为准；TOML 不接受未接入运行时的整理或导出保留字段。
 
 `[acquisition]` 接受 first-tier providers、timeout/concurrency/host budget、资产大小、forbidden URL 文件和可选 XML/HTML 开关。`[acquisition.sci_hub]`、`[acquisition.translator]` 和 `[acquisition.browser]` 都是严格、默认关闭的 capability；完整字段和仅使用 `.example` host 的占位示例见 [`config.example.toml`](config.example.toml)。未启用 capability 不要求 endpoint、rule、profile 或运行时；translator/browser 在 disabled 时不得携带 rules，browser 也不得携带 profile。
 
@@ -406,7 +408,7 @@ src/sciretriever/
   cli/              current composition root
 ```
 
-当前模块事实与目标所有权见[技术架构](docs/specs/technical-architecture.md)。
+当前模块事实与目标所有权见[技术架构](docs/architecture/technical-architecture.md)。
 
 ## 数据与安全边界
 
@@ -417,7 +419,7 @@ src/sciretriever/
 - 领域数据不进入 SciRetriever catalog。
 - 文献数据和运行时 catalog 不提交到代码仓库。
 
-ADR 的权威范围和阅读顺序见 [ADR 索引](docs/adr/README.md)：ADR 0001 控制领域边界，ADR 0002 控制 Work-centered 产品方向，ADR 0003 控制 operator-managed MinerU 服务边界。
+ADR 的权威范围和阅读顺序见 [架构决策索引](docs/architecture/decisions/README.md)：ADR 0001 控制领域边界，ADR 0002 控制 Work-centered 产品方向，ADR 0003 控制 operator-managed MinerU 服务边界。
 
 ## 开发与验证
 
@@ -428,20 +430,14 @@ uv run --frozen python scripts/harness.py docs
 uv run --frozen python scripts/harness.py architecture
 ```
 
-协作规则见 [`AGENTS.md`](AGENTS.md) 和 [`HARNESS.md`](HARNESS.md)，代码与文档同步关系见[责任映射](docs/governance/code-doc-map.md)。
+协作规则见 [`AGENTS.md`](AGENTS.md) 和 [`HARNESS.md`](HARNESS.md)，代码与文档同步关系见[开发手册](docs/development/README.md)。
 
 ## 项目文档
 
-- [需求规格](docs/specs/requirements.md)
-- [系统设计](docs/specs/system-design.md)
-- [技术架构](docs/specs/technical-architecture.md)
-- [ADR 索引与权威范围](docs/adr/README.md)
-- [ADR 0001，范围与边界](docs/adr/0001-sciretriever-scope-and-boundary.md)
-- [ADR 0002，文献库产品重置](docs/adr/0002-work-centered-literature-library.md)
-- [ADR 0003，operator-managed MinerU 服务](docs/adr/0003-operator-managed-mineru-service.md)
-- [方向确认提案](docs/proposals/literature-library-product.md)
-- [获批执行计划](docs/planning/literature-library-execution.md)
-- [Provider 运维手册](docs/guides/provider-operations.md)
-- [MinerU 服务运维指南](docs/guides/mineru-service-operations.md)
-- [WP3 acquisition 准入记录](docs/guides/wp3-acquisition-admission.md)
-- [实施进度](docs/governance/implementation-progress.md)
+- [文档总览](docs/README.md)
+- [用户教程](docs/guides/README.md)
+- [开发手册](docs/development/README.md)
+- [整体架构](docs/architecture/README.md)
+- [供应商与外部依赖注意事项](docs/notes/README.md)
+- [活动提案](docs/proposals/README.md)
+- [历史归档](docs/archive/)

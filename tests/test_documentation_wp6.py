@@ -64,8 +64,8 @@ class Wp6DocumentationSnapshotTests(unittest.TestCase):
         # When the example is parsed and its WP6 field declarations are counted
         config = load_config(example)
         declarations = (
-            "document_start_interval_seconds =", "[expansion]", "[curation]",
-            "[export]", "max_provider_calls =", "page_size =",
+            "document_start_interval_seconds =", "[expansion]",
+            "max_provider_calls =", "page_size =",
         )
 
         # Then every field is present once and uses the implemented defaults
@@ -77,15 +77,15 @@ class Wp6DocumentationSnapshotTests(unittest.TestCase):
         self.assertEqual(config.expansion.providers, ("openalex", "semantic-scholar"))
         self.assertEqual(config.expansion.max_provider_calls, 10)
         self.assertEqual(config.expansion.page_size, 100)
-        self.assertEqual(config.curation.output_format, "json")
-        self.assertEqual(config.export.output_format, "jsonl")
-        self.assertFalse(config.export.include_references)
+        self.assertNotIn("[curation]", text)
+        self.assertNotIn("[export]", text)
 
     def test_readme_and_progress_publish_one_current_wp6_surface(self) -> None:
         # Given the current-behavior README and sole progress ledger
         readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
         progress = (
-            REPOSITORY / "docs" / "governance" / "implementation-progress.md"
+            REPOSITORY / "docs" / "archive" / "2026-07-literature-library"
+            / "implementation-progress.md"
         ).read_text(encoding="utf-8")
 
         # When their command and final-release statements are inspected

@@ -20,11 +20,13 @@ MARKDOWN_REFERENCE_TARGET = re.compile(
 )
 REQUIRED_FILES = (
     "README.md", "AGENTS.md", "HARNESS.md", "config.example.toml",
-    "docs/adr/0001-sciretriever-scope-and-boundary.md",
-    "docs/architecture/principles.md", "docs/governance/code-doc-map.md",
-    "docs/planning/README.md", "docs/proposals/README.md",
-    "docs/specs/requirements.md", "docs/specs/system-design.md",
-    "docs/specs/technical-architecture.md",
+    "docs/README.md", "docs/guides/README.md",
+    "docs/development/README.md", "docs/development/documentation-map.md",
+    "docs/architecture/README.md", "docs/architecture/principles.md",
+    "docs/architecture/requirements.md", "docs/architecture/system-design.md",
+    "docs/architecture/technical-architecture.md",
+    "docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md",
+    "docs/notes/README.md", "docs/proposals/README.md",
 )
 README_HEADINGS = (
     "## 功能特性", "## 工作流程", "## 快速开始",
@@ -36,7 +38,7 @@ FINAL_RELEASE_FACTS = (
     "`.omo/evidence/wp6/task-31.txt`",
 )
 WP6_CONFIG_DECLARATIONS = (
-    "document_start_interval_seconds =", "[expansion]", "[curation]", "[export]",
+    "document_start_interval_seconds =", "[expansion]",
     "max_provider_calls =", "page_size =",
 )
 
@@ -92,25 +94,25 @@ def _wp6_surface_violations(root: Path) -> tuple[str, ...]:
                 and config.expansion.providers == ("openalex", "semantic-scholar")
                 and config.expansion.max_provider_calls == 10
                 and config.expansion.page_size == 100
-                and config.curation.output_format == "json"
-                and config.export.output_format == "jsonl"
-                and not config.export.include_references
             )
             if not declarations_are_unique or not defaults_are_exact:
                 violations.append(
                     "config.example.toml: WP6 fields must appear once with exact defaults"
                 )
-    progress = root / "docs" / "governance" / "implementation-progress.md"
+    progress = (
+        root / "docs" / "archive" / "2026-07-literature-library"
+        / "implementation-progress.md"
+    )
     if progress.is_file():
         text = progress.read_text(encoding="utf-8")
         if text.count(FINAL_RELEASE_MARKER) != 1:
             violations.append(
-                "docs/governance/implementation-progress.md: "
+                "docs/archive/2026-07-literature-library/implementation-progress.md: "
                 "Todo 31 final release marker must appear exactly once"
             )
         if any(text.count(fact) != 1 for fact in FINAL_RELEASE_FACTS):
             violations.append(
-                "docs/governance/implementation-progress.md: "
+                "docs/archive/2026-07-literature-library/implementation-progress.md: "
                 "Todo 31 final count and receipt must appear exactly once"
             )
         if (
@@ -118,7 +120,8 @@ def _wp6_surface_violations(root: Path) -> tuple[str, ...]:
             or "WP6 引用扩展与产品收口 | approved | not started" in text
         ):
             violations.append(
-                "docs/governance/implementation-progress.md: stale WP6 capability status"
+                "docs/archive/2026-07-literature-library/implementation-progress.md: "
+                "stale WP6 capability status"
             )
     return tuple(violations)
 

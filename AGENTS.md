@@ -5,9 +5,9 @@
 ## 1. 主规范
 
 1. 阅读 [`HARNESS.md`](HARNESS.md) 的工作流、质量、Git 和完成标准。
-2. 先按 [ADR 索引](docs/adr/README.md)判断权威范围：项目领域边界或 `DocumentPackage` 适用 ADR 0001；产品中心、WorkVersion、PDF analysis、CLI 方向或旧任务行为删除适用 ADR 0002；WP4 MinerU parser/service ownership、连接和 attempt/evidence 边界适用 ADR 0003。
-3. 涉及模块边界、数据所有权或持久化时读[架构原则](docs/architecture/principles.md)和[系统设计](docs/specs/system-design.md)。
-4. 按[代码与文档责任映射](docs/governance/code-doc-map.md)判断文档同步范围。
+2. 先按 [架构决策索引](docs/architecture/decisions/README.md)判断权威范围：项目领域边界或 `DocumentPackage` 适用 ADR 0001；产品中心、WorkVersion、PDF analysis、CLI 方向或旧任务行为删除适用 ADR 0002；MinerU parser/service ownership、连接和 attempt/evidence 边界适用 ADR 0003。
+3. 涉及模块边界、数据所有权或持久化时读[架构原则](docs/architecture/principles.md)和[系统设计](docs/architecture/system-design.md)。
+4. 按[代码与文档同步映射](docs/development/documentation-map.md)判断文档同步范围。
 5. 默认沟通和项目文档使用中文；代码标识符、异常和提交信息使用英文。
 
 ## 2. 项目画像
@@ -110,21 +110,18 @@ CLI / adapters
 
 | 主题 | 真相源 |
 |---|---|
-| ADR 权威范围与阅读顺序 | `docs/adr/README.md` |
-| 领域边界与 `DocumentPackage` | `docs/adr/0001-sciretriever-scope-and-boundary.md` |
-| 产品中心、WorkVersion、PDF analysis 与 pre-v1 删除策略 | `docs/adr/0002-work-centered-literature-library.md` |
-| WP4 MinerU parser/service connection 与外部 attempt/evidence 边界 | `docs/adr/0003-operator-managed-mineru-service.md` |
+| ADR 权威范围与阅读顺序 | `docs/architecture/decisions/README.md` |
+| 领域边界与 `DocumentPackage` | `docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md` |
+| 产品中心、WorkVersion、PDF analysis 与 pre-v1 删除策略 | `docs/architecture/decisions/0002-work-centered-literature-library.md` |
+| MinerU parser/service connection 与外部 attempt/evidence 边界 | `docs/architecture/decisions/0003-operator-managed-mineru-service.md` |
 | 数据所有权与 `DocumentPackage` | `docs/architecture/principles.md` |
-| 理想产品数据流与模块责任 | `docs/specs/system-design.md` |
-| 理想代码模块与依赖边界 | `docs/specs/technical-architecture.md` |
-| 当前实施覆盖、差距与验证证据 | `docs/governance/implementation-progress.md` |
+| 理想产品数据流与模块责任 | `docs/architecture/system-design.md` |
+| 理想代码模块与依赖边界 | `docs/architecture/technical-architecture.md` |
 | 用户安装、命令和配置 | `README.md`、`config.example.toml` |
-| 代码到文档同步 | `docs/governance/code-doc-map.md` |
+| 代码到文档同步 | `docs/development/documentation-map.md` |
 | 跨项目协作规则 | `HARNESS.md` |
 
-requirements、system design 和 technical architecture 只描述理想产品，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；实施覆盖、差距和工作包状态统一记录在 `docs/governance/implementation-progress.md`。不得把理想能力写成当前实现。
-
-未批准的方向、评估和草案只放在 `docs/proposals/`；`docs/planning/` 只放带 owner、批准记录和责任 spec 的执行计划，计划只负责顺序、依赖、验收和回退。目录和授权契约由 documentation harness 阻断检查；proposal、plan 和 progress 都不是当前用户行为真相源。
+requirements、system design 和 technical architecture 只描述理想产品，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；不得把理想能力写成当前实现。`docs/proposals/` 只保留活动提案，完成或终止后及时归档；OMO 执行计划只放在 `.omo/plans/`，不进入项目文档。
 
 ## 8. 金牌实现与测试
 
@@ -136,7 +133,7 @@ requirements、system design 和 technical architecture 只描述理想产品，
 - `tests/test_download_wp3.py`：WorkVersion selector、三层 acquisition、身份拒绝、幂等复用和脱敏诊断。
 - `tests/test_browser_wp3.py`：browser profile snapshot、网络边界、deadline 和 cleanup。
 - `tests/test_raw_asset_crash_recovery.py`：崩溃恢复与证据保留模式。
-- WP4 已实现；MinerU 服务运维合同见 `docs/guides/mineru-service-operations.md`，SciRetriever 只连接 operator-managed 服务。
+- PDF analysis 已实现；MinerU 接入边界见 `docs/notes/mineru.md`，SciRetriever 只连接 operator-managed 服务。
 - `tests/test_completion_wp5.py`：真实临时 SQLite/不可变存储上的 DOI 到 COMPLETE、重启、并发和原子回滚验收。
 
 ## 9. 雷区和遗留代码
@@ -148,12 +145,12 @@ requirements、system design 和 technical architecture 只描述理想产品，
 
 ## 10. 文档、Git 与审查覆盖
 
-- 代码变化按 `docs/governance/code-doc-map.md` 同步责任文档。
+- 代码变化按 `docs/development/documentation-map.md` 同步责任文档。
 - 提交格式采用英文 Conventional Commits；当前仅 `POLICY`，无 commit-msg hook。
 - 实现、直接测试和必要契约文档应在同一原子提交；纯用户指南可独立提交。
 - 只有用户明确要求时执行 commit、push、rebase、PR 或发布。
 - 完成后的集中审查最多使用 2 个 reviewer；按实际风险选择目标/质量和安全/QA 角色。
-- 公开契约、不可变存储、网络安全、边界变化和未来受支持数据迁移需要人工判断。本次 WP1 pre-v1 schema 直接替换已获 owner 批准。
+- 公开契约、不可变存储、网络安全、边界变化和未来受支持数据迁移需要人工判断。本次 pre-v1 schema 直接替换已获 owner 批准。
 
 ## 11. 完成检查
 
