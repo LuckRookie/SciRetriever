@@ -53,13 +53,6 @@ providers = ["openalex", "semantic-scholar"]
 max_provider_calls = 10
 page_size = 100
 
-[curation]
-output_format = "json"
-
-[export]
-output_format = "jsonl"
-include_references = false
-
 [acquisition]
 providers = ["direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex", "semantic-scholar", "elsevier", "wiley", "springer"]
 timeout = 30.0

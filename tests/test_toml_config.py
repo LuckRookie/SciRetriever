@@ -321,8 +321,19 @@ name = "publisher-one"
 landing_url_template = "https://landing.example/article?doi={doi}"
 allowed_landing_hosts = ["redirect.example"]
 allowed_pdf_hosts = ["pdf.example"]
-''', "translator-enabled.toml"))
+        ''', "translator-enabled.toml"))
         self.assertEqual(enabled.acquisition.translator.rules[0].name, "publisher-one")
+        ip_template = load_config(self.write('''schema_version = 1
+[acquisition.translator]
+enabled = true
+[[acquisition.translator.rules]]
+name = "publisher-ip"
+landing_url_template = "https://192.0.2.1/article?doi={doi}"
+''', "translator-ip.toml"))
+        self.assertEqual(
+            ip_template.acquisition.translator.rules[0].landing_url_template,
+            "https://192.0.2.1/article?doi={doi}",
+        )
         invalid = {
             "disabled-rules": '''[acquisition.translator]
 [[acquisition.translator.rules]]

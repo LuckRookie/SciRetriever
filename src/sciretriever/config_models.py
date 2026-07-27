@@ -190,17 +190,6 @@ class ExpansionConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class CurationConfig:
-    output_format: str = "json"
-
-
-@dataclass(frozen=True, slots=True)
-class ExportConfig:
-    output_format: str = "jsonl"
-    include_references: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class SciRetrieverConfig:
     schema_version: int
     paths: PathsConfig = PathsConfig()
@@ -211,15 +200,13 @@ class SciRetrieverConfig:
     analysis: AnalysisConfig = AnalysisConfig()
     package: PackageConfig = PackageConfig()
     expansion: ExpansionConfig = ExpansionConfig()
-    curation: CurationConfig = CurationConfig()
-    export: ExportConfig = ExportConfig()
     document_start_interval_seconds: float = 30.0
 
 
 __all__ = (
     "AcquisitionConfig", "AnalysisConfig", "BrowserConfig", "BrowserRuleConfig",
-    "ConfigCheckMode", "CredentialsConfig", "CurationConfig", "DiscoveryConfig",
-    "ExpansionConfig", "ExportConfig", "LLMConfig", "MinerUConfig", "PackageConfig",
+    "ConfigCheckMode", "CredentialsConfig", "DiscoveryConfig", "ExpansionConfig",
+    "LLMConfig", "MinerUConfig", "PackageConfig",
     "PathsConfig", "PreflightConfig", "SciHubConfig", "SciRetrieverConfig", "SearchConfig",
     "TranslatorConfig", "TranslatorRuleConfig",
 )

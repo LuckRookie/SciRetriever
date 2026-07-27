@@ -1,27 +1,38 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import replace
 from enum import Enum
 from io import BytesIO
 import os
 from pathlib import Path
 import stat
+import sys
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib
 
 from sciretriever.config_models import SciRetrieverConfig
-from sciretriever.config_wp6 import parse_wp6_sections
+from sciretriever.config_parsing import (
+    CREDENTIAL_KEYS,
+    parse_acquisition,
+    parse_analysis,
+    parse_credentials,
+    parse_discovery,
+    parse_document_start_interval,
+    parse_expansion,
+    parse_package,
+    parse_paths,
+    parse_search,
+)
 from sciretriever.errors import ConfigError
 
 
 MAX_CONFIG_BYTES = 1024 * 1024
 ROOT_KEYS = {
     "schema_version", "paths", "credentials", "discovery", "search", "acquisition",
-    "analysis", "package", "expansion", "curation", "export",
+    "analysis", "package", "expansion",
     "document_start_interval_seconds",
-}
-CREDENTIAL_KEYS = {
-    "unpaywall_email", "semantic_scholar_api_key", "elsevier_api_key",
-    "wiley_api_key", "springer_api_key",
 }
 
 
@@ -96,17 +107,11 @@ def _read_config_snapshot(config_path: Path) -> tuple[os.stat_result, bytes, Pat
 
 def load_config(path: str | os.PathLike[str]) -> SciRetrieverConfig:
     """Load one strict config file without creating or modifying filesystem entries."""
-    from sciretriever.config import (
-        TOML_DECODE_ERROR, TOML_LOAD,
-        _parse_acquisition, _parse_analysis, _parse_credentials, _parse_discovery,
-        _parse_package, _parse_paths, _parse_search,
-    )
-
     config_path = Path(path).expanduser()
     metadata, payload, parent = _read_config_snapshot(config_path)
     try:
-        root = TOML_LOAD(BytesIO(payload))
-    except TOML_DECODE_ERROR as error:
+        root = tomllib.load(BytesIO(payload))
+    except tomllib.TOMLDecodeError as error:
         raise ConfigLoadError(ConfigLoadFailure.INVALID_TOML) from error
     unknown = sorted(set(root) - ROOT_KEYS)
     if unknown:
@@ -114,38 +119,21 @@ def load_config(path: str | os.PathLike[str]) -> SciRetrieverConfig:
     version = root.get("schema_version")
     if not isinstance(version, int) or isinstance(version, bool) or version != 1:
         raise ConfigError("config field schema_version must be integer 1")
-    credentials = _parse_credentials(root)
+    credentials = parse_credentials(root)
     if any(credentials.get(name) is not None for name in CREDENTIAL_KEYS):
         if os.name == "posix" and metadata.st_mode & 0o077:
             raise ConfigError("config file containing credentials must have mode 0600 or stricter")
-    expansion, curation, export, interval = parse_wp6_sections(root)
-    acquisition = _parse_acquisition(root, parent)
-    acquisition_table = root.get("acquisition", {})
-    if isinstance(acquisition_table, Mapping):
-        browser_table = acquisition_table.get("browser", {})
-        if isinstance(browser_table, Mapping):
-            raw_profile = browser_table.get("profile_dir")
-            if isinstance(raw_profile, str):
-                profile_reference = Path(raw_profile).expanduser()
-                if not profile_reference.is_absolute():
-                    profile_reference = parent / profile_reference
-                acquisition = replace(
-                    acquisition,
-                    browser=replace(acquisition.browser, profile_reference=profile_reference),
-                )
     return SciRetrieverConfig(
         schema_version=version,
-        paths=_parse_paths(root, parent),
+        paths=parse_paths(root, parent),
         credentials=credentials,
-        discovery=_parse_discovery(root),
-        search=_parse_search(root),
-        acquisition=acquisition,
-        analysis=_parse_analysis(root),
-        package=_parse_package(root),
-        expansion=expansion,
-        curation=curation,
-        export=export,
-        document_start_interval_seconds=interval,
+        discovery=parse_discovery(root),
+        search=parse_search(root),
+        acquisition=parse_acquisition(root, parent),
+        analysis=parse_analysis(root),
+        package=parse_package(root),
+        expansion=parse_expansion(root),
+        document_start_interval_seconds=parse_document_start_interval(root),
     )
 
 

@@ -73,9 +73,6 @@ class ConfigCheckWp6Tests(unittest.TestCase):
         self.assertEqual(default.document_start_interval_seconds, 30.0)
         self.assertEqual(default.expansion.direction, "references")
         self.assertEqual(default.expansion.depth, 0)
-        self.assertEqual(default.curation.output_format, "json")
-        self.assertEqual(default.export.output_format, "jsonl")
-        self.assertFalse(default.export.include_references)
 
         configured = load_config(self.write(
             """schema_version = 1
@@ -83,27 +80,19 @@ document_start_interval_seconds = 45
 [expansion]
 direction = "both"
 depth = 3
-[curation]
-output_format = "jsonl"
-[export]
-output_format = "json"
-include_references = true
 """,
             "configured.toml",
         ))
         self.assertEqual(configured.document_start_interval_seconds, 45.0)
         self.assertEqual((configured.expansion.direction, configured.expansion.depth), ("both", 3))
-        self.assertEqual(configured.curation.output_format, "jsonl")
-        self.assertEqual((configured.export.output_format, configured.export.include_references), ("json", True))
 
     def test_wp6_unknown_type_conflict_and_bounds_fail_by_field(self) -> None:
         cases = {
             "unknown.toml": "[expansion]\nfuture = true",
             "direction.toml": '[expansion]\ndirection = "sideways"',
             "depth.toml": "[expansion]\ndepth = -1",
-            "curation-format.toml": '[curation]\noutput_format = "yaml"',
-            "export-format.toml": '[export]\noutput_format = "yaml"',
-            "references-type.toml": '[export]\ninclude_references = "yes"',
+            "removed-curation.toml": '[curation]\noutput_format = "json"',
+            "removed-export.toml": '[export]\noutput_format = "jsonl"',
             "interval-zero.toml": "document_start_interval_seconds = 0",
             "interval-bound.toml": "document_start_interval_seconds = 86401",
         }
