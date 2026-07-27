@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -19,35 +18,27 @@ from sciretriever.catalog.work_curation_state import recompute_preferred
 from sciretriever.catalog.models import (
     authors,
     authorships,
-    generated_work_version_tags,
     identifiers,
-    manual_work_tags,
     metadata_observations,
     provider_canonical_projections,
     publisher_aliases,
     publishers,
-    tag_aliases,
-    tags,
     venue_aliases,
     venues,
     version_relations,
-    version_references,
     work_version_identifiers,
     work_versions,
     works,
 )
 from sciretriever.catalog.records import (
-    AuthorRecord,
-    AuthorshipRecord,
     MetadataObservationRecord,
-    RegistryRecord,
-    TagRecord,
     VersionRelationRecord,
-    VersionReferenceRecord,
     WorkRecord,
     WorkVersionRecord,
 )
 from sciretriever.catalog.repository import _required_text, _work_record, canonical_json, catalog_operation
+from sciretriever.catalog.registry_repository import RegistryRepository
+from sciretriever.catalog.text import normalize_title
 from sciretriever.core.contracts import CandidateMetadata, Identifier
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
@@ -73,15 +64,6 @@ class MetadataIngestionBatch:
     observations: tuple[MetadataIngestionObservation, ...]
     provider_precedence: tuple[str, ...]
     review_reason: str | None = None
-
-
-def normalize_title(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", _required_text(value, "title")).casefold()
-    without_punctuation = "".join(
-        " " if unicodedata.category(character)[0] in {"P", "S"} else character
-        for character in normalized
-    )
-    return " ".join(without_punctuation.split())
 
 
 def _version_record(row: Mapping[Any, Any]) -> WorkVersionRecord:
@@ -984,235 +966,8 @@ class WorkRepository(CatalogOwner):
             for row in rows
         )
 
-class RegistryRepository:
-    def __init__(self, catalog: CatalogEngine) -> None:
-        self._catalog = catalog
-
-    def add(
-        self,
-        kind: str,
-        canonical_name: str,
-        aliases: Sequence[str] = (),
-        *,
-        _connection: Connection | None = None,
-    ) -> RegistryRecord:
-        table, alias_table, foreign_key = self._tables(kind)
-        name = _required_text(canonical_name, "canonical_name")
-        normalized_name = normalize_title(name)
-        transaction = (
-            self._catalog.critical_transaction()
-            if _connection is None
-            else nullcontext(_connection)
-        )
-        with transaction as connection:
-            row = connection.execute(select(table).where(table.c.normalized_name == normalized_name)).mappings().one_or_none()
-            alias_owner = connection.execute(
-                select(alias_table.c[foreign_key]).where(
-                    alias_table.c.normalized_alias == normalized_name
-                )
-            ).scalar_one_or_none()
-            if row is None and alias_owner is not None:
-                raise CatalogError("canonical name conflicts with an existing alias")
-            if row is None:
-                row = {
-                    "id": new_uuid4(),
-                    "canonical_name": name,
-                    "normalized_name": normalized_name,
-                    "created_at": utc_now_rfc3339(),
-                }
-                connection.execute(insert(table).values(**row))
-            for alias in aliases:
-                alias_value = _required_text(alias, "alias")
-                normalized_alias = normalize_title(alias_value)
-                canonical_owner = connection.execute(
-                    select(table.c.id).where(table.c.normalized_name == normalized_alias)
-                ).scalar_one_or_none()
-                if canonical_owner is not None:
-                    if canonical_owner == row["id"]:
-                        continue
-                    raise CatalogError("alias conflicts with an existing canonical name")
-                existing_owner = connection.execute(
-                    select(alias_table.c[foreign_key]).where(
-                        alias_table.c.normalized_alias == normalized_alias
-                    )
-                ).scalar_one_or_none()
-                if existing_owner is None:
-                    connection.execute(insert(alias_table).values(
-                        id=new_uuid4(), **{foreign_key: row["id"]}, alias=alias_value,
-                        normalized_alias=normalized_alias,
-                        created_at=utc_now_rfc3339(),
-                    ))
-                elif existing_owner != row["id"]:
-                    raise CatalogError("alias is already assigned to another registry record")
-            return RegistryRecord(
-                id=row["id"],
-                canonical_name=row["canonical_name"],
-                created_at=row["created_at"],
-            )
-
-    def resolve(self, kind: str, value: str) -> RegistryRecord | None:
-        table, alias_table, foreign_key = self._tables(kind)
-        value = _required_text(value, "value")
-        normalized_value = normalize_title(value)
-        with self._catalog.connect() as connection:
-            row = connection.execute(
-                select(table).where(table.c.normalized_name == normalized_value)
-            ).mappings().one_or_none()
-            if row is None:
-                row = connection.execute(
-                    select(table)
-                    .join(alias_table, alias_table.c[foreign_key] == table.c.id)
-                    .where(alias_table.c.normalized_alias == normalized_value)
-                ).mappings().one_or_none()
-        return None if row is None else RegistryRecord(**{field: row[field] for field in RegistryRecord.__dataclass_fields__})
-
-    @staticmethod
-    def _tables(kind: str):
-        if kind == "publisher":
-            return publishers, publisher_aliases, "publisher_id"
-        if kind == "venue":
-            return venues, venue_aliases, "venue_id"
-        raise ValueError("kind must be publisher or venue")
-
-
-class AuthorRepository:
-    def __init__(self, catalog: CatalogEngine) -> None:
-        self._catalog = catalog
-
-    def add_authorship(self, work_version_id: str, name: str, position: int, *, orcid: str | None = None,
-                       role: str | None = None, is_corresponding: bool = False,
-                       affiliation: str | None = None) -> tuple[AuthorRecord, AuthorshipRecord]:
-        work_version_id = validate_uuid(work_version_id, "work_version_id")
-        display_name = _required_text(name, "name")
-        normalized_name = display_name.casefold()
-        with self._catalog.critical_transaction() as connection:
-            row = None if orcid is None else connection.execute(select(authors).where(authors.c.orcid == orcid)).mappings().one_or_none()
-            if row is None:
-                row = {"id": new_uuid4(), "display_name": display_name, "normalized_name": normalized_name,
-                       "orcid": orcid, "status": "active", "merged_into_author_id": None,
-                       "created_at": utc_now_rfc3339()}
-                connection.execute(insert(authors).values(**row))
-            link = {"id": new_uuid4(), "work_version_id": work_version_id, "author_id": row["id"],
-                    "position": position, "role": role, "is_corresponding": int(is_corresponding),
-                    "affiliation": affiliation, "created_at": utc_now_rfc3339()}
-            connection.execute(insert(authorships).values(**link))
-            return AuthorRecord(**row), AuthorshipRecord(**{**link, "is_corresponding": bool(link["is_corresponding"])})
-
-
-class TagRepository:
-    def __init__(self, catalog: CatalogEngine) -> None:
-        self._catalog = catalog
-
-    def add(self, canonical_name: str, *, definition: str | None = None,
-            aliases: Sequence[str] = ()) -> TagRecord:
-        name = _required_text(canonical_name, "canonical_name")
-        normalized_name = normalize_title(name)
-        with self._catalog.critical_transaction() as connection:
-            row = connection.execute(select(tags).where(tags.c.normalized_name == normalized_name)).mappings().one_or_none()
-            alias_owner = connection.execute(
-                select(tag_aliases.c.tag_id).where(
-                    tag_aliases.c.normalized_alias == normalized_name
-                )
-            ).scalar_one_or_none()
-            if row is None and alias_owner is not None:
-                raise CatalogError("canonical tag name conflicts with an existing alias")
-            if row is None:
-                row = {"id": new_uuid4(), "canonical_name": name,
-                       "normalized_name": normalized_name, "definition": definition,
-                       "created_at": utc_now_rfc3339()}
-                connection.execute(insert(tags).values(**row))
-            for alias in aliases:
-                alias_value = _required_text(alias, "alias")
-                normalized_alias = normalize_title(alias_value)
-                canonical_owner = connection.execute(
-                    select(tags.c.id).where(tags.c.normalized_name == normalized_alias)
-                ).scalar_one_or_none()
-                if canonical_owner is not None:
-                    if canonical_owner == row["id"]:
-                        continue
-                    raise CatalogError("tag alias conflicts with an existing canonical name")
-                existing_owner = connection.execute(
-                    select(tag_aliases.c.tag_id).where(
-                        tag_aliases.c.normalized_alias == normalized_alias
-                    )
-                ).scalar_one_or_none()
-                if existing_owner is None:
-                    connection.execute(insert(tag_aliases).values(id=new_uuid4(), tag_id=row["id"],
-                        alias=alias_value, normalized_alias=normalized_alias,
-                        language=None, created_at=utc_now_rfc3339()))
-                elif existing_owner != row["id"]:
-                    raise CatalogError("tag alias is already assigned to another tag")
-            return TagRecord(
-                id=row["id"],
-                canonical_name=row["canonical_name"],
-                definition=row["definition"],
-                created_at=row["created_at"],
-            )
-
-    def resolve(self, value: str) -> TagRecord | None:
-        normalized_value = normalize_title(_required_text(value, "value"))
-        with self._catalog.connect() as connection:
-            row = connection.execute(
-                select(tags).where(tags.c.normalized_name == normalized_value)
-            ).mappings().one_or_none()
-            if row is None:
-                row = connection.execute(
-                    select(tags)
-                    .join(tag_aliases, tag_aliases.c.tag_id == tags.c.id)
-                    .where(tag_aliases.c.normalized_alias == normalized_value)
-                ).mappings().one_or_none()
-        if row is None:
-            return None
-        return TagRecord(
-            id=row["id"],
-            canonical_name=row["canonical_name"],
-            definition=row["definition"],
-            created_at=row["created_at"],
-        )
-
-    def add_generated(self, work_version_id: str, tag_id: str, source_artifact_id: str) -> None:
-        self._link(generated_work_version_tags, "work_version_id", work_version_id, tag_id, source_artifact_id)
-
-    def _link(self, table, owner_key: str, owner_id: str, tag_id: str, source_artifact_id: str | None) -> None:
-        values = {owner_key: validate_uuid(owner_id, owner_key), "tag_id": validate_uuid(tag_id, "tag_id"),
-                  "linked_at": utc_now_rfc3339()}
-        if source_artifact_id is not None:
-            values["source_artifact_id"] = validate_uuid(source_artifact_id, "source_artifact_id")
-        with self._catalog.critical_transaction() as connection:
-            connection.execute(insert(table).prefix_with("OR IGNORE").values(**values))
-
-
-class ReferenceRepository:
-    def __init__(self, catalog: CatalogEngine) -> None:
-        self._catalog = catalog
-
-    def add(self, citing_work_version_id: str, reference_order: int, raw_reference: str, *,
-            cited_work_id: str | None = None, identifier: Identifier | None = None,
-            source_artifact_id: str | None = None, locator: object | None = None) -> VersionReferenceRecord:
-        citing_work_version_id = validate_uuid(citing_work_version_id, "citing_work_version_id")
-        if cited_work_id is not None:
-            cited_work_id = validate_uuid(cited_work_id, "cited_work_id")
-        if source_artifact_id is not None:
-            source_artifact_id = validate_uuid(source_artifact_id, "source_artifact_id")
-        values = {"id": new_uuid4(), "citing_work_version_id": citing_work_version_id,
-                  "cited_work_id": cited_work_id, "reference_order": reference_order,
-                  "raw_reference": raw_reference if isinstance(raw_reference, str) and raw_reference.strip() else _required_text(raw_reference, "raw_reference"),
-                  "cited_namespace": None if identifier is None else identifier.namespace,
-                  "cited_value": None if identifier is None else identifier.value,
-                  "source_artifact_id": source_artifact_id,
-                  "locator_json": None if locator is None else canonical_json(locator),
-                  "created_at": utc_now_rfc3339()}
-        with self._catalog.critical_transaction() as connection:
-            connection.execute(insert(version_references).values(**values))
-        return VersionReferenceRecord(**values)
-
-    def cited_by(self, work_id: str) -> tuple[VersionReferenceRecord, ...]:
-        work_id = validate_uuid(work_id, "work_id")
-        with self._catalog.connect() as connection:
-            rows = connection.execute(select(version_references).where(
-                version_references.c.cited_work_id == work_id
-            ).order_by(version_references.c.created_at, version_references.c.id)).mappings().all()
-        return tuple(VersionReferenceRecord(**{field: row[field] for field in VersionReferenceRecord.__dataclass_fields__}) for row in rows)
-
-
-__all__ = ("AuthorRepository", "MetadataIngestionObservation", "ReferenceRepository", "RegistryRepository", "TagRepository", "WorkRepository", "normalize_title")
+__all__ = (
+    "MetadataIngestionBatch",
+    "MetadataIngestionObservation",
+    "WorkRepository",
+)

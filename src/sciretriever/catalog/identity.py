@@ -8,7 +8,8 @@ from typing import Any
 from sqlalchemy import Connection, insert, or_, select
 
 from sciretriever.catalog.engine import CatalogEngine
-from sciretriever.catalog.library import RegistryRepository, WorkRepository
+from sciretriever.catalog.library import WorkRepository
+from sciretriever.catalog.registry_repository import RegistryRepository
 from sciretriever.catalog.models import identifiers as identifier_table
 from sciretriever.catalog.models import authors, authorships, identity_reviews, work_version_identifiers, work_versions, works
 from sciretriever.catalog.records import (
