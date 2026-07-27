@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TypeVar
 
-from sciretriever.catalog.library import normalize_title
+from sciretriever.catalog.text import normalize_title
 from sciretriever.core.contracts import CandidateMetadata, Identifier
 from .search_records import ObservedMetadataRecord, raw_record_key
 

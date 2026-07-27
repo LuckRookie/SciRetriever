@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sciretriever.catalog.library import MetadataIngestionBatch, normalize_title
+from sciretriever.catalog.library import MetadataIngestionBatch
+from sciretriever.catalog.text import normalize_title
 from sciretriever.core.contracts import Identifier
 from .models import ProviderRecord
 from .normalize import identifier_sort_key
