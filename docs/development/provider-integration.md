@@ -1,4 +1,4 @@
-# Provider 准入与退役模板
+# Provider 接入开发手册
 
 新增或实质修改 metadata/acquisition provider、translator 或 browser adapter 前，维护者应填写一份准入记录，并由责任 spec 明确其当前能力和资产角色。本模板保留 provider 安全、可维护性和证据要求，不属于任何旧下载阶段或 checkpoint 计划。
 
