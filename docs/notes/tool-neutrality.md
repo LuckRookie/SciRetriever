@@ -4,7 +4,7 @@
 - 记录日期：2026-07-22
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
-本声明规定项目立场，不声明某项能力已经实现。当前可用来源和命令以 [README](../README.md) 为准，批准但尚未实现的访问路径见[文献库产品提案](proposals/literature-library-product.md)。
+本声明规定项目立场，不声明某项能力已经实现。当前可用来源和命令以项目 [README](../../README.md) 为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
 
 ## 1. 核心立场
 

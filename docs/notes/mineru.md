@@ -1,14 +1,14 @@
-# MinerU parser service operations
+# MinerU 接入注意事项
 
-> Status: current released WP4 behavior. Accepted configuration is defined by `config.py` and `config.example.toml`; operator-only `mineru-api` commands manage the external service independently of SciRetriever.
+> Status: current released PDF analysis behavior. Accepted configuration is defined by `config.py` and `config.example.toml`; operator-only `mineru-api` commands manage the external service independently of SciRetriever.
 
-This guide records the operator contract for the MinerU service approved in [ADR 0003](../adr/0003-operator-managed-mineru-service.md). Product behavior is owned by the requirements and system design; this document explains deployment, readiness, incident handling and evidence needed to operate that target safely.
+This note records the external MinerU contract approved in [ADR 0003](../architecture/decisions/0003-operator-managed-mineru-service.md). Product behavior is owned by the requirements and system design; this document explains deployment, readiness, incident handling and evidence needed to use that capability safely.
 
 No credential value, private endpoint, model token, user PDF content or runtime task URL belongs in this guide.
 
 ## 1. Pinned contract
 
-WP4 initially targets:
+PDF analysis currently targets:
 
 | Item | Approved value |
 |---|---|

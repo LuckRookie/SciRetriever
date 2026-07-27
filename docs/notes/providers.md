@@ -1,6 +1,6 @@
-# 外部机构与 Provider 运维手册
+# Provider 接入注意事项
 
-本手册记录 SciRetriever 与外部机构接口适配时需要长期保留的操作知识，包括公开契约、当前实现、现场验证结果和难以从公开资料获得的经验。它解释如何使用和排障，不重新定义 provider 能力；当前行为仍以代码和 README 为准，覆盖状态见实施进度。
+本手册记录 SciRetriever 与外部机构接口适配时需要长期保留的注意事项，包括公开契约、当前实现、现场验证结果和难以从公开资料获得的经验。它解释如何使用和排障，不重新定义 provider 能力；当前行为仍以代码和 README 为准。
 
 任何凭据值、用户身份、内部工单内容或受限响应正文都不得写入本手册。凭据只以环境变量名表示。
 
@@ -29,11 +29,11 @@
 5. 返回内容、授权范围和常见失败不能混为一谈的边界。
 6. 最后核对日期、证据等级和已知但尚未解决的实现限制。
 
-下文各机构的“当前接入”均属于 `implementation`；“运维知识”中的事实必须单独标注证据等级。新增或实质修改 provider / resolver 还必须填写 [Provider 准入与退役模板](provider-admission-template.md)，记录请求预算、有限 timeout、验证、脱敏和退役证据。当前 WP3 adapters 的已填记录见 [WP3 acquisition 准入记录](wp3-acquisition-admission.md)。
+下文各机构的“当前接入”均属于 `implementation`；外部事实必须单独标注证据等级。新增或实质修改 provider / resolver 时使用 [Provider 接入开发手册](../development/provider-integration.md)，记录请求预算、有限 timeout、验证、脱敏和退役证据。历史 WP3 准入记录已进入[文献库实施归档](../archive/2026-07-literature-library/wp3-acquisition-admission.md)。
 
 ### 1.3 当前实现与批准目标
 
-- 当前 provider 能力只以代码和 [README](../../README.md) 为准，覆盖与差距见[实施进度](../governance/implementation-progress.md)；本手册中的理想语义不表示对应配置或运行路径已经可用。
+- 当前 provider 能力只以代码和 [README](../../README.md) 为准；本文件中的外部事实不表示对应配置或运行路径已经可用。
 - 当前 `search --level metadata` 在有界并发和各自有限 timeout 下接收 provider-neutral observations，并按确定性身份规则与 configured precedence/fill-missing 入库；结果不依赖完成顺序。`search --level download` 会对本次返回的 WorkVersion 继续运行与独立 `download` 相同的补全服务。已提供的 OA evidence 会规范化为 canonical open-access status，provider record 仍不天然等于 `WorkVersion`。
 - acquisition provider 面向具体 `WorkVersion` 的资产缺口。direct official、publisher、open provider 与显式配置的 Sci-Hub 属于第一层进程内竞速；translator 和 browser 是前层耗尽后的顺序回退。
 - Sci-Hub、translator 和 browser 均是已实现、默认关闭的 capability。Sci-Hub 必须显式配置且与 first-tier provider 列表一致；translator 只使用严格 rule template、精确 host allowlist 和固定静态 HTML whitelist；browser 只使用经过权限检查的 profile 临时副本。禁用这些 capability 时不要求 endpoint、rule、profile 或运行时。
@@ -71,7 +71,7 @@
 | Restricted translator | rule name | 否 | 第二层主文 PDF 候选 | 默认关闭；无凭据字段 |
 | Profile-copy browser | rule name | 否 | 第三层主文 PDF | 默认关闭；使用 operator 准备的 profile 副本 |
 
-`direct` 是对 WorkVersion 已持久化 HTTPS locator 的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。Sci-Hub、translator 和 browser 的共同安全/退役事实集中在 [WP3 acquisition 准入记录](wp3-acquisition-admission.md)，不在本文写入 endpoint、profile path 或 session 数据。
+`direct` 是对 WorkVersion 已持久化 HTTPS locator 的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。Sci-Hub、translator 和 browser 的共同安全边界以当前代码、架构和 [Provider 接入开发手册](../development/provider-integration.md)为准；本文不写入 endpoint、profile path 或 session 数据。
 
 ## 3. Semantic Scholar
 
@@ -100,7 +100,7 @@
 
 ### 保活与排障
 
-- 本项目运维建议每 30 天执行一次最小只读健康检查，为 60 天失活窗口保留余量。这是本地运维策略，不是官方要求。
+- 本项目建议每 30 天执行一次最小只读健康检查，为 60 天失活窗口保留余量。这是本地使用策略，不是官方要求。
 - 健康检查应查询一个稳定 DOI，只请求 `paperId,title` 等最小字段；不得下载全文或批量搜索来保活。
 - 预期结果：带 key 返回 `200`。若带 key 返回 `403` 而匿名对照返回 `200`，优先判断 key 已失效或被撤销，不应重试轰炸端点。
 - `429` 表示限流，应遵守退避；不能据此判断 key 是否过期。
@@ -123,7 +123,7 @@
 - Acquisition 先按 DOI 请求 `view=FULL` XML，再从附件元数据选择主文或补充 PDF 的 EID；XML 可以直接作为资产保存。
 - 当前 publisher profile 支持 DOI 前缀 `10.1016/`，主文 PDF、补充 PDF 和 XML，并发 2、最小间隔 0.25 秒。
 
-### 运维知识
+### 使用注意
 
 - `official`，2026-07-21：API key 有效不等于有权获取某篇全文；官方说明完整 API 访问取决于所属机构对相应 Elsevier 产品的订阅。
 - `verified`，2026-07-21：现有 key 对官方 API 最小直连请求返回 HTTP `200`，但 SciRetriever 在两篇真实样本的 acquisition 中均超过外层 90 秒。这是本地 provider/transport/timeout 问题的证据，不能归类为 key 无效。
@@ -145,7 +145,7 @@
 - Acquisition 使用 Wiley TDM article 端点，只支持主文 PDF。
 - 当前 profile 覆盖 DOI 前缀 `10.1002/`、`10.1111/`，并发 1、最小间隔 1 秒。
 
-### 运维知识
+### 使用注意
 
 - `inferred`：TDM token 和文章访问授权是两个不同条件；token 可用不保证每个 DOI 都返回 PDF。复核时应以 Wiley 当前 TDM 条款和已知授权 DOI 对照验证。
 - `verified`，2026-07-21：现有 token 在分层基准中对 1 篇 OA 和 1 篇 closed 样本均成功，是该轮唯一明确通过出版社授权 API 获取 closed 文献的 provider。
@@ -168,7 +168,7 @@
 - Acquisition 支持 JATS/XML 和 HTML；当前不声明主文 PDF 能力。
 - 当前 profile 覆盖 DOI 前缀 `10.1007/`，并发 1、最小间隔 1 秒。
 
-### 运维知识
+### 使用注意
 
 - `official`，2026-07-21：Springer Nature 将 Metadata、Open Access 和 Full Text/TDM 作为不同 API 产品；一个产品可用不能证明其它端点已授权。
 - `implementation`：HTML acquisition 依赖 metadata 返回的 HTTPS canonical URL；拿到 landing page 不等于拿到 PDF。
@@ -189,7 +189,7 @@
 - Discovery 使用 cursor 分页。
 - Acquisition 按 `best_oa_location`、`primary_location`、`locations` 的顺序选择首个 HTTPS `pdf_url`，再交给共享 executor。
 
-### 运维知识
+### 使用注意
 
 - `official`，2026-07-21：当前 OpenAlex 文档说明 API 需要免费 API key，并提供每日免费额度。SciRetriever 尚未接入该 key；匿名访问即使暂时可用，也不应视为稳定契约。
 - `inferred`：OpenAlex 的开放状态和 PDF 地址来自聚合元数据，可能滞后或与目标站点实际可访问性不一致；需用 resolver 响应和最终下载结果对照复核。
@@ -210,7 +210,7 @@
 - 无 API key；Discovery 建议配置 `crossref_mailto` 作为礼貌池身份。
 - Acquisition 只接受 work message 中 `content-type` 为 `application/pdf` 的第一个 link。
 
-### 运维知识
+### 使用注意
 
 - `official`，2026-07-21：Crossref REST API 暴露成员和可信来源登记的元数据，无需注册；官方提供 `mailto` polite pool 用法。
 - `inferred`：Crossref link 来自登记元数据，不应假定候选可匿名访问、持续存在或实际返回 PDF；应以最终响应和内容校验复核。
@@ -232,7 +232,7 @@
 - Discovery 支持 cursor 分页。
 - Acquisition 优先使用 PMID，否则使用 DOI 查找记录，只返回存在 `open_access_url` 的主文 PDF 路由。
 
-### 运维知识
+### 使用注意
 
 - `inferred`：Europe PMC 的覆盖具有领域特征；跨领域 DOI 无匹配不应直接判断为服务故障，需用已知收录记录对照。
 - `implementation`：找到元数据但没有开放全文路由时，应记录为“无 PDF route”，而不是网络失败。
@@ -247,7 +247,7 @@
 - 环境变量：`SCIRETRIEVER_UNPAYWALL_EMAIL`，必需且不得为空。
 - 仅用于 acquisition；按 DOI 查询 `best_oa_location` 和 `oa_locations` 中的 `url_for_pdf`。
 
-### 运维知识
+### 使用注意
 
 - `implementation`：Email 用于构造 API 请求身份，不是访问付费全文的凭据。
 - `implementation`：当前 resolver 按 `best_oa_location` 后接 `oa_locations` 的顺序形成去重候选；首候选下载或验证失败后继续下一候选，单来源最多执行 8 个。
@@ -268,7 +268,7 @@
 - Discovery 使用 Atom API，并在分页间执行延迟。
 - Acquisition 根据 arXiv identifier 构造规范 PDF URL，仅支持主文 PDF。
 
-### 运维知识
+### 使用注意
 
 - `implementation`：应保留版本化 arXiv identifier；当前 PDF URL 直接由该 identifier 构造。
 - `implementation`：Atom 搜索和 PDF 下载是不同请求路径，单一路径成功不能替代完整 acquisition 验证。
