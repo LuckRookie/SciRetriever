@@ -180,8 +180,10 @@ def find_wp6_architecture_violations(
             or _is_concrete_provider(module)
         ):
             violations.append(f"{relative}: {layer} must not import WP6 workflow {module}")
-        if module in {"tomli", "tomllib"} and relative != "config.py":
-            violations.append(f"{relative}: config parser is owned by config.py")
+        if module in {"tomli", "tomllib"} and relative != "config_loader.py":
+            violations.append(
+                f"{relative}: config parser is owned by config_loader.py"
+            )
         if module == "sciretriever.config" and relative.startswith("cli/"):
             imported_names = {
                 alias.name

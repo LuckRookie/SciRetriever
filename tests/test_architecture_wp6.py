@@ -144,6 +144,18 @@ class ArchitectureWp6CharacterizationTests(unittest.TestCase):
         self.assertTrue(any("config parser" in item for item in violations))
         self.assertTrue(any("package construction" in item for item in violations))
 
+    def test_wp6_gate_accepts_config_loader_as_the_toml_owner(self) -> None:
+        with TemporaryDirectory(prefix="sciretriever-wp6-architecture-") as temporary:
+            source_root = Path(temporary)
+            write_module(source_root, "config_loader.py", "import tomllib\n")
+
+            violations = architecture_checks.find_architecture_violations(
+                source_root,
+                frozenset(),
+            )
+
+        self.assertEqual(violations, ())
+
     def test_wp6_gate_rejects_forbidden_schema_declarations(self) -> None:
         cases = {
             "catalog/core_table.py": (
