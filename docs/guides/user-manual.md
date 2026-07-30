@@ -1,6 +1,6 @@
 # SciRetriever 用户手册
 
-本手册面向使用命令行建立和维护本地科研文献库的研究者与运维人员，介绍 SciRetriever 0.1.0 当前已经发布的功能与使用方法。命令的精确参数以 `sciretriever --help` 和各子命令的 `--help` 为准；完整配置字段以 [`config.example.toml`](../../config.example.toml) 为准。
+本手册面向使用命令行建立和维护本地科研文献库的研究者与运维人员，介绍 SciRetriever 0.1.0 当前已经发布的功能与使用方法。命令的精确参数以 `sciretriever --help` 和各子命令的 `--help` 为准；配置字段、示例值、默认行为、约束和安全边界见 [SciRetriever 配置手册](configuration.md)。
 
 ## 1. 软件用途
 
@@ -31,7 +31,7 @@ SciRetriever 的处理边界止于通用文献包。反应、分子、路线、�
 
 ## 3. 完成阶段
 
-`search`、`download`、`analyze` 和 primary-PDF import 使用同一条 completion 管线。管线从 catalog 的权威事实推导阶段，不保存第二套任务状态：
+Metadata retrieval、asset acquisition 和 PDF analysis 是三个可独立启动的前台能力。`search`、`download`、`analyze` 和 primary-PDF import 复用同一套 completion eligibility 与幂等判断，但日常使用不要求把它们串成一次长任务。管线从 catalog 的权威事实推导阶段，不保存第二套任务状态：
 
 ```text
 METADATA_PENDING
@@ -45,34 +45,40 @@ METADATA_PENDING
 - `ANALYSIS_PENDING`：已有 primary PDF，但没有对齐的 current analysis。
 - `COMPLETE`：metadata、primary PDF 和 current analysis 均就绪。
 
-重复执行会重读事实并只补齐缺失阶段。来源耗尽时目标停留在当前阶段，不会被报告为成功。
+推荐先运行 `search --level metadata`，稍后用 `download` 获取已入库版本的资产，再用 `analyze` 处理已经接受的 primary PDF。每个命令重复执行时都会重读已提交事实并只补齐自身需要的工作。来源耗尽时目标停留在当前阶段，不会被报告为成功。
+
+同一主机上，同一 catalog 同时最多运行一个 acquisition batch 和一个 analysis batch；acquisition 与 analysis 可以同时运行。第二个同阶段命令会立即返回错误，持有进程退出后自动释放。这个机制只协调当前主机上的进程，不承诺跨机器互斥。
+
+Acquisition batch 中，相邻且确实需要联网获取资产的 WorkVersion 至少间隔 30 秒启动。这个硬下限不作用于 metadata、analysis、已有资产复用，也不作用于同一 WorkVersion 内部的多个候选请求。
 
 ## 4. 安装与首次检查
 
 ### 4.1 环境要求
 
 - Python 3.10 或更高版本，开发基线为 Python 3.12；
-- `uv`；
+- `uv`，用于安装并隔离 SciRetriever CLI；
 - 本地 SQLite 文件和已有的 storage directory；
 - 只做 metadata 管理时不需要 MinerU 或 LLM；
 - 执行 analysis 时需要 operator-managed MinerU 3.4.4 服务和 OpenAI-compatible LLM endpoint。
 
-### 4.2 安装锁定依赖
+### 4.2 安装 CLI
 
-在仓库根目录执行：
+在仓库根目录把当前源码安装为独立 CLI 工具：
 
 ```bash
-uv sync --locked --dev
-uv run --frozen sciretriever --version
+uv tool install .
+sciretriever --version
 ```
 
 当前版本输出应为 `0.1.0`。
 
+`uv` 在这里负责创建隔离环境并安装工具。安装完成后，日常使用不再经过 `uv run`，而是直接调用 `sciretriever`。`uv sync --locked --dev` 和 `uv run --frozen ...` 是修改源码、运行测试和项目门禁时使用的开发工作流，不是用户命令入口。
+
 查看命令树：
 
 ```bash
-uv run --frozen sciretriever --help
-uv run --frozen sciretriever search --help
+sciretriever --help
+sciretriever search --help
 ```
 
 ## 5. 创建工作目录和 catalog
@@ -82,7 +88,7 @@ uv run --frozen sciretriever search --help
 ```bash
 mkdir -p ../SciRetriever-runtime/storage ../SciRetriever-runtime/manifests ../SciRetriever-runtime/exports
 
-uv run --frozen sciretriever catalog create \
+sciretriever catalog create \
   --catalog ../SciRetriever-runtime/catalog.sqlite
 ```
 
@@ -108,38 +114,13 @@ SciRetriever 按以下顺序选择配置：
 
 ### 6.2 准备配置文件
 
+本目录的 [`config.toml`](config.toml) 是覆盖全部字段的完整注释模板，并保持默认可运行；[`config.minimal.toml`](config.minimal.toml) 是保留全部凭据入口、但省略高级调优项的最小可用模板。仓库根目录 `config.toml` 是当前工作区的个人运行配置。修改任一字段前先查看 [SciRetriever 配置手册](configuration.md)，其中每个字段都有示例值。
+
 ```bash
-cp config.example.toml config.toml
-chmod 600 config.toml
+sciretriever --config docs/guides/config.minimal.toml config check
 ```
 
-完整样例会列出 acquisition 和 analysis 的凭据、服务及安全上限，因此不能在未编辑时当作 metadata-only 配置直接使用。只建立 metadata 文献库时，可以把 `config.toml` 精简为：
-
-```toml
-schema_version = 1
-
-[paths]
-catalog = "../SciRetriever-runtime/catalog.sqlite"
-storage_root = "../SciRetriever-runtime/storage"
-
-[discovery]
-sources = ["crossref", "europe-pmc", "arxiv"]
-limit = 100
-timeout = 30.0
-
-[search]
-level = "metadata"
-limit = 100
-providers = ["crossref", "europe-pmc", "arxiv"]
-precedence = ["crossref", "europe-pmc", "arxiv"]
-provider_timeout = 30.0
-max_concurrency = 8
-
-[acquisition]
-providers = ["direct", "arxiv", "crossref", "europe-pmc", "openalex", "semantic-scholar"]
-```
-
-这份配置只启用不强制要求凭据的 provider，也不启用 analysis。确保仓库同级数据目录、catalog 和 storage 已按第 5 节创建后，offline `config check` 应返回 `"status":"ready"`。需要全文、出版社 provider 或 analysis 时，再从 `config.example.toml` 复制对应 section 和安全上限。
+最小模板只启用不强制要求凭据的 provider，也不启用 analysis。确保仓库同级数据目录、catalog 和 storage 已按第 5 节创建后，offline `config check` 应返回 `"status":"ready"`。需要全文 fallback、出版社 provider、analysis 或资源上限时，再从本目录完整模板复制对应 section。
 
 Parser 会拒绝未知 section 和字段。不要保留尚未接入当前命令 runtime 的配置名称，也不要在未提供凭据时保留 Unpaywall、Elsevier、Wiley 或 Springer 等 credential-gated acquisition provider。
 
@@ -168,13 +149,13 @@ export SCIRETRIEVER_LLM_API_KEY='...'
 Offline check 不联网：
 
 ```bash
-uv run --frozen sciretriever --config config.toml config check
+sciretriever --config config.toml config check
 ```
 
 只有显式 `--runtime` 才会对已启用 capability 发起有界、只读的 identity/readiness probe：
 
 ```bash
-uv run --frozen sciretriever --config config.toml config check --runtime
+sciretriever --config config.toml config check --runtime
 ```
 
 Runtime check 不下载论文正文，不启动 MinerU，也不修改外部服务。`config check` 和 `preflight` 都要求实际选择一份 TOML。
@@ -184,17 +165,20 @@ Runtime check 不下载论文正文，不启动 MinerU，也不修改外部服�
 ### 7.1 搜索并写入 catalog
 
 ```bash
-uv run --frozen sciretriever search "solid-state electrolytes" \
+sciretriever search "solid-state electrolytes" \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --level metadata \
   --provider crossref \
   --provider europe-pmc \
   --precedence crossref \
   --precedence europe-pmc \
-  --limit 100
+  --filter year_from=2020 \
+  --filter year_to=2025
 ```
 
-`--provider` 与 `--precedence` 必须包含完全相同的 provider 名称。多个 provider 有界并发运行，各自拥有独立 timeout；部分 provider 失败不会阻止其它成功结果入库。
+`--provider` 与 `--precedence` 必须包含完全相同的 provider 名称。`--precedence` 的顺序决定字段冲突时的选择顺序，较低优先级来源只补空字段。多个 provider 有界并发运行，各自拥有独立 timeout；部分 provider 失败不会阻止其它成功结果入库，失败会以脱敏条目出现在 JSON 中。全部 provider 失败时命令返回 1，不写候选 metadata。
+
+`discover` 和普通 `search` 的 metadata `--limit` 默认都是 1000。首次试用可以显式传入更小的值；这不会改变默认合同。
 
 不显式给 provider 时，metadata discovery 默认使用 Crossref、Europe PMC 和 arXiv。
 
@@ -203,7 +187,7 @@ uv run --frozen sciretriever search "solid-state electrolytes" \
 按关键词和字段过滤：
 
 ```bash
-uv run --frozen sciretriever library search "electrolyte" \
+sciretriever library search "electrolyte" \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --year 2024
 ```
@@ -211,7 +195,7 @@ uv run --frozen sciretriever library search "electrolyte" \
 精确查询 DOI：
 
 ```bash
-uv run --frozen sciretriever library show \
+sciretriever library show \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --doi 10.1000/example
 ```
@@ -223,10 +207,11 @@ uv run --frozen sciretriever library show \
 `discover` 生成原子 JSONL manifest，用于独立的 metadata 发现和筛选：
 
 ```bash
-uv run --frozen sciretriever discover "solid-state electrolytes" \
+sciretriever discover "solid-state electrolytes" \
   --source crossref \
   --source europe-pmc \
   --filter year_from=2020 \
+  --filter year_to=2025 \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --output ../SciRetriever-runtime/manifests/electrolytes.jsonl \
   --taxonomy literature-topic \
@@ -234,7 +219,13 @@ uv run --frozen sciretriever discover "solid-state electrolytes" \
   --label-rule battery=electrolyte
 ```
 
-`discover` 对 catalog 只做只读比较，不为结果创建 placeholder Work。`search` 才会把 canonical Work/WorkVersion 写入本地库，并可继续补齐 PDF 或 analysis。
+普通 `discover` 和普通 `search` 共享一套 metadata 候选检索、身份匹配、字段选择、稳定排序和 post-merge limit。两者都把 query、所选 provider 和 `year_from`/`year_to` 原样交给每个 provider；其它 filter 不受支持并会在 provider 构造前拒绝。精确 DOI search 是单目标，不应用年份过滤。
+
+两条命令的 sink 不同。`discover` 以 `--source` 的首次出现顺序作为 effective precedence，对 catalog 只做只读比较，再添加 manifest 标签并原子替换输出。`search` 使用显式 `--precedence`，把同类候选原子提交为 Work、WorkVersion 和 provider observations。Catalog 中的历史 observation 可能影响 search 提交后的公开投影，但不会改变共享的 pre-sink 候选。
+
+部分 provider 失败时，`discover` 仍发布成功候选，向 stderr 写出排序、脱敏的 warning，并返回 0；`search` 仍入库成功候选并在 JSON 中返回失败条目。全部 provider 失败时两者都返回 1，`discover` 保留已有 manifest 字节，`search` 不写候选 metadata。当前 manifest 不是 staging 或导入格式，不能交给 `download`、`search` 或 `catalog` 导入。
+
+只有显式选择 `search --level download` 或 `search --level analyze` 时，search 才会继续处理 PDF 或 analysis。普通 metadata search 不隐式补全 catalog。
 
 ## 8. 获取全文资产
 
@@ -243,7 +234,7 @@ uv run --frozen sciretriever discover "solid-state electrolytes" \
 从 `search` 或 `library` 输出取得真实 ID：
 
 ```bash
-uv run --frozen sciretriever download \
+sciretriever download \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-version-id <WORK_VERSION_ID>
@@ -252,7 +243,7 @@ uv run --frozen sciretriever download \
 也可以按 Work 使用 preferred WorkVersion：
 
 ```bash
-uv run --frozen sciretriever download \
+sciretriever download \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-id <WORK_ID>
@@ -263,7 +254,7 @@ uv run --frozen sciretriever download \
 按查询和字段选择，默认最多处理 100 个 WorkVersion：
 
 ```bash
-uv run --frozen sciretriever download \
+sciretriever download \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --query "solid-state electrolytes" \
@@ -272,10 +263,10 @@ uv run --frozen sciretriever download \
   --limit 50
 ```
 
-只有显式 `--all-missing` 才会选择全部缺 primary PDF 的版本：
+只有显式 `--all-missing` 才会从全部缺 primary PDF 的版本中选择。默认最多处理 100 个；`--limit` 同样适用于该选择器：
 
 ```bash
-uv run --frozen sciretriever download \
+sciretriever download \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --all-missing
@@ -299,7 +290,7 @@ HTTP 200 或 provider 返回候选不代表成功。资产还必须通过：
 ### 8.4 可选 XML 和 HTML
 
 ```bash
-uv run --frozen sciretriever download \
+sciretriever download \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-version-id <WORK_VERSION_ID> \
@@ -313,7 +304,7 @@ XML/HTML 只是可选补充，不能替代 primary PDF，也不改变四阶段�
 把已有 PDF 交给同一验证和不可变发布路径：
 
 ```bash
-uv run --frozen sciretriever catalog import-asset \
+sciretriever catalog import-asset \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --asset /path/to/article.pdf \
@@ -338,7 +329,7 @@ SciRetriever 不负责启动、停止、重载或升级 MinerU。Loopback 部署
 ### 10.2 分析一个版本
 
 ```bash
-uv run --frozen sciretriever --config config.toml analyze \
+sciretriever --config config.toml analyze \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-version-id <WORK_VERSION_ID>
@@ -347,7 +338,7 @@ uv run --frozen sciretriever --config config.toml analyze \
 批量补齐 pending analysis：
 
 ```bash
-uv run --frozen sciretriever --config config.toml analyze \
+sciretriever --config config.toml analyze \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --all-pending \
@@ -357,7 +348,7 @@ uv run --frozen sciretriever --config config.toml analyze \
 ### 10.3 强制替换 current analysis
 
 ```bash
-uv run --frozen sciretriever --config config.toml analyze \
+sciretriever --config config.toml analyze \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-version-id <WORK_VERSION_ID> \
@@ -366,9 +357,9 @@ uv run --frozen sciretriever --config config.toml analyze \
 
 `--force` 跳过 metadata 和 acquisition，构建下一 revision。只有完整新结果通过 evidence 和 promotion gate 后才会原子替换 current analysis；失败时旧结果和原有 COMPLETE 状态继续可用。
 
-## 11. 一条命令完成搜索、下载或分析
+## 11. 可选的显式深层 search
 
-`search --level` 可以控制停止点：
+推荐流程仍是 metadata-only search、独立 download、独立 analyze。确实需要在同一次 invocation 中继续处理本批结果时，`search --level` 可以显式选择深层停止点：
 
 | Level | 停止位置 | 额外要求 |
 |---|---|---|
@@ -379,22 +370,25 @@ uv run --frozen sciretriever --config config.toml analyze \
 例如：
 
 ```bash
-uv run --frozen sciretriever --config config.toml search \
+sciretriever --config config.toml search \
   "solid-state electrolytes" \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --level analyze \
-  --limit 20
+  --limit 1000 \
+  --completion-limit 20
 ```
 
-它只处理本次 search 持久化的 WorkVersion，不会隐式补全整个 catalog。
+普通 query 的 `--limit` 控制 metadata 数量，默认 1000；`--completion-limit` 只控制显式 deep search 送入 download/analyze 的前缀，默认 100。上例会持久化最多 1000 条 metadata，但只深层处理前 20 个确定性目标。其余结果留在 catalog 中，可由后续 `download` 或 `analyze` 处理。精确 DOI 始终只处理一个目标。
+
+Deep search 只处理本次 search 持久化的 WorkVersion，不会隐式补全整个 catalog，也不代表 metadata 建库必须同步等待 acquisition 或 analysis。
 
 ## 12. 引用关系与图扩展
 
 查看一跳 references：
 
 ```bash
-uv run --frozen sciretriever library references \
+sciretriever library references \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --work-id <WORK_ID>
 ```
@@ -402,7 +396,7 @@ uv run --frozen sciretriever library references \
 反向引用使用 `library cited-by`，并且必须使用 `--work-id`：
 
 ```bash
-uv run --frozen sciretriever library cited-by \
+sciretriever library cited-by \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --work-id <WORK_ID>
 ```
@@ -410,7 +404,7 @@ uv run --frozen sciretriever library cited-by \
 从一个明确种子扩展引用图：
 
 ```bash
-uv run --frozen sciretriever --config config.toml expand \
+sciretriever --config config.toml expand \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-id <WORK_ID> \
@@ -427,7 +421,7 @@ uv run --frozen sciretriever --config config.toml expand \
 ### 13.1 导出阅读视图
 
 ```bash
-uv run --frozen sciretriever library export \
+sciretriever library export \
   --mode reading \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --work-id <WORK_ID> \
@@ -442,7 +436,7 @@ Reading export 只接受 `--work-id` 或 `--work-version-id`。输出包含 cano
 ### 13.2 发布 package snapshot
 
 ```bash
-uv run --frozen sciretriever package \
+sciretriever package \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
   --work-id <WORK_ID>
@@ -451,7 +445,7 @@ uv run --frozen sciretriever package \
 也可以直接导出 package：
 
 ```bash
-uv run --frozen sciretriever library export \
+sciretriever library export \
   --mode package \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --storage-root ../SciRetriever-runtime/storage \
@@ -478,7 +472,7 @@ uv run --frozen sciretriever library export \
 人工操作只接受明确 UUID，不会隐式作用于全库。合并示例：
 
 ```bash
-uv run --frozen sciretriever --no-config library merge-work \
+sciretriever --no-config library merge-work \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --source-work-id <SOURCE_WORK_ID> \
   --target-work-id <TARGET_WORK_ID> \
@@ -488,11 +482,11 @@ uv run --frozen sciretriever --no-config library merge-work \
 查看并撤销：
 
 ```bash
-uv run --frozen sciretriever --no-config library audit \
+sciretriever --no-config library audit \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --operation-id <OPERATION_ID>
 
-uv run --frozen sciretriever --no-config library undo \
+sciretriever --no-config library undo \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --operation-id <OPERATION_ID>
 ```
@@ -504,7 +498,7 @@ uv run --frozen sciretriever --no-config library undo \
 查询某个 WorkVersion 最新失败：
 
 ```bash
-uv run --frozen sciretriever failures \
+sciretriever failures \
   --catalog ../SciRetriever-runtime/catalog.sqlite \
   --work-version-id <WORK_VERSION_ID> \
   --latest
@@ -530,18 +524,20 @@ PDF missing 计为 `exhausted`/`missing`，不计为 `succeeded`/`accepted`。
 
 恢复时重新执行同一命令即可。SciRetriever 会复用已有 observation、RawAsset、current analysis 和 frontier，不承诺从每个网络请求的内部断点继续，也不提供 daemon、pause/resume 或 durable job 控制。
 
+同阶段的主机本地 admission 在正常结束、错误、中断或进程退出后释放。不同阶段可以继续共用同一 catalog 的已提交事实，但 operator 仍需自行避免从不同机器同时启动同阶段 batch。
+
 ## 17. Preflight 与常见排障
 
 ### 17.1 Acquisition preflight
 
 ```bash
-uv run --frozen sciretriever --config config.toml preflight
+sciretriever --config config.toml preflight
 ```
 
 如果 `[acquisition.preflight].readiness = "headers"`，可对明确 HTTPS URL 执行不读取响应正文的 headers readiness：
 
 ```bash
-uv run --frozen sciretriever --config config.toml preflight \
+sciretriever --config config.toml preflight \
   --url https://example.org/article.pdf
 ```
 
@@ -549,9 +545,10 @@ uv run --frozen sciretriever --config config.toml preflight \
 
 | 现象 | 检查方法 |
 |---|---|
-| `config check` 拒绝未知字段 | 对照 `config.example.toml` 删除未接受字段，不保留旧配置接口 |
+| `config check` 拒绝未知字段 | 对照 `docs/guides/config.toml` 和配置手册删除未接受字段，不保留旧配置接口 |
 | 配置文件权限错误 | 对包含 `[credentials]` 的文件执行 `chmod 600 config.toml` |
-| Search 部分 provider 失败 | 查看命令 JSON 和 `failures --stage metadata`；成功 provider 结果仍可能已入库 |
+| Search 部分 provider 失败 | 查看本次命令 JSON 中的脱敏 failure；成功 provider 结果仍会入库 |
+| Discover 部分 provider 失败 | 查看 stderr warning；成功候选仍会写入 manifest |
 | Download 返回 missing | 区分无候选、网络失败、身份不符和内容验证失败；使用 `failures --stage acquisition --details` |
 | HTTP 200 仍未接受 PDF | 检查 MIME、文件结构、大小和文章身份；状态码不等于资产成功 |
 | XML/HTML 已存在但仍是 ASSET_PENDING | 这是预期行为；primary PDF 是 required asset |

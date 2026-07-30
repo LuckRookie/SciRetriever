@@ -1,0 +1,45 @@
+# SciRetriever 最小可用配置。
+# 使用前创建数据目录：mkdir -p ../SciRetriever-runtime/storage
+# 然后运行：sciretriever --config docs/guides/config.minimal.toml config check
+# 推荐先用 search --level metadata 建库，再分别运行 download 和 analyze。
+# 本模板不覆盖批次调优：metadata 默认 1000，download、analyze 和显式 deep
+# completion 默认 100，acquisition 文献启动间隔默认且最小为 30 秒。
+
+schema_version = 1
+
+[paths]
+catalog = "../../../SciRetriever-runtime/catalog.sqlite"
+storage_root = "../../../SciRetriever-runtime/storage"
+
+# Provider 凭据入口全部保留，但不要提交真实值。
+# 推荐在 shell 中设置对应环境变量；如必须写入 TOML，再取消字段注释并保持 0600 权限。
+[credentials]
+# unpaywall_email = "you@example.org"                  # SCIRETRIEVER_UNPAYWALL_EMAIL
+# semantic_scholar_api_key = "your-semantic-key"       # SCIRETRIEVER_SEMANTIC_SCHOLAR_API_KEY
+# elsevier_api_key = "your-elsevier-key"               # SCIRETRIEVER_ELSEVIER_API_KEY
+# wiley_api_key = "your-wiley-tdm-token"                # SCIRETRIEVER_WILEY_API_KEY
+# springer_api_key = "your-springer-key"                # SCIRETRIEVER_SPRINGER_API_KEY
+
+[discovery]
+sources = ["crossref", "europe-pmc", "arxiv"]
+# Crossref 不使用 API key；建议填写联系邮箱。
+# crossref_mailto = "you@example.org"
+
+[search]
+level = "metadata"
+providers = ["crossref", "europe-pmc", "arxiv"]
+precedence = ["crossref", "europe-pmc", "arxiv"]
+# crossref_mailto = "you@example.org"
+
+# 可选年份范围与 discovery 相同，只支持 year_from 和 year_to。
+# [search.filters]
+# year_from = 2020
+# year_to = 2026
+
+[acquisition]
+providers = ["direct", "arxiv", "crossref", "europe-pmc"]
+
+# Analysis 默认不启用。启用时还需要以下运行时秘密环境变量：
+# - analysis.mineru.auth_env 示例：SCIRETRIEVER_MINERU_TOKEN（仅 remote MinerU）
+# - analysis.llm.credential_env 示例：SCIRETRIEVER_LLM_API_KEY
+# 完整 analysis section 和全部高级参数见同目录 config.toml 与 configuration.md。
