@@ -1,424 +1,209 @@
-# SciRetriever 产品需求与验收规格
+# SciRetriever 产品需求
 
-- 文档效力：2026-07-24 owner 批准的产品需求
-- 决策依据：[ADR 0002](decisions/0002-work-centered-literature-library.md)、[ADR 0003](decisions/0003-operator-managed-mineru-service.md)
+- 文档效力：产品需求真相源
+- Owner 确认：2026-07-30
 - 产品设计：[系统设计](system-design.md)
-- 历史背景：[文献库实施归档](../archive/2026-07-literature-library/README.md)
+- 当前实现：项目 [README](../../README.md)、源码与测试
 
-本文只定义理想产品必须具备的能力、约束和验收结果，不记录实现进度。当前可运行行为见 [README](../../README.md)。
+本文只说明 SciRetriever 要解决的问题、用户工作流、产品结果和验收标准。数据模型、模块划分、算法、供应商协议、存储方式和运行机制属于设计，不在本文规定。
 
-## 0. 文档用途与阅读方法
+## 1. 产品目标
 
-本文面向产品 owner、使用者和验收人员，回答五个问题：SciRetriever 是什么；用户能完成哪些任务；产品必须遵守哪些规则；哪些能力明确不属于产品；如何判断产品已经按要求完成。模块如何协同和数据如何流转见[系统设计](system-design.md)，代码模块、依赖和技术边界见[技术架构](technical-architecture.md)。
+SciRetriever 要解决的是**面向指定领域的大批量文献收集问题**。
 
-本文使用以下范围词：
+研究者通常需要从多个文献来源反复检索、下载和整理大量文献。不同来源覆盖范围不同，返回的元数据可能重复或不完整，全文获取方式也不一致。手工完成这些工作成本高、难以重复，并且很难持续维护已经收集的结果。
 
-| 范围 | 含义 |
-|---|---|
-| 首版 | 理想产品第一版必须满足的要求 |
-| 延后 | 方向未否决，但不属于首版产品合同 |
-| 排除 | 不属于 SciRetriever，或必须通过新 ADR 才能纳入 |
+SciRetriever 接收用户给出的领域条件或种子文献，通过主题检索或引用关系迭代收集文献，完成多来源元数据汇总、文献下载、内容解析和语言模型结构化分析，最终形成一个可以持续积累、查询并与主流文献管理工具交换数据的文献数据库。
 
-本文的 `必须`、`不得`、`默认` 和需求编号均描述理想产品。提案提供方向背景，决策追踪保存讨论证据，但只有适用 ADR 和本文定义产品行为。
+## 2. 用户与使用场景
 
-## 1. 产品目标与边界
+主要用户是需要建立专题文献集合的研究者或文献整理人员。典型场景包括：
 
-SciRetriever 是以前台 CLI 操作的本地科研文献库。产品围绕 `Work`、书目版本、全文资产、作者、标签、分析结果和引用关系组织数据。用户可以检索并合并多来源元数据，为已有文献补全文或补分析，再按引用图扩展文献库。所有写入型入库和补全入口共享同一条从临时供应商元数据到最终统一文献数据的完成管线。
+- 为一个研究方向批量收集相关文献；
+- 从一批种子文献出发，沿引用关系继续发现相关文献；
+- 定期补充某个领域新发表的文献；
+- 从多个来源提高文献覆盖率；
+- 批量获得文献全文、轻结构化文本和结构化分析结果；
+- 在文献数据库中查询、检查和继续处理已经收集的文献；
+- 在文献数据库与 Zotero 等主流文献管理工具之间导入和导出书目信息。
 
-### 1.1 一句话定位
+## 3. 用户输入与产品输出
 
-**SciRetriever 把分散在多个来源的论文线索收敛成一个可持续维护的本地文献库，并以 PDF 为证据基准完成全文分析、检索、引用扩展和可审计导出。**
+### 3.1 用户输入
 
-产品中心是文献及其版本，不是 provider 响应、单个 PDF 文件或后台下载任务。旧 task/job 产品面不属于目标合同；诊断记录只用于解释一次处理发生了什么。用户日常面对的是 Work、WorkVersion、全文、分析、标签和引用关系。
+用户可以通过两种方式发起文献收集：
 
-### 1.2 主要使用角色
+1. 指定一次收集所针对的领域条件，例如主题描述、关键词、时间范围、文献类型或其它文献筛选条件；
+2. 指定一篇或一组种子文献，并要求系统通过文献之间的引用关系迭代发现更多相关文献。
 
-这里的角色描述使用目的，不引入账号或权限系统：
+需求只规定用户能够表达目标领域或引用扩展目标，不规定具体查询语法、迭代方式或供应商能力。
 
-| 角色 | 主要目标 | 典型操作 |
-|---|---|---|
-| 研究者 | 建立并使用自己的本地文献库 | 搜索、查看版本、阅读 PDF、检索分析、沿引用扩展、导出 |
-| 文献整理者 | 补齐和修正文献数据 | 合并来源、选择 preferred version、补 PDF、补分析、维护 manual tags |
-| 运行维护者 | 配置来源并处理失败 | 检查配置、查看脱敏失败、重跑缺失项、维护 provider 顺序 |
-| 下游领域消费者 | 使用通用文献包生成领域数据 | 通过稳定 ID、hash 和 provenance 读取 `DocumentPackage`，不访问内部表 |
+### 3.2 产品输出
 
-同一位用户可以同时承担前三种角色；首版不设计多用户权限、协作审批或 Web UI。
+产品输出是一个文献数据库。数据库至少能够关联保存以下五类信息：
 
-### 1.3 产品成功定义
+1. **文献元数据**：用于识别、描述和检索文献的信息；通过文献来源检索获得的信息还包括提供它的来源；
+2. **文献资产**：已获得的全文或相关文件，以及资产类型、来源和可用性信息；
+3. **轻结构化文本**：从文献资产解析得到的通用文本结构，以及它与原始资产的对应关系；
+4. **结构化分析结果**：语言模型根据文献内容产生的、由产品明确规定含义的通用结构化信息，以及它与输入文献内容的对应关系；
+5. **文献关联信息**：文献被收集的原因、它与收集目标的关系，以及已获得的文献引用关系。
 
-| 成功结果 | 用户可观察的证明 |
-|---|---|
-| 文献身份稳定 | 多来源重复结果收敛到同一 Work；预印本与正式版作为不同 WorkVersion 保留 |
-| 数据可逐步补全 | 所有入口使用同一完成阶段；metadata、download、analyze 可分别停在显式阶段，重跑只处理缺失或显式强制项 |
-| 全文可信 | analysis 必须基于验证合格的 primary PDF，每项提升结果可回到 PDF 页码/span |
-| 结果可持续维护 | canonical metadata、manual tags 和当前分析可更新，RawAsset 与 observations 不丢失 |
-| 文献关系可探索 | 用户可查 references/cited-by，并按 depth 逐层扩展、下载和分析 |
-| 失败可恢复 | 部分 provider 或 branch 失败不破坏已完成数据，用户能看到行动建议并幂等重跑 |
-| 产品边界清楚 | 通用文献数据留在 SciRetriever；反应、分子等领域数据留在下游 domain pack |
+数据库是持续积累的产品结果，不是一次运行后即丢弃的临时结果集合。用户还必须能够通过主流文献交换格式导入和导出书目信息，使数据库能够与 Zotero 等常用文献管理工具协作。
 
-项目边界继续止于通用、带 provenance 的文献表示。反应、分子、路线、材料属性等领域 schema 和数据库仍属于下游，见 [ADR 0001](decisions/0001-sciretriever-scope-and-boundary.md)。
-
-执行模型是有界的前台命令和幂等重跑。产品不包含 SciRetriever-owned daemon、lease、fencing、后台 worker ownership、durable pause/resume/safe-stop control state、旧 task/job/attempt/event 生命周期或逐内部步骤的精确崩溃续跑。前台 invocation 必须支持 Ctrl+C/cooperative stop：停止启动新记录，安全排空或取消当前有限操作，保留已完成记录，随后重跑跳过已完成内容。脱敏 failure/diagnostic records 只支撑诊断与审计。PDF analysis 可以通过显式 adapter 调用 operator-managed MinerU parser service；该外部能力不属于 SciRetriever 产品服务或任务中心，其 task ID 只能作为 processing attempt 恢复元数据。
-
-### 1.4 产品边界总览
-
-| SciRetriever 负责 | SciRetriever 不负责 |
-|---|---|
-| 文献检索、身份、书目版本、元数据和来源观察 | 化学、生物、材料等领域抽取 schema |
-| primary PDF 获取、验证、不可变保存和 PDF-based analysis | 反应、分子、路线、产率或领域数据库 |
-| 通用 Markdown、标签、作者、引用和本地查询 | 下游预测、规划、统计分析或知识推理 |
-| 失败诊断、配置检查、幂等补全和导出；连接显式配置的 operator-managed parser capability | Web UI、SciRetriever-owned daemon/microservice、外部 workflow engine 或任务中心 |
-| `DocumentPackage`、稳定 ID、hash 和 provenance 下游边界 | 下游直接查询 SciRetriever 内部存储结构或把领域字段写回 catalog |
-
-## 2. 用户任务与完整工作流
-
-### 3.1 常规发现与入库
-
-用户输入关键词、标题、DOI 或其它受支持查询，选择处理到 `metadata`、`download` 或 `analyze` 层级。系统并发查询启用的 metadata providers，先清洗和确定性去重，再创建或更新 Work、WorkVersion、observations、authors 和 provisional provider projection。该投影只用于身份收敛、资产获取和分析前的临时展示，不是文献最终 canonical metadata。若选择更深层级，系统继续补 primary PDF、MinerU/LLM analysis，并在最后原子发布统一 canonical metadata。
+## 4. 核心工作流
 
 ```text
-查询
-  -> 多来源 metadata
-  -> 清洗、去重、版本识别
-  -> 写入临时 provider metadata projection
-  -> [可选] 获取并验证 primary PDF
-  -> [可选] PDF normalization/OCR + LLM analysis
-  -> [analyze 成功] 原子发布最终 canonical metadata、Markdown、tags、references
-  -> COMPLETE
+用户指定领域条件 ──────────┐
+                            ├─> 收集相关文献元数据
+用户指定种子文献并迭代引用 ─┘
+  -> 汇总并写入文献数据库
+  -> 使用元数据信息获取文献资产
+  -> 解析文献资产
+  -> 写入轻结构化文本
+  -> 使用语言模型获得结构化分析结果
+  -> 用户查询、继续补充或导入导出文献数据库
 ```
 
-### 3.2 独立补全文与补分析
+八项核心产品能力是：
 
-用户不需要重新搜索才能修复缺失层级。`download` 可为指定 ID、查询结果、标签集合或显式全部缺失项补 PDF；`analyze` 可为已有合格 PDF 的版本补 current result。没有选择器时命令不得隐式处理全库。已有结果只有在显式 all-current/force 语义下才重析。
+1. 按主题领域收集文献；
+2. 按引用关系迭代收集文献；
+3. 从多个来源汇总和整理文献元数据；
+4. 获取文献全文及相关资产；
+5. 解析文献内容并获得轻结构化文本；
+6. 使用语言模型获得结构化文献分析结果；
+7. 持续建立、查询和补充文献数据库；
+8. 通过主流文献格式导入和导出书目信息。
 
-### 3.3 本地查询、查看与导出
+## 5. 功能需求
 
-用户可以按 DOI、标题或内部 ID 精确查找，按 title、Abstract 和 light Markdown 做关键词检索，按 author、year、publisher、venue 和 tag 过滤，并遍历 references/cited-by。文献整理者可以查看待复核项，显式合并 Work、把已有 WorkVersion 归入同一 Work、设置或清除 preferred version、修订或清除 manual metadata、增删 manual tags，以及在有明确证据时合并 Author。每次人工操作都记录对象、动作、时间和前后值，不删除 observations、RawAsset 或其它版本。
+### R1. 发起文献收集
 
-`library export` 提供两类明确输出：面向阅读的 canonical metadata + light Markdown，以及面向下游的版本化 `DocumentPackage`。完整 reference list 只在显式要求时加入。`DocumentPackage` 导出绑定所选 WorkVersion、primary PDF、current result、稳定 ID、输入 hash 和 provenance；它是导出时刻的不可变快照。之后 canonical/current 内容变化不会静默改写旧快照，用户重新导出会得到与新输入对应的新快照。
+- 用户必须能够提交一组领域条件，批量收集与目标领域相关的文献。
+- 用户必须能够提交一篇或一组种子文献，通过引用关系迭代收集相关文献。
+- 同一收集目标必须能够再次执行，以便补充新文献或重试未完成内容。
+- 系统必须保留文献由何种收集方式、哪些条件或哪些引用关系发现，使用户能够理解文献进入数据库的原因。
 
-### 3.4 引用扩展
+### R2. 多来源元数据搜索
 
-用户从一个或多个种子 Work 出发，选择 references、cited-by 或 both 以及 depth。系统逐层完成新 Work 的 metadata、download 和 analyze，再进入下一层；循环和重复通过稳定 Work identity 去除，单分支失败不阻塞其它分支。
+- 系统必须能够在一次收集中查询多个已配置的文献元数据供应商。
+- 系统必须保留各供应商成功返回的结果；单个供应商失败不得使其它成功结果失效。
+- 系统必须把不同来源中代表同一文献的结果收敛到同一文献记录，同时保留来源差异和来源信息。
+- 系统必须允许元数据不完整的文献先进入数据库，并在后续收集中继续补充。
 
-### 3.5 失败处理与恢复
+### R3. 文献资产获取
 
-用户通过 `failures` 统一查看 metadata、acquisition、analysis 和 expansion 的失败阶段、对象、overall reason/action 与重跑建议；acquisition 还可按需展开脱敏的 per-source details。某个 metadata provider 失败但仍有其它响应时，命令继续并在汇总中报告该来源；全部 provider 失败时 search 明确失败。analysis replacement 失败时旧 current result 保持可用，同时记录新尝试失败。Ctrl+C 停止领取新记录并安全结束当前有限操作；重跑根据已有 Work、资产和 current result 跳过完成内容，不依赖后台任务恢复协议。
+- 系统必须能够使用已收集的元数据信息寻找并下载对应文献资产。
+- 一篇文献可以具有多个资产或多个可能来源，系统必须明确资产与文献的关系。
+- 只有实际获得且可用的资产才能标记为已获取；失败、空响应或错误内容不能被当作成功。
+- 已获得的资产必须在后续重跑中保持可用，不因重复收集而被无声破坏。
 
-### 3.6 配置与运行检查
+### R4. 文献解析
 
-用户通过统一 TOML 配置数据位置、默认处理层级、provider 优先级、获取顺序、LLM、资源上限和启动间隔。命令特有的输出格式继续由显式 CLI 参数选择，不保留未接入运行时的 TOML 字段。`config check` 默认只做离线 schema、secret reference、目录与权限检查；只有显式 runtime 模式才执行有界、只读的 capability identity probe，不下载文献正文或修改外部系统。
+- 系统必须能够解析已获得的受支持文献资产并生成轻结构化文本。
+- 轻结构化文本必须保留文献的主要内容和基本结构，使用户或后续程序无需重新解析原始文件即可使用。
+- 解析结果必须能够追溯到所使用的文献资产。
+- 单篇文献解析失败不得阻止同批其它文献继续处理。
 
-## 3. 核心实体与身份
+### R5. 语言模型结构化分析
 
-### 4.1 业务对象关系
+- 系统必须能够使用语言模型分析已经获得的文献内容，并产生含义明确的结构化文献分析结果。
+- 结构化分析结果必须能够追溯到所分析的文献内容，不得脱离输入文献成为无法核对的孤立结果。
+- 单篇文献分析失败不得阻止同批其它文献继续处理，也不得破坏已经获得的元数据、资产或轻结构化文本。
+- 用户必须能够在文献数据库中查询和继续使用已经成功获得的结构化分析结果。
 
-```text
-Work（同一学术工作）
-  |-- stable identifiers
-  |-- preferred WorkVersion
-  |-- canonical tags
-  `-- WorkVersion[]（预印本、accepted manuscript、正式版等）
-        |-- version identifiers + canonical metadata
-        |-- provider MetadataObservation[]
-        |-- Authorship[] -> Author
-        |-- Publisher / Venue
-        |-- primary PDF + optional XML/HTML
-        |-- VersionReference[] -> Work 或 unresolved reference
-        `-- single current generated result
-```
+### R6. 文献数据库
 
-`WorkVersion` 是书目版本；processing snapshot 和 `DocumentPackage` export snapshot 是处理或导出结果。三类对象的名称、身份、生命周期和用户含义必须始终分开。
+- 用户必须能够在数据库中查找和检查已经收集的文献。
+- 每篇文献必须能够看到当前拥有的元数据、资产、轻结构化文本、结构化分析结果和引用关系。
+- 用户必须能够区分各类信息当前是否已经获得，以及哪些内容仍然缺失或处理失败。
+- 数据库必须支持持续追加和补全，而不是要求每次重新建立全部结果。
 
-### FR-1 Work 与书目版本
+### R7. 书目信息导入与导出
 
-- `Work` 表示同一学术工作的稳定身份。
-- 一个 `Work` 可以连接多个 `WorkVersion`，包括预印本版本、accepted manuscript 和正式发表版本。
-- provider record 是 observation，不天然等于一个 `WorkVersion`。版本先按规范化的稳定版本标识符（例如 DOI、arXiv identifier）精确匹配；不同非空 DOI 必须属于不同版本。没有稳定版本标识符时，只有 normalized title、normalized version class、normalized publication date 和规范化 Venue 都精确相同且不存在标识符冲突的记录才自动合并；关键证据缺失或冲突时保留独立 provisional version，等待后续确定性证据或人工复核。
-- 不同 DOI 阻止的是仅凭标题把记录自动当成同一身份或同一版本，不阻止有明确版本关系证据的预印本与正式版归入同一 Work。只有 provider 提供的显式版本关系、稳定 registry 关系或用户确认可以跨不同标识符连接已有 WorkVersion；系统保留关系证据和原 Work 身份，人工操作可审计并可撤销。没有这类证据时保持为独立 Work，不凭相似标题猜测关系。
-- 系统用完整、可测试且与 provider 完成顺序无关的排序选择一个 preferred version：`formal publication > accepted manuscript > preprint > unknown/other`，同级依次优先有 DOI、较新的完整 publication date、较高 configured provider precedence，最后按规范化稳定 version key 升序打破平局。新增 observation 后在同一次原子 catalog 更新中重新计算 preferred pointer。所有非 preferred 版本、关系和来源证据都必须保留。
-- 用户可以显式覆盖 preferred version；显式选择存在时自动排序不得改写它，用户清除覆盖后才恢复自动选择。主文献默认展示 preferred version 的 canonical metadata、light Markdown 和 reference view，其它版本仍可独立查看。
-### FR-2 确定性 Work 去重
+- 用户必须能够把 Zotero 等主流文献管理工具中的书目信息导入文献数据库。
+- 用户必须能够把文献数据库中的书目信息导出到 Zotero 等主流文献管理工具能够使用的格式。
+- 文献经过元数据信息收集并形成可用的统一书目信息后即可导出，不得把全文获取、解析或结构化分析完成作为书目导出的前置条件。
+- 产品必须覆盖主流文献交换格式；具体格式范围由后续产品设计明确。
+- 导入的文献必须能够与通过主题或引用关系收集的文献共同查询和继续补充，不形成彼此隔离的结果集合。
+- 产品不要求长期保存书目文件、外部工具对象或导入导出过程来源；导入的书目信息进入数据库后，作为 SciRetriever 自身的当前元数据继续整理和使用。
 
-- DOI 或其它稳定、规范化的外部标识符优先决定身份。
-- 两条记录都有非空且不同的 DOI 时，即使 normalized title 相同也不得仅凭标题自动合并为同一 Work 或同一 WorkVersion；FR-1 定义的显式跨版本关系或用户确认除外，且两个 DOI 仍归属于不同 WorkVersion。
-- 一条记录有 DOI、另一条没有 DOI 时，可以在 normalized title 完全相同的情况下合并，并把 DOI 补给原无 DOI 记录。
-- 两条记录都没有稳定标识符时只按完全相同的 deterministic normalized-title key 合并。标题规范化规则必须版本化、可测试、与 provider 顺序无关；不做 fuzzy match。
-- 标识符冲突或证据不足时保留独立记录并进入可查询的人工复核清单，不静默合并。用户未处理的复核项不会阻塞其它文献入库。
-- LLM 不参与 Work、WorkVersion 或 Author 的身份去重。
+### R8. 大批量处理
 
-### FR-3 版本资产
+- 产品必须面向一批文献运行，而不是只支持逐篇手工处理。
+- 批量运行必须保留已经成功完成的文献，局部失败不能回滚整批有效结果。
+- 中断或失败后，用户必须能够再次运行相同流程，继续补充缺失结果而不制造无意义重复。
+- 用户必须能够获知本批范围筛选、实际目标、成功、缺失和失败的大致结果，以判断是否需要继续处理。
 
-- primary PDF、可选 XML 和可选 HTML 归属于具体 `WorkVersion`。
-- PDF 是保存、阅读、导出和分析的主文基准资产；XML/HTML 是可配置的补充全文资产。
-- `analyze` 必须读取通过身份、完整性和内容验证的 primary PDF。XML/HTML 可以补充章节边界、表格或机器可读结构，并可用于与 PDF 交叉核对，但不能覆盖 PDF 支持的事实，也不能在缺少合格 PDF 时独立满足 `analyze`。XML/HTML 与 PDF 冲突时以 PDF 和其 evidence locator 为准，并保留补充资产的 provenance 供诊断。
-- 同一字节按 hash 收敛，但每个版本与资产的关系和 provenance 独立保存。
-- RawAsset 不可变，修复解析或分析时重跑派生步骤。
+## 6. 产品质量要求
 
-## 4. 元数据、作者与标签
+### 6.1 覆盖与部分成功
 
-### FR-4 Canonical metadata
+多来源和两种收集方式的目的在于提高覆盖率。任何单一来源、文献获取、解析或结构化分析失败时，系统都应尽可能保留其它已经获得的有效结果，并明确指出尚未完成的部分。
 
-canonical metadata 只保存稳定产品字段：标题、原始 Abstract、语言、work type、发表日期或年份、venue、publisher、卷、期、页码或 article number、稳定标识符和 open-access status。provider 专有响应字段不得直接进入 canonical schema。首版不建立 license、retraction、correction 或 erratum 的 canonical model。
+### 6.2 一致性
 
-open-access 只记录来源观察到的状态和 provenance，不表达项目对来源或用户行为的判断。
+同一文献不应仅因来自不同来源、不同收集方式或书目信息导入而在数据库中无控制地重复出现。系统也不得在证据不足时把不同文献错误合并。重复执行相同收集或重复导入相同数据不应持续制造重复记录或重复资产。
 
-metadata 阶段的 provider projection 是可用但非权威的临时元数据，不得称为该文献已经完成。fulltext analysis 完成后，系统在同一次原子更新中按以下确定性投影重建最终 canonical metadata：手工修订优先；其次使用通过 schema、证据和 allowed-ID/identifier validation 的当前 fulltext-derived 非空值；仍缺失的字段按 provider precedence/fill-missing 回退到 observations。LLM 不得创造未经正文支持的标识符。新分析未提供某字段时，不把已有 provider 值擦成空值。只有该原子 promotion 与 current analysis、references 和 generated tags 一起成功后，WorkVersion 才进入 `COMPLETE`。
+### 6.3 可追溯性
 
-### FR-5 MetadataObservation
+用户必须能够判断：
 
-- 每个 provider 返回的字段值在后端保存为 `MetadataObservation`，至少记录 provider、观察时间、目标 Work/WorkVersion、字段、值、provider record id 和 provenance。
-- observations 和原始 provider shape 是 backend-only audit/recompute evidence，不作为 canonical 值显示，也不进入普通 library/search/export 输出；诊断输出只能显示经过脱敏的必要摘要。
-- 配置决定 provider precedence。高优先级 provider 先确定 canonical 值，低优先级 provider 只填补缺失字段。
-- 已有 canonical 值不因后到的低优先级 observation 被无声覆盖。冲突保持可审计。
-- 相同输入和配置重复合并必须得到相同 canonical metadata。
+- 文献由哪些领域条件、种子文献或引用关系发现；
+- 元数据来自哪些供应商；
+- 资产从何处获得；
+- 轻结构化文本由哪个资产解析得到；
+- 结构化分析结果依据哪些文献内容产生；
+- 某篇文献为什么未能获取、解析或完成结构化分析。
 
-### FR-6 Publisher 与 Venue registry
+### 6.4 数据完整性
 
-- `Publisher` 与 `Venue` 是两个独立的扁平 registry，各自保存 official/canonical name 和 aliases，不建立层级。
-- metadata 阶段只通过确定性的现有 alias mapping 和 provider precedence 关联 registry。未知值保持 unresolved，不静默创建大小写、缩写或拼写变体。
-- fulltext analysis 只接收允许的内部 Publisher/Venue IDs 和 names，并按 strict output 选择。没有匹配时输出 unresolved 或独立 new-entity proposal；normalization comparison 决定合并 alias 或创建新扁平实体。
+已经写入数据库的有效元数据、资产关系、解析结果和结构化分析结果不得因另一个来源失败、运行中断、重复运行或重复导入而被无声破坏。
 
-### FR-7 Author 与 Authorship
+### 6.5 可扩展接入
 
-- `Author` 独立于 Work 和版本存在。
-- `Authorship` 连接 Author 与 `WorkVersion`，保存作者顺序及可得的角色、通讯作者或 affiliation observation。
-- ORCID 等稳定标识符或明确的多项佐证可确定合并。仅姓名相同或相似时采取保守策略，证据不足则创建独立 Author 或进入人工复核，不静默合并。
-- 首版 affiliation 只作为 Authorship observation 保存原始字符串，不建立机构 registry 或机构消歧模型。
+增加或替换元数据来源、文献获取方式、解析能力、语言模型服务或书目信息交换格式时，不应要求重新定义产品工作流或文献数据库的基本含义。
 
-### FR-8 Canonical tags
+## 7. 范围边界
 
-- canonical tag 词表为扁平、可自增长的英文词表，无父子层级。
-- 非英文标签、拼写变体和同义词作为 alias 指向一个 canonical tag。
-- metadata provider 的 keywords/topics 只保存为 source observations，不在 metadata level 生成 canonical tags。
-- fulltext LLM 接收现有 registry，或在 registry 很大时接收相关候选，必须选择 stable tag IDs。它可以另行输出 new-tag proposal，包含英文 canonical name、definition 和 multilingual aliases。
-- normalization comparison 把 proposal 合并为现有 synonym/alias，或创建新的扁平 tag。用户标签使用同一 registry。
-- manual tag 和 generated tag links 的来源分开。重新分析替换 generated links，但不得删除 manual links。
-- tag 合并必须可审计，不能依靠隐藏的层级推断。
+当前核心产品范围包括通用文献元数据、文献资产、轻结构化文本、通用结构化文献分析结果、文献引用关系以及书目信息导入导出。
 
-## 5. 搜索与处理层级
+产品需要处理通用文献信息、通用文本结构和产品明确规定的通用结构化分析结果，但不要求从文献中抽取反应、分子、路线、产率、材料性质等特定领域知识，也不要求提供基于这些领域数据的预测、规划或分析系统。
 
-### FR-9 多来源搜索
+以下内容不由需求文档决定：
 
-- 一次搜索必须在有界并发和各 provider 独立有限 timeout 下同时查询所有已启用的 metadata provider；不得因某个 provider 缓慢或失败而把其它 provider 串行阻塞到其后。
-- 系统等待已启动 provider 完成或到达各自 deadline 后，再按 configured precedence 确定性合并；相同 provider 响应集合在任意完成顺序下必须产生相同结果。
-- 默认结果上限为 100，指去重合并后的 Work 数，而不是每个 provider 各 100 条。
-- TOML 可以修改默认上限，`search --limit` 只覆盖本次 invocation；优先级为 CLI 显式值、TOML 默认值、内置默认 `100`。任何覆盖都不改写 TOML。
-- 清洗、稳定标识符匹配和 normalized-title 去重必须在任何 LLM 调用前完成。
+- 内部数据模型、文献标识和版本表示方式；
+- 使用何种数据库、文件存储、消息机制或并发模型；
+- 供应商调用协议、请求额度和限速策略；
+- 使用何种文献获取工具、解析器、语言模型或客户端；
+- CLI、GUI、Web API 等具体交互形式；
+- 内部阶段名称、状态枚举、表结构和模块名称。
 
-### FR-10 全局完成管线与三个处理层级
+这些内容只有在能够更好地满足本需求时，才由系统设计和技术架构作出选择。
 
-所有写入型入库、补全和引用扩展入口必须复用同一应用层完成契约。完成阶段只由已持久化的 WorkVersion 事实确定，不建立平行 task/job 状态机：
+## 8. 产品验收
 
-| 完成阶段 | 含义 | 成功后的下一阶段 |
-|---|---|---|
-| `METADATA_PENDING` | 尚无足以确定 Work/WorkVersion 身份并支持资产获取的供应商元数据 | observations 和 provisional provider projection 入库后进入 `ASSET_PENDING` |
-| `ASSET_PENDING` | 已有临时供应商元数据，但没有 accepted primary PDF | primary PDF 验收并不可变保存后进入 `ANALYSIS_PENDING` |
-| `ANALYSIS_PENDING` | 已有 accepted primary PDF，但没有完成当前 PDF 对应的 MinerU、LLM、evidence validation 和 canonical promotion | 完整 payload 原子发布后进入 `COMPLETE` |
-| `COMPLETE` | current analysis、最终 canonical metadata、references 和 generated tags 已对齐并原子发布 | 普通重跑直接复用；只有显式 force 才重析 |
+满足以下场景时，核心需求才算成立：
 
-在 WorkVersion 尚不存在时，`METADATA_PENDING` target 可以只是本次 invocation 中的规范化 DOI 或其它稳定标识符，不要求为了记录失败而预先创建 placeholder、status row 或 job。临时元数据成功后才建立或复用 Work/WorkVersion，后续阶段由其 catalog 事实确定。
-
-供应商全部失败、资产来源全部耗尽、MinerU/LLM 失败或 Ctrl+C 都不增加 `failed`、`blocked`、`stale` 或 `interrupted` 文献状态；对象保持在失败前的完成阶段，修复条件后重跑。已存在且仍有效的 `COMPLETE` 对象强制重析失败时继续保持 `COMPLETE`，旧 current payload 不变。
-
-命令处理层级只是本次 invocation 的显式停止点，不是另一套状态模型：
-
-| 层级 | 本次操作的终止条件与持久状态 |
+| 场景 | 必须观察到的结果 |
 |---|---|
-| `metadata` | Work、版本、provisional provider projection、observations、authors/authorships、Publisher/Venue placeholders/links 和标识符已入库，目标进入 `ASSET_PENDING`；provider source keywords 可作为 observations 保存，但不产生 canonical generated tags |
-| `download` | accepted primary PDF 使目标进入 `ANALYSIS_PENDING`；本次来源耗尽时仍保持 `ASSET_PENDING` 并可由 all-missing 选择器重试；按配置补 XML/HTML |
-| `analyze` | 基于合格 primary PDF 的 MinerU/LLM 结果和最终 projection 已原子发布，目标进入 `COMPLETE`；XML/HTML-only 不算完成 |
+| 领域收集 | 用户给出领域条件后，数据库获得与条件相关的一批文献，而不是只能逐篇录入 |
+| 引用迭代收集 | 用户给出种子文献后，系统能够通过引用关系继续发现相关文献，并保留文献被发现的关系 |
+| 多来源搜索 | 至少两个供应商返回结果时，成功结果都被保留，重复文献不会简单按供应商复制成多篇 |
+| 部分来源失败 | 一个供应商失败时，其它供应商的有效文献仍进入数据库，并能看到失败信息 |
+| 文献下载 | 系统能够从元数据继续获得对应资产，资产与正确文献关联，错误内容不被标记为成功 |
+| 文献解析 | 已获得的受支持资产能够生成可读取的轻结构化文本，并能追溯到原始资产 |
+| 结构化分析 | 已解析文献能够获得含义明确、可查询并可追溯到输入内容的结构化分析结果 |
+| 书目导入 | 用户能够导入主流文献管理工具的书目信息，并与数据库已有文献共同查询和补充 |
+| 书目导出 | 已经完成元数据信息收集并形成可用统一书目信息的文献，无需等待全文处理即可导出为 Zotero 等主流文献管理工具可继续使用的格式 |
+| 批量局部失败 | 某些文献获取、解析或分析失败时，其它文献继续完成，已完成结果不丢失 |
+| 重复运行 | 再次执行相同收集时，已有结果被复用，新结果和缺失结果得到补充，不产生无意义重复 |
+| 数据库使用 | 用户能够查询一篇文献并同时了解其元数据、资产、轻结构化文本、结构化分析结果和引用关系的可用情况 |
 
-`download` 和 `analyze` 必须可作为独立 backfill 运行。已有 metadata 不要求重新搜索，已有全文不要求重新下载。
+## 9. 文档责任
 
-普通 `search` 必须接受 `metadata`、`download`、`analyze` processing level；未显式指定时使用 TOML 默认值。`download` 和 `analyze` 支持显式 Work/WorkVersion IDs、library query/filters、tag selection 和 all-missing/all-pending 选择器。无 ID 或选择器时不得隐式处理全库；全库补全必须显式使用 `--all-missing` 或 `--all-pending`。强制重析当前结果使用显式 `--all-current --force` 或等价双重确认语义。
-
-## 6. 全文获取
-
-### FR-11 获取顺序
-
-1. direct official、publisher、open providers 和用户配置的 Sci-Hub provider 在同一 primary PDF 目标内进行有界的进程内竞速。每个 provider 产生 provider-neutral runtime candidate；candidate 可携带受控请求凭据或 auth reference，但这些敏感字段不得持久化或进入 diagnostics。系统在该 provider 内去重并按确定性顺序逐个执行候选，当前候选失败后才回退到同 provider 的下一个候选。不同 provider 的候选不得扁平化为无界全量竞速。
-2. 第一层没有合格 PDF 时，运行受限 translator，从文章 landing page 提取候选。
-3. translator 耗尽后，运行显式配置的 browser 路径。
-4. PDF 优先。XML 和 HTML 是否同时获取由配置决定。
-
-### FR-12 获取安全、幂等与失败 UX
-
-- 保留 HTTPS、DNS 与 redirect 检查、敏感 header 处理、有限 timeout、有界读取、内容和身份验证、进程内 race、不可变发布和 redaction。
-- race loser 不得 late accept。未完整下载或未通过 validation 的内容不得进入 RawAsset。
-- 重复命令通过 WorkVersion 身份、目标角色和内容 hash 收敛，不依赖 lease、fencing 或精确 checkpoint。
-- 最终 acquisition 失败显示一个 overall reason/action，并允许展开 per-source details。某一来源失败但其它来源成功时，losing provider failure 只是诊断细节，不构成最终失败。
-- overall 和 per-source 输出都必须脱敏。
-
-## 7. 全文分析与生成结果
-
-### FR-13 全文限定和语言
-
-- LLM 只消费已保存并通过验证的 primary PDF 及从该 PDF 得到的 normalized/OCR content；可选 XML/HTML 只能补充结构或交叉核对，不用标题、搜索摘要、provider snippet 或 XML/HTML-only 内容代替 PDF 分析。
-- 输出保持原文语言。
-- 优先从全文抽取原始 Abstract。全文没有 Abstract 时才生成，并明确记录 `generated`；不得把生成文本冒充原始 Abstract。
-- PDF analysis primary parser 固定为 MinerU 3.4.4 `vlm-engine`，通过 operator-managed persistent `mineru-api` 调用。SciRetriever 不启动、停止、升级或拥有该服务、GPU、模型、并发和 retention；MinerU 版本、API protocol、模型 ID/revision、backend 和解析参数必须进入 provenance。升级 MinerU 或模型前必须重跑 parser acceptance fixtures。
-- connector 使用 `GET /health`、`POST /tasks`、`GET /tasks/{task_id}` 和 `GET /tasks/{task_id}/result` 的异步协议。外部 task ID 只作为 processing attempt handle；服务重启、task 过期或返回 `404` 时允许在同一 deterministic processing run 下创建新 attempt，不恢复旧 task/job 产品模型，也不承诺 network exactly-once。
-- loopback mode 只允许显式 loopback HTTP endpoint；remote mode 必须使用 HTTPS、精确 endpoint policy、显式 remote-PDF-upload opt-in 和运行时认证。不得信任响应返回的绝对 status/result URL、redirect 或 caller-controlled MinerU `server_url`；status/result path 从配置 origin 与经过验证的 task ID 构造。
-- MinerU result ZIP、`middle.json`、`content_list.json`、model output 和 images 都是不可信输入，必须经过下载/展开/文件数/压缩比/JSON 深度/page/block/text/image bounds、schema、page index、page size 和 bbox validation 后才能发布。`middle.json` 是 primary structural input；Markdown 只是派生视图。
-
-### FR-14 固定核心与灵活 Markdown
-
-- 固定核心使用以下 stable internal section IDs，渲染 heading 使用论文语言：`document_information`（Document Information/Metadata）、`abstract`（Abstract）、`research_background`（Research Background）、`research_question_and_objectives`（Research Question and Objectives）、`research_approach`（Research Approach）、`methods`（Methods）、`data_and_materials`（Data and Materials）、`results`（Results）、`conclusion`（Conclusion）、`limitations`（Limitations）。
-- document information/metadata 是正常的 Markdown body section，可使用表格，不是 YAML front matter。
-- 每个 section 内允许 LLM 按证据选择段落、列表、表格和子标题。`Data and Materials` 不强制为表格，也不固定为领域 schema。
-- 证据不足的 section 必须明确说明证据不足，不得补写或 hallucinate。
-- fulltext-derived section、canonical field 和 reference 必须携带可回到 primary PDF RawAsset 的页码/文本 span evidence locator；可另附 XML/HTML section/path 作为补充 locator，但不能替代 PDF locator。无法形成 PDF locator 的模型输出不得直接提升为 canonical field 或 resolved reference。
-- 完整 reference list 默认不进入 light Markdown，可显式追加或导出。reference parsing 可以属于 fulltext processing；本需求不禁止 references 参与 LLM context/input。
-- analysis 向 LLM 提供允许的 Publisher/Venue IDs/names 和现有 tag registry 或相关候选，并严格解析 stable IDs 与 separate proposals。
-
-### FR-15 直接覆盖与原子替换
-
-- 每个 `WorkVersion` 只保留一份 current generated result，不建立 analysis history。
-- 系统先在旁路构建并验证完整新结果。构建或验证失败时旧 current result 继续可用，不能留下半个新结果。
-- replacement payload 包含 light Markdown/sections、fulltext-derived canonical metadata 投影、fulltext-derived references 和 generated tag links。原子 replacement 成功后旧 payload 被删除或替换，不保留旧分析内容或旧 generated-result lineage 作为历史。
-- RawAsset、current parser/model/schema metadata、后端 provider observations、手工 metadata 修订和 manual tag links 不随 analysis replacement 改变。新 payload 缺失的 canonical 字段按 FR-4 回退到手工值或 provisional provider value，而不是保留无来源的旧 generated 值。
-- 书目 `WorkVersion`、current analysis 和 `DocumentPackage` 导出快照必须使用不同名称、身份和生命周期；处理或导出快照不得充当 analysis history。
-
-## 8. 引用与扩展
-
-### FR-16 版本级引用
-
-- reference 从具体 `WorkVersion` 指向目标 `Work` 或 unresolved raw reference。
-- resolved link 优先使用 DOI 或其它稳定标识符。无法解析时保存原始引用文本、顺序和可得标识符。
-- cited-by 是已保存版本引用的反向派生视图，不是独立手工维护事实。
-
-### FR-17 图扩展
-
-- `expand` 默认方向为 `references`，支持 `cited-by` 和 `both`。
-- 用户只指定 depth。depth 0 只处理种子，depth N 扩展 N 层。
-- expansion 只由 depth 限制，不设置 product-level maximum-new-documents cap。provider call、page size、并发与启动间隔只限制资源使用，不截断已经进入产品 frontier 的文献总数。
-- 每次 expansion 使用稳定 Work identity 维护 invocation visited set；已经访问、已排队或已在当前层收敛的 Work 不重复入队，循环引用不能造成重复处理。跨 invocation 由 catalog 完成状态和幂等选择跳过已完成节点。
-- 每一层必须让每个新增目标调用同一完成管线；只有到达 `COMPLETE` 的 WorkVersion 才产生下一层 reference frontier。仍停留在 `METADATA_PENDING`、`ASSET_PENDING` 或 `ANALYSIS_PENDING` 的目标只停止自己的 branch，其它 branches 继续。
-- 命令报告每层发现、已有、完成和失败数量。一个 branch 失败只停止该 branch，其它 branches 继续。
-- Ctrl+C 停止启动新记录并安全排空或取消当前有限操作；已完成记录保留，重跑跳过完成内容。
-- 单项失败不得伪装成功。失败项保留诊断，整层完成状态必须可查询和幂等重跑。
-
-## 9. CLI 与配置
-
-### FR-18 CLI 与本地搜索
-
-产品命令为 `search`、`expand`、`download`、`analyze`、`library`、`failures` 和 `config check`。它们都是前台命令，不要求后台服务。
-
-`library` 首版必须支持：exact DOI/title/internal ID lookup；对 title、Abstract 和 light Markdown 的 keyword search；author、year、publisher、venue/journal 和 tag filters；references/cited-by traversal；待复核项查询；显式 Work 合并或 WorkVersion 归组；preferred version 设置/清除；manual metadata 设置/清除；manual tag 增删；有明确证据的 Author 合并。人工更改必须审计并允许撤销，自动重算不得覆盖仍有效的人工选择。Vector semantic search 明确延后，不属于 first release。
-
-CLI 的具体安全边界为：`download`/`analyze` 使用 FR-10 的显式选择器；`library show` 读取单个 Work；所有人工合并、归组和修改都要求显式对象且不能隐式批量处理全库；`library export` 明确选择阅读版或版本化 `DocumentPackage`，只有显式 `--include-references` 才追加完整 reference list。`failures` 按阶段和对象查询失败，acquisition source details 保持脱敏。各前台命令统一报告 provider 返回、去重后 Work、新建/复用、下载 accepted/missing/failed、分析成功/失败等适用计数，不能把 PDF missing 计为下载成功。
-
-### FR-19 严格 TOML
-
-- 一份严格 TOML 管理 catalog database/assets 路径、普通 search 默认 level/limit、metadata enabled providers 与 precedence、acquisition tier/order、LLM、Sci-Hub、translator、browser profile、MinerU service connection、资产格式、引用扩展和默认 30 秒文献启动间隔。人工整理输出固定为 JSON；reading export 的格式与是否包含完整引用由显式 CLI 参数选择，不在 TOML 保留未接入运行时的字段。MinerU 配置至少区分 loopback/remote mode、固定 base URL、expected service/protocol/model/backend identity、认证引用、remote upload opt-in、connect/upload/task/download timeout、poll interval、并发和 input/result/archive/schema bounds。
-- 固定 acquisition credential 字段可以直接写入权限合格的 TOML。MinerU remote auth 与 LLM credential 只在 TOML 保存环境变量名称，secret value 只在运行时读取。
-- 未知字段、错误类型和冲突设置 fail closed。程序不自动改写 TOML。
-- CLI 参数只能覆盖本次 invocation，不持久修改 TOML。`config check` 的 offline 模式至少验证未知字段、类型和冲突、所需 secret 引用、目录存在性/权限、provider/模型必填配置和启用 browser 的 profile；未启用能力不强制要求其 secret 或运行时。显式 runtime 模式只对启用能力执行有限、只读 identity/capability probe。
-- secret 不进入终端、JSON、日志、catalog details、provenance 或生成结果。
-
-## 10. 跨能力质量规则
-
-- 确定性：相同 provider observations 和配置得到相同 Work、版本、metadata 和作者连接结果。
-- 保守合并：不因标题或姓名相似而静默误合并。
-- 幂等：search、download、analyze、expand 重跑不重复创建身份或资产。
-- 统一完成：所有写入型入口通过同一 `METADATA_PENDING -> ASSET_PENDING -> ANALYSIS_PENDING -> COMPLETE` 契约决定下一步，不复制阶段判断。
-- 不可变：RawAsset 永不原地修改；current generated analysis 按 FR-15 直接原子覆盖，不建立分析历史。
-- 可审计：canonical 值、current 生成结果、标签和引用能追溯当前来源与输入 hash；provider observations 独立保留。
-- 安全：获取路径不绕过 transport、timeout、validation、redaction 和 immutable acceptance。
-- 外部解析：MinerU service 只产生待验证的派生候选；服务 task 完成不等于 normalization 或 analyze 成功，只有本地验证、不可变发布和 current replacement 完成后才计为成功。
-- 文档真相分离：README 只描述已发布行为；本规格只描述理想产品；实施覆盖和差距只在独立进度文档记录。
-
-## 11. 关键产品决策及理由
-
-本节汇总 owner 已确认的产品选择，帮助读者理解为什么需求采用当前形态。历史讨论证据见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
-
-| 决策点 | 采用方案 | 未采用方案与原因 |
-|---|---|---|
-| 产品中心 | Work-centered 本地文献库 | 下载任务中心不能表达研究者长期使用的文献、版本和引用关系 |
-| 同一论文的版本 | 一个 Work 下保留多个 WorkVersion | 把预印本和正式版压成一条记录会丢失版本证据；按 provider 建版本会制造重复 |
-| 身份去重 | DOI/稳定 ID 和 exact normalized title 的确定性规则 | fuzzy/LLM 去重不可重复且容易错误合并 |
-| preferred version | 正式版优先的确定性排序，可由用户显式覆盖 | 自动删除其它版本或让 provider 完成顺序决定主版本均不可接受 |
-| 元数据来源 | canonical projection + backend observations | 只保留一个 provider 会丢 provenance；把所有原始字段展示给用户会污染产品模型 |
-| 文献完成模型 | 四个由 catalog 事实确定的单向阶段；失败保持原阶段并重跑 | 多维 workflow 状态和持久化失败状态增加复杂度，却不改变缺失事实或下一步动作 |
-| 全文基准 | primary PDF 是保存、阅读、导出和分析的权威资产 | XML 很难稳定获得且不能代表用户看到的版面；XML/HTML 只作补充 |
-| PDF parser | MinerU 3.4.4 `vlm-engine`，由 operator-managed persistent `mineru-api` 提供，SciRetriever 只连接并验证结果 | invocation-local VLM 重复加载代价高；SciRetriever-owned parser daemon 会破坏前台产品边界；Markdown-only 丢失结构 provenance |
-| LLM 使用边界 | 仅处理 PDF 全文，不参与 Work/版本/作者身份去重 | 标题、摘要或 provider snippet 不足以支撑正文结论；LLM 身份判断不可审计 |
-| 分析输出 | 十个稳定核心 section，内部 Markdown 灵活并保留 PDF evidence | 完全自由结构难以检索；固定领域 schema 又会越过通用文献边界 |
-| 重新分析 | 每个 WorkVersion 一份 current result，旁路构建后原子替换 | 保存分析历史增加产品和迁移复杂度，owner 已明确不需要 |
-| 标签 | 扁平英文 canonical registry + 多语言 aliases，manual/generated 分离 | 主观层级不稳定；metadata keywords 不能直接成为 canonical generated tags |
-| 引用 | 版本级单向 reference，cited-by 反向派生，unresolved 原样保留 | 猜测创建 Work 会污染引用图；双向手工事实会产生不一致 |
-| 获取顺序 | 第一层来源竞速，随后 translator，再 browser | 全部串行会延迟常见成功路径；全部同时启动会浪费重型 browser 资源 |
-| 执行模型 | 前台 CLI、合作式停止、幂等重跑 | daemon、lease、fencing、durable pause/resume 优化了任务控制而非文献库 |
-| 引用扩展边界 | 只由 depth 限制，逐层完整处理并隔离失败分支 | 隐藏文献数上限会截断用户明确要求的图；重复和循环由 visited set 控制 |
-| 本地搜索 | exact lookup、关键词、字段过滤和引用遍历 | vector semantic search 延后，避免首版引入另一套索引和相关性语义 |
-| 产品领域边界 | 止于通用 `DocumentPackage` 和 provenance | 反应、分子、路线等领域 schema 属于下游 domain pack，不进入 catalog |
-
-## 12. 延后与排除项
-
-### 13.1 延后
-
-- vector semantic search 和 vector index；首版只做 exact、keyword、filters 和 citation traversal。
-- 机构 registry、机构 alias 和 affiliation 消歧；首版只保存 affiliation observation。
-- 新的 license、retraction、correction 和 erratum canonical models；首版只增加 OA status。
-- 多用户权限、协作审批和 Web UI。Web UI 同时受 ADR 0001 约束，纳入前需要新 ADR。
-- BibTeX、RIS、Zotero library 和任意本地目录导入。本轮“入库”只指 metadata 候选清洗、去重并创建或更新 provisional WorkVersion；新增导入格式需要单独输入契约和验收。
-
-### 13.2 明确排除
-
-- 反应、分子、合成路线、产率、材料性质等领域字段、schema 或 catalog 表。
-- 下游领域数据库、预测、规划、统计分析或领域知识推理。
-- SciRetriever-owned daemon/microservice、外部 workflow engine、lease、fencing、后台 worker ownership 和逐内部步骤 exactly-once。ADR 0003 批准的 operator-managed MinerU parser capability 不属于该排除项，但不能成为 SciRetriever 产品或任务 owner。
-- durable pause/resume、retry-child、candidate checkpoint 或任务中心产品导航。
-- 对旧下载任务 CLI、配置、状态和 codec 的完整向后兼容承诺。
-- 把实际文献语料、运行时 catalog、secret 或用户身份写入代码仓库。
-- 让下游直接访问 SciRetriever 内部存储结构；下游只能使用稳定 ID、hash、provenance 和 `DocumentPackage`。
-
-## 13. 产品验收场景
-
-以下场景是 owner 验收的最低集合。实现可以增加更细测试，但不得用“功能看起来正常”代替这些可观察结果。
-
-| 场景 | 给定与操作 | 必须得到 | 必须避免 |
-|---|---|---|---|
-| 多来源搜索 | 固定多个 provider 响应，以不同完成顺序运行 search | 相同 Work、WorkVersion、canonical metadata 和计数 | provider 完成顺序改变结果 |
-| DOI 冲突 | 两条 normalized title 相同但 DOI 均非空且不同 | 两个独立身份或人工复核 | 仅因标题相同自动合并 |
-| DOI 补全 | 一条有 DOI、一条无 DOI且 exact normalized title 相同 | 收敛并补 DOI，保留两条 observations | 丢失来源证据 |
-| 跨版本关系 | 预印本与正式版 DOI 不同，但存在明确 registry/provider 版本关系或用户确认 | 两个 WorkVersion 归入同一 Work并保留关系证据 | 仅凭相似标题自动归组或覆盖任一 DOI |
-| 多书目版本 | 同一工作包含预印本和正式版 | 两个 WorkVersion 均可读，正式版默认 preferred | 删除预印本或把 processing snapshot 当版本 |
-| preferred override | 用户显式选择非默认版本后新增 observations | 显式选择保持；清除后恢复自动排序 | 后台重算覆盖用户选择 |
-| PDF 获取 | 多来源竞速，其中一个返回合格 PDF、其它失败或较慢 | 接受一个不可变 PDF；其它失败仅为诊断 | loser late accept 或保存无效内容 |
-| 无 PDF | 只有 XML/HTML 或所有 PDF 来源失败 | 目标保持 `ASSET_PENDING`；修复来源后重跑 download | XML/HTML-only 被计为分析完成或新增持久化失败状态 |
-| PDF missing 重跑 | 某版本上次来源耗尽并记录 missing，随后运行 `download --all-missing` | 该版本重新进入获取；本次 accepted 与 missing 分开计数 | 把 missing 当作成功或永久跳过 |
-| PDF 与补充资产冲突 | PDF 与 XML/HTML 内容不一致 | PDF 控制分析与 canonical projection，补充 provenance 保留 | XML/HTML 覆盖 PDF 事实 |
-| 全文分析 | 合格 PDF 含可定位证据 | 原文语言、十个稳定 section、PDF page/span locators | 用标题/摘要替代全文或生成无证据结论 |
-| MinerU service readiness | 配置 loopback 或 remote MinerU endpoint 并运行 config check/analyze | 验证 health、service 3.4.4、protocol 2、endpoint mode、认证和显式 bounds；不启动服务 | SciRetriever 自动拉起 MinerU、接受错误版本、remote 明文 HTTP 或输出 secret |
-| MinerU task 恢复 | async task 在 polling 期间 Ctrl+C、过期或服务重启 | 保留 attempt handle；可恢复时继续 polling，`404` 时在同一 processing run 创建新 attempt；旧 current 不变 | 把外部 task 当产品 job、声称已取消或重复发布结果 |
-| MinerU 结果验收 | 固定 ZIP 含合法与恶意路径、超限文件、错误 page/bbox 和 schema | 只接受有界且可回到 primary PDF 的结构化结果；恶意/超限结果 fail closed | 直接解压、信任 Markdown 或把 service completed 当 analyze success |
-| Abstract 缺失 | PDF 确实没有 Abstract | 生成并标记 `generated` | 把生成文本冒充原始 Abstract |
-| 重新分析成功 | 已有 current result，新的完整结果通过验证 | light content、fulltext metadata、references、generated tags 整体替换 | 保留旧 generated payload 形成隐式历史 |
-| 重新分析失败 | 新结果构建或验证失败 | 旧 current result 继续完整可用 | 留下半个新结果或破坏 manual 数据 |
-| manual/generated 分离 | 已有 manual tags 和 metadata 修订后重新分析 | manual 数据保留，generated links 更新 | 删除用户维护内容 |
-| 人工整理 | 用户处理复核项、归组版本、修改 metadata/tag 或 preferred version | 立即反映在 canonical view，操作可审计并可撤销 | 删除 observations/资产或被自动重算静默覆盖 |
-| unresolved reference | 引用没有稳定标识符或确定性匹配 | 保存原文、顺序和可得 ID，后续可重跑解析 | 为图完整性猜测创建 Work |
-| 引用循环 | 固定引用图含循环和重复边 | 每个 Work 每次 invocation 只入队一次 | 无限循环或重复处理 |
-| 分支失败 | expansion 某 branch 缺 PDF，其它 branch 正常 | 失败目标保持 `ASSET_PENDING`，其他 branch 继续；层级计数可对账 | 单分支失败终止全部扩展或创建额外 branch 状态机 |
-| 全局完成管线 | 分别从 DOI、临时 provider metadata、accepted PDF 和 current analysis 进入写入型流程 | 统一判定为 `METADATA_PENDING`、`ASSET_PENDING`、`ANALYSIS_PENDING` 或 `COMPLETE`，只执行缺失阶段 | 各 CLI 维护不同完成条件或把临时 provider metadata 当最终版本 |
-| 跨阶段失败查询 | 固定 metadata 全失败、acquisition 耗尽、analysis replacement 失败和 expansion branch 失败 | `failures` 可按阶段/对象给出脱敏 reason/action；旧 current 仍可用 | 只显示总失败数或泄漏原始异常/secret |
-| 无选择器 backfill | 运行 download/analyze 但不给 ID、query、tag 或 all selector | fail closed 并提示显式选择 | 隐式处理整个文献库 |
-| Ctrl+C 与重跑 | 长操作中断后再次运行同一命令 | 不再领取新记录，保留完成项，重跑跳过完成内容 | 依赖后台 lease 或重复创建资产 |
-| 配置检查 | TOML 含未知字段、错误类型、缺失启用能力 secret 或不可写目录 | `config check` 明确失败且不泄漏 secret | 自动改写配置或要求未启用能力的 secret |
-| 下游边界 | domain pack 消费 DocumentPackage 生成领域数据 | 领域输出在下游 portable dataset/consumer store | 领域字段回写 SciRetriever catalog |
-| DocumentPackage 重导出 | current result 更新后再次导出同一 WorkVersion | 新快照绑定新输入 hash；旧快照保持不可变且可追溯 | 静默改写旧导出或暴露内部表 |
-
-## 14. 首版完成定义
-
-产品首版只有在以下条件同时成立时才算完成：
-
-1. CLI、schema 和用户流程以 Work/WorkVersion 为中心；任务历史只作为内部诊断，不形成任务中心产品面。
-2. Work/WorkVersion、版本资产、observations、authors、registries、tags 和 references 已按本文身份规则运行。
-3. search、download、analyze 和 expand 通过同一全局完成管线独立、组合、中断并幂等重跑；供应商元数据在 analysis 成功前始终只是临时输入。
-4. PDF 获取、PDF-based analysis、evidence locator 和原子 current replacement 通过离线验收。
-5. local library 查询、人工整理、复核、可撤销审计和阅读版/`DocumentPackage` 显式 export 可用。
-6. failures 能覆盖 metadata、acquisition、analysis 和 expansion，config check 能给出脱敏、可行动的结果。
-7. README、示例配置和 `--help` 只声明已发布能力，并与当前代码和测试一致。
-8. 不可变资产、安全和完整性边界通过相应人工门禁；当前 pre-v1 直接建立新 schema，不要求旧 catalog 迁移、备份、回退、legacy read path 或 retired-database safeguard。
+- 本文定义**为什么做、用户要做什么、产品最终得到什么**。
+- [系统设计](system-design.md)说明为了满足这些需求，系统采用哪些概念、数据流和责任边界。
+- [技术架构](technical-architecture.md)说明这些设计如何映射到代码模块、依赖和运行技术。
+- ADR 保存重要设计选择及其理由，不反向定义用户需求。
+- README、源码和测试说明当前已经实现的行为。

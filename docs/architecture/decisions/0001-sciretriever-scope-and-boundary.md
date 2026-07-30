@@ -1,141 +1,41 @@
-# ADR 0001: SciRetriever Scope and Boundary
+# ADR 0001：SciRetriever 的范围与数据边界
 
 - Status: Accepted
 - Date: 2026-07-20
+- Revised: 2026-07-30
 - Supersedes: none
-- Superseded by: [ADR 0002](0002-work-centered-literature-library.md) only for product center and compatibility of unwanted download-task behavior; the scope boundary remains accepted
-- Related: [ADR 0002](0002-work-centered-literature-library.md), [architecture principles](../principles.md), [project README](../../../README.md), [local AGENTS.md](../../../AGENTS.md)
+- Superseded by: none
+- Related: [产品需求](../requirements.md)、[系统设计](../system-design.md)、[架构原则](../principles.md)
 
-This ADR is the authoritative source of truth for SciRetriever's domain boundary and where it stops. Read it before writing code, reviewing a change, or proposing a new module. It wins on that boundary unless a later ADR explicitly supersedes it; for product center and compatibility of unwanted download-task behavior, ADR 0002 controls as declared above.
+## 背景
 
-## Current applicability
+SciRetriever 面向指定领域执行大批量文献收集，最终形成包含文献元数据、资产信息、轻结构化文本和通用结构化文献分析结果的文献数据库。文献内容还可以被其它系统用于特定领域知识抽取，但这种下游用途不能反向扩大 SciRetriever 自身的数据范围。
 
-This ADR remains accepted for the domain boundary, the `DocumentPackage` integration contract, immutable evidence, generic light structure, stable downstream references, and the separation of domain extraction. It is not the current product specification. [ADR 0002](0002-work-centered-literature-library.md) controls the Work-centered product, bibliographic `WorkVersion`, foreground execution, PDF-required analysis, and removal or decoupling of unwanted download-task behavior. The [ADR index](README.md) gives the complete authority and reading order.
+本 ADR 只决定 SciRetriever 在哪里停止，不决定文献身份模型、数据库 schema、解析器或用户交互方式。
 
-The `DocumentPackage` boundary describes what SciRetriever may expose to downstream domains; it does not make package generation the product navigation center or end the internal Work/WorkVersion lifecycle. Domain-run bookkeeping and portable domain-pack outputs below are permitted boundary contracts, not first-release SciRetriever requirements. Current implemented behavior is documented by the project [README](../../../README.md), and ideal product behavior is normative in the [requirements](../requirements.md).
+## 决策
 
-## Context
+1. SciRetriever 负责通用文献的元数据收集、资产获取、资产保存、通用解析、轻结构化文本管理和产品规定含义的通用结构化文献分析。
+2. 文献数据库可以保存文献身份、来源、元数据、资产关系、轻结构化文本、通用结构化文献分析结果、处理证据和失败信息，但不得保存反应、分子、路线、产率、材料性质等特定领域数据。
+3. 原始文献资产是解析结果的证据。已接受的原始字节不得原地修改；数据库保存资产关系、hash 和存储引用，不把大型文献文件作为关系型 BLOB 保存。
+4. 轻结构化文本必须保持领域中立，并能够追溯到产生它的原始资产。摘要、标签等有损信息不能替代完整的已解析内容。
+5. 通用结构化文献分析结果必须具有产品明确规定的含义，能够追溯到所分析的轻结构化文本，并且不能替代完整轻结构化文本。
+6. 特定领域知识抽取、领域 schema、领域数据集、预测、规划和领域数据库由下游消费者负责。
+7. 如果系统提供下游导出，应使用稳定标识符、hash、provenance 和领域中立的文献表示。具体导出合同属于后续设计，不是核心产品目标，也不是文献数据库的内部数据模型。
+8. 文献语料、运行时数据库和用户数据存放在配置的数据位置，不进入代码仓库。
 
-The following context is a historical snapshot as of 2026-07-20, not a description of current implementation or approved target status. SciRetriever had grown as a toolkit for one lab's energetic-materials literature work, and its code mixed two concerns that needed to be separated.
+## 后果
 
-The generic concern is literature handling: search providers (Semantic Scholar, Crossref, Google Scholar, plus an OpenAlex stub), download providers (Sci-Hub, Elsevier/ScienceDirect XML, Wiley, a generic web fetcher, and a CJEM journal scraper), a weak SQLAlchemy `Paper` ORM with a 22-column table and a self-referential citation join, an `Optera` CRUD wrapper, and standalone LLM scripts that summarize parsed documents.
+- 新的元数据字段、资产类型、通用文档结构和通用分析结果可以进入 SciRetriever，只要它们仍是领域中立的文献信息。
+- 新的领域抽取需求不修改 SciRetriever catalog，而是消费稳定的文献表示。
+- 资产保存、解析和导出必须保留来源与输入关系。
+- 任何导出合同都不能要求用户围绕导出快照使用产品，也不能把处理快照解释成文献身份。
 
-The domain-specific concern is chemistry extraction. It lives today inside one standalone script whose prompt hardcodes reactant, reagent, solvent, conditions, product, and yield fields. That chemistry logic is currently entangled with generic literature handling, and the `Paper` model already carries opinions (a flat metadata table, no provenance, no versioning) that would quietly become the schema for everything downstream if we let it.
+## 需要新 ADR 的变化
 
-At that time, nine legacy databases had been retired in Batch 015 with no replacement, there was no `docs/` directory or recorded architecture, and a future PDF/XML rebuild had not started. This historical state made it the right moment to freeze the initial boundary before the old `Paper` table and chemistry script could set future defaults by accident.
+以下变化需要新的 owner 决策：
 
-This ADR settles the boundary before that happens. It does not implement anything. It records decisions the project owner finalized after an extended architecture discussion.
-
-## Decision
-
-SciRetriever is a scientific-literature acquisition, cataloging, normalization, and light-structuring system. It is not a chemistry system, and it is not a domain database.
-
-1. **Purpose.** SciRetriever acquires scientific literature, catalogs it, normalizes it into a consistent shape, and adds generic light structure. Nothing about a specific research domain belongs in its core.
-
-2. **Processing boundary.** SciRetriever's cross-domain authority ends at a versioned, provenance-bearing `DocumentPackage`. The package contract can represent supported PDF, XML, or HTML assets without exposing internal ORM tables. Under ADR 0002, the internal product continues to manage Work/WorkVersion, current analysis, tags and references, and target `analyze` requires an accepted primary PDF; XML/HTML cannot independently satisfy analysis. The package remains the stable downstream boundary, not the product center.
-
-3. **Raw assets are evidence.** Downloaded files stay on an external filesystem as immutable evidence. SciRetriever never rewrites a raw asset in place. Large documents and images are referenced by path and hash. They are not stored as relational BLOBs.
-
-4. **What the catalog owns.** The literature catalog manages work identity, external identifiers (DOI, arXiv id, and similar), file records, acquisition history, normalized artifacts, generic summaries, tags, citation links, literature-processing state, failure records, and lineage. That is the full list. Under ADR 0002, literature-processing state means Work/WorkVersion, asset, analysis and reference state plus diagnostic acquisition evidence; it does not preserve task-centered durable control state as a product requirement.
-
-5. **Domain extraction is out of scope.** Pulling reactions, molecules, routes, materials properties, or any other domain payload out of a document is not SciRetriever's job. Independent downstream consumers ("domain packs") do that work using a Prompt, an output Schema, and an optional Validator.
-
-6. **Domain output is a portable dataset, not a database.** A domain pack produces a versioned, portable dataset: JSONL as the authoritative form, an optional flattened CSV export, plus a schema, a manifest, and a validation report. A domain pack does not create or own a domain database. A consumer may later load the dataset into its own database. That loading is the consumer's concern, not SciRetriever's.
-
-7. **The catalog tracks runs, not domain fields.** The catalog may record only that a domain run happened: its status, a pointer to its output, and content hashes. This is a permitted integration boundary, not a first-release product requirement. The catalog never gains a reaction column, a molecule column, a yield column, or any other domain field.
-
-8. **Integration is by stable reference.** Downstream consumers integrate through stable identifiers (`document_id`, `file_id`, `artifact_id`), content hashes, and evidence and provenance records. They do not import or query SciRetriever's internal ORM tables. The internal storage layer is free to change as long as those references and the `DocumentPackage` contract hold.
-
-9. **Retained legacy code enters through adapters.** SciRetriever is the host project for the new framework, but existing code does not get to define the future. A legacy shape still needed for approved migration or retained behavior may enter only through a restricted adapter. CLI, state, codec, or task behavior removed or decoupled under ADR 0002 does not require an adapter. No legacy shape may dictate the v2 schema or module boundaries.
-
-10. **Light structuring is loss-aware.** Generic summaries and tags exist to help people and machines find documents. They are lossy by nature, so they never replace the full normalized content. The full sections, tables, references, and evidence stay available in the `DocumentPackage`. SciRetriever's target analysis is based on the accepted primary PDF and primary-PDF evidence locators as required by ADR 0002; a downstream domain pack reads the full package and must not depend on a compressed summary alone.
-
-11. **Modular monolith first.** The codebase evolves as a single, well-factored application. No microservices, no external workflow platform, no vector store, and no web UI until a concrete need forces the question through a new ADR.
-
-12. **Data lives outside the repository.** Actual literature and domain data stay outside the code repository, under configured storage roots. The repository holds code and documentation, not corpora.
-
-## Scope
-
-### In scope
-
-- Search across literature providers and normalization of search hits into work records.
-- Download of full-text assets (PDF, XML, HTML) and recording each as an immutable file with a hash.
-- Work identity and deduplication across providers and identifiers.
-- Normalization of any supported raw format into a single `DocumentPackage` shape.
-- Generic light structure: summaries, tags, and citation links that aid discovery.
-- Catalog state: Work/WorkVersion processing state, acquisition diagnostics, artifact records, failures, and lineage.
-- Optionally recording minimal domain-run bookkeeping: status, output pointers, and hashes produced by external domain packs. This is permitted, not required for the first release.
-- Configuration of storage roots and provider credentials.
-
-### Out of scope
-
-- Any domain-specific extraction schema, including reactions, molecules, synthesis routes, and materials properties.
-- Any domain database, table, or column inside the catalog.
-- Ownership of generated JSONL or CSV domain datasets. Those are outputs of domain packs, not catalog entries.
-- Chemistry knowledge, cheminformatics parsing, or reaction validation in core code.
-- Downstream analytics, prediction, or planning built on domain data.
-- Microservices, a workflow engine, a vector store, or a web UI (see decision 11).
-- Storing corpora inside the repository (see decision 12).
-
-## Canonical flow
-
-```text
-                     SciRetriever (ADR 0002 product)                     | Downstream domains
-                                                                          |
- metadata providers -> Work -> WorkVersion -> primary PDF asset           |
-                                      |      (accepted, or missing/blocked) |
-                                      |                                   |
-                                      +-> optional XML/HTML supplements   |
-                                      |                                   |
-                                      +-> PDF normalization/OCR           |
-                                      +-> current generic analysis        |
-                                      +-> canonical metadata/tags/refs    |
-                                      |                                   |
-                                      `-> DocumentPackage + stable refs --+-> domain pack
-                                                                          |   -> portable dataset
- Catalog: Work/WorkVersion, assets, current result, references, failures, |   -> consumer store
-          lineage, and optional minimal domain-run bookkeeping            |
- -------------------------------------------------------------------------+----------------------
-                     DOMAIN BOUNDARY: no domain payload enters the catalog
-```
-
-The vertical line is the domain boundary. Everything left of it remains generic literature handling organized around Work/WorkVersion. Everything right of it reads a `DocumentPackage` through stable identifiers, hashes and provenance, then produces its own portable dataset. Optional domain-run bookkeeping may cross back only as status, output pointer and hash; it is not product navigation or domain data.
-
-## Consequences
-
-### What this buys us
-
-- One domain can never corrupt another. Chemistry, biology, or materials packs all read the same neutral package and write their own datasets.
-- The catalog schema stays small and stable. Adding a new research domain requires zero catalog migrations.
-- Provenance is first class. Every downstream claim traces back to a file, a hash, and an evidence record.
-- Internal storage can be refactored freely. Consumers depend on the `DocumentPackage` contract and stable ids, not on table shapes.
-- Reprocessing is safe. Raw assets are immutable, so a normalization bug is fixed by re-running, not by hoping the original survived.
-
-### What this costs us
-
-- Indirection. A consumer that just wants "the reactions" has to run a domain pack rather than query a table. We accept that cost to keep domains decoupled.
-- Duplication of some data across portable datasets. Two packs may each carry a document's title. We accept redundancy in exchange for independence.
-- The `DocumentPackage` contract becomes load-bearing. Changing it ripples to every consumer, so it changes only through a new ADR (see below).
-- Loss-aware structuring means we keep full normalized content, which costs more storage than summaries alone. Decision 10 makes that non-negotiable.
-
-## Compatibility strategy
-
-This ADR does not require preserving pre-v1 implementation shapes. [ADR 0002](0002-work-centered-literature-library.md) supersedes compatibility promises for unwanted task-centered and legacy-catalog behavior: its approved work may directly delete incompatible CLI, configuration, schema, adapters and control state while preserving the scope boundary and immutable evidence defined here.
-
-The current pre-v1 product has no supported legacy catalog and therefore no migration adapter boundary. Old `Paper` ORM, `Optera` rows, retired-database guards and incompatible legacy shapes may be deleted directly. If a future supported input requires migration, its contract and safeguards require a new explicit owner decision. The chemistry `synthsis` script remains outside the SciRetriever core boundary.
-
-No legacy shape is part of the approved pre-v1 product. ADR 0002 authorizes direct replacement within its Work-centered scope; this ADR continues to set the domain and `DocumentPackage` boundary every replacement implementation must satisfy. See the [architecture principles](../principles.md) for the responsibility matrix and minimum contract.
-
-## When a new ADR is required
-
-Open a new ADR (do not edit this one, supersede it) before doing any of the following:
-
-- Changing the `DocumentPackage` contract in a way that is not backward compatible.
-- Adding any domain-specific field, table, or schema to the catalog.
-- Making a domain-generated JSONL or CSV dataset part of the catalog rather than an external output.
-- Coupling a downstream consumer to internal ORM tables instead of stable identifiers.
-- Introducing microservices, an external workflow platform, a vector store, or a web UI.
-- Moving actual corpora into the code repository, or hardcoding a workspace path in place of a configured storage root.
-- Letting legacy `Paper`/`Optera`/script shapes define the v2 schema instead of entering through adapters.
-
-Editing this ADR in place is allowed only for clarifications that do not change a decision. Any change to a decision is a new, dated ADR that marks this one superseded.
+- 把特定领域字段写入 SciRetriever 文献数据库；
+- 允许下游直接依赖内部数据库表而不是稳定边界；
+- 取消原始资产的证据地位或允许原地覆盖；
+- 将文献语料或运行时数据库纳入代码仓库。
