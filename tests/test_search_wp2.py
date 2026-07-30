@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from threading import Barrier, Event
 from time import monotonic
 from typing import Any
-from unittest import TestCase
+from unittest import TestCase, mock
 
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -24,6 +24,7 @@ from sciretriever.catalog import (
 )
 from sciretriever.core.contracts import Identifier, SearchSpec
 from sciretriever.discovery import (
+    CandidatePreparer,
     MetadataSearchRequest,
     MetadataSearchService,
     ProviderRecord,
@@ -148,6 +149,79 @@ class MetadataSearchWp2Tests(TestCase):
         output = MetadataSearchService(providers, self.repository).search(self.request(("a", "b")))
         self.assertEqual(tuple(item.metadata.title for item in output.results), ("Alpha", "Beta"))
         self.assertEqual(self.counts("works", "work_versions"), (2, 2))
+
+    def test_search_ingests_the_single_shared_candidate_tuple(self):
+        records = (
+            record("high", 1, "Canonical", "10.1/shared", provider_record_id="high-1"),
+            record("low", 1, "Fallback", "10.1/shared", abstract="filled",
+                   provider_record_id="low-1"),
+        )
+        captured = []
+        prepare = CandidatePreparer.prepare
+
+        def capture(preparer, request, values, failures=(), *, all_providers_failed=False):
+            result = prepare(
+                preparer, request, values, failures,
+                all_providers_failed=all_providers_failed,
+            )
+            captured.append(result.candidates)
+            return result
+
+        service = MetadataSearchService(
+            {
+                "low": FakeProvider("low", (records[1],)),
+                "high": FakeProvider("high", (records[0],)),
+            },
+            self.repository,
+        )
+        with mock.patch.object(CandidatePreparer, "prepare", autospec=True, side_effect=capture) as shared:
+            output = service.search(self.request(("low", "high"), precedence=("high", "low")))
+
+        shared.assert_called_once()
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(tuple(item.metadata.title for item in captured[0]), ("Canonical",))
+        self.assertEqual(tuple(item.metadata.title for item in output.results), ("Canonical",))
+        self.assertEqual(
+            tuple(item.provider_record_id for item in captured[0][0].observations),
+            ("high-1", "low-1"),
+        )
+
+    def test_post_ingest_fill_missing_does_not_mutate_captured_candidates(self):
+        MetadataSearchService(
+            {"high": FakeProvider("high", (record(
+                "high", 1, "Canonical", "10.1/history", abstract="preferred",
+            ),))},
+            self.repository,
+        ).search(self.request(("high",)))
+        captured = []
+        prepare = CandidatePreparer.prepare
+
+        def capture(preparer, request, values, failures=(), *, all_providers_failed=False):
+            result = prepare(
+                preparer, request, values, failures,
+                all_providers_failed=all_providers_failed,
+            )
+            captured.append(result.candidates)
+            return result
+
+        service = MetadataSearchService(
+            {
+                "high": FakeProvider("high", error=RuntimeError("unavailable")),
+                "low": FakeProvider("low", (record(
+                    "low", 1, "Replacement", "10.1/history", abstract="replacement",
+                ),)),
+            },
+            self.repository,
+        )
+        with mock.patch.object(CandidatePreparer, "prepare", autospec=True, side_effect=capture):
+            output = service.search(
+                self.request(("low", "high"), precedence=("high", "low"))
+            )
+
+        self.assertEqual(captured[0][0].metadata.title, "Replacement")
+        self.assertEqual(output.results[0].metadata.title, "Canonical")
+        self.assertEqual(captured[0][0].metadata.abstract, "replacement")
+        self.assertEqual(output.results[0].metadata.abstract, "preferred")
 
     def test_provider_and_record_order_do_not_change_merge_projection(self):
         first = record("high", 2, "Canonical Title", "10.1/stable", abstract="preferred")
@@ -442,16 +516,16 @@ print("finished")
                 self.assertEqual(len(output.results), 1)
                 self.assertEqual(output.results[0].metadata.year, 2020)
 
-    def test_default_limit_persists_only_first_100_merged_works(self):
+    def test_default_limit_persists_only_first_1000_merged_works(self):
         records = tuple(
-            record("p", rank, f"Work {rank:03d}", f"10.1/work-{rank:03d}")
-            for rank in range(1, 102)
+            record("p", rank, f"Work {rank:04d}", f"10.1/work-{rank:04d}")
+            for rank in range(1, 1002)
         )
         output = MetadataSearchService(
             {"p": FakeProvider("p", records)}, self.repository
         ).search(MetadataSearchRequest("query", ("p",), ("p",)))
-        self.assertEqual(len(output.results), 100)
-        self.assertEqual(self.counts("works", "work_versions"), (100, 100))
+        self.assertEqual(len(output.results), 1000)
+        self.assertEqual(self.counts("works", "work_versions"), (1000, 1000))
 
     def test_observations_are_canonical_idempotent_and_keywords_do_not_create_tags(self):
         providers = {
@@ -568,6 +642,46 @@ print("finished")
                 (json.dumps("Conflicting Title", separators=(",", ":")),),
             ).scalar_one()
         self.assertEqual(conflicting_rows, 0)
+
+    def test_candidate_batch_conflict_rolls_back_earlier_candidates(self):
+        title_only = MetadataSearchService(
+            {"p": FakeProvider("p", (record(
+                "p", 1, "Title Only", provider_record_id="collision",
+            ),))},
+            self.repository,
+        ).search(self.request(("p",))).results[0]
+        identified = MetadataSearchService(
+            {"q": FakeProvider("q", (record("q", 1, "Identified", "10.1/owner"),))},
+            self.repository,
+        ).search(self.request(("q",))).results[0]
+        before = self.counts(
+            "works", "work_versions", "metadata_observations", "work_version_identifiers"
+        )
+        service = MetadataSearchService(
+            {"p": FakeProvider("p", (
+                record("p", 1, "First New", "10.1/first-new"),
+                record("p", 2, "Conflicting", "10.1/owner",
+                       provider_record_id="collision"),
+            ))},
+            self.repository,
+        )
+
+        with self.assertRaisesRegex(
+            CatalogError, "metadata observation owner conflicts with identifier owner"
+        ):
+            service.search(self.request(("p",)))
+
+        self.assertEqual(
+            self.counts(
+                "works", "work_versions", "metadata_observations", "work_version_identifiers"
+            ),
+            before,
+        )
+        self.assertNotEqual(title_only.work_version.id, identified.work_version.id)
+        with self.catalog.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM work_version_identifiers WHERE value = '10.1/first-new'"
+            ).scalar_one(), 0)
 
     def test_later_lower_precedence_observations_fill_only(self):
         registries = RegistryRepository(self.catalog)

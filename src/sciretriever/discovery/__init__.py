@@ -3,7 +3,14 @@
 from sciretriever.core.contracts import DownloadManifestEntry, SearchSpec
 from sciretriever.errors import ProviderErrorCategory, ProviderSearchError
 
-from .dedup import deduplicate_candidates, merge_candidates
+from .candidate_retrieval import (
+    CandidateObservation,
+    CandidatePreparer,
+    CandidateRetrievalRequest,
+    CandidateRetrievalResult,
+    ProviderFailure,
+    RetrievedCandidate,
+)
 from .labeling import (
     KeywordRuleLabeler,
     LabelInput,
@@ -16,7 +23,7 @@ from .labeling import (
 from .manifest import discover_to_jsonl, write_manifest
 from .models import Candidate, MergedCandidate, ProviderRecord
 from .normalize import clean_text, identifier_sort_key, normalize_record, normalize_records
-from .pipeline import discover
+from .pipeline import DiscoveryOutput, discover
 from .search import (
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_PROVIDER_TIMEOUT_SECONDS,
@@ -57,8 +64,13 @@ __all__ = (
     "DEFAULT_SEARCH_LIMIT",
     "ArxivProvider",
     "Candidate",
+    "CandidateObservation",
+    "CandidatePreparer",
+    "CandidateRetrievalRequest",
+    "CandidateRetrievalResult",
     "CrossrefProvider",
     "DiscoveryProvider",
+    "DiscoveryOutput",
     "DownloadManifestEntry",
     "EuropePMCProvider",
     "ElsevierProvider",
@@ -78,9 +90,11 @@ __all__ = (
     "MetadataSearchResult",
     "MetadataSearchService",
     "ProviderErrorCategory",
+    "ProviderFailure",
     "ProviderRecord",
     "ProviderSearchError",
     "SearchSpec",
+    "RetrievedCandidate",
     "Transport",
     "UrllibTransport",
     "build_arxiv_provider",
@@ -91,13 +105,11 @@ __all__ = (
     "build_semantic_scholar_provider",
     "build_springer_provider",
     "clean_text",
-    "deduplicate_candidates",
     "discover",
     "discover_to_jsonl",
     "identifier_sort_key",
     "label_candidate",
     "label_input_sha256",
-    "merge_candidates",
     "normalize_record",
     "normalize_records",
     "write_manifest",

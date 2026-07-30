@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import nullcontext
 import json
 import math
 from pathlib import Path
@@ -15,13 +16,15 @@ from sciretriever.cli.acquisition_runtime import (
 )
 from sciretriever.cli.analysis_runtime import AnalysisCliRuntime
 from sciretriever.cli.metadata_runtime import (
-    ALL_METADATA_PROVIDERS, DEFAULT_METADATA_PROVIDERS, MetadataCliConfig,
+    ALL_METADATA_PROVIDERS, DEFAULT_METADATA_PROVIDERS, DEFAULT_SEARCH_LIMIT, MetadataCliConfig,
     MetadataSearchOutput,
 )
 from .search_completion_runtime import (
     SearchCliRuntime,
     build_search_completion_runtime,
 )
+from .stage_admission import StageKind, admit_catalog_stages
+from .year_filters import parse_year_filter, validate_year_filters
 from sciretriever.completion import (
     BatchItemStatus, CompletionStop, DoiTarget, OptionalAssetKind, OptionalAssetRequest,
     WorkVersionTarget, run_completion_batch,
@@ -30,13 +33,13 @@ from sciretriever.config import (
     ACQUISITION_PROVIDERS, AnalysisConfig, BrowserConfig, CredentialsConfig,
     SciHubConfig, TranslatorConfig,
 )
-from sciretriever.errors import SciRetrieverError, SearchError
+from sciretriever.errors import SciRetrieverError, SearchError, StageAdmissionConflict
 from sciretriever.core.public_identifiers import PUBLIC_IDENTIFIER_NAMESPACES
 
 
 DEFAULT_PROVIDERS = DEFAULT_METADATA_PROVIDERS
 ALL_PROVIDERS = ALL_METADATA_PROVIDERS
-DEFAULT_SEARCH_LIMIT = 100
+DEFAULT_COMPLETION_LIMIT = 100
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENCY = 8
 
@@ -69,23 +72,24 @@ def _positive_float(value: str) -> float:
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    """Configure the implemented metadata-only ``search`` command."""
-    parser.description = "Search metadata providers and persist canonical Works."
+    """Configure the ``search`` command and its explicit stop level."""
+    parser.description = "Retrieve metadata candidates and commit them to catalog, with optional explicit PDF or analysis completion."
     parser.add_argument("query", type=_nonblank, metavar="QUERY")
     parser.add_argument("--catalog", required=True, type=Path, metavar="PATH")
-    parser.add_argument("--level", choices=("metadata", "download", "analyze"), default="metadata")
-    parser.add_argument("--provider", action="append", choices=ALL_PROVIDERS)
-    parser.add_argument("--precedence", action="append", choices=ALL_PROVIDERS)
-    parser.add_argument("--limit", type=_positive_int, default=DEFAULT_SEARCH_LIMIT)
+    parser.add_argument("--level", choices=("metadata", "download", "analyze"),
+                        default="metadata", help="explicit stop level (default: metadata)")
+    parser.add_argument("--provider", action="append", choices=ALL_PROVIDERS, help="metadata provider; repeat to select multiple")
+    parser.add_argument("--precedence", action="append", choices=ALL_PROVIDERS, help="field priority; repeat every selected provider once")
+    parser.add_argument("--limit", type=_positive_int, default=DEFAULT_SEARCH_LIMIT, help="maximum metadata results (default: 1000)")
     parser.add_argument(
-        "--provider-timeout",
-        type=_positive_float,
-        default=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-    )
-    parser.add_argument(
-        "--max-concurrency", type=_positive_int, default=DEFAULT_MAX_CONCURRENCY
-    )
+        "--completion-limit", type=_positive_int, default=DEFAULT_COMPLETION_LIMIT,
+        help="maximum deep completion targets (default: 100)")
+    parser.add_argument("--provider-timeout", type=_positive_float,
+                        default=DEFAULT_PROVIDER_TIMEOUT_SECONDS)
+    parser.add_argument("--max-concurrency", type=_positive_int, default=DEFAULT_MAX_CONCURRENCY)
     parser.add_argument("--crossref-mailto", type=_nonblank, metavar="EMAIL")
+    parser.add_argument("--filter", action="append", type=parse_year_filter, default=[],
+                        metavar="NAME=VALUE", help="year_from or year_to; each name may be supplied once")
     parser.add_argument("--storage-root", type=Path)
     parser.add_argument("--download-provider", action="append", choices=tuple(sorted(ACQUISITION_PROVIDERS)))
     parser.add_argument("--download-timeout", type=_positive_float, default=30.0)
@@ -112,6 +116,7 @@ def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace
         parser.error("precedence must contain every selected provider exactly once")
     args.provider = providers
     args.precedence = precedence
+    validate_year_filters(parser, args.filter)
     if args.level in {"download", "analyze"} and args.storage_root is None:
         parser.error(f"search --level {args.level} requires --storage-root")
     if args.level == "analyze":
@@ -175,10 +180,16 @@ def run(args: argparse.Namespace) -> int:
     """Run metadata search with stable, sanitized operational failures."""
     runtime = None
     try:
+        try:
+            doi = DoiTarget(args.query)
+        except ValueError:
+            doi = None
+        stages = {"metadata": (), "download": (StageKind.ACQUISITION,), "analyze": (StageKind.ACQUISITION, StageKind.ANALYSIS)}[args.level]
         credentials = getattr(args, "_config_credentials", None) or CredentialsConfig()
         metadata = MetadataCliConfig(
             args.query, tuple(args.provider), tuple(args.precedence), args.limit,
             args.provider_timeout, args.max_concurrency, args.crossref_mailto, credentials,
+            filters=() if doi is not None else tuple(args.filter),
         )
         acquisition = AcquisitionCliConfig(
             tuple(args.download_provider), args.download_provider_concurrency,
@@ -191,42 +202,49 @@ def run(args: argparse.Namespace) -> int:
         )
         analysis_config = getattr(args, "_config_analysis", None)
         analysis = None if analysis_config is None else AnalysisCliRuntime(analysis_config)
-        runtime = build_search_completion_runtime(SearchCliRuntime(
-            args.catalog, args.level, metadata, args.storage_root, acquisition,
-            args.download_timeout, analysis,
-        ))
-        try:
-            doi = DoiTarget(args.query)
-        except ValueError:
-            output = runtime.search()
-            targets = tuple(WorkVersionTarget(value) for value in runtime.targets(output))
-            payload = json.loads(_serialize(output))
-            exact = False
-        else:
-            targets = (doi,)
-            payload = {"counts": {"failures": 0, "results": 0}, "failures": [], "results": []}
-            exact = True
-        batch = asyncio.run(run_completion_batch(runtime.completion.pipeline, targets, _STOPS[args.level]))
-        if exact:
-            failures = runtime.exact_failures()
-            payload["failures"] = failures
-            payload["counts"]["failures"] = len(failures)
-        payload["completion"] = batch.to_dict(_STOPS[args.level])
-        optional = []
-        if args.xml or args.html:
-            for item in batch.items:
-                if item.status is not BatchItemStatus.SUCCEEDED or item.work_version_id is None:
-                    continue
-                target = WorkVersionTarget(item.work_version_id)
-                for kind, enabled in ((OptionalAssetKind.XML, args.xml), (OptionalAssetKind.HTML, args.html)):
-                    if enabled:
-                        optional.append(asyncio.run(runtime.completion.pipeline.acquire_optional(
-                            OptionalAssetRequest(target, kind))).to_dict())
+        runtime_admission = admit_catalog_stages(args.catalog, stages) if doi is not None and stages else nullcontext()
+        with runtime_admission:
+            runtime = build_search_completion_runtime(SearchCliRuntime(
+                args.catalog, args.level, metadata, args.storage_root, acquisition,
+                args.download_timeout, analysis))
+            if doi is None:
+                output = runtime.search()
+                target_ids = runtime.targets(output)
+                if args.level != "metadata":
+                    target_ids = target_ids[:args.completion_limit]
+                targets = tuple(WorkVersionTarget(value) for value in target_ids)
+                payload = json.loads(_serialize(output))
+            else:
+                targets = (doi,)
+                payload = {"counts": {"failures": 0, "results": 0}, "failures": [], "results": []}
+            completion_admission = admit_catalog_stages(args.catalog, stages) if doi is None and stages else nullcontext()
+            with completion_admission:
+                batch = asyncio.run(run_completion_batch(
+                    runtime.completion.pipeline, targets, _STOPS[args.level]
+                ))
+                if doi is not None:
+                    failures = runtime.exact_failures()
+                    payload["failures"] = failures
+                    payload["counts"]["failures"] = len(failures)
+                payload["completion"] = batch.to_dict(_STOPS[args.level])
+                optional = []
+                if args.xml or args.html:
+                    for item in batch.items:
+                        if item.status is not BatchItemStatus.SUCCEEDED or item.work_version_id is None:
+                            continue
+                        target = WorkVersionTarget(item.work_version_id)
+                        for kind, enabled in ((OptionalAssetKind.XML, args.xml),
+                                              (OptionalAssetKind.HTML, args.html)):
+                            if enabled:
+                                request = OptionalAssetRequest(target, kind)
+                                optional.append(asyncio.run(
+                                    runtime.completion.pipeline.acquire_optional(request)
+                                ).to_dict())
         payload["optional_assets"] = optional
         print(canonical_json(payload))
         if batch.interrupted:
             return 130
-        if (exact and batch.succeeded == 0
+        if (doi is not None and batch.succeeded == 0
                 and any(item.status is BatchItemStatus.EXHAUSTED for item in batch.items)):
             return 1
         return 0
@@ -234,6 +252,9 @@ def run(args: argparse.Namespace) -> int:
         print(canonical_json({"completion": {"items": [], "succeeded": 0, "failed": 0,
               "duplicates": 0, "interrupted": True}, "optional_assets": []}))
         return 130
+    except StageAdmissionConflict as error:
+        print(f"sciretriever: error: {error.stage.value} stage is already active", file=sys.stderr)
+        return 1
     except (SearchError, SciRetrieverError, OSError, TypeError, ValueError) as error:
         if isinstance(error, SearchError) and str(error).startswith("all metadata search providers failed:"):
             detail = "all metadata search providers failed"

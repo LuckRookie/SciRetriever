@@ -22,6 +22,7 @@ from sciretriever.discovery.labeling import LabelInput, LabelResult
 from sciretriever.discovery.manifest import discover_to_jsonl
 from sciretriever.discovery.models import ProviderRecord
 from sciretriever.discovery.pipeline import discover
+from sciretriever.errors import SearchError
 
 
 RUN_ID = "00000000-0000-4000-8000-000000000001"
@@ -146,10 +147,44 @@ class DiscoveryPipelineTests(TestCase):
             providers,
             labeler,
         )
-        self.assertEqual(events[:3], ["search:crossref", "search:europe-pmc", "search:arxiv"])
+        self.assertEqual(set(events[:3]), {"search:crossref", "search:europe-pmc", "search:arxiv"})
         self.assertEqual(events[3:], ["label", "label"])
         self.assertEqual(len(entries), 2)
         self.assertEqual(len(labeler.calls), 2)
+
+    def test_source_first_occurrence_controls_shared_candidate_precedence(self):
+        entries = self.run_discover(
+            SearchSpec("query", ("arxiv", "crossref", "arxiv"), 1),
+            {
+                "crossref": Provider(
+                    "crossref", (record("crossref", 1, "10.1/same", "Crossref title"),)
+                ),
+                "arxiv": Provider(
+                    "arxiv", (record("arxiv", 1, "10.1/same", "arXiv title"),)
+                ),
+            },
+        )
+
+        self.assertEqual(entries[0].metadata.title, "arXiv title")
+
+    def test_partial_provider_failure_returns_sanitized_warning_and_entries(self):
+        result = self.run_discover(
+            SearchSpec("query", ("crossref", "arxiv"), 1),
+            {
+                "crossref": Provider(
+                    "crossref", (record("crossref", 1, "10.1/a", "Alpha"),)
+                ),
+                "arxiv": Provider(
+                    "arxiv", (), error=RuntimeError("secret-bearing provider detail")
+                ),
+            },
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            tuple((failure.provider, failure.category, failure.message) for failure in result.failures),
+            (("arxiv", "provider_error", "provider search failed"),),
+        )
 
     def test_all_catalog_comparisons_finish_before_any_label(self):
         events = []
@@ -210,7 +245,7 @@ class DiscoveryPipelineTests(TestCase):
         entries = self.run_discover(SearchSpec("query", ("arxiv", "crossref"), 2), providers)
         self.assertEqual(
             tuple(entry.identifiers[0].value for entry in entries),
-            ("10.1/c1", "10.1/a"),
+            ("10.1/a", "10.1/c1"),
         )
 
     def test_missing_abstract_survives_and_combines_review_reasons(self):
@@ -228,15 +263,15 @@ class DiscoveryPipelineTests(TestCase):
         output = Path(self.temporary_directory.name) / "manifest.jsonl"
         output.write_text("existing\n", encoding="utf-8")
         spec = SearchSpec("query", ("crossref", "arxiv"), 2)
-        with self.assertRaisesRegex(ValueError, "missing discovery providers: arxiv"):
+        with self.assertRaisesRegex(ValueError, "missing metadata search providers: arxiv"):
             self.run_discover(spec, {"crossref": Provider("crossref", ())})
         self.assertEqual(output.read_text(encoding="utf-8"), "existing\n")
 
-        for provider, labeler in (
-            (Provider("crossref", (), error=RuntimeError("search failed")), Labeler()),
-            (Provider("crossref", (record("crossref", 1, "10.1/x", "Title"),)), Labeler(error=RuntimeError("label failed"))),
+        for provider, labeler, error_type in (
+            (Provider("crossref", (), error=RuntimeError("search failed")), Labeler(), SearchError),
+            (Provider("crossref", (record("crossref", 1, "10.1/x", "Title"),)), Labeler(error=RuntimeError("label failed")), RuntimeError),
         ):
-            with self.subTest(error=provider.error or labeler.error), self.assertRaises(RuntimeError):
+            with self.subTest(error=provider.error or labeler.error), self.assertRaises(error_type):
                 discover_to_jsonl(
                     SearchSpec("query", ("crossref",), 1),
                     output,
@@ -254,8 +289,8 @@ class DiscoveryPipelineTests(TestCase):
         labeler = Labeler()
 
         with self.assertRaisesRegex(
-            ValueError,
-            "provider 'crossref' returned a record for 'spoofed-source'",
+            SearchError,
+            "all metadata search providers failed: crossref:provider_error",
         ):
             discover_to_jsonl(
                 SearchSpec("query", ("crossref",), 1),
@@ -289,7 +324,7 @@ class DiscoveryPipelineTests(TestCase):
             },
         )
         second = self.run_discover(
-            SearchSpec("query", ("crossref", "arxiv"), 10),
+            SearchSpec("query", ("arxiv", "crossref"), 10),
             {
                 "arxiv": Provider("arxiv", (record("arxiv", 2, "10.1/z", "Zulu"),)),
                 "crossref": Provider("crossref", second_records),

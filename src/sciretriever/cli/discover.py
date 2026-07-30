@@ -15,7 +15,8 @@ from sciretriever.catalog.repository import ReadOnlyCatalogView
 from sciretriever.core.contracts import SearchSpec
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.core.timestamps import parse_rfc3339, utc_now_rfc3339
-from sciretriever.discovery import KeywordRuleLabeler, discover_to_jsonl
+from sciretriever.discovery import KeywordRuleLabeler, ProviderFailure, discover_to_jsonl
+from sciretriever.discovery.search_contracts import DEFAULT_SEARCH_LIMIT
 from sciretriever.discovery.providers import (
     DEFAULT_MAX_RESPONSE_BYTES,
     DiscoveryProvider,
@@ -29,6 +30,7 @@ from sciretriever.discovery.providers import (
 )
 from sciretriever.network import SecureHttpsTransport, Transport
 from sciretriever.config import CredentialsConfig, get_credential
+from sciretriever.cli.year_filters import parse_year_filter, validate_year_filters
 from sciretriever.errors import CatalogError, SearchError
 
 
@@ -39,9 +41,6 @@ _CREDENTIALS = {
     "elsevier": ("SCIRETRIEVER_ELSEVIER_API_KEY", "elsevier_api_key"),
     "springer": ("SCIRETRIEVER_SPRINGER_API_KEY", "springer_api_key"),
 }
-FILTER_NAMES = frozenset({"year_from", "year_to"})
-
-
 def _nonblank(value: str) -> str:
     normalized = " ".join(value.split())
     if not normalized:
@@ -67,24 +66,6 @@ def _positive_float(value: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive number")
     return parsed
-
-
-def _filter(value: str) -> tuple[str, str]:
-    if value.count("=") != 1:
-        raise argparse.ArgumentTypeError("filter must use NAME=VALUE syntax")
-    name, filter_value = (part.strip() for part in value.split("=", 1))
-    if not name or not filter_value:
-        raise argparse.ArgumentTypeError("filter name and value must not be blank")
-    if name not in FILTER_NAMES:
-        raise argparse.ArgumentTypeError(
-            f"unsupported filter {name!r}; choose year_from or year_to"
-        )
-    if not filter_value.isascii() or not filter_value.isdecimal():
-        raise argparse.ArgumentTypeError(f"{name} must be a year from 1 through 9999")
-    year = int(filter_value)
-    if not 1 <= year <= 9999:
-        raise argparse.ArgumentTypeError(f"{name} must be a year from 1 through 9999")
-    return name, filter_value
 
 
 def _label_rule(value: str) -> tuple[str, str]:
@@ -113,22 +94,27 @@ def _rfc3339(value: str) -> str:
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     """Configure the implemented ``discover`` subcommand parser."""
-    parser.description = "Discover literature metadata and write an atomic JSONL manifest."
+    parser.description = (
+        "Retrieve metadata candidates without catalog writes and publish an atomic JSONL manifest."
+    )
     parser.add_argument("query", type=_nonblank, metavar="QUERY")
     parser.add_argument(
         "--source",
         action="append",
         choices=ALL_SOURCES,
         help=(
-            "metadata source; repeat to select multiple "
+            "metadata source in effective precedence order; repeat to select multiple "
             "(default: crossref, europe-pmc, arxiv)"
         ),
     )
-    parser.add_argument("--limit", type=_positive_int, default=100)
+    parser.add_argument(
+        "--limit", type=_positive_int, default=DEFAULT_SEARCH_LIMIT,
+        help="maximum metadata results (default: 1000)",
+    )
     parser.add_argument(
         "--filter",
         action="append",
-        type=_filter,
+        type=parse_year_filter,
         default=[],
         metavar="NAME=VALUE",
         help="year_from or year_to; each name may be supplied once",
@@ -156,17 +142,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Apply validation that depends on repeated argument values."""
     args.source = list(args.source or DEFAULT_SOURCES)
-    filter_names = [name for name, _ in args.filter]
-    duplicate_names = sorted({name for name in filter_names if filter_names.count(name) > 1})
-    if duplicate_names:
-        parser.error(f"duplicate filter: {', '.join(duplicate_names)}")
-    filters = dict(args.filter)
-    if (
-        "year_from" in filters
-        and "year_to" in filters
-        and int(filters["year_from"]) > int(filters["year_to"])
-    ):
-        parser.error("year_from must not be later than year_to")
+    validate_year_filters(parser, args.filter)
 
 
 def _providers(
@@ -208,7 +184,7 @@ def _production_transport() -> SecureHttpsTransport:
     return SecureHttpsTransport(max_bytes=DEFAULT_MAX_RESPONSE_BYTES)
 
 
-def _execute(args: argparse.Namespace) -> tuple[Path, int]:
+def _execute(args: argparse.Namespace) -> tuple[Path, int, tuple[ProviderFailure, ...]]:
     output = args.output.expanduser()
     if not output.parent.is_dir():
         raise FileNotFoundError(f"manifest parent directory does not exist: {output.parent}")
@@ -238,20 +214,27 @@ def _execute(args: argparse.Namespace) -> tuple[Path, int]:
             labeler=labeler,
             intake_run_id=intake_run_id,
             retrieved_at=retrieved_at,
+            provider_timeout_seconds=args.timeout,
         )
     finally:
         engine.dispose()
-    return output, len(entries)
+    return output, len(entries), entries.failures
 
 
 def run(args: argparse.Namespace) -> int:
     """Run discovery and map expected operational failures to stable exit codes."""
     try:
-        output, count = _execute(args)
+        output, count, failures = _execute(args)
     except (SearchError, CatalogError, SQLAlchemyError, OSError) as error:
         detail = str(error).splitlines()[0] if str(error) else type(error).__name__
         print(f"sciretriever: error: {detail}", file=sys.stderr)
         return 1
+    for failure in failures:
+        print(
+            f"sciretriever: warning: {failure.provider}: "
+            f"{failure.category}: {failure.message}",
+            file=sys.stderr,
+        )
     print(f"Wrote {count} entries to {output}")
     return 0
 

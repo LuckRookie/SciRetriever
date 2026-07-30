@@ -274,6 +274,8 @@ class CrossrefClient(BaseClient):
             ):
                 raise TypeError(f"{key}.date-parts must contain a date")
             year = date_parts[0][0]
+            if year is None:
+                continue
             if not isinstance(year, int) or isinstance(year, bool):
                 raise TypeError(f"{key} year must be an integer")
             return year

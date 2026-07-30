@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from sciretriever.catalog import WorkRepository
 from sciretriever.config import CredentialsConfig, get_credential
 from sciretriever.discovery import (
+    DEFAULT_SEARCH_LIMIT,
     MetadataSearchOutput,
     MetadataSearchRequest,
     MetadataSearchService,
@@ -46,11 +47,12 @@ class MetadataCliConfig:
     max_concurrency: int
     crossref_mailto: str | None
     credentials: CredentialsConfig = CredentialsConfig()
+    filters: tuple[tuple[str, str], ...] = ()
 
     def request(self) -> MetadataSearchRequest:
         return MetadataSearchRequest(
             self.query, self.providers, self.precedence, self.limit,
-            self.provider_timeout, self.max_concurrency,
+            self.provider_timeout, self.max_concurrency, self.filters,
         )
 
 

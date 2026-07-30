@@ -92,7 +92,10 @@ def build_search_completion_runtime(config: SearchCliRuntime) -> SearchCompletio
         if config.level == "analyze":
             if root is None or config.analysis is None:
                 raise ValueError("analysis runtime is not configured")
-            analysis = AtomicAnalysisAdapter(build_analysis_services(config.analysis, catalog, root))
+            analysis_runtime = config.analysis
+            analysis = AtomicAnalysisAdapter(
+                lambda: build_analysis_services(analysis_runtime, catalog, root)
+            )
         else:
             analysis = UnconfiguredAnalysisPromotion()
         exact = ExactMetadataAdapter(metadata_runtime.build_exact_resolver(providers, repository))

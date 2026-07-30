@@ -23,12 +23,15 @@ class ProviderCollectionRequest:
     limit: int
     provider_timeout_seconds: float
     max_concurrency: int
+    precedence: tuple[str, ...] = ()
+    filters: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderCollection:
     records: tuple[ProviderRecord, ...]
     failures: tuple[MetadataSearchFailure, ...]
+    all_failed: bool
 
 
 class ProviderCollector:
@@ -42,6 +45,7 @@ class ProviderCollector:
         if missing:
             raise ValueError(f"missing metadata search providers: {', '.join(missing)}")
 
+        collection_started = monotonic()
         futures: dict[str, Future[tuple[ProviderRecord, ...]]] = {}
         slots = Semaphore(min(request.max_concurrency, len(request.providers)))
         for provider_name in request.providers:
@@ -56,11 +60,12 @@ class ProviderCollector:
             thread.start()
 
         deadlines = {
-            name: monotonic() + float(request.provider_timeout_seconds)
+            name: collection_started + float(request.provider_timeout_seconds)
             for name in request.providers
         }
         records: list[ProviderRecord] = []
         failures: list[MetadataSearchFailure] = []
+        successful_providers = 0
         try:
             for name in sorted(futures):
                 future = futures[name]
@@ -81,13 +86,16 @@ class ProviderCollector:
                         name, "provider_error", "provider search failed"
                     ))
                 else:
+                    successful_providers += 1
                     records.extend(provider_records)
         finally:
             for future in futures.values():
                 future.cancel()
         records.sort(key=raw_record_key)
         failures.sort(key=lambda item: item.provider)
-        return ProviderCollection(tuple(records), tuple(failures))
+        return ProviderCollection(
+            tuple(records), tuple(failures), successful_providers == 0
+        )
 
     def _invoke(
         self,
@@ -112,7 +120,12 @@ class ProviderCollector:
             raise ValueError(
                 f"provider mapping key {provider_name!r} is owned by {provider.name!r}"
             )
-        result = provider.search(SearchSpec(request.query, (provider_name,), request.limit))
+        result = provider.search(SearchSpec(
+            request.query,
+            (provider_name,),
+            request.limit,
+            request.filters,
+        ))
         if not isinstance(result, tuple) or not all(
             isinstance(item, ProviderRecord) for item in result
         ):

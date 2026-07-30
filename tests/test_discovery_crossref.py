@@ -105,6 +105,27 @@ class CrossrefProviderTests(TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(len(transport.calls), 1)
 
+    def test_unknown_issued_year_does_not_reject_crossref_page(self) -> None:
+        payload = {
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1021/example.s001",
+                        "title": ["Supplement"],
+                        "issued": {"date-parts": [[None]]},
+                    }
+                ]
+            }
+        }
+        transport = FakeTransport([response(json.dumps(payload).encode())])
+
+        records = CrossrefProvider(transport).search(
+            SearchSpec("machine learning interatomic potentials", ("crossref",), 1)
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0].year)
+
     def test_rejects_unknown_invalid_and_reversed_filters_before_transport(self) -> None:
         cases = (
             (("language", "en"),),

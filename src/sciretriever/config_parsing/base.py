@@ -72,20 +72,8 @@ def parse_discovery(root: Mapping[str, Any]) -> DiscoveryConfig:
         sources = string_list(section["sources"], "discovery.sources", nonempty=True)
         if any(source not in DISCOVERY_SOURCES for source in sources):
             raise config_error("discovery.sources", "contains an unsupported source")
-    filters_table = table(section, "filters", {"year_from", "year_to"})
-    filters: list[tuple[str, str]] = []
-    for name in ("year_from", "year_to"):
-        if name in filters_table:
-            year = positive_int(filters_table[name], f"discovery.filters.{name}")
-            if year > 9999:
-                raise config_error(
-                    f"discovery.filters.{name}", "must be a year from 1 through 9999"
-                )
-            filters.append((name, str(year)))
-    if len(filters) == 2 and int(filters[0][1]) > int(filters[1][1]):
-        raise config_error(
-            "discovery.filters.year_from", "must not be later than year_to"
-        )
+    filters = _parse_year_filters(section, "discovery")
+
     raw_rules = section.get("label_rules", {})
     rules_table = table(
         section,
@@ -108,15 +96,35 @@ def parse_discovery(root: Mapping[str, Any]) -> DiscoveryConfig:
         taxonomy=optional_string(section, "taxonomy", "discovery"),
         taxonomy_version=optional_string(section, "taxonomy_version", "discovery"),
         crossref_mailto=optional_string(section, "crossref_mailto", "discovery"),
-        filters=tuple(filters),
+        filters=filters,
         label_rules=rules,
     )
 
 
+def _parse_year_filters(
+    section: Mapping[str, Any],
+    section_name: str,
+) -> tuple[tuple[str, str], ...]:
+    filters_table = table(section, "filters", {"year_from", "year_to"})
+    filters: list[tuple[str, str]] = []
+    for name in ("year_from", "year_to"):
+        if name in filters_table:
+            path = f"{section_name}.filters.{name}"
+            year = positive_int(filters_table[name], path)
+            if year > 9999:
+                raise config_error(path, "must be a year from 1 through 9999")
+            filters.append((name, str(year)))
+    if len(filters) == 2 and int(filters[0][1]) > int(filters[1][1]):
+        raise config_error(
+            f"{section_name}.filters.year_from", "must not be later than year_to"
+        )
+    return tuple(filters)
+
+
 def parse_search(root: Mapping[str, Any]) -> SearchConfig:
     allowed = {
-        "level", "limit", "providers", "precedence", "provider_timeout",
-        "max_concurrency", "crossref_mailto",
+        "level", "limit", "completion_limit", "providers", "precedence", "provider_timeout",
+        "max_concurrency", "crossref_mailto", "filters",
     }
     section = table(root, "search", allowed)
     has_providers = "providers" in section
@@ -145,6 +153,9 @@ def parse_search(root: Mapping[str, Any]) -> SearchConfig:
         limit=None if "limit" not in section else positive_int(
             section["limit"], "search.limit"
         ),
+        completion_limit=None if "completion_limit" not in section else positive_int(
+            section["completion_limit"], "search.completion_limit"
+        ),
         providers=providers,
         precedence=precedence,
         provider_timeout=None if "provider_timeout" not in section else positive_number(
@@ -154,6 +165,7 @@ def parse_search(root: Mapping[str, Any]) -> SearchConfig:
             section["max_concurrency"], "search.max_concurrency"
         ),
         crossref_mailto=optional_string(section, "crossref_mailto", "search"),
+        filters=_parse_year_filters(section, "search"),
     )
 
 

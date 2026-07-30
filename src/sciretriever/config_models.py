@@ -50,11 +50,13 @@ class DiscoveryConfig:
 class SearchConfig:
     level: str | None = None
     limit: int | None = None
+    completion_limit: int | None = None
     providers: tuple[str, ...] | None = None
     precedence: tuple[str, ...] | None = None
     provider_timeout: float | None = None
     max_concurrency: int | None = None
     crossref_mailto: str | None = None
+    filters: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,133 +1,114 @@
-"""Normalized provider records and catalog observation projection."""
+"""Provider-record normalization and deterministic ordering."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from hashlib import sha256
 import json
+import unicodedata
 
-from sciretriever.catalog.library import MetadataIngestionObservation
 from sciretriever.core.contracts import CandidateMetadata, Identifier
-from .models import ProviderRecord
-from .normalize import clean_text, identifier_sort_key, normalize_record
+from .models import CandidateObservation, ProviderRecord
+from .normalize import clean_text, identifier_sort_key
 
 
-@dataclass(frozen=True, slots=True)
-class ObservedMetadataRecord:
-    record: ProviderRecord
-    identifiers: tuple[Identifier, ...]
-    metadata: CandidateMetadata
-    provider_record_id: str
-
-
-def normalize_provider_record(record: ProviderRecord) -> ObservedMetadataRecord | None:
-    candidate = normalize_record(record)
-    if candidate is None:
+def normalize_candidate_observation(
+    record: ProviderRecord,
+) -> CandidateObservation | None:
+    identifiers: set[Identifier] = set()
+    for namespace, value in record.raw_identifiers:
+        try:
+            identifiers.add(Identifier(namespace, value))
+        except (TypeError, ValueError):
+            continue
+    metadata = CandidateMetadata(
+        title=clean_text(record.title),
+        abstract=clean_text(record.abstract),
+        authors=_stable_text(record.authors),
+        year=record.year,
+        venue=clean_text(record.venue),
+        keywords=_stable_text(record.keywords),
+    )
+    ordered = tuple(sorted(identifiers, key=identifier_sort_key))
+    if metadata.title is None and not ordered:
         return None
-    return ObservedMetadataRecord(
-        record=record,
-        identifiers=candidate.identifiers,
-        metadata=candidate.metadata,
-        provider_record_id=_provider_record_id(
-            record, candidate.identifiers, candidate.metadata
-        ),
+    provider_record_id = clean_text(record.provider_record_id) or _synthetic_id(
+        record.provider, ordered, metadata
+    )
+    return CandidateObservation(
+        record.provider,
+        record.rank,
+        provider_record_id,
+        ordered,
+        metadata,
+        clean_text(record.publisher),
+        clean_text(record.publication_date),
+        clean_text(record.open_access_status),
     )
 
 
-def exact_doi_record(
-    record: ObservedMetadataRecord, doi: str
-) -> ObservedMetadataRecord | None:
-    if not any(
-        identifier.namespace == "doi" and identifier.value == doi
-        for identifier in record.identifiers
-    ):
-        return None
-    identifiers = tuple(
-        identifier
-        for identifier in record.identifiers
-        if identifier.namespace != "doi" or identifier.value == doi
+def normalize_candidate_title(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    without_punctuation = "".join(
+        " " if unicodedata.category(character)[0] in {"P", "S"} else character
+        for character in normalized
     )
-    return ObservedMetadataRecord(
-        record=record.record,
-        identifiers=identifiers,
-        metadata=record.metadata,
-        provider_record_id=record.provider_record_id,
-    )
-
-
-def metadata_observation(record: ObservedMetadataRecord) -> MetadataIngestionObservation:
-    fields: list[tuple[str, object]] = []
-    values = {
-        "title": record.metadata.title,
-        "abstract": record.metadata.abstract,
-        "authors": record.metadata.authors,
-        "year": record.metadata.year,
-        "venue": record.metadata.venue,
-        "publisher": clean_text(record.record.publisher),
-        "publication_date": clean_text(record.record.publication_date),
-        "open_access_status": clean_text(record.record.open_access_status),
-        "keywords": record.metadata.keywords,
-    }
-    fields.extend(
-        (name, value) for name, value in values.items()
-        if value is not None and value != ()
-    )
-    fields.extend(
-        (identifier.namespace, identifier.value) for identifier in record.identifiers
-    )
-    return MetadataIngestionObservation(
-        provider=record.record.provider,
-        provider_record_id=record.provider_record_id,
-        fields=tuple(sorted(fields, key=lambda pair: (pair[0], str(pair[1])))),
-        provenance=(
-            ("provider", record.record.provider),
-            ("provider_record_id", record.provider_record_id),
-        ),
-    )
+    return " ".join(without_punctuation.split())
 
 
 def raw_record_key(record: ProviderRecord) -> tuple[object, ...]:
     return (
-        record.provider.casefold(), record.provider, record.rank, record.raw_identifiers,
-        record.title or "", record.abstract or "", record.authors, record.year or -1,
-        record.venue or "", record.publisher or "", record.publication_date or "",
-        record.keywords, record.open_access_status or "", record.provider_record_id or "",
+        record.provider.casefold(),
+        record.provider,
+        record.rank,
+        record.raw_identifiers,
+        record.title or "",
+        record.abstract or "",
+        record.authors,
+        record.year or -1,
+        record.venue or "",
+        record.publisher or "",
+        record.publication_date or "",
+        record.keywords,
+        record.open_access_status or "",
+        record.provider_record_id or "",
     )
 
 
-def _provider_record_id(
-    record: ProviderRecord,
-    identifiers: tuple[Identifier, ...],
-    metadata: CandidateMetadata,
+def _stable_text(values: tuple[str, ...]) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = clean_text(raw)
+        if value is not None and value.casefold() not in seen:
+            seen.add(value.casefold())
+            result.append(value)
+    return tuple(result)
+
+
+def _synthetic_id(
+    provider: str, identifiers: tuple[Identifier, ...], metadata: CandidateMetadata
 ) -> str:
-    explicit = clean_text(record.provider_record_id)
-    if explicit is not None:
-        return explicit
     if identifiers:
         identifier = min(identifiers, key=identifier_sort_key)
         return f"{identifier.namespace}:{identifier.value}"
-    payload = {
-        "provider": record.provider,
-        "title": metadata.title,
-        "abstract": metadata.abstract,
-        "authors": metadata.authors,
-        "year": metadata.year,
-        "venue": metadata.venue,
-        "publisher": clean_text(record.publisher),
-        "publication_date": clean_text(record.publication_date),
-        "open_access_status": clean_text(record.open_access_status),
-        "keywords": metadata.keywords,
-    }
-    encoded = json.dumps(
-        payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    payload = json.dumps(
+        (
+            provider,
+            metadata.title,
+            metadata.abstract,
+            metadata.authors,
+            metadata.year,
+            metadata.venue,
+            metadata.keywords,
+        ),
+        ensure_ascii=True,
+        separators=(",", ":"),
     ).encode()
-    return f"synthetic:sha256:{sha256(encoded).hexdigest()}"
+    return f"synthetic:sha256:{sha256(payload).hexdigest()}"
 
 
 __all__ = (
-    "ObservedMetadataRecord",
-    "exact_doi_record",
-    "metadata_observation",
-    "normalize_provider_record",
+    "normalize_candidate_observation",
+    "normalize_candidate_title",
     "raw_record_key",
 )

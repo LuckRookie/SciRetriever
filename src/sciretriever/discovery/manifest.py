@@ -11,7 +11,7 @@ from typing import Iterable
 from sciretriever.catalog.repository import ReadOnlyCatalogView
 from sciretriever.core.contracts import DownloadManifestEntry, SearchSpec
 from sciretriever.discovery.labeling import Labeler
-from sciretriever.discovery.pipeline import discover
+from sciretriever.discovery.pipeline import DiscoveryOutput, discover
 from sciretriever.discovery.providers.base import DiscoveryProvider
 
 
@@ -69,7 +69,8 @@ def discover_to_jsonl(
     labeler: Labeler,
     intake_run_id: str,
     retrieved_at: str,
-) -> tuple[DownloadManifestEntry, ...]:
+    provider_timeout_seconds: float = 30.0,
+) -> DiscoveryOutput:
     """Complete discovery before atomically publishing its manifest."""
     entries = discover(
         spec,
@@ -78,6 +79,7 @@ def discover_to_jsonl(
         labeler=labeler,
         intake_run_id=intake_run_id,
         retrieved_at=retrieved_at,
+        provider_timeout_seconds=provider_timeout_seconds,
     )
     write_manifest(entries, output)
     return entries

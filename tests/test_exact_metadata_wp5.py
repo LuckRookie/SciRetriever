@@ -14,7 +14,7 @@ from sciretriever.catalog import WorkRepository, create_catalog_engine, initiali
 from sciretriever.core.contracts import SearchSpec
 from sciretriever.discovery import ProviderRecord
 from sciretriever.discovery.search import ExactMetadataResolver
-from sciretriever.discovery.search_contracts import ExactMetadataRequest
+from sciretriever.discovery.search_contracts import DEFAULT_SEARCH_LIMIT, ExactMetadataRequest
 
 
 class FakeProvider:
@@ -97,7 +97,10 @@ class ExactMetadataWp5Tests(TestCase):
 
         self.assertEqual(output.doi, "10.1234/exact")
         self.assertIsNotNone(output.result)
-        self.assertEqual(provider.specs, [SearchSpec("10.1234/exact", ("p",), 100)])
+        self.assertEqual(
+            provider.specs,
+            [SearchSpec("10.1234/exact", ("p",), DEFAULT_SEARCH_LIMIT)],
+        )
         self.assertEqual(self.counts("works", "work_versions"), (1, 1))
 
     def test_invalid_doi_is_rejected_before_provider_or_catalog_access(self):
@@ -143,6 +146,66 @@ class ExactMetadataWp5Tests(TestCase):
                 ).scalars()
             )
         self.assertEqual(observed_dois, {'"10.1234/target"'})
+
+    def test_unrelated_same_title_record_does_not_join_exact_doi(self):
+        provider = FakeProvider(
+            "p",
+            (
+                record("p", 1, "Shared title", "10.1234/target"),
+                record("p", 2, "Shared title", abstract="misleading"),
+            ),
+        )
+
+        output = ExactMetadataResolver({"p": provider}, self.repository).resolve(
+            self.request("10.1234/target", ("p",))
+        )
+
+        self.assertIsNotNone(output.result)
+        assert output.result is not None
+        self.assertIsNone(output.result.metadata.abstract)
+        self.assertEqual(self.counts("metadata_observations"), (2,))
+
+    def test_exact_doi_without_canonical_title_creates_no_rows(self):
+        provider = FakeProvider(
+            "p", (record("p", 1, None, "10.1234/target", abstract="orphan"),)
+        )
+
+        output = ExactMetadataResolver({"p": provider}, self.repository).resolve(
+            self.request("10.1234/target", ("p",))
+        )
+
+        self.assertIsNone(output.result)
+        self.assertEqual(
+            self.counts("works", "work_versions", "metadata_observations"),
+            (0, 0, 0),
+        )
+
+    def test_exact_doi_omits_observation_with_distinct_normalized_dois(self):
+        provider = FakeProvider(
+            "p",
+            (
+                ProviderRecord(
+                    "p",
+                    1,
+                    (
+                        ("doi", " DOI:10.1234/TARGET "),
+                        ("doi", "10.1234/stale"),
+                        ("doi", "not-a-doi"),
+                    ),
+                    title="Exact",
+                ),
+            ),
+        )
+
+        output = ExactMetadataResolver({"p": provider}, self.repository).resolve(
+            self.request("10.1234/target", ("p",))
+        )
+
+        self.assertIsNone(output.result)
+        self.assertEqual(
+            self.counts("works", "work_versions", "metadata_observations"),
+            (0, 0, 0),
+        )
 
     def test_partial_provider_failure_keeps_exact_result_and_sanitizes_failure(self):
         secret = "token=do-not-expose"
@@ -263,9 +326,10 @@ class ExactMetadataWp5Tests(TestCase):
             for alias in node.names
         }
         self.assertTrue(
-            {"ProviderCollector", "MetadataRecordPreparer", "MetadataIngestor"}
+            {"ProviderCollector", "CandidatePreparer", "MetadataIngestor"}
             <= imported_names
         )
+        self.assertNotIn("MetadataRecordPreparer", imported_names)
 
 
 if __name__ == "__main__":

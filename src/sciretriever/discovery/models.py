@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sciretriever.core.contracts import CandidateMetadata, Identifier
+from sciretriever.core.contracts import CandidateMetadata, Identifier, SearchSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +65,64 @@ class ProviderRecord:
             self.provider_record_id, str
         ):
             raise TypeError("provider_record_id must be a string or None")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRetrievalRequest:
+    spec: SearchSpec
+    precedence: tuple[str, ...]
+    provider_timeout_seconds: float = 30.0
+    max_concurrency: int = 8
+
+    def __post_init__(self) -> None:
+        if set(self.precedence) != set(self.spec.sources) or len(
+            self.precedence
+        ) != len(self.spec.sources):
+            raise ValueError("precedence must contain every source exactly once")
+        if self.provider_timeout_seconds <= 0:
+            raise ValueError("provider_timeout_seconds must be positive")
+        if self.max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFailure:
+    provider: str
+    category: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateObservation:
+    provider: str
+    rank: int
+    provider_record_id: str
+    identifiers: tuple[Identifier, ...]
+    metadata: CandidateMetadata
+    publisher: str | None
+    publication_date: str | None
+    open_access_status: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievedCandidate:
+    identifiers: tuple[Identifier, ...]
+    metadata: CandidateMetadata
+    publisher: str | None
+    publication_date: str | None
+    open_access_status: str | None
+    observations: tuple[CandidateObservation, ...]
+    providers: tuple[str, ...]
+    source_ranks: tuple[tuple[str, int], ...]
+    quality_reasons: tuple[str, ...]
+    identity_ambiguity_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRetrievalResult:
+    candidates: tuple[RetrievedCandidate, ...]
+    failures: tuple[ProviderFailure, ...]
+    all_providers_failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,4 +191,13 @@ class MergedCandidate:
             raise ValueError("a merged candidate requires a title or at least one identifier")
 
 
-__all__ = ("Candidate", "MergedCandidate", "ProviderRecord")
+__all__ = (
+    "Candidate",
+    "CandidateObservation",
+    "CandidateRetrievalRequest",
+    "CandidateRetrievalResult",
+    "MergedCandidate",
+    "ProviderFailure",
+    "ProviderRecord",
+    "RetrievedCandidate",
+)

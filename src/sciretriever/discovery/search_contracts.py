@@ -6,10 +6,10 @@ from dataclasses import dataclass
 import re
 
 from sciretriever.catalog.records import WorkVersionRecord
-from sciretriever.core.contracts import CandidateMetadata, Identifier
+from sciretriever.core.contracts import CandidateMetadata, Identifier, SearchSpec
 
 
-DEFAULT_SEARCH_LIMIT = 100
+DEFAULT_SEARCH_LIMIT = 1000
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENCY = 8
 _DOI_PATTERN = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
@@ -47,6 +47,7 @@ class MetadataSearchRequest:
     limit: int = DEFAULT_SEARCH_LIMIT
     provider_timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY
+    filters: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, str) or not self.query.strip():
@@ -59,6 +60,20 @@ class MetadataSearchRequest:
         )
         if not isinstance(self.limit, int) or isinstance(self.limit, bool) or self.limit < 1:
             raise ValueError("limit must be a positive integer")
+        normalized_filters = SearchSpec(
+            self.query, self.providers, self.limit, self.filters
+        ).filters
+        values = dict(normalized_filters)
+        if values.keys() - {"year_from", "year_to"}:
+            raise ValueError("unsupported search filter")
+        years: dict[str, int] = {}
+        for name, value in values.items():
+            if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 9999:
+                raise ValueError(f"{name} must be a year from 1 through 9999")
+            years[name] = int(value)
+        if years.get("year_from", 1) > years.get("year_to", 9999):
+            raise ValueError("year_from must not be later than year_to")
+        object.__setattr__(self, "filters", normalized_filters)
 
 
 @dataclass(frozen=True, slots=True)

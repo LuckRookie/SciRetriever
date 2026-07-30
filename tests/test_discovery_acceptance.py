@@ -38,7 +38,7 @@ from sciretriever.discovery.providers.base import DiscoveryProvider
 from sciretriever.discovery.providers.crossref import CROSSREF_WORKS_URL
 from sciretriever.discovery.providers.europe_pmc import EUROPE_PMC_SEARCH_URL
 from sciretriever.discovery.providers.http import HttpResponse
-from sciretriever.errors import ProviderSearchError
+from sciretriever.errors import SearchError
 
 
 RUN_ID = "00000000-0000-4000-8000-000000000001"
@@ -321,10 +321,10 @@ class DiscoveryAcceptanceTests(TestCase):
             DownloadManifestEntry.from_json_line(line)
             for line in raw.decode("utf-8").splitlines()
         )
-        self.assertEqual(parsed, entries)
+        self.assertEqual(parsed, entries.entries)
         self.assertEqual(len(entries), 4)
         self.assertTrue(raw.endswith(b"\n"))
-        self.assertEqual(
+        self.assertCountEqual(
             transport.calls,
             [CROSSREF_WORKS_URL, EUROPE_PMC_SEARCH_URL, ARXIV_QUERY_URL],
         )
@@ -341,9 +341,9 @@ class DiscoveryAcceptanceTests(TestCase):
             tuple((item.namespace, item.value) for item in shared.identifiers),
             (("doi", "10.1000/shared"), ("pmid", "111"), ("arxiv", "2401.00001v2")),
         )
-        self.assertEqual(shared.metadata.title, "Crossref Shared Study")
-        self.assertEqual(shared.metadata.abstract, "Europe shared abstract")
-        self.assertEqual(shared.metadata.authors, ("Ada Lovelace",))
+        self.assertEqual(shared.metadata.title, "arXiv Shared Study")
+        self.assertEqual(shared.metadata.abstract, "arXiv shared abstract")
+        self.assertEqual(shared.metadata.authors, ("Alan Turing",))
         self.assertEqual(
             shared.metadata.keywords,
             ("Crossref keyword", "cs.IR", "Europe keyword"),
@@ -365,7 +365,7 @@ class DiscoveryAcceptanceTests(TestCase):
         self.assertEqual(len(labeler.calls), 3)
         self.assertEqual(
             {call.title for call in labeler.calls},
-            {"Crossref Shared Study", "Safe: Title Merge", "Missing Abstract Study"},
+            {"arXiv Shared Study", "Safe--Title Merge", "Missing Abstract Study"},
         )
         self.assertNotIn("must never reach labeling", {call.abstract for call in labeler.calls})
 
@@ -409,7 +409,7 @@ class DiscoveryAcceptanceTests(TestCase):
         self.assertEqual(outputs[0], outputs[1])
         self.assertEqual(len(outputs[0].splitlines()), 1)
 
-    def test_provider_failure_preserves_preexisting_manifest_atomically(self) -> None:
+    def test_partial_provider_failure_publishes_successes_with_sanitized_failure(self) -> None:
         original = b'{"preexisting":true}\n'
         output = self.directory / "manifest.jsonl"
         output.write_bytes(original)
@@ -426,7 +426,45 @@ class DiscoveryAcceptanceTests(TestCase):
             "crossref": CrossrefProvider(transport, timeout=None),
         }
 
-        with self.assertRaises(ProviderSearchError):
+        result = discover_to_jsonl(
+            SearchSpec("failure", ("arxiv", "europe-pmc", "crossref"), 10),
+            output,
+            providers=providers,
+            catalog=self.catalog,
+            labeler=SpyKeywordLabeler(),
+            intake_run_id=RUN_ID,
+            retrieved_at=RETRIEVED_AT,
+        )
+
+        self.assertNotEqual(output.read_bytes(), original)
+        self.assertGreater(len(result), 0)
+        self.assertEqual(
+            tuple((item.provider, item.category, item.message) for item in result.failures),
+            (("europe-pmc", "transport", "provider search failed"),),
+        )
+        self.assertNotIn("offline", repr(result.failures))
+
+    def test_all_provider_failure_preserves_preexisting_manifest_atomically(self) -> None:
+        original = b'{"preexisting":true}\n'
+        output = self.directory / "manifest.jsonl"
+        output.write_bytes(original)
+        transport = RoutingTransport(
+            {
+                CROSSREF_WORKS_URL: [OSError("crossref secret")],
+                EUROPE_PMC_SEARCH_URL: [OSError("europe secret")],
+                ARXIV_QUERY_URL: [OSError("arxiv secret")],
+            }
+        )
+        providers = {
+            "arxiv": ArxivProvider(transport, sleeper=lambda _: None, timeout=None),
+            "europe-pmc": EuropePMCProvider(transport, timeout=None),
+            "crossref": CrossrefProvider(transport, timeout=None),
+        }
+
+        with self.assertRaisesRegex(
+            SearchError,
+            "arxiv:transport; crossref:transport; europe-pmc:transport",
+        ):
             discover_to_jsonl(
                 SearchSpec("failure", ("arxiv", "europe-pmc", "crossref"), 10),
                 output,
@@ -438,7 +476,6 @@ class DiscoveryAcceptanceTests(TestCase):
             )
 
         self.assertEqual(output.read_bytes(), original)
-        self.assertEqual(transport.calls, [CROSSREF_WORKS_URL, EUROPE_PMC_SEARCH_URL])
 
 
 if __name__ == "__main__":

@@ -6,15 +6,17 @@ from typing import Mapping
 
 from sciretriever.catalog.diagnostics import CatalogDiagnosticService
 from sciretriever.catalog.library import WorkRepository
+from sciretriever.core.contracts import SearchSpec
 from sciretriever.diagnostics.owners import MetadataFailureOwner
+from .candidate_retrieval import CandidatePreparer
 from .metadata_ingestion import MetadataIngestor
-from .metadata_preparation import MetadataRecordPreparer
 from .normalize import normalize_query
 from .provider_collection import (
     ProviderCollectionRequest,
     ProviderCollector,
 )
 from .providers.base import DiscoveryProvider
+from .models import CandidateRetrievalRequest, ProviderFailure
 from .search_contracts import (
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_PROVIDER_TIMEOUT_SECONDS,
@@ -36,7 +38,7 @@ class MetadataSearchService:
         repository: WorkRepository,
     ) -> None:
         self._collector = ProviderCollector(providers)
-        self._preparer = MetadataRecordPreparer()
+        self._candidate_preparer = CandidatePreparer()
         self._ingestor = MetadataIngestor(repository)
         self._failures = MetadataFailureOwner(CatalogDiagnosticService(repository.catalog))
 
@@ -47,6 +49,7 @@ class MetadataSearchService:
             request.limit,
             request.provider_timeout_seconds,
             request.max_concurrency,
+            filters=request.filters,
         ))
         if len(collected.failures) == len(request.providers):
             self._failures.provider_total_failure(
@@ -59,13 +62,27 @@ class MetadataSearchService:
                 for failure in collected.failures
             )
             raise SearchError(f"all metadata search providers failed: {detail}")
-        prepared = self._preparer.prepare_search(
+        retrieved = self._candidate_preparer.prepare(
+            CandidateRetrievalRequest(
+                SearchSpec(
+                    request.query,
+                    request.providers,
+                    request.limit,
+                    request.filters,
+                ),
+                request.precedence,
+                request.provider_timeout_seconds,
+                request.max_concurrency,
+            ),
             collected.records,
-            request.precedence,
-            request.limit,
+            tuple(
+                ProviderFailure(failure.provider, failure.category, failure.message)
+                for failure in collected.failures
+            ),
+            all_providers_failed=collected.all_failed,
         )
         return MetadataSearchOutput(
-            self._ingestor.ingest_many(prepared),
+            self._ingestor.ingest_candidates(retrieved.candidates, request.precedence),
             collected.failures,
         )
 
@@ -79,7 +96,7 @@ class ExactMetadataResolver:
         repository: WorkRepository,
     ) -> None:
         self._collector = ProviderCollector(providers)
-        self._preparer = MetadataRecordPreparer()
+        self._candidate_preparer = CandidatePreparer()
         self._ingestor = MetadataIngestor(repository)
         self._failures = MetadataFailureOwner(CatalogDiagnosticService(repository.catalog))
 
@@ -91,12 +108,16 @@ class ExactMetadataResolver:
             request.provider_timeout_seconds,
             request.max_concurrency,
         ))
-        prepared = self._preparer.prepare_exact(
+        candidate = self._candidate_preparer.prepare_exact(
             collected.records,
             request.doi,
             request.precedence,
         )
-        result = None if prepared is None else self._ingestor.ingest_one(prepared)
+        result = None
+        if candidate is not None:
+            result = self._ingestor.ingest_candidates(
+                (candidate,), request.precedence
+            )[0]
         if len(collected.failures) == len(request.providers):
             self._failures.provider_total_failure(
                 normalize_query(request.doi),

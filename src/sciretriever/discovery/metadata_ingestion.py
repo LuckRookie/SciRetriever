@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from sciretriever.catalog.library import WorkRepository
-from sciretriever.catalog.records import WorkVersionRecord
-from .metadata_preparation import PreparedMetadata
+from sciretriever.catalog.library import (
+    MetadataIngestionBatch,
+    MetadataIngestionObservation,
+    WorkRepository,
+)
+from .models import CandidateObservation, RetrievedCandidate
 from .search_contracts import MetadataSearchResult
 
 
@@ -14,36 +17,63 @@ class MetadataIngestor:
     def __init__(self, repository: WorkRepository) -> None:
         self._repository = repository
 
-    def ingest_many(
-        self, prepared: tuple[PreparedMetadata, ...]
+    def ingest_candidates(
+        self,
+        candidates: tuple[RetrievedCandidate, ...],
+        precedence: tuple[str, ...],
     ) -> tuple[MetadataSearchResult, ...]:
-        versions = self._repository.ingest_metadata_batches(
-            tuple(item.batch for item in prepared)
+        projected = tuple(
+            (
+                candidate,
+                MetadataIngestionBatch(
+                    title,
+                    candidate.identifiers,
+                    tuple(self._observation(item) for item in candidate.observations),
+                    precedence,
+                    "; ".join(candidate.identity_ambiguity_reasons) or None,
+                ),
+            )
+            for candidate in candidates
+            if (title := candidate.metadata.title) is not None
         )
+        versions = self._repository.ingest_metadata_batches(tuple(
+            batch for _, batch in projected
+        ))
         return tuple(
-            self._result(item, version)
-            for item, version in zip(prepared, versions)
+            MetadataSearchResult(
+                version,
+                candidate.providers,
+                candidate.identifiers,
+                self._repository.get_canonical_metadata(version.id),
+            )
+            for (candidate, _), version in zip(projected, versions)
         )
 
-    def ingest_one(self, prepared: PreparedMetadata) -> MetadataSearchResult:
-        batch = prepared.batch
-        version = self._repository.ingest_metadata_batch(
-            title=batch.title,
-            identifiers_to_persist=batch.identifiers,
-            observations=batch.observations,
-            provider_precedence=batch.provider_precedence,
-            review_reason=batch.review_reason,
+    @staticmethod
+    def _observation(item: CandidateObservation) -> MetadataIngestionObservation:
+        fields = (
+            ("title", item.metadata.title),
+            ("abstract", item.metadata.abstract),
+            ("authors", item.metadata.authors),
+            ("year", item.metadata.year),
+            ("venue", item.metadata.venue),
+            ("publisher", item.publisher),
+            ("publication_date", item.publication_date),
+            ("open_access_status", item.open_access_status),
+            ("keywords", item.metadata.keywords),
         )
-        return self._result(prepared, version)
-
-    def _result(
-        self, prepared: PreparedMetadata, version: WorkVersionRecord
-    ) -> MetadataSearchResult:
-        return MetadataSearchResult(
-            version,
-            prepared.providers,
-            prepared.identifiers,
-            self._repository.get_canonical_metadata(version.id),
+        present = tuple(
+            (name, value) for name, value in fields
+            if value is not None and value != ()
+        )
+        identifiers = tuple(
+            (identifier.namespace, identifier.value) for identifier in item.identifiers
+        )
+        return MetadataIngestionObservation(
+            item.provider,
+            item.provider_record_id,
+            tuple(sorted((*present, *identifiers), key=lambda pair: (pair[0], str(pair[1])))),
+            (("provider", item.provider), ("provider_record_id", item.provider_record_id)),
         )
 
 
