@@ -6,6 +6,20 @@ from scripts.harness import find_document_governance_violations, find_documentat
 
 
 class HarnessGovernanceTests(unittest.TestCase):
+    def test_documentation_gate_requires_configuration_reference(self) -> None:
+        # Given a documentation root without the user-facing configuration reference
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            # When the documentation gate runs
+            violations = find_documentation_violations(root)
+
+        # Then the missing configuration contract is reported explicitly
+        self.assertIn(
+            "missing required file: docs/guides/configuration.md",
+            violations,
+        )
+
     def test_documentation_gate_detects_both_broken_link_forms(self) -> None:
         for link in ("[missing](docs/missing.md)", "[missing][guide]\n\n[guide]: docs/missing.md"):
             with self.subTest(link=link), tempfile.TemporaryDirectory() as temporary:
@@ -38,11 +52,13 @@ class HarnessGovernanceTests(unittest.TestCase):
         # Then the stale command surface is rejected explicitly
         self.assertIn("README.md: stale or incomplete WP6 command surface", violations)
 
-    def test_documentation_gate_rejects_unknown_example_config_key(self) -> None:
-        # Given an example TOML with one field outside the strict schema
+    def test_documentation_gate_rejects_unknown_minimal_config_key(self) -> None:
+        # Given a minimal TOML with one field outside the strict schema
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "config.example.toml").write_text(
+            guides = root / "docs" / "guides"
+            guides.mkdir(parents=True)
+            (guides / "config.minimal.toml").write_text(
                 "schema_version = 1\nfuture = true\n",
                 encoding="utf-8",
             )
@@ -50,8 +66,11 @@ class HarnessGovernanceTests(unittest.TestCase):
             # When the documentation gate runs
             violations = find_documentation_violations(root)
 
-        # Then the example/schema drift is rejected without echoing a value
-        self.assertIn("config.example.toml: strict parser rejected the example", violations)
+        # Then the minimal/schema drift is rejected without echoing a value
+        self.assertIn(
+            "docs/guides/config.minimal.toml: strict parser rejected the template",
+            violations,
+        )
 
     def test_documentation_gate_rejects_duplicate_wp6_release_marker(self) -> None:
         # Given two progress markers claiming the final release update

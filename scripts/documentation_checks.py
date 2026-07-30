@@ -19,8 +19,9 @@ MARKDOWN_REFERENCE_TARGET = re.compile(
     r"^[ \t]{0,3}\[(?!\^)[^\]]+\]:[ \t]*(.+?)\s*$", re.MULTILINE,
 )
 REQUIRED_FILES = (
-    "README.md", "AGENTS.md", "HARNESS.md", "config.example.toml",
-    "docs/README.md", "docs/guides/README.md",
+    "README.md", "AGENTS.md", "HARNESS.md", "docs/README.md",
+    "docs/guides/README.md", "docs/guides/configuration.md",
+    "docs/guides/config.toml", "docs/guides/config.minimal.toml",
     "docs/development/README.md", "docs/development/documentation-map.md",
     "docs/architecture/README.md", "docs/architecture/principles.md",
     "docs/architecture/requirements.md", "docs/architecture/system-design.md",
@@ -37,9 +38,9 @@ FINAL_RELEASE_FACTS = (
     "Todo 31 最终 `full` harness 940 项通过",
     "`.omo/evidence/wp6/task-31.txt`",
 )
-WP6_CONFIG_DECLARATIONS = (
-    "document_start_interval_seconds =", "[expansion]",
-    "max_provider_calls =", "page_size =",
+MINIMAL_CONFIG_SECTIONS = (
+    "schema_version =", "[paths]", "[credentials]", "[discovery]", "[search]",
+    "[acquisition]",
 )
 
 
@@ -76,16 +77,22 @@ def _wp6_surface_violations(root: Path) -> tuple[str, ...]:
             for command in required
         ):
             violations.append("README.md: stale or incomplete WP6 command surface")
-    example = root / "config.example.toml"
-    if example.is_file():
+    full_config = root / "docs" / "guides" / "config.toml"
+    if full_config.is_file():
         try:
-            config = load_config(example)
+            load_config(full_config)
         except (ConfigError, OSError):
-            violations.append("config.example.toml: strict parser rejected the example")
+            violations.append("docs/guides/config.toml: strict parser rejected the complete template")
+    minimal = root / "docs" / "guides" / "config.minimal.toml"
+    if minimal.is_file():
+        try:
+            config = load_config(minimal)
+        except (ConfigError, OSError):
+            violations.append("docs/guides/config.minimal.toml: strict parser rejected the template")
         else:
-            text = example.read_text(encoding="utf-8")
+            text = minimal.read_text(encoding="utf-8")
             declarations_are_unique = all(
-                text.count(declaration) == 1 for declaration in WP6_CONFIG_DECLARATIONS
+                text.count(declaration) == 1 for declaration in MINIMAL_CONFIG_SECTIONS
             )
             defaults_are_exact = (
                 config.document_start_interval_seconds == 30.0
@@ -97,7 +104,7 @@ def _wp6_surface_violations(root: Path) -> tuple[str, ...]:
             )
             if not declarations_are_unique or not defaults_are_exact:
                 violations.append(
-                    "config.example.toml: WP6 fields must appear once with exact defaults"
+                    "docs/guides/config.minimal.toml: required sections and omitted defaults must be exact"
                 )
     progress = (
         root / "docs" / "archive" / "2026-07-literature-library"

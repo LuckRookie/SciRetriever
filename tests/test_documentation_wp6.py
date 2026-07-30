@@ -56,29 +56,44 @@ class Wp6DocumentationSnapshotTests(unittest.TestCase):
         self.assertTrue(_option(failures, "--latest").default)
         self.assertFalse(_option(failures, "--details").default)
 
-    def test_example_toml_lists_wp6_fields_once_with_parser_defaults(self) -> None:
-        # Given the exhaustive example consumed by the strict parser
-        example = REPOSITORY / "config.example.toml"
-        text = example.read_text(encoding="utf-8")
+    def test_full_and_minimal_toml_are_strictly_loadable(self) -> None:
+        # Given the complete annotated template and the minimal starter template
+        full_path = REPOSITORY / "docs" / "guides" / "config.toml"
+        minimal_path = REPOSITORY / "docs" / "guides" / "config.minimal.toml"
 
-        # When the example is parsed and its WP6 field declarations are counted
-        config = load_config(example)
-        declarations = (
-            "document_start_interval_seconds =", "[expansion]",
-            "max_provider_calls =", "page_size =",
-        )
+        # When both public configuration surfaces are parsed
+        full = load_config(full_path)
+        minimal = load_config(minimal_path)
 
-        # Then every field is present once and uses the implemented defaults
-        for declaration in declarations:
-            self.assertEqual(text.count(declaration), 1, declaration)
-        self.assertEqual(config.document_start_interval_seconds, 30.0)
-        self.assertEqual(config.expansion.direction, "references")
-        self.assertEqual(config.expansion.depth, 0)
-        self.assertEqual(config.expansion.providers, ("openalex", "semantic-scholar"))
-        self.assertEqual(config.expansion.max_provider_calls, 10)
-        self.assertEqual(config.expansion.page_size, 100)
-        self.assertNotIn("[curation]", text)
-        self.assertNotIn("[export]", text)
+        # Then each exposes its intended machine-consumed configuration level
+        self.assertEqual(full.schema_version, 1)
+        self.assertEqual(full.document_start_interval_seconds, 30.0)
+        self.assertEqual(full.discovery.limit, 1000)
+        self.assertEqual((full.search.limit, full.search.completion_limit), (1000, 100))
+        self.assertEqual(full.expansion.max_provider_calls, 5)
+        self.assertEqual(full.package.max_pages, 2000)
+        self.assertEqual(minimal.schema_version, 1)
+        self.assertEqual(minimal.document_start_interval_seconds, 30.0)
+        self.assertIsNone(minimal.discovery.limit)
+        self.assertEqual((minimal.search.limit, minimal.search.completion_limit), (None, None))
+        self.assertEqual(minimal.search.level, "metadata")
+        self.assertEqual(minimal.analysis.mineru.mode, "disabled")
+
+    def test_stage_help_exposes_independent_batch_defaults(self) -> None:
+        # Given the four independently runnable stage command parsers
+        root = _subparsers(_build_parser())
+
+        # When their public help is rendered
+        help_text = {name: root.choices[name].format_help() for name in (
+            "discover", "search", "download", "analyze",
+        )}
+
+        # Then metadata, deep completion, acquisition, and analysis limits are distinct
+        self.assertIn("metadata results (default: 1000)", help_text["discover"])
+        self.assertIn("metadata results (default: 1000)", help_text["search"])
+        self.assertIn("deep completion targets (default: 100)", help_text["search"])
+        self.assertIn("acquisition targets (default: 100)", help_text["download"])
+        self.assertIn("analysis targets (default: 100)", help_text["analyze"])
 
     def test_readme_and_progress_publish_one_current_wp6_surface(self) -> None:
         # Given the current-behavior README and sole progress ledger
