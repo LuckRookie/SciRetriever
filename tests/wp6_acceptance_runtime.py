@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 
 from PyPDF2 import PdfReader, PdfWriter
 
@@ -11,6 +12,7 @@ from sciretriever.analysis import AnalysisService
 from sciretriever.catalog import (
     AssetRepository, CompletionFactsRepository, MetadataIngestionObservation,
     WorkRepository, WorkVersionDownloadRepository, create_catalog_engine,
+    open_catalog_engine,
     initialize_catalog,
 )
 from sciretriever.cli.analysis_runtime import AnalysisRuntimeServices
@@ -19,11 +21,15 @@ from sciretriever.cli.completion_runtime import (
     OptionalAssetAdapter, RequiredPrimaryAdapter, WorkVersionIdentifierAdapter,
     assemble_completion_runtime,
 )
-from sciretriever.completion import MetadataResolutionPolicy
+from sciretriever.cli.stage_admission import StageKind, admit_catalog_stages
+from sciretriever.completion import (
+    AnalysisPromotionRequest, AnalysisPromotionResult, MetadataResolutionPolicy,
+)
 from sciretriever.config import MinerUConfig
 from sciretriever.core.contracts import CandidateMetadata, Identifier
 from sciretriever.discovery import MetadataSearchResult
 from sciretriever.discovery.search_contracts import ExactMetadataOutput
+from sciretriever.errors import StageAdmissionConflict
 from sciretriever.normalization import MinerUParsingService, MinerUSourceMapService
 from sciretriever.storage import DerivedArtifactStore, RawAssetStore
 from sciretriever.storage.coordinator import AssetAcceptanceCoordinator
@@ -37,11 +43,26 @@ class OfflineBranchFailure(RuntimeError):
         return "offline branch failure"
 
 
+class CountingMinerU(CompletedClient):
+    def __init__(self, archive: bytes) -> None:
+        super().__init__(archive)
+        self.submissions: int = 0
+
+    def submit(self, filename: str, pdf: bytes, timeout: float):
+        self.submissions += 1
+        return super().submit(filename, pdf, timeout)
+
+
 class OfflineMetadata:
     def __init__(self, repository: WorkRepository) -> None:
         self.repository = repository
+        self.calls = 0
+        self.barrier: Barrier | None = None
 
     def resolve(self, request) -> ExactMetadataOutput:
+        self.calls += 1
+        if self.barrier is not None:
+            self.barrier.wait()
         title = f"WP6 {request.doi.rsplit('/', 1)[-1]}"
         record = self.repository.ingest_metadata_batch(
             title=title,
@@ -66,8 +87,11 @@ class OfflineAcquisition:
         self.pdf_path = pdf_path
         self.fail_doi: str | None = None
         self.calls = 0
+        self.barrier: Barrier | None = None
 
     async def acquire(self, work_version_id, role, target, providers, *, timeout):
+        if self.barrier is not None:
+            self.barrier.wait()
         if any(
             item.namespace == "doi" and item.value == self.fail_doi
             for item in target.identifiers
@@ -90,6 +114,19 @@ class OfflineAcquisition:
         return AcquisitionResult(work_version_id, disposition)
 
 
+class OfflineAnalysis:
+    def __init__(self, owner: AtomicAnalysisAdapter) -> None:
+        self.owner = owner
+        self.calls = 0
+        self.barrier: Barrier | None = None
+
+    def promote(self, request: AnalysisPromotionRequest) -> AnalysisPromotionResult:
+        self.calls += 1
+        if self.barrier is not None:
+            self.barrier.wait()
+        return self.owner.promote(request)
+
+
 class AcceptanceRuntime:
     def __init__(self, root: Path, pdf_path: Path) -> None:
         self.catalog = create_catalog_engine(root / "catalog.sqlite", allow_repository_write=True)
@@ -110,26 +147,28 @@ class AcceptanceRuntime:
         configured = AcquisitionRuntimeConfig(
             downloads, self.acquisition, self.facts, ("fixture",), 1.0
         )
-        provider = FixtureProvider()
+        self.mineru: CountingMinerU = CountingMinerU(archive_bytes(middle_value()))
+        self.provider = FixtureProvider()
         services = AnalysisRuntimeServices(
             self.facts, assets, self.raw_store,
             MinerUParsingService(
                 self.catalog, self.derived_store,
                 MinerUConfig(model="operator/model@fixture", poll_interval=0.01),
-                CompletedClient(archive_bytes(middle_value())), sleep=lambda _: None,
+                self.mineru, sleep=lambda _: None,
             ),
             MinerUSourceMapService(
                 self.catalog, self.raw_store, self.derived_store
             ),
             AnalysisService(
-                self.catalog, self.derived_store, provider,
+                self.catalog, self.derived_store, self.provider,
                 configuration={"profile": "fixture"},
             ),
             10_000_000,
         )
+        self.analysis = OfflineAnalysis(AtomicAnalysisAdapter(lambda: services))
         adapters = CompletionRuntimeAdapters(
             WorkVersionIdentifierAdapter(downloads), self.metadata,
-            RequiredPrimaryAdapter(configured), AtomicAnalysisAdapter(services),
+            RequiredPrimaryAdapter(configured), self.analysis,
             OptionalAssetAdapter(configured),
         )
         policy = MetadataResolutionPolicy(("fixture",), ("fixture",))
@@ -152,4 +191,38 @@ class AcceptanceRuntime:
         self.catalog.dispose()
 
 
-__all__ = ("AcceptanceRuntime",)
+def hold_stage(catalog: str, stage: StageKind, ready, release) -> None:
+    with admit_catalog_stages(catalog, (stage,)):
+        ready.set()
+        release.wait()
+
+
+def contend_stage(catalog: str, stage: StageKind, external_sentinel: str, output) -> None:
+    try:
+        with admit_catalog_stages(catalog, (stage,)):
+            Path(external_sentinel).write_text("external-called", encoding="ascii")
+    except StageAdmissionConflict as error:
+        output.put((1, error.stage.value))
+    else:
+        output.put((0, stage.value))
+
+
+def write_metadata(catalog: str, output) -> None:
+    engine = open_catalog_engine(catalog, allow_repository_write=True)
+    try:
+        doi = "10.1234/concurrent-metadata"
+        version = WorkRepository(engine).ingest_metadata_batch(
+            title="Concurrent metadata",
+            identifiers_to_persist=(Identifier("doi", doi),),
+            observations=(MetadataIngestionObservation(
+                "fixture", doi, (("doi", doi), ("title", "Concurrent metadata")),
+                (("provider", "fixture"),),
+            ),),
+            provider_precedence=("fixture",),
+        )
+        output.put(version.id)
+    finally:
+        engine.dispose()
+
+
+__all__ = ("AcceptanceRuntime", "contend_stage", "hold_stage", "write_metadata")

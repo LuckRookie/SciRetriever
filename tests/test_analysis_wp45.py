@@ -69,7 +69,7 @@ class AnalysisWP45Tests(TestCase):
 
     def test_pending_is_bounded_deterministic_and_pdf_eligibility_is_strict(self) -> None:
         selected = self.repository.select_all_pending(limit=1).work_version_ids
-        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected, ())
         self.assertEqual(self.repository.get(self.first).eligibility_reason, "primary_pdf_missing")
         raw_id = str(uuid4())
         with self.catalog.transaction() as connection:

@@ -1,7 +1,87 @@
 from completion_facts_fixture import *
+from sciretriever.errors import CatalogError
 
 
 class CompletionFactsWP5Tests(CompletionFactsFixture):
+    def test_stage_selection_rejects_non_integer_and_nonpositive_limits(self) -> None:
+        selector = getattr(self.repository, "select_by_stage")
+
+        for invalid in (True, False, 1.0, "1", 0, -1):
+            with self.subTest(limit=invalid), self.assertRaises(CatalogError):
+                selector(CompletionStage.ANALYSIS_PENDING, invalid)
+
+    def test_analysis_pending_selection_uses_complete_pdf_facts_and_eligible_limit(self) -> None:
+        missing = self.ingest(title="00 missing")
+        wrong_media = self.ingest(title="01 wrong media")
+        self.attach(wrong_media, media_type="application/xml", format_name="pdf")
+        wrong_format = self.ingest(title="02 wrong format")
+        self.attach(wrong_format, format_name="xml")
+        multiple = self.ingest(title="03 multiple")
+        self.attach(multiple)
+        self.attach(multiple)
+        first_eligible = self.ingest(title="04 eligible")
+        self.attach(first_eligible)
+        second_eligible = self.ingest(title="05 eligible")
+        self.attach(second_eligible)
+
+        selected = self.repository.select_by_stage(CompletionStage.ANALYSIS_PENDING, limit=1)
+
+        self.assertEqual(selected, (first_eligible,))
+        self.assertEqual(
+            self.analysis_selection.select_all_pending(limit=1).work_version_ids,
+            (first_eligible,),
+        )
+        self.assertNotIn(
+            missing,
+            self.repository.select_by_stage(CompletionStage.ANALYSIS_PENDING, limit=10),
+        )
+
+    def test_bounded_library_analysis_selection_filters_with_completion_facts(self) -> None:
+        missing = self.ingest(title="Library missing")
+        eligible = self.ingest(title="Library eligible")
+        self.attach(eligible)
+        items = tuple(
+            type("Item", (), {"work_version_id": version_id})()
+            for version_id in (missing, eligible)
+        )
+        result = type("Result", (), {"items": items})()
+
+        with mock.patch.object(self.analysis_selection._library, "search", return_value=result) as search:
+            selected = self.analysis_selection.select_library(
+                "query", filters=LibraryFilters(), limit=2
+            )
+
+        self.assertEqual(selected.work_version_ids, (eligible,))
+        search.assert_called_once_with("query", filters=LibraryFilters(), limit=2)
+
+    def test_analysis_pending_limit_counts_only_eligible_versions_deterministically(self) -> None:
+        eligible = []
+        for index in range(120):
+            work_version_id = self.ingest(title=f"Eligible {index:03d}")
+            self.attach(work_version_id)
+            eligible.append(work_version_id)
+        for index in range(20):
+            self.ingest(title=f"Ineligible {index:03d}")
+
+        first = self.analysis_selection.select_all_pending(limit=100).work_version_ids
+        repeated = self.analysis_selection.select_all_pending(limit=100).work_version_ids
+
+        self.assertEqual(first, tuple(eligible[:100]))
+        self.assertEqual(repeated, first)
+
+    def test_completed_analysis_is_skipped_unless_exact_selection_is_forced(self) -> None:
+        work_version_id, _, _ = self.complete()
+
+        pending = self.analysis_selection.select_all_pending(limit=100).work_version_ids
+        exact = self.analysis_selection.select_exact(work_version_id=work_version_id).work_version_ids
+        forced = self.analysis_selection.select_exact(
+            work_version_id=work_version_id, force=True
+        ).work_version_ids
+
+        self.assertNotIn(work_version_id, pending)
+        self.assertEqual(exact, ())
+        self.assertEqual(forced, (work_version_id,))
+
     def test_provider_metadata_with_stable_identifier_is_asset_pending(self) -> None:
         version = WorkRepository(self.catalog).ingest_metadata_batch(
             title="Provider title",

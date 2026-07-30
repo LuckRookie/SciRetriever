@@ -80,7 +80,11 @@ class WorkVersionDownloadRepository:
         result = self._library.search(query, filters=filters, limit=limit)
         return DownloadSelection(tuple(item.work_version_id for item in result.items))
 
-    def select_all_missing_primary_pdf(self) -> DownloadSelection:
+    def select_all_missing_primary_pdf(self, *, limit: int) -> DownloadSelection:
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise TypeError("missing primary PDF selection limit must be an integer")
+        if limit <= 0:
+            raise ValueError("missing primary PDF selection limit must be positive")
         statement = (
             select(work_versions.c.id)
             .where(~exists(select(literal(1)).where(
@@ -88,6 +92,7 @@ class WorkVersionDownloadRepository:
                 work_version_assets.c.asset_role == AssetRole.PRIMARY_PDF.value,
             )))
             .order_by(work_versions.c.normalized_title, work_versions.c.id)
+            .limit(limit)
         )
         with catalog_operation("missing primary PDF selection"):
             with self._catalog.connect() as connection:

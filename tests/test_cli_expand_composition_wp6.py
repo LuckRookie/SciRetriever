@@ -102,7 +102,7 @@ class ExpandCompositionTests(TestCase):
         configured = subprocess.run(
             [
                 "uv", "run", "--frozen", "sciretriever",
-                "--config", "config.example.toml", "expand",
+                "--config", "docs/guides/config.minimal.toml", "expand",
                 "--catalog", str(fixture.catalog.path),
                 "--storage-root", str(fixture.storage),
                 "--work-version-id", completed.work_version_id,

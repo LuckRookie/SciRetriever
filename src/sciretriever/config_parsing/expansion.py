@@ -39,11 +39,11 @@ def parse_document_start_interval(root: Mapping[str, Any]) -> float:
         not isinstance(value, (int, float))
         or isinstance(value, bool)
         or not math.isfinite(float(value))
-        or not 0 < float(value) <= 86_400
+        or not 30 <= float(value) <= 86_400
     ):
         raise ConfigError(
-            "config field document_start_interval_seconds must be a positive "
-            "finite number not exceeding 86400"
+            "config field document_start_interval_seconds must be a finite "
+            "number between 30 and 86400"
         )
     return float(value)
 

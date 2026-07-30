@@ -7,7 +7,7 @@ from sqlalchemy import func, insert, select, update
 from .engine import CatalogEngine
 from .models import external_parser_attempts, processing_runs
 from .records import ExternalParserAttemptRecord
-from .repository import _required_text, canonical_json, catalog_operation
+from .repository import canonical_json, catalog_operation
 from sciretriever.core.ids import new_uuid4, validate_uuid
 from sciretriever.core.timestamps import utc_now_rfc3339
 from sciretriever.errors import CatalogError
@@ -22,7 +22,7 @@ class ExternalParserAttemptRepository:
     def create(self, processing_run_id: str, metadata: object, *,
                external_task_id: str | None = None) -> ExternalParserAttemptRecord:
         run_id = validate_uuid(processing_run_id, "processing_run_id")
-        task_id = None if external_task_id is None else _required_text(external_task_id, "external_task_id")
+        task_id = None if external_task_id is None else validate_uuid(external_task_id, "external_task_id")
         with catalog_operation("external parser attempt creation"):
             with self._catalog.critical_transaction() as connection:
                 run = connection.execute(select(processing_runs.c.stage, processing_runs.c.state).where(

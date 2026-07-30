@@ -17,10 +17,11 @@ from sciretriever.catalog import (
 from sciretriever.config import (
     ACQUISITION_PROVIDERS, BrowserConfig, CredentialsConfig, SciHubConfig, TranslatorConfig,
 )
-from sciretriever.errors import SciRetrieverError
+from sciretriever.errors import SciRetrieverError, StageAdmissionConflict
 from sciretriever.cli.acquisition_runtime import AcquisitionCliConfig, build_acquisition_service
 from sciretriever.cli.completion_context import CommandCompletionRuntime
 from sciretriever.cli.completion_runtime import build_command_completion_runtime
+from sciretriever.cli.stage_admission import StageKind, admit_catalog_stages
 from sciretriever.completion import (
     BatchItemStatus, BatchResult, CompletionStop, OptionalAssetKind,
     OptionalAssetRequest, WorkVersionTarget, run_completion_batch,
@@ -33,7 +34,7 @@ DEFAULT_PROVIDERS = (
     "semantic-scholar", "elsevier", "wiley", "springer",
 )
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    parser.description = "Download missing assets for existing WorkVersions."
+    parser.description = "Run asset acquisition independently for existing WorkVersions."
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--storage-root", required=True, type=Path)
     exact = parser.add_mutually_exclusive_group()
@@ -46,7 +47,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--publisher")
     parser.add_argument("--venue")
     parser.add_argument("--tag")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=int, default=100,
+                        help="maximum acquisition targets (default: 100)")
     parser.add_argument("--provider", action="append", choices=tuple(sorted(ACQUISITION_PROVIDERS)))
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--provider-concurrency", type=int, default=4)
@@ -93,7 +95,7 @@ def _selection(repository: WorkVersionDownloadRepository, args: argparse.Namespa
             work_version_id=args.work_version_id, work_id=args.work_id
         ).work_version_ids
     if args.all_missing:
-        return repository.select_all_missing_primary_pdf().work_version_ids
+        return repository.select_all_missing_primary_pdf(limit=args.limit).work_version_ids
     filters = LibraryFilters(
         author=args.author,
         publication_year=args.year,
@@ -154,12 +156,16 @@ def _execute(args: argparse.Namespace) -> tuple[BatchResult, list[JsonObject]]:
 
 def run(args: argparse.Namespace) -> int:
     try:
-        result, optional = _execute(args)
+        with admit_catalog_stages(args.catalog, (StageKind.ACQUISITION,)):
+            result, optional = _execute(args)
     except KeyboardInterrupt:
         print(canonical_json({"items": [], "succeeded": 0, "failed": 0,
                               "duplicates": 0, "interrupted": True,
                               "optional_assets": []}))
         return 130
+    except StageAdmissionConflict as error:
+        print(f"sciretriever: error: {error.stage.value} stage is already active", file=sys.stderr)
+        return 1
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: download failed", file=sys.stderr)
         return 1

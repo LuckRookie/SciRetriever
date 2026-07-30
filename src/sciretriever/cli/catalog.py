@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 import anyio
@@ -11,7 +12,7 @@ from sciretriever.catalog.completion_facts import CompletionFactsRepository, Com
 from sciretriever.catalog.engine import create_catalog_engine, open_catalog_engine
 from sciretriever.catalog.schema import initialize_catalog
 from sciretriever.core.enums import AssetRole
-from sciretriever.errors import ConfigError, SciRetrieverError
+from sciretriever.errors import ConfigError, SciRetrieverError, StageAdmissionConflict
 from sciretriever.cli.analysis_runtime import AnalysisCliRuntime
 from sciretriever.cli.completion_runtime import (
     CompletionRuntime, build_completion_runtime,
@@ -20,6 +21,7 @@ from sciretriever.cli.completion_runtime import (
 from sciretriever.cli.completion_context import (
     CompletionInvocationContext, CompletionRuntimeOptions,
 )
+from sciretriever.cli.stage_admission import StageKind, admit_catalog_stages
 from sciretriever.completion import CompletionStop, WorkVersionTarget
 from sciretriever.config import AnalysisConfig
 
@@ -96,12 +98,15 @@ def _import_asset(args: argparse.Namespace) -> int:
             stop = CompletionStop(args.stop) if args.stop is not None else (
                 CompletionStop.COMPLETE if configured else CompletionStop.ASSET
             )
-            completion = build_import_completion_runtime(context, config, stop)
-            anyio.run(
-                completion.pipeline.ensure_complete,
-                WorkVersionTarget(result.work_version_id), stop,
-            )
-            stage = completion.facts.get(result.work_version_id).stage
+            admission = admit_catalog_stages(args.catalog, (StageKind.ANALYSIS,)) \
+                if stop is CompletionStop.COMPLETE else nullcontext()
+            with admission:
+                completion = build_import_completion_runtime(context, config, stop)
+                anyio.run(
+                    completion.pipeline.ensure_complete,
+                    WorkVersionTarget(result.work_version_id), stop,
+                )
+                stage = completion.facts.get(result.work_version_id).stage
         print(
             f"disposition={result.disposition} work_version_id={result.work_version_id} "
             f"raw_asset_id={result.raw_asset_id} sha256={result.sha256} "
@@ -119,6 +124,9 @@ def run(args: argparse.Namespace) -> int:
         if args.catalog_command == "import-asset":
             return _import_asset(args)
         raise ValueError("unknown catalog command")
+    except StageAdmissionConflict as error:
+        print(f"sciretriever: error: {error.stage.value} stage is already active", file=sys.stderr)
+        return 1
     except (OSError, SciRetrieverError, RuntimeError, TypeError, ValueError) as error:
         print(f"sciretriever: error: {error}", file=sys.stderr)
         return 1

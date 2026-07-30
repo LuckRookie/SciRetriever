@@ -8,10 +8,11 @@ from pathlib import Path
 import sys
 from sciretriever.catalog import LibraryFilters, WorkVersionAnalysisRepository, canonical_json
 from sciretriever.config import AnalysisConfig
-from sciretriever.errors import SciRetrieverError
+from sciretriever.errors import SciRetrieverError, StageAdmissionConflict
 from sciretriever.cli.analysis_runtime import AnalysisCliRuntime
 from sciretriever.cli.completion_context import CommandCompletionRuntime
 from sciretriever.cli.completion_runtime import build_command_completion_runtime
+from sciretriever.cli.stage_admission import StageKind, admit_catalog_stages
 from sciretriever.completion import (
     BatchResult, CompletionStop, ForceAnalysisBatchResult, WorkVersionTarget,
     run_completion_batch, run_force_analysis_batch,
@@ -19,7 +20,7 @@ from sciretriever.completion import (
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    parser.description = "Analyze accepted primary PDFs for existing WorkVersions."
+    parser.description = "Run PDF analysis independently for existing WorkVersions."
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--storage-root", required=True, type=Path)
     exact = parser.add_mutually_exclusive_group()
@@ -33,7 +34,8 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--publisher")
     parser.add_argument("--venue")
     parser.add_argument("--tag")
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=int, default=100,
+                        help="maximum analysis targets (default: 100)")
     parser.add_argument("--force", action="store_true")
 
 
@@ -104,10 +106,14 @@ def _execute(args: argparse.Namespace) -> BatchResult | ForceAnalysisBatchResult
 
 def run(args: argparse.Namespace) -> int:
     try:
-        result = _execute(args)
+        with admit_catalog_stages(args.catalog, (StageKind.ANALYSIS,)):
+            result = _execute(args)
     except KeyboardInterrupt:
         print(canonical_json({"items": [], "failed": 0, "interrupted": True}))
         return 130
+    except StageAdmissionConflict as error:
+        print(f"sciretriever: error: {error.stage.value} stage is already active", file=sys.stderr)
+        return 1
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: analyze failed", file=sys.stderr)
         return 1

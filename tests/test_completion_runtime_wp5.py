@@ -11,6 +11,7 @@ from sciretriever.cli.completion_runtime import (
     RequiredPrimaryAdapter,
     WorkVersionIdentifierAdapter,
 )
+from sciretriever.cli.completion_unconfigured import AnalysisOnlyRequiredPrimary
 from sciretriever.completion import OutcomeDisposition, OutcomeReason
 from sciretriever.core.contracts import Identifier
 from sciretriever.core.enums import AssetRole
@@ -80,6 +81,14 @@ class CompletionRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 owner = RequiredPrimaryAdapter(runtime)
                 result = await owner.acquire(VERSION)
                 self.assertEqual((result.disposition, result.reason), pair)
+
+    async def test_analysis_only_primary_returns_typed_exhaustion(self) -> None:
+        result = await AnalysisOnlyRequiredPrimary().acquire(VERSION)
+
+        self.assertEqual(
+            (result.work_version_id, result.disposition, result.reason),
+            (VERSION, OutcomeDisposition.NOT_ADVANCED, OutcomeReason.EXHAUSTED),
+        )
 
     async def test_required_primary_adapter_rejects_unknown_status(self) -> None:
         runtime = AcquisitionRuntimeConfig(

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 
 from sciretriever.catalog import canonical_json
-from sciretriever.errors import SciRetrieverError
+from sciretriever.errors import SciRetrieverError, StageAdmissionConflict
 from sciretriever.integrations.graph import GraphDirection
 
 from .expansion_runtime import build_expand_runtime
+from .stage_admission import StageKind, admit_catalog_stages
 
 
 GRAPH_PROVIDERS = ("openalex", "semantic-scholar")
@@ -55,11 +57,18 @@ def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace
 def run(args: argparse.Namespace) -> int:
     runtime = None
     try:
-        runtime = build_expand_runtime(args)
-        result = runtime.execute(args)
+        admission = nullcontext() if args.depth == 0 else admit_catalog_stages(
+            args.catalog, (StageKind.ACQUISITION, StageKind.ANALYSIS)
+        )
+        with admission:
+            runtime = build_expand_runtime(args)
+            result = runtime.execute(args)
     except KeyboardInterrupt:
         print(canonical_json({"interrupted": True, "layers": []}))
         return 130
+    except StageAdmissionConflict as error:
+        print(f"sciretriever: error: {error.stage.value} stage is already active", file=sys.stderr)
+        return 1
     except (OSError, SciRetrieverError, TypeError, ValueError):
         print("sciretriever: error: expansion failed", file=sys.stderr)
         return 1

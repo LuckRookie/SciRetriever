@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Protocol
 from urllib.error import HTTPError, URLError
+
+
+class _StageKind(Protocol):
+    @property
+    def value(self) -> str: ...
 
 
 class SciRetrieverError(Exception):
@@ -183,6 +189,14 @@ class PackagingError(SciRetrieverError):
 
 class CatalogError(SciRetrieverError):
     """Raised when a catalog operation fails."""
+
+
+class StageAdmissionConflict(SciRetrieverError):
+    """Raised when another local process already owns a catalog stage."""
+
+    def __init__(self, stage: _StageKind) -> None:
+        self.stage = stage
+        super().__init__(f"{stage.value} stage is already active for this catalog")
 
 
 class StorageError(SciRetrieverError):

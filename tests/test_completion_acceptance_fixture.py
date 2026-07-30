@@ -169,7 +169,7 @@ class RealCompletionFixture:
             ),
             10_000_000,
         )
-        self.analysis = InterruptibleAnalysis(AtomicAnalysisAdapter(services))
+        self.analysis = InterruptibleAnalysis(AtomicAnalysisAdapter(lambda: services))
         adapters = CompletionRuntimeAdapters(
             WorkVersionIdentifierAdapter(self.downloads),
             self.metadata,

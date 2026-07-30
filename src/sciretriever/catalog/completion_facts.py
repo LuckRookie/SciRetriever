@@ -115,6 +115,26 @@ def _stage(metadata_ready: bool, primary_ready: bool, analysis_ready: bool) -> C
     return CompletionStage.COMPLETE
 
 
+def _derive_facts(connection: Connection, version) -> CompletionFacts:
+    metadata_ready = _metadata_ready(connection, version)
+    primary = _primary_pdf(connection, version.id) if metadata_ready else None
+    current = connection.execute(select(current_analyses).where(
+        current_analyses.c.work_version_id == version.id)).mappings().one_or_none()
+    analysis_ready = bool(primary is not None and current is not None
+                          and current_promotion_aligns(connection, version, primary, current))
+    return CompletionFacts(
+        work_version_id=version.id,
+        stage=_stage(metadata_ready, primary is not None, analysis_ready),
+        metadata_ready=metadata_ready,
+        primary_pdf_ready=primary is not None,
+        analysis_ready=analysis_ready,
+        primary_pdf_id=None if primary is None else primary.id,
+        primary_pdf_sha256=None if primary is None else primary.sha256,
+        current_analysis_id=None if current is None else current.id,
+        current_revision=0 if current is None else current.revision,
+    )
+
+
 class CompletionFactsRepository:
     """Derive one WorkVersion's completion facts from one SQLite snapshot."""
 
@@ -132,23 +152,23 @@ class CompletionFactsRepository:
                     work_versions.c.id == version_id)).mappings().one_or_none()
                 if version is None:
                     raise CatalogError(f"unknown WorkVersion: {version_id}")
-                metadata_ready = _metadata_ready(connection, version)
-                primary = _primary_pdf(connection, version_id) if metadata_ready else None
-                current = connection.execute(select(current_analyses).where(
-                    current_analyses.c.work_version_id == version_id)).mappings().one_or_none()
-                analysis_ready = bool(primary is not None and current is not None
-                                      and current_promotion_aligns(connection, version, primary, current))
-        return CompletionFacts(
-            work_version_id=version_id,
-            stage=_stage(metadata_ready, primary is not None, analysis_ready),
-            metadata_ready=metadata_ready,
-            primary_pdf_ready=primary is not None,
-            analysis_ready=analysis_ready,
-            primary_pdf_id=None if primary is None else primary.id,
-            primary_pdf_sha256=None if primary is None else primary.sha256,
-            current_analysis_id=None if current is None else current.id,
-            current_revision=0 if current is None else current.revision,
-        )
+                return _derive_facts(connection, version)
+
+    def select_by_stage(self, stage: CompletionStage, limit: int) -> tuple[str, ...]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise CatalogError("completion fact selection limit must be positive")
+        with catalog_operation("completion facts selection"):
+            with self._catalog.connect() as connection:
+                connection.exec_driver_sql("BEGIN")
+                versions = connection.execute(select(work_versions).order_by(
+                    work_versions.c.normalized_title, work_versions.c.id)).mappings()
+                selected: list[str] = []
+                for version in versions:
+                    if _derive_facts(connection, version).stage == stage:
+                        selected.append(version.id)
+                        if len(selected) == limit:
+                            break
+        return tuple(selected)
 
 
 __all__ = ("CompletionFacts", "CompletionFactsRepository", "CompletionStage")

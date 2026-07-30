@@ -116,7 +116,9 @@ class WP4CatalogContractTests(TestCase):
             self.work_version_id, ProcessingStage.PARSING, "mineru", "3.4.4", {"backend": "vlm-engine"}, input_raw_asset_ids=(self.raw_id,)
         )
         attempts = ExternalParserAttemptRepository(self.catalog)
-        first = attempts.create(run.id, {"reason": "initial"}, external_task_id="task-1")
+        first_task_id = str(uuid4())
+        second_task_id = str(uuid4())
+        first = attempts.create(run.id, {"reason": "initial"}, external_task_id=first_task_id)
         with self.assertRaisesRegex(CatalogError, "already has an active"):
             ExternalParserAttemptRepository(self.catalog).create(run.id, {"reason": "replay"})
         with self.assertRaises(IntegrityError):
@@ -126,10 +128,25 @@ class WP4CatalogContractTests(TestCase):
                     (str(uuid4()), run.id, 2),
                 )
         attempts.finish(first.id, "expired")
-        second = attempts.create(run.id, {"reason": "remote_404"}, external_task_id="task-2")
+        second = attempts.create(run.id, {"reason": "remote_404"}, external_task_id=second_task_id)
         self.assertEqual((first.sequence, second.sequence), (1, 2))
-        self.assertEqual([item.external_task_id for item in attempts.list_for_run(run.id)], ["task-1", "task-2"])
-        self.assertNotIn("task-1", json.loads(first.metadata_json).values())
+        self.assertEqual(
+            [item.external_task_id for item in attempts.list_for_run(run.id)],
+            [first_task_id, second_task_id],
+        )
+        self.assertNotIn(first_task_id, json.loads(first.metadata_json).values())
+
+    def test_external_attempt_create_rejects_malformed_task_id_before_insert(self) -> None:
+        run = ProcessingRunRepository(self.catalog).claim_or_resume(
+            self.work_version_id, ProcessingStage.PARSING, "mineru", "3.4.4",
+            {"backend": "vlm-engine"}, input_raw_asset_ids=(self.raw_id,),
+        )
+        attempts = ExternalParserAttemptRepository(self.catalog)
+
+        with self.assertRaisesRegex(ValueError, "canonical lowercase UUID"):
+            attempts.create(run.id, {"reason": "initial"}, external_task_id="task-1")
+
+        self.assertEqual(attempts.list_for_run(run.id), ())
 
     def test_current_analysis_replacement_is_atomic_and_has_no_history(self) -> None:
         artifacts = self._register_artifacts()

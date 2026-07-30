@@ -27,6 +27,8 @@ from sciretriever.completion import (
 )
 from sciretriever.core.enums import AssetRole
 from sciretriever.config import AnalysisConfig
+from sciretriever.config import LLMConfig, MinerUConfig
+from completion_facts_fixture import CompletionFactsFixture
 
 
 VERSION_A = "11111111-1111-4111-8111-111111111111"
@@ -44,10 +46,10 @@ class FreshProcessRuntimeImportTests(unittest.TestCase):
                 "assert AnalysisRuntimeServices.__module__ == "
                 "'sciretriever.cli.analysis_runtime'",
             ),
-            ("-m", "sciretriever.cli.main", "--help"),
-            ("-m", "sciretriever.cli.main", "download", "--help"),
-            ("-m", "sciretriever.cli.main", "analyze", "--help"),
-            ("-m", "sciretriever.cli.main", "catalog", "import-asset", "--help"),
+            ("-m", "sciretriever.cli.main", "--no-config", "--help"),
+            ("-m", "sciretriever.cli.main", "--no-config", "download", "--help"),
+            ("-m", "sciretriever.cli.main", "--no-config", "analyze", "--help"),
+            ("-m", "sciretriever.cli.main", "--no-config", "catalog", "import-asset", "--help"),
         )
 
         for arguments in commands:
@@ -159,7 +161,7 @@ class DownloadCompletionCommandTests(unittest.TestCase):
         with mock.patch.object(download, "_execute", return_value=(
                     batch(VERSION_A, interrupted=True), [])), \
                 contextlib.redirect_stdout(output):
-            code = download.run(argparse.Namespace())
+            code = download.run(argparse.Namespace(catalog=Path("catalog.sqlite")))
 
         self.assertEqual(code, 130)
         self.assertTrue(json.loads(output.getvalue())["interrupted"])
@@ -180,6 +182,7 @@ class AnalyzeCompletionCommandTests(unittest.TestCase):
         self.assertEqual(observed, result)
         self.assertIs(run_batch.call_args.args[2], CompletionStop.COMPLETE)
         self.assertTrue(runtime.closed)
+
 
     def test_force_routes_to_shared_force_batch_and_preserves_failed_current(self) -> None:
         runtime = RuntimeFake()
@@ -204,3 +207,70 @@ class AnalyzeCompletionCommandTests(unittest.TestCase):
         self.assertTrue(runtime.closed)
 
 
+class AnalyzeMissingPrimaryRegressionTests(CompletionFactsFixture):
+    def test_exact_missing_primary_is_exhausted_without_external_calls(self) -> None:
+        work_version_id = self.ingest(title="Exact missing primary")
+        mineru = mock.Mock()
+        provider = mock.Mock(provider_name="fixture", model="fixture-v1")
+        credential_reader = mock.Mock(return_value="fixture-token")
+        mineru_factory = mock.Mock(return_value=mineru)
+        provider_factory = mock.Mock(return_value=provider)
+        args = argparse.Namespace(
+            catalog=Path(self.temporary.name) / "catalog.sqlite",
+            storage_root=self.storage,
+            work_version_id=work_version_id,
+            work_id=None,
+            all_pending=False,
+            all_current=False,
+            query=None,
+            author=None,
+            year=None,
+            publisher=None,
+            venue=None,
+            tag=None,
+            limit=100,
+            force=False,
+            _config_analysis=AnalysisConfig(
+                MinerUConfig(
+                    mode="loopback", endpoint="http://127.0.0.1:8000", model="fixture"
+                ),
+                LLMConfig(
+                    endpoint="https://llm.invalid/v1",
+                    model="fixture-v1",
+                    credential_env="TOKEN",
+                ),
+            ),
+            _credential_reader=credential_reader,
+            _mineru_client_factory=mineru_factory,
+            _analysis_provider_factory=provider_factory,
+        )
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            exit_code = analyze.run(args)
+
+        payload = json.loads(output.getvalue())
+        item = payload["items"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            (item["status"], item["reason"], item["final_stage"]),
+            ("exhausted", "exhausted", "asset_pending"),
+        )
+        self.assertEqual(
+            item["result"]["outcomes"],
+            [{
+                "action": "acquire_primary",
+                "disposition": "not_advanced",
+                "reason": "exhausted",
+                "before": "asset_pending",
+                "after": "asset_pending",
+            }],
+        )
+        credential_reader.assert_not_called()
+        mineru_factory.assert_not_called()
+        provider_factory.assert_not_called()
+        mineru.health.assert_not_called()
+        mineru.submit.assert_not_called()
+        mineru.status.assert_not_called()
+        mineru.result.assert_not_called()
+        provider.analyze.assert_not_called()

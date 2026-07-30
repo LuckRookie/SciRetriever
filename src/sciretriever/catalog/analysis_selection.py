@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
+from sciretriever.catalog.completion_facts import CompletionFactsRepository, CompletionStage
 from sciretriever.catalog.engine import CatalogEngine
 from sciretriever.catalog.library_read import LibraryFilters, LibraryReadRepository
 from sciretriever.catalog.models import current_analyses, raw_assets, work_version_assets, work_versions
@@ -32,6 +33,7 @@ class WorkVersionAnalysisRepository:
     def __init__(self, catalog: CatalogEngine) -> None:
         self._catalog = catalog
         self._library = LibraryReadRepository(catalog)
+        self._facts = CompletionFactsRepository(catalog)
 
     def _pending(self, ids: tuple[str, ...], *, force: bool) -> AnalysisSelection:
         if force or not ids:
@@ -51,17 +53,20 @@ class WorkVersionAnalysisRepository:
         return self._pending(tuple(item.work_version_id for item in result.items), force=force)
 
     def select_library(self, query: str | None, *, filters: LibraryFilters, limit: int,
-                       force: bool = False) -> AnalysisSelection:
+                        force: bool = False) -> AnalysisSelection:
         result = self._library.search(query, filters=filters, limit=limit)
-        return self._pending(tuple(item.work_version_id for item in result.items), force=force)
+        ids = tuple(item.work_version_id for item in result.items)
+        if force:
+            return AnalysisSelection(ids)
+        return AnalysisSelection(tuple(
+            value for value in ids
+            if self._facts.get(value).stage == CompletionStage.ANALYSIS_PENDING
+        ))
 
     def select_all_pending(self, *, limit: int) -> AnalysisSelection:
-        statement = (select(work_versions.c.id).outerjoin(
-            current_analyses, current_analyses.c.work_version_id == work_versions.c.id)
-            .where(current_analyses.c.id.is_(None))
-            .order_by(work_versions.c.normalized_title, work_versions.c.id).limit(limit))
-        with self._catalog.connect() as connection:
-            return AnalysisSelection(tuple(connection.execute(statement).scalars()))
+        return AnalysisSelection(
+            self._facts.select_by_stage(CompletionStage.ANALYSIS_PENDING, limit)
+        )
 
     def select_all_current(self, *, limit: int, force: bool) -> AnalysisSelection:
         if not force:

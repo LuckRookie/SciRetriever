@@ -124,6 +124,7 @@ def inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
         _add_scalar(injected, present, "--catalog", config.paths.catalog)
         for option, value in (
             ("--level", values.level), ("--limit", values.limit),
+            ("--completion-limit", values.completion_limit),
             ("--provider-timeout", values.provider_timeout), ("--max-concurrency", values.max_concurrency),
             ("--crossref-mailto", values.crossref_mailto),
         ):
@@ -134,6 +135,9 @@ def inject_config(argv: list[str], config: SciRetrieverConfig) -> list[str]:
         if "--provider" not in present and "--precedence" not in present and values.precedence is not None:
             for provider in values.precedence:
                 injected.extend(("--precedence", provider))
+        if "--filter" not in present:
+            for name, value in values.filters:
+                injected.extend(("--filter", f"{name}={value}"))
         if (_option_value(argv, "--level") or values.level) in {"download", "analyze"}:
             injected.extend(_acquisition_tokens(config, present, "--download-"))
     elif command == "download":

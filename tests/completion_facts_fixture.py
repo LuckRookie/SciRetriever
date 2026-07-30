@@ -5,7 +5,7 @@ from io import BytesIO
 import json
 import sys
 from tempfile import TemporaryDirectory
-from unittest import TestCase
+from unittest import TestCase, mock
 from uuid import uuid4
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -17,9 +17,11 @@ from sciretriever.catalog import (
     CompletionFactsRepository,
     CompletionStage,
     IdentityResolver,
+    LibraryFilters,
     MetadataIngestionObservation,
     TagRepository,
     WorkRepository,
+    WorkVersionAnalysisRepository,
     create_catalog_engine,
     initialize_catalog,
 )
@@ -42,6 +44,7 @@ class CompletionFactsFixture(TestCase):
         self.addCleanup(self.catalog.dispose)
         initialize_catalog(self.catalog)
         self.repository = CompletionFactsRepository(self.catalog)
+        self.analysis_selection = WorkVersionAnalysisRepository(self.catalog)
         self.storage = Path(self.temporary.name) / "storage"
         self.storage.mkdir()
         self.raw_store = RawAssetStore(self.storage)

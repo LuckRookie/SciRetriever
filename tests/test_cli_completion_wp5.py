@@ -48,8 +48,9 @@ def arguments(level: str) -> argparse.Namespace:
     return argparse.Namespace(
         query="https://doi.org/10.1234/Example", level=level,
         catalog=Path("catalog.sqlite"), storage_root=None,
-        provider=["crossref"], precedence=["crossref"], limit=100,
+        provider=["crossref"], precedence=["crossref"], limit=1000, completion_limit=100,
         provider_timeout=30.0, max_concurrency=8, crossref_mailto=None,
+        filter=[],
         download_provider=["direct"], download_timeout=30.0,
         download_provider_concurrency=4, host_concurrency=2,
         host_min_interval=0.0, max_asset_bytes=1024, forbidden_urls=None,
@@ -130,6 +131,58 @@ class CliCompletionWp5Tests(unittest.TestCase):
         self.assertEqual(runtime.search_calls, 1)
         self.assertEqual(seen, ((search.WorkVersionTarget(second), search.WorkVersionTarget(first)),
                                 CompletionStop.ASSET))
+
+    def test_deep_search_completes_only_first_configured_metadata_targets(self) -> None:
+        runtime = RuntimeFake()
+        runtime.output = SimpleNamespace(results=(), failures=())
+        runtime.target_ids = tuple(
+            f"00000000-0000-4000-8000-{index:012d}" for index in range(1000)
+        )
+        seen = None
+
+        async def run_batch(_pipeline, targets, stop):
+            nonlocal seen
+            seen = (targets, stop)
+            return BatchResult(BatchPolicy(), ())
+
+        args = arguments("download")
+        args.query = "ordinary query"
+        args.completion_limit = 7
+        with mock.patch.object(search, "build_search_completion_runtime", return_value=runtime), \
+                mock.patch.object(search, "run_completion_batch", side_effect=run_batch), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = search.run(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, (
+            tuple(search.WorkVersionTarget(value) for value in runtime.target_ids[:7]),
+            CompletionStop.ASSET,
+        ))
+
+    def test_metadata_level_processes_every_persisted_metadata_target(self) -> None:
+        runtime = RuntimeFake()
+        runtime.output = SimpleNamespace(results=(), failures=())
+        runtime.target_ids = tuple(
+            f"00000000-0000-4000-8000-{index:012d}" for index in range(10)
+        )
+        seen = None
+
+        async def run_batch(_pipeline, targets, stop):
+            nonlocal seen
+            seen = (targets, stop)
+            return BatchResult(BatchPolicy(), ())
+
+        args = arguments("metadata")
+        args.query = "ordinary query"
+        args.completion_limit = 7
+        with mock.patch.object(search, "build_search_completion_runtime", return_value=runtime), \
+                mock.patch.object(search, "run_completion_batch", side_effect=run_batch), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = search.run(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, (
+            tuple(search.WorkVersionTarget(value) for value in runtime.target_ids),
+            CompletionStop.METADATA,
+        ))
 
     def test_batch_partial_failure_and_interruption_preserve_sanitized_shape(self) -> None:
         first = search.WorkVersionTarget("11111111-1111-4111-8111-111111111111")

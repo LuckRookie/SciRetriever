@@ -26,7 +26,12 @@ from sciretriever.cli import package as package_cli
 from sciretriever.network import HeadersResponse
 from sciretriever.core.contracts import DownloadManifestEntry
 from sciretriever.core.enums import PackageQuality
-from sciretriever.discovery import LabelInput, ProviderRecord
+from sciretriever.discovery import (
+    DiscoveryOutput,
+    LabelInput,
+    ProviderFailure,
+    ProviderRecord,
+)
 
 
 EXPLICIT_RUN_ID = "00000000-0000-4000-8000-000000000001"
@@ -58,7 +63,7 @@ class CliTests(TestCase):
 
     def discover_args(self, *extra: str) -> list[str]:
         return [
-            "discover",
+            "--no-config", "discover",
             "catalysis",
             "--catalog",
             str(self.catalog),
@@ -94,7 +99,7 @@ class CliTests(TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as raised:
-                main(["catalog", "--help"])
+                main(["--no-config", "catalog", "--help"])
         self.assertEqual(raised.exception.code, 0)
         for command in ("create", "import-asset"):
             self.assertIn(command, output.getvalue())
@@ -103,7 +108,7 @@ class CliTests(TestCase):
     def test_download_exists_and_durable_acquire_controls_are_removed(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
-            main(["download", "--help"])
+            main(["--no-config", "download", "--help"])
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--all-missing", output.getvalue())
         commands = (
@@ -120,7 +125,7 @@ class CliTests(TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as raised:
-                main(["discover", "--help"])
+                main(["--no-config", "discover", "--help"])
 
         self.assertEqual(raised.exception.code, 0)
         help_text = output.getvalue()
@@ -138,7 +143,7 @@ class CliTests(TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             with self.assertRaises(SystemExit) as raised:
-                main(["package", "--help"])
+                main(["--no-config", "package", "--help"])
         self.assertEqual(raised.exception.code, 0)
         for option in (
             "--catalog", "--storage-root", "--work-id", "--raw-asset-id",
@@ -310,7 +315,7 @@ max_asset_bytes = 1
             with self.subTest(extra=extra):
                 with contextlib.redirect_stderr(io.StringIO()):
                     with self.assertRaises(SystemExit) as raised:
-                        main([*base, *extra])
+                        main(["--no-config", *base, *extra])
                 self.assertEqual(raised.exception.code, 2)
 
     def test_discover_defaults_build_all_providers_and_generated_provenance(self) -> None:
@@ -329,15 +334,18 @@ max_asset_bytes = 1
             mock.patch("sciretriever.cli.discover.build_arxiv_provider", return_value=providers[2]) as arxiv,
             mock.patch("sciretriever.cli.discover.new_uuid4", return_value=generated_run_id),
             mock.patch("sciretriever.cli.discover.utc_now_rfc3339", return_value=generated_time),
-            mock.patch("sciretriever.cli.discover.discover_to_jsonl", return_value=()) as discover,
+            mock.patch(
+                "sciretriever.cli.discover.discover_to_jsonl",
+                return_value=DiscoveryOutput((), ()),
+            ) as discover,
         ):
-            result = main(["--no-config", *self.discover_args()])
+            result = main(self.discover_args())
 
         self.assertEqual(result, 0)
         spec = discover.call_args.args[0]
         self.assertEqual(spec.query, "catalysis")
         self.assertEqual(spec.sources, ("crossref", "europe-pmc", "arxiv"))
-        self.assertEqual(spec.limit, 100)
+        self.assertEqual(spec.limit, 1000)
         self.assertEqual(spec.filters, ())
         self.assertEqual(discover.call_args.kwargs["intake_run_id"], generated_run_id)
         self.assertEqual(discover.call_args.kwargs["retrieved_at"], generated_time)
@@ -359,7 +367,10 @@ max_asset_bytes = 1
             mock.patch("sciretriever.cli.discover.ReadOnlyCatalogView", return_value=mock.sentinel.catalog),
             mock.patch("sciretriever.cli.discover.build_crossref_provider", return_value=mock.sentinel.crossref),
             mock.patch("sciretriever.cli.discover.build_arxiv_provider", return_value=mock.sentinel.arxiv),
-            mock.patch("sciretriever.cli.discover.discover_to_jsonl", return_value=()) as discover,
+            mock.patch(
+                "sciretriever.cli.discover.discover_to_jsonl",
+                return_value=DiscoveryOutput((), ()),
+            ) as discover,
             mock.patch("sciretriever.cli.discover.new_uuid4") as new_uuid,
             mock.patch("sciretriever.cli.discover.utc_now_rfc3339") as utc_now,
         ):
@@ -434,6 +445,32 @@ max_asset_bytes = 1
         self.assertEqual(entry.provenance.intake_run_id, EXPLICIT_RUN_ID)
         self.assertIn(f"Wrote 1 entries to {self.output}", output.getvalue())
 
+    def test_discover_partial_failure_prints_only_sanitized_warning(self) -> None:
+        self.catalog.touch()
+        engine = mock.MagicMock()
+        engine.read_only = True
+        error = io.StringIO()
+        with (
+            mock.patch("sciretriever.cli.discover.open_read_only_catalog_engine", return_value=engine),
+            mock.patch("sciretriever.cli.discover.ReadOnlyCatalogView", return_value=mock.sentinel.catalog),
+            mock.patch("sciretriever.cli.discover._providers", return_value={}),
+            mock.patch(
+                "sciretriever.cli.discover.discover_to_jsonl",
+                return_value=DiscoveryOutput(
+                    (),
+                    (ProviderFailure("arxiv", "transport", "provider search failed"),),
+                ),
+            ),
+            contextlib.redirect_stderr(error),
+        ):
+            result = main(self.discover_args())
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            error.getvalue(),
+            "sciretriever: warning: arxiv: transport: provider search failed\n",
+        )
+
     def test_discover_always_disposes_read_only_engine_on_operational_failure(self) -> None:
         self.catalog.touch()
         engine = mock.MagicMock()
@@ -491,7 +528,7 @@ max_asset_bytes = 1
         with (
             mock.patch(
                 "sciretriever.cli.discover._execute",
-                return_value=(self.output, 0),
+                return_value=(self.output, 0, ()),
             ) as execute,
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(error),

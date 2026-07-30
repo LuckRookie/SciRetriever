@@ -18,8 +18,8 @@ class DocumentStartGate:
     ) -> None:
         if not isinstance(interval, (int, float)) or isinstance(interval, bool):
             raise TypeError("document start interval must be numeric")
-        if not math.isfinite(interval) or interval <= 0:
-            raise ValueError("document start interval must be positive and finite")
+        if not math.isfinite(interval) or not 30 <= interval <= 86_400:
+            raise ValueError("document start interval must be finite and between 30 and 86400")
         self.interval = float(interval)
         self._monotonic = monotonic
         self._sleep = sleep

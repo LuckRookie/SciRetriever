@@ -165,21 +165,22 @@ max_text_characters = 50
                 with self.assertRaises(ConfigError):
                     load_config(self.write(text, name))
 
-    def test_example_contains_no_active_credentials_and_matches_package_defaults(self) -> None:
-        loaded = load_config(REPOSITORY / "config.example.toml")
+    def test_minimal_config_has_no_active_credentials_or_advanced_overrides(self) -> None:
+        loaded = load_config(REPOSITORY / "docs" / "guides" / "config.minimal.toml")
         self.assertTrue(all(loaded.credentials.get(name) is None for name in (
             "unpaywall_email", "semantic_scholar_api_key", "elsevier_api_key",
             "wiley_api_key", "springer_api_key",
         )))
-        defaults = NormalizationParameters()
-        self.assertEqual(loaded.package.max_input_bytes, defaults.max_input_bytes)
-        self.assertEqual(loaded.package.max_pages, defaults.max_pages)
-        self.assertEqual(loaded.package.max_structural_units, defaults.max_structural_units)
-        self.assertEqual(loaded.package.max_depth, defaults.max_depth)
-        self.assertEqual(loaded.package.max_elements, defaults.max_elements)
-        self.assertEqual(loaded.package.max_text_characters, defaults.max_text_characters)
-        self.assertIsNotNone(loaded.acquisition.forbidden_urls)
-        self.assertTrue(loaded.acquisition.forbidden_urls.is_file())
+        self.assertEqual(loaded.discovery.sources, ("crossref", "europe-pmc", "arxiv"))
+        self.assertEqual(loaded.search.level, "metadata")
+        self.assertEqual(loaded.search.providers, ("crossref", "europe-pmc", "arxiv"))
+        self.assertEqual(
+            loaded.acquisition.providers,
+            ("direct", "arxiv", "crossref", "europe-pmc"),
+        )
+        self.assertIsNone(loaded.acquisition.forbidden_urls)
+        self.assertEqual(loaded.analysis.mineru.mode, "disabled")
+        self.assertIsNone(loaded.package.max_input_bytes)
 
     def test_credential_mode_is_enforced_without_exposing_value(self) -> None:
         secret = "DO-NOT-PRINT"
@@ -210,20 +211,26 @@ max_text_characters = 50
 [search]
 level = "metadata"
 limit = 100
+completion_limit = 7
 providers = ["crossref", "openalex", "semantic-scholar"]
 precedence = ["semantic-scholar", "crossref", "openalex"]
 provider_timeout = 8.5
 max_concurrency = 3
 crossref_mailto = "reader@example.org"
+[search.filters]
+year_from = 2020
+year_to = 2025
 """
         ))
         self.assertEqual(config.search.level, "metadata")
         self.assertEqual(config.search.limit, 100)
+        self.assertEqual(config.search.completion_limit, 7)
         self.assertEqual(config.search.providers, ("crossref", "openalex", "semantic-scholar"))
         self.assertEqual(config.search.precedence, ("semantic-scholar", "crossref", "openalex"))
         self.assertEqual(config.search.provider_timeout, 8.5)
         self.assertEqual(config.search.max_concurrency, 3)
         self.assertEqual(config.search.crossref_mailto, "reader@example.org")
+        self.assertEqual(config.search.filters, (("year_from", "2020"), ("year_to", "2025")))
 
     def test_search_config_accepts_processing_levels(self) -> None:
         for level in ("download", "analyze"):
@@ -239,12 +246,18 @@ crossref_mailto = "reader@example.org"
             "unknown.toml": "unknown = true",
             "level.toml": 'level = "future"',
             "limit.toml": "limit = 0",
+            "completion-limit-zero.toml": "completion_limit = 0",
+            "completion-limit-negative.toml": "completion_limit = -1",
             "timeout.toml": "provider_timeout = inf",
             "concurrency.toml": "max_concurrency = true",
             "mailto.toml": 'crossref_mailto = "   "',
             "providers-type.toml": 'providers = "crossref"\nprecedence = ["crossref"]',
             "unsupported-provider.toml": 'providers = ["unknown"]\nprecedence = ["unknown"]',
             "duplicate-precedence.toml": 'providers = ["crossref", "arxiv"]\nprecedence = ["crossref", "crossref"]',
+            "unknown-filter.toml": "[search.filters]\npublisher = 2020",
+            "nonnumeric-filter.toml": '[search.filters]\nyear_from = "20x0"',
+            "out-of-range-filter.toml": "[search.filters]\nyear_to = 10000",
+            "reversed-filter.toml": "[search.filters]\nyear_from = 2026\nyear_to = 2025",
         }
         for name, body in cases.items():
             with self.subTest(name=name), self.assertRaises(ConfigError):
@@ -573,27 +586,33 @@ catalog = "catalog.sqlite"
 [search]
 level = "metadata"
 limit = 100
+completion_limit = 7
 providers = ["crossref", "openalex"]
 precedence = ["openalex", "crossref"]
 provider_timeout = 9.5
 max_concurrency = 4
 crossref_mailto = "configured@example.org"
+[search.filters]
+year_from = 2020
+year_to = 2025
 """
         ))
         injected = _inject_config(["search", "catalysis"], config)
         self.assertEqual(injected, [
             "search", "catalysis", "--catalog", str(self.catalog),
-            "--level", "metadata", "--limit", "100", "--provider-timeout", "9.5",
+            "--level", "metadata", "--limit", "100", "--completion-limit", "7",
+            "--provider-timeout", "9.5",
             "--max-concurrency", "4", "--crossref-mailto", "configured@example.org",
             "--provider", "crossref", "--provider", "openalex",
             "--precedence", "openalex", "--precedence", "crossref",
+            "--filter", "year_from=2020", "--filter", "year_to=2025",
         ])
 
         explicit = [
             "search", "catalysis", "--catalog", "explicit.sqlite", "--level", "metadata",
-            "--limit=7", "--provider-timeout", "2", "--max-concurrency=2",
+            "--limit=7", "--completion-limit", "3", "--provider-timeout", "2", "--max-concurrency=2",
             "--crossref-mailto", "explicit@example.org", "--provider", "arxiv",
-            "--precedence", "arxiv",
+            "--precedence", "arxiv", "--filter", "year_from=2022",
         ]
         self.assertEqual(_inject_config(explicit, config), explicit)
 
@@ -605,9 +624,11 @@ crossref_mailto = "configured@example.org"
         precedence_only = ["search", "catalysis", "--precedence", "arxiv"]
         precedence_only_result = _inject_config(precedence_only, config)
         self.assertEqual(precedence_only_result.count("--precedence"), 1)
-        self.assertEqual(precedence_only_result[-4:], [
-            "--provider", "crossref", "--provider", "openalex",
-        ])
+        self.assertIn(
+            ["--provider", "crossref", "--provider", "openalex"],
+            [precedence_only_result[index:index + 4]
+             for index in range(len(precedence_only_result) - 3)],
+        )
 
         analyze_config = load_config(self.write(
             'schema_version = 1\n[paths]\ncatalog="catalog.sqlite"\nstorage_root="storage"\n'
@@ -652,7 +673,7 @@ crossref_mailto = "configured@example.org"
     def test_root_help_documents_config_selectors(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
-            main(["--help"])
+            main(["--no-config", "--help"])
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--config", output.getvalue())
         self.assertIn("--no-config", output.getvalue())

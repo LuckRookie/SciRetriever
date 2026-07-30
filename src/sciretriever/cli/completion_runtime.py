@@ -8,24 +8,23 @@ from typing import Protocol
 from sciretriever.acquisition.models import AcquisitionResult, AcquisitionTarget
 from sciretriever.acquisition.existing_asset import ExistingAssetImporter
 from sciretriever.catalog.assets import AssetRepository
-from sciretriever.catalog.completion_facts import CompletionFactsRepository, CompletionStage
+from sciretriever.catalog.completion_facts import CompletionFactsRepository
 from sciretriever.catalog.download_selection import WorkVersionDownloadRecord
 from sciretriever.catalog.engine import CatalogEngine, open_catalog_engine
 from sciretriever.catalog.download_selection import WorkVersionDownloadRepository
 from sciretriever.cli.acquisition_runtime import AcquisitionCliConfig, build_acquisition_service
 from sciretriever.cli.analysis_runtime import (
-    AnalysisCliRuntime, AnalysisRuntimeServices, build_analysis_services,
+    AnalysisCliRuntime, build_analysis_services,
 )
+from sciretriever.cli.analysis_completion import AtomicAnalysisAdapter
 from sciretriever.cli.completion_unconfigured import (
-    UNCONFIGURED_POLICY, UnconfiguredAnalysisPromotion, UnconfiguredExactMetadata,
-    UnconfiguredOptionalAssets, UnconfiguredRequiredPrimary,
+    AnalysisOnlyRequiredPrimary, UNCONFIGURED_POLICY, UnconfiguredAnalysisPromotion,
+    UnconfiguredExactMetadata, UnconfiguredOptionalAssets, UnconfiguredRequiredPrimary,
 )
 from sciretriever.cli.completion_context import (
     CommandCompletionRuntime, CompletionInvocationContext, CompletionRuntimeOptions,
 )
 from sciretriever.completion import (
-    AnalysisPromotionRequest,
-    AnalysisPromotionResult,
     AtomicAnalysisPromotion,
     CompletionInvariantError,
     CompletionFactInspector,
@@ -162,34 +161,6 @@ class OptionalAssetAdapter:
                 raise ValueError("acquisition owner returned an unknown status")
 
 
-class AtomicAnalysisAdapter:
-    def __init__(self, services: AnalysisRuntimeServices) -> None:
-        self.services = services
-
-    def promote(self, request: AnalysisPromotionRequest) -> AnalysisPromotionResult:
-        services = self.services
-        before = services.facts.get(request.work_version_id)
-        raw_asset_id = before.primary_pdf_id
-        if raw_asset_id is None:
-            raise ValueError("analysis promotion requires one accepted primary PDF")
-        raw = services.assets.get_raw_asset(raw_asset_id)
-        if raw is None:
-            raise ValueError("accepted primary PDF record is missing")
-        pdf = services.raw_store.read_verified(raw.storage_path, raw.sha256,
-                                               raw.byte_size, services.max_pdf_bytes)
-        parsed = services.parsing.run(request.work_version_id, raw.id, pdf)
-        source = services.mapping.run(request.work_version_id, parsed)
-        services.analysis.run(request.work_version_id, source,
-                          expected_current_id=request.expected_current_analysis_id,
-                          expected_revision=before.current_revision,
-                          force=request.replace_current)
-        after = services.facts.get(request.work_version_id)
-        if after.current_analysis_id is None or after.stage is not CompletionStage.COMPLETE:
-            raise ValueError("analysis owner did not publish an aligned current result")
-        return AnalysisPromotionResult(request.work_version_id,
-                                       after.current_analysis_id, after.current_revision)
-
-
 @dataclass(frozen=True, slots=True)
 class CompletionRuntimeAdapters:
     identifiers: WorkVersionIdentifierLookup
@@ -234,7 +205,11 @@ def build_completion_runtime(
     downloads = WorkVersionDownloadRepository(catalog)
     facts = CompletionFactsRepository(catalog)
     if options.acquisition is None:
-        required = UnconfiguredRequiredPrimary()
+        required = (
+            AnalysisOnlyRequiredPrimary()
+            if options.analysis is not None
+            else UnconfiguredRequiredPrimary()
+        )
         optional = UnconfiguredOptionalAssets()
     else:
         owner = build_acquisition_service(options.acquisition, catalog, context.storage_root)
@@ -244,10 +219,9 @@ def build_completion_runtime(
         )
         required = RequiredPrimaryAdapter(configured)
         optional = OptionalAssetAdapter(configured)
-    promotion = UnconfiguredAnalysisPromotion() if options.analysis is None else (
-        AtomicAnalysisAdapter(
-            build_analysis_services(options.analysis, catalog, context.storage_root)
-        )
+    analysis = options.analysis
+    promotion = UnconfiguredAnalysisPromotion() if analysis is None else AtomicAnalysisAdapter(
+        lambda: build_analysis_services(analysis, catalog, context.storage_root)
     )
     adapters = CompletionRuntimeAdapters(
         WorkVersionIdentifierAdapter(downloads), UnconfiguredExactMetadata(),

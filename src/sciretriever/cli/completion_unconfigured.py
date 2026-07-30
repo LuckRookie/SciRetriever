@@ -2,7 +2,8 @@
 
 from sciretriever.completion import (
     AnalysisPromotionRequest, AnalysisPromotionResult, MetadataResolutionPolicy,
-    OptionalAssetRequest, OptionalAssetResult, RequiredPrimaryResult,
+    OptionalAssetRequest, OptionalAssetResult, OutcomeDisposition, OutcomeReason,
+    RequiredPrimaryResult,
 )
 from sciretriever.discovery.search_contracts import ExactMetadataOutput, ExactMetadataRequest
 from sciretriever.errors import ConfigError
@@ -16,6 +17,13 @@ class UnconfiguredExactMetadata:
 class UnconfiguredRequiredPrimary:
     async def acquire(self, work_version_id: str) -> RequiredPrimaryResult:
         raise ConfigError("required acquisition is not configured")
+
+
+class AnalysisOnlyRequiredPrimary:
+    async def acquire(self, work_version_id: str) -> RequiredPrimaryResult:
+        return RequiredPrimaryResult(
+            work_version_id, OutcomeDisposition.NOT_ADVANCED, OutcomeReason.EXHAUSTED
+        )
 
 
 class UnconfiguredOptionalAssets:
@@ -32,6 +40,7 @@ UNCONFIGURED_POLICY = MetadataResolutionPolicy(("unconfigured",), ("unconfigured
 
 
 __all__ = (
-    "UNCONFIGURED_POLICY", "UnconfiguredAnalysisPromotion", "UnconfiguredExactMetadata",
+    "AnalysisOnlyRequiredPrimary", "UNCONFIGURED_POLICY", "UnconfiguredAnalysisPromotion",
+    "UnconfiguredExactMetadata",
     "UnconfiguredOptionalAssets", "UnconfiguredRequiredPrimary",
 )

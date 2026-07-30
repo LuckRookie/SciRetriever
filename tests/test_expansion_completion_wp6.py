@@ -89,7 +89,7 @@ class ExpansionCompletionAcceptanceTests(IsolatedAsyncioTestCase):
         converging_adapter = PipelineLayerCompletion(ExpansionCompletionServices(
             fixture.runtime.pipeline,
             RecordingPacer(DocumentStartGate(
-                1.0, monotonic=lambda: rerun_now[0], sleep=immediate_sleep,
+                30.0, monotonic=lambda: rerun_now[0], sleep=immediate_sleep,
             )),
             CatalogDiagnosticService(fixture.catalog),
         ))

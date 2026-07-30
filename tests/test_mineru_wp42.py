@@ -320,6 +320,8 @@ class ScriptedClient:
         self.interrupt_status = interrupt_status
         self.submissions = 0
         self.result_calls = 0
+        self.status_task_ids = []
+        self.result_task_ids = []
         self.results = list(results or [])
 
     def health(self, timeout):
@@ -333,6 +335,7 @@ class ScriptedClient:
         return MinerUTask(task_id, MinerUTaskStatus.PENDING)
 
     def status(self, task_id, timeout):
+        self.status_task_ids.append(task_id)
         if self.interrupt_status:
             raise KeyboardInterrupt
         value = self.statuses.pop(0)
@@ -340,6 +343,7 @@ class ScriptedClient:
 
     def result(self, task_id, timeout):
         self.result_calls += 1
+        self.result_task_ids.append(task_id)
         if self.results:
             return self.results.pop(0)
         return MinerUResult(MinerUResultState.COMPLETED, self.archive)
@@ -423,6 +427,8 @@ class MinerUServiceTests(TestCase):
         result = self.service(client).run(self.work_id, self.raw_id, self.pdf)
         attempts = self.service(client).attempts.list_for_run(result.run.id)
         self.assertEqual(client.submissions, 2)
+        self.assertEqual(client.status_task_ids, [TASK_ONE, TASK_TWO])
+        self.assertEqual([item.external_task_id for item in attempts], [TASK_ONE, TASK_TWO])
         self.assertEqual([item.state for item in attempts], ["expired", "succeeded"])
 
     def test_result_404_expires_and_resubmits_under_same_run(self) -> None:
@@ -433,6 +439,9 @@ class MinerUServiceTests(TestCase):
         result = self.service(client).run(self.work_id, self.raw_id, self.pdf)
         attempts = self.service(client).attempts.list_for_run(result.run.id)
         self.assertEqual(client.submissions, 2)
+        self.assertEqual(client.status_task_ids, [TASK_ONE, TASK_TWO])
+        self.assertEqual(client.result_task_ids, [TASK_ONE, TASK_TWO])
+        self.assertEqual([item.external_task_id for item in attempts], [TASK_ONE, TASK_TWO])
         self.assertEqual([item.state for item in attempts], ["expired", "succeeded"])
 
     def test_expired_tasks_stop_at_configured_attempt_limit(self) -> None:
@@ -452,6 +461,7 @@ class MinerUServiceTests(TestCase):
             service._parameters(), input_raw_asset_ids=(self.raw_id,),
         )
         self.assertEqual(client.submissions, 2)
+        self.assertEqual(client.status_task_ids, [TASK_ONE, TASK_TWO])
         self.assertEqual(
             [attempt.state for attempt in service.attempts.list_for_run(run.id)],
             ["expired", "expired"],
@@ -497,11 +507,16 @@ class MinerUServiceTests(TestCase):
         self.assertEqual(row[1], "active")
         attempts = service.attempts.list_for_run(row[0])
         self.assertEqual([item.state for item in attempts], ["active"])
+        self.assertEqual(attempts[0].external_task_id, TASK_ONE)
+        with self.assertRaises(KeyboardInterrupt):
+            service.run(self.work_id, self.raw_id, self.pdf)
         interrupted.interrupt_status = False
         interrupted.statuses.append(MinerUTaskStatus.COMPLETED)
         result = service.run(self.work_id, self.raw_id, self.pdf)
         self.assertEqual(result.run.id, row[0])
         self.assertEqual(interrupted.submissions, 1)
+        self.assertEqual(interrupted.status_task_ids, [TASK_ONE, TASK_ONE, TASK_ONE])
+        self.assertEqual(interrupted.result_task_ids, [TASK_ONE])
         self.assertEqual(
             [item.state for item in service.attempts.list_for_run(row[0])],
             ["succeeded"],
