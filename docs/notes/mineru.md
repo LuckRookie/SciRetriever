@@ -1,6 +1,6 @@
 # MinerU 接入注意事项
 
-> Status: current released PDF analysis behavior. Accepted configuration is defined by `config.py` and `config.example.toml`; operator-only `mineru-api` commands manage the external service independently of SciRetriever.
+> Status: current released PDF analysis behavior. Accepted configuration is defined by `config.py`, the complete `docs/guides/config.toml` template and the configuration guide; operator-only `mineru-api` commands manage the external service independently of SciRetriever.
 
 This note records the external MinerU contract approved in [ADR 0003](../architecture/decisions/0003-operator-managed-mineru-service.md). Product behavior is owned by the requirements and system design; this document explains deployment, readiness, incident handling and evidence needed to use that capability safely.
 
@@ -102,7 +102,7 @@ The operator should record, outside the repository:
 
 ## 5. Current connection configuration
 
-This is a minimal accepted shape. [`config.example.toml`](../../config.example.toml) is the exhaustive list of accepted safety bounds and exact field names:
+This is a minimal accepted shape. The complete [`config.toml`](../guides/config.toml) template and [configuration guide](../guides/configuration.md) list every accepted safety bound and exact field name:
 
 ```toml
 [analysis.mineru]

@@ -6,7 +6,7 @@ created = "2026-07-22"
 
 # 文献自动下载产品方案
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的旧产品方向，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的旧产品方向，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 面向读者：产品 owner、普通用户、后续实施者

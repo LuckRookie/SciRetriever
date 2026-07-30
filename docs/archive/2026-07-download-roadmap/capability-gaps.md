@@ -6,7 +6,7 @@ created = "2026-07-22"
 
 # SciRetriever 能力差距台账
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的评估，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的评估，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 对比基线：SciRetriever 当前 v2 实现、工作区中的 `scansci-pdf` 参考快照与 Zotero 客户端/translators

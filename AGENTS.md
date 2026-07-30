@@ -5,8 +5,8 @@
 ## 1. 主规范
 
 1. 阅读 [`HARNESS.md`](HARNESS.md) 的工作流、质量、Git 和完成标准。
-2. 先按 [架构决策索引](docs/architecture/decisions/README.md)判断权威范围：项目领域边界或 `DocumentPackage` 适用 ADR 0001；产品中心、WorkVersion、PDF analysis、CLI 方向或旧任务行为删除适用 ADR 0002；MinerU parser/service ownership、连接和 attempt/evidence 边界适用 ADR 0003。
-3. 涉及模块边界、数据所有权或持久化时读[架构原则](docs/architecture/principles.md)和[系统设计](docs/architecture/system-design.md)。
+2. 先读[产品需求](docs/architecture/requirements.md)，再按[架构决策索引](docs/architecture/decisions/README.md)判断已接受约束：领域与数据边界适用 ADR 0001；Work/WorkVersion 内部身份和单机增量处理适用 ADR 0002；MinerU parser adapter 边界适用 ADR 0003；需求与派生设计的责任边界适用 ADR 0004。
+3. 涉及系统设计、模块边界、数据所有权或持久化时，依次读[架构原则](docs/architecture/principles.md)、[系统设计](docs/architecture/system-design.md)和[技术架构](docs/architecture/technical-architecture.md)；先检查它们能否追溯到需求，不得用当前代码反向证明目标设计正确。
 4. 按[代码与文档同步映射](docs/development/documentation-map.md)判断文档同步范围。
 5. 默认沟通和项目文档使用中文；代码标识符、异常和提交信息使用英文。
 
@@ -14,8 +14,8 @@
 
 | 字段 | 值 |
 |---|---|
-| 项目定位 | 当前为文献发现、采集、不可变保存和处理快照工具；批准目标为以 Work 为中心的本地文献库 |
-| 权威边界 | 带版本和 provenance 的 `DocumentPackageVersion` |
+| 项目定位 | 面向指定领域的大批量文献收集工具；通过多来源元数据搜索、资产获取和轻结构化文本解析形成文献数据库 |
+| 权威边界 | 文献元数据、资产信息、轻结构化文本和通用结构化文献分析结果；领域数据留在下游 |
 | 主要语言/运行时 | Python 3.10+；开发基线 Python 3.12 |
 | 包管理器 | uv；锁文件 `uv.lock` |
 | 默认分支 | `master` |
@@ -55,75 +55,62 @@
 - 首次冒烟：`uv run --frozen sciretriever --version`。
 - 测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。
 
-## 4. 项目结构
+## 4. 当前实现结构
+
+下表用于定位现有代码，不定义下一版目标架构。模块是否保留、拆分或调整，必须从产品需求和已接受 ADR 重新推导。
 
 | 路径 | 职责 | 稳定性/风险 |
 |---|---|---|
-| `src/sciretriever/core/` | 中性契约、枚举、ID、hash、文献包 | stable / 公开契约高风险 |
-| `src/sciretriever/catalog/` | SQLite schema、身份、状态、关系 | stable / 持久化高风险 |
-| `src/sciretriever/discovery/` | 元数据清洗、去重、合并、标注和清单 | stable |
+| `src/sciretriever/core/` | 当前中性契约、枚举、ID、hash 和文献包 | 公开契约高风险 |
+| `src/sciretriever/catalog/` | 当前 SQLite schema、身份、状态和关系 | 持久化高风险 |
+| `src/sciretriever/discovery/` | 当前 metadata 候选检索、身份匹配和 sink 投影 | 多来源收敛高风险 |
 | `src/sciretriever/integrations/` | 供应商共享 client 和中性 DTO | evolving / 外部 API 风险 |
-| `src/sciretriever/network/` | HTTPS、DNS、重定向和响应边界 | stable / 安全高风险 |
-| `src/sciretriever/acquisition/` | WorkVersion resolver、tier 编排、候选执行、身份/内容验证和验收 | evolving / 生命周期高风险 |
-| `src/sciretriever/completion/` | 从 catalog 事实派生四阶段、只调用下一缺失阶段、批处理/中断、force analysis 与可选资产操作 | stable / 跨阶段应用契约高风险 |
-| `src/sciretriever/storage/` | Raw/Derived 不可变发布和恢复 | stable / durability 高风险 |
-| `src/sciretriever/normalization/` | PDF/XML/HTML 统一归一化 | stable |
-| `src/sciretriever/packaging/` | 质量门与版本化发布 | stable |
-| `src/sciretriever/cli/` | composition root 和配置装配 | evolving |
+| `src/sciretriever/network/` | 当前 HTTPS、DNS、重定向和响应边界 | 安全高风险 |
+| `src/sciretriever/acquisition/` | 当前 WorkVersion resolver、候选执行、验证和验收 | 资产生命周期高风险 |
+| `src/sciretriever/completion/` | 当前阶段派生、补全编排和批处理机制 | 待设计审查 |
+| `src/sciretriever/storage/` | 当前 Raw/Derived 不可变发布和恢复 | durability 高风险 |
+| `src/sciretriever/normalization/` | 当前 PDF/XML/HTML 归一化和 parser 接入 | 解析边界高风险 |
+| `src/sciretriever/packaging/` | 当前处理快照发布 | 公开导出合同高风险 |
+| `src/sciretriever/cli/` | 当前 composition root 和配置装配 | 用户入口高风险 |
 
-## 5. 架构边界
+## 5. 产品边界与设计治理
 
-```text
-CLI / adapters
-      │
-      ├── Completion ──▶ Catalog facts
-      │       ├── Discovery ──▶ shared integrations/network
-      │       ├── Acquisition ─▶ shared integrations/network
-      │       └── Normalization / current analysis
-      ├── Catalog / Storage
-      └── Packaging
-                         │
-                         ▼
-              core contracts / DocumentPackage
-```
-
-- `search`、`download`、`analyze` 和 primary-PDF import 由 CLI composition root 装配同一个 completion 契约；命令模块不得直接串接阶段服务。`discover` 的 `DownloadManifest` 仍是独立只读文件输出。
-- `discovery`、`acquisition`、`normalization`、`analysis` 和 `catalog` 不反向导入 `completion`；`completion` 不导入 CLI，也不写第二套完成状态。
-- `catalog` 不依赖 discovery、acquisition、storage、normalization、enrichment 或 packaging 类型。
-- `core` 不依赖任一工作流或基础设施模块。
-- 供应商响应在 `integrations` 转换为中性 DTO；vendor dict 不进入 core/catalog。
-- Composition root：`src/sciretriever/cli/main.py`。
-- 自动门禁：`python scripts/harness.py architecture`。
+- 产品主流程是“领域条件或种子文献 → 多来源元数据 → 文献资产 → 轻结构化文本 → 通用结构化文献分析 → 可持续使用的文献数据库”。目标设计必须完整覆盖该流程和需求中的批量、局部成功、重复运行、查询、书目信息交换与可追溯性验收。
+- `Work`、`WorkVersion` 是 ADR 0002 接受的内部身份机制；阶段枚举、completion pipeline、CLI 命令、SQLite、`DocumentPackage` 和当前目录划分仍是实现或派生设计，不是产品需求。
+- 系统设计负责逻辑对象、数据流和所有权；技术架构负责模块、依赖和运行技术；README、CLI `--help`、源码与测试负责当前已实现行为。
+- 设计审查应建立“需求 → 系统行为 → 数据与状态 → 模块责任 → 验收”的可追踪关系，并删除无需求依据的旧设计。
+- 当前依赖规则由 `scripts/harness.py architecture` 检查；修改前先确认它表达的是已接受目标边界还是仅保护现有实现。
 
 ## 6. 不可协商的数据边界
 
-- SciRetriever 止于 `DocumentPackageVersion`；不得加入反应、分子、路线、产率等领域 schema。
+- SciRetriever 止于通用文献元数据、资产信息、轻结构化文本和产品规定含义的通用结构化文献分析结果；不得加入反应、分子、路线、产率等领域 schema。
 - `package_versions` 是处理快照，不是已经实现的书目 `WorkVersion`。
 - catalog 不存大型 BLOB，不存绝对资产路径；文件系统存字节，catalog 存相对路径、hash、关系和 provenance。
 - RawAsset 永不原地修改；发布只允许 create-if-absent，不覆盖冲突证据。
-- 清洗、去重和 catalog 比对必须先于可能消耗 token 的标注。
-- Acquisition、Normalization 和 Packaging 不得丢失来源、输入、hash 或 lineage。
-- 下游通过稳定 ID、hash 和包契约集成，不直接依赖内部 ORM 表。
-- 不添加 SciRetriever-owned 微服务、外部工作流平台、向量库或 Web UI，除非新 ADR 明确授权。ADR 0003 只批准通过严格 adapter 连接 operator-managed MinerU parser capability，不授权 SciRetriever 启停或拥有该服务。
+- 元数据、资产和解析结果不得丢失来源、输入、hash 或 lineage。
+- 下游通过文档化的稳定 ID、hash、provenance 和领域中立合同集成，不直接依赖内部数据库表。
+- MinerU 是当前 operator-managed PDF parser adapter；不得把其服务协议、输出格式或额外 LLM 分析反向写成核心产品需求。
 
 ## 7. 真相源
 
 | 主题 | 真相源 |
 |---|---|
 | ADR 权威范围与阅读顺序 | `docs/architecture/decisions/README.md` |
-| 领域边界与 `DocumentPackage` | `docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md` |
-| 产品中心、WorkVersion、PDF analysis 与 pre-v1 删除策略 | `docs/architecture/decisions/0002-work-centered-literature-library.md` |
+| 领域与数据边界 | `docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md` |
+| Work/WorkVersion 内部身份与单机增量处理 | `docs/architecture/decisions/0002-literature-identity-and-incremental-processing.md` |
 | MinerU parser/service connection 与外部 attempt/evidence 边界 | `docs/architecture/decisions/0003-operator-managed-mineru-service.md` |
-| 数据所有权与 `DocumentPackage` | `docs/architecture/principles.md` |
+| 长期架构原则 | `docs/architecture/principles.md` |
 | 理想产品数据流与模块责任 | `docs/architecture/system-design.md` |
 | 理想代码模块与依赖边界 | `docs/architecture/technical-architecture.md` |
-| 用户安装、命令和配置 | `README.md`、`config.example.toml` |
+| 用户安装、命令和配置 | `README.md`、`docs/guides/config.toml`、`docs/guides/config.minimal.toml`、`docs/guides/configuration.md` |
 | 代码到文档同步 | `docs/development/documentation-map.md` |
 | 跨项目协作规则 | `HARNESS.md` |
 
-requirements、system design 和 technical architecture 只描述理想产品，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；不得把理想能力写成当前实现。`docs/proposals/` 只保留活动提案，完成或终止后及时归档；OMO 执行计划只放在 `.omo/plans/`，不进入项目文档。
+requirements、system design 和 technical architecture 描述产品目标和派生设计，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；不得把理想能力写成当前实现，也不得让当前实现反向覆盖需求。`docs/proposals/` 只保留活动提案，完成或终止后及时归档；OMO 执行计划只放在 `.omo/plans/`，不进入项目文档。
 
-## 8. 金牌实现与测试
+## 8. 当前关键实现与测试
+
+以下条目是理解和回归当前行为的入口，不表示目标设计必须继续采用相同模块或合同。
 
 - `src/sciretriever/core/contracts.py`：冻结、可序列化的中性边界对象。
 - `src/sciretriever/integrations/`：一个供应商一个共享 client，能力 adapter 只做边界转换。

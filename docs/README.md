@@ -11,4 +11,4 @@
 | [活动提案](proposals/README.md) | 讨论产品或架构变化的维护者 | 仍处于 draft 或 under-review 的提案 |
 | [历史归档](archive/) | 需要审计历史决策过程的维护者 | 已完成或终止的提案、评估、进度和阶段证据 |
 
-当前用户行为以项目 [`README`](../README.md)、CLI `--help` 和 [`config.example.toml`](../config.example.toml) 为准。归档内容不定义当前行为，也不授权新的实现。
+当前用户行为以项目 [`README`](../README.md)、CLI `--help`、[配置手册](guides/configuration.md)和 guides 下的[完整模板](guides/config.toml) / [最小模板](guides/config.minimal.toml)为准。根目录 `config.toml` 是个人运行配置，不定义公开行为；归档内容也不授权新的实现。

@@ -6,7 +6,7 @@ created = "2026-07-22"
 
 # 文献下载实施提案
 
-> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的候选工作包，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-work-centered-literature-library.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
+> **归档状态：已被替代。** 本文仅保存 2026-07-23 产品重置前的候选工作包，不是当前需求、产品方向或实施授权。当前方向见 [ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)。当时的 OMO 执行计划不作为项目文档保留；下文 front matter 状态和正文保持历史原样。
 
 - 记录日期：2026-07-22
 - 适用范围：v2 `src/sciretriever/` 的全文候选发现、下载执行、验证、调度和运维

@@ -4,10 +4,10 @@
 
 ## 阅读顺序
 
-1. [需求规格](requirements.md)：产品能力、约束和验收结果。
-2. [系统设计](system-design.md)：数据所有权、状态和端到端流程。
+1. [产品需求](requirements.md)：用户问题、核心流程、产品结果和验收标准。
+2. [系统设计](system-design.md)：从需求推导出的逻辑对象、数据流、所有权和设计取舍。
 3. [技术架构](technical-architecture.md)：代码模块、依赖方向和运行边界。
 4. [架构原则](principles.md)：实现与审查时遵守的稳定原则。
-5. [架构决策](decisions/README.md)：领域边界、Work-centered 产品方向和 MinerU 外部服务边界的决策记录。
+5. [架构决策](decisions/README.md)：重要技术选择、适用范围和变更关系的决策记录。
 
 当前代码是否已覆盖某项设计，以源码、测试和项目 `README` 为准，不在本目录维护另一份动态进度台账。
