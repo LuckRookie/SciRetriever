@@ -17,6 +17,22 @@
       "session_ids": ["codex:current"],
       "status": "completed",
       "worktree_path": null
+    },
+    "simple-three-stage-architecture": {
+      "work_id": "simple-three-stage-architecture",
+      "active_plan": ".omo/plans/simple-three-stage-architecture.md",
+      "plan_name": "simple-three-stage-architecture",
+      "session_ids": ["codex:current"],
+      "status": "completed",
+      "worktree_path": null
+    },
+    "unified-candidate-retrieval": {
+      "work_id": "unified-candidate-retrieval",
+      "active_plan": ".omo/plans/unified-candidate-retrieval.md",
+      "plan_name": "unified-candidate-retrieval",
+      "session_ids": ["codex:current"],
+      "status": "completed",
+      "worktree_path": null
     }
   }
 }
