@@ -7,6 +7,10 @@ from collections.abc import Set
 from pathlib import Path
 
 from scripts.wp6_architecture import find_wp6_architecture_violations
+from scripts.target_architecture import (
+    TARGET_PACKAGES,
+    find_target_architecture_violations,
+)
 
 
 FORBIDDEN_IMPORTS = {
@@ -43,7 +47,7 @@ def imported_modules(path: Path, source_root: Path) -> tuple[str, ...]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
+        if isinstance(node, ast.ImportFrom):
             retained = len(package_parts) - (node.level - 1) if node.level else 0
             base_parts = package_parts[:max(retained, 0)] if node.level else []
             if node.module is not None:
@@ -52,7 +56,7 @@ def imported_modules(path: Path, source_root: Path) -> tuple[str, ...]:
             if node.module is None or base_parts == ["sciretriever"]:
                 imports.extend(".".join((*base_parts, alias.name)) for alias in node.names
                                if alias.name != "*")
-        elif isinstance(node, ast.Call) and node.args:
+        if isinstance(node, ast.Call) and node.args:
             function = node.func
             is_runtime_import = (
                 isinstance(function, ast.Name) and function.id == "__import__"
@@ -119,11 +123,25 @@ def find_architecture_violations(
                     violations.append(
                         f"{relative}: lowercase v2 must not import legacy module {module}"
                     )
-        violations.extend(
-            find_wp6_architecture_violations(path, source_root, imported, tree)
-        )
+        if len(Path(relative).parts) == 1:
+            violations.extend(
+                find_wp6_architecture_violations(path, source_root, imported, tree)
+            )
+        elif layer in TARGET_PACKAGES:
+            violations.extend(
+                find_target_architecture_violations(path, source_root, imported, tree)
+            )
+        else:
+            violations.append(f"{relative}: unclassified architecture root {layer}")
+            violations.extend(
+                find_wp6_architecture_violations(path, source_root, imported, tree)
+            )
     violations.extend(find_completion_command_violations(source_root, cutover_commands))
     return tuple(sorted(set(violations)))
 
 
-__all__ = ("find_architecture_violations", "find_completion_command_violations")
+__all__ = (
+    "TARGET_PACKAGES",
+    "find_architecture_violations",
+    "find_completion_command_violations",
+)
