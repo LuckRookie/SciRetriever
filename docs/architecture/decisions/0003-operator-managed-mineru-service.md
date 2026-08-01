@@ -5,7 +5,7 @@
 - Revised: 2026-07-29
 - Supersedes: none
 - Superseded by: none
-- Related: [产品需求](../requirements.md)、[系统设计](../system-design.md)、[MinerU 注意事项](../../notes/mineru.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[MinerU 注意事项](../../notes/mineru.md)
 
 ## 背景
 

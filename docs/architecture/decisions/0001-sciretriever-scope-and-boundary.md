@@ -5,7 +5,7 @@
 - Revised: 2026-07-30
 - Supersedes: none
 - Superseded by: none
-- Related: [产品需求](../requirements.md)、[系统设计](../system-design.md)、[架构原则](../principles.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[架构原则](../principles.md)
 
 ## 背景
 
