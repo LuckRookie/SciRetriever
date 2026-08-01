@@ -9,6 +9,7 @@
 3. 涉及设计文档、模块边界、数据所有权或持久化时，依次读[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)和[技术文档](docs/architecture/technical.md)；先检查它们能否追溯到需求，不得用当前代码反向证明目标设计正确。
 4. 按[代码与文档同步映射](docs/development/documentation-map.md)判断文档同步范围。
 5. 默认沟通和项目文档使用中文；代码标识符、异常和提交信息使用英文。
+6. Harness 只执行项目 owner 明确要求建立的机械门禁。Agent 不得把对话总结、计划、审查意见、通用经验或自行推导的约束编码为 Harness；未获 owner 明示批准的协作约束应保留为自然语言 POLICY 或审查事项，不得新增 CLI 检查、AST 规则、固定阈值或阻断条件。
 
 ## 2. 项目画像
 
@@ -43,8 +44,6 @@
 | L0 | 单文件测试 | `uv run --frozen python -m unittest discover -s tests -p 'test_<name>.py'` | LOCAL GATE |
 | L3 | 覆盖率 | 无阈值和门禁 | N/A |
 | L2 | wheel 构建 | `uv run --frozen python -m build --wheel --no-isolation` | full_check |
-| L1-L2 | 文档检查 | `uv run --frozen python scripts/harness.py docs` | LOCAL GATE / CI GATE |
-| L1-L2 | 架构检查 | `uv run --frozen python scripts/harness.py architecture` | LOCAL GATE / CI GATE |
 | L4 | 语义审查 | 对照原始需求、ADR、责任映射和最终 diff | POLICY |
 | L5 | 人工审批 | 新 ADR、受支持数据迁移、边界变化、生产数据操作 | HUMAN GATE |
 
@@ -79,7 +78,7 @@
 - `Work`、`WorkVersion` 是 ADR 0002 接受的内部身份机制；阶段枚举、completion pipeline、CLI 命令、SQLite、`DocumentPackage` 和当前目录划分仍是实现或派生设计，不是产品需求。
 - 设计文档负责系统架构、模块命名、责任、数据流和所有权；技术文档负责代码映射、依赖、持久化、外部访问和运行技术；README、CLI `--help`、源码与测试负责当前已实现行为。
 - 设计审查应建立“需求 → 系统行为 → 数据与状态 → 模块责任 → 验收”的可追踪关系，并删除无需求依据的旧设计。
-- 当前依赖规则由 `scripts/harness.py architecture` 检查；修改前先确认它表达的是已接受目标边界还是仅保护现有实现。
+- 模块依赖和责任边界通过权威设计文档、代码审查与相关行为测试确认；除非 owner 明确要求，不建立项目自有架构解释器或阻断门禁。
 
 ## 6. 不可协商的数据边界
 
@@ -145,6 +144,5 @@ requirements、design 和 technical 描述产品目标和派生设计，不承�
 - [ ] 修改文件无新增诊断。
 - [ ] 相关测试通过。
 - [ ] `quick_check` 通过；交付前 `full_check` 通过。
-- [ ] 架构和文档门禁通过。
 - [ ] diff 无凭据、数据、生成物或无关改动。
 - [ ] Git 操作没有超出用户授权。

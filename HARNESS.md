@@ -87,14 +87,14 @@
 
 ### 4.6 Python 代码基线
 
-“活动 Python 代码”是 `scripts/harness.py` 按以下四组路径生成的同一份排序文件清单：项目根目录现有的 `*.py`、`src/sciretriever/**/*.py`、`tests/**/*.py` 和 `scripts/**/*.py`。接收 Python 文件参数的编译、lint、format 和类型工具只接收这份清单，因此 `archive/`、`.venv/`、`build/`、`dist/`、缓存、生成物和 vendored code 不进入这些工具的检查范围；测试发现、架构、文档和 wheel 门禁分别使用自身定义的确定性范围。自动门禁只执行工具能够稳定、无上下文歧义地判断的检查；需要理解职责、风险或业务含义的规则属于审查，不实现项目自有 Python 语义解释器。
+“活动 Python 代码”是 `scripts/harness.py` 按以下四组路径生成的同一份排序文件清单：项目根目录现有的 `*.py`、`src/sciretriever/**/*.py`、`tests/**/*.py` 和 `scripts/**/*.py`。接收 Python 文件参数的编译、lint、format 和类型工具只接收这份清单，因此 `archive/`、`.venv/`、`build/`、`dist/`、缓存、生成物和 vendored code 不进入这些工具的检查范围；测试发现和 wheel 门禁分别使用自身定义的确定性范围。自动门禁只执行工具能够稳定、无上下文歧义地判断的检查；需要理解职责、风险或业务含义的规则属于审查，不实现项目自有 Python 语义解释器。
 
 #### 4.6.1 确定性自动门禁
 
 - **LOCAL GATE / CI GATE**：Python 最低运行版本为 3.10，开发基线为 3.12。语法、typing API 和标准库 API 必须在 Python 3.10 可用；Ruff 使用 `target-version = "py310"`，Pyright 使用 `pythonVersion = "3.10"`，CI 在 Python 3.10 和 3.12 分别执行 full gate。
 - **LOCAL GATE / CI GATE**：Ruff 是唯一 formatter 和 linter。harness 把同一活动文件清单传给 `ruff check` 和 `ruff format --check`，不使用 `.` 或另一组 glob 重新决定范围。Ruff formatter 使用 `line-length = 100`，lint 启用 E501 和项目选定的原生规则。
 - **LOCAL GATE / CI GATE**：Pyright 使用 `strict` 模式并接收同一活动文件清单。类型错误不得降级为 warning，也不维护债务 baseline。
-- **LOCAL GATE / CI GATE**：`compileall`、目标架构检查、文档检查和标准库 `unittest` 继续作为独立门禁；full gate 还执行 wheel 构建/内容核对。测试命令必须报告实际执行数量，匹配到零个测试时失败。
+- **LOCAL GATE / CI GATE**：`compileall` 和标准库 `unittest` 作为独立门禁；full gate 还执行 wheel 构建/内容核对。测试命令必须报告实际执行数量，匹配到零个测试时失败。
 - **LOCAL GATE / CI GATE**：Ruff、Pyright 和其它原生工具的抑制必须带具体错误码并保持在最小语句范围；文件级全局抑制禁止。抑制是否合理由审查判断，不建立自定义 marker、到期语法或 allowance 解释器。
 - **LOCAL GATE / CI GATE**：harness 直接传播每个工具的非零退出结果，不重复实现 Ruff、Pyright 或 Python 的名称绑定、作用域、annotation、Pydantic 和控制流语义。
 
@@ -113,14 +113,14 @@
 
 公开合同、catalog、storage、network、身份、状态、provenance、外部访问、安全边界、持久化和模块边界发生变化时，必须启动至少一个独立 subagent 做语义审查。审查读取原始需求、适用 ADR、责任文档、最终 diff 和验证证据，检查自动工具无法可靠判断的职责归属、`Any`/抑制必要性、Pydantic validator 含义、异常边界、不可变性和复杂度。普通低风险改动由实现者完成同样维度的自审；发现边界不清或证据不足时升级为独立审查。
 
-机械配置只放在 `pyproject.toml` 和 `scripts/harness.py` 中。`quick` 执行 Ruff、format、编译、Pyright、架构、文档和 harness 自测，覆盖确定性 L1 门禁；开发者仍须按 L0 检查 diff、修改文件诊断和任务相关测试。`full` 执行相同 L1 门禁，并增加全部测试和 wheel 构建/内容核对。不得排除活动目录、降低错误级别或把失败转为 warning。
+机械配置只放在 `pyproject.toml` 和 `scripts/harness.py` 中。`quick` 执行 Ruff、format、编译、Pyright 和 harness 自测，覆盖确定性 L1 门禁；开发者仍须按 L0 检查 diff、修改文件诊断和任务相关测试。`full` 执行相同 L1 门禁，并增加全部测试和 wheel 构建/内容核对。不得排除活动目录、降低错误级别或把失败转为 warning。
 
 ## 5. 测试与验证
 
 | 层级 | 内容 | 默认范围 |
 |---|---|---|
 | L0 | diff、诊断、相关测试 | 所有改动 |
-| L1 | 编译、格式、lint、类型、结构规则 | 所有代码改动 |
+| L1 | 编译、格式、lint、类型 | 所有代码改动 |
 | L2 | 模块组装、生成契约、真实依赖冒烟 | 跨模块或契约改动 |
 | L3 | 集成、E2E、关键行为路径 | 用户流程或运行时改动 |
 | L4 | 需求与 diff 的语义审查 | 中高风险改动 |
