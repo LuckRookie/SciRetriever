@@ -45,9 +45,7 @@ class OpaqueExtensionRecordStore:
     def __init__(self, catalog_path: str | os.PathLike[str]) -> None:
         self._catalog_path = catalog_path
 
-    def get(
-        self, namespace: str, record_id: ExtensionRecordId
-    ) -> OpaqueExtensionRecord | None:
+    def get(self, namespace: str, record_id: ExtensionRecordId) -> OpaqueExtensionRecord | None:
         with create_or_open_catalog(self._catalog_path) as connection:
             row = connection.execute(
                 "SELECT namespace,record_id,revision,payload_sha256,payload_json "
@@ -62,9 +60,7 @@ class OpaqueExtensionRecordStore:
         after_record_id: ExtensionRecordId | None,
         limit: int,
     ) -> tuple[OpaqueExtensionRecord, ...]:
-        after, bounded_limit = validate_page_request(
-            after_record_id=after_record_id, limit=limit
-        )
+        after, bounded_limit = validate_page_request(after_record_id=after_record_id, limit=limit)
         with create_or_open_catalog(self._catalog_path) as connection:
             rows = connection.execute(
                 "SELECT namespace,record_id,revision,payload_sha256,payload_json "
@@ -85,20 +81,25 @@ class OpaqueExtensionRecordStore:
         normalized = parse_canonical_json(payload_bytes.decode("ascii"))
         digest = Sha256.from_bytes(payload_bytes)
         revision = 1 if expected_revision is None else expected_revision + 1
-        candidate = OpaqueExtensionRecord(
-            namespace, record_id, revision, digest, normalized
-        )
+        candidate = OpaqueExtensionRecord(namespace, record_id, revision, digest, normalized)
         with create_or_open_catalog(self._catalog_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             if expected_revision is None:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO opaque_extension_records "
                     "(namespace,record_id,revision,payload_sha256,payload_json) VALUES (?,?,?,?,?)",
-                    (namespace, str(record_id), revision, str(digest), payload_bytes.decode("ascii")),
+                    (
+                        namespace,
+                        str(record_id),
+                        revision,
+                        str(digest),
+                        payload_bytes.decode("ascii"),
+                    ),
                 )
             else:
                 cursor = connection.execute(
-                    "UPDATE opaque_extension_records SET revision=?,payload_sha256=?,payload_json=? "
+                    "UPDATE opaque_extension_records SET revision=?,payload_sha256=?,"
+                    "payload_json=? "
                     "WHERE namespace=? AND record_id=? AND revision=?",
                     (
                         revision,
@@ -115,9 +116,7 @@ class OpaqueExtensionRecordStore:
             connection.commit()
         return candidate
 
-    def delete(
-        self, namespace: str, record_id: ExtensionRecordId, expected_revision: int
-    ) -> None:
+    def delete(self, namespace: str, record_id: ExtensionRecordId, expected_revision: int) -> None:
         with create_or_open_catalog(self._catalog_path) as connection:
             cursor = connection.execute(
                 "DELETE FROM opaque_extension_records "

@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import os
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-import os
 from types import TracebackType
 from uuid import uuid4
 
-from sciretriever.batching.ports import AdmissionGuard, AdmissionPort, CatalogIdentity, OutputIdentity
+from sciretriever.batching.ports import (
+    AdmissionGuard,
+    AdmissionPort,
+    CatalogIdentity,
+    OutputIdentity,
+)
 from sciretriever.kernel.hashes import Sha256
 from sciretriever.kernel.ids import AdmissionBindingId, BatchRunId, WorkVersionId
-from sciretriever.literature_store.filesystem.locks import (
-    AdvisoryLock, CanonicalCatalogPath, FilesystemSafetyError, canonical_catalog_path,
-    verify_absent_entry, verify_catalog_entry,
-)
 from sciretriever.literature_store.filesystem.admission_order import (
-    AdmissionOrderError, AdmissionOrderTracker, HeldAdmission,
+    AdmissionOrderTracker,
+    HeldAdmission,
+)
+from sciretriever.literature_store.filesystem.locks import (
+    AdvisoryLock,
+    CanonicalCatalogPath,
+    FilesystemSafetyError,
+    canonical_catalog_path,
+    verify_absent_entry,
+    verify_catalog_entry,
 )
 
 
@@ -91,7 +101,9 @@ class _Guard:
 
 class LocalAdmissionPort:
     def __init__(
-        self, bindings: dict[AdmissionBindingId, _Binding], catalog: CatalogIdentity,
+        self,
+        bindings: dict[AdmissionBindingId, _Binding],
+        catalog: CatalogIdentity,
         tracker: AdmissionOrderTracker,
     ) -> None:
         self._bindings = bindings
@@ -153,7 +165,9 @@ class LocalAdmissionBindingFactory:
         self._bindings: dict[AdmissionBindingId, _Binding] = {}
         self._tracker = AdmissionOrderTracker()
 
-    def _bind(self, path: str | os.PathLike[str], *, output: bool) -> tuple[AdmissionBindingId, _Binding]:
+    def _bind(
+        self, path: str | os.PathLike[str], *, output: bool
+    ) -> tuple[AdmissionBindingId, _Binding]:
         try:
             scope = canonical_catalog_path(path)
         except FilesystemSafetyError as error:
@@ -166,7 +180,9 @@ class LocalAdmissionBindingFactory:
     def bind_catalog(self, path: str | os.PathLike[str]) -> BoundCatalogAdmission:
         identifier, binding = self._bind(path, output=False)
         identity = CatalogIdentity(identifier, binding.fingerprint)
-        return BoundCatalogAdmission(identity, LocalAdmissionPort(self._bindings, identity, self._tracker))
+        return BoundCatalogAdmission(
+            identity, LocalAdmissionPort(self._bindings, identity, self._tracker)
+        )
 
     def bind_output(self, path: str | os.PathLike[str]) -> OutputIdentity:
         identifier, binding = self._bind(path, output=True)

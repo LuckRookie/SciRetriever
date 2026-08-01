@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import sqlite3
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.api import metadata_snapshot_sha256
 from sciretriever.kernel import CanonicalJsonObject, ExtensionRecordId
 from sciretriever.literature_store.sqlite import (
+    SCHEMA_FINGERPRINT,
     OpaqueExtensionConflictError,
     OpaqueExtensionRecordStore,
-    SCHEMA_FINGERPRINT,
     UnsupportedCatalogError,
     create_or_open_catalog,
     validate_catalog,
@@ -30,7 +30,9 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
     def test_exact_marker_partial_schema_is_rejected(self) -> None:
         with sqlite3.connect(self.catalog) as connection:
             connection.execute(
-                "CREATE TABLE schema_identity(singleton INTEGER PRIMARY KEY,product TEXT,schema_version INTEGER,schema_fingerprint TEXT)"
+                "CREATE TABLE schema_identity("
+                "singleton INTEGER PRIMARY KEY,product TEXT,schema_version INTEGER,"
+                "schema_fingerprint TEXT)"
             )
             connection.execute(
                 "INSERT INTO schema_identity VALUES (1,'sciretriever',2,?)",
@@ -58,7 +60,8 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
                 )
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "UPDATE work_version_assets SET work_version_id='other-version' WHERE id='asset-link'"
+                    "UPDATE work_version_assets SET work_version_id='other-version' "
+                    "WHERE id='asset-link'"
                 )
 
     def test_completion_rejects_analysis_from_other_light_document(self) -> None:
@@ -66,15 +69,23 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
             self._insert_completion_parents(connection)
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "INSERT INTO completion_bundles(work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,reference_set_id,tag_set_id) VALUES ('version','light-2','analysis-1','metadata','references','tags')"
+                    "INSERT INTO completion_bundles("
+                    "work_version_id,light_document_id,analysis_artifact_id,"
+                    "metadata_snapshot_id,reference_set_id,tag_set_id) "
+                    "VALUES ('version','light-2','analysis-1','metadata','references','tags')"
                 )
 
     def test_completion_rejects_analysis_input_hash_mismatch_and_update(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:
-            self._insert_completion_parents(connection, analysis_light="light-2", input_hash="f" * 64)
+            self._insert_completion_parents(
+                connection, analysis_light="light-2", input_hash="f" * 64
+            )
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "INSERT INTO completion_bundles(work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,reference_set_id,tag_set_id) VALUES ('version','light-2','analysis-1','metadata','references','tags')"
+                    "INSERT INTO completion_bundles("
+                    "work_version_id,light_document_id,analysis_artifact_id,"
+                    "metadata_snapshot_id,reference_set_id,tag_set_id) "
+                    "VALUES ('version','light-2','analysis-1','metadata','references','tags')"
                 )
 
     def test_opaque_store_canonicalizes_hashes_and_enforces_cas(self) -> None:
@@ -104,9 +115,14 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
                 (1, "0" * 64, '{ "a": 1 }'),
             )
             for revision, digest, payload in cases:
-                with self.subTest(revision=revision, digest=digest), self.assertRaises(sqlite3.IntegrityError):
+                with (
+                    self.subTest(revision=revision, digest=digest),
+                    self.assertRaises(sqlite3.IntegrityError),
+                ):
                     connection.execute(
-                        "INSERT INTO opaque_extension_records(namespace,record_id,revision,payload_sha256,payload_json) VALUES ('raw',hex(randomblob(16)),?,?,?)",
+                        "INSERT INTO opaque_extension_records("
+                        "namespace,record_id,revision,payload_sha256,payload_json) "
+                        "VALUES ('raw',hex(randomblob(16)),?,?,?)",
                         (revision, digest, payload),
                     )
 
@@ -165,7 +181,8 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
             self._insert_valid_completion(connection)
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "UPDATE work_version_current_light_document SET light_document_id='light-1' WHERE work_version_id='version'"
+                    "UPDATE work_version_current_light_document SET light_document_id='light-1' "
+                    "WHERE work_version_id='version'"
                 )
 
     def test_completed_current_metadata_pointer_cannot_be_removed(self) -> None:
@@ -181,14 +198,20 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
             self._insert_valid_completion(connection)
             connection.execute("DELETE FROM completion_bundles WHERE work_version_id='version'")
             connection.execute(
-                "UPDATE work_version_current_light_document SET light_document_id='light-1' WHERE work_version_id='version'"
+                "UPDATE work_version_current_light_document SET light_document_id='light-1' "
+                "WHERE work_version_id='version'"
             )
             connection.execute(
-                "UPDATE analysis_artifacts SET light_document_id='light-1',input_sha256=? WHERE id='analysis-1'",
+                "UPDATE analysis_artifacts SET light_document_id='light-1',input_sha256=? "
+                "WHERE id='analysis-1'",
                 (hashlib.sha256(b'{"id":"light-1"}').hexdigest(),),
             )
             connection.execute(
-                "INSERT INTO completion_bundles(work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,reference_set_id,tag_set_id,identity_sha256) VALUES ('version','light-1','analysis-1','metadata','references','tags','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')"
+                "INSERT INTO completion_bundles("
+                "work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,"
+                "reference_set_id,tag_set_id,identity_sha256) "
+                "VALUES ('version','light-1','analysis-1','metadata','references','tags','"
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')"
             )
             connection.commit()
         validate_catalog(self.catalog)
@@ -197,12 +220,30 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
     def _insert_primary(connection: sqlite3.Connection) -> None:
         connection.execute("INSERT INTO works(id) VALUES ('work')")
         connection.execute("INSERT INTO works(id) VALUES ('other-work')")
-        connection.execute("INSERT INTO work_versions(id,work_id,version_role) VALUES ('version','work','formal')")
-        connection.execute("INSERT INTO work_versions(id,work_id,version_role) VALUES ('other-version','other-work','formal')")
-        connection.execute("INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES ('raw','raw',?,'raw/aa/value',1)", ("a" * 64,))
-        connection.execute("INSERT INTO raw_assets(artifact_id,asset_role,source_json) VALUES ('raw','primary-pdf','{}')")
-        connection.execute("INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) VALUES ('asset-link','version','raw','primary-pdf')")
-        connection.execute("INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) VALUES ('version','asset-link')")
+        connection.execute(
+            "INSERT INTO work_versions(id,work_id,version_role) VALUES ('version','work','formal')"
+        )
+        connection.execute(
+            "INSERT INTO work_versions(id,work_id,version_role) "
+            "VALUES ('other-version','other-work','formal')"
+        )
+        connection.execute(
+            "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+            "VALUES ('raw','raw',?,'raw/aa/value',1)",
+            ("a" * 64,),
+        )
+        connection.execute(
+            "INSERT INTO raw_assets(artifact_id,asset_role,source_json) "
+            "VALUES ('raw','primary-pdf','{}')"
+        )
+        connection.execute(
+            "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) "
+            "VALUES ('asset-link','version','raw','primary-pdf')"
+        )
+        connection.execute(
+            "INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) "
+            "VALUES ('version','asset-link')"
+        )
 
     @classmethod
     def _insert_completion_parents(
@@ -216,26 +257,61 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
             payload = f'{{"id":"{identifier}"}}'
             digest = hashlib.sha256(payload.encode("ascii")).hexdigest()
             artifact = f"artifact-{identifier}"
-            connection.execute("INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES (?,'light-document',?,?,?)", (artifact, digest, f"light/{identifier}", len(payload)))
-            connection.execute("INSERT INTO light_documents(id,work_version_id,primary_asset_id,artifact_id,sha256,document_json,provenance_json,complete) VALUES (?,'version','asset-link',?,?,?,'{}',1)", (identifier, artifact, digest, payload))
-        connection.execute("INSERT INTO work_version_current_light_document VALUES ('version','light-2')")
-        metadata_digest = metadata_snapshot_sha256(1, CanonicalJsonObject(()), CanonicalJsonObject(()))
-        connection.execute("INSERT INTO metadata_snapshots(id,work_version_id,revision,sha256,values_json,provenance_json) VALUES ('metadata','version',1,?,'{}','{}')", (str(metadata_digest),))
-        connection.execute("INSERT INTO work_version_current_metadata VALUES ('version','metadata')")
+            connection.execute(
+                "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+                "VALUES (?,'light-document',?,?,?)",
+                (artifact, digest, f"light/{identifier}", len(payload)),
+            )
+            connection.execute(
+                "INSERT INTO light_documents("
+                "id,work_version_id,primary_asset_id,artifact_id,sha256,document_json,"
+                "provenance_json,complete) VALUES (?,'version','asset-link',?,?,?,'{}',1)",
+                (identifier, artifact, digest, payload),
+            )
+        connection.execute(
+            "INSERT INTO work_version_current_light_document VALUES ('version','light-2')"
+        )
+        metadata_digest = metadata_snapshot_sha256(
+            1, CanonicalJsonObject(()), CanonicalJsonObject(())
+        )
+        connection.execute(
+            "INSERT INTO metadata_snapshots("
+            "id,work_version_id,revision,sha256,values_json,provenance_json) "
+            "VALUES ('metadata','version',1,?,'{}','{}')",
+            (str(metadata_digest),),
+        )
+        connection.execute(
+            "INSERT INTO work_version_current_metadata VALUES ('version','metadata')"
+        )
         connection.execute("INSERT INTO reference_sets VALUES ('references','version',1,1)")
         connection.execute("INSERT INTO tag_sets VALUES ('tags','version',1,1)")
         proposal_digest = hashlib.sha256(b"{}").hexdigest()
-        connection.execute("INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES ('analysis-artifact','analysis',?,'analysis/value',2)", (proposal_digest,))
-        connection.execute("INSERT INTO analysis_artifacts(id,work_version_id,light_document_id,artifact_id,sha256,input_sha256,proposal_json,provenance_json,nine_categories_complete) VALUES ('analysis-1','version',?,'analysis-artifact',?,?,'{}','{}',1)", (analysis_light, proposal_digest, input_hash))
+        connection.execute(
+            "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+            "VALUES ('analysis-artifact','analysis',?,'analysis/value',2)",
+            (proposal_digest,),
+        )
+        connection.execute(
+            "INSERT INTO analysis_artifacts("
+            "id,work_version_id,light_document_id,artifact_id,sha256,input_sha256,"
+            "proposal_json,provenance_json,nine_categories_complete) "
+            "VALUES ('analysis-1','version',?,'analysis-artifact',?,?,'{}','{}',1)",
+            (analysis_light, proposal_digest, input_hash),
+        )
 
     @classmethod
     def _insert_valid_completion(cls, connection: sqlite3.Connection) -> None:
         cls._insert_completion_parents(
-            connection, analysis_light="light-2",
+            connection,
+            analysis_light="light-2",
             input_hash=hashlib.sha256(b'{"id":"light-2"}').hexdigest(),
         )
         connection.execute(
-            "INSERT INTO completion_bundles(work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,reference_set_id,tag_set_id,identity_sha256) VALUES ('version','light-2','analysis-1','metadata','references','tags','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+            "INSERT INTO completion_bundles("
+            "work_version_id,light_document_id,analysis_artifact_id,metadata_snapshot_id,"
+            "reference_set_id,tag_set_id,identity_sha256) "
+            "VALUES ('version','light-2','analysis-1','metadata','references','tags','"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
         )
 
 

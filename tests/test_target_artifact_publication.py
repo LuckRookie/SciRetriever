@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from sciretriever.content.model import ArtifactKind, StagedArtifact
 from sciretriever.kernel import RelativeArtifactPath, Sha256
@@ -166,9 +166,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
 
     def reconciler(self) -> CoreArtifactReconciler:
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
-        return CoreArtifactReconciler(
-            self.storage, self.catalog, bound.port, bound.identity
-        )
+        return CoreArtifactReconciler(self.storage, self.catalog, bound.port, bound.identity)
 
     def test_reconciliation_preserves_references_and_never_observes_extension_root(self) -> None:
         referenced = self.store.publish(self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-shared"))
@@ -179,7 +177,8 @@ class TargetArtifactPublicationTests(unittest.TestCase):
         os.chmod(extension, 0o000)
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
-                "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES ('kept','raw',?,?,?)",
+                "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+                "VALUES ('kept','raw',?,?,?)",
                 (str(referenced.sha256), str(referenced.path), referenced.size),
             )
             connection.commit()
@@ -194,9 +193,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
 
     def test_publication_window_core_write_admission_blocks_reconciliation(self) -> None:
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
-        reconciler = CoreArtifactReconciler(
-            self.storage, self.catalog, bound.port, bound.identity
-        )
+        reconciler = CoreArtifactReconciler(self.storage, self.catalog, bound.port, bound.identity)
 
         with bound.port.acquire_core_write(bound.identity):
             published = self.store.publish(
@@ -222,12 +219,15 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                     "from sciretriever.kernel import RelativeArtifactPath,Sha256; "
                     "from sciretriever.literature_store.filesystem import CoreArtifactStore; "
                     f"data={content!r}; s=CoreArtifactStore(Path({str(self.storage)!r})); "
-                    "s.publish(StagedArtifact(ArtifactKind.ANALYSIS,RelativeArtifactPath('x'),Sha256.from_bytes(data),data),checkpoint=lambda n: os._exit(73) if n=="
+                    "s.publish(StagedArtifact(ArtifactKind.ANALYSIS,RelativeArtifactPath('x'),"
+                    "Sha256.from_bytes(data),data),checkpoint=lambda n: os._exit(73) if n=="
                     f"{checkpoint!r} else None)"
                 )
                 process = subprocess.run(
-                    [sys.executable, "-c", script], check=False,
-                    capture_output=True, text=True,
+                    [sys.executable, "-c", script],
+                    check=False,
+                    capture_output=True,
+                    text=True,
                 )
                 self.assertEqual(process.returncode, 73, process.stderr)
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)

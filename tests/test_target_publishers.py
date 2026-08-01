@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
+
+from target_publisher_support import ScenarioFactory
 
 from sciretriever.batching.api import (
-    ContentAcceptanceCommand, ImportAcceptanceCommand,
+    ContentAcceptanceCommand,
+    ImportAcceptanceCommand,
     TargetResult,
 )
 from sciretriever.bibliography.api import CompletionSubmission, FinalMetadataFact
 from sciretriever.collection.api import CollectionAcceptance
-from sciretriever.content.api import ArtifactKind, LightDocumentAcceptance
+from sciretriever.content.api import LightDocumentAcceptance
 from sciretriever.interoperability.ports import ImportResult
 from sciretriever.kernel import BoundaryError, CanonicalJsonObject, Sha256, WorkId, WorkVersionId
 from sciretriever.literature_store.sqlite import StalePublicationError, open_read_only_snapshot
-from target_publisher_support import ScenarioFactory
 
 
 class InjectedFailure(RuntimeError):
@@ -30,42 +32,66 @@ class TargetPublisherTests(unittest.TestCase):
         assert isinstance(collection.command, CollectionAcceptance)
         other_work = WorkId("00000000-0000-0000-0000-000000000001")
         with self.assertRaises(BoundaryError):
-            CollectionAcceptance(collection.command.bibliography, replace(collection.command.membership, work_id=other_work), (), ())
+            CollectionAcceptance(
+                collection.command.bibliography,
+                replace(collection.command.membership, work_id=other_work),
+                (),
+                (),
+            )
 
         imported = self.factory.imported()
         assert isinstance(imported.command, ImportAcceptanceCommand)
         other_version = WorkVersionId("00000000-0000-0000-0000-000000000002")
         with self.assertRaises(BoundaryError):
-            ImportAcceptanceCommand(imported.command.bibliography, imported.command.references, imported.command.tags, replace(imported.command.record, work_version_id=other_version))
+            ImportAcceptanceCommand(
+                imported.command.bibliography,
+                imported.command.references,
+                imported.command.tags,
+                replace(imported.command.record, work_version_id=other_version),
+            )
 
         primary = self.factory.primary()
         assert isinstance(primary.command, ContentAcceptanceCommand)
         with self.assertRaises(BoundaryError):
-            ContentAcceptanceCommand(primary.command.acceptance, replace(primary.command.target, work_version_id=other_version))
+            ContentAcceptanceCommand(
+                primary.command.acceptance,
+                replace(primary.command.target, work_version_id=other_version),
+            )
 
         completion = self.factory.completion()
         assert isinstance(completion.command, CompletionSubmission)
         with self.assertRaises(BoundaryError):
             replace(completion.command, work_version_id=other_version)
         with self.assertRaises(BoundaryError):
-            replace(completion.command, references=replace(completion.command.references, work_version_id=other_version))
+            replace(
+                completion.command,
+                references=replace(completion.command.references, work_version_id=other_version),
+            )
 
     def test_adapters_defensively_reject_tampered_cross_identity_commands(self) -> None:
         other_work = WorkId("00000000-0000-0000-0000-000000000001")
         other_version = WorkVersionId("00000000-0000-0000-0000-000000000002")
         scenarios = (
-            self.factory.collection(), self.factory.imported(), self.factory.primary(),
+            self.factory.collection(),
+            self.factory.imported(),
+            self.factory.primary(),
             self.factory.completion(),
         )
         collection = scenarios[0].command
         assert isinstance(collection, CollectionAcceptance)
-        object.__setattr__(collection, "membership", replace(collection.membership, work_id=other_work))
+        object.__setattr__(
+            collection, "membership", replace(collection.membership, work_id=other_work)
+        )
         imported = scenarios[1].command
         assert isinstance(imported, ImportAcceptanceCommand)
-        object.__setattr__(imported, "record", replace(imported.record, work_version_id=other_version))
+        object.__setattr__(
+            imported, "record", replace(imported.record, work_version_id=other_version)
+        )
         content = scenarios[2].command
         assert isinstance(content, ContentAcceptanceCommand)
-        object.__setattr__(content, "target", replace(content.target, work_version_id=other_version))
+        object.__setattr__(
+            content, "target", replace(content.target, work_version_id=other_version)
+        )
         completion = scenarios[3].command
         assert isinstance(completion, CompletionSubmission)
         object.__setattr__(completion, "work_version_id", other_version)
@@ -86,13 +112,19 @@ class TargetPublisherTests(unittest.TestCase):
                 scenario = builder()
                 command = scenario.command
                 if isinstance(command, ContentAcceptanceCommand):
-                    command = replace(command, target=replace(command.target, result=result, details=details))
+                    command = replace(
+                        command, target=replace(command.target, result=result, details=details)
+                    )
                 else:
                     assert isinstance(command, ImportAcceptanceCommand)
-                    command = replace(command, record=replace(command.record, result=result, details=details))
+                    command = replace(
+                        command, record=replace(command.record, result=result, details=details)
+                    )
                 replace(scenario, command=command).invoke()
                 with open_read_only_snapshot(scenario.path) as reader:
-                    stored.append(reader.execute("SELECT result_json FROM batch_targets").fetchone()[0])
+                    stored.append(
+                        reader.execute("SELECT result_json FROM batch_targets").fetchone()[0]
+                    )
             with self.subTest(builder=builder.__name__):
                 self.assertNotEqual(stored[0], stored[1])
                 self.assertIn(f'"result":"{first_result.value}"', stored[0])
@@ -116,9 +148,15 @@ class TargetPublisherTests(unittest.TestCase):
         metadata = completion.command.metadata
         with self.assertRaises(BoundaryError):
             FinalMetadataFact(
-                metadata.work_version_id, metadata.expected_snapshot_id,
-                metadata.expected_revision, metadata.expected_sha256, metadata.snapshot_id,
-                metadata.revision, Sha256("0" * 64), metadata.values, metadata.provenance,
+                metadata.work_version_id,
+                metadata.expected_snapshot_id,
+                metadata.expected_revision,
+                metadata.expected_sha256,
+                metadata.snapshot_id,
+                metadata.revision,
+                Sha256("0" * 64),
+                metadata.values,
+                metadata.provenance,
             )
         light = self.factory.light()
         assert isinstance(light.command, ContentAcceptanceCommand)
@@ -149,25 +187,36 @@ class TargetPublisherTests(unittest.TestCase):
         assert isinstance(metadata_command, CompletionSubmission)
         object.__setattr__(metadata_command.metadata, "sha256", Sha256("0" * 64))
         for scenario in scenarios:
-            with self.subTest(authority=scenario.authority_table), self.assertRaises(StalePublicationError):
+            with (
+                self.subTest(authority=scenario.authority_table),
+                self.assertRaises(StalePublicationError),
+            ):
                 scenario.invoke()
 
         result = self.factory.primary()
         assert isinstance(result.command, ContentAcceptanceCommand)
         object.__setattr__(
-            result.command.target, "details", CanonicalJsonObject((("result", "failed"),)),
+            result.command.target,
+            "details",
+            CanonicalJsonObject((("result", "failed"),)),
         )
         with self.assertRaises(StalePublicationError):
             result.invoke()
 
     def test_every_write_and_commit_failpoint_is_atomic_for_every_variant(self) -> None:
         builders = (
-            self.factory.collection, self.factory.imported, self.factory.primary,
-            self.factory.light, self.factory.completion,
+            self.factory.collection,
+            self.factory.imported,
+            self.factory.primary,
+            self.factory.light,
+            self.factory.completion,
         )
         expected_writes = {
-            "collection": 10, "imported": 12, "primary": 6,
-            "light": 7, "completion": 14,
+            "collection": 10,
+            "imported": 12,
+            "primary": 6,
+            "light": 7,
+            "completion": 14,
         }
         for builder in builders:
             with self.subTest(builder=builder.__name__):
@@ -178,21 +227,38 @@ class TargetPublisherTests(unittest.TestCase):
                     points.append(point)
                     if point == "before-commit":
                         with open_read_only_snapshot(scenario.path) as reader:
-                            old_visibility.append(reader.execute(f"SELECT count(*) FROM {scenario.authority_table}").fetchone()[0])
+                            old_visibility.append(
+                                reader.execute(
+                                    f"SELECT count(*) FROM {scenario.authority_table}"
+                                ).fetchone()[0]
+                            )
 
                 scenario = builder(observe)
                 scenario.invoke()
                 with open_read_only_snapshot(scenario.path) as reader:
-                    new_visibility = reader.execute(f"SELECT count(*) FROM {scenario.authority_table}").fetchone()[0]
+                    new_visibility = reader.execute(
+                        f"SELECT count(*) FROM {scenario.authority_table}"
+                    ).fetchone()[0]
                 self.assertEqual((old_visibility, new_visibility), ([0], 1))
                 self.assertEqual(points[-1], "before-commit")
                 self.assertEqual(len(points) - 1, expected_writes[builder.__name__])
                 for point_name in points:
-                    failed = builder(lambda point, expected=point_name: (_ for _ in ()).throw(InjectedFailure(point)) if point == expected else None)
+                    failed = builder(
+                        lambda point, expected=point_name: (
+                            (_ for _ in ()).throw(InjectedFailure(point))
+                            if point == expected
+                            else None
+                        )
+                    )
                     with self.assertRaises(InjectedFailure):
                         failed.invoke()
                     with open_read_only_snapshot(failed.path) as reader:
-                        self.assertEqual(reader.execute(f"SELECT count(*) FROM {failed.authority_table}").fetchone(), (0,))
+                        self.assertEqual(
+                            reader.execute(
+                                f"SELECT count(*) FROM {failed.authority_table}"
+                            ).fetchone(),
+                            (0,),
+                        )
 
 
 if __name__ == "__main__":

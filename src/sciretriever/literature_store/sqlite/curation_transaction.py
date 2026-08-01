@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import os
 import sqlite3
+from collections.abc import Callable
 
 from sciretriever.bibliography.api import (
-    CurationCommit, CurationStaleError, MembershipMove, ReferenceRetarget, ValidatedCurationPlan,
+    CurationCommit,
+    CurationStaleError,
+    MembershipMove,
+    ReferenceRetarget,
+    ValidatedCurationPlan,
 )
 from sciretriever.literature_store.sqlite.curation_authorization import authorize_plan_sources
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
@@ -32,13 +36,21 @@ def _retarget_reference(connection: sqlite3.Connection, item: ReferenceRetarget)
     if item.downgrade_reference_json is None:
         raise sqlite3.IntegrityError("reference downgrade requires canonical payload")
     row = connection.execute(
-        "SELECT reference_set_id,ordinal FROM reference_members WHERE id=?", (str(item.reference_id),)
+        "SELECT reference_set_id,ordinal FROM reference_members WHERE id=?",
+        (str(item.reference_id),),
     ).fetchone()
     if row is None:
         raise sqlite3.IntegrityError("reference downgrade source is missing")
     connection.execute(
-        "INSERT INTO unresolved_references(id,reference_set_id,ordinal,raw_text,reference_json) VALUES(?,?,?,?,?)",
-        (str(item.reference_id), row[0], row[1], item.downgrade_raw_text, item.downgrade_reference_json),
+        "INSERT INTO unresolved_references(id,reference_set_id,ordinal,raw_text,reference_json) "
+        "VALUES(?,?,?,?,?)",
+        (
+            str(item.reference_id),
+            row[0],
+            row[1],
+            item.downgrade_raw_text,
+            item.downgrade_reference_json,
+        ),
     )
     connection.execute("DELETE FROM reference_members WHERE id=?", (str(item.reference_id),))
 
@@ -59,7 +71,9 @@ def _validate_membership_move(connection: sqlite3.Connection, item: MembershipMo
         (str(item.coalesce_membership_id),),
     ).fetchone()
     if target is None or target[0] != source[0] or target[1] != str(item.target_work_id):
-        raise sqlite3.IntegrityError("membership coalesce target must share Collection and destination Work")
+        raise sqlite3.IntegrityError(
+            "membership coalesce target must share Collection and destination Work"
+        )
     invalid = connection.execute(
         "SELECT 1 FROM (SELECT collection_run_id FROM collection_causes WHERE membership_id=? "
         "UNION ALL SELECT collection_run_id FROM collection_paths WHERE membership_id=?) x "
@@ -100,7 +114,9 @@ class SqliteCurationTransaction:
                 ).fetchone()
                 if current is None or current[0] == str(item.target_work_id):
                     connection.rollback()
-                    raise sqlite3.IntegrityError("version move source is missing or already at target Work")
+                    raise sqlite3.IntegrityError(
+                        "version move source is missing or already at target Work"
+                    )
             committed = False
             try:
                 self._apply(connection, validated_plan)
@@ -112,7 +128,11 @@ class SqliteCurationTransaction:
                     connection.rollback()
         return CurationCommit(validated_plan.plan_id, resulting)
 
-    def _apply(self, connection: sqlite3.Connection, plan: ValidatedCurationPlan) -> None:
+    def _apply(  # noqa: C901
+        self,
+        connection: sqlite3.Connection,
+        plan: ValidatedCurationPlan,
+    ) -> None:
         for item in plan.observation_moves:
             cursor = connection.execute(
                 "UPDATE metadata_observations SET work_version_id=? WHERE id=?",
@@ -143,7 +163,9 @@ class SqliteCurationTransaction:
                     "UPDATE collection_paths SET membership_id=? WHERE membership_id=?",
                     (str(item.coalesce_membership_id), str(item.membership_id)),
                 )
-                cursor = connection.execute("DELETE FROM collection_memberships WHERE id=?", (str(item.membership_id),))
+                cursor = connection.execute(
+                    "DELETE FROM collection_memberships WHERE id=?", (str(item.membership_id),)
+                )
                 _one(cursor, str(item.membership_id))
         self._step("memberships")
         for item in plan.reference_retargets:
@@ -157,35 +179,54 @@ class SqliteCurationTransaction:
             _one(cursor, str(item.relation_id))
         for item in plan.relation_deletes:
             _one(
-                connection.execute("DELETE FROM work_version_relations WHERE id=?", (str(item.relation_id),)),
+                connection.execute(
+                    "DELETE FROM work_version_relations WHERE id=?", (str(item.relation_id),)
+                ),
                 str(item.relation_id),
             )
         for item in plan.relation_inserts:
             connection.execute(
-                "INSERT INTO work_version_relations(id,left_version_id,right_version_id,relation) VALUES(?,?,?,?)",
-                (str(item.relation_id), str(item.left_version_id), str(item.right_version_id), item.relation),
+                "INSERT INTO work_version_relations(id,left_version_id,right_version_id,"
+                "relation) VALUES(?,?,?,?)",
+                (
+                    str(item.relation_id),
+                    str(item.left_version_id),
+                    str(item.right_version_id),
+                    item.relation,
+                ),
             )
         self._step("relations")
         for item in plan.representative_updates:
             if item.version_id is None:
-                connection.execute("DELETE FROM work_representative_versions WHERE work_id=?", (str(item.work_id),))
+                connection.execute(
+                    "DELETE FROM work_representative_versions WHERE work_id=?", (str(item.work_id),)
+                )
         for item in plan.version_moves:
             cursor = connection.execute(
-                "UPDATE work_versions SET work_id=? WHERE id=?", (str(item.target_work_id), str(item.version_id))
+                "UPDATE work_versions SET work_id=? WHERE id=?",
+                (str(item.target_work_id), str(item.version_id)),
             )
             _one(cursor, str(item.version_id))
         self._step("versions")
         for item in plan.representative_updates:
             if item.version_id is not None:
                 connection.execute(
-                    "INSERT INTO work_representative_versions(work_id,work_version_id) VALUES(?,?) ON CONFLICT(work_id) DO UPDATE SET work_version_id=excluded.work_version_id",
+                    "INSERT INTO work_representative_versions(work_id,work_version_id) VALUES(?,"
+                    "?) ON CONFLICT(work_id) DO UPDATE SET "
+                    "work_version_id=excluded.work_version_id",
                     (str(item.work_id), str(item.version_id)),
                 )
         self._step("representatives")
         for identifier in plan.delete_version_ids:
-            _one(connection.execute("DELETE FROM work_versions WHERE id=?", (str(identifier),)), str(identifier))
+            _one(
+                connection.execute("DELETE FROM work_versions WHERE id=?", (str(identifier),)),
+                str(identifier),
+            )
         for identifier in plan.delete_work_ids:
-            _one(connection.execute("DELETE FROM works WHERE id=?", (str(identifier),)), str(identifier))
+            _one(
+                connection.execute("DELETE FROM works WHERE id=?", (str(identifier),)),
+                str(identifier),
+            )
         self._step("deletes")
         for identifier in plan.orphan_artifact_candidates:
             connection.execute(
@@ -203,25 +244,31 @@ class SqliteCurationTransaction:
         self._step("artifact-registrations")
         for identifier in plan.fts_rebuild_version_ids:
             for table in ("metadata_fts", "light_text_fts", "analysis_fts"):
-                connection.execute(f"DELETE FROM {table} WHERE work_version_id=?", (str(identifier),))
+                connection.execute(
+                    f"DELETE FROM {table} WHERE work_version_id=?", (str(identifier),)
+                )
             connection.execute(
                 "INSERT INTO metadata_fts(work_version_id,content) "
                 "SELECT c.work_version_id,s.values_json FROM work_version_current_metadata c "
-                "JOIN metadata_snapshots s ON s.id=c.metadata_snapshot_id AND s.work_version_id=c.work_version_id "
+                "JOIN metadata_snapshots s ON s.id=c.metadata_snapshot_id AND "
+                "s.work_version_id=c.work_version_id "
                 "WHERE c.work_version_id=?",
                 (str(identifier),),
             )
             connection.execute(
                 "INSERT INTO light_text_fts(work_version_id,content) "
-                "SELECT c.work_version_id,d.document_json FROM work_version_current_light_document c "
-                "JOIN light_documents d ON d.id=c.light_document_id AND d.work_version_id=c.work_version_id "
+                "SELECT c.work_version_id,d.document_json FROM "
+                "work_version_current_light_document c "
+                "JOIN light_documents d ON d.id=c.light_document_id AND "
+                "d.work_version_id=c.work_version_id "
                 "WHERE c.work_version_id=?",
                 (str(identifier),),
             )
             connection.execute(
                 "INSERT INTO analysis_fts(work_version_id,content) "
                 "SELECT b.work_version_id,a.proposal_json FROM completion_bundles b "
-                "JOIN analysis_artifacts a ON a.id=b.analysis_artifact_id AND a.work_version_id=b.work_version_id "
+                "JOIN analysis_artifacts a ON a.id=b.analysis_artifact_id AND "
+                "a.work_version_id=b.work_version_id "
                 "WHERE b.work_version_id=?",
                 (str(identifier),),
             )

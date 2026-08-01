@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
 import os
-from pathlib import Path
 import sqlite3
-import stat
-from tempfile import TemporaryDirectory
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from sciretriever.literature_store.filesystem import (
+    AdvisoryLock,
+    canonical_catalog_path,
+)
 from sciretriever.literature_store.sqlite import (
     SCHEMA_FINGERPRINT,
     SCHEMA_TABLES,
     UnsupportedCatalogError,
     create_or_open_catalog,
-    open_read_only_snapshot,
     validate_catalog,
-)
-from sciretriever.literature_store.filesystem import (
-    AdvisoryLock,
-    canonical_catalog_path,
 )
 
 
@@ -35,9 +33,7 @@ class TargetStoreSchemaTests(unittest.TestCase):
         with create_or_open_catalog(self.catalog) as connection:
             tables = {
                 row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
             marker = connection.execute(
                 "SELECT product,schema_version,schema_fingerprint FROM schema_identity"
@@ -61,8 +57,10 @@ class TargetStoreSchemaTests(unittest.TestCase):
         validate_catalog(self.catalog)
 
         after = self.catalog.stat()
-        self.assertEqual((after.st_ino, after.st_size, after.st_mtime_ns),
-                         (before.st_ino, before.st_size, before.st_mtime_ns))
+        self.assertEqual(
+            (after.st_ino, after.st_size, after.st_mtime_ns),
+            (before.st_ino, before.st_size, before.st_mtime_ns),
+        )
         self.assertEqual(hashlib.sha256(self.catalog.read_bytes()).hexdigest(), digest)
         self.assertFalse(Path(f"{self.catalog}-wal").exists())
         self.assertFalse(Path(f"{self.catalog}-shm").exists())
@@ -111,10 +109,31 @@ class TargetStoreSchemaTests(unittest.TestCase):
                 (version, work, "formal"),
             )
             illegal = (
-                ("cross-work representative", "INSERT INTO work_representative_versions(work_id,work_version_id) VALUES (?,?)", (other, version)),
-                ("absolute artifact", "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES ('a','raw','" + "a" * 64 + "','/tmp/x',1)", ()),
-                ("invalid batch type", "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json) VALUES ('b','other','created','{}','{}')", ()),
-                ("invalid opaque revision", "INSERT INTO opaque_extension_records(namespace,record_id,revision,payload_sha256,payload_json) VALUES ('x','r',0,'" + "b" * 64 + "','{}')", ()),
+                (
+                    "cross-work representative",
+                    "INSERT INTO work_representative_versions(work_id,work_version_id) "
+                    "VALUES (?,?)",
+                    (other, version),
+                ),
+                (
+                    "absolute artifact",
+                    "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+                    "VALUES ('a','raw','" + "a" * 64 + "','/tmp/x',1)",
+                    (),
+                ),
+                (
+                    "invalid batch type",
+                    "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json) "
+                    "VALUES ('b','other','created','{}','{}')",
+                    (),
+                ),
+                (
+                    "invalid opaque revision",
+                    "INSERT INTO opaque_extension_records("
+                    "namespace,record_id,revision,payload_sha256,payload_json) "
+                    "VALUES ('x','r',0,'" + "b" * 64 + "','{}')",
+                    (),
+                ),
             )
             for label, statement, parameters in illegal:
                 with self.subTest(label=label), self.assertRaises(sqlite3.IntegrityError):
@@ -122,8 +141,14 @@ class TargetStoreSchemaTests(unittest.TestCase):
 
     def test_alignment_uniqueness_and_complete_parent_constraints(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:
-            work_ids = ("10000000-0000-0000-0000-000000000001", "10000000-0000-0000-0000-000000000002")
-            version_ids = ("20000000-0000-0000-0000-000000000001", "20000000-0000-0000-0000-000000000002")
+            work_ids = (
+                "10000000-0000-0000-0000-000000000001",
+                "10000000-0000-0000-0000-000000000002",
+            )
+            version_ids = (
+                "20000000-0000-0000-0000-000000000001",
+                "20000000-0000-0000-0000-000000000002",
+            )
             for work_id, version_id in zip(work_ids, version_ids, strict=True):
                 connection.execute("INSERT INTO works(id) VALUES (?)", (work_id,))
                 connection.execute(
@@ -132,49 +157,77 @@ class TargetStoreSchemaTests(unittest.TestCase):
                 )
             digest = "c" * 64
             connection.execute(
-                "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) VALUES ('asset','raw',?,'raw/cc/value',1)",
+                "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
+                "VALUES ('asset','raw',?,'raw/cc/value',1)",
                 (digest,),
             )
             connection.execute(
-                "INSERT INTO raw_assets(artifact_id,asset_role,source_json) VALUES ('asset','primary-pdf','{}')"
+                "INSERT INTO raw_assets(artifact_id,asset_role,source_json) "
+                "VALUES ('asset','primary-pdf','{}')"
             )
             connection.execute(
-                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) VALUES ('link',?,'asset','primary-pdf')",
+                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) "
+                "VALUES ('link',?,'asset','primary-pdf')",
                 (version_ids[0],),
             )
             connection.execute(
-                "INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) VALUES (?,'link')",
+                "INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) "
+                "VALUES (?,'link')",
                 (version_ids[0],),
             )
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) VALUES (?,'link')",
+                    "INSERT INTO accepted_primary_assets("
+                    "work_version_id,work_version_asset_id) VALUES (?,'link')",
                     (version_ids[1],),
                 )
             with self.assertRaises(sqlite3.IntegrityError):
                 connection.execute(
-                    "INSERT INTO light_documents(id,work_version_id,primary_asset_id,artifact_id,sha256,document_json,provenance_json,complete) VALUES ('light',?,'link','asset',?,'{}','{}',1)",
+                    "INSERT INTO light_documents("
+                    "id,work_version_id,primary_asset_id,artifact_id,sha256,document_json,"
+                    "provenance_json,complete) "
+                    "VALUES ('light',?,'link','asset',?,'{}','{}',1)",
                     (version_ids[1], digest),
                 )
 
     def test_collection_run_and_batch_target_constraints(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
-                "INSERT INTO collections(id,name,created_at) VALUES ('collection','name','2026-01-01T00:00:00Z')"
+                "INSERT INTO collections(id,name,created_at) "
+                "VALUES ('collection','name','2026-01-01T00:00:00Z')"
             )
             connection.execute(
-                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,requested_advance_to,status) VALUES ('run','collection','topic','{}','completed','created')"
+                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,"
+                "requested_advance_to,status) "
+                "VALUES ('run','collection','topic','{}','completed','created')"
             )
             connection.execute(
-                "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json,trigger_collection_run_id) VALUES ('batch','process','created','{}','{}','run')"
+                "INSERT INTO batch_runs("
+                "id,batch_type,status,scope_json,counts_json,trigger_collection_run_id) "
+                "VALUES ('batch','process','created','{}','{}','run')"
             )
             connection.execute(
-                "INSERT INTO batch_targets(id,batch_run_id,target_kind,target_id,input_ordinal) VALUES ('target','batch','work-version','version',0)"
+                "INSERT INTO batch_targets("
+                "id,batch_run_id,target_kind,target_id,input_ordinal) "
+                "VALUES ('target','batch','work-version','version',0)"
             )
             illegal = (
-                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,citation_input_json,requested_advance_to,status) VALUES ('mixed','collection','topic','{}','{}','completed','created')",
-                "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json,trigger_collection_run_id) VALUES ('second','process','created','{}','{}','run')",
-                "INSERT INTO batch_targets(id,batch_run_id,target_kind,target_id,input_ordinal) VALUES ('duplicate','batch','work-version','version',1)",
+                (
+                    "INSERT INTO collection_runs("
+                    "id,collection_id,mode,topic_conditions_json,citation_input_json,"
+                    "requested_advance_to,status) "
+                    "VALUES ('mixed','collection','topic','{}','{}','completed','created')"
+                ),
+                (
+                    "INSERT INTO batch_runs("
+                    "id,batch_type,status,scope_json,counts_json,trigger_collection_run_id) "
+                    "VALUES ('second','process','created','{}','{}','run')"
+                ),
+                (
+                    "INSERT INTO batch_targets("
+                    "id,batch_run_id,target_kind,target_id,input_ordinal) "
+                    "VALUES ('duplicate','batch','work-version','version',1)"
+                ),
             )
             for statement in illegal:
                 with self.assertRaises(sqlite3.IntegrityError):
@@ -184,7 +237,8 @@ class TargetStoreSchemaTests(unittest.TestCase):
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute("INSERT INTO collections(id,name) VALUES ('collection','name')")
             connection.execute(
-                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,requested_advance_to,status) "
+                "INSERT INTO collection_runs("
+                "id,collection_id,mode,topic_conditions_json,requested_advance_to,status) "
                 "VALUES ('run','collection','topic','{}','completed','running')"
             )
             connection.execute(
@@ -193,19 +247,30 @@ class TargetStoreSchemaTests(unittest.TestCase):
                 "missing_count=1,source_failure_count=1 WHERE id='run'"
             )
             connection.execute(
-                "INSERT INTO collection_source_results(collection_run_id,source_ordinal,source_name,"
-                "discovered_count,accepted_count,missing_count,failure_code,failure_reason,failure_action,retryable) "
+                "INSERT INTO collection_source_results("
+                "collection_run_id,source_ordinal,source_name,discovered_count,accepted_count,"
+                "missing_count,failure_code,failure_reason,failure_action,retryable) "
                 "VALUES ('run',0,'crossref',2,2,0,NULL,NULL,NULL,NULL)"
             )
             connection.execute(
-                "INSERT INTO collection_source_results(collection_run_id,source_ordinal,source_name,"
-                "discovered_count,accepted_count,missing_count,failure_code,failure_reason,failure_action,retryable) "
+                "INSERT INTO collection_source_results("
+                "collection_run_id,source_ordinal,source_name,discovered_count,accepted_count,"
+                "missing_count,failure_code,failure_reason,failure_action,retryable) "
                 "VALUES ('run',1,'openalex',1,0,1,'timeout','timed out','retry',1)"
             )
             invalid = (
                 "UPDATE collection_runs SET accepted_count=3 WHERE id='run'",
-                "INSERT INTO collection_source_results(collection_run_id,source_ordinal,source_name,discovered_count,accepted_count,missing_count) VALUES ('run',2,'crossref',0,0,0)",
-                "INSERT INTO collection_source_results(collection_run_id,source_ordinal,source_name,discovered_count,accepted_count,missing_count,failure_code) VALUES ('run',2,'semantic-scholar',0,0,0,'broken')",
+                (
+                    "INSERT INTO collection_source_results("
+                    "collection_run_id,source_ordinal,source_name,discovered_count,"
+                    "accepted_count,missing_count) VALUES ('run',2,'crossref',0,0,0)"
+                ),
+                (
+                    "INSERT INTO collection_source_results("
+                    "collection_run_id,source_ordinal,source_name,discovered_count,"
+                    "accepted_count,missing_count,failure_code) "
+                    "VALUES ('run',2,'semantic-scholar',0,0,0,'broken')"
+                ),
             )
             for statement in invalid:
                 with self.assertRaises(sqlite3.IntegrityError):

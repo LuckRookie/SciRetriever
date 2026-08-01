@@ -33,9 +33,13 @@ class AdmissionOrderTracker:
     def add(self, rank: int, fingerprint: str, kind: str) -> HeldAdmission:
         held = self._entries.get()
         if held and (rank, fingerprint) < (held[-1].rank, held[-1].fingerprint):
-            raise AdmissionOrderError("admission locks must follow canonical rank and fingerprint order")
+            raise AdmissionOrderError(
+                "admission locks must follow canonical rank and fingerprint order"
+            )
         if held and held[-1].kind == "core" and kind not in ("core", "batch"):
-            raise AdmissionOrderError("core-write may only precede another ordered core lock or exchange owner")
+            raise AdmissionOrderError(
+                "core-write may only precede another ordered core lock or exchange owner"
+            )
         if held and held[-1].rank == 20 and kind != "output":
             raise AdmissionOrderError("owner locks may only be followed by output")
         entry = HeldAdmission(uuid4(), rank, fingerprint, kind)
@@ -43,4 +47,6 @@ class AdmissionOrderTracker:
         return entry
 
     def remove(self, entry: HeldAdmission) -> None:
-        self._entries.set(tuple(value for value in self._entries.get() if value.entry_id != entry.entry_id))
+        self._entries.set(
+            tuple(value for value in self._entries.get() if value.entry_id != entry.entry_id)
+        )

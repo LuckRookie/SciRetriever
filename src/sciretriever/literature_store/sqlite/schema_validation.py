@@ -5,7 +5,6 @@ from typing import Final
 
 from sciretriever.literature_store.sqlite.schema import SCHEMA_MANIFEST
 
-
 SchemaObject = tuple[str, str, str, str]
 
 
@@ -32,8 +31,10 @@ def _expected_objects() -> tuple[SchemaObject, ...]:
             "sciretriever_sha256", 1, lambda payload: payload, deterministic=True
         )
         connection.create_function(
-            "sciretriever_metadata_sha256", 3,
-            lambda revision, values, provenance: values, deterministic=True,
+            "sciretriever_metadata_sha256",
+            3,
+            lambda revision, values, provenance: values,
+            deterministic=True,
         )
         connection.execute("PRAGMA foreign_keys=ON")
         for statement in SCHEMA_MANIFEST:

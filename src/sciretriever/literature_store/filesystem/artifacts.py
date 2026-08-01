@@ -1,17 +1,14 @@
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-import os
 from pathlib import Path
-import stat
 from typing import Final
 
-
-_DIRECTORY_FLAGS: Final = (
-    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-)
+_DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
 _READ_FLAGS: Final = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -71,9 +68,7 @@ class CoreStorage:
         core_descriptor = -1
         try:
             _validate_directory(parent_descriptor, "storage parent")
-            root_descriptor = _ensure_directory(
-                parent_descriptor, self.root.name, "storage root"
-            )
+            root_descriptor = _ensure_directory(parent_descriptor, self.root.name, "storage root")
             core_descriptor = _ensure_directory(root_descriptor, "core", "core root")
             yield core_descriptor
         finally:

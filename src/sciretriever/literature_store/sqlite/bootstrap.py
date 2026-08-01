@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import os
 import re
 import stat
+from collections.abc import Callable
 from typing import Final
 
 from sciretriever.literature_store.filesystem import CanonicalCatalogPath
-
 
 _UUID: Final = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 

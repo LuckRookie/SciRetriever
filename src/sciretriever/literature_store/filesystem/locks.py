@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
 import fcntl
 import hashlib
 import os
-from pathlib import Path
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
-
 
 _DIRECTORY_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
 _FILE_FLAGS: Final = os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
@@ -157,19 +156,29 @@ class AdvisoryLock:
         lock_descriptor = -1
         try:
             metadata = os.fstat(parent_descriptor)
-            if (metadata.st_dev, metadata.st_ino) != (self.scope.parent_device, self.scope.parent_inode):
+            if (metadata.st_dev, metadata.st_ino) != (
+                self.scope.parent_device,
+                self.scope.parent_inode,
+            ):
                 raise FilesystemSafetyError("catalog parent identity changed")
             try:
                 os.mkdir(".sciretriever-locks", 0o700, dir_fd=parent_descriptor)
                 os.fsync(parent_descriptor)
             except FileExistsError:
                 os.stat(".sciretriever-locks", dir_fd=parent_descriptor, follow_symlinks=False)
-            lock_directory = os.open(".sciretriever-locks", _DIRECTORY_FLAGS, dir_fd=parent_descriptor)
+            lock_directory = os.open(
+                ".sciretriever-locks", _DIRECTORY_FLAGS, dir_fd=parent_descriptor
+            )
             _validate_owner_mode(os.fstat(lock_directory), 0o700, "lock root")
             root_operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
             fcntl.flock(lock_directory, root_operation)
-            lock_name = hashlib.sha256(f"{self.scope.identity}\0{self.name}".encode("ascii")).hexdigest() + ".lock"
-            lock_descriptor = os.open(lock_name, _FILE_FLAGS | os.O_CREAT, 0o600, dir_fd=lock_directory)
+            lock_name = (
+                hashlib.sha256(f"{self.scope.identity}\0{self.name}".encode("ascii")).hexdigest()
+                + ".lock"
+            )
+            lock_descriptor = os.open(
+                lock_name, _FILE_FLAGS | os.O_CREAT, 0o600, dir_fd=lock_directory
+            )
             lock_metadata = os.fstat(lock_descriptor)
             if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_nlink != 1:
                 raise FilesystemSafetyError("lock must be a unique regular file")

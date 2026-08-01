@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Final
 
@@ -19,7 +19,6 @@ from sciretriever.literature_store.filesystem.artifacts import (
     CoreStorage,
     open_child,
 )
-
 
 _KINDS: Final = ("primary", "supplementary", "light-document", "analysis")
 Checkpoint = Callable[[str], None]
@@ -94,7 +93,7 @@ class CoreArtifactReconciler:
             return ReconciliationResult(tuple(deleted), tuple(preserved))
 
     @staticmethod
-    def _scan(core: int) -> _ScanResult:
+    def _scan(core: int) -> _ScanResult:  # noqa: C901
         found: list[FormalArtifactCandidate] = []
         preserved: list[RelativeArtifactPath] = []
         for kind in _KINDS:
@@ -110,9 +109,7 @@ class CoreArtifactReconciler:
                         continue
                     try:
                         for digest in sorted(os.listdir(prefix)):
-                            relative = RelativeArtifactPath(
-                                f"{kind}/{prefix_name}/{digest}"
-                            )
+                            relative = RelativeArtifactPath(f"{kind}/{prefix_name}/{digest}")
                             formal = formal_artifact_path(kind, prefix_name, digest)
                             if formal is None:
                                 preserved.append(relative)
@@ -159,7 +156,8 @@ class CoreArtifactReconciler:
                         return False
                     if (
                         current != candidate.identity
-                        or (entry.st_dev, entry.st_ino) != (
+                        or (entry.st_dev, entry.st_ino)
+                        != (
                             candidate.identity.device,
                             candidate.identity.inode,
                         )

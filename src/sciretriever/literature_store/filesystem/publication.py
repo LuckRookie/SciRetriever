@@ -1,23 +1,25 @@
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-import json
-import os
 from pathlib import Path
 from typing import Final, NoReturn
 from uuid import uuid4
 
 from sciretriever.content.api import ArtifactKind, PublishedArtifact, StagedArtifact
-from sciretriever.kernel import RelativeArtifactPath, Sha256
-from sciretriever.literature_store.filesystem.artifacts import (
-    ArtifactFilesystemError, CoreStorage, ensure_child,
-)
+from sciretriever.kernel import RelativeArtifactPath
 from sciretriever.literature_store.filesystem.artifact_identity import (
-    descriptor_identity, open_immutable_artifact,
+    descriptor_identity,
+    open_immutable_artifact,
 )
-
+from sciretriever.literature_store.filesystem.artifacts import (
+    ArtifactFilesystemError,
+    CoreStorage,
+    ensure_child,
+)
 
 _MAX_ARTIFACT_BYTES: Final = 512 * 1024 * 1024
 Checkpoint = Callable[[str], None]
@@ -90,14 +92,12 @@ class CoreArtifactStore:
     def __init__(self, storage_root: str | os.PathLike[str]) -> None:
         object.__setattr__(self, "storage_root", Path(storage_root).absolute())
 
-    def publish(
+    def publish(  # noqa: C901
         self, artifact: StagedArtifact, *, checkpoint: Checkpoint | None = None
     ) -> PublishedArtifact:
         _validate_type(artifact)
         digest = str(artifact.sha256)
-        relative = RelativeArtifactPath(
-            f"{_directory(artifact.kind)}/{digest[:2]}/{digest}"
-        )
+        relative = RelativeArtifactPath(f"{_directory(artifact.kind)}/{digest[:2]}/{digest}")
         staging_name = f"artifact-{uuid4()}.stage"
         with CoreStorage(self.storage_root).open_core() as core:
             staging = ensure_child(core, ".staging", "core staging")
@@ -107,7 +107,10 @@ class CoreArtifactStore:
             try:
                 descriptor = os.open(
                     staging_name,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_CLOEXEC
                     | getattr(os, "O_NOFOLLOW", 0),
                     0o600,
                     dir_fd=staging,
@@ -125,7 +128,10 @@ class CoreArtifactStore:
                 self._verify(staging, staging_name, artifact)
                 try:
                     os.link(
-                        staging_name, digest, src_dir_fd=staging, dst_dir_fd=prefix,
+                        staging_name,
+                        digest,
+                        src_dir_fd=staging,
+                        dst_dir_fd=prefix,
                         follow_symlinks=False,
                     )
                     published = True
@@ -171,15 +177,10 @@ class CoreArtifactStore:
         descriptor = open_immutable_artifact(parent, name)
         try:
             identity = descriptor_identity(descriptor)
-            if (
-                identity.size != len(artifact.content)
-                or identity.digest != str(artifact.sha256)
-            ):
+            if identity.size != len(artifact.content) or identity.digest != str(artifact.sha256):
                 digest = str(artifact.sha256)
                 raise ArtifactConflictError(
-                    RelativeArtifactPath(
-                        f"{_directory(artifact.kind)}/{digest[:2]}/{digest}"
-                    )
+                    RelativeArtifactPath(f"{_directory(artifact.kind)}/{digest[:2]}/{digest}")
                 )
         finally:
             os.close(descriptor)
