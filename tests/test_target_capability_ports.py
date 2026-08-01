@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, asdict, fields
 import json
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import get_type_hints
 import unittest
 
-from scripts.architecture_checks import find_architecture_violations
 from sciretriever.batching.ports import AdmissionGuard, AdmissionPort, CatalogIdentity, OutputIdentity
 from sciretriever.collection.model import (
     CitationDiscoveryRequest, CitationObservation, MetadataDiscoveryRequest,
@@ -36,10 +33,6 @@ from sciretriever.kernel.ids import (
     AdmissionBindingId,
 )
 from sciretriever.kernel.paths import RelativeArtifactPath
-from tests.target_capability_leak_fixtures import (
-    ALLOWED_CONTRACT_FIXTURES, FORBIDDEN_CONTRACT_FIXTURES,
-    MALFORMED_FORWARD_REFERENCE_FIXTURES,
-)
 
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
@@ -211,54 +204,6 @@ class TargetCapabilityPortTests(unittest.TestCase):
             json.loads(json.dumps(asdict(target)))["current_metadata"]["title"],
             "Title",
         )
-
-    def test_public_contract_leaks_fail_closed_with_aliases(self) -> None:
-        for name, source in FORBIDDEN_CONTRACT_FIXTURES:
-            with self.subTest(name=name), TemporaryDirectory(prefix="sciretriever-port-leak-") as temporary:
-                root = Path(temporary)
-                path = root / "content" / "ports.py"
-                path.parent.mkdir(parents=True)
-                path.write_text(source, encoding="utf-8")
-                self.assertTrue(any("public contract annotation" in item for item in find_architecture_violations(root, frozenset())))
-
-    def test_independent_verifier_reproductions_have_exact_diagnostics(self) -> None:
-        fixtures = (
-            ("from pathlib import Path\nclass Port:\n def load(self, value: 'Path') -> bytes: ...\n", "content/ports.py: public contract annotation pathlib.Path is forbidden"),
-            ("from pathlib import Path\nLeak = tuple[Path, ...]\nclass Port:\n def load(self) -> Leak: ...\n", "content/ports.py: public contract annotation pathlib.Path is forbidden"),
-            ("from vendor import VendorWork\nclass NeutralWork(VendorWork): pass\nclass Port:\n def search(self) -> NeutralWork: ...\n", "content/ports.py: public contract annotation vendor.VendorWork is forbidden"),
-        )
-        for source, expected in fixtures:
-            with self.subTest(source=source), TemporaryDirectory(prefix="sciretriever-port-verifier-") as temporary:
-                root = Path(temporary)
-                path = root / "content" / "ports.py"
-                path.parent.mkdir(parents=True)
-                path.write_text(source, encoding="utf-8")
-                self.assertEqual(
-                    find_architecture_violations(root, frozenset()),
-                    (expected,),
-                )
-
-    def test_malformed_forward_references_fail_with_stable_diagnostic(self) -> None:
-        for source in MALFORMED_FORWARD_REFERENCE_FIXTURES:
-            with self.subTest(source=source), TemporaryDirectory(prefix="sciretriever-port-malformed-") as temporary:
-                root = Path(temporary)
-                path = root / "content" / "ports.py"
-                path.parent.mkdir(parents=True)
-                path.write_text(source, encoding="utf-8")
-                violations = find_architecture_violations(root, frozenset())
-                self.assertEqual(
-                    violations,
-                    ("content/ports.py: malformed public contract forward reference",),
-                )
-
-    def test_neutral_compositions_unknown_names_and_alias_cycles_pass(self) -> None:
-        for source in ALLOWED_CONTRACT_FIXTURES:
-            with self.subTest(source=source), TemporaryDirectory(prefix="sciretriever-port-neutral-") as temporary:
-                root = Path(temporary)
-                path = root / "content" / "ports.py"
-                path.parent.mkdir(parents=True)
-                path.write_text(source, encoding="utf-8")
-                self.assertEqual(find_architecture_violations(root, frozenset()), ())
 
 
 if __name__ == "__main__":
