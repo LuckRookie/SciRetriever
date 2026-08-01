@@ -117,11 +117,25 @@ LibrarySummary = WorkSummary | WorkVersionSummary
 
 
 __all__ = (
-    "AnalysisView", "AssetView", "AuthorView", "CurrentFailure", "ExtensionResultView",
-    "LibrarySummary", "LightDocumentView", "MetadataView", "ObservationView",
-    "ReferenceSetView", "ReferenceView", "TagSetView", "TagView", "UnifiedMetadataValues",
-    "WorkSummary", "WorkVersionSummary",
+    "AnalysisView",
+    "AssetView",
+    "AuthorView",
+    "CurrentFailure",
+    "ExtensionResultView",
+    "LibrarySummary",
+    "LightDocumentView",
+    "MetadataView",
+    "ObservationView",
+    "ReferenceSetView",
+    "ReferenceView",
+    "TagSetView",
+    "TagView",
+    "UnifiedMetadataValues",
+    "WorkSummary",
+    "WorkVersionSummary",
 )
+
+
 @dataclass(frozen=True, slots=True)
 class AuthorView:
     display_name: str

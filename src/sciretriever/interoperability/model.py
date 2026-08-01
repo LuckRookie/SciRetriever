@@ -47,6 +47,8 @@ class ExportEncodingResult:
 
 
 __all__ = (
-    "ExportEncodingResult", "ExportOmission", "ImportedBibliographicRecord",
+    "ExportEncodingResult",
+    "ExportOmission",
+    "ImportedBibliographicRecord",
     "RecordParseResult",
 )

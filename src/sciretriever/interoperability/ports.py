@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Protocol
 
 from sciretriever.interoperability.model import (
-    ExportEncodingResult, ImportedBibliographicRecord, RecordParseResult,
+    ExportEncodingResult,
+    ImportedBibliographicRecord,
+    RecordParseResult,
 )
-from sciretriever.kernel.enums import BibliographyFormat
 from sciretriever.interoperability.publisher_contracts import ImportRecordProjection, ImportResult
+from sciretriever.kernel.enums import BibliographyFormat
 
 
 class BinaryInput(Protocol):
@@ -28,6 +30,9 @@ class BibliographyCodec(Protocol):
 
 
 __all__ = (
-    "BibliographyCodec", "BinaryInput", "BinaryOutput", "ImportRecordProjection",
+    "BibliographyCodec",
+    "BinaryInput",
+    "BinaryOutput",
+    "ImportRecordProjection",
     "ImportResult",
 )

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+
 import bibtexparser
 
 from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
 from sciretriever.kernel import BibliographyFormat
+
 from ._common import CodecInputError, decode_bytes, read_bounded, record, rejected
 
 
@@ -30,18 +32,39 @@ class BibtexCodec:
                 if len(values) != 1:
                     raise CodecInputError("malformed-record", "BibTeX record cannot be parsed")
                 item = values[0]
-                authors = tuple(part.strip() for part in item.get("author", "").split(" and ") if part.strip())
-                split = lambda name: tuple(part.strip() for part in re.split(r"[;,]", item.get(name, "")) if part.strip())
-                ids = tuple((name, item[name]) for name in ("doi", "pmid", "pmcid", "arxiv", "isbn", "issn") if name in item)
+                authors = tuple(
+                    part.strip() for part in item.get("author", "").split(" and ") if part.strip()
+                )
+
+                def split(name: str) -> tuple[str, ...]:
+                    return tuple(
+                        part.strip()
+                        for part in re.split(r"[;,]", item.get(name, ""))
+                        if part.strip()
+                    )
+
+                ids = tuple(
+                    (name, item[name])
+                    for name in ("doi", "pmid", "pmcid", "arxiv", "isbn", "issn")
+                    if name in item
+                )
                 result = record(
-                    title=item.get("title"), authors=authors, identifier_values=ids,
-                    abstract=item.get("abstract"), keywords=split("keywords"), tags=split("tags"),
-                    references=split("references"), institutions=split("institution"),
+                    title=item.get("title"),
+                    authors=authors,
+                    identifier_values=ids,
+                    abstract=item.get("abstract"),
+                    keywords=split("keywords"),
+                    tags=split("tags"),
+                    references=split("references"),
+                    institutions=split("institution"),
                     year=int(item["year"]) if item.get("year", "").isdigit() else None,
                     month=int(item["month"]) if item.get("month", "").isdigit() else None,
-                    venue=item.get("journal") or item.get("booktitle"), volume=item.get("volume"),
-                    issue=item.get("number"), pages=item.get("pages", "").replace("--", "-"),
-                    item_type=item.get("ENTRYTYPE"), language=item.get("language"),
+                    venue=item.get("journal") or item.get("booktitle"),
+                    volume=item.get("volume"),
+                    issue=item.get("number"),
+                    pages=item.get("pages", "").replace("--", "-"),
+                    item_type=item.get("ENTRYTYPE"),
+                    language=item.get("language"),
                 )
                 results.append(RecordParseResult(ordinal, result, None))
             except (CodecInputError, KeyError, TypeError, ValueError) as error:

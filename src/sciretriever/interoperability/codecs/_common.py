@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import unicodedata
+from dataclasses import dataclass
 from typing import Final
 
 from sciretriever.interoperability.model import ImportedBibliographicRecord, RecordParseResult
 from sciretriever.kernel import Action, FailureEvidence, Identifier, Reason
-
 
 MAX_INPUT_BYTES: Final = 8 * 1024 * 1024
 READ_SIZE: Final = 64 * 1024
@@ -40,7 +39,9 @@ def read_bounded(stream) -> bytes:
 
 
 def decode_bytes(value: bytes) -> str:
-    encodings = ("utf-8-sig", "utf-16") if value.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig",)
+    encodings = (
+        ("utf-8-sig", "utf-16") if value.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig",)
+    )
     for encoding in encodings:
         try:
             return value.decode(encoding, errors="strict")
@@ -49,7 +50,7 @@ def decode_bytes(value: bytes) -> str:
     raise CodecInputError("invalid-encoding", "input is not valid UTF-8 or BOM-marked UTF-16")
 
 
-def decode_xml_bytes(value: bytes) -> str:
+def decode_xml_bytes(value: bytes) -> str:  # noqa: C901
     if value.startswith(b"\xef\xbb\xbf"):
         encoding, physical = "utf-8-sig", "utf-8"
     elif value.startswith(b"\xff\xfe"):
@@ -65,7 +66,9 @@ def decode_xml_bytes(value: bytes) -> str:
     try:
         text = value.decode(encoding, errors="strict")
     except UnicodeDecodeError as error:
-        raise CodecInputError("invalid-encoding", "XML bytes do not match a supported encoding") from error
+        raise CodecInputError(
+            "invalid-encoding", "XML bytes do not match a supported encoding"
+        ) from error
     if "\x00" in text:
         raise CodecInputError("invalid-encoding", "decoded XML must not contain NUL characters")
     declaration = _XML_DECLARATION.match(text)
@@ -82,9 +85,13 @@ def decode_xml_bytes(value: bytes) -> str:
             "utf_16_be": {"utf-16-be"},
         }.get(declared)
         if compatible is None:
-            raise CodecInputError("unsupported-encoding", "XML declaration names an unsupported encoding")
+            raise CodecInputError(
+                "unsupported-encoding", "XML declaration names an unsupported encoding"
+            )
         if physical not in compatible:
-            raise CodecInputError("encoding-mismatch", "XML declaration does not match the byte encoding")
+            raise CodecInputError(
+                "encoding-mismatch", "XML declaration does not match the byte encoding"
+            )
     elif physical != "utf-8":
         raise CodecInputError("missing-encoding", "UTF-16 XML must declare its encoding")
     return text
@@ -113,28 +120,74 @@ def identifiers(values) -> tuple[Identifier, ...]:
             continue
         key = namespace.casefold()
         if key == "doi":
-            value = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", value, flags=re.I).casefold()
+            value = re.sub(
+                r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", value, flags=re.I
+            ).casefold()
         elif key in {"pmid", "pmcid", "arxiv", "isbn", "issn"}:
             value = re.sub(rf"^{key}:\s*", "", value, flags=re.I)
         normalized.add(Identifier(key, value))
-    return tuple(sorted(normalized, key=lambda item: (_IDENTIFIER_ORDER.get(item.namespace, 99), item.namespace, item.value)))
+    return tuple(
+        sorted(
+            normalized,
+            key=lambda item: (
+                _IDENTIFIER_ORDER.get(item.namespace, 99),
+                item.namespace,
+                item.value,
+            ),
+        )
+    )
 
 
 def rejected(ordinal: int, code: str, reason: str) -> RecordParseResult:
-    return RecordParseResult(ordinal, ImportedBibliographicRecord("", (), (), None, (), (), ()), FailureEvidence(
-        code, Reason(reason), Action("Correct or remove this bibliography record."), False,
-    ))
+    return RecordParseResult(
+        ordinal,
+        ImportedBibliographicRecord("", (), (), None, (), (), ()),
+        FailureEvidence(
+            code,
+            Reason(reason),
+            Action("Correct or remove this bibliography record."),
+            False,
+        ),
+    )
 
 
-def record(*, title: str | None, authors=(), identifier_values=(), abstract=None,
-           keywords=(), tags=(), references=(), institutions=(), year=None, month=None,
-           venue=None, volume=None, issue=None, pages=None, item_type=None, language=None) -> ImportedBibliographicRecord:
+def record(
+    *,
+    title: str | None,
+    authors=(),
+    identifier_values=(),
+    abstract=None,
+    keywords=(),
+    tags=(),
+    references=(),
+    institutions=(),
+    year=None,
+    month=None,
+    venue=None,
+    volume=None,
+    issue=None,
+    pages=None,
+    item_type=None,
+    language=None,
+) -> ImportedBibliographicRecord:
     normalized_title = clean(title)
     if normalized_title is None:
         raise CodecInputError("missing-title", "record has no convertible title")
     return ImportedBibliographicRecord(
-        normalized_title, ordered(authors), identifiers(identifier_values), clean(abstract),
-        set_values(keywords), set_values(tags), ordered(references), ordered(institutions),
-        year, month, clean(venue), clean(volume), clean(issue), clean(pages),
-        clean(item_type), clean(language),
+        normalized_title,
+        ordered(authors),
+        identifiers(identifier_values),
+        clean(abstract),
+        set_values(keywords),
+        set_values(tags),
+        ordered(references),
+        ordered(institutions),
+        year,
+        month,
+        clean(venue),
+        clean(volume),
+        clean(issue),
+        clean(pages),
+        clean(item_type),
+        clean(language),
     )

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
-from sciretriever.kernel import BibliographyFormat, BoundaryError, CanonicalJsonObject, parse_canonical_json
+from sciretriever.kernel import (
+    BibliographyFormat,
+    BoundaryError,
+    CanonicalJsonObject,
+    parse_canonical_json,
+)
+
 from ._common import CodecInputError, decode_bytes, read_bounded, record, rejected
 
 
@@ -11,13 +17,15 @@ def _text(fields: dict, name: str) -> str | None:
 
 
 def _strings(value) -> tuple[str, ...]:
-    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
+    return (
+        tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
+    )
 
 
 class CslJsonCodec:
     format = BibliographyFormat.CSL_JSON
 
-    def read(self, stream) -> tuple[RecordParseResult, ...]:
+    def read(self, stream) -> tuple[RecordParseResult, ...]:  # noqa: C901
         try:
             value = parse_canonical_json(decode_bytes(read_bounded(stream)))
         except (CodecInputError, BoundaryError) as error:
@@ -45,24 +53,49 @@ class CslJsonCodec:
                     else:
                         family, given = names.get("family"), names.get("given")
                         if isinstance(family, str):
-                            authors.append(f"{family}, {given}" if isinstance(given, str) else family)
+                            authors.append(
+                                f"{family}, {given}" if isinstance(given, str) else family
+                            )
                 issued = fields.get("issued")
-                date_parts = dict(issued.entries).get("date-parts", ()) if isinstance(issued, CanonicalJsonObject) else ()
-                first_date = date_parts[0] if isinstance(date_parts, tuple) and date_parts and isinstance(date_parts[0], tuple) else ()
+                date_parts = (
+                    dict(issued.entries).get("date-parts", ())
+                    if isinstance(issued, CanonicalJsonObject)
+                    else ()
+                )
+                first_date = (
+                    date_parts[0]
+                    if isinstance(date_parts, tuple)
+                    and date_parts
+                    and isinstance(date_parts[0], tuple)
+                    else ()
+                )
                 keyword = _text(fields, "keyword")
-                ids = tuple((name.casefold(), value) for name in ("DOI", "PMID", "PMCID", "ISBN", "ISSN") if isinstance(value := fields.get(name), str))
+                ids = tuple(
+                    (name.casefold(), value)
+                    for name in ("DOI", "PMID", "PMCID", "ISBN", "ISSN")
+                    if isinstance(value := fields.get(name), str)
+                )
                 item_type = _text(fields, "type")
                 result = record(
-                    title=_text(fields, "title"), authors=authors, identifier_values=ids,
+                    title=_text(fields, "title"),
+                    authors=authors,
+                    identifier_values=ids,
                     abstract=_text(fields, "abstract"),
                     keywords=() if keyword is None else tuple(keyword.replace(",", ";").split(";")),
-                    tags=_strings(fields.get("categories")), references=_strings(fields.get("references")),
+                    tags=_strings(fields.get("categories")),
+                    references=_strings(fields.get("references")),
                     year=first_date[0] if first_date and isinstance(first_date[0], int) else None,
-                    month=first_date[1] if len(first_date) > 1 and isinstance(first_date[1], int) else None,
-                    venue=_text(fields, "container-title"), volume=_text(fields, "volume"),
-                    issue=_text(fields, "issue"), pages=_text(fields, "page"),
+                    month=first_date[1]
+                    if len(first_date) > 1 and isinstance(first_date[1], int)
+                    else None,
+                    venue=_text(fields, "container-title"),
+                    volume=_text(fields, "volume"),
+                    issue=_text(fields, "issue"),
+                    pages=_text(fields, "page"),
                     item_type=(
-                        None if item_type is None else {"article-journal": "article"}.get(item_type, item_type)
+                        None
+                        if item_type is None
+                        else {"article-journal": "article"}.get(item_type, item_type)
                     ),
                     language=_text(fields, "language"),
                 )

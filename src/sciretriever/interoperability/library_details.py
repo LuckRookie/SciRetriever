@@ -3,12 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from sciretriever.interoperability.library_views import ReferenceView
 from sciretriever.interoperability.library_views import (
-    AnalysisView, AssetView, CurrentFailure, ExtensionResultView, LightDocumentView,
-    MetadataView, ObservationView, ReferenceSetView, TagSetView,
+    AnalysisView,
+    AssetView,
+    CurrentFailure,
+    ExtensionResultView,
+    LightDocumentView,
+    MetadataView,
+    ObservationView,
+    ReferenceSetView,
+    ReferenceView,
+    TagSetView,
 )
-from sciretriever.kernel import CanonicalJsonValue, Identifier, Provenance
+from sciretriever.kernel import Identifier, Provenance
 from sciretriever.kernel.enums import WorkVersionState
 
 
@@ -105,7 +112,13 @@ class CollectionMembershipPage:
 
 
 __all__ = (
-    "CollectionCause", "CollectionMembershipPage", "CollectionPath", "GraphEdge", "GraphPage",
-    "UnresolvedReferenceItem", "WorkCollectionMembership",
-    "WorkDetail", "WorkVersionDetail",
+    "CollectionCause",
+    "CollectionMembershipPage",
+    "CollectionPath",
+    "GraphEdge",
+    "GraphPage",
+    "UnresolvedReferenceItem",
+    "WorkCollectionMembership",
+    "WorkDetail",
+    "WorkVersionDetail",
 )

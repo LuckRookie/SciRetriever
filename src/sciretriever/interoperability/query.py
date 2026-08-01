@@ -35,7 +35,9 @@ MissingStep = Literal["primary-pdf", "light-document", "analysis", "completion"]
 
 
 class QueryFilterV1(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, strict=True, arbitrary_types_allowed=True
+    )
 
     query: Text = None
     identifiers: tuple[Identifier, ...] = ()
@@ -63,12 +65,19 @@ class QueryFilterV1(BaseModel):
         if len(collections) != len(set(collections)):
             raise QueryValueError("collection identifiers must be unique")
         groups = (
-            self.identifiers, self.collection_modes, self.discovery_relations,
-            self.states, self.missing_steps,
+            self.identifiers,
+            self.collection_modes,
+            self.discovery_relations,
+            self.states,
+            self.missing_steps,
         )
         if any(len(values) != len(set(values)) for values in groups):
             raise QueryValueError("repeated filter values must be unique")
-        if self.year_from is not None and self.year_to is not None and self.year_from > self.year_to:
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_from > self.year_to
+        ):
             raise QueryValueError("year range must be ordered")
         return self
 
