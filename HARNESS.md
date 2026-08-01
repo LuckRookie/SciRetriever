@@ -85,6 +85,36 @@
 - 拆分必须改善语义和测试边界，不做机械切碎。
 - 注释解释原因、约束和权衡，不复述代码。
 
+### 4.6 Python 代码基线
+
+“活动 Python 代码”是 `scripts/harness.py` 按以下四组路径生成的同一份排序文件清单：项目根目录现有的 `*.py`、`src/sciretriever/**/*.py`、`tests/**/*.py` 和 `scripts/**/*.py`。接收 Python 文件参数的编译、lint、format 和类型工具只接收这份清单，因此 `archive/`、`.venv/`、`build/`、`dist/`、缓存、生成物和 vendored code 不进入这些工具的检查范围；测试发现、架构、文档和 wheel 门禁分别使用自身定义的确定性范围。自动门禁只执行工具能够稳定、无上下文歧义地判断的检查；需要理解职责、风险或业务含义的规则属于审查，不实现项目自有 Python 语义解释器。
+
+#### 4.6.1 确定性自动门禁
+
+- **LOCAL GATE / CI GATE**：Python 最低运行版本为 3.10，开发基线为 3.12。语法、typing API 和标准库 API 必须在 Python 3.10 可用；Ruff 使用 `target-version = "py310"`，Pyright 使用 `pythonVersion = "3.10"`，CI 在 Python 3.10 和 3.12 分别执行 full gate。
+- **LOCAL GATE / CI GATE**：Ruff 是唯一 formatter 和 linter。harness 把同一活动文件清单传给 `ruff check` 和 `ruff format --check`，不使用 `.` 或另一组 glob 重新决定范围。Ruff formatter 使用 `line-length = 100`，lint 启用 E501 和项目选定的原生规则。
+- **LOCAL GATE / CI GATE**：Pyright 使用 `strict` 模式并接收同一活动文件清单。类型错误不得降级为 warning，也不维护债务 baseline。
+- **LOCAL GATE / CI GATE**：`compileall`、目标架构检查、文档检查和标准库 `unittest` 继续作为独立门禁；full gate 还执行 wheel 构建/内容核对。测试命令必须报告实际执行数量，匹配到零个测试时失败。
+- **LOCAL GATE / CI GATE**：Ruff、Pyright 和其它原生工具的抑制必须带具体错误码并保持在最小语句范围；文件级全局抑制禁止。抑制是否合理由审查判断，不建立自定义 marker、到期语法或 allowance 解释器。
+- **LOCAL GATE / CI GATE**：harness 直接传播每个工具的非零退出结果，不重复实现 Ruff、Pyright 或 Python 的名称绑定、作用域、annotation、Pydantic 和控制流语义。
+
+#### 4.6.2 语义质量政策
+
+- **POLICY**：公开函数、类和模块名称使用英文；异常、日志和提交消息使用英文；注释只解释约束和原因。
+- **POLICY**：公开边界写明参数和返回类型。封闭状态使用 `Enum`；语义不同的 ID、hash、相对路径和时间使用不同的明确类型，不以裸字符串互换。
+- **POLICY**：能力合同使用 `Protocol`，只在需要共享实现时使用 ABC。函数签名不得用未定形 `dict` 代替已知结构；动态第三方数据进入 Core 前必须解析为明确模型。
+- **POLICY**：SciRetriever 的结构化业务数据统一使用 Pydantic v2，不使用 dataclass 建立第二套业务模型机制。模型默认不可变；Pydantic 承担边界解析和序列化，Core 独占业务合法性、身份、precedence、状态推进和 evidence 含义的解释与决定，Services 只编排用例并提交 Core 已确认的决定。
+- **POLICY**：validator 只承担纯结构验证、格式或不可变容器转换和跨字段结构约束，不执行 I/O、环境读取、provider 调用或业务决定。除受控边界 validator 外，model 禁止自定义 serializer、自定义 `__init__`、`model_post_init`、普通自定义方法和 property；Pydantic 内建解析与序列化能力不受此限制。
+- **POLICY**：资源通过 context manager 管理；下层只捕获预期的具体异常并保留异常链。顶层 catch-all 必须保留 traceback 并转换为稳定退出结果或重新抛出。
+- **POLICY**：新增行为和错误路径遵循 red-green-refactor。测试继续使用标准库 `unittest`，命名和代码分段明确表达 Given、When、Then。
+- **POLICY**：文件、函数、圈复杂度、嵌套和同步修改范围异常时触发语义拆分审查；审查依据责任、依赖和测试边界决定是否拆分，不以自定义 AST 行数算法机械切片。
+
+#### 4.6.3 风险触发审查
+
+公开合同、catalog、storage、network、身份、状态、provenance、外部访问、安全边界、持久化和模块边界发生变化时，必须启动至少一个独立 subagent 做语义审查。审查读取原始需求、适用 ADR、责任文档、最终 diff 和验证证据，检查自动工具无法可靠判断的职责归属、`Any`/抑制必要性、Pydantic validator 含义、异常边界、不可变性和复杂度。普通低风险改动由实现者完成同样维度的自审；发现边界不清或证据不足时升级为独立审查。
+
+机械配置只放在 `pyproject.toml` 和 `scripts/harness.py` 中。`quick` 执行 Ruff、format、编译、Pyright、架构、文档和 harness 自测，覆盖确定性 L1 门禁；开发者仍须按 L0 检查 diff、修改文件诊断和任务相关测试。`full` 执行相同 L1 门禁，并增加全部测试和 wheel 构建/内容核对。不得排除活动目录、降低错误级别或把失败转为 warning。
+
 ## 5. 测试与验证
 
 | 层级 | 内容 | 默认范围 |

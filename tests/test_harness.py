@@ -1,10 +1,15 @@
+import sys
 import tempfile
 import unittest
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 from scripts.harness import (
     ROOT,
+    CommandCheck,
+    _commands,
+    _run,
+    active_python_files,
     clean_build_staging,
     find_architecture_violations,
     find_completion_command_violations,
@@ -14,6 +19,67 @@ from scripts.harness import (
 
 
 class HarnessTests(unittest.TestCase):
+    def test_active_python_files_use_one_sorted_project_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            included = (
+                root / "main.py",
+                root / "src" / "sciretriever" / "package.py",
+                root / "tests" / "test_package.py",
+                root / "scripts" / "check.py",
+            )
+            for path in included:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("", encoding="utf-8")
+            excluded = root / "archive" / "legacy.py"
+            excluded.parent.mkdir()
+            excluded.write_text("", encoding="utf-8")
+
+            files = active_python_files(root)
+
+        self.assertEqual(
+            files,
+            ("main.py", "scripts/check.py", "src/sciretriever/package.py", "tests/test_package.py"),
+        )
+
+    def test_quick_commands_share_the_active_python_file_list(self) -> None:
+        files = ("main.py", "scripts/check.py")
+
+        commands = _commands("quick", files)
+
+        self.assertEqual(
+            tuple(check.name for check in commands),
+            ("lint", "format", "compile", "typecheck", "harness tests"),
+        )
+        for check in commands[:4]:
+            self.assertEqual(check.command[-len(files) :], files)
+        self.assertEqual(commands[-1].minimum_tests, 1)
+
+    def test_full_commands_extend_quick_with_tests_and_wheel(self) -> None:
+        files = ("main.py",)
+
+        quick = _commands("quick", files)
+        full = _commands("full", files)
+
+        self.assertEqual(full[: len(quick)], quick)
+        self.assertEqual(tuple(check.name for check in full[-2:]), ("tests", "wheel"))
+        self.assertEqual(full[-2].minimum_tests, 1)
+
+    def test_test_command_fails_when_command_reports_zero_tests(self) -> None:
+        check = CommandCheck(
+            "empty tests",
+            (
+                sys.executable,
+                "-c",
+                "import sys; print('Ran 0 tests in 0.000s', file=sys.stderr)",
+            ),
+            minimum_tests=1,
+        )
+
+        passed = _run(check)
+
+        self.assertFalse(passed)
+
     def test_repository_documentation_and_architecture_gates_pass(self) -> None:
         self.assertEqual(find_documentation_violations(ROOT), ())
         self.assertEqual(find_architecture_violations(ROOT / "src" / "sciretriever"), ())
@@ -36,25 +102,29 @@ class HarnessTests(unittest.TestCase):
 
     def test_architecture_gate_resolves_relative_cross_capability_import(self) -> None:
         self.assert_architecture_violation(
-            "acquisition/bad.py", "from ..discovery import discover\n",
+            "acquisition/bad.py",
+            "from ..discovery import discover\n",
             "acquisition/bad.py: acquisition must not import sciretriever.discovery",
         )
 
     def test_architecture_gate_detects_imported_package_member(self) -> None:
         self.assert_architecture_violation(
-            "core/bad.py", "from sciretriever import discovery\n",
+            "core/bad.py",
+            "from sciretriever import discovery\n",
             "core/bad.py: core must not import sciretriever.discovery",
         )
 
     def test_architecture_gate_rejects_stage_importing_completion(self) -> None:
         self.assert_architecture_violation(
-            "analysis/bad.py", "from sciretriever.completion import CompletionStop\n",
+            "analysis/bad.py",
+            "from sciretriever.completion import CompletionStop\n",
             "analysis/bad.py: analysis must not import sciretriever.completion",
         )
 
     def test_architecture_gate_rejects_completion_importing_cli(self) -> None:
         self.assert_architecture_violation(
-            "completion/bad.py", "from sciretriever.cli import main\n",
+            "completion/bad.py",
+            "from sciretriever.cli import main\n",
             "completion/bad.py: completion must not import sciretriever.cli",
         )
 
@@ -64,9 +134,7 @@ class HarnessTests(unittest.TestCase):
             module = source / "cli" / "download.py"
             module.parent.mkdir(parents=True)
             module.write_text(source_text, encoding="utf-8")
-            violations = find_completion_command_violations(
-                source, frozenset({"download"})
-            )
+            violations = find_completion_command_violations(source, frozenset({"download"}))
         self.assertEqual(
             violations,
             ("cli/download.py: cut-over command must use cli.completion_runtime",),
