@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from sciretriever.bibliography.api import (
-    BibliographicObservation, BibliographyRepository, IdentityCandidateQuery,
-    IdentityCandidateSet, PreparedBibliographyAcceptance, VersionFacts, WorkFacts,
+    BibliographicObservation,
+    BibliographyRepository,
+    IdentityCandidateQuery,
+    IdentityCandidateSet,
+    PreparedBibliographyAcceptance,
+    VersionFacts,
+    WorkFacts,
     prepare_initial_ingest,
 )
 from sciretriever.kernel import WorkId, WorkVersionId
@@ -13,7 +18,8 @@ class InitialBibliographyIngestion:
         self._repository = repository
 
     def prepare_discovery(
-        self, observation: BibliographicObservation,
+        self,
+        observation: BibliographicObservation,
     ) -> PreparedBibliographyAcceptance:
         return prepare_initial_ingest(self._repository, (observation,))
 

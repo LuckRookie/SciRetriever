@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sciretriever.collection.publisher_contracts import (
-    CollectionCauseFact, CollectionCauseId, CollectionPathFact, CollectionPathId,
+    CollectionCauseFact,
+    CollectionCauseId,
+    CollectionPathFact,
+    CollectionPathId,
 )
 from sciretriever.kernel import BoundaryError, CollectionId
 

@@ -4,15 +4,20 @@ from typing import assert_never
 
 from sciretriever.bibliography.api import IdentityCandidateQuery
 from sciretriever.collection.citation_input import (
-    CitationCollectionRequest, CitationRunInput, CollectionSeed, IdentifierSeed,
-    SeedSelector, WorkSeed, WorkVersionSeed,
+    CitationCollectionRequest,
+    CitationRunInput,
+    CollectionSeed,
+    IdentifierSeed,
+    SeedSelector,
+    WorkSeed,
+    WorkVersionSeed,
 )
 from sciretriever.collection.model import MembershipPageRequest
 from sciretriever.collection.ports import BibliographyIngestionPort, CollectionRepository
 from sciretriever.kernel import BoundaryError, WorkId
 
 
-def _resolve_selector(
+def _resolve_selector(  # noqa: C901
     selector: SeedSelector,
     bibliography: BibliographyIngestionPort,
     repository: CollectionRepository,
@@ -28,7 +33,9 @@ def _resolve_selector(
                 raise BoundaryError.for_field("seed", "WorkVersion is missing or orphaned")
             return (facts.work_id,)
         case IdentifierSeed(identifier=identifier):
-            candidates = bibliography.find_identity_candidates(IdentityCandidateQuery((identifier,)))
+            candidates = bibliography.find_identity_candidates(
+                IdentityCandidateQuery((identifier,))
+            )
             work_ids = tuple(sorted({str(item.work_id) for item in candidates.candidates}))
             if len(work_ids) != 1:
                 raise BoundaryError.for_field("seed", "Identifier must resolve to exactly one Work")
@@ -39,7 +46,9 @@ def _resolve_selector(
             members: list[WorkId] = []
             after = None
             while True:
-                page = repository.list_memberships(MembershipPageRequest(collection_id, after, 1000))
+                page = repository.list_memberships(
+                    MembershipPageRequest(collection_id, after, 1000)
+                )
                 members.extend(item.work_id for item in page.members)
                 after = page.next_after_work_id
                 if after is None:
@@ -60,8 +69,12 @@ def resolve_citation_input(
     for selector in request.seed_selectors:
         resolved.update(str(item) for item in _resolve_selector(selector, bibliography, repository))
     return CitationRunInput(
-        request.seed_selectors, tuple(WorkId(item) for item in sorted(resolved)),
-        request.providers, request.direction, request.depth, request.max_new,
+        request.seed_selectors,
+        tuple(WorkId(item) for item in sorted(resolved)),
+        request.providers,
+        request.direction,
+        request.depth,
+        request.max_new,
     )
 
 

@@ -5,26 +5,42 @@ from uuid import UUID, uuid5
 
 from sciretriever.bibliography.api import BibliographicObservation, InitialMetadata
 from sciretriever.collection.citation_input import CitationRunInput
-from sciretriever.collection.model import (
-    CitationDiscoveryRequest, CitationObservation, CollectionRunRecord,
-)
 from sciretriever.collection.citation_progress import CitationProgress
+from sciretriever.collection.model import (
+    CitationDiscoveryRequest,
+    CitationObservation,
+    CollectionRunRecord,
+)
 from sciretriever.collection.ports import (
-    BibliographyIngestionPort, CitationDiscoveryPort, CollectionAcceptancePublisher,
+    BibliographyIngestionPort,
+    CitationDiscoveryPort,
+    CollectionAcceptancePublisher,
     CollectionRepository,
 )
 from sciretriever.collection.publisher_contracts import (
-    CollectionAcceptance, CollectionCauseFact, CollectionCauseId, CollectionCauseKind,
-    CollectionAcceptanceConflict, CollectionMembershipFact, CollectionPathFact, CollectionPathId,
+    CollectionAcceptance,
+    CollectionAcceptanceConflict,
+    CollectionCauseFact,
+    CollectionCauseId,
+    CollectionCauseKind,
+    CollectionMembershipFact,
+    CollectionPathFact,
+    CollectionPathId,
     ExistingCollectionAcceptance,
 )
 from sciretriever.collection.run_finalization import CollectionRunFinalizer
 from sciretriever.collection.run_results import CollectionRunStatus
 from sciretriever.kernel import (
-    Action, CanonicalJsonObject, CollectionId, CollectionRunId, FailureEvidence,
-    MembershipId, Reason, UtcTimestamp, WorkId,
+    Action,
+    CanonicalJsonObject,
+    CollectionId,
+    CollectionRunId,
+    FailureEvidence,
+    MembershipId,
+    Reason,
+    UtcTimestamp,
+    WorkId,
 )
-
 
 _NAMESPACE = UUID("f4fc7f3d-633b-4cc3-8ae7-e32c83cc932d")
 
@@ -43,7 +59,9 @@ class CitationExecutionDependencies:
     sources: tuple[CitationSource, ...]
 
 
-def _membership(collection_id: CollectionId, work_id: WorkId, run_id: CollectionRunId) -> CollectionMembershipFact:
+def _membership(
+    collection_id: CollectionId, work_id: WorkId, run_id: CollectionRunId
+) -> CollectionMembershipFact:
     identifier = MembershipId(str(uuid5(_NAMESPACE, f"membership:{collection_id}:{work_id}")))
     return CollectionMembershipFact(identifier, collection_id, work_id, run_id)
 
@@ -56,17 +74,30 @@ def _cause_path(
     observation: CitationObservation,
     path: tuple[WorkId, ...],
 ) -> tuple[CollectionCauseFact, CollectionPathFact]:
-    key = f"{run_id}:{source}:{parent}:{observation.direction.value}:{observation.target_identifier.namespace}:{observation.target_identifier.value}:{':'.join(map(str, path))}"
+    key = (
+        f"{run_id}:{source}:{parent}:{observation.direction.value}:"
+        f"{observation.target_identifier.namespace}:{observation.target_identifier.value}:"
+        f"{':'.join(map(str, path))}"
+    )
     cause = CollectionCauseFact(
-        CollectionCauseId(str(uuid5(_NAMESPACE, f"cause:{key}"))), membership.membership_id,
+        CollectionCauseId(str(uuid5(_NAMESPACE, f"cause:{key}"))),
+        membership.membership_id,
         run_id,
-        CollectionCauseKind.REFERENCE if observation.direction.value == "references" else CollectionCauseKind.CITED_BY,
-        CanonicalJsonObject((("identifier", observation.target_identifier.to_json()), ("provider", source))),
+        CollectionCauseKind.REFERENCE
+        if observation.direction.value == "references"
+        else CollectionCauseKind.CITED_BY,
+        CanonicalJsonObject(
+            (("identifier", observation.target_identifier.to_json()), ("provider", source))
+        ),
         path[0],
     )
     citation_path = CollectionPathFact(
-        CollectionPathId(str(uuid5(_NAMESPACE, f"path:{key}"))), membership.membership_id,
-        run_id, observation.direction, len(path) - 1, path,
+        CollectionPathId(str(uuid5(_NAMESPACE, f"path:{key}"))),
+        membership.membership_id,
+        run_id,
+        observation.direction,
+        len(path) - 1,
+        path,
     )
     return cause, citation_path
 
@@ -75,8 +106,11 @@ class CitationRunExecutor:
     def __init__(self, dependencies: CitationExecutionDependencies) -> None:
         self._dependencies = dependencies
 
-    def execute(
-        self, run_id: CollectionRunId, collection_id: CollectionId, value: CitationRunInput,
+    def execute(  # noqa: C901
+        self,
+        run_id: CollectionRunId,
+        collection_id: CollectionId,
+        value: CitationRunInput,
         existing_members: set[str],
     ) -> CollectionRunRecord:
         sources = {item.name: item.port for item in self._dependencies.sources}
@@ -91,16 +125,27 @@ class CitationRunExecutor:
                 membership = _membership(collection_id, seed, run_id)
                 cause = CollectionCauseFact(
                     CollectionCauseId(str(uuid5(_NAMESPACE, f"seed:{run_id}:{seed}"))),
-                    membership.membership_id, run_id, CollectionCauseKind.SEED,
-                    CanonicalJsonObject((("work_id", str(seed)),)), seed,
+                    membership.membership_id,
+                    run_id,
+                    CollectionCauseKind.SEED,
+                    CanonicalJsonObject((("work_id", str(seed)),)),
+                    seed,
                 )
                 seed_path = CollectionPathFact(
                     CollectionPathId(str(uuid5(_NAMESPACE, f"seed-path:{run_id}:{seed}"))),
-                    membership.membership_id, run_id, None, 0, (seed,),
+                    membership.membership_id,
+                    run_id,
+                    None,
+                    0,
+                    (seed,),
                 )
-                self._dependencies.publisher.publish_existing(ExistingCollectionAcceptance(
-                    membership, (cause,), (seed_path,),
-                ))
+                self._dependencies.publisher.publish_existing(
+                    ExistingCollectionAcceptance(
+                        membership,
+                        (cause,),
+                        (seed_path,),
+                    )
+                )
             for layer in range(1, value.depth + 1):
                 next_frontier: set[str] = set()
                 for parent in frontier:
@@ -111,44 +156,68 @@ class CitationRunExecutor:
                         try:
                             result = sources[provider].expand(request)
                             valid_result = result.provider == provider and all(
-                                item.provider == provider and item.source_work_id == parent
+                                item.provider == provider
+                                and item.source_work_id == parent
                                 and item.direction.value in ("references", "cited-by")
-                                and (value.direction.value == "both" or item.direction == value.direction)
+                                and (
+                                    value.direction.value == "both"
+                                    or item.direction == value.direction
+                                )
                                 for item in result.observations
                             )
                             if not valid_result:
-                                progress.failed(provider, FailureEvidence(
-                                    "provider-invalid-response",
-                                    Reason(f"{provider} citation response was invalid"),
-                                    Action("Check the citation provider response."), False,
-                                ))
+                                progress.failed(
+                                    provider,
+                                    FailureEvidence(
+                                        "provider-invalid-response",
+                                        Reason(f"{provider} citation response was invalid"),
+                                        Action("Check the citation provider response."),
+                                        False,
+                                    ),
+                                )
                                 continue
-                            observations = tuple(sorted(
-                                set(result.observations),
-                                key=lambda item: (
-                                    item.target_identifier.namespace, item.target_identifier.value,
-                                    item.direction.value,
-                                ),
-                            ))
+                            observations = tuple(
+                                sorted(
+                                    set(result.observations),
+                                    key=lambda item: (
+                                        item.target_identifier.namespace,
+                                        item.target_identifier.value,
+                                        item.direction.value,
+                                    ),
+                                )
+                            )
                         except KeyboardInterrupt:
-                            progress.failed(provider, FailureEvidence(
-                                "interrupted", Reason("citation collection was interrupted"),
-                                Action("Rerun citation collection to resume."), True,
-                            ))
+                            progress.failed(
+                                provider,
+                                FailureEvidence(
+                                    "interrupted",
+                                    Reason("citation collection was interrupted"),
+                                    Action("Rerun citation collection to resume."),
+                                    True,
+                                ),
+                            )
                             raise
                         except (OSError, TimeoutError):
-                            progress.failed(provider, FailureEvidence(
-                                "provider-unavailable",
-                                Reason(f"{provider} citation provider failed"),
-                                Action("Retry the citation provider."), True,
-                            ))
+                            progress.failed(
+                                provider,
+                                FailureEvidence(
+                                    "provider-unavailable",
+                                    Reason(f"{provider} citation provider failed"),
+                                    Action("Retry the citation provider."),
+                                    True,
+                                ),
+                            )
                             continue
-                        except Exception:  # noqa: BROAD_EXCEPT_OK
-                            progress.failed(provider, FailureEvidence(
-                                "provider-execution-failed",
-                                Reason(f"{provider} citation provider execution failed"),
-                                Action("Inspect the citation adapter and retry."), True,
-                            ))
+                        except Exception:  # noqa: BLE001
+                            progress.failed(
+                                provider,
+                                FailureEvidence(
+                                    "provider-execution-failed",
+                                    Reason(f"{provider} citation provider execution failed"),
+                                    Action("Inspect the citation adapter and retry."),
+                                    True,
+                                ),
+                            )
                             continue
                         if result.failure is not None:
                             progress.failed(provider, result.failure)
@@ -158,8 +227,11 @@ class CitationRunExecutor:
                                 BibliographicObservation(
                                     provider,
                                     f"citation:{parent}:{observation.direction.value}:{observation.target_identifier.namespace}:{observation.target_identifier.value}",
-                                    ordinal, UtcTimestamp.now(), (observation.target_identifier,),
-                                    InitialMetadata(), "other",
+                                    ordinal,
+                                    UtcTimestamp.now(),
+                                    (observation.target_identifier,),
+                                    InitialMetadata(),
+                                    "other",
                                 ),
                             )
                             target = prepared.work_id
@@ -171,18 +243,33 @@ class CitationRunExecutor:
                             full_path = parent_path + (target,)
                             membership = _membership(collection_id, target, run_id)
                             cause, citation_path = _cause_path(
-                                membership, run_id, provider, parent, observation, full_path,
+                                membership,
+                                run_id,
+                                provider,
+                                parent,
+                                observation,
+                                full_path,
                             )
                             try:
-                                self._dependencies.publisher.publish(CollectionAcceptance(
-                                    prepared, membership, (cause,), (citation_path,),
-                                ))
+                                self._dependencies.publisher.publish(
+                                    CollectionAcceptance(
+                                        prepared,
+                                        membership,
+                                        (cause,),
+                                        (citation_path,),
+                                    )
+                                )
                             except CollectionAcceptanceConflict:
                                 progress.missing(provider)
-                                progress.failed(provider, FailureEvidence(
-                                    "publication-conflict", Reason("citation acceptance conflicted"),
-                                    Action("Retry the citation collection."), True,
-                                ))
+                                progress.failed(
+                                    provider,
+                                    FailureEvidence(
+                                        "publication-conflict",
+                                        Reason("citation acceptance conflicted"),
+                                        Action("Retry the citation collection."),
+                                        True,
+                                    ),
+                                )
                                 continue
                             progress.accepted(provider, target, is_new)
                             if is_new:
@@ -194,24 +281,38 @@ class CitationRunExecutor:
                     stop_reason = "no-new"
                     break
                 frontier = tuple(WorkId(item) for item in sorted(next_frontier))
-            status = CollectionRunStatus.PARTIAL if progress.failures else CollectionRunStatus.COMPLETED
+            status = (
+                CollectionRunStatus.PARTIAL if progress.failures else CollectionRunStatus.COMPLETED
+            )
             return finalizer.finish(progress.command(status, stop_reason))
         except KeyboardInterrupt:
             if not finalizer.attempted:
-                finalizer.finish(progress.command(
-                    CollectionRunStatus.INTERRUPTED, "interrupted", current_provider,
-                ))
+                finalizer.finish(
+                    progress.command(
+                        CollectionRunStatus.INTERRUPTED,
+                        "interrupted",
+                        current_provider,
+                    )
+                )
             raise
-        except Exception:  # noqa: BROAD_EXCEPT_OK
+        except Exception:  # noqa: BLE001
             if not finalizer.attempted:
                 if current_provider is not None and current_provider not in progress.failures:
-                    progress.failed(current_provider, FailureEvidence(
-                        "execution-failed", Reason("citation execution failed"),
-                        Action("Inspect collection state and retry."), True,
-                    ))
-                finalizer.finish(progress.command(
-                    CollectionRunStatus.FAILED, "execution-failed",
-                ))
+                    progress.failed(
+                        current_provider,
+                        FailureEvidence(
+                            "execution-failed",
+                            Reason("citation execution failed"),
+                            Action("Inspect collection state and retry."),
+                            True,
+                        ),
+                    )
+                finalizer.finish(
+                    progress.command(
+                        CollectionRunStatus.FAILED,
+                        "execution-failed",
+                    )
+                )
             raise
 
 

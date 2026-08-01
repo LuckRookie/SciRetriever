@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import unittest
+from dataclasses import dataclass
+
+from test_target_collection import (
+    FakeMetadataPort,
+    TargetCollectionTests,
+    observation,
+)
 
 from sciretriever.collection.api import (
-    CollectionAcceptance, MetadataDiscoveryRequest, ProviderDiscoveryResult,
+    CollectionAcceptance,
+    MetadataDiscoveryRequest,
+    ProviderDiscoveryResult,
     TopicConditions,
 )
 from sciretriever.collection.service import MetadataSource
 from sciretriever.kernel import WorkVersionState
 from sciretriever.literature_store.sqlite import (
-    CollectionAcceptancePublisher, open_read_only_snapshot,
-)
-from test_target_collection import (
-    FakeMetadataPort, TargetCollectionTests, observation,
+    CollectionAcceptancePublisher,
+    open_read_only_snapshot,
 )
 
 
@@ -41,7 +47,9 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
     def test_exact_same_source_subject_is_counted_and_published_once(self) -> None:
         repeated = observation("dup", "same", "10.1/same")
         port = FakeMetadataPort(
-            self.catalog, ProviderDiscoveryResult("dup", (repeated, repeated), None), [],
+            self.catalog,
+            ProviderDiscoveryResult("dup", (repeated, repeated), None),
+            [],
         )
         service = self.service((MetadataSource("dup", port),))
         definition = service.create("Exact duplicate", None, TopicConditions("duplicate"))
@@ -53,36 +61,64 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         self.assertEqual((run.counts.discovered, run.counts.accepted), (1, 1))
         self.assertEqual(run.source_results[0].discovered, 1)
         with open_read_only_snapshot(self.catalog) as connection:
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_runs WHERE status='running'").fetchone(), (0,))
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (1,)
+            )
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (1,)
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE status='running'"
+                ).fetchone(),
+                (0,),
+            )
 
     def test_conflicting_same_source_subject_keeps_first_fact_and_records_failure(self) -> None:
         first = observation("dup", "same", "10.1/same")
         conflicting = observation("dup", "same", "10.1/different")
         port = FakeMetadataPort(
-            self.catalog, ProviderDiscoveryResult("dup", (first, conflicting), None), [],
+            self.catalog,
+            ProviderDiscoveryResult("dup", (first, conflicting), None),
+            [],
         )
         service = self.service((MetadataSource("dup", port),))
         definition = service.create("Conflicting duplicate", None, TopicConditions("duplicate"))
 
         run = service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
 
-        self.assertEqual((run.counts.discovered, run.counts.accepted, run.counts.missing), (1, 1, 0))
+        self.assertEqual(
+            (run.counts.discovered, run.counts.accepted, run.counts.missing), (1, 1, 0)
+        )
         self.assertEqual(run.source_results[0].failure_code, "conflicting-source-subject")
         with open_read_only_snapshot(self.catalog) as connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM works").fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_runs WHERE status='running'").fetchone(), (0,))
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (1,)
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE status='running'"
+                ).fetchone(),
+                (0,),
+            )
 
     def test_exception_after_first_source_terminalizes_prefix_before_reraise(self) -> None:
-        first = FakeMetadataPort(self.catalog, ProviderDiscoveryResult(
-            "first", (observation("first", "accepted", "10.1/accepted"),), None,
-        ), [])
-        service = self.service((
-            MetadataSource("first", first),
-            MetadataSource("broken", RaisingMetadataPort(RuntimeError("provider exploded"))),
-        ))
+        first = FakeMetadataPort(
+            self.catalog,
+            ProviderDiscoveryResult(
+                "first",
+                (observation("first", "accepted", "10.1/accepted"),),
+                None,
+            ),
+            [],
+        )
+        service = self.service(
+            (
+                MetadataSource("first", first),
+                MetadataSource("broken", RaisingMetadataPort(RuntimeError("provider exploded"))),
+            )
+        )
         definition = service.create("Exception", None, TopicConditions("exception"))
 
         with self.assertRaisesRegex(RuntimeError, "provider exploded"):
@@ -94,16 +130,33 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
                 (str(definition.collection_id),),
             ).fetchone()
             self.assertEqual(row[1:], ("failed", 1))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_source_results WHERE collection_run_id=?", (row[0],)).fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_runs WHERE status='running'").fetchone(), (0,))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_source_results WHERE collection_run_id=?",
+                    (row[0],),
+                ).fetchone(),
+                (1,),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE status='running'"
+                ).fetchone(),
+                (0,),
+            )
 
     def test_interruption_terminalizes_completed_subject_prefix_before_reraise(self) -> None:
-        port = FakeMetadataPort(self.catalog, ProviderDiscoveryResult(
-            "source", (
-                observation("source", "accepted", "10.1/accepted"),
-                observation("source", "interrupt", "10.1/interrupt"),
-            ), None,
-        ), [])
+        port = FakeMetadataPort(
+            self.catalog,
+            ProviderDiscoveryResult(
+                "source",
+                (
+                    observation("source", "accepted", "10.1/accepted"),
+                    observation("source", "interrupt", "10.1/interrupt"),
+                ),
+                None,
+            ),
+            [],
+        )
         publisher = InterruptingPublisher(CollectionAcceptancePublisher(self.catalog), "interrupt")
         service = self.service((MetadataSource("source", port),), publisher)
         definition = service.create("Interrupted", None, TopicConditions("interrupt"))
@@ -113,12 +166,24 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
 
         with open_read_only_snapshot(self.catalog) as connection:
             row = connection.execute(
-                "SELECT id,status,discovered_count,accepted_count FROM collection_runs WHERE collection_id=?",
+                "SELECT id,status,discovered_count,accepted_count "
+                "FROM collection_runs WHERE collection_id=?",
                 (str(definition.collection_id),),
             ).fetchone()
             self.assertEqual(row[1:], ("interrupted", 1, 1))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_source_results WHERE collection_run_id=?", (row[0],)).fetchone(), (1,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_runs WHERE status='running'").fetchone(), (0,))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_source_results WHERE collection_run_id=?",
+                    (row[0],),
+                ).fetchone(),
+                (1,),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE status='running'"
+                ).fetchone(),
+                (0,),
+            )
 
 
 if __name__ == "__main__":

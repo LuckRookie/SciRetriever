@@ -5,8 +5,13 @@ from enum import Enum, unique
 
 from sciretriever.bibliography.api import PreparedBibliographyAcceptance
 from sciretriever.kernel import (
-    BoundaryError, CanonicalJsonObject, CitationDirection, CollectionId, CollectionRunId,
-    MembershipId, WorkId,
+    BoundaryError,
+    CanonicalJsonObject,
+    CitationDirection,
+    CollectionId,
+    CollectionRunId,
+    MembershipId,
+    WorkId,
 )
 from sciretriever.kernel.ids import UuidValue
 
@@ -71,7 +76,9 @@ class CollectionAcceptance:
     def __post_init__(self) -> None:
         if self.membership.work_id != self.bibliography.work_id:
             raise BoundaryError.for_field("membership", "must match accepted bibliography Work")
-        if any(item.membership_id != self.membership.membership_id for item in self.causes + self.paths):
+        if any(
+            item.membership_id != self.membership.membership_id for item in self.causes + self.paths
+        ):
             raise BoundaryError.for_field("evidence", "must match collection membership")
         if any(item.run_id != self.membership.first_run_id for item in self.causes + self.paths):
             raise BoundaryError.for_field("evidence", "must match collection run")
@@ -84,14 +91,22 @@ class ExistingCollectionAcceptance:
     paths: tuple[CollectionPathFact, ...]
 
     def __post_init__(self) -> None:
-        if any(item.membership_id != self.membership.membership_id for item in self.causes + self.paths):
+        if any(
+            item.membership_id != self.membership.membership_id for item in self.causes + self.paths
+        ):
             raise BoundaryError.for_field("evidence", "must match collection membership")
         if any(item.run_id != self.membership.first_run_id for item in self.causes + self.paths):
             raise BoundaryError.for_field("evidence", "must match collection run")
 
 
 __all__ = (
-    "CollectionAcceptance", "CollectionAcceptanceConflict", "CollectionCauseFact", "CollectionCauseId",
-    "CollectionCauseKind", "CollectionMembershipFact", "CollectionPathFact",
-    "CollectionPathId", "ExistingCollectionAcceptance",
+    "CollectionAcceptance",
+    "CollectionAcceptanceConflict",
+    "CollectionCauseFact",
+    "CollectionCauseId",
+    "CollectionCauseKind",
+    "CollectionMembershipFact",
+    "CollectionPathFact",
+    "CollectionPathId",
+    "ExistingCollectionAcceptance",
 )

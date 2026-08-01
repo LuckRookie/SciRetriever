@@ -1,23 +1,33 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import sqlite3
 import unittest
+from dataclasses import dataclass
+
+from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
+from test_target_collection import FakeMetadataPort
 
 from sciretriever.collection.api import (
-    CitationCollectionRequest, CitationDiscoveryRequest, CitationObservation,
-    FinishCollectionRun, ProviderCitationResult, WorkSeed,
+    CitationCollectionRequest,
+    CitationDiscoveryRequest,
+    CitationObservation,
+    FinishCollectionRun,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
+    WorkSeed,
 )
 from sciretriever.collection.service import (
-    CitationSource, CollectionService, CollectionServiceDependencies, MetadataSource,
+    CitationSource,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
 )
 from sciretriever.kernel import CitationDirection, Identifier, WorkVersionState
 from sciretriever.literature_store.sqlite import (
-    CollectionAcceptancePublisher, SqliteCollectionRepository, open_read_only_snapshot,
+    CollectionAcceptancePublisher,
+    SqliteCollectionRepository,
+    open_read_only_snapshot,
 )
-from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
-from test_target_collection import FakeMetadataPort
-from sciretriever.collection.api import ProviderDiscoveryResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +42,10 @@ class RaisingCitationPort:
 class WrongProviderPort:
     def expand(self, request: CitationDiscoveryRequest) -> ProviderCitationResult:
         observation = CitationObservation(
-            "wrong", request.seed, Identifier("doi", "10.1/wrong"), request.direction,
+            "wrong",
+            request.seed,
+            Identifier("doi", "10.1/wrong"),
+            request.direction,
         )
         return ProviderCitationResult("wrong", (observation,), None)
 
@@ -50,7 +63,11 @@ class FailingFinishRepository(SqliteCollectionRepository):
 class TargetCitationTerminalizationTests(CitationCollectionTestCase):
     def request(self, work_id, providers: tuple[str, ...]) -> CitationCollectionRequest:
         return CitationCollectionRequest(
-            (WorkSeed(work_id),), providers, CitationDirection.REFERENCES, 1, 10,
+            (WorkSeed(work_id),),
+            providers,
+            CitationDirection.REFERENCES,
+            1,
+            10,
         )
 
     def rows(self, collection_id):
@@ -64,7 +81,8 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
             sources = connection.execute(
                 "SELECT source_ordinal,source_name,discovered_count,accepted_count,missing_count,"
                 "failure_code FROM collection_source_results WHERE collection_run_id=? "
-                "ORDER BY source_ordinal", (run[0],),
+                "ORDER BY source_ordinal",
+                (run[0],),
             ).fetchall()
             running = connection.execute(
                 "SELECT count(*) FROM collection_runs WHERE status='running'",
@@ -78,11 +96,13 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
         target = service.create("runtime-seed", None, None)
 
         first = service.run_citation(
-            target.collection_id, self.request(seed.work_id, ("broken",)),
+            target.collection_id,
+            self.request(seed.work_id, ("broken",)),
             WorkVersionState.UNREVIEWED,
         )
         second = service.run_citation(
-            target.collection_id, self.request(seed.work_id, ("broken",)),
+            target.collection_id,
+            self.request(seed.work_id, ("broken",)),
             WorkVersionState.UNREVIEWED,
         )
 
@@ -97,32 +117,55 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
         _, seed = self.add_work("10.1/prefix-seed")
         _, target_work = self.add_work("10.1/prefix-target")
         calls: list[CitationDiscoveryRequest] = []
-        successful = FakeCitationPort(self.catalog, {
-            (str(seed.work_id), CitationDirection.REFERENCES): (Identifier("doi", "10.1/prefix-target"),),
-        }, "good", calls)
-        service = self.service((
-            CitationSource("good", successful),
-            CitationSource("broken", RaisingCitationPort(RuntimeError("adapter bug"))),
-        ))
+        successful = FakeCitationPort(
+            self.catalog,
+            {
+                (str(seed.work_id), CitationDirection.REFERENCES): (
+                    Identifier("doi", "10.1/prefix-target"),
+                ),
+            },
+            "good",
+            calls,
+        )
+        service = self.service(
+            (
+                CitationSource("good", successful),
+                CitationSource("broken", RaisingCitationPort(RuntimeError("adapter bug"))),
+            )
+        )
         target = service.create("prefix", None, None)
 
         service.run_citation(
-            target.collection_id, self.request(seed.work_id, ("good", "broken")),
+            target.collection_id,
+            self.request(seed.work_id, ("good", "broken")),
             WorkVersionState.UNREVIEWED,
         )
 
         run, sources, running = self.rows(target.collection_id)
         self.assertEqual(run[1:], ("partial", 1, 1, 1, 0, 0, 1))
-        self.assertEqual(sources, [
-            (0, "good", 1, 1, 0, None),
-            (1, "broken", 0, 0, 0, "provider-execution-failed"),
-        ])
+        self.assertEqual(
+            sources,
+            [
+                (0, "good", 1, 1, 0, None),
+                (1, "broken", 0, 0, 0, "provider-execution-failed"),
+            ],
+        )
         self.assertEqual(running, 0)
-        self.assertIn(target_work.work_id, tuple(item.work_id for item in self.collections.list_memberships(
-            __import__("sciretriever.collection.api", fromlist=["MembershipPageRequest"]).MembershipPageRequest(
-                target.collection_id, None, 100,
-            )
-        ).members))
+        self.assertIn(
+            target_work.work_id,
+            tuple(
+                item.work_id
+                for item in self.collections.list_memberships(
+                    __import__(
+                        "sciretriever.collection.api", fromlist=["MembershipPageRequest"]
+                    ).MembershipPageRequest(
+                        target.collection_id,
+                        None,
+                        100,
+                    )
+                ).members
+            ),
+        )
 
     def test_malformed_provider_result_is_sanitized_and_terminal(self) -> None:
         _, seed = self.add_work("10.1/malformed")
@@ -130,7 +173,8 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
         target = service.create("malformed", None, None)
 
         service.run_citation(
-            target.collection_id, self.request(seed.work_id, ("expected",)),
+            target.collection_id,
+            self.request(seed.work_id, ("expected",)),
             WorkVersionState.UNREVIEWED,
         )
 
@@ -142,18 +186,28 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
     def test_keyboard_interrupt_persists_completed_prefix_releases_lock_and_reraises(self) -> None:
         _, seed = self.add_work("10.1/interrupt-seed")
         _, target_work = self.add_work("10.1/interrupt-target")
-        good = FakeCitationPort(self.catalog, {
-            (str(seed.work_id), CitationDirection.REFERENCES): (Identifier("doi", "10.1/interrupt-target"),),
-        }, "good", [])
-        service = self.service((
-            CitationSource("good", good),
-            CitationSource("interrupt", RaisingCitationPort(KeyboardInterrupt())),
-        ))
+        good = FakeCitationPort(
+            self.catalog,
+            {
+                (str(seed.work_id), CitationDirection.REFERENCES): (
+                    Identifier("doi", "10.1/interrupt-target"),
+                ),
+            },
+            "good",
+            [],
+        )
+        service = self.service(
+            (
+                CitationSource("good", good),
+                CitationSource("interrupt", RaisingCitationPort(KeyboardInterrupt())),
+            )
+        )
         target = service.create("interrupt", None, None)
 
         with self.assertRaises(KeyboardInterrupt):
             service.run_citation(
-                target.collection_id, self.request(seed.work_id, ("good", "interrupt")),
+                target.collection_id,
+                self.request(seed.work_id, ("good", "interrupt")),
                 WorkVersionState.UNREVIEWED,
             )
 
@@ -168,19 +222,27 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
         _, seed = self.add_work("10.1/finish")
         repository = FailingFinishRepository(self.catalog)
         metadata = FakeMetadataPort(
-            self.catalog, ProviderDiscoveryResult("seed", (), None), [],
+            self.catalog,
+            ProviderDiscoveryResult("seed", (), None),
+            [],
         )
         source = CitationSource("empty", FakeCitationPort(self.catalog, {}, "empty", []))
-        service = CollectionService(CollectionServiceDependencies(
-            repository, self.bibliography, CollectionAcceptancePublisher(self.catalog),
-            lambda: self.bound.port.acquire_core_write(self.bound.identity),
-            (MetadataSource("seed", metadata),), (source,),
-        ))
+        service = CollectionService(
+            CollectionServiceDependencies(
+                repository,
+                self.bibliography,
+                CollectionAcceptancePublisher(self.catalog),
+                lambda: self.bound.port.acquire_core_write(self.bound.identity),
+                (MetadataSource("seed", metadata),),
+                (source,),
+            )
+        )
         target = service.create("finish", None, None)
 
         with self.assertRaisesRegex(sqlite3.OperationalError, "finish failed"):
             service.run_citation(
-                target.collection_id, self.request(seed.work_id, ("empty",)),
+                target.collection_id,
+                self.request(seed.work_id, ("empty",)),
                 WorkVersionState.UNREVIEWED,
             )
 

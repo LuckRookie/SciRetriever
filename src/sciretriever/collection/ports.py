@@ -3,18 +3,39 @@ from __future__ import annotations
 from typing import Protocol
 
 from sciretriever.bibliography.api import (
-    BibliographicObservation, IdentityCandidateQuery, IdentityCandidateSet,
-    PreparedBibliographyAcceptance, VersionFacts, WorkFacts,
+    BibliographicObservation,
+    IdentityCandidateQuery,
+    IdentityCandidateSet,
+    PreparedBibliographyAcceptance,
+    VersionFacts,
+    WorkFacts,
 )
 from sciretriever.collection.citation_input import CitationRunInput
 from sciretriever.collection.model import (
-    CitationDiscoveryRequest, CitationObservation, CollectionDefinition, CollectionRunRecord,
-    CreateCollectionDefinition, FinishCollectionRun, MembershipPage, MembershipPageRequest,
-    MetadataDiscoveryRequest, MetadataObservation, ProviderCitationResult, ProviderDiscoveryResult,
+    CitationDiscoveryRequest,
+    CitationObservation,
+    CollectionDefinition,
+    CollectionRunRecord,
+    CreateCollectionDefinition,
+    FinishCollectionRun,
+    MembershipPage,
+    MembershipPageRequest,
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
     StartCollectionRun,
 )
-from sciretriever.collection.publisher_contracts import CollectionAcceptance, ExistingCollectionAcceptance
-from sciretriever.collection.provenance import CausePage, CausePageRequest, PathPage, PathPageRequest
+from sciretriever.collection.provenance import (
+    CausePage,
+    CausePageRequest,
+    PathPage,
+    PathPageRequest,
+)
+from sciretriever.collection.publisher_contracts import (
+    CollectionAcceptance,
+    ExistingCollectionAcceptance,
+)
 from sciretriever.kernel.ids import CollectionId, CollectionRunId, WorkId, WorkVersionId
 
 
@@ -27,7 +48,9 @@ class CitationDiscoveryPort(Protocol):
 
 
 class BibliographyIngestionPort(Protocol):
-    def prepare_discovery(self, observation: BibliographicObservation) -> PreparedBibliographyAcceptance: ...
+    def prepare_discovery(
+        self, observation: BibliographicObservation
+    ) -> PreparedBibliographyAcceptance: ...
     def find_identity_candidates(self, query: IdentityCandidateQuery) -> IdentityCandidateSet: ...
     def get_work_facts(self, work_id: WorkId) -> WorkFacts | None: ...
     def get_version_facts(self, version_id: WorkVersionId) -> VersionFacts | None: ...
@@ -51,8 +74,15 @@ class CollectionRepository(Protocol):
 
 
 __all__ = (
-    "BibliographyIngestionPort", "CitationDiscoveryPort", "CitationDiscoveryRequest", "CitationObservation",
+    "BibliographyIngestionPort",
+    "CitationDiscoveryPort",
+    "CitationDiscoveryRequest",
+    "CitationObservation",
     "CollectionAcceptancePublisher",
-    "CollectionRepository", "MetadataDiscoveryPort", "MetadataDiscoveryRequest",
-    "MetadataObservation", "ProviderCitationResult", "ProviderDiscoveryResult",
+    "CollectionRepository",
+    "MetadataDiscoveryPort",
+    "MetadataDiscoveryRequest",
+    "MetadataObservation",
+    "ProviderCitationResult",
+    "ProviderDiscoveryResult",
 )

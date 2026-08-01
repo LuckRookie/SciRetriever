@@ -19,16 +19,27 @@ class TopicConditions:
         if not isinstance(self.limit, int) or isinstance(self.limit, bool) or self.limit < 1:
             raise BoundaryError.for_field("limit", "must be a positive integer")
         years = tuple(value for value in (self.year_from, self.year_to) if value is not None)
-        if any(not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 9999 for value in years):
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 9999
+            for value in years
+        ):
             raise BoundaryError.for_field("year", "must be from 1 through 9999")
-        if self.year_from is not None and self.year_to is not None and self.year_from > self.year_to:
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_from > self.year_to
+        ):
             raise BoundaryError.for_field("year range", "must be ordered")
 
     def validated(self) -> ValidatedTopicConditionSet:
-        value = CanonicalJsonObject((
-            ("limit", self.limit), ("query", self.query.strip()),
-            ("year_from", self.year_from), ("year_to", self.year_to),
-        ))
+        value = CanonicalJsonObject(
+            (
+                ("limit", self.limit),
+                ("query", self.query.strip()),
+                ("year_from", self.year_from),
+                ("year_to", self.year_to),
+            )
+        )
         payload = canonical_json_bytes(value)
         return ValidatedTopicConditionSet(payload.decode("ascii"), Sha256.from_bytes(payload))
 

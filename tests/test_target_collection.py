@@ -1,27 +1,42 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import sqlite3
-from tempfile import TemporaryDirectory
 import unittest
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from sciretriever.collection.api import (
-    CausePageRequest, CollectionAcceptance, CollectionAcceptanceConflict, MetadataDiscoveryRequest,
-    MetadataObservation, ProviderDiscoveryResult, TopicConditions,
+    CausePageRequest,
+    CollectionAcceptance,
+    CollectionAcceptanceConflict,
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderDiscoveryResult,
+    TopicConditions,
 )
 from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
 from sciretriever.collection.service import (
-    CollectionService, CollectionServiceDependencies, MetadataSource,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
 )
 from sciretriever.kernel import (
-    Action, BoundaryError, FailureEvidence, Identifier, Reason, WorkVersionState,
+    Action,
+    BoundaryError,
+    FailureEvidence,
+    Identifier,
+    Reason,
+    WorkVersionState,
 )
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
-    CollectionAcceptancePublisher, SqliteBibliographyRepository,
-    SqliteCollectionRepository, create_or_open_catalog, open_read_only_snapshot,
+    CollectionAcceptancePublisher,
+    SqliteBibliographyRepository,
+    SqliteCollectionRepository,
+    create_or_open_catalog,
+    open_read_only_snapshot,
 )
 
 
@@ -53,8 +68,13 @@ class ConflictPublisher:
 
 def observation(provider: str, record: str, doi: str) -> MetadataObservation:
     return MetadataObservation(
-        provider, record, f"Title {doi}", ("Ada",), 2026,
-        (Identifier("doi", doi),), f"Abstract {doi}",
+        provider,
+        record,
+        f"Title {doi}",
+        ("Ada",),
+        2026,
+        (Identifier("doi", doi),),
+        f"Abstract {doi}",
     )
 
 
@@ -75,15 +95,29 @@ class TargetCollectionTests(unittest.TestCase):
 
     def service(self, sources: tuple[MetadataSource, ...], publisher=None) -> CollectionService:
         selected = CollectionAcceptancePublisher(self.catalog) if publisher is None else publisher
-        return CollectionService(CollectionServiceDependencies(
-            self.collection_repository, self.bibliography, selected,
-            lambda: self.bound.port.acquire_core_write(self.bound.identity), sources,
-        ))
+        return CollectionService(
+            CollectionServiceDependencies(
+                self.collection_repository,
+                self.bibliography,
+                selected,
+                lambda: self.bound.port.acquire_core_write(self.bound.identity),
+                sources,
+            )
+        )
 
     def test_create_show_and_validation_round_trip_saved_topic_conditions(self) -> None:
-        service = self.service((MetadataSource("empty", FakeMetadataPort(
-            self.catalog, ProviderDiscoveryResult("empty", (), None), [],
-        )),))
+        service = self.service(
+            (
+                MetadataSource(
+                    "empty",
+                    FakeMetadataPort(
+                        self.catalog,
+                        ProviderDiscoveryResult("empty", (), None),
+                        [],
+                    ),
+                ),
+            )
+        )
         conditions = TopicConditions(" catalysis ", 2020, 2026, 25)
 
         definition = service.create("Catalysis", " durable topic ", conditions)
@@ -98,29 +132,49 @@ class TargetCollectionTests(unittest.TestCase):
         with self.assertRaises(BoundaryError):
             service.run_topic(without_topic.collection_id, WorkVersionState.UNREVIEWED)
         with open_read_only_snapshot(self.catalog) as connection:
-            self.assertEqual(connection.execute(
-                "SELECT count(*) FROM collection_runs WHERE collection_id=?",
-                (str(without_topic.collection_id),),
-            ).fetchone(), (0,))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE collection_id=?",
+                    (str(without_topic.collection_id),),
+                ).fetchone(),
+                (0,),
+            )
 
     def test_topic_run_reuses_saved_conditions_and_preserves_ordered_partial_results(self) -> None:
         requests: list[MetadataDiscoveryRequest] = []
-        crossref = FakeMetadataPort(self.catalog, ProviderDiscoveryResult(
-            "crossref", (
-                observation("crossref", "crossref-a", "10.1/a"),
-                observation("crossref", "crossref-b", "10.1/b"),
-            ), None,
-        ), requests)
-        failure = FailureEvidence(
-            "provider-timeout", Reason("provider deadline exceeded"),
-            Action("retry provider"), True,
+        crossref = FakeMetadataPort(
+            self.catalog,
+            ProviderDiscoveryResult(
+                "crossref",
+                (
+                    observation("crossref", "crossref-a", "10.1/a"),
+                    observation("crossref", "crossref-b", "10.1/b"),
+                ),
+                None,
+            ),
+            requests,
         )
-        openalex = FakeMetadataPort(self.catalog, ProviderDiscoveryResult(
-            "openalex", (observation("openalex", "openalex-a", "10.1/a"),), failure,
-        ), requests)
-        service = self.service((
-            MetadataSource("crossref", crossref), MetadataSource("openalex", openalex),
-        ))
+        failure = FailureEvidence(
+            "provider-timeout",
+            Reason("provider deadline exceeded"),
+            Action("retry provider"),
+            True,
+        )
+        openalex = FakeMetadataPort(
+            self.catalog,
+            ProviderDiscoveryResult(
+                "openalex",
+                (observation("openalex", "openalex-a", "10.1/a"),),
+                failure,
+            ),
+            requests,
+        )
+        service = self.service(
+            (
+                MetadataSource("crossref", crossref),
+                MetadataSource("openalex", openalex),
+            )
+        )
         conditions = TopicConditions("catalysis", 2020, 2026, 25)
         definition = service.create("Catalysis", None, conditions)
 
@@ -130,8 +184,13 @@ class TargetCollectionTests(unittest.TestCase):
         self.assertEqual(requests, [MetadataDiscoveryRequest("catalysis", 2020, 2026, 25)] * 4)
         self.assertEqual((first.status.value, first.requested_advance_to), ("partial", "completed"))
         self.assertEqual(
-            (first.counts.discovered, first.counts.accepted, first.counts.new_members,
-             first.counts.existing_members, first.counts.source_failures),
+            (
+                first.counts.discovered,
+                first.counts.accepted,
+                first.counts.new_members,
+                first.counts.existing_members,
+                first.counts.source_failures,
+            ),
             (3, 2, 2, 0, 1),
         )
         self.assertEqual(
@@ -145,18 +204,33 @@ class TargetCollectionTests(unittest.TestCase):
         self.assertEqual(len(causes.causes), 6)
         self.assertTrue(all(cause.evidence.entries for cause in causes.causes))
         with open_read_only_snapshot(self.catalog) as connection:
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (2,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (6,))
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (2,)
+            )
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_causes").fetchone(), (6,)
+            )
             self.assertEqual(connection.execute("SELECT count(*) FROM batch_runs").fetchone(), (0,))
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_runs WHERE advancement_batch_id IS NOT NULL").fetchone(), (0,))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM collection_runs WHERE advancement_batch_id IS NOT NULL"
+                ).fetchone(),
+                (0,),
+            )
 
     def test_publication_conflict_keeps_prior_acceptance_and_records_subject_failure(self) -> None:
-        port = FakeMetadataPort(self.catalog, ProviderDiscoveryResult(
-            "crossref", (
-                observation("crossref", "accepted", "10.1/accepted"),
-                observation("crossref", "conflict", "10.1/conflict"),
-            ), None,
-        ), [])
+        port = FakeMetadataPort(
+            self.catalog,
+            ProviderDiscoveryResult(
+                "crossref",
+                (
+                    observation("crossref", "accepted", "10.1/accepted"),
+                    observation("crossref", "conflict", "10.1/conflict"),
+                ),
+                None,
+            ),
+            [],
+        )
         publisher = ConflictPublisher(CollectionAcceptancePublisher(self.catalog), "conflict")
         service = self.service((MetadataSource("crossref", port),), publisher)
         definition = service.create("Conflicts", None, TopicConditions("conflicts"))
@@ -169,7 +243,9 @@ class TargetCollectionTests(unittest.TestCase):
         assert reason is not None
         self.assertIn("conflict", reason)
         with open_read_only_snapshot(self.catalog) as connection:
-            self.assertEqual(connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (1,))
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (1,)
+            )
             self.assertEqual(connection.execute("SELECT count(*) FROM works").fetchone(), (1,))
             self.assertEqual(connection.execute("SELECT count(*) FROM batch_runs").fetchone(), (0,))
 

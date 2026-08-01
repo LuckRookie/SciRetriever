@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from sciretriever.collection.run_results import (
+    CollectionCounts,
+    CollectionRunStatus,
+    CollectionSourceResult,
+    FinishCollectionRun,
+)
 from sciretriever.kernel.contracts import Identifier
 from sciretriever.kernel.enums import CitationDirection
 from sciretriever.kernel.errors import BoundaryError, FailureEvidence
 from sciretriever.kernel.hashes import Sha256
 from sciretriever.kernel.ids import CollectionId, CollectionRunId, WorkId
-from sciretriever.kernel.time import UtcTimestamp
 from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
-from sciretriever.collection.run_results import (
-    CollectionCounts, CollectionRunStatus, CollectionSourceResult, FinishCollectionRun,
-)
+from sciretriever.kernel.time import UtcTimestamp
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,11 +24,16 @@ class ValidatedTopicConditionSet:
 
     def __post_init__(self) -> None:
         payload = canonical_json_bytes(parse_canonical_json(self.canonical_json))
-        if payload.decode("ascii") != self.canonical_json or Sha256.from_bytes(payload) != self.sha256:
-            raise BoundaryError.for_field("topic_conditions", "must be canonical JSON with matching hash")
+        if (
+            payload.decode("ascii") != self.canonical_json
+            or Sha256.from_bytes(payload) != self.sha256
+        ):
+            raise BoundaryError.for_field(
+                "topic_conditions", "must be canonical JSON with matching hash"
+            )
 
 
-from sciretriever.collection.citation_input import ValidatedCitationInput
+from sciretriever.collection.citation_input import ValidatedCitationInput  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +108,11 @@ class MetadataDiscoveryRequest:
         _text(self.query, "query")
         if not isinstance(self.limit, int) or isinstance(self.limit, bool) or self.limit < 1:
             raise BoundaryError.for_field("limit", "must be a positive integer")
-        if self.year_from is not None and self.year_to is not None and self.year_from > self.year_to:
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_from > self.year_to
+        ):
             raise BoundaryError.for_field("year range", "must be ordered")
 
 
@@ -149,10 +162,23 @@ class ProviderCitationResult:
 
 
 __all__ = (
-    "CollectionCounts", "CollectionDefinition", "CollectionMember", "CollectionRunRecord", "CollectionRunStatus",
+    "CollectionCounts",
+    "CollectionDefinition",
+    "CollectionMember",
+    "CollectionRunRecord",
+    "CollectionRunStatus",
     "CollectionSourceResult",
-    "CreateCollectionDefinition", "FinishCollectionRun", "MembershipPage", "MembershipPageRequest",
-    "StartCollectionRun", "ValidatedCitationInput", "ValidatedTopicConditionSet",
-    "CitationDiscoveryRequest", "CitationObservation", "MetadataDiscoveryRequest",
-    "MetadataObservation", "ProviderCitationResult", "ProviderDiscoveryResult",
+    "CreateCollectionDefinition",
+    "FinishCollectionRun",
+    "MembershipPage",
+    "MembershipPageRequest",
+    "StartCollectionRun",
+    "ValidatedCitationInput",
+    "ValidatedTopicConditionSet",
+    "CitationDiscoveryRequest",
+    "CitationObservation",
+    "MetadataDiscoveryRequest",
+    "MetadataObservation",
+    "ProviderCitationResult",
+    "ProviderDiscoveryResult",
 )

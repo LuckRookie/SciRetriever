@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from sciretriever.collection.run_results import (
-    CollectionCounts, CollectionRunStatus, CollectionSourceResult, FinishCollectionRun,
+    CollectionCounts,
+    CollectionRunStatus,
+    CollectionSourceResult,
+    FinishCollectionRun,
 )
 from sciretriever.kernel import CollectionRunId, FailureEvidence, WorkId
 
 
 class CitationProgress:
     def __init__(
-        self, run_id: CollectionRunId, providers: tuple[str, ...],
-        seeds: tuple[WorkId, ...], existing_members: set[str],
+        self,
+        run_id: CollectionRunId,
+        providers: tuple[str, ...],
+        seeds: tuple[WorkId, ...],
+        existing_members: set[str],
     ) -> None:
         self.run_id = run_id
         self.providers = providers
@@ -36,7 +42,9 @@ class CitationProgress:
         self.failures[provider] = failure
 
     def command(
-        self, status: CollectionRunStatus, stop_reason: str,
+        self,
+        status: CollectionRunStatus,
+        stop_reason: str,
         through_provider: str | None = None,
     ) -> FinishCollectionRun:
         limit = len(self.providers)
@@ -44,7 +52,10 @@ class CitationProgress:
             limit = self.providers.index(through_provider) + 1
         source_results = tuple(
             CollectionSourceResult(
-                ordinal, name, self.totals[name][0], self.totals[name][1],
+                ordinal,
+                name,
+                self.totals[name][0],
+                self.totals[name][1],
                 self.totals[name][2],
                 None if name not in self.failures else self.failures[name].code,
                 None if name not in self.failures else str(self.failures[name].reason),
@@ -59,8 +70,11 @@ class CitationProgress:
         )
         new_members = min(new_members, accepted)
         counts = CollectionCounts(
-            sum(item.discovered for item in source_results), accepted, new_members,
-            accepted - new_members, sum(item.missing for item in source_results),
+            sum(item.discovered for item in source_results),
+            accepted,
+            new_members,
+            accepted - new_members,
+            sum(item.missing for item in source_results),
             sum(item.failed for item in source_results),
         )
         return FinishCollectionRun(self.run_id, status, stop_reason, counts, source_results)
