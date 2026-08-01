@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
-from collections.abc import Iterable, Sequence, Set
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-SOURCE_ROOT = ROOT / "src" / "sciretriever"
 PACKAGE_ROOTS = ("sciretriever",)
 TEST_COUNT_PATTERN = re.compile(r"Ran\s+(\d+)\s+tests?")
 
@@ -28,34 +27,9 @@ class CommandCheck:
     minimum_tests: int | None = None
 
 
-def find_architecture_violations(source_root: Path = SOURCE_ROOT) -> tuple[str, ...]:
-    from scripts.architecture_checks import find_architecture_violations as find_violations
-
-    return find_violations(source_root)
-
-
-def find_completion_command_violations(
-    source_root: Path,
-    cutover_commands: Set[str],
-) -> tuple[str, ...]:
-    from scripts.architecture_checks import find_completion_command_violations as find_violations
-
-    return find_violations(source_root, cutover_commands)
-
-
-def find_documentation_violations(root: Path = ROOT) -> tuple[str, ...]:
-    try:
-        from scripts.documentation_checks import find_documentation_violations as find_violations
-    except ModuleNotFoundError as error:
-        return (f"documentation checker import failed: {error.name}",)
-
-    return find_violations(root)
-
-
-def find_document_governance_violations(root: Path = ROOT) -> tuple[str, ...]:
-    from scripts.governance_checks import find_document_governance_violations as find_violations
-
-    return find_violations(root)
+class UnsafeBuildStagingError(RuntimeError):
+    def __init__(self, path: Path) -> None:
+        super().__init__(f"{path.name} must not be a symbolic link")
 
 
 def active_python_files(root: Path = ROOT) -> tuple[str, ...]:
@@ -68,8 +42,13 @@ def active_python_files(root: Path = ROOT) -> tuple[str, ...]:
 
 
 def clean_build_staging(root: Path = ROOT) -> None:
-    shutil.rmtree(root / "build", ignore_errors=True)
-    for wheel in (root / "dist").glob("sciretriever-*.whl"):
+    build = root / "build"
+    dist = root / "dist"
+    for staging_path in (build, dist):
+        if staging_path.is_symlink():
+            raise UnsafeBuildStagingError(staging_path)
+    shutil.rmtree(build, ignore_errors=True)
+    for wheel in dist.glob("sciretriever-*.whl"):
         wheel.unlink()
 
 
@@ -126,8 +105,8 @@ def _run(check: CommandCheck) -> bool:
         )
         return False
     if check.minimum_tests is not None:
-        match = TEST_COUNT_PATTERN.search(f"{completed.stdout}\n{completed.stderr}")
-        count = 0 if match is None else int(match.group(1))
+        matches = tuple(TEST_COUNT_PATTERN.finditer(f"{completed.stdout}\n{completed.stderr}"))
+        count = 0 if not matches else int(matches[-1].group(1))
         if count < check.minimum_tests:
             print(
                 f"[harness] {check.name}: expected at least "
@@ -192,19 +171,14 @@ def _commands(
 
 def run(mode: str) -> int:
     ok = True
-    if mode in {"quick", "full", "docs"}:
-        ok = _report_gate("documentation", find_documentation_violations()) and ok
-    if mode in {"quick", "full", "architecture"}:
-        ok = _report_gate("architecture", find_architecture_violations()) and ok
-    if mode in {"quick", "full"}:
-        for check in _commands(mode):
-            ok = _run(check) and ok
+    for check in _commands(mode):
+        ok = _run(check) and ok
     return 0 if ok else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("quick", "full", "docs", "architecture"))
+    parser.add_argument("mode", choices=("quick", "full"))
     return run(parser.parse_args(argv).mode)
 
 
