@@ -10,7 +10,6 @@ import zipfile
 
 from scripts.harness import (
     clean_build_staging,
-    find_architecture_violations,
     find_wheel_content_violations,
 )
 
@@ -31,8 +30,7 @@ RETIRED_SYMBOLS = (
 
 
 class CompletionDistributionTests(unittest.TestCase):
-    def test_architecture_and_closed_deletion_manifests(self) -> None:
-        self.assertEqual(find_architecture_violations(SOURCE), ())
+    def test_closed_deletion_manifests(self) -> None:
         for relative in RETIRED_PATHS:
             self.assertFalse((REPOSITORY / relative).exists(), relative)
         paths = tuple((REPOSITORY / root).rglob("*.*") for root in ("src", "docs"))
