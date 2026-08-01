@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
+
+from test_target_bibliography_identity import (
+    FakeAcceptancePublisher,
+    TargetBibliographyIdentityTests,
+    observation,
+)
 
 from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.bibliography.identity_model import InitialMetadata
 from sciretriever.kernel import Identifier
 from sciretriever.literature_store.sqlite import create_or_open_catalog
 
-from test_target_bibliography_identity import FakeAcceptancePublisher, TargetBibliographyIdentityTests, observation
-
 
 class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
     def test_incomplete_identifier_free_metadata_never_exact_matches(self) -> None:
-        complete = InitialMetadata("Exact Identity", ("Ada Lovelace", "Grace Hopper"), 2026, "journal-article")
+        complete = InitialMetadata(
+            "Exact Identity", ("Ada Lovelace", "Grace Hopper"), 2026, "journal-article"
+        )
         incomplete = (
             replace(complete, title=None),
             replace(complete, authors=()),
@@ -38,14 +44,23 @@ class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
         )
         for namespace_index, identifier in enumerate(identifiers):
             for variant_index, variant in enumerate(variants):
-                catalog, repository = self.prepare_catalog(f"blocked-{namespace_index}-{variant_index}")
-                first = prepare_initial_ingest(repository, (observation("one", "1", (identifier,)),))
+                catalog, repository = self.prepare_catalog(
+                    f"blocked-{namespace_index}-{variant_index}"
+                )
+                first = prepare_initial_ingest(
+                    repository, (observation("one", "1", (identifier,)),)
+                )
                 FakeAcceptancePublisher(catalog).publish(first)
                 incoming = replace(variant, identifiers=(identifier,))
                 second = prepare_initial_ingest(repository, (incoming,))
                 self.assertNotEqual(second.work_version_id, first.work_version_id)
                 self.assertFalse(second.identifiers)
-                self.assertTrue(all(item.left_version_id != item.right_version_id for item in second.review_relations))
+                self.assertTrue(
+                    all(
+                        item.left_version_id != item.right_version_id
+                        for item in second.review_relations
+                    )
+                )
                 FakeAcceptancePublisher(catalog).publish(second)
                 replay = prepare_initial_ingest(repository, (incoming,))
                 self.assertEqual(replay.work_version_id, second.work_version_id)
@@ -60,13 +75,20 @@ class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
         for index, (first_role, second_role, expected) in enumerate(pairs):
             catalog, repository = self.prepare_catalog(f"role-{index}")
             identifier = Identifier("doi", f"10.1/role-{index}")
-            first = prepare_initial_ingest(repository, (observation("one", "1", (identifier,), role=first_role),))
+            first = prepare_initial_ingest(
+                repository, (observation("one", "1", (identifier,), role=first_role),)
+            )
             FakeAcceptancePublisher(catalog).publish(first)
-            second = prepare_initial_ingest(repository, (observation("two", "2", (identifier,), role=second_role),))
+            second = prepare_initial_ingest(
+                repository, (observation("two", "2", (identifier,), role=second_role),)
+            )
             self.assertEqual(second.version_role, expected)
             FakeAcceptancePublisher(catalog).publish(second)
             with create_or_open_catalog(catalog) as connection:
-                stored = connection.execute("SELECT version_role FROM work_versions WHERE id=?", (str(second.work_version_id),)).fetchone()
+                stored = connection.execute(
+                    "SELECT version_role FROM work_versions WHERE id=?",
+                    (str(second.work_version_id),),
+                ).fetchone()
             self.assertEqual(stored, (expected,))
 
 

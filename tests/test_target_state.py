@@ -1,33 +1,42 @@
 from __future__ import annotations
 
+import os
+import unittest
 from dataclasses import replace
 from itertools import product
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
+
+from target_state_fixture import (
+    ANALYSIS_ID,
+    LIGHT_HASH,
+    LIGHT_ID,
+    METADATA_ID,
+    PRIMARY_ID,
+    VERSION_ID,
+    FakeRepository,
+    RecordingPublisher,
+    facts,
+    insert_completed,
+    light_ready_facts,
+    submission,
+)
 
 from sciretriever.bibliography.api import (
     CompletionRejectedError,
-    VersionFacts,
+    accept_completion,
     derive_missing_step,
     derive_work_version_state,
-    accept_completion,
 )
 from sciretriever.kernel import (
-    BoundaryError, MissingStep,
+    BoundaryError,
+    MissingStep,
     Sha256,
-    WorkVersionId,
     WorkVersionState,
 )
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     create_or_open_catalog,
-)
-from target_state_fixture import (
-    ANALYSIS_ID, LIGHT_HASH, LIGHT_ID, METADATA_ID, PRIMARY_ID, VERSION_ID,
-    FakeRepository, RecordingPublisher, facts, insert_completed, light_ready_facts,
-    submission,
 )
 
 
@@ -40,7 +49,17 @@ class TargetStateTests(unittest.TestCase):
             WorkVersionState.LIGHT_TEXT_READY: MissingStep.COMPLETION,
             WorkVersionState.COMPLETED: None,
         }
-        for primary, light, light_aligned, bundle, analysis_aligned, references, tags, current_metadata, completion_metadata in product((False, True), repeat=9):
+        for (
+            primary,
+            light,
+            light_aligned,
+            bundle,
+            analysis_aligned,
+            references,
+            tags,
+            current_metadata,
+            completion_metadata,
+        ) in product((False, True), repeat=9):
             current = replace(
                 base,
                 metadata_snapshot_id=METADATA_ID if current_metadata else None,
@@ -56,7 +75,9 @@ class TargetStateTests(unittest.TestCase):
                 analysis_light_document_id=LIGHT_ID if bundle and analysis_aligned else None,
                 analysis_input_sha256=LIGHT_HASH if bundle and analysis_aligned else None,
                 analysis_nine_categories_complete=bundle,
-                completion_metadata_snapshot_id=METADATA_ID if bundle and completion_metadata else None,
+                completion_metadata_snapshot_id=METADATA_ID
+                if bundle and completion_metadata
+                else None,
                 completion_reference_set_id="references" if bundle else None,
                 completion_reference_set_complete=bundle and references,
                 completion_tag_set_id="tags" if bundle else None,
@@ -69,8 +90,15 @@ class TargetStateTests(unittest.TestCase):
             if primary and light and light_aligned:
                 expected_state = WorkVersionState.LIGHT_TEXT_READY
             if (
-                primary and light and light_aligned and bundle and analysis_aligned
-                and references and tags and current_metadata and completion_metadata
+                primary
+                and light
+                and light_aligned
+                and bundle
+                and analysis_aligned
+                and references
+                and tags
+                and current_metadata
+                and completion_metadata
             ):
                 expected_state = WorkVersionState.COMPLETED
             self.assertEqual(state, expected_state)
@@ -84,27 +112,39 @@ class TargetStateTests(unittest.TestCase):
             with create_or_open_catalog(catalog) as connection:
                 insert_completed(connection)
                 expected = connection.execute(
-                    "SELECT state,missing_step FROM work_version_state_view WHERE work_version_id=?",
+                    "SELECT state,missing_step FROM work_version_state_view "
+                    "WHERE work_version_id=?",
                     (str(VERSION_ID),),
                 ).fetchone()
                 for statement in (
-                    "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json) VALUES ('batch','process','failed','{}','{}')",
-                    f"INSERT INTO current_failures VALUES ('failure','work-version','{VERSION_ID}','analysis','x','x','x',1,CURRENT_TIMESTAMP)",
-                    f"INSERT INTO parser_attempts VALUES ('attempt','{VERSION_ID}',NULL,'parser','{'9' * 64}',CURRENT_TIMESTAMP)",
+                    "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json) "
+                    "VALUES ('batch','process','failed','{}','{}')",
+                    f"INSERT INTO current_failures VALUES ('failure','work-version',"
+                    f"'{VERSION_ID}','analysis','x','x','x',1,CURRENT_TIMESTAMP)",
+                    f"INSERT INTO parser_attempts VALUES ('attempt','{VERSION_ID}',NULL,"
+                    f"'parser','{'9' * 64}',CURRENT_TIMESTAMP)",
                     f"INSERT INTO metadata_fts VALUES ('{VERSION_ID}','noise')",
                 ):
                     connection.execute(statement)
                 actual = connection.execute(
-                    "SELECT state,missing_step FROM work_version_state_view WHERE work_version_id=?",
+                    "SELECT state,missing_step FROM work_version_state_view "
+                    "WHERE work_version_id=?",
                     (str(VERSION_ID),),
                 ).fetchone()
-                completed_facts = SqliteBibliographyRepository(catalog).get_version_facts(VERSION_ID)
+                completed_facts = SqliteBibliographyRepository(catalog).get_version_facts(
+                    VERSION_ID
+                )
                 self.assertIsNotNone(completed_facts)
                 assert completed_facts is not None
-                self.assertEqual(derive_work_version_state(completed_facts), WorkVersionState.COMPLETED)
+                self.assertEqual(
+                    derive_work_version_state(completed_facts), WorkVersionState.COMPLETED
+                )
                 transitions = (
                     ("DELETE FROM completion_bundles", WorkVersionState.LIGHT_TEXT_READY),
-                    ("DELETE FROM work_version_current_light_document", WorkVersionState.ASSET_READY),
+                    (
+                        "DELETE FROM work_version_current_light_document",
+                        WorkVersionState.ASSET_READY,
+                    ),
                     ("DELETE FROM analysis_artifacts", WorkVersionState.ASSET_READY),
                     ("DELETE FROM light_documents", WorkVersionState.ASSET_READY),
                     ("DELETE FROM accepted_primary_assets", WorkVersionState.UNREVIEWED),
@@ -139,14 +179,19 @@ class TargetStateTests(unittest.TestCase):
                 )
                 connection.commit()
                 row = connection.execute(
-                    "SELECT state,missing_step FROM work_version_state_view WHERE work_version_id=?",
+                    "SELECT state,missing_step FROM work_version_state_view "
+                    "WHERE work_version_id=?",
                     (str(VERSION_ID),),
                 ).fetchone()
             current = replace(
-                facts(), metadata_snapshot_id=None, metadata_revision=None,
+                facts(),
+                metadata_snapshot_id=None,
+                metadata_revision=None,
                 metadata_sha256=None,
             )
-            self.assertEqual(row, (WorkVersionState.LIGHT_TEXT_READY.value, MissingStep.COMPLETION.value))
+            self.assertEqual(
+                row, (WorkVersionState.LIGHT_TEXT_READY.value, MissingStep.COMPLETION.value)
+            )
             self.assertEqual(derive_work_version_state(current), WorkVersionState.LIGHT_TEXT_READY)
 
     def test_accept_completion_rejects_stale_or_incomplete_before_publisher(self) -> None:
@@ -158,7 +203,9 @@ class TargetStateTests(unittest.TestCase):
         )
         for candidate in invalid:
             with self.subTest(candidate=candidate), self.assertRaises(CompletionRejectedError):
-                accept_completion(FakeRepository(light_ready_facts()), publisher, candidate, "target")
+                accept_completion(
+                    FakeRepository(light_ready_facts()), publisher, candidate, "target"
+                )
         self.assertEqual(publisher.calls, [])
         self.assertEqual(
             accept_completion(
@@ -170,6 +217,7 @@ class TargetStateTests(unittest.TestCase):
             accept_completion(FakeRepository(facts()), publisher, submission(), "target"),
             "published",
         )
+
 
 if __name__ == "__main__":
     unittest.main()

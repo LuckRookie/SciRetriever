@@ -18,10 +18,10 @@ from sciretriever.kernel import (
     Identifier,
     OpaqueExtensionRecord,
     OpaqueExtensionRecordStorePort,
-    ProvenanceId,
     Provenance,
-    RelativeArtifactPath,
+    ProvenanceId,
     Reason,
+    RelativeArtifactPath,
     Sha256,
     SourceKind,
     SourceLocator,
@@ -32,7 +32,6 @@ from sciretriever.kernel import (
     parse_canonical_json,
     validate_page_request,
 )
-
 
 UUIDS = tuple(f"00000000-0000-4000-8000-{index:012x}" for index in range(1, 12))
 SHA_A = "a" * 64
@@ -50,11 +49,17 @@ class InMemoryOpaqueStore:
         self, namespace: str, after_record_id: ExtensionRecordId | None, limit: int
     ) -> tuple[OpaqueExtensionRecord, ...]:
         validate_page_request(after_record_id=after_record_id, limit=limit)
-        records = tuple(sorted(
-            (record for (record_namespace, _record_id), record in self._records.items()
-             if record_namespace == namespace and (after_record_id is None or record.record_id.value > after_record_id.value)),
-            key=lambda record: record.record_id.value,
-        ))
+        records = tuple(
+            sorted(
+                (
+                    record
+                    for (record_namespace, _record_id), record in self._records.items()
+                    if record_namespace == namespace
+                    and (after_record_id is None or record.record_id.value > after_record_id.value)
+                ),
+                key=lambda record: record.record_id.value,
+            )
+        )
         return records[:limit]
 
     def compare_and_set(
@@ -109,18 +114,25 @@ class KernelValueTests(TestCase):
         )
 
         for value_type, raw in invalid_values:
-            with self.subTest(value_type=value_type.__name__, raw=raw), self.assertRaises(BoundaryError):
+            with (
+                self.subTest(value_type=value_type.__name__, raw=raw),
+                self.assertRaises(BoundaryError),
+            ):
                 value_type(raw)
 
     def test_value_serialization_is_deterministic(self) -> None:
-        first = CanonicalJsonObject((
-            ("z", (3, 2, 1)),
-            ("a", CanonicalJsonObject((("unicode", "Café"),))),
-        ))
-        second = CanonicalJsonObject((
-            ("a", CanonicalJsonObject((("unicode", "Café"),))),
-            ("z", (3, 2, 1)),
-        ))
+        first = CanonicalJsonObject(
+            (
+                ("z", (3, 2, 1)),
+                ("a", CanonicalJsonObject((("unicode", "Café"),))),
+            )
+        )
+        second = CanonicalJsonObject(
+            (
+                ("a", CanonicalJsonObject((("unicode", "Café"),))),
+                ("z", (3, 2, 1)),
+            )
+        )
 
         expected = b'{"a":{"unicode":"Caf\\u00e9"},"z":[3,2,1]}'
         self.assertEqual(canonical_json_bytes(first), expected)
@@ -217,9 +229,12 @@ class ContractTests(TestCase):
 
         for field, value in malformed:
             arguments = {
-                "provenance_id": ProvenanceId(UUIDS[0]), "source_kind": SourceKind.PARSER,
-                "source_name": "fixture-parser", "source_record_id": None,
-                "observed_at": UtcTimestamp(NOW), "input_sha256": None,
+                "provenance_id": ProvenanceId(UUIDS[0]),
+                "source_kind": SourceKind.PARSER,
+                "source_name": "fixture-parser",
+                "source_record_id": None,
+                "observed_at": UtcTimestamp(NOW),
+                "input_sha256": None,
                 "parameters_sha256": None,
             }
             arguments[field] = value

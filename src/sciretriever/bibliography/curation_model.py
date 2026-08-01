@@ -5,9 +5,17 @@ from enum import Enum
 
 from sciretriever.kernel import Identifier
 from sciretriever.kernel.ids import (
-    AssetId, CollectionId, MembershipId, ObservationId, ReferenceFactId,
-    StableIdentifierId, VersionRelationId, WorkId, WorkVersionId,
+    AssetId,
+    CollectionId,
+    MembershipId,
+    ObservationId,
+    ReferenceFactId,
+    StableIdentifierId,
+    VersionRelationId,
+    WorkId,
+    WorkVersionId,
 )
+
 from .model import CurationSnapshot
 
 

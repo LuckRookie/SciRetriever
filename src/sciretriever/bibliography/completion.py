@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, assert_never
 
-from .publisher_contracts import CompletionSubmission
-from .model import WorkFacts
-from .state import VersionFacts, derive_work_version_state
 from sciretriever.kernel import WorkId, WorkVersionId, WorkVersionState, canonical_json_bytes
+
+from .model import WorkFacts
+from .publisher_contracts import CompletionSubmission
+from .state import VersionFacts, derive_work_version_state
 
 
 class CompletionFactsRepository(Protocol):
@@ -63,10 +64,7 @@ def accept_completion(
             pass
         case WorkVersionState.COMPLETED:
             return publisher.publish_completion(submission, target_projection)
-        case (
-            WorkVersionState.UNREVIEWED
-            | WorkVersionState.ASSET_READY
-        ):
+        case WorkVersionState.UNREVIEWED | WorkVersionState.ASSET_READY:
             raise CompletionRejectedError("work version is not ready for completion")
         case unreachable:
             assert_never(unreachable)
@@ -99,10 +97,18 @@ def accept_completion(
     )
     proposal = dict(submission.analysis.proposal.entries)
     _reject_unless(
-        set(proposal) == {
-            "schema_version", "final_bibliography", "classification",
-            "content_overview", "research_objectives", "methods", "key_results",
-            "conclusions_and_limitations", "keywords_and_tags", "references",
+        set(proposal)
+        == {
+            "schema_version",
+            "final_bibliography",
+            "classification",
+            "content_overview",
+            "research_objectives",
+            "methods",
+            "key_results",
+            "conclusions_and_limitations",
+            "keywords_and_tags",
+            "references",
         }
         and proposal["schema_version"] == "1"
         and submission.analysis.artifact_sha256
@@ -115,6 +121,8 @@ def accept_completion(
 
 
 __all__ = (
-    "CompletionFactsRepository", "CompletionPublisher", "CompletionRejectedError",
+    "CompletionFactsRepository",
+    "CompletionPublisher",
+    "CompletionRejectedError",
     "accept_completion",
 )

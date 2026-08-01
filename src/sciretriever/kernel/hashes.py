@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import re
+from dataclasses import dataclass
 
 from sciretriever.kernel.errors import BoundaryError
-
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 

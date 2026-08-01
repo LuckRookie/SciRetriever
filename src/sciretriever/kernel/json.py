@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
+from dataclasses import dataclass
 from typing import NoReturn, TypeAlias
 
 from sciretriever.kernel.errors import BoundaryError
-
 
 CanonicalJsonScalar: TypeAlias = None | bool | int | float | str
 
@@ -26,8 +25,12 @@ class CanonicalJsonObject:
         object.__setattr__(self, "entries", tuple(sorted(self.entries, key=lambda item: item[0])))
 
 
-CanonicalJsonValue: TypeAlias = CanonicalJsonScalar | tuple["CanonicalJsonValue", ...] | CanonicalJsonObject
-CanonicalJsonInput: TypeAlias = CanonicalJsonScalar | list["CanonicalJsonInput"] | dict[str, "CanonicalJsonInput"]
+CanonicalJsonValue: TypeAlias = (
+    CanonicalJsonScalar | tuple["CanonicalJsonValue", ...] | CanonicalJsonObject
+)
+CanonicalJsonInput: TypeAlias = (
+    CanonicalJsonScalar | list["CanonicalJsonInput"] | dict[str, "CanonicalJsonInput"]
+)
 JsonOutput: TypeAlias = CanonicalJsonScalar | list["JsonOutput"] | dict[str, "JsonOutput"]
 
 
@@ -108,7 +111,9 @@ def parse_canonical_json(payload: str) -> CanonicalJsonValue:
     try:
         payload.encode("utf-8")
     except UnicodeEncodeError as error:
-        raise BoundaryError.for_field("payload", "must contain valid Unicode scalar values") from error
+        raise BoundaryError.for_field(
+            "payload", "must contain valid Unicode scalar values"
+        ) from error
     return _freeze(decoded)
 
 

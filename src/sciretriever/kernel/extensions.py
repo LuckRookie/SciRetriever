@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import unicodedata
+from dataclasses import dataclass
 from typing import Protocol
 
 from sciretriever.kernel.errors import BoundaryError
@@ -27,7 +27,9 @@ def _fields(value: CanonicalJsonValue) -> dict[str, CanonicalJsonValue]:
     fields = dict(value.entries)
     expected = frozenset(("namespace", "payload", "payload_sha256", "record_id", "revision"))
     if fields.keys() != expected:
-        raise BoundaryError.for_field("OpaqueExtensionRecord", "must contain exactly the required fields")
+        raise BoundaryError.for_field(
+            "OpaqueExtensionRecord", "must contain exactly the required fields"
+        )
     return fields
 
 
@@ -55,19 +57,29 @@ class OpaqueExtensionRecord:
         object.__setattr__(self, "namespace", _text(self.namespace, "namespace"))
         if not isinstance(self.record_id, ExtensionRecordId):
             raise BoundaryError.for_field("record_id", "must be ExtensionRecordId")
-        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1:
+        if (
+            not isinstance(self.revision, int)
+            or isinstance(self.revision, bool)
+            or self.revision < 1
+        ):
             raise BoundaryError.for_field("revision", "must be an integer at least 1")
         if not isinstance(self.payload_sha256, Sha256):
             raise BoundaryError.for_field("payload_sha256", "must be Sha256")
         if Sha256.from_bytes(canonical_json_bytes(self.payload)) != self.payload_sha256:
-            raise BoundaryError.for_field("payload_sha256", "does not match canonical payload bytes")
+            raise BoundaryError.for_field(
+                "payload_sha256", "does not match canonical payload bytes"
+            )
 
     def to_json(self) -> str:
-        value = CanonicalJsonObject((
-            ("namespace", self.namespace), ("payload", self.payload),
-            ("payload_sha256", str(self.payload_sha256)), ("record_id", str(self.record_id)),
-            ("revision", self.revision),
-        ))
+        value = CanonicalJsonObject(
+            (
+                ("namespace", self.namespace),
+                ("payload", self.payload),
+                ("payload_sha256", str(self.payload_sha256)),
+                ("record_id", str(self.record_id)),
+                ("revision", self.revision),
+            )
+        )
         return canonical_json_bytes(value).decode("ascii")
 
     @classmethod
@@ -107,4 +119,6 @@ class OpaqueExtensionRecordStorePort(Protocol):
         payload: CanonicalJsonValue,
     ) -> OpaqueExtensionRecord: ...
 
-    def delete(self, namespace: str, record_id: ExtensionRecordId, expected_revision: int) -> None: ...
+    def delete(
+        self, namespace: str, record_id: ExtensionRecordId, expected_revision: int
+    ) -> None: ...

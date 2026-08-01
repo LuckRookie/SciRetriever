@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import unicodedata
+from dataclasses import dataclass
+
 from sciretriever.kernel.enums import SourceKind
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.kernel.hashes import Sha256
@@ -27,7 +28,9 @@ def _object(value: CanonicalJsonValue, name: str) -> CanonicalJsonObject:
     return value
 
 
-def _fields(value: CanonicalJsonObject, expected: frozenset[str], name: str) -> dict[str, CanonicalJsonValue]:
+def _fields(
+    value: CanonicalJsonObject, expected: frozenset[str], name: str
+) -> dict[str, CanonicalJsonValue]:
     fields = dict(value.entries)
     if fields.keys() != expected:
         raise BoundaryError.for_field(name, "must contain exactly the required fields")
@@ -99,23 +102,39 @@ class Provenance:
             )
 
     def to_json(self) -> str:
-        value = CanonicalJsonObject((
-            ("input_sha256", None if self.input_sha256 is None else str(self.input_sha256)),
-            ("observed_at", str(self.observed_at)),
-            ("parameters_sha256", None if self.parameters_sha256 is None else str(self.parameters_sha256)),
-            ("provenance_id", str(self.provenance_id)),
-            ("source_kind", self.source_kind.value),
-            ("source_name", self.source_name),
-            ("source_record_id", self.source_record_id),
-        ))
+        value = CanonicalJsonObject(
+            (
+                ("input_sha256", None if self.input_sha256 is None else str(self.input_sha256)),
+                ("observed_at", str(self.observed_at)),
+                (
+                    "parameters_sha256",
+                    None if self.parameters_sha256 is None else str(self.parameters_sha256),
+                ),
+                ("provenance_id", str(self.provenance_id)),
+                ("source_kind", self.source_kind.value),
+                ("source_name", self.source_name),
+                ("source_record_id", self.source_record_id),
+            )
+        )
         return canonical_json_bytes(value).decode("ascii")
 
     @classmethod
     def from_json(cls, payload: str) -> Provenance:
-        fields = _fields(_object(parse_canonical_json(payload), "Provenance"), frozenset((
-            "input_sha256", "observed_at", "parameters_sha256", "provenance_id",
-            "source_kind", "source_name", "source_record_id",
-        )), "Provenance")
+        fields = _fields(
+            _object(parse_canonical_json(payload), "Provenance"),
+            frozenset(
+                (
+                    "input_sha256",
+                    "observed_at",
+                    "parameters_sha256",
+                    "provenance_id",
+                    "source_kind",
+                    "source_name",
+                    "source_record_id",
+                )
+            ),
+            "Provenance",
+        )
         source_record_id = fields["source_record_id"]
         input_hash = fields["input_sha256"]
         parameters_hash = fields["parameters_sha256"]
@@ -126,7 +145,9 @@ class Provenance:
             None if source_record_id is None else _string(source_record_id, "source_record_id"),
             UtcTimestamp(_string(fields["observed_at"], "observed_at")),
             None if input_hash is None else Sha256(_string(input_hash, "input_sha256")),
-            None if parameters_hash is None else Sha256(_string(parameters_hash, "parameters_sha256")),
+            None
+            if parameters_hash is None
+            else Sha256(_string(parameters_hash, "parameters_sha256")),
         )
 
 
@@ -142,22 +163,43 @@ class SourceLocator:
     def __post_init__(self) -> None:
         if not isinstance(self.asset_id, AssetId):
             raise BoundaryError.for_field("asset_id", "must be AssetId")
-        if not isinstance(self.page_start, int) or isinstance(self.page_start, bool) or self.page_start < 1:
+        if (
+            not isinstance(self.page_start, int)
+            or isinstance(self.page_start, bool)
+            or self.page_start < 1
+        ):
             raise BoundaryError.for_field("page_start", "must be an integer at least 1")
-        if not isinstance(self.page_end, int) or isinstance(self.page_end, bool) or self.page_end < self.page_start:
+        if (
+            not isinstance(self.page_end, int)
+            or isinstance(self.page_end, bool)
+            or self.page_end < self.page_start
+        ):
             raise BoundaryError.for_field("page_end", "must be at least page_start")
-        if not isinstance(self.char_start, int) or isinstance(self.char_start, bool) or self.char_start < 0:
+        if (
+            not isinstance(self.char_start, int)
+            or isinstance(self.char_start, bool)
+            or self.char_start < 0
+        ):
             raise BoundaryError.for_field("char_start", "must be a nonnegative integer")
-        if not isinstance(self.char_end, int) or isinstance(self.char_end, bool) or self.char_end < self.char_start:
+        if (
+            not isinstance(self.char_end, int)
+            or isinstance(self.char_end, bool)
+            or self.char_end < self.char_start
+        ):
             raise BoundaryError.for_field("char_end", "must be at least char_start")
         object.__setattr__(self, "block_id", _text(self.block_id, "block_id"))
 
     def _value(self) -> CanonicalJsonObject:
-        return CanonicalJsonObject((
-            ("asset_id", str(self.asset_id)), ("block_id", self.block_id),
-            ("char_end", self.char_end), ("char_start", self.char_start),
-            ("page_end", self.page_end), ("page_start", self.page_start),
-        ))
+        return CanonicalJsonObject(
+            (
+                ("asset_id", str(self.asset_id)),
+                ("block_id", self.block_id),
+                ("char_end", self.char_end),
+                ("char_start", self.char_start),
+                ("page_end", self.page_end),
+                ("page_start", self.page_start),
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,30 +209,51 @@ class EvidenceText:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "text", _text(self.text, "text"))
-        if not isinstance(self.evidence, tuple) or not all(isinstance(item, SourceLocator) for item in self.evidence):
+        if not isinstance(self.evidence, tuple) or not all(
+            isinstance(item, SourceLocator) for item in self.evidence
+        ):
             raise BoundaryError.for_field("evidence", "must be a tuple of SourceLocator")
 
     def to_json(self) -> str:
-        value = CanonicalJsonObject((("evidence", tuple(item._value() for item in self.evidence)), ("text", self.text)))
+        value = CanonicalJsonObject(
+            (("evidence", tuple(item._value() for item in self.evidence)), ("text", self.text))
+        )
         return canonical_json_bytes(value).decode("ascii")
 
     @classmethod
     def from_json(cls, payload: str) -> EvidenceText:
-        fields = _fields(_object(parse_canonical_json(payload), "EvidenceText"), frozenset(("evidence", "text")), "EvidenceText")
+        fields = _fields(
+            _object(parse_canonical_json(payload), "EvidenceText"),
+            frozenset(("evidence", "text")),
+            "EvidenceText",
+        )
         raw_evidence = fields["evidence"]
         if not isinstance(raw_evidence, tuple):
             raise BoundaryError.for_field("evidence", "must be an array")
         locators: list[SourceLocator] = []
         for value in raw_evidence:
-            locator = _fields(_object(value, "SourceLocator"), frozenset((
-                "asset_id", "block_id", "char_end", "char_start", "page_end", "page_start",
-            )), "SourceLocator")
-            locators.append(SourceLocator(
-                AssetId(_string(locator["asset_id"], "asset_id")),
-                _integer(locator["page_start"], "page_start"),
-                _integer(locator["page_end"], "page_end"),
-                _string(locator["block_id"], "block_id"),
-                _integer(locator["char_start"], "char_start"),
-                _integer(locator["char_end"], "char_end"),
-            ))
+            locator = _fields(
+                _object(value, "SourceLocator"),
+                frozenset(
+                    (
+                        "asset_id",
+                        "block_id",
+                        "char_end",
+                        "char_start",
+                        "page_end",
+                        "page_start",
+                    )
+                ),
+                "SourceLocator",
+            )
+            locators.append(
+                SourceLocator(
+                    AssetId(_string(locator["asset_id"], "asset_id")),
+                    _integer(locator["page_start"], "page_start"),
+                    _integer(locator["page_end"], "page_end"),
+                    _string(locator["block_id"], "block_id"),
+                    _integer(locator["char_start"], "char_start"),
+                    _integer(locator["char_end"], "char_end"),
+                )
+            )
         return cls(_string(fields["text"], "text"), tuple(locators))

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from itertools import permutations
-import json
 import os
+import unittest
+from itertools import permutations
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.bibliography.identity_model import (
@@ -55,7 +54,9 @@ class FakeAcceptancePublisher:
 
     def publish(self, prepared) -> None:
         with create_or_open_catalog(self.catalog) as connection:
-            connection.execute("INSERT OR IGNORE INTO works(id) VALUES(?)", (str(prepared.work_id),))
+            connection.execute(
+                "INSERT OR IGNORE INTO works(id) VALUES(?)", (str(prepared.work_id),)
+            )
             connection.execute(
                 "INSERT OR IGNORE INTO work_versions(id,work_id,version_role) VALUES(?,?,?)",
                 (str(prepared.work_version_id), str(prepared.work_id), prepared.version_role),
@@ -81,39 +82,77 @@ class FakeAcceptancePublisher:
                     "DELETE FROM work_representative_versions WHERE work_id=?",
                     (str(identity.work_id),),
                 )
-                connection.execute("DELETE FROM work_versions WHERE id=?", (str(identity.work_version_id),))
                 connection.execute(
-                    "DELETE FROM works WHERE id=? AND NOT EXISTS(SELECT 1 FROM work_versions WHERE work_id=?)",
+                    "DELETE FROM work_versions WHERE id=?", (str(identity.work_version_id),)
+                )
+                connection.execute(
+                    "DELETE FROM works WHERE id=? "
+                    "AND NOT EXISTS(SELECT 1 FROM work_versions WHERE work_id=?)",
                     (str(identity.work_id), str(identity.work_id)),
                 )
             for identifier in prepared.identifiers:
                 connection.execute(
-                    "INSERT OR IGNORE INTO stable_identifiers(id,work_version_id,namespace,value) VALUES(?,?,?,?)",
-                    (str(identifier.identifier_id), str(prepared.work_version_id), identifier.value.namespace, identifier.value.value),
+                    "INSERT OR IGNORE INTO stable_identifiers"
+                    "(id,work_version_id,namespace,value) VALUES(?,?,?,?)",
+                    (
+                        str(identifier.identifier_id),
+                        str(prepared.work_version_id),
+                        identifier.value.namespace,
+                        identifier.value.value,
+                    ),
                 )
             for item in prepared.observations:
                 connection.execute(
-                    "INSERT OR IGNORE INTO metadata_observations(id,work_version_id,provider,provider_record_id,payload_sha256,payload_json,observed_at) VALUES(?,?,?,?,?,?,?)",
-                    (str(item.observation_id), str(prepared.work_version_id), item.provider, item.provider_record_id, str(item.payload_sha256), item.payload_json, str(item.observed_at)),
+                    "INSERT OR IGNORE INTO metadata_observations"
+                    "(id,work_version_id,provider,provider_record_id,payload_sha256,payload_json,"
+                    "observed_at) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        str(item.observation_id),
+                        str(prepared.work_version_id),
+                        item.provider,
+                        item.provider_record_id,
+                        str(item.payload_sha256),
+                        item.payload_json,
+                        str(item.observed_at),
+                    ),
                 )
             if prepared.metadata_snapshot is not None:
                 snapshot = prepared.metadata_snapshot
                 connection.execute(
-                    "INSERT OR IGNORE INTO metadata_snapshots(id,work_version_id,revision,sha256,values_json,provenance_json) VALUES(?,?,?,?,?,?)",
-                    (str(snapshot.snapshot_id), str(prepared.work_version_id), snapshot.revision, str(snapshot.sha256), snapshot.values_json, snapshot.provenance_json),
+                    "INSERT OR IGNORE INTO metadata_snapshots"
+                    "(id,work_version_id,revision,sha256,values_json,provenance_json) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        str(snapshot.snapshot_id),
+                        str(prepared.work_version_id),
+                        snapshot.revision,
+                        str(snapshot.sha256),
+                        snapshot.values_json,
+                        snapshot.provenance_json,
+                    ),
                 )
                 connection.execute(
-                    "INSERT INTO work_version_current_metadata(work_version_id,metadata_snapshot_id) VALUES(?,?) ON CONFLICT(work_version_id) DO UPDATE SET metadata_snapshot_id=excluded.metadata_snapshot_id",
+                    "INSERT INTO work_version_current_metadata"
+                    "(work_version_id,metadata_snapshot_id) VALUES(?,?) "
+                    "ON CONFLICT(work_version_id) DO UPDATE SET "
+                    "metadata_snapshot_id=excluded.metadata_snapshot_id",
                     (str(prepared.work_version_id), str(snapshot.snapshot_id)),
                 )
             connection.execute(
-                "INSERT INTO work_representative_versions(work_id,work_version_id) VALUES(?,?) ON CONFLICT(work_id) DO UPDATE SET work_version_id=excluded.work_version_id",
+                "INSERT INTO work_representative_versions(work_id,work_version_id) VALUES(?,?) "
+                "ON CONFLICT(work_id) DO UPDATE SET work_version_id=excluded.work_version_id",
                 (str(prepared.work_id), str(prepared.representative_version_id)),
             )
             for relation in prepared.version_relations:
                 connection.execute(
-                    "INSERT OR IGNORE INTO work_version_relations(id,left_version_id,right_version_id,relation) VALUES(?,?,?,?)",
-                    (str(relation.relation_id), str(relation.left_version_id), str(relation.right_version_id), relation.relation),
+                    "INSERT OR IGNORE INTO work_version_relations"
+                    "(id,left_version_id,right_version_id,relation) VALUES(?,?,?,?)",
+                    (
+                        str(relation.relation_id),
+                        str(relation.left_version_id),
+                        str(relation.right_version_id),
+                        relation.relation,
+                    ),
                 )
             connection.commit()
 
@@ -148,9 +187,22 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
                 prepared = prepare_initial_ingest(repository, (item,))
                 FakeAcceptancePublisher(catalog).publish(prepared)
             replay = prepare_initial_ingest(repository, tuple(reversed(ordered)))
-            current = next(item for item in repository.list_identity_records() if item.work_version_id == prepared.work_version_id)
-            outcomes.add((str(prepared.work_id), str(prepared.work_version_id), repr(current.current_metadata)))
-            self.assertEqual((replay.work_id, replay.work_version_id), (prepared.work_id, prepared.work_version_id))
+            current = next(
+                item
+                for item in repository.list_identity_records()
+                if item.work_version_id == prepared.work_version_id
+            )
+            outcomes.add(
+                (
+                    str(prepared.work_id),
+                    str(prepared.work_version_id),
+                    repr(current.current_metadata),
+                )
+            )
+            self.assertEqual(
+                (replay.work_id, replay.work_version_id),
+                (prepared.work_id, prepared.work_version_id),
+            )
             self.assertEqual(len(repository.list_observations(prepared.work_version_id)), 3)
         self.assertEqual(len(outcomes), 1, outcomes)
         catalog, repository = self.prepare_catalog("metadata-tuple")
@@ -161,10 +213,19 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
 
     def test_conflict_blockers_keep_versions_separate_with_review_evidence(self) -> None:
         blockers = (
-            (observation("a", "1", (Identifier("doi", "10.1/a"),)), observation("b", "2", (Identifier("doi", "10.1/b"),))),
-            (observation("a", "1", (), title="Alpha", authors=("A",)), observation("b", "2", (), title="Beta", authors=("B",))),
+            (
+                observation("a", "1", (Identifier("doi", "10.1/a"),)),
+                observation("b", "2", (Identifier("doi", "10.1/b"),)),
+            ),
+            (
+                observation("a", "1", (), title="Alpha", authors=("A",)),
+                observation("b", "2", (), title="Beta", authors=("B",)),
+            ),
             (observation("a", "1", (), year=2025), observation("b", "2", (), year=2026)),
-            (observation("a", "1", (), item_type="article"), observation("b", "2", (), item_type="book")),
+            (
+                observation("a", "1", (), item_type="article"),
+                observation("b", "2", (), item_type="book"),
+            ),
         )
         for index, pair in enumerate(blockers):
             catalog, repository = self.prepare_catalog(f"conflict-{index}")
@@ -176,19 +237,28 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
 
     def test_fuzzy_title_only_creates_neutral_review_and_never_merges(self) -> None:
         catalog, repository = self.prepare_catalog("fuzzy")
-        first = prepare_initial_ingest(repository, (observation("a", "1", (), title="A Study of Catalysis"),))
+        first = prepare_initial_ingest(
+            repository, (observation("a", "1", (), title="A Study of Catalysis"),)
+        )
         FakeAcceptancePublisher(catalog).publish(first)
-        second = prepare_initial_ingest(repository, (observation("b", "2", (), title="Study of Catalysis"),))
+        second = prepare_initial_ingest(
+            repository, (observation("b", "2", (), title="Study of Catalysis"),)
+        )
         self.assertNotEqual(second.work_version_id, first.work_version_id)
         self.assertEqual(second.review_relations[0].relation, "possible-duplicate")
 
     def test_explicit_version_relation_shares_work_but_preserves_versions_and_roles(self) -> None:
         catalog, repository = self.prepare_catalog("relations")
         preprint_id = Identifier("arxiv", "2601.00001")
-        preprint = prepare_initial_ingest(repository, (observation("arxiv", "p", (preprint_id,), role="preprint"),))
+        preprint = prepare_initial_ingest(
+            repository, (observation("arxiv", "p", (preprint_id,), role="preprint"),)
+        )
         FakeAcceptancePublisher(catalog).publish(preprint)
         formal = observation(
-            "crossref", "f", (Identifier("doi", "10.1/formal"),), role="formal",
+            "crossref",
+            "f",
+            (Identifier("doi", "10.1/formal"),),
+            role="formal",
             relation=VersionRelationEvidence(preprint_id, "published-version-of"),
         )
         published = prepare_initial_ingest(repository, (formal,))
@@ -198,7 +268,9 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
         self.assertEqual(published.representative_version_id, published.work_version_id)
         self.assertEqual(published.version_relations[0].right_version_id, preprint.work_version_id)
         with create_or_open_catalog(catalog) as connection:
-            rows = connection.execute("SELECT version_role FROM work_versions ORDER BY version_role").fetchall()
+            rows = connection.execute(
+                "SELECT version_role FROM work_versions ORDER BY version_role"
+            ).fetchall()
         self.assertEqual(rows, [("formal",), ("preprint",)])
 
 

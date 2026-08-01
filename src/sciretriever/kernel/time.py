@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import re
 
 from sciretriever.kernel.errors import BoundaryError
-
 
 _RFC3339_UTC = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})T(?P<time>\d{2}:\d{2}:\d{2})"

@@ -5,8 +5,12 @@ from types import TracebackType
 from typing import Protocol
 
 from sciretriever.kernel.ids import WorkId, WorkVersionId
+
 from .curation_plans import (
-    delete_version_plan, delete_work_plan, distinct_plan, related_versions_plan,
+    delete_version_plan,
+    delete_work_plan,
+    distinct_plan,
+    related_versions_plan,
     same_version_plan,
 )
 from .model import CurationCommit
@@ -20,14 +24,18 @@ class GuardedArtifactReconciler(Protocol):
 class CoreWriteGuard(Protocol):
     def __enter__(self) -> CoreWriteGuard: ...
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None,
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None: ...
 
 
 class CurationService:
     def __init__(
-        self, repository: BibliographyRepository, transaction: CurationTransactionPort,
+        self,
+        repository: BibliographyRepository,
+        transaction: CurationTransactionPort,
         acquire_core_write: Callable[[], CoreWriteGuard],
         reconciler: GuardedArtifactReconciler | None = None,
     ) -> None:
@@ -37,7 +45,10 @@ class CurationService:
         self._reconciler = reconciler
 
     def same_version(
-        self, left: WorkVersionId, right: WorkVersionId, survivor: WorkVersionId,
+        self,
+        left: WorkVersionId,
+        right: WorkVersionId,
+        survivor: WorkVersionId,
     ) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
@@ -46,11 +57,16 @@ class CurationService:
             return commit
 
     def related_versions(
-        self, left: WorkVersionId, right: WorkVersionId, survivor_work: WorkId,
+        self,
+        left: WorkVersionId,
+        right: WorkVersionId,
+        survivor_work: WorkId,
     ) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
-            return self._transaction.apply(related_versions_plan(topology, left, right, survivor_work))
+            return self._transaction.apply(
+                related_versions_plan(topology, left, right, survivor_work)
+            )
 
     def distinct(self, left: WorkId, right: WorkId) -> CurationCommit:
         with self._acquire_core_write():

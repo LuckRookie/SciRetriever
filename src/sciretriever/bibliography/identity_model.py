@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
 from sciretriever.kernel import (
     Identifier,
@@ -31,9 +31,14 @@ class InitialMetadata:
 def initial_metadata_from_json(payload: str) -> InitialMetadata:
     value = json.loads(payload)
     return InitialMetadata(
-        value.get("title"), tuple(value.get("authors", ())), value.get("year"),
-        value.get("item_type"), value.get("abstract"), value.get("venue"),
-        value.get("language"), tuple(value.get("keywords", ())),
+        value.get("title"),
+        tuple(value.get("authors", ())),
+        value.get("year"),
+        value.get("item_type"),
+        value.get("abstract"),
+        value.get("venue"),
+        value.get("language"),
+        tuple(value.get("keywords", ())),
     )
 
 

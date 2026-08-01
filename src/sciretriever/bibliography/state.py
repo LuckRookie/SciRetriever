@@ -94,6 +94,7 @@ def derive_missing_step(facts: VersionFacts) -> MissingStep | None:
 
 
 __all__ = (
-    "VersionFacts", "derive_missing_step",
+    "VersionFacts",
+    "derive_missing_step",
     "derive_work_version_state",
 )

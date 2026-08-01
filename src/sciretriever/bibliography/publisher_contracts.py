@@ -4,9 +4,17 @@ from dataclasses import dataclass
 from enum import Enum, unique
 
 from sciretriever.kernel import (
-    AnalysisArtifactId, AssetId, BoundaryError, CanonicalJsonObject,
-    LightDocumentId, MetadataSnapshotId, RelativeArtifactPath, Sha256, WorkId,
-    WorkVersionId, canonical_json_bytes,
+    AnalysisArtifactId,
+    AssetId,
+    BoundaryError,
+    CanonicalJsonObject,
+    LightDocumentId,
+    MetadataSnapshotId,
+    RelativeArtifactPath,
+    Sha256,
+    WorkId,
+    WorkVersionId,
+    canonical_json_bytes,
 )
 from sciretriever.kernel.ids import UuidValue
 
@@ -41,9 +49,7 @@ class ReferenceMemberFact:
 
     def __post_init__(self) -> None:
         if self.target_work_version_id is not None and self.target_work_id is None:
-            raise BoundaryError.for_field(
-                "target_work_version_id", "requires target_work_id"
-            )
+            raise BoundaryError.for_field("target_work_version_id", "requires target_work_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,15 +60,25 @@ class TagMemberFact:
 
 
 def metadata_snapshot_bytes(
-    revision: int, values: CanonicalJsonObject, provenance: CanonicalJsonObject,
+    revision: int,
+    values: CanonicalJsonObject,
+    provenance: CanonicalJsonObject,
 ) -> bytes:
-    return canonical_json_bytes(CanonicalJsonObject((
-        ("provenance", provenance), ("revision", revision), ("values", values),
-    )))
+    return canonical_json_bytes(
+        CanonicalJsonObject(
+            (
+                ("provenance", provenance),
+                ("revision", revision),
+                ("values", values),
+            )
+        )
+    )
 
 
 def metadata_snapshot_sha256(
-    revision: int, values: CanonicalJsonObject, provenance: CanonicalJsonObject,
+    revision: int,
+    values: CanonicalJsonObject,
+    provenance: CanonicalJsonObject,
 ) -> Sha256:
     return Sha256.from_bytes(metadata_snapshot_bytes(revision, values, provenance))
 
@@ -97,7 +113,9 @@ class FinalMetadataFact:
 
     def __post_init__(self) -> None:
         if metadata_snapshot_sha256(self.revision, self.values, self.provenance) != self.sha256:
-            raise BoundaryError.for_field("sha256", "must identify the complete canonical metadata snapshot")
+            raise BoundaryError.for_field(
+                "sha256", "must identify the complete canonical metadata snapshot"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,8 +161,10 @@ class CompletionSubmission:
 
     def __post_init__(self) -> None:
         identities = (
-            self.analysis.work_version_id, self.metadata.work_version_id,
-            self.references.work_version_id, self.tags.work_version_id,
+            self.analysis.work_version_id,
+            self.metadata.work_version_id,
+            self.references.work_version_id,
+            self.tags.work_version_id,
         )
         if any(value != self.work_version_id for value in identities):
             raise BoundaryError.for_field("completion", "facts must share one WorkVersion")
@@ -162,63 +182,116 @@ def completion_submission_canonical(submission: CompletionSubmission) -> Canonic
     references = submission.references
     tags = submission.tags
     provenance = submission.provenance
-    return CanonicalJsonObject((
-        ("work_version_id", str(submission.work_version_id)),
-        ("light_document_id", str(submission.light_document_id)),
-        ("light_document_sha256", str(submission.light_document_sha256)),
-        ("analysis", CanonicalJsonObject((
-            ("work_version_id", str(analysis.work_version_id)),
-            ("light_document_id", str(analysis.light_document_id)),
-            ("input_sha256", str(analysis.input_sha256)),
-            ("analysis_id", str(analysis.analysis_id)),
-            ("artifact_id", str(analysis.artifact_id)),
-            ("artifact_path", str(analysis.artifact_path)),
-            ("artifact_sha256", str(analysis.artifact_sha256)),
-            ("artifact_size", analysis.artifact_size),
-            ("proposal", analysis.proposal),
-        ))),
-        ("metadata", CanonicalJsonObject((
-            ("work_version_id", str(metadata.work_version_id)),
-            ("expected_snapshot_id", str(metadata.expected_snapshot_id)),
-            ("expected_revision", metadata.expected_revision),
-            ("expected_sha256", str(metadata.expected_sha256)),
-            ("snapshot_id", str(metadata.snapshot_id)),
-            ("revision", metadata.revision),
-            ("sha256", str(metadata.sha256)),
-            ("values", metadata.values),
-            ("provenance", metadata.provenance),
-        ))),
-        ("references", CanonicalJsonObject((
-            ("set_id", str(references.set_id)),
-            ("work_version_id", str(references.work_version_id)),
-            ("revision", references.revision),
-            ("members", tuple(CanonicalJsonObject((
-                ("member_id", str(member.member_id)),
-                ("raw_text", member.raw_text),
-                ("reference", member.reference),
-                ("target_work_id", None if member.target_work_id is None else str(member.target_work_id)),
-                ("target_work_version_id", None if member.target_work_version_id is None else str(member.target_work_version_id)),
-            )) for member in references.members)),
-        ))),
-        ("tags", CanonicalJsonObject((
-            ("set_id", str(tags.set_id)),
-            ("work_version_id", str(tags.work_version_id)),
-            ("revision", tags.revision),
-            ("members", tuple(CanonicalJsonObject((
-                ("member_id", str(member.member_id)),
-                ("name", member.name),
-                ("evidence", member.evidence),
-            )) for member in tags.members)),
-        ))),
-        ("provenance", CanonicalJsonObject((
-            ("parser_identity", provenance.parser_identity),
-            ("model_provider", provenance.model_provider),
-            ("model_identity", provenance.model_identity),
-            ("input_sha256", str(provenance.input_sha256)),
-            ("parameters_sha256", str(provenance.parameters_sha256)),
-            ("evidence", provenance.evidence),
-        ))),
-    ))
+    return CanonicalJsonObject(
+        (
+            ("work_version_id", str(submission.work_version_id)),
+            ("light_document_id", str(submission.light_document_id)),
+            ("light_document_sha256", str(submission.light_document_sha256)),
+            (
+                "analysis",
+                CanonicalJsonObject(
+                    (
+                        ("work_version_id", str(analysis.work_version_id)),
+                        ("light_document_id", str(analysis.light_document_id)),
+                        ("input_sha256", str(analysis.input_sha256)),
+                        ("analysis_id", str(analysis.analysis_id)),
+                        ("artifact_id", str(analysis.artifact_id)),
+                        ("artifact_path", str(analysis.artifact_path)),
+                        ("artifact_sha256", str(analysis.artifact_sha256)),
+                        ("artifact_size", analysis.artifact_size),
+                        ("proposal", analysis.proposal),
+                    )
+                ),
+            ),
+            (
+                "metadata",
+                CanonicalJsonObject(
+                    (
+                        ("work_version_id", str(metadata.work_version_id)),
+                        ("expected_snapshot_id", str(metadata.expected_snapshot_id)),
+                        ("expected_revision", metadata.expected_revision),
+                        ("expected_sha256", str(metadata.expected_sha256)),
+                        ("snapshot_id", str(metadata.snapshot_id)),
+                        ("revision", metadata.revision),
+                        ("sha256", str(metadata.sha256)),
+                        ("values", metadata.values),
+                        ("provenance", metadata.provenance),
+                    )
+                ),
+            ),
+            (
+                "references",
+                CanonicalJsonObject(
+                    (
+                        ("set_id", str(references.set_id)),
+                        ("work_version_id", str(references.work_version_id)),
+                        ("revision", references.revision),
+                        (
+                            "members",
+                            tuple(
+                                CanonicalJsonObject(
+                                    (
+                                        ("member_id", str(member.member_id)),
+                                        ("raw_text", member.raw_text),
+                                        ("reference", member.reference),
+                                        (
+                                            "target_work_id",
+                                            None
+                                            if member.target_work_id is None
+                                            else str(member.target_work_id),
+                                        ),
+                                        (
+                                            "target_work_version_id",
+                                            None
+                                            if member.target_work_version_id is None
+                                            else str(member.target_work_version_id),
+                                        ),
+                                    )
+                                )
+                                for member in references.members
+                            ),
+                        ),
+                    )
+                ),
+            ),
+            (
+                "tags",
+                CanonicalJsonObject(
+                    (
+                        ("set_id", str(tags.set_id)),
+                        ("work_version_id", str(tags.work_version_id)),
+                        ("revision", tags.revision),
+                        (
+                            "members",
+                            tuple(
+                                CanonicalJsonObject(
+                                    (
+                                        ("member_id", str(member.member_id)),
+                                        ("name", member.name),
+                                        ("evidence", member.evidence),
+                                    )
+                                )
+                                for member in tags.members
+                            ),
+                        ),
+                    )
+                ),
+            ),
+            (
+                "provenance",
+                CanonicalJsonObject(
+                    (
+                        ("parser_identity", provenance.parser_identity),
+                        ("model_provider", provenance.model_provider),
+                        ("model_identity", provenance.model_identity),
+                        ("input_sha256", str(provenance.input_sha256)),
+                        ("parameters_sha256", str(provenance.parameters_sha256)),
+                        ("evidence", provenance.evidence),
+                    )
+                ),
+            ),
+        )
+    )
 
 
 @unique
@@ -228,9 +301,20 @@ class CompletionOutcome(str, Enum):
 
 
 __all__ = (
-    "CompletionAnalysisFact", "CompletionOutcome", "CompletionProvenance",
-    "CompletionSubmission", "FinalMetadataFact", "ReferenceMemberFact",
-    "ReferenceMemberId", "ReferenceSetFact", "ReferenceSetId", "TagMemberFact",
-    "TagMemberId", "TagSetFact", "TagSetId", "completion_submission_canonical",
-    "metadata_snapshot_bytes", "metadata_snapshot_sha256",
+    "CompletionAnalysisFact",
+    "CompletionOutcome",
+    "CompletionProvenance",
+    "CompletionSubmission",
+    "FinalMetadataFact",
+    "ReferenceMemberFact",
+    "ReferenceMemberId",
+    "ReferenceSetFact",
+    "ReferenceSetId",
+    "TagMemberFact",
+    "TagMemberId",
+    "TagSetFact",
+    "TagSetId",
+    "completion_submission_canonical",
+    "metadata_snapshot_bytes",
+    "metadata_snapshot_sha256",
 )

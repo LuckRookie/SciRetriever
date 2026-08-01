@@ -1,37 +1,41 @@
 from __future__ import annotations
 
-import os
-from dataclasses import replace
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
+from dataclasses import replace
 from uuid import uuid4
 
-from sciretriever.batching.api import ContentAcceptanceCommand, FailureStage, TargetProjection, TargetResult
-from sciretriever.batching.completion import CompletionContext, complete_analysis
+from target_completion_support import (
+    CompletionDurabilityTests,
+    FailingArtifactStore,
+    authority_snapshot,
+    prepare_completion,
+)
+from target_publisher_support import ScenarioFactory
+
+from sciretriever.batching.completion import complete_analysis
 from sciretriever.bibliography.api import (
-    CompletionOutcome, CompletionRejectedError, CompletionSubmission,
-    ReferenceMemberFact, ReferenceMemberId, accept_completion,
+    CompletionOutcome,
+    CompletionRejectedError,
+    CompletionSubmission,
+    ReferenceMemberFact,
+    ReferenceMemberId,
+    accept_completion,
     metadata_snapshot_sha256,
 )
-from sciretriever.content.api import AnalysisProposalV1, LightDocumentAcceptance
 from sciretriever.kernel import (
-    BoundaryError, CanonicalJsonObject, MetadataSnapshotId, Sha256, WorkId,
+    BoundaryError,
+    CanonicalJsonObject,
+    Sha256,
+    WorkId,
     WorkVersionId,
 )
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
-    CompletionPublisher,
     SqliteBibliographyRepository,
+    StalePublicationError,
     create_or_open_catalog,
     open_read_only_snapshot,
-    StalePublicationError,
 )
-from target_completion_support import (
-    CompletionDurabilityTests, FailingArtifactStore, authority_snapshot,
-    prepare_completion,
-)
-from target_publisher_support import ScenarioFactory
 
 
 class TargetCompletionDurabilityTests(CompletionDurabilityTests):
@@ -46,30 +50,58 @@ class TargetCompletionTests(unittest.TestCase):
     def _prepared(self, *, failpoint=None):
         prepared = prepare_completion(self.factory, failpoint)
         return (
-            prepared.path, prepared.storage, prepared.context, prepared.target,
-            prepared.proposal, prepared.publisher,
+            prepared.path,
+            prepared.storage,
+            prepared.context,
+            prepared.target,
+            prepared.proposal,
+            prepared.publisher,
         )
 
-    def test_complete_analysis_publishes_full_authority_and_exact_replay_is_write_free(self) -> None:
+    def test_complete_analysis_publishes_full_authority_and_exact_replay_is_write_free(
+        self,
+    ) -> None:
         path, storage, context, target, proposal, publisher = self._prepared()
         with create_or_open_catalog(path) as connection:
             for stage in ("analysis", "feedback", "parsing"):
                 connection.execute(
                     "INSERT INTO current_failures VALUES (?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP)",
-                    (str(uuid4()), "work-version", str(context.work_version_id), stage, "x", "x", "x"),
+                    (
+                        str(uuid4()),
+                        "work-version",
+                        str(context.work_version_id),
+                        stage,
+                        "x",
+                        "x",
+                        "x",
+                    ),
                 )
             connection.commit()
         submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
-        outcome = accept_completion(SqliteBibliographyRepository(path), publisher, submission, target)
-        replay = accept_completion(SqliteBibliographyRepository(path), publisher, submission, target)
+        outcome = accept_completion(
+            SqliteBibliographyRepository(path), publisher, submission, target
+        )
+        replay = accept_completion(
+            SqliteBibliographyRepository(path), publisher, submission, target
+        )
 
-        self.assertEqual((outcome, replay), (CompletionOutcome.PUBLISHED, CompletionOutcome.REPLAYED))
+        self.assertEqual(
+            (outcome, replay), (CompletionOutcome.PUBLISHED, CompletionOutcome.REPLAYED)
+        )
         with open_read_only_snapshot(path) as reader:
-            counts = tuple(reader.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in (
-                "completion_bundles", "analysis_artifacts", "reference_members",
-                "unresolved_references", "tag_members", "metadata_fts", "light_text_fts",
-                "analysis_fts",
-            ))
+            counts = tuple(
+                reader.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                for table in (
+                    "completion_bundles",
+                    "analysis_artifacts",
+                    "reference_members",
+                    "unresolved_references",
+                    "tag_members",
+                    "metadata_fts",
+                    "light_text_fts",
+                    "analysis_fts",
+                )
+            )
             state = reader.execute(
                 "SELECT state FROM work_version_state_view WHERE work_version_id=?",
                 (str(context.work_version_id),),
@@ -95,13 +127,17 @@ class TargetCompletionTests(unittest.TestCase):
         replay_submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
         self.assertEqual(replay_submission.analysis.artifact_id, submission.analysis.artifact_id)
         with open_read_only_snapshot(path) as reader:
-            self.assertEqual(reader.execute("SELECT count(*) FROM analysis_artifacts").fetchone(), (0,))
+            self.assertEqual(
+                reader.execute("SELECT count(*) FROM analysis_artifacts").fetchone(), (0,)
+            )
 
     def test_reference_member_rejects_resolved_version_without_work(self) -> None:
         with self.assertRaisesRegex(BoundaryError, "requires target_work_id"):
             ReferenceMemberFact(
                 ReferenceMemberId("00000000-0000-0000-0000-000000000301"),
-                "invalid", CanonicalJsonObject(()), None,
+                "invalid",
+                CanonicalJsonObject(()),
+                None,
                 WorkVersionId("00000000-0000-0000-0000-000000000302"),
             )
 
@@ -115,7 +151,10 @@ class TargetCompletionTests(unittest.TestCase):
         )
         other_target = replace(target, work_version_id=other_context.work_version_id)
         second = complete_analysis(
-            proposal, other_context, other_target, CoreArtifactStore(storage),
+            proposal,
+            other_context,
+            other_target,
+            CoreArtifactStore(storage),
         )
 
         self.assertNotEqual(first.references.set_id, second.references.set_id)
@@ -151,7 +190,10 @@ class TargetCompletionTests(unittest.TestCase):
             with self.subTest(member=member):
                 with self.assertRaisesRegex(CompletionRejectedError, "resolved reference"):
                     accept_completion(
-                        SqliteBibliographyRepository(path), publisher, invalid, target,
+                        SqliteBibliographyRepository(path),
+                        publisher,
+                        invalid,
+                        target,
                     )
 
     def test_completed_replay_rejects_every_divergent_submission_fact(self) -> None:
@@ -205,7 +247,10 @@ class TargetCompletionTests(unittest.TestCase):
             with self.subTest(divergent=divergent):
                 with self.assertRaises((CompletionRejectedError, StalePublicationError)):
                     accept_completion(
-                        SqliteBibliographyRepository(path), publisher, divergent, target,
+                        SqliteBibliographyRepository(path),
+                        publisher,
+                        divergent,
+                        target,
                     )
 
     def test_completed_replay_rejects_divergent_target_projection(self) -> None:
@@ -213,7 +258,8 @@ class TargetCompletionTests(unittest.TestCase):
         submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
         accept_completion(SqliteBibliographyRepository(path), publisher, submission, target)
         divergent = replace(
-            target, details=CanonicalJsonObject((("changed", True),)),
+            target,
+            details=CanonicalJsonObject((("changed", True),)),
         )
 
         with self.assertRaises(StalePublicationError):
@@ -258,6 +304,7 @@ class TargetCompletionTests(unittest.TestCase):
             authority_snapshot(path, str(context.work_version_id), str(target.batch_run_id)),
             before,
         )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,13 @@
-from sciretriever.bibliography.model import *
-from sciretriever.bibliography.identity_model import *
-from sciretriever.bibliography.publisher_contracts import *
-from .state import *
-from .completion import *
-from .curation_model import *
+from sciretriever.bibliography.identity_model import *  # noqa: F403
+from sciretriever.bibliography.model import *  # noqa: F403
+from sciretriever.bibliography.publisher_contracts import *  # noqa: F403
+
+from .completion import *  # noqa: F403
+from .curation import *  # noqa: F403
+from .curation_model import *  # noqa: F403
 from .curation_model import ArtifactRegistrationFact as _ArtifactRegistrationFact
+from .identity import prepare_initial_ingest as _prepare_initial_ingest
+from .state import *  # noqa: F403
 
 ArtifactRegistrationFact = _ArtifactRegistrationFact
-from .curation import *
-from .identity import prepare_initial_ingest
+prepare_initial_ingest = _prepare_initial_ingest
