@@ -1,0 +1,60 @@
+# 下一版 runtime.config 的完整字段模板；当前 CLI 尚不读取此文件。
+schema_version = 2
+
+[paths]
+catalog = "~/.sciretriever/catalog.sqlite"
+storage_root = "~/.sciretriever-assets"
+
+[collection]
+citation_providers = ["openalex", "semantic-scholar"]
+topic_limit = 1000
+citation_max_new = 1000
+
+[metadata]
+providers = ["crossref", "europe-pmc", "arxiv"]
+timeout_seconds = 30.0
+max_concurrency = 4
+result_limit = 1000
+
+[content.acquisition]
+providers = ["direct", "arxiv", "crossref", "europe-pmc"]
+timeout_seconds = 30.0
+provider_concurrency = 4
+host_concurrency = 2
+max_asset_bytes = 104857600
+
+[content.parser]
+protocol = "loopback"
+base_url = "http://127.0.0.1:8000"
+model = "mineru-3.4.4"
+timeout_seconds = 900.0
+remote_upload = false
+max_pages = 2000
+max_blocks = 500000
+max_source_units = 100000
+
+[content.analysis]
+protocol = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-5.1"
+secret_ref = "env:SCIRETRIEVER_ANALYSIS_API_KEY"
+timeout_seconds = 120.0
+max_output_tokens = 16384
+max_input_characters = 200000
+max_source_units = 5000
+
+[batching]
+max_targets = 1000
+max_concurrency = 4
+
+[interoperability]
+max_input_bytes = 67108864
+max_records = 100000
+
+[credentials]
+# metadata = "env:SCIRETRIEVER_METADATA_API_KEY"
+# acquisition = "env:SCIRETRIEVER_ACQUISITION_API_KEY"
+
+[extensions]
+namespaces = []
+max_results = 100

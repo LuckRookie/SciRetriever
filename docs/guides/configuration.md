@@ -2,6 +2,8 @@
 
 本文是当前 `schema_version = 1` 的完整用户配置手册。本目录 [`config.toml`](config.toml) 是覆盖全部字段的完整注释模板；[`config.minimal.toml`](config.minimal.toml) 是保留全部凭据入口、但省略高级调优项的最小可用模板。仓库根目录 `config.toml` 是当前工作区的个人运行配置，不承担公开模板职责。下文为每个字段直接给出类型、默认行为、示例值、约束、使用命令和安全边界。
 
+下一版 `schema_version = 2` 的冻结配置合同由 [`config.target.toml`](config.target.toml) 和 [`config.target.minimal.toml`](config.target.minimal.toml) 记录，责任组固定为 `paths`、`collection`、`metadata`、`content.acquisition`、`content.parser`、`content.analysis`、`batching`、`interoperability`、`credentials` 和 `extensions`。它只保存 `env:VARIABLE_NAME` 形式的 secret reference；分析协议必须显式选择 `openai` 或 `anthropic`，不得由 URL 或模型名推断。当前 CLI runtime 尚未切换到该合同，不能把目标模板用于当前命令。
+
 ## 1. 配置如何生效
 
 SciRetriever 按以下顺序选择配置文件：

@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
+import threading
+import time
+
+from PyPDF2 import PdfWriter
+
+from sciretriever.batching.api import ContentAcceptanceCommand, TargetProjection
+from sciretriever.content.model import (
+    AcceptedContentReference, AssetCandidate, BoundedByteStream, ContentTarget,
+    Header, PublishedArtifact, StagedArtifact, UnifiedMetadataSnapshot,
+)
+from sciretriever.content.publisher_contracts import ContentAcceptance
+from sciretriever.content.ports import RaceToken
+from sciretriever.kernel import (
+    AssetId, Identifier, MetadataSnapshotId, Sha256, WorkVersionId,
+)
+from sciretriever.kernel.enums import AssetRole
+from sciretriever.literature_store.filesystem import CoreArtifactStore
+from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
+
+
+UUID_A = "00000000-0000-0000-0000-000000000001"
+UUID_B = "00000000-0000-0000-0000-000000000002"
+
+
+def pdf(*, title: str = "Exact Article Title", author: str = "Ada Lovelace", year: int = 2024,
+        doi: str | None = "10.1000/exact", pages: int = 2) -> bytes:
+    writer = PdfWriter()
+    for _index in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    subject = f"doi:{doi}" if doi is not None else "article"
+    writer.add_metadata({"/Title": title, "/Author": author, "/CreationDate": f"D:{year}0101", "/Subject": subject})
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def target(*, current: AcceptedContentReference | None = None) -> ContentTarget:
+    metadata = UnifiedMetadataSnapshot(
+        MetadataSnapshotId(UUID_B), 3, "Exact Article Title", ("Ada Lovelace",),
+        (Identifier("doi", "10.1000/exact"),), publication_year=2024,
+        sha256=Sha256.from_bytes(b"metadata"),
+    )
+    accepted = () if current is None else (current,)
+    return ContentTarget(
+        WorkVersionId(UUID_A),
+        metadata, accepted, current, 3,
+        None if current is None else current.sha256,
+        None if current is None else current.revision,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Resolver:
+    candidates: tuple[AssetCandidate, ...]
+
+    def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
+        del target
+        return self.candidates
+
+
+@dataclass(frozen=True, slots=True)
+class Fetcher:
+    responses: dict[str, BoundedByteStream]
+
+    def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
+        return self.responses[candidate.locator]
+
+
+class ControlledFetcher:
+    def __init__(self, responses: dict[str, BoundedByteStream | OSError | TimeoutError], delays: dict[str, float] | None = None) -> None:
+        self.responses = responses
+        self.delays = delays or {}
+        self.calls: list[str] = []
+        self.cancelled = threading.Event()
+
+    def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
+        self.calls.append(candidate.locator)
+        delay = self.delays.get(candidate.locator, 0.0)
+        if delay:
+            time.sleep(delay)
+        response = self.responses[candidate.locator]
+        if isinstance(response, (OSError, TimeoutError)):
+            raise response
+        return response
+
+    def fetch_cancellable(
+        self, candidate: AssetCandidate, token: RaceToken,
+    ) -> BoundedByteStream:
+        self.calls.append(candidate.locator)
+        deadline = time.monotonic() + self.delays.get(candidate.locator, 0.0)
+        while time.monotonic() < deadline:
+            if token.cancelled:
+                self.cancelled.set()
+                raise TimeoutError
+            time.sleep(0.005)
+        response = self.responses[candidate.locator]
+        if isinstance(response, (OSError, TimeoutError)):
+            raise response
+        return response
+
+
+class DeterministicRaceFetcher:
+    def __init__(self, responses: dict[str, BoundedByteStream]) -> None:
+        self.responses = responses
+        self.late_entered = threading.Event()
+        self.fast_release = threading.Event()
+        self.service_done = threading.Event()
+        self.cancellation_probe = threading.Event()
+        self.cancellation_seen = threading.Event()
+        self.late_release = threading.Event()
+        self.late_finished = threading.Event()
+        self.late_claim_rejected = threading.Event()
+
+    def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
+        return self.responses[candidate.locator]
+
+    def fetch_cancellable(
+        self, candidate: AssetCandidate, token: RaceToken,
+    ) -> BoundedByteStream:
+        if candidate.locator == "fast":
+            if not self.late_entered.wait(1.0) or not self.fast_release.wait(1.0):
+                raise TimeoutError
+            return self.responses[candidate.locator]
+        self.late_entered.set()
+        if not self.cancellation_probe.wait(1.0):
+            raise TimeoutError
+        if token.cancelled:
+            self.cancellation_seen.set()
+        if not self.late_release.wait(1.0):
+            raise TimeoutError
+        if not token.claim("late-probe"):
+            self.late_claim_rejected.set()
+        self.late_finished.set()
+        return self.responses[candidate.locator]
+
+
+class RecordingPublisher:
+    def __init__(self, events: list[str], projection: TargetProjection) -> None:
+        self.events = events
+        self.projection = projection
+        self.commands: list[ContentAcceptanceCommand] = []
+
+    def publish(self, acceptance: ContentAcceptance) -> None:
+        self.events.append("catalog")
+        self.commands.append(ContentAcceptanceCommand(acceptance, self.projection))
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedPublisher:
+    publisher: ContentAcceptancePublisher
+    projection: TargetProjection
+
+    def publish(self, acceptance: ContentAcceptance) -> None:
+        self.publisher.publish(ContentAcceptanceCommand(acceptance, self.projection))
+
+
+class RecordingStore:
+    def __init__(self, root: Path, events: list[str]) -> None:
+        self._store = CoreArtifactStore(root)
+        self.events = events
+
+    def publish(self, artifact: StagedArtifact) -> PublishedArtifact:
+        self.events.append("file")
+        return self._store.publish(artifact)
+
+
+def candidate(locator: str, role: AssetRole = AssetRole.PRIMARY_PDF, provider: str = "provider") -> AssetCandidate:
+    return AssetCandidate(provider, role, locator, (Header("Authorization", "secret"),))
+
+
+def stream(content: bytes, media_type: str = "application/pdf") -> BoundedByteStream:
+    return BoundedByteStream((content,), media_type, "https://final.invalid/private", len(content))

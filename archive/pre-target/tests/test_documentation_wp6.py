@@ -12,6 +12,36 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 FINAL_RELEASE_MARKER = "<!-- WP6_FINAL_RELEASE_RECEIPT: TODO31_940 -->"
 FINAL_RELEASE_COUNT = "Todo 31 最终 `full` harness 940 项通过"
 FINAL_RELEASE_RECEIPT = "`.omo/evidence/wp6/task-31.txt`"
+ADR_0005 = "0005-document-package-2-breaking-contract.md"
+
+
+def _adr_0005_violations(
+    adr_text: str,
+    index_text: str,
+    documentation_map_text: str,
+) -> tuple[str, ...]:
+    required_adr_fragments = (
+        "# ADR 0005：",
+        "- Status: Accepted",
+        "## 决策理由",
+        "## 决策",
+        'schema_version:"2.0"',
+        "package_id",
+        "package_sha256",
+        "published_at",
+        "v1",
+        "不支持",
+    )
+    violations = [
+        f"ADR 0005 missing contract fragment: {fragment}"
+        for fragment in required_adr_fragments
+        if fragment not in adr_text
+    ]
+    if ADR_0005 not in index_text:
+        violations.append("ADR 0005 is missing from the decision index")
+    if ADR_0005 not in documentation_map_text:
+        violations.append("ADR 0005 is missing from the documentation responsibility map")
+    return tuple(violations)
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
@@ -26,6 +56,40 @@ def _option(parser: argparse.ArgumentParser, name: str) -> argparse.Action:
 
 
 class Wp6DocumentationSnapshotTests(unittest.TestCase):
+    def test_adr_0005_records_the_breaking_package_contract(self) -> None:
+        # Given the accepted package ADR, decision index, and responsibility map
+        adr_path = REPOSITORY / "docs" / "architecture" / "decisions" / ADR_0005
+        index_path = adr_path.parent / "README.md"
+        documentation_map_path = REPOSITORY / "docs" / "development" / "documentation-map.md"
+
+        # When their package-specific contract is checked
+        violations = _adr_0005_violations(
+            adr_path.read_text(encoding="utf-8") if adr_path.is_file() else "",
+            index_path.read_text(encoding="utf-8"),
+            documentation_map_path.read_text(encoding="utf-8"),
+        )
+
+        # Then the accepted incompatibility is complete and discoverable
+        self.assertEqual(violations, ())
+
+    def test_adr_0005_check_rejects_a_missing_breaking_contract_rationale(self) -> None:
+        # Given an otherwise shaped ADR fixture without its breaking-contract rationale
+        malformed_adr = "\n".join((
+            "# ADR 0005：DocumentPackage 2.0 不兼容合同",
+            "- Status: Accepted",
+            "## 决策",
+            'schema_version:"2.0" package_id package_sha256 published_at v1 不支持',
+        ))
+
+        # When the package-specific documentation contract is checked
+        violations = _adr_0005_violations(malformed_adr, ADR_0005, ADR_0005)
+
+        # Then omission of the owner-approved rationale is rejected explicitly
+        self.assertEqual(
+            violations,
+            ("ADR 0005 missing contract fragment: ## 决策理由",),
+        )
+
     def test_final_help_tree_and_defaults_match_the_command_contract(self) -> None:
         # Given the installed parser used to render every --help surface
         parser = _build_parser()
