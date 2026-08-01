@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from io import BytesIO
-import re
 from typing import assert_never
-import unicodedata
 
 from PyPDF2 import PdfReader
 
@@ -22,7 +22,14 @@ def _normalized(value: str) -> str:
 
 
 def _doi(target: ContentTarget) -> str | None:
-    return next((item.value.casefold() for item in target.current_metadata.identifiers if item.namespace.casefold() == "doi"), None)
+    return next(
+        (
+            item.value.casefold()
+            for item in target.current_metadata.identifiers
+            if item.namespace.casefold() == "doi"
+        ),
+        None,
+    )
 
 
 def validate_asset(
@@ -40,13 +47,20 @@ def validate_asset(
         case AssetRole.PRIMARY_PDF | AssetRole.SUPPLEMENTARY_PDF:
             return _validate_pdf(content, target, role, min_pdf_bytes)
         case AssetRole.XML:
-            if content.media_type.split(";", 1)[0].strip().lower() not in {"application/xml", "text/xml", "application/jats+xml"}:
+            if content.media_type.split(";", 1)[0].strip().lower() not in {
+                "application/xml",
+                "text/xml",
+                "application/jats+xml",
+            }:
                 return AssetValidationFailure("media-type-invalid")
             if not data.lstrip().startswith(b"<"):
                 return AssetValidationFailure("format-invalid")
             return None
         case AssetRole.HTML:
-            if content.media_type.split(";", 1)[0].strip().lower() not in {"text/html", "application/xhtml+xml"}:
+            if content.media_type.split(";", 1)[0].strip().lower() not in {
+                "text/html",
+                "application/xhtml+xml",
+            }:
                 return AssetValidationFailure("media-type-invalid")
             if b"<html" not in data[:2048].lower():
                 return AssetValidationFailure("format-invalid")
@@ -57,7 +71,7 @@ def validate_asset(
             assert_never(unreachable)
 
 
-def _validate_pdf(
+def _validate_pdf(  # noqa: C901
     content: BoundedByteStream,
     target: ContentTarget,
     role: AssetRole,
@@ -87,14 +101,21 @@ def _validate_pdf(
         return AssetValidationFailure("not-primary")
     expected_doi = _doi(target)
     if expected_doi is not None:
-        found = {match.casefold().rstrip(".,;)") for match in re.findall(r"10\.\d{4,9}/[^\s<>\]]+", evidence, re.IGNORECASE)}
+        found = {
+            match.casefold().rstrip(".,;)")
+            for match in re.findall(r"10\.\d{4,9}/[^\s<>\]]+", evidence, re.IGNORECASE)
+        }
         if expected_doi in found:
             return None
         if found:
             return AssetValidationFailure("identity-mismatch")
     expected_title = _normalized(target.current_metadata.title)
     title_matches = bool(expected_title) and _normalized(title) == expected_title
-    surnames = {_normalized(item).split()[-1] for item in target.current_metadata.authors if _normalized(item)}
+    surnames = {
+        _normalized(item).split()[-1]
+        for item in target.current_metadata.authors
+        if _normalized(item)
+    }
     author_matches = bool(surnames) and bool(surnames.intersection(_normalized(author).split()))
     year = target.current_metadata.publication_year
     year_matches = year is not None and str(year) in evidence

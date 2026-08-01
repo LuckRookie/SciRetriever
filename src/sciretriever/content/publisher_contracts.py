@@ -4,11 +4,17 @@ from dataclasses import dataclass
 
 from sciretriever.content.model import ArtifactKind, PublishedArtifact
 from sciretriever.kernel import (
-    AssetId, BoundaryError, CanonicalJsonObject, LightDocumentId,
-    MetadataSnapshotId, Sha256, WorkVersionId, canonical_json_bytes,
+    AssetId,
+    BoundaryError,
+    CanonicalJsonObject,
+    LightDocumentId,
+    MetadataSnapshotId,
+    Sha256,
+    WorkVersionId,
+    canonical_json_bytes,
 )
 from sciretriever.kernel.enums import AssetRole
-from sciretriever.kernel.ids import AnalysisArtifactId, WorkVersionAssetId
+from sciretriever.kernel.ids import WorkVersionAssetId
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +66,9 @@ class LightDocumentAcceptance:
 
 
 def _verify_structured_artifact(
-    artifact: PublishedArtifact, kind: ArtifactKind, payload: CanonicalJsonObject,
+    artifact: PublishedArtifact,
+    kind: ArtifactKind,
+    payload: CanonicalJsonObject,
 ) -> None:
     canonical = canonical_json_bytes(payload)
     if artifact.kind is not kind:
@@ -75,6 +83,8 @@ ContentAcceptance = PrimaryPdfAcceptance | SupplementaryAssetAcceptance | LightD
 
 
 __all__ = (
-    "ContentAcceptance", "LightDocumentAcceptance",
-    "PrimaryPdfAcceptance", "SupplementaryAssetAcceptance",
+    "ContentAcceptance",
+    "LightDocumentAcceptance",
+    "PrimaryPdfAcceptance",
+    "SupplementaryAssetAcceptance",
 )

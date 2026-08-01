@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import (
-    AfterValidator, BaseModel, ConfigDict, Field, ValidationError,
-    field_validator, model_validator,
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
 )
 
 from sciretriever.content.light_models import LightDocumentV1, Section
@@ -28,7 +33,9 @@ Text = Annotated[str, Field(min_length=1, max_length=100_000), AfterValidator(_s
 OptionalText = Annotated[str | None, Field(max_length=100_000), AfterValidator(_strict_text)]
 IdentifierNamespace = Annotated[Text, Field(max_length=128)]
 IdentifierValue = Annotated[Text, Field(max_length=2048)]
-UUIDText = Annotated[str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
+UUIDText = Annotated[
+    str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+]
 AnalysisJsonSchema: TypeAlias = dict[str, JsonOutput]
 
 
@@ -127,6 +134,7 @@ class ReferenceView(_StrictModel):
     def canonical_evidence(cls, value: tuple[SourceLocator, ...]) -> tuple[SourceLocator, ...]:
         return EvidenceText.canonical_evidence(value)
 
+
 class Classification(_StrictModel):
     document_type: OptionalText
     language: OptionalText
@@ -176,8 +184,13 @@ class AnalysisProposalV1(_StrictModel):
         return self
 
     def canonical_bytes(self) -> bytes:
-        return json.dumps(self.model_dump(mode="json"), ensure_ascii=True, allow_nan=False,
-                          sort_keys=True, separators=(",", ":")).encode("ascii")
+        return json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,8 +215,9 @@ def analysis_json_schema() -> AnalysisJsonSchema:
     return AnalysisProposalV1.model_json_schema()
 
 
-def validate_analysis_text(payload: str, document: LightDocumentV1,
-                           bounds: AnalysisBounds) -> AnalysisProposalV1:
+def validate_analysis_text(
+    payload: str, document: LightDocumentV1, bounds: AnalysisBounds
+) -> AnalysisProposalV1:
     if len(payload) > bounds.max_output_characters:
         raise AnalysisValidationError("analysis_output_too_large")
     try:
@@ -218,34 +232,55 @@ def validate_analysis_text(payload: str, document: LightDocumentV1,
 
 def validate_analysis_input(document: LightDocumentV1, bounds: AnalysisBounds) -> str:
     payload = document.canonical_bytes().decode("ascii")
-    if len(payload) > bounds.max_input_characters or _source_units(document.sections) > bounds.max_source_units:
+    if (
+        len(payload) > bounds.max_input_characters
+        or _source_units(document.sections) > bounds.max_source_units
+    ):
         raise AnalysisValidationError("analysis_input_too_large")
     return payload
 
 
 def _locator_key(value: SourceLocator) -> tuple[str, int, int, str, int, int]:
-    return (value.asset_id, value.page_start, value.page_end, value.block_id,
-            value.char_start, value.char_end)
+    return (
+        value.asset_id,
+        value.page_start,
+        value.page_end,
+        value.block_id,
+        value.char_start,
+        value.char_end,
+    )
 
 
 def _document_locator_bounds(document: LightDocumentV1) -> dict[tuple[str, int, int, str], int]:
     value = json.loads(document.canonical_bytes())
     found: dict[tuple[str, int, int, str], int] = {}
+
     def visit(item) -> None:
-        if isinstance(item, dict):  # noqa: IF_VARIANT_OK -- recursive JSON tree walk
-            if set(item) == {"asset_id", "page_start", "page_end", "block_id", "char_start", "char_end"}:
+        if isinstance(item, dict):
+            if set(item) == {
+                "asset_id",
+                "page_start",
+                "page_end",
+                "block_id",
+                "char_start",
+                "char_end",
+            }:
                 key = (item["asset_id"], item["page_start"], item["page_end"], item["block_id"])
                 found[key] = max(found.get(key, 0), item["char_end"])
             else:
-                for nested in item.values(): visit(nested)
+                for nested in item.values():
+                    visit(nested)
         elif isinstance(item, list):
-            for nested in item: visit(nested)
+            for nested in item:
+                visit(nested)
+
     visit(value)
     return found
 
 
-def _locator_resolves(locator: tuple[str, int, int, str, int, int],
-                      allowed: dict[tuple[str, int, int, str], int]) -> bool:
+def _locator_resolves(
+    locator: tuple[str, int, int, str, int, int], allowed: dict[tuple[str, int, int, str], int]
+) -> bool:
     asset, page_start, page_end, block_id, char_start, char_end = locator
     return char_start < char_end <= allowed.get((asset, page_start, page_end, block_id), -1)
 
@@ -253,14 +288,34 @@ def _locator_resolves(locator: tuple[str, int, int, str, int, int],
 def _proposal_locators(proposal: AnalysisProposalV1) -> set[tuple[str, int, int, str, int, int]]:
     found: set[tuple[str, int, int, str, int, int]] = set()
     value = proposal.model_dump(mode="json")
+
     def visit(item) -> None:
-        if isinstance(item, dict):  # noqa: IF_VARIANT_OK -- recursive JSON tree walk
-            if set(item) == {"asset_id", "page_start", "page_end", "block_id", "char_start", "char_end"}:
-                found.add((item["asset_id"], item["page_start"], item["page_end"], item["block_id"], item["char_start"], item["char_end"]))
+        if isinstance(item, dict):
+            if set(item) == {
+                "asset_id",
+                "page_start",
+                "page_end",
+                "block_id",
+                "char_start",
+                "char_end",
+            }:
+                found.add(
+                    (
+                        item["asset_id"],
+                        item["page_start"],
+                        item["page_end"],
+                        item["block_id"],
+                        item["char_start"],
+                        item["char_end"],
+                    )
+                )
             else:
-                for nested in item.values(): visit(nested)
+                for nested in item.values():
+                    visit(nested)
         elif isinstance(item, list):
-            for nested in item: visit(nested)
+            for nested in item:
+                visit(nested)
+
     visit(value)
     return found
 
@@ -270,8 +325,16 @@ def _source_units(sections: tuple[Section, ...]) -> int:
 
 
 __all__ = (
-    "AnalysisBounds", "AnalysisProposalV1", "AnalysisValidationError",
-    "Classification", "ConclusionsAndLimitations", "ContentOverview", "KeywordsAndTags",
-    "ReferenceView", "UnifiedMetadataValues", "analysis_json_schema",
-    "validate_analysis_input", "validate_analysis_text",
+    "AnalysisBounds",
+    "AnalysisProposalV1",
+    "AnalysisValidationError",
+    "Classification",
+    "ConclusionsAndLimitations",
+    "ContentOverview",
+    "KeywordsAndTags",
+    "ReferenceView",
+    "UnifiedMetadataValues",
+    "analysis_json_schema",
+    "validate_analysis_input",
+    "validate_analysis_text",
 )

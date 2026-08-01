@@ -1,57 +1,72 @@
 from __future__ import annotations
 
+import os
+import stat
+import unittest
+import zipfile
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from io import BytesIO
-import os
 from pathlib import Path
-import stat
 from tempfile import TemporaryDirectory
-import unittest
-import zipfile
 
+from target_light_document_support import (
+    ASSET_ID,
+    TaskBoundaryService,
+    archive_bytes,
+    document_value,
+    manifest_blocks,
+    pdf_bytes,
+)
+
+from sciretriever.adapters.mineru import (
+    MinerUArchiveAdapter,
+    MinerUServiceBounds,
+    MinerUTaskState,
+    MinerUTaskView,
+    OperatorManagedMinerUAdapter,
+)
 from sciretriever.content.light_document import (
-    LightDocumentBounds, LightDocumentError, validate_light_document,
+    LightDocumentBounds,
+    LightDocumentError,
+    validate_light_document,
 )
 from sciretriever.content.light_models import ParagraphBlock
 from sciretriever.content.light_service import (
-    LightDocumentService, LightPublicationTarget, ParserIdentity,
+    LightDocumentService,
+    LightPublicationTarget,
+    ParserIdentity,
 )
 from sciretriever.content.model import PublishedArtifact, StagedArtifact
 from sciretriever.content.publisher_contracts import LightDocumentAcceptance
-from sciretriever.adapters.mineru import (
-    MinerUArchiveAdapter, MinerUServiceBounds, MinerUTaskState, MinerUTaskView,
-    OperatorManagedMinerUAdapter,
-)
 from sciretriever.kernel import Sha256, WorkVersionId
-from sciretriever.kernel.json import CanonicalJsonInput
 from sciretriever.kernel.ids import WorkVersionAssetId
+from sciretriever.kernel.json import CanonicalJsonInput
 from sciretriever.literature_store.filesystem import CoreArtifactStore
-
-
-from target_light_document_support import (
-    ASSET_ID, TaskBoundaryService, archive_bytes, document_value, manifest_blocks,
-    pdf_bytes,
-)
 
 
 class TargetLightDocumentTests(unittest.TestCase):
     def test_complete_union_is_frozen_canonical_and_preserves_order(self) -> None:
         document = validate_light_document(
-            document_value(), ASSET_ID, 2,
+            document_value(),
+            ASSET_ID,
+            2,
             manifest_blocks(),
             LightDocumentBounds(),
         )
 
         self.assertEqual(document.canonical_bytes(), document.canonical_bytes())
-        self.assertEqual([block.kind for block in document.sections[0].blocks],
-                         ["paragraph", "list", "table", "formula", "figure-caption"])
+        self.assertEqual(
+            [block.kind for block in document.sections[0].blocks],
+            ["paragraph", "list", "table", "formula", "figure-caption"],
+        )
         with self.assertRaises(FrozenInstanceError):
             setattr(document, "schema_version", "2")
 
     def test_closed_schema_recursive_bounds_and_locator_alignment_reject(self) -> None:
         cases: list[tuple[str, dict[str, CanonicalJsonInput], LightDocumentBounds]] = []
-        extra = document_value(); extra["unexpected"] = True
+        extra = document_value()
+        extra["unexpected"] = True
         cases.append(("extra", extra, LightDocumentBounds()))
         bad_page = document_value()
         title = bad_page["title"]
@@ -61,7 +76,8 @@ class TargetLightDocumentTests(unittest.TestCase):
         assert isinstance(evidence[0], dict)
         evidence[0]["page_end"] = 3
         cases.append(("page", bad_page, LightDocumentBounds()))
-        empty = document_value(); empty["sections"] = []
+        empty = document_value()
+        empty["sections"] = []
         cases.append(("empty", empty, LightDocumentBounds()))
         for name, value, bounds in cases:
             with self.subTest(name=name), self.assertRaises(LightDocumentError):
@@ -91,8 +107,14 @@ class TargetLightDocumentTests(unittest.TestCase):
         with zipfile.ZipFile(symlink, "w") as archive:
             archive.writestr(link, "target")
         oversized = MinerUArchiveAdapter(LightDocumentBounds(max_member_bytes=4))
-        truncated = document_value(); truncated["truncated"] = True
-        for payload in (hostile.getvalue(), symlink.getvalue(), archive_bytes(truncated), b"not-a-zip"):
+        truncated = document_value()
+        truncated["truncated"] = True
+        for payload in (
+            hostile.getvalue(),
+            symlink.getvalue(),
+            archive_bytes(truncated),
+            b"not-a-zip",
+        ):
             with self.subTest(size=len(payload)), self.assertRaises(LightDocumentError):
                 adapter.parse(payload, ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes())
         with self.assertRaises(LightDocumentError):
@@ -119,7 +141,9 @@ class TargetLightDocumentTests(unittest.TestCase):
         with TemporaryDirectory(prefix="sciretriever-light-") as directory:
             os.chmod(directory, 0o700)
             document = validate_light_document(
-                document_value(), ASSET_ID, 2,
+                document_value(),
+                ASSET_ID,
+                2,
                 manifest_blocks(),
                 LightDocumentBounds(),
             )
@@ -127,11 +151,16 @@ class TargetLightDocumentTests(unittest.TestCase):
             target = LightPublicationTarget(
                 WorkVersionId("00000000-0000-0000-0000-000000000201"),
                 WorkVersionAssetId("00000000-0000-0000-0000-000000000202"),
-                ASSET_ID, Sha256.from_bytes(pdf_bytes()),
+                ASSET_ID,
+                Sha256.from_bytes(pdf_bytes()),
             )
-            parser = ParserIdentity("mineru", "3.4.4", "vlm", "fixture", Sha256.from_bytes(b"params"))
+            parser = ParserIdentity(
+                "mineru", "3.4.4", "vlm", "fixture", Sha256.from_bytes(b"params")
+            )
 
-            result = LightDocumentService(Store(str(Path(directory) / "storage")), sink).publish(target, document, parser)
+            result = LightDocumentService(Store(str(Path(directory) / "storage")), sink).publish(
+                target, document, parser
+            )
 
             self.assertEqual(events, ["artifact", "catalog"])
             self.assertEqual(result.artifact.sha256, Sha256.from_bytes(document.canonical_bytes()))
@@ -153,11 +182,16 @@ class TargetLightDocumentTests(unittest.TestCase):
         pdf = pdf_bytes()
         service = Service()
         adapter = OperatorManagedMinerUAdapter(
-            service, MinerUArchiveAdapter(LightDocumentBounds()), MinerUServiceBounds(2),
+            service,
+            MinerUArchiveAdapter(LightDocumentBounds()),
+            MinerUServiceBounds(2),
         )
 
         document = adapter.parse(
-            pdf, ASSET_ID, Sha256.from_bytes(pdf), resume_task_id="approved-task",
+            pdf,
+            ASSET_ID,
+            Sha256.from_bytes(pdf),
+            resume_task_id="approved-task",
         )
 
         self.assertEqual(document.schema_version, "1")
@@ -166,36 +200,45 @@ class TargetLightDocumentTests(unittest.TestCase):
     def test_duplicate_block_ids_reject_across_complete_recursive_tree(self) -> None:
         cases: list[dict[str, CanonicalJsonInput]] = []
         same = document_value()
-        sections = same["sections"]; assert isinstance(sections, list)
-        section = sections[0]; assert isinstance(section, dict)
-        blocks = section["blocks"]; assert isinstance(blocks, list)
+        sections = same["sections"]
+        assert isinstance(sections, list)
+        section = sections[0]
+        assert isinstance(section, dict)
+        blocks = section["blocks"]
+        assert isinstance(blocks, list)
         blocks.append(deepcopy(blocks[0]))
         cases.append(same)
         sibling = document_value()
-        sibling_sections = sibling["sections"]; assert isinstance(sibling_sections, list)
+        sibling_sections = sibling["sections"]
+        assert isinstance(sibling_sections, list)
         sibling_sections.append(deepcopy(sibling_sections[0]))
         cases.append(sibling)
         deep = document_value()
-        deep_sections = deep["sections"]; assert isinstance(deep_sections, list)
-        deep_section = deep_sections[0]; assert isinstance(deep_section, dict)
-        child = deepcopy(deep_section); child["section_id"] = "nested"
+        deep_sections = deep["sections"]
+        assert isinstance(deep_sections, list)
+        deep_section = deep_sections[0]
+        assert isinstance(deep_section, dict)
+        child = deepcopy(deep_section)
+        child["section_id"] = "nested"
         deep_section["children"] = [child]
         cases.append(deep)
         for value in cases:
             with self.subTest(depth=str(value)[:20]), self.assertRaises(LightDocumentError):
-                validate_light_document(value, ASSET_ID, 2,
-                    manifest_blocks(),
-                    LightDocumentBounds())
+                validate_light_document(
+                    value, ASSET_ID, 2, manifest_blocks(), LightDocumentBounds()
+                )
 
     def test_repeated_locators_for_one_unique_block_remain_valid(self) -> None:
         value = document_value()
-        title = value["title"]; assert isinstance(title, dict)
-        evidence = title["evidence"]; assert isinstance(evidence, list)
+        title = value["title"]
+        assert isinstance(title, dict)
+        evidence = title["evidence"]
+        assert isinstance(evidence, list)
         evidence.append(deepcopy(evidence[0]))
 
-        document = validate_light_document(value, ASSET_ID, 2,
-            manifest_blocks(),
-            LightDocumentBounds())
+        document = validate_light_document(
+            value, ASSET_ID, 2, manifest_blocks(), LightDocumentBounds()
+        )
 
         assert document.title is not None
         self.assertEqual(len(document.title.evidence), 2)
@@ -203,27 +246,38 @@ class TargetLightDocumentTests(unittest.TestCase):
     def test_locator_page_must_match_manifest_block_page(self) -> None:
         for page_start, page_end in ((2, 2), (1, 2)):
             value = document_value()
-            title = value["title"]; assert isinstance(title, dict)
-            evidence = title["evidence"]; assert isinstance(evidence, list)
-            locator = evidence[0]; assert isinstance(locator, dict)
+            title = value["title"]
+            assert isinstance(title, dict)
+            evidence = title["evidence"]
+            assert isinstance(evidence, list)
+            locator = evidence[0]
+            assert isinstance(locator, dict)
             locator.update(page_start=page_start, page_end=page_end)
             with self.subTest(pages=(page_start, page_end)), self.assertRaises(LightDocumentError):
                 MinerUArchiveAdapter(LightDocumentBounds()).parse(
-                    archive_bytes(value), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes())
+                    archive_bytes(value), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes()
+                )
 
     def test_page_two_manifest_block_accepts_page_two_locator(self) -> None:
         value = document_value()
-        title = value["title"]; assert isinstance(title, dict)
-        evidence = title["evidence"]; assert isinstance(evidence, list)
-        locator = evidence[0]; assert isinstance(locator, dict)
+        title = value["title"]
+        assert isinstance(title, dict)
+        evidence = title["evidence"]
+        assert isinstance(evidence, list)
+        locator = evidence[0]
+        assert isinstance(locator, dict)
         locator.update(block_id="page-two", page_start=2, page_end=2)
-        middle: dict[str, CanonicalJsonInput] = {"_backend": "vlm", "pdf_info": [
-            {"page_idx": 0, "blocks": {"b1": 5, "b2": 4, "b3": 1, "b4": 1, "b5": 6}},
-            {"page_idx": 1, "blocks": {"page-two": 5}},
-        ]}
+        middle: dict[str, CanonicalJsonInput] = {
+            "_backend": "vlm",
+            "pdf_info": [
+                {"page_idx": 0, "blocks": {"b1": 5, "b2": 4, "b3": 1, "b4": 1, "b5": 6}},
+                {"page_idx": 1, "blocks": {"page-two": 5}},
+            ],
+        }
 
         document = MinerUArchiveAdapter(LightDocumentBounds()).parse(
-            archive_bytes(value, middle), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes())
+            archive_bytes(value, middle), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes()
+        )
 
         assert document.title is not None
         self.assertEqual(document.title.evidence[0].page_start, 2)
@@ -236,10 +290,15 @@ class TargetLightDocumentTests(unittest.TestCase):
                 with self.subTest(boundary=boundary, task_id=task_id[:8]):
                     service = TaskBoundaryService(task_id, boundary)
                     adapter = OperatorManagedMinerUAdapter(
-                        service, MinerUArchiveAdapter(LightDocumentBounds()), MinerUServiceBounds(2))
+                        service, MinerUArchiveAdapter(LightDocumentBounds()), MinerUServiceBounds(2)
+                    )
                     with self.assertRaises(LightDocumentError):
-                        adapter.parse(pdf, ASSET_ID, Sha256.from_bytes(pdf),
-                            resume_task_id=task_id if boundary == "resume" else None)
+                        adapter.parse(
+                            pdf,
+                            ASSET_ID,
+                            Sha256.from_bytes(pdf),
+                            resume_task_id=task_id if boundary == "resume" else None,
+                        )
                     self.assertEqual(service.polls, 0 if boundary in {"resume", "submit"} else 1)
 
 

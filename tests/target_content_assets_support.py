@@ -1,39 +1,55 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-import threading
-import time
 
 from PyPDF2 import PdfWriter
 
 from sciretriever.batching.api import ContentAcceptanceCommand, TargetProjection
 from sciretriever.content.model import (
-    AcceptedContentReference, AssetCandidate, BoundedByteStream, ContentTarget,
-    Header, PublishedArtifact, StagedArtifact, UnifiedMetadataSnapshot,
+    AcceptedContentReference,
+    AssetCandidate,
+    BoundedByteStream,
+    ContentTarget,
+    Header,
+    PublishedArtifact,
+    StagedArtifact,
+    UnifiedMetadataSnapshot,
 )
-from sciretriever.content.publisher_contracts import ContentAcceptance
 from sciretriever.content.ports import RaceToken
+from sciretriever.content.publisher_contracts import ContentAcceptance
 from sciretriever.kernel import (
-    AssetId, Identifier, MetadataSnapshotId, Sha256, WorkVersionId,
+    Identifier,
+    MetadataSnapshotId,
+    Sha256,
+    WorkVersionId,
 )
 from sciretriever.kernel.enums import AssetRole
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
 
-
 UUID_A = "00000000-0000-0000-0000-000000000001"
 UUID_B = "00000000-0000-0000-0000-000000000002"
 
 
-def pdf(*, title: str = "Exact Article Title", author: str = "Ada Lovelace", year: int = 2024,
-        doi: str | None = "10.1000/exact", pages: int = 2) -> bytes:
+def pdf(
+    *,
+    title: str = "Exact Article Title",
+    author: str = "Ada Lovelace",
+    year: int = 2024,
+    doi: str | None = "10.1000/exact",
+    pages: int = 2,
+) -> bytes:
     writer = PdfWriter()
     for _index in range(pages):
         writer.add_blank_page(width=612, height=792)
     subject = f"doi:{doi}" if doi is not None else "article"
-    writer.add_metadata({"/Title": title, "/Author": author, "/CreationDate": f"D:{year}0101", "/Subject": subject})
+    writer.add_metadata(
+        {"/Title": title, "/Author": author, "/CreationDate": f"D:{year}0101", "/Subject": subject}
+    )
     output = BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -41,14 +57,21 @@ def pdf(*, title: str = "Exact Article Title", author: str = "Ada Lovelace", yea
 
 def target(*, current: AcceptedContentReference | None = None) -> ContentTarget:
     metadata = UnifiedMetadataSnapshot(
-        MetadataSnapshotId(UUID_B), 3, "Exact Article Title", ("Ada Lovelace",),
-        (Identifier("doi", "10.1000/exact"),), publication_year=2024,
+        MetadataSnapshotId(UUID_B),
+        3,
+        "Exact Article Title",
+        ("Ada Lovelace",),
+        (Identifier("doi", "10.1000/exact"),),
+        publication_year=2024,
         sha256=Sha256.from_bytes(b"metadata"),
     )
     accepted = () if current is None else (current,)
     return ContentTarget(
         WorkVersionId(UUID_A),
-        metadata, accepted, current, 3,
+        metadata,
+        accepted,
+        current,
+        3,
         None if current is None else current.sha256,
         None if current is None else current.revision,
     )
@@ -72,7 +95,11 @@ class Fetcher:
 
 
 class ControlledFetcher:
-    def __init__(self, responses: dict[str, BoundedByteStream | OSError | TimeoutError], delays: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[str, BoundedByteStream | OSError | TimeoutError],
+        delays: dict[str, float] | None = None,
+    ) -> None:
         self.responses = responses
         self.delays = delays or {}
         self.calls: list[str] = []
@@ -89,7 +116,9 @@ class ControlledFetcher:
         return response
 
     def fetch_cancellable(
-        self, candidate: AssetCandidate, token: RaceToken,
+        self,
+        candidate: AssetCandidate,
+        token: RaceToken,
     ) -> BoundedByteStream:
         self.calls.append(candidate.locator)
         deadline = time.monotonic() + self.delays.get(candidate.locator, 0.0)
@@ -120,7 +149,9 @@ class DeterministicRaceFetcher:
         return self.responses[candidate.locator]
 
     def fetch_cancellable(
-        self, candidate: AssetCandidate, token: RaceToken,
+        self,
+        candidate: AssetCandidate,
+        token: RaceToken,
     ) -> BoundedByteStream:
         if candidate.locator == "fast":
             if not self.late_entered.wait(1.0) or not self.fast_release.wait(1.0):
@@ -169,7 +200,9 @@ class RecordingStore:
         return self._store.publish(artifact)
 
 
-def candidate(locator: str, role: AssetRole = AssetRole.PRIMARY_PDF, provider: str = "provider") -> AssetCandidate:
+def candidate(
+    locator: str, role: AssetRole = AssetRole.PRIMARY_PDF, provider: str = "provider"
+) -> AssetCandidate:
     return AssetCandidate(provider, role, locator, (Header("Authorization", "secret"),))
 
 

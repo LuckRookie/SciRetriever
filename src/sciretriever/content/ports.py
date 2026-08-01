@@ -5,9 +5,18 @@ from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
 from sciretriever.content.model import (
-    AcceptedPrimaryPdf, AnalysisProposalV1, AssetCandidate, BoundedByteStream,
-    ContentTarget, Header, LightDocumentManifest, ParserResult, PublishedArtifact,
-    StagedArtifact, TransportRequest, TransportResponse,
+    AcceptedPrimaryPdf,
+    AnalysisProposalV1,
+    AssetCandidate,
+    BoundedByteStream,
+    ContentTarget,
+    Header,
+    LightDocumentManifest,
+    ParserResult,
+    PublishedArtifact,
+    StagedArtifact,
+    TransportRequest,
+    TransportResponse,
 )
 
 
@@ -57,7 +66,9 @@ class RaceToken:
 
 class CancellableAssetFetcherPort(Protocol):
     def fetch_cancellable(
-        self, candidate: AssetCandidate, token: RaceToken,
+        self,
+        candidate: AssetCandidate,
+        token: RaceToken,
     ) -> BoundedByteStream: ...
 
 
@@ -94,9 +105,22 @@ class ArtifactStorePort(Protocol):
 
 
 __all__ = (
-    "AnalysisModelPort", "ArtifactStorePort", "AssetCandidate", "AssetFetcherPort",
-    "AssetResolverPort", "BoundedByteStream", "BoundedTransportPort", "ContentTarget",
-    "CandidateRaceExhausted", "CandidateRacePort", "CancellableAssetFetcherPort",
-    "Header", "InvalidRaceDeadline", "ParserPort", "RaceCallable", "RaceToken",
-    "TransportRequest", "TransportResponse",
+    "AnalysisModelPort",
+    "ArtifactStorePort",
+    "AssetCandidate",
+    "AssetFetcherPort",
+    "AssetResolverPort",
+    "BoundedByteStream",
+    "BoundedTransportPort",
+    "ContentTarget",
+    "CandidateRaceExhausted",
+    "CandidateRacePort",
+    "CancellableAssetFetcherPort",
+    "Header",
+    "InvalidRaceDeadline",
+    "ParserPort",
+    "RaceCallable",
+    "RaceToken",
+    "TransportRequest",
+    "TransportResponse",
 )

@@ -96,6 +96,7 @@ class LightDocumentV1:
 
     def canonical_bytes(self) -> bytes:
         from sciretriever.content.light_serialization import document_bytes
+
         return document_bytes(self)
 
 
@@ -106,12 +107,26 @@ def block_text(block: Block) -> str:
         case ListBlock(items=items):
             return "".join(item.text for item in items)
         case TableBlock(caption=caption, columns=columns, rows=rows):
-            return "".join((*columns, *(cell for row in rows for cell in row), "" if caption is None else caption.text))
+            return "".join(
+                (
+                    *columns,
+                    *(cell for row in rows for cell in row),
+                    "" if caption is None else caption.text,
+                )
+            )
         case unreachable:
             assert_never(unreachable)
 
 
 __all__ = (
-    "Author", "Block", "FigureCaptionBlock", "FormulaBlock", "LightDocumentV1",
-    "ListBlock", "ParagraphBlock", "ReferenceView", "Section", "TableBlock",
+    "Author",
+    "Block",
+    "FigureCaptionBlock",
+    "FormulaBlock",
+    "LightDocumentV1",
+    "ListBlock",
+    "ParagraphBlock",
+    "ReferenceView",
+    "Section",
+    "TableBlock",
 )

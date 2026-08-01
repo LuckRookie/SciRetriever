@@ -1,24 +1,41 @@
-from sciretriever.content.model import ArtifactKind, PublishedArtifact, StagedArtifact
-from sciretriever.content.ports import ArtifactStorePort
-from sciretriever.content.publisher_contracts import (
-    ContentAcceptance, LightDocumentAcceptance,
-    PrimaryPdfAcceptance, SupplementaryAssetAcceptance,
+from sciretriever.content.analysis import (
+    AnalysisBounds,
+    AnalysisProposalV1,
+    AnalysisValidationError,
+    analysis_json_schema,
+    validate_analysis_input,
+    validate_analysis_text,
 )
 from sciretriever.content.light_document import (
-    LightDocumentBounds, LightDocumentError, LightDocumentV1, ManifestBlock,
+    LightDocumentBounds,
+    LightDocumentError,
+    LightDocumentV1,
+    ManifestBlock,
     validate_light_document,
 )
 from sciretriever.content.light_models import (
-    Author, FigureCaptionBlock, FormulaBlock, ListBlock, ParagraphBlock,
-    ReferenceView, Section, TableBlock,
+    Author,
+    FigureCaptionBlock,
+    FormulaBlock,
+    ListBlock,
+    ParagraphBlock,
+    ReferenceView,
+    Section,
+    TableBlock,
 )
 from sciretriever.content.light_service import (
-    LightDocumentPublication, LightDocumentService, LightPublicationTarget,
+    LightDocumentPublication,
+    LightDocumentService,
+    LightPublicationTarget,
     ParserIdentity,
 )
-from sciretriever.content.analysis import (
-    AnalysisBounds, AnalysisProposalV1, AnalysisValidationError,
-    analysis_json_schema, validate_analysis_input, validate_analysis_text,
+from sciretriever.content.model import ArtifactKind, PublishedArtifact, StagedArtifact
+from sciretriever.content.ports import ArtifactStorePort
+from sciretriever.content.publisher_contracts import (
+    ContentAcceptance,
+    LightDocumentAcceptance,
+    PrimaryPdfAcceptance,
+    SupplementaryAssetAcceptance,
 )
 
 __all__ = (
@@ -63,7 +80,12 @@ __all__ = (
     "validate_analysis_text",
 )
 from sciretriever.content.assets import (
-    AssetAcceptancePolicy, CandidateEvidence, ContentAssetFailure,
-    ContentAssetReplay, ContentAssetResult, ContentAssetService,
-    ContentAssetSuccess, ResolverTier,
+    AssetAcceptancePolicy,
+    CandidateEvidence,
+    ContentAssetFailure,
+    ContentAssetReplay,
+    ContentAssetResult,
+    ContentAssetService,
+    ContentAssetSuccess,
+    ResolverTier,
 )

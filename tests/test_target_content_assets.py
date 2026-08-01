@@ -1,13 +1,29 @@
 from __future__ import annotations
 
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import threading
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from target_content_assets_support import (
+    UUID_A,
+    UUID_B,
+    ControlledFetcher,
+    DeterministicRaceFetcher,
+    Fetcher,
+    RecordingPublisher,
+    RecordingStore,
+    Resolver,
+    candidate,
+    pdf,
+    stream,
+    target,
+)
 
 from sciretriever.adapters.acquisition import CandidateRace
 from sciretriever.batching.api import (
-    ContentAcceptanceCommand, TargetProjection, TargetResult,
+    TargetProjection,
+    TargetResult,
 )
 from sciretriever.content.assets import (
     AssetAcceptancePolicy,
@@ -18,18 +34,18 @@ from sciretriever.content.assets import (
     ResolverTier,
 )
 from sciretriever.content.model import (
-    AcceptedContentReference, BoundedByteStream,
+    AcceptedContentReference,
+    BoundedByteStream,
 )
 from sciretriever.content.ports import ArtifactStorePort
 from sciretriever.kernel import (
-    AssetId, BatchRunId, CanonicalJsonObject, Sha256, WorkVersionId,
+    AssetId,
+    BatchRunId,
+    CanonicalJsonObject,
+    Sha256,
+    WorkVersionId,
 )
 from sciretriever.kernel.enums import AssetRole
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from target_content_assets_support import (
-    UUID_A, UUID_B, ControlledFetcher, DeterministicRaceFetcher, Fetcher,
-    RecordingPublisher, RecordingStore, Resolver, candidate, pdf, stream, target,
-)
 
 
 class TargetContentAssetTests(unittest.TestCase):
@@ -39,23 +55,32 @@ class TargetContentAssetTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.events: list[str] = []
         self.projection = TargetProjection(
-            BatchRunId(UUID_B), WorkVersionId(UUID_A),
+            BatchRunId(UUID_B),
+            WorkVersionId(UUID_A),
             TargetResult.PARTIALLY_ADVANCED,
-            CanonicalJsonObject(()), (),
+            CanonicalJsonObject(()),
+            (),
         )
         self.publisher = RecordingPublisher(self.events, self.projection)
 
-    def service(self, tiers: tuple[ResolverTier, ...], responses: dict[str, BoundedByteStream]) -> ContentAssetService:
+    def service(
+        self, tiers: tuple[ResolverTier, ...], responses: dict[str, BoundedByteStream]
+    ) -> ContentAssetService:
         store: ArtifactStorePort = RecordingStore(self.root / "storage", self.events)
         return ContentAssetService(
-            tiers, Fetcher(responses), store, self.publisher,
+            tiers,
+            Fetcher(responses),
+            store,
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300, max_asset_bytes=1_000_000),
             race=CandidateRace(deadline_seconds=1.0),
         )
 
     def test_exact_doi_primary_publishes_file_before_catalog(self) -> None:
         first = candidate("https://source.invalid/article")
-        service = self.service((ResolverTier("first", (Resolver((first,)),), True),), {first.locator: stream(pdf())})
+        service = self.service(
+            (ResolverTier("first", (Resolver((first,)),), True),), {first.locator: stream(pdf())}
+        )
 
         result = service.accept(target(), AssetRole.PRIMARY_PDF)
 
@@ -67,9 +92,12 @@ class TargetContentAssetTests(unittest.TestCase):
 
     def test_complete_title_author_year_fallback_accepts_without_doi(self) -> None:
         first = candidate("https://source.invalid/fallback")
-        service = self.service((ResolverTier("first", (Resolver((first,)),), False),), {
-            first.locator: stream(pdf(doi=None)),
-        })
+        service = self.service(
+            (ResolverTier("first", (Resolver((first,)),), False),),
+            {
+                first.locator: stream(pdf(doi=None)),
+            },
+        )
 
         result = service.accept(target(), AssetRole.PRIMARY_PDF)
 
@@ -85,7 +113,10 @@ class TargetContentAssetTests(unittest.TestCase):
         for name, body in cases:
             with self.subTest(name=name):
                 item = candidate(f"https://source.invalid/{name}")
-                service = self.service((ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)})
+                service = self.service(
+                    (ResolverTier("first", (Resolver((item,)),), False),),
+                    {item.locator: stream(body)},
+                )
                 result = service.accept(target(), AssetRole.PRIMARY_PDF)
                 self.assertIsInstance(result, ContentAssetFailure)
                 assert isinstance(result, ContentAssetFailure)
@@ -96,10 +127,17 @@ class TargetContentAssetTests(unittest.TestCase):
         wrong = candidate("wrong", provider="a")
         winner = candidate("winner", provider="b")
         fallback = candidate("fallback", provider="translator")
-        service = self.service((
-            ResolverTier("first", (Resolver((wrong,)), Resolver((winner,))), True),
-            ResolverTier("translator", (Resolver((fallback,)),), False),
-        ), {wrong.locator: stream(pdf(doi="10.9999/wrong")), winner.locator: stream(pdf()), fallback.locator: stream(pdf())})
+        service = self.service(
+            (
+                ResolverTier("first", (Resolver((wrong,)), Resolver((winner,))), True),
+                ResolverTier("translator", (Resolver((fallback,)),), False),
+            ),
+            {
+                wrong.locator: stream(pdf(doi="10.9999/wrong")),
+                winner.locator: stream(pdf()),
+                fallback.locator: stream(pdf()),
+            },
+        )
 
         result = service.accept(target(), AssetRole.PRIMARY_PDF)
 
@@ -111,7 +149,9 @@ class TargetContentAssetTests(unittest.TestCase):
         body = pdf()
         current = AcceptedContentReference(AssetId(UUID_B), Sha256.from_bytes(body), 1)
         item = candidate("same")
-        service = self.service((ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)})
+        service = self.service(
+            (ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)}
+        )
 
         replay = service.accept(target(current=current), AssetRole.PRIMARY_PDF)
         replacement = service.accept(target(current=current), AssetRole.PRIMARY_PDF)
@@ -123,7 +163,10 @@ class TargetContentAssetTests(unittest.TestCase):
     def test_supplementary_role_publishes_without_primary_semantics(self) -> None:
         item = candidate("supp", AssetRole.XML)
         xml = b"<article><title>support</title></article>"
-        service = self.service((ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(xml, "application/xml")})
+        service = self.service(
+            (ResolverTier("first", (Resolver((item,)),), False),),
+            {item.locator: stream(xml, "application/xml")},
+        )
 
         result = service.accept(target(), AssetRole.XML)
 
@@ -134,10 +177,14 @@ class TargetContentAssetTests(unittest.TestCase):
     def test_serial_transport_failure_is_redacted_and_falls_through_in_order(self) -> None:
         bad = candidate("https://secret.invalid/bad", provider="bad")
         good = candidate("good", provider="good")
-        fetcher = ControlledFetcher({bad.locator: OSError("token=SECRET"), good.locator: stream(pdf())})
+        fetcher = ControlledFetcher(
+            {bad.locator: OSError("token=SECRET"), good.locator: stream(pdf())}
+        )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((bad, good)),), False),), fetcher,
-            RecordingStore(self.root / "serial", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((bad, good)),), False),),
+            fetcher,
+            RecordingStore(self.root / "serial", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
         )
 
@@ -151,10 +198,14 @@ class TargetContentAssetTests(unittest.TestCase):
     def test_race_failure_isolated_from_valid_sibling(self) -> None:
         bad = candidate("bad", provider="bad")
         good = candidate("good", provider="good")
-        fetcher = ControlledFetcher({bad.locator: TimeoutError("secret"), good.locator: stream(pdf())})
+        fetcher = ControlledFetcher(
+            {bad.locator: TimeoutError("secret"), good.locator: stream(pdf())}
+        )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((bad, good)),), True),), fetcher,
-            RecordingStore(self.root / "race-failure", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((bad, good)),), True),),
+            fetcher,
+            RecordingStore(self.root / "race-failure", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
             race=CandidateRace(deadline_seconds=1.0),
         )
@@ -171,8 +222,10 @@ class TargetContentAssetTests(unittest.TestCase):
             {fast.locator: stream(pdf()), late.locator: stream(pdf(doi="10.9999/late"))},
         )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((fast, late)),), True),), fetcher,
-            RecordingStore(self.root / "race-late", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((fast, late)),), True),),
+            fetcher,
+            RecordingStore(self.root / "race-late", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
             race=CandidateRace(deadline_seconds=1.0),
             cancellable_fetcher=fetcher,
@@ -207,10 +260,14 @@ class TargetContentAssetTests(unittest.TestCase):
     def test_race_all_failures_are_aggregated_in_configured_order(self) -> None:
         first = candidate("first", provider="first")
         second = candidate("second", provider="second")
-        fetcher = ControlledFetcher({first.locator: OSError("private-a"), second.locator: TimeoutError("private-b")})
+        fetcher = ControlledFetcher(
+            {first.locator: OSError("private-a"), second.locator: TimeoutError("private-b")}
+        )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((first, second)),), True),), fetcher,
-            RecordingStore(self.root / "race-all-fail", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((first, second)),), True),),
+            fetcher,
+            RecordingStore(self.root / "race-all-fail", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
             race=CandidateRace(deadline_seconds=1.0),
         )
@@ -226,8 +283,10 @@ class TargetContentAssetTests(unittest.TestCase):
         late = candidate("late", provider="late")
         fetcher = ControlledFetcher({late.locator: stream(pdf())}, {late.locator: 0.3})
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((late,)),), True),), fetcher,
-            RecordingStore(self.root / "race-deadline", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((late,)),), True),),
+            fetcher,
+            RecordingStore(self.root / "race-deadline", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
             race=CandidateRace(deadline_seconds=0.05),
             cancellable_fetcher=fetcher,
@@ -247,8 +306,10 @@ class TargetContentAssetTests(unittest.TestCase):
             {slow_first.locator: 0.2},
         )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((slow_first, fast_second)),), True),), fetcher,
-            RecordingStore(self.root / "race-two-valid", self.events), self.publisher,
+            (ResolverTier("first", (Resolver((slow_first, fast_second)),), True),),
+            fetcher,
+            RecordingStore(self.root / "race-two-valid", self.events),
+            self.publisher,
             AssetAcceptancePolicy(min_pdf_bytes=300),
             race=CandidateRace(deadline_seconds=1.0),
             cancellable_fetcher=fetcher,

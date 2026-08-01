@@ -3,13 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, unique
 
-from sciretriever.kernel.contracts import EvidenceText, Identifier
 from sciretriever.content.analysis import AnalysisProposalV1
+from sciretriever.kernel.contracts import EvidenceText, Identifier
 from sciretriever.kernel.enums import AssetRole
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.kernel.hashes import Sha256
 from sciretriever.kernel.ids import (
-    AssetId, LightDocumentId, MetadataSnapshotId, WorkVersionId,
+    AssetId,
+    LightDocumentId,
+    MetadataSnapshotId,
+    WorkVersionId,
 )
 from sciretriever.kernel.paths import RelativeArtifactPath
 
@@ -35,37 +38,46 @@ class UnifiedMetadataSnapshot:
     keywords: tuple[str, ...] = ()
     sha256: Sha256 | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         if not isinstance(self.snapshot_id, MetadataSnapshotId):
             raise BoundaryError.for_field("snapshot_id", "must be MetadataSnapshotId")
-        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1:
+        if (
+            not isinstance(self.revision, int)
+            or isinstance(self.revision, bool)
+            or self.revision < 1
+        ):
             raise BoundaryError.for_field("revision", "must be a positive integer")
         if not isinstance(self.title, str) or not self.title.strip():
             raise BoundaryError.for_field("title", "must be nonblank text")
-        if not isinstance(self.authors, tuple) or not all(isinstance(item, str) for item in self.authors):
+        if not isinstance(self.authors, tuple) or not all(
+            isinstance(item, str) for item in self.authors
+        ):
             raise BoundaryError.for_field("authors", "must be a tuple of strings")
-        if not isinstance(self.identifiers, tuple) or not all(isinstance(item, Identifier) for item in self.identifiers):
+        if not isinstance(self.identifiers, tuple) or not all(
+            isinstance(item, Identifier) for item in self.identifiers
+        ):
             raise BoundaryError.for_field("identifiers", "must be a tuple of Identifier")
         if self.abstract is not None and not isinstance(self.abstract, str):
             raise BoundaryError.for_field("abstract", "must be text or None")
         optional_text = (
-            self.publication_date, self.publisher, self.venue, self.volume, self.issue,
-            self.pages, self.article_number, self.work_type, self.language,
+            self.publication_date,
+            self.publisher,
+            self.venue,
+            self.volume,
+            self.issue,
+            self.pages,
+            self.article_number,
+            self.work_type,
+            self.language,
         )
         if not all(value is None or isinstance(value, str) for value in optional_text):
             raise BoundaryError.for_field(
                 "metadata", "optional bibliographic fields must be text or None"
             )
-        if (
-            self.publication_year is not None
-            and (
-                not isinstance(self.publication_year, int)
-                or isinstance(self.publication_year, bool)
-            )
+        if self.publication_year is not None and (
+            not isinstance(self.publication_year, int) or isinstance(self.publication_year, bool)
         ):
-            raise BoundaryError.for_field(
-                "publication_year", "must be an integer or None"
-            )
+            raise BoundaryError.for_field("publication_year", "must be an integer or None")
         if not isinstance(self.keywords, tuple) or not all(
             isinstance(item, str) for item in self.keywords
         ):
@@ -82,12 +94,14 @@ class AcceptedContentReference:
 
     def __post_init__(self) -> None:
         if not isinstance(self.content_id, (AssetId, LightDocumentId)):
-            raise BoundaryError.for_field(
-                "content_id", "must be AssetId or LightDocumentId"
-            )
+            raise BoundaryError.for_field("content_id", "must be AssetId or LightDocumentId")
         if not isinstance(self.sha256, Sha256):
             raise BoundaryError.for_field("sha256", "must be Sha256")
-        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1:
+        if (
+            not isinstance(self.revision, int)
+            or isinstance(self.revision, bool)
+            or self.revision < 1
+        ):
             raise BoundaryError.for_field("revision", "must be a positive integer")
 
 
@@ -105,9 +119,7 @@ class ContentTarget:
         if not isinstance(self.work_version_id, WorkVersionId):
             raise BoundaryError.for_field("work_version_id", "must be WorkVersionId")
         if not isinstance(self.current_metadata, UnifiedMetadataSnapshot):
-            raise BoundaryError.for_field(
-                "current_metadata", "must be UnifiedMetadataSnapshot"
-            )
+            raise BoundaryError.for_field("current_metadata", "must be UnifiedMetadataSnapshot")
         if not isinstance(self.accepted_content, tuple) or not all(
             isinstance(item, AcceptedContentReference) for item in self.accepted_content
         ):
@@ -243,9 +255,20 @@ class PublishedArtifact:
 
 
 __all__ = (
-    "AcceptedContentReference", "AcceptedPrimaryPdf", "AnalysisProposalV1",
-    "ArtifactKind", "AssetCandidate",
-    "BoundedByteStream", "ContentTarget", "Header", "LightDocumentBlock",
-    "LightDocumentManifest", "ParserResult", "PublishedArtifact", "StagedArtifact",
-    "TransportRequest", "TransportResponse", "UnifiedMetadataSnapshot",
+    "AcceptedContentReference",
+    "AcceptedPrimaryPdf",
+    "AnalysisProposalV1",
+    "ArtifactKind",
+    "AssetCandidate",
+    "BoundedByteStream",
+    "ContentTarget",
+    "Header",
+    "LightDocumentBlock",
+    "LightDocumentManifest",
+    "ParserResult",
+    "PublishedArtifact",
+    "StagedArtifact",
+    "TransportRequest",
+    "TransportResponse",
+    "UnifiedMetadataSnapshot",
 )

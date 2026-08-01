@@ -8,8 +8,12 @@ import anthropic
 import openai
 
 from sciretriever.content.api import (
-    AnalysisBounds, AnalysisProposalV1, AnalysisValidationError,
-    LightDocumentV1, analysis_json_schema, validate_analysis_input,
+    AnalysisBounds,
+    AnalysisProposalV1,
+    AnalysisValidationError,
+    LightDocumentV1,
+    analysis_json_schema,
+    validate_analysis_input,
     validate_analysis_text,
 )
 
@@ -44,8 +48,9 @@ class _OpenAIClient(Protocol):
 
 
 class _OpenAIFactory(Protocol):
-    def __call__(self, *, api_key: str, base_url: str, timeout: float,
-                 max_retries: int) -> _OpenAIClient: ...
+    def __call__(
+        self, *, api_key: str, base_url: str, timeout: float, max_retries: int
+    ) -> _OpenAIClient: ...
 
 
 class _AnthropicBlock(Protocol):
@@ -69,8 +74,9 @@ class _AnthropicClient(Protocol):
 
 
 class _AnthropicFactory(Protocol):
-    def __call__(self, *, api_key: str, base_url: str, timeout: float,
-                 max_retries: int) -> _AnthropicClient: ...
+    def __call__(
+        self, *, api_key: str, base_url: str, timeout: float, max_retries: int
+    ) -> _AnthropicClient: ...
 
 
 class _OpenAISdkCompletions:
@@ -116,18 +122,30 @@ class _AnthropicSdkClient:
         return self._messages
 
 
-def _openai_factory(*, api_key: str, base_url: str, timeout: float,
-                    max_retries: int) -> _OpenAIClient:
-    return _OpenAISdkClient(openai.OpenAI(
-        api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries,
-    ))
+def _openai_factory(
+    *, api_key: str, base_url: str, timeout: float, max_retries: int
+) -> _OpenAIClient:
+    return _OpenAISdkClient(
+        openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    )
 
 
-def _anthropic_factory(*, api_key: str, base_url: str, timeout: float,
-                       max_retries: int) -> _AnthropicClient:
-    return _AnthropicSdkClient(anthropic.Anthropic(
-        api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries,
-    ))
+def _anthropic_factory(
+    *, api_key: str, base_url: str, timeout: float, max_retries: int
+) -> _AnthropicClient:
+    return _AnthropicSdkClient(
+        anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +169,8 @@ class AnalysisAdapterError(Exception):
 
 def _bounds(config: AnalysisAdapterSettings) -> AnalysisBounds:
     return AnalysisBounds(
-        config.max_input_characters, config.max_source_units,
+        config.max_input_characters,
+        config.max_source_units,
         config.max_output_tokens * 16,
     )
 
@@ -163,8 +182,9 @@ def _input(document: LightDocumentV1, config: AnalysisAdapterSettings) -> str:
         raise AnalysisAdapterError(error.code) from None
 
 
-def _proposal(payload: str, document: LightDocumentV1,
-              config: AnalysisAdapterSettings) -> AnalysisProposalV1:
+def _proposal(
+    payload: str, document: LightDocumentV1, config: AnalysisAdapterSettings
+) -> AnalysisProposalV1:
     if not payload.strip() or not payload.lstrip().startswith("{"):
         raise AnalysisAdapterError("analysis_invalid_content")
     try:
@@ -174,8 +194,12 @@ def _proposal(payload: str, document: LightDocumentV1,
 
 
 class OpenAIAnalysisAdapter:
-    def __init__(self, config: AnalysisAdapterSettings, secret: str,
-                 client_factory: _OpenAIFactory | None = None) -> None:
+    def __init__(
+        self,
+        config: AnalysisAdapterSettings,
+        secret: str,
+        client_factory: _OpenAIFactory | None = None,
+    ) -> None:
         self._config = config
         self._secret = secret
         self._factory: _OpenAIFactory = client_factory or _openai_factory
@@ -184,18 +208,30 @@ class OpenAIAnalysisAdapter:
         source = _input(document, self._config)
         try:
             client = self._factory(
-                api_key=self._secret, base_url=self._config.base_url,
-                timeout=self._config.timeout_seconds, max_retries=0,
+                api_key=self._secret,
+                base_url=self._config.base_url,
+                timeout=self._config.timeout_seconds,
+                max_retries=0,
             )
             response = client.chat.completions.create(
                 model=self._config.model,
                 messages=(
-                    {"role": "system", "content": "Return one complete analysis object grounded only in the supplied LightDocumentV1."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return one complete analysis object grounded only in the supplied "
+                            "LightDocumentV1."
+                        ),
+                    },
                     {"role": "user", "content": source},
                 ),
                 response_format={
                     "type": "json_schema",
-                    "json_schema": {"name": "analysis_proposal_v1", "schema": analysis_json_schema(), "strict": True},
+                    "json_schema": {
+                        "name": "analysis_proposal_v1",
+                        "schema": analysis_json_schema(),
+                        "strict": True,
+                    },
                 },
                 max_completion_tokens=self._config.max_output_tokens,
             )
@@ -212,7 +248,11 @@ class OpenAIAnalysisAdapter:
             if choice.message.refusal is not None:
                 raise AnalysisAdapterError("analysis_refused")
             if choice.finish_reason != "stop":
-                raise AnalysisAdapterError("analysis_truncated" if choice.finish_reason == "length" else "analysis_unknown_status")
+                raise AnalysisAdapterError(
+                    "analysis_truncated"
+                    if choice.finish_reason == "length"
+                    else "analysis_unknown_status"
+                )
             content = choice.message.content
             if content is None:
                 raise AnalysisAdapterError("analysis_invalid_content")
@@ -222,8 +262,12 @@ class OpenAIAnalysisAdapter:
 
 
 class AnthropicAnalysisAdapter:
-    def __init__(self, config: AnalysisAdapterSettings, secret: str,
-                 client_factory: _AnthropicFactory | None = None) -> None:
+    def __init__(
+        self,
+        config: AnalysisAdapterSettings,
+        secret: str,
+        client_factory: _AnthropicFactory | None = None,
+    ) -> None:
         self._config = config
         self._secret = secret
         self._factory: _AnthropicFactory = client_factory or _anthropic_factory
@@ -232,11 +276,14 @@ class AnthropicAnalysisAdapter:
         source = _input(document, self._config)
         try:
             client = self._factory(
-                api_key=self._secret, base_url=self._config.base_url,
-                timeout=self._config.timeout_seconds, max_retries=0,
+                api_key=self._secret,
+                base_url=self._config.base_url,
+                timeout=self._config.timeout_seconds,
+                max_retries=0,
             )
             response = client.messages.create(
-                model=self._config.model, max_tokens=self._config.max_output_tokens,
+                model=self._config.model,
+                max_tokens=self._config.max_output_tokens,
                 messages=({"role": "user", "content": source},),
                 output_config={"format": {"type": "json_schema", "schema": analysis_json_schema()}},
             )
@@ -250,12 +297,18 @@ class AnthropicAnalysisAdapter:
             if response.stop_reason == "refusal":
                 raise AnalysisAdapterError("analysis_refused")
             if response.stop_reason != "end_turn":
-                raise AnalysisAdapterError("analysis_truncated" if response.stop_reason == "max_tokens" else "analysis_unknown_status")
+                raise AnalysisAdapterError(
+                    "analysis_truncated"
+                    if response.stop_reason == "max_tokens"
+                    else "analysis_unknown_status"
+                )
             if len(response.content) != 1:
                 raise AnalysisAdapterError("analysis_unknown_response")
             block = response.content[0]
             if block.type != "text":
-                raise AnalysisAdapterError("analysis_refused" if block.type == "refusal" else "analysis_unknown_block")
+                raise AnalysisAdapterError(
+                    "analysis_refused" if block.type == "refusal" else "analysis_unknown_block"
+                )
             text = block.text
         except (AttributeError, IndexError, TypeError):
             raise AnalysisAdapterError("analysis_unknown_response") from None
@@ -263,6 +316,8 @@ class AnthropicAnalysisAdapter:
 
 
 __all__ = (
-    "AnalysisAdapterError", "AnalysisAdapterSettings", "AnthropicAnalysisAdapter",
+    "AnalysisAdapterError",
+    "AnalysisAdapterSettings",
+    "AnthropicAnalysisAdapter",
     "OpenAIAnalysisAdapter",
 )
