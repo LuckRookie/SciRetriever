@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-import sqlite3
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from sciretriever.literature_store.filesystem import AdvisoryLock, canonical_catalog_path
@@ -37,9 +36,9 @@ class TargetStoreFilesystemHardeningTests(unittest.TestCase):
         self.assertGreater(Path(f"{self.catalog}-wal").stat().st_size, 0)
 
         with open_read_only_snapshot(self.catalog) as reader:
-            count = reader.execute(
-                "SELECT count(*) FROM works WHERE id='wal-visible'"
-            ).fetchone()[0]
+            count = reader.execute("SELECT count(*) FROM works WHERE id='wal-visible'").fetchone()[
+                0
+            ]
 
         self.assertEqual(count, 1)
 
@@ -56,6 +55,21 @@ class TargetStoreFilesystemHardeningTests(unittest.TestCase):
         self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
         self.assertFalse(Path(f"{self.catalog}-wal").exists())
         self.assertFalse(Path(f"{self.catalog}-shm").exists())
+
+    def test_catalog_uri_delimiters_are_treated_as_filename_bytes(self) -> None:
+        for delimiter in ("?", "#"):
+            catalog = self.root / f"catalog{delimiter}evidence.sqlite"
+            with self.subTest(delimiter=delimiter):
+                with create_or_open_catalog(catalog) as writer:
+                    writer.execute("INSERT INTO works(id) VALUES ('intended-catalog')")
+                    writer.commit()
+
+                with open_read_only_snapshot(catalog) as reader:
+                    row = reader.execute(
+                        "SELECT id FROM works WHERE id='intended-catalog'"
+                    ).fetchone()
+
+                self.assertEqual(row, ("intended-catalog",))
 
     def test_replaced_lock_entry_does_not_admit_second_owner(self) -> None:
         scope = canonical_catalog_path(self.catalog)
@@ -111,8 +125,10 @@ class TargetStoreFilesystemHardeningTests(unittest.TestCase):
         for checkpoint in ("after-temporary-fsync", "after-publication"):
             path = self.root / f"crash-{checkpoint}.sqlite"
             script = (
-                "import os; from sciretriever.literature_store.sqlite import create_or_open_catalog; "
-                f"create_or_open_catalog({str(path)!r},checkpoint=lambda name: os._exit(91) if name=={checkpoint!r} else None)"
+                "import os; from sciretriever.literature_store.sqlite "
+                "import create_or_open_catalog; "
+                f"create_or_open_catalog({str(path)!r},"
+                f"checkpoint=lambda name: os._exit(91) if name=={checkpoint!r} else None)"
             )
             result = subprocess.run(
                 [sys.executable, "-c", script], check=False, capture_output=True, text=True

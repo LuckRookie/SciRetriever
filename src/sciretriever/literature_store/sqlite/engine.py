@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import AbstractContextManager, suppress
 import hashlib
 import os
 import sqlite3
-from typing import Final
+from collections.abc import Callable
+from contextlib import AbstractContextManager, suppress
 from types import TracebackType
+from typing import Final
 from uuid import uuid4
 
+from sciretriever.bibliography.api import metadata_snapshot_sha256
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes, parse_canonical_json
 from sciretriever.literature_store.filesystem import (
     AdvisoryLock,
     CanonicalCatalogPath,
@@ -17,14 +19,11 @@ from sciretriever.literature_store.filesystem import (
     verify_catalog_entry,
 )
 from sciretriever.literature_store.sqlite.bootstrap import recover_bootstrap_temps
-from sciretriever.bibliography.api import metadata_snapshot_sha256
 from sciretriever.literature_store.sqlite.schema import SCHEMA_FINGERPRINT, SCHEMA_MANIFEST
 from sciretriever.literature_store.sqlite.schema_validation import (
     EXPECTED_SCHEMA_OBJECTS,
     schema_objects,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes, parse_canonical_json
-
 
 DEFAULT_BUSY_TIMEOUT_MS: Final = 5_000
 
@@ -51,13 +50,18 @@ class CatalogConnection(AbstractContextManager[sqlite3.Connection]):
     def __enter__(self) -> sqlite3.Connection:
         return self._connection
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self._connection.close()
 
 
 def _uri(scope: CanonicalCatalogPath, mode: str, *, immutable: bool = False) -> str:
     immutable_option = "&immutable=1" if immutable else ""
-    return f"file:{scope.path.as_posix()}?mode={mode}{immutable_option}"
+    return f"{scope.path.as_uri()}?mode={mode}{immutable_option}"
 
 
 def _canonicalize_json(payload: str) -> str:
@@ -71,7 +75,9 @@ def _sha256_text(payload: str) -> str:
 def _metadata_sha256(revision: int, values_json: str, provenance_json: str) -> str:
     values = parse_canonical_json(values_json)
     provenance = parse_canonical_json(provenance_json)
-    if not isinstance(values, CanonicalJsonObject) or not isinstance(provenance, CanonicalJsonObject):
+    if not isinstance(values, CanonicalJsonObject) or not isinstance(
+        provenance, CanonicalJsonObject
+    ):
         raise MetadataSnapshotComponentError("metadata snapshot components must be JSON objects")
     return str(metadata_snapshot_sha256(revision, values, provenance))
 
@@ -82,7 +88,10 @@ def _configure(connection: sqlite3.Connection, timeout_ms: int) -> None:
     )
     connection.create_function("sciretriever_sha256", 1, _sha256_text, deterministic=True)
     connection.create_function(
-        "sciretriever_metadata_sha256", 3, _metadata_sha256, deterministic=True,
+        "sciretriever_metadata_sha256",
+        3,
+        _metadata_sha256,
+        deterministic=True,
     )
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute(f"PRAGMA busy_timeout={timeout_ms}")
@@ -108,16 +117,25 @@ def _read_only_connection(
 def _validate(connection: sqlite3.Connection) -> None:
     try:
         marker = connection.execute(
-            "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1"
+            "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE "
+            "singleton=1"
         ).fetchone()
         integrity = connection.execute("PRAGMA integrity_check").fetchone()
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
         actual_schema = schema_objects(connection)
         semantic_mismatches = connection.execute(
             "SELECT "
-            "(SELECT count(*) FROM metadata_snapshots WHERE sha256<>sciretriever_metadata_sha256(revision,values_json,provenance_json)) + "
-            "(SELECT count(*) FROM light_documents d LEFT JOIN artifacts a ON a.id=d.artifact_id WHERE d.sha256<>sciretriever_sha256(sciretriever_canonical_json(d.document_json)) OR a.kind<>'light-document' OR a.sha256<>d.sha256 OR a.byte_size<>length(CAST(sciretriever_canonical_json(d.document_json) AS BLOB))) + "
-            "(SELECT count(*) FROM analysis_artifacts d LEFT JOIN artifacts a ON a.id=d.artifact_id WHERE d.sha256<>sciretriever_sha256(sciretriever_canonical_json(d.proposal_json)) OR a.kind<>'analysis' OR a.sha256<>d.sha256 OR a.byte_size<>length(CAST(sciretriever_canonical_json(d.proposal_json) AS BLOB)))"
+            "(SELECT count(*) FROM metadata_snapshots WHERE "
+            "sha256<>sciretriever_metadata_sha256(revision,values_json,provenance_json)) + "
+            "(SELECT count(*) FROM light_documents d LEFT JOIN artifacts a ON "
+            "a.id=d.artifact_id WHERE d.sha256<>sciretriever_sha256(sciretriever_canonical_json("
+            "d.document_json)) OR a.kind<>'light-document' OR a.sha256<>d.sha256 OR "
+            "a.byte_size<>length(CAST(sciretriever_canonical_json(d.document_json) AS BLOB))) + "
+            ""
+            "(SELECT count(*) FROM analysis_artifacts d LEFT JOIN artifacts a ON "
+            "a.id=d.artifact_id WHERE d.sha256<>sciretriever_sha256(sciretriever_canonical_json("
+            "d.proposal_json)) OR a.kind<>'analysis' OR a.sha256<>d.sha256 OR "
+            "a.byte_size<>length(CAST(sciretriever_canonical_json(d.proposal_json) AS BLOB)))"
         ).fetchone()
     except sqlite3.DatabaseError as error:
         raise UnsupportedCatalogError("catalog is not a supported SciRetriever schema") from error
@@ -136,9 +154,7 @@ def _scope(path: str | os.PathLike[str], *, require_unique: bool = True) -> Cano
         raise UnsupportedCatalogError(str(error)) from error
 
 
-def _validate_path(
-    path: str | os.PathLike[str], timeout_ms: int, *, require_unique: bool
-) -> None:
+def _validate_path(path: str | os.PathLike[str], timeout_ms: int, *, require_unique: bool) -> None:
     scope = _scope(path, require_unique=require_unique)
     if not scope.path.exists():
         raise FileNotFoundError(scope.path)
@@ -196,7 +212,8 @@ def _initialize_temporary(scope: CanonicalCatalogPath, temporary_name: str) -> N
         for statement in SCHEMA_MANIFEST:
             connection.execute(statement)
         connection.execute(
-            "INSERT INTO schema_identity(singleton,product,schema_version,schema_fingerprint) VALUES (1,'sciretriever',2,?)",
+            "INSERT INTO schema_identity(singleton,product,schema_version,schema_fingerprint) "
+            "VALUES (1,'sciretriever',2,?)",
             (SCHEMA_FINGERPRINT,),
         )
         connection.commit()
@@ -218,7 +235,13 @@ def _publish(
     parent = os.open(scope.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         try:
-            os.link(temporary_name, scope.basename, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+            os.link(
+                temporary_name,
+                scope.basename,
+                src_dir_fd=parent,
+                dst_dir_fd=parent,
+                follow_symlinks=False,
+            )
         except FileExistsError:
             return False
         if checkpoint is not None:
@@ -229,9 +252,7 @@ def _publish(
         os.close(parent)
 
 
-def _create(
-    scope: CanonicalCatalogPath, checkpoint: Callable[[str], None] | None
-) -> None:
+def _create(scope: CanonicalCatalogPath, checkpoint: Callable[[str], None] | None) -> None:
     temporary_name = f".{scope.basename}.bootstrap-{uuid4()}.tmp"
     try:
         _initialize_temporary(scope, temporary_name)
@@ -257,6 +278,7 @@ def create_or_open_catalog(
     except FilesystemSafetyError as error:
         raise UnsupportedCatalogError(str(error)) from error
     with AdvisoryLock(scope, "catalog-bootstrap").acquire():
+
         def valid_bootstrap(candidate: str) -> bool:
             try:
                 _validate_path(candidate, busy_timeout_ms, require_unique=False)
