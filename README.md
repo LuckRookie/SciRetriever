@@ -466,8 +466,6 @@ ADR 的权威范围和阅读顺序见 [架构决策索引](docs/architecture/dec
 uv sync --locked --dev
 uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
-uv run --frozen python scripts/harness.py docs
-uv run --frozen python scripts/harness.py architecture
 ```
 
 协作规则见 [`AGENTS.md`](AGENTS.md) 和 [`HARNESS.md`](HARNESS.md)，代码与文档同步关系见[开发手册](docs/development/README.md)。

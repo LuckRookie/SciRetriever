@@ -13,8 +13,6 @@
 ```bash
 uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
-uv run --frozen python scripts/harness.py docs
-uv run --frozen python scripts/harness.py architecture
 ```
 
 测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。
