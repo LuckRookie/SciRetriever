@@ -1,30 +1,42 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import sqlite3
 import threading
 import unittest
-import sqlite3
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.model import (
-    CurationPlanError, CurationScope, MembershipMove, ReferenceRetarget,
-    SnapshotToken, ValidatedCurationPlan, VersionMove,
+    CurationPlanError,
+    CurationScope,
+    MembershipMove,
+    ReferenceRetarget,
+    SnapshotToken,
+    ValidatedCurationPlan,
 )
 from sciretriever.collection.model import CollectionCounts, CollectionRunStatus, FinishCollectionRun
 from sciretriever.kernel import (
-    BatchRunId, CollectionId, CollectionRunId, CurationPlanId, MembershipId,
-    ReferenceFactId, Sha256, WorkId, WorkVersionId,
+    BatchRunId,
+    CollectionRunId,
+    CurationPlanId,
+    MembershipId,
+    ReferenceFactId,
+    Sha256,
+    WorkId,
+    WorkVersionId,
 )
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.literature_store.filesystem import (
-    AdmissionOrderError, FilesystemSafetyError, LocalAdmissionBindingFactory,
+    AdmissionOrderError,
+    FilesystemSafetyError,
+    LocalAdmissionBindingFactory,
 )
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository, SqliteCollectionRepository, SqliteCurationTransaction,
+    SqliteBibliographyRepository,
+    SqliteCurationTransaction,
     create_or_open_catalog,
 )
-
 
 UUIDS = tuple(f"10000000-0000-4000-8000-{value:012d}" for value in range(1, 40))
 
@@ -46,12 +58,34 @@ class TargetStorePortRepairTests(unittest.TestCase):
         version = WorkVersionId(UUIDS[1])
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute("INSERT INTO works(id) VALUES(?)", (str(work),))
-            connection.execute("INSERT INTO work_versions(id,work_id,version_role) VALUES(?,?,'formal')", (str(version), str(work)))
+            connection.execute(
+                "INSERT INTO work_versions(id,work_id,version_role) VALUES(?,?,'formal')",
+                (str(version), str(work)),
+            )
             connection.execute("INSERT INTO collections(id,name) VALUES(?,'a')", (UUIDS[2],))
-            connection.execute("INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,requested_advance_to,status) VALUES(?,?,'topic','{}','completed','completed')", (UUIDS[3], UUIDS[2]))
-            connection.execute("INSERT INTO collection_memberships(id,collection_id,work_id,first_collection_run_id) VALUES(?,?,?,?)", (UUIDS[4], UUIDS[2], str(work), UUIDS[3]))
-            connection.execute("INSERT INTO collection_causes(id,membership_id,collection_run_id,kind,source) VALUES(?,?,?,'seed','before')", (UUIDS[5], UUIDS[4], UUIDS[3]))
-            connection.execute("INSERT INTO collection_paths(id,membership_id,collection_run_id,direction,depth,work_ids_json) VALUES(?,?,?,'references',0,'[]')", (UUIDS[6], UUIDS[4], UUIDS[3]))
+            connection.execute(
+                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,"
+                "requested_advance_to,status) "
+                "VALUES(?,?,'topic','{}','completed','completed')",
+                (UUIDS[3], UUIDS[2]),
+            )
+            connection.execute(
+                "INSERT INTO collection_memberships("
+                "id,collection_id,work_id,first_collection_run_id) VALUES(?,?,?,?)",
+                (UUIDS[4], UUIDS[2], str(work), UUIDS[3]),
+            )
+            connection.execute(
+                "INSERT INTO collection_causes("
+                "id,membership_id,collection_run_id,kind,source) "
+                "VALUES(?,?,?,'seed','before')",
+                (UUIDS[5], UUIDS[4], UUIDS[3]),
+            )
+            connection.execute(
+                "INSERT INTO collection_paths("
+                "id,membership_id,collection_run_id,direction,depth,work_ids_json) "
+                "VALUES(?,?,?,'references',0,'[]')",
+                (UUIDS[6], UUIDS[4], UUIDS[3]),
+            )
             connection.commit()
         return CurationScope((work,), (version,)), UUIDS[5], UUIDS[6]
 
@@ -104,9 +138,11 @@ class TargetStorePortRepairTests(unittest.TestCase):
             with self.assertRaises(AdmissionOrderError):
                 right.port.acquire_core_write(right.identity)
             outcomes: list[str] = []
+
             def acquire_in_thread() -> None:
                 with right.port.acquire_core_write(right.identity):
                     outcomes.append("acquired")
+
             thread = threading.Thread(target=acquire_in_thread)
             thread.start()
             thread.join()
@@ -124,16 +160,30 @@ class TargetStorePortRepairTests(unittest.TestCase):
             with self.subTest(status=status), self.assertRaises(BoundaryError):
                 FinishCollectionRun(CollectionRunId(UUIDS[0]), status, None, counts, ())
         with self.assertRaises(BoundaryError):
-            FinishCollectionRun(CollectionRunId(UUIDS[0]), CollectionRunStatus.FAILED, None, counts, ())
+            FinishCollectionRun(
+                CollectionRunId(UUIDS[0]), CollectionRunStatus.FAILED, None, counts, ()
+            )
         with self.assertRaises(BoundaryError):
-            FinishCollectionRun(CollectionRunId(UUIDS[0]), CollectionRunStatus.COMPLETED, "reason", counts, ())
+            FinishCollectionRun(
+                CollectionRunId(UUIDS[0]), CollectionRunStatus.NO_TARGET, "reason", counts, ()
+            )
+        completed = FinishCollectionRun(
+            CollectionRunId(UUIDS[0]), CollectionRunStatus.COMPLETED, "reason", counts, ()
+        )
+        self.assertEqual(completed.stop_reason, "reason")
+        with self.assertRaises(BoundaryError):
+            FinishCollectionRun(
+                CollectionRunId(UUIDS[0]), CollectionRunStatus.COMPLETED, " ", counts, ()
+            )
 
     def test_cause_and_path_mutations_change_snapshot_token(self) -> None:
         scope, cause_id, path_id = self.seed_collection_membership()
         repository = SqliteBibliographyRepository(self.catalog)
         original = repository.load_curation_snapshot(scope).token
         with create_or_open_catalog(self.catalog) as connection:
-            connection.execute("UPDATE collection_causes SET source='after' WHERE id=?", (cause_id,))
+            connection.execute(
+                "UPDATE collection_causes SET source='after' WHERE id=?", (cause_id,)
+            )
             connection.commit()
         after_cause = repository.load_curation_snapshot(scope).token
         with create_or_open_catalog(self.catalog) as connection:
@@ -148,19 +198,34 @@ class TargetStorePortRepairTests(unittest.TestCase):
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute("INSERT INTO works(id) VALUES(?)", (str(target_work),))
             connection.execute("INSERT INTO collections(id,name) VALUES(?,'b')", (UUIDS[9],))
-            connection.execute("INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,requested_advance_to,status) VALUES(?,?,'topic','{}','completed','completed')", (UUIDS[10], UUIDS[9]))
-            connection.execute("INSERT INTO collection_memberships(id,collection_id,work_id,first_collection_run_id) VALUES(?,?,?,?)", (UUIDS[11], UUIDS[9], str(target_work), UUIDS[10]))
+            connection.execute(
+                "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,"
+                "requested_advance_to,status) "
+                "VALUES(?,?,'topic','{}','completed','completed')",
+                (UUIDS[10], UUIDS[9]),
+            )
+            connection.execute(
+                "INSERT INTO collection_memberships("
+                "id,collection_id,work_id,first_collection_run_id) VALUES(?,?,?,?)",
+                (UUIDS[11], UUIDS[9], str(target_work), UUIDS[10]),
+            )
             connection.commit()
         expanded = CurationScope(scope.work_ids + (target_work,), scope.work_version_ids)
         token = SqliteBibliographyRepository(self.catalog).load_curation_snapshot(expanded).token
         plan = ValidatedCurationPlan(
-            CurationPlanId(UUIDS[12]), expanded, token,
-            membership_moves=(MembershipMove(MembershipId(UUIDS[4]), target_work, MembershipId(UUIDS[11])),),
+            CurationPlanId(UUIDS[12]),
+            expanded,
+            token,
+            membership_moves=(
+                MembershipMove(MembershipId(UUIDS[4]), target_work, MembershipId(UUIDS[11])),
+            ),
         )
         with self.assertRaises(sqlite3.IntegrityError):
             SqliteCurationTransaction(self.catalog).apply(plan)
         with create_or_open_catalog(self.catalog) as connection:
-            row = connection.execute("SELECT collection_id FROM collection_memberships WHERE id=?", (UUIDS[4],)).fetchone()
+            row = connection.execute(
+                "SELECT collection_id FROM collection_memberships WHERE id=?", (UUIDS[4],)
+            ).fetchone()
         self.assertEqual(row, (UUIDS[2],))
 
     def test_plan_rejects_contradictory_unscoped_and_self_shapes(self) -> None:
@@ -168,18 +233,32 @@ class TargetStorePortRepairTests(unittest.TestCase):
         scope = CurationScope((work,), (version,))
         token = SnapshotToken(Sha256.from_bytes(b"scope"))
         with self.assertRaises(CurationPlanError):
-            ValidatedCurationPlan(CurationPlanId(UUIDS[2]), scope, token, delete_work_ids=(WorkId(UUIDS[3]),))
-        with self.assertRaises(CurationPlanError):
             ValidatedCurationPlan(
-                CurationPlanId(UUIDS[2]), scope, token,
-                membership_moves=(MembershipMove(MembershipId(UUIDS[4]), work, MembershipId(UUIDS[4])),),
+                CurationPlanId(UUIDS[2]), scope, token, delete_work_ids=(WorkId(UUIDS[3]),)
             )
         with self.assertRaises(CurationPlanError):
             ValidatedCurationPlan(
-                CurationPlanId(UUIDS[2]), scope, token,
-                reference_retargets=(ReferenceRetarget(
-                    ReferenceFactId(UUIDS[5]), work, version, "raw", "{}",
-                ),),
+                CurationPlanId(UUIDS[2]),
+                scope,
+                token,
+                membership_moves=(
+                    MembershipMove(MembershipId(UUIDS[4]), work, MembershipId(UUIDS[4])),
+                ),
+            )
+        with self.assertRaises(CurationPlanError):
+            ValidatedCurationPlan(
+                CurationPlanId(UUIDS[2]),
+                scope,
+                token,
+                reference_retargets=(
+                    ReferenceRetarget(
+                        ReferenceFactId(UUIDS[5]),
+                        work,
+                        version,
+                        "raw",
+                        "{}",
+                    ),
+                ),
             )
 
 

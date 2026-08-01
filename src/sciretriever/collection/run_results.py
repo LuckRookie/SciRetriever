@@ -28,13 +28,21 @@ class CollectionCounts:
 
     def __post_init__(self) -> None:
         values = (
-            self.discovered, self.accepted, self.new_members,
-            self.existing_members, self.missing, self.source_failures,
+            self.discovered,
+            self.accepted,
+            self.new_members,
+            self.existing_members,
+            self.missing,
+            self.source_failures,
         )
-        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values
+        ):
             raise BoundaryError.for_field("collection counts", "must be nonnegative integers")
         if self.accepted != self.new_members + self.existing_members:
-            raise BoundaryError.for_field("accepted", "must equal new_members plus existing_members")
+            raise BoundaryError.for_field(
+                "accepted", "must equal new_members plus existing_members"
+            )
         if self.discovered < self.accepted + self.missing:
             raise BoundaryError.for_field("discovered", "must cover accepted and missing results")
 
@@ -57,13 +65,17 @@ class CollectionSourceResult:
         if not isinstance(self.source, str) or not self.source.strip():
             raise BoundaryError.for_field("source", "must be nonblank text")
         counts = (self.discovered, self.accepted, self.missing)
-        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts
+        ):
             raise BoundaryError.for_field("source counts", "must be nonnegative integers")
         if self.discovered != self.accepted + self.missing:
             raise BoundaryError.for_field("source discovered", "must equal accepted plus missing")
         failure = (self.failure_code, self.failure_reason, self.failure_action, self.retryable)
         if any(value is None for value in failure) != all(value is None for value in failure):
-            raise BoundaryError.for_field("source failure", "fields must be all present or all absent")
+            raise BoundaryError.for_field(
+                "source failure", "fields must be all present or all absent"
+            )
         if self.failure_code is not None:
             text = (self.failure_code, self.failure_reason, self.failure_action)
             if any(not isinstance(value, str) or not value.strip() for value in text):
@@ -85,19 +97,28 @@ class FinishCollectionRun:
     source_results: tuple[CollectionSourceResult, ...]
 
     def __post_init__(self) -> None:
-        terminal = frozenset((
-            CollectionRunStatus.NO_TARGET, CollectionRunStatus.COMPLETED,
-            CollectionRunStatus.PARTIAL, CollectionRunStatus.FAILED,
-            CollectionRunStatus.INTERRUPTED,
-        ))
+        terminal = frozenset(
+            (
+                CollectionRunStatus.NO_TARGET,
+                CollectionRunStatus.COMPLETED,
+                CollectionRunStatus.PARTIAL,
+                CollectionRunStatus.FAILED,
+                CollectionRunStatus.INTERRUPTED,
+            )
+        )
         if self.status not in terminal:
             raise BoundaryError.for_field("status", "must be a terminal collection run status")
         requires_reason = self.status in (
-            CollectionRunStatus.PARTIAL, CollectionRunStatus.FAILED,
+            CollectionRunStatus.PARTIAL,
+            CollectionRunStatus.FAILED,
             CollectionRunStatus.INTERRUPTED,
         )
         if requires_reason and (self.stop_reason is None or not self.stop_reason.strip()):
-            raise BoundaryError.for_field("stop_reason", "is required for partial, failed, or interrupted")
+            raise BoundaryError.for_field(
+                "stop_reason", "is required for partial, failed, or interrupted"
+            )
+        if self.status is CollectionRunStatus.NO_TARGET and self.stop_reason is not None:
+            raise BoundaryError.for_field("stop_reason", "is forbidden for no-target")
         if self.stop_reason is not None and not self.stop_reason.strip():
             raise BoundaryError.for_field("stop_reason", "must be nonblank when present")
         expected_ordinals = tuple(range(len(self.source_results)))
@@ -115,6 +136,8 @@ class FinishCollectionRun:
 
 
 __all__ = (
-    "CollectionCounts", "CollectionRunStatus", "CollectionSourceResult",
+    "CollectionCounts",
+    "CollectionRunStatus",
+    "CollectionSourceResult",
     "FinishCollectionRun",
 )
