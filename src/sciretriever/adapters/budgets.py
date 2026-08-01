@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-import ipaddress
 from typing import TypeVar
 
 import anyio
 
 from sciretriever.adapters.acquisition import RaceToken
-
 
 ResultT = TypeVar("ResultT")
 
@@ -53,12 +52,15 @@ class HostBudgetManager:
         self._limiters: dict[str, anyio.CapacityLimiter] = {}
 
     async def run(
-        self, host: str, token: RaceToken,
+        self,
+        host: str,
+        token: RaceToken,
         operation: Callable[[RaceToken], Awaitable[ResultT]],
     ) -> ResultT:
         key = canonical_hostname(host)
         limiter = self._limiters.setdefault(
-            key, anyio.CapacityLimiter(self._max_per_host),
+            key,
+            anyio.CapacityLimiter(self._max_per_host),
         )
         with anyio.fail_after(max(0.0, token.deadline - anyio.current_time())):
             async with limiter:
@@ -68,5 +70,8 @@ class HostBudgetManager:
 
 
 __all__ = (
-    "HostBudgetManager", "InvalidHostBudget", "InvalidHostname", "canonical_hostname",
+    "HostBudgetManager",
+    "InvalidHostBudget",
+    "InvalidHostname",
+    "canonical_hostname",
 )

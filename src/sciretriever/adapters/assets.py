@@ -4,9 +4,13 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from sciretriever.content.ports import (
-    AssetCandidate, BoundedByteStream, ContentTarget, Header, TransportRequest,
+    AssetCandidate,
+    BoundedByteStream,
+    BoundedTransportPort,
+    ContentTarget,
+    Header,
+    TransportRequest,
 )
-from sciretriever.content.ports import BoundedTransportPort
 from sciretriever.kernel.enums import AssetRole
 
 
@@ -35,15 +39,23 @@ class AssetResolverAdapter:
             if identity in seen:
                 continue
             seen.add(identity)
-            results.append(AssetCandidate(
-                self._provider, candidate.role, candidate.locator, candidate.headers,
-            ))
+            results.append(
+                AssetCandidate(
+                    self._provider,
+                    candidate.role,
+                    candidate.locator,
+                    candidate.headers,
+                )
+            )
         return tuple(results)
 
 
 class AssetFetcherAdapter:
     def __init__(
-        self, transport: BoundedTransportPort, *, timeout_seconds: int,
+        self,
+        transport: BoundedTransportPort,
+        *,
+        timeout_seconds: int,
         max_response_bytes: int,
     ) -> None:
         self._transport = transport
@@ -51,19 +63,31 @@ class AssetFetcherAdapter:
         self._max_bytes = max_response_bytes
 
     def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
-        response = self._transport.execute(TransportRequest(
-            "GET", candidate.locator, candidate.headers, None,
-            self._timeout, self._max_bytes,
-        ))
+        response = self._transport.execute(
+            TransportRequest(
+                "GET",
+                candidate.locator,
+                candidate.headers,
+                None,
+                self._timeout,
+                self._max_bytes,
+            )
+        )
         media_type = next(
             (header.value for header in response.headers if header.name.lower() == "content-type"),
             "application/octet-stream",
         )
         return BoundedByteStream(
-            (response.body,), media_type, response.final_url, len(response.body),
+            (response.body,),
+            media_type,
+            response.final_url,
+            len(response.body),
         )
 
 
 __all__ = (
-    "AssetFetcherAdapter", "AssetResolverAdapter", "ResolverCandidate", "ResolverClient",
+    "AssetFetcherAdapter",
+    "AssetResolverAdapter",
+    "ResolverCandidate",
+    "ResolverClient",
 )

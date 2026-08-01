@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import unittest
+from dataclasses import dataclass
 
 import anyio
 
@@ -9,24 +9,33 @@ from sciretriever.adapters.acquisition import RaceToken
 from sciretriever.adapters.budgets import HostBudgetManager, InvalidHostname, canonical_hostname
 from sciretriever.adapters.collection import collect_citations, collect_metadata
 from sciretriever.adapters.production import (
-    ACQUISITION_PROVIDERS, CITATION_PROVIDERS, METADATA_PROVIDERS,
-    ProviderDependencies, ProviderRuntimeConfig, build_provider_registry,
+    ACQUISITION_PROVIDERS,
+    CITATION_PROVIDERS,
+    METADATA_PROVIDERS,
+    ProviderDependencies,
+    ProviderRuntimeConfig,
+    build_provider_registry,
 )
 from sciretriever.adapters.providers import (
-    CitationClient, MetadataClient, MetadataProviderAdapter, VendorCitationRecord,
+    CitationClient,
+    MetadataClient,
+    MetadataProviderAdapter,
+    VendorCitationRecord,
     VendorMetadataRecord,
 )
 from sciretriever.adapters.registry import Capability, ProviderRegistry
 from sciretriever.collection.ports import (
-    CitationDiscoveryRequest, MetadataDiscoveryRequest, MetadataDiscoveryPort,
+    CitationDiscoveryRequest,
+    MetadataDiscoveryPort,
+    MetadataDiscoveryRequest,
     ProviderDiscoveryResult,
 )
 from sciretriever.content.ports import (
-    AssetCandidate, BoundedByteStream, ContentTarget, TransportRequest, TransportResponse,
+    TransportRequest,
+    TransportResponse,
 )
-from sciretriever.kernel.enums import AssetRole, CitationDirection
+from sciretriever.kernel.enums import CitationDirection
 from sciretriever.kernel.ids import WorkId
-
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 
@@ -36,10 +45,16 @@ class FakeMetadataClient:
     provider: str
 
     def search(self, request: MetadataDiscoveryRequest) -> tuple[VendorMetadataRecord, ...]:
-        return (VendorMetadataRecord(
-            f"{self.provider}-record", request.query, ("Ada",), 2026,
-            (("doi", f"10.1/{self.provider}"),), "abstract",
-        ),)
+        return (
+            VendorMetadataRecord(
+                f"{self.provider}-record",
+                request.query,
+                ("Ada",),
+                2026,
+                (("doi", f"10.1/{self.provider}"),),
+                "abstract",
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,11 +106,14 @@ class TargetAdapterRepairTests(unittest.TestCase):
         registry = ProviderRegistry()
         registry.register_metadata("bad", lambda: self._raise_factory_error())
         registry.register_metadata(
-            "good", lambda: MetadataProviderAdapter("good", good),
+            "good",
+            lambda: MetadataProviderAdapter("good", good),
         )
 
         results = collect_metadata(
-            registry, ("bad", "good"), MetadataDiscoveryRequest("query", None, None, 10),
+            registry,
+            ("bad", "good"),
+            MetadataDiscoveryRequest("query", None, None, 10),
         )
 
         self.assertEqual(tuple(result.provider for result in results), ("bad", "good"))
@@ -106,7 +124,9 @@ class TargetAdapterRepairTests(unittest.TestCase):
         registry = ProviderRegistry().register_metadata("configured", lambda: SpoofingProvider())
 
         result = collect_metadata(
-            registry, ("configured",), MetadataDiscoveryRequest("query", None, None, 1),
+            registry,
+            ("configured",),
+            MetadataDiscoveryRequest("query", None, None, 1),
         )[0]
 
         self.assertEqual(result.provider, "configured")
@@ -122,10 +142,13 @@ class TargetAdapterRepairTests(unittest.TestCase):
         )
 
         metadata_results = collect_metadata(
-            registry, METADATA_PROVIDERS, MetadataDiscoveryRequest("query", None, None, 20),
+            registry,
+            METADATA_PROVIDERS,
+            MetadataDiscoveryRequest("query", None, None, 20),
         )
         citation_results = collect_citations(
-            registry, CITATION_PROVIDERS,
+            registry,
+            CITATION_PROVIDERS,
             CitationDiscoveryRequest(WorkId(UUID_A), CitationDirection.REFERENCES, 20),
         )
 

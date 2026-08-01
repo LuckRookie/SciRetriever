@@ -1,1 +1,1 @@
-from sciretriever.batching.publisher_contracts import *
+from sciretriever.batching.publisher_contracts import *  # noqa: F403

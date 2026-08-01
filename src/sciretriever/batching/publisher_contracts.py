@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Protocol
 
-from sciretriever.bibliography.api import PreparedBibliographyAcceptance, ReferenceSetFact, TagSetFact
+from sciretriever.bibliography.api import (
+    PreparedBibliographyAcceptance,
+    ReferenceSetFact,
+    TagSetFact,
+)
 from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.api import ContentAcceptance
 from sciretriever.interoperability.ports import ImportRecordProjection
@@ -57,15 +61,18 @@ class TargetProjection:
         return TargetResultEnvelope(self.result, self.details)
 
     def canonical(self) -> CanonicalJsonObject:
-        return CanonicalJsonObject((
-            ("batch_run_id", str(self.batch_run_id)),
-            ("work_version_id", str(self.work_version_id)),
-            ("result", self.result.value),
-            ("details", self.details),
-            ("failure_stages_to_clear", tuple(
-                stage.value for stage in self.failure_stages_to_clear
-            )),
-        ))
+        return CanonicalJsonObject(
+            (
+                ("batch_run_id", str(self.batch_run_id)),
+                ("work_version_id", str(self.work_version_id)),
+                ("result", self.result.value),
+                ("details", self.details),
+                (
+                    "failure_stages_to_clear",
+                    tuple(stage.value for stage in self.failure_stages_to_clear),
+                ),
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,10 +84,14 @@ class ImportAcceptanceCommand:
 
     def __post_init__(self) -> None:
         expected = self.bibliography.work_version_id
-        if any(value != expected for value in (
-            self.references.work_version_id, self.tags.work_version_id,
-            self.record.work_version_id,
-        )):
+        if any(
+            value != expected
+            for value in (
+                self.references.work_version_id,
+                self.tags.work_version_id,
+                self.record.work_version_id,
+            )
+        ):
             raise BoundaryError.for_field("import", "facts and result must share one WorkVersion")
 
 
@@ -91,7 +102,9 @@ class ContentAcceptanceCommand:
 
     def __post_init__(self) -> None:
         if self.acceptance.work_version_id != self.target.work_version_id:
-            raise BoundaryError.for_field("content", "acceptance and target must share one WorkVersion")
+            raise BoundaryError.for_field(
+                "content", "acceptance and target must share one WorkVersion"
+            )
 
 
 class CollectionAcceptancePublisher(Protocol):
@@ -107,7 +120,13 @@ class ContentAcceptancePublisher(Protocol):
 
 
 __all__ = (
-    "CollectionAcceptancePublisher", "ContentAcceptanceCommand", "ContentAcceptancePublisher",
-    "FailureStage", "ImportAcceptanceCommand", "ImportAcceptancePublisher",
-    "TargetProjection", "TargetResult", "TargetResultEnvelope",
+    "CollectionAcceptancePublisher",
+    "ContentAcceptanceCommand",
+    "ContentAcceptancePublisher",
+    "FailureStage",
+    "ImportAcceptanceCommand",
+    "ImportAcceptancePublisher",
+    "TargetProjection",
+    "TargetResult",
+    "TargetResultEnvelope",
 )

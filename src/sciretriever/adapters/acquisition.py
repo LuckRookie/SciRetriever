@@ -7,8 +7,13 @@ from typing import Generic, TypeVar, assert_never
 import anyio
 
 from sciretriever.content.ports import (
-    AssetCandidate, AssetFetcherPort, BoundedByteStream, CandidateRaceExhausted,
-    InvalidRaceDeadline, RaceCallable, RaceToken,
+    AssetCandidate,
+    AssetFetcherPort,
+    BoundedByteStream,
+    CandidateRaceExhausted,
+    InvalidRaceDeadline,
+    RaceCallable,
+    RaceToken,
 )
 
 
@@ -40,6 +45,8 @@ class NeutralAssetFetcher:
 
 
 ResultT = TypeVar("ResultT")
+
+
 @dataclass(frozen=True, slots=True)
 class RaceResult(Generic[ResultT]):
     identity: str
@@ -104,6 +111,12 @@ class CandidateRace(Generic[ResultT]):
 
 
 __all__ = (
-    "CandidateRace", "CandidateSetExhausted", "EmptyAssetResponse", "InvalidRaceDeadline",
-    "NeutralAssetFetcher", "RaceFailure", "RaceResult", "RaceToken",
+    "CandidateRace",
+    "CandidateSetExhausted",
+    "EmptyAssetResponse",
+    "InvalidRaceDeadline",
+    "NeutralAssetFetcher",
+    "RaceFailure",
+    "RaceResult",
+    "RaceToken",
 )

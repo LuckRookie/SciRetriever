@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from sciretriever.collection.ports import (
-    CitationDiscoveryRequest, CitationObservation, MetadataDiscoveryRequest,
-    MetadataObservation, ProviderCitationResult, ProviderDiscoveryResult,
+    CitationDiscoveryRequest,
+    CitationObservation,
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
 )
 from sciretriever.kernel.contracts import Identifier
 from sciretriever.kernel.errors import Action, FailureEvidence, Reason
@@ -54,7 +58,10 @@ class MetadataProviderAdapter:
             records = self._client.search(request)
             observations = tuple(
                 MetadataObservation(
-                    self._provider, record.record_id, record.title, record.authors,
+                    self._provider,
+                    record.record_id,
+                    record.title,
+                    record.authors,
                     record.publication_year,
                     tuple(Identifier(namespace, value) for namespace, value in record.identifiers),
                     record.abstract,
@@ -78,7 +85,9 @@ class CitationProviderAdapter:
             records = self._client.expand(request)
             observations = tuple(
                 CitationObservation(
-                    self._provider, request.seed, Identifier(record.namespace, record.value),
+                    self._provider,
+                    request.seed,
+                    Identifier(record.namespace, record.value),
                     request.direction,
                 )
                 for record in records
@@ -91,6 +100,10 @@ class CitationProviderAdapter:
 
 
 __all__ = (
-    "CitationClient", "CitationProviderAdapter", "MetadataClient",
-    "MetadataProviderAdapter", "VendorCitationRecord", "VendorMetadataRecord",
+    "CitationClient",
+    "CitationProviderAdapter",
+    "MetadataClient",
+    "MetadataProviderAdapter",
+    "VendorCitationRecord",
+    "VendorMetadataRecord",
 )

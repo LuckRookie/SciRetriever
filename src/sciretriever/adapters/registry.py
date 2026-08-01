@@ -50,7 +50,10 @@ class ProviderRegistry:
 
     @staticmethod
     def _add(
-        values: dict[str, FactoryT], name: str, factory: FactoryT, capability: Capability,
+        values: dict[str, FactoryT],
+        name: str,
+        factory: FactoryT,
+        capability: Capability,
     ) -> None:
         if name in values:
             raise DuplicateProviderCapability(name, capability)
@@ -86,7 +89,9 @@ class ProviderRegistry:
 
     @staticmethod
     def _get(
-        values: dict[str, FactoryT], name: str, capability: Capability,
+        values: dict[str, FactoryT],
+        name: str,
+        capability: Capability,
     ) -> FactoryT:
         try:
             return values[name]
@@ -115,6 +120,8 @@ class ProviderRegistry:
 
 
 __all__ = (
-    "Capability", "DuplicateProviderCapability", "ProviderRegistry",
+    "Capability",
+    "DuplicateProviderCapability",
+    "ProviderRegistry",
     "UnsupportedCapability",
 )

@@ -5,23 +5,40 @@ from dataclasses import dataclass
 from typing import Final
 
 from sciretriever.adapters.assets import (
-    AssetFetcherAdapter, AssetResolverAdapter, ResolverClient,
+    AssetFetcherAdapter,
+    AssetResolverAdapter,
+    ResolverClient,
 )
 from sciretriever.adapters.providers import (
-    CitationClient, CitationProviderAdapter, MetadataClient, MetadataProviderAdapter,
+    CitationClient,
+    CitationProviderAdapter,
+    MetadataClient,
+    MetadataProviderAdapter,
 )
 from sciretriever.adapters.registry import ProviderRegistry
 from sciretriever.content.ports import BoundedTransportPort
 
-
 METADATA_PROVIDERS: Final = (
-    "crossref", "europe-pmc", "arxiv", "openalex", "semantic-scholar",
-    "elsevier", "springer",
+    "crossref",
+    "europe-pmc",
+    "arxiv",
+    "openalex",
+    "semantic-scholar",
+    "elsevier",
+    "springer",
 )
 CITATION_PROVIDERS: Final = ("openalex", "semantic-scholar")
 ACQUISITION_PROVIDERS: Final = (
-    "direct", "arxiv", "crossref", "unpaywall", "europe-pmc", "openalex",
-    "semantic-scholar", "elsevier", "wiley", "springer",
+    "direct",
+    "arxiv",
+    "crossref",
+    "unpaywall",
+    "europe-pmc",
+    "openalex",
+    "semantic-scholar",
+    "elsevier",
+    "wiley",
+    "springer",
 )
 
 
@@ -50,7 +67,8 @@ class CapabilityConstructionError(OSError):
 
 
 def _metadata_factory(
-    provider: str, dependencies: ProviderDependencies,
+    provider: str,
+    dependencies: ProviderDependencies,
 ) -> MetadataProviderAdapter:
     try:
         client = dependencies.metadata_clients[provider]
@@ -60,7 +78,8 @@ def _metadata_factory(
 
 
 def _citation_factory(
-    provider: str, dependencies: ProviderDependencies,
+    provider: str,
+    dependencies: ProviderDependencies,
 ) -> CitationProviderAdapter:
     try:
         client = dependencies.citation_clients[provider]
@@ -70,7 +89,8 @@ def _citation_factory(
 
 
 def _resolver_factory(
-    provider: str, dependencies: ProviderDependencies,
+    provider: str,
+    dependencies: ProviderDependencies,
 ) -> AssetResolverAdapter:
     try:
         client = dependencies.resolver_clients[provider]
@@ -80,21 +100,25 @@ def _resolver_factory(
 
 
 def build_provider_registry(
-    config: ProviderRuntimeConfig, dependencies: ProviderDependencies,
+    config: ProviderRuntimeConfig,
+    dependencies: ProviderDependencies,
 ) -> ProviderRegistry:
     registry = ProviderRegistry()
     for provider in METADATA_PROVIDERS:
         registry.register_metadata(
-            provider, lambda provider=provider: _metadata_factory(provider, dependencies),
+            provider,
+            lambda provider=provider: _metadata_factory(provider, dependencies),
         )
     for provider in CITATION_PROVIDERS:
         registry.register_citation(
-            provider, lambda provider=provider: _citation_factory(provider, dependencies),
+            provider,
+            lambda provider=provider: _citation_factory(provider, dependencies),
         )
     acquisition = ACQUISITION_PROVIDERS + (("sci-hub",) if config.sci_hub_enabled else ())
     for provider in acquisition:
         registry.register_asset_resolver(
-            provider, lambda provider=provider: _resolver_factory(provider, dependencies),
+            provider,
+            lambda provider=provider: _resolver_factory(provider, dependencies),
         )
         registry.register_asset_fetcher(
             provider,
@@ -108,7 +132,11 @@ def build_provider_registry(
 
 
 __all__ = (
-    "ACQUISITION_PROVIDERS", "CITATION_PROVIDERS", "METADATA_PROVIDERS",
-    "CapabilityConstructionError", "ProviderDependencies", "ProviderRuntimeConfig",
+    "ACQUISITION_PROVIDERS",
+    "CITATION_PROVIDERS",
+    "METADATA_PROVIDERS",
+    "CapabilityConstructionError",
+    "ProviderDependencies",
+    "ProviderRuntimeConfig",
     "build_provider_registry",
 )

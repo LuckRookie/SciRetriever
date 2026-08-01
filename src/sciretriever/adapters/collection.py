@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from sciretriever.adapters.registry import Capability, ProviderRegistry
 from sciretriever.collection.ports import (
-    CitationDiscoveryRequest, MetadataDiscoveryRequest, ProviderCitationResult,
+    CitationDiscoveryRequest,
+    MetadataDiscoveryRequest,
+    ProviderCitationResult,
     ProviderDiscoveryResult,
 )
 from sciretriever.kernel.errors import Action, FailureEvidence, Reason
 
 
 def _failure(provider: str, retryable: bool) -> FailureEvidence:
-    action = "Retry the provider request." if retryable else "Check the provider response or configuration."
+    action = (
+        "Retry the provider request."
+        if retryable
+        else "Check the provider response or configuration."
+    )
     return FailureEvidence(
         "provider-unavailable" if retryable else "provider-invalid-response",
-        Reason(f"{provider} provider request failed"), Action(action), retryable,
+        Reason(f"{provider} provider request failed"),
+        Action(action),
+        retryable,
     )
 
 

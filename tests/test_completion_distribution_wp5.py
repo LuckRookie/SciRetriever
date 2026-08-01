@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
 import zipfile
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from scripts.harness import (
     clean_build_staging,
     find_wheel_content_violations,
 )
-
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE = REPOSITORY / "src" / "sciretriever"
@@ -36,7 +35,8 @@ class CompletionDistributionTests(unittest.TestCase):
         paths = tuple((REPOSITORY / root).rglob("*.*") for root in ("src", "docs"))
         texts = {
             path.relative_to(REPOSITORY).as_posix(): path.read_text(encoding="utf-8")
-            for group in paths for path in group
+            for group in paths
+            for path in group
             if path.suffix in {".py", ".md"} and path.name != Path(__file__).name
         }
         for symbol in RETIRED_SYMBOLS:
