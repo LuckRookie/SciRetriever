@@ -32,7 +32,7 @@ SciRetriever 面向需要建立专题文献集合的研究者和文献整理人�
 
 当前已有独立书目 `WorkVersion`、全文补全、PDF current analysis、全局完成管线、引用扩展、统一失败查询、library 人工整理和两类安全导出。`package_versions` 是不可变处理/导出快照，不是书目版本或 analysis history。
 
-当前使用者只应依赖上表、CLI `--help`、[配置手册](docs/guides/configuration.md)和 `docs/guides/` 下 TOML 模板已经发布的入口。系统设计和技术架构描述目标方案，不证明某项能力已经实现。
+当前使用者只应依赖上表、CLI `--help`、[配置手册](docs/guides/configuration.md)和 `docs/guides/` 下 TOML 模板已经发布的入口。设计文档和技术文档描述目标方案，不证明某项能力已经实现。
 
 ## 功能特性
 
@@ -56,7 +56,7 @@ SciRetriever 当前可以发布带 provenance 的 `DocumentPackageVersion` 处�
 
 ## 工作流程
 
-以下流程解释当前 CLI 如何工作，不定义后续系统设计必须保留的阶段、命令或编排方式。
+以下流程解释当前 CLI 如何工作，不定义后续设计必须保留的阶段、命令或编排方式。
 
 ```text
 query + metadata providers + optional year range
@@ -445,7 +445,7 @@ src/sciretriever/
   cli/              current composition root
 ```
 
-目标模块、依赖和所有权需要从[产品需求](docs/architecture/requirements.md)与已接受 ADR 推导，详见[系统设计](docs/architecture/system-design.md)和[技术架构](docs/architecture/technical-architecture.md)。
+目标模块、依赖和所有权需要从[产品需求](docs/architecture/requirements.md)与已接受 ADR 推导，详见[设计文档](docs/architecture/design.md)和[技术文档](docs/architecture/technical.md)。
 
 ## 数据与安全边界
 

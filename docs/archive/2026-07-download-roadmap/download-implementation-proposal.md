@@ -12,7 +12,7 @@ created = "2026-07-22"
 - 适用范围：v2 `src/sciretriever/` 的全文候选发现、下载执行、验证、调度和运维
 - 产品方向：[文献自动下载产品方案](download-product-shape.md)
 - 评估输入：[下载能力对比](download-capability-comparison.md)、[能力差距台账](capability-gaps.md)
-- 当前行为真相源：[系统设计](../../architecture/system-design.md)、[需求](../../architecture/requirements.md)、[README](../../../README.md)
+- 当前行为真相源：[系统设计](../../architecture/design.md)、[需求](../../architecture/requirements.md)、[README](../../../README.md)
 - 权威边界：[ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)
 
 ## 1. 文档定位

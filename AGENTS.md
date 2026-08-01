@@ -6,7 +6,7 @@
 
 1. 阅读 [`HARNESS.md`](HARNESS.md) 的工作流、质量、Git 和完成标准。
 2. 先读[产品需求](docs/architecture/requirements.md)，再按[架构决策索引](docs/architecture/decisions/README.md)判断已接受约束：领域与数据边界适用 ADR 0001；Work/WorkVersion 内部身份和单机增量处理适用 ADR 0002；MinerU parser adapter 边界适用 ADR 0003；需求与派生设计的责任边界适用 ADR 0004。
-3. 涉及系统设计、模块边界、数据所有权或持久化时，依次读[架构原则](docs/architecture/principles.md)、[系统设计](docs/architecture/system-design.md)和[技术架构](docs/architecture/technical-architecture.md)；先检查它们能否追溯到需求，不得用当前代码反向证明目标设计正确。
+3. 涉及设计文档、模块边界、数据所有权或持久化时，依次读[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)和[技术文档](docs/architecture/technical.md)；先检查它们能否追溯到需求，不得用当前代码反向证明目标设计正确。
 4. 按[代码与文档同步映射](docs/development/documentation-map.md)判断文档同步范围。
 5. 默认沟通和项目文档使用中文；代码标识符、异常和提交信息使用英文。
 
@@ -77,7 +77,7 @@
 
 - 产品主流程是“领域条件或种子文献 → 多来源元数据 → 文献资产 → 轻结构化文本 → 通用结构化文献分析 → 可持续使用的文献数据库”。目标设计必须完整覆盖该流程和需求中的批量、局部成功、重复运行、查询、书目信息交换与可追溯性验收。
 - `Work`、`WorkVersion` 是 ADR 0002 接受的内部身份机制；阶段枚举、completion pipeline、CLI 命令、SQLite、`DocumentPackage` 和当前目录划分仍是实现或派生设计，不是产品需求。
-- 系统设计负责逻辑对象、数据流和所有权；技术架构负责模块、依赖和运行技术；README、CLI `--help`、源码与测试负责当前已实现行为。
+- 设计文档负责系统架构、模块命名、责任、数据流和所有权；技术文档负责代码映射、依赖、持久化、外部访问和运行技术；README、CLI `--help`、源码与测试负责当前已实现行为。
 - 设计审查应建立“需求 → 系统行为 → 数据与状态 → 模块责任 → 验收”的可追踪关系，并删除无需求依据的旧设计。
 - 当前依赖规则由 `scripts/harness.py architecture` 检查；修改前先确认它表达的是已接受目标边界还是仅保护现有实现。
 
@@ -100,13 +100,13 @@
 | Work/WorkVersion 内部身份与单机增量处理 | `docs/architecture/decisions/0002-literature-identity-and-incremental-processing.md` |
 | MinerU parser/service connection 与外部 attempt/evidence 边界 | `docs/architecture/decisions/0003-operator-managed-mineru-service.md` |
 | 长期架构原则 | `docs/architecture/principles.md` |
-| 理想产品数据流与模块责任 | `docs/architecture/system-design.md` |
-| 理想代码模块与依赖边界 | `docs/architecture/technical-architecture.md` |
+| 理想产品数据流与模块责任 | `docs/architecture/design.md` |
+| 理想代码模块与依赖边界 | `docs/architecture/technical.md` |
 | 用户安装、命令和配置 | `README.md`、`docs/guides/config.toml`、`docs/guides/config.minimal.toml`、`docs/guides/configuration.md` |
 | 代码到文档同步 | `docs/development/documentation-map.md` |
 | 跨项目协作规则 | `HARNESS.md` |
 
-requirements、system design 和 technical architecture 描述产品目标和派生设计，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；不得把理想能力写成当前实现，也不得让当前实现反向覆盖需求。`docs/proposals/` 只保留活动提案，完成或终止后及时归档；OMO 执行计划只放在 `.omo/plans/`，不进入项目文档。
+requirements、design 和 technical 描述产品目标和派生设计，不承担现状或执行进度追踪。代码表达实际行为，README 是当前用户解释层；不得把理想能力写成当前实现，也不得让当前实现反向覆盖需求。`docs/proposals/` 只保留活动提案，完成或终止后及时归档；OMO 执行计划只放在 `.omo/plans/`，不进入项目文档。
 
 ## 8. 当前关键实现与测试
 
@@ -126,7 +126,7 @@ requirements、system design 和 technical architecture 描述产品目标和派
 ## 9. 雷区和遗留代码
 
 - 当前 pre-v1 无受支持旧 catalog；不保留 legacy import、旧 schema、迁移 adapter 或退休数据库 guard。
-- `catalog/models.py`、schema bootstrap、`core/package.py`：修改前必须读 ADR、系统设计和直接测试。
+- `catalog/models.py`、schema bootstrap、`core/package.py`：修改前必须读 ADR、设计文档和直接测试。
 - `network/secure.py`、URL policy、credential plumbing：修改必须做安全专项检查。
 - `dist/`、`build/`、`.venv/`、运行时 catalog、下载资产和语料不得提交。
 

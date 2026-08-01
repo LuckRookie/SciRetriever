@@ -9,7 +9,7 @@ updated = "2026-07-24"
 
 本文记录 Zotero、`scansci-pdf` 与 SciRetriever 目标架构在全文候选发现、下载执行、页面回退、浏览器会话、内容验收和资产保存方面的对比，作为 WP3 设计评审输入。
 
-本文是评估记录，不描述当前已发布行为，也不授权修改当时的 OMO 执行计划。理想产品合同仍以[需求规格](../../architecture/requirements.md)和[系统设计](../../architecture/system-design.md)为准；当前实现覆盖见[实施进度](implementation-progress.md)。
+本文是评估记录，不描述当前已发布行为，也不授权修改当时的 OMO 执行计划。理想产品合同仍以[需求规格](../../architecture/requirements.md)和[系统设计](../../architecture/design.md)为准；当前实现覆盖见[实施进度](implementation-progress.md)。
 
 ## 1. 证据边界
 
@@ -147,7 +147,7 @@ Owner 于 2026-07-24 单独确认的是 5.2 的两级调度。以下细节不是
 ### SciRetriever
 
 - [需求规格 FR-10 至 FR-12](../../architecture/requirements.md#6-全文获取)
-- [系统设计 Acquisition 流](../../architecture/system-design.md#5-acquisition-流)
+- [系统设计 Acquisition 流](../../architecture/design.md#5-acquisition-流)
 - [WP3 实施证据](implementation-progress.md#5-能力覆盖与差距)
 - `src/sciretriever/acquisition/`
 - `src/sciretriever/network/secure.py`

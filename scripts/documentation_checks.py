@@ -24,8 +24,8 @@ REQUIRED_FILES = (
     "docs/guides/config.toml", "docs/guides/config.minimal.toml",
     "docs/development/README.md", "docs/development/documentation-map.md",
     "docs/architecture/README.md", "docs/architecture/principles.md",
-    "docs/architecture/requirements.md", "docs/architecture/system-design.md",
-    "docs/architecture/technical-architecture.md",
+    "docs/architecture/requirements.md", "docs/architecture/design.md",
+    "docs/architecture/technical.md",
     "docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md",
     "docs/notes/README.md", "docs/proposals/README.md",
 )

@@ -11,7 +11,7 @@ created = "2026-07-22"
 - 记录日期：2026-07-22
 - 面向读者：产品 owner、普通用户、后续实施者
 - 技术实施草案：[文献下载实施提案](download-implementation-proposal.md)
-- 当前行为真相源：[README](../../../README.md)、[系统设计](../../architecture/system-design.md)
+- 当前行为真相源：[README](../../../README.md)、[系统设计](../../architecture/design.md)
 
 ## 1. 产品目标
 

@@ -2,7 +2,7 @@
 
 - 最后核对：2026-07-26
 - 进度依据：当时的 OMO 执行计划与下列代码、测试和发布证据；执行计划不作为项目文档保留
-- 理想产品：[需求规格](../../architecture/requirements.md)、[系统设计](../../architecture/system-design.md)、[技术架构](../../architecture/technical-architecture.md)
+- 理想产品：[需求规格](../../architecture/requirements.md)、[系统设计](../../architecture/design.md)、[技术架构](../../architecture/technical.md)
 - 当前用户行为：[README](../../../README.md)、`sciretriever --help`
 
 ## 1. 文档职责

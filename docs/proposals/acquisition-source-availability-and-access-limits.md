@@ -232,7 +232,7 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 
 如果 owner 接受方向，长期规则应分别落到其真相源：
 
-- acquisition 理想流程与预算责任：系统设计和技术架构；
+- acquisition 理想流程与预算责任：设计文档和技术文档；
 - 当前已发布配置、默认值和命令行为：README、配置手册和 TOML 模板；
 - 供应商限速、额度、凭据与现场事实：Provider 注意事项；
 - 实际实现和验证：源码、离线测试与受控 live 验证记录。
@@ -246,7 +246,7 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 - [项目 README](../../README.md)
 - [Provider 接入注意事项](../notes/providers.md)
 - [ADR 0002](../architecture/decisions/0002-literature-identity-and-incremental-processing.md)
-- [系统设计 Acquisition 流](../architecture/system-design.md#acquisition-流)
+- [设计文档 Acquisition 流](../architecture/design.md#acquisition-流)
 - `src/sciretriever/acquisition/controls.py`
 - `src/sciretriever/acquisition/pacing.py`
 - `src/sciretriever/acquisition/profiles.py`
