@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
-from pathlib import Path
 import stat
 import sys
+from io import BytesIO
+from pathlib import Path
 from typing import Literal
-from typing_extensions import LiteralString
 
 from pydantic import ValidationError
 from pydantic_core import PydanticCustomError
+from typing_extensions import LiteralString
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -17,7 +17,6 @@ else:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib
 
 from .config_models import TargetConfig
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 

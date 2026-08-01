@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import re
 from enum import Enum
 from pathlib import Path
-import re
 from typing import Annotated, Self
 from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
 
 PositiveInt = Annotated[int, Field(strict=True, ge=1)]
 PositiveFloat = Annotated[float, Field(strict=True, gt=0, le=3600)]
@@ -104,7 +103,11 @@ class ParserConfig(StrictConfigModel):
         parsed = _parse_base_url(self.base_url)
         match self.protocol:
             case ParserProtocol.LOOPBACK:
-                if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                if parsed.scheme != "http" or parsed.hostname not in {
+                    "localhost",
+                    "127.0.0.1",
+                    "::1",
+                }:
                     raise ValueError("loopback parser requires an explicit loopback HTTP origin")
                 if self.secret_ref is not None or self.remote_upload:
                     raise ValueError("loopback parser forbids secret_ref and remote_upload")
@@ -215,5 +218,7 @@ def _parse_string_tuple(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
 
 
 __all__ = (
-    "LLMProtocol", "ParserProtocol", "TargetConfig",
+    "LLMProtocol",
+    "ParserProtocol",
+    "TargetConfig",
 )

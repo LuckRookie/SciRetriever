@@ -1,19 +1,18 @@
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
 from pydantic import ValidationError
-
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from sciretriever.runtime.config import load_target_config
-from sciretriever.runtime.config_models import LLMProtocol
+from sciretriever.runtime.config import load_target_config  # noqa: E402
+from sciretriever.runtime.config_models import LLMProtocol  # noqa: E402
 
 
 class TargetConfigTests(TestCase):
@@ -30,7 +29,7 @@ class TargetConfigTests(TestCase):
         return path
 
     def base(self, analysis: str = "") -> str:
-        return f'''schema_version = 2
+        return f"""schema_version = 2
 [paths]
 catalog = "catalog.sqlite"
 storage_root = "storage"
@@ -50,7 +49,7 @@ model = "mineru-3.4.4"
 [interoperability]
 [credentials]
 [extensions]
-'''
+"""
 
     def test_openai_and_anthropic_are_explicit_offline_protocols(self) -> None:
         cases = (
@@ -59,22 +58,40 @@ model = "mineru-3.4.4"
         )
         for protocol, base_url, model in cases:
             with self.subTest(protocol=protocol):
-                config = load_target_config(self.write(self.base(
-                    f'protocol = "{protocol}"\nbase_url = "{base_url}"\n'
-                    f'model = "{model}"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
-                ), f"{protocol}.toml"))
+                config = load_target_config(
+                    self.write(
+                        self.base(
+                            f'protocol = "{protocol}"\nbase_url = "{base_url}"\n'
+                            f'model = "{model}"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
+                        ),
+                        f"{protocol}.toml",
+                    )
+                )
                 self.assertEqual(config.content.analysis.protocol, LLMProtocol(protocol))
                 self.assertEqual(config.content.analysis.model, model)
 
     def test_models_are_frozen_and_all_target_groups_exist(self) -> None:
-        config = load_target_config(self.write(self.base(
-            'protocol = "openai"\nbase_url = "https://api.openai.com/v1"\n'
-            'model = "gpt-5.1"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
-        )))
+        config = load_target_config(
+            self.write(
+                self.base(
+                    'protocol = "openai"\nbase_url = "https://api.openai.com/v1"\n'
+                    'model = "gpt-5.1"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
+                )
+            )
+        )
         self.assertEqual(
             tuple(type(config).model_fields),
-            ("schema_version", "paths", "collection", "metadata", "content",
-             "batching", "interoperability", "credentials", "extensions"),
+            (
+                "schema_version",
+                "paths",
+                "collection",
+                "metadata",
+                "content",
+                "batching",
+                "interoperability",
+                "credentials",
+                "extensions",
+            ),
         )
         with self.assertRaises(ValidationError):
             config.content.analysis.model = "replacement"
@@ -93,8 +110,12 @@ model = "mineru-3.4.4"
         cases = {
             "unknown": self.base() + "\nfuture = true\n",
             "protocol": self.base('protocol = "compatible"'),
-            "timeout": self.base('protocol="openai"\nbase_url="https://api.openai.com/v1"\nmodel="m"\nsecret_ref="env:KEY"\ntimeout_seconds=0'),
-            "traversal": self.base().replace('catalog = "catalog.sqlite"', 'catalog = "../escape.sqlite"'),
+            "timeout": self.base(
+                'protocol="openai"\nbase_url="https://api.openai.com/v1"\nmodel="m"\nsecret_ref="env:KEY"\ntimeout_seconds=0'
+            ),
+            "traversal": self.base().replace(
+                'catalog = "catalog.sqlite"', 'catalog = "../escape.sqlite"'
+            ),
             "nested": self.base().replace('storage_root = "storage"', 'storage_root = "."'),
             "duplicate": self.base().replace('["crossref"]', '["crossref", "crossref"]', 1),
             "repository": self.base().replace(
@@ -120,10 +141,14 @@ model = "mineru-3.4.4"
     def test_raw_secret_keys_are_rejected_without_echoing_values(self) -> None:
         sentinel = "SECRET-MUST-NOT-APPEAR"
         with self.assertRaises(ValidationError) as raised:
-            load_target_config(self.write(self.base(
-                'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
-                f'model="gpt"\nsecret_ref="env:KEY"\napi_key="{sentinel}"'
-            )))
+            load_target_config(
+                self.write(
+                    self.base(
+                        'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
+                        f'model="gpt"\nsecret_ref="env:KEY"\napi_key="{sentinel}"'
+                    )
+                )
+            )
         self.assertNotIn(sentinel, str(raised.exception))
 
     def test_coercible_scalar_types_are_rejected_in_every_group(self) -> None:
@@ -132,24 +157,31 @@ model = "mineru-3.4.4"
             'model="gpt"\nsecret_ref="env:KEY"'
         )
         cases = (
-            ('schema_version = 2', 'schema_version = "2"'),
-            ('topic_limit = 1000', 'topic_limit = "1000"'),
-            ('timeout_seconds = 30.0', 'timeout_seconds = "30.0"'),
-            ('max_asset_bytes = 104857600', 'max_asset_bytes = "104857600"'),
-            ('remote_upload = false', 'remote_upload = "false"'),
-            ('max_targets = 1000', 'max_targets = "1000"'),
-            ('max_input_bytes = 67108864', 'max_input_bytes = "67108864"'),
-            ('max_results = 100', 'max_results = "100"'),
+            ("schema_version = 2", 'schema_version = "2"'),
+            ("topic_limit = 1000", 'topic_limit = "1000"'),
+            ("timeout_seconds = 30.0", 'timeout_seconds = "30.0"'),
+            ("max_asset_bytes = 104857600", 'max_asset_bytes = "104857600"'),
+            ("remote_upload = false", 'remote_upload = "false"'),
+            ("max_targets = 1000", 'max_targets = "1000"'),
+            ("max_input_bytes = 67108864", 'max_input_bytes = "67108864"'),
+            ("max_results = 100", 'max_results = "100"'),
         )
         full = (REPOSITORY / "docs/guides/config.target.toml").read_text(encoding="utf-8")
         for index, (valid, invalid) in enumerate(cases):
             with self.subTest(index=index), self.assertRaises(ValidationError):
-                load_target_config(self.write(full.replace(valid, invalid), f"coercion-{index}.toml"))
+                load_target_config(
+                    self.write(full.replace(valid, invalid), f"coercion-{index}.toml")
+                )
         with self.assertRaises(ValidationError):
-            load_target_config(self.write(self.base(valid_analysis).replace(
-                '[content.acquisition]\nproviders = ["crossref"]',
-                '[content.acquisition]\nproviders = [1]',
-            ), "provider-coercion.toml"))
+            load_target_config(
+                self.write(
+                    self.base(valid_analysis).replace(
+                        '[content.acquisition]\nproviders = ["crossref"]',
+                        "[content.acquisition]\nproviders = [1]",
+                    ),
+                    "provider-coercion.toml",
+                )
+            )
 
     def test_original_path_symlinks_and_unsafe_permissions_fail_closed(self) -> None:
         analysis = (
@@ -166,21 +198,33 @@ model = "mineru-3.4.4"
         catalog_link.symlink_to(catalog_target)
         unsafe_root = self.root / "unsafe-root"
         unsafe_root.mkdir(mode=0o770)
+        unsafe_root.chmod(0o770)
         bodies = (
-            self.base(analysis).replace('storage_root = "storage"', 'storage_root = "storage-link"'),
-            self.base(analysis).replace('catalog = "catalog.sqlite"', 'catalog = "catalog-link.sqlite"'),
+            self.base(analysis).replace(
+                'storage_root = "storage"', 'storage_root = "storage-link"'
+            ),
+            self.base(analysis).replace(
+                'catalog = "catalog.sqlite"', 'catalog = "catalog-link.sqlite"'
+            ),
             self.base(analysis).replace('storage_root = "storage"', 'storage_root = "unsafe-root"'),
-            self.base(analysis).replace('catalog = "catalog.sqlite"', 'catalog = "unsafe-root/catalog.sqlite"'),
+            self.base(analysis).replace(
+                'catalog = "catalog.sqlite"', 'catalog = "unsafe-root/catalog.sqlite"'
+            ),
         )
         for index, body in enumerate(bodies):
             with self.subTest(index=index), self.assertRaisesRegex(ValidationError, "unsafe_path"):
                 load_target_config(self.write(body, f"unsafe-path-{index}.toml"))
 
     def test_wrong_owner_alias_and_safe_nonexistent_targets(self) -> None:
-        valid = load_target_config(self.write(self.base(
-            'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
-            'model="gpt"\nsecret_ref="env:KEY"'
-        ), "safe-paths.toml"))
+        valid = load_target_config(
+            self.write(
+                self.base(
+                    'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
+                    'model="gpt"\nsecret_ref="env:KEY"'
+                ),
+                "safe-paths.toml",
+            )
+        )
         self.assertFalse(valid.paths.catalog.exists())
         self.assertFalse(valid.paths.storage_root.exists())
 
@@ -207,12 +251,17 @@ model = "mineru-3.4.4"
         for index, (catalog, storage) in enumerate(aliases):
             body = self.base(analysis).replace('catalog = "catalog.sqlite"', catalog)
             body = body.replace('storage_root = "storage"', storage)
-            with self.subTest(index=index), self.assertRaisesRegex(ValidationError, "must not overlap"):
+            with (
+                self.subTest(index=index),
+                self.assertRaisesRegex(ValidationError, "must not overlap"),
+            ):
                 load_target_config(self.write(body, f"equal-alias-{index}.toml"))
 
-        parent_alias = self.base(analysis).replace(
-            'catalog = "catalog.sqlite"', 'catalog = "nested/../same"'
-        ).replace('storage_root = "storage"', 'storage_root = "same"')
+        parent_alias = (
+            self.base(analysis)
+            .replace('catalog = "catalog.sqlite"', 'catalog = "nested/../same"')
+            .replace('storage_root = "storage"', 'storage_root = "same"')
+        )
         with self.assertRaisesRegex(ValidationError, "unsafe_path"):
             load_target_config(self.write(parent_alias, "parent-alias.toml"))
 
