@@ -9,7 +9,6 @@ from test_target_collection import (
     observation,
 )
 
-from sciretriever.collection.service import MetadataSource
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
@@ -17,6 +16,7 @@ from sciretriever.literature_store.sqlite import (
 from sciretriever.model.collection import CollectionAcceptance, TopicConditions
 from sciretriever.model.primitives import WorkVersionState
 from sciretriever.model.sources import MetadataDiscoveryRequest, ProviderDiscoveryResult
+from sciretriever.services.collection.api import MetadataSource
 
 
 @dataclass(frozen=True, slots=True)

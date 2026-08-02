@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from sciretriever.collection.citation_input import citation_run_input_from_validated
-from sciretriever.collection.run_results import validate_finish_collection_run
-from sciretriever.collection.topic import validate_topic_condition_set
+from sciretriever.core.collection import (
+    citation_run_input_from_validated,
+    validate_finish_collection_run,
+    validate_topic_condition_set,
+)
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,

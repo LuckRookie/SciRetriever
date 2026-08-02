@@ -9,9 +9,8 @@ from tempfile import TemporaryDirectory
 
 from pydantic import ValidationError
 
-from sciretriever.collection.run_results import validate_finish_collection_run
+from sciretriever.core.collection import CollectionRuleError, validate_finish_collection_run
 from sciretriever.core.literature.curation import CurationPlanError, validate_curation_plan
-from sciretriever.kernel.errors import BoundaryError
 from sciretriever.literature_store.filesystem import (
     AdmissionOrderError,
     FilesystemSafetyError,
@@ -182,11 +181,11 @@ class TargetStorePortRepairTests(unittest.TestCase):
             )
 
         for status in (CollectionRunStatus.CREATED, CollectionRunStatus.RUNNING):
-            with self.subTest(status=status), self.assertRaises(BoundaryError):
+            with self.subTest(status=status), self.assertRaises(CollectionRuleError):
                 validate_finish_collection_run(command(status, None))
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(CollectionRuleError):
             validate_finish_collection_run(command(CollectionRunStatus.FAILED, None))
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(CollectionRuleError):
             validate_finish_collection_run(command(CollectionRunStatus.NO_TARGET, "reason"))
         completed = command(CollectionRunStatus.COMPLETED, "reason")
         validate_finish_collection_run(completed)

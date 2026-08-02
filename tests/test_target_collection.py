@@ -7,18 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.collection.api import CollectionAcceptanceConflict
-from sciretriever.collection.service import (
-    CollectionService,
-    CollectionServiceDependencies,
-    MetadataSource,
+from sciretriever.core.collection import (
+    CollectionAcceptanceConflict,
+    validated_topic_conditions,
 )
-from sciretriever.collection.topic import validated_topic_conditions
-from sciretriever.kernel import (
-    BoundaryError,
-    CanonicalJsonObject,
-    parse_canonical_json,
-)
+from sciretriever.kernel import CanonicalJsonObject, parse_canonical_json
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
@@ -35,6 +28,12 @@ from sciretriever.model.sources import (
     MetadataDiscoveryRequest,
     MetadataObservation,
     ProviderDiscoveryResult,
+)
+from sciretriever.services.collection.api import (
+    CollectionRuleError,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
 )
 from sciretriever.services.literature.api import LiteratureService
 
@@ -128,7 +127,7 @@ class TargetCollectionTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             service.create("Catalysis", None, conditions)
         without_topic = service.create("No topic", None, None)
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(CollectionRuleError):
             service.run_topic(without_topic.collection_id, WorkVersionState.UNREVIEWED)
         with open_read_only_snapshot(self.catalog) as connection:
             self.assertEqual(

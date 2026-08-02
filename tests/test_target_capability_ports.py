@@ -12,7 +12,6 @@ from sciretriever.batching.ports import (
     CatalogIdentity,
     OutputIdentity,
 )
-from sciretriever.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 from sciretriever.content.ports import (
     AnalysisModelPort,
     ArtifactStorePort,
@@ -67,6 +66,7 @@ from sciretriever.model.sources import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"

@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-from sciretriever.collection.api import CollectionAcceptanceConflict
+from sciretriever.core.collection import CollectionAcceptanceConflict
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
 from sciretriever.model.literature import PreparedBibliographyAcceptance
 

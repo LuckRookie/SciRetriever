@@ -7,12 +7,6 @@ from dataclasses import dataclass
 from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.collection.service import (
-    CitationSource,
-    CollectionService,
-    CollectionServiceDependencies,
-    MetadataSource,
-)
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
@@ -34,6 +28,12 @@ from sciretriever.model.sources import (
     CitationObservation,
     ProviderCitationResult,
     ProviderDiscoveryResult,
+)
+from sciretriever.services.collection.api import (
+    CitationSource,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
 )
 
 

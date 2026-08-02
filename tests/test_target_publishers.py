@@ -6,7 +6,7 @@ from dataclasses import replace as dataclass_replace
 from pydantic import BaseModel
 from target_publisher_support import ScenarioFactory
 
-from sciretriever.collection.publisher_contracts import validate_collection_acceptance
+from sciretriever.core.collection import CollectionRuleError, validate_collection_acceptance
 from sciretriever.core.execution import (
     ExecutionRejectedError,
     canonical_import_record_projection,
@@ -18,10 +18,7 @@ from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
     validate_completion_submission_contract,
 )
-from sciretriever.kernel import (
-    BoundaryError,
-    CanonicalJsonObject,
-)
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
     ContentAcceptancePublisher,
@@ -58,7 +55,7 @@ class TargetPublisherTests(unittest.TestCase):
         collection = self.factory.collection()
         assert isinstance(collection.command, CollectionAcceptance)
         other_work = WorkId("00000000-0000-0000-0000-000000000001")
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(CollectionRuleError):
             validate_collection_acceptance(
                 CollectionAcceptance(
                     bibliography=collection.command.bibliography,

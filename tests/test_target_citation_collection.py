@@ -9,20 +9,11 @@ from target_citation_fixture import (
 )
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.collection.citation_input import (
+from sciretriever.core.collection import (
+    CollectionRuleError,
     citation_run_input_from_validated,
 )
-from sciretriever.collection.service import (
-    CitationSource,
-    CollectionService,
-    CollectionServiceDependencies,
-    MetadataSource,
-)
-from sciretriever.kernel import (
-    BoundaryError,
-    CanonicalJsonObject,
-    canonical_json_bytes,
-)
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
@@ -48,6 +39,12 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.model.sources import CitationDiscoveryRequest, ProviderDiscoveryResult
+from sciretriever.services.collection.api import (
+    CitationSource,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
+)
 
 
 class TargetCitationCollectionTests(CitationCollectionTestCase):
@@ -67,7 +64,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
             canonical_json=encoded.decode("ascii"), sha256=sha256_digest(encoded)
         )
 
-        with self.assertRaisesRegex(BoundaryError, "citation_input"):
+        with self.assertRaisesRegex(CollectionRuleError, "citation_input"):
             citation_run_input_from_validated(validated)
 
     def test_four_seed_kinds_resolve_dedupe_sort_and_persist_canonical_input(self) -> None:
@@ -129,7 +126,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         )
         source = CitationSource("alpha", FakeCitationPort(self.catalog, {}, "alpha", []))
         for selector in selectors:
-            with self.subTest(selector=selector), self.assertRaises(BoundaryError):
+            with self.subTest(selector=selector), self.assertRaises(CollectionRuleError):
                 self.service((source,)).run_citation(
                     target.collection_id,
                     CitationCollectionRequest(
@@ -194,7 +191,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         )
         target = service.create("ambiguous", None, None)
 
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(CollectionRuleError):
             service.run_citation(
                 target.collection_id,
                 CitationCollectionRequest(

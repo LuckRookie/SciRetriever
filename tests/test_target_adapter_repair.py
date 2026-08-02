@@ -28,14 +28,14 @@ from sciretriever.adapters.providers import (
     VendorMetadataRecord,
 )
 from sciretriever.adapters.registry import Capability, ProviderRegistry
-from sciretriever.collection.ports import (
+from sciretriever.model.access import TransportRequest, TransportResponse
+from sciretriever.model.primitives import CitationDirection, WorkId
+from sciretriever.model.sources import (
     CitationDiscoveryRequest,
-    MetadataDiscoveryPort,
     MetadataDiscoveryRequest,
     ProviderDiscoveryResult,
 )
-from sciretriever.model.access import TransportRequest, TransportResponse
-from sciretriever.model.primitives import CitationDirection, WorkId
+from sciretriever.services.collection.ports import MetadataDiscoveryPort
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 

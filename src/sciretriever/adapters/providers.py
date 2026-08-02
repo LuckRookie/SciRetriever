@@ -3,16 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sciretriever.collection.ports import (
+from sciretriever.model.execution import Action, FailureEvidence, Reason
+from sciretriever.model.literature import Identifier
+from sciretriever.model.sources import CitationObservation, MetadataObservation
+from sciretriever.services.collection.ports import (
     CitationDiscoveryRequest,
-    CitationObservation,
     MetadataDiscoveryRequest,
-    MetadataObservation,
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
-from sciretriever.model.execution import Action, FailureEvidence, Reason
-from sciretriever.model.literature import Identifier
 
 
 @dataclass(frozen=True, slots=True)

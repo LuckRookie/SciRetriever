@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from sciretriever.adapters.registry import Capability, ProviderRegistry
-from sciretriever.collection.ports import (
+from sciretriever.model.execution import Action, FailureEvidence, Reason
+from sciretriever.services.collection.ports import (
     CitationDiscoveryRequest,
     MetadataDiscoveryRequest,
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
-from sciretriever.model.execution import Action, FailureEvidence, Reason
 
 
 def _failure(provider: str, retryable: bool) -> FailureEvidence:

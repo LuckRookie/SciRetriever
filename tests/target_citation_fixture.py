@@ -8,12 +8,6 @@ from tempfile import TemporaryDirectory
 
 from test_target_collection import FakeMetadataPort, observation
 
-from sciretriever.collection.service import (
-    CitationSource,
-    CollectionService,
-    CollectionServiceDependencies,
-    MetadataSource,
-)
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
@@ -42,6 +36,12 @@ from sciretriever.model.sources import (
     CitationObservation,
     ProviderCitationResult,
     ProviderDiscoveryResult,
+)
+from sciretriever.services.collection.api import (
+    CitationSource,
+    CollectionService,
+    CollectionServiceDependencies,
+    MetadataSource,
 )
 from sciretriever.services.literature.api import LiteratureService
 
