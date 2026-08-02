@@ -60,28 +60,29 @@ class TargetStateTests(unittest.TestCase):
             current_metadata,
             completion_metadata,
         ) in product((False, True), repeat=9):
-            current = replace(
-                base,
-                metadata_snapshot_id=METADATA_ID if current_metadata else None,
-                metadata_revision=1 if current_metadata else None,
-                metadata_sha256=Sha256("2" * 64) if current_metadata else None,
-                accepted_primary_id=PRIMARY_ID if primary else None,
-                current_light_document_id=LIGHT_ID if light else None,
-                current_light_sha256=LIGHT_HASH if light else None,
-                current_light_primary_id=PRIMARY_ID if light and light_aligned else None,
-                current_light_complete=light,
-                completion_light_document_id=LIGHT_ID if bundle else None,
-                completion_analysis_artifact_id=ANALYSIS_ID if bundle else None,
-                analysis_light_document_id=LIGHT_ID if bundle and analysis_aligned else None,
-                analysis_input_sha256=LIGHT_HASH if bundle and analysis_aligned else None,
-                analysis_nine_categories_complete=bundle,
-                completion_metadata_snapshot_id=METADATA_ID
-                if bundle and completion_metadata
-                else None,
-                completion_reference_set_id="references" if bundle else None,
-                completion_reference_set_complete=bundle and references,
-                completion_tag_set_id="tags" if bundle else None,
-                completion_tag_set_complete=bundle and tags,
+            current = base.model_copy(
+                update={
+                    "metadata_snapshot_id": METADATA_ID if current_metadata else None,
+                    "metadata_revision": 1 if current_metadata else None,
+                    "metadata_sha256": Sha256("2" * 64) if current_metadata else None,
+                    "accepted_primary_id": PRIMARY_ID if primary else None,
+                    "current_light_document_id": LIGHT_ID if light else None,
+                    "current_light_sha256": LIGHT_HASH if light else None,
+                    "current_light_primary_id": PRIMARY_ID if light and light_aligned else None,
+                    "current_light_complete": light,
+                    "completion_light_document_id": LIGHT_ID if bundle else None,
+                    "completion_analysis_artifact_id": ANALYSIS_ID if bundle else None,
+                    "analysis_light_document_id": LIGHT_ID if bundle and analysis_aligned else None,
+                    "analysis_input_sha256": LIGHT_HASH if bundle and analysis_aligned else None,
+                    "analysis_nine_categories_complete": bundle,
+                    "completion_metadata_snapshot_id": METADATA_ID
+                    if bundle and completion_metadata
+                    else None,
+                    "completion_reference_set_id": "references" if bundle else None,
+                    "completion_reference_set_complete": bundle and references,
+                    "completion_tag_set_id": "tags" if bundle else None,
+                    "completion_tag_set_complete": bundle and tags,
+                }
             )
             state = derive_work_version_state(current)
             expected_state = WorkVersionState.UNREVIEWED
@@ -183,11 +184,12 @@ class TargetStateTests(unittest.TestCase):
                     "WHERE work_version_id=?",
                     (str(VERSION_ID),),
                 ).fetchone()
-            current = replace(
-                facts(),
-                metadata_snapshot_id=None,
-                metadata_revision=None,
-                metadata_sha256=None,
+            current = facts().model_copy(
+                update={
+                    "metadata_snapshot_id": None,
+                    "metadata_revision": None,
+                    "metadata_sha256": None,
+                }
             )
             self.assertEqual(
                 row, (WorkVersionState.LIGHT_TEXT_READY.value, MissingStep.COMPLETION.value)

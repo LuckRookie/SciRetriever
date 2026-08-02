@@ -7,16 +7,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.bibliography.identity_model import (
-    BibliographicObservation,
-    InitialMetadata,
-    VersionRelationEvidence,
-)
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     create_or_open_catalog,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import (
+    BibliographicObservation,
+    Identifier,
+    InitialMetadata,
+    VersionRelationEvidence,
+)
 from sciretriever.model.primitives import UtcTimestamp
 
 
@@ -39,7 +39,13 @@ def observation(
         source_priority=priority,
         observed_at=UtcTimestamp("2026-07-31T00:00:00Z"),
         identifiers=identifiers,
-        metadata=InitialMetadata(title, authors, year, item_type, f"abstract-{provider}"),
+        metadata=InitialMetadata(
+            title=title,
+            authors=authors,
+            year=year,
+            item_type=item_type,
+            abstract=f"abstract-{provider}",
+        ),
         version_role=role,
         version_relation=relation,
     )
@@ -260,7 +266,10 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
             "f",
             (Identifier(namespace="doi", value="10.1/formal"),),
             role="formal",
-            relation=VersionRelationEvidence(preprint_id, "published-version-of"),
+            relation=VersionRelationEvidence(
+                target_identifier=preprint_id,
+                relation="published-version-of",
+            ),
         )
         published = prepare_initial_ingest(repository, (formal,))
         FakeAcceptancePublisher(catalog).publish(published)

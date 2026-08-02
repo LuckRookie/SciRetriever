@@ -4,11 +4,7 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Protocol
 
-from sciretriever.bibliography.api import (
-    PreparedBibliographyAcceptance,
-    ReferenceSetFact,
-    TagSetFact,
-)
+from sciretriever.bibliography.api import ReferenceSetFact, TagSetFact
 from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.api import ContentAcceptance
 from sciretriever.interoperability.ports import ImportRecordProjection
@@ -16,6 +12,7 @@ from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
 )
+from sciretriever.model.literature import PreparedBibliographyAcceptance
 from sciretriever.model.primitives import (
     BatchRunId,
     WorkVersionId,

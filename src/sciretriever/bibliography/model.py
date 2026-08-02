@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import Identifier, VersionFacts
 from sciretriever.model.primitives import (
     AssetId,
     CurationPlanId,
@@ -16,8 +16,6 @@ from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
 )
-
-from .state import VersionFacts
 
 
 class CurationPlanError(Exception):

@@ -1,4 +1,3 @@
-from sciretriever.bibliography.identity_model import *  # noqa: F403
 from sciretriever.bibliography.model import *  # noqa: F403
 from sciretriever.bibliography.ports import BibliographyRepository, CurationTransactionPort
 

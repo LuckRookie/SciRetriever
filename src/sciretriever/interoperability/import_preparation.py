@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sciretriever.bibliography.api import InitialMetadata, PreparedBibliographyAcceptance
 from sciretriever.interoperability.model import ImportedBibliographicRecord, RecordParseResult
 from sciretriever.interoperability.publisher_contracts import ImportResult
 from sciretriever.kernel import FailureEvidence
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import (
+    Identifier,
+    InitialMetadata,
+    PreparedBibliographyAcceptance,
+)
 from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
@@ -50,14 +53,14 @@ class ImportPreparationOutcome:
 def _request(record: ImportedBibliographicRecord) -> ImportPreparationRequest:
     return ImportPreparationRequest(
         InitialMetadata(
-            record.title,
-            record.authors,
-            record.year,
-            record.item_type,
-            record.abstract,
-            record.venue,
-            record.language,
-            record.keywords,
+            title=record.title,
+            authors=record.authors,
+            year=record.year,
+            item_type=record.item_type,
+            abstract=record.abstract,
+            venue=record.venue,
+            language=record.language,
+            keywords=record.keywords,
         ),
         record.identifiers,
         record.references,

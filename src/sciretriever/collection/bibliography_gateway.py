@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from sciretriever.bibliography.api import (
-    BibliographicObservation,
     BibliographyRepository,
     IdentityCandidateQuery,
     IdentityCandidateSet,
-    PreparedBibliographyAcceptance,
-    VersionFacts,
     WorkFacts,
     prepare_initial_ingest,
+)
+from sciretriever.model.literature import (
+    BibliographicObservation,
+    PreparedBibliographyAcceptance,
+    VersionFacts,
 )
 from sciretriever.model.primitives import (
     WorkId,

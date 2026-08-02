@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID, uuid5
 
-from sciretriever.bibliography.api import BibliographicObservation, InitialMetadata
 from sciretriever.collection.citation_input import CitationRunInput
 from sciretriever.collection.citation_progress import CitationProgress
 from sciretriever.collection.model import (
@@ -37,6 +36,7 @@ from sciretriever.kernel import (
     FailureEvidence,
     Reason,
 )
+from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionId,
     CollectionRunId,
@@ -236,13 +236,13 @@ class CitationRunExecutor:
                         for ordinal, observation in enumerate(observations):
                             prepared = self._dependencies.bibliography.prepare_discovery(
                                 BibliographicObservation(
-                                    provider,
-                                    f"citation:{parent}:{observation.direction.value}:{observation.target_identifier.namespace}:{observation.target_identifier.value}",
-                                    ordinal,
-                                    self._dependencies.clock(),
-                                    (observation.target_identifier,),
-                                    InitialMetadata(),
-                                    "other",
+                                    provider=provider,
+                                    provider_record_id=f"citation:{parent}:{observation.direction.value}:{observation.target_identifier.namespace}:{observation.target_identifier.value}",
+                                    source_priority=ordinal,
+                                    observed_at=self._dependencies.clock(),
+                                    identifiers=(observation.target_identifier,),
+                                    metadata=InitialMetadata(),
+                                    version_role="other",
                                 ),
                             )
                             target = prepared.work_id

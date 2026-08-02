@@ -6,11 +6,11 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-from sciretriever.bibliography.api import PreparedBibliographyAcceptance
 from sciretriever.collection.api import CollectionAcceptanceConflict
 from sciretriever.content.api import ArtifactKind, PublishedArtifact
 from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
+from sciretriever.model.literature import PreparedBibliographyAcceptance
 from sciretriever.model.primitives import sha256_digest
 
 

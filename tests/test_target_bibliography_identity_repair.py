@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
 
 from test_target_bibliography_identity import (
     FakeAcceptancePublisher,
@@ -10,26 +9,32 @@ from test_target_bibliography_identity import (
 )
 
 from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.bibliography.identity_model import InitialMetadata
 from sciretriever.literature_store.sqlite import create_or_open_catalog
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import Identifier, InitialMetadata
 
 
 class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
     def test_incomplete_identifier_free_metadata_never_exact_matches(self) -> None:
         complete = InitialMetadata(
-            "Exact Identity", ("Ada Lovelace", "Grace Hopper"), 2026, "journal-article"
+            title="Exact Identity",
+            authors=("Ada Lovelace", "Grace Hopper"),
+            year=2026,
+            item_type="journal-article",
         )
         incomplete = (
-            replace(complete, title=None),
-            replace(complete, authors=()),
-            replace(complete, year=None),
-            replace(complete, item_type=None),
+            complete.model_copy(update={"title": None}),
+            complete.model_copy(update={"authors": ()}),
+            complete.model_copy(update={"year": None}),
+            complete.model_copy(update={"item_type": None}),
         )
         for index, metadata in enumerate(incomplete):
             catalog, repository = self.prepare_catalog(f"incomplete-{index}")
-            first_observation = replace(observation("one", "1", ()), metadata=metadata)
-            second_observation = replace(observation("two", "2", ()), metadata=metadata)
+            first_observation = observation("one", "1", ()).model_copy(
+                update={"metadata": metadata}
+            )
+            second_observation = observation("two", "2", ()).model_copy(
+                update={"metadata": metadata}
+            )
             first = prepare_initial_ingest(repository, (first_observation,))
             FakeAcceptancePublisher(catalog).publish(first)
             second = prepare_initial_ingest(repository, (second_observation,))
@@ -54,7 +59,7 @@ class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
                     repository, (observation("one", "1", (identifier,)),)
                 )
                 FakeAcceptancePublisher(catalog).publish(first)
-                incoming = replace(variant, identifiers=(identifier,))
+                incoming = variant.model_copy(update={"identifiers": (identifier,)})
                 second = prepare_initial_ingest(repository, (incoming,))
                 self.assertNotEqual(second.work_version_id, first.work_version_id)
                 self.assertFalse(second.identifiers)

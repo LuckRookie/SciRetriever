@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import replace
 
 from sciretriever.bibliography.api import (
     CompletionAnalysisFact,
@@ -12,7 +11,6 @@ from sciretriever.bibliography.api import (
     ReferenceSetId,
     TagSetFact,
     TagSetId,
-    VersionFacts,
     metadata_snapshot_sha256,
 )
 from sciretriever.bibliography.model import WorkFacts
@@ -20,6 +18,7 @@ from sciretriever.kernel import (
     CanonicalJsonObject,
     canonical_json_bytes,
 )
+from sciretriever.model.literature import VersionFacts
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
@@ -45,27 +44,27 @@ METADATA_HASH = metadata_snapshot_sha256(1, CanonicalJsonObject(()), CanonicalJs
 
 def facts() -> VersionFacts:
     return VersionFacts(
-        WORK_ID,
-        VERSION_ID,
-        "formal",
-        METADATA_ID,
-        1,
-        METADATA_HASH,
-        PRIMARY_ID,
-        LIGHT_ID,
-        LIGHT_HASH,
-        PRIMARY_ID,
-        True,
-        LIGHT_ID,
-        ANALYSIS_ID,
-        LIGHT_ID,
-        LIGHT_HASH,
-        True,
-        METADATA_ID,
-        "references",
-        True,
-        "tags",
-        True,
+        work_id=WORK_ID,
+        work_version_id=VERSION_ID,
+        version_role="formal",
+        metadata_snapshot_id=METADATA_ID,
+        metadata_revision=1,
+        metadata_sha256=METADATA_HASH,
+        accepted_primary_id=PRIMARY_ID,
+        current_light_document_id=LIGHT_ID,
+        current_light_sha256=LIGHT_HASH,
+        current_light_primary_id=PRIMARY_ID,
+        current_light_complete=True,
+        completion_light_document_id=LIGHT_ID,
+        completion_analysis_artifact_id=ANALYSIS_ID,
+        analysis_light_document_id=LIGHT_ID,
+        analysis_input_sha256=LIGHT_HASH,
+        analysis_nine_categories_complete=True,
+        completion_metadata_snapshot_id=METADATA_ID,
+        completion_reference_set_id="references",
+        completion_reference_set_complete=True,
+        completion_tag_set_id="tags",
+        completion_tag_set_complete=True,
     )
 
 
@@ -138,18 +137,19 @@ def submission() -> CompletionSubmission:
 
 
 def light_ready_facts() -> VersionFacts:
-    return replace(
-        facts(),
-        completion_light_document_id=None,
-        completion_analysis_artifact_id=None,
-        analysis_light_document_id=None,
-        analysis_input_sha256=None,
-        analysis_nine_categories_complete=False,
-        completion_metadata_snapshot_id=None,
-        completion_reference_set_id=None,
-        completion_reference_set_complete=False,
-        completion_tag_set_id=None,
-        completion_tag_set_complete=False,
+    return facts().model_copy(
+        update={
+            "completion_light_document_id": None,
+            "completion_analysis_artifact_id": None,
+            "analysis_light_document_id": None,
+            "analysis_input_sha256": None,
+            "analysis_nine_categories_complete": False,
+            "completion_metadata_snapshot_id": None,
+            "completion_reference_set_id": None,
+            "completion_reference_set_complete": False,
+            "completion_tag_set_id": None,
+            "completion_tag_set_complete": False,
+        }
     )
 
 

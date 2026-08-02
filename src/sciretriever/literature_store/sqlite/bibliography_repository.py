@@ -11,23 +11,25 @@ from sciretriever.bibliography.api import (
     IdentityCandidate,
     IdentityCandidateQuery,
     IdentityCandidateSet,
-    IdentityRecord,
     MembershipFact,
     ObservationFact,
     ReferenceFact,
     RelationFact,
-    StoredObservation,
     ValidatedVersionRelation,
-    VersionFacts,
     WorkFacts,
-    initial_metadata_from_json,
 )
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
 from sciretriever.literature_store.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import (
+    Identifier,
+    IdentityRecord,
+    InitialMetadata,
+    StoredObservation,
+    VersionFacts,
+)
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
@@ -86,27 +88,27 @@ def _version(connection, version_id: WorkVersionId) -> VersionFacts | None:
     if row is None:
         return None
     return VersionFacts(
-        WorkId(row[0]),
-        version_id,
-        row[1],
-        None if row[2] is None else MetadataSnapshotId(row[2]),
-        row[3],
-        None if row[4] is None else Sha256(row[4]),
-        None if row[5] is None else WorkVersionAssetId(row[5]),
-        None if row[6] is None else LightDocumentId(row[6]),
-        None if row[7] is None else Sha256(row[7]),
-        None if row[8] is None else WorkVersionAssetId(row[8]),
-        bool(row[9]),
-        None if row[10] is None else LightDocumentId(row[10]),
-        None if row[11] is None else AnalysisArtifactId(row[11]),
-        None if row[12] is None else LightDocumentId(row[12]),
-        None if row[13] is None else Sha256(row[13]),
-        bool(row[14]),
-        None if row[15] is None else MetadataSnapshotId(row[15]),
-        row[16],
-        bool(row[17]),
-        row[18],
-        bool(row[19]),
+        work_id=WorkId(row[0]),
+        work_version_id=version_id,
+        version_role=row[1],
+        metadata_snapshot_id=None if row[2] is None else MetadataSnapshotId(row[2]),
+        metadata_revision=row[3],
+        metadata_sha256=None if row[4] is None else Sha256(row[4]),
+        accepted_primary_id=None if row[5] is None else WorkVersionAssetId(row[5]),
+        current_light_document_id=None if row[6] is None else LightDocumentId(row[6]),
+        current_light_sha256=None if row[7] is None else Sha256(row[7]),
+        current_light_primary_id=None if row[8] is None else WorkVersionAssetId(row[8]),
+        current_light_complete=bool(row[9]),
+        completion_light_document_id=None if row[10] is None else LightDocumentId(row[10]),
+        completion_analysis_artifact_id=None if row[11] is None else AnalysisArtifactId(row[11]),
+        analysis_light_document_id=None if row[12] is None else LightDocumentId(row[12]),
+        analysis_input_sha256=None if row[13] is None else Sha256(row[13]),
+        analysis_nine_categories_complete=bool(row[14]),
+        completion_metadata_snapshot_id=None if row[15] is None else MetadataSnapshotId(row[15]),
+        completion_reference_set_id=row[16],
+        completion_reference_set_complete=bool(row[17]),
+        completion_tag_set_id=row[18],
+        completion_tag_set_complete=bool(row[19]),
     )
 
 
@@ -300,15 +302,19 @@ class SqliteBibliographyRepository:
                 )
                 result.append(
                     IdentityRecord(
-                        WorkId(work_id),
-                        WorkVersionId(version_id),
-                        None if representative_id is None else WorkVersionId(representative_id),
-                        role,
-                        identifiers,
-                        None if values_json is None else initial_metadata_from_json(values_json),
-                        revision,
-                        completed_id is not None,
-                        sha256_digest(revision_payload.encode("utf-8")),
+                        work_id=WorkId(work_id),
+                        work_version_id=WorkVersionId(version_id),
+                        representative_version_id=None
+                        if representative_id is None
+                        else WorkVersionId(representative_id),
+                        version_role=role,
+                        identifiers=identifiers,
+                        current_metadata=None
+                        if values_json is None
+                        else InitialMetadata.model_validate_json(values_json),
+                        metadata_revision=revision,
+                        completed=completed_id is not None,
+                        identity_revision=sha256_digest(revision_payload.encode("utf-8")),
                     )
                 )
             return tuple(result)
@@ -322,12 +328,12 @@ class SqliteBibliographyRepository:
             ).fetchall()
         return tuple(
             StoredObservation(
-                ObservationId(identifier),
-                provider,
-                provider_record_id,
-                Sha256(payload_sha256),
-                payload_json,
-                UtcTimestamp(observed_at),
+                observation_id=ObservationId(identifier),
+                provider=provider,
+                provider_record_id=provider_record_id,
+                payload_sha256=Sha256(payload_sha256),
+                payload_json=payload_json,
+                observed_at=UtcTimestamp(observed_at),
             )
             for (
                 identifier,

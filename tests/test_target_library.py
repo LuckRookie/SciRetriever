@@ -13,7 +13,6 @@ from target_publisher_support import ScenarioFactory
 from sciretriever.batching.completion import complete_analysis
 from sciretriever.bibliography.api import accept_completion
 from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.bibliography.identity_model import BibliographicObservation, InitialMetadata
 from sciretriever.interoperability.library import LibraryPageRequest, LibraryReadService
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
@@ -26,7 +25,7 @@ from sciretriever.literature_store.sqlite.publisher_support import (
     publish_bibliography,
 )
 from sciretriever.model.library import QueryFilterV1
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import BibliographicObservation, Identifier, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionId,
     UtcTimestamp,
@@ -46,15 +45,21 @@ class TargetLibraryTests(unittest.TestCase):
 
     def _publish(self, title: str, role: str, suffix: str) -> tuple[str, str]:
         observation = BibliographicObservation(
-            "crossref",
-            f"record-{suffix}",
-            0,
-            UtcTimestamp("2026-07-31T00:00:00Z"),
-            (Identifier(namespace="doi", value=f"10.1000/{suffix}"),),
-            InitialMetadata(
-                title, ("Ada Lovelace",), 2024, "article", "metadata alpha", "Journal Alpha", "en"
+            provider="crossref",
+            provider_record_id=f"record-{suffix}",
+            source_priority=0,
+            observed_at=UtcTimestamp("2026-07-31T00:00:00Z"),
+            identifiers=(Identifier(namespace="doi", value=f"10.1000/{suffix}"),),
+            metadata=InitialMetadata(
+                title=title,
+                authors=("Ada Lovelace",),
+                year=2024,
+                item_type="article",
+                abstract="metadata alpha",
+                venue="Journal Alpha",
+                language="en",
             ),
-            role,
+            version_role=role,
         )
         prepared = prepare_initial_ingest(
             SqliteBibliographyRepository(self.catalog), (observation,)

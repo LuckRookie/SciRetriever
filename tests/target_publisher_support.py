@@ -26,7 +26,6 @@ from sciretriever.bibliography.api import (
     metadata_snapshot_sha256,
 )
 from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.bibliography.identity_model import BibliographicObservation, InitialMetadata
 from sciretriever.collection.api import (
     CollectionAcceptance,
     CollectionMembershipFact,
@@ -47,7 +46,7 @@ from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     create_or_open_catalog,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import BibliographicObservation, Identifier, InitialMetadata
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
@@ -113,13 +112,18 @@ class ScenarioFactory:
     @staticmethod
     def prepared(path: Path, suffix: str = "a"):
         observation = BibliographicObservation(
-            "crossref",
-            f"record-{suffix}",
-            0,
-            UtcTimestamp("2026-07-31T00:00:00Z"),
-            (Identifier(namespace="doi", value=f"10.1000/publisher-{suffix}"),),
-            InitialMetadata(f"Atomic publication {suffix}", ("Ada",), 2026, "article"),
-            "formal",
+            provider="crossref",
+            provider_record_id=f"record-{suffix}",
+            source_priority=0,
+            observed_at=UtcTimestamp("2026-07-31T00:00:00Z"),
+            identifiers=(Identifier(namespace="doi", value=f"10.1000/publisher-{suffix}"),),
+            metadata=InitialMetadata(
+                title=f"Atomic publication {suffix}",
+                authors=("Ada",),
+                year=2026,
+                item_type="article",
+            ),
+            version_role="formal",
         )
         return prepare_initial_ingest(SqliteBibliographyRepository(path), (observation,))
 

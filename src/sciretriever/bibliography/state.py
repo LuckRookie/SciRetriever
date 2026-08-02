@@ -1,44 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import assert_never
 
+from sciretriever.model.literature import VersionFacts
 from sciretriever.model.primitives import (
-    AnalysisArtifactId,
-    LightDocumentId,
-    MetadataSnapshotId,
     MissingStep,
-    Sha256,
-    WorkId,
-    WorkVersionAssetId,
-    WorkVersionId,
     WorkVersionState,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class VersionFacts:
-    work_id: WorkId
-    work_version_id: WorkVersionId
-    version_role: str
-    metadata_snapshot_id: MetadataSnapshotId | None
-    metadata_revision: int | None
-    metadata_sha256: Sha256 | None
-    accepted_primary_id: WorkVersionAssetId | None
-    current_light_document_id: LightDocumentId | None
-    current_light_sha256: Sha256 | None
-    current_light_primary_id: WorkVersionAssetId | None
-    current_light_complete: bool
-    completion_light_document_id: LightDocumentId | None
-    completion_analysis_artifact_id: AnalysisArtifactId | None
-    analysis_light_document_id: LightDocumentId | None
-    analysis_input_sha256: Sha256 | None
-    analysis_nine_categories_complete: bool
-    completion_metadata_snapshot_id: MetadataSnapshotId | None
-    completion_reference_set_id: str | None
-    completion_reference_set_complete: bool
-    completion_tag_set_id: str | None
-    completion_tag_set_complete: bool
 
 
 def derive_work_version_state(facts: VersionFacts) -> WorkVersionState:
@@ -94,7 +62,6 @@ def derive_missing_step(facts: VersionFacts) -> MissingStep | None:
 
 
 __all__ = (
-    "VersionFacts",
     "derive_missing_step",
     "derive_work_version_state",
 )

@@ -6,9 +6,16 @@ import unicodedata
 from collections.abc import Iterable
 from uuid import uuid5
 
-from sciretriever.bibliography.identity_model import (
+from sciretriever.bibliography.ports import BibliographyRepository
+from sciretriever.bibliography.publisher_contracts import metadata_snapshot_sha256
+from sciretriever.kernel import (
+    CanonicalJsonObject,
+    parse_canonical_json,
+)
+from sciretriever.model.literature import (
     BibliographicObservation,
     ExpectedIdentityRevision,
+    Identifier,
     IdentityRecord,
     IdentityReviewRelation,
     InitialMetadata,
@@ -19,13 +26,6 @@ from sciretriever.bibliography.identity_model import (
     PreparedVersionRelation,
     SupersededIdentity,
 )
-from sciretriever.bibliography.ports import BibliographyRepository
-from sciretriever.bibliography.publisher_contracts import metadata_snapshot_sha256
-from sciretriever.kernel import (
-    CanonicalJsonObject,
-    parse_canonical_json,
-)
-from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     MetadataSnapshotId,
     StableIdentifierId,
@@ -168,19 +168,19 @@ def prepare_initial_ingest(
 ) -> PreparedBibliographyAcceptance:
     normalized = tuple(
         BibliographicObservation(
-            item.provider,
-            item.provider_record_id,
-            item.source_priority,
-            item.observed_at,
-            tuple(
+            provider=item.provider,
+            provider_record_id=item.provider_record_id,
+            source_priority=item.source_priority,
+            observed_at=item.observed_at,
+            identifiers=tuple(
                 sorted(
                     {_identifier(value) for value in item.identifiers},
                     key=lambda value: (value.namespace, value.value),
                 )
             ),
-            item.metadata,
-            item.version_role,
-            item.version_relation,
+            metadata=item.metadata,
+            version_role=item.version_role,
+            version_relation=item.version_relation,
         )
         for item in observations
     )
@@ -277,7 +277,13 @@ def prepare_initial_ingest(
         )
     prepared_observations = tuple(
         sorted(
-            {prepare_observation(item) for item in normalized} | set(existing_observations),
+            {
+                item.observation_id: item
+                for item in (
+                    *existing_observations,
+                    *(prepare_observation(value) for value in normalized),
+                )
+            }.values(),
             key=lambda item: str(item.observation_id),
         )
     )
@@ -297,13 +303,13 @@ def prepare_initial_ingest(
         selected is not None and selected.completed
     ):
         snapshot = PreparedMetadataSnapshot(
-            MetadataSnapshotId(
+            snapshot_id=MetadataSnapshotId(
                 str(uuid5(IDENTITY_NAMESPACE, f"snapshot:{version_id}:{snapshot_sha}"))
             ),
-            revision,
-            snapshot_sha,
-            values_json,
-            provenance_json,
+            revision=revision,
+            sha256=snapshot_sha,
+            values_json=values_json,
+            provenance_json=provenance_json,
         )
     blocked_identifiers = {
         identifier
@@ -313,17 +319,17 @@ def prepare_initial_ingest(
     }
     prepared_identifiers = tuple(
         PreparedIdentifier(
-            StableIdentifierId(
+            identifier_id=StableIdentifierId(
                 str(uuid5(IDENTITY_NAMESPACE, f"identifier:{item.namespace}:{item.value}"))
             ),
-            item,
+            value=item,
         )
         for item in identifiers
         if item not in blocked_identifiers
     )
     relations = tuple(
         PreparedVersionRelation(
-            VersionRelationId(
+            relation_id=VersionRelationId(
                 str(
                     uuid5(
                         IDENTITY_NAMESPACE,
@@ -331,9 +337,9 @@ def prepare_initial_ingest(
                     )
                 )
             ),
-            version_id,
-            target.work_version_id,
-            evidence.relation,
+            left_version_id=version_id,
+            right_version_id=target.work_version_id,
+            relation=evidence.relation,
         )
         for evidence in (
             item.version_relation for item in normalized if item.version_relation is not None
@@ -353,10 +359,10 @@ def prepare_initial_ingest(
         ):
             reviews.append(
                 IdentityReviewRelation(
-                    version_id,
-                    record.work_version_id,
-                    "identity-conflict" if reasons else "possible-duplicate",
-                    ",".join(reasons) if reasons else "title-token-overlap",
+                    left_version_id=version_id,
+                    right_version_id=record.work_version_id,
+                    relation="identity-conflict" if reasons else "possible-duplicate",
+                    evidence=",".join(reasons) if reasons else "title-token-overlap",
                 )
             )
     expected_records = {
@@ -364,27 +370,36 @@ def prepare_initial_ingest(
         for record in candidates + related + (() if selected is None else (selected,))
     }
     expected = tuple(
-        ExpectedIdentityRevision(record.work_version_id, record.identity_revision)
+        ExpectedIdentityRevision(
+            work_version_id=record.work_version_id,
+            revision=record.identity_revision,
+        )
         for record in expected_records.values()
     )
     superseded = tuple(
-        SupersededIdentity(record.work_id, record.work_version_id)
+        SupersededIdentity(work_id=record.work_id, work_version_id=record.work_version_id)
         for record in compatible
         if record.work_version_id != version_id
     )
     return PreparedBibliographyAcceptance(
-        work_id,
-        version_id,
-        role,
-        representative,
-        prepared_identifiers,
-        tuple(item for item in prepared_observations if item not in existing_observations),
-        snapshot,
-        relations,
-        tuple(reviews),
-        expected,
-        superseded,
-        None
+        work_id=work_id,
+        work_version_id=version_id,
+        version_role=role,
+        representative_version_id=representative,
+        identifiers=prepared_identifiers,
+        observations=tuple(
+            item for item in prepared_observations if item not in existing_observations
+        ),
+        metadata_snapshot=snapshot,
+        version_relations=relations,
+        review_relations=tuple(reviews),
+        expected_revisions=expected,
+        superseded_identities=superseded,
+        role_update=None
         if selected is None or selected.version_role == role
-        else PreparedRoleUpdate(version_id, selected.version_role, role),
+        else PreparedRoleUpdate(
+            work_version_id=version_id,
+            expected_role=selected.version_role,
+            role=role,
+        ),
     )

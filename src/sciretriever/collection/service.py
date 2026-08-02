@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID, uuid4, uuid5
 
-from sciretriever.bibliography.api import BibliographicObservation, InitialMetadata
 from sciretriever.collection.citation import (
     CitationExecutionDependencies,
     CitationRunExecutor,
@@ -42,6 +41,7 @@ from sciretriever.kernel import (
     CanonicalJsonObject,
     parse_canonical_json,
 )
+from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionId,
     CollectionRunId,
@@ -272,19 +272,19 @@ class CollectionService:
     ) -> str:
         prepared = self._dependencies.bibliography.prepare_discovery(
             BibliographicObservation(
-                observation.provider,
-                observation.provider_record_id,
-                ordinal,
-                self._dependencies.clock(),
-                observation.identifiers,
-                InitialMetadata(
-                    observation.title,
-                    observation.authors,
-                    observation.publication_year,
-                    "other",
-                    observation.abstract,
+                provider=observation.provider,
+                provider_record_id=observation.provider_record_id,
+                source_priority=ordinal,
+                observed_at=self._dependencies.clock(),
+                identifiers=observation.identifiers,
+                metadata=InitialMetadata(
+                    title=observation.title,
+                    authors=observation.authors,
+                    year=observation.publication_year,
+                    item_type="other",
+                    abstract=observation.abstract,
                 ),
-                "formal",
+                version_role="formal",
             )
         )
         membership_id = MembershipId(

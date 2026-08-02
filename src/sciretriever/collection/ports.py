@@ -3,11 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from sciretriever.bibliography.api import (
-    BibliographicObservation,
     IdentityCandidateQuery,
     IdentityCandidateSet,
-    PreparedBibliographyAcceptance,
-    VersionFacts,
     WorkFacts,
 )
 from sciretriever.collection.citation_input import CitationRunInput
@@ -35,6 +32,11 @@ from sciretriever.collection.provenance import (
 from sciretriever.collection.publisher_contracts import (
     CollectionAcceptance,
     ExistingCollectionAcceptance,
+)
+from sciretriever.model.literature import (
+    BibliographicObservation,
+    PreparedBibliographyAcceptance,
+    VersionFacts,
 )
 from sciretriever.model.primitives import CollectionId, CollectionRunId, WorkId, WorkVersionId
 

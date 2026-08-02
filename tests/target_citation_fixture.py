@@ -9,11 +9,8 @@ from tempfile import TemporaryDirectory
 from test_target_collection import FakeMetadataPort, observation
 
 from sciretriever.bibliography.api import (
-    BibliographicObservation,
     IdentityCandidateQuery,
     IdentityCandidateSet,
-    PreparedBibliographyAcceptance,
-    VersionFacts,
     WorkFacts,
 )
 from sciretriever.collection.api import (
@@ -37,7 +34,12 @@ from sciretriever.literature_store.sqlite import (
     SqliteCollectionRepository,
     create_or_open_catalog,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import (
+    BibliographicObservation,
+    Identifier,
+    PreparedBibliographyAcceptance,
+    VersionFacts,
+)
 from sciretriever.model.primitives import (
     CitationDirection,
     WorkId,

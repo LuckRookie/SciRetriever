@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, unique
 
-from sciretriever.bibliography.api import PreparedBibliographyAcceptance
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
 )
+from sciretriever.model.literature import PreparedBibliographyAcceptance
 from sciretriever.model.primitives import (
     CitationDirection,
     CollectionCauseId,

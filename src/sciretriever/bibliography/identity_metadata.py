@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from uuid import UUID, uuid5
 
-from sciretriever.bibliography.identity_model import (
+from sciretriever.model.literature import (
     BibliographicObservation,
+    Identifier,
     InitialMetadata,
     StoredObservation,
     VersionRelationEvidence,
 )
-from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import ObservationId, sha256_digest
 
 IDENTITY_NAMESPACE = UUID("4dcd977a-16c2-4e67-8072-f032c2c73a70")
@@ -46,12 +46,12 @@ def prepare_observation(observation: BibliographicObservation) -> StoredObservat
     digest = sha256_digest(payload.encode("ascii"))
     key = f"observation:{observation.provider}:{observation.provider_record_id}:{digest}"
     return StoredObservation(
-        ObservationId(str(uuid5(IDENTITY_NAMESPACE, key))),
-        observation.provider,
-        observation.provider_record_id,
-        digest,
-        payload,
-        observation.observed_at,
+        observation_id=ObservationId(str(uuid5(IDENTITY_NAMESPACE, key))),
+        provider=observation.provider,
+        provider_record_id=observation.provider_record_id,
+        payload_sha256=digest,
+        payload_json=payload,
+        observed_at=observation.observed_at,
     )
 
 
@@ -80,27 +80,31 @@ def observation_from_stored(value: StoredObservation) -> BibliographicObservatio
     parsed_relation = None
     if relation is not None:
         parsed_relation = VersionRelationEvidence(
-            Identifier(namespace=relation["target"][0], value=relation["target"][1]),
-            relation["relation"],
+            target_identifier=Identifier(
+                namespace=relation["target"][0], value=relation["target"][1]
+            ),
+            relation=relation["relation"],
         )
     return BibliographicObservation(
-        value.provider,
-        value.provider_record_id,
-        payload["source_priority"],
-        value.observed_at,
-        tuple(Identifier(namespace=item[0], value=item[1]) for item in payload["identifiers"]),
-        InitialMetadata(
-            metadata["title"],
-            tuple(metadata["authors"]),
-            metadata["year"],
-            metadata["item_type"],
-            metadata["abstract"],
-            metadata["venue"],
-            metadata["language"],
-            tuple(metadata["keywords"]),
+        provider=value.provider,
+        provider_record_id=value.provider_record_id,
+        source_priority=payload["source_priority"],
+        observed_at=value.observed_at,
+        identifiers=tuple(
+            Identifier(namespace=item[0], value=item[1]) for item in payload["identifiers"]
         ),
-        payload["version_role"],
-        parsed_relation,
+        metadata=InitialMetadata(
+            title=metadata["title"],
+            authors=tuple(metadata["authors"]),
+            year=metadata["year"],
+            item_type=metadata["item_type"],
+            abstract=metadata["abstract"],
+            venue=metadata["venue"],
+            language=metadata["language"],
+            keywords=tuple(metadata["keywords"]),
+        ),
+        version_role=payload["version_role"],
+        version_relation=parsed_relation,
     )
 
 
@@ -120,21 +124,25 @@ def unified_metadata(
                 provenance[field] = f"{item.provider}:{item.provider_record_id}"
                 break
     metadata = InitialMetadata(
-        next((item.metadata.title for item in ordered if item.metadata.title is not None), None),
-        next((item.metadata.authors for item in ordered if item.metadata.authors), ()),
-        next((item.metadata.year for item in ordered if item.metadata.year is not None), None),
-        next(
+        title=next(
+            (item.metadata.title for item in ordered if item.metadata.title is not None), None
+        ),
+        authors=next((item.metadata.authors for item in ordered if item.metadata.authors), ()),
+        year=next((item.metadata.year for item in ordered if item.metadata.year is not None), None),
+        item_type=next(
             (item.metadata.item_type for item in ordered if item.metadata.item_type is not None),
             None,
         ),
-        next(
+        abstract=next(
             (item.metadata.abstract for item in ordered if item.metadata.abstract is not None), None
         ),
-        next((item.metadata.venue for item in ordered if item.metadata.venue is not None), None),
-        next(
+        venue=next(
+            (item.metadata.venue for item in ordered if item.metadata.venue is not None), None
+        ),
+        language=next(
             (item.metadata.language for item in ordered if item.metadata.language is not None), None
         ),
-        next((item.metadata.keywords for item in ordered if item.metadata.keywords), ()),
+        keywords=next((item.metadata.keywords for item in ordered if item.metadata.keywords), ()),
     )
     return metadata, json.dumps(
         provenance, ensure_ascii=True, separators=(",", ":"), sort_keys=True

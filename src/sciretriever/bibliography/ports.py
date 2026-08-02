@@ -1,7 +1,6 @@
 from typing import Protocol
 
 from sciretriever.bibliography.curation_model import CurationTopology
-from sciretriever.bibliography.identity_model import IdentityRecord, StoredObservation
 from sciretriever.bibliography.model import (
     CurationCommit,
     CurationScope,
@@ -12,9 +11,8 @@ from sciretriever.bibliography.model import (
     ValidatedVersionRelation,
     WorkFacts,
 )
+from sciretriever.model.literature import IdentityRecord, StoredObservation, VersionFacts
 from sciretriever.model.primitives import WorkId, WorkVersionId
-
-from .state import VersionFacts
 
 
 class BibliographyRepository(Protocol):
