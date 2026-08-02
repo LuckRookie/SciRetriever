@@ -9,11 +9,7 @@ from test_target_collection import FakeMetadataPort
 
 from sciretriever.collection.api import (
     CitationCollectionRequest,
-    CitationDiscoveryRequest,
-    CitationObservation,
     FinishCollectionRun,
-    ProviderCitationResult,
-    ProviderDiscoveryResult,
     WorkSeed,
 )
 from sciretriever.collection.service import (
@@ -32,6 +28,12 @@ from sciretriever.model.primitives import (
     CitationDirection,
     WorkVersionState,
 )
+from sciretriever.model.sources import (
+    CitationDiscoveryRequest,
+    CitationObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +48,12 @@ class RaisingCitationPort:
 class WrongProviderPort:
     def expand(self, request: CitationDiscoveryRequest) -> ProviderCitationResult:
         observation = CitationObservation(
-            "wrong",
-            request.seed,
-            Identifier(namespace="doi", value="10.1/wrong"),
-            request.direction,
+            provider="wrong",
+            source_work_id=request.seed,
+            target_identifier=Identifier(namespace="doi", value="10.1/wrong"),
+            direction=request.direction,
         )
-        return ProviderCitationResult("wrong", (observation,), None)
+        return ProviderCitationResult(provider="wrong", observations=(observation,), failure=None)
 
 
 class FailingFinishRepository(SqliteCollectionRepository):
@@ -227,7 +229,7 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
         repository = FailingFinishRepository(self.catalog)
         metadata = FakeMetadataPort(
             self.catalog,
-            ProviderDiscoveryResult("seed", (), None),
+            ProviderDiscoveryResult(provider="seed", observations=(), failure=None),
             [],
         )
         source = CitationSource("empty", FakeCitationPort(self.catalog, {}, "empty", []))

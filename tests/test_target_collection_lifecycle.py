@@ -11,8 +11,6 @@ from test_target_collection import (
 
 from sciretriever.collection.api import (
     CollectionAcceptance,
-    MetadataDiscoveryRequest,
-    ProviderDiscoveryResult,
     TopicConditions,
 )
 from sciretriever.collection.service import MetadataSource
@@ -21,6 +19,7 @@ from sciretriever.literature_store.sqlite import (
     open_read_only_snapshot,
 )
 from sciretriever.model.primitives import WorkVersionState
+from sciretriever.model.sources import MetadataDiscoveryRequest, ProviderDiscoveryResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +47,9 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         repeated = observation("dup", "same", "10.1/same")
         port = FakeMetadataPort(
             self.catalog,
-            ProviderDiscoveryResult("dup", (repeated, repeated), None),
+            ProviderDiscoveryResult(
+                provider="dup", observations=(repeated, repeated), failure=None
+            ),
             [],
         )
         service = self.service((MetadataSource("dup", port),))
@@ -79,7 +80,9 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         conflicting = observation("dup", "same", "10.1/different")
         port = FakeMetadataPort(
             self.catalog,
-            ProviderDiscoveryResult("dup", (first, conflicting), None),
+            ProviderDiscoveryResult(
+                provider="dup", observations=(first, conflicting), failure=None
+            ),
             [],
         )
         service = self.service((MetadataSource("dup", port),))
@@ -107,9 +110,9 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         first = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "first",
-                (observation("first", "accepted", "10.1/accepted"),),
-                None,
+                provider="first",
+                observations=(observation("first", "accepted", "10.1/accepted"),),
+                failure=None,
             ),
             [],
         )
@@ -148,12 +151,12 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         port = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "source",
-                (
+                provider="source",
+                observations=(
                     observation("source", "accepted", "10.1/accepted"),
                     observation("source", "interrupt", "10.1/interrupt"),
                 ),
-                None,
+                failure=None,
             ),
             [],
         )

@@ -9,18 +9,12 @@ from sciretriever.bibliography.api import (
 )
 from sciretriever.collection.citation_input import CitationRunInput
 from sciretriever.collection.model import (
-    CitationDiscoveryRequest,
-    CitationObservation,
     CollectionDefinition,
     CollectionRunRecord,
     CreateCollectionDefinition,
     FinishCollectionRun,
     MembershipPage,
     MembershipPageRequest,
-    MetadataDiscoveryRequest,
-    MetadataObservation,
-    ProviderCitationResult,
-    ProviderDiscoveryResult,
     StartCollectionRun,
 )
 from sciretriever.collection.provenance import (
@@ -39,6 +33,14 @@ from sciretriever.model.literature import (
     VersionFacts,
 )
 from sciretriever.model.primitives import CollectionId, CollectionRunId, WorkId, WorkVersionId
+from sciretriever.model.sources import (
+    CitationDiscoveryRequest,
+    CitationObservation,
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
+)
 
 
 class MetadataDiscoveryPort(Protocol):

@@ -6,11 +6,7 @@ from uuid import UUID, uuid5
 
 from sciretriever.collection.citation_input import CitationRunInput
 from sciretriever.collection.citation_progress import CitationProgress
-from sciretriever.collection.model import (
-    CitationDiscoveryRequest,
-    CitationObservation,
-    CollectionRunRecord,
-)
+from sciretriever.collection.model import CollectionRunRecord
 from sciretriever.collection.ports import (
     BibliographyIngestionPort,
     CitationDiscoveryPort,
@@ -44,6 +40,7 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
     WorkId,
 )
+from sciretriever.model.sources import CitationDiscoveryRequest, CitationObservation
 
 _NAMESPACE = UUID("f4fc7f3d-633b-4cc3-8ae7-e32c83cc932d")
 
@@ -163,7 +160,11 @@ class CitationRunExecutor:
                     parent_path = paths[str(parent)]
                     for provider in value.providers:
                         current_provider = provider
-                        request = CitationDiscoveryRequest(parent, value.direction, value.max_new)
+                        request = CitationDiscoveryRequest(
+                            seed=parent,
+                            direction=value.direction,
+                            limit=value.max_new,
+                        )
                         try:
                             result = sources[provider].expand(request)
                             valid_result = result.provider == provider and all(
@@ -180,10 +181,14 @@ class CitationRunExecutor:
                                 progress.failed(
                                     provider,
                                     FailureEvidence(
-                                        "provider-invalid-response",
-                                        Reason(f"{provider} citation response was invalid"),
-                                        Action("Check the citation provider response."),
-                                        False,
+                                        code="provider-invalid-response",
+                                        reason=Reason(
+                                            value=f"{provider} citation response was invalid"
+                                        ),
+                                        action=Action(
+                                            value="Check the citation provider response."
+                                        ),
+                                        retryable=False,
                                     ),
                                 )
                                 continue
@@ -201,10 +206,10 @@ class CitationRunExecutor:
                             progress.failed(
                                 provider,
                                 FailureEvidence(
-                                    "interrupted",
-                                    Reason("citation collection was interrupted"),
-                                    Action("Rerun citation collection to resume."),
-                                    True,
+                                    code="interrupted",
+                                    reason=Reason(value="citation collection was interrupted"),
+                                    action=Action(value="Rerun citation collection to resume."),
+                                    retryable=True,
                                 ),
                             )
                             raise
@@ -212,10 +217,10 @@ class CitationRunExecutor:
                             progress.failed(
                                 provider,
                                 FailureEvidence(
-                                    "provider-unavailable",
-                                    Reason(f"{provider} citation provider failed"),
-                                    Action("Retry the citation provider."),
-                                    True,
+                                    code="provider-unavailable",
+                                    reason=Reason(value=f"{provider} citation provider failed"),
+                                    action=Action(value="Retry the citation provider."),
+                                    retryable=True,
                                 ),
                             )
                             continue
@@ -223,10 +228,12 @@ class CitationRunExecutor:
                             progress.failed(
                                 provider,
                                 FailureEvidence(
-                                    "provider-execution-failed",
-                                    Reason(f"{provider} citation provider execution failed"),
-                                    Action("Inspect the citation adapter and retry."),
-                                    True,
+                                    code="provider-execution-failed",
+                                    reason=Reason(
+                                        value=f"{provider} citation provider execution failed"
+                                    ),
+                                    action=Action(value="Inspect the citation adapter and retry."),
+                                    retryable=True,
                                 ),
                             )
                             continue
@@ -275,10 +282,10 @@ class CitationRunExecutor:
                                 progress.failed(
                                     provider,
                                     FailureEvidence(
-                                        "publication-conflict",
-                                        Reason("citation acceptance conflicted"),
-                                        Action("Retry the citation collection."),
-                                        True,
+                                        code="publication-conflict",
+                                        reason=Reason(value="citation acceptance conflicted"),
+                                        action=Action(value="Retry the citation collection."),
+                                        retryable=True,
                                     ),
                                 )
                                 continue
@@ -312,10 +319,10 @@ class CitationRunExecutor:
                     progress.failed(
                         current_provider,
                         FailureEvidence(
-                            "execution-failed",
-                            Reason("citation execution failed"),
-                            Action("Inspect collection state and retry."),
-                            True,
+                            code="execution-failed",
+                            reason=Reason(value="citation execution failed"),
+                            action=Action(value="Inspect collection state and retry."),
+                            retryable=True,
                         ),
                     )
                 finalizer.finish(

@@ -16,8 +16,6 @@ from sciretriever.collection.model import (
     CollectionRunRecord,
     CreateCollectionDefinition,
     MembershipPageRequest,
-    MetadataDiscoveryRequest,
-    MetadataObservation,
     StartCollectionRun,
 )
 from sciretriever.collection.ports import (
@@ -49,6 +47,7 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
     WorkVersionState,
 )
+from sciretriever.model.sources import MetadataDiscoveryRequest, MetadataObservation
 
 _COLLECTION_NAMESPACE = UUID("f4fc7f3d-633b-4cc3-8ae7-e32c83cc932d")
 
@@ -239,7 +238,12 @@ class CollectionService:
             raise BoundaryError.for_field("year_from", "must be an integer or null")
         if year_to is not None and (not isinstance(year_to, int) or isinstance(year_to, bool)):
             raise BoundaryError.for_field("year_to", "must be an integer or null")
-        return MetadataDiscoveryRequest(query, year_from, year_to, limit)
+        return MetadataDiscoveryRequest(
+            query=query,
+            year_from=year_from,
+            year_to=year_to,
+            limit=limit,
+        )
 
     def _execute_sources(
         self,

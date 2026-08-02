@@ -17,10 +17,10 @@ def _failure(provider: str, retryable: bool) -> FailureEvidence:
         else "Check the provider response or configuration."
     )
     return FailureEvidence(
-        "provider-unavailable" if retryable else "provider-invalid-response",
-        Reason(f"{provider} provider request failed"),
-        Action(action),
-        retryable,
+        code="provider-unavailable" if retryable else "provider-invalid-response",
+        reason=Reason(value=f"{provider} provider request failed"),
+        action=Action(value=action),
+        retryable=retryable,
     )
 
 
@@ -35,13 +35,19 @@ def collect_metadata(
         try:
             result = registry.metadata(name).search(request)
         except (OSError, TimeoutError):
-            result = ProviderDiscoveryResult(name, (), _failure(name, True))
+            result = ProviderDiscoveryResult(
+                provider=name, observations=(), failure=_failure(name, True)
+            )
         except (TypeError, ValueError):
-            result = ProviderDiscoveryResult(name, (), _failure(name, False))
+            result = ProviderDiscoveryResult(
+                provider=name, observations=(), failure=_failure(name, False)
+            )
         if result.provider != name or any(
             observation.provider != name for observation in result.observations
         ):
-            result = ProviderDiscoveryResult(name, (), _failure(name, False))
+            result = ProviderDiscoveryResult(
+                provider=name, observations=(), failure=_failure(name, False)
+            )
         results.append(result)
     return tuple(results)
 
@@ -57,13 +63,19 @@ def collect_citations(
         try:
             result = registry.citation(name).expand(request)
         except (OSError, TimeoutError):
-            result = ProviderCitationResult(name, (), _failure(name, True))
+            result = ProviderCitationResult(
+                provider=name, observations=(), failure=_failure(name, True)
+            )
         except (TypeError, ValueError):
-            result = ProviderCitationResult(name, (), _failure(name, False))
+            result = ProviderCitationResult(
+                provider=name, observations=(), failure=_failure(name, False)
+            )
         if result.provider != name or any(
             observation.provider != name for observation in result.observations
         ):
-            result = ProviderCitationResult(name, (), _failure(name, False))
+            result = ProviderCitationResult(
+                provider=name, observations=(), failure=_failure(name, False)
+            )
         results.append(result)
     return tuple(results)
 

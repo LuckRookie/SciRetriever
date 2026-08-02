@@ -2,24 +2,15 @@ from __future__ import annotations
 
 import json
 import unittest
-from dataclasses import FrozenInstanceError, asdict, fields
 from typing import get_type_hints
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from sciretriever.batching.ports import (
     AdmissionGuard,
     AdmissionPort,
     CatalogIdentity,
     OutputIdentity,
-)
-from sciretriever.collection.model import (
-    CitationDiscoveryRequest,
-    CitationObservation,
-    MetadataDiscoveryRequest,
-    MetadataObservation,
-    ProviderCitationResult,
-    ProviderDiscoveryResult,
 )
 from sciretriever.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 from sciretriever.content.model import (
@@ -69,6 +60,14 @@ from sciretriever.model.primitives import (
     WorkVersionId,
     sha256_digest,
 )
+from sciretriever.model.sources import (
+    CitationDiscoveryRequest,
+    CitationObservation,
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
+)
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
@@ -77,17 +76,29 @@ UUID_B = "00000000-0000-4000-8000-000000000002"
 class FakeCapabilities:
     def search(self, request: MetadataDiscoveryRequest) -> ProviderDiscoveryResult:
         return ProviderDiscoveryResult(
-            "fake", (MetadataObservation("fake", "r1", request.query, (), None, (), None),), None
+            provider="fake",
+            observations=(
+                MetadataObservation(
+                    provider="fake",
+                    provider_record_id="r1",
+                    title=request.query,
+                    authors=(),
+                    publication_year=None,
+                    identifiers=(),
+                    abstract=None,
+                ),
+            ),
+            failure=None,
         )
 
     def expand(self, request: CitationDiscoveryRequest) -> ProviderCitationResult:
         observation = CitationObservation(
-            "fake",
-            request.seed,
-            Identifier(namespace="doi", value="10.1/x"),
-            CitationDirection.REFERENCES,
+            provider="fake",
+            source_work_id=request.seed,
+            target_identifier=Identifier(namespace="doi", value="10.1/x"),
+            direction=CitationDirection.REFERENCES,
         )
-        return ProviderCitationResult("fake", (observation,), None)
+        return ProviderCitationResult(provider="fake", observations=(observation,), failure=None)
 
     def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
         _ = target
@@ -241,7 +252,7 @@ class TargetCapabilityPortTests(unittest.TestCase):
         model: AnalysisModelPort = fake
         transport: BoundedTransportPort = fake
         store: ArtifactStorePort = fake
-        request = MetadataDiscoveryRequest("query", None, None, 10)
+        request = MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=10)
         content_target = self.content_target()
         target = content_target.work_version_id
         candidates = resolver.resolve(content_target)
@@ -259,7 +270,9 @@ class TargetCapabilityPortTests(unittest.TestCase):
         self.assertEqual(metadata.search(request).provider, "fake")
         self.assertEqual(
             citation.expand(
-                CitationDiscoveryRequest(WorkId(UUID_A), CitationDirection.REFERENCES, 10)
+                CitationDiscoveryRequest(
+                    seed=WorkId(UUID_A), direction=CitationDirection.REFERENCES, limit=10
+                )
             ).provider,
             "fake",
         )
@@ -294,13 +307,13 @@ class TargetCapabilityPortTests(unittest.TestCase):
         self.assertEqual((encoded.record_count, output.value), (1, b"Title"))
 
     def test_public_dtos_are_frozen_explicit_and_type_resolvable(self) -> None:
-        value = MetadataDiscoveryRequest("query", 2020, 2024, 5)
-        with self.assertRaises(FrozenInstanceError):
+        value = MetadataDiscoveryRequest(query="query", year_from=2020, year_to=2024, limit=5)
+        with self.assertRaises(ValidationError):
             setattr(value, "query", "changed")
         self.assertEqual(
-            tuple(item.name for item in fields(value)), ("query", "year_from", "year_to", "limit")
+            tuple(type(value).model_fields), ("query", "year_from", "year_to", "limit")
         )
-        self.assertEqual(json.loads(json.dumps(asdict(value)))["limit"], 5)
+        self.assertEqual(json.loads(value.model_dump_json())["limit"], 5)
         self.assertEqual(
             get_type_hints(MetadataDiscoveryPort.search)["return"], ProviderDiscoveryResult
         )

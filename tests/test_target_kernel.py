@@ -308,8 +308,8 @@ class ContractTests(TestCase):
     def test_reason_action_errors_have_stable_typed_fields(self) -> None:
         evidence = FailureEvidence(
             code="invalid-boundary",
-            reason=Reason("The supplied value is invalid."),
-            action=Action("Supply a canonical value."),
+            reason=Reason(value="The supplied value is invalid."),
+            action=Action(value="Supply a canonical value."),
             retryable=False,
         )
         error = BoundaryError.from_evidence(evidence, field="work_id")

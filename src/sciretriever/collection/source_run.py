@@ -5,8 +5,6 @@ from typing import Callable, Protocol
 
 from sciretriever.collection.model import (
     CollectionRunRecord,
-    MetadataDiscoveryRequest,
-    MetadataObservation,
 )
 from sciretriever.collection.ports import CollectionRepository, MetadataDiscoveryPort
 from sciretriever.collection.publisher_contracts import CollectionAcceptanceConflict
@@ -17,8 +15,10 @@ from sciretriever.collection.run_results import (
     CollectionSourceResult,
     FinishCollectionRun,
 )
-from sciretriever.kernel.errors import BoundaryError, FailureEvidence
+from sciretriever.kernel.errors import BoundaryError
+from sciretriever.model.execution import FailureEvidence
 from sciretriever.model.primitives import CollectionRunId
+from sciretriever.model.sources import MetadataDiscoveryRequest, MetadataObservation
 
 
 class MetadataSourcePort(Protocol):

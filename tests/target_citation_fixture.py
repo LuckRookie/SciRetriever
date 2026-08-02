@@ -13,13 +13,7 @@ from sciretriever.bibliography.api import (
     IdentityCandidateSet,
     WorkFacts,
 )
-from sciretriever.collection.api import (
-    CitationDiscoveryRequest,
-    CitationObservation,
-    ProviderCitationResult,
-    ProviderDiscoveryResult,
-    TopicConditions,
-)
+from sciretriever.collection.api import TopicConditions
 from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
 from sciretriever.collection.service import (
     CitationSource,
@@ -46,6 +40,12 @@ from sciretriever.model.primitives import (
     WorkVersionId,
     WorkVersionState,
 )
+from sciretriever.model.sources import (
+    CitationDiscoveryRequest,
+    CitationObservation,
+    ProviderCitationResult,
+    ProviderDiscoveryResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,17 +65,17 @@ class FakeCitationPort:
             raise OSError("provider branch failed")
         values = self.edges.get((str(request.seed), request.direction), ())
         return ProviderCitationResult(
-            self.provider,
-            tuple(
+            provider=self.provider,
+            observations=tuple(
                 CitationObservation(
-                    self.provider,
-                    request.seed,
-                    item,
-                    request.direction,
+                    provider=self.provider,
+                    source_work_id=request.seed,
+                    target_identifier=item,
+                    direction=request.direction,
                 )
                 for item in values
             ),
-            None,
+            failure=None,
         )
 
 
@@ -115,7 +115,7 @@ class CitationCollectionTestCase(unittest.TestCase):
     def service(self, citation_sources: tuple[CitationSource, ...] = ()) -> CollectionService:
         metadata = FakeMetadataPort(
             self.catalog,
-            ProviderDiscoveryResult("seed", (), None),
+            ProviderDiscoveryResult(provider="seed", observations=(), failure=None),
             [],
         )
         return CollectionService(
@@ -133,9 +133,9 @@ class CitationCollectionTestCase(unittest.TestCase):
         metadata = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "seed",
-                (observation("seed", doi, doi),),
-                None,
+                provider="seed",
+                observations=(observation("seed", doi, doi),),
+                failure=None,
             ),
             [],
         )

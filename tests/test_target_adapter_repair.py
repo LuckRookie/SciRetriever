@@ -73,7 +73,7 @@ class FakeTransport:
 class SpoofingProvider:
     def search(self, request: MetadataDiscoveryRequest) -> ProviderDiscoveryResult:
         _ = request
-        return ProviderDiscoveryResult("spoofed", (), None)
+        return ProviderDiscoveryResult(provider="spoofed", observations=(), failure=None)
 
 
 class TargetAdapterRepairTests(unittest.TestCase):
@@ -112,7 +112,7 @@ class TargetAdapterRepairTests(unittest.TestCase):
         results = collect_metadata(
             registry,
             ("bad", "good"),
-            MetadataDiscoveryRequest("query", None, None, 10),
+            MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=10),
         )
 
         self.assertEqual(tuple(result.provider for result in results), ("bad", "good"))
@@ -125,7 +125,7 @@ class TargetAdapterRepairTests(unittest.TestCase):
         result = collect_metadata(
             registry,
             ("configured",),
-            MetadataDiscoveryRequest("query", None, None, 1),
+            MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=1),
         )[0]
 
         self.assertEqual(result.provider, "configured")
@@ -143,12 +143,14 @@ class TargetAdapterRepairTests(unittest.TestCase):
         metadata_results = collect_metadata(
             registry,
             METADATA_PROVIDERS,
-            MetadataDiscoveryRequest("query", None, None, 20),
+            MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=20),
         )
         citation_results = collect_citations(
             registry,
             CITATION_PROVIDERS,
-            CitationDiscoveryRequest(WorkId(UUID_A), CitationDirection.REFERENCES, 20),
+            CitationDiscoveryRequest(
+                seed=WorkId(UUID_A), direction=CitationDirection.REFERENCES, limit=20
+            ),
         )
 
         self.assertEqual(

@@ -16,12 +16,10 @@ from sciretriever.bibliography.api import (
 from sciretriever.collection.api import (
     CausePageRequest,
     CitationCollectionRequest,
-    CitationDiscoveryRequest,
     CitationRunInput,
     CollectionSeed,
     IdentifierSeed,
     PathPageRequest,
-    ProviderDiscoveryResult,
     WorkSeed,
     WorkVersionSeed,
 )
@@ -53,6 +51,7 @@ from sciretriever.model.primitives import (
     WorkVersionState,
     sha256_digest,
 )
+from sciretriever.model.sources import CitationDiscoveryRequest, ProviderDiscoveryResult
 
 
 class TargetCitationCollectionTests(CitationCollectionTestCase):
@@ -179,7 +178,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
                         "seed",
                         FakeMetadataPort(
                             self.catalog,
-                            ProviderDiscoveryResult("seed", (), None),
+                            ProviderDiscoveryResult(provider="seed", observations=(), failure=None),
                             [],
                         ),
                     ),

@@ -41,10 +41,10 @@ class CitationClient(Protocol):
 
 def _failure(provider: str, retryable: bool) -> FailureEvidence:
     return FailureEvidence(
-        "provider-unavailable" if retryable else "provider-invalid-response",
-        Reason(f"{provider} provider request failed"),
-        Action("Retry the request." if retryable else "Check provider configuration."),
-        retryable,
+        code="provider-unavailable" if retryable else "provider-invalid-response",
+        reason=Reason(value=f"{provider} provider request failed"),
+        action=Action(value="Retry the request." if retryable else "Check provider configuration."),
+        retryable=retryable,
     )
 
 
@@ -58,24 +58,34 @@ class MetadataProviderAdapter:
             records = self._client.search(request)
             observations = tuple(
                 MetadataObservation(
-                    self._provider,
-                    record.record_id,
-                    record.title,
-                    record.authors,
-                    record.publication_year,
-                    tuple(
+                    provider=self._provider,
+                    provider_record_id=record.record_id,
+                    title=record.title,
+                    authors=record.authors,
+                    publication_year=record.publication_year,
+                    identifiers=tuple(
                         Identifier(namespace=namespace, value=value)
                         for namespace, value in record.identifiers
                     ),
-                    record.abstract,
+                    abstract=record.abstract,
                 )
                 for record in records
             )
-            return ProviderDiscoveryResult(self._provider, observations, None)
+            return ProviderDiscoveryResult(
+                provider=self._provider, observations=observations, failure=None
+            )
         except (OSError, TimeoutError):
-            return ProviderDiscoveryResult(self._provider, (), _failure(self._provider, True))
+            return ProviderDiscoveryResult(
+                provider=self._provider,
+                observations=(),
+                failure=_failure(self._provider, True),
+            )
         except (TypeError, ValueError):
-            return ProviderDiscoveryResult(self._provider, (), _failure(self._provider, False))
+            return ProviderDiscoveryResult(
+                provider=self._provider,
+                observations=(),
+                failure=_failure(self._provider, False),
+            )
 
 
 class CitationProviderAdapter:
@@ -88,18 +98,28 @@ class CitationProviderAdapter:
             records = self._client.expand(request)
             observations = tuple(
                 CitationObservation(
-                    self._provider,
-                    request.seed,
-                    Identifier(namespace=record.namespace, value=record.value),
-                    request.direction,
+                    provider=self._provider,
+                    source_work_id=request.seed,
+                    target_identifier=Identifier(namespace=record.namespace, value=record.value),
+                    direction=request.direction,
                 )
                 for record in records
             )
-            return ProviderCitationResult(self._provider, observations, None)
+            return ProviderCitationResult(
+                provider=self._provider, observations=observations, failure=None
+            )
         except (OSError, TimeoutError):
-            return ProviderCitationResult(self._provider, (), _failure(self._provider, True))
+            return ProviderCitationResult(
+                provider=self._provider,
+                observations=(),
+                failure=_failure(self._provider, True),
+            )
         except (TypeError, ValueError):
-            return ProviderCitationResult(self._provider, (), _failure(self._provider, False))
+            return ProviderCitationResult(
+                provider=self._provider,
+                observations=(),
+                failure=_failure(self._provider, False),
+            )
 
 
 __all__ = (

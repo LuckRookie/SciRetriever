@@ -11,9 +11,6 @@ from sciretriever.collection.api import (
     CausePageRequest,
     CollectionAcceptance,
     CollectionAcceptanceConflict,
-    MetadataDiscoveryRequest,
-    MetadataObservation,
-    ProviderDiscoveryResult,
     TopicConditions,
 )
 from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
@@ -38,6 +35,11 @@ from sciretriever.literature_store.sqlite import (
 )
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import WorkVersionState
+from sciretriever.model.sources import (
+    MetadataDiscoveryRequest,
+    MetadataObservation,
+    ProviderDiscoveryResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +70,13 @@ class ConflictPublisher:
 
 def observation(provider: str, record: str, doi: str) -> MetadataObservation:
     return MetadataObservation(
-        provider,
-        record,
-        f"Title {doi}",
-        ("Ada",),
-        2026,
-        (Identifier(namespace="doi", value=doi),),
-        f"Abstract {doi}",
+        provider=provider,
+        provider_record_id=record,
+        title=f"Title {doi}",
+        authors=("Ada",),
+        publication_year=2026,
+        identifiers=(Identifier(namespace="doi", value=doi),),
+        abstract=f"Abstract {doi}",
     )
 
 
@@ -112,7 +114,7 @@ class TargetCollectionTests(unittest.TestCase):
                     "empty",
                     FakeMetadataPort(
                         self.catalog,
-                        ProviderDiscoveryResult("empty", (), None),
+                        ProviderDiscoveryResult(provider="empty", observations=(), failure=None),
                         [],
                     ),
                 ),
@@ -145,27 +147,27 @@ class TargetCollectionTests(unittest.TestCase):
         crossref = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "crossref",
-                (
+                provider="crossref",
+                observations=(
                     observation("crossref", "crossref-a", "10.1/a"),
                     observation("crossref", "crossref-b", "10.1/b"),
                 ),
-                None,
+                failure=None,
             ),
             requests,
         )
         failure = FailureEvidence(
-            "provider-timeout",
-            Reason("provider deadline exceeded"),
-            Action("retry provider"),
-            True,
+            code="provider-timeout",
+            reason=Reason(value="provider deadline exceeded"),
+            action=Action(value="retry provider"),
+            retryable=True,
         )
         openalex = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "openalex",
-                (observation("openalex", "openalex-a", "10.1/a"),),
-                failure,
+                provider="openalex",
+                observations=(observation("openalex", "openalex-a", "10.1/a"),),
+                failure=failure,
             ),
             requests,
         )
@@ -181,7 +183,11 @@ class TargetCollectionTests(unittest.TestCase):
         first = service.run_topic(definition.collection_id, WorkVersionState.COMPLETED)
         second = service.run_topic(definition.collection_id, WorkVersionState.COMPLETED)
 
-        self.assertEqual(requests, [MetadataDiscoveryRequest("catalysis", 2020, 2026, 25)] * 4)
+        self.assertEqual(
+            requests,
+            [MetadataDiscoveryRequest(query="catalysis", year_from=2020, year_to=2026, limit=25)]
+            * 4,
+        )
         self.assertEqual((first.status.value, first.requested_advance_to), ("partial", "completed"))
         self.assertEqual(
             (
@@ -222,12 +228,12 @@ class TargetCollectionTests(unittest.TestCase):
         port = FakeMetadataPort(
             self.catalog,
             ProviderDiscoveryResult(
-                "crossref",
-                (
+                provider="crossref",
+                observations=(
                     observation("crossref", "accepted", "10.1/accepted"),
                     observation("crossref", "conflict", "10.1/conflict"),
                 ),
-                None,
+                failure=None,
             ),
             [],
         )

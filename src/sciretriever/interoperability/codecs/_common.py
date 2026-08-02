@@ -148,10 +148,10 @@ def rejected(ordinal: int, code: str, reason: str) -> RecordParseResult:
         ordinal,
         ImportedBibliographicRecord("", (), (), None, (), (), ()),
         FailureEvidence(
-            code,
-            Reason(reason),
-            Action("Correct or remove this bibliography record."),
-            False,
+            code=code,
+            reason=Reason(value=reason),
+            action=Action(value="Correct or remove this bibliography record."),
+            retryable=False,
         ),
     )
 

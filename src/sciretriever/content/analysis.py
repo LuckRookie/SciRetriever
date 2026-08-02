@@ -204,8 +204,8 @@ class AnalysisValidationError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
-        self.reason = Reason("Analysis output failed strict validation.")
-        self.action = Action("Retry with a supported model and complete source evidence.")
+        self.reason = Reason(value="Analysis output failed strict validation.")
+        self.action = Action(value="Retry with a supported model and complete source evidence.")
 
     def __str__(self) -> str:
         return self.code
