@@ -7,16 +7,6 @@ from sciretriever.bibliography.api import (
     IdentityCandidateSet,
     WorkFacts,
 )
-from sciretriever.collection.citation_input import CitationRunInput
-from sciretriever.collection.model import (
-    CollectionDefinition,
-    CollectionRunRecord,
-    CreateCollectionDefinition,
-    FinishCollectionRun,
-    MembershipPage,
-    MembershipPageRequest,
-    StartCollectionRun,
-)
 from sciretriever.collection.provenance import (
     CausePage,
     CausePageRequest,
@@ -26,6 +16,16 @@ from sciretriever.collection.provenance import (
 from sciretriever.collection.publisher_contracts import (
     CollectionAcceptance,
     ExistingCollectionAcceptance,
+)
+from sciretriever.model.collection import (
+    CitationRunInput,
+    CollectionDefinition,
+    CollectionRunRecord,
+    CreateCollectionDefinition,
+    FinishCollectionRun,
+    MembershipPage,
+    MembershipPageRequest,
+    StartCollectionRun,
 )
 from sciretriever.model.literature import (
     BibliographicObservation,

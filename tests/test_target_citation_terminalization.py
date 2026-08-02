@@ -69,11 +69,11 @@ class FailingFinishRepository(SqliteCollectionRepository):
 class TargetCitationTerminalizationTests(CitationCollectionTestCase):
     def request(self, work_id, providers: tuple[str, ...]) -> CitationCollectionRequest:
         return CitationCollectionRequest(
-            (WorkSeed(work_id),),
-            providers,
-            CitationDirection.REFERENCES,
-            1,
-            10,
+            seed_selectors=(WorkSeed(work_id=work_id),),
+            providers=providers,
+            direction=CitationDirection.REFERENCES,
+            depth=1,
+            max_new=10,
         )
 
     def rows(self, collection_id):
@@ -165,9 +165,9 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
                     __import__(
                         "sciretriever.collection.api", fromlist=["MembershipPageRequest"]
                     ).MembershipPageRequest(
-                        target.collection_id,
-                        None,
-                        100,
+                        collection_id=target.collection_id,
+                        after_work_id=None,
+                        limit=100,
                     )
                 ).members
             ),

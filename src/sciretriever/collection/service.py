@@ -10,13 +10,9 @@ from sciretriever.collection.citation import (
     CitationRunExecutor,
     CitationSource,
 )
-from sciretriever.collection.citation_input import CitationCollectionRequest
-from sciretriever.collection.model import (
-    CollectionDefinition,
-    CollectionRunRecord,
-    CreateCollectionDefinition,
-    MembershipPageRequest,
-    StartCollectionRun,
+from sciretriever.collection.citation_input import (
+    validate_citation_collection_request,
+    validated_citation_run_input,
 )
 from sciretriever.collection.ports import (
     BibliographyIngestionPort,
@@ -38,6 +34,14 @@ from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
     parse_canonical_json,
+)
+from sciretriever.model.collection import (
+    CitationCollectionRequest,
+    CollectionDefinition,
+    CollectionRunRecord,
+    CreateCollectionDefinition,
+    MembershipPageRequest,
+    StartCollectionRun,
 )
 from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
@@ -116,14 +120,14 @@ class CollectionService:
         ):
             raise BoundaryError.for_field("description", "must be nonblank text when present")
         definition = CollectionDefinition(
-            CollectionId(str(uuid4())),
-            name.strip(),
-            None if description is None else description.strip(),
-            None if topic_conditions is None else topic_conditions.validated(),
-            self._dependencies.clock(),
+            collection_id=CollectionId(str(uuid4())),
+            name=name.strip(),
+            description=None if description is None else description.strip(),
+            topic_conditions=None if topic_conditions is None else topic_conditions.validated(),
+            created_at=self._dependencies.clock(),
         )
         return self._dependencies.repository.create_definition(
-            CreateCollectionDefinition(definition)
+            CreateCollectionDefinition(definition=definition)
         )
 
     def get(self, collection_id: CollectionId) -> CollectionDefinition | None:
@@ -145,12 +149,12 @@ class CollectionService:
             run_id = CollectionRunId(str(uuid4()))
             self._dependencies.repository.start_run(
                 StartCollectionRun(
-                    run_id,
-                    collection_id,
-                    "topic",
-                    definition.topic_conditions,
-                    None,
-                    requested_advance_to.value,
+                    run_id=run_id,
+                    collection_id=collection_id,
+                    mode="topic",
+                    topic_conditions=definition.topic_conditions,
+                    citation_input=None,
+                    requested_advance_to=requested_advance_to.value,
                 )
             )
             return self._execute_sources(
@@ -170,6 +174,7 @@ class CollectionService:
         pending: BoundaryError | None = None
         with self._dependencies.acquire_core_write():
             try:
+                validate_citation_collection_request(request)
                 if self._dependencies.repository.get_definition(collection_id) is None:
                     raise BoundaryError.for_field("collection_id", "must identify a collection")
                 configured = tuple(item.name for item in self._dependencies.citation_sources)
@@ -186,12 +191,12 @@ class CollectionService:
                 run_id = CollectionRunId(str(uuid4()))
                 self._dependencies.repository.start_run(
                     StartCollectionRun(
-                        run_id,
-                        collection_id,
-                        "citation",
-                        None,
-                        value.validated(),
-                        requested_advance_to.value,
+                        run_id=run_id,
+                        collection_id=collection_id,
+                        mode="citation",
+                        topic_conditions=None,
+                        citation_input=validated_citation_run_input(value),
+                        requested_advance_to=requested_advance_to.value,
                     )
                 )
                 return CitationRunExecutor(
@@ -213,7 +218,11 @@ class CollectionService:
         after = None
         while True:
             page = self._dependencies.repository.list_memberships(
-                MembershipPageRequest(collection_id, after, 1000),
+                MembershipPageRequest(
+                    collection_id=collection_id,
+                    after_work_id=after,
+                    limit=1000,
+                ),
             )
             members.update(str(item.work_id) for item in page.members)
             after = page.next_after_work_id

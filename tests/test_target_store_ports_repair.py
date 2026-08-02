@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from pydantic import ValidationError
+
 from sciretriever.bibliography.model import (
     CurationPlanError,
     CurationScope,
@@ -15,7 +17,7 @@ from sciretriever.bibliography.model import (
     SnapshotToken,
     ValidatedCurationPlan,
 )
-from sciretriever.collection.model import CollectionCounts, CollectionRunStatus, FinishCollectionRun
+from sciretriever.collection.run_results import validate_finish_collection_run
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.literature_store.filesystem import (
     AdmissionOrderError,
@@ -27,9 +29,11 @@ from sciretriever.literature_store.sqlite import (
     SqliteCurationTransaction,
     create_or_open_catalog,
 )
+from sciretriever.model.collection import CollectionCounts, FinishCollectionRun
 from sciretriever.model.primitives import (
     BatchRunId,
     CollectionRunId,
+    CollectionRunStatus,
     CurationPlanId,
     MembershipId,
     ReferenceFactId,
@@ -155,26 +159,36 @@ class TargetStorePortRepairTests(unittest.TestCase):
         self.assertEqual(outcomes, ["acquired"])
 
     def test_finish_command_rejects_nonterminal_and_reason_mismatches(self) -> None:
-        counts = CollectionCounts(0, 0, 0, 0, 0, 0)
+        counts = CollectionCounts(
+            discovered=0,
+            accepted=0,
+            new_members=0,
+            existing_members=0,
+            missing=0,
+            source_failures=0,
+        )
+
+        def command(status: CollectionRunStatus, reason: str | None) -> FinishCollectionRun:
+            return FinishCollectionRun(
+                run_id=CollectionRunId(UUIDS[0]),
+                status=status,
+                stop_reason=reason,
+                counts=counts,
+                source_results=(),
+            )
+
         for status in (CollectionRunStatus.CREATED, CollectionRunStatus.RUNNING):
             with self.subTest(status=status), self.assertRaises(BoundaryError):
-                FinishCollectionRun(CollectionRunId(UUIDS[0]), status, None, counts, ())
+                validate_finish_collection_run(command(status, None))
         with self.assertRaises(BoundaryError):
-            FinishCollectionRun(
-                CollectionRunId(UUIDS[0]), CollectionRunStatus.FAILED, None, counts, ()
-            )
+            validate_finish_collection_run(command(CollectionRunStatus.FAILED, None))
         with self.assertRaises(BoundaryError):
-            FinishCollectionRun(
-                CollectionRunId(UUIDS[0]), CollectionRunStatus.NO_TARGET, "reason", counts, ()
-            )
-        completed = FinishCollectionRun(
-            CollectionRunId(UUIDS[0]), CollectionRunStatus.COMPLETED, "reason", counts, ()
-        )
+            validate_finish_collection_run(command(CollectionRunStatus.NO_TARGET, "reason"))
+        completed = command(CollectionRunStatus.COMPLETED, "reason")
+        validate_finish_collection_run(completed)
         self.assertEqual(completed.stop_reason, "reason")
-        with self.assertRaises(BoundaryError):
-            FinishCollectionRun(
-                CollectionRunId(UUIDS[0]), CollectionRunStatus.COMPLETED, " ", counts, ()
-            )
+        with self.assertRaises(ValidationError):
+            command(CollectionRunStatus.COMPLETED, " ")
 
     def test_cause_and_path_mutations_change_snapshot_token(self) -> None:
         scope, cause_id, path_id = self.seed_collection_membership()

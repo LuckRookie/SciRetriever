@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from sciretriever.collection.run_results import (
+from sciretriever.collection.run_results import collection_source_failed
+from sciretriever.kernel import FailureEvidence
+from sciretriever.model.collection import (
     CollectionCounts,
-    CollectionRunStatus,
     CollectionSourceResult,
     FinishCollectionRun,
 )
-from sciretriever.kernel import FailureEvidence
 from sciretriever.model.primitives import (
     CollectionRunId,
+    CollectionRunStatus,
     WorkId,
 )
 
@@ -56,15 +57,19 @@ class CitationProgress:
             limit = self.providers.index(through_provider) + 1
         source_results = tuple(
             CollectionSourceResult(
-                ordinal,
-                name,
-                self.totals[name][0],
-                self.totals[name][1],
-                self.totals[name][2],
-                None if name not in self.failures else self.failures[name].code,
-                None if name not in self.failures else str(self.failures[name].reason),
-                None if name not in self.failures else str(self.failures[name].action),
-                None if name not in self.failures else self.failures[name].retryable,
+                ordinal=ordinal,
+                source=name,
+                discovered=self.totals[name][0],
+                accepted=self.totals[name][1],
+                missing=self.totals[name][2],
+                failure_code=None if name not in self.failures else self.failures[name].code,
+                failure_reason=None
+                if name not in self.failures
+                else str(self.failures[name].reason),
+                failure_action=None
+                if name not in self.failures
+                else str(self.failures[name].action),
+                retryable=None if name not in self.failures else self.failures[name].retryable,
             )
             for ordinal, name in enumerate(self.providers[:limit])
         )
@@ -74,14 +79,20 @@ class CitationProgress:
         )
         new_members = min(new_members, accepted)
         counts = CollectionCounts(
-            sum(item.discovered for item in source_results),
-            accepted,
-            new_members,
-            accepted - new_members,
-            sum(item.missing for item in source_results),
-            sum(item.failed for item in source_results),
+            discovered=sum(item.discovered for item in source_results),
+            accepted=accepted,
+            new_members=new_members,
+            existing_members=accepted - new_members,
+            missing=sum(item.missing for item in source_results),
+            source_failures=sum(collection_source_failed(item) for item in source_results),
         )
-        return FinishCollectionRun(self.run_id, status, stop_reason, counts, source_results)
+        return FinishCollectionRun(
+            run_id=self.run_id,
+            status=status,
+            stop_reason=stop_reason,
+            counts=counts,
+            source_results=source_results,
+        )
 
 
 __all__ = ("CitationProgress",)

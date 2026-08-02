@@ -6,29 +6,17 @@ import sqlite3
 from sciretriever.collection.api import (
     CausePage,
     CausePageRequest,
-    CitationRunInput,
     CollectionCauseFact,
     CollectionCauseId,
     CollectionCauseKind,
-    CollectionCounts,
-    CollectionDefinition,
-    CollectionMember,
     CollectionPathFact,
     CollectionPathId,
-    CollectionRunRecord,
-    CollectionRunStatus,
-    CollectionSourceResult,
-    CreateCollectionDefinition,
-    FinishCollectionRun,
-    MembershipPage,
-    MembershipPageRequest,
     PathPage,
     PathPageRequest,
-    StartCollectionRun,
-    ValidatedCitationInput,
-    ValidatedTopicConditionSet,
     citation_run_input_from_validated,
 )
+from sciretriever.collection.run_results import validate_finish_collection_run
+from sciretriever.collection.topic import validate_topic_condition_set
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
@@ -38,10 +26,26 @@ from sciretriever.literature_store.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.collection import (
+    CitationRunInput,
+    CollectionCounts,
+    CollectionDefinition,
+    CollectionMember,
+    CollectionRunRecord,
+    CollectionSourceResult,
+    CreateCollectionDefinition,
+    FinishCollectionRun,
+    MembershipPage,
+    MembershipPageRequest,
+    StartCollectionRun,
+    ValidatedCitationInput,
+    ValidatedTopicConditionSet,
+)
 from sciretriever.model.primitives import (
     CitationDirection,
     CollectionId,
     CollectionRunId,
+    CollectionRunStatus,
     MembershipId,
     UtcTimestamp,
     WorkId,
@@ -65,10 +69,16 @@ def _definition(row: tuple[str, str, str | None, str | None, str]) -> Collection
     validated = None
     if conditions is not None:
         validated = ValidatedTopicConditionSet(
-            conditions, sha256_digest(conditions.encode("ascii"))
+            canonical_json=conditions,
+            sha256=sha256_digest(conditions.encode("ascii")),
         )
+        validate_topic_condition_set(validated)
     return CollectionDefinition(
-        CollectionId(identifier), name, description, validated, _timestamp(created_at)
+        collection_id=CollectionId(identifier),
+        name=name,
+        description=description,
+        topic_conditions=validated,
+        created_at=_timestamp(created_at),
     )
 
 
@@ -96,23 +106,23 @@ def _run(
     if count_values[0] is not None:
         discovered, accepted, new_members, existing_members, missing, failures = count_values
         counts = CollectionCounts(
-            _required_count(discovered),
-            _required_count(accepted),
-            _required_count(new_members),
-            _required_count(existing_members),
-            _required_count(missing),
-            _required_count(failures),
+            discovered=_required_count(discovered),
+            accepted=_required_count(accepted),
+            new_members=_required_count(new_members),
+            existing_members=_required_count(existing_members),
+            missing=_required_count(missing),
+            source_failures=_required_count(failures),
         )
     return CollectionRunRecord(
-        CollectionRunId(identifier),
-        CollectionId(collection_id),
-        mode,
-        target,
-        CollectionRunStatus(status),
-        reason,
-        _timestamp(created_at),
-        counts,
-        sources,
+        run_id=CollectionRunId(identifier),
+        collection_id=CollectionId(collection_id),
+        mode=mode,
+        requested_advance_to=target,
+        status=CollectionRunStatus(status),
+        stop_reason=reason,
+        created_at=_timestamp(created_at),
+        counts=counts,
+        source_results=sources,
     )
 
 
@@ -121,15 +131,15 @@ def _source(
 ) -> CollectionSourceResult:
     ordinal, name, discovered, accepted, missing, code, reason, action, retryable = row
     return CollectionSourceResult(
-        ordinal,
-        name,
-        discovered,
-        accepted,
-        missing,
-        code,
-        reason,
-        action,
-        None if retryable is None else bool(retryable),
+        ordinal=ordinal,
+        source=name,
+        discovered=discovered,
+        accepted=accepted,
+        missing=missing,
+        failure_code=code,
+        failure_reason=reason,
+        failure_action=action,
+        retryable=None if retryable is None else bool(retryable),
     )
 
 
@@ -201,15 +211,15 @@ class SqliteCollectionRepository:
         if row is None:
             raise sqlite3.DatabaseError("collection run insert returned no timestamp")
         return CollectionRunRecord(
-            command.run_id,
-            command.collection_id,
-            command.mode,
-            command.requested_advance_to,
-            CollectionRunStatus.RUNNING,
-            None,
-            _timestamp(row[0]),
-            None,
-            (),
+            run_id=command.run_id,
+            collection_id=command.collection_id,
+            mode=command.mode,
+            requested_advance_to=command.requested_advance_to,
+            status=CollectionRunStatus.RUNNING,
+            stop_reason=None,
+            created_at=_timestamp(row[0]),
+            counts=None,
+            source_results=(),
         )
 
     def get_run(self, run_id: CollectionRunId) -> CollectionRunRecord | None:
@@ -241,10 +251,13 @@ class SqliteCollectionRepository:
             ).fetchone()
         if row is None:
             return None
-        value = ValidatedCitationInput(row[0], sha256_digest(row[0].encode("ascii")))
+        value = ValidatedCitationInput(
+            canonical_json=row[0], sha256=sha256_digest(row[0].encode("ascii"))
+        )
         return citation_run_input_from_validated(value)
 
     def finish_run(self, command: FinishCollectionRun) -> CollectionRunRecord:
+        validate_finish_collection_run(command)
         with create_or_open_catalog(self._catalog_path) as connection:
             row = connection.execute(
                 "SELECT collection_id,mode,requested_advance_to,created_at FROM collection_runs "
@@ -296,15 +309,15 @@ class SqliteCollectionRepository:
             connection.commit()
         collection_id, mode, target, created_at = row
         return CollectionRunRecord(
-            command.run_id,
-            CollectionId(collection_id),
-            mode,
-            target,
-            command.status,
-            command.stop_reason,
-            _timestamp(created_at),
-            command.counts,
-            command.source_results,
+            run_id=command.run_id,
+            collection_id=CollectionId(collection_id),
+            mode=mode,
+            requested_advance_to=target,
+            status=command.status,
+            stop_reason=command.stop_reason,
+            created_at=_timestamp(created_at),
+            counts=command.counts,
+            source_results=command.source_results,
         )
 
     def list_memberships(self, request: MembershipPageRequest) -> MembershipPage:
@@ -319,10 +332,14 @@ class SqliteCollectionRepository:
             ).fetchall()
         visible = rows[: request.limit]
         members = tuple(
-            CollectionMember(WorkId(row[0]), CollectionRunId(row[1])) for row in visible
+            CollectionMember(
+                work_id=WorkId(row[0]),
+                first_collection_run_id=CollectionRunId(row[1]),
+            )
+            for row in visible
         )
         cursor = members[-1].work_id if len(rows) > request.limit else None
-        return MembershipPage(members, cursor)
+        return MembershipPage(members=members, next_after_work_id=cursor)
 
     def list_causes(self, request: CausePageRequest) -> CausePage:
         after = "" if request.after_cause_id is None else str(request.after_cause_id)

@@ -15,16 +15,9 @@ from sciretriever.bibliography.api import (
 )
 from sciretriever.collection.api import (
     CausePageRequest,
-    CitationCollectionRequest,
-    CitationRunInput,
-    CollectionSeed,
-    IdentifierSeed,
     PathPageRequest,
-    WorkSeed,
-    WorkVersionSeed,
 )
 from sciretriever.collection.citation_input import (
-    ValidatedCitationInput,
     citation_run_input_from_validated,
 )
 from sciretriever.collection.service import (
@@ -41,6 +34,15 @@ from sciretriever.kernel import (
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
+)
+from sciretriever.model.collection import (
+    CitationCollectionRequest,
+    CitationRunInput,
+    CollectionSeed,
+    IdentifierSeed,
+    ValidatedCitationInput,
+    WorkSeed,
+    WorkVersionSeed,
 )
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
@@ -67,7 +69,9 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
             )
         )
         encoded = canonical_json_bytes(payload)
-        validated = ValidatedCitationInput(encoded.decode("ascii"), sha256_digest(encoded))
+        validated = ValidatedCitationInput(
+            canonical_json=encoded.decode("ascii"), sha256=sha256_digest(encoded)
+        )
 
         with self.assertRaisesRegex(BoundaryError, "citation_input"):
             citation_run_input_from_validated(validated)
@@ -77,16 +81,16 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         _, second = self.add_work("10.1/b")
         target = self.service().create("citation-target", None, None)
         request = CitationCollectionRequest(
-            (
-                WorkSeed(second.work_id),
-                WorkVersionSeed(first.work_version_id),
-                IdentifierSeed(Identifier(namespace="doi", value="10.1/b")),
-                CollectionSeed(first_collection.collection_id),
+            seed_selectors=(
+                WorkSeed(work_id=second.work_id),
+                WorkVersionSeed(work_version_id=first.work_version_id),
+                IdentifierSeed(identifier=Identifier(namespace="doi", value="10.1/b")),
+                CollectionSeed(collection_id=first_collection.collection_id),
             ),
-            ("alpha", "beta"),
-            CitationDirection.BOTH,
-            0,
-            9,
+            providers=("alpha", "beta"),
+            direction=CitationDirection.BOTH,
+            depth=0,
+            max_new=9,
         )
 
         requests: list[CitationDiscoveryRequest] = []
@@ -123,11 +127,11 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         empty = self.service().create("empty-seed", None, None)
         missing = "00000000-0000-4000-8000-000000000099"
         selectors = (
-            WorkSeed(WorkId(missing)),
-            WorkVersionSeed(WorkVersionId(missing)),
-            IdentifierSeed(Identifier(namespace="doi", value="10.1/missing")),
-            CollectionSeed(CollectionId(missing)),
-            CollectionSeed(empty.collection_id),
+            WorkSeed(work_id=WorkId(missing)),
+            WorkVersionSeed(work_version_id=WorkVersionId(missing)),
+            IdentifierSeed(identifier=Identifier(namespace="doi", value="10.1/missing")),
+            CollectionSeed(collection_id=CollectionId(missing)),
+            CollectionSeed(collection_id=empty.collection_id),
         )
         source = CitationSource("alpha", FakeCitationPort(self.catalog, {}, "alpha", []))
         for selector in selectors:
@@ -135,11 +139,11 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
                 self.service((source,)).run_citation(
                     target.collection_id,
                     CitationCollectionRequest(
-                        (selector,),
-                        ("alpha",),
-                        CitationDirection.REFERENCES,
-                        1,
-                        10,
+                        seed_selectors=(selector,),
+                        providers=("alpha",),
+                        direction=CitationDirection.REFERENCES,
+                        depth=1,
+                        max_new=10,
                     ),
                     WorkVersionState.UNREVIEWED,
                 )
@@ -192,11 +196,11 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
             service.run_citation(
                 target.collection_id,
                 CitationCollectionRequest(
-                    (IdentifierSeed(identifier),),
-                    ("alpha",),
-                    CitationDirection.REFERENCES,
-                    1,
-                    10,
+                    seed_selectors=(IdentifierSeed(identifier=identifier),),
+                    providers=("alpha",),
+                    direction=CitationDirection.REFERENCES,
+                    depth=1,
+                    max_new=10,
                 ),
                 WorkVersionState.UNREVIEWED,
             )
@@ -254,11 +258,11 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         service = self.service(sources)
         target = service.create("cyclic", None, None)
         request = CitationCollectionRequest(
-            (WorkSeed(first.work_id),),
-            ("alpha", "beta"),
-            CitationDirection.REFERENCES,
-            2,
-            10,
+            seed_selectors=(WorkSeed(work_id=first.work_id),),
+            providers=("alpha", "beta"),
+            direction=CitationDirection.REFERENCES,
+            depth=2,
+            max_new=10,
         )
 
         first_run = service.run_citation(
@@ -325,22 +329,22 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         max_run = service.run_citation(
             limited.collection_id,
             CitationCollectionRequest(
-                (WorkSeed(seed.work_id),),
-                ("alpha",),
-                CitationDirection.REFERENCES,
-                4,
-                1,
+                seed_selectors=(WorkSeed(work_id=seed.work_id),),
+                providers=("alpha",),
+                direction=CitationDirection.REFERENCES,
+                depth=4,
+                max_new=1,
             ),
             WorkVersionState.UNREVIEWED,
         )
         no_new_run = service.run_citation(
             empty.collection_id,
             CitationCollectionRequest(
-                (WorkSeed(second.work_id),),
-                ("alpha",),
-                CitationDirection.REFERENCES,
-                4,
-                3,
+                seed_selectors=(WorkSeed(work_id=second.work_id),),
+                providers=("alpha",),
+                direction=CitationDirection.REFERENCES,
+                depth=4,
+                max_new=3,
             ),
             WorkVersionState.UNREVIEWED,
         )

@@ -3,21 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from sciretriever.collection.model import (
-    CollectionRunRecord,
-)
 from sciretriever.collection.ports import CollectionRepository, MetadataDiscoveryPort
 from sciretriever.collection.publisher_contracts import CollectionAcceptanceConflict
 from sciretriever.collection.run_finalization import CollectionRunFinalizer
-from sciretriever.collection.run_results import (
+from sciretriever.collection.run_results import collection_source_failed
+from sciretriever.kernel.errors import BoundaryError
+from sciretriever.model.collection import (
     CollectionCounts,
-    CollectionRunStatus,
+    CollectionRunRecord,
     CollectionSourceResult,
     FinishCollectionRun,
 )
-from sciretriever.kernel.errors import BoundaryError
 from sciretriever.model.execution import FailureEvidence
-from sciretriever.model.primitives import CollectionRunId
+from sciretriever.model.primitives import CollectionRunId, CollectionRunStatus
 from sciretriever.model.sources import MetadataDiscoveryRequest, MetadataObservation
 
 
@@ -47,12 +45,15 @@ class SourceProgress:
     ) -> CollectionSourceResult:
         fields = (None, None, None, None) if failure is None else failure
         return CollectionSourceResult(
-            self.ordinal,
-            self.source,
-            self.accepted + self.missing,
-            self.accepted,
-            self.missing,
-            *fields,
+            ordinal=self.ordinal,
+            source=self.source,
+            discovered=self.accepted + self.missing,
+            accepted=self.accepted,
+            missing=self.missing,
+            failure_code=fields[0],
+            failure_reason=fields[1],
+            failure_action=fields[2],
+            retryable=fields[3],
         )
 
 
@@ -151,7 +152,7 @@ class SourceRunExecutor:
                 source_results,
             )
             raise
-        partial = any(item.failed or item.missing for item in source_results)
+        partial = any(collection_source_failed(item) or item.missing for item in source_results)
         return self._finish(
             finalizer,
             run_id,
@@ -174,20 +175,20 @@ class SourceRunExecutor:
     ) -> CollectionRunRecord:
         new_members = len(accepted - existing)
         counts = CollectionCounts(
-            sum(item.discovered for item in source_results),
-            len(accepted),
-            new_members,
-            len(accepted) - new_members,
-            sum(item.missing for item in source_results),
-            sum(item.failed for item in source_results),
+            discovered=sum(item.discovered for item in source_results),
+            accepted=len(accepted),
+            new_members=new_members,
+            existing_members=len(accepted) - new_members,
+            missing=sum(item.missing for item in source_results),
+            source_failures=sum(collection_source_failed(item) for item in source_results),
         )
         return finalizer.finish(
             FinishCollectionRun(
-                run_id,
-                status,
-                stop_reason,
-                counts,
-                tuple(source_results),
+                run_id=run_id,
+                status=status,
+                stop_reason=stop_reason,
+                counts=counts,
+                source_results=tuple(source_results),
             )
         )
 

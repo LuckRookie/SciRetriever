@@ -4,9 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID, uuid5
 
-from sciretriever.collection.citation_input import CitationRunInput
 from sciretriever.collection.citation_progress import CitationProgress
-from sciretriever.collection.model import CollectionRunRecord
 from sciretriever.collection.ports import (
     BibliographyIngestionPort,
     CitationDiscoveryPort,
@@ -25,17 +23,18 @@ from sciretriever.collection.publisher_contracts import (
     ExistingCollectionAcceptance,
 )
 from sciretriever.collection.run_finalization import CollectionRunFinalizer
-from sciretriever.collection.run_results import CollectionRunStatus
 from sciretriever.kernel import (
     Action,
     CanonicalJsonObject,
     FailureEvidence,
     Reason,
 )
+from sciretriever.model.collection import CitationRunInput, CollectionRunRecord
 from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionId,
     CollectionRunId,
+    CollectionRunStatus,
     MembershipId,
     UtcTimestamp,
     WorkId,

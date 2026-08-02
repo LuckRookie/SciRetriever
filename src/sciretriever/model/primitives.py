@@ -228,6 +228,17 @@ class CollectionMode(_StrEnum):
 
 
 @unique
+class CollectionRunStatus(_StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    NO_TARGET = "no-target"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+@unique
 class DiscoveryRelation(_StrEnum):
     MEMBER = "member"
     SEED = "seed"

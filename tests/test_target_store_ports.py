@@ -13,17 +13,6 @@ from sciretriever.bibliography.model import (
     ValidatedCurationPlan,
     VersionMove,
 )
-from sciretriever.collection.model import (
-    CollectionCounts,
-    CollectionDefinition,
-    CollectionRunStatus,
-    CollectionSourceResult,
-    CreateCollectionDefinition,
-    FinishCollectionRun,
-    MembershipPageRequest,
-    StartCollectionRun,
-    ValidatedTopicConditionSet,
-)
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import (
     AdmissionBindingError,
@@ -39,11 +28,22 @@ from sciretriever.literature_store.sqlite import (
     SqliteCurationTransaction,
     create_or_open_catalog,
 )
+from sciretriever.model.collection import (
+    CollectionCounts,
+    CollectionDefinition,
+    CollectionSourceResult,
+    CreateCollectionDefinition,
+    FinishCollectionRun,
+    MembershipPageRequest,
+    StartCollectionRun,
+    ValidatedTopicConditionSet,
+)
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     BatchRunId,
     CollectionId,
     CollectionRunId,
+    CollectionRunStatus,
     CurationPlanId,
     ExtensionRecordId,
     UtcTimestamp,
@@ -98,47 +98,60 @@ class TargetStorePortTests(unittest.TestCase):
 
     def test_collection_repository_round_trip_and_membership_page(self) -> None:
         repository = SqliteCollectionRepository(self.catalog)
-        conditions = ValidatedTopicConditionSet("{}", sha256_digest(b"{}"))
+        conditions = ValidatedTopicConditionSet(canonical_json="{}", sha256=sha256_digest(b"{}"))
         definition = CollectionDefinition(
-            CollectionId(UUIDS[0]),
-            "topic",
-            None,
-            conditions,
-            UtcTimestamp("2026-07-31T00:00:00Z"),
+            collection_id=CollectionId(UUIDS[0]),
+            name="topic",
+            description=None,
+            topic_conditions=conditions,
+            created_at=UtcTimestamp("2026-07-31T00:00:00Z"),
         )
-        repository.create_definition(CreateCollectionDefinition(definition))
+        repository.create_definition(CreateCollectionDefinition(definition=definition))
         run = repository.start_run(
             StartCollectionRun(
-                CollectionRunId(UUIDS[1]),
-                definition.collection_id,
-                "topic",
-                conditions,
-                None,
-                "completed",
+                run_id=CollectionRunId(UUIDS[1]),
+                collection_id=definition.collection_id,
+                mode="topic",
+                topic_conditions=conditions,
+                citation_input=None,
+                requested_advance_to="completed",
             )
         )
-        counts = CollectionCounts(3, 2, 1, 1, 1, 1)
+        counts = CollectionCounts(
+            discovered=3,
+            accepted=2,
+            new_members=1,
+            existing_members=1,
+            missing=1,
+            source_failures=1,
+        )
         sources = (
-            CollectionSourceResult(0, "crossref", 2, 2, 0),
             CollectionSourceResult(
-                1,
-                "openalex",
-                1,
-                0,
-                1,
-                "provider-timeout",
-                "provider timed out",
-                "retry provider",
-                True,
+                ordinal=0,
+                source="crossref",
+                discovered=2,
+                accepted=2,
+                missing=0,
+            ),
+            CollectionSourceResult(
+                ordinal=1,
+                source="openalex",
+                discovered=1,
+                accepted=0,
+                missing=1,
+                failure_code="provider-timeout",
+                failure_reason="provider timed out",
+                failure_action="retry provider",
+                retryable=True,
             ),
         )
         finished = repository.finish_run(
             FinishCollectionRun(
-                run.run_id,
-                CollectionRunStatus.PARTIAL,
-                "source-failure",
-                counts,
-                sources,
+                run_id=run.run_id,
+                status=CollectionRunStatus.PARTIAL,
+                stop_reason="source-failure",
+                counts=counts,
+                source_results=sources,
             )
         )
         self.assertEqual(repository.get_definition(definition.collection_id), definition)
@@ -146,7 +159,11 @@ class TargetStorePortTests(unittest.TestCase):
         self.assertEqual(repository.get_run(run.run_id), finished)
         self.assertEqual(
             repository.list_memberships(
-                MembershipPageRequest(definition.collection_id, None, 2)
+                MembershipPageRequest(
+                    collection_id=definition.collection_id,
+                    after_work_id=None,
+                    limit=2,
+                )
             ).members,
             (),
         )

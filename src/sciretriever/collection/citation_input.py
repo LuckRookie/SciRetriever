@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
-from typing import TypeAlias, assert_never
+from typing import assert_never
 
 from pydantic import ValidationError
 
@@ -12,38 +11,24 @@ from sciretriever.kernel import (
     canonical_json_bytes,
     parse_canonical_json,
 )
+from sciretriever.model.collection import (
+    CitationCollectionRequest,
+    CitationRunInput,
+    CollectionSeed,
+    IdentifierSeed,
+    SeedSelector,
+    ValidatedCitationInput,
+    WorkSeed,
+    WorkVersionSeed,
+)
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     CitationDirection,
     CollectionId,
-    Sha256,
     WorkId,
     WorkVersionId,
     sha256_digest,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class WorkSeed:
-    work_id: WorkId
-
-
-@dataclass(frozen=True, slots=True)
-class WorkVersionSeed:
-    work_version_id: WorkVersionId
-
-
-@dataclass(frozen=True, slots=True)
-class IdentifierSeed:
-    identifier: Identifier
-
-
-@dataclass(frozen=True, slots=True)
-class CollectionSeed:
-    collection_id: CollectionId
-
-
-SeedSelector: TypeAlias = WorkSeed | WorkVersionSeed | IdentifierSeed | CollectionSeed
 
 
 class _SeedKind(str, Enum):
@@ -73,69 +58,40 @@ def _selector_value(selector: SeedSelector) -> CanonicalJsonObject:
             assert_never(unreachable)
 
 
-@dataclass(frozen=True, slots=True)
-class CitationCollectionRequest:
-    seed_selectors: tuple[SeedSelector, ...]
-    providers: tuple[str, ...]
-    direction: CitationDirection
-    depth: int
-    max_new: int
-
-    def __post_init__(self) -> None:
-        if not self.seed_selectors:
-            raise BoundaryError.for_field("seed_selectors", "must be nonempty")
-        if not self.providers or any(
-            not isinstance(item, str) or not item.strip() for item in self.providers
-        ):
-            raise BoundaryError.for_field("providers", "must be nonempty names")
-        if len(set(self.providers)) != len(self.providers):
-            raise BoundaryError.for_field("providers", "must be unique")
-        if not isinstance(self.depth, int) or isinstance(self.depth, bool) or self.depth < 0:
-            raise BoundaryError.for_field("depth", "must be a nonnegative integer")
-        if not isinstance(self.max_new, int) or isinstance(self.max_new, bool) or self.max_new < 1:
-            raise BoundaryError.for_field("max_new", "must be a positive integer")
-        if not isinstance(self.direction, CitationDirection):
-            raise BoundaryError.for_field("direction", "must be a CitationDirection")
+def validate_citation_collection_request(value: CitationCollectionRequest) -> None:
+    if not value.seed_selectors:
+        raise BoundaryError.for_field("seed_selectors", "must be nonempty")
+    if not value.providers:
+        raise BoundaryError.for_field("providers", "must be nonempty names")
+    if len(set(value.providers)) != len(value.providers):
+        raise BoundaryError.for_field("providers", "must be unique")
 
 
-@dataclass(frozen=True, slots=True)
-class CitationRunInput:
-    original_selectors: tuple[SeedSelector, ...]
-    resolved_work_ids: tuple[WorkId, ...]
-    providers: tuple[str, ...]
-    direction: CitationDirection
-    depth: int
-    max_new: int
-
-    def validated(self) -> ValidatedCitationInput:
-        payload = CanonicalJsonObject(
+def validated_citation_run_input(value: CitationRunInput) -> ValidatedCitationInput:
+    payload = CanonicalJsonObject(
+        (
+            ("depth", value.depth),
+            ("direction", value.direction.value),
+            ("max_new", value.max_new),
+            ("providers", value.providers),
+            ("resolved_work_ids", tuple(str(item) for item in value.resolved_work_ids)),
             (
-                ("depth", self.depth),
-                ("direction", self.direction.value),
-                ("max_new", self.max_new),
-                ("providers", self.providers),
-                ("resolved_work_ids", tuple(str(item) for item in self.resolved_work_ids)),
-                (
-                    "seed_selectors",
-                    tuple(_selector_value(item) for item in self.original_selectors),
-                ),
-            )
+                "seed_selectors",
+                tuple(_selector_value(item) for item in value.original_selectors),
+            ),
         )
-        encoded = canonical_json_bytes(payload)
-        return ValidatedCitationInput(encoded.decode("ascii"), sha256_digest(encoded))
+    )
+    encoded = canonical_json_bytes(payload)
+    return ValidatedCitationInput(
+        canonical_json=encoded.decode("ascii"),
+        sha256=sha256_digest(encoded),
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class ValidatedCitationInput:
-    canonical_json: str
-    sha256: Sha256
-
-    def __post_init__(self) -> None:
-        payload = canonical_json_bytes(parse_canonical_json(self.canonical_json))
-        if payload.decode("ascii") != self.canonical_json or sha256_digest(payload) != self.sha256:
-            raise BoundaryError.for_field(
-                "citation_input", "must be canonical JSON with matching hash"
-            )
+def validate_validated_citation_input(value: ValidatedCitationInput) -> None:
+    payload = canonical_json_bytes(parse_canonical_json(value.canonical_json))
+    if payload.decode("ascii") != value.canonical_json or sha256_digest(payload) != value.sha256:
+        raise BoundaryError.for_field("citation_input", "must be canonical JSON with matching hash")
 
 
 def _citation_run_input_from_validated(  # noqa: C901
@@ -171,20 +127,22 @@ def _citation_run_input_from_validated(  # noqa: C901
         kind = _SeedKind(str(selector["kind"]))
         match kind:
             case _SeedKind.WORK:
-                selectors.append(WorkSeed(WorkId(str(selector["value"]))))
+                selectors.append(WorkSeed(work_id=WorkId(str(selector["value"]))))
             case _SeedKind.WORK_VERSION:
-                selectors.append(WorkVersionSeed(WorkVersionId(str(selector["value"]))))
+                selectors.append(
+                    WorkVersionSeed(work_version_id=WorkVersionId(str(selector["value"])))
+                )
             case _SeedKind.IDENTIFIER:
                 selectors.append(
                     IdentifierSeed(
-                        Identifier(
+                        identifier=Identifier(
                             namespace=str(selector["namespace"]),
                             value=str(selector["value"]),
                         )
                     )
                 )
             case _SeedKind.COLLECTION:
-                selectors.append(CollectionSeed(CollectionId(str(selector["value"]))))
+                selectors.append(CollectionSeed(collection_id=CollectionId(str(selector["value"]))))
             case unreachable:
                 assert_never(unreachable)
     direction = fields["direction"]
@@ -203,17 +161,18 @@ def _citation_run_input_from_validated(  # noqa: C901
             raise BoundaryError.for_field("providers", "must contain strings")
         providers.append(item)
     return CitationRunInput(
-        tuple(selectors),
-        tuple(resolved),
-        tuple(providers),
-        CitationDirection(direction),
-        depth,
-        max_new,
+        original_selectors=tuple(selectors),
+        resolved_work_ids=tuple(resolved),
+        providers=tuple(providers),
+        direction=CitationDirection(direction),
+        depth=depth,
+        max_new=max_new,
     )
 
 
 def citation_run_input_from_validated(value: ValidatedCitationInput) -> CitationRunInput:
     try:
+        validate_validated_citation_input(value)
         return _citation_run_input_from_validated(value)
     except ValidationError as error:
         raise BoundaryError.for_field(
@@ -222,13 +181,8 @@ def citation_run_input_from_validated(value: ValidatedCitationInput) -> Citation
 
 
 __all__ = (
-    "CitationCollectionRequest",
-    "CitationRunInput",
-    "CollectionSeed",
-    "IdentifierSeed",
-    "SeedSelector",
-    "ValidatedCitationInput",
-    "WorkSeed",
-    "WorkVersionSeed",
     "citation_run_input_from_validated",
+    "validate_citation_collection_request",
+    "validate_validated_citation_input",
+    "validated_citation_run_input",
 )

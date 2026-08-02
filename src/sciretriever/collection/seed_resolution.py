@@ -3,18 +3,18 @@ from __future__ import annotations
 from typing import assert_never
 
 from sciretriever.bibliography.api import IdentityCandidateQuery
-from sciretriever.collection.citation_input import (
+from sciretriever.collection.ports import BibliographyIngestionPort, CollectionRepository
+from sciretriever.kernel import BoundaryError
+from sciretriever.model.collection import (
     CitationCollectionRequest,
     CitationRunInput,
     CollectionSeed,
     IdentifierSeed,
+    MembershipPageRequest,
     SeedSelector,
     WorkSeed,
     WorkVersionSeed,
 )
-from sciretriever.collection.model import MembershipPageRequest
-from sciretriever.collection.ports import BibliographyIngestionPort, CollectionRepository
-from sciretriever.kernel import BoundaryError
 from sciretriever.model.primitives import WorkId
 
 
@@ -48,7 +48,11 @@ def _resolve_selector(  # noqa: C901
             after = None
             while True:
                 page = repository.list_memberships(
-                    MembershipPageRequest(collection_id, after, 1000)
+                    MembershipPageRequest(
+                        collection_id=collection_id,
+                        after_work_id=after,
+                        limit=1000,
+                    )
                 )
                 members.extend(item.work_id for item in page.members)
                 after = page.next_after_work_id
@@ -70,12 +74,12 @@ def resolve_citation_input(
     for selector in request.seed_selectors:
         resolved.update(str(item) for item in _resolve_selector(selector, bibliography, repository))
     return CitationRunInput(
-        request.seed_selectors,
-        tuple(WorkId(item) for item in sorted(resolved)),
-        request.providers,
-        request.direction,
-        request.depth,
-        request.max_new,
+        original_selectors=request.seed_selectors,
+        resolved_work_ids=tuple(WorkId(item) for item in sorted(resolved)),
+        providers=request.providers,
+        direction=request.direction,
+        depth=request.depth,
+        max_new=request.max_new,
     )
 
 
