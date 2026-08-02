@@ -20,24 +20,22 @@ from sciretriever.collection.ports import (
     CollectionRepository,
     MetadataDiscoveryPort,
 )
-from sciretriever.collection.publisher_contracts import (
-    CollectionAcceptance,
-    CollectionCauseFact,
-    CollectionCauseId,
-    CollectionCauseKind,
-    CollectionMembershipFact,
-)
+from sciretriever.collection.publisher_contracts import validate_collection_acceptance
 from sciretriever.collection.seed_resolution import resolve_citation_input
 from sciretriever.collection.source_run import SourceRunExecutor
 from sciretriever.collection.topic import TopicConditions
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
+    canonical_json_bytes,
     parse_canonical_json,
 )
 from sciretriever.model.collection import (
     CitationCollectionRequest,
+    CollectionAcceptance,
+    CollectionCauseFact,
     CollectionDefinition,
+    CollectionMembershipFact,
     CollectionRunRecord,
     CreateCollectionDefinition,
     MembershipPageRequest,
@@ -45,6 +43,8 @@ from sciretriever.model.collection import (
 )
 from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
+    CollectionCauseId,
+    CollectionCauseKind,
     CollectionId,
     CollectionRunId,
     MembershipId,
@@ -317,33 +317,35 @@ class CollectionService:
             )
         )
         membership = CollectionMembershipFact(
-            membership_id,
-            collection_id,
-            prepared.work_id,
-            run_id,
+            membership_id=membership_id,
+            collection_id=collection_id,
+            work_id=prepared.work_id,
+            first_run_id=run_id,
         )
         cause = CollectionCauseFact(
-            cause_id,
-            membership_id,
-            run_id,
-            CollectionCauseKind.TOPIC_MATCH,
-            CanonicalJsonObject(
-                (
-                    ("condition_sha256", condition_hash),
-                    ("provider", observation.provider),
-                    ("provider_record_id", observation.provider_record_id),
+            cause_id=cause_id,
+            membership_id=membership_id,
+            run_id=run_id,
+            kind=CollectionCauseKind.TOPIC_MATCH,
+            evidence=canonical_json_bytes(
+                CanonicalJsonObject(
+                    (
+                        ("condition_sha256", condition_hash),
+                        ("provider", observation.provider),
+                        ("provider_record_id", observation.provider_record_id),
+                    )
                 )
-            ),
-            None,
+            ).decode("ascii"),
+            seed_work_id=None,
         )
-        self._dependencies.publisher.publish(
-            CollectionAcceptance(
-                prepared,
-                membership,
-                (cause,),
-                (),
-            )
+        acceptance = CollectionAcceptance(
+            bibliography=prepared,
+            membership=membership,
+            causes=(cause,),
+            paths=(),
         )
+        validate_collection_acceptance(acceptance)
+        self._dependencies.publisher.publish(acceptance)
         return str(prepared.work_id)
 
 

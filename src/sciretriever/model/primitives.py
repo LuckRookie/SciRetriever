@@ -239,6 +239,14 @@ class CollectionRunStatus(_StrEnum):
 
 
 @unique
+class CollectionCauseKind(_StrEnum):
+    TOPIC_MATCH = "topic-match"
+    SEED = "seed"
+    REFERENCE = "reference"
+    CITED_BY = "cited-by"
+
+
+@unique
 class DiscoveryRelation(_StrEnum):
     MEMBER = "member"
     SEED = "seed"

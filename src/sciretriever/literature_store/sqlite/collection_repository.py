@@ -3,18 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from sciretriever.collection.api import (
-    CausePage,
-    CausePageRequest,
-    CollectionCauseFact,
-    CollectionCauseId,
-    CollectionCauseKind,
-    CollectionPathFact,
-    CollectionPathId,
-    PathPage,
-    PathPageRequest,
-    citation_run_input_from_validated,
-)
+from sciretriever.collection.citation_input import citation_run_input_from_validated
 from sciretriever.collection.run_results import validate_finish_collection_run
 from sciretriever.collection.topic import validate_topic_condition_set
 from sciretriever.kernel import (
@@ -27,23 +16,32 @@ from sciretriever.literature_store.sqlite.engine import (
     open_read_only_snapshot,
 )
 from sciretriever.model.collection import (
+    CausePage,
+    CausePageRequest,
     CitationRunInput,
+    CollectionCauseFact,
     CollectionCounts,
     CollectionDefinition,
     CollectionMember,
+    CollectionPathFact,
     CollectionRunRecord,
     CollectionSourceResult,
     CreateCollectionDefinition,
     FinishCollectionRun,
     MembershipPage,
     MembershipPageRequest,
+    PathPage,
+    PathPageRequest,
     StartCollectionRun,
     ValidatedCitationInput,
     ValidatedTopicConditionSet,
 )
 from sciretriever.model.primitives import (
     CitationDirection,
+    CollectionCauseId,
+    CollectionCauseKind,
     CollectionId,
+    CollectionPathId,
     CollectionRunId,
     CollectionRunStatus,
     MembershipId,
@@ -358,16 +356,16 @@ class SqliteCollectionRepository:
                 raise sqlite3.DatabaseError("collection cause evidence is not an object")
             causes.append(
                 CollectionCauseFact(
-                    CollectionCauseId(identifier),
-                    MembershipId(membership),
-                    CollectionRunId(run),
-                    CollectionCauseKind(kind),
-                    evidence,
-                    None if seed is None else WorkId(seed),
+                    cause_id=CollectionCauseId(identifier),
+                    membership_id=MembershipId(membership),
+                    run_id=CollectionRunId(run),
+                    kind=CollectionCauseKind(kind),
+                    evidence=evidence_json,
+                    seed_work_id=None if seed is None else WorkId(seed),
                 )
             )
         cursor = causes[-1].cause_id if len(rows) > request.limit else None
-        return CausePage(tuple(causes), cursor)
+        return CausePage(causes=tuple(causes), next_after_cause_id=cursor)
 
     def list_paths(self, request: PathPageRequest) -> PathPage:
         after = "" if request.after_path_id is None else str(request.after_path_id)
@@ -383,13 +381,13 @@ class SqliteCollectionRepository:
         for identifier, membership, run, direction, depth, work_ids_json in visible:
             paths.append(
                 CollectionPathFact(
-                    CollectionPathId(identifier),
-                    MembershipId(membership),
-                    CollectionRunId(run),
-                    None if direction is None else CitationDirection(direction),
-                    depth,
-                    _path_work_ids(work_ids_json),
+                    path_id=CollectionPathId(identifier),
+                    membership_id=MembershipId(membership),
+                    run_id=CollectionRunId(run),
+                    direction=None if direction is None else CitationDirection(direction),
+                    depth=depth,
+                    work_ids=_path_work_ids(work_ids_json),
                 )
             )
         cursor = paths[-1].path_id if len(rows) > request.limit else None
-        return PathPage(tuple(paths), cursor)
+        return PathPage(paths=tuple(paths), next_after_path_id=cursor)

@@ -12,6 +12,7 @@ from sciretriever.batching.api import (
 )
 from sciretriever.bibliography.api import CompletionSubmission, FinalMetadataFact
 from sciretriever.collection.api import CollectionAcceptance
+from sciretriever.collection.publisher_contracts import validate_collection_acceptance
 from sciretriever.content.api import LightDocumentAcceptance
 from sciretriever.interoperability.ports import ImportResult
 from sciretriever.kernel import (
@@ -40,11 +41,15 @@ class TargetPublisherTests(unittest.TestCase):
         assert isinstance(collection.command, CollectionAcceptance)
         other_work = WorkId("00000000-0000-0000-0000-000000000001")
         with self.assertRaises(BoundaryError):
-            CollectionAcceptance(
-                collection.command.bibliography,
-                replace(collection.command.membership, work_id=other_work),
-                (),
-                (),
+            validate_collection_acceptance(
+                CollectionAcceptance(
+                    bibliography=collection.command.bibliography,
+                    membership=collection.command.membership.model_copy(
+                        update={"work_id": other_work}
+                    ),
+                    causes=(),
+                    paths=(),
+                )
             )
 
         imported = self.factory.imported()
@@ -88,7 +93,9 @@ class TargetPublisherTests(unittest.TestCase):
         collection = scenarios[0].command
         assert isinstance(collection, CollectionAcceptance)
         object.__setattr__(
-            collection, "membership", replace(collection.membership, work_id=other_work)
+            collection,
+            "membership",
+            collection.membership.model_copy(update={"work_id": other_work}),
         )
         imported = scenarios[1].command
         assert isinstance(imported, ImportAcceptanceCommand)

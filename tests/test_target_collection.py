@@ -22,8 +22,10 @@ from sciretriever.collection.service import (
 from sciretriever.kernel import (
     Action,
     BoundaryError,
+    CanonicalJsonObject,
     FailureEvidence,
     Reason,
+    parse_canonical_json,
 )
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
@@ -205,10 +207,17 @@ class TargetCollectionTests(unittest.TestCase):
         )
         self.assertEqual((second.counts.new_members, second.counts.existing_members), (0, 2))
         causes = self.collection_repository.list_causes(
-            CausePageRequest(definition.collection_id, None, 100),
+            CausePageRequest(
+                collection_id=definition.collection_id,
+                after_cause_id=None,
+                limit=100,
+            ),
         )
         self.assertEqual(len(causes.causes), 6)
-        self.assertTrue(all(cause.evidence.entries for cause in causes.causes))
+        evidence = tuple(parse_canonical_json(cause.evidence) for cause in causes.causes)
+        self.assertTrue(
+            all(isinstance(item, CanonicalJsonObject) and item.entries for item in evidence)
+        )
         with open_read_only_snapshot(self.catalog) as connection:
             self.assertEqual(
                 connection.execute("SELECT count(*) FROM collection_memberships").fetchone(), (2,)

@@ -7,24 +7,20 @@ from sciretriever.bibliography.api import (
     IdentityCandidateSet,
     WorkFacts,
 )
-from sciretriever.collection.provenance import (
+from sciretriever.model.collection import (
     CausePage,
     CausePageRequest,
-    PathPage,
-    PathPageRequest,
-)
-from sciretriever.collection.publisher_contracts import (
-    CollectionAcceptance,
-    ExistingCollectionAcceptance,
-)
-from sciretriever.model.collection import (
     CitationRunInput,
+    CollectionAcceptance,
     CollectionDefinition,
     CollectionRunRecord,
     CreateCollectionDefinition,
+    ExistingCollectionAcceptance,
     FinishCollectionRun,
     MembershipPage,
     MembershipPageRequest,
+    PathPage,
+    PathPageRequest,
     StartCollectionRun,
 )
 from sciretriever.model.literature import (

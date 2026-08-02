@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from sciretriever.collection.api import CollectionAcceptance, ExistingCollectionAcceptance
 from sciretriever.kernel import canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
     StalePublicationError,
@@ -12,6 +11,7 @@ from sciretriever.literature_store.sqlite.publisher_support import (
     immediate,
     publish_bibliography,
 )
+from sciretriever.model.collection import CollectionAcceptance, ExistingCollectionAcceptance
 
 
 class CollectionAcceptancePublisher:
@@ -50,7 +50,6 @@ class CollectionAcceptancePublisher:
                 ),
             )
             for cause in command.causes:
-                evidence = canonical_json_bytes(cause.evidence).decode("ascii")
                 execute(
                     connection,
                     point,
@@ -61,7 +60,7 @@ class CollectionAcceptancePublisher:
                         str(cause.membership_id),
                         str(cause.run_id),
                         cause.kind.value,
-                        evidence,
+                        cause.evidence,
                         None,
                         None if cause.seed_work_id is None else str(cause.seed_work_id),
                     ),
@@ -104,7 +103,6 @@ class CollectionAcceptancePublisher:
                 ),
             )
             for cause in command.causes:
-                evidence = canonical_json_bytes(cause.evidence).decode("ascii")
                 execute(
                     connection,
                     point,
@@ -115,7 +113,7 @@ class CollectionAcceptancePublisher:
                         str(cause.membership_id),
                         str(cause.run_id),
                         cause.kind.value,
-                        evidence,
+                        cause.evidence,
                         None,
                         None if cause.seed_work_id is None else str(cause.seed_work_id),
                     ),

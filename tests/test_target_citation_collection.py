@@ -292,9 +292,19 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
                 (str(third.work_id), CitationDirection.REFERENCES),
             ),
         )
-        paths = self.collections.list_paths(PathPageRequest(target.collection_id, None, 100)).paths
+        paths = self.collections.list_paths(
+            PathPageRequest(
+                collection_id=target.collection_id,
+                after_path_id=None,
+                limit=100,
+            )
+        ).paths
         causes = self.collections.list_causes(
-            CausePageRequest(target.collection_id, None, 100)
+            CausePageRequest(
+                collection_id=target.collection_id,
+                after_cause_id=None,
+                limit=100,
+            )
         ).causes
         fourth_paths = tuple(item for item in paths if item.work_ids[-1] == fourth.work_id)
         self.assertGreaterEqual(len(fourth_paths), 4)

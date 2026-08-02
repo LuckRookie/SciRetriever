@@ -12,15 +12,9 @@ from sciretriever.collection.ports import (
     CollectionRepository,
 )
 from sciretriever.collection.publisher_contracts import (
-    CollectionAcceptance,
     CollectionAcceptanceConflict,
-    CollectionCauseFact,
-    CollectionCauseId,
-    CollectionCauseKind,
-    CollectionMembershipFact,
-    CollectionPathFact,
-    CollectionPathId,
-    ExistingCollectionAcceptance,
+    validate_collection_acceptance,
+    validate_existing_collection_acceptance,
 )
 from sciretriever.collection.run_finalization import CollectionRunFinalizer
 from sciretriever.kernel import (
@@ -28,11 +22,23 @@ from sciretriever.kernel import (
     CanonicalJsonObject,
     FailureEvidence,
     Reason,
+    canonical_json_bytes,
 )
-from sciretriever.model.collection import CitationRunInput, CollectionRunRecord
+from sciretriever.model.collection import (
+    CitationRunInput,
+    CollectionAcceptance,
+    CollectionCauseFact,
+    CollectionMembershipFact,
+    CollectionPathFact,
+    CollectionRunRecord,
+    ExistingCollectionAcceptance,
+)
 from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
+    CollectionCauseId,
+    CollectionCauseKind,
     CollectionId,
+    CollectionPathId,
     CollectionRunId,
     CollectionRunStatus,
     MembershipId,
@@ -67,7 +73,12 @@ def _membership(
     collection_id: CollectionId, work_id: WorkId, run_id: CollectionRunId
 ) -> CollectionMembershipFact:
     identifier = MembershipId(str(uuid5(_NAMESPACE, f"membership:{collection_id}:{work_id}")))
-    return CollectionMembershipFact(identifier, collection_id, work_id, run_id)
+    return CollectionMembershipFact(
+        membership_id=identifier,
+        collection_id=collection_id,
+        work_id=work_id,
+        first_run_id=run_id,
+    )
 
 
 def _cause_path(
@@ -84,27 +95,29 @@ def _cause_path(
         f"{':'.join(map(str, path))}"
     )
     cause = CollectionCauseFact(
-        CollectionCauseId(str(uuid5(_NAMESPACE, f"cause:{key}"))),
-        membership.membership_id,
-        run_id,
-        CollectionCauseKind.REFERENCE
+        cause_id=CollectionCauseId(str(uuid5(_NAMESPACE, f"cause:{key}"))),
+        membership_id=membership.membership_id,
+        run_id=run_id,
+        kind=CollectionCauseKind.REFERENCE
         if observation.direction.value == "references"
         else CollectionCauseKind.CITED_BY,
-        CanonicalJsonObject(
-            (
-                ("identifier", observation.target_identifier.model_dump_json()),
-                ("provider", source),
+        evidence=canonical_json_bytes(
+            CanonicalJsonObject(
+                (
+                    ("identifier", observation.target_identifier.model_dump_json()),
+                    ("provider", source),
+                )
             )
-        ),
-        path[0],
+        ).decode("ascii"),
+        seed_work_id=path[0],
     )
     citation_path = CollectionPathFact(
-        CollectionPathId(str(uuid5(_NAMESPACE, f"path:{key}"))),
-        membership.membership_id,
-        run_id,
-        observation.direction,
-        len(path) - 1,
-        path,
+        path_id=CollectionPathId(str(uuid5(_NAMESPACE, f"path:{key}"))),
+        membership_id=membership.membership_id,
+        run_id=run_id,
+        direction=observation.direction,
+        depth=len(path) - 1,
+        work_ids=path,
     )
     return cause, citation_path
 
@@ -131,28 +144,30 @@ class CitationRunExecutor:
             for seed in frontier:
                 membership = _membership(collection_id, seed, run_id)
                 cause = CollectionCauseFact(
-                    CollectionCauseId(str(uuid5(_NAMESPACE, f"seed:{run_id}:{seed}"))),
-                    membership.membership_id,
-                    run_id,
-                    CollectionCauseKind.SEED,
-                    CanonicalJsonObject((("work_id", str(seed)),)),
-                    seed,
+                    cause_id=CollectionCauseId(str(uuid5(_NAMESPACE, f"seed:{run_id}:{seed}"))),
+                    membership_id=membership.membership_id,
+                    run_id=run_id,
+                    kind=CollectionCauseKind.SEED,
+                    evidence=canonical_json_bytes(
+                        CanonicalJsonObject((("work_id", str(seed)),))
+                    ).decode("ascii"),
+                    seed_work_id=seed,
                 )
                 seed_path = CollectionPathFact(
-                    CollectionPathId(str(uuid5(_NAMESPACE, f"seed-path:{run_id}:{seed}"))),
-                    membership.membership_id,
-                    run_id,
-                    None,
-                    0,
-                    (seed,),
+                    path_id=CollectionPathId(str(uuid5(_NAMESPACE, f"seed-path:{run_id}:{seed}"))),
+                    membership_id=membership.membership_id,
+                    run_id=run_id,
+                    direction=None,
+                    depth=0,
+                    work_ids=(seed,),
                 )
-                self._dependencies.publisher.publish_existing(
-                    ExistingCollectionAcceptance(
-                        membership,
-                        (cause,),
-                        (seed_path,),
-                    )
+                acceptance = ExistingCollectionAcceptance(
+                    membership=membership,
+                    causes=(cause,),
+                    paths=(seed_path,),
                 )
+                validate_existing_collection_acceptance(acceptance)
+                self._dependencies.publisher.publish_existing(acceptance)
             for layer in range(1, value.depth + 1):
                 next_frontier: set[str] = set()
                 for parent in frontier:
@@ -268,14 +283,14 @@ class CitationRunExecutor:
                                 full_path,
                             )
                             try:
-                                self._dependencies.publisher.publish(
-                                    CollectionAcceptance(
-                                        prepared,
-                                        membership,
-                                        (cause,),
-                                        (citation_path,),
-                                    )
+                                acceptance = CollectionAcceptance(
+                                    bibliography=prepared,
+                                    membership=membership,
+                                    causes=(cause,),
+                                    paths=(citation_path,),
                                 )
+                                validate_collection_acceptance(acceptance)
+                                self._dependencies.publisher.publish(acceptance)
                             except CollectionAcceptanceConflict:
                                 progress.missing(provider)
                                 progress.failed(

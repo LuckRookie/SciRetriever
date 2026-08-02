@@ -176,12 +176,15 @@ class ScenarioFactory:
             )
             connection.commit()
         command = CollectionAcceptance(
-            prepared,
-            CollectionMembershipFact(
-                MembershipId(str(uuid4())), collection_id, prepared.work_id, run_id
+            bibliography=prepared,
+            membership=CollectionMembershipFact(
+                membership_id=MembershipId(str(uuid4())),
+                collection_id=collection_id,
+                work_id=prepared.work_id,
+                first_run_id=run_id,
             ),
-            (),
-            (),
+            causes=(),
+            paths=(),
         )
         return Scenario(
             path,
