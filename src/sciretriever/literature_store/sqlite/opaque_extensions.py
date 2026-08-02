@@ -5,14 +5,17 @@ import os
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonValue,
-    ExtensionRecordId,
     OpaqueExtensionRecord,
-    Sha256,
     canonical_json_bytes,
     parse_canonical_json,
     validate_page_request,
 )
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
+from sciretriever.model.primitives import (
+    ExtensionRecordId,
+    Sha256,
+    sha256_digest,
+)
 
 
 class OpaqueExtensionConflictError(Exception):
@@ -79,7 +82,7 @@ class OpaqueExtensionRecordStore:
     ) -> OpaqueExtensionRecord:
         payload_bytes = canonical_json_bytes(payload)
         normalized = parse_canonical_json(payload_bytes.decode("ascii"))
-        digest = Sha256.from_bytes(payload_bytes)
+        digest = sha256_digest(payload_bytes)
         revision = 1 if expected_revision is None else expected_revision + 1
         candidate = OpaqueExtensionRecord(namespace, record_id, revision, digest, normalized)
         with create_or_open_catalog(self._catalog_path) as connection:

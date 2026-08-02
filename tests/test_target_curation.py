@@ -9,13 +9,16 @@ from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.curation import CurationService
 from sciretriever.bibliography.model import CurationPlanError
-from sciretriever.kernel import WorkId, WorkVersionId
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     SqliteCurationTransaction,
     create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
 )
 
 UUIDS = tuple(f"d0000000-0000-4000-8000-{value:012d}" for value in range(1, 60))
@@ -440,7 +443,7 @@ class TargetCurationTests(unittest.TestCase):
                 script = f"""
 import os
 from sciretriever.bibliography.curation import CurationService
-from sciretriever.kernel import WorkVersionId
+from sciretriever.model.primitives import WorkVersionId
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,

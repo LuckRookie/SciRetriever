@@ -5,6 +5,8 @@ import unittest
 from dataclasses import FrozenInstanceError, asdict, fields
 from typing import get_type_hints
 
+from pydantic import TypeAdapter
+
 from sciretriever.batching.ports import (
     AdmissionGuard,
     AdmissionPort,
@@ -52,19 +54,21 @@ from sciretriever.interoperability.model import (
     RecordParseResult,
 )
 from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
-from sciretriever.kernel.contracts import Identifier
-from sciretriever.kernel.enums import AssetRole, BibliographyFormat, CitationDirection
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import (
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     AdmissionBindingId,
     AssetId,
+    AssetRole,
     BatchRunId,
+    BibliographyFormat,
+    CitationDirection,
     LightDocumentId,
     MetadataSnapshotId,
+    RelativeArtifactPath,
     WorkId,
     WorkVersionId,
+    sha256_digest,
 )
-from sciretriever.kernel.paths import RelativeArtifactPath
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
@@ -78,7 +82,10 @@ class FakeCapabilities:
 
     def expand(self, request: CitationDiscoveryRequest) -> ProviderCitationResult:
         observation = CitationObservation(
-            "fake", request.seed, Identifier("doi", "10.1/x"), CitationDirection.REFERENCES
+            "fake",
+            request.seed,
+            Identifier(namespace="doi", value="10.1/x"),
+            CitationDirection.REFERENCES,
         )
         return ProviderCitationResult("fake", (observation,), None)
 
@@ -211,7 +218,7 @@ class TargetCapabilityPortTests(unittest.TestCase):
         )
         accepted = AcceptedContentReference(
             AssetId(UUID_A),
-            Sha256.from_bytes(b"pdf"),
+            sha256_digest(b"pdf"),
             2,
         )
         return ContentTarget(
@@ -240,13 +247,13 @@ class TargetCapabilityPortTests(unittest.TestCase):
         candidates = resolver.resolve(content_target)
         stream = fetcher.fetch(candidates[0])
         pdf = AcceptedPrimaryPdf(
-            AssetId(UUID_A), target, Sha256.from_bytes(stream.content), stream.media_type
+            AssetId(UUID_A), target, sha256_digest(stream.content), stream.media_type
         )
         document = parser.parse(pdf).document
         staged = StagedArtifact(
             ArtifactKind.LIGHT_DOCUMENT,
             RelativeArtifactPath("light/a.json"),
-            Sha256.from_bytes(b"{}"),
+            sha256_digest(b"{}"),
             b"{}",
         )
         self.assertEqual(metadata.search(request).provider, "fake")
@@ -272,13 +279,13 @@ class TargetCapabilityPortTests(unittest.TestCase):
         encoded = codec.write((parsed[0].record,), output)
         admission: AdmissionPort = FakeAdmission()
         binding = AdmissionBindingId(UUID_A)
-        catalog = CatalogIdentity(binding, Sha256.from_bytes(b"catalog"))
+        catalog = CatalogIdentity(binding, sha256_digest(b"catalog"))
         leases = (
             admission.acquire_core_write(catalog),
             admission.acquire_exchange_batch_owner(BatchRunId(UUID_A)),
             admission.acquire_package_owner(catalog, WorkVersionId(UUID_B)),
             admission.acquire_output_path(
-                OutputIdentity(AdmissionBindingId(UUID_B), Sha256.from_bytes(b"output"))
+                OutputIdentity(AdmissionBindingId(UUID_B), sha256_digest(b"output"))
             ),
         )
         for guard in leases:
@@ -306,7 +313,7 @@ class TargetCapabilityPortTests(unittest.TestCase):
             target.accepted_content[-1].revision, target.expected_accepted_content_revision
         )
         self.assertEqual(
-            json.loads(json.dumps(asdict(target)))["current_metadata"]["title"],
+            json.loads(TypeAdapter(type(target)).dump_json(target))["current_metadata"]["title"],
             "Title",
         )
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sciretriever.kernel.contracts import Identifier
 from sciretriever.kernel.errors import FailureEvidence
+from sciretriever.model.literature import Identifier
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,8 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from sciretriever.kernel import Identifier
-from sciretriever.kernel.ids import CollectionId
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import CollectionId
 
 
 class QueryValueError(ValueError):
@@ -35,9 +35,7 @@ MissingStep = Literal["primary-pdf", "light-document", "analysis", "completion"]
 
 
 class QueryFilterV1(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid", frozen=True, strict=True, arbitrary_types_allowed=True
-    )
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     query: Text = None
     identifiers: tuple[Identifier, ...] = ()

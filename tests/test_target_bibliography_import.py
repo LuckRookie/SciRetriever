@@ -15,7 +15,10 @@ from sciretriever.interoperability.import_preparation import (
     prepare_import_record,
 )
 from sciretriever.interoperability.publisher_contracts import ImportResult
-from sciretriever.kernel import WorkId, WorkVersionId
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
+)
 
 BIBTEX = (
     b"@article{x,title={Canonical Title},"

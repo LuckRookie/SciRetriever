@@ -22,30 +22,29 @@ from sciretriever.bibliography.api import (
     WorkFacts,
     initial_metadata_from_json,
 )
-from sciretriever.kernel import (
-    AnalysisArtifactId,
-    AssetId,
-    LightDocumentId,
-    MetadataSnapshotId,
-    ObservationId,
-    Sha256,
-    UtcTimestamp,
-    WorkId,
-    WorkVersionId,
-)
-from sciretriever.kernel.contracts import Identifier
-from sciretriever.kernel.ids import (
-    CollectionId,
-    MembershipId,
-    ReferenceFactId,
-    StableIdentifierId,
-    VersionRelationId,
-    WorkVersionAssetId,
-)
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
 from sciretriever.literature_store.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    AnalysisArtifactId,
+    AssetId,
+    CollectionId,
+    LightDocumentId,
+    MembershipId,
+    MetadataSnapshotId,
+    ObservationId,
+    ReferenceFactId,
+    Sha256,
+    StableIdentifierId,
+    UtcTimestamp,
+    VersionRelationId,
+    WorkId,
+    WorkVersionAssetId,
+    WorkVersionId,
+    sha256_digest,
 )
 
 
@@ -181,7 +180,9 @@ class SqliteBibliographyRepository:
             versions = tuple(version_values)
             identifiers = tuple(
                 IdentifierFact(
-                    StableIdentifierId(row[0]), WorkVersionId(row[1]), Identifier(row[2], row[3])
+                    StableIdentifierId(row[0]),
+                    WorkVersionId(row[1]),
+                    Identifier(namespace=row[2], value=row[3]),
                 )
                 for row in connection.execute(
                     "SELECT id,work_version_id,namespace,value FROM stable_identifiers ORDER BY id"
@@ -285,7 +286,8 @@ class SqliteBibliographyRepository:
                     (version_id,),
                 ).fetchall()
                 identifiers = tuple(
-                    Identifier(namespace, value) for namespace, value in identifier_rows
+                    Identifier(namespace=namespace, value=value)
+                    for namespace, value in identifier_rows
                 )
                 revision_payload = "|".join(
                     (
@@ -306,7 +308,7 @@ class SqliteBibliographyRepository:
                         None if values_json is None else initial_metadata_from_json(values_json),
                         revision,
                         completed_id is not None,
-                        Sha256.from_bytes(revision_payload.encode("utf-8")),
+                        sha256_digest(revision_payload.encode("utf-8")),
                     )
                 )
             return tuple(result)

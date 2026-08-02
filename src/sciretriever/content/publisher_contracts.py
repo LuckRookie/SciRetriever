@@ -4,17 +4,20 @@ from dataclasses import dataclass
 
 from sciretriever.content.model import ArtifactKind, PublishedArtifact
 from sciretriever.kernel import (
-    AssetId,
     BoundaryError,
     CanonicalJsonObject,
+    canonical_json_bytes,
+)
+from sciretriever.model.primitives import (
+    AssetId,
+    AssetRole,
     LightDocumentId,
     MetadataSnapshotId,
     Sha256,
+    WorkVersionAssetId,
     WorkVersionId,
-    canonical_json_bytes,
+    sha256_digest,
 )
-from sciretriever.kernel.enums import AssetRole
-from sciretriever.kernel.ids import WorkVersionAssetId
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +76,7 @@ def _verify_structured_artifact(
     canonical = canonical_json_bytes(payload)
     if artifact.kind is not kind:
         raise BoundaryError.for_field("artifact", f"must be a {kind.value} artifact")
-    if artifact.sha256 != Sha256.from_bytes(canonical):
+    if artifact.sha256 != sha256_digest(canonical):
         raise BoundaryError.for_field("artifact", "sha256 must identify canonical payload bytes")
     if artifact.size != len(canonical):
         raise BoundaryError.for_field("artifact", "size must equal canonical payload byte length")

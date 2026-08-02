@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from sciretriever.bibliography.api import ValidatedCurationPlan
-from sciretriever.kernel import WorkId
+from sciretriever.model.primitives import WorkId
 
 
 def _require_owner(

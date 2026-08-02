@@ -25,6 +25,10 @@ from sciretriever.collection.api import (
     WorkSeed,
     WorkVersionSeed,
 )
+from sciretriever.collection.citation_input import (
+    ValidatedCitationInput,
+    citation_run_input_from_validated,
+)
 from sciretriever.collection.service import (
     CitationSource,
     CollectionService,
@@ -33,20 +37,42 @@ from sciretriever.collection.service import (
 )
 from sciretriever.kernel import (
     BoundaryError,
-    CitationDirection,
-    CollectionId,
-    Identifier,
-    WorkId,
-    WorkVersionId,
-    WorkVersionState,
+    CanonicalJsonObject,
+    canonical_json_bytes,
 )
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    CitationDirection,
+    CollectionId,
+    WorkId,
+    WorkVersionId,
+    WorkVersionState,
+    sha256_digest,
+)
 
 
 class TargetCitationCollectionTests(CitationCollectionTestCase):
+    def test_persisted_invalid_primitive_is_translated_to_boundary_error(self) -> None:
+        payload = CanonicalJsonObject(
+            (
+                ("depth", 1),
+                ("direction", "references"),
+                ("max_new", 1),
+                ("providers", ("alpha",)),
+                ("resolved_work_ids", ("not-a-uuid",)),
+                ("seed_selectors", ()),
+            )
+        )
+        encoded = canonical_json_bytes(payload)
+        validated = ValidatedCitationInput(encoded.decode("ascii"), sha256_digest(encoded))
+
+        with self.assertRaisesRegex(BoundaryError, "citation_input"):
+            citation_run_input_from_validated(validated)
+
     def test_four_seed_kinds_resolve_dedupe_sort_and_persist_canonical_input(self) -> None:
         first_collection, first = self.add_work("10.1/a")
         _, second = self.add_work("10.1/b")
@@ -55,7 +81,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
             (
                 WorkSeed(second.work_id),
                 WorkVersionSeed(first.work_version_id),
-                IdentifierSeed(Identifier("doi", "10.1/b")),
+                IdentifierSeed(Identifier(namespace="doi", value="10.1/b")),
                 CollectionSeed(first_collection.collection_id),
             ),
             ("alpha", "beta"),
@@ -100,7 +126,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         selectors = (
             WorkSeed(WorkId(missing)),
             WorkVersionSeed(WorkVersionId(missing)),
-            IdentifierSeed(Identifier("doi", "10.1/missing")),
+            IdentifierSeed(Identifier(namespace="doi", value="10.1/missing")),
             CollectionSeed(CollectionId(missing)),
             CollectionSeed(empty.collection_id),
         )
@@ -131,7 +157,7 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
     def test_ambiguous_identifier_rejects_before_run_creation(self) -> None:
         _, first = self.add_work("10.1/ambiguous-a")
         _, second = self.add_work("10.1/ambiguous-b")
-        identifier = Identifier("doi", "10.1/ambiguous")
+        identifier = Identifier(namespace="doi", value="10.1/ambiguous")
         bibliography = FixedCandidateBibliography(
             self.bibliography,
             IdentityCandidateSet(
@@ -191,10 +217,10 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         _, third = self.add_work("10.1/c")
         _, fourth = self.add_work("10.1/d")
         identifiers = {
-            str(first.work_id): Identifier("doi", "10.1/a"),
-            str(second.work_id): Identifier("doi", "10.1/b"),
-            str(third.work_id): Identifier("doi", "10.1/c"),
-            str(fourth.work_id): Identifier("doi", "10.1/d"),
+            str(first.work_id): Identifier(namespace="doi", value="10.1/a"),
+            str(second.work_id): Identifier(namespace="doi", value="10.1/b"),
+            str(third.work_id): Identifier(namespace="doi", value="10.1/c"),
+            str(fourth.work_id): Identifier(namespace="doi", value="10.1/d"),
         }
         alpha_edges = {
             (str(first.work_id), CitationDirection.REFERENCES): (
@@ -287,8 +313,8 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         _, second = self.add_work("10.1/limit-b")
         edges = {
             (str(seed.work_id), CitationDirection.REFERENCES): (
-                Identifier("doi", "10.1/limit-b"),
-                Identifier("doi", "10.1/limit-a"),
+                Identifier(namespace="doi", value="10.1/limit-b"),
+                Identifier(namespace="doi", value="10.1/limit-a"),
             )
         }
         calls: list[CitationDiscoveryRequest] = []

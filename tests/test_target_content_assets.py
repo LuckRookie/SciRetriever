@@ -38,14 +38,14 @@ from sciretriever.content.model import (
     BoundedByteStream,
 )
 from sciretriever.content.ports import ArtifactStorePort
-from sciretriever.kernel import (
+from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.primitives import (
     AssetId,
+    AssetRole,
     BatchRunId,
-    CanonicalJsonObject,
-    Sha256,
     WorkVersionId,
+    sha256_digest,
 )
-from sciretriever.kernel.enums import AssetRole
 
 
 class TargetContentAssetTests(unittest.TestCase):
@@ -147,7 +147,7 @@ class TargetContentAssetTests(unittest.TestCase):
 
     def test_exact_existing_primary_replays_and_different_bytes_cannot_replace(self) -> None:
         body = pdf()
-        current = AcceptedContentReference(AssetId(UUID_B), Sha256.from_bytes(body), 1)
+        current = AcceptedContentReference(AssetId(UUID_B), sha256_digest(body), 1)
         item = candidate("same")
         service = self.service(
             (ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)}

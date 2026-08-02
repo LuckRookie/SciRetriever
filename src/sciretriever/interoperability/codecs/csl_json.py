@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
 from sciretriever.kernel import (
-    BibliographyFormat,
     BoundaryError,
     CanonicalJsonObject,
     parse_canonical_json,
 )
+from sciretriever.model.primitives import BibliographyFormat
 
 from ._common import CodecInputError, decode_bytes, read_bounded, record, rejected
 

@@ -10,8 +10,13 @@ from sciretriever.interoperability.library_details import (
     WorkVersionDetail,
 )
 from sciretriever.interoperability.library_views import LibrarySummary
-from sciretriever.interoperability.query import QueryFilterV1
-from sciretriever.kernel import BoundaryError, CollectionId, WorkId, WorkVersionId
+from sciretriever.kernel import BoundaryError
+from sciretriever.model.library import QueryFilterV1
+from sciretriever.model.primitives import (
+    CollectionId,
+    WorkId,
+    WorkVersionId,
+)
 
 
 @dataclass(frozen=True, slots=True)

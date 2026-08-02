@@ -15,7 +15,12 @@ from sciretriever.bibliography.model import (
     RelationRetarget,
     ValidatedCurationPlan,
 )
-from sciretriever.kernel import (
+from sciretriever.literature_store.sqlite import (
+    SqliteBibliographyRepository,
+    SqliteCurationTransaction,
+    create_or_open_catalog,
+)
+from sciretriever.model.primitives import (
     CurationPlanId,
     MembershipId,
     ObservationId,
@@ -24,11 +29,6 @@ from sciretriever.kernel import (
     VersionRelationId,
     WorkId,
     WorkVersionId,
-)
-from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
-    SqliteCurationTransaction,
-    create_or_open_catalog,
 )
 
 UUIDS = tuple(f"20000000-0000-4000-8000-{value:012d}" for value in range(1, 50))

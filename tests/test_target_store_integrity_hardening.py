@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.api import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject, ExtensionRecordId
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     SCHEMA_FINGERPRINT,
     OpaqueExtensionConflictError,
@@ -17,6 +17,7 @@ from sciretriever.literature_store.sqlite import (
     create_or_open_catalog,
     validate_catalog,
 )
+from sciretriever.model.primitives import ExtensionRecordId
 
 
 class TargetStoreIntegrityHardeningTests(unittest.TestCase):

@@ -32,18 +32,20 @@ from sciretriever.collection.api import (
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
-    CitationDirection,
-    CollectionId,
-    CollectionRunId,
-    MembershipId,
-    Sha256,
-    UtcTimestamp,
-    WorkId,
     parse_canonical_json,
 )
 from sciretriever.literature_store.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.model.primitives import (
+    CitationDirection,
+    CollectionId,
+    CollectionRunId,
+    MembershipId,
+    UtcTimestamp,
+    WorkId,
+    sha256_digest,
 )
 
 
@@ -63,7 +65,7 @@ def _definition(row: tuple[str, str, str | None, str | None, str]) -> Collection
     validated = None
     if conditions is not None:
         validated = ValidatedTopicConditionSet(
-            conditions, Sha256.from_bytes(conditions.encode("ascii"))
+            conditions, sha256_digest(conditions.encode("ascii"))
         )
     return CollectionDefinition(
         CollectionId(identifier), name, description, validated, _timestamp(created_at)
@@ -239,7 +241,7 @@ class SqliteCollectionRepository:
             ).fetchone()
         if row is None:
             return None
-        value = ValidatedCitationInput(row[0], Sha256.from_bytes(row[0].encode("ascii")))
+        value = ValidatedCitationInput(row[0], sha256_digest(row[0].encode("ascii")))
         return citation_run_input_from_validated(value)
 
     def finish_run(self, command: FinishCollectionRun) -> CollectionRunRecord:

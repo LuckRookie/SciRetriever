@@ -6,7 +6,11 @@ from sciretriever.collection.run_results import (
     CollectionSourceResult,
     FinishCollectionRun,
 )
-from sciretriever.kernel import CollectionRunId, FailureEvidence, WorkId
+from sciretriever.kernel import FailureEvidence
+from sciretriever.model.primitives import (
+    CollectionRunId,
+    WorkId,
+)
 
 
 class CitationProgress:

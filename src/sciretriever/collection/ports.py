@@ -36,7 +36,7 @@ from sciretriever.collection.publisher_contracts import (
     CollectionAcceptance,
     ExistingCollectionAcceptance,
 )
-from sciretriever.kernel.ids import CollectionId, CollectionRunId, WorkId, WorkVersionId
+from sciretriever.model.primitives import CollectionId, CollectionRunId, WorkId, WorkVersionId
 
 
 class MetadataDiscoveryPort(Protocol):

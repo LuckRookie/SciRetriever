@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from sciretriever.kernel import Identifier
-from sciretriever.kernel.ids import (
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     AssetId,
     CollectionId,
     MembershipId,

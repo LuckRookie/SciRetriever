@@ -14,7 +14,8 @@ from sciretriever.collection.citation_input import (
 )
 from sciretriever.collection.model import MembershipPageRequest
 from sciretriever.collection.ports import BibliographyIngestionPort, CollectionRepository
-from sciretriever.kernel import BoundaryError, WorkId
+from sciretriever.kernel import BoundaryError
+from sciretriever.model.primitives import WorkId
 
 
 def _resolve_selector(  # noqa: C901

@@ -8,7 +8,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.content.model import ArtifactKind, StagedArtifact
-from sciretriever.kernel import RelativeArtifactPath, Sha256
 from sciretriever.literature_store.filesystem import (
     AdmissionConflictError,
     ArtifactConflictError,
@@ -17,6 +16,7 @@ from sciretriever.literature_store.filesystem import (
     LocalAdmissionBindingFactory,
 )
 from sciretriever.literature_store.sqlite import create_or_open_catalog
+from sciretriever.model.primitives import RelativeArtifactPath, sha256_digest
 
 
 class TargetArtifactPublicationTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
         return StagedArtifact(
             kind,
             RelativeArtifactPath("ignored/by/store"),
-            Sha256.from_bytes(content),
+            sha256_digest(content),
             content,
         )
 
@@ -216,11 +216,12 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                 script = (
                     "import os; from pathlib import Path; "
                     "from sciretriever.content.model import ArtifactKind,StagedArtifact; "
-                    "from sciretriever.kernel import RelativeArtifactPath,Sha256; "
+                    "from sciretriever.model.primitives import "
+                    "RelativeArtifactPath,sha256_digest; "
                     "from sciretriever.literature_store.filesystem import CoreArtifactStore; "
                     f"data={content!r}; s=CoreArtifactStore(Path({str(self.storage)!r})); "
                     "s.publish(StagedArtifact(ArtifactKind.ANALYSIS,RelativeArtifactPath('x'),"
-                    "Sha256.from_bytes(data),data),checkpoint=lambda n: os._exit(73) if n=="
+                    "sha256_digest(data),data),checkpoint=lambda n: os._exit(73) if n=="
                     f"{checkpoint!r} else None)"
                 )
                 process = subprocess.run(

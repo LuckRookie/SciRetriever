@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, assert_never
 
-from sciretriever.kernel import EvidenceText, Identifier, Provenance, SourceLocator
-from sciretriever.kernel.ids import WorkId, WorkVersionId
+from sciretriever.model.documents import (
+    EvidenceText,
+    SourceLocator,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import WorkId, WorkVersionId
+from sciretriever.model.sources import Provenance
 
 
 @dataclass(frozen=True, slots=True)

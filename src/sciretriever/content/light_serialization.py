@@ -13,8 +13,12 @@ from sciretriever.content.light_models import (
     Section,
     TableBlock,
 )
-from sciretriever.kernel import EvidenceText, Provenance, SourceLocator
 from sciretriever.kernel.json import JsonOutput
+from sciretriever.model.documents import (
+    EvidenceText,
+    SourceLocator,
+)
+from sciretriever.model.sources import Provenance
 
 
 def _locator(value: SourceLocator) -> dict[str, str | int]:
@@ -118,7 +122,7 @@ def _section(value: Section) -> JsonOutput:
 
 
 def _provenance(value: Provenance) -> dict[str, str | None]:
-    return json.loads(value.to_json())
+    return json.loads(value.model_dump_json())
 
 
 def document_value(value: LightDocumentV1) -> JsonOutput:

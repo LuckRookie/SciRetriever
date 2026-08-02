@@ -10,7 +10,10 @@ from sciretriever.bibliography.api import (
     WorkFacts,
     prepare_initial_ingest,
 )
-from sciretriever.kernel import WorkId, WorkVersionId
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
+)
 
 
 class InitialBibliographyIngestion:

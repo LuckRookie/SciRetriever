@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from sciretriever.kernel.errors import BoundaryError
-from sciretriever.kernel.ids import CollectionRunId
+from sciretriever.model.primitives import CollectionRunId
 
 
 class CollectionRunStatus(str, Enum):

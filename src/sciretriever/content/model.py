@@ -4,17 +4,19 @@ from dataclasses import dataclass
 from enum import Enum, unique
 
 from sciretriever.content.analysis import AnalysisProposalV1
-from sciretriever.kernel.contracts import EvidenceText, Identifier
-from sciretriever.kernel.enums import AssetRole
 from sciretriever.kernel.errors import BoundaryError
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import (
+from sciretriever.model.documents import EvidenceText
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     AssetId,
+    AssetRole,
     LightDocumentId,
     MetadataSnapshotId,
+    RelativeArtifactPath,
+    Sha256,
     WorkVersionId,
+    sha256_digest,
 )
-from sciretriever.kernel.paths import RelativeArtifactPath
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +244,7 @@ class StagedArtifact:
     content: bytes
 
     def __post_init__(self) -> None:
-        if Sha256.from_bytes(self.content) != self.sha256:
+        if sha256_digest(self.content) != self.sha256:
             raise BoundaryError.for_field("sha256", "must match artifact content")
 
 

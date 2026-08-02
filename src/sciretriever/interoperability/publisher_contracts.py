@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, unique
 
-from sciretriever.kernel import BatchRunId, BoundaryError, CanonicalJsonObject, WorkVersionId
+from sciretriever.kernel import (
+    BoundaryError,
+    CanonicalJsonObject,
+)
+from sciretriever.model.primitives import (
+    BatchRunId,
+    WorkVersionId,
+)
 
 
 @unique

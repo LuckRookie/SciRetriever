@@ -9,7 +9,8 @@ from sciretriever.bibliography.identity_model import (
     StoredObservation,
     VersionRelationEvidence,
 )
-from sciretriever.kernel import Identifier, ObservationId, Sha256
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import ObservationId, sha256_digest
 
 IDENTITY_NAMESPACE = UUID("4dcd977a-16c2-4e67-8072-f032c2c73a70")
 
@@ -42,7 +43,7 @@ def prepare_observation(observation: BibliographicObservation) -> StoredObservat
         separators=(",", ":"),
         sort_keys=True,
     )
-    digest = Sha256.from_bytes(payload.encode("ascii"))
+    digest = sha256_digest(payload.encode("ascii"))
     key = f"observation:{observation.provider}:{observation.provider_record_id}:{digest}"
     return StoredObservation(
         ObservationId(str(uuid5(IDENTITY_NAMESPACE, key))),
@@ -79,14 +80,15 @@ def observation_from_stored(value: StoredObservation) -> BibliographicObservatio
     parsed_relation = None
     if relation is not None:
         parsed_relation = VersionRelationEvidence(
-            Identifier(relation["target"][0], relation["target"][1]), relation["relation"]
+            Identifier(namespace=relation["target"][0], value=relation["target"][1]),
+            relation["relation"],
         )
     return BibliographicObservation(
         value.provider,
         value.provider_record_id,
         payload["source_priority"],
         value.observed_at,
-        tuple(Identifier(item[0], item[1]) for item in payload["identifiers"]),
+        tuple(Identifier(namespace=item[0], value=item[1]) for item in payload["identifiers"]),
         InitialMetadata(
             metadata["title"],
             tuple(metadata["authors"]),

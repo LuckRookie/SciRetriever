@@ -26,9 +26,7 @@ from sciretriever.kernel import (
     Action,
     BoundaryError,
     FailureEvidence,
-    Identifier,
     Reason,
-    WorkVersionState,
 )
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
@@ -38,6 +36,8 @@ from sciretriever.literature_store.sqlite import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import WorkVersionState
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,7 @@ def observation(provider: str, record: str, doi: str) -> MetadataObservation:
         f"Title {doi}",
         ("Ada",),
         2026,
-        (Identifier("doi", doi),),
+        (Identifier(namespace="doi", value=doi),),
         f"Abstract {doi}",
     )
 

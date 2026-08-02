@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import assert_never
 
-from sciretriever.kernel import (
+from sciretriever.model.primitives import (
     AnalysisArtifactId,
     LightDocumentId,
     MetadataSnapshotId,

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Final
 
 from sciretriever.batching.ports import AdmissionPort, CatalogIdentity
-from sciretriever.kernel import RelativeArtifactPath
 from sciretriever.literature_store.filesystem.artifact_identity import (
     FormalArtifactCandidate,
     descriptor_identity,
@@ -19,6 +18,7 @@ from sciretriever.literature_store.filesystem.artifacts import (
     CoreStorage,
     open_child,
 )
+from sciretriever.model.primitives import RelativeArtifactPath
 
 _KINDS: Final = ("primary", "supplementary", "light-document", "analysis")
 Checkpoint = Callable[[str], None]

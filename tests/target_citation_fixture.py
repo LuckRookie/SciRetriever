@@ -30,19 +30,19 @@ from sciretriever.collection.service import (
     CollectionServiceDependencies,
     MetadataSource,
 )
-from sciretriever.kernel import (
-    CitationDirection,
-    Identifier,
-    WorkId,
-    WorkVersionId,
-    WorkVersionState,
-)
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     SqliteBibliographyRepository,
     SqliteCollectionRepository,
     create_or_open_catalog,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    CitationDirection,
+    WorkId,
+    WorkVersionId,
+    WorkVersionState,
 )
 
 
@@ -151,7 +151,7 @@ class CitationCollectionTestCase(unittest.TestCase):
         service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
         repository = SqliteBibliographyRepository(self.catalog)
         candidate = repository.find_identity_candidates(
-            IdentityCandidateQuery((Identifier("doi", doi),)),
+            IdentityCandidateQuery((Identifier(namespace="doi", value=doi),)),
         ).candidates[0]
         record = next(
             item

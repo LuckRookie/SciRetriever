@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from sciretriever.kernel import CanonicalJsonValue, Identifier, Provenance, SourceLocator
-from sciretriever.kernel.enums import AssetRole, WorkVersionState
+from sciretriever.kernel import CanonicalJsonValue
+from sciretriever.model.documents import SourceLocator
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import AssetRole, WorkVersionState
+from sciretriever.model.sources import Provenance
 
 
 @dataclass(frozen=True, slots=True)

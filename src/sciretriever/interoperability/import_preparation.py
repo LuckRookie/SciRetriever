@@ -6,7 +6,12 @@ from typing import Protocol
 from sciretriever.bibliography.api import InitialMetadata, PreparedBibliographyAcceptance
 from sciretriever.interoperability.model import ImportedBibliographicRecord, RecordParseResult
 from sciretriever.interoperability.publisher_contracts import ImportResult
-from sciretriever.kernel import FailureEvidence, Identifier, WorkId, WorkVersionId
+from sciretriever.kernel import FailureEvidence
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
+)
 
 
 @dataclass(frozen=True, slots=True)

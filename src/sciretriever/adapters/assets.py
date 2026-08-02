@@ -11,7 +11,7 @@ from sciretriever.content.ports import (
     Header,
     TransportRequest,
 )
-from sciretriever.kernel.enums import AssetRole
+from sciretriever.model.primitives import AssetRole
 
 
 @dataclass(frozen=True, slots=True)

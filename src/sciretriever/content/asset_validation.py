@@ -9,7 +9,7 @@ from typing import assert_never
 from PyPDF2 import PdfReader
 
 from sciretriever.content.model import BoundedByteStream, ContentTarget
-from sciretriever.kernel.enums import AssetRole
+from sciretriever.model.primitives import AssetRole
 
 
 @dataclass(frozen=True, slots=True)

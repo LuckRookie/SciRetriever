@@ -16,11 +16,11 @@ from sciretriever.collection.api import (
     TopicConditions,
 )
 from sciretriever.collection.service import MetadataSource
-from sciretriever.kernel import WorkVersionState
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )
+from sciretriever.model.primitives import WorkVersionState
 
 
 @dataclass(frozen=True, slots=True)

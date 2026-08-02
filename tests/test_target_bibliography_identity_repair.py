@@ -11,8 +11,8 @@ from test_target_bibliography_identity import (
 
 from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.bibliography.identity_model import InitialMetadata
-from sciretriever.kernel import Identifier
 from sciretriever.literature_store.sqlite import create_or_open_catalog
+from sciretriever.model.literature import Identifier
 
 
 class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
@@ -36,7 +36,10 @@ class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
             self.assertNotEqual(second.work_version_id, first.work_version_id)
 
     def test_shared_identifiers_with_blockers_use_distinct_replayable_identity(self) -> None:
-        identifiers = (Identifier("doi", "10.1/shared"), Identifier("pmid", "42"))
+        identifiers = (
+            Identifier(namespace="doi", value="10.1/shared"),
+            Identifier(namespace="pmid", value="42"),
+        )
         variants = (
             observation("two", "2", (), title="Other", authors=("Different",)),
             observation("two", "2", (), year=2025),
@@ -74,7 +77,7 @@ class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):
         )
         for index, (first_role, second_role, expected) in enumerate(pairs):
             catalog, repository = self.prepare_catalog(f"role-{index}")
-            identifier = Identifier("doi", f"10.1/role-{index}")
+            identifier = Identifier(namespace="doi", value=f"10.1/role-{index}")
             first = prepare_initial_ingest(
                 repository, (observation("one", "1", (identifier,), role=first_role),)
             )

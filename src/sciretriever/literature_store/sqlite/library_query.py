@@ -10,7 +10,7 @@ from sciretriever.interoperability.api import (
     WorkVersionSummary,
 )
 from sciretriever.kernel import BoundaryError
-from sciretriever.kernel.enums import WorkVersionState
+from sciretriever.model.primitives import WorkVersionState
 
 SqlParameter = str | int | float | bytes | None
 

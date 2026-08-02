@@ -20,8 +20,12 @@ from sciretriever.content.api import (
     ManifestBlock,
     validate_light_document,
 )
-from sciretriever.kernel import AssetId, Sha256
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.primitives import (
+    AssetId,
+    Sha256,
+    sha256_digest,
+)
 
 MinerUTaskId = NewType("MinerUTaskId", str)
 _MAX_TASK_ID_LENGTH: Final = 128
@@ -70,7 +74,7 @@ class MinerUArchiveAdapter:
     def parse(
         self, archive_bytes: bytes, asset_id: AssetId, asset_sha256: Sha256, pdf_bytes: bytes
     ) -> LightDocumentV1:
-        if Sha256.from_bytes(pdf_bytes) != asset_sha256 or not pdf_bytes.startswith(b"%PDF-"):
+        if sha256_digest(pdf_bytes) != asset_sha256 or not pdf_bytes.startswith(b"%PDF-"):
             raise LightDocumentError("primary-pdf-alignment")
         try:
             page_count = len(PdfReader(BytesIO(pdf_bytes), strict=True).pages)

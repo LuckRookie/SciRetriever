@@ -8,7 +8,7 @@ from sciretriever.interoperability.model import (
     RecordParseResult,
 )
 from sciretriever.interoperability.publisher_contracts import ImportRecordProjection, ImportResult
-from sciretriever.kernel.enums import BibliographyFormat
+from sciretriever.model.primitives import BibliographyFormat
 
 
 class BinaryInput(Protocol):

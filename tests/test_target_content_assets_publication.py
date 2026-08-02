@@ -18,14 +18,15 @@ from sciretriever.batching.api import TargetProjection, TargetResult
 from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.assets import AssetAcceptancePolicy, ContentAssetService, ResolverTier
 from sciretriever.content.model import ContentTarget, UnifiedMetadataSnapshot
-from sciretriever.kernel import BatchRunId, CanonicalJsonObject, Identifier, Sha256
-from sciretriever.kernel.enums import AssetRole
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     ContentAcceptancePublisher,
     StalePublicationError,
     open_read_only_snapshot,
 )
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import AssetRole, BatchRunId, sha256_digest
 
 
 class TargetContentPublicationTests(unittest.TestCase):
@@ -49,7 +50,7 @@ class TargetContentPublicationTests(unittest.TestCase):
                 snapshot.revision,
                 "Atomic publication a",
                 ("Ada",),
-                (Identifier("doi", "10.1000/publisher-a"),),
+                (Identifier(namespace="doi", value="10.1000/publisher-a"),),
                 publication_year=2026,
                 sha256=snapshot.sha256,
             ),
@@ -85,7 +86,7 @@ class TargetContentPublicationTests(unittest.TestCase):
         with self.assertRaises(StalePublicationError):
             second.accept(content_target, AssetRole.PRIMARY_PDF)
 
-        second_hash = Sha256.from_bytes(second_body)
+        second_hash = sha256_digest(second_body)
         self.assertTrue(
             (storage / "core" / "primary" / str(second_hash)[:2] / str(second_hash)).is_file()
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypeVar
 from uuid import UUID, uuid5
 
-from sciretriever.kernel.ids import (
+from sciretriever.model.primitives import (
     AssetId,
     CurationPlanId,
     VersionRelationId,

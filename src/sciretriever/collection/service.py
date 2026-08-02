@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID, uuid4, uuid5
 
@@ -39,12 +40,14 @@ from sciretriever.collection.topic import TopicConditions
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
+    parse_canonical_json,
+)
+from sciretriever.model.primitives import (
     CollectionId,
     CollectionRunId,
     MembershipId,
     UtcTimestamp,
     WorkVersionState,
-    parse_canonical_json,
 )
 
 _COLLECTION_NAMESPACE = UUID("f4fc7f3d-633b-4cc3-8ae7-e32c83cc932d")
@@ -57,6 +60,15 @@ class CoreWriteGuard(Protocol):
 
 class CoreWriteAcquirer(Protocol):
     def __call__(self) -> CoreWriteGuard: ...
+
+
+class Clock(Protocol):
+    def __call__(self) -> UtcTimestamp: ...
+
+
+def _system_clock() -> UtcTimestamp:
+    value = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return UtcTimestamp(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +89,7 @@ class CollectionServiceDependencies:
     acquire_core_write: CoreWriteAcquirer
     metadata_sources: tuple[MetadataSource, ...]
     citation_sources: tuple[CitationSource, ...] = ()
+    clock: Clock = _system_clock
 
     def __post_init__(self) -> None:
         names = tuple(item.name for item in self.metadata_sources)
@@ -108,7 +121,7 @@ class CollectionService:
             name.strip(),
             None if description is None else description.strip(),
             None if topic_conditions is None else topic_conditions.validated(),
-            UtcTimestamp.now(),
+            self._dependencies.clock(),
         )
         return self._dependencies.repository.create_definition(
             CreateCollectionDefinition(definition)
@@ -188,6 +201,7 @@ class CollectionService:
                         self._dependencies.bibliography,
                         self._dependencies.publisher,
                         self._dependencies.citation_sources,
+                        self._dependencies.clock,
                     )
                 ).execute(run_id, collection_id, value, existing)
             except BoundaryError as error:
@@ -261,7 +275,7 @@ class CollectionService:
                 observation.provider,
                 observation.provider_record_id,
                 ordinal,
-                UtcTimestamp.now(),
+                self._dependencies.clock(),
                 observation.identifiers,
                 InitialMetadata(
                     observation.title,

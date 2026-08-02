@@ -24,19 +24,7 @@ from sciretriever.collection.model import (
     StartCollectionRun,
     ValidatedTopicConditionSet,
 )
-from sciretriever.kernel import (
-    BatchRunId,
-    CanonicalJsonObject,
-    CollectionId,
-    CollectionRunId,
-    CurationPlanId,
-    ExtensionRecordId,
-    Identifier,
-    Sha256,
-    UtcTimestamp,
-    WorkId,
-    WorkVersionId,
-)
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import (
     AdmissionBindingError,
     AdmissionConflictError,
@@ -50,6 +38,18 @@ from sciretriever.literature_store.sqlite import (
     SqliteCollectionRepository,
     SqliteCurationTransaction,
     create_or_open_catalog,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    BatchRunId,
+    CollectionId,
+    CollectionRunId,
+    CurationPlanId,
+    ExtensionRecordId,
+    UtcTimestamp,
+    WorkId,
+    WorkVersionId,
+    sha256_digest,
 )
 
 UUIDS = tuple(f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 20))
@@ -98,7 +98,7 @@ class TargetStorePortTests(unittest.TestCase):
 
     def test_collection_repository_round_trip_and_membership_page(self) -> None:
         repository = SqliteCollectionRepository(self.catalog)
-        conditions = ValidatedTopicConditionSet("{}", Sha256.from_bytes(b"{}"))
+        conditions = ValidatedTopicConditionSet("{}", sha256_digest(b"{}"))
         definition = CollectionDefinition(
             CollectionId(UUIDS[0]),
             "topic",
@@ -155,7 +155,7 @@ class TargetStorePortTests(unittest.TestCase):
         work, version, _ = self.seed_bibliography()
         repository = SqliteBibliographyRepository(self.catalog)
         candidates = repository.find_identity_candidates(
-            IdentityCandidateQuery((Identifier("doi", "10.1/test"),))
+            IdentityCandidateQuery((Identifier(namespace="doi", value="10.1/test"),))
         )
         self.assertEqual(
             (candidates.candidates[0].work_id, candidates.candidates[0].work_version_id),
@@ -213,7 +213,7 @@ class TargetStorePortTests(unittest.TestCase):
         with bound.port.acquire_output_path(output):
             with self.assertRaises(AdmissionOrderError):
                 bound.port.acquire_core_write(bound.identity)
-        forged = type(bound.identity)(bound.identity.binding_id, Sha256.from_bytes(b"forged"))
+        forged = type(bound.identity)(bound.identity.binding_id, sha256_digest(b"forged"))
         with self.assertRaises(AdmissionBindingError):
             bound.port.acquire_core_write(forged)
 

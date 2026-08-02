@@ -17,9 +17,14 @@ from sciretriever.content.light_models import (
     Section,
     TableBlock,
 )
-from sciretriever.kernel import AssetId, EvidenceText, Identifier, Provenance, SourceLocator
-from sciretriever.kernel.ids import WorkId, WorkVersionId
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.documents import (
+    EvidenceText,
+    SourceLocator,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import AssetId, WorkId, WorkVersionId
+from sciretriever.model.sources import Provenance
 
 _DOCUMENT_FIELDS: Final = frozenset(
     ("schema_version", "title", "abstract", "sections", "references", "provenance")
@@ -123,12 +128,12 @@ def _locator(
     )
     try:
         locator = SourceLocator(
-            AssetId(_text(fields["asset_id"], "asset-id")),
-            _integer(fields["page_start"], "page-start"),
-            _integer(fields["page_end"], "page-end"),
-            _text(fields["block_id"], "block-id"),
-            _integer(fields["char_start"], "char-start"),
-            _integer(fields["char_end"], "char-end"),
+            asset_id=AssetId(_text(fields["asset_id"], "asset-id")),
+            page_start=_integer(fields["page_start"], "page-start"),
+            page_end=_integer(fields["page_end"], "page-end"),
+            block_id=_text(fields["block_id"], "block-id"),
+            char_start=_integer(fields["char_start"], "char-start"),
+            char_end=_integer(fields["char_end"], "char-end"),
         )
     except (TypeError, ValueError) as error:
         raise LightDocumentError("locator-value") from error
@@ -185,8 +190,8 @@ def _evidence(
 ) -> EvidenceText:
     fields = _closed(value, frozenset(("text", "evidence")), "evidence-text")
     return EvidenceText(
-        budget.add_text(_text(fields["text"], "evidence")),
-        _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        text=budget.add_text(_text(fields["text"], "evidence")),
+        evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
     )
 
 
@@ -370,7 +375,7 @@ def _reference(
     except ValueError as error:
         raise LightDocumentError("reference-id") from error
     identifiers = tuple(
-        Identifier.from_json(
+        Identifier.model_validate_json(
             json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
         for item in _array(fields["identifiers"], "identifiers")
@@ -402,7 +407,7 @@ def _provenance(value: CanonicalJsonInput) -> Provenance:
     if not isinstance(value, dict):
         raise LightDocumentError("provenance-schema")
     try:
-        return Provenance.from_json(
+        return Provenance.model_validate_json(
             json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
     except (TypeError, ValueError) as error:

@@ -16,16 +16,6 @@ from sciretriever.bibliography.model import (
     ValidatedCurationPlan,
 )
 from sciretriever.collection.model import CollectionCounts, CollectionRunStatus, FinishCollectionRun
-from sciretriever.kernel import (
-    BatchRunId,
-    CollectionRunId,
-    CurationPlanId,
-    MembershipId,
-    ReferenceFactId,
-    Sha256,
-    WorkId,
-    WorkVersionId,
-)
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.literature_store.filesystem import (
     AdmissionOrderError,
@@ -36,6 +26,16 @@ from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     SqliteCurationTransaction,
     create_or_open_catalog,
+)
+from sciretriever.model.primitives import (
+    BatchRunId,
+    CollectionRunId,
+    CurationPlanId,
+    MembershipId,
+    ReferenceFactId,
+    WorkId,
+    WorkVersionId,
+    sha256_digest,
 )
 
 UUIDS = tuple(f"10000000-0000-4000-8000-{value:012d}" for value in range(1, 40))
@@ -231,7 +231,7 @@ class TargetStorePortRepairTests(unittest.TestCase):
     def test_plan_rejects_contradictory_unscoped_and_self_shapes(self) -> None:
         work, version = WorkId(UUIDS[0]), WorkVersionId(UUIDS[1])
         scope = CurationScope((work,), (version,))
-        token = SnapshotToken(Sha256.from_bytes(b"scope"))
+        token = SnapshotToken(sha256_digest(b"scope"))
         with self.assertRaises(CurationPlanError):
             ValidatedCurationPlan(
                 CurationPlanId(UUIDS[2]), scope, token, delete_work_ids=(WorkId(UUIDS[3]),)

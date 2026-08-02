@@ -21,15 +21,15 @@ from sciretriever.content.model import (
 )
 from sciretriever.content.ports import RaceToken
 from sciretriever.content.publisher_contracts import ContentAcceptance
-from sciretriever.kernel import (
-    Identifier,
-    MetadataSnapshotId,
-    Sha256,
-    WorkVersionId,
-)
-from sciretriever.kernel.enums import AssetRole
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    AssetRole,
+    MetadataSnapshotId,
+    WorkVersionId,
+    sha256_digest,
+)
 
 UUID_A = "00000000-0000-0000-0000-000000000001"
 UUID_B = "00000000-0000-0000-0000-000000000002"
@@ -61,9 +61,9 @@ def target(*, current: AcceptedContentReference | None = None) -> ContentTarget:
         3,
         "Exact Article Title",
         ("Ada Lovelace",),
-        (Identifier("doi", "10.1000/exact"),),
+        (Identifier(namespace="doi", value="10.1000/exact"),),
         publication_year=2024,
-        sha256=Sha256.from_bytes(b"metadata"),
+        sha256=sha256_digest(b"metadata"),
     )
     accepted = () if current is None else (current,)
     return ContentTarget(

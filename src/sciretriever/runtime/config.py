@@ -16,7 +16,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib
 
-from .config_models import TargetConfig
+from sciretriever.model.configuration import TargetConfig
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 

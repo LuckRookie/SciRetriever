@@ -10,7 +10,6 @@ from typing import Final, NoReturn
 from uuid import uuid4
 
 from sciretriever.content.api import ArtifactKind, PublishedArtifact, StagedArtifact
-from sciretriever.kernel import RelativeArtifactPath
 from sciretriever.literature_store.filesystem.artifact_identity import (
     descriptor_identity,
     open_immutable_artifact,
@@ -20,6 +19,7 @@ from sciretriever.literature_store.filesystem.artifacts import (
     CoreStorage,
     ensure_child,
 )
+from sciretriever.model.primitives import RelativeArtifactPath
 
 _MAX_ARTIFACT_BYTES: Final = 512 * 1024 * 1024
 Checkpoint = Callable[[str], None]

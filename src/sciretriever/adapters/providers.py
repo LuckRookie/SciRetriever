@@ -11,8 +11,8 @@ from sciretriever.collection.ports import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
-from sciretriever.kernel.contracts import Identifier
 from sciretriever.kernel.errors import Action, FailureEvidence, Reason
+from sciretriever.model.literature import Identifier
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +63,10 @@ class MetadataProviderAdapter:
                     record.title,
                     record.authors,
                     record.publication_year,
-                    tuple(Identifier(namespace, value) for namespace, value in record.identifiers),
+                    tuple(
+                        Identifier(namespace=namespace, value=value)
+                        for namespace, value in record.identifiers
+                    ),
                     record.abstract,
                 )
                 for record in records
@@ -87,7 +90,7 @@ class CitationProviderAdapter:
                 CitationObservation(
                     self._provider,
                     request.seed,
-                    Identifier(record.namespace, record.value),
+                    Identifier(namespace=record.namespace, value=record.value),
                     request.direction,
                 )
                 for record in records

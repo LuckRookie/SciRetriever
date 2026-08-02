@@ -23,13 +23,15 @@ from sciretriever.bibliography.ports import BibliographyRepository
 from sciretriever.bibliography.publisher_contracts import metadata_snapshot_sha256
 from sciretriever.kernel import (
     CanonicalJsonObject,
-    Identifier,
+    parse_canonical_json,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     MetadataSnapshotId,
     StableIdentifierId,
     VersionRelationId,
     WorkId,
     WorkVersionId,
-    parse_canonical_json,
 )
 
 from .identity_metadata import (
@@ -59,7 +61,7 @@ def _identifier(value: Identifier) -> Identifier:
             r"^(?:https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/|arxiv:\s*)", "", normalized
         )
         normalized = re.sub(r"\.pdf$", "", normalized)
-    return Identifier(namespace, normalized)
+    return Identifier(namespace=namespace, value=normalized)
 
 
 def _metadata_signature(value: InitialMetadata) -> tuple[str, tuple[str, ...], int, str] | None:

@@ -25,9 +25,6 @@ from sciretriever.bibliography.api import (
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
-    Sha256,
-    WorkId,
-    WorkVersionId,
 )
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
@@ -35,6 +32,11 @@ from sciretriever.literature_store.sqlite import (
     StalePublicationError,
     create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
+    sha256_digest,
 )
 
 
@@ -238,7 +240,7 @@ class TargetCompletionTests(unittest.TestCase):
                 analysis=replace(
                     submission.analysis,
                     proposal=divergent_values,
-                    artifact_sha256=Sha256.from_bytes(b'{"title":"divergent"}'),
+                    artifact_sha256=sha256_digest(b'{"title":"divergent"}'),
                     artifact_size=len(b'{"title":"divergent"}'),
                 ),
             ),

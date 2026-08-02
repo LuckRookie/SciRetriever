@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeVar, assert_never
 
-from sciretriever.kernel import WorkId, WorkVersionId, WorkVersionState, canonical_json_bytes
+from sciretriever.kernel import canonical_json_bytes
+from sciretriever.model.primitives import (
+    WorkId,
+    WorkVersionId,
+    WorkVersionState,
+    sha256_digest,
+)
 
 from .model import WorkFacts
 from .publisher_contracts import CompletionSubmission
@@ -112,9 +118,7 @@ def accept_completion(
         }
         and proposal["schema_version"] == "1"
         and submission.analysis.artifact_sha256
-        == submission.analysis.artifact_sha256.from_bytes(
-            canonical_json_bytes(submission.analysis.proposal)
-        ),
+        == sha256_digest(canonical_json_bytes(submission.analysis.proposal)),
         "analysis artifact must contain the canonical nine-category proposal",
     )
     return publisher.publish_completion(submission, target_projection)

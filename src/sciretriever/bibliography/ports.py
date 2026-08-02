@@ -12,7 +12,7 @@ from sciretriever.bibliography.model import (
     ValidatedVersionRelation,
     WorkFacts,
 )
-from sciretriever.kernel.ids import WorkId, WorkVersionId
+from sciretriever.model.primitives import WorkId, WorkVersionId
 
 from .state import VersionFacts
 

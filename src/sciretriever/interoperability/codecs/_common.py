@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Final
 
 from sciretriever.interoperability.model import ImportedBibliographicRecord, RecordParseResult
-from sciretriever.kernel import Action, FailureEvidence, Identifier, Reason
+from sciretriever.kernel import (
+    Action,
+    FailureEvidence,
+    Reason,
+)
+from sciretriever.model.literature import Identifier
 
 MAX_INPUT_BYTES: Final = 8 * 1024 * 1024
 READ_SIZE: Final = 64 * 1024
@@ -125,7 +130,7 @@ def identifiers(values) -> tuple[Identifier, ...]:
             ).casefold()
         elif key in {"pmid", "pmcid", "arxiv", "isbn", "issn"}:
             value = re.sub(rf"^{key}:\s*", "", value, flags=re.I)
-        normalized.add(Identifier(key, value))
+        normalized.add(Identifier(namespace=key, value=value))
     return tuple(
         sorted(
             normalized,

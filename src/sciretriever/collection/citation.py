@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID, uuid5
 
 from sciretriever.bibliography.api import BibliographicObservation, InitialMetadata
@@ -33,11 +34,13 @@ from sciretriever.collection.run_results import CollectionRunStatus
 from sciretriever.kernel import (
     Action,
     CanonicalJsonObject,
+    FailureEvidence,
+    Reason,
+)
+from sciretriever.model.primitives import (
     CollectionId,
     CollectionRunId,
-    FailureEvidence,
     MembershipId,
-    Reason,
     UtcTimestamp,
     WorkId,
 )
@@ -51,12 +54,17 @@ class CitationSource:
     port: CitationDiscoveryPort
 
 
+class Clock(Protocol):
+    def __call__(self) -> UtcTimestamp: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CitationExecutionDependencies:
     repository: CollectionRepository
     bibliography: BibliographyIngestionPort
     publisher: CollectionAcceptancePublisher
     sources: tuple[CitationSource, ...]
+    clock: Clock
 
 
 def _membership(
@@ -87,7 +95,10 @@ def _cause_path(
         if observation.direction.value == "references"
         else CollectionCauseKind.CITED_BY,
         CanonicalJsonObject(
-            (("identifier", observation.target_identifier.to_json()), ("provider", source))
+            (
+                ("identifier", observation.target_identifier.model_dump_json()),
+                ("provider", source),
+            )
         ),
         path[0],
     )
@@ -228,7 +239,7 @@ class CitationRunExecutor:
                                     provider,
                                     f"citation:{parent}:{observation.direction.value}:{observation.target_identifier.namespace}:{observation.target_identifier.value}",
                                     ordinal,
-                                    UtcTimestamp.now(),
+                                    self._dependencies.clock(),
                                     (observation.target_identifier,),
                                     InitialMetadata(),
                                     "other",

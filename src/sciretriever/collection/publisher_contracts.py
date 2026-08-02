@@ -7,26 +7,19 @@ from sciretriever.bibliography.api import PreparedBibliographyAcceptance
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
+)
+from sciretriever.model.primitives import (
     CitationDirection,
+    CollectionCauseId,
     CollectionId,
+    CollectionPathId,
     CollectionRunId,
     MembershipId,
     WorkId,
 )
-from sciretriever.kernel.ids import UuidValue
 
 
 class CollectionAcceptanceConflict(Exception):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CollectionCauseId(UuidValue):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CollectionPathId(UuidValue):
     pass
 
 

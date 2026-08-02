@@ -8,7 +8,8 @@ from sciretriever.collection.publisher_contracts import (
     CollectionPathFact,
     CollectionPathId,
 )
-from sciretriever.kernel import BoundaryError, CollectionId
+from sciretriever.kernel import BoundaryError
+from sciretriever.model.primitives import CollectionId
 
 
 @dataclass(frozen=True, slots=True)

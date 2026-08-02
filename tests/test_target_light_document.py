@@ -39,10 +39,9 @@ from sciretriever.content.light_service import (
 )
 from sciretriever.content.model import PublishedArtifact, StagedArtifact
 from sciretriever.content.publisher_contracts import LightDocumentAcceptance
-from sciretriever.kernel import Sha256, WorkVersionId
-from sciretriever.kernel.ids import WorkVersionAssetId
 from sciretriever.kernel.json import CanonicalJsonInput
 from sciretriever.literature_store.filesystem import CoreArtifactStore
+from sciretriever.model.primitives import WorkVersionAssetId, WorkVersionId, sha256_digest
 
 
 class TargetLightDocumentTests(unittest.TestCase):
@@ -87,7 +86,7 @@ class TargetLightDocumentTests(unittest.TestCase):
         adapter = MinerUArchiveAdapter(LightDocumentBounds())
         pdf = pdf_bytes()
 
-        document = adapter.parse(archive_bytes(), ASSET_ID, Sha256.from_bytes(pdf), pdf)
+        document = adapter.parse(archive_bytes(), ASSET_ID, sha256_digest(pdf), pdf)
 
         self.assertEqual(document.schema_version, "1")
         first = document.sections[0].blocks[0]
@@ -116,9 +115,9 @@ class TargetLightDocumentTests(unittest.TestCase):
             b"not-a-zip",
         ):
             with self.subTest(size=len(payload)), self.assertRaises(LightDocumentError):
-                adapter.parse(payload, ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes())
+                adapter.parse(payload, ASSET_ID, sha256_digest(pdf_bytes()), pdf_bytes())
         with self.assertRaises(LightDocumentError):
-            oversized.parse(archive_bytes(), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes())
+            oversized.parse(archive_bytes(), ASSET_ID, sha256_digest(pdf_bytes()), pdf_bytes())
 
     def test_publication_writes_canonical_artifact_before_acceptance(self) -> None:
         events: list[str] = []
@@ -152,18 +151,16 @@ class TargetLightDocumentTests(unittest.TestCase):
                 WorkVersionId("00000000-0000-0000-0000-000000000201"),
                 WorkVersionAssetId("00000000-0000-0000-0000-000000000202"),
                 ASSET_ID,
-                Sha256.from_bytes(pdf_bytes()),
+                sha256_digest(pdf_bytes()),
             )
-            parser = ParserIdentity(
-                "mineru", "3.4.4", "vlm", "fixture", Sha256.from_bytes(b"params")
-            )
+            parser = ParserIdentity("mineru", "3.4.4", "vlm", "fixture", sha256_digest(b"params"))
 
             result = LightDocumentService(Store(str(Path(directory) / "storage")), sink).publish(
                 target, document, parser
             )
 
             self.assertEqual(events, ["artifact", "catalog"])
-            self.assertEqual(result.artifact.sha256, Sha256.from_bytes(document.canonical_bytes()))
+            self.assertEqual(result.artifact.sha256, sha256_digest(document.canonical_bytes()))
             self.assertIsNotNone(sink.acceptance)
 
     def test_remote_recovery_polls_only_explicit_task_id_without_submit(self) -> None:
@@ -190,7 +187,7 @@ class TargetLightDocumentTests(unittest.TestCase):
         document = adapter.parse(
             pdf,
             ASSET_ID,
-            Sha256.from_bytes(pdf),
+            sha256_digest(pdf),
             resume_task_id="approved-task",
         )
 
@@ -255,7 +252,7 @@ class TargetLightDocumentTests(unittest.TestCase):
             locator.update(page_start=page_start, page_end=page_end)
             with self.subTest(pages=(page_start, page_end)), self.assertRaises(LightDocumentError):
                 MinerUArchiveAdapter(LightDocumentBounds()).parse(
-                    archive_bytes(value), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes()
+                    archive_bytes(value), ASSET_ID, sha256_digest(pdf_bytes()), pdf_bytes()
                 )
 
     def test_page_two_manifest_block_accepts_page_two_locator(self) -> None:
@@ -276,7 +273,7 @@ class TargetLightDocumentTests(unittest.TestCase):
         }
 
         document = MinerUArchiveAdapter(LightDocumentBounds()).parse(
-            archive_bytes(value, middle), ASSET_ID, Sha256.from_bytes(pdf_bytes()), pdf_bytes()
+            archive_bytes(value, middle), ASSET_ID, sha256_digest(pdf_bytes()), pdf_bytes()
         )
 
         assert document.title is not None
@@ -296,7 +293,7 @@ class TargetLightDocumentTests(unittest.TestCase):
                         adapter.parse(
                             pdf,
                             ASSET_ID,
-                            Sha256.from_bytes(pdf),
+                            sha256_digest(pdf),
                             resume_task_id=task_id if boundary == "resume" else None,
                         )
                     self.assertEqual(service.polls, 0 if boundary in {"resume", "submit"} else 1)

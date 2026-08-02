@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sciretriever.kernel.contracts import Identifier
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import (
+from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     AssetId,
     CurationPlanId,
     MembershipId,
     ObservationId,
     ReferenceFactId,
+    Sha256,
     StableIdentifierId,
     VersionRelationId,
     WorkId,
     WorkVersionId,
 )
-from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
 
 from .state import VersionFacts
 

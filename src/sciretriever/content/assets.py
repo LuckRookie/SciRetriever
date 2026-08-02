@@ -30,14 +30,15 @@ from sciretriever.content.publisher_contracts import (
     PrimaryPdfAcceptance,
     SupplementaryAssetAcceptance,
 )
-from sciretriever.kernel import (
+from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.primitives import (
     AssetId,
-    CanonicalJsonObject,
+    AssetRole,
     RelativeArtifactPath,
     Sha256,
+    WorkVersionAssetId,
+    sha256_digest,
 )
-from sciretriever.kernel.enums import AssetRole
-from sciretriever.kernel.ids import WorkVersionAssetId
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +248,7 @@ class ContentAssetService:
         metadata_hash = target.current_metadata.sha256
         if metadata_hash is None:
             return ContentAssetFailure("metadata-hash-missing", ())
-        digest = Sha256.from_bytes(content)
+        digest = sha256_digest(content)
         kind = (
             ArtifactKind.PRIMARY_PDF
             if candidate.role is AssetRole.PRIMARY_PDF

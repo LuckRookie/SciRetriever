@@ -12,13 +12,14 @@ from sciretriever.bibliography.api import (
     completion_submission_canonical,
     metadata_snapshot_sha256,
 )
-from sciretriever.kernel import CanonicalJsonObject, Sha256, canonical_json_bytes
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
     StalePublicationError,
     StatementFailpoint,
     execute,
     immediate,
 )
+from sciretriever.model.primitives import sha256_digest
 
 
 def _references(connection, point: StatementFailpoint, fact: ReferenceSetFact) -> None:
@@ -104,7 +105,7 @@ class CompletionPublisher:
         analysis = submission.analysis
         metadata = submission.metadata
         proposal_bytes = canonical_json_bytes(analysis.proposal)
-        if analysis.artifact_sha256 != Sha256.from_bytes(
+        if analysis.artifact_sha256 != sha256_digest(
             proposal_bytes
         ) or analysis.artifact_size != len(proposal_bytes):
             raise StalePublicationError("analysis artifact identity is inconsistent")
@@ -116,7 +117,7 @@ class CompletionPublisher:
             raise StalePublicationError("final metadata hash is inconsistent")
         provenance = canonical_json_bytes(submission.provenance.evidence).decode("ascii")
         result_json = canonical_json_bytes(target.result_envelope().canonical()).decode("ascii")
-        identity_sha256 = Sha256.from_bytes(
+        identity_sha256 = sha256_digest(
             canonical_json_bytes(
                 CanonicalJsonObject(
                     (

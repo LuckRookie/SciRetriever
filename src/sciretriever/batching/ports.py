@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol
 
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import AdmissionBindingId, BatchRunId, WorkVersionId
+from sciretriever.model.primitives import AdmissionBindingId, BatchRunId, Sha256, WorkVersionId
 
 
 @dataclass(frozen=True, slots=True)

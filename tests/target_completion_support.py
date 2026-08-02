@@ -23,13 +23,18 @@ from sciretriever.content.api import (
     PublishedArtifact,
     StagedArtifact,
 )
-from sciretriever.kernel import CanonicalJsonObject, MetadataSnapshotId, Sha256, WorkId
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
     SqliteBibliographyRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.model.primitives import (
+    MetadataSnapshotId,
+    Sha256,
+    WorkId,
 )
 
 SqlValue = str | int | float | bytes | None

@@ -26,17 +26,20 @@ from sciretriever.content.api import (
     StagedArtifact,
 )
 from sciretriever.kernel import (
-    AnalysisArtifactId,
-    AssetId,
     BoundaryError,
     CanonicalJsonObject,
+    parse_canonical_json,
+)
+from sciretriever.model.primitives import (
+    AnalysisArtifactId,
+    AssetId,
     LightDocumentId,
     MetadataSnapshotId,
     RelativeArtifactPath,
     Sha256,
     WorkId,
     WorkVersionId,
-    parse_canonical_json,
+    sha256_digest,
 )
 
 
@@ -74,7 +77,7 @@ def complete_analysis(
     if target.work_version_id != context.work_version_id:
         raise BoundaryError.for_field("target", "must share the completion WorkVersion")
     proposal_bytes = proposal.canonical_bytes()
-    proposal_hash = Sha256.from_bytes(proposal_bytes)
+    proposal_hash = sha256_digest(proposal_bytes)
     staged = StagedArtifact(
         ArtifactKind.ANALYSIS,
         RelativeArtifactPath(f"analysis/{str(proposal_hash)[:2]}/{proposal_hash}"),

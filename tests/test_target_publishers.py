@@ -14,8 +14,16 @@ from sciretriever.bibliography.api import CompletionSubmission, FinalMetadataFac
 from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.api import LightDocumentAcceptance
 from sciretriever.interoperability.ports import ImportResult
-from sciretriever.kernel import BoundaryError, CanonicalJsonObject, Sha256, WorkId, WorkVersionId
+from sciretriever.kernel import (
+    BoundaryError,
+    CanonicalJsonObject,
+)
 from sciretriever.literature_store.sqlite import StalePublicationError, open_read_only_snapshot
+from sciretriever.model.primitives import (
+    Sha256,
+    WorkId,
+    WorkVersionId,
+)
 
 
 class InjectedFailure(RuntimeError):

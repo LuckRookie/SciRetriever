@@ -33,7 +33,7 @@ from sciretriever.interoperability.library_views import (
     WorkSummary,
     WorkVersionSummary,
 )
-from sciretriever.interoperability.query import QueryFilterV1
+from sciretriever.model.library import QueryFilterV1
 
 __all__ = (
     "AnalysisView",

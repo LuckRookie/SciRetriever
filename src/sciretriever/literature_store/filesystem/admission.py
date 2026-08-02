@@ -12,8 +12,6 @@ from sciretriever.batching.ports import (
     CatalogIdentity,
     OutputIdentity,
 )
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import AdmissionBindingId, BatchRunId, WorkVersionId
 from sciretriever.literature_store.filesystem.admission_order import (
     AdmissionOrderTracker,
     HeldAdmission,
@@ -26,6 +24,7 @@ from sciretriever.literature_store.filesystem.locks import (
     verify_absent_entry,
     verify_catalog_entry,
 )
+from sciretriever.model.primitives import AdmissionBindingId, BatchRunId, Sha256, WorkVersionId
 
 
 class AdmissionConflictError(Exception):

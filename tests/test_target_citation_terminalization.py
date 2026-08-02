@@ -22,11 +22,15 @@ from sciretriever.collection.service import (
     CollectionServiceDependencies,
     MetadataSource,
 )
-from sciretriever.kernel import CitationDirection, Identifier, WorkVersionState
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
     open_read_only_snapshot,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    CitationDirection,
+    WorkVersionState,
 )
 
 
@@ -44,7 +48,7 @@ class WrongProviderPort:
         observation = CitationObservation(
             "wrong",
             request.seed,
-            Identifier("doi", "10.1/wrong"),
+            Identifier(namespace="doi", value="10.1/wrong"),
             request.direction,
         )
         return ProviderCitationResult("wrong", (observation,), None)
@@ -121,7 +125,7 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
             self.catalog,
             {
                 (str(seed.work_id), CitationDirection.REFERENCES): (
-                    Identifier("doi", "10.1/prefix-target"),
+                    Identifier(namespace="doi", value="10.1/prefix-target"),
                 ),
             },
             "good",
@@ -190,7 +194,7 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
             self.catalog,
             {
                 (str(seed.work_id), CitationDirection.REFERENCES): (
-                    Identifier("doi", "10.1/interrupt-target"),
+                    Identifier(namespace="doi", value="10.1/interrupt-target"),
                 ),
             },
             "good",

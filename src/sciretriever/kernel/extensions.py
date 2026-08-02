@@ -4,15 +4,16 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from sciretriever.kernel.errors import BoundaryError
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import ExtensionRecordId
 from sciretriever.kernel.json import (
     CanonicalJsonObject,
     CanonicalJsonValue,
     canonical_json_bytes,
     parse_canonical_json,
 )
+from sciretriever.model.primitives import ExtensionRecordId, Sha256, sha256_digest
 
 
 def _text(value: str, field: str) -> str:
@@ -65,7 +66,7 @@ class OpaqueExtensionRecord:
             raise BoundaryError.for_field("revision", "must be an integer at least 1")
         if not isinstance(self.payload_sha256, Sha256):
             raise BoundaryError.for_field("payload_sha256", "must be Sha256")
-        if Sha256.from_bytes(canonical_json_bytes(self.payload)) != self.payload_sha256:
+        if sha256_digest(canonical_json_bytes(self.payload)) != self.payload_sha256:
             raise BoundaryError.for_field(
                 "payload_sha256", "does not match canonical payload bytes"
             )
@@ -85,13 +86,18 @@ class OpaqueExtensionRecord:
     @classmethod
     def from_json(cls, payload: str) -> OpaqueExtensionRecord:
         fields = _fields(parse_canonical_json(payload))
-        return cls(
-            _string(fields["namespace"], "namespace"),
-            ExtensionRecordId(_string(fields["record_id"], "record_id")),
-            _integer(fields["revision"], "revision"),
-            Sha256(_string(fields["payload_sha256"], "payload_sha256")),
-            fields["payload"],
-        )
+        try:
+            return cls(
+                _string(fields["namespace"], "namespace"),
+                ExtensionRecordId(_string(fields["record_id"], "record_id")),
+                _integer(fields["revision"], "revision"),
+                Sha256(_string(fields["payload_sha256"], "payload_sha256")),
+                fields["payload"],
+            )
+        except ValidationError as error:
+            raise BoundaryError.for_field(
+                "extension_record", "must contain valid primitive values"
+            ) from error
 
 
 def validate_page_request(

@@ -26,16 +26,8 @@ from sciretriever.interoperability.api import (
 )
 from sciretriever.kernel import (
     BoundaryError,
-    CollectionId,
-    Identifier,
-    Provenance,
-    ProvenanceId,
-    UtcTimestamp,
-    WorkId,
-    WorkVersionId,
     parse_canonical_json,
 )
-from sciretriever.kernel.enums import AssetRole, SourceKind, WorkVersionState
 from sciretriever.literature_store.sqlite.engine import (
     open_read_only_snapshot,
 )
@@ -53,6 +45,18 @@ from sciretriever.literature_store.sqlite.library_parse import (
     reference,
 )
 from sciretriever.literature_store.sqlite.library_query import search as search_page
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    AssetRole,
+    CollectionId,
+    ProvenanceId,
+    SourceKind,
+    UtcTimestamp,
+    WorkId,
+    WorkVersionId,
+    WorkVersionState,
+)
+from sciretriever.model.sources import Provenance
 
 
 def _path_ids(payload: str) -> tuple[str, ...]:
@@ -150,7 +154,7 @@ class SqliteLibraryReadRepository:
             raise LookupError(str(version_id))
         work_id, state, missing = row[:3]
         identifiers = tuple(
-            Identifier(item[0], item[1])
+            Identifier(namespace=item[0], value=item[1])
             for item in connection.execute(
                 "SELECT namespace,value FROM stable_identifiers WHERE work_version_id=? ORDER "
                 "BY namespace,value",
@@ -293,13 +297,13 @@ class SqliteLibraryReadRepository:
                 json_value(row[3]),
                 row[4],
                 Provenance(
-                    ProvenanceId(row[0]),
-                    SourceKind.METADATA_PROVIDER,
-                    row[1],
-                    row[2],
-                    UtcTimestamp(row[4]),
-                    None,
-                    None,
+                    provenance_id=ProvenanceId(row[0]),
+                    source_kind=SourceKind.METADATA_PROVIDER,
+                    source_name=row[1],
+                    source_record_id=row[2],
+                    observed_at=UtcTimestamp(row[4]),
+                    input_sha256=None,
+                    parameters_sha256=None,
                 ),
             )
             for row in rows

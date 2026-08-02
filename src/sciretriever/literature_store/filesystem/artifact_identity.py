@@ -7,8 +7,8 @@ import stat
 from dataclasses import dataclass
 from typing import Final
 
-from sciretriever.kernel import RelativeArtifactPath
 from sciretriever.literature_store.filesystem.artifacts import ArtifactFilesystemError
+from sciretriever.model.primitives import RelativeArtifactPath
 
 _CHUNK_BYTES: Final = 1024 * 1024
 _MAX_ARTIFACT_BYTES: Final = 512 * 1024 * 1024

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from sciretriever.kernel import (
-    Identifier,
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     MetadataSnapshotId,
     ObservationId,
     Sha256,

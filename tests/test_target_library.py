@@ -15,8 +15,6 @@ from sciretriever.bibliography.api import accept_completion
 from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.bibliography.identity_model import BibliographicObservation, InitialMetadata
 from sciretriever.interoperability.library import LibraryPageRequest, LibraryReadService
-from sciretriever.interoperability.query import QueryFilterV1
-from sciretriever.kernel import CollectionId, Identifier, UtcTimestamp, WorkId
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
@@ -26,6 +24,13 @@ from sciretriever.literature_store.sqlite import (
 from sciretriever.literature_store.sqlite.publisher_support import (
     StatementFailpoint,
     publish_bibliography,
+)
+from sciretriever.model.library import QueryFilterV1
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    CollectionId,
+    UtcTimestamp,
+    WorkId,
 )
 
 
@@ -45,7 +50,7 @@ class TargetLibraryTests(unittest.TestCase):
             f"record-{suffix}",
             0,
             UtcTimestamp("2026-07-31T00:00:00Z"),
-            (Identifier("doi", f"10.1000/{suffix}"),),
+            (Identifier(namespace="doi", value=f"10.1000/{suffix}"),),
             InitialMetadata(
                 title, ("Ada Lovelace",), 2024, "article", "metadata alpha", "Journal Alpha", "en"
             ),
@@ -184,7 +189,7 @@ class TargetLibraryTests(unittest.TestCase):
 
         filters = (
             QueryFilterV1(query="alpha"),
-            QueryFilterV1(identifiers=(Identifier("doi", "10.1000/detail"),)),
+            QueryFilterV1(identifiers=(Identifier(namespace="doi", value="10.1000/detail"),)),
             QueryFilterV1(title="SEARCH"),
             QueryFilterV1(authors=("lovelace",)),
             QueryFilterV1(venues=("journal",)),
@@ -208,7 +213,7 @@ class TargetLibraryTests(unittest.TestCase):
             )
         negative_filters = (
             QueryFilterV1(query="absent"),
-            QueryFilterV1(identifiers=(Identifier("doi", "10.1000/absent"),)),
+            QueryFilterV1(identifiers=(Identifier(namespace="doi", value="10.1000/absent"),)),
             QueryFilterV1(title="absent"),
             QueryFilterV1(authors=("Grace",)),
             QueryFilterV1(venues=("absent",)),

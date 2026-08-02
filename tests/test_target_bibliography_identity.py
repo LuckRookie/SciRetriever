@@ -12,11 +12,12 @@ from sciretriever.bibliography.identity_model import (
     InitialMetadata,
     VersionRelationEvidence,
 )
-from sciretriever.kernel import Identifier, UtcTimestamp
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     create_or_open_catalog,
 )
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import UtcTimestamp
 
 
 def observation(
@@ -171,8 +172,8 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
         return catalog, SqliteBibliographyRepository(catalog)
 
     def test_three_exact_routes_are_deterministic_across_provider_permutations(self) -> None:
-        doi = Identifier("doi", "10.1000/exact")
-        pmid = Identifier("pmid", "42")
+        doi = Identifier(namespace="doi", value="10.1000/exact")
+        pmid = Identifier(namespace="pmid", value="42")
         records = (
             observation("crossref", "c", (doi,), priority=0),
             observation("pubmed", "p", (pmid,), priority=1),
@@ -214,8 +215,8 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
     def test_conflict_blockers_keep_versions_separate_with_review_evidence(self) -> None:
         blockers = (
             (
-                observation("a", "1", (Identifier("doi", "10.1/a"),)),
-                observation("b", "2", (Identifier("doi", "10.1/b"),)),
+                observation("a", "1", (Identifier(namespace="doi", value="10.1/a"),)),
+                observation("b", "2", (Identifier(namespace="doi", value="10.1/b"),)),
             ),
             (
                 observation("a", "1", (), title="Alpha", authors=("A",)),
@@ -249,7 +250,7 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
 
     def test_explicit_version_relation_shares_work_but_preserves_versions_and_roles(self) -> None:
         catalog, repository = self.prepare_catalog("relations")
-        preprint_id = Identifier("arxiv", "2601.00001")
+        preprint_id = Identifier(namespace="arxiv", value="2601.00001")
         preprint = prepare_initial_ingest(
             repository, (observation("arxiv", "p", (preprint_id,), role="preprint"),)
         )
@@ -257,7 +258,7 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
         formal = observation(
             "crossref",
             "f",
-            (Identifier("doi", "10.1/formal"),),
+            (Identifier(namespace="doi", value="10.1/formal"),),
             role="formal",
             relation=VersionRelationEvidence(preprint_id, "published-version-of"),
         )

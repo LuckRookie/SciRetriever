@@ -8,8 +8,8 @@ from PyPDF2 import PdfWriter
 
 from sciretriever.adapters.mineru import MinerUTaskState, MinerUTaskView
 from sciretriever.content.light_document import ManifestBlock
-from sciretriever.kernel import AssetId
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.primitives import AssetId
 
 ASSET_ID = AssetId("00000000-0000-0000-0000-000000000101")
 

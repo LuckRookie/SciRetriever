@@ -4,39 +4,25 @@ from dataclasses import dataclass
 from enum import Enum, unique
 
 from sciretriever.kernel import (
-    AnalysisArtifactId,
-    AssetId,
     BoundaryError,
     CanonicalJsonObject,
-    LightDocumentId,
-    MetadataSnapshotId,
-    RelativeArtifactPath,
-    Sha256,
-    WorkId,
-    WorkVersionId,
     canonical_json_bytes,
 )
-from sciretriever.kernel.ids import UuidValue
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceSetId(UuidValue):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceMemberId(UuidValue):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class TagSetId(UuidValue):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class TagMemberId(UuidValue):
-    pass
+from sciretriever.model.primitives import (
+    AnalysisArtifactId,
+    AssetId,
+    LightDocumentId,
+    MetadataSnapshotId,
+    ReferenceMemberId,
+    ReferenceSetId,
+    RelativeArtifactPath,
+    Sha256,
+    TagMemberId,
+    TagSetId,
+    WorkId,
+    WorkVersionId,
+    sha256_digest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +66,7 @@ def metadata_snapshot_sha256(
     values: CanonicalJsonObject,
     provenance: CanonicalJsonObject,
 ) -> Sha256:
-    return Sha256.from_bytes(metadata_snapshot_bytes(revision, values, provenance))
+    return sha256_digest(metadata_snapshot_bytes(revision, values, provenance))
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +118,7 @@ class CompletionAnalysisFact:
 
     def __post_init__(self) -> None:
         proposal_bytes = canonical_json_bytes(self.proposal)
-        if self.artifact_sha256 != Sha256.from_bytes(proposal_bytes):
+        if self.artifact_sha256 != sha256_digest(proposal_bytes):
             raise BoundaryError.for_field("artifact_sha256", "must identify proposal bytes")
         if self.artifact_size != len(proposal_bytes):
             raise BoundaryError.for_field("artifact_size", "must equal proposal byte length")

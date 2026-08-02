@@ -8,15 +8,18 @@ from sciretriever.content.light_models import LightDocumentV1
 from sciretriever.content.model import ArtifactKind, PublishedArtifact, StagedArtifact
 from sciretriever.content.publisher_contracts import LightDocumentAcceptance
 from sciretriever.kernel import (
-    AssetId,
     CanonicalJsonObject,
+    parse_canonical_json,
+)
+from sciretriever.model.primitives import (
+    AssetId,
     LightDocumentId,
     RelativeArtifactPath,
     Sha256,
+    WorkVersionAssetId,
     WorkVersionId,
-    parse_canonical_json,
+    sha256_digest,
 )
-from sciretriever.kernel.ids import WorkVersionAssetId
 
 
 class LightArtifactStore(Protocol):
@@ -60,7 +63,7 @@ class LightDocumentService:
         self, target: LightPublicationTarget, document: LightDocumentV1, parser: ParserIdentity
     ) -> LightDocumentPublication:
         content = document.canonical_bytes()
-        digest = Sha256.from_bytes(content)
+        digest = sha256_digest(content)
         document_id = LightDocumentId(
             str(uuid5(NAMESPACE_URL, f"light-document:{target.work_version_id}:{digest}"))
         )

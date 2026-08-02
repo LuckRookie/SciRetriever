@@ -5,7 +5,7 @@ import re
 import bibtexparser
 
 from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
-from sciretriever.kernel import BibliographyFormat
+from sciretriever.model.primitives import BibliographyFormat
 
 from ._common import CodecInputError, decode_bytes, read_bounded, record, rejected
 

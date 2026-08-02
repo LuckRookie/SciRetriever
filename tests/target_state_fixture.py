@@ -17,9 +17,12 @@ from sciretriever.bibliography.api import (
 )
 from sciretriever.bibliography.model import WorkFacts
 from sciretriever.kernel import (
+    CanonicalJsonObject,
+    canonical_json_bytes,
+)
+from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
-    CanonicalJsonObject,
     LightDocumentId,
     MetadataSnapshotId,
     RelativeArtifactPath,
@@ -27,7 +30,7 @@ from sciretriever.kernel import (
     WorkId,
     WorkVersionAssetId,
     WorkVersionId,
-    canonical_json_bytes,
+    sha256_digest,
 )
 
 WORK_ID = WorkId("10000000-0000-0000-0000-000000000001")
@@ -36,7 +39,7 @@ PRIMARY_ID = WorkVersionAssetId("30000000-0000-0000-0000-000000000001")
 LIGHT_ID = LightDocumentId("40000000-0000-0000-0000-000000000001")
 ANALYSIS_ID = AnalysisArtifactId("50000000-0000-0000-0000-000000000001")
 METADATA_ID = MetadataSnapshotId("60000000-0000-0000-0000-000000000001")
-LIGHT_HASH = Sha256.from_bytes(b"{}")
+LIGHT_HASH = sha256_digest(b"{}")
 METADATA_HASH = metadata_snapshot_sha256(1, CanonicalJsonObject(()), CanonicalJsonObject(()))
 
 
@@ -82,7 +85,7 @@ def submission() -> CompletionSubmission:
         )
     )
     proposal_bytes = canonical_json_bytes(proposal)
-    proposal_hash = Sha256.from_bytes(proposal_bytes)
+    proposal_hash = sha256_digest(proposal_bytes)
     values = CanonicalJsonObject((("title", "final"),))
     provenance_value = CanonicalJsonObject(())
     return CompletionSubmission(
@@ -211,7 +214,7 @@ def insert_completed(connection: sqlite3.Connection) -> None:
         "INSERT INTO work_version_current_light_document VALUES (?,?)",
         (str(VERSION_ID), str(LIGHT_ID)),
     )
-    analysis_hash = Sha256.from_bytes(b"{}")
+    analysis_hash = sha256_digest(b"{}")
     connection.execute(
         "INSERT INTO artifacts VALUES ('analysis-file','analysis',?,'analysis/value',2,NULL)",
         (str(analysis_hash),),

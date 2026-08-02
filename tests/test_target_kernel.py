@@ -1,37 +1,43 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import FrozenInstanceError
 from importlib import import_module
 from pathlib import Path
 from unittest import TestCase
 
+from pydantic import ValidationError
+
 from sciretriever.kernel import (
     Action,
-    AssetId,
     BoundaryError,
     CanonicalJsonObject,
     CanonicalJsonValue,
-    EvidenceText,
-    ExtensionRecordId,
     FailureEvidence,
-    Identifier,
     OpaqueExtensionRecord,
     OpaqueExtensionRecordStorePort,
-    Provenance,
-    ProvenanceId,
     Reason,
-    RelativeArtifactPath,
-    Sha256,
-    SourceKind,
-    SourceLocator,
-    UtcTimestamp,
-    WorkId,
-    WorkVersionId,
     canonical_json_bytes,
     parse_canonical_json,
     validate_page_request,
 )
+from sciretriever.model.documents import (
+    EvidenceText,
+    SourceLocator,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    AssetId,
+    ExtensionRecordId,
+    ProvenanceId,
+    RelativeArtifactPath,
+    Sha256,
+    SourceKind,
+    UtcTimestamp,
+    WorkId,
+    WorkVersionId,
+    sha256_digest,
+)
+from sciretriever.model.sources import Provenance
 
 UUIDS = tuple(f"00000000-0000-4000-8000-{index:012x}" for index in range(1, 12))
 SHA_A = "a" * 64
@@ -55,9 +61,9 @@ class InMemoryOpaqueStore:
                     record
                     for (record_namespace, _record_id), record in self._records.items()
                     if record_namespace == namespace
-                    and (after_record_id is None or record.record_id.value > after_record_id.value)
+                    and (after_record_id is None or record.record_id.root > after_record_id.root)
                 ),
-                key=lambda record: record.record_id.value,
+                key=lambda record: record.record_id.root,
             )
         )
         return records[:limit]
@@ -77,7 +83,7 @@ class InMemoryOpaqueStore:
             namespace=namespace,
             record_id=record_id,
             revision=1 if current is None else current.revision + 1,
-            payload_sha256=Sha256.from_bytes(canonical_json_bytes(payload)),
+            payload_sha256=sha256_digest(canonical_json_bytes(payload)),
             payload=payload,
         )
         self._records[(namespace, record_id)] = record
@@ -93,12 +99,21 @@ class InMemoryOpaqueStore:
 class KernelValueTests(TestCase):
     def test_branded_ids_are_strict_and_not_interchangeable(self) -> None:
         work_id = WorkId(UUIDS[0])
-        version_id = WorkVersionId(UUIDS[1])
+        duplicate_work_id = WorkId(UUIDS[0])
+        version_id = WorkVersionId(UUIDS[0])
 
         self.assertEqual(str(work_id), UUIDS[0])
         self.assertNotEqual(work_id, version_id)
-        with self.assertRaisesRegex(BoundaryError, "work_version_id must be WorkVersionId"):
-            WorkVersionId.from_value(work_id)
+        self.assertEqual(hash(work_id), hash(duplicate_work_id))
+        self.assertNotEqual(hash(work_id), hash(version_id))
+        self.assertEqual(len({work_id, duplicate_work_id, version_id}), 2)
+        self.assertEqual(work_id.model_dump_json(), f'"{UUIDS[0]}"')
+        with self.assertRaisesRegex(ValidationError, "valid string"):
+            WorkVersionId.model_validate(work_id)
+        with self.assertRaises(ValidationError):
+            WorkId.model_validate(1)
+        with self.assertRaisesRegex(ValidationError, "Instance is frozen"):
+            setattr(work_id, "root", UUIDS[1])
 
     def test_malformed_id_hash_path_and_time_are_rejected(self) -> None:
         invalid_values = (
@@ -116,7 +131,7 @@ class KernelValueTests(TestCase):
         for value_type, raw in invalid_values:
             with (
                 self.subTest(value_type=value_type.__name__, raw=raw),
-                self.assertRaises(BoundaryError),
+                self.assertRaises(ValidationError),
             ):
                 value_type(raw)
 
@@ -188,7 +203,7 @@ class ContractTests(TestCase):
             namespace="example.extension.v1",
             record_id=ExtensionRecordId(UUIDS[0]),
             revision=1,
-            payload_sha256=Sha256.from_bytes(canonical_json_bytes(payload)),
+            payload_sha256=sha256_digest(canonical_json_bytes(payload)),
             payload=payload,
         )
 
@@ -213,14 +228,14 @@ class ContractTests(TestCase):
         evidence = EvidenceText(text="text", evidence=(locator,))
         identifier = Identifier(namespace="doi", value="10.1000/example")
 
-        self.assertEqual(Provenance.from_json(provenance.to_json()), provenance)
-        self.assertEqual(EvidenceText.from_json(evidence.to_json()), evidence)
-        self.assertEqual(Identifier.from_json(identifier.to_json()), identifier)
-        with self.assertRaises(FrozenInstanceError):
+        self.assertEqual(Provenance.model_validate_json(provenance.model_dump_json()), provenance)
+        self.assertEqual(EvidenceText.model_validate_json(evidence.model_dump_json()), evidence)
+        self.assertEqual(Identifier.model_validate_json(identifier.model_dump_json()), identifier)
+        with self.assertRaises(ValidationError):
             setattr(provenance, "source_name", "changed")
 
     def test_provenance_constructor_rejects_malformed_nullable_fields(self) -> None:
-        provenance_type = getattr(import_module("sciretriever.kernel"), "Provenance")
+        provenance_type = getattr(import_module("sciretriever.model.sources"), "Provenance")
         malformed = (
             ("source_record_id", 123),
             ("input_sha256", "not-a-sha"),
@@ -239,9 +254,9 @@ class ContractTests(TestCase):
             }
             arguments[field] = value
             with self.subTest(field=field):
-                with self.assertRaises(BoundaryError) as raised:
+                with self.assertRaises(ValidationError) as raised:
                     provenance_type(**arguments)
-                self.assertEqual(raised.exception.field, field)
+                self.assertEqual(raised.exception.errors()[0]["loc"], (field,))
 
     def test_opaque_record_round_trip_and_payload_hash_are_strict(self) -> None:
         record = self.make_record()
@@ -258,6 +273,10 @@ class ContractTests(TestCase):
 
         with self.assertRaises(BoundaryError):
             OpaqueExtensionRecord.from_json(record.to_json()[:-1] + ',"unknown":true}')
+
+        malformed_id = record.to_json().replace(str(record.record_id), "not-a-uuid")
+        with self.assertRaisesRegex(BoundaryError, "extension_record"):
+            OpaqueExtensionRecord.from_json(malformed_id)
 
     def test_compare_and_set_is_deterministic_and_rejects_stale_revision(self) -> None:
         store: OpaqueExtensionRecordStorePort = InMemoryOpaqueStore()

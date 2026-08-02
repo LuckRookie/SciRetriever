@@ -6,7 +6,7 @@ from io import StringIO
 from typing import Final
 
 from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
-from sciretriever.kernel import BibliographyFormat
+from sciretriever.model.primitives import BibliographyFormat
 
 from ._common import CodecInputError, decode_xml_bytes, read_bounded, record, rejected
 

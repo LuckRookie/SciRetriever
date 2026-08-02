@@ -38,21 +38,7 @@ from sciretriever.content.api import (
     PublishedArtifact,
 )
 from sciretriever.interoperability.ports import ImportRecordProjection, ImportResult
-from sciretriever.kernel import (
-    AssetId,
-    BatchRunId,
-    CanonicalJsonObject,
-    CollectionId,
-    CollectionRunId,
-    Identifier,
-    LightDocumentId,
-    MembershipId,
-    MetadataSnapshotId,
-    RelativeArtifactPath,
-    Sha256,
-    UtcTimestamp,
-)
-from sciretriever.kernel.ids import AnalysisArtifactId, WorkVersionAssetId
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     CompletionPublisher,
@@ -60,6 +46,22 @@ from sciretriever.literature_store.sqlite import (
     ImportAcceptancePublisher,
     SqliteBibliographyRepository,
     create_or_open_catalog,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    AnalysisArtifactId,
+    AssetId,
+    BatchRunId,
+    CollectionId,
+    CollectionRunId,
+    LightDocumentId,
+    MembershipId,
+    MetadataSnapshotId,
+    RelativeArtifactPath,
+    Sha256,
+    UtcTimestamp,
+    WorkVersionAssetId,
+    sha256_digest,
 )
 
 EMPTY = CanonicalJsonObject(())
@@ -115,7 +117,7 @@ class ScenarioFactory:
             f"record-{suffix}",
             0,
             UtcTimestamp("2026-07-31T00:00:00Z"),
-            (Identifier("doi", f"10.1000/publisher-{suffix}"),),
+            (Identifier(namespace="doi", value=f"10.1000/publisher-{suffix}"),),
             InitialMetadata(f"Atomic publication {suffix}", ("Ada",), 2026, "article"),
             "formal",
         )
@@ -123,7 +125,7 @@ class ScenarioFactory:
 
     @staticmethod
     def artifact(kind: ArtifactKind, content: bytes) -> PublishedArtifact:
-        digest = Sha256.from_bytes(content)
+        digest = sha256_digest(content)
         directories = {
             ArtifactKind.PRIMARY_PDF: "primary",
             ArtifactKind.SUPPLEMENTARY: "supplementary",

@@ -15,8 +15,9 @@ from sciretriever.interoperability.library_views import (
     ReferenceView,
     TagSetView,
 )
-from sciretriever.kernel import Identifier, Provenance
-from sciretriever.kernel.enums import WorkVersionState
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import WorkVersionState
+from sciretriever.model.sources import Provenance
 
 
 @dataclass(frozen=True, slots=True)

@@ -34,8 +34,7 @@ from sciretriever.content.ports import (
     TransportRequest,
     TransportResponse,
 )
-from sciretriever.kernel.enums import CitationDirection
-from sciretriever.kernel.ids import WorkId
+from sciretriever.model.primitives import CitationDirection, WorkId
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 

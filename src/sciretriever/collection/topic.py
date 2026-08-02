@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sciretriever.collection.model import ValidatedTopicConditionSet
-from sciretriever.kernel import BoundaryError, CanonicalJsonObject, Sha256, canonical_json_bytes
+from sciretriever.kernel import BoundaryError, CanonicalJsonObject, canonical_json_bytes
+from sciretriever.model.primitives import sha256_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,7 @@ class TopicConditions:
             )
         )
         payload = canonical_json_bytes(value)
-        return ValidatedTopicConditionSet(payload.decode("ascii"), Sha256.from_bytes(payload))
+        return ValidatedTopicConditionSet(payload.decode("ascii"), sha256_digest(payload))
 
 
 __all__ = ("TopicConditions",)

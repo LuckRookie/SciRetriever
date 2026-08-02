@@ -12,13 +12,13 @@ from sciretriever.interoperability.api import (
     UnifiedMetadataValues,
 )
 from sciretriever.kernel import (
-    AssetId,
     CanonicalJsonObject,
     CanonicalJsonValue,
-    Identifier,
-    SourceLocator,
     parse_canonical_json,
 )
+from sciretriever.model.documents import SourceLocator
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import AssetId
 
 
 def json_value(payload: str) -> CanonicalJsonValue:
@@ -43,7 +43,8 @@ def _metadata(payload: str) -> UnifiedMetadataValues:
                 )
             )
     identifiers = tuple(
-        Identifier(item["namespace"], item["value"]) for item in value.get("identifiers", ())
+        Identifier(namespace=item["namespace"], value=item["value"])
+        for item in value.get("identifiers", ())
     )
     return UnifiedMetadataValues(
         value["title"],
@@ -110,12 +111,12 @@ def _integer(value: CanonicalJsonValue, field: str) -> int:
 def _locator(value: CanonicalJsonValue) -> SourceLocator:
     fields = _mapping(value, "reference evidence")
     return SourceLocator(
-        AssetId(_text(fields["asset_id"], "asset_id")),
-        _integer(fields["page_start"], "page_start"),
-        _integer(fields["page_end"], "page_end"),
-        _text(fields["block_id"], "block_id"),
-        _integer(fields["char_start"], "char_start"),
-        _integer(fields["char_end"], "char_end"),
+        asset_id=AssetId(_text(fields["asset_id"], "asset_id")),
+        page_start=_integer(fields["page_start"], "page_start"),
+        page_end=_integer(fields["page_end"], "page_end"),
+        block_id=_text(fields["block_id"], "block_id"),
+        char_start=_integer(fields["char_start"], "char_start"),
+        char_end=_integer(fields["char_end"], "char_end"),
     )
 
 
@@ -144,8 +145,8 @@ def reference(payload: str) -> ReferenceView:
     )
     identifiers = tuple(
         Identifier(
-            _text(item_fields["namespace"], "namespace"),
-            _text(item_fields["value"], "value"),
+            namespace=_text(item_fields["namespace"], "namespace"),
+            value=_text(item_fields["value"], "value"),
         )
         for item_fields in (_mapping(item, "identifier") for item in raw_identifiers)
     )

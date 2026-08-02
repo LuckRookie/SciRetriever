@@ -8,13 +8,18 @@ from sciretriever.collection.run_results import (
     CollectionSourceResult,
     FinishCollectionRun,
 )
-from sciretriever.kernel.contracts import Identifier
-from sciretriever.kernel.enums import CitationDirection
 from sciretriever.kernel.errors import BoundaryError, FailureEvidence
-from sciretriever.kernel.hashes import Sha256
-from sciretriever.kernel.ids import CollectionId, CollectionRunId, WorkId
 from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
-from sciretriever.kernel.time import UtcTimestamp
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
+    CitationDirection,
+    CollectionId,
+    CollectionRunId,
+    Sha256,
+    UtcTimestamp,
+    WorkId,
+    sha256_digest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,10 +29,7 @@ class ValidatedTopicConditionSet:
 
     def __post_init__(self) -> None:
         payload = canonical_json_bytes(parse_canonical_json(self.canonical_json))
-        if (
-            payload.decode("ascii") != self.canonical_json
-            or Sha256.from_bytes(payload) != self.sha256
-        ):
+        if payload.decode("ascii") != self.canonical_json or sha256_digest(payload) != self.sha256:
             raise BoundaryError.for_field(
                 "topic_conditions", "must be canonical JSON with matching hash"
             )

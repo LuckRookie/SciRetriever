@@ -4,17 +4,22 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias, assert_never
 
+from pydantic import ValidationError
+
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
+    canonical_json_bytes,
+    parse_canonical_json,
+)
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import (
     CitationDirection,
     CollectionId,
-    Identifier,
     Sha256,
     WorkId,
     WorkVersionId,
-    canonical_json_bytes,
-    parse_canonical_json,
+    sha256_digest,
 )
 
 
@@ -117,7 +122,7 @@ class CitationRunInput:
             )
         )
         encoded = canonical_json_bytes(payload)
-        return ValidatedCitationInput(encoded.decode("ascii"), Sha256.from_bytes(encoded))
+        return ValidatedCitationInput(encoded.decode("ascii"), sha256_digest(encoded))
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,16 +132,13 @@ class ValidatedCitationInput:
 
     def __post_init__(self) -> None:
         payload = canonical_json_bytes(parse_canonical_json(self.canonical_json))
-        if (
-            payload.decode("ascii") != self.canonical_json
-            or Sha256.from_bytes(payload) != self.sha256
-        ):
+        if payload.decode("ascii") != self.canonical_json or sha256_digest(payload) != self.sha256:
             raise BoundaryError.for_field(
                 "citation_input", "must be canonical JSON with matching hash"
             )
 
 
-def citation_run_input_from_validated(  # noqa: C901
+def _citation_run_input_from_validated(  # noqa: C901
     value: ValidatedCitationInput,
 ) -> CitationRunInput:
     payload = parse_canonical_json(value.canonical_json)
@@ -174,7 +176,12 @@ def citation_run_input_from_validated(  # noqa: C901
                 selectors.append(WorkVersionSeed(WorkVersionId(str(selector["value"]))))
             case _SeedKind.IDENTIFIER:
                 selectors.append(
-                    IdentifierSeed(Identifier(str(selector["namespace"]), str(selector["value"])))
+                    IdentifierSeed(
+                        Identifier(
+                            namespace=str(selector["namespace"]),
+                            value=str(selector["value"]),
+                        )
+                    )
                 )
             case _SeedKind.COLLECTION:
                 selectors.append(CollectionSeed(CollectionId(str(selector["value"]))))
@@ -203,6 +210,15 @@ def citation_run_input_from_validated(  # noqa: C901
         depth,
         max_new,
     )
+
+
+def citation_run_input_from_validated(value: ValidatedCitationInput) -> CitationRunInput:
+    try:
+        return _citation_run_input_from_validated(value)
+    except ValidationError as error:
+        raise BoundaryError.for_field(
+            "citation_input", "must contain valid primitive values"
+        ) from error
 
 
 __all__ = (

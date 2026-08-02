@@ -11,8 +11,8 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from sciretriever.model.configuration import LLMProtocol  # noqa: E402
 from sciretriever.runtime.config import load_target_config  # noqa: E402
-from sciretriever.runtime.config_models import LLMProtocol  # noqa: E402
 
 
 class TargetConfigTests(TestCase):

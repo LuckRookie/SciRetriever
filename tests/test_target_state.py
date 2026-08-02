@@ -28,15 +28,15 @@ from sciretriever.bibliography.api import (
     derive_missing_step,
     derive_work_version_state,
 )
-from sciretriever.kernel import (
-    BoundaryError,
-    MissingStep,
-    Sha256,
-    WorkVersionState,
-)
+from sciretriever.kernel import BoundaryError
 from sciretriever.literature_store.sqlite import (
     SqliteBibliographyRepository,
     create_or_open_catalog,
+)
+from sciretriever.model.primitives import (
+    MissingStep,
+    Sha256,
+    WorkVersionState,
 )
 
 

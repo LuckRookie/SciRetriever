@@ -18,7 +18,7 @@ from sciretriever.collection.run_results import (
     FinishCollectionRun,
 )
 from sciretriever.kernel.errors import BoundaryError, FailureEvidence
-from sciretriever.kernel.ids import CollectionRunId
+from sciretriever.model.primitives import CollectionRunId
 
 
 class MetadataSourcePort(Protocol):

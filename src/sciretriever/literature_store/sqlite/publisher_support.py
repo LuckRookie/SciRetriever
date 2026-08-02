@@ -9,8 +9,9 @@ from contextlib import contextmanager
 from sciretriever.bibliography.api import PreparedBibliographyAcceptance
 from sciretriever.collection.api import CollectionAcceptanceConflict
 from sciretriever.content.api import ArtifactKind, PublishedArtifact
-from sciretriever.kernel import CanonicalJsonObject, Sha256, canonical_json_bytes
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
+from sciretriever.model.primitives import sha256_digest
 
 
 class StalePublicationError(CollectionAcceptanceConflict):
@@ -39,7 +40,7 @@ def verify_structured_artifact(
     canonical = canonical_json_bytes(payload)
     if artifact.kind is not kind:
         raise StalePublicationError("structured artifact kind mismatched")
-    if artifact.sha256 != Sha256.from_bytes(canonical) or artifact.size != len(canonical):
+    if artifact.sha256 != sha256_digest(canonical) or artifact.size != len(canonical):
         raise StalePublicationError("structured artifact bytes differ from published identity")
     return canonical
 

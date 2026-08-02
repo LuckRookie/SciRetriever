@@ -4,7 +4,7 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Protocol
 
-from sciretriever.kernel.ids import WorkId, WorkVersionId
+from sciretriever.model.primitives import WorkId, WorkVersionId
 
 from .curation_plans import (
     delete_version_plan,

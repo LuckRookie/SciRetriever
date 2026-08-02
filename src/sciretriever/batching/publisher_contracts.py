@@ -12,7 +12,14 @@ from sciretriever.bibliography.api import (
 from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.api import ContentAcceptance
 from sciretriever.interoperability.ports import ImportRecordProjection
-from sciretriever.kernel import BatchRunId, BoundaryError, CanonicalJsonObject, WorkVersionId
+from sciretriever.kernel import (
+    BoundaryError,
+    CanonicalJsonObject,
+)
+from sciretriever.model.primitives import (
+    BatchRunId,
+    WorkVersionId,
+)
 
 
 @unique
