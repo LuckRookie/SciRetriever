@@ -51,7 +51,7 @@ def _optional_module(path: str) -> ModuleType | None:
     try:
         return importlib.import_module(path)
     except ModuleNotFoundError as error:
-        if error.name != path:
+        if error.name is None or not (path == error.name or path.startswith(f"{error.name}.")):
             raise
         return None
 
