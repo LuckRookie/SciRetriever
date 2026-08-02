@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
@@ -32,10 +33,13 @@ from sciretriever.model.primitives import (
     TagSetId,
     WorkVersionAssetId,
 )
-from tests.target_publisher_support import EMPTY, Scenario, ScenarioFactory
+if TYPE_CHECKING:
+    from tests.target_publisher_support import Scenario, ScenarioFactory
 
 
 def build_primary(factory: ScenarioFactory, callback=None) -> Scenario:
+    from tests.target_publisher_support import EMPTY, Scenario
+
     base = factory.collection()
     base.invoke()
     assert isinstance(base.command, CollectionAcceptance)
@@ -80,6 +84,8 @@ def build_primary(factory: ScenarioFactory, callback=None) -> Scenario:
 
 
 def build_light(factory: ScenarioFactory, callback=None) -> Scenario:
+    from tests.target_publisher_support import EMPTY, Scenario
+
     base = factory.primary()
     base.invoke()
     assert isinstance(base.command, ContentAcceptanceCommand)
@@ -125,6 +131,8 @@ def build_light(factory: ScenarioFactory, callback=None) -> Scenario:
 
 
 def build_completion(factory: ScenarioFactory, callback=None) -> Scenario:
+    from tests.target_publisher_support import EMPTY, Scenario
+
     base = factory.light()
     base.invoke()
     assert isinstance(base.command, ContentAcceptanceCommand)

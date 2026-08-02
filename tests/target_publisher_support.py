@@ -48,6 +48,7 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.services.literature.api import prepare_initial_ingest
+from tests import target_publisher_content_scenarios
 
 EMPTY = CanonicalJsonObject(())
 
@@ -223,16 +224,10 @@ class ScenarioFactory:
         )
 
     def primary(self, callback=None) -> Scenario:
-        from tests.target_publisher_content_scenarios import build_primary
-
-        return build_primary(self, callback)
+        return target_publisher_content_scenarios.build_primary(self, callback)
 
     def light(self, callback=None) -> Scenario:
-        from tests.target_publisher_content_scenarios import build_light
-
-        return build_light(self, callback)
+        return target_publisher_content_scenarios.build_light(self, callback)
 
     def completion(self, callback=None) -> Scenario:
-        from tests.target_publisher_content_scenarios import build_completion
-
-        return build_completion(self, callback)
+        return target_publisher_content_scenarios.build_completion(self, callback)
