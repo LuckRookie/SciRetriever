@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias, TypeVar, assert_never
 
-from sciretriever.content.ports import AssetFetcherPort, AssetResolverPort
+from sciretriever.services.assets.ports import AssetFetcherPort, AssetResolverPort
 from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 
 

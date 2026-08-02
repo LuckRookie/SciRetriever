@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - one capability contract matrix keeps all fake port evidence together
 from __future__ import annotations
 
 import json
@@ -6,6 +7,7 @@ from typing import get_type_hints
 
 from pydantic import TypeAdapter, ValidationError
 
+from sciretriever.adapters.assets import BoundedTransportPort
 from sciretriever.batching.ports import (
     AdmissionGuard,
     AdmissionPort,
@@ -14,10 +16,6 @@ from sciretriever.batching.ports import (
 )
 from sciretriever.content.ports import (
     AnalysisModelPort,
-    ArtifactStorePort,
-    AssetFetcherPort,
-    AssetResolverPort,
-    BoundedTransportPort,
     ParserPort,
 )
 from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
@@ -66,6 +64,11 @@ from sciretriever.model.sources import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.assets.ports import (
+    ArtifactStorePort,
+    AssetFetcherPort,
+    AssetResolverPort,
+)
 from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
@@ -73,6 +76,10 @@ UUID_B = "00000000-0000-4000-8000-000000000002"
 
 
 class FakeCapabilities:
+    @property
+    def identity(self) -> str:
+        return "fake"
+
     def search(self, request: MetadataDiscoveryRequest) -> ProviderDiscoveryResult:
         return ProviderDiscoveryResult(
             provider="fake",

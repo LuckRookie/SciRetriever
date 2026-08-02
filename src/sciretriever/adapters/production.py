@@ -7,6 +7,7 @@ from typing import Final
 from sciretriever.adapters.assets import (
     AssetFetcherAdapter,
     AssetResolverAdapter,
+    BoundedTransportPort,
     ResolverClient,
 )
 from sciretriever.adapters.providers import (
@@ -16,7 +17,6 @@ from sciretriever.adapters.providers import (
     MetadataProviderAdapter,
 )
 from sciretriever.adapters.registry import ProviderRegistry
-from sciretriever.content.ports import BoundedTransportPort
 
 METADATA_PROVIDERS: Final = (
     "crossref",

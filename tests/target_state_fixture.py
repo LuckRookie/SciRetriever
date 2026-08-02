@@ -200,9 +200,9 @@ def insert_completed(connection: sqlite3.Connection) -> None:
     connection.execute(
         "INSERT INTO artifacts VALUES ('raw','raw',?,'raw/value',1,NULL)", ("0" * 64,)
     )
-    connection.execute("INSERT INTO raw_assets VALUES ('raw','primary-pdf','{}')")
+    connection.execute("INSERT INTO raw_assets VALUES ('raw')")
     connection.execute(
-        "INSERT INTO work_version_assets VALUES (?,?, 'raw','primary-pdf')",
+        "INSERT INTO work_version_assets VALUES (?,?, 'raw','primary-pdf','{}')",
         (str(PRIMARY_ID), str(VERSION_ID)),
     )
     connection.execute(

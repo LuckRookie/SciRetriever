@@ -7,7 +7,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from sciretriever.content.publisher_contracts import validate_content_acceptance
+from sciretriever.content.publisher_contracts import validate_light_document_acceptance
+from sciretriever.core.assets import AssetRuleError, validate_supplementary_asset_acceptance
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.model.assets import ArtifactKind, PublishedArtifact
@@ -116,10 +117,10 @@ class TargetM1ExecutionClosureTests(unittest.TestCase):
         self.assertEqual(supplementary.role, AssetRole.PRIMARY_PDF)
         self.assertEqual(light.artifact.kind, ArtifactKind.PRIMARY_PDF)
 
+        with self.assertRaises(AssetRuleError):
+            validate_supplementary_asset_acceptance(supplementary)
         with self.assertRaises(BoundaryError):
-            validate_content_acceptance(supplementary)
-        with self.assertRaises(BoundaryError):
-            validate_content_acceptance(light)
+            validate_light_document_acceptance(light)
 
 
 if __name__ == "__main__":

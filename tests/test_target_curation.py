@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - curation transaction scenarios share one seeded relationship matrix
 from __future__ import annotations
 
 import ast
@@ -378,13 +379,12 @@ class TargetCurationTests(unittest.TestCase):
                 ),
             )
             connection.executemany(
-                "INSERT INTO raw_assets(artifact_id,asset_role,source_json) "
-                "VALUES(?,'supplementary','{}')",
+                "INSERT INTO raw_assets(artifact_id) VALUES(?)",
                 ((UUIDS[20],), (UUIDS[21],)),
             )
             connection.executemany(
-                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) "
-                "VALUES(?,?,?,'supplementary')",
+                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role,source_json) "
+                "VALUES(?,?,?,'supplementary','{}')",
                 (
                     (UUIDS[22], str(left), UUIDS[20]),
                     (UUIDS[23], str(right), UUIDS[20]),
@@ -434,9 +434,9 @@ class TargetCurationTests(unittest.TestCase):
                 "INSERT INTO artifacts VALUES(?, 'raw', ?, 'primary/44/value', 1, NULL)",
                 (UUIDS[26], "4" * 64),
             )
-            connection.execute("INSERT INTO raw_assets VALUES(?,'primary-pdf','{}')", (UUIDS[26],))
+            connection.execute("INSERT INTO raw_assets VALUES(?)", (UUIDS[26],))
             connection.execute(
-                "INSERT INTO work_version_assets VALUES(?,?,?,'primary-pdf')",
+                "INSERT INTO work_version_assets VALUES(?,?,?,'primary-pdf','{}')",
                 (UUIDS[27], str(left), UUIDS[26]),
             )
             connection.execute(
