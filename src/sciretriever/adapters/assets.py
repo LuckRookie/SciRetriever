@@ -3,10 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from pydantic import ValidationError
+
 import sciretriever.model.assets as asset_models
-from sciretriever.content.ports import BoundedTransportPort
-from sciretriever.model.access import BoundedByteStream, Header, TransportRequest
+from sciretriever.model.access import (
+    BoundedByteStream,
+    Header,
+    TransportRequest,
+    TransportResponse,
+)
 from sciretriever.model.primitives import AssetRole
+
+
+class BoundedTransportPort(Protocol):
+    def execute(self, request: TransportRequest) -> TransportResponse: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,10 +30,30 @@ class ResolverClient(Protocol):
     def resolve(self, target: asset_models.ContentTarget) -> tuple[ResolverCandidate, ...]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _InvalidResolverResponse(OSError):
+    provider: str
+
+    def __str__(self) -> str:
+        return f"{self.provider} resolver returned an invalid candidate"
+
+
+@dataclass(frozen=True, slots=True)
+class _UnsuccessfulAssetResponse(OSError):
+    status: int
+
+    def __str__(self) -> str:
+        return f"asset transport returned HTTP status {self.status}"
+
+
 class AssetResolverAdapter:
     def __init__(self, provider: str, client: ResolverClient) -> None:
         self._provider = provider
         self._client = client
+
+    @property
+    def identity(self) -> str:
+        return self._provider
 
     def resolve(
         self, target: asset_models.ContentTarget
@@ -32,18 +62,20 @@ class AssetResolverAdapter:
         seen: set[tuple[str, AssetRole]] = set()
         results: list[asset_models.AssetCandidate] = []
         for candidate in candidates:
-            identity = (candidate.locator, candidate.role)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            results.append(
-                asset_models.AssetCandidate(
+            try:
+                parsed = asset_models.AssetCandidate(
                     provider=self._provider,
                     role=candidate.role,
                     locator=candidate.locator,
                     headers=candidate.headers,
                 )
-            )
+            except ValidationError as error:
+                raise _InvalidResolverResponse(self._provider) from error
+            identity = (parsed.locator, parsed.role)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            results.append(parsed)
         return tuple(results)
 
 
@@ -70,6 +102,8 @@ class AssetFetcherAdapter:
                 max_response_bytes=self._max_bytes,
             )
         )
+        if not 200 <= response.status < 300:
+            raise _UnsuccessfulAssetResponse(response.status)
         media_type = next(
             (header.value for header in response.headers if header.name.lower() == "content-type"),
             "application/octet-stream",
@@ -85,6 +119,7 @@ class AssetFetcherAdapter:
 __all__ = (
     "AssetFetcherAdapter",
     "AssetResolverAdapter",
+    "BoundedTransportPort",
     "ResolverCandidate",
     "ResolverClient",
 )

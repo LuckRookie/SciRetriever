@@ -6,23 +6,19 @@ from typing import Generic, TypeVar, assert_never
 
 import anyio
 
-from sciretriever.content.ports import (
+from sciretriever.model.access import BoundedByteStream
+from sciretriever.model.assets import AssetCandidate
+from sciretriever.services.assets.ports import (
     AssetFetcherPort,
     CandidateRaceExhausted,
     InvalidRaceDeadline,
     RaceCallable,
-    RaceToken,
 )
-from sciretriever.model.access import BoundedByteStream
-from sciretriever.model.assets import AssetCandidate
 
 
 class EmptyAssetResponse(Exception):
     def __str__(self) -> str:
         return "asset response was empty"
-
-
-CandidateSetExhausted = CandidateRaceExhausted
 
 
 class NeutralAssetFetcher:
@@ -41,7 +37,7 @@ class NeutralAssetFetcher:
                 return self.fetch(candidate)
             except EmptyAssetResponse:
                 continue
-        raise CandidateSetExhausted
+        raise CandidateRaceExhausted
 
 
 ResultT = TypeVar("ResultT")
@@ -56,6 +52,29 @@ class RaceResult(Generic[ResultT]):
 @dataclass(frozen=True, slots=True)
 class RaceFailure:
     identity: str
+
+
+class _RaceToken:
+    def __init__(self, deadline: float) -> None:
+        self.deadline = deadline
+        self._winner: str | None = None
+        self._cancelled = False
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    def _claim(self, identity: str) -> bool:
+        if self._winner is not None or self._cancelled:
+            return False
+        self._winner = identity
+        return True
+
+    def _is_current(self, identity: str) -> bool:
+        return self._winner == identity and not self._cancelled
+
+    def _cancel(self) -> None:
+        self._cancelled = True
 
 
 class CandidateRace(Generic[ResultT]):
@@ -75,7 +94,7 @@ class CandidateRace(Generic[ResultT]):
             len(candidates)
         )
 
-        token = RaceToken(anyio.current_time() + self._deadline)
+        token = _RaceToken(anyio.current_time() + self._deadline)
 
         async def execute(identity: str, operation: RaceCallable[ResultT]) -> None:
             try:
@@ -98,7 +117,7 @@ class CandidateRace(Generic[ResultT]):
                                 case RaceFailure():
                                     failures += 1
                                 case RaceResult(identity=identity, value=value):
-                                    if token.claim(identity) and token.is_current(identity):
+                                    if token._claim(identity) and token._is_current(identity):
                                         publish(value)
                                         task_group.cancel_scope.cancel()
                                         return value
@@ -106,17 +125,15 @@ class CandidateRace(Generic[ResultT]):
                                 case unreachable:
                                     assert_never(unreachable)
         finally:
-            token.cancel()
+            token._cancel()
         raise CandidateRaceExhausted
 
 
 __all__ = (
     "CandidateRace",
-    "CandidateSetExhausted",
     "EmptyAssetResponse",
     "InvalidRaceDeadline",
     "NeutralAssetFetcher",
     "RaceFailure",
     "RaceResult",
-    "RaceToken",
 )

@@ -107,6 +107,7 @@ class TargetAssetModelTests(unittest.TestCase):
             sha256=accepted.sha256,
             provider="fixture",
             role=AssetRole.PRIMARY_PDF,
+            evidence=(),
         )
         acquired = AcceptedCandidate(
             candidate=candidate,

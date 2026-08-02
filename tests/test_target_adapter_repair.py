@@ -9,7 +9,6 @@ from pathlib import Path
 import anyio
 from pydantic import BaseModel
 
-from sciretriever.adapters.acquisition import RaceToken
 from sciretriever.adapters.budgets import HostBudgetManager, InvalidHostname, canonical_hostname
 from sciretriever.adapters.collection import collect_citations, collect_metadata
 from sciretriever.adapters.production import (
@@ -35,6 +34,7 @@ from sciretriever.model.sources import (
     MetadataDiscoveryRequest,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.assets.ports import RaceCancellation
 from sciretriever.services.collection.ports import MetadataDiscoveryPort
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
@@ -74,6 +74,19 @@ class FakeTransport:
             headers=(),
             body=b"%PDF-1.7",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _BudgetToken:
+    _deadline: float
+
+    @property
+    def deadline(self) -> float:
+        return self._deadline
+
+    @property
+    def cancelled(self) -> bool:
+        return False
 
 
 class SpoofingProvider:
@@ -220,13 +233,13 @@ class TargetAdapterRepairTests(unittest.TestCase):
     def test_dns_equivalent_hosts_cannot_exceed_one_concurrent_operation(self) -> None:
         async def scenario() -> int:
             manager = HostBudgetManager(1)
-            token = RaceToken(anyio.current_time() + 5)
+            token = _BudgetToken(anyio.current_time() + 5)
             active = 0
             peak = 0
             first_entered = anyio.Event()
             release = anyio.Event()
 
-            async def operation(current: RaceToken) -> str:
+            async def operation(current: RaceCancellation) -> str:
                 nonlocal active, peak
                 _ = current
                 active += 1

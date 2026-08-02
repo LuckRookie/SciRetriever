@@ -37,9 +37,13 @@ class _AssetsModel(BaseModel):
     )
 
 
+class _AssetStructureError(ValueError):
+    pass
+
+
 def _nonblank(value: str) -> str:
     if not value.strip():
-        raise ValueError("must be a nonblank string")
+        raise _AssetStructureError("must be a nonblank string")
     return value
 
 
@@ -76,16 +80,20 @@ class ContentTarget(_AssetsModel):
             self.current_accepted_content is not None
             and self.current_accepted_content not in self.accepted_content
         ):
-            raise ValueError("current accepted content must be present in accepted content")
+            raise _AssetStructureError(
+                "current accepted content must be present in accepted content"
+            )
         if self.expected_metadata_revision != self.current_metadata.revision:
-            raise ValueError("expected metadata revision must match current metadata")
+            raise _AssetStructureError("expected metadata revision must match current metadata")
         current = self.current_accepted_content
         current_hash = None if current is None else current.sha256
         current_revision = None if current is None else current.revision
         if self.expected_accepted_content_sha256 != current_hash:
-            raise ValueError("expected accepted content hash must match current content")
+            raise _AssetStructureError("expected accepted content hash must match current content")
         if self.expected_accepted_content_revision != current_revision:
-            raise ValueError("expected accepted content revision must match current content")
+            raise _AssetStructureError(
+                "expected accepted content revision must match current content"
+            )
         return self
 
 
@@ -132,11 +140,18 @@ class ContentAssetSuccess(_AssetsModel):
     sha256: Sha256
     provider: str
     role: AssetRole
+    evidence: tuple[CandidateEvidence, ...]
 
     @field_validator("provider")
     @classmethod
     def validate_provider(cls, value: str) -> str:
         return _nonblank(value)
+
+
+class AssetPublication(_AssetsModel):
+    asset_id: AssetId
+    relation_id: WorkVersionAssetId
+    replayed: bool
 
 
 class AcceptedCandidate(_AssetsModel):
@@ -200,6 +215,7 @@ __all__ = (
     "AcceptedPrimaryPdf",
     "ArtifactKind",
     "AssetCandidate",
+    "AssetPublication",
     "CandidateEvidence",
     "ContentAssetFailure",
     "ContentAssetReplay",

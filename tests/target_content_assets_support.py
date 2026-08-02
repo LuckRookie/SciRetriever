@@ -7,20 +7,22 @@ from io import BytesIO
 from pathlib import Path
 
 from PyPDF2 import PdfWriter
+from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from sciretriever.content.ports import RaceToken
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
 from sciretriever.model.access import BoundedByteStream, Header
 from sciretriever.model.assets import (
     AcceptedContentReference,
     AssetCandidate,
+    AssetPublication,
     ContentTarget,
+    PrimaryPdfAcceptance,
     PublishedArtifact,
     StagedArtifact,
+    SupplementaryAssetAcceptance,
 )
 from sciretriever.model.execution import (
-    ContentAcceptance,
     ContentAcceptanceCommand,
     TargetProjection,
 )
@@ -31,6 +33,9 @@ from sciretriever.model.primitives import (
     WorkVersionId,
     sha256_digest,
 )
+from sciretriever.services.assets.ports import RaceCancellation
+
+AssetAcceptance = PrimaryPdfAcceptance | SupplementaryAssetAcceptance
 
 UUID_A = "00000000-0000-0000-0000-000000000001"
 UUID_B = "00000000-0000-0000-0000-000000000002"
@@ -47,6 +52,20 @@ def pdf(
     writer = PdfWriter()
     for _index in range(pages):
         writer.add_blank_page(width=612, height=792)
+    page = writer.pages[0]
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
+    )
+    content = DecodedStreamObject()
+    content.set_data(b"BT\n/F1 12 Tf\n72 720 Td\n(Article body) Tj\nET\n")
+    page[NameObject("/Contents")] = content
     subject = f"doi:{doi}" if doi is not None else "article"
     writer.add_metadata(
         {"/Title": title, "/Author": author, "/CreationDate": f"D:{year}0101", "/Subject": subject}
@@ -81,10 +100,20 @@ def target(*, current: AcceptedContentReference | None = None) -> ContentTarget:
 @dataclass(frozen=True, slots=True)
 class Resolver:
     candidates: tuple[AssetCandidate, ...]
+    identity: str = "fixture-resolver"
 
     def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
         del target
         return self.candidates
+
+
+@dataclass(frozen=True, slots=True)
+class FailingResolver:
+    identity: str
+
+    def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
+        del target
+        raise OSError("private resolver failure")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +148,7 @@ class ControlledFetcher:
     def fetch_cancellable(
         self,
         candidate: AssetCandidate,
-        token: RaceToken,
+        token: RaceCancellation,
     ) -> BoundedByteStream:
         self.calls.append(candidate.locator)
         deadline = time.monotonic() + self.delays.get(candidate.locator, 0.0)
@@ -144,7 +173,7 @@ class DeterministicRaceFetcher:
         self.cancellation_seen = threading.Event()
         self.late_release = threading.Event()
         self.late_finished = threading.Event()
-        self.late_claim_rejected = threading.Event()
+        self.winner_authority_hidden = threading.Event()
 
     def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
         return self.responses[candidate.locator]
@@ -152,7 +181,7 @@ class DeterministicRaceFetcher:
     def fetch_cancellable(
         self,
         candidate: AssetCandidate,
-        token: RaceToken,
+        token: RaceCancellation,
     ) -> BoundedByteStream:
         if candidate.locator == "fast":
             if not self.late_entered.wait(1.0) or not self.fast_release.wait(1.0):
@@ -165,8 +194,8 @@ class DeterministicRaceFetcher:
             self.cancellation_seen.set()
         if not self.late_release.wait(1.0):
             raise TimeoutError
-        if not token.claim("late-probe"):
-            self.late_claim_rejected.set()
+        if not hasattr(token, "claim"):
+            self.winner_authority_hidden.set()
         self.late_finished.set()
         return self.responses[candidate.locator]
 
@@ -177,10 +206,15 @@ class RecordingPublisher:
         self.projection = projection
         self.commands: list[ContentAcceptanceCommand] = []
 
-    def publish(self, acceptance: ContentAcceptance) -> None:
+    def publish(self, acceptance: AssetAcceptance) -> AssetPublication:
         self.events.append("catalog")
         self.commands.append(
             ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
+        )
+        return AssetPublication(
+            asset_id=acceptance.artifact_id,
+            relation_id=acceptance.relation_id,
+            replayed=False,
         )
 
 
@@ -189,10 +223,12 @@ class ProjectedPublisher:
     publisher: ContentAcceptancePublisher
     projection: TargetProjection
 
-    def publish(self, acceptance: ContentAcceptance) -> None:
-        self.publisher.publish(
+    def publish(self, acceptance: AssetAcceptance) -> AssetPublication:
+        result = self.publisher.publish(
             ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
         )
+        assert result is not None
+        return result
 
 
 class RecordingStore:

@@ -7,7 +7,7 @@ from typing import TypeVar
 
 import anyio
 
-from sciretriever.adapters.acquisition import RaceToken
+from sciretriever.services.assets.ports import RaceCancellation
 
 ResultT = TypeVar("ResultT")
 
@@ -54,8 +54,8 @@ class HostBudgetManager:
     async def run(
         self,
         host: str,
-        token: RaceToken,
-        operation: Callable[[RaceToken], Awaitable[ResultT]],
+        token: RaceCancellation,
+        operation: Callable[[RaceCancellation], Awaitable[ResultT]],
     ) -> ResultT:
         key = canonical_hostname(host)
         limiter = self._limiters.setdefault(

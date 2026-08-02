@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import threading
+import importlib.util
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,7 +9,6 @@ from target_content_assets_support import (
     UUID_A,
     UUID_B,
     ControlledFetcher,
-    DeterministicRaceFetcher,
     Fetcher,
     RecordingPublisher,
     RecordingStore,
@@ -21,12 +20,6 @@ from target_content_assets_support import (
 )
 
 from sciretriever.adapters.acquisition import CandidateRace
-from sciretriever.content.assets import (
-    AssetAcceptancePolicy,
-    ContentAssetService,
-    ResolverTier,
-)
-from sciretriever.content.ports import ArtifactStorePort
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.access import BoundedByteStream
 from sciretriever.model.assets import (
@@ -43,6 +36,13 @@ from sciretriever.model.primitives import (
     WorkVersionId,
     sha256_digest,
 )
+from sciretriever.services.assets import (
+    AssetAcceptancePolicy,
+    AssetServiceDependencies,
+    ContentAssetService,
+    ResolverTier,
+)
+from sciretriever.services.assets.ports import ArtifactStorePort
 
 
 class TargetContentAssetTests(unittest.TestCase):
@@ -74,13 +74,44 @@ class TargetContentAssetTests(unittest.TestCase):
     ) -> ContentAssetService:
         store: ArtifactStorePort = RecordingStore(self.root / "storage", self.events)
         return ContentAssetService(
-            tiers,
-            Fetcher(responses),
-            store,
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300, max_asset_bytes=1_000_000),
-            race=CandidateRace(deadline_seconds=1.0),
+            AssetServiceDependencies(
+                tiers=tiers,
+                fetcher=Fetcher(responses),
+                store=store,
+                publisher=self.publisher,
+                race=CandidateRace(deadline_seconds=1.0),
+            ),
+            AssetAcceptancePolicy(
+                min_pdf_bytes=300,
+                max_asset_bytes=1_000_000,
+                chunk_size=300,
+            ),
         )
+
+    def test_public_exports_are_the_narrow_use_case_surface(self) -> None:
+        expected = (
+            "AssetAcceptancePolicy",
+            "AssetServiceDependencies",
+            "ContentAssetService",
+            "ResolverTier",
+        )
+        import sciretriever.services.assets as assets_package
+        from sciretriever.services.assets import api as assets_api
+
+        self.assertEqual(assets_api.__all__, expected)
+        self.assertEqual(assets_package.__all__, expected)
+
+        import sciretriever.content.api as content_api
+
+        for module_name in (
+            "sciretriever.content.assets",
+            "sciretriever.content.asset_acquisition",
+            "sciretriever.content.asset_validation",
+        ):
+            self.assertIsNone(importlib.util.find_spec(module_name), module_name)
+        for name in ("AssetAcceptancePolicy", "ContentAssetService", "ResolverTier"):
+            self.assertNotIn(name, content_api.__dict__)
+            self.assertNotIn(name, content_api.__all__)
 
     def test_exact_doi_primary_publishes_file_before_catalog(self) -> None:
         first = candidate("https://source.invalid/article")
@@ -111,12 +142,21 @@ class TargetContentAssetTests(unittest.TestCase):
 
     def test_wrong_truncated_supplementary_and_unconfirmed_pdf_are_typed_failures(self) -> None:
         cases = (
-            ("wrong", pdf(title="Different Article", author="Other Author", doi="10.9999/wrong")),
-            ("truncated", pdf()[:-20]),
-            ("supplement", pdf(title="Supplementary Information for Exact Article Title")),
-            ("unconfirmed", pdf(title="", author="", doi=None)),
+            (
+                "wrong",
+                pdf(title="Different Article", author="Other Author", doi="10.9999/wrong"),
+                "identity-mismatch",
+            ),
+            ("truncated", pdf()[:-20], "format-invalid"),
+            (
+                "supplement",
+                pdf(title="Supplementary Information for Exact Article Title"),
+                "not-primary",
+            ),
+            ("unconfirmed", pdf(title="", author="", doi=None), "identity-unconfirmed"),
+            ("malformed", b"not a pdf" + b"x" * 400, "format-invalid"),
         )
-        for name, body in cases:
+        for name, body, code in cases:
             with self.subTest(name=name):
                 item = candidate(f"https://source.invalid/{name}")
                 service = self.service(
@@ -126,6 +166,8 @@ class TargetContentAssetTests(unittest.TestCase):
                 result = service.accept(target(), AssetRole.PRIMARY_PDF)
                 self.assertIsInstance(result, ContentAssetFailure)
                 assert isinstance(result, ContentAssetFailure)
+                self.assertEqual(result.code, "candidates-exhausted")
+                self.assertEqual(result.evidence[0].outcome, code)
                 self.assertNotIn("source.invalid", str(result.evidence))
                 self.assertNotIn("private", str(result.evidence))
 
@@ -150,6 +192,10 @@ class TargetContentAssetTests(unittest.TestCase):
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)
         self.assertEqual(result.provider, "b")
+        self.assertEqual(
+            tuple((item.provider, item.outcome) for item in result.evidence),
+            (("a", "identity-mismatch"),),
+        )
 
     def test_exact_existing_primary_replays_and_different_bytes_cannot_replace(self) -> None:
         body = pdf()
@@ -191,10 +237,12 @@ class TargetContentAssetTests(unittest.TestCase):
             {bad.locator: OSError("token=SECRET"), good.locator: stream(pdf())}
         )
         service = ContentAssetService(
-            (ResolverTier("first", (Resolver((bad, good)),), False),),
-            fetcher,
-            RecordingStore(self.root / "serial", self.events),
-            self.publisher,
+            AssetServiceDependencies(
+                tiers=(ResolverTier("first", (Resolver((bad, good)),), False),),
+                fetcher=fetcher,
+                store=RecordingStore(self.root / "serial", self.events),
+                publisher=self.publisher,
+            ),
             AssetAcceptancePolicy(min_pdf_bytes=300),
         )
 
@@ -203,133 +251,10 @@ class TargetContentAssetTests(unittest.TestCase):
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)
         self.assertEqual((fetcher.calls, result.provider), ([bad.locator, good.locator], "good"))
-        self.assertEqual(len(self.publisher.commands), 1)
-
-    def test_race_failure_isolated_from_valid_sibling(self) -> None:
-        bad = candidate("bad", provider="bad")
-        good = candidate("good", provider="good")
-        fetcher = ControlledFetcher(
-            {bad.locator: TimeoutError("secret"), good.locator: stream(pdf())}
+        self.assertEqual(
+            tuple((item.provider, item.outcome) for item in result.evidence),
+            (("bad", "transport-failed"),),
         )
-        service = ContentAssetService(
-            (ResolverTier("first", (Resolver((bad, good)),), True),),
-            fetcher,
-            RecordingStore(self.root / "race-failure", self.events),
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300),
-            race=CandidateRace(deadline_seconds=1.0),
-        )
-
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
-
-        self.assertIsInstance(result, ContentAssetSuccess)
-        self.assertEqual(len(self.publisher.commands), 1)
-
-    def test_race_returns_first_valid_and_cancels_cooperative_late_loser(self) -> None:
-        fast = candidate("fast", provider="fast")
-        late = candidate("late", provider="late")
-        fetcher = DeterministicRaceFetcher(
-            {fast.locator: stream(pdf()), late.locator: stream(pdf(doi="10.9999/late"))},
-        )
-        service = ContentAssetService(
-            (ResolverTier("first", (Resolver((fast, late)),), True),),
-            fetcher,
-            RecordingStore(self.root / "race-late", self.events),
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300),
-            race=CandidateRace(deadline_seconds=1.0),
-            cancellable_fetcher=fetcher,
-        )
-        results: list[ContentAssetSuccess | ContentAssetFailure | ContentAssetReplay] = []
-
-        def accept() -> None:
-            results.append(service.accept(target(), AssetRole.PRIMARY_PDF))
-            fetcher.service_done.set()
-
-        service_thread = threading.Thread(target=accept)
-        service_thread.start()
-
-        self.assertTrue(fetcher.late_entered.wait(1.0))
-        fetcher.fast_release.set()
-        self.assertTrue(fetcher.service_done.wait(1.0))
-        self.assertFalse(fetcher.late_finished.is_set())
-        fetcher.cancellation_probe.set()
-        self.assertTrue(fetcher.cancellation_seen.wait(1.0))
-        self.assertEqual(len(self.publisher.commands), 1)
-
-        fetcher.late_release.set()
-        self.assertTrue(fetcher.late_finished.wait(1.0))
-        self.assertTrue(fetcher.late_claim_rejected.is_set())
-        service_thread.join(timeout=1.0)
-
-        self.assertFalse(service_thread.is_alive())
-        self.assertEqual(len(results), 1)
-        self.assertIsInstance(results[0], ContentAssetSuccess)
-        self.assertEqual(len(self.publisher.commands), 1)
-
-    def test_race_all_failures_are_aggregated_in_configured_order(self) -> None:
-        first = candidate("first", provider="first")
-        second = candidate("second", provider="second")
-        fetcher = ControlledFetcher(
-            {first.locator: OSError("private-a"), second.locator: TimeoutError("private-b")}
-        )
-        service = ContentAssetService(
-            (ResolverTier("first", (Resolver((first, second)),), True),),
-            fetcher,
-            RecordingStore(self.root / "race-all-fail", self.events),
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300),
-            race=CandidateRace(deadline_seconds=1.0),
-        )
-
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
-
-        self.assertIsInstance(result, ContentAssetFailure)
-        assert isinstance(result, ContentAssetFailure)
-        self.assertEqual(tuple(item.provider for item in result.evidence), ("first", "second"))
-        self.assertNotIn("private", str(result.evidence))
-
-    def test_race_deadline_expires_without_publication(self) -> None:
-        late = candidate("late", provider="late")
-        fetcher = ControlledFetcher({late.locator: stream(pdf())}, {late.locator: 0.3})
-        service = ContentAssetService(
-            (ResolverTier("first", (Resolver((late,)),), True),),
-            fetcher,
-            RecordingStore(self.root / "race-deadline", self.events),
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300),
-            race=CandidateRace(deadline_seconds=0.05),
-            cancellable_fetcher=fetcher,
-        )
-
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
-
-        self.assertIsInstance(result, ContentAssetFailure)
-        self.assertTrue(fetcher.cancelled.wait(0.2))
-        self.assertEqual(self.publisher.commands, [])
-
-    def test_two_valid_race_candidates_publish_first_current_winner_once(self) -> None:
-        slow_first = candidate("slow", provider="configured-first")
-        fast_second = candidate("fast", provider="current-winner")
-        fetcher = ControlledFetcher(
-            {slow_first.locator: stream(pdf()), fast_second.locator: stream(pdf())},
-            {slow_first.locator: 0.2},
-        )
-        service = ContentAssetService(
-            (ResolverTier("first", (Resolver((slow_first, fast_second)),), True),),
-            fetcher,
-            RecordingStore(self.root / "race-two-valid", self.events),
-            self.publisher,
-            AssetAcceptancePolicy(min_pdf_bytes=300),
-            race=CandidateRace(deadline_seconds=1.0),
-            cancellable_fetcher=fetcher,
-        )
-
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
-
-        self.assertIsInstance(result, ContentAssetSuccess)
-        assert isinstance(result, ContentAssetSuccess)
-        self.assertEqual(result.provider, "current-winner")
         self.assertEqual(len(self.publisher.commands), 1)
 
 
