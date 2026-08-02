@@ -1,17 +1,23 @@
 from typing import Protocol
 
-from sciretriever.bibliography.curation_model import CurationTopology
 from sciretriever.bibliography.model import (
+    ValidatedCurationPlan,
+    ValidatedVersionRelation,
+)
+from sciretriever.model.library import (
     CurationCommit,
     CurationScope,
     CurationSnapshot,
+    CurationTopology,
+)
+from sciretriever.model.literature import (
     IdentityCandidateQuery,
     IdentityCandidateSet,
-    ValidatedCurationPlan,
-    ValidatedVersionRelation,
+    IdentityRecord,
+    StoredObservation,
+    VersionFacts,
     WorkFacts,
 )
-from sciretriever.model.literature import IdentityRecord, StoredObservation, VersionFacts
 from sciretriever.model.primitives import WorkId, WorkVersionId
 
 

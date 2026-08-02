@@ -4,6 +4,7 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Protocol
 
+from sciretriever.model.library import CurationCommit
 from sciretriever.model.primitives import WorkId, WorkVersionId
 
 from .curation_plans import (
@@ -13,7 +14,6 @@ from .curation_plans import (
     related_versions_plan,
     same_version_plan,
 )
-from .model import CurationCommit
 from .ports import BibliographyRepository, CurationTransactionPort
 
 

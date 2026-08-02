@@ -166,3 +166,23 @@ class VersionFacts(_LiteratureModel):
     completion_reference_set_complete: bool
     completion_tag_set_id: str | None
     completion_tag_set_complete: bool
+
+
+class IdentityCandidateQuery(_LiteratureModel):
+    identifiers: tuple[Identifier, ...]
+
+
+class IdentityCandidate(_LiteratureModel):
+    work_id: WorkId
+    work_version_id: WorkVersionId
+    matched_identifiers: tuple[Identifier, ...]
+
+
+class IdentityCandidateSet(_LiteratureModel):
+    candidates: tuple[IdentityCandidate, ...]
+
+
+class WorkFacts(_LiteratureModel):
+    work_id: WorkId
+    representative_version_id: WorkVersionId | None
+    version_ids: tuple[WorkVersionId, ...]

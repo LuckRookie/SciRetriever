@@ -5,7 +5,6 @@ import sqlite3
 from collections.abc import Callable
 
 from sciretriever.bibliography.api import (
-    CurationCommit,
     CurationStaleError,
     MembershipMove,
     ReferenceRetarget,
@@ -14,6 +13,7 @@ from sciretriever.bibliography.api import (
 from sciretriever.literature_store.sqlite.curation_authorization import authorize_plan_sources
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
+from sciretriever.model.library import CurationCommit
 
 
 def _one(cursor: sqlite3.Cursor, subject: str) -> None:
@@ -126,7 +126,7 @@ class SqliteCurationTransaction:
             finally:
                 if not committed:
                     connection.rollback()
-        return CurationCommit(validated_plan.plan_id, resulting)
+        return CurationCommit(plan_id=validated_plan.plan_id, resulting_snapshot=resulting)
 
     def _apply(  # noqa: C901
         self,

@@ -8,11 +8,6 @@ from tempfile import TemporaryDirectory
 
 from test_target_collection import FakeMetadataPort, observation
 
-from sciretriever.bibliography.api import (
-    IdentityCandidateQuery,
-    IdentityCandidateSet,
-    WorkFacts,
-)
 from sciretriever.collection.api import TopicConditions
 from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
 from sciretriever.collection.service import (
@@ -31,8 +26,11 @@ from sciretriever.literature_store.sqlite import (
 from sciretriever.model.literature import (
     BibliographicObservation,
     Identifier,
+    IdentityCandidateQuery,
+    IdentityCandidateSet,
     PreparedBibliographyAcceptance,
     VersionFacts,
+    WorkFacts,
 )
 from sciretriever.model.primitives import (
     CitationDirection,
@@ -153,7 +151,7 @@ class CitationCollectionTestCase(unittest.TestCase):
         service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
         repository = SqliteBibliographyRepository(self.catalog)
         candidate = repository.find_identity_candidates(
-            IdentityCandidateQuery((Identifier(namespace="doi", value=doi),)),
+            IdentityCandidateQuery(identifiers=(Identifier(namespace="doi", value=doi),)),
         ).candidates[0]
         record = next(
             item

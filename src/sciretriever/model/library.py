@@ -4,8 +4,20 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from sciretriever.model.literature import Identifier
-from sciretriever.model.primitives import CollectionId
+from sciretriever.model.literature import Identifier, VersionFacts, WorkFacts
+from sciretriever.model.primitives import (
+    AssetId,
+    CollectionId,
+    CurationPlanId,
+    MembershipId,
+    ObservationId,
+    ReferenceFactId,
+    Sha256,
+    StableIdentifierId,
+    VersionRelationId,
+    WorkId,
+    WorkVersionId,
+)
 
 
 class QueryValueError(ValueError):
@@ -80,4 +92,90 @@ class QueryFilterV1(BaseModel):
         return self
 
 
-__all__ = ("QueryFilterV1",)
+class _LibraryModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class CurationScope(_LibraryModel):
+    work_ids: tuple[WorkId, ...]
+    work_version_ids: tuple[WorkVersionId, ...]
+
+
+class SnapshotToken(_LibraryModel):
+    sha256: Sha256
+
+
+class CurationSnapshot(_LibraryModel):
+    scope: CurationScope
+    token: SnapshotToken
+    works: tuple[WorkFacts, ...]
+    versions: tuple[VersionFacts, ...]
+
+
+class CurationCommit(_LibraryModel):
+    plan_id: CurationPlanId
+    resulting_snapshot: SnapshotToken
+
+
+class IdentifierFact(_LibraryModel):
+    identifier_id: StableIdentifierId
+    version_id: WorkVersionId
+    value: Identifier
+
+
+class ObservationFact(_LibraryModel):
+    observation_id: ObservationId
+    version_id: WorkVersionId
+
+
+class MembershipFact(_LibraryModel):
+    membership_id: MembershipId
+    collection_id: CollectionId
+    work_id: WorkId
+
+
+class ReferenceFact(_LibraryModel):
+    reference_id: ReferenceFactId
+    source_version_id: WorkVersionId
+    target_work_id: WorkId | None
+    target_version_id: WorkVersionId | None
+    raw_text: str
+    reference_json: str
+
+
+class RelationFact(_LibraryModel):
+    relation_id: VersionRelationId
+    left_version_id: WorkVersionId
+    right_version_id: WorkVersionId
+    relation: str
+
+
+class ArtifactRegistrationFact(_LibraryModel):
+    artifact_id: AssetId
+    version_id: WorkVersionId
+
+
+class CurationTopology(_LibraryModel):
+    snapshot: CurationSnapshot
+    identifiers: tuple[IdentifierFact, ...]
+    observations: tuple[ObservationFact, ...]
+    memberships: tuple[MembershipFact, ...]
+    references: tuple[ReferenceFact, ...]
+    relations: tuple[RelationFact, ...]
+    artifact_registrations: tuple[ArtifactRegistrationFact, ...]
+
+
+__all__ = (
+    "ArtifactRegistrationFact",
+    "CurationCommit",
+    "CurationScope",
+    "CurationSnapshot",
+    "CurationTopology",
+    "IdentifierFact",
+    "MembershipFact",
+    "ObservationFact",
+    "QueryFilterV1",
+    "ReferenceFact",
+    "RelationFact",
+    "SnapshotToken",
+)

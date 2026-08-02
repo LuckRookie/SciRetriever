@@ -3,14 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sciretriever.kernel.json import canonical_json_bytes, parse_canonical_json
-from sciretriever.model.literature import Identifier, VersionFacts
+from sciretriever.model.library import (
+    CurationScope,
+    SnapshotToken,
+)
 from sciretriever.model.primitives import (
     AssetId,
     CurationPlanId,
     MembershipId,
     ObservationId,
     ReferenceFactId,
-    Sha256,
     StableIdentifierId,
     VersionRelationId,
     WorkId,
@@ -27,49 +29,6 @@ class CurationPlanError(Exception):
 
     def __str__(self) -> str:
         return self.reason
-
-
-@dataclass(frozen=True, slots=True)
-class IdentityCandidateQuery:
-    identifiers: tuple[Identifier, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class IdentityCandidate:
-    work_id: WorkId
-    work_version_id: WorkVersionId
-    matched_identifiers: tuple[Identifier, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class IdentityCandidateSet:
-    candidates: tuple[IdentityCandidate, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class WorkFacts:
-    work_id: WorkId
-    representative_version_id: WorkVersionId | None
-    version_ids: tuple[WorkVersionId, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CurationScope:
-    work_ids: tuple[WorkId, ...]
-    work_version_ids: tuple[WorkVersionId, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SnapshotToken:
-    sha256: Sha256
-
-
-@dataclass(frozen=True, slots=True)
-class CurationSnapshot:
-    scope: CurationScope
-    token: SnapshotToken
-    works: tuple[WorkFacts, ...]
-    versions: tuple[VersionFacts, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,12 +241,6 @@ class ValidatedCurationPlan:
             self.fts_rebuild_version_ids
         ):
             raise CurationPlanError("deleted versions cannot remain mutation targets")
-
-
-@dataclass(frozen=True, slots=True)
-class CurationCommit:
-    plan_id: CurationPlanId
-    resulting_snapshot: SnapshotToken
 
 
 class CurationStaleError(Exception):

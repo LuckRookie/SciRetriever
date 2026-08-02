@@ -13,12 +13,11 @@ from sciretriever.bibliography.api import (
     TagSetId,
     metadata_snapshot_sha256,
 )
-from sciretriever.bibliography.model import WorkFacts
 from sciretriever.kernel import (
     CanonicalJsonObject,
     canonical_json_bytes,
 )
-from sciretriever.model.literature import VersionFacts
+from sciretriever.model.literature import VersionFacts, WorkFacts
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
@@ -163,7 +162,11 @@ class FakeRepository:
     def get_work_facts(self, work_id: WorkId) -> WorkFacts | None:
         if work_id != self.current.work_id:
             return None
-        return WorkFacts(work_id, self.current.work_version_id, (self.current.work_version_id,))
+        return WorkFacts(
+            work_id=work_id,
+            representative_version_id=self.current.work_version_id,
+            version_ids=(self.current.work_version_id,),
+        )
 
 
 class RecordingPublisher:

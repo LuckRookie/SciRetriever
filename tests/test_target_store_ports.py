@@ -7,9 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.model import (
-    CurationScope,
     CurationStaleError,
-    IdentityCandidateQuery,
     ValidatedCurationPlan,
     VersionMove,
 )
@@ -38,7 +36,8 @@ from sciretriever.model.collection import (
     StartCollectionRun,
     ValidatedTopicConditionSet,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.library import CurationScope
+from sciretriever.model.literature import Identifier, IdentityCandidateQuery
 from sciretriever.model.primitives import (
     BatchRunId,
     CollectionId,
@@ -172,7 +171,7 @@ class TargetStorePortTests(unittest.TestCase):
         work, version, _ = self.seed_bibliography()
         repository = SqliteBibliographyRepository(self.catalog)
         candidates = repository.find_identity_candidates(
-            IdentityCandidateQuery((Identifier(namespace="doi", value="10.1/test"),))
+            IdentityCandidateQuery(identifiers=(Identifier(namespace="doi", value="10.1/test"),))
         )
         self.assertEqual(
             (candidates.candidates[0].work_id, candidates.candidates[0].work_version_id),
@@ -184,7 +183,7 @@ class TargetStorePortTests(unittest.TestCase):
     def test_curation_applies_exact_move_and_rejects_stale_token(self) -> None:
         work, version, target = self.seed_bibliography()
         repository = SqliteBibliographyRepository(self.catalog)
-        scope = CurationScope((work, target), (version,))
+        scope = CurationScope(work_ids=(work, target), work_version_ids=(version,))
         snapshot = repository.load_curation_snapshot(scope)
         plan = ValidatedCurationPlan(
             CurationPlanId(UUIDS[4]),
@@ -200,7 +199,7 @@ class TargetStorePortTests(unittest.TestCase):
     def test_curation_failpoint_rolls_back_whole_plan(self) -> None:
         work, version, target = self.seed_bibliography()
         repository = SqliteBibliographyRepository(self.catalog)
-        scope = CurationScope((work, target), (version,))
+        scope = CurationScope(work_ids=(work, target), work_version_ids=(version,))
         snapshot = repository.load_curation_snapshot(scope)
         plan = ValidatedCurationPlan(
             CurationPlanId(UUIDS[4]),

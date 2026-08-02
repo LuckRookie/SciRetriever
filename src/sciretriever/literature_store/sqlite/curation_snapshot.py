@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.bibliography.api import CurationScope, SnapshotToken
 from sciretriever.kernel import canonical_json_bytes
 from sciretriever.kernel.json import CanonicalJsonObject
+from sciretriever.model.library import CurationScope, SnapshotToken
 from sciretriever.model.primitives import sha256_digest
 
 SqlValue = str | int | float | bytes | None
@@ -88,4 +88,4 @@ def snapshot_token(connection: sqlite3.Connection, scope: CurationScope) -> Snap
         entries.extend(("raw_assets", repr(tuple(row))) for row in raw_rows)
     entries.sort()
     payload = CanonicalJsonObject((("entries", tuple(f"{table}:{row}" for table, row in entries)),))
-    return SnapshotToken(sha256_digest(canonical_json_bytes(payload)))
+    return SnapshotToken(sha256=sha256_digest(canonical_json_bytes(payload)))

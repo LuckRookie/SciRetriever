@@ -2,11 +2,6 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sciretriever.bibliography.api import (
-    IdentityCandidateQuery,
-    IdentityCandidateSet,
-    WorkFacts,
-)
 from sciretriever.model.collection import (
     CausePage,
     CausePageRequest,
@@ -25,8 +20,11 @@ from sciretriever.model.collection import (
 )
 from sciretriever.model.literature import (
     BibliographicObservation,
+    IdentityCandidateQuery,
+    IdentityCandidateSet,
     PreparedBibliographyAcceptance,
     VersionFacts,
+    WorkFacts,
 )
 from sciretriever.model.primitives import CollectionId, CollectionRunId, WorkId, WorkVersionId
 from sciretriever.model.sources import (

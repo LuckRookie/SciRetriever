@@ -11,10 +11,8 @@ from pydantic import ValidationError
 
 from sciretriever.bibliography.model import (
     CurationPlanError,
-    CurationScope,
     MembershipMove,
     ReferenceRetarget,
-    SnapshotToken,
     ValidatedCurationPlan,
 )
 from sciretriever.collection.run_results import validate_finish_collection_run
@@ -30,6 +28,7 @@ from sciretriever.literature_store.sqlite import (
     create_or_open_catalog,
 )
 from sciretriever.model.collection import CollectionCounts, FinishCollectionRun
+from sciretriever.model.library import CurationScope, SnapshotToken
 from sciretriever.model.primitives import (
     BatchRunId,
     CollectionRunId,
@@ -91,7 +90,11 @@ class TargetStorePortRepairTests(unittest.TestCase):
                 (UUIDS[6], UUIDS[4], UUIDS[3]),
             )
             connection.commit()
-        return CurationScope((work,), (version,)), UUIDS[5], UUIDS[6]
+        return (
+            CurationScope(work_ids=(work,), work_version_ids=(version,)),
+            UUIDS[5],
+            UUIDS[6],
+        )
 
     def test_catalog_and_output_bindings_reject_post_bind_replacement(self) -> None:
         factory = LocalAdmissionBindingFactory()
@@ -224,7 +227,10 @@ class TargetStorePortRepairTests(unittest.TestCase):
                 (UUIDS[11], UUIDS[9], str(target_work), UUIDS[10]),
             )
             connection.commit()
-        expanded = CurationScope(scope.work_ids + (target_work,), scope.work_version_ids)
+        expanded = CurationScope(
+            work_ids=scope.work_ids + (target_work,),
+            work_version_ids=scope.work_version_ids,
+        )
         token = SqliteBibliographyRepository(self.catalog).load_curation_snapshot(expanded).token
         plan = ValidatedCurationPlan(
             CurationPlanId(UUIDS[12]),
@@ -244,8 +250,8 @@ class TargetStorePortRepairTests(unittest.TestCase):
 
     def test_plan_rejects_contradictory_unscoped_and_self_shapes(self) -> None:
         work, version = WorkId(UUIDS[0]), WorkVersionId(UUIDS[1])
-        scope = CurationScope((work,), (version,))
-        token = SnapshotToken(sha256_digest(b"scope"))
+        scope = CurationScope(work_ids=(work,), work_version_ids=(version,))
+        token = SnapshotToken(sha256=sha256_digest(b"scope"))
         with self.assertRaises(CurationPlanError):
             ValidatedCurationPlan(
                 CurationPlanId(UUIDS[2]), scope, token, delete_work_ids=(WorkId(UUIDS[3]),)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from sciretriever.bibliography.api import IdentityCandidateQuery
 from sciretriever.collection.ports import BibliographyIngestionPort, CollectionRepository
 from sciretriever.kernel import BoundaryError
 from sciretriever.model.collection import (
@@ -15,6 +14,7 @@ from sciretriever.model.collection import (
     WorkSeed,
     WorkVersionSeed,
 )
+from sciretriever.model.literature import IdentityCandidateQuery
 from sciretriever.model.primitives import WorkId
 
 
@@ -35,7 +35,7 @@ def _resolve_selector(  # noqa: C901
             return (facts.work_id,)
         case IdentifierSeed(identifier=identifier):
             candidates = bibliography.find_identity_candidates(
-                IdentityCandidateQuery((identifier,))
+                IdentityCandidateQuery(identifiers=(identifier,))
             )
             work_ids = tuple(sorted({str(item.work_id) for item in candidates.candidates}))
             if len(work_ids) != 1:

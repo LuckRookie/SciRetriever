@@ -247,6 +247,15 @@ class CollectionCauseKind(_StrEnum):
 
 
 @unique
+class CurationDecision(_StrEnum):
+    SAME_VERSION = "same-version"
+    RELATED_VERSIONS = "related-versions"
+    DISTINCT = "distinct"
+    DELETE_VERSION = "delete-version"
+    DELETE_WORK = "delete-work"
+
+
+@unique
 class DiscoveryRelation(_StrEnum):
     MEMBER = "member"
     SEED = "seed"

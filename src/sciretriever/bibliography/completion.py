@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar, assert_never
 
 from sciretriever.kernel import canonical_json_bytes
-from sciretriever.model.literature import VersionFacts
+from sciretriever.model.literature import VersionFacts, WorkFacts
 from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
@@ -12,7 +12,6 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 
-from .model import WorkFacts
 from .publisher_contracts import CompletionSubmission
 from .state import derive_work_version_state
 

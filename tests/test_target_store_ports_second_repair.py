@@ -7,7 +7,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.bibliography.model import (
-    CurationScope,
     IdentifierMove,
     MembershipMove,
     ObservationMove,
@@ -20,6 +19,7 @@ from sciretriever.literature_store.sqlite import (
     SqliteCurationTransaction,
     create_or_open_catalog,
 )
+from sciretriever.model.library import CurationScope
 from sciretriever.model.primitives import (
     CurationPlanId,
     MembershipId,
@@ -96,7 +96,7 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
             )
             connection.commit()
         self.works, self.versions = works, versions
-        return CurationScope(works[:2], versions[:2])
+        return CurationScope(work_ids=works[:2], work_version_ids=versions[:2])
 
     def plan(self, scope: CurationScope, **changes) -> ValidatedCurationPlan:
         token = SqliteBibliographyRepository(self.catalog).load_curation_snapshot(scope).token
@@ -180,7 +180,7 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
                 (str(version), UUIDS[3]),
             )
             connection.commit()
-        return CurationScope((work,), (version,))
+        return CurationScope(work_ids=(work,), work_version_ids=(version,))
 
     def test_artifact_and_raw_asset_mutations_each_stale_snapshot(self) -> None:
         scope = self.seed_accepted_asset()

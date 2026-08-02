@@ -9,10 +9,6 @@ from target_citation_fixture import (
 )
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.bibliography.api import (
-    IdentityCandidate,
-    IdentityCandidateSet,
-)
 from sciretriever.collection.api import (
     CausePageRequest,
     PathPageRequest,
@@ -44,7 +40,7 @@ from sciretriever.model.collection import (
     WorkSeed,
     WorkVersionSeed,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.literature import Identifier, IdentityCandidate, IdentityCandidateSet
 from sciretriever.model.primitives import (
     CitationDirection,
     CollectionId,
@@ -164,9 +160,17 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
         bibliography = FixedCandidateBibliography(
             self.bibliography,
             IdentityCandidateSet(
-                (
-                    IdentityCandidate(first.work_id, first.work_version_id, (identifier,)),
-                    IdentityCandidate(second.work_id, second.work_version_id, (identifier,)),
+                candidates=(
+                    IdentityCandidate(
+                        work_id=first.work_id,
+                        work_version_id=first.work_version_id,
+                        matched_identifiers=(identifier,),
+                    ),
+                    IdentityCandidate(
+                        work_id=second.work_id,
+                        work_version_id=second.work_version_id,
+                        matched_identifiers=(identifier,),
+                    ),
                 )
             ),
         )

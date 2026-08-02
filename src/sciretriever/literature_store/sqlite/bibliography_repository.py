@@ -3,32 +3,34 @@ from __future__ import annotations
 import os
 
 from sciretriever.bibliography.api import (
-    ArtifactRegistrationFact,
-    CurationScope,
-    CurationSnapshot,
-    CurationTopology,
-    IdentifierFact,
-    IdentityCandidate,
-    IdentityCandidateQuery,
-    IdentityCandidateSet,
-    MembershipFact,
-    ObservationFact,
-    ReferenceFact,
-    RelationFact,
     ValidatedVersionRelation,
-    WorkFacts,
 )
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
 from sciretriever.literature_store.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.library import (
+    ArtifactRegistrationFact,
+    CurationScope,
+    CurationSnapshot,
+    CurationTopology,
+    IdentifierFact,
+    MembershipFact,
+    ObservationFact,
+    ReferenceFact,
+    RelationFact,
+)
 from sciretriever.model.literature import (
     Identifier,
+    IdentityCandidate,
+    IdentityCandidateQuery,
+    IdentityCandidateSet,
     IdentityRecord,
     InitialMetadata,
     StoredObservation,
     VersionFacts,
+    WorkFacts,
 )
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
@@ -61,9 +63,11 @@ def _work(connection, work_id: WorkId) -> WorkFacts | None:
         "SELECT work_version_id FROM work_representative_versions WHERE work_id=?", (str(work_id),)
     ).fetchone()
     return WorkFacts(
-        work_id,
-        None if representative is None else WorkVersionId(representative[0]),
-        tuple(WorkVersionId(row[0]) for row in versions),
+        work_id=work_id,
+        representative_version_id=None
+        if representative is None
+        else WorkVersionId(representative[0]),
+        version_ids=tuple(WorkVersionId(row[0]) for row in versions),
     )
 
 
@@ -129,10 +133,14 @@ class SqliteBibliographyRepository:
                 for work_id, version_id in rows:
                     matches.setdefault((work_id, version_id), []).append(identifier)
         candidates = tuple(
-            IdentityCandidate(WorkId(key[0]), WorkVersionId(key[1]), tuple(values))
+            IdentityCandidate(
+                work_id=WorkId(key[0]),
+                work_version_id=WorkVersionId(key[1]),
+                matched_identifiers=tuple(values),
+            )
             for key, values in sorted(matches.items())
         )
-        return IdentityCandidateSet(candidates)
+        return IdentityCandidateSet(candidates=candidates)
 
     def get_work_facts(self, work_id: WorkId) -> WorkFacts | None:
         with open_read_only_snapshot(self._catalog_path) as connection:
@@ -156,7 +164,12 @@ class SqliteBibliographyRepository:
                     version_values.append(version)
             works = tuple(work_values)
             versions = tuple(version_values)
-            return CurationSnapshot(scope, snapshot_token(connection, scope), works, versions)
+            return CurationSnapshot(
+                scope=scope,
+                token=snapshot_token(connection, scope),
+                works=works,
+                versions=versions,
+            )
 
     def load_curation_topology(self) -> CurationTopology:
         with open_read_only_snapshot(self._catalog_path) as connection:
@@ -167,7 +180,7 @@ class SqliteBibliographyRepository:
                 WorkVersionId(row[0])
                 for row in connection.execute("SELECT id FROM work_versions ORDER BY id")
             )
-            scope = CurationScope(work_ids, version_ids)
+            scope = CurationScope(work_ids=work_ids, work_version_ids=version_ids)
             work_values: list[WorkFacts] = []
             for identifier in work_ids:
                 work_value = _work(connection, identifier)
@@ -182,34 +195,41 @@ class SqliteBibliographyRepository:
             versions = tuple(version_values)
             identifiers = tuple(
                 IdentifierFact(
-                    StableIdentifierId(row[0]),
-                    WorkVersionId(row[1]),
-                    Identifier(namespace=row[2], value=row[3]),
+                    identifier_id=StableIdentifierId(row[0]),
+                    version_id=WorkVersionId(row[1]),
+                    value=Identifier(namespace=row[2], value=row[3]),
                 )
                 for row in connection.execute(
                     "SELECT id,work_version_id,namespace,value FROM stable_identifiers ORDER BY id"
                 )
             )
             observations = tuple(
-                ObservationFact(ObservationId(row[0]), WorkVersionId(row[1]))
+                ObservationFact(
+                    observation_id=ObservationId(row[0]),
+                    version_id=WorkVersionId(row[1]),
+                )
                 for row in connection.execute(
                     "SELECT id,work_version_id FROM metadata_observations ORDER BY id"
                 )
             )
             memberships = tuple(
-                MembershipFact(MembershipId(row[0]), CollectionId(row[1]), WorkId(row[2]))
+                MembershipFact(
+                    membership_id=MembershipId(row[0]),
+                    collection_id=CollectionId(row[1]),
+                    work_id=WorkId(row[2]),
+                )
                 for row in connection.execute(
                     "SELECT id,collection_id,work_id FROM collection_memberships ORDER BY id"
                 )
             )
             references = tuple(
                 ReferenceFact(
-                    ReferenceFactId(row[0]),
-                    WorkVersionId(row[1]),
-                    None if row[2] is None else WorkId(row[2]),
-                    None if row[3] is None else WorkVersionId(row[3]),
-                    row[4],
-                    row[5],
+                    reference_id=ReferenceFactId(row[0]),
+                    source_version_id=WorkVersionId(row[1]),
+                    target_work_id=None if row[2] is None else WorkId(row[2]),
+                    target_version_id=None if row[3] is None else WorkVersionId(row[3]),
+                    raw_text=row[4],
+                    reference_json=row[5],
                 )
                 for row in connection.execute(
                     "SELECT m.id,s.work_version_id,m.target_work_id,m.target_work_version_id,"
@@ -221,7 +241,10 @@ class SqliteBibliographyRepository:
             )
             relations = tuple(
                 RelationFact(
-                    VersionRelationId(row[0]), WorkVersionId(row[1]), WorkVersionId(row[2]), row[3]
+                    relation_id=VersionRelationId(row[0]),
+                    left_version_id=WorkVersionId(row[1]),
+                    right_version_id=WorkVersionId(row[2]),
+                    relation=row[3],
                 )
                 for row in connection.execute(
                     "SELECT id,left_version_id,right_version_id,relation FROM "
@@ -229,22 +252,30 @@ class SqliteBibliographyRepository:
                 )
             )
             registrations = tuple(
-                ArtifactRegistrationFact(AssetId(row[0]), WorkVersionId(row[1]))
+                ArtifactRegistrationFact(
+                    artifact_id=AssetId(row[0]),
+                    version_id=WorkVersionId(row[1]),
+                )
                 for row in connection.execute(
                     "SELECT artifact_id,work_version_id FROM work_version_assets UNION "
                     "SELECT artifact_id,work_version_id FROM light_documents UNION "
                     "SELECT artifact_id,work_version_id FROM analysis_artifacts ORDER BY 1,2"
                 )
             )
-            snapshot = CurationSnapshot(scope, snapshot_token(connection, scope), works, versions)
+            snapshot = CurationSnapshot(
+                scope=scope,
+                token=snapshot_token(connection, scope),
+                works=works,
+                versions=versions,
+            )
             return CurationTopology(
-                snapshot,
-                identifiers,
-                observations,
-                memberships,
-                references,
-                relations,
-                registrations,
+                snapshot=snapshot,
+                identifiers=identifiers,
+                observations=observations,
+                memberships=memberships,
+                references=references,
+                relations=relations,
+                artifact_registrations=registrations,
             )
 
     def add_version_relation(self, relation: ValidatedVersionRelation) -> None:

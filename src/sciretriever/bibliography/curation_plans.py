@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TypeVar
 from uuid import UUID, uuid5
 
+from sciretriever.model.library import CurationTopology
 from sciretriever.model.primitives import (
     AssetId,
     CurationPlanId,
@@ -11,7 +12,6 @@ from sciretriever.model.primitives import (
     WorkVersionId,
 )
 
-from .curation_model import CurationTopology
 from .model import (
     CurationPlanError,
     IdentifierMove,
