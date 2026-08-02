@@ -20,3 +20,6 @@ page_1.json
 
 work/*
 
+# Local agent state and personal runtime configuration
+/.omo/
+/config.toml
