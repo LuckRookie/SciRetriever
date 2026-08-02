@@ -7,46 +7,38 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 from uuid import uuid4
 
-from sciretriever.batching.api import (
-    ContentAcceptanceCommand,
-    FailureStage,
-    ImportAcceptanceCommand,
-    TargetProjection,
-    TargetResult,
-)
-from sciretriever.bibliography.api import (
-    CompletionAnalysisFact,
-    CompletionProvenance,
-    CompletionSubmission,
-    FinalMetadataFact,
-    ReferenceSetFact,
-    ReferenceSetId,
-    TagSetFact,
-    TagSetId,
-    metadata_snapshot_sha256,
-)
-from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.collection.api import (
-    CollectionAcceptance,
-    CollectionMembershipFact,
-)
-from sciretriever.content.api import (
-    ArtifactKind,
-    LightDocumentAcceptance,
-    PrimaryPdfAcceptance,
-    PublishedArtifact,
-)
-from sciretriever.interoperability.ports import ImportRecordProjection, ImportResult
-from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     CompletionPublisher,
     ContentAcceptancePublisher,
     ImportAcceptancePublisher,
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
-from sciretriever.model.literature import BibliographicObservation, Identifier, InitialMetadata
+from sciretriever.model.assets import ArtifactKind, PrimaryPdfAcceptance, PublishedArtifact
+from sciretriever.model.collection import CollectionAcceptance, CollectionMembershipFact
+from sciretriever.model.documents import LightDocumentAcceptance
+from sciretriever.model.execution import (
+    ContentAcceptanceCommand,
+    ImportAcceptanceCommand,
+    ImportRecordProjection,
+    ImportResult,
+    TargetProjection,
+    TargetResult,
+)
+from sciretriever.model.literature import (
+    BibliographicObservation,
+    CompletionAnalysisFact,
+    CompletionProvenance,
+    CompletionSubmission,
+    FinalMetadataFact,
+    Identifier,
+    InitialMetadata,
+    ReferenceSetFact,
+    TagSetFact,
+)
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
@@ -56,12 +48,15 @@ from sciretriever.model.primitives import (
     LightDocumentId,
     MembershipId,
     MetadataSnapshotId,
+    ReferenceSetId,
     RelativeArtifactPath,
     Sha256,
+    TagSetId,
     UtcTimestamp,
     WorkVersionAssetId,
     sha256_digest,
 )
+from sciretriever.services.literature.api import prepare_initial_ingest
 
 EMPTY = CanonicalJsonObject(())
 
@@ -125,7 +120,7 @@ class ScenarioFactory:
             ),
             version_role="formal",
         )
-        return prepare_initial_ingest(SqliteBibliographyRepository(path), (observation,))
+        return prepare_initial_ingest(SqliteLiteratureRepository(path), (observation,))
 
     @staticmethod
     def artifact(kind: ArtifactKind, content: bytes) -> PublishedArtifact:
@@ -137,7 +132,7 @@ class ScenarioFactory:
             ArtifactKind.ANALYSIS: "analysis",
         }
         path = RelativeArtifactPath(f"{directories[kind]}/{str(digest)[:2]}/{digest}")
-        return PublishedArtifact(kind, path, digest, len(content))
+        return PublishedArtifact(kind=kind, path=path, sha256=digest, size=len(content))
 
     @staticmethod
     def batch(path: Path, batch_id: BatchRunId, version_id, kind: str = "work-version") -> None:
@@ -198,19 +193,41 @@ class ScenarioFactory:
         prepared = self.prepared(path)
         batch_id = BatchRunId(str(uuid4()))
         self.batch(path, batch_id, prepared.work_version_id, "import-record")
-        references = ReferenceSetFact(ReferenceSetId(str(uuid4())), prepared.work_version_id, 1, ())
-        tags = TagSetFact(TagSetId(str(uuid4())), prepared.work_version_id, 1, ())
+        references = ReferenceSetFact(
+            set_id=ReferenceSetId(str(uuid4())),
+            work_version_id=prepared.work_version_id,
+            revision=1,
+            members=(),
+        )
+        tags = TagSetFact(
+            set_id=TagSetId(str(uuid4())),
+            work_version_id=prepared.work_version_id,
+            revision=1,
+            members=(),
+        )
         record = ImportRecordProjection(
-            batch_id,
-            prepared.work_version_id,
-            0,
-            ImportResult.CREATED,
-            CanonicalJsonObject((("reason", "accepted"),)),
+            batch_run_id=batch_id,
+            work_version_id=prepared.work_version_id,
+            input_ordinal=0,
+            result=ImportResult(
+                record_index=0,
+                work_id=str(prepared.work_id),
+                work_version_id=prepared.work_version_id,
+                outcome="created",
+                omissions=(),
+                failure=None,
+            ),
+            details=CanonicalJsonObject((("reason", "accepted"),)),
         )
         return Scenario(
             path,
             ImportAcceptancePublisher(path, failpoint=callback),
-            ImportAcceptanceCommand(prepared, references, tags, record),
+            ImportAcceptanceCommand(
+                bibliography=prepared,
+                references=references,
+                tags=tags,
+                record=record,
+            ),
             "reference_sets",
         )
 
@@ -225,26 +242,35 @@ class ScenarioFactory:
         self.batch(base.path, batch_id, prepared.work_version_id)
         artifact = self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-primary")
         acceptance = PrimaryPdfAcceptance(
-            prepared.work_version_id,
-            snapshot.snapshot_id,
-            snapshot.revision,
-            snapshot.sha256,
-            AssetId(str(uuid4())),
-            WorkVersionAssetId(str(uuid4())),
-            artifact,
-            EMPTY,
+            work_version_id=prepared.work_version_id,
+            expected_metadata_id=snapshot.snapshot_id,
+            expected_metadata_revision=snapshot.revision,
+            expected_metadata_sha256=snapshot.sha256,
+            artifact_id=AssetId(str(uuid4())),
+            relation_id=WorkVersionAssetId(str(uuid4())),
+            artifact=artifact,
+            source=EMPTY,
         )
         target = TargetProjection(
-            batch_id,
-            prepared.work_version_id,
-            TargetResult.PARTIALLY_ADVANCED,
-            EMPTY,
-            (FailureStage.ACQUISITION,),
+            batch_run_id=batch_id,
+            work_version_id=prepared.work_version_id,
+            result=TargetResult(
+                subject_type="work-version",
+                subject_id=str(prepared.work_version_id),
+                outcome="partially-advanced",
+                initial_state="unreviewed",
+                target_state="asset-ready",
+                final_state="asset-ready",
+                stage="acquisition",
+                failure=None,
+            ),
+            details=EMPTY,
+            failure_stages_to_clear=("acquisition",),
         )
         return Scenario(
             base.path,
             ContentAcceptancePublisher(base.path, failpoint=callback),
-            ContentAcceptanceCommand(acceptance, target),
+            ContentAcceptanceCommand(acceptance=acceptance, target=target),
             "accepted_primary_assets",
         )
 
@@ -260,26 +286,35 @@ class ScenarioFactory:
         document = CanonicalJsonObject((("blocks", (CanonicalJsonObject((("text", "atomic"),)),)),))
         artifact = self.artifact(ArtifactKind.LIGHT_DOCUMENT, b'{"blocks":[{"text":"atomic"}]}')
         light = LightDocumentAcceptance(
-            acceptance.work_version_id,
-            acceptance.relation_id,
-            acceptance.artifact.sha256,
-            LightDocumentId(str(uuid4())),
-            AssetId(str(uuid4())),
-            artifact,
-            document,
-            EMPTY,
+            work_version_id=acceptance.work_version_id,
+            expected_primary_relation_id=acceptance.relation_id,
+            expected_primary_sha256=acceptance.artifact.sha256,
+            document_id=LightDocumentId(str(uuid4())),
+            artifact_id=AssetId(str(uuid4())),
+            artifact=artifact,
+            document=document,
+            provenance=EMPTY,
         )
         target = TargetProjection(
-            base.command.target.batch_run_id,
-            acceptance.work_version_id,
-            TargetResult.PARTIALLY_ADVANCED,
-            EMPTY,
-            (FailureStage.PARSING,),
+            batch_run_id=base.command.target.batch_run_id,
+            work_version_id=acceptance.work_version_id,
+            result=TargetResult(
+                subject_type="work-version",
+                subject_id=str(acceptance.work_version_id),
+                outcome="partially-advanced",
+                initial_state="asset-ready",
+                target_state="light-text-ready",
+                final_state="light-text-ready",
+                stage="parsing",
+                failure=None,
+            ),
+            details=EMPTY,
+            failure_stages_to_clear=("parsing",),
         )
         return Scenario(
             base.path,
             ContentAcceptancePublisher(base.path, failpoint=callback),
-            ContentAcceptanceCommand(light, target),
+            ContentAcceptanceCommand(acceptance=light, target=target),
             "light_documents",
         )
 
@@ -300,57 +335,90 @@ class ScenarioFactory:
             connection.execute("UPDATE batch_targets SET result_json=NULL")
             connection.commit()
         assert row is not None
-        analysis_artifact = self.artifact(ArtifactKind.ANALYSIS, b'{"nine":true}')
+        proposal = CanonicalJsonObject(
+            (
+                ("schema_version", "1"),
+                ("final_bibliography", EMPTY),
+                ("classification", EMPTY),
+                ("content_overview", EMPTY),
+                ("research_objectives", ()),
+                ("methods", ()),
+                ("key_results", ()),
+                ("conclusions_and_limitations", EMPTY),
+                ("keywords_and_tags", EMPTY),
+                ("references", ()),
+            )
+        )
+        analysis_artifact = self.artifact(ArtifactKind.ANALYSIS, canonical_json_bytes(proposal))
         analysis = CompletionAnalysisFact(
-            light.work_version_id,
-            light.document_id,
-            light.artifact.sha256,
-            AnalysisArtifactId(str(uuid4())),
-            AssetId(str(uuid4())),
-            analysis_artifact.path,
-            analysis_artifact.sha256,
-            analysis_artifact.size,
-            CanonicalJsonObject((("nine", True),)),
+            work_version_id=light.work_version_id,
+            light_document_id=light.document_id,
+            input_sha256=light.artifact.sha256,
+            analysis_id=AnalysisArtifactId(str(uuid4())),
+            artifact_id=AssetId(str(uuid4())),
+            artifact_path=analysis_artifact.path,
+            artifact_sha256=analysis_artifact.sha256,
+            artifact_size=analysis_artifact.size,
+            proposal=proposal,
         )
         final_values = CanonicalJsonObject((("title", "final"),))
         final_revision = row[1] + 1
         metadata = FinalMetadataFact(
-            light.work_version_id,
-            MetadataSnapshotId(row[0]),
-            row[1],
-            Sha256(row[2]),
-            MetadataSnapshotId(str(uuid4())),
-            final_revision,
-            metadata_snapshot_sha256(final_revision, final_values, EMPTY),
-            final_values,
-            EMPTY,
+            work_version_id=light.work_version_id,
+            expected_snapshot_id=MetadataSnapshotId(row[0]),
+            expected_revision=row[1],
+            expected_sha256=Sha256(row[2]),
+            snapshot_id=MetadataSnapshotId(str(uuid4())),
+            revision=final_revision,
+            sha256=metadata_snapshot_sha256(final_revision, final_values, EMPTY),
+            values=final_values,
+            provenance=EMPTY,
         )
-        references = ReferenceSetFact(ReferenceSetId(str(uuid4())), light.work_version_id, 1, ())
-        tags = TagSetFact(TagSetId(str(uuid4())), light.work_version_id, 1, ())
+        references = ReferenceSetFact(
+            set_id=ReferenceSetId(str(uuid4())),
+            work_version_id=light.work_version_id,
+            revision=1,
+            members=(),
+        )
+        tags = TagSetFact(
+            set_id=TagSetId(str(uuid4())),
+            work_version_id=light.work_version_id,
+            revision=1,
+            members=(),
+        )
         provenance = CompletionProvenance(
-            "parser@1",
-            "provider",
-            "model@1",
-            light.artifact.sha256,
-            Sha256("4" * 64),
-            EMPTY,
+            parser_identity="parser@1",
+            model_provider="provider",
+            model_identity="model@1",
+            input_sha256=light.artifact.sha256,
+            parameters_sha256=Sha256("4" * 64),
+            evidence=EMPTY,
         )
         submission = CompletionSubmission(
-            light.work_version_id,
-            light.document_id,
-            light.artifact.sha256,
-            analysis,
-            metadata,
-            references,
-            tags,
-            provenance,
+            work_version_id=light.work_version_id,
+            light_document_id=light.document_id,
+            light_document_sha256=light.artifact.sha256,
+            analysis=analysis,
+            metadata=metadata,
+            references=references,
+            tags=tags,
+            provenance=provenance,
         )
         target = TargetProjection(
-            base.command.target.batch_run_id,
-            light.work_version_id,
-            TargetResult.COMPLETED,
-            EMPTY,
-            (FailureStage.ANALYSIS, FailureStage.FEEDBACK),
+            batch_run_id=base.command.target.batch_run_id,
+            work_version_id=light.work_version_id,
+            result=TargetResult(
+                subject_type="work-version",
+                subject_id=str(light.work_version_id),
+                outcome="completed",
+                initial_state="light-text-ready",
+                target_state="completed",
+                final_state="completed",
+                stage="completion",
+                failure=None,
+            ),
+            details=EMPTY,
+            failure_stages_to_clear=("analysis", "feedback"),
         )
         return Scenario(
             base.path,

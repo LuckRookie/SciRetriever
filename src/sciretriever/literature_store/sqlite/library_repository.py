@@ -3,27 +3,6 @@ from __future__ import annotations
 import os
 import sqlite3
 
-from sciretriever.interoperability.api import (
-    AssetView,
-    CollectionCause,
-    CollectionMembershipPage,
-    CollectionPath,
-    CurrentFailure,
-    ExtensionResultView,
-    GraphEdge,
-    GraphPage,
-    LibraryPage,
-    LibraryPageRequest,
-    ObservationView,
-    QueryFilterV1,
-    ReferenceSetView,
-    TagSetView,
-    TagView,
-    UnresolvedReferenceItem,
-    WorkCollectionMembership,
-    WorkDetail,
-    WorkVersionDetail,
-)
 from sciretriever.kernel import (
     BoundaryError,
     parse_canonical_json,
@@ -39,17 +18,49 @@ from sciretriever.literature_store.sqlite.library_maintenance import (
 from sciretriever.literature_store.sqlite.library_parse import (
     analysis_view,
     extension_fields,
-    json_value,
+    json_output,
     light_view,
     metadata_view,
     reference,
 )
 from sciretriever.literature_store.sqlite.library_query import search as search_page
+from sciretriever.model.execution import CurrentFailure
+from sciretriever.model.library_details import (
+    CollectionCause,
+    CollectionMembershipPage,
+    CollectionPath,
+    GraphEdge,
+    GraphPage,
+    UnresolvedReferenceItem,
+    WorkCollectionMembership,
+    WorkDetail,
+    WorkVersionDetail,
+)
+from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
+from sciretriever.model.library_query import QueryFilterV1
+from sciretriever.model.library_views import (
+    AssetView,
+    ExtensionResultView,
+    ObservationView,
+    ReferenceSetView,
+    TagSetView,
+    TagView,
+)
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
+    AssetId,
     AssetRole,
+    CitationDirection,
+    CollectionCauseId,
+    CollectionCauseKind,
     CollectionId,
+    CollectionPathId,
+    CollectionRunId,
+    MissingStep,
+    ObservationId,
     ProvenanceId,
+    RelativeArtifactPath,
+    Sha256,
     SourceKind,
     UtcTimestamp,
     WorkId,
@@ -73,12 +84,25 @@ def _path_ids(payload: str) -> tuple[str, ...]:
 
 def _cause(row: tuple[str, str, str, str, str | None, str | None, str | None]) -> CollectionCause:
     identifier, _membership, run, kind, source, condition, seed = row
-    return CollectionCause(identifier, run, kind, source, condition, seed)
+    return CollectionCause(
+        cause_id=CollectionCauseId(identifier),
+        collection_run_id=CollectionRunId(run),
+        kind=CollectionCauseKind(kind),
+        source=source,
+        condition=condition,
+        seed_work_id=None if seed is None else WorkId(seed),
+    )
 
 
 def _path(row: tuple[str, str, str, str | None, int, str]) -> CollectionPath:
     identifier, _membership, run, direction, depth, work_ids = row
-    return CollectionPath(identifier, run, direction, depth, _path_ids(work_ids))
+    return CollectionPath(
+        path_id=CollectionPathId(identifier),
+        collection_run_id=CollectionRunId(run),
+        direction=None if direction is None else CitationDirection(direction),
+        depth=depth,
+        work_ids=tuple(WorkId(value) for value in _path_ids(work_ids)),
+    )
 
 
 class SqliteLibraryReadRepository:
@@ -113,13 +137,15 @@ class SqliteLibraryReadRepository:
             memberships = self._memberships(connection, work_id)
             edges = self._work_edges(connection, work_id)
         return WorkDetail(
-            "work-detail",
-            str(work_id),
-            representative[0],
-            any(item.state is WorkVersionState.COMPLETED for item in versions),
-            versions,
-            memberships,
-            edges,
+            kind="work-detail",
+            work_id=work_id,
+            preferred_work_version_id=WorkVersionId(representative[0]),
+            at_least_one_completed=any(
+                item.state is WorkVersionState.COMPLETED for item in versions
+            ),
+            versions=versions,
+            collection_memberships=memberships,
+            work_references=edges,
         )
 
     def get_version(
@@ -163,13 +189,13 @@ class SqliteLibraryReadRepository:
         )
         assets = tuple(
             AssetView(
-                item[0],
-                AssetRole(item[1]),
-                item[2],
-                item[3] or "application/octet-stream",
-                item[4],
-                item[5],
-                (),
+                asset_id=AssetId(item[0]),
+                role=AssetRole(item[1]),
+                sha256=Sha256(item[2]),
+                media_type=item[3] or "application/octet-stream",
+                byte_size=item[4],
+                storage_path=RelativeArtifactPath(item[5]),
+                provenance=(),
             )
             for item in connection.execute(
                 "SELECT a.id,w.role,a.sha256,a.media_type,a.byte_size,a.storage_path FROM "
@@ -205,35 +231,35 @@ class SqliteLibraryReadRepository:
             None
             if failure_row is None
             else CurrentFailure(
-                failure_row[0],
-                failure_row[1],
-                failure_row[2],
-                failure_row[3],
-                bool(failure_row[4]),
-                failure_row[5],
+                stage=failure_row[0],
+                code=failure_row[1],
+                reason=failure_row[2],
+                action=failure_row[3],
+                retryable=bool(failure_row[4]),
+                updated_at=UtcTimestamp(failure_row[5]),
             )
         )
         observation_items = self._observations(connection, version_id) if observations else ()
         extensions = self._extensions(connection, version_id, namespaces)
         return WorkVersionDetail(
-            "work-version-detail",
-            work_id,
-            str(version_id),
-            identifiers,
-            metadata_view((row[3], row[4], row[5], row[6])),
-            assets,
-            light,
-            analysis,
-            references,
-            tags,
-            WorkVersionState(state),
-            missing,
-            failure,
-            observations,
-            observation_items,
-            namespaces,
-            extensions,
-            (),
+            kind="work-version-detail",
+            work_id=WorkId(work_id),
+            work_version_id=version_id,
+            identifiers=identifiers,
+            metadata=metadata_view((row[3], row[4], row[5], row[6])),
+            assets=assets,
+            light_document=light,
+            analysis=analysis,
+            references=references,
+            tags=tags,
+            state=WorkVersionState(state),
+            missing_step=None if missing is None else MissingStep(missing),
+            current_failure=failure,
+            observations_included=observations,
+            observations=observation_items,
+            extension_namespaces=namespaces,
+            extensions=extensions,
+            provenance=(),
         )
 
     @staticmethod
@@ -268,7 +294,7 @@ class SqliteLibraryReadRepository:
             ()
             if tag_set is None
             else tuple(
-                TagView(row[0], json_value(row[1]))
+                TagView(name=row[0], evidence=json_output(row[1]))
                 for row in connection.execute(
                     "SELECT name,evidence_json FROM tag_members WHERE tag_set_id=? ORDER BY "
                     "lower(name),name",
@@ -277,8 +303,12 @@ class SqliteLibraryReadRepository:
             )
         )
         return ReferenceSetView(
-            reference_set is not None and bool(reference_set[1]), references
-        ), TagSetView(tag_set is not None and bool(tag_set[1]), tags)
+            complete=reference_set is not None and bool(reference_set[1]),
+            items=references,
+        ), TagSetView(
+            complete=tag_set is not None and bool(tag_set[1]),
+            items=tags,
+        )
 
     @staticmethod
     def _observations(
@@ -291,12 +321,12 @@ class SqliteLibraryReadRepository:
         ).fetchall()
         return tuple(
             ObservationView(
-                row[0],
-                row[1],
-                "metadata",
-                json_value(row[3]),
-                row[4],
-                Provenance(
+                observation_id=ObservationId(row[0]),
+                provider=row[1],
+                field_name="metadata",
+                value=json_output(row[3]),
+                observed_at=UtcTimestamp(row[4]),
+                provenance=Provenance(
                     provenance_id=ProvenanceId(row[0]),
                     source_kind=SourceKind.METADATA_PROVIDER,
                     source_name=row[1],
@@ -322,7 +352,15 @@ class SqliteLibraryReadRepository:
                 (namespace, str(version_id)),
             ).fetchall():
                 schema, artifact, digest, value = extension_fields(payload)
-                results.append(ExtensionResultView(namespace, schema, artifact, digest, value))
+                results.append(
+                    ExtensionResultView(
+                        namespace=namespace,
+                        schema_version=schema,
+                        artifact_id=None if artifact is None else AssetId(artifact),
+                        sha256=None if digest is None else Sha256(digest),
+                        value=value,
+                    )
+                )
         return tuple(results)
 
     @staticmethod
@@ -351,7 +389,14 @@ class SqliteLibraryReadRepository:
                     (membership_id,),
                 ).fetchall()
             )
-            memberships.append(WorkCollectionMembership(collection_id, run_id, causes, paths))
+            memberships.append(
+                WorkCollectionMembership(
+                    collection_id=CollectionId(collection_id),
+                    first_collection_run_id=CollectionRunId(run_id),
+                    causes=causes,
+                    paths=paths,
+                )
+            )
         return tuple(memberships)
 
     @staticmethod
@@ -365,7 +410,15 @@ class SqliteLibraryReadRepository:
             (str(work_id),),
         ).fetchall()
         return tuple(
-            GraphEdge("graph-edge", row[0], row[1], row[2], row[3], "references", reference(row[4]))
+            GraphEdge(
+                kind="graph-edge",
+                source_work_id=WorkId(row[0]),
+                source_work_version_id=WorkVersionId(row[1]),
+                target_work_id=WorkId(row[2]),
+                target_work_version_id=(None if row[3] is None else WorkVersionId(row[3])),
+                relation="references",
+                reference=reference(row[4]),
+            )
             for row in rows
         )
 
@@ -400,25 +453,32 @@ class SqliteLibraryReadRepository:
             )
         edges = tuple(
             GraphEdge(
-                "graph-edge",
-                source[0],
-                str(version_id),
-                row[1],
-                row[2],
-                "references",
-                reference(row[3]),
+                kind="graph-edge",
+                source_work_id=WorkId(source[0]),
+                source_work_version_id=version_id,
+                target_work_id=WorkId(row[1]),
+                target_work_version_id=None if row[2] is None else WorkVersionId(row[2]),
+                relation="references",
+                reference=reference(row[3]),
             )
             for row in resolved_rows[:limit]
         )
         missing = tuple(
             UnresolvedReferenceItem(
-                "unresolved-reference", source[0], str(version_id), reference(row[1])
+                kind="unresolved-reference",
+                source_work_id=WorkId(source[0]),
+                source_work_version_id=version_id,
+                reference=reference(row[1]),
             )
             for row in unresolved_rows[:limit]
         )
         page_ids = tuple(row[0] for row in (*resolved_rows[:limit], *unresolved_rows[:limit]))
         has_more = len(resolved_rows) > limit or len(unresolved_rows) > limit
-        return GraphPage(edges, missing, max(page_ids) if has_more and page_ids else None)
+        return GraphPage(
+            edges=edges,
+            unresolved=missing,
+            next_cursor=max(page_ids) if has_more and page_ids else None,
+        )
 
     def collection_memberships(
         self, collection_id: CollectionId, after: WorkId | None, limit: int
@@ -437,8 +497,8 @@ class SqliteLibraryReadRepository:
                 (row[0], self._memberships(connection, WorkId(row[0]))[0]) for row in visible
             )
         return CollectionMembershipPage(
-            memberships,
-            visible[-1][0] if len(rows) > limit else None,
+            memberships=tuple((WorkId(item), membership) for item, membership in memberships),
+            next_after_work_id=(None if len(rows) <= limit else WorkId(visible[-1][0])),
         )
 
     def authority_fingerprint(self) -> str:

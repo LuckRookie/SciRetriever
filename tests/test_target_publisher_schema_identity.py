@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.bibliography.api import metadata_snapshot_sha256
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     UnsupportedCatalogError,

@@ -4,38 +4,22 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
-import anyio
-from anyio import to_thread
-
-from sciretriever.content.asset_validation import validate_asset
-from sciretriever.content.model import (
-    ArtifactKind,
-    AssetCandidate,
-    BoundedByteStream,
-    ContentTarget,
-    StagedArtifact,
-)
+import sciretriever.model.assets as asset_models
+from sciretriever.content.asset_acquisition import CandidateAcquisition
 from sciretriever.content.ports import (
     ArtifactStorePort,
     AssetFetcherPort,
     AssetResolverPort,
     CancellableAssetFetcherPort,
-    CandidateRaceExhausted,
     CandidateRacePort,
-    RaceCallable,
-    RaceToken,
-)
-from sciretriever.content.publisher_contracts import (
-    ContentAcceptance,
-    PrimaryPdfAcceptance,
-    SupplementaryAssetAcceptance,
 )
 from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.assets import PrimaryPdfAcceptance, SupplementaryAssetAcceptance
+from sciretriever.model.execution import ContentAcceptance
 from sciretriever.model.primitives import (
     AssetId,
     AssetRole,
     RelativeArtifactPath,
-    Sha256,
     WorkVersionAssetId,
     sha256_digest,
 )
@@ -54,46 +38,6 @@ class ResolverTier:
     race: bool
 
 
-@dataclass(frozen=True, slots=True)
-class CandidateEvidence:
-    provider: str
-    outcome: str
-
-
-@dataclass(frozen=True, slots=True)
-class ContentAssetFailure:
-    code: str
-    evidence: tuple[CandidateEvidence, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ContentAssetReplay:
-    asset_id: AssetId
-    sha256: Sha256
-
-
-@dataclass(frozen=True, slots=True)
-class ContentAssetSuccess:
-    asset_id: AssetId
-    relation_id: WorkVersionAssetId
-    sha256: Sha256
-    provider: str
-    role: AssetRole
-
-
-ContentAssetResult = ContentAssetFailure | ContentAssetReplay | ContentAssetSuccess
-
-
-@dataclass(frozen=True, slots=True)
-class AcceptedCandidate:
-    candidate: AssetCandidate
-    content: BoundedByteStream
-
-
-class CandidateRejected(OSError):
-    pass
-
-
 class AcceptancePublisher(Protocol):
     def publish(self, acceptance: ContentAcceptance) -> None: ...
 
@@ -106,28 +50,34 @@ class ContentAssetService:
         store: ArtifactStorePort,
         publisher: AcceptancePublisher,
         policy: AssetAcceptancePolicy,
-        race: CandidateRacePort[AcceptedCandidate] | None = None,
+        race: CandidateRacePort[asset_models.AcceptedCandidate] | None = None,
         cancellable_fetcher: CancellableAssetFetcherPort | None = None,
     ) -> None:
         self._tiers = tiers
         self._fetcher = fetcher
         self._store = store
         self._publisher = publisher
-        self._policy = policy
-        self._race_port = race
-        self._cancellable_fetcher = cancellable_fetcher
+        self._acquisition = CandidateAcquisition(
+            fetcher=fetcher,
+            race_port=race,
+            cancellable_fetcher=cancellable_fetcher,
+            min_pdf_bytes=policy.min_pdf_bytes,
+            max_asset_bytes=policy.max_asset_bytes,
+        )
 
     def accept(
         self,
-        target: ContentTarget,
+        target: asset_models.ContentTarget,
         role: AssetRole,
-    ) -> ContentAssetResult:
+    ) -> asset_models.ContentAssetResult:
         current = target.current_accepted_content
         if role is AssetRole.PRIMARY_PDF and current is not None:
             if isinstance(current.content_id, AssetId):
-                return ContentAssetReplay(current.content_id, current.sha256)
-            return ContentAssetFailure("current-primary-invalid", ())
-        evidence: list[CandidateEvidence] = []
+                return asset_models.ContentAssetReplay(
+                    asset_id=current.content_id, sha256=current.sha256
+                )
+            return asset_models.ContentAssetFailure(code="current-primary-invalid", evidence=())
+        evidence: list[asset_models.CandidateEvidence] = []
         for tier in self._tiers:
             candidates = tuple(
                 candidate
@@ -136,168 +86,83 @@ class ContentAssetService:
                 if candidate.role is role
             )
             winner = (
-                self._run_race(candidates, target, role, evidence)
+                self._acquisition.race(candidates, target, role, evidence)
                 if tier.race
-                else self._fallback(candidates, target, role, evidence)
+                else self._acquisition.fallback(candidates, target, role, evidence)
             )
             if winner is not None:
                 candidate, content = winner
-                return self._publish(target, candidate, content.content, content.media_type)
-        return ContentAssetFailure("candidates-exhausted", tuple(evidence))
-
-    def _fallback(
-        self,
-        candidates: tuple[AssetCandidate, ...],
-        target: ContentTarget,
-        role: AssetRole,
-        evidence: list[CandidateEvidence],
-    ) -> tuple[AssetCandidate, BoundedByteStream] | None:
-        for candidate in candidates:
-            try:
-                accepted = self._fetch_and_validate(candidate, target, role, None)
-            except CandidateRejected as failure:
-                evidence.append(CandidateEvidence(candidate.provider, str(failure)))
-                continue
-            except (OSError, TimeoutError):
-                evidence.append(CandidateEvidence(candidate.provider, "transport-failed"))
-                continue
-            evidence.append(CandidateEvidence(candidate.provider, "accepted"))
-            return accepted.candidate, accepted.content
-        return None
-
-    def _run_race(
-        self,
-        candidates: tuple[AssetCandidate, ...],
-        target: ContentTarget,
-        role: AssetRole,
-        evidence: list[CandidateEvidence],
-    ) -> tuple[AssetCandidate, BoundedByteStream] | None:
-        if not candidates or self._race_port is None:
-            return None
-        outcomes: dict[int, CandidateEvidence] = {}
-
-        def operation(index: int, candidate: AssetCandidate) -> RaceCallable[AcceptedCandidate]:
-            async def execute(token: RaceToken) -> AcceptedCandidate:
-                try:
-                    accepted = await to_thread.run_sync(
-                        lambda: self._fetch_and_validate(candidate, target, role, token),
-                        abandon_on_cancel=True,
-                    )
-                except CandidateRejected as failure:
-                    outcomes[index] = CandidateEvidence(candidate.provider, str(failure))
-                    raise
-                except (OSError, TimeoutError):
-                    outcomes[index] = CandidateEvidence(candidate.provider, "transport-failed")
-                    raise
-                outcomes[index] = CandidateEvidence(candidate.provider, "accepted")
-                return accepted
-
-            return execute
-
-        operations = tuple(
-            (str(index), operation(index, candidate)) for index, candidate in enumerate(candidates)
+                return self._publish(
+                    target, candidate, b"".join(content.chunks), content.media_type
+                )
+        return asset_models.ContentAssetFailure(
+            code="candidates-exhausted", evidence=tuple(evidence)
         )
-        try:
-            accepted = anyio.run(self._race_port.run, operations, lambda _value: None)
-        except CandidateRaceExhausted:
-            evidence.extend(
-                outcomes.get(index, CandidateEvidence(candidate.provider, "candidate-failed"))
-                for index, candidate in enumerate(candidates)
-            )
-            return None
-        except TimeoutError:
-            evidence.extend(
-                outcomes.get(index, CandidateEvidence(candidate.provider, "deadline-exceeded"))
-                for index, candidate in enumerate(candidates)
-            )
-            return None
-        evidence.extend(
-            outcomes[index] for index in sorted(outcomes) if outcomes[index].outcome != "accepted"
-        )
-        return accepted.candidate, accepted.content
-
-    def _fetch_and_validate(
-        self,
-        candidate: AssetCandidate,
-        target: ContentTarget,
-        role: AssetRole,
-        token: RaceToken | None,
-    ) -> AcceptedCandidate:
-        if token is not None and self._cancellable_fetcher is not None:
-            content = self._cancellable_fetcher.fetch_cancellable(candidate, token)
-        else:
-            content = self._fetcher.fetch(candidate)
-        failure = validate_asset(
-            content,
-            target,
-            role,
-            min_pdf_bytes=self._policy.min_pdf_bytes,
-            max_asset_bytes=self._policy.max_asset_bytes,
-        )
-        if failure is not None:
-            raise CandidateRejected(failure.code)
-        return AcceptedCandidate(candidate, content)
 
     def _publish(
         self,
-        target: ContentTarget,
-        candidate: AssetCandidate,
+        target: asset_models.ContentTarget,
+        candidate: asset_models.AssetCandidate,
         content: bytes,
         media_type: str,
-    ) -> ContentAssetResult:
+    ) -> asset_models.ContentAssetResult:
         metadata_hash = target.current_metadata.sha256
         if metadata_hash is None:
-            return ContentAssetFailure("metadata-hash-missing", ())
+            return asset_models.ContentAssetFailure(code="metadata-hash-missing", evidence=())
         digest = sha256_digest(content)
         kind = (
-            ArtifactKind.PRIMARY_PDF
+            asset_models.ArtifactKind.PRIMARY_PDF
             if candidate.role is AssetRole.PRIMARY_PDF
-            else ArtifactKind.SUPPLEMENTARY
+            else asset_models.ArtifactKind.SUPPLEMENTARY
         )
         published = self._store.publish(
-            StagedArtifact(kind, RelativeArtifactPath("staged"), digest, content)
+            asset_models.StagedArtifact(
+                kind=kind,
+                path=RelativeArtifactPath("staged"),
+                sha256=digest,
+                content=content,
+            )
         )
         asset_id = AssetId(str(uuid4()))
         relation_id = WorkVersionAssetId(str(uuid4()))
         source = CanonicalJsonObject((("provider", candidate.provider),))
         if candidate.role is AssetRole.PRIMARY_PDF:
             acceptance = PrimaryPdfAcceptance(
-                target.work_version_id,
-                target.current_metadata.snapshot_id,
-                target.expected_metadata_revision,
-                metadata_hash,
-                asset_id,
-                relation_id,
-                published,
-                source,
+                work_version_id=target.work_version_id,
+                expected_metadata_id=target.current_metadata.snapshot_id,
+                expected_metadata_revision=target.expected_metadata_revision,
+                expected_metadata_sha256=metadata_hash,
+                artifact_id=asset_id,
+                relation_id=relation_id,
+                artifact=published,
+                source=source,
             )
         else:
             acceptance = SupplementaryAssetAcceptance(
-                target.work_version_id,
-                target.current_metadata.snapshot_id,
-                target.expected_metadata_revision,
-                metadata_hash,
-                target.expected_accepted_content_sha256,
-                asset_id,
-                relation_id,
-                candidate.role,
-                media_type,
-                published,
-                source,
+                work_version_id=target.work_version_id,
+                expected_metadata_id=target.current_metadata.snapshot_id,
+                expected_metadata_revision=target.expected_metadata_revision,
+                expected_metadata_sha256=metadata_hash,
+                expected_primary_sha256=target.expected_accepted_content_sha256,
+                artifact_id=asset_id,
+                relation_id=relation_id,
+                role=candidate.role,
+                media_type=media_type,
+                artifact=published,
+                source=source,
             )
         self._publisher.publish(acceptance)
-        return ContentAssetSuccess(
-            asset_id, relation_id, digest, candidate.provider, candidate.role
+        return asset_models.ContentAssetSuccess(
+            asset_id=asset_id,
+            relation_id=relation_id,
+            sha256=digest,
+            provider=candidate.provider,
+            role=candidate.role,
         )
 
 
 __all__ = (
     "AssetAcceptancePolicy",
-    "CandidateEvidence",
-    "ContentAssetFailure",
-    "ContentAssetReplay",
-    "ContentAssetResult",
     "ContentAssetService",
-    "ContentAssetSuccess",
     "ResolverTier",
 )

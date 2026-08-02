@@ -3,43 +3,54 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from sciretriever.interoperability.api import (
-    AnalysisView,
-    AuthorView,
-    LightDocumentView,
-    MetadataView,
-    ReferenceView,
-    UnifiedMetadataValues,
-)
-from sciretriever.kernel import (
+from sciretriever.model.analysis import AnalysisProposalV1, UnifiedMetadataValues
+from sciretriever.model.canonical_json import (
     CanonicalJsonObject,
     CanonicalJsonValue,
+    canonical_json_bytes,
     parse_canonical_json,
 )
-from sciretriever.model.documents import SourceLocator
-from sciretriever.model.literature import Identifier
-from sciretriever.model.primitives import AssetId
+from sciretriever.model.documents import LightDocumentV1, ReferenceView, SourceLocator
+from sciretriever.model.library_views import (
+    AnalysisView,
+    LightDocumentView,
+    MetadataView,
+)
+from sciretriever.model.literature import Author, Identifier
+from sciretriever.model.primitives import AssetId, Sha256, WorkId, WorkVersionId
 
 
 def json_value(payload: str) -> CanonicalJsonValue:
     return parse_canonical_json(payload)
 
 
+def json_output(payload: str) -> CanonicalJsonObject:
+    return json.loads(canonical_json_bytes(json_value(payload)))
+
+
 def _metadata(payload: str) -> UnifiedMetadataValues:
     value = json.loads(payload)
     author_values = value.get("authors", ())
-    authors: list[AuthorView] = []
+    authors: list[Author] = []
     for author in author_values:
         if isinstance(author, str):
-            authors.append(AuthorView(author, None, None, None, ()))
+            authors.append(
+                Author(
+                    display_name=author,
+                    family_name=None,
+                    given_name=None,
+                    orcid=None,
+                    affiliations=(),
+                )
+            )
         else:
             authors.append(
-                AuthorView(
-                    author["display_name"],
-                    author.get("family_name"),
-                    author.get("given_name"),
-                    author.get("orcid"),
-                    tuple(author.get("affiliations", ())),
+                Author(
+                    display_name=author["display_name"],
+                    family_name=author.get("family_name"),
+                    given_name=author.get("given_name"),
+                    orcid=author.get("orcid"),
+                    affiliations=tuple(author.get("affiliations", ())),
                 )
             )
     identifiers = tuple(
@@ -47,34 +58,44 @@ def _metadata(payload: str) -> UnifiedMetadataValues:
         for item in value.get("identifiers", ())
     )
     return UnifiedMetadataValues(
-        value["title"],
-        tuple(authors),
-        value.get("abstract"),
-        value.get("publication_date"),
-        value.get("publication_year", value.get("year")),
-        value.get("document_type", value.get("item_type")),
-        value.get("language"),
-        value.get("venue"),
-        value.get("publisher"),
-        value.get("volume"),
-        value.get("issue"),
-        value.get("pages"),
-        value.get("article_number"),
-        value.get("open_access_status"),
-        identifiers,
+        title=value["title"],
+        authors=tuple(authors),
+        abstract=value.get("abstract"),
+        publication_date=value.get("publication_date"),
+        publication_year=value.get("publication_year", value.get("year")),
+        document_type=value.get("document_type", value.get("item_type")),
+        language=value.get("language"),
+        venue=value.get("venue"),
+        publisher=value.get("publisher"),
+        volume=value.get("volume"),
+        issue=value.get("issue"),
+        pages=value.get("pages"),
+        article_number=value.get("article_number"),
+        open_access_status=value.get("open_access_status"),
+        identifiers=identifiers,
     )
 
 
 def metadata_view(row: tuple[int, str, str, str]) -> MetadataView:
     revision, digest, values_json, _provenance_json = row
-    return MetadataView(revision, digest, _metadata(values_json), ())
+    return MetadataView(
+        revision=revision,
+        sha256=Sha256(digest),
+        values=_metadata(values_json),
+        provenance=(),
+    )
 
 
 def light_view(row: tuple[str, str, str, str] | None) -> LightDocumentView | None:
     if row is None:
         return None
     artifact_id, digest, document_json, _provenance_json = row
-    return LightDocumentView(artifact_id, digest, json_value(document_json), ())
+    return LightDocumentView(
+        artifact_id=AssetId(artifact_id),
+        sha256=Sha256(digest),
+        document=LightDocumentV1.model_validate_json(document_json),
+        provenance=(),
+    )
 
 
 def analysis_view(row: tuple[str, str, str, str, str] | None) -> AnalysisView | None:
@@ -82,7 +103,13 @@ def analysis_view(row: tuple[str, str, str, str, str] | None) -> AnalysisView | 
         return None
     artifact_id, digest, input_digest, proposal_json, _provenance_json = row
     return AnalysisView(
-        artifact_id, digest, "unknown", "unknown", input_digest, json_value(proposal_json), ()
+        artifact_id=AssetId(artifact_id),
+        sha256=Sha256(digest),
+        provider="unknown",
+        model="unknown",
+        input_sha256=Sha256(input_digest),
+        proposal=AnalysisProposalV1.model_validate_json(proposal_json),
+        provenance=(),
     )
 
 
@@ -132,14 +159,16 @@ def reference(payload: str) -> ReferenceView:
     ):
         raise sqlite3.DatabaseError("ReferenceView arrays are invalid")
     authors = tuple(
-        AuthorView(
-            _text(item_fields["display_name"], "display_name"),
-            _optional_text(item_fields["family_name"], "family_name"),
-            _optional_text(item_fields["given_name"], "given_name"),
-            _optional_text(item_fields["orcid"], "orcid"),
-            tuple(_text(value, "affiliation") for value in item_fields["affiliations"])
-            if isinstance(item_fields["affiliations"], tuple)
-            else (),
+        Author(
+            display_name=_text(item_fields["display_name"], "display_name"),
+            family_name=_optional_text(item_fields["family_name"], "family_name"),
+            given_name=_optional_text(item_fields["given_name"], "given_name"),
+            orcid=_optional_text(item_fields["orcid"], "orcid"),
+            affiliations=(
+                tuple(_text(value, "affiliation") for value in item_fields["affiliations"])
+                if isinstance(item_fields["affiliations"], tuple)
+                else ()
+            ),
         )
         for item_fields in (_mapping(item, "author") for item in raw_authors)
     )
@@ -153,24 +182,30 @@ def reference(payload: str) -> ReferenceView:
     year = fields["publication_year"]
     if year is not None and (not isinstance(year, int) or isinstance(year, bool)):
         raise sqlite3.DatabaseError("publication_year must be an integer or null")
+    resolved_work_id = _optional_text(fields["resolved_work_id"], "resolved_work_id")
+    resolved_work_version_id = _optional_text(
+        fields["resolved_work_version_id"], "resolved_work_version_id"
+    )
     return ReferenceView(
-        _text(fields["reference_id"], "reference_id"),
-        _text(fields["raw_text"], "raw_text"),
-        _optional_text(fields["title"], "title"),
-        authors,
-        year,
-        _optional_text(fields["source"], "source"),
-        identifiers,
-        _optional_text(fields["resolved_work_id"], "resolved_work_id"),
-        _optional_text(fields["resolved_work_version_id"], "resolved_work_version_id"),
-        tuple(_locator(item) for item in raw_evidence),
+        reference_id=_text(fields["reference_id"], "reference_id"),
+        raw_text=_text(fields["raw_text"], "raw_text"),
+        title=_optional_text(fields["title"], "title"),
+        authors=authors,
+        publication_year=year,
+        source=_optional_text(fields["source"], "source"),
+        identifiers=identifiers,
+        resolved_work_id=None if resolved_work_id is None else WorkId(resolved_work_id),
+        resolved_work_version_id=None
+        if resolved_work_version_id is None
+        else WorkVersionId(resolved_work_version_id),
+        evidence=tuple(_locator(item) for item in raw_evidence),
     )
 
 
-def extension_fields(payload: str) -> tuple[str, str | None, str | None, CanonicalJsonValue]:
+def extension_fields(payload: str) -> tuple[str, str | None, str | None, CanonicalJsonObject]:
     value = json_value(payload)
     if not isinstance(value, CanonicalJsonObject):
-        return "1", None, None, value
+        return "1", None, None, json.loads(canonical_json_bytes(value))
     fields = dict(value.entries)
     schema, artifact, digest = (
         fields.get("schema_version", "1"),
@@ -181,7 +216,7 @@ def extension_fields(payload: str) -> tuple[str, str | None, str | None, Canonic
         schema if isinstance(schema, str) else "1",
         artifact if isinstance(artifact, str) else None,
         digest if isinstance(digest, str) else None,
-        fields.get("value", value),
+        json.loads(canonical_json_bytes(fields.get("value", value))),
     )
 
 
@@ -189,6 +224,7 @@ __all__ = (
     "analysis_view",
     "extension_fields",
     "json_value",
+    "json_output",
     "light_view",
     "metadata_view",
     "reference",

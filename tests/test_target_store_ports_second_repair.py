@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.bibliography.model import (
+from sciretriever.literature_store.sqlite import (
+    SqliteCurationTransaction,
+    SqliteLiteratureRepository,
+    create_or_open_catalog,
+)
+from sciretriever.model.library import (
+    CurationScope,
     IdentifierMove,
     MembershipMove,
     ObservationMove,
@@ -14,12 +20,6 @@ from sciretriever.bibliography.model import (
     RelationRetarget,
     ValidatedCurationPlan,
 )
-from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
-    SqliteCurationTransaction,
-    create_or_open_catalog,
-)
-from sciretriever.model.library import CurationScope
 from sciretriever.model.primitives import (
     CurationPlanId,
     MembershipId,
@@ -99,29 +99,54 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
         return CurationScope(work_ids=works[:2], work_version_ids=versions[:2])
 
     def plan(self, scope: CurationScope, **changes) -> ValidatedCurationPlan:
-        token = SqliteBibliographyRepository(self.catalog).load_curation_snapshot(scope).token
-        return ValidatedCurationPlan(CurationPlanId(UUIDS[20]), scope, token, **changes)
+        token = SqliteLiteratureRepository(self.catalog).load_curation_snapshot(scope).token
+        return ValidatedCurationPlan(
+            plan_id=CurationPlanId(UUIDS[20]),
+            scope=scope,
+            expected_snapshot=token,
+            **changes,
+        )
 
     def test_each_unscoped_source_family_rejects_without_owner_change(self) -> None:
         scope = self.seed_source_matrix()
         plans = (
             self.plan(
                 scope,
-                observation_moves=(ObservationMove(ObservationId(UUIDS[8]), self.versions[0]),),
+                observation_moves=(
+                    ObservationMove(
+                        observation_id=ObservationId(UUIDS[8]),
+                        target_version_id=self.versions[0],
+                    ),
+                ),
             ),
             self.plan(
                 scope,
-                identifier_moves=(IdentifierMove(StableIdentifierId(UUIDS[9]), self.versions[0]),),
+                identifier_moves=(
+                    IdentifierMove(
+                        identifier_id=StableIdentifierId(UUIDS[9]),
+                        target_version_id=self.versions[0],
+                    ),
+                ),
             ),
             self.plan(
                 scope,
-                membership_moves=(MembershipMove(MembershipId(UUIDS[12]), self.works[0], None),),
+                membership_moves=(
+                    MembershipMove(
+                        membership_id=MembershipId(UUIDS[12]),
+                        target_work_id=self.works[0],
+                        coalesce_membership_id=None,
+                    ),
+                ),
             ),
             self.plan(
                 scope,
                 reference_retargets=(
                     ReferenceRetarget(
-                        ReferenceFactId(UUIDS[14]), self.works[0], self.versions[0], None, None
+                        reference_id=ReferenceFactId(UUIDS[14]),
+                        target_work_id=self.works[0],
+                        target_version_id=self.versions[0],
+                        downgrade_raw_text=None,
+                        downgrade_reference_json=None,
                     ),
                 ),
             ),
@@ -129,7 +154,9 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
                 scope,
                 relation_retargets=(
                     RelationRetarget(
-                        VersionRelationId(UUIDS[15]), self.versions[0], self.versions[1]
+                        relation_id=VersionRelationId(UUIDS[15]),
+                        left_version_id=self.versions[0],
+                        right_version_id=self.versions[1],
                     ),
                 ),
             ),
@@ -184,7 +211,7 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
 
     def test_artifact_and_raw_asset_mutations_each_stale_snapshot(self) -> None:
         scope = self.seed_accepted_asset()
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         original = repository.load_curation_snapshot(scope).token
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
@@ -220,11 +247,11 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
             scope,
             reference_retargets=(
                 ReferenceRetarget(
-                    ReferenceFactId(UUIDS[14]),
-                    self.works[0],
-                    self.versions[1],
-                    None,
-                    None,
+                    reference_id=ReferenceFactId(UUIDS[14]),
+                    target_work_id=self.works[0],
+                    target_version_id=self.versions[1],
+                    downgrade_raw_text=None,
+                    downgrade_reference_json=None,
                 ),
             ),
         )
@@ -234,11 +261,11 @@ class TargetStorePortSecondRepairTests(unittest.TestCase):
             scope,
             reference_retargets=(
                 ReferenceRetarget(
-                    ReferenceFactId(UUIDS[14]),
-                    self.works[1],
-                    self.versions[1],
-                    None,
-                    None,
+                    reference_id=ReferenceFactId(UUIDS[14]),
+                    target_work_id=self.works[1],
+                    target_version_id=self.versions[1],
+                    downgrade_raw_text=None,
+                    downgrade_reference_json=None,
                 ),
             ),
         )

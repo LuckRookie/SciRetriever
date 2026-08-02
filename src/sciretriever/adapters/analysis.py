@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -7,15 +8,17 @@ from typing import Protocol
 import anthropic
 import openai
 
+import sciretriever.model.llm as llm_models
 from sciretriever.content.api import (
     AnalysisBounds,
-    AnalysisProposalV1,
     AnalysisValidationError,
-    LightDocumentV1,
     analysis_json_schema,
     validate_analysis_input,
     validate_analysis_text,
 )
+from sciretriever.model.analysis import AnalysisProposalV1
+from sciretriever.model.documents import LightDocumentV1
+from sciretriever.model.primitives import sha256_digest
 
 
 class _OpenAIMessage(Protocol):
@@ -175,9 +178,9 @@ def _bounds(config: AnalysisAdapterSettings) -> AnalysisBounds:
     )
 
 
-def _input(document: LightDocumentV1, config: AnalysisAdapterSettings) -> str:
+def _input(request: llm_models.LLMRequest, config: AnalysisAdapterSettings) -> str:
     try:
-        return validate_analysis_input(document, _bounds(config))
+        return validate_analysis_input(request.document, _bounds(config))
     except AnalysisValidationError as error:
         raise AnalysisAdapterError(error.code) from None
 
@@ -193,6 +196,26 @@ def _proposal(
         raise AnalysisAdapterError(error.code) from None
 
 
+def _provenance(
+    provider: str, request: llm_models.LLMRequest, source: str
+) -> llm_models.LLMProvenance:
+    parameters = json.dumps(
+        {
+            "max_output_tokens": request.max_output_tokens,
+            "model": request.model,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return llm_models.LLMProvenance(
+        provider=provider,
+        model=request.model,
+        input_sha256=sha256_digest(source.encode("ascii")),
+        parameters_sha256=sha256_digest(parameters),
+    )
+
+
 class OpenAIAnalysisAdapter:
     def __init__(
         self,
@@ -204,8 +227,8 @@ class OpenAIAnalysisAdapter:
         self._secret = secret
         self._factory: _OpenAIFactory = client_factory or _openai_factory
 
-    def analyze(self, document: LightDocumentV1) -> AnalysisProposalV1:
-        source = _input(document, self._config)
+    def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
+        source = _input(request, self._config)
         try:
             client = self._factory(
                 api_key=self._secret,
@@ -214,7 +237,7 @@ class OpenAIAnalysisAdapter:
                 max_retries=0,
             )
             response = client.chat.completions.create(
-                model=self._config.model,
+                model=request.model,
                 messages=(
                     {
                         "role": "system",
@@ -233,14 +256,14 @@ class OpenAIAnalysisAdapter:
                         "strict": True,
                     },
                 },
-                max_completion_tokens=self._config.max_output_tokens,
+                max_completion_tokens=request.max_output_tokens,
             )
         except NotImplementedError:
             raise AnalysisAdapterError("capability_unavailable") from None
         except (openai.APIError, OSError, TimeoutError):
             raise AnalysisAdapterError("analysis_provider_error") from None
         try:
-            if response.model != self._config.model:
+            if response.model != request.model:
                 raise AnalysisAdapterError("analysis_model_mismatch")
             if len(response.choices) != 1:
                 raise AnalysisAdapterError("analysis_unknown_response")
@@ -258,7 +281,10 @@ class OpenAIAnalysisAdapter:
                 raise AnalysisAdapterError("analysis_invalid_content")
         except (AttributeError, IndexError, TypeError):
             raise AnalysisAdapterError("analysis_unknown_response") from None
-        return _proposal(content, document, self._config)
+        return llm_models.LLMStructuredResponse(
+            proposal=_proposal(content, request.document, self._config),
+            provenance=_provenance("openai", request, source),
+        )
 
 
 class AnthropicAnalysisAdapter:
@@ -272,8 +298,8 @@ class AnthropicAnalysisAdapter:
         self._secret = secret
         self._factory: _AnthropicFactory = client_factory or _anthropic_factory
 
-    def analyze(self, document: LightDocumentV1) -> AnalysisProposalV1:
-        source = _input(document, self._config)
+    def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
+        source = _input(request, self._config)
         try:
             client = self._factory(
                 api_key=self._secret,
@@ -282,8 +308,8 @@ class AnthropicAnalysisAdapter:
                 max_retries=0,
             )
             response = client.messages.create(
-                model=self._config.model,
-                max_tokens=self._config.max_output_tokens,
+                model=request.model,
+                max_tokens=request.max_output_tokens,
                 messages=({"role": "user", "content": source},),
                 output_config={"format": {"type": "json_schema", "schema": analysis_json_schema()}},
             )
@@ -292,7 +318,7 @@ class AnthropicAnalysisAdapter:
         except (anthropic.APIError, OSError, TimeoutError):
             raise AnalysisAdapterError("analysis_provider_error") from None
         try:
-            if response.model != self._config.model:
+            if response.model != request.model:
                 raise AnalysisAdapterError("analysis_model_mismatch")
             if response.stop_reason == "refusal":
                 raise AnalysisAdapterError("analysis_refused")
@@ -312,7 +338,10 @@ class AnthropicAnalysisAdapter:
             text = block.text
         except (AttributeError, IndexError, TypeError):
             raise AnalysisAdapterError("analysis_unknown_response") from None
-        return _proposal(text, document, self._config)
+        return llm_models.LLMStructuredResponse(
+            proposal=_proposal(text, request.document, self._config),
+            provenance=_provenance("anthropic", request, source),
+        )
 
 
 __all__ = (

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.bibliography.api import ValidatedCurationPlan
+from sciretriever.model.library import ValidatedCurationPlan
 from sciretriever.model.primitives import WorkId
 
 

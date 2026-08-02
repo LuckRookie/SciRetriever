@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import ast
+import importlib
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import ModuleType
 
-from sciretriever.bibliography.curation import CurationService
-from sciretriever.bibliography.model import CurationPlanError
+from sciretriever.core.literature.curation import CurationPlanError
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
     SqliteCurationTransaction,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
@@ -20,8 +22,79 @@ from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
 )
+from sciretriever.services.literature.api import CurationService
 
 UUIDS = tuple(f"d0000000-0000-4000-8000-{value:012d}" for value in range(1, 60))
+
+
+def _optional_module(name: str) -> ModuleType | None:
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError:
+        return None
+
+
+def _assert_not_exported(
+    test_case: unittest.TestCase, module: ModuleType | None, names: tuple[str, ...]
+) -> None:
+    if module is None:
+        return
+    exported = getattr(module, "__all__", ())
+    for name in names:
+        test_case.assertNotIn(name, vars(module))
+        test_case.assertNotIn(name, exported)
+
+
+def _assert_model_contract_ownership(
+    test_case: unittest.TestCase, contract_names: tuple[str, ...]
+) -> None:
+    target_module = importlib.import_module("sciretriever.model.library")
+    legacy_module = _optional_module("sciretriever.bibliography.model")
+    for name in contract_names:
+        if not hasattr(target_module, name):
+            test_case.fail(f"target Model is missing migrated contract {name}")
+        target = getattr(target_module, name)
+        test_case.assertEqual(target.__module__, target_module.__name__)
+        if legacy_module is not None:
+            test_case.assertNotIn(name, legacy_module.__dict__)
+    for facade_name in (
+        "sciretriever.bibliography",
+        "sciretriever.bibliography.api",
+        "sciretriever.bibliography.curation",
+    ):
+        _assert_not_exported(test_case, _optional_module(facade_name), contract_names)
+    if legacy_module is None:
+        return
+    legacy_file = legacy_module.__file__
+    test_case.assertIsNotNone(legacy_file)
+    assert legacy_file is not None
+    legacy_path = Path(legacy_file)
+    legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
+    legacy_definitions = {
+        node.name
+        for node in ast.walk(legacy_tree)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    test_case.assertTrue(legacy_definitions.isdisjoint(contract_names))
+
+
+def _assert_core_factory_ownership(
+    test_case: unittest.TestCase, factory_names: tuple[str, ...]
+) -> None:
+    try:
+        core_module = importlib.import_module("sciretriever.core.literature.curation")
+    except ModuleNotFoundError as error:
+        test_case.fail(f"target Core curation module is absent: {error.name}")
+    legacy_plans = _optional_module("sciretriever.bibliography.curation_plans")
+    for name in factory_names:
+        if not hasattr(core_module, name):
+            test_case.fail(f"target Core is missing migrated plan factory {name}")
+        factory = getattr(core_module, name)
+        test_case.assertEqual(factory.__module__, core_module.__name__)
+        if legacy_plans is not None:
+            test_case.assertNotIn(name, legacy_plans.__dict__)
+    for facade_name in ("sciretriever.bibliography.api", "sciretriever.bibliography.curation"):
+        _assert_not_exported(test_case, _optional_module(facade_name), factory_names)
 
 
 class TargetCurationTests(unittest.TestCase):
@@ -40,9 +113,36 @@ class TargetCurationTests(unittest.TestCase):
 
     def service(self, checkpoint=None) -> CurationService:
         return CurationService(
-            SqliteBibliographyRepository(self.catalog),
+            SqliteLiteratureRepository(self.catalog),
             SqliteCurationTransaction(self.catalog, checkpoint),
             lambda: self.bound.port.acquire_core_write(self.bound.identity),
+        )
+
+    def test_curation_contracts_and_plan_factories_have_target_ownership(self) -> None:
+        _assert_model_contract_ownership(
+            self,
+            (
+                "VersionMove",
+                "ObservationMove",
+                "IdentifierMove",
+                "MembershipMove",
+                "ReferenceRetarget",
+                "RelationRetarget",
+                "RelationDelete",
+                "RepresentativeUpdate",
+                "ValidatedVersionRelation",
+                "ValidatedCurationPlan",
+            ),
+        )
+        _assert_core_factory_ownership(
+            self,
+            (
+                "same_version_plan",
+                "related_versions_plan",
+                "distinct_plan",
+                "delete_version_plan",
+                "delete_work_plan",
+            ),
         )
 
     def seed(self) -> tuple[WorkId, WorkVersionId, WorkId, WorkVersionId, WorkVersionId]:
@@ -442,13 +542,13 @@ class TargetCurationTests(unittest.TestCase):
                 old = self.topology()
                 script = f"""
 import os
-from sciretriever.bibliography.curation import CurationService
 from sciretriever.model.primitives import WorkVersionId
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     SqliteCurationTransaction,
 )
+from sciretriever.services.literature.api import CurationService
 catalog = {str(self.catalog)!r}
 factory = LocalAdmissionBindingFactory()
 bound = factory.bind_catalog(catalog)
@@ -456,7 +556,7 @@ def crash(name):
     if name == {checkpoint!r}:
         os._exit(91)
 service = CurationService(
-    SqliteBibliographyRepository(catalog),
+    SqliteLiteratureRepository(catalog),
     SqliteCurationTransaction(catalog, crash),
     lambda: bound.port.acquire_core_write(bound.identity),
 )

@@ -6,12 +6,21 @@ from io import BytesIO
 
 from PyPDF2 import PdfWriter
 
-from sciretriever.adapters.mineru import MinerUTaskState, MinerUTaskView
 from sciretriever.content.light_document import ManifestBlock
 from sciretriever.kernel.json import CanonicalJsonInput
-from sciretriever.model.primitives import AssetId
+from sciretriever.model.parsing import ParserRequest, ParserTask, ParserTaskState
+from sciretriever.model.primitives import AssetId, sha256_digest
 
 ASSET_ID = AssetId("00000000-0000-0000-0000-000000000101")
+
+
+def parser_request(pdf: bytes, resume_task_id: str | None = None) -> ParserRequest:
+    return ParserRequest(
+        pdf=pdf,
+        asset_id=ASSET_ID,
+        asset_sha256=sha256_digest(pdf),
+        resume_task_id=resume_task_id,
+    )
 
 
 def manifest_blocks() -> tuple[ManifestBlock, ...]:
@@ -127,7 +136,11 @@ class TaskBoundaryService:
     def submit(self, pdf: bytes) -> str:
         return self.invalid_id if self.boundary == "submit" else "valid-task"
 
-    def poll(self, task_id: str) -> MinerUTaskView:
+    def poll(self, task_id: str) -> ParserTask:
         self.polls += 1
         returned = self.invalid_id if self.boundary == "poll" else task_id
-        return MinerUTaskView(returned, MinerUTaskState.COMPLETED, archive_bytes())
+        return ParserTask(
+            task_id=returned,
+            state=ParserTaskState.COMPLETED,
+            archive=archive_bytes(),
+        )

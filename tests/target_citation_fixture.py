@@ -8,8 +8,6 @@ from tempfile import TemporaryDirectory
 
 from test_target_collection import FakeMetadataPort, observation
 
-from sciretriever.collection.api import TopicConditions
-from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
 from sciretriever.collection.service import (
     CitationSource,
     CollectionService,
@@ -19,10 +17,11 @@ from sciretriever.collection.service import (
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
-    SqliteBibliographyRepository,
     SqliteCollectionRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
+from sciretriever.model.collection import TopicConditions
 from sciretriever.model.literature import (
     BibliographicObservation,
     Identifier,
@@ -44,6 +43,7 @@ from sciretriever.model.sources import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.literature.api import LiteratureService
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +79,7 @@ class FakeCitationPort:
 
 @dataclass(frozen=True, slots=True)
 class FixedCandidateBibliography:
-    delegate: InitialBibliographyIngestion
+    delegate: LiteratureService
     candidates: IdentityCandidateSet
 
     def prepare_discovery(
@@ -107,7 +107,7 @@ class CitationCollectionTestCase(unittest.TestCase):
         with create_or_open_catalog(self.catalog):
             pass
         self.collections = SqliteCollectionRepository(self.catalog)
-        self.bibliography = InitialBibliographyIngestion(SqliteBibliographyRepository(self.catalog))
+        self.bibliography = LiteratureService(SqliteLiteratureRepository(self.catalog))
         self.bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
 
     def service(self, citation_sources: tuple[CitationSource, ...] = ()) -> CollectionService:
@@ -147,9 +147,9 @@ class CitationCollectionTestCase(unittest.TestCase):
                 (),
             )
         )
-        definition = service.create(f"seed-{doi}", None, TopicConditions(doi))
+        definition = service.create(f"seed-{doi}", None, TopicConditions(query=doi))
         service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         candidate = repository.find_identity_candidates(
             IdentityCandidateQuery(identifiers=(Identifier(namespace="doi", value=doi),)),
         ).candidates[0]

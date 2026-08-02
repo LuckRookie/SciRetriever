@@ -3,20 +3,19 @@ from __future__ import annotations
 import json
 from typing import assert_never
 
-from sciretriever.content.light_models import (
+from sciretriever.kernel.json import JsonOutput
+from sciretriever.model.documents import (
     Block,
+    EvidenceText,
     FigureCaptionBlock,
     FormulaBlock,
     LightDocumentV1,
     ListBlock,
     ParagraphBlock,
+    ReferenceView,
     Section,
-    TableBlock,
-)
-from sciretriever.kernel.json import JsonOutput
-from sciretriever.model.documents import (
-    EvidenceText,
     SourceLocator,
+    TableBlock,
 )
 from sciretriever.model.sources import Provenance
 
@@ -144,7 +143,7 @@ def document_value(value: LightDocumentV1) -> JsonOutput:
     )
 
 
-def reference_to_json(value) -> str:
+def reference_to_json(value: ReferenceView) -> str:
     payload = {
         "reference_id": value.reference_id,
         "raw_text": value.raw_text,

@@ -7,6 +7,7 @@ from target_analysis_support import (
     AnthropicClient,
     OpenAIClient,
     adapter_settings,
+    analysis_request,
     complete_document,
     openai_adapter,
     proposal_value,
@@ -18,7 +19,7 @@ from sciretriever.adapters.analysis import (
     AnthropicAnalysisAdapter,
     OpenAIAnalysisAdapter,
 )
-from sciretriever.content.analysis import analysis_json_schema
+from sciretriever.content.analysis import analysis_bytes, analysis_json_schema
 from sciretriever.kernel.json import CanonicalJsonInput
 
 
@@ -51,10 +52,12 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             return client
 
         proposal = OpenAIAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(
-            complete_document()
+            analysis_request(complete_document())
         )
 
-        self.assertEqual(proposal.schema_version, "1")
+        self.assertEqual(proposal.proposal.schema_version, "1")
+        self.assertEqual(proposal.provenance.provider, "openai")
+        self.assertEqual(proposal.provenance.model, "exact-model")
         self.assertEqual(
             created,
             {
@@ -104,14 +107,16 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             self.config(),
             "runtime-secret",
             openai_factory,
-        ).analyze(complete_document())
+        ).analyze(analysis_request(complete_document()))
         anthropic_proposal = AnthropicAnalysisAdapter(
             self.config(),
             "runtime-secret",
             anthropic_factory,
-        ).analyze(complete_document())
+        ).analyze(analysis_request(complete_document()))
 
-        self.assertEqual(openai_proposal.canonical_bytes(), anthropic_proposal.canonical_bytes())
+        self.assertEqual(
+            analysis_bytes(openai_proposal.proposal), analysis_bytes(anthropic_proposal.proposal)
+        )
         self.assertEqual(created["max_retries"], 0)
         assert client.kwargs is not None
         self.assertEqual(client.kwargs["max_tokens"], 321)
@@ -137,7 +142,9 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             base.max_source_units,
         )
         with self.assertRaisesRegex(AnalysisAdapterError, "analysis_input_too_large"):
-            OpenAIAnalysisAdapter(config, "runtime-secret", factory).analyze(complete_document())
+            OpenAIAnalysisAdapter(config, "runtime-secret", factory).analyze(
+                analysis_request(complete_document())
+            )
         self.assertEqual(calls, 0)
 
     def test_response_and_proposal_failures_have_distinct_sanitized_codes(self) -> None:
@@ -223,7 +230,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
 
             with self.subTest(code=code), self.assertRaises(AnalysisAdapterError) as raised:
                 OpenAIAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(
-                    complete_document()
+                    analysis_request(complete_document())
                 )
             self.assertEqual(raised.exception.code, code)
             self.assertNotIn("secret", str(raised.exception))
@@ -263,7 +270,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
 
             with self.subTest(code=code), self.assertRaises(AnalysisAdapterError) as raised:
                 OpenAIAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(
-                    complete_document()
+                    analysis_request(complete_document())
                 )
             self.assertEqual(raised.exception.code, code)
 
@@ -328,15 +335,15 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
         cases.append(blank_block)
         for value in cases:
             with self.subTest(value=value), self.assertRaises(AnalysisAdapterError) as raised:
-                openai_adapter(value).analyze(complete_document())
+                openai_adapter(value).analyze(analysis_request(complete_document()))
             self.assertEqual(raised.exception.code, "analysis_invalid_output")
 
         preserved = proposal_value()
         metadata = preserved["final_bibliography"]
         assert isinstance(metadata, dict)
         metadata["abstract"] = "  retained  "
-        proposal = openai_adapter(preserved).analyze(complete_document())
-        self.assertEqual(proposal.final_bibliography.abstract, "  retained  ")
+        proposal = openai_adapter(preserved).analyze(analysis_request(complete_document()))
+        self.assertEqual(proposal.proposal.final_bibliography.abstract, "  retained  ")
 
     def test_client_constructor_failures_are_stable_for_both_providers(self) -> None:
         def openai_factory(
@@ -358,7 +365,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
                 self.subTest(adapter=type(adapter).__name__),
                 self.assertRaises(AnalysisAdapterError) as raised,
             ):
-                adapter.analyze(complete_document())
+                adapter.analyze(analysis_request(complete_document()))
             self.assertEqual(str(raised.exception), "analysis_provider_error")
             self.assertNotIn("runtime-secret", str(raised.exception))
 
@@ -382,14 +389,14 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
 
         with self.assertRaises(AnalysisAdapterError) as raised:
             OpenAIAnalysisAdapter(self.config(), "runtime-secret", capability_factory).analyze(
-                complete_document()
+                analysis_request(complete_document())
             )
         self.assertEqual(str(raised.exception), "capability_unavailable")
 
         client.create = lambda **kwargs: (_ for _ in ()).throw(OSError("secret endpoint"))
         with self.assertRaises(AnalysisAdapterError) as raised:
             OpenAIAnalysisAdapter(self.config(), "runtime-secret", capability_factory).analyze(
-                complete_document()
+                analysis_request(complete_document())
             )
         self.assertEqual(str(raised.exception), "analysis_provider_error")
 
@@ -406,7 +413,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
                 self.config(),
                 "runtime-secret",
                 anthropic_factory,
-            ).analyze(complete_document())
+            ).analyze(analysis_request(complete_document()))
         self.assertEqual(str(raised.exception), "analysis_provider_error")
 
     def test_anthropic_rejects_truncation_refusal_tool_and_multiple_blocks(self) -> None:
@@ -440,7 +447,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
 
             with self.subTest(code=code), self.assertRaises(AnalysisAdapterError) as raised:
                 AnthropicAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(
-                    complete_document()
+                    analysis_request(complete_document())
                 )
             self.assertEqual(raised.exception.code, code)
             self.assertNotIn("secret", str(raised.exception))
@@ -466,7 +473,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
                 self.config(),
                 "runtime-secret",
                 factory,
-            ).analyze(complete_document())
+            ).analyze(analysis_request(complete_document()))
         self.assertEqual(raised.exception.code, "analysis_refused")
 
 

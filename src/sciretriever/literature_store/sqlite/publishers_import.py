@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from sciretriever.batching.api import ImportAcceptanceCommand
-from sciretriever.bibliography.api import ReferenceSetFact, TagSetFact
-from sciretriever.kernel import BoundaryError, canonical_json_bytes
+from sciretriever.core.execution import (
+    ExecutionRejectedError,
+    canonical_import_record_projection,
+    validate_import_acceptance_command,
+)
+from sciretriever.kernel import canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
     StalePublicationError,
     StatementFailpoint,
@@ -13,6 +16,8 @@ from sciretriever.literature_store.sqlite.publisher_support import (
     immediate,
     publish_bibliography,
 )
+from sciretriever.model.execution import ImportAcceptanceCommand
+from sciretriever.model.literature import ReferenceSetFact, TagSetFact
 
 
 def _references(connection, point: StatementFailpoint, fact: ReferenceSetFact) -> None:
@@ -61,21 +66,10 @@ class ImportAcceptancePublisher:
         self._failpoint = failpoint
 
     def publish(self, command: ImportAcceptanceCommand) -> None:
-        expected = command.bibliography.work_version_id
-        if any(
-            value != expected
-            for value in (
-                command.references.work_version_id,
-                command.tags.work_version_id,
-                command.record.work_version_id,
-            )
-        ):
-            raise StalePublicationError("import acceptance identities differ")
         try:
-            result_json = canonical_json_bytes(command.record.result_envelope().canonical()).decode(
-                "ascii"
-            )
-        except BoundaryError as error:
+            validate_import_acceptance_command(command)
+            result_json = canonical_import_record_projection(command.record).decode("ascii")
+        except ExecutionRejectedError as error:
             raise StalePublicationError("import result envelope is invalid") from error
         point = StatementFailpoint(self._failpoint)
         with immediate(self._catalog_path) as connection:

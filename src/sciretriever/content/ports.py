@@ -4,28 +4,20 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
-from sciretriever.content.model import (
-    AcceptedPrimaryPdf,
-    AnalysisProposalV1,
-    AssetCandidate,
-    BoundedByteStream,
-    ContentTarget,
-    Header,
-    LightDocumentManifest,
-    ParserResult,
-    PublishedArtifact,
-    StagedArtifact,
-    TransportRequest,
-    TransportResponse,
-)
+import sciretriever.model.access as access_models
+import sciretriever.model.assets as asset_models
+import sciretriever.model.llm as llm_models
+import sciretriever.model.parsing as parsing_models
 
 
 class AssetResolverPort(Protocol):
-    def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]: ...
+    def resolve(
+        self, target: asset_models.ContentTarget
+    ) -> tuple[asset_models.AssetCandidate, ...]: ...
 
 
 class AssetFetcherPort(Protocol):
-    def fetch(self, candidate: AssetCandidate) -> BoundedByteStream: ...
+    def fetch(self, candidate: asset_models.AssetCandidate) -> access_models.BoundedByteStream: ...
 
 
 class CandidateRaceExhausted(Exception):
@@ -67,9 +59,9 @@ class RaceToken:
 class CancellableAssetFetcherPort(Protocol):
     def fetch_cancellable(
         self,
-        candidate: AssetCandidate,
+        candidate: asset_models.AssetCandidate,
         token: RaceToken,
-    ) -> BoundedByteStream: ...
+    ) -> access_models.BoundedByteStream: ...
 
 
 ResultT = TypeVar("ResultT")
@@ -89,38 +81,34 @@ class CandidateRacePort(Protocol, Generic[ResultT]):
 
 
 class ParserPort(Protocol):
-    def parse(self, primary_pdf: AcceptedPrimaryPdf) -> ParserResult: ...
+    def parse(self, request: parsing_models.ParserRequest) -> parsing_models.ParserResult: ...
 
 
 class AnalysisModelPort(Protocol):
-    def analyze(self, document: LightDocumentManifest) -> AnalysisProposalV1: ...
+    def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse: ...
 
 
 class BoundedTransportPort(Protocol):
-    def execute(self, request: TransportRequest) -> TransportResponse: ...
+    def execute(
+        self, request: access_models.TransportRequest
+    ) -> access_models.TransportResponse: ...
 
 
 class ArtifactStorePort(Protocol):
-    def publish(self, artifact: StagedArtifact) -> PublishedArtifact: ...
+    def publish(self, artifact: asset_models.StagedArtifact) -> asset_models.PublishedArtifact: ...
 
 
 __all__ = (
     "AnalysisModelPort",
     "ArtifactStorePort",
-    "AssetCandidate",
     "AssetFetcherPort",
     "AssetResolverPort",
-    "BoundedByteStream",
     "BoundedTransportPort",
-    "ContentTarget",
     "CandidateRaceExhausted",
     "CandidateRacePort",
     "CancellableAssetFetcherPort",
-    "Header",
     "InvalidRaceDeadline",
     "ParserPort",
     "RaceCallable",
     "RaceToken",
-    "TransportRequest",
-    "TransportResponse",
 )

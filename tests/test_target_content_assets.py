@@ -21,24 +21,21 @@ from target_content_assets_support import (
 )
 
 from sciretriever.adapters.acquisition import CandidateRace
-from sciretriever.batching.api import (
-    TargetProjection,
-    TargetResult,
-)
 from sciretriever.content.assets import (
     AssetAcceptancePolicy,
-    ContentAssetFailure,
-    ContentAssetReplay,
     ContentAssetService,
-    ContentAssetSuccess,
     ResolverTier,
-)
-from sciretriever.content.model import (
-    AcceptedContentReference,
-    BoundedByteStream,
 )
 from sciretriever.content.ports import ArtifactStorePort
 from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.access import BoundedByteStream
+from sciretriever.model.assets import (
+    AcceptedContentReference,
+    ContentAssetFailure,
+    ContentAssetReplay,
+    ContentAssetSuccess,
+)
+from sciretriever.model.execution import TargetProjection, TargetResult
 from sciretriever.model.primitives import (
     AssetId,
     AssetRole,
@@ -55,11 +52,20 @@ class TargetContentAssetTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.events: list[str] = []
         self.projection = TargetProjection(
-            BatchRunId(UUID_B),
-            WorkVersionId(UUID_A),
-            TargetResult.PARTIALLY_ADVANCED,
-            CanonicalJsonObject(()),
-            (),
+            batch_run_id=BatchRunId(UUID_B),
+            work_version_id=WorkVersionId(UUID_A),
+            result=TargetResult(
+                subject_type="work-version",
+                subject_id=UUID_A,
+                outcome="partially-advanced",
+                initial_state="unreviewed",
+                target_state="asset-ready",
+                final_state="asset-ready",
+                stage="asset",
+                failure=None,
+            ),
+            details=CanonicalJsonObject(()),
+            failure_stages_to_clear=(),
         )
         self.publisher = RecordingPublisher(self.events, self.projection)
 
@@ -147,7 +153,11 @@ class TargetContentAssetTests(unittest.TestCase):
 
     def test_exact_existing_primary_replays_and_different_bytes_cannot_replace(self) -> None:
         body = pdf()
-        current = AcceptedContentReference(AssetId(UUID_B), sha256_digest(body), 1)
+        current = AcceptedContentReference(
+            content_id=AssetId(UUID_B),
+            sha256=sha256_digest(body),
+            revision=1,
+        )
         item = candidate("same")
         service = self.service(
             (ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)}

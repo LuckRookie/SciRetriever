@@ -2,29 +2,30 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.bibliography.api import (
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
+from sciretriever.kernel import (
+    CanonicalJsonObject,
+    canonical_json_bytes,
+)
+from sciretriever.model.literature import (
     CompletionAnalysisFact,
     CompletionProvenance,
     CompletionSubmission,
     FinalMetadataFact,
     ReferenceSetFact,
-    ReferenceSetId,
     TagSetFact,
-    TagSetId,
-    metadata_snapshot_sha256,
+    VersionFacts,
+    WorkFacts,
 )
-from sciretriever.kernel import (
-    CanonicalJsonObject,
-    canonical_json_bytes,
-)
-from sciretriever.model.literature import VersionFacts, WorkFacts
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
     AssetId,
     LightDocumentId,
     MetadataSnapshotId,
+    ReferenceSetId,
     RelativeArtifactPath,
     Sha256,
+    TagSetId,
     WorkId,
     WorkVersionAssetId,
     WorkVersionId,
@@ -87,50 +88,52 @@ def submission() -> CompletionSubmission:
     values = CanonicalJsonObject((("title", "final"),))
     provenance_value = CanonicalJsonObject(())
     return CompletionSubmission(
-        VERSION_ID,
-        LIGHT_ID,
-        LIGHT_HASH,
-        CompletionAnalysisFact(
-            VERSION_ID,
-            LIGHT_ID,
-            LIGHT_HASH,
-            ANALYSIS_ID,
-            AssetId("50000000-0000-0000-0000-000000000002"),
-            RelativeArtifactPath(f"analysis/{str(proposal_hash)[:2]}/{proposal_hash}"),
-            proposal_hash,
-            len(proposal_bytes),
-            proposal,
+        work_version_id=VERSION_ID,
+        light_document_id=LIGHT_ID,
+        light_document_sha256=LIGHT_HASH,
+        analysis=CompletionAnalysisFact(
+            work_version_id=VERSION_ID,
+            light_document_id=LIGHT_ID,
+            input_sha256=LIGHT_HASH,
+            analysis_id=ANALYSIS_ID,
+            artifact_id=AssetId("50000000-0000-0000-0000-000000000002"),
+            artifact_path=RelativeArtifactPath(
+                f"analysis/{str(proposal_hash)[:2]}/{proposal_hash}"
+            ),
+            artifact_sha256=proposal_hash,
+            artifact_size=len(proposal_bytes),
+            proposal=proposal,
         ),
-        FinalMetadataFact(
-            VERSION_ID,
-            METADATA_ID,
-            1,
-            METADATA_HASH,
-            MetadataSnapshotId("60000000-0000-0000-0000-000000000002"),
-            2,
-            metadata_snapshot_sha256(2, values, provenance_value),
-            values,
-            provenance_value,
+        metadata=FinalMetadataFact(
+            work_version_id=VERSION_ID,
+            expected_snapshot_id=METADATA_ID,
+            expected_revision=1,
+            expected_sha256=METADATA_HASH,
+            snapshot_id=MetadataSnapshotId("60000000-0000-0000-0000-000000000002"),
+            revision=2,
+            sha256=metadata_snapshot_sha256(2, values, provenance_value),
+            values=values,
+            provenance=provenance_value,
         ),
-        ReferenceSetFact(
-            ReferenceSetId("70000000-0000-0000-0000-000000000001"),
-            VERSION_ID,
-            2,
-            (),
+        references=ReferenceSetFact(
+            set_id=ReferenceSetId("70000000-0000-0000-0000-000000000001"),
+            work_version_id=VERSION_ID,
+            revision=2,
+            members=(),
         ),
-        TagSetFact(
-            TagSetId("80000000-0000-0000-0000-000000000001"),
-            VERSION_ID,
-            2,
-            (),
+        tags=TagSetFact(
+            set_id=TagSetId("80000000-0000-0000-0000-000000000001"),
+            work_version_id=VERSION_ID,
+            revision=2,
+            members=(),
         ),
-        CompletionProvenance(
-            "parser@1",
-            "provider",
-            "model@1",
-            LIGHT_HASH,
-            Sha256("4" * 64),
-            provenance_value,
+        provenance=CompletionProvenance(
+            parser_identity="parser@1",
+            model_provider="provider",
+            model_identity="model@1",
+            input_sha256=LIGHT_HASH,
+            parameters_sha256=Sha256("4" * 64),
+            evidence=provenance_value,
         ),
     )
 

@@ -8,9 +8,9 @@ from test_target_bibliography_identity import (
     observation,
 )
 
-from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.literature_store.sqlite import create_or_open_catalog
 from sciretriever.model.literature import Identifier, InitialMetadata
+from sciretriever.services.literature.api import prepare_initial_ingest
 
 
 class TargetBibliographyIdentityRepairTests(TargetBibliographyIdentityTests):

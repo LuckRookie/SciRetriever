@@ -1,91 +1,43 @@
 from sciretriever.content.analysis import (
     AnalysisBounds,
-    AnalysisProposalV1,
     AnalysisValidationError,
+    analysis_bytes,
     analysis_json_schema,
     validate_analysis_input,
     validate_analysis_text,
 )
+from sciretriever.content.assets import (
+    AssetAcceptancePolicy,
+    ContentAssetService,
+    ResolverTier,
+)
 from sciretriever.content.light_document import (
     LightDocumentBounds,
     LightDocumentError,
-    LightDocumentV1,
     ManifestBlock,
     validate_light_document,
-)
-from sciretriever.content.light_models import (
-    Author,
-    FigureCaptionBlock,
-    FormulaBlock,
-    ListBlock,
-    ParagraphBlock,
-    ReferenceView,
-    Section,
-    TableBlock,
 )
 from sciretriever.content.light_service import (
     LightDocumentPublication,
     LightDocumentService,
-    LightPublicationTarget,
     ParserIdentity,
-)
-from sciretriever.content.model import ArtifactKind, PublishedArtifact, StagedArtifact
-from sciretriever.content.ports import ArtifactStorePort
-from sciretriever.content.publisher_contracts import (
-    ContentAcceptance,
-    LightDocumentAcceptance,
-    PrimaryPdfAcceptance,
-    SupplementaryAssetAcceptance,
 )
 
 __all__ = (
-    "ArtifactKind",
-    "ArtifactStorePort",
     "AssetAcceptancePolicy",
     "AnalysisBounds",
-    "AnalysisProposalV1",
     "AnalysisValidationError",
-    "CandidateEvidence",
-    "ContentAssetFailure",
-    "ContentAssetReplay",
-    "ContentAssetResult",
+    "analysis_bytes",
     "ContentAssetService",
-    "ContentAssetSuccess",
-    "ContentAcceptance",
-    "LightDocumentAcceptance",
     "LightDocumentBounds",
     "LightDocumentError",
     "LightDocumentPublication",
     "LightDocumentService",
-    "LightDocumentV1",
     "ManifestBlock",
-    "LightPublicationTarget",
     "ParserIdentity",
-    "Author",
-    "FigureCaptionBlock",
-    "FormulaBlock",
-    "ListBlock",
-    "ParagraphBlock",
-    "ReferenceView",
-    "Section",
-    "TableBlock",
-    "PrimaryPdfAcceptance",
-    "SupplementaryAssetAcceptance",
-    "PublishedArtifact",
     "ResolverTier",
-    "StagedArtifact",
     "validate_light_document",
     "analysis_json_schema",
     "validate_analysis_input",
     "validate_analysis_text",
-)
-from sciretriever.content.assets import (
-    AssetAcceptancePolicy,
-    CandidateEvidence,
-    ContentAssetFailure,
-    ContentAssetReplay,
-    ContentAssetResult,
-    ContentAssetService,
-    ContentAssetSuccess,
-    ResolverTier,
 )

@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Annotated, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from sciretriever.model.literature import Identifier, PreparedBibliographyAcceptance
 from sciretriever.model.primitives import (
@@ -27,6 +34,30 @@ PositiveInt = Annotated[int, Field(ge=1)]
 
 class _CollectionModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class TopicConditions(_CollectionModel):
+    query: str
+    year_from: int | None = Field(default=None, strict=True, ge=1, le=9999)
+    year_to: int | None = Field(default=None, strict=True, ge=1, le=9999)
+    limit: int = Field(default=1000, strict=True, ge=1)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must be nonblank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_year_range(self) -> TopicConditions:
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_from > self.year_to
+        ):
+            raise ValueError("year range must be ordered")
+        return self
 
 
 class ValidatedTopicConditionSet(_CollectionModel):
@@ -238,6 +269,7 @@ __all__ = (
     "PathPageRequest",
     "SeedSelector",
     "StartCollectionRun",
+    "TopicConditions",
     "ValidatedCitationInput",
     "ValidatedTopicConditionSet",
     "WorkSeed",

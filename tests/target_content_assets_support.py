@@ -8,22 +8,23 @@ from pathlib import Path
 
 from PyPDF2 import PdfWriter
 
-from sciretriever.batching.api import ContentAcceptanceCommand, TargetProjection
-from sciretriever.content.model import (
-    AcceptedContentReference,
-    AssetCandidate,
-    BoundedByteStream,
-    ContentTarget,
-    Header,
-    PublishedArtifact,
-    StagedArtifact,
-    UnifiedMetadataSnapshot,
-)
 from sciretriever.content.ports import RaceToken
-from sciretriever.content.publisher_contracts import ContentAcceptance
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
-from sciretriever.model.literature import Identifier
+from sciretriever.model.access import BoundedByteStream, Header
+from sciretriever.model.assets import (
+    AcceptedContentReference,
+    AssetCandidate,
+    ContentTarget,
+    PublishedArtifact,
+    StagedArtifact,
+)
+from sciretriever.model.execution import (
+    ContentAcceptance,
+    ContentAcceptanceCommand,
+    TargetProjection,
+)
+from sciretriever.model.literature import Identifier, UnifiedMetadataSnapshot
 from sciretriever.model.primitives import (
     AssetRole,
     MetadataSnapshotId,
@@ -57,23 +58,23 @@ def pdf(
 
 def target(*, current: AcceptedContentReference | None = None) -> ContentTarget:
     metadata = UnifiedMetadataSnapshot(
-        MetadataSnapshotId(UUID_B),
-        3,
-        "Exact Article Title",
-        ("Ada Lovelace",),
-        (Identifier(namespace="doi", value="10.1000/exact"),),
+        snapshot_id=MetadataSnapshotId(UUID_B),
+        revision=3,
+        title="Exact Article Title",
+        authors=("Ada Lovelace",),
+        identifiers=(Identifier(namespace="doi", value="10.1000/exact"),),
         publication_year=2024,
         sha256=sha256_digest(b"metadata"),
     )
     accepted = () if current is None else (current,)
     return ContentTarget(
-        WorkVersionId(UUID_A),
-        metadata,
-        accepted,
-        current,
-        3,
-        None if current is None else current.sha256,
-        None if current is None else current.revision,
+        work_version_id=WorkVersionId(UUID_A),
+        current_metadata=metadata,
+        accepted_content=accepted,
+        current_accepted_content=current,
+        expected_metadata_revision=3,
+        expected_accepted_content_sha256=None if current is None else current.sha256,
+        expected_accepted_content_revision=None if current is None else current.revision,
     )
 
 
@@ -178,7 +179,9 @@ class RecordingPublisher:
 
     def publish(self, acceptance: ContentAcceptance) -> None:
         self.events.append("catalog")
-        self.commands.append(ContentAcceptanceCommand(acceptance, self.projection))
+        self.commands.append(
+            ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +190,9 @@ class ProjectedPublisher:
     projection: TargetProjection
 
     def publish(self, acceptance: ContentAcceptance) -> None:
-        self.publisher.publish(ContentAcceptanceCommand(acceptance, self.projection))
+        self.publisher.publish(
+            ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
+        )
 
 
 class RecordingStore:
@@ -203,8 +208,18 @@ class RecordingStore:
 def candidate(
     locator: str, role: AssetRole = AssetRole.PRIMARY_PDF, provider: str = "provider"
 ) -> AssetCandidate:
-    return AssetCandidate(provider, role, locator, (Header("Authorization", "secret"),))
+    return AssetCandidate(
+        provider=provider,
+        role=role,
+        locator=locator,
+        headers=(Header(name="Authorization", value="secret"),),
+    )
 
 
 def stream(content: bytes, media_type: str = "application/pdf") -> BoundedByteStream:
-    return BoundedByteStream((content,), media_type, "https://final.invalid/private", len(content))
+    return BoundedByteStream(
+        chunks=(content,),
+        media_type=media_type,
+        final_locator="https://final.invalid/private",
+        size=len(content),
+    )

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import ast
+import importlib
 import unittest
 from dataclasses import dataclass
+from pathlib import Path
 
 import anyio
+from pydantic import BaseModel
 
 from sciretriever.adapters.acquisition import RaceToken
 from sciretriever.adapters.budgets import HostBudgetManager, InvalidHostname, canonical_hostname
@@ -30,10 +34,7 @@ from sciretriever.collection.ports import (
     MetadataDiscoveryRequest,
     ProviderDiscoveryResult,
 )
-from sciretriever.content.ports import (
-    TransportRequest,
-    TransportResponse,
-)
+from sciretriever.model.access import TransportRequest, TransportResponse
 from sciretriever.model.primitives import CitationDirection, WorkId
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
@@ -67,7 +68,12 @@ class FakeCitationClient:
 
 class FakeTransport:
     def execute(self, request: TransportRequest) -> TransportResponse:
-        return TransportResponse(200, request.url, (), b"%PDF-1.7")
+        return TransportResponse(
+            status=200,
+            final_url=request.url,
+            headers=(),
+            body=b"%PDF-1.7",
+        )
 
 
 class SpoofingProvider:
@@ -77,6 +83,46 @@ class SpoofingProvider:
 
 
 class TargetAdapterRepairTests(unittest.TestCase):
+    def test_access_contracts_have_one_target_owner_and_no_legacy_definitions(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        target_path = repository / "src" / "sciretriever" / "model" / "access.py"
+        self.assertTrue(target_path.is_file(), "access contracts must be owned by model/access.py")
+
+        access_tree = ast.parse(target_path.read_text(encoding="utf-8"))
+        expected = {"Header", "BoundedByteStream", "TransportRequest", "TransportResponse"}
+        target_classes = {node.name for node in access_tree.body if isinstance(node, ast.ClassDef)}
+        self.assertTrue(expected <= target_classes)
+
+        legacy_path = repository / "src" / "sciretriever" / "content" / "model.py"
+        legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
+        legacy_classes = {node.name for node in legacy_tree.body if isinstance(node, ast.ClassDef)}
+        self.assertTrue(expected.isdisjoint(legacy_classes))
+
+        legacy_exports = next(
+            (
+                ast.literal_eval(node.value)
+                for node in legacy_tree.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "__all__"
+                    for target in node.targets
+                )
+            ),
+            (),
+        )
+        self.assertTrue(expected.isdisjoint(set(legacy_exports)))
+
+        target_module = importlib.import_module("sciretriever.model.access")
+        legacy_module = importlib.import_module("sciretriever.content.model")
+        for name in expected:
+            contract = getattr(target_module, name)
+            self.assertTrue(issubclass(contract, BaseModel))
+            self.assertIs(contract.__module__, target_module.__name__)
+            self.assertTrue(contract.model_config["frozen"])
+            self.assertTrue(contract.model_config["strict"])
+            self.assertEqual(contract.model_config["extra"], "forbid")
+            self.assertNotIn(name, legacy_module.__dict__)
+
     def test_production_registry_contains_complete_supported_inventory(self) -> None:
         metadata: dict[str, MetadataClient] = {
             name: FakeMetadataClient(name) for name in METADATA_PROVIDERS

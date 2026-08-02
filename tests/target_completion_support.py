@@ -9,33 +9,26 @@ from uuid import uuid4
 from target_analysis_support import proposal_value
 from target_publisher_support import ScenarioFactory
 
-from sciretriever.batching.api import (
-    ContentAcceptanceCommand,
-    FailureStage,
-    TargetProjection,
-    TargetResult,
-)
 from sciretriever.batching.completion import CompletionContext, complete_analysis
-from sciretriever.bibliography.api import CompletionOutcome, accept_completion
-from sciretriever.content.api import (
-    AnalysisProposalV1,
-    LightDocumentAcceptance,
-    PublishedArtifact,
-    StagedArtifact,
-)
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.analysis import AnalysisProposalV1
+from sciretriever.model.assets import PublishedArtifact, StagedArtifact
+from sciretriever.model.documents import LightDocumentAcceptance
+from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection, TargetResult
+from sciretriever.model.literature import CompletionOutcome
 from sciretriever.model.primitives import (
     MetadataSnapshotId,
     Sha256,
     WorkId,
 )
+from sciretriever.services.literature.api import accept_completion
 
 SqlValue = str | int | float | bytes | None
 
@@ -112,11 +105,20 @@ def prepare_completion(
         Sha256("8" * 64),
     )
     target = TargetProjection(
-        base.command.target.batch_run_id,
-        light.work_version_id,
-        TargetResult.COMPLETED,
-        CanonicalJsonObject(()),
-        (FailureStage.ANALYSIS, FailureStage.FEEDBACK),
+        batch_run_id=base.command.target.batch_run_id,
+        work_version_id=light.work_version_id,
+        result=TargetResult(
+            subject_type="work-version",
+            subject_id=str(light.work_version_id),
+            outcome="completed",
+            initial_state="light-text-ready",
+            target_state="completed",
+            final_state="completed",
+            stage="completion",
+            failure=None,
+        ),
+        details=CanonicalJsonObject(()),
+        failure_stages_to_clear=("analysis", "feedback"),
     )
     value = proposal_value()
     value["keywords_and_tags"] = {
@@ -256,7 +258,7 @@ class CompletionDurabilityTests(unittest.TestCase):
             CoreArtifactStore(prepared.storage),
         )
         accept_completion(
-            SqliteBibliographyRepository(prepared.path),
+            SqliteLiteratureRepository(prepared.path),
             prepared.publisher,
             submission,
             prepared.target,
@@ -304,7 +306,7 @@ class CompletionDurabilityTests(unittest.TestCase):
             CoreArtifactStore(prepared.storage),
         )
         accept_completion(
-            SqliteBibliographyRepository(prepared.path),
+            SqliteLiteratureRepository(prepared.path),
             prepared.publisher,
             submission,
             prepared.target,
@@ -330,7 +332,7 @@ class CompletionDurabilityTests(unittest.TestCase):
             )
             with self.assertRaises(InjectedFailure):
                 accept_completion(
-                    SqliteBibliographyRepository(failed.path),
+                    SqliteLiteratureRepository(failed.path),
                     failed.publisher,
                     failed_submission,
                     failed.target,
@@ -344,7 +346,7 @@ class CompletionDurabilityTests(unittest.TestCase):
                 old,
             )
             outcome = accept_completion(
-                SqliteBibliographyRepository(failed.path),
+                SqliteLiteratureRepository(failed.path),
                 CompletionPublisher(failed.path),
                 failed_submission,
                 failed.target,

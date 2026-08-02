@@ -7,6 +7,8 @@ from target_light_document_support import ASSET_ID, document_value, manifest_blo
 from sciretriever.adapters.analysis import AnalysisAdapterSettings, OpenAIAnalysisAdapter
 from sciretriever.content.light_document import LightDocumentBounds, validate_light_document
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.documents import LightDocumentV1
+from sciretriever.model.llm import LLMRequest
 
 
 def proposal_value() -> dict[str, CanonicalJsonInput]:
@@ -68,6 +70,10 @@ def adapter_settings() -> AnalysisAdapterSettings:
         max_input_characters=200_000,
         max_source_units=100,
     )
+
+
+def analysis_request(document: LightDocumentV1) -> LLMRequest:
+    return LLMRequest(document=document, model="exact-model", max_output_tokens=321)
 
 
 class OpenAIClient:

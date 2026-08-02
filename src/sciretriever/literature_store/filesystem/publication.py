@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Final, NoReturn
 from uuid import uuid4
 
-from sciretriever.content.api import ArtifactKind, PublishedArtifact, StagedArtifact
 from sciretriever.literature_store.filesystem.artifact_identity import (
     descriptor_identity,
     open_immutable_artifact,
@@ -19,7 +18,8 @@ from sciretriever.literature_store.filesystem.artifacts import (
     CoreStorage,
     ensure_child,
 )
-from sciretriever.model.primitives import RelativeArtifactPath
+from sciretriever.model.assets import ArtifactKind, PublishedArtifact, StagedArtifact
+from sciretriever.model.primitives import RelativeArtifactPath, sha256_digest
 
 _MAX_ARTIFACT_BYTES: Final = 512 * 1024 * 1024
 Checkpoint = Callable[[str], None]
@@ -68,6 +68,8 @@ def _directory(kind: ArtifactKind) -> str:
 def _validate_type(artifact: StagedArtifact) -> None:
     if not artifact.content or len(artifact.content) > _MAX_ARTIFACT_BYTES:
         raise ArtifactValidationError("artifact size is outside the supported bounds")
+    if sha256_digest(artifact.content) != artifact.sha256:
+        raise ArtifactValidationError("artifact sha256 does not match content")
     match artifact.kind:
         case ArtifactKind.PRIMARY_PDF:
             if not artifact.content.startswith(b"%PDF-"):
@@ -156,7 +158,10 @@ class CoreArtifactStore:
                 if checkpoint is not None:
                     checkpoint("after-cleanup")
                 return PublishedArtifact(
-                    artifact.kind, relative, artifact.sha256, len(artifact.content)
+                    kind=artifact.kind,
+                    path=relative,
+                    sha256=artifact.sha256,
+                    size=len(artifact.content),
                 )
             except ArtifactConflictError:
                 raise

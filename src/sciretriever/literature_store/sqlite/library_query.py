@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.interoperability.api import (
-    LibraryPage,
-    LibraryPageRequest,
-    QueryFilterV1,
-    WorkSummary,
-    WorkVersionSummary,
-)
 from sciretriever.kernel import BoundaryError
-from sciretriever.model.primitives import WorkVersionState
+from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
+from sciretriever.model.library_query import QueryFilterV1
+from sciretriever.model.library_views import WorkSummary, WorkVersionSummary
+from sciretriever.model.primitives import (
+    VersionRole,
+    WorkId,
+    WorkVersionId,
+    WorkVersionState,
+)
 
 SqlParameter = str | int | float | bytes | None
 
@@ -179,17 +180,30 @@ def search(
     visible = rows[: request.limit]
     items = tuple(
         WorkVersionSummary(
-            "work-version", row[0], row[1], row[2], row[3], WorkVersionState(row[4]), bool(row[5])
+            kind="work-version",
+            work_id=WorkId(row[0]),
+            work_version_id=WorkVersionId(row[1]),
+            version_role=VersionRole(row[2]),
+            title=row[3],
+            state=WorkVersionState(row[4]),
+            is_preferred=bool(row[5]),
         )
         if request.include_all_versions
-        else WorkSummary("work", row[0], row[1], row[1], row[3], WorkVersionState(row[4]))
+        else WorkSummary(
+            kind="work",
+            work_id=WorkId(row[0]),
+            work_version_id=WorkVersionId(row[1]),
+            preferred_work_version_id=WorkVersionId(row[1]),
+            title=row[3],
+            state=WorkVersionState(row[4]),
+        )
         for row in visible
     )
     next_cursor = None
     if len(rows) > request.limit:
         last = visible[-1]
         next_cursor = "\0".join((last[3].casefold(), last[0], last[1]))
-    return LibraryPage(items, next_cursor)
+    return LibraryPage(items=items, next_cursor=next_cursor)
 
 
 __all__ = ("search",)

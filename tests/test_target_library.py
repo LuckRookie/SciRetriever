@@ -11,26 +11,26 @@ from target_completion_support import prepare_completion
 from target_publisher_support import ScenarioFactory
 
 from sciretriever.batching.completion import complete_analysis
-from sciretriever.bibliography.api import accept_completion
-from sciretriever.bibliography.identity import prepare_initial_ingest
-from sciretriever.interoperability.library import LibraryPageRequest, LibraryReadService
+from sciretriever.interoperability.library import LibraryReadService
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
     SqliteLibraryReadRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
 from sciretriever.literature_store.sqlite.publisher_support import (
     StatementFailpoint,
     publish_bibliography,
 )
-from sciretriever.model.library import QueryFilterV1
+from sciretriever.model.library_pages import LibraryPageRequest
+from sciretriever.model.library_query import QueryFilterV1
 from sciretriever.model.literature import BibliographicObservation, Identifier, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionId,
     UtcTimestamp,
     WorkId,
 )
+from sciretriever.services.literature.api import accept_completion, prepare_initial_ingest
 
 
 class TargetLibraryTests(unittest.TestCase):
@@ -61,9 +61,7 @@ class TargetLibraryTests(unittest.TestCase):
             ),
             version_role=role,
         )
-        prepared = prepare_initial_ingest(
-            SqliteBibliographyRepository(self.catalog), (observation,)
-        )
+        prepared = prepare_initial_ingest(SqliteLiteratureRepository(self.catalog), (observation,))
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute("BEGIN IMMEDIATE")
             publish_bibliography(connection, StatementFailpoint(None), prepared)
@@ -109,12 +107,21 @@ class TargetLibraryTests(unittest.TestCase):
             connection.commit()
         service = LibraryReadService(SqliteLibraryReadRepository(self.catalog))
 
-        representative = service.search(QueryFilterV1(), LibraryPageRequest(100, None, False))
-        all_versions = service.search(QueryFilterV1(), LibraryPageRequest(100, None, True))
+        representative = service.search(
+            QueryFilterV1(),
+            LibraryPageRequest(limit=100, cursor=None, include_all_versions=False),
+        )
+        all_versions = service.search(
+            QueryFilterV1(),
+            LibraryPageRequest(limit=100, cursor=None, include_all_versions=True),
+        )
 
-        self.assertEqual(tuple(item.work_version_id for item in representative.items), (formal_id,))
         self.assertEqual(
-            tuple(item.work_version_id for item in all_versions.items), (formal_id, other_id)
+            tuple(str(item.work_version_id) for item in representative.items),
+            (formal_id,),
+        )
+        self.assertEqual(
+            tuple(str(item.work_version_id) for item in all_versions.items), (formal_id, other_id)
         )
 
     def test_filters_details_graph_extensions_and_fts_use_current_facts(self) -> None:
@@ -214,7 +221,13 @@ class TargetLibraryTests(unittest.TestCase):
         )
         for query_filter in filters:
             self.assertEqual(
-                len(service.search(query_filter, LibraryPageRequest(10, None, False)).items), 1
+                len(
+                    service.search(
+                        query_filter,
+                        LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
+                    ).items
+                ),
+                1,
             )
         negative_filters = (
             QueryFilterV1(query="absent"),
@@ -238,26 +251,35 @@ class TargetLibraryTests(unittest.TestCase):
         )
         for query_filter in negative_filters:
             self.assertEqual(
-                len(service.search(query_filter, LibraryPageRequest(10, None, False)).items), 0
+                len(
+                    service.search(
+                        query_filter,
+                        LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
+                    ).items
+                ),
+                0,
             )
 
         detail = service.get_work(WorkId(work_id), True, ("example.ns",))
         resolved = service.references(version_id, True, 100, None)
         memberships = service.collection_memberships(CollectionId(collection_id), None, 1)
 
-        self.assertEqual(detail.work_id, work_id)
+        self.assertEqual(str(detail.work_id), work_id)
         self.assertTrue(detail.versions[0].observations_included)
         self.assertEqual(detail.versions[0].extension_namespaces, ("example.ns",))
         self.assertEqual((len(resolved.edges), len(resolved.unresolved)), (1, 1))
-        self.assertEqual(memberships.memberships[0][0], work_id)
+        self.assertEqual(str(memberships.memberships[0][0]), work_id)
         self.assertEqual(len(memberships.memberships[0][1].causes), 1)
+        self.assertEqual(type(detail).model_validate_json(detail.model_dump_json()), detail)
+        self.assertEqual(type(resolved).model_validate_json(resolved.model_dump_json()), resolved)
 
         before = service.authority_fingerprint()
         service.drop_search_indexes()
         self.assertEqual(
             len(
                 service.search(
-                    QueryFilterV1(query="alpha"), LibraryPageRequest(10, None, False)
+                    QueryFilterV1(query="alpha"),
+                    LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
                 ).items
             ),
             0,
@@ -267,7 +289,8 @@ class TargetLibraryTests(unittest.TestCase):
         self.assertEqual(
             len(
                 service.search(
-                    QueryFilterV1(query="alpha"), LibraryPageRequest(10, None, False)
+                    QueryFilterV1(query="alpha"),
+                    LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
                 ).items
             ),
             1,
@@ -284,7 +307,7 @@ class TargetLibraryTests(unittest.TestCase):
             CoreArtifactStore(prepared.storage),
         )
         accept_completion(
-            SqliteBibliographyRepository(prepared.path),
+            SqliteLiteratureRepository(prepared.path),
             prepared.publisher,
             submission,
             prepared.target,
@@ -296,7 +319,8 @@ class TargetLibraryTests(unittest.TestCase):
             self.assertEqual(
                 len(
                     service.search(
-                        QueryFilterV1(query=term), LibraryPageRequest(10, None, False)
+                        QueryFilterV1(query=term),
+                        LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
                     ).items
                 ),
                 1,
@@ -309,7 +333,8 @@ class TargetLibraryTests(unittest.TestCase):
             self.assertEqual(
                 len(
                     service.search(
-                        QueryFilterV1(query=term), LibraryPageRequest(10, None, False)
+                        QueryFilterV1(query=term),
+                        LibraryPageRequest(limit=10, cursor=None, include_all_versions=False),
                     ).items
                 ),
                 1,

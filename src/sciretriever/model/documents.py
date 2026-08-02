@@ -1,15 +1,70 @@
 from __future__ import annotations
 
 import unicodedata
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_validator, model_validator
 
-from sciretriever.model.primitives import AssetId
+from sciretriever.model.assets import PublishedArtifact
+from sciretriever.model.canonical_json import CanonicalJsonObject
+from sciretriever.model.literature import Author, Identifier
+from sciretriever.model.primitives import (
+    AssetId,
+    LightDocumentId,
+    Sha256,
+    WorkId,
+    WorkVersionAssetId,
+    WorkVersionId,
+)
+
+_UUID_PATTERN: Final = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
-class SourceLocator(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+class _DocumentModel(BaseModel):
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        frozen=True,
+        strict=True,
+    )
 
+
+def _nonblank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must be a nonblank string")
+    return unicodedata.normalize("NFC", value)
+
+
+def _optional_nonblank(value: str | None) -> str | None:
+    return None if value is None else _nonblank(value)
+
+
+def _text_items(value: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(_nonblank(item) for item in value)
+
+
+class LightDocumentAcceptance(_DocumentModel):
+    work_version_id: WorkVersionId
+    expected_primary_relation_id: WorkVersionAssetId
+    expected_primary_sha256: Sha256
+    document_id: LightDocumentId
+    artifact_id: AssetId
+    artifact: PublishedArtifact
+    document: SkipValidation[CanonicalJsonObject]
+    provenance: SkipValidation[CanonicalJsonObject]
+
+
+class LightPublicationTarget(_DocumentModel):
+    work_version_id: WorkVersionId
+    primary_relation_id: WorkVersionAssetId
+    primary_asset_id: AssetId
+    primary_sha256: Sha256
+
+
+from sciretriever.model.sources import Provenance  # noqa: E402
+
+
+class SourceLocator(_DocumentModel):
     asset_id: AssetId
     page_start: int = Field(ge=1)
     page_end: int = Field(ge=1)
@@ -20,9 +75,7 @@ class SourceLocator(BaseModel):
     @field_validator("block_id")
     @classmethod
     def validate_block_id(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must be a nonblank string")
-        return unicodedata.normalize("NFC", value)
+        return _nonblank(value)
 
     @model_validator(mode="after")
     def validate_ranges(self) -> SourceLocator:
@@ -33,15 +86,181 @@ class SourceLocator(BaseModel):
         return self
 
 
-class EvidenceText(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
+class EvidenceText(_DocumentModel):
     text: str
-    evidence: tuple[SourceLocator, ...]
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
 
     @field_validator("text")
     @classmethod
     def validate_text(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must be a nonblank string")
-        return unicodedata.normalize("NFC", value)
+        return _nonblank(value)
+
+
+class ParagraphBlock(_DocumentModel):
+    kind: Literal["paragraph"]
+    block_id: str
+    text: str
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
+
+    @field_validator("block_id", "text")
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        return _nonblank(value)
+
+
+class ListBlock(_DocumentModel):
+    kind: Literal["list"]
+    block_id: str
+    ordered: bool
+    items: tuple[EvidenceText, ...] = Field(min_length=1)
+
+    @field_validator("block_id")
+    @classmethod
+    def validate_block_id(cls, value: str) -> str:
+        return _nonblank(value)
+
+
+class TableBlock(_DocumentModel):
+    kind: Literal["table"]
+    block_id: str
+    caption: EvidenceText | None
+    columns: tuple[str, ...] = Field(min_length=1)
+    rows: tuple[tuple[str, ...], ...]
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
+
+    @field_validator("block_id")
+    @classmethod
+    def validate_block_id(cls, value: str) -> str:
+        return _nonblank(value)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _text_items(value)
+
+    @field_validator("rows")
+    @classmethod
+    def validate_rows(cls, value: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
+        return tuple(_text_items(row) for row in value)
+
+    @model_validator(mode="after")
+    def validate_row_widths(self) -> TableBlock:
+        if any(len(row) != len(self.columns) for row in self.rows):
+            raise ValueError("table rows must match columns")
+        return self
+
+
+class FormulaBlock(_DocumentModel):
+    kind: Literal["formula"]
+    block_id: str
+    text: str
+    label: str | None
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
+
+    @field_validator("block_id", "text")
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        return _nonblank(value)
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str | None) -> str | None:
+        return _optional_nonblank(value)
+
+
+class FigureCaptionBlock(_DocumentModel):
+    kind: Literal["figure-caption"]
+    block_id: str
+    text: str
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
+
+    @field_validator("block_id", "text")
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        return _nonblank(value)
+
+
+Block: TypeAlias = ParagraphBlock | ListBlock | TableBlock | FormulaBlock | FigureCaptionBlock
+
+
+class Section(_DocumentModel):
+    section_id: str
+    level: int = Field(ge=1)
+    title: EvidenceText | None
+    blocks: tuple[Block, ...]
+    children: tuple[Section, ...]
+
+    @field_validator("section_id")
+    @classmethod
+    def validate_section_id(cls, value: str) -> str:
+        return _nonblank(value)
+
+
+Section.model_rebuild()
+
+
+class ReferenceView(_DocumentModel):
+    reference_id: str = Field(pattern=_UUID_PATTERN)
+    raw_text: str
+    title: str | None
+    authors: tuple[Author, ...]
+    publication_year: int | None = Field(default=None, ge=0, le=9999)
+    source: str | None
+    identifiers: tuple[Identifier, ...]
+    resolved_work_id: WorkId | None
+    resolved_work_version_id: WorkVersionId | None
+    evidence: tuple[SourceLocator, ...] = Field(min_length=1)
+
+    @field_validator("raw_text")
+    @classmethod
+    def validate_raw_text(cls, value: str) -> str:
+        return _nonblank(value)
+
+    @field_validator("title", "source")
+    @classmethod
+    def validate_optional_text(cls, value: str | None) -> str | None:
+        return _optional_nonblank(value)
+
+    @field_validator("identifiers")
+    @classmethod
+    def validate_identifiers(cls, value: tuple[Identifier, ...]) -> tuple[Identifier, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate identifiers")
+        return value
+
+
+class LightDocumentV1(_DocumentModel):
+    schema_version: Literal["1"]
+    title: EvidenceText | None
+    abstract: tuple[EvidenceText, ...]
+    sections: tuple[Section, ...]
+    references: tuple[ReferenceView, ...]
+    provenance: tuple[Provenance, ...]
+
+    @model_validator(mode="after")
+    def validate_unique_entries(self) -> LightDocumentV1:
+        reference_ids = tuple(item.reference_id for item in self.references)
+        if len(reference_ids) != len(set(reference_ids)):
+            raise ValueError("duplicate references")
+        provenance_ids = tuple(item.provenance_id for item in self.provenance)
+        if len(provenance_ids) != len(set(provenance_ids)):
+            raise ValueError("duplicate provenance")
+        return self
+
+
+__all__ = (
+    "Author",
+    "Block",
+    "EvidenceText",
+    "FigureCaptionBlock",
+    "FormulaBlock",
+    "LightDocumentV1",
+    "LightDocumentAcceptance",
+    "LightPublicationTarget",
+    "ListBlock",
+    "ParagraphBlock",
+    "ReferenceView",
+    "Section",
+    "SourceLocator",
+    "TableBlock",
+)

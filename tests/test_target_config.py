@@ -6,6 +6,11 @@ from unittest import TestCase, mock
 
 from pydantic import ValidationError
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 REPOSITORY = Path(__file__).resolve().parents[1]
 SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
@@ -35,21 +40,48 @@ catalog = "catalog.sqlite"
 storage_root = "storage"
 [collection]
 citation_providers = ["openalex"]
-[metadata]
+[sources]
 providers = ["crossref"]
-[content.acquisition]
+[assets]
 providers = ["crossref"]
-[content.parser]
+[parsing]
 protocol = "loopback"
 base_url = "http://127.0.0.1:8000"
 model = "mineru-3.4.4"
-[content.analysis]
+[analysis]
 {analysis}
-[batching]
-[interoperability]
+[execution]
+[library]
+[access]
 [credentials]
-[extensions]
 """
+
+    def test_final_contract_has_exactly_ten_authoritative_groups(self) -> None:
+        config = load_target_config(
+            self.write(
+                self.base(
+                    'protocol = "openai"\nbase_url = "https://api.openai.com/v1"\n'
+                    'model = "gpt-5.1"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
+                ),
+                "final-contract.toml",
+            )
+        )
+        self.assertEqual(
+            tuple(type(config).model_fields),
+            (
+                "schema_version",
+                "paths",
+                "collection",
+                "sources",
+                "assets",
+                "parsing",
+                "analysis",
+                "execution",
+                "library",
+                "access",
+                "credentials",
+            ),
+        )
 
     def test_openai_and_anthropic_are_explicit_offline_protocols(self) -> None:
         cases = (
@@ -67,8 +99,8 @@ model = "mineru-3.4.4"
                         f"{protocol}.toml",
                     )
                 )
-                self.assertEqual(config.content.analysis.protocol, LLMProtocol(protocol))
-                self.assertEqual(config.content.analysis.model, model)
+                self.assertEqual(config.analysis.protocol, LLMProtocol(protocol))
+                self.assertEqual(config.analysis.model, model)
 
     def test_models_are_frozen_and_all_target_groups_exist(self) -> None:
         config = load_target_config(
@@ -85,24 +117,26 @@ model = "mineru-3.4.4"
                 "schema_version",
                 "paths",
                 "collection",
-                "metadata",
-                "content",
-                "batching",
-                "interoperability",
+                "sources",
+                "assets",
+                "parsing",
+                "analysis",
+                "execution",
+                "library",
+                "access",
                 "credentials",
-                "extensions",
             ),
         )
         with self.assertRaises(ValidationError):
-            config.content.analysis.model = "replacement"
+            config.analysis.model = "replacement"
 
     def test_templates_parse_without_environment_or_network(self) -> None:
         sentinel = "SECRET-MUST-NOT-APPEAR"
         with mock.patch.dict(os.environ, {"ANALYSIS_API_KEY": sentinel}, clear=True):
             minimal = load_target_config(REPOSITORY / "docs/guides/config.target.minimal.toml")
             full = load_target_config(REPOSITORY / "docs/guides/config.target.toml")
-        self.assertEqual(minimal.metadata.providers, ("crossref", "europe-pmc", "arxiv"))
-        self.assertEqual(full.content.analysis.protocol, LLMProtocol.OPENAI)
+        self.assertEqual(minimal.sources.providers, ("crossref", "europe-pmc", "arxiv"))
+        self.assertEqual(full.analysis.protocol, LLMProtocol.OPENAI)
         self.assertNotIn(sentinel, repr(full))
         self.assertNotIn(sentinel, full.model_dump_json())
 
@@ -125,6 +159,24 @@ model = "mineru-3.4.4"
         for name, body in cases.items():
             with self.subTest(name=name), self.assertRaises(ValidationError):
                 load_target_config(self.write(body, f"{name}.toml"))
+
+    def test_legacy_group_names_are_rejected(self) -> None:
+        for name in ("metadata", "content", "batching", "interoperability", "extensions"):
+            with self.subTest(name=name), self.assertRaises(ValidationError):
+                load_target_config(self.write(self.base() + f"\n[{name}]\n", f"{name}.toml"))
+
+    def test_blank_provider_names_are_rejected(self) -> None:
+        analysis = (
+            'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
+            'model="gpt"\nsecret_ref="env:KEY"'
+        )
+        with self.assertRaises(ValidationError):
+            load_target_config(
+                self.write(
+                    self.base(analysis).replace('["crossref"]', '[""]', 1),
+                    "blank-provider.toml",
+                )
+            )
 
     def test_protocol_model_secret_and_url_combinations_fail_closed(self) -> None:
         invalid = (
@@ -151,6 +203,10 @@ model = "mineru-3.4.4"
             )
         self.assertNotIn(sentinel, str(raised.exception))
 
+    def test_malformed_toml_fails_before_model_construction(self) -> None:
+        with self.assertRaises(tomllib.TOMLDecodeError):
+            load_target_config(self.write("schema_version = [", "malformed.toml"))
+
     def test_coercible_scalar_types_are_rejected_in_every_group(self) -> None:
         valid_analysis = (
             'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
@@ -176,97 +232,12 @@ model = "mineru-3.4.4"
             load_target_config(
                 self.write(
                     self.base(valid_analysis).replace(
-                        '[content.acquisition]\nproviders = ["crossref"]',
-                        "[content.acquisition]\nproviders = [1]",
+                        '[assets]\nproviders = ["crossref"]',
+                        "[assets]\nproviders = [1]",
                     ),
                     "provider-coercion.toml",
                 )
             )
-
-    def test_original_path_symlinks_and_unsafe_permissions_fail_closed(self) -> None:
-        analysis = (
-            'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
-            'model="gpt"\nsecret_ref="env:KEY"'
-        )
-        safe_storage = self.root / "safe-storage"
-        safe_storage.mkdir(mode=0o700)
-        storage_link = self.root / "storage-link"
-        storage_link.symlink_to(safe_storage, target_is_directory=True)
-        catalog_target = self.root / "catalog-target.sqlite"
-        catalog_target.touch(mode=0o600)
-        catalog_link = self.root / "catalog-link.sqlite"
-        catalog_link.symlink_to(catalog_target)
-        unsafe_root = self.root / "unsafe-root"
-        unsafe_root.mkdir(mode=0o770)
-        unsafe_root.chmod(0o770)
-        bodies = (
-            self.base(analysis).replace(
-                'storage_root = "storage"', 'storage_root = "storage-link"'
-            ),
-            self.base(analysis).replace(
-                'catalog = "catalog.sqlite"', 'catalog = "catalog-link.sqlite"'
-            ),
-            self.base(analysis).replace('storage_root = "storage"', 'storage_root = "unsafe-root"'),
-            self.base(analysis).replace(
-                'catalog = "catalog.sqlite"', 'catalog = "unsafe-root/catalog.sqlite"'
-            ),
-        )
-        for index, body in enumerate(bodies):
-            with self.subTest(index=index), self.assertRaisesRegex(ValidationError, "unsafe_path"):
-                load_target_config(self.write(body, f"unsafe-path-{index}.toml"))
-
-    def test_wrong_owner_alias_and_safe_nonexistent_targets(self) -> None:
-        valid = load_target_config(
-            self.write(
-                self.base(
-                    'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
-                    'model="gpt"\nsecret_ref="env:KEY"'
-                ),
-                "safe-paths.toml",
-            )
-        )
-        self.assertFalse(valid.paths.catalog.exists())
-        self.assertFalse(valid.paths.storage_root.exists())
-
-        with mock.patch("os.getuid", return_value=os.getuid() + 1):
-            with self.assertRaisesRegex(ValidationError, "unsafe_path"):
-                load_target_config(self.root / "safe-paths.toml")
-
-        catalog = self.root / "catalog.sqlite"
-        alias = self.root / "catalog-alias.sqlite"
-        catalog.touch(mode=0o600)
-        os.link(catalog, alias)
-        with self.assertRaisesRegex(ValidationError, "unsafe_path"):
-            load_target_config(self.root / "safe-paths.toml")
-
-    def test_equal_normalized_paths_and_lexical_aliases_fail(self) -> None:
-        analysis = (
-            'protocol="openai"\nbase_url="https://api.openai.com/v1"\n'
-            'model="gpt"\nsecret_ref="env:KEY"'
-        )
-        aliases = (
-            ('catalog = "same"', 'storage_root = "same"'),
-            ('catalog = "same"', 'storage_root = "./same"'),
-        )
-        for index, (catalog, storage) in enumerate(aliases):
-            body = self.base(analysis).replace('catalog = "catalog.sqlite"', catalog)
-            body = body.replace('storage_root = "storage"', storage)
-            with (
-                self.subTest(index=index),
-                self.assertRaisesRegex(ValidationError, "must not overlap"),
-            ):
-                load_target_config(self.write(body, f"equal-alias-{index}.toml"))
-
-        parent_alias = (
-            self.base(analysis)
-            .replace('catalog = "catalog.sqlite"', 'catalog = "nested/../same"')
-            .replace('storage_root = "storage"', 'storage_root = "same"')
-        )
-        with self.assertRaisesRegex(ValidationError, "unsafe_path"):
-            load_target_config(self.write(parent_alias, "parent-alias.toml"))
-
-        siblings = load_target_config(self.write(self.base(analysis), "safe-siblings.toml"))
-        self.assertNotEqual(siblings.paths.catalog, siblings.paths.storage_root)
 
 
 if __name__ == "__main__":

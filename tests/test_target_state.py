@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import unittest
-from dataclasses import replace
+from dataclasses import replace as dataclass_replace
 from itertools import product
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from pydantic import BaseModel
 from target_state_fixture import (
     ANALYSIS_ID,
     LIGHT_HASH,
@@ -22,15 +23,13 @@ from target_state_fixture import (
     submission,
 )
 
-from sciretriever.bibliography.api import (
+from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
-    accept_completion,
-    derive_missing_step,
-    derive_work_version_state,
+    validate_completion_submission_contract,
 )
-from sciretriever.kernel import BoundaryError
+from sciretriever.core.literature.state import derive_missing_step, derive_work_version_state
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
 from sciretriever.model.primitives import (
@@ -38,6 +37,14 @@ from sciretriever.model.primitives import (
     Sha256,
     WorkVersionState,
 )
+from sciretriever.services.literature.api import accept_completion
+
+
+def replace(value, **updates):
+    if isinstance(value, BaseModel):
+        candidate = value.model_copy(update=updates)
+        return type(value).model_validate(candidate.model_dump())
+    return dataclass_replace(value, **updates)
 
 
 class TargetStateTests(unittest.TestCase):
@@ -132,9 +139,7 @@ class TargetStateTests(unittest.TestCase):
                     "WHERE work_version_id=?",
                     (str(VERSION_ID),),
                 ).fetchone()
-                completed_facts = SqliteBibliographyRepository(catalog).get_version_facts(
-                    VERSION_ID
-                )
+                completed_facts = SqliteLiteratureRepository(catalog).get_version_facts(VERSION_ID)
                 self.assertIsNotNone(completed_facts)
                 assert completed_facts is not None
                 self.assertEqual(
@@ -159,7 +164,7 @@ class TargetStateTests(unittest.TestCase):
                         (str(VERSION_ID),),
                     ).fetchone()
                     self.assertEqual(row, (expected_state.value,))
-                    current = SqliteBibliographyRepository(catalog).get_version_facts(VERSION_ID)
+                    current = SqliteLiteratureRepository(catalog).get_version_facts(VERSION_ID)
                     self.assertIsNotNone(current)
                     assert current is not None
                     observed_states.append(derive_work_version_state(current))
@@ -198,8 +203,9 @@ class TargetStateTests(unittest.TestCase):
 
     def test_accept_completion_rejects_stale_or_incomplete_before_publisher(self) -> None:
         publisher = RecordingPublisher()
-        with self.assertRaises(BoundaryError):
-            replace(submission(), light_document_sha256=Sha256("9" * 64))
+        invalid_input = replace(submission(), light_document_sha256=Sha256("9" * 64))
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(invalid_input)
         invalid = (
             replace(submission(), metadata=replace(submission().metadata, expected_revision=2)),
         )

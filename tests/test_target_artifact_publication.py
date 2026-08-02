@@ -7,15 +7,16 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.content.model import ArtifactKind, StagedArtifact
 from sciretriever.literature_store.filesystem import (
     AdmissionConflictError,
     ArtifactConflictError,
+    ArtifactValidationError,
     CoreArtifactReconciler,
     CoreArtifactStore,
     LocalAdmissionBindingFactory,
 )
 from sciretriever.literature_store.sqlite import create_or_open_catalog
+from sciretriever.model.assets import ArtifactKind, StagedArtifact
 from sciretriever.model.primitives import RelativeArtifactPath, sha256_digest
 
 
@@ -34,10 +35,10 @@ class TargetArtifactPublicationTests(unittest.TestCase):
     @staticmethod
     def artifact(kind: ArtifactKind, content: bytes) -> StagedArtifact:
         return StagedArtifact(
-            kind,
-            RelativeArtifactPath("ignored/by/store"),
-            sha256_digest(content),
-            content,
+            kind=kind,
+            path=RelativeArtifactPath("ignored/by/store"),
+            sha256=sha256_digest(content),
+            content=content,
         )
 
     def test_every_core_kind_publishes_and_exact_replay_is_stable(self) -> None:
@@ -56,6 +57,19 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                 self.assertEqual(target.read_bytes(), content)
                 self.assertEqual(first.size, len(content))
                 self.assertEqual(stat_mode(target), 0o600)
+
+    def test_hash_mismatch_is_rejected_at_publication_boundary(self) -> None:
+        artifact = StagedArtifact(
+            kind=ArtifactKind.SUPPLEMENTARY,
+            path=RelativeArtifactPath("ignored/by/store"),
+            sha256=sha256_digest(b"declared"),
+            content=b"actual",
+        )
+
+        with self.assertRaises(ArtifactValidationError):
+            self.store.publish(artifact)
+
+        self.assertFalse(self.storage.exists())
 
     def test_mismatched_existing_target_is_preserved_as_conflict_evidence(self) -> None:
         artifact = self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-valid")
@@ -215,13 +229,14 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                 content = f'{{"checkpoint":"{checkpoint}"}}'.encode("ascii")
                 script = (
                     "import os; from pathlib import Path; "
-                    "from sciretriever.content.model import ArtifactKind,StagedArtifact; "
+                    "from sciretriever.model.assets import ArtifactKind,StagedArtifact; "
                     "from sciretriever.model.primitives import "
                     "RelativeArtifactPath,sha256_digest; "
                     "from sciretriever.literature_store.filesystem import CoreArtifactStore; "
                     f"data={content!r}; s=CoreArtifactStore(Path({str(self.storage)!r})); "
-                    "s.publish(StagedArtifact(ArtifactKind.ANALYSIS,RelativeArtifactPath('x'),"
-                    "sha256_digest(data),data),checkpoint=lambda n: os._exit(73) if n=="
+                    "s.publish(StagedArtifact(kind=ArtifactKind.ANALYSIS,path=RelativeArtifactPath('x'),"
+                    "sha256=sha256_digest(data),content=data),"
+                    "checkpoint=lambda n: os._exit(73) if n=="
                     f"{checkpoint!r} else None)"
                 )
                 process = subprocess.run(

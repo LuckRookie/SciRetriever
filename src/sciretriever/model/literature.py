@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import unicodedata
+from enum import Enum, unique
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_validator
 
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
+    AssetId,
     LightDocumentId,
     MetadataSnapshotId,
     ObservationId,
+    ReferenceMemberId,
+    ReferenceSetId,
+    RelativeArtifactPath,
     Sha256,
     StableIdentifierId,
+    TagMemberId,
+    TagSetId,
     UtcTimestamp,
     VersionRelationId,
     WorkId,
@@ -20,15 +28,17 @@ from sciretriever.model.primitives import (
 
 
 class _LiteratureModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        frozen=True,
+        strict=True,
+    )
 
 
 class Identifier(_LiteratureModel):
     namespace: str
     value: str
-
-    def __hash__(self) -> int:
-        return hash((self.namespace, self.value))
 
     @field_validator("namespace", "value")
     @classmethod
@@ -36,6 +46,40 @@ class Identifier(_LiteratureModel):
         if not value.strip():
             raise ValueError("must be a nonblank string")
         return unicodedata.normalize("NFC", value)
+
+
+class Author(_LiteratureModel):
+    display_name: str
+    family_name: str | None
+    given_name: str | None
+    orcid: str | None
+    affiliations: tuple[str, ...]
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must be a nonblank string")
+        return unicodedata.normalize("NFC", value)
+
+    @field_validator("family_name", "given_name", "orcid")
+    @classmethod
+    def validate_optional_names(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("must be a nonblank string")
+        return unicodedata.normalize("NFC", value)
+
+    @field_validator("affiliations")
+    @classmethod
+    def validate_affiliations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(unicodedata.normalize("NFC", item) for item in value)
+        if any(not item.strip() for item in normalized):
+            raise ValueError("must be a nonblank string")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("duplicate affiliations")
+        return normalized
 
 
 class InitialMetadata(_LiteratureModel):
@@ -47,6 +91,34 @@ class InitialMetadata(_LiteratureModel):
     venue: str | None = None
     language: str | None = None
     keywords: tuple[str, ...] = ()
+
+
+class UnifiedMetadataSnapshot(_LiteratureModel):
+    snapshot_id: MetadataSnapshotId
+    revision: int = Field(strict=True, ge=1)
+    title: str
+    authors: tuple[str, ...]
+    identifiers: tuple[Identifier, ...]
+    abstract: str | None = None
+    publication_date: str | None = None
+    publication_year: int | None = Field(default=None, strict=True)
+    publisher: str | None = None
+    venue: str | None = None
+    volume: str | None = None
+    issue: str | None = None
+    pages: str | None = None
+    article_number: str | None = None
+    work_type: str | None = None
+    language: str | None = None
+    keywords: tuple[str, ...] = ()
+    sha256: Sha256 | None = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title must be nonblank")
+        return value
 
 
 class VersionRelationEvidence(_LiteratureModel):
@@ -84,6 +156,22 @@ class IdentityRecord(_LiteratureModel):
     metadata_revision: int | None
     completed: bool
     identity_revision: Sha256
+
+
+class IdentityResolution(_LiteratureModel):
+    observations: tuple[BibliographicObservation, ...]
+    metadata: InitialMetadata
+    provenance_json: str
+    identifiers: tuple[Identifier, ...]
+    records: tuple[IdentityRecord, ...]
+    related_records: tuple[IdentityRecord, ...]
+    candidate_records: tuple[IdentityRecord, ...]
+    compatible_records: tuple[IdentityRecord, ...]
+    selected_record: IdentityRecord | None
+    work_id: WorkId
+    work_version_id: WorkVersionId
+    version_role: str
+    anchor: str
 
 
 class PreparedIdentifier(_LiteratureModel):
@@ -142,6 +230,84 @@ class PreparedBibliographyAcceptance(_LiteratureModel):
     expected_revisions: tuple[ExpectedIdentityRevision, ...]
     superseded_identities: tuple[SupersededIdentity, ...]
     role_update: PreparedRoleUpdate | None
+
+
+class ReferenceMemberFact(_LiteratureModel):
+    member_id: ReferenceMemberId
+    raw_text: str
+    reference: SkipValidation[CanonicalJsonObject]
+    target_work_id: WorkId | None = None
+    target_work_version_id: WorkVersionId | None = None
+
+
+class TagMemberFact(_LiteratureModel):
+    member_id: TagMemberId
+    name: str
+    evidence: SkipValidation[CanonicalJsonObject]
+
+
+class ReferenceSetFact(_LiteratureModel):
+    set_id: ReferenceSetId
+    work_version_id: WorkVersionId
+    revision: int = Field(ge=1)
+    members: tuple[ReferenceMemberFact, ...]
+
+
+class TagSetFact(_LiteratureModel):
+    set_id: TagSetId
+    work_version_id: WorkVersionId
+    revision: int = Field(ge=1)
+    members: tuple[TagMemberFact, ...]
+
+
+class FinalMetadataFact(_LiteratureModel):
+    work_version_id: WorkVersionId
+    expected_snapshot_id: MetadataSnapshotId
+    expected_revision: int = Field(ge=1)
+    expected_sha256: Sha256
+    snapshot_id: MetadataSnapshotId
+    revision: int = Field(ge=1)
+    sha256: Sha256
+    values: SkipValidation[CanonicalJsonObject]
+    provenance: SkipValidation[CanonicalJsonObject]
+
+
+class CompletionAnalysisFact(_LiteratureModel):
+    work_version_id: WorkVersionId
+    light_document_id: LightDocumentId
+    input_sha256: Sha256
+    analysis_id: AnalysisArtifactId
+    artifact_id: AssetId
+    artifact_path: RelativeArtifactPath
+    artifact_sha256: Sha256
+    artifact_size: int = Field(ge=0)
+    proposal: SkipValidation[CanonicalJsonObject]
+
+
+class CompletionProvenance(_LiteratureModel):
+    parser_identity: str = Field(min_length=1)
+    model_provider: str = Field(min_length=1)
+    model_identity: str = Field(min_length=1)
+    input_sha256: Sha256
+    parameters_sha256: Sha256
+    evidence: SkipValidation[CanonicalJsonObject]
+
+
+class CompletionSubmission(_LiteratureModel):
+    work_version_id: WorkVersionId
+    light_document_id: LightDocumentId
+    light_document_sha256: Sha256
+    analysis: CompletionAnalysisFact
+    metadata: FinalMetadataFact
+    references: ReferenceSetFact
+    tags: TagSetFact
+    provenance: CompletionProvenance
+
+
+@unique
+class CompletionOutcome(str, Enum):
+    PUBLISHED = "published"
+    REPLAYED = "replayed"
 
 
 class VersionFacts(_LiteratureModel):

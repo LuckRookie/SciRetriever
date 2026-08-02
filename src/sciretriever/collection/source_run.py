@@ -242,7 +242,7 @@ def _source_failure(
         )
     if failure is None:
         return None
-    return failure.code, str(failure.reason), str(failure.action), failure.retryable
+    return failure.code, failure.reason.value, failure.action.value, failure.retryable
 
 
 __all__ = ("SourceRunExecutor",)

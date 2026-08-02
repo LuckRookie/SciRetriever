@@ -3,12 +3,17 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from sciretriever.batching.api import FailureStage, TargetProjection, TargetResult
-from sciretriever.bibliography.api import (
-    CompletionOutcome,
-    CompletionSubmission,
-    ReferenceSetFact,
-    TagSetFact,
+from sciretriever.core.execution import (
+    ExecutionRejectedError,
+    canonical_target_projection,
+    target_projection_canonical,
+    validate_completion_target,
+)
+from sciretriever.core.literature.acceptance import (
+    CompletionRejectedError,
+    validate_completion_submission_contract,
+)
+from sciretriever.core.literature.completion import (
     completion_submission_canonical,
     metadata_snapshot_sha256,
 )
@@ -18,6 +23,13 @@ from sciretriever.literature_store.sqlite.publisher_support import (
     StatementFailpoint,
     execute,
     immediate,
+)
+from sciretriever.model.execution import TargetProjection
+from sciretriever.model.literature import (
+    CompletionOutcome,
+    CompletionSubmission,
+    ReferenceSetFact,
+    TagSetFact,
 )
 from sciretriever.model.primitives import sha256_digest
 
@@ -96,12 +108,16 @@ class CompletionPublisher:
     ) -> CompletionOutcome:
         submission = validated_submission
         target = target_projection
+        try:
+            validate_completion_submission_contract(submission)
+        except CompletionRejectedError as error:
+            raise StalePublicationError(str(error)) from error
+        try:
+            validate_completion_target(target)
+        except ExecutionRejectedError as error:
+            raise StalePublicationError(str(error)) from error
         if target.work_version_id != submission.work_version_id:
             raise StalePublicationError("completion submission and target identities differ")
-        if target.result is not TargetResult.COMPLETED:
-            raise StalePublicationError("completion target result must be completed")
-        if target.failure_stages_to_clear != (FailureStage.ANALYSIS, FailureStage.FEEDBACK):
-            raise StalePublicationError("completion may clear only analysis and feedback failures")
         analysis = submission.analysis
         metadata = submission.metadata
         proposal_bytes = canonical_json_bytes(analysis.proposal)
@@ -116,13 +132,16 @@ class CompletionPublisher:
         ):
             raise StalePublicationError("final metadata hash is inconsistent")
         provenance = canonical_json_bytes(submission.provenance.evidence).decode("ascii")
-        result_json = canonical_json_bytes(target.result_envelope().canonical()).decode("ascii")
+        try:
+            result_json = canonical_target_projection(target).decode("ascii")
+        except ExecutionRejectedError as error:
+            raise StalePublicationError("target result envelope is invalid") from error
         identity_sha256 = sha256_digest(
             canonical_json_bytes(
                 CanonicalJsonObject(
                     (
                         ("submission", completion_submission_canonical(submission)),
-                        ("target", target.canonical()),
+                        ("target", target_projection_canonical(target)),
                     )
                 )
             )
@@ -299,7 +318,7 @@ class CompletionPublisher:
                     point,
                     "DELETE FROM current_failures WHERE subject_kind='work-version' AND "
                     "subject_id=? AND stage=?",
-                    (str(submission.work_version_id), stage.value),
+                    (str(submission.work_version_id), stage),
                 )
             cursor = execute(
                 connection,

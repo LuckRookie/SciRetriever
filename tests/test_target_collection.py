@@ -7,34 +7,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.collection.api import (
-    CausePageRequest,
-    CollectionAcceptance,
-    CollectionAcceptanceConflict,
-    TopicConditions,
-)
-from sciretriever.collection.bibliography_gateway import InitialBibliographyIngestion
+from sciretriever.collection.api import CollectionAcceptanceConflict
 from sciretriever.collection.service import (
     CollectionService,
     CollectionServiceDependencies,
     MetadataSource,
 )
+from sciretriever.collection.topic import validated_topic_conditions
 from sciretriever.kernel import (
-    Action,
     BoundaryError,
     CanonicalJsonObject,
-    FailureEvidence,
-    Reason,
     parse_canonical_json,
 )
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
-    SqliteBibliographyRepository,
     SqliteCollectionRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.collection import CausePageRequest, CollectionAcceptance, TopicConditions
+from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import WorkVersionState
 from sciretriever.model.sources import (
@@ -42,6 +36,7 @@ from sciretriever.model.sources import (
     MetadataObservation,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.literature.api import LiteratureService
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,8 +87,8 @@ class TargetCollectionTests(unittest.TestCase):
         with create_or_open_catalog(self.catalog):
             pass
         self.collection_repository = SqliteCollectionRepository(self.catalog)
-        self.bibliography = InitialBibliographyIngestion(
-            SqliteBibliographyRepository(self.catalog),
+        self.bibliography = LiteratureService(
+            SqliteLiteratureRepository(self.catalog),
         )
         self.bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
 
@@ -122,14 +117,14 @@ class TargetCollectionTests(unittest.TestCase):
                 ),
             )
         )
-        conditions = TopicConditions(" catalysis ", 2020, 2026, 25)
+        conditions = TopicConditions(query=" catalysis ", year_from=2020, year_to=2026, limit=25)
 
         definition = service.create("Catalysis", " durable topic ", conditions)
 
         self.assertEqual(service.get(definition.collection_id), definition)
         self.assertEqual(definition.name, "Catalysis")
         self.assertEqual(definition.description, "durable topic")
-        self.assertEqual(definition.topic_conditions, conditions.validated())
+        self.assertEqual(definition.topic_conditions, validated_topic_conditions(conditions))
         with self.assertRaises(sqlite3.IntegrityError):
             service.create("Catalysis", None, conditions)
         without_topic = service.create("No topic", None, None)
@@ -179,7 +174,7 @@ class TargetCollectionTests(unittest.TestCase):
                 MetadataSource("openalex", openalex),
             )
         )
-        conditions = TopicConditions("catalysis", 2020, 2026, 25)
+        conditions = TopicConditions(query="catalysis", year_from=2020, year_to=2026, limit=25)
         definition = service.create("Catalysis", None, conditions)
 
         first = service.run_topic(definition.collection_id, WorkVersionState.COMPLETED)
@@ -248,7 +243,7 @@ class TargetCollectionTests(unittest.TestCase):
         )
         publisher = ConflictPublisher(CollectionAcceptancePublisher(self.catalog), "conflict")
         service = self.service((MetadataSource("crossref", port),), publisher)
-        definition = service.create("Conflicts", None, TopicConditions("conflicts"))
+        definition = service.create("Conflicts", None, TopicConditions(query="conflicts"))
 
         run = service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
 

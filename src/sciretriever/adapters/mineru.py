@@ -7,20 +7,20 @@ import re
 import stat
 import zipfile
 from dataclasses import dataclass
-from enum import Enum, unique
 from io import BytesIO
 from typing import Final, NewType, Protocol, assert_never
 
 from PyPDF2 import PdfReader
 
+import sciretriever.model.parsing as parsing_models
 from sciretriever.content.api import (
     LightDocumentBounds,
     LightDocumentError,
-    LightDocumentV1,
     ManifestBlock,
     validate_light_document,
 )
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.documents import LightDocumentV1
 from sciretriever.model.primitives import (
     AssetId,
     Sha256,
@@ -42,24 +42,9 @@ def parse_mineru_task_id(value: str) -> MinerUTaskId:
     return MinerUTaskId(value)
 
 
-@unique
-class MinerUTaskState(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class MinerUTaskView:
-    task_id: str
-    state: MinerUTaskState
-    archive: bytes | None
-
-
 class MinerUServicePort(Protocol):
     def submit(self, pdf: bytes) -> str: ...
-    def poll(self, task_id: str) -> MinerUTaskView: ...
+    def poll(self, task_id: str) -> parsing_models.ParserTask: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,27 +208,40 @@ class OperatorManagedMinerUAdapter:
     archive: MinerUArchiveAdapter
     bounds: MinerUServiceBounds
 
-    def parse(
-        self,
-        pdf: bytes,
-        asset_id: AssetId,
-        asset_sha256: Sha256,
-        *,
-        resume_task_id: str | None = None,
-    ) -> LightDocumentV1:
-        raw_task_id = self.service.submit(pdf) if resume_task_id is None else resume_task_id
+    def parse(self, request: parsing_models.ParserRequest) -> parsing_models.ParserResult:
+        raw_task_id = (
+            self.service.submit(request.pdf)
+            if request.resume_task_id is None
+            else request.resume_task_id
+        )
         task_id = parse_mineru_task_id(raw_task_id)
         for _ in range(self.bounds.max_polls):
             task = self.service.poll(str(task_id))
             returned_task_id = parse_mineru_task_id(task.task_id)
             if returned_task_id != task_id:
                 raise LightDocumentError("mineru-task-id-mismatch")
-            if task.state is MinerUTaskState.FAILED:
+            if task.state is parsing_models.ParserTaskState.FAILED:
                 raise LightDocumentError("mineru-task-failed")
-            if task.state is MinerUTaskState.COMPLETED:
+            if task.state is parsing_models.ParserTaskState.COMPLETED:
                 if task.archive is None:
                     raise LightDocumentError("mineru-result-missing")
-                return self.archive.parse(task.archive, asset_id, asset_sha256, pdf)
+                return parsing_models.ParserResult(
+                    document=self.archive.parse(
+                        task.archive,
+                        request.asset_id,
+                        request.asset_sha256,
+                        request.pdf,
+                    ),
+                    provenance=parsing_models.ParserProvenance(
+                        parser_name="mineru",
+                        parser_version="operator-managed",
+                        backend="vlm",
+                        model="operator-managed",
+                        parameters_sha256=sha256_digest(b"{}"),
+                        input_sha256=request.asset_sha256,
+                        task_id=str(task_id),
+                    ),
+                )
             if task.archive is not None:
                 raise LightDocumentError("mineru-result-premature")
         raise LightDocumentError("mineru-poll-bound")
@@ -254,8 +252,6 @@ __all__ = (
     "MinerUServiceBounds",
     "MinerUServicePort",
     "MinerUTaskId",
-    "MinerUTaskState",
-    "MinerUTaskView",
     "OperatorManagedMinerUAdapter",
     "parse_mineru_task_id",
 )

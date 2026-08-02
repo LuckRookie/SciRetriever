@@ -1,93 +1,73 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import assert_never
 
-from sciretriever.content.model import ArtifactKind, PublishedArtifact
-from sciretriever.kernel import (
-    BoundaryError,
-    CanonicalJsonObject,
-    canonical_json_bytes,
-)
-from sciretriever.model.primitives import (
-    AssetId,
-    AssetRole,
-    LightDocumentId,
-    MetadataSnapshotId,
-    Sha256,
-    WorkVersionAssetId,
-    WorkVersionId,
-    sha256_digest,
-)
+import sciretriever.model.assets as asset_models
+import sciretriever.model.documents as document_models
+from sciretriever.kernel.errors import BoundaryError
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
+from sciretriever.model.primitives import sha256_digest
 
 
-@dataclass(frozen=True, slots=True)
-class PrimaryPdfAcceptance:
-    work_version_id: WorkVersionId
-    expected_metadata_id: MetadataSnapshotId
-    expected_metadata_revision: int
-    expected_metadata_sha256: Sha256
-    artifact_id: AssetId
-    relation_id: WorkVersionAssetId
-    artifact: PublishedArtifact
-    source: CanonicalJsonObject
+def validate_content_acceptance(
+    value: (
+        asset_models.PrimaryPdfAcceptance
+        | asset_models.SupplementaryAssetAcceptance
+        | document_models.LightDocumentAcceptance
+    ),
+) -> None:
+    match value:
+        case asset_models.PrimaryPdfAcceptance():
+            _verify_published_artifact(value.artifact)
+            _verify_artifact_kind(value.artifact, asset_models.ArtifactKind.PRIMARY_PDF)
+        case asset_models.SupplementaryAssetAcceptance():
+            _verify_published_artifact(value.artifact)
+            if value.role is asset_models.AssetRole.PRIMARY_PDF:
+                raise BoundaryError.for_field("role", "must be a supplementary role")
+            _verify_artifact_kind(value.artifact, asset_models.ArtifactKind.SUPPLEMENTARY)
+        case document_models.LightDocumentAcceptance():
+            _verify_structured_artifact(
+                value.artifact,
+                asset_models.ArtifactKind.LIGHT_DOCUMENT,
+                value.document,
+            )
+        case unreachable:
+            assert_never(unreachable)
 
 
-@dataclass(frozen=True, slots=True)
-class SupplementaryAssetAcceptance:
-    work_version_id: WorkVersionId
-    expected_metadata_id: MetadataSnapshotId
-    expected_metadata_revision: int
-    expected_metadata_sha256: Sha256
-    expected_primary_sha256: Sha256 | None
-    artifact_id: AssetId
-    relation_id: WorkVersionAssetId
-    role: AssetRole
-    media_type: str
-    artifact: PublishedArtifact
-    source: CanonicalJsonObject
-
-    def __post_init__(self) -> None:
-        if self.role is AssetRole.PRIMARY_PDF:
-            raise BoundaryError.for_field("role", "must be a supplementary role")
-        if self.artifact.kind is not ArtifactKind.SUPPLEMENTARY:
-            raise BoundaryError.for_field("artifact", "must be supplementary")
+def _verify_published_artifact(artifact: asset_models.PublishedArtifact) -> None:
+    directories = {
+        asset_models.ArtifactKind.PRIMARY_PDF: "primary",
+        asset_models.ArtifactKind.SUPPLEMENTARY: "supplementary",
+        asset_models.ArtifactKind.LIGHT_DOCUMENT: "light-document",
+        asset_models.ArtifactKind.ANALYSIS: "analysis",
+    }
+    digest = str(artifact.sha256)
+    expected = f"{directories[artifact.kind]}/{digest[:2]}/{digest}"
+    if str(artifact.path) != expected or artifact.size <= 0:
+        raise BoundaryError.for_field("artifact", "published artifact identity is inconsistent")
 
 
-@dataclass(frozen=True, slots=True)
-class LightDocumentAcceptance:
-    work_version_id: WorkVersionId
-    expected_primary_relation_id: WorkVersionAssetId
-    expected_primary_sha256: Sha256
-    document_id: LightDocumentId
-    artifact_id: AssetId
-    artifact: PublishedArtifact
-    document: CanonicalJsonObject
-    provenance: CanonicalJsonObject
-
-    def __post_init__(self) -> None:
-        _verify_structured_artifact(self.artifact, ArtifactKind.LIGHT_DOCUMENT, self.document)
+def _verify_artifact_kind(
+    artifact: asset_models.PublishedArtifact,
+    expected: asset_models.ArtifactKind,
+) -> None:
+    if artifact.kind is not expected:
+        raise BoundaryError.for_field("artifact", f"must be a {expected.value} artifact")
 
 
 def _verify_structured_artifact(
-    artifact: PublishedArtifact,
-    kind: ArtifactKind,
+    artifact: asset_models.PublishedArtifact,
+    kind: asset_models.ArtifactKind,
     payload: CanonicalJsonObject,
 ) -> None:
+    _verify_published_artifact(artifact)
     canonical = canonical_json_bytes(payload)
-    if artifact.kind is not kind:
-        raise BoundaryError.for_field("artifact", f"must be a {kind.value} artifact")
+    _verify_artifact_kind(artifact, kind)
     if artifact.sha256 != sha256_digest(canonical):
         raise BoundaryError.for_field("artifact", "sha256 must identify canonical payload bytes")
     if artifact.size != len(canonical):
         raise BoundaryError.for_field("artifact", "size must equal canonical payload byte length")
 
 
-ContentAcceptance = PrimaryPdfAcceptance | SupplementaryAssetAcceptance | LightDocumentAcceptance
-
-
-__all__ = (
-    "ContentAcceptance",
-    "LightDocumentAcceptance",
-    "PrimaryPdfAcceptance",
-    "SupplementaryAssetAcceptance",
-)
+__all__ = ("validate_content_acceptance",)

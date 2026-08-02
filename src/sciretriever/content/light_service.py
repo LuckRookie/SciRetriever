@@ -4,38 +4,29 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from sciretriever.content.light_models import LightDocumentV1
-from sciretriever.content.model import ArtifactKind, PublishedArtifact, StagedArtifact
-from sciretriever.content.publisher_contracts import LightDocumentAcceptance
+import sciretriever.model.assets as asset_models
+import sciretriever.model.documents as document_models
+from sciretriever.content.light_serialization import document_bytes
 from sciretriever.kernel import (
     CanonicalJsonObject,
     parse_canonical_json,
 )
+from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.primitives import (
     AssetId,
     LightDocumentId,
     RelativeArtifactPath,
     Sha256,
-    WorkVersionAssetId,
-    WorkVersionId,
     sha256_digest,
 )
 
 
 class LightArtifactStore(Protocol):
-    def publish(self, artifact: StagedArtifact) -> PublishedArtifact: ...
+    def publish(self, artifact: asset_models.StagedArtifact) -> asset_models.PublishedArtifact: ...
 
 
 class LightAcceptanceSink(Protocol):
     def publish(self, acceptance: LightDocumentAcceptance) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class LightPublicationTarget:
-    work_version_id: WorkVersionId
-    primary_relation_id: WorkVersionAssetId
-    primary_asset_id: AssetId
-    primary_sha256: Sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +42,7 @@ class ParserIdentity:
 class LightDocumentPublication:
     document_id: LightDocumentId
     artifact_id: AssetId
-    artifact: PublishedArtifact
+    artifact: asset_models.PublishedArtifact
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,16 +51,22 @@ class LightDocumentService:
     publisher: LightAcceptanceSink
 
     def publish(
-        self, target: LightPublicationTarget, document: LightDocumentV1, parser: ParserIdentity
+        self,
+        target: document_models.LightPublicationTarget,
+        document: document_models.LightDocumentV1,
+        parser: ParserIdentity,
     ) -> LightDocumentPublication:
-        content = document.canonical_bytes()
+        content = document_bytes(document)
         digest = sha256_digest(content)
         document_id = LightDocumentId(
             str(uuid5(NAMESPACE_URL, f"light-document:{target.work_version_id}:{digest}"))
         )
         artifact_id = AssetId(str(uuid5(NAMESPACE_URL, f"light-artifact:{digest}")))
-        staged = StagedArtifact(
-            ArtifactKind.LIGHT_DOCUMENT, RelativeArtifactPath("ignored"), digest, content
+        staged = asset_models.StagedArtifact(
+            kind=asset_models.ArtifactKind.LIGHT_DOCUMENT,
+            path=RelativeArtifactPath("ignored"),
+            sha256=digest,
+            content=content,
         )
         published = self.store.publish(staged)
         document_value = parse_canonical_json(content.decode("ascii"))
@@ -88,14 +85,14 @@ class LightDocumentService:
         )
         self.publisher.publish(
             LightDocumentAcceptance(
-                target.work_version_id,
-                target.primary_relation_id,
-                target.primary_sha256,
-                document_id,
-                artifact_id,
-                published,
-                document_value,
-                provenance,
+                work_version_id=target.work_version_id,
+                expected_primary_relation_id=target.primary_relation_id,
+                expected_primary_sha256=target.primary_sha256,
+                document_id=document_id,
+                artifact_id=artifact_id,
+                artifact=published,
+                document=document_value,
+                provenance=provenance,
             )
         )
         return LightDocumentPublication(document_id, artifact_id, published)
@@ -104,6 +101,5 @@ class LightDocumentService:
 __all__ = (
     "LightDocumentPublication",
     "LightDocumentService",
-    "LightPublicationTarget",
     "ParserIdentity",
 )

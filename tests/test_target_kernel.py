@@ -8,14 +8,11 @@ from unittest import TestCase
 from pydantic import ValidationError
 
 from sciretriever.kernel import (
-    Action,
     BoundaryError,
     CanonicalJsonObject,
     CanonicalJsonValue,
-    FailureEvidence,
     OpaqueExtensionRecord,
     OpaqueExtensionRecordStorePort,
-    Reason,
     canonical_json_bytes,
     parse_canonical_json,
     validate_page_request,
@@ -24,6 +21,7 @@ from sciretriever.model.documents import (
     EvidenceText,
     SourceLocator,
 )
+from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     AssetId,

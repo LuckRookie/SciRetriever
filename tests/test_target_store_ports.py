@@ -6,11 +6,6 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.bibliography.model import (
-    CurationStaleError,
-    ValidatedCurationPlan,
-    VersionMove,
-)
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import (
     AdmissionBindingError,
@@ -19,11 +14,12 @@ from sciretriever.literature_store.filesystem import (
     LocalAdmissionBindingFactory,
 )
 from sciretriever.literature_store.sqlite import (
+    CurationStaleError,
     OpaqueExtensionConflictError,
     OpaqueExtensionRecordStore,
-    SqliteBibliographyRepository,
     SqliteCollectionRepository,
     SqliteCurationTransaction,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
 from sciretriever.model.collection import (
@@ -36,7 +32,7 @@ from sciretriever.model.collection import (
     StartCollectionRun,
     ValidatedTopicConditionSet,
 )
-from sciretriever.model.library import CurationScope
+from sciretriever.model.library import CurationScope, ValidatedCurationPlan, VersionMove
 from sciretriever.model.literature import Identifier, IdentityCandidateQuery
 from sciretriever.model.primitives import (
     BatchRunId,
@@ -169,7 +165,7 @@ class TargetStorePortTests(unittest.TestCase):
 
     def test_bibliography_facts_and_identity_candidates_use_real_sqlite(self) -> None:
         work, version, _ = self.seed_bibliography()
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         candidates = repository.find_identity_candidates(
             IdentityCandidateQuery(identifiers=(Identifier(namespace="doi", value="10.1/test"),))
         )
@@ -182,14 +178,14 @@ class TargetStorePortTests(unittest.TestCase):
 
     def test_curation_applies_exact_move_and_rejects_stale_token(self) -> None:
         work, version, target = self.seed_bibliography()
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         scope = CurationScope(work_ids=(work, target), work_version_ids=(version,))
         snapshot = repository.load_curation_snapshot(scope)
         plan = ValidatedCurationPlan(
-            CurationPlanId(UUIDS[4]),
-            scope,
-            snapshot.token,
-            version_moves=(VersionMove(version, target),),
+            plan_id=CurationPlanId(UUIDS[4]),
+            scope=scope,
+            expected_snapshot=snapshot.token,
+            version_moves=(VersionMove(version_id=version, target_work_id=target),),
         )
         SqliteCurationTransaction(self.catalog).apply(plan)
         self.assertEqual(repository.get_version_facts(version).work_id, target)
@@ -198,14 +194,14 @@ class TargetStorePortTests(unittest.TestCase):
 
     def test_curation_failpoint_rolls_back_whole_plan(self) -> None:
         work, version, target = self.seed_bibliography()
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         scope = CurationScope(work_ids=(work, target), work_version_ids=(version,))
         snapshot = repository.load_curation_snapshot(scope)
         plan = ValidatedCurationPlan(
-            CurationPlanId(UUIDS[4]),
-            scope,
-            snapshot.token,
-            version_moves=(VersionMove(version, target),),
+            plan_id=CurationPlanId(UUIDS[4]),
+            scope=scope,
+            expected_snapshot=snapshot.token,
+            version_moves=(VersionMove(version_id=version, target_work_id=target),),
         )
 
         def fail(name: str) -> None:

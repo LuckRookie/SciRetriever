@@ -315,4 +315,3 @@ class BibliographyFormat(_StrEnum):
     BIBTEX = "bibtex"
     RIS = "ris"
     CSL_JSON = "csl-json"
-    ENDNOTE_XML = "endnote-xml"

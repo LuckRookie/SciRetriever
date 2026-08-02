@@ -11,7 +11,7 @@ from sciretriever.collection.ports import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
-from sciretriever.kernel.errors import Action, FailureEvidence, Reason
+from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 
 

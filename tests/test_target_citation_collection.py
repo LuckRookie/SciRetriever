@@ -9,10 +9,6 @@ from target_citation_fixture import (
 )
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.collection.api import (
-    CausePageRequest,
-    PathPageRequest,
-)
 from sciretriever.collection.citation_input import (
     citation_run_input_from_validated,
 )
@@ -32,10 +28,12 @@ from sciretriever.literature_store.sqlite import (
     open_read_only_snapshot,
 )
 from sciretriever.model.collection import (
+    CausePageRequest,
     CitationCollectionRequest,
     CitationRunInput,
     CollectionSeed,
     IdentifierSeed,
+    PathPageRequest,
     ValidatedCitationInput,
     WorkSeed,
     WorkVersionSeed,

@@ -3,14 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sciretriever.content.ports import (
-    AssetCandidate,
-    BoundedByteStream,
-    BoundedTransportPort,
-    ContentTarget,
-    Header,
-    TransportRequest,
-)
+import sciretriever.model.assets as asset_models
+from sciretriever.content.ports import BoundedTransportPort
+from sciretriever.model.access import BoundedByteStream, Header, TransportRequest
 from sciretriever.model.primitives import AssetRole
 
 
@@ -22,7 +17,7 @@ class ResolverCandidate:
 
 
 class ResolverClient(Protocol):
-    def resolve(self, target: ContentTarget) -> tuple[ResolverCandidate, ...]: ...
+    def resolve(self, target: asset_models.ContentTarget) -> tuple[ResolverCandidate, ...]: ...
 
 
 class AssetResolverAdapter:
@@ -30,21 +25,23 @@ class AssetResolverAdapter:
         self._provider = provider
         self._client = client
 
-    def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
+    def resolve(
+        self, target: asset_models.ContentTarget
+    ) -> tuple[asset_models.AssetCandidate, ...]:
         candidates = self._client.resolve(target)
         seen: set[tuple[str, AssetRole]] = set()
-        results: list[AssetCandidate] = []
+        results: list[asset_models.AssetCandidate] = []
         for candidate in candidates:
             identity = (candidate.locator, candidate.role)
             if identity in seen:
                 continue
             seen.add(identity)
             results.append(
-                AssetCandidate(
-                    self._provider,
-                    candidate.role,
-                    candidate.locator,
-                    candidate.headers,
+                asset_models.AssetCandidate(
+                    provider=self._provider,
+                    role=candidate.role,
+                    locator=candidate.locator,
+                    headers=candidate.headers,
                 )
             )
         return tuple(results)
@@ -62,15 +59,15 @@ class AssetFetcherAdapter:
         self._timeout = timeout_seconds
         self._max_bytes = max_response_bytes
 
-    def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
+    def fetch(self, candidate: asset_models.AssetCandidate) -> BoundedByteStream:
         response = self._transport.execute(
             TransportRequest(
-                "GET",
-                candidate.locator,
-                candidate.headers,
-                None,
-                self._timeout,
-                self._max_bytes,
+                method="GET",
+                url=candidate.locator,
+                headers=candidate.headers,
+                body=None,
+                timeout_seconds=self._timeout,
+                max_response_bytes=self._max_bytes,
             )
         )
         media_type = next(
@@ -78,10 +75,10 @@ class AssetFetcherAdapter:
             "application/octet-stream",
         )
         return BoundedByteStream(
-            (response.body,),
-            media_type,
-            response.final_url,
-            len(response.body),
+            chunks=(response.body,),
+            media_type=media_type,
+            final_locator=response.final_url,
+            size=len(response.body),
         )
 
 

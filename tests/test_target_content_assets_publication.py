@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from target_content_assets_support import (
@@ -14,10 +13,7 @@ from target_content_assets_support import (
 )
 from target_publisher_support import ScenarioFactory
 
-from sciretriever.batching.api import TargetProjection, TargetResult
-from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.content.assets import AssetAcceptancePolicy, ContentAssetService, ResolverTier
-from sciretriever.content.model import ContentTarget, UnifiedMetadataSnapshot
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
@@ -25,7 +21,10 @@ from sciretriever.literature_store.sqlite import (
     StalePublicationError,
     open_read_only_snapshot,
 )
-from sciretriever.model.literature import Identifier
+from sciretriever.model.assets import ContentTarget
+from sciretriever.model.collection import CollectionAcceptance
+from sciretriever.model.execution import TargetProjection, TargetResult
+from sciretriever.model.literature import Identifier, UnifiedMetadataSnapshot
 from sciretriever.model.primitives import AssetRole, BatchRunId, sha256_digest
 
 
@@ -44,21 +43,21 @@ class TargetContentPublicationTests(unittest.TestCase):
         factory.batch(base.path, first_batch, prepared.work_version_id)
         factory.batch(base.path, second_batch, prepared.work_version_id)
         content_target = ContentTarget(
-            prepared.work_version_id,
-            UnifiedMetadataSnapshot(
-                snapshot.snapshot_id,
-                snapshot.revision,
-                "Atomic publication a",
-                ("Ada",),
-                (Identifier(namespace="doi", value="10.1000/publisher-a"),),
+            work_version_id=prepared.work_version_id,
+            current_metadata=UnifiedMetadataSnapshot(
+                snapshot_id=snapshot.snapshot_id,
+                revision=snapshot.revision,
+                title="Atomic publication a",
+                authors=("Ada",),
+                identifiers=(Identifier(namespace="doi", value="10.1000/publisher-a"),),
                 publication_year=2026,
                 sha256=snapshot.sha256,
             ),
-            (),
-            None,
-            snapshot.revision,
-            None,
-            None,
+            accepted_content=(),
+            current_accepted_content=None,
+            expected_metadata_revision=snapshot.revision,
+            expected_accepted_content_sha256=None,
+            expected_accepted_content_revision=None,
         )
         storage = factory.root / "storage"
         publisher = ContentAcceptancePublisher(base.path)
@@ -67,17 +66,26 @@ class TargetContentPublicationTests(unittest.TestCase):
         )
         second_body = first_body + b"\n% ordinary-new-source"
         projection = TargetProjection(
-            first_batch,
-            prepared.work_version_id,
-            TargetResult.PARTIALLY_ADVANCED,
-            CanonicalJsonObject(()),
-            (),
+            batch_run_id=first_batch,
+            work_version_id=prepared.work_version_id,
+            result=TargetResult(
+                subject_type="work-version",
+                subject_id=str(prepared.work_version_id),
+                outcome="partially-advanced",
+                initial_state="unreviewed",
+                target_state="asset-ready",
+                final_state="asset-ready",
+                stage="asset",
+                failure=None,
+            ),
+            details=CanonicalJsonObject(()),
+            failure_stages_to_clear=(),
         )
         first = self._service(storage, publisher, projection, "first", first_body)
         second = self._service(
             storage,
             publisher,
-            replace(projection, batch_run_id=second_batch),
+            projection.model_copy(update={"batch_run_id": second_batch}),
             "second",
             second_body,
         )

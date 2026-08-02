@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sciretriever.model.execution import Action, FailureEvidence, Reason
+import sciretriever.model.execution as execution_models
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,21 +17,26 @@ class ErrorDescriptorError(Exception):
 @dataclass(frozen=True, slots=True)
 class BoundaryError(Exception):
     code: str
-    reason: Reason
-    action: Action
+    reason: execution_models.Reason
+    action: execution_models.Action
     field: str | None = None
 
     @classmethod
     def for_field(cls, field: str, expectation: str) -> BoundaryError:
         return cls(
             code="invalid-boundary",
-            reason=Reason(value=f"{field} {expectation}"),
-            action=Action(value=f"Supply a valid {field}."),
+            reason=execution_models.Reason(value=f"{field} {expectation}"),
+            action=execution_models.Action(value=f"Supply a valid {field}."),
             field=field,
         )
 
     @classmethod
-    def from_evidence(cls, evidence: FailureEvidence, *, field: str | None = None) -> BoundaryError:
+    def from_evidence(
+        cls,
+        evidence: execution_models.FailureEvidence,
+        *,
+        field: str | None = None,
+    ) -> BoundaryError:
         return cls(
             code=evidence.code,
             reason=evidence.reason,
@@ -40,4 +45,4 @@ class BoundaryError(Exception):
         )
 
     def __str__(self) -> str:
-        return str(self.reason)
+        return self.reason.value

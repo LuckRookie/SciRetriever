@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import UUID, uuid4, uuid5
 
+import sciretriever.model.collection as collection_models
 from sciretriever.collection.citation import (
     CitationExecutionDependencies,
     CitationRunExecutor,
@@ -23,7 +24,7 @@ from sciretriever.collection.ports import (
 from sciretriever.collection.publisher_contracts import validate_collection_acceptance
 from sciretriever.collection.seed_resolution import resolve_citation_input
 from sciretriever.collection.source_run import SourceRunExecutor
-from sciretriever.collection.topic import TopicConditions
+from sciretriever.collection.topic import validated_topic_conditions
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
@@ -111,7 +112,7 @@ class CollectionService:
         self,
         name: str,
         description: str | None,
-        topic_conditions: TopicConditions | None,
+        topic_conditions: collection_models.TopicConditions | None,
     ) -> CollectionDefinition:
         if not isinstance(name, str) or not name.strip():
             raise BoundaryError.for_field("name", "must be nonblank text")
@@ -123,7 +124,9 @@ class CollectionService:
             collection_id=CollectionId(str(uuid4())),
             name=name.strip(),
             description=None if description is None else description.strip(),
-            topic_conditions=None if topic_conditions is None else topic_conditions.validated(),
+            topic_conditions=None
+            if topic_conditions is None
+            else validated_topic_conditions(topic_conditions),
             created_at=self._dependencies.clock(),
         )
         return self._dependencies.repository.create_definition(

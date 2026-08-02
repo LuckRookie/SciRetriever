@@ -7,42 +7,12 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from sciretriever.collection.api import CollectionAcceptanceConflict
-from sciretriever.content.api import ArtifactKind, PublishedArtifact
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
 from sciretriever.model.literature import PreparedBibliographyAcceptance
-from sciretriever.model.primitives import sha256_digest
 
 
 class StalePublicationError(CollectionAcceptanceConflict):
     pass
-
-
-def verify_published_artifact(artifact: PublishedArtifact) -> None:
-    directories = {
-        ArtifactKind.PRIMARY_PDF: "primary",
-        ArtifactKind.SUPPLEMENTARY: "supplementary",
-        ArtifactKind.LIGHT_DOCUMENT: "light-document",
-        ArtifactKind.ANALYSIS: "analysis",
-    }
-    digest = str(artifact.sha256)
-    expected = f"{directories[artifact.kind]}/{digest[:2]}/{digest}"
-    if str(artifact.path) != expected or artifact.size <= 0:
-        raise StalePublicationError("published artifact identity is inconsistent")
-
-
-def verify_structured_artifact(
-    artifact: PublishedArtifact,
-    kind: ArtifactKind,
-    payload: CanonicalJsonObject,
-) -> bytes:
-    verify_published_artifact(artifact)
-    canonical = canonical_json_bytes(payload)
-    if artifact.kind is not kind:
-        raise StalePublicationError("structured artifact kind mismatched")
-    if artifact.sha256 != sha256_digest(canonical) or artifact.size != len(canonical):
-        raise StalePublicationError("structured artifact bytes differ from published identity")
-    return canonical
 
 
 class StatementFailpoint:

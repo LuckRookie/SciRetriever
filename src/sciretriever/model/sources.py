@@ -4,7 +4,6 @@ import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from sciretriever.model.execution import FailureEvidence
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     CitationDirection,
@@ -40,6 +39,9 @@ class Provenance(_SourceModel):
     @classmethod
     def normalize_source_record_id(cls, value: str | None) -> str | None:
         return None if value is None else unicodedata.normalize("NFC", value)
+
+
+from sciretriever.model.execution import FailureEvidence  # noqa: E402
 
 
 class MetadataDiscoveryRequest(_SourceModel):

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
-
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from sciretriever.model.literature import Identifier, VersionFacts, WorkFacts
 from sciretriever.model.primitives import (
@@ -18,78 +16,6 @@ from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
 )
-
-
-class QueryValueError(ValueError):
-    pass
-
-
-def _nonblank(value: str | None) -> str | None:
-    if value is not None and not value.strip():
-        raise QueryValueError("text must be nonblank")
-    return value
-
-
-def _unique(values: tuple[str, ...]) -> tuple[str, ...]:
-    if len(values) != len(set(values)):
-        raise QueryValueError("repeated filter values must be unique")
-    if any(not value.strip() for value in values):
-        raise QueryValueError("filter values must be nonblank")
-    return values
-
-
-Text = Annotated[str | None, AfterValidator(_nonblank)]
-Texts = Annotated[tuple[str, ...], AfterValidator(_unique)]
-CollectionMode = Literal["topic", "citation"]
-DiscoveryRelation = Literal["member", "seed", "reference", "cited-by"]
-State = Literal["unreviewed", "asset-ready", "light-text-ready", "completed"]
-MissingStep = Literal["primary-pdf", "light-document", "analysis", "completion"]
-
-
-class QueryFilterV1(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    query: Text = None
-    identifiers: tuple[Identifier, ...] = ()
-    title: Text = None
-    authors: Texts = ()
-    venues: Texts = ()
-    document_types: Texts = ()
-    languages: Texts = ()
-    collection_ids: tuple[str, ...] = ()
-    collection_modes: tuple[CollectionMode, ...] = ()
-    discovery_relations: tuple[DiscoveryRelation, ...] = ()
-    states: tuple[State, ...] = ()
-    missing_steps: tuple[MissingStep, ...] = ()
-    has_current_failure: bool | None = None
-    year_from: Annotated[int | None, Field(ge=0, le=9999)] = None
-    year_to: Annotated[int | None, Field(ge=0, le=9999)] = None
-    asset_available: bool | None = None
-    light_document_available: bool | None = None
-    analysis_available: bool | None = None
-    extension_namespaces: Texts = ()
-
-    @model_validator(mode="after")
-    def valid_combinations(self) -> QueryFilterV1:
-        collections = tuple(str(CollectionId(value)) for value in self.collection_ids)
-        if len(collections) != len(set(collections)):
-            raise QueryValueError("collection identifiers must be unique")
-        groups = (
-            self.identifiers,
-            self.collection_modes,
-            self.discovery_relations,
-            self.states,
-            self.missing_steps,
-        )
-        if any(len(values) != len(set(values)) for values in groups):
-            raise QueryValueError("repeated filter values must be unique")
-        if (
-            self.year_from is not None
-            and self.year_to is not None
-            and self.year_from > self.year_to
-        ):
-            raise QueryValueError("year range must be ordered")
-        return self
 
 
 class _LibraryModel(BaseModel):
@@ -165,6 +91,76 @@ class CurationTopology(_LibraryModel):
     artifact_registrations: tuple[ArtifactRegistrationFact, ...]
 
 
+class VersionMove(_LibraryModel):
+    version_id: WorkVersionId
+    target_work_id: WorkId
+
+
+class ObservationMove(_LibraryModel):
+    observation_id: ObservationId
+    target_version_id: WorkVersionId
+
+
+class IdentifierMove(_LibraryModel):
+    identifier_id: StableIdentifierId
+    target_version_id: WorkVersionId
+
+
+class MembershipMove(_LibraryModel):
+    membership_id: MembershipId
+    target_work_id: WorkId
+    coalesce_membership_id: MembershipId | None
+
+
+class ReferenceRetarget(_LibraryModel):
+    reference_id: ReferenceFactId
+    target_work_id: WorkId | None
+    target_version_id: WorkVersionId | None
+    downgrade_raw_text: str | None
+    downgrade_reference_json: str | None
+
+
+class RelationRetarget(_LibraryModel):
+    relation_id: VersionRelationId
+    left_version_id: WorkVersionId
+    right_version_id: WorkVersionId
+
+
+class RelationDelete(_LibraryModel):
+    relation_id: VersionRelationId
+
+
+class RepresentativeUpdate(_LibraryModel):
+    work_id: WorkId
+    version_id: WorkVersionId | None
+
+
+class ValidatedVersionRelation(_LibraryModel):
+    relation_id: VersionRelationId
+    left_version_id: WorkVersionId
+    right_version_id: WorkVersionId
+    relation: str
+
+
+class ValidatedCurationPlan(_LibraryModel):
+    plan_id: CurationPlanId
+    scope: CurationScope
+    expected_snapshot: SnapshotToken
+    version_moves: tuple[VersionMove, ...] = ()
+    observation_moves: tuple[ObservationMove, ...] = ()
+    identifier_moves: tuple[IdentifierMove, ...] = ()
+    membership_moves: tuple[MembershipMove, ...] = ()
+    reference_retargets: tuple[ReferenceRetarget, ...] = ()
+    relation_retargets: tuple[RelationRetarget, ...] = ()
+    relation_inserts: tuple[ValidatedVersionRelation, ...] = ()
+    relation_deletes: tuple[RelationDelete, ...] = ()
+    representative_updates: tuple[RepresentativeUpdate, ...] = ()
+    delete_version_ids: tuple[WorkVersionId, ...] = ()
+    delete_work_ids: tuple[WorkId, ...] = ()
+    fts_rebuild_version_ids: tuple[WorkVersionId, ...] = ()
+    orphan_artifact_candidates: tuple[AssetId, ...] = ()
+
+
 __all__ = (
     "ArtifactRegistrationFact",
     "CurationCommit",
@@ -174,8 +170,17 @@ __all__ = (
     "IdentifierFact",
     "MembershipFact",
     "ObservationFact",
-    "QueryFilterV1",
     "ReferenceFact",
+    "ReferenceRetarget",
+    "RelationDelete",
     "RelationFact",
+    "RelationRetarget",
+    "RepresentativeUpdate",
     "SnapshotToken",
+    "ValidatedCurationPlan",
+    "ValidatedVersionRelation",
+    "VersionMove",
+    "ObservationMove",
+    "IdentifierMove",
+    "MembershipMove",
 )

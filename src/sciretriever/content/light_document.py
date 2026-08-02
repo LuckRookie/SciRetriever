@@ -5,23 +5,8 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import UUID
 
-from sciretriever.content.light_models import (
-    Author,
-    Block,
-    FigureCaptionBlock,
-    FormulaBlock,
-    LightDocumentV1,
-    ListBlock,
-    ParagraphBlock,
-    ReferenceView,
-    Section,
-    TableBlock,
-)
 from sciretriever.kernel.json import CanonicalJsonInput
-from sciretriever.model.documents import (
-    EvidenceText,
-    SourceLocator,
-)
+from sciretriever.model import documents
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import AssetId, WorkId, WorkVersionId
 from sciretriever.model.sources import Provenance
@@ -120,14 +105,14 @@ def _locator(
     pages: int,
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
-) -> SourceLocator:
+) -> documents.SourceLocator:
     fields = _closed(
         value,
         frozenset(("asset_id", "page_start", "page_end", "block_id", "char_start", "char_end")),
         "locator",
     )
     try:
-        locator = SourceLocator(
+        locator = documents.SourceLocator(
             asset_id=AssetId(_text(fields["asset_id"], "asset-id")),
             page_start=_integer(fields["page_start"], "page-start"),
             page_end=_integer(fields["page_end"], "page-end"),
@@ -160,7 +145,7 @@ def _locators(
     pages: int,
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
-) -> tuple[SourceLocator, ...]:
+) -> tuple[documents.SourceLocator, ...]:
     items = tuple(
         _locator(item, asset_id, pages, manifest, budget) for item in _array(value, "evidence")
     )
@@ -187,9 +172,9 @@ def _evidence(
     pages: int,
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
-) -> EvidenceText:
+) -> documents.EvidenceText:
     fields = _closed(value, frozenset(("text", "evidence")), "evidence-text")
-    return EvidenceText(
+    return documents.EvidenceText(
         text=budget.add_text(_text(fields["text"], "evidence")),
         evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
     )
@@ -201,7 +186,7 @@ def _block(  # noqa: C901
     pages: int,
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
-) -> Block:
+) -> documents.Block:
     if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
         raise LightDocumentError("block-schema")
     budget.blocks += 1
@@ -214,11 +199,11 @@ def _block(  # noqa: C901
     budget.block_ids.add(block_id)
     if kind == "paragraph":
         fields = _closed(value, frozenset(("kind", "block_id", "text", "evidence")), "paragraph")
-        return ParagraphBlock(
-            "paragraph",
-            block_id,
-            budget.add_text(_text(fields["text"], "paragraph")),
-            _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        return documents.ParagraphBlock(
+            kind="paragraph",
+            block_id=block_id,
+            text=budget.add_text(_text(fields["text"], "paragraph")),
+            evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
         )
     if kind == "list":
         fields = _closed(value, frozenset(("kind", "block_id", "ordered", "items")), "list")
@@ -230,7 +215,9 @@ def _block(  # noqa: C901
         )
         if not items:
             raise LightDocumentError("list-empty")
-        return ListBlock("list", block_id, fields["ordered"], items)
+        return documents.ListBlock(
+            kind="list", block_id=block_id, ordered=fields["ordered"], items=items
+        )
     if kind == "table":
         fields = _closed(
             value,
@@ -254,34 +241,34 @@ def _block(  # noqa: C901
             if fields["caption"] is None
             else _evidence(fields["caption"], asset_id, pages, manifest, budget)
         )
-        return TableBlock(
-            "table",
-            block_id,
-            caption,
-            columns,
-            rows,
-            _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        return documents.TableBlock(
+            kind="table",
+            block_id=block_id,
+            caption=caption,
+            columns=columns,
+            rows=rows,
+            evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
         )
     if kind == "formula":
         fields = _closed(
             value, frozenset(("kind", "block_id", "text", "label", "evidence")), "formula"
         )
-        return FormulaBlock(
-            "formula",
-            block_id,
-            budget.add_text(_text(fields["text"], "formula")),
-            _optional_text(fields["label"], "label"),
-            _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        return documents.FormulaBlock(
+            kind="formula",
+            block_id=block_id,
+            text=budget.add_text(_text(fields["text"], "formula")),
+            label=_optional_text(fields["label"], "label"),
+            evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
         )
     if kind == "figure-caption":
         fields = _closed(
             value, frozenset(("kind", "block_id", "text", "evidence")), "figure-caption"
         )
-        return FigureCaptionBlock(
-            "figure-caption",
-            block_id,
-            budget.add_text(_text(fields["text"], "figure-caption")),
-            _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        return documents.FigureCaptionBlock(
+            kind="figure-caption",
+            block_id=block_id,
+            text=budget.add_text(_text(fields["text"], "figure-caption")),
+            evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
         )
     raise LightDocumentError("block-kind")
 
@@ -293,7 +280,7 @@ def _section(
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
     depth: int,
-) -> Section:
+) -> documents.Section:
     if depth > 32 or depth > budget.bounds.max_json_depth:
         raise LightDocumentError("section-depth")
     fields = _closed(
@@ -320,10 +307,16 @@ def _section(
         _section(item, asset_id, pages, manifest, budget, depth + 1)
         for item in _array(fields["children"], "children")
     )
-    return Section(fields["section_id"], fields["level"], title, blocks, children)
+    return documents.Section(
+        section_id=fields["section_id"],
+        level=fields["level"],
+        title=title,
+        blocks=blocks,
+        children=children,
+    )
 
 
-def _author(value: CanonicalJsonInput, budget: _Budget) -> Author:
+def _author(value: CanonicalJsonInput, budget: _Budget) -> documents.Author:
     fields = _closed(
         value,
         frozenset(("display_name", "family_name", "given_name", "orcid", "affiliations")),
@@ -335,12 +328,12 @@ def _author(value: CanonicalJsonInput, budget: _Budget) -> Author:
     )
     if len(affiliations) != len(set(affiliations)):
         raise LightDocumentError("author-affiliation-duplicate")
-    return Author(
-        budget.add_text(_text(fields["display_name"], "display-name")),
-        _optional_text(fields["family_name"], "family-name"),
-        _optional_text(fields["given_name"], "given-name"),
-        _optional_text(fields["orcid"], "orcid"),
-        affiliations,
+    return documents.Author(
+        display_name=budget.add_text(_text(fields["display_name"], "display-name")),
+        family_name=_optional_text(fields["family_name"], "family-name"),
+        given_name=_optional_text(fields["given_name"], "given-name"),
+        orcid=_optional_text(fields["orcid"], "orcid"),
+        affiliations=affiliations,
     )
 
 
@@ -350,7 +343,7 @@ def _reference(
     pages: int,
     manifest: dict[str, ManifestBlock],
     budget: _Budget,
-) -> ReferenceView:
+) -> documents.ReferenceView:
     fields = _closed(
         value,
         frozenset(
@@ -387,19 +380,21 @@ def _reference(
         raise LightDocumentError("reference-year")
     resolved_work = fields["resolved_work_id"]
     resolved_version = fields["resolved_work_version_id"]
-    return ReferenceView(
-        reference_id,
-        budget.add_text(_text(fields["raw_text"], "raw-text")),
-        _optional_text(fields["title"], "reference-title"),
-        tuple(_author(item, budget) for item in _array(fields["authors"], "authors")),
-        year,
-        _optional_text(fields["source"], "reference-source"),
-        identifiers,
-        None if resolved_work is None else WorkId(_text(resolved_work, "resolved-work-id")),
-        None
+    return documents.ReferenceView(
+        reference_id=reference_id,
+        raw_text=budget.add_text(_text(fields["raw_text"], "raw-text")),
+        title=_optional_text(fields["title"], "reference-title"),
+        authors=tuple(_author(item, budget) for item in _array(fields["authors"], "authors")),
+        publication_year=year,
+        source=_optional_text(fields["source"], "reference-source"),
+        identifiers=identifiers,
+        resolved_work_id=None
+        if resolved_work is None
+        else WorkId(_text(resolved_work, "resolved-work-id")),
+        resolved_work_version_id=None
         if resolved_version is None
         else WorkVersionId(_text(resolved_version, "resolved-version-id")),
-        _locators(fields["evidence"], asset_id, pages, manifest, budget),
+        evidence=_locators(fields["evidence"], asset_id, pages, manifest, budget),
     )
 
 
@@ -420,7 +415,7 @@ def validate_light_document(
     pdf_pages: int,
     block_manifest: tuple[ManifestBlock, ...],
     bounds: LightDocumentBounds,
-) -> LightDocumentV1:
+) -> documents.LightDocumentV1:
     fields = _closed(value, _DOCUMENT_FIELDS, "light-document")
     if fields["schema_version"] != "1" or pdf_pages < 1 or pdf_pages > bounds.max_pages:
         raise LightDocumentError("document-version-pages")
@@ -457,13 +452,19 @@ def validate_light_document(
         raise LightDocumentError("reference-duplicate")
     if len({item.provenance_id for item in provenance}) != len(provenance):
         raise LightDocumentError("provenance-duplicate")
-    return LightDocumentV1("1", title, abstract, sections, references, provenance)
+    return documents.LightDocumentV1(
+        schema_version="1",
+        title=title,
+        abstract=abstract,
+        sections=sections,
+        references=references,
+        provenance=provenance,
+    )
 
 
 __all__ = (
     "LightDocumentBounds",
     "LightDocumentError",
-    "LightDocumentV1",
     "ManifestBlock",
     "validate_light_document",
 )

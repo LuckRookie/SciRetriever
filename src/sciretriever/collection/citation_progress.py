@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from sciretriever.collection.run_results import collection_source_failed
-from sciretriever.kernel import FailureEvidence
 from sciretriever.model.collection import (
     CollectionCounts,
     CollectionSourceResult,
     FinishCollectionRun,
 )
+from sciretriever.model.execution import FailureEvidence
 from sciretriever.model.primitives import (
     CollectionRunId,
     CollectionRunStatus,
@@ -65,10 +65,10 @@ class CitationProgress:
                 failure_code=None if name not in self.failures else self.failures[name].code,
                 failure_reason=None
                 if name not in self.failures
-                else str(self.failures[name].reason),
+                else self.failures[name].reason.value,
                 failure_action=None
                 if name not in self.failures
-                else str(self.failures[name].action),
+                else self.failures[name].action.value,
                 retryable=None if name not in self.failures else self.failures[name].retryable,
             )
             for ordinal, name in enumerate(self.providers[:limit])

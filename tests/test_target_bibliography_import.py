@@ -1,24 +1,19 @@
 from __future__ import annotations
 
+import ast
 import unittest
 from io import BytesIO
+from pathlib import Path
 
-from sciretriever.interoperability.codecs import (
-    BibtexCodec,
-    CslJsonCodec,
-    EndnoteXmlCodec,
-    RisCodec,
-)
-from sciretriever.interoperability.import_preparation import (
-    ImportIdentityResolution,
-    ImportPreparationRequest,
-    prepare_import_record,
-)
-from sciretriever.interoperability.publisher_contracts import ImportResult
-from sciretriever.model.primitives import (
-    WorkId,
-    WorkVersionId,
-)
+from pydantic import BaseModel, ValidationError
+
+import sciretriever.model.record as target_record
+from sciretriever.interoperability.codecs import BibtexCodec, CslJsonCodec, RisCodec
+from sciretriever.interoperability.import_preparation import prepare_import_record
+from sciretriever.model.execution import Action, FailureEvidence, Reason
+from sciretriever.model.literature import Identifier
+from sciretriever.model.primitives import WorkId, WorkVersionId
+from sciretriever.model.record import ImportIdentityResolution, ImportPreparationRequest
 
 BIBTEX = (
     b"@article{x,title={Canonical Title},"
@@ -46,27 +41,9 @@ CSL = (
     b'"references":["First ref","Second ref"],"note":"secret",'
     b'"attachments":["/private/paper.pdf"]}]'
 )
-ENDNOTE = (
-    b'<?xml version="1.0" encoding="UTF-8"?><xml><records><record>'
-    b'<ref-type name="Journal Article">17</ref-type><titles>'
-    b"<title>Canonical Title</title><secondary-title>Journal</secondary-title></titles>"
-    b"<contributors><authors><author>Lovelace, Ada</author>"
-    b"<author>Hopper, Grace</author></authors></contributors><abstract>Summary</abstract>"
-    b"<dates><year>2026</year><month>7</month></dates><volume>4</volume>"
-    b"<number>2</number><pages>10-20</pages>"
-    b"<electronic-resource-num>10.1000/Example</electronic-resource-num>"
-    b"<accession-num>PMID:42</accession-num><isbn>1234-5678</isbn>"
-    b"<language>en</language><keywords><keyword>alpha</keyword><keyword>beta</keyword>"
-    b"<keyword>alpha</keyword></keywords><custom1>review</custom1><custom2>core</custom2>"
-    b"<references><reference>First ref</reference><reference>Second ref</reference>"
-    b"</references><notes>secret</notes><urls><pdf-urls>"
-    b"<url>/private/paper.pdf</url></pdf-urls></urls></record></records></xml>"
-)
 
 
 class FakeIdentity:
-    __slots__ = ("calls", "resolution")
-
     def __init__(self, resolution: ImportIdentityResolution) -> None:
         self.resolution = resolution
         self.calls = 0
@@ -77,12 +54,118 @@ class FakeIdentity:
 
 
 class TargetBibliographyImportTests(unittest.TestCase):
-    def test_four_formats_converge_without_private_fields(self) -> None:
+    @staticmethod
+    def representative_record() -> target_record.ImportedBibliographicRecord:
+        return target_record.ImportedBibliographicRecord(
+            title="Canonical Title",
+            authors=("Lovelace, Ada", "Hopper, Grace"),
+            identifiers=(
+                Identifier(namespace="doi", value="10.1000/example"),
+                Identifier(namespace="pmid", value="42"),
+            ),
+            abstract="Summary",
+            keywords=("alpha", "beta"),
+            tags=("review", "core"),
+            references=("First ref", "Second ref"),
+            institutions=("Example University",),
+            year=2026,
+            month=7,
+            venue="Journal",
+            volume="4",
+            issue="2",
+            pages="10-20",
+            item_type="article",
+            language="en",
+        )
+
+    def test_record_contracts_are_owned_by_target_model_without_legacy_duplicates(self) -> None:
+        target_names = {
+            "ExportEncodingResult",
+            "ExportOmission",
+            "ImportedBibliographicRecord",
+            "RecordParseResult",
+        }
+        legacy_module = __import__("sciretriever.interoperability.model", fromlist=("model",))
+        legacy_path = (
+            Path(__file__).parents[1] / "src" / "sciretriever" / "interoperability" / "model.py"
+        )
+        tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
+        legacy_definitions = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        self.assertEqual(legacy_definitions & target_names, set())
+        for name in target_names:
+            contract = getattr(target_record, name)
+            self.assertTrue(issubclass(contract, BaseModel))
+            self.assertIs(contract.__module__, target_record.__name__)
+            self.assertTrue(contract.model_config["frozen"])
+            self.assertTrue(contract.model_config["strict"])
+            self.assertEqual(contract.model_config["extra"], "forbid")
+            self.assertNotIn(name, legacy_module.__dict__)
+
+    def test_record_and_results_round_trip_deterministically(self) -> None:
+        record = self.representative_record()
+        record_json = record.model_dump_json()
+
+        self.assertEqual(
+            target_record.ImportedBibliographicRecord.model_validate_json(record_json), record
+        )
+        self.assertEqual(
+            target_record.ImportedBibliographicRecord.model_validate_json(
+                record_json
+            ).model_dump_json(),
+            record_json,
+        )
+
+        failure = FailureEvidence(
+            code="malformed-record",
+            reason=Reason(value="record is malformed"),
+            action=Action(value="Correct the record."),
+            retryable=False,
+        )
+        parsed = target_record.RecordParseResult(ordinal=2, record=record, failure=failure)
+        encoded = target_record.ExportEncodingResult(
+            record_count=1,
+            bytes_written=len(record_json.encode("utf-8")),
+            omissions=(target_record.ExportOmission(field="attachments", reason="not portable"),),
+        )
+
+        self.assertEqual(
+            target_record.RecordParseResult.model_validate_json(parsed.model_dump_json()), parsed
+        )
+        self.assertEqual(
+            target_record.ExportEncodingResult.model_validate_json(encoded.model_dump_json()),
+            encoded,
+        )
+
+    def test_unknown_coercible_and_out_of_range_record_fields_are_rejected(self) -> None:
+        record = self.representative_record()
+        unknown = record.model_dump(mode="json")
+        unknown["private_path"] = "/private/paper.pdf"
+        with self.assertRaises(ValidationError):
+            target_record.ImportedBibliographicRecord.model_validate(unknown)
+
+        coercible = record.model_dump(mode="json")
+        coercible["year"] = "2026"
+        with self.assertRaises(ValidationError):
+            target_record.ImportedBibliographicRecord.model_validate(coercible)
+
+        out_of_range = record.model_dump(mode="json")
+        out_of_range["month"] = 13
+        with self.assertRaises(ValidationError):
+            target_record.ImportedBibliographicRecord.model_validate(out_of_range)
+
+        with self.assertRaises(ValidationError):
+            record.title = "Changed"
+
+    def test_three_formats_converge_without_private_fields(self) -> None:
         codecs_and_bytes = (
             (BibtexCodec(), BIBTEX),
             (RisCodec(), RIS),
             (CslJsonCodec(), CSL),
-            (EndnoteXmlCodec(), ENDNOTE),
         )
 
         records = tuple(
@@ -100,101 +183,11 @@ class TargetBibliographyImportTests(unittest.TestCase):
 
         self.assertEqual(tuple(item.failure is None for item in results), (True, False, True))
 
-    def test_endnote_rejects_dtd_and_utf8_rejects_malformed_bytes(self) -> None:
-        xxe = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><xml><records/></xml>'
+    def test_malformed_csl_json_is_rejected_without_private_bytes(self) -> None:
+        result = CslJsonCodec().read(BytesIO(b"[\xff]"))
 
-        xml_result = EndnoteXmlCodec().read(BytesIO(xxe))
-        byte_result = CslJsonCodec().read(BytesIO(b"[\xff]"))
-
-        self.assertIsNotNone(xml_result[0].failure)
-        self.assertIsNotNone(byte_result[0].failure)
-
-    def test_endnote_rejects_utf16_declarations_before_entity_expansion(self) -> None:
-        declarations = (
-            '<!DOCTYPE xml [<!ENTITY x "EXPANDED">]>',
-            '<! DoCtYpE xml [<! EnTiTy x SYSTEM "file:///etc/passwd">]>',
-            '<!DOCTYPE xml PUBLIC "external" "https://example.invalid/x">',
-            '<!DOCTYPE xml [<!ENTITY a "1234567890"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]>',
-        )
-        codecs = ("utf-16-le", "utf-16-be")
-
-        results = tuple(
-            EndnoteXmlCodec().read(
-                BytesIO(
-                    (b"\xff\xfe" if encoding.endswith("le") else b"\xfe\xff")
-                    + (
-                        f'<?xml version="1.0" encoding="UTF-16"?>{declaration}'
-                        "<xml><records><record><titles><title>&x;</title></titles></record></records></xml>"
-                    ).encode(encoding)
-                )
-            )[0]
-            for declaration in declarations
-            for encoding in codecs
-        )
-
-        self.assertTrue(all(item.failure is not None for item in results))
-
-    def test_endnote_namespace_variants_map_identically_and_reject_unknown_namespace(self) -> None:
-        body = (
-            "<records><record><titles><title>Namespaced</title></titles>"
-            "<references><reference>R</reference></references></record></records>"
-        )
-        default = f'<xml xmlns="urn:endnote">{body}</xml>'.encode()
-        prefixed = (
-            f'<e:xml xmlns:e="urn:endnote">'
-            f"{body.replace('<', '<e:').replace('<e:/', '</e:')}</e:xml>"
-        ).encode()
-        unknown = f'<xml xmlns="urn:unknown">{body}</xml>'.encode()
-        collision = (
-            b"<xml><record><title>Wrong</title></record><records><record><titles>"
-            b"<title>Namespaced</title></titles></record></records></xml>"
-        )
-
-        default_record = EndnoteXmlCodec().read(BytesIO(default))[0]
-        prefixed_record = EndnoteXmlCodec().read(BytesIO(prefixed))[0]
-        unknown_result = EndnoteXmlCodec().read(BytesIO(unknown))[0]
-        collision_result = EndnoteXmlCodec().read(BytesIO(collision))
-
-        self.assertEqual(default_record.record, prefixed_record.record)
-        self.assertIsNotNone(unknown_result.failure)
-        self.assertEqual(len(collision_result), 1)
-        self.assertEqual(collision_result[0].record.title, "Namespaced")
-
-    def test_endnote_encoding_contract_rejects_mismatch_and_nul_but_accepts_benign_utf16(
-        self,
-    ) -> None:
-        benign = (
-            '<?xml version="1.0" encoding="UTF-16"?><xml><records><record><titles>'
-            "<title>Benign</title></titles></record></records></xml>"
-        )
-        declared_le = benign.replace('encoding="UTF-16"', 'encoding="UTF-16LE"').encode("utf-16-le")
-        mismatched_bom = b"\xff\xfe" + benign.replace(
-            'encoding="UTF-16"', 'encoding="UTF-16BE"'
-        ).encode("utf-16-le")
-        mismatch = b'<?xml version="1.0" encoding="UTF-16"?><xml><records/></xml>'
-        unsupported = b'<?xml version="1.0" encoding="ISO-8859-1"?><xml><records/></xml>'
-        nul = b'<?xml version="1.0"?><xml>\x00<records/></xml>'
-
-        good = tuple(
-            EndnoteXmlCodec().read(BytesIO(value))[0]
-            for value in (
-                b"\xff\xfe" + benign.encode("utf-16-le"),
-                b"\xfe\xff" + benign.encode("utf-16-be"),
-                declared_le,
-            )
-        )
-        bad = tuple(
-            EndnoteXmlCodec().read(BytesIO(value))[0]
-            for value in (
-                mismatched_bom,
-                mismatch,
-                unsupported,
-                nul,
-            )
-        )
-
-        self.assertTrue(all(item.failure is None for item in good))
-        self.assertTrue(all(item.failure is not None for item in bad))
+        self.assertIsNotNone(result[0].failure)
+        self.assertNotIn("private", repr(result[0]).lower())
 
     def test_csl_empty_array_is_one_explicit_rejection(self) -> None:
         result = CslJsonCodec().read(BytesIO(b"[]"))
@@ -213,41 +206,70 @@ class TargetBibliographyImportTests(unittest.TestCase):
         parsed = BibtexCodec().read(BytesIO(BIBTEX))[0]
         identity = FakeIdentity(
             ImportIdentityResolution(
-                WorkId("00000000-0000-0000-0000-000000000001"),
-                WorkVersionId("00000000-0000-0000-0000-000000000002"),
-                ImportResult.ENRICHED,
-                True,
-                None,
+                work_id=WorkId("00000000-0000-0000-0000-000000000001"),
+                work_version_id=WorkVersionId("00000000-0000-0000-0000-000000000002"),
+                result="enriched",
+                completed=True,
+                prepared=None,
             )
         )
 
         outcome = prepare_import_record(identity, parsed)
 
-        self.assertEqual(outcome.result, ImportResult.DUPLICATE)
+        self.assertEqual(outcome.result.outcome, "duplicate")
         self.assertIsNone(outcome.prepared)
         self.assertEqual(identity.calls, 1)
 
     def test_replay_and_mixed_format_use_identity_result_without_writes(self) -> None:
         identity = FakeIdentity(
             ImportIdentityResolution(
-                WorkId("00000000-0000-0000-0000-000000000001"),
-                WorkVersionId("00000000-0000-0000-0000-000000000002"),
-                ImportResult.DUPLICATE,
-                False,
-                None,
+                work_id=WorkId("00000000-0000-0000-0000-000000000001"),
+                work_version_id=WorkVersionId("00000000-0000-0000-0000-000000000002"),
+                result="duplicate",
+                completed=False,
+                prepared=None,
             )
         )
         parsed = (
             BibtexCodec().read(BytesIO(BIBTEX))[0],
             RisCodec().read(BytesIO(RIS))[0],
             CslJsonCodec().read(BytesIO(CSL))[0],
-            EndnoteXmlCodec().read(BytesIO(ENDNOTE))[0],
         )
 
         outcomes = tuple(prepare_import_record(identity, item) for item in parsed + parsed)
 
-        self.assertEqual({item.result for item in outcomes}, {ImportResult.DUPLICATE})
-        self.assertEqual(identity.calls, 8)
+        self.assertEqual({item.result.outcome for item in outcomes}, {"duplicate"})
+        self.assertEqual(identity.calls, 6)
+
+    def test_import_preparation_consumes_target_record_contract(self) -> None:
+        resolution = ImportIdentityResolution(
+            work_id=WorkId("00000000-0000-0000-0000-000000000001"),
+            work_version_id=WorkVersionId("00000000-0000-0000-0000-000000000002"),
+            result="enriched",
+            completed=True,
+            prepared=None,
+        )
+        identity = FakeIdentity(resolution)
+        record = target_record.ImportedBibliographicRecord(
+            title="Canonical Title",
+            authors=("Lovelace, Ada",),
+            identifiers=(),
+            abstract=None,
+            keywords=(),
+            tags=(),
+            references=(),
+        )
+        parsed = target_record.RecordParseResult(
+            ordinal=0,
+            record=record,
+            failure=None,
+        )
+
+        outcome = prepare_import_record(identity, parsed)
+
+        self.assertEqual(outcome.result.outcome, "duplicate")
+        self.assertIsNone(outcome.prepared)
+        self.assertEqual(identity.calls, 1)
 
 
 if __name__ == "__main__":

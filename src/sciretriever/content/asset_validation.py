@@ -8,7 +8,8 @@ from typing import assert_never
 
 from PyPDF2 import PdfReader
 
-from sciretriever.content.model import BoundedByteStream, ContentTarget
+import sciretriever.model.assets as asset_models
+from sciretriever.model.access import BoundedByteStream
 from sciretriever.model.primitives import AssetRole
 
 
@@ -21,7 +22,7 @@ def _normalized(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", value).casefold()))
 
 
-def _doi(target: ContentTarget) -> str | None:
+def _doi(target: asset_models.ContentTarget) -> str | None:
     return next(
         (
             item.value.casefold()
@@ -34,13 +35,13 @@ def _doi(target: ContentTarget) -> str | None:
 
 def validate_asset(
     content: BoundedByteStream,
-    target: ContentTarget,
+    target: asset_models.ContentTarget,
     role: AssetRole,
     *,
     min_pdf_bytes: int,
     max_asset_bytes: int,
 ) -> AssetValidationFailure | None:
-    data = content.content
+    data = b"".join(content.chunks)
     if not data or len(data) > max_asset_bytes or content.size != len(data):
         return AssetValidationFailure("size-invalid")
     match role:
@@ -73,11 +74,11 @@ def validate_asset(
 
 def _validate_pdf(  # noqa: C901
     content: BoundedByteStream,
-    target: ContentTarget,
+    target: asset_models.ContentTarget,
     role: AssetRole,
     min_pdf_bytes: int,
 ) -> AssetValidationFailure | None:
-    data = content.content
+    data = b"".join(content.chunks)
     if len(data) < min_pdf_bytes:
         return AssetValidationFailure("size-invalid")
     if content.media_type.split(";", 1)[0].strip().lower() != "application/pdf":

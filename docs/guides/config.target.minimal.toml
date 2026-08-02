@@ -8,24 +8,24 @@ storage_root = "~/.sciretriever-assets"
 [collection]
 citation_providers = ["openalex", "semantic-scholar"]
 
-[metadata]
+[sources]
 providers = ["crossref", "europe-pmc", "arxiv"]
 
-[content.acquisition]
+[assets]
 providers = ["direct", "arxiv", "crossref", "europe-pmc"]
 
-[content.parser]
+[parsing]
 protocol = "loopback"
 base_url = "http://127.0.0.1:8000"
 model = "mineru-3.4.4"
 
-[content.analysis]
+[analysis]
 protocol = "openai"
 base_url = "https://api.openai.com/v1"
 model = "gpt-5.1"
 secret_ref = "env:SCIRETRIEVER_ANALYSIS_API_KEY"
 
-[batching]
-[interoperability]
+[execution]
+[library]
+[access]
 [credentials]
-[extensions]

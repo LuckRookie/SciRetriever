@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from sciretriever.interoperability.model import ExportEncodingResult, RecordParseResult
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
     parse_canonical_json,
 )
 from sciretriever.model.primitives import BibliographyFormat
+from sciretriever.model.record import ExportEncodingResult, RecordParseResult
 
 from ._common import CodecInputError, decode_bytes, read_bounded, record, rejected
 
@@ -99,7 +99,7 @@ class CslJsonCodec:
                     ),
                     language=_text(fields, "language"),
                 )
-                results.append(RecordParseResult(ordinal, result, None))
+                results.append(RecordParseResult(ordinal=ordinal, record=result, failure=None))
             except (CodecInputError, KeyError, TypeError, ValueError) as error:
                 results.append(rejected(ordinal, "malformed-record", str(error)))
         return tuple(results)

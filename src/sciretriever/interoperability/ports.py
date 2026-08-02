@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sciretriever.interoperability.model import (
+from sciretriever.model.execution import ImportRecordProjection, ImportResult
+from sciretriever.model.primitives import BibliographyFormat
+from sciretriever.model.record import (
     ExportEncodingResult,
     ImportedBibliographicRecord,
     RecordParseResult,
 )
-from sciretriever.interoperability.publisher_contracts import ImportRecordProjection, ImportResult
-from sciretriever.model.primitives import BibliographyFormat
 
 
 class BinaryInput(Protocol):

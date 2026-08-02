@@ -9,15 +9,12 @@ from test_target_collection import (
     observation,
 )
 
-from sciretriever.collection.api import (
-    CollectionAcceptance,
-    TopicConditions,
-)
 from sciretriever.collection.service import MetadataSource
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )
+from sciretriever.model.collection import CollectionAcceptance, TopicConditions
 from sciretriever.model.primitives import WorkVersionState
 from sciretriever.model.sources import MetadataDiscoveryRequest, ProviderDiscoveryResult
 
@@ -53,7 +50,7 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
             [],
         )
         service = self.service((MetadataSource("dup", port),))
-        definition = service.create("Exact duplicate", None, TopicConditions("duplicate"))
+        definition = service.create("Exact duplicate", None, TopicConditions(query="duplicate"))
 
         run = service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
         restarted = self.collection_repository.get_run(run.run_id)
@@ -86,7 +83,9 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
             [],
         )
         service = self.service((MetadataSource("dup", port),))
-        definition = service.create("Conflicting duplicate", None, TopicConditions("duplicate"))
+        definition = service.create(
+            "Conflicting duplicate", None, TopicConditions(query="duplicate")
+        )
 
         run = service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
 
@@ -122,7 +121,7 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
                 MetadataSource("broken", RaisingMetadataPort(RuntimeError("provider exploded"))),
             )
         )
-        definition = service.create("Exception", None, TopicConditions("exception"))
+        definition = service.create("Exception", None, TopicConditions(query="exception"))
 
         with self.assertRaisesRegex(RuntimeError, "provider exploded"):
             service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)
@@ -162,7 +161,7 @@ class TargetCollectionLifecycleTests(TargetCollectionTests):
         )
         publisher = InterruptingPublisher(CollectionAcceptancePublisher(self.catalog), "interrupt")
         service = self.service((MetadataSource("source", port),), publisher)
-        definition = service.create("Interrupted", None, TopicConditions("interrupt"))
+        definition = service.create("Interrupted", None, TopicConditions(query="interrupt"))
 
         with self.assertRaises(KeyboardInterrupt):
             service.run_topic(definition.collection_id, WorkVersionState.UNREVIEWED)

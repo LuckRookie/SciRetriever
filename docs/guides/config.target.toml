@@ -10,20 +10,20 @@ citation_providers = ["openalex", "semantic-scholar"]
 topic_limit = 1000
 citation_max_new = 1000
 
-[metadata]
+[sources]
 providers = ["crossref", "europe-pmc", "arxiv"]
 timeout_seconds = 30.0
 max_concurrency = 4
 result_limit = 1000
 
-[content.acquisition]
+[assets]
 providers = ["direct", "arxiv", "crossref", "europe-pmc"]
 timeout_seconds = 30.0
 provider_concurrency = 4
 host_concurrency = 2
 max_asset_bytes = 104857600
 
-[content.parser]
+[parsing]
 protocol = "loopback"
 base_url = "http://127.0.0.1:8000"
 model = "mineru-3.4.4"
@@ -33,7 +33,7 @@ max_pages = 2000
 max_blocks = 500000
 max_source_units = 100000
 
-[content.analysis]
+[analysis]
 protocol = "openai"
 base_url = "https://api.openai.com/v1"
 model = "gpt-5.1"
@@ -43,18 +43,18 @@ max_output_tokens = 16384
 max_input_characters = 200000
 max_source_units = 5000
 
-[batching]
+[execution]
 max_targets = 1000
 max_concurrency = 4
 
-[interoperability]
+[library]
 max_input_bytes = 67108864
 max_records = 100000
+namespaces = []
+max_results = 100
+
+[access]
 
 [credentials]
 # metadata = "env:SCIRETRIEVER_METADATA_API_KEY"
 # acquisition = "env:SCIRETRIEVER_ACQUISITION_API_KEY"
-
-[extensions]
-namespaces = []
-max_results = 100

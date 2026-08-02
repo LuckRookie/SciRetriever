@@ -1,30 +1,48 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
+from dataclasses import replace as dataclass_replace
 
+from pydantic import BaseModel
 from target_publisher_support import ScenarioFactory
 
-from sciretriever.batching.api import (
-    ContentAcceptanceCommand,
-    ImportAcceptanceCommand,
-    TargetResult,
-)
-from sciretriever.bibliography.api import CompletionSubmission, FinalMetadataFact
-from sciretriever.collection.api import CollectionAcceptance
 from sciretriever.collection.publisher_contracts import validate_collection_acceptance
-from sciretriever.content.api import LightDocumentAcceptance
-from sciretriever.interoperability.ports import ImportResult
+from sciretriever.core.execution import (
+    ExecutionRejectedError,
+    canonical_import_record_projection,
+    canonical_target_projection,
+    validate_content_acceptance_command,
+    validate_import_acceptance_command,
+)
+from sciretriever.core.literature.acceptance import (
+    CompletionRejectedError,
+    validate_completion_submission_contract,
+)
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
 )
-from sciretriever.literature_store.sqlite import StalePublicationError, open_read_only_snapshot
+from sciretriever.literature_store.sqlite import (
+    CompletionPublisher,
+    ContentAcceptancePublisher,
+    StalePublicationError,
+    open_read_only_snapshot,
+)
+from sciretriever.model.collection import CollectionAcceptance
+from sciretriever.model.documents import LightDocumentAcceptance
+from sciretriever.model.execution import ContentAcceptanceCommand, ImportAcceptanceCommand
+from sciretriever.model.literature import CompletionSubmission
 from sciretriever.model.primitives import (
     Sha256,
     WorkId,
     WorkVersionId,
 )
+
+
+def replace(value, **updates):
+    if isinstance(value, BaseModel):
+        return value.model_copy(update=updates)
+    return dataclass_replace(value, **updates)
 
 
 class InjectedFailure(RuntimeError):
@@ -55,30 +73,40 @@ class TargetPublisherTests(unittest.TestCase):
         imported = self.factory.imported()
         assert isinstance(imported.command, ImportAcceptanceCommand)
         other_version = WorkVersionId("00000000-0000-0000-0000-000000000002")
-        with self.assertRaises(BoundaryError):
-            ImportAcceptanceCommand(
-                imported.command.bibliography,
-                imported.command.references,
-                imported.command.tags,
-                replace(imported.command.record, work_version_id=other_version),
+        with self.assertRaises(ExecutionRejectedError):
+            validate_import_acceptance_command(
+                ImportAcceptanceCommand(
+                    bibliography=imported.command.bibliography,
+                    references=imported.command.references,
+                    tags=imported.command.tags,
+                    record=replace(imported.command.record, work_version_id=other_version),
+                )
             )
 
         primary = self.factory.primary()
         assert isinstance(primary.command, ContentAcceptanceCommand)
-        with self.assertRaises(BoundaryError):
-            ContentAcceptanceCommand(
-                primary.command.acceptance,
-                replace(primary.command.target, work_version_id=other_version),
+        with self.assertRaises(ExecutionRejectedError):
+            validate_content_acceptance_command(
+                ContentAcceptanceCommand(
+                    acceptance=primary.command.acceptance,
+                    target=replace(primary.command.target, work_version_id=other_version),
+                )
             )
 
         completion = self.factory.completion()
         assert isinstance(completion.command, CompletionSubmission)
-        with self.assertRaises(BoundaryError):
-            replace(completion.command, work_version_id=other_version)
-        with self.assertRaises(BoundaryError):
-            replace(
-                completion.command,
-                references=replace(completion.command.references, work_version_id=other_version),
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(
+                replace(completion.command, work_version_id=other_version)
+            )
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(
+                replace(
+                    completion.command,
+                    references=replace(
+                        completion.command.references, work_version_id=other_version
+                    ),
+                )
             )
 
     def test_adapters_defensively_reject_tampered_cross_identity_commands(self) -> None:
@@ -118,22 +146,36 @@ class TargetPublisherTests(unittest.TestCase):
     def test_pairwise_result_enums_with_identical_details_persist_differently(self) -> None:
         details = CanonicalJsonObject((("reason", "same"),))
         cases = (
-            (self.factory.primary, TargetResult.PARTIALLY_ADVANCED, TargetResult.FAILED),
-            (self.factory.imported, ImportResult.CREATED, ImportResult.REJECTED),
+            (self.factory.primary, ("partially-advanced", "failed")),
+            (self.factory.imported, ("created", "rejected")),
         )
-        for builder, first_result, second_result in cases:
+        for builder, result_values in cases:
             stored: list[str] = []
-            for result in (first_result, second_result):
+            for result_value in result_values:
                 scenario = builder()
                 command = scenario.command
                 if isinstance(command, ContentAcceptanceCommand):
                     command = replace(
-                        command, target=replace(command.target, result=result, details=details)
+                        command,
+                        target=replace(
+                            command.target,
+                            result=command.target.result.model_copy(
+                                update={"outcome": result_value}
+                            ),
+                            details=details,
+                        ),
                     )
                 else:
                     assert isinstance(command, ImportAcceptanceCommand)
                     command = replace(
-                        command, record=replace(command.record, result=result, details=details)
+                        command,
+                        record=replace(
+                            command.record,
+                            result=command.record.result.model_copy(
+                                update={"outcome": result_value}
+                            ),
+                            details=details,
+                        ),
                     )
                 replace(scenario, command=command).invoke()
                 with open_read_only_snapshot(scenario.path) as reader:
@@ -142,50 +184,72 @@ class TargetPublisherTests(unittest.TestCase):
                     )
             with self.subTest(builder=builder.__name__):
                 self.assertNotEqual(stored[0], stored[1])
-                self.assertIn(f'"result":"{first_result.value}"', stored[0])
-                self.assertIn(f'"result":"{second_result.value}"', stored[1])
+                self.assertIn(f'"result":"{result_values[0]}"', stored[0])
+                self.assertIn(f'"result":"{result_values[1]}"', stored[1])
                 self.assertIn('"details":{"reason":"same"}', stored[0])
 
     def test_result_details_cannot_supply_a_second_discriminator(self) -> None:
         contradictory = CanonicalJsonObject((("result", "failed"),))
         primary = self.factory.primary()
         assert isinstance(primary.command, ContentAcceptanceCommand)
-        with self.assertRaises(BoundaryError):
-            replace(primary.command.target, details=contradictory)
+        with self.assertRaises(ExecutionRejectedError):
+            canonical_target_projection(replace(primary.command.target, details=contradictory))
         imported = self.factory.imported()
         assert isinstance(imported.command, ImportAcceptanceCommand)
-        with self.assertRaises(BoundaryError):
-            replace(imported.command.record, details=contradictory)
+        with self.assertRaises(ExecutionRejectedError):
+            canonical_import_record_projection(
+                replace(imported.command.record, details=contradictory)
+            )
 
     def test_owner_contracts_reject_false_structured_payload_identity(self) -> None:
         completion = self.factory.completion()
         assert isinstance(completion.command, CompletionSubmission)
         metadata = completion.command.metadata
-        with self.assertRaises(BoundaryError):
-            FinalMetadataFact(
-                metadata.work_version_id,
-                metadata.expected_snapshot_id,
-                metadata.expected_revision,
-                metadata.expected_sha256,
-                metadata.snapshot_id,
-                metadata.revision,
-                Sha256("0" * 64),
-                metadata.values,
-                metadata.provenance,
-            )
+        tampered = metadata.model_copy(update={"sha256": Sha256("0" * 64)})
+        candidate = completion.command.model_copy(update={"metadata": tampered})
+        assert isinstance(completion.publisher, CompletionPublisher)
+        assert completion.target is not None
+        with self.assertRaises(StalePublicationError):
+            completion.publisher.publish_completion(candidate, completion.target)
         light = self.factory.light()
         assert isinstance(light.command, ContentAcceptanceCommand)
         accepted_light = light.command.acceptance
         assert isinstance(accepted_light, LightDocumentAcceptance)
-        with self.assertRaises(BoundaryError):
-            replace(accepted_light, document=CanonicalJsonObject((("tampered", True),)))
+        tampered_light = replace(
+            accepted_light,
+            document=CanonicalJsonObject((("tampered", True),)),
+        )
+        with self.assertRaises(StalePublicationError):
+            assert isinstance(light.publisher, ContentAcceptancePublisher)
+            light.publisher.publish(
+                ContentAcceptanceCommand(
+                    acceptance=tampered_light,
+                    target=light.command.target,
+                )
+            )
         analysis = completion.command.analysis
-        with self.assertRaises(BoundaryError):
-            replace(analysis, proposal=CanonicalJsonObject((("tampered", True),)))
-        with self.assertRaises(BoundaryError):
-            replace(analysis, artifact_size=analysis.artifact_size + 1)
-        with self.assertRaises(BoundaryError):
-            replace(analysis, artifact_sha256=Sha256("1" * 64))
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(
+                completion.command.model_copy(
+                    update={
+                        "analysis": replace(
+                            analysis, proposal=CanonicalJsonObject((("tampered", True),))
+                        )
+                    }
+                )
+            )
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(
+                completion.command.model_copy(
+                    update={"analysis": replace(analysis, artifact_size=analysis.artifact_size + 1)}
+                )
+            )
+        with self.assertRaises(CompletionRejectedError):
+            validate_completion_submission_contract(
+                completion.command.model_copy(
+                    update={"analysis": replace(analysis, artifact_sha256=Sha256("1" * 64))}
+                )
+            )
 
     def test_adapters_recompute_structured_payload_identity_before_begin(self) -> None:
         scenarios = (self.factory.light(), self.factory.completion(), self.factory.completion())

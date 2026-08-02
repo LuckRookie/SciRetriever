@@ -7,11 +7,6 @@ from dataclasses import dataclass
 from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.collection.api import (
-    CitationCollectionRequest,
-    FinishCollectionRun,
-    WorkSeed,
-)
 from sciretriever.collection.service import (
     CitationSource,
     CollectionService,
@@ -22,6 +17,12 @@ from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
     open_read_only_snapshot,
+)
+from sciretriever.model.collection import (
+    CitationCollectionRequest,
+    FinishCollectionRun,
+    MembershipPageRequest,
+    WorkSeed,
 )
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
@@ -162,9 +163,7 @@ class TargetCitationTerminalizationTests(CitationCollectionTestCase):
             tuple(
                 item.work_id
                 for item in self.collections.list_memberships(
-                    __import__(
-                        "sciretriever.collection.api", fromlist=["MembershipPageRequest"]
-                    ).MembershipPageRequest(
+                    MembershipPageRequest(
                         collection_id=target.collection_id,
                         after_work_id=None,
                         limit=100,

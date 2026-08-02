@@ -18,10 +18,7 @@ from sciretriever.collection.publisher_contracts import (
 )
 from sciretriever.collection.run_finalization import CollectionRunFinalizer
 from sciretriever.kernel import (
-    Action,
     CanonicalJsonObject,
-    FailureEvidence,
-    Reason,
     canonical_json_bytes,
 )
 from sciretriever.model.collection import (
@@ -33,6 +30,7 @@ from sciretriever.model.collection import (
     CollectionRunRecord,
     ExistingCollectionAcceptance,
 )
+from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import BibliographicObservation, InitialMetadata
 from sciretriever.model.primitives import (
     CollectionCauseId,

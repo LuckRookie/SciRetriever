@@ -1,8 +1,8 @@
-from sciretriever.literature_store.sqlite.bibliography_repository import (
-    SqliteBibliographyRepository,
-)
 from sciretriever.literature_store.sqlite.collection_repository import SqliteCollectionRepository
-from sciretriever.literature_store.sqlite.curation_transaction import SqliteCurationTransaction
+from sciretriever.literature_store.sqlite.curation_transaction import (
+    CurationStaleError,
+    SqliteCurationTransaction,
+)
 from sciretriever.literature_store.sqlite.engine import (
     CatalogConnection,
     UnsupportedCatalogError,
@@ -11,6 +11,9 @@ from sciretriever.literature_store.sqlite.engine import (
     validate_catalog,
 )
 from sciretriever.literature_store.sqlite.library_repository import SqliteLibraryReadRepository
+from sciretriever.literature_store.sqlite.literature_repository import (
+    SqliteLiteratureRepository,
+)
 from sciretriever.literature_store.sqlite.opaque_extensions import (
     OpaqueExtensionConflictError,
     OpaqueExtensionRecordStore,
@@ -31,13 +34,14 @@ __all__ = (
     "CollectionAcceptancePublisher",
     "CompletionPublisher",
     "ContentAcceptancePublisher",
+    "CurationStaleError",
     "ImportAcceptancePublisher",
     "OpaqueExtensionConflictError",
     "OpaqueExtensionRecordStore",
     "SCHEMA_FINGERPRINT",
     "SCHEMA_MANIFEST",
     "SCHEMA_TABLES",
-    "SqliteBibliographyRepository",
+    "SqliteLiteratureRepository",
     "SqliteCollectionRepository",
     "SqliteCurationTransaction",
     "SqliteLibraryReadRepository",

@@ -3,8 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sciretriever.batching.publisher_contracts import TargetProjection
-from sciretriever.bibliography.api import (
+from sciretriever.content.analysis import analysis_bytes
+from sciretriever.content.ports import ArtifactStorePort
+from sciretriever.core.execution import validate_target_alignment
+from sciretriever.core.literature.acceptance import validate_completion_submission_contract
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
+from sciretriever.kernel import (
+    BoundaryError,
+    CanonicalJsonObject,
+    parse_canonical_json,
+)
+from sciretriever.model.analysis import AnalysisProposalV1
+from sciretriever.model.assets import ArtifactKind, StagedArtifact
+from sciretriever.model.execution import TargetProjection
+from sciretriever.model.literature import (
     CompletionAnalysisFact,
     CompletionProvenance,
     CompletionSubmission,
@@ -17,18 +29,6 @@ from sciretriever.bibliography.api import (
     TagMemberId,
     TagSetFact,
     TagSetId,
-    metadata_snapshot_sha256,
-)
-from sciretriever.content.api import (
-    AnalysisProposalV1,
-    ArtifactKind,
-    ArtifactStorePort,
-    StagedArtifact,
-)
-from sciretriever.kernel import (
-    BoundaryError,
-    CanonicalJsonObject,
-    parse_canonical_json,
 )
 from sciretriever.model.primitives import (
     AnalysisArtifactId,
@@ -37,7 +37,6 @@ from sciretriever.model.primitives import (
     MetadataSnapshotId,
     RelativeArtifactPath,
     Sha256,
-    WorkId,
     WorkVersionId,
     sha256_digest,
 )
@@ -74,15 +73,14 @@ def complete_analysis(
     target: TargetProjection,
     artifact_store: ArtifactStorePort,
 ) -> CompletionSubmission:
-    if target.work_version_id != context.work_version_id:
-        raise BoundaryError.for_field("target", "must share the completion WorkVersion")
-    proposal_bytes = proposal.canonical_bytes()
+    validate_target_alignment(target, context.work_version_id)
+    proposal_bytes = analysis_bytes(proposal)
     proposal_hash = sha256_digest(proposal_bytes)
     staged = StagedArtifact(
-        ArtifactKind.ANALYSIS,
-        RelativeArtifactPath(f"analysis/{str(proposal_hash)[:2]}/{proposal_hash}"),
-        proposal_hash,
-        proposal_bytes,
+        kind=ArtifactKind.ANALYSIS,
+        path=RelativeArtifactPath(f"analysis/{str(proposal_hash)[:2]}/{proposal_hash}"),
+        sha256=proposal_hash,
+        content=proposal_bytes,
     )
     published = artifact_store.publish(staged)
     identity = "\0".join(
@@ -104,43 +102,43 @@ def complete_analysis(
         )
     )
     provenance = CompletionProvenance(
-        context.parser_identity,
-        context.model_provider,
-        context.model_identity,
-        context.light_document_sha256,
-        context.parameters_sha256,
-        provenance_value,
+        parser_identity=context.parser_identity,
+        model_provider=context.model_provider,
+        model_identity=context.model_identity,
+        input_sha256=context.light_document_sha256,
+        parameters_sha256=context.parameters_sha256,
+        evidence=provenance_value,
     )
     analysis = CompletionAnalysisFact(
-        context.work_version_id,
-        context.light_document_id,
-        context.light_document_sha256,
-        AnalysisArtifactId(_uuid(f"analysis\0{identity}")),
-        AssetId(_uuid(f"artifact\0analysis\0{proposal_hash}")),
-        published.path,
-        published.sha256,
-        published.size,
-        proposal_value,
+        work_version_id=context.work_version_id,
+        light_document_id=context.light_document_id,
+        input_sha256=context.light_document_sha256,
+        analysis_id=AnalysisArtifactId(_uuid(f"analysis\0{identity}")),
+        artifact_id=AssetId(_uuid(f"artifact\0analysis\0{proposal_hash}")),
+        artifact_path=published.path,
+        artifact_sha256=published.sha256,
+        artifact_size=published.size,
+        proposal=proposal_value,
     )
     final_values = _object(
         proposal.final_bibliography.model_dump_json().encode("utf-8"), "final_bibliography"
     )
     final_revision = context.metadata_revision + 1
     final_metadata = FinalMetadataFact(
-        context.work_version_id,
-        context.metadata_snapshot_id,
-        context.metadata_revision,
-        context.metadata_sha256,
-        MetadataSnapshotId(_uuid(f"metadata\0{identity}")),
-        final_revision,
-        metadata_snapshot_sha256(final_revision, final_values, provenance_value),
-        final_values,
-        provenance_value,
+        work_version_id=context.work_version_id,
+        expected_snapshot_id=context.metadata_snapshot_id,
+        expected_revision=context.metadata_revision,
+        expected_sha256=context.metadata_sha256,
+        snapshot_id=MetadataSnapshotId(_uuid(f"metadata\0{identity}")),
+        revision=final_revision,
+        sha256=metadata_snapshot_sha256(final_revision, final_values, provenance_value),
+        values=final_values,
+        provenance=provenance_value,
     )
     reference_set_id = ReferenceSetId(_uuid(f"references\0{identity}"))
     reference_members = tuple(
         ReferenceMemberFact(
-            ReferenceMemberId(
+            member_id=ReferenceMemberId(
                 str(
                     uuid5(
                         UUID(str(reference_set_id)),
@@ -148,20 +146,18 @@ def complete_analysis(
                     )
                 )
             ),
-            reference.raw_text,
-            _object(reference.model_dump_json().encode("utf-8"), "reference"),
-            None if reference.resolved_work_id is None else WorkId(reference.resolved_work_id),
-            None
-            if reference.resolved_work_version_id is None
-            else WorkVersionId(reference.resolved_work_version_id),
+            raw_text=reference.raw_text,
+            reference=_object(reference.model_dump_json().encode("utf-8"), "reference"),
+            target_work_id=reference.resolved_work_id,
+            target_work_version_id=reference.resolved_work_version_id,
         )
         for ordinal, reference in enumerate(proposal.references)
     )
     references = ReferenceSetFact(
-        reference_set_id,
-        context.work_version_id,
-        final_revision,
-        reference_members,
+        set_id=reference_set_id,
+        work_version_id=context.work_version_id,
+        revision=final_revision,
+        members=reference_members,
     )
     origins: dict[str, set[str]] = {}
     spellings: dict[str, str] = {}
@@ -175,9 +171,9 @@ def complete_analysis(
             spellings.setdefault(key, value)
     tag_members = tuple(
         TagMemberFact(
-            TagMemberId(_uuid(f"tag\0{identity}\0{key}")),
-            spellings[key],
-            CanonicalJsonObject(
+            member_id=TagMemberId(_uuid(f"tag\0{identity}\0{key}")),
+            name=spellings[key],
+            evidence=CanonicalJsonObject(
                 (
                     ("origins", tuple(sorted(origins[key]))),
                     ("source", "analysis-proposal"),
@@ -187,21 +183,23 @@ def complete_analysis(
         for key in sorted(spellings, key=lambda item: (item, spellings[item]))
     )
     tags = TagSetFact(
-        TagSetId(_uuid(f"tags\0{identity}")),
-        context.work_version_id,
-        final_revision,
-        tag_members,
+        set_id=TagSetId(_uuid(f"tags\0{identity}")),
+        work_version_id=context.work_version_id,
+        revision=final_revision,
+        members=tag_members,
     )
-    return CompletionSubmission(
-        context.work_version_id,
-        context.light_document_id,
-        context.light_document_sha256,
-        analysis,
-        final_metadata,
-        references,
-        tags,
-        provenance,
+    submission = CompletionSubmission(
+        work_version_id=context.work_version_id,
+        light_document_id=context.light_document_id,
+        light_document_sha256=context.light_document_sha256,
+        analysis=analysis,
+        metadata=final_metadata,
+        references=references,
+        tags=tags,
+        provenance=provenance,
     )
+    validate_completion_submission_contract(submission)
+    return submission
 
 
 __all__ = ("CompletionContext", "complete_analysis")

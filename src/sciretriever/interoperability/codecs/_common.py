@@ -5,13 +5,9 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Final
 
-from sciretriever.interoperability.model import ImportedBibliographicRecord, RecordParseResult
-from sciretriever.kernel import (
-    Action,
-    FailureEvidence,
-    Reason,
-)
+from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
+from sciretriever.model.record import ImportedBibliographicRecord, RecordParseResult
 
 MAX_INPUT_BYTES: Final = 8 * 1024 * 1024
 READ_SIZE: Final = 64 * 1024
@@ -145,9 +141,17 @@ def identifiers(values) -> tuple[Identifier, ...]:
 
 def rejected(ordinal: int, code: str, reason: str) -> RecordParseResult:
     return RecordParseResult(
-        ordinal,
-        ImportedBibliographicRecord("", (), (), None, (), (), ()),
-        FailureEvidence(
+        ordinal=ordinal,
+        record=ImportedBibliographicRecord(
+            title="",
+            authors=(),
+            identifiers=(),
+            abstract=None,
+            keywords=(),
+            tags=(),
+            references=(),
+        ),
+        failure=FailureEvidence(
             code=code,
             reason=Reason(value=reason),
             action=Action(value="Correct or remove this bibliography record."),
@@ -179,20 +183,20 @@ def record(
     if normalized_title is None:
         raise CodecInputError("missing-title", "record has no convertible title")
     return ImportedBibliographicRecord(
-        normalized_title,
-        ordered(authors),
-        identifiers(identifier_values),
-        clean(abstract),
-        set_values(keywords),
-        set_values(tags),
-        ordered(references),
-        ordered(institutions),
-        year,
-        month,
-        clean(venue),
-        clean(volume),
-        clean(issue),
-        clean(pages),
-        clean(item_type),
-        clean(language),
+        title=normalized_title,
+        authors=ordered(authors),
+        identifiers=identifiers(identifier_values),
+        abstract=clean(abstract),
+        keywords=set_values(keywords),
+        tags=set_values(tags),
+        references=ordered(references),
+        institutions=ordered(institutions),
+        year=year,
+        month=month,
+        venue=clean(venue),
+        volume=clean(volume),
+        issue=clean(issue),
+        pages=clean(pages),
+        item_type=clean(item_type),
+        language=clean(language),
     )

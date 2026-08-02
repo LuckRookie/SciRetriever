@@ -4,12 +4,11 @@ import os
 from collections.abc import Callable
 from typing import assert_never
 
-from sciretriever.batching.api import ContentAcceptanceCommand
-from sciretriever.content.api import (
-    ArtifactKind,
-    LightDocumentAcceptance,
-    PrimaryPdfAcceptance,
-    SupplementaryAssetAcceptance,
+from sciretriever.content.publisher_contracts import validate_content_acceptance
+from sciretriever.core.execution import (
+    ExecutionRejectedError,
+    canonical_target_projection,
+    validate_content_acceptance_command,
 )
 from sciretriever.kernel import BoundaryError, canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
@@ -17,9 +16,10 @@ from sciretriever.literature_store.sqlite.publisher_support import (
     StatementFailpoint,
     execute,
     immediate,
-    verify_published_artifact,
-    verify_structured_artifact,
 )
+from sciretriever.model.assets import PrimaryPdfAcceptance, SupplementaryAssetAcceptance
+from sciretriever.model.documents import LightDocumentAcceptance
+from sciretriever.model.execution import ContentAcceptanceCommand
 
 
 class ContentAcceptancePublisher:
@@ -33,30 +33,17 @@ class ContentAcceptancePublisher:
         self._failpoint = failpoint
 
     def publish(self, command: ContentAcceptanceCommand) -> None:  # noqa: C901
-        if command.acceptance.work_version_id != command.target.work_version_id:
-            raise StalePublicationError("content acceptance identities differ")
-        match command.acceptance:
-            case PrimaryPdfAcceptance() as acceptance:
-                verify_published_artifact(acceptance.artifact)
-                if acceptance.artifact.kind is not ArtifactKind.PRIMARY_PDF:
-                    raise StalePublicationError("primary artifact kind mismatched")
-            case LightDocumentAcceptance() as acceptance:
-                verify_structured_artifact(
-                    acceptance.artifact,
-                    ArtifactKind.LIGHT_DOCUMENT,
-                    acceptance.document,
-                )
-            case SupplementaryAssetAcceptance() as acceptance:
-                verify_published_artifact(acceptance.artifact)
-                if acceptance.artifact.kind is not ArtifactKind.SUPPLEMENTARY:
-                    raise StalePublicationError("supplementary artifact kind mismatched")
-            case unreachable:
-                assert_never(unreachable)
         try:
-            result_json = canonical_json_bytes(command.target.result_envelope().canonical()).decode(
-                "ascii"
-            )
+            validate_content_acceptance_command(command)
+        except ExecutionRejectedError as error:
+            raise StalePublicationError(str(error)) from error
+        try:
+            validate_content_acceptance(command.acceptance)
         except BoundaryError as error:
+            raise StalePublicationError(str(error)) from error
+        try:
+            result_json = canonical_target_projection(command.target).decode("ascii")
+        except ExecutionRejectedError as error:
             raise StalePublicationError("target result envelope is invalid") from error
         point = StatementFailpoint(self._failpoint)
         with immediate(self._catalog_path) as connection:
@@ -76,7 +63,7 @@ class ContentAcceptancePublisher:
                     point,
                     "DELETE FROM current_failures WHERE subject_kind='work-version' AND "
                     "subject_id=? AND stage=?",
-                    (str(target.work_version_id), stage.value),
+                    (str(target.work_version_id), stage),
                 )
             cursor = execute(
                 connection,

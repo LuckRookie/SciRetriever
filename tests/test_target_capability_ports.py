@@ -13,24 +13,6 @@ from sciretriever.batching.ports import (
     OutputIdentity,
 )
 from sciretriever.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
-from sciretriever.content.model import (
-    AcceptedContentReference,
-    AcceptedPrimaryPdf,
-    AnalysisProposalV1,
-    ArtifactKind,
-    AssetCandidate,
-    BoundedByteStream,
-    ContentTarget,
-    Header,
-    LightDocumentBlock,
-    LightDocumentManifest,
-    ParserResult,
-    PublishedArtifact,
-    StagedArtifact,
-    TransportRequest,
-    TransportResponse,
-    UnifiedMetadataSnapshot,
-)
 from sciretriever.content.ports import (
     AnalysisModelPort,
     ArtifactStorePort,
@@ -39,13 +21,26 @@ from sciretriever.content.ports import (
     BoundedTransportPort,
     ParserPort,
 )
-from sciretriever.interoperability.model import (
-    ExportEncodingResult,
-    ImportedBibliographicRecord,
-    RecordParseResult,
-)
 from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
-from sciretriever.model.literature import Identifier
+from sciretriever.model import documents
+from sciretriever.model.access import (
+    BoundedByteStream,
+    Header,
+    TransportRequest,
+    TransportResponse,
+)
+from sciretriever.model.analysis import AnalysisProposalV1
+from sciretriever.model.assets import (
+    AcceptedContentReference,
+    ArtifactKind,
+    AssetCandidate,
+    ContentTarget,
+    PublishedArtifact,
+    StagedArtifact,
+)
+from sciretriever.model.literature import Identifier, UnifiedMetadataSnapshot
+from sciretriever.model.llm import LLMProvenance, LLMRequest, LLMStructuredResponse
+from sciretriever.model.parsing import ParserProvenance, ParserRequest, ParserResult
 from sciretriever.model.primitives import (
     AdmissionBindingId,
     AssetId,
@@ -53,12 +48,16 @@ from sciretriever.model.primitives import (
     BatchRunId,
     BibliographyFormat,
     CitationDirection,
-    LightDocumentId,
     MetadataSnapshotId,
     RelativeArtifactPath,
     WorkId,
     WorkVersionId,
     sha256_digest,
+)
+from sciretriever.model.record import (
+    ExportEncodingResult,
+    ImportedBibliographicRecord,
+    RecordParseResult,
 )
 from sciretriever.model.sources import (
     CitationDiscoveryRequest,
@@ -102,61 +101,106 @@ class FakeCapabilities:
 
     def resolve(self, target: ContentTarget) -> tuple[AssetCandidate, ...]:
         _ = target
-        return (AssetCandidate("fake", AssetRole.PRIMARY_PDF, "https://example.test/a.pdf", ()),)
+        return (
+            AssetCandidate(
+                provider="fake",
+                role=AssetRole.PRIMARY_PDF,
+                locator="https://example.test/a.pdf",
+                headers=(),
+            ),
+        )
 
     def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
-        return BoundedByteStream((b"%PDF-1.7",), "application/pdf", candidate.locator, 8)
-
-    def parse(self, primary_pdf: AcceptedPrimaryPdf) -> ParserResult:
-        block = LightDocumentBlock("body", 0, "text", ())
-        document = LightDocumentManifest(
-            LightDocumentId(UUID_B), primary_pdf.asset_id, primary_pdf.sha256, (block,), "fake"
+        return BoundedByteStream(
+            chunks=(b"%PDF-1.7",),
+            media_type="application/pdf",
+            final_locator=candidate.locator,
+            size=8,
         )
-        return ParserResult(document, "fake", "v1")
 
-    def analyze(self, document: LightDocumentManifest) -> AnalysisProposalV1:
-        _ = document
-        return AnalysisProposalV1.model_validate_json(
-            json.dumps(
-                {
-                    "schema_version": "1",
-                    "final_bibliography": {
-                        "title": "Title",
-                        "authors": [],
-                        "abstract": None,
-                        "publication_date": None,
-                        "publication_year": None,
-                        "document_type": None,
-                        "language": None,
-                        "venue": None,
-                        "publisher": None,
-                        "volume": None,
-                        "issue": None,
-                        "pages": None,
-                        "article_number": None,
-                        "open_access_status": None,
-                        "identifiers": [],
-                    },
-                    "classification": {"document_type": None, "language": None, "subjects": []},
-                    "content_overview": {"summary": None, "conclusions": []},
-                    "research_objectives": [],
-                    "methods": [],
-                    "key_results": [],
-                    "conclusions_and_limitations": {"conclusions": [], "limitations": []},
-                    "keywords_and_tags": {"keywords": [], "tags": []},
-                    "references": [],
-                }
-            )
+    def parse(self, request: ParserRequest) -> ParserResult:
+        return ParserResult(
+            document=documents.LightDocumentV1(
+                schema_version="1",
+                title=None,
+                abstract=(),
+                sections=(),
+                references=(),
+                provenance=(),
+            ),
+            provenance=ParserProvenance(
+                parser_name="fake",
+                parser_version="1",
+                backend="fake",
+                model="fake",
+                parameters_sha256=sha256_digest(b"parameters"),
+                input_sha256=request.asset_sha256,
+            ),
+        )
+
+    def analyze(self, request: LLMRequest) -> LLMStructuredResponse:
+        return LLMStructuredResponse(
+            proposal=AnalysisProposalV1.model_validate_json(
+                json.dumps(
+                    {
+                        "schema_version": "1",
+                        "final_bibliography": {
+                            "title": "Title",
+                            "authors": [],
+                            "abstract": None,
+                            "publication_date": None,
+                            "publication_year": None,
+                            "document_type": None,
+                            "language": None,
+                            "venue": None,
+                            "publisher": None,
+                            "volume": None,
+                            "issue": None,
+                            "pages": None,
+                            "article_number": None,
+                            "open_access_status": None,
+                            "identifiers": [],
+                        },
+                        "classification": {
+                            "document_type": None,
+                            "language": None,
+                            "subjects": [],
+                        },
+                        "content_overview": {"summary": None, "conclusions": []},
+                        "research_objectives": [],
+                        "methods": [],
+                        "key_results": [],
+                        "conclusions_and_limitations": {
+                            "conclusions": [],
+                            "limitations": [],
+                        },
+                        "keywords_and_tags": {"keywords": [], "tags": []},
+                        "references": [],
+                    }
+                )
+            ),
+            provenance=LLMProvenance(
+                provider="fake",
+                model=request.model,
+                input_sha256=sha256_digest(b"document"),
+                parameters_sha256=sha256_digest(b"parameters"),
+            ),
         )
 
     def execute(self, request: TransportRequest) -> TransportResponse:
         return TransportResponse(
-            200, request.url, (Header("content-type", "application/pdf"),), b"ok"
+            status=200,
+            final_url=request.url,
+            headers=(Header(name="content-type", value="application/pdf"),),
+            body=b"ok",
         )
 
     def publish(self, artifact: StagedArtifact) -> PublishedArtifact:
         return PublishedArtifact(
-            artifact.kind, artifact.path, artifact.sha256, len(artifact.content)
+            kind=artifact.kind,
+            path=artifact.path,
+            sha256=artifact.sha256,
+            size=len(artifact.content),
         )
 
 
@@ -181,7 +225,17 @@ class FakeCodec:
         stream.read(64)
         return (
             RecordParseResult(
-                0, ImportedBibliographicRecord("Title", (), (), None, (), (), ()), None
+                ordinal=0,
+                record=ImportedBibliographicRecord(
+                    title="Title",
+                    authors=(),
+                    identifiers=(),
+                    abstract=None,
+                    keywords=(),
+                    tags=(),
+                    references=(),
+                ),
+                failure=None,
             ),
         )
 
@@ -189,7 +243,7 @@ class FakeCodec:
         self, records: tuple[ImportedBibliographicRecord, ...], stream: BinaryOutput
     ) -> ExportEncodingResult:
         written = stream.write(records[0].title.encode("utf-8"))
-        return ExportEncodingResult(len(records), written, ())
+        return ExportEncodingResult(record_count=len(records), bytes_written=written, omissions=())
 
 
 class FakeGuard:
@@ -220,26 +274,26 @@ class TargetCapabilityPortTests(unittest.TestCase):
     @staticmethod
     def content_target() -> ContentTarget:
         metadata = UnifiedMetadataSnapshot(
-            MetadataSnapshotId(UUID_B),
-            3,
-            "Title",
-            (),
-            (),
-            None,
+            snapshot_id=MetadataSnapshotId(UUID_B),
+            revision=3,
+            title="Title",
+            authors=(),
+            identifiers=(),
+            abstract=None,
         )
         accepted = AcceptedContentReference(
-            AssetId(UUID_A),
-            sha256_digest(b"pdf"),
-            2,
+            content_id=AssetId(UUID_A),
+            sha256=sha256_digest(b"pdf"),
+            revision=2,
         )
         return ContentTarget(
-            WorkVersionId(UUID_A),
-            metadata,
-            (accepted,),
-            accepted,
-            3,
-            accepted.sha256,
-            accepted.revision,
+            work_version_id=WorkVersionId(UUID_A),
+            current_metadata=metadata,
+            accepted_content=(accepted,),
+            current_accepted_content=accepted,
+            expected_metadata_revision=3,
+            expected_accepted_content_sha256=accepted.sha256,
+            expected_accepted_content_revision=accepted.revision,
         )
 
     def test_deterministic_fakes_drive_every_capability_method(self) -> None:
@@ -254,18 +308,20 @@ class TargetCapabilityPortTests(unittest.TestCase):
         store: ArtifactStorePort = fake
         request = MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=10)
         content_target = self.content_target()
-        target = content_target.work_version_id
         candidates = resolver.resolve(content_target)
         stream = fetcher.fetch(candidates[0])
-        pdf = AcceptedPrimaryPdf(
-            AssetId(UUID_A), target, sha256_digest(stream.content), stream.media_type
+        parser_request = ParserRequest(
+            pdf=b"".join(stream.chunks),
+            asset_id=AssetId(UUID_A),
+            asset_sha256=sha256_digest(b"".join(stream.chunks)),
+            resume_task_id=None,
         )
-        document = parser.parse(pdf).document
+        document = parser.parse(parser_request).document
         staged = StagedArtifact(
-            ArtifactKind.LIGHT_DOCUMENT,
-            RelativeArtifactPath("light/a.json"),
-            sha256_digest(b"{}"),
-            b"{}",
+            kind=ArtifactKind.LIGHT_DOCUMENT,
+            path=RelativeArtifactPath("light/a.json"),
+            sha256=sha256_digest(b"{}"),
+            content=b"{}",
         )
         self.assertEqual(metadata.search(request).provider, "fake")
         self.assertEqual(
@@ -276,10 +332,18 @@ class TargetCapabilityPortTests(unittest.TestCase):
             ).provider,
             "fake",
         )
-        self.assertEqual(model.analyze(document).schema_version, "1")
+        analysis_request = LLMRequest(document=document, model="fake", max_output_tokens=32)
+        self.assertEqual(model.analyze(analysis_request).proposal.schema_version, "1")
         self.assertEqual(
             transport.execute(
-                TransportRequest("GET", "https://example.test", (), None, 2, 20)
+                TransportRequest(
+                    method="GET",
+                    url="https://example.test",
+                    headers=(),
+                    body=None,
+                    timeout_seconds=2,
+                    max_response_bytes=20,
+                )
             ).status,
             200,
         )

@@ -9,7 +9,7 @@ from types import TracebackType
 from typing import Final
 from uuid import uuid4
 
-from sciretriever.bibliography.api import metadata_snapshot_sha256
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
 from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes, parse_canonical_json
 from sciretriever.literature_store.filesystem import (
     AdvisoryLock,

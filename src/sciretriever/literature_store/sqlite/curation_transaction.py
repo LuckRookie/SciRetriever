@@ -4,16 +4,28 @@ import os
 import sqlite3
 from collections.abc import Callable
 
-from sciretriever.bibliography.api import (
-    CurationStaleError,
-    MembershipMove,
-    ReferenceRetarget,
-    ValidatedCurationPlan,
-)
 from sciretriever.literature_store.sqlite.curation_authorization import authorize_plan_sources
 from sciretriever.literature_store.sqlite.curation_snapshot import snapshot_token
 from sciretriever.literature_store.sqlite.engine import create_or_open_catalog
-from sciretriever.model.library import CurationCommit
+from sciretriever.model.library import (
+    CurationCommit,
+    MembershipMove,
+    ReferenceRetarget,
+    SnapshotToken,
+    ValidatedCurationPlan,
+)
+
+
+class CurationStaleError(Exception):
+    __slots__ = ("expected", "actual")
+
+    def __init__(self, expected: SnapshotToken, actual: SnapshotToken) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(expected, actual)
+
+    def __str__(self) -> str:
+        return "curation snapshot is stale"
 
 
 def _one(cursor: sqlite3.Cursor, subject: str) -> None:

@@ -6,9 +6,8 @@ from itertools import permutations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.bibliography.identity import prepare_initial_ingest
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
 from sciretriever.model.literature import (
@@ -18,6 +17,7 @@ from sciretriever.model.literature import (
     VersionRelationEvidence,
 )
 from sciretriever.model.primitives import UtcTimestamp
+from sciretriever.services.literature.api import prepare_initial_ingest
 
 
 def observation(
@@ -171,11 +171,11 @@ class TargetBibliographyIdentityTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         os.chmod(self.root, 0o700)
 
-    def prepare_catalog(self, name: str) -> tuple[Path, SqliteBibliographyRepository]:
+    def prepare_catalog(self, name: str) -> tuple[Path, SqliteLiteratureRepository]:
         catalog = self.root / f"{name}.sqlite"
         with create_or_open_catalog(catalog):
             pass
-        return catalog, SqliteBibliographyRepository(catalog)
+        return catalog, SqliteLiteratureRepository(catalog)
 
     def test_three_exact_routes_are_deterministic_across_provider_permutations(self) -> None:
         doi = Identifier(namespace="doi", value="10.1000/exact")

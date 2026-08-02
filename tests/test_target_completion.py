@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
+from dataclasses import replace as dataclass_replace
 from uuid import uuid4
 
+from pydantic import BaseModel
 from target_completion_support import (
     CompletionDurabilityTests,
     FailingArtifactStore,
@@ -13,31 +14,40 @@ from target_completion_support import (
 from target_publisher_support import ScenarioFactory
 
 from sciretriever.batching.completion import complete_analysis
-from sciretriever.bibliography.api import (
-    CompletionOutcome,
+from sciretriever.content.analysis import analysis_bytes
+from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
-    CompletionSubmission,
-    ReferenceMemberFact,
-    ReferenceMemberId,
-    accept_completion,
-    metadata_snapshot_sha256,
+    validate_completion_submission_contract,
 )
+from sciretriever.core.literature.completion import metadata_snapshot_sha256
 from sciretriever.kernel import (
-    BoundaryError,
     CanonicalJsonObject,
 )
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
+    SqliteLiteratureRepository,
     StalePublicationError,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.model.literature import (
+    CompletionOutcome,
+    CompletionSubmission,
+    ReferenceMemberFact,
+)
 from sciretriever.model.primitives import (
+    ReferenceMemberId,
     WorkId,
     WorkVersionId,
     sha256_digest,
 )
+from sciretriever.services.literature.api import accept_completion
+
+
+def replace(value, **updates):
+    if isinstance(value, BaseModel):
+        return value.model_copy(update=updates)
+    return dataclass_replace(value, **updates)
 
 
 class TargetCompletionDurabilityTests(CompletionDurabilityTests):
@@ -80,12 +90,8 @@ class TargetCompletionTests(unittest.TestCase):
                 )
             connection.commit()
         submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
-        outcome = accept_completion(
-            SqliteBibliographyRepository(path), publisher, submission, target
-        )
-        replay = accept_completion(
-            SqliteBibliographyRepository(path), publisher, submission, target
-        )
+        outcome = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
+        replay = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
 
         self.assertEqual(
             (outcome, replay), (CompletionOutcome.PUBLISHED, CompletionOutcome.REPLAYED)
@@ -123,9 +129,9 @@ class TargetCompletionTests(unittest.TestCase):
             metadata=replace(submission.metadata, expected_revision=context.metadata_revision + 1),
         )
         with self.assertRaises(CompletionRejectedError):
-            accept_completion(SqliteBibliographyRepository(path), publisher, stale, target)
+            accept_completion(SqliteLiteratureRepository(path), publisher, stale, target)
         artifact = storage / "core" / str(submission.analysis.artifact_path)
-        self.assertEqual(artifact.read_bytes(), proposal.canonical_bytes())
+        self.assertEqual(artifact.read_bytes(), analysis_bytes(proposal))
         replay_submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
         self.assertEqual(replay_submission.analysis.artifact_id, submission.analysis.artifact_id)
         with open_read_only_snapshot(path) as reader:
@@ -134,14 +140,29 @@ class TargetCompletionTests(unittest.TestCase):
             )
 
     def test_reference_member_rejects_resolved_version_without_work(self) -> None:
-        with self.assertRaisesRegex(BoundaryError, "requires target_work_id"):
-            ReferenceMemberFact(
-                ReferenceMemberId("00000000-0000-0000-0000-000000000301"),
-                "invalid",
-                CanonicalJsonObject(()),
-                None,
-                WorkVersionId("00000000-0000-0000-0000-000000000302"),
-            )
+        _path, storage, context, target, proposal, _publisher = self._prepared()
+        valid = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
+        invalid = valid.model_copy(
+            update={
+                "references": valid.references.model_copy(
+                    update={
+                        "members": (
+                            ReferenceMemberFact(
+                                member_id=ReferenceMemberId("00000000-0000-0000-0000-000000000301"),
+                                raw_text="invalid",
+                                reference=CanonicalJsonObject(()),
+                                target_work_id=None,
+                                target_work_version_id=WorkVersionId(
+                                    "00000000-0000-0000-0000-000000000302"
+                                ),
+                            ),
+                        )
+                    }
+                )
+            }
+        )
+        with self.assertRaisesRegex(CompletionRejectedError, "requires target work"):
+            validate_completion_submission_contract(invalid)
 
     def test_reference_member_identity_is_scoped_to_completion_set(self) -> None:
         _path, storage, context, target, proposal, _publisher = self._prepared()
@@ -151,7 +172,14 @@ class TargetCompletionTests(unittest.TestCase):
             work_version_id=WorkVersionId(str(uuid4())),
             light_document_id=type(context.light_document_id)(str(uuid4())),
         )
-        other_target = replace(target, work_version_id=other_context.work_version_id)
+        other_target = replace(
+            target,
+            work_version_id=other_context.work_version_id,
+            result=replace(
+                target.result,
+                subject_id=str(other_context.work_version_id),
+            ),
+        )
         second = complete_analysis(
             proposal,
             other_context,
@@ -192,7 +220,7 @@ class TargetCompletionTests(unittest.TestCase):
             with self.subTest(member=member):
                 with self.assertRaisesRegex(CompletionRejectedError, "resolved reference"):
                     accept_completion(
-                        SqliteBibliographyRepository(path),
+                        SqliteLiteratureRepository(path),
                         publisher,
                         invalid,
                         target,
@@ -201,7 +229,7 @@ class TargetCompletionTests(unittest.TestCase):
     def test_completed_replay_rejects_every_divergent_submission_fact(self) -> None:
         path, storage, context, target, proposal, publisher = self._prepared()
         submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
-        accept_completion(SqliteBibliographyRepository(path), publisher, submission, target)
+        accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
         divergent_values = CanonicalJsonObject((("title", "divergent"),))
         divergent_metadata = replace(
             submission.metadata,
@@ -249,7 +277,7 @@ class TargetCompletionTests(unittest.TestCase):
             with self.subTest(divergent=divergent):
                 with self.assertRaises((CompletionRejectedError, StalePublicationError)):
                     accept_completion(
-                        SqliteBibliographyRepository(path),
+                        SqliteLiteratureRepository(path),
                         publisher,
                         divergent,
                         target,
@@ -258,7 +286,7 @@ class TargetCompletionTests(unittest.TestCase):
     def test_completed_replay_rejects_divergent_target_projection(self) -> None:
         path, storage, context, target, proposal, publisher = self._prepared()
         submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
-        accept_completion(SqliteBibliographyRepository(path), publisher, submission, target)
+        accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
         divergent = replace(
             target,
             details=CanonicalJsonObject((("changed", True),)),

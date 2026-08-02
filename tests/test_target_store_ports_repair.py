@@ -9,13 +9,8 @@ from tempfile import TemporaryDirectory
 
 from pydantic import ValidationError
 
-from sciretriever.bibliography.model import (
-    CurationPlanError,
-    MembershipMove,
-    ReferenceRetarget,
-    ValidatedCurationPlan,
-)
 from sciretriever.collection.run_results import validate_finish_collection_run
+from sciretriever.core.literature.curation import CurationPlanError, validate_curation_plan
 from sciretriever.kernel.errors import BoundaryError
 from sciretriever.literature_store.filesystem import (
     AdmissionOrderError,
@@ -23,12 +18,18 @@ from sciretriever.literature_store.filesystem import (
     LocalAdmissionBindingFactory,
 )
 from sciretriever.literature_store.sqlite import (
-    SqliteBibliographyRepository,
     SqliteCurationTransaction,
+    SqliteLiteratureRepository,
     create_or_open_catalog,
 )
 from sciretriever.model.collection import CollectionCounts, FinishCollectionRun
-from sciretriever.model.library import CurationScope, SnapshotToken
+from sciretriever.model.library import (
+    CurationScope,
+    MembershipMove,
+    ReferenceRetarget,
+    SnapshotToken,
+    ValidatedCurationPlan,
+)
 from sciretriever.model.primitives import (
     BatchRunId,
     CollectionRunId,
@@ -195,7 +196,7 @@ class TargetStorePortRepairTests(unittest.TestCase):
 
     def test_cause_and_path_mutations_change_snapshot_token(self) -> None:
         scope, cause_id, path_id = self.seed_collection_membership()
-        repository = SqliteBibliographyRepository(self.catalog)
+        repository = SqliteLiteratureRepository(self.catalog)
         original = repository.load_curation_snapshot(scope).token
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
@@ -231,13 +232,17 @@ class TargetStorePortRepairTests(unittest.TestCase):
             work_ids=scope.work_ids + (target_work,),
             work_version_ids=scope.work_version_ids,
         )
-        token = SqliteBibliographyRepository(self.catalog).load_curation_snapshot(expanded).token
+        token = SqliteLiteratureRepository(self.catalog).load_curation_snapshot(expanded).token
         plan = ValidatedCurationPlan(
-            CurationPlanId(UUIDS[12]),
-            expanded,
-            token,
+            plan_id=CurationPlanId(UUIDS[12]),
+            scope=expanded,
+            expected_snapshot=token,
             membership_moves=(
-                MembershipMove(MembershipId(UUIDS[4]), target_work, MembershipId(UUIDS[11])),
+                MembershipMove(
+                    membership_id=MembershipId(UUIDS[4]),
+                    target_work_id=target_work,
+                    coalesce_membership_id=MembershipId(UUIDS[11]),
+                ),
             ),
         )
         with self.assertRaises(sqlite3.IntegrityError):
@@ -253,32 +258,45 @@ class TargetStorePortRepairTests(unittest.TestCase):
         scope = CurationScope(work_ids=(work,), work_version_ids=(version,))
         token = SnapshotToken(sha256=sha256_digest(b"scope"))
         with self.assertRaises(CurationPlanError):
-            ValidatedCurationPlan(
-                CurationPlanId(UUIDS[2]), scope, token, delete_work_ids=(WorkId(UUIDS[3]),)
+            validate_curation_plan(
+                ValidatedCurationPlan(
+                    plan_id=CurationPlanId(UUIDS[2]),
+                    scope=scope,
+                    expected_snapshot=token,
+                    delete_work_ids=(WorkId(UUIDS[3]),),
+                )
             )
         with self.assertRaises(CurationPlanError):
-            ValidatedCurationPlan(
-                CurationPlanId(UUIDS[2]),
-                scope,
-                token,
-                membership_moves=(
-                    MembershipMove(MembershipId(UUIDS[4]), work, MembershipId(UUIDS[4])),
-                ),
-            )
-        with self.assertRaises(CurationPlanError):
-            ValidatedCurationPlan(
-                CurationPlanId(UUIDS[2]),
-                scope,
-                token,
-                reference_retargets=(
-                    ReferenceRetarget(
-                        ReferenceFactId(UUIDS[5]),
-                        work,
-                        version,
-                        "raw",
-                        "{}",
+            validate_curation_plan(
+                ValidatedCurationPlan(
+                    plan_id=CurationPlanId(UUIDS[2]),
+                    scope=scope,
+                    expected_snapshot=token,
+                    membership_moves=(
+                        MembershipMove(
+                            membership_id=MembershipId(UUIDS[4]),
+                            target_work_id=work,
+                            coalesce_membership_id=MembershipId(UUIDS[4]),
+                        ),
                     ),
-                ),
+                )
+            )
+        with self.assertRaises(CurationPlanError):
+            validate_curation_plan(
+                ValidatedCurationPlan(
+                    plan_id=CurationPlanId(UUIDS[2]),
+                    scope=scope,
+                    expected_snapshot=token,
+                    reference_retargets=(
+                        ReferenceRetarget(
+                            reference_id=ReferenceFactId(UUIDS[5]),
+                            target_work_id=work,
+                            target_version_id=version,
+                            downgrade_raw_text="raw",
+                            downgrade_reference_json="{}",
+                        ),
+                    ),
+                )
             )
 
 

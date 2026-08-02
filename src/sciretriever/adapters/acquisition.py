@@ -7,14 +7,14 @@ from typing import Generic, TypeVar, assert_never
 import anyio
 
 from sciretriever.content.ports import (
-    AssetCandidate,
     AssetFetcherPort,
-    BoundedByteStream,
     CandidateRaceExhausted,
     InvalidRaceDeadline,
     RaceCallable,
     RaceToken,
 )
+from sciretriever.model.access import BoundedByteStream
+from sciretriever.model.assets import AssetCandidate
 
 
 class EmptyAssetResponse(Exception):
@@ -31,7 +31,7 @@ class NeutralAssetFetcher:
 
     def fetch(self, candidate: AssetCandidate) -> BoundedByteStream:
         stream = self._fetcher.fetch(candidate)
-        if stream.size < 1 or not stream.content:
+        if stream.size < 1 or not b"".join(stream.chunks):
             raise EmptyAssetResponse
         return stream
 

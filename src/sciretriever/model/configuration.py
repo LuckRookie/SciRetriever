@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Self
-from urllib.parse import unquote, urlsplit
+from typing import Annotated
+from urllib.parse import SplitResult, unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,7 +38,7 @@ class PathsConfig(StrictConfigModel):
     storage_root: Path
 
     @model_validator(mode="after")
-    def validate_separation(self) -> Self:
+    def validate_separation(self) -> PathsConfig:
         if _paths_overlap(self.catalog, self.storage_root):
             raise ValueError("catalog and storage_root must not overlap")
         return self
@@ -55,7 +55,7 @@ class CollectionConfig(StrictConfigModel):
         return _parse_string_tuple(values)
 
 
-class MetadataConfig(StrictConfigModel):
+class SourcesConfig(StrictConfigModel):
     providers: ProviderTuple
     timeout_seconds: PositiveFloat = 30.0
     max_concurrency: Annotated[int, Field(strict=True, ge=1, le=64)] = 4
@@ -67,7 +67,7 @@ class MetadataConfig(StrictConfigModel):
         return _parse_string_tuple(values)
 
 
-class AcquisitionConfig(StrictConfigModel):
+class AssetsConfig(StrictConfigModel):
     providers: ProviderTuple
     timeout_seconds: PositiveFloat = 30.0
     provider_concurrency: Annotated[int, Field(strict=True, ge=1, le=64)] = 4
@@ -80,7 +80,7 @@ class AcquisitionConfig(StrictConfigModel):
         return _parse_string_tuple(values)
 
 
-class ParserConfig(StrictConfigModel):
+class ParsingConfig(StrictConfigModel):
     protocol: ParserProtocol
     base_url: str
     model: Annotated[str, Field(min_length=1, max_length=256)]
@@ -99,7 +99,7 @@ class ParserConfig(StrictConfigModel):
         return ParserProtocol(value)
 
     @model_validator(mode="after")
-    def validate_protocol(self) -> Self:
+    def validate_protocol(self) -> ParsingConfig:
         parsed = _parse_base_url(self.base_url)
         match self.protocol:
             case ParserProtocol.LOOPBACK:
@@ -135,35 +135,21 @@ class AnalysisConfig(StrictConfigModel):
         return LLMProtocol(value)
 
     @model_validator(mode="after")
-    def validate_base_url(self) -> Self:
+    def validate_base_url(self) -> AnalysisConfig:
         parsed = _parse_base_url(self.base_url)
         if parsed.scheme != "https":
             raise ValueError("analysis base_url must use HTTPS")
         return self
 
 
-class ContentConfig(StrictConfigModel):
-    acquisition: AcquisitionConfig
-    parser: ParserConfig
-    analysis: AnalysisConfig
-
-
-class BatchingConfig(StrictConfigModel):
+class ExecutionConfig(StrictConfigModel):
     max_targets: Annotated[int, Field(strict=True, ge=1, le=100_000)] = 1000
     max_concurrency: Annotated[int, Field(strict=True, ge=1, le=64)] = 4
 
 
-class InteroperabilityConfig(StrictConfigModel):
+class LibraryConfig(StrictConfigModel):
     max_input_bytes: Annotated[int, Field(strict=True, ge=1024, le=1_073_741_824)] = 67_108_864
     max_records: Annotated[int, Field(strict=True, ge=1, le=1_000_000)] = 100_000
-
-
-class CredentialsConfig(StrictConfigModel):
-    metadata: SecretReference | None = Field(default=None, repr=False)
-    acquisition: SecretReference | None = Field(default=None, repr=False)
-
-
-class ExtensionsConfig(StrictConfigModel):
     namespaces: tuple[Annotated[str, Field(pattern=r"^[a-z][a-z0-9.-]{0,127}$")], ...] = ()
     max_results: Annotated[int, Field(strict=True, ge=1, le=1000)] = 100
 
@@ -173,19 +159,30 @@ class ExtensionsConfig(StrictConfigModel):
         return _parse_string_tuple(values)
 
 
+class AccessConfig(StrictConfigModel):
+    pass
+
+
+class CredentialsConfig(StrictConfigModel):
+    metadata: SecretReference | None = Field(default=None, repr=False)
+    acquisition: SecretReference | None = Field(default=None, repr=False)
+
+
 class TargetConfig(StrictConfigModel):
     schema_version: Annotated[int, Field(strict=True, ge=2, le=2)]
     paths: PathsConfig
     collection: CollectionConfig
-    metadata: MetadataConfig
-    content: ContentConfig
-    batching: BatchingConfig
-    interoperability: InteroperabilityConfig
+    sources: SourcesConfig
+    assets: AssetsConfig
+    parsing: ParsingConfig
+    analysis: AnalysisConfig
+    execution: ExecutionConfig
+    library: LibraryConfig
+    access: AccessConfig
     credentials: CredentialsConfig
-    extensions: ExtensionsConfig
 
 
-def _parse_base_url(value: str):
+def _parse_base_url(value: str) -> SplitResult:
     if any(character.isspace() or ord(character) < 32 for character in value):
         raise ValueError("base_url contains unsafe characters")
     parsed = urlsplit(value)
@@ -212,13 +209,25 @@ def _parse_string_tuple(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     if not isinstance(values, (list, tuple)) or any(not isinstance(value, str) for value in values):
         raise ValueError("expected an array of strings")
     parsed = tuple(values)
+    if any(not value.strip() for value in parsed):
+        raise ValueError("array values must be nonblank")
     if len(parsed) != len(set(parsed)):
         raise ValueError("duplicate values are not allowed")
     return parsed
 
 
 __all__ = (
+    "AccessConfig",
+    "AnalysisConfig",
+    "AssetsConfig",
+    "CollectionConfig",
+    "CredentialsConfig",
+    "ExecutionConfig",
     "LLMProtocol",
+    "LibraryConfig",
     "ParserProtocol",
+    "ParsingConfig",
+    "PathsConfig",
+    "SourcesConfig",
     "TargetConfig",
 )

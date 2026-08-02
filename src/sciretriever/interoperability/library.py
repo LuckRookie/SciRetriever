@@ -1,39 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from sciretriever.interoperability.library_details import (
-    CollectionMembershipPage,
-    GraphPage,
-    WorkDetail,
-    WorkVersionDetail,
-)
-from sciretriever.interoperability.library_views import LibrarySummary
-from sciretriever.kernel import BoundaryError
-from sciretriever.model.library import QueryFilterV1
 from sciretriever.model.primitives import (
     CollectionId,
     WorkId,
     WorkVersionId,
 )
 
-
-@dataclass(frozen=True, slots=True)
-class LibraryPageRequest:
-    limit: int
-    cursor: str | None
-    include_all_versions: bool
-
-    def __post_init__(self) -> None:
-        if not 1 <= self.limit <= 1000:
-            raise BoundaryError.for_field("limit", "must be from 1 through 1000")
-
-
-@dataclass(frozen=True, slots=True)
-class LibraryPage:
-    items: tuple[LibrarySummary, ...]
-    next_cursor: str | None
+if TYPE_CHECKING:
+    from sciretriever.model.library_details import (
+        CollectionMembershipPage,
+        GraphPage,
+        WorkDetail,
+        WorkVersionDetail,
+    )
+    from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
+    from sciretriever.model.library_query import QueryFilterV1
 
 
 class LibraryReadPort(Protocol):
@@ -95,4 +78,4 @@ class LibraryReadService:
         self._repository.rebuild_search_indexes()
 
 
-__all__ = ("LibraryPage", "LibraryPageRequest", "LibraryReadPort", "LibraryReadService")
+__all__ = ("LibraryReadPort", "LibraryReadService")
