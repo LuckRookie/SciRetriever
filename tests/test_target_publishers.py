@@ -1,11 +1,12 @@
+# noqa: SIZE_OK - the failpoint matrix covers every publisher variant in one fixture suite
 from __future__ import annotations
 
 import unittest
 from dataclasses import replace as dataclass_replace
 
 from pydantic import BaseModel
-from target_publisher_support import ScenarioFactory
 
+from sciretriever.core import assets as core_assets
 from sciretriever.core.collection import CollectionRuleError, validate_collection_acceptance
 from sciretriever.core.execution import (
     ExecutionRejectedError,
@@ -25,15 +26,18 @@ from sciretriever.literature_store.sqlite import (
     StalePublicationError,
     open_read_only_snapshot,
 )
+from sciretriever.model.assets import PrimaryPdfAcceptance
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import ContentAcceptanceCommand, ImportAcceptanceCommand
 from sciretriever.model.literature import CompletionSubmission
 from sciretriever.model.primitives import (
+    RelativeArtifactPath,
     Sha256,
     WorkId,
     WorkVersionId,
 )
+from tests.target_publisher_support import ScenarioFactory
 
 
 def replace(value, **updates):
@@ -139,6 +143,27 @@ class TargetPublisherTests(unittest.TestCase):
             with self.subTest(authority=scenario.authority_table):
                 with self.assertRaises(StalePublicationError):
                     scenario.invoke()
+
+    def test_asset_validation_precedes_execution_alignment(self) -> None:
+        scenario = self.factory.primary()
+        assert isinstance(scenario.command, ContentAcceptanceCommand)
+        acceptance = scenario.command.acceptance
+        assert isinstance(acceptance, PrimaryPdfAcceptance)
+        invalid_artifact = acceptance.artifact.model_copy(
+            update={"path": RelativeArtifactPath("primary/ff/" + "f" * 64)}
+        )
+        invalid_acceptance = acceptance.model_copy(update={"artifact": invalid_artifact})
+        with self.assertRaises(core_assets.AssetRuleError):
+            core_assets.validate_content_acceptance(invalid_acceptance)
+        other_version = WorkVersionId("00000000-0000-0000-0000-000000000002")
+        command = ContentAcceptanceCommand(
+            acceptance=invalid_acceptance,
+            target=replace(scenario.command.target, work_version_id=other_version),
+        )
+        with self.assertRaises(StalePublicationError) as raised:
+            assert isinstance(scenario.publisher, ContentAcceptancePublisher)
+            scenario.publisher.publish(command)
+        self.assertIn("published artifact identity is inconsistent", str(raised.exception))
 
     def test_pairwise_result_enums_with_identical_details_persist_differently(self) -> None:
         details = CanonicalJsonObject((("reason", "same"),))

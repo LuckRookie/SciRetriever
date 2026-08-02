@@ -8,14 +8,13 @@ CONTENT_DDL: Final = (
     "byte_size>=0),media_type TEXT,UNIQUE(kind,sha256),UNIQUE(id,kind),UNIQUE(id,sha256)) "
     "STRICT",
     "CREATE TABLE raw_assets(artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE "
-    "RESTRICT,asset_role TEXT NOT NULL CHECK(asset_role IN ('primary-pdf','supplementary-pdf',"
-    "'xml','html','supplementary')),source_json TEXT NOT NULL CHECK(json_valid(source_json))) "
-    "STRICT",
+    "RESTRICT) STRICT",
     "CREATE TABLE work_version_assets(id TEXT PRIMARY KEY,work_version_id TEXT NOT NULL "
     "REFERENCES work_versions(id) ON DELETE CASCADE,artifact_id TEXT NOT NULL REFERENCES "
     "raw_assets(artifact_id),role TEXT NOT NULL CHECK(role IN ('primary-pdf',"
-    "'supplementary-pdf','xml','html','supplementary')),UNIQUE(work_version_id,artifact_id,role)"
-    ",UNIQUE(id,work_version_id)) STRICT",
+    "'supplementary-pdf','xml','html','supplementary')),source_json TEXT NOT NULL CHECK(json_valid("
+    "source_json) AND source_json=sciretriever_canonical_json(source_json)),UNIQUE("
+    "work_version_id,artifact_id,role,source_json),UNIQUE(id,work_version_id)) STRICT",
     "CREATE TABLE accepted_primary_assets(work_version_id TEXT PRIMARY KEY REFERENCES "
     "work_versions(id) ON DELETE CASCADE,work_version_asset_id TEXT NOT NULL UNIQUE,UNIQUE("
     "work_version_id,work_version_asset_id),FOREIGN KEY(work_version_asset_id,work_version_id) "

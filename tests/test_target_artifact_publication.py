@@ -87,7 +87,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
     def test_existing_hardlinked_target_is_rejected_and_preserved(self) -> None:
         artifact = self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-aliased-existing")
         digest = str(artifact.sha256)
-        target = self.storage / "core" / "primary" / digest[:2] / digest
+        target = self.storage / "core" / "raw" / digest[:2] / digest
         target.parent.mkdir(parents=True, mode=0o700)
         for directory in (self.storage, self.storage / "core", target.parent.parent, target.parent):
             os.chmod(directory, 0o700)
@@ -113,7 +113,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
         self.assertEqual(target.stat().st_nlink, 2)
 
     def test_reconciliation_preserves_malformed_and_corrupt_core_evidence(self) -> None:
-        core = self.storage / "core" / "primary"
+        core = self.storage / "core" / "raw"
         malformed = core / "aa" / "not-a-sha256"
         wrong_prefix_digest = "b" * 64
         wrong_prefix = core / "aa" / wrong_prefix_digest
@@ -135,9 +135,9 @@ class TargetArtifactPublicationTests(unittest.TestCase):
         self.assertEqual(
             set(result.preserved),
             {
-                RelativeArtifactPath("primary/aa/not-a-sha256"),
-                RelativeArtifactPath(f"primary/aa/{wrong_prefix_digest}"),
-                RelativeArtifactPath(f"primary/cc/{valid_name_digest}"),
+                RelativeArtifactPath("raw/aa/not-a-sha256"),
+                RelativeArtifactPath(f"raw/aa/{wrong_prefix_digest}"),
+                RelativeArtifactPath(f"raw/cc/{valid_name_digest}"),
             },
         )
         self.assertTrue(all(path.exists() for path in (malformed, wrong_prefix, wrong_bytes)))

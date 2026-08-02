@@ -51,9 +51,11 @@ _TRIGGER_DDL: Final = (
     "a.work_version_id=NEW.work_version_id AND a.role='primary-pdf') BEGIN SELECT RAISE(ABORT,"
     "'accepted primary asset must retain primary-pdf role'); END",
     "CREATE TRIGGER trg_accepted_asset_relation_update BEFORE UPDATE OF work_version_id,"
-    "artifact_id,role ON work_version_assets WHEN EXISTS(SELECT 1 FROM accepted_primary_assets "
+    "artifact_id,role,source_json ON work_version_assets WHEN EXISTS(SELECT 1 FROM "
+    "accepted_primary_assets "
     "p WHERE p.work_version_asset_id=OLD.id) AND (NEW.work_version_id<>OLD.work_version_id OR "
-    "NEW.artifact_id<>OLD.artifact_id OR NEW.role<>'primary-pdf') BEGIN SELECT RAISE(ABORT,"
+    "NEW.artifact_id<>OLD.artifact_id OR NEW.role<>'primary-pdf' OR "
+    "NEW.source_json<>OLD.source_json) BEGIN SELECT RAISE(ABORT,"
     "'accepted primary relation is immutable'); END",
     "CREATE TRIGGER trg_light_current_alignment BEFORE INSERT ON "
     "work_version_current_light_document WHEN NOT EXISTS(SELECT 1 FROM light_documents d JOIN "

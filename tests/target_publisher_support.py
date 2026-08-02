@@ -7,53 +7,44 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 from uuid import uuid4
 
-from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     CollectionAcceptancePublisher,
     CompletionPublisher,
-    ContentAcceptancePublisher,
     ImportAcceptancePublisher,
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )
-from sciretriever.model.assets import ArtifactKind, PrimaryPdfAcceptance, PublishedArtifact
+from sciretriever.model.assets import (
+    ArtifactKind,
+    AssetPublication,
+    PublishedArtifact,
+)
 from sciretriever.model.collection import CollectionAcceptance, CollectionMembershipFact
-from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import (
     ContentAcceptanceCommand,
     ImportAcceptanceCommand,
     ImportRecordProjection,
     ImportResult,
     TargetProjection,
-    TargetResult,
 )
 from sciretriever.model.literature import (
     BibliographicObservation,
-    CompletionAnalysisFact,
-    CompletionProvenance,
     CompletionSubmission,
-    FinalMetadataFact,
     Identifier,
     InitialMetadata,
     ReferenceSetFact,
     TagSetFact,
 )
 from sciretriever.model.primitives import (
-    AnalysisArtifactId,
-    AssetId,
     BatchRunId,
     CollectionId,
     CollectionRunId,
-    LightDocumentId,
     MembershipId,
-    MetadataSnapshotId,
     ReferenceSetId,
     RelativeArtifactPath,
-    Sha256,
     TagSetId,
     UtcTimestamp,
-    WorkVersionAssetId,
     sha256_digest,
 )
 from sciretriever.services.literature.api import prepare_initial_ingest
@@ -62,7 +53,7 @@ EMPTY = CanonicalJsonObject(())
 
 
 class Publisher(Protocol):
-    def publish(self, command) -> None: ...
+    def publish(self, command) -> AssetPublication | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,8 +117,8 @@ class ScenarioFactory:
     def artifact(kind: ArtifactKind, content: bytes) -> PublishedArtifact:
         digest = sha256_digest(content)
         directories = {
-            ArtifactKind.PRIMARY_PDF: "primary",
-            ArtifactKind.SUPPLEMENTARY: "supplementary",
+            ArtifactKind.PRIMARY_PDF: "raw",
+            ArtifactKind.SUPPLEMENTARY: "raw",
             ArtifactKind.LIGHT_DOCUMENT: "light-document",
             ArtifactKind.ANALYSIS: "analysis",
         }
@@ -232,198 +223,16 @@ class ScenarioFactory:
         )
 
     def primary(self, callback=None) -> Scenario:
-        base = self.collection()
-        base.invoke()
-        assert isinstance(base.command, CollectionAcceptance)
-        prepared = base.command.bibliography
-        snapshot = prepared.metadata_snapshot
-        assert snapshot is not None
-        batch_id = BatchRunId(str(uuid4()))
-        self.batch(base.path, batch_id, prepared.work_version_id)
-        artifact = self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-primary")
-        acceptance = PrimaryPdfAcceptance(
-            work_version_id=prepared.work_version_id,
-            expected_metadata_id=snapshot.snapshot_id,
-            expected_metadata_revision=snapshot.revision,
-            expected_metadata_sha256=snapshot.sha256,
-            artifact_id=AssetId(str(uuid4())),
-            relation_id=WorkVersionAssetId(str(uuid4())),
-            artifact=artifact,
-            source=EMPTY,
-        )
-        target = TargetProjection(
-            batch_run_id=batch_id,
-            work_version_id=prepared.work_version_id,
-            result=TargetResult(
-                subject_type="work-version",
-                subject_id=str(prepared.work_version_id),
-                outcome="partially-advanced",
-                initial_state="unreviewed",
-                target_state="asset-ready",
-                final_state="asset-ready",
-                stage="acquisition",
-                failure=None,
-            ),
-            details=EMPTY,
-            failure_stages_to_clear=("acquisition",),
-        )
-        return Scenario(
-            base.path,
-            ContentAcceptancePublisher(base.path, failpoint=callback),
-            ContentAcceptanceCommand(acceptance=acceptance, target=target),
-            "accepted_primary_assets",
-        )
+        from tests.target_publisher_content_scenarios import build_primary
+
+        return build_primary(self, callback)
 
     def light(self, callback=None) -> Scenario:
-        base = self.primary()
-        base.invoke()
-        assert isinstance(base.command, ContentAcceptanceCommand)
-        acceptance = base.command.acceptance
-        assert isinstance(acceptance, PrimaryPdfAcceptance)
-        with create_or_open_catalog(base.path) as connection:
-            connection.execute("UPDATE batch_targets SET result_json=NULL")
-            connection.commit()
-        document = CanonicalJsonObject((("blocks", (CanonicalJsonObject((("text", "atomic"),)),)),))
-        artifact = self.artifact(ArtifactKind.LIGHT_DOCUMENT, b'{"blocks":[{"text":"atomic"}]}')
-        light = LightDocumentAcceptance(
-            work_version_id=acceptance.work_version_id,
-            expected_primary_relation_id=acceptance.relation_id,
-            expected_primary_sha256=acceptance.artifact.sha256,
-            document_id=LightDocumentId(str(uuid4())),
-            artifact_id=AssetId(str(uuid4())),
-            artifact=artifact,
-            document=document,
-            provenance=EMPTY,
-        )
-        target = TargetProjection(
-            batch_run_id=base.command.target.batch_run_id,
-            work_version_id=acceptance.work_version_id,
-            result=TargetResult(
-                subject_type="work-version",
-                subject_id=str(acceptance.work_version_id),
-                outcome="partially-advanced",
-                initial_state="asset-ready",
-                target_state="light-text-ready",
-                final_state="light-text-ready",
-                stage="parsing",
-                failure=None,
-            ),
-            details=EMPTY,
-            failure_stages_to_clear=("parsing",),
-        )
-        return Scenario(
-            base.path,
-            ContentAcceptancePublisher(base.path, failpoint=callback),
-            ContentAcceptanceCommand(acceptance=light, target=target),
-            "light_documents",
-        )
+        from tests.target_publisher_content_scenarios import build_light
+
+        return build_light(self, callback)
 
     def completion(self, callback=None) -> Scenario:
-        base = self.light()
-        base.invoke()
-        assert isinstance(base.command, ContentAcceptanceCommand)
-        light = base.command.acceptance
-        assert isinstance(light, LightDocumentAcceptance)
-        with create_or_open_catalog(base.path) as connection:
-            row = connection.execute(
-                "SELECT metadata_snapshot_id,revision,sha256 "
-                "FROM work_version_current_metadata "
-                "JOIN metadata_snapshots ON id=metadata_snapshot_id "
-                "WHERE work_version_current_metadata.work_version_id=?",
-                (str(light.work_version_id),),
-            ).fetchone()
-            connection.execute("UPDATE batch_targets SET result_json=NULL")
-            connection.commit()
-        assert row is not None
-        proposal = CanonicalJsonObject(
-            (
-                ("schema_version", "1"),
-                ("final_bibliography", EMPTY),
-                ("classification", EMPTY),
-                ("content_overview", EMPTY),
-                ("research_objectives", ()),
-                ("methods", ()),
-                ("key_results", ()),
-                ("conclusions_and_limitations", EMPTY),
-                ("keywords_and_tags", EMPTY),
-                ("references", ()),
-            )
-        )
-        analysis_artifact = self.artifact(ArtifactKind.ANALYSIS, canonical_json_bytes(proposal))
-        analysis = CompletionAnalysisFact(
-            work_version_id=light.work_version_id,
-            light_document_id=light.document_id,
-            input_sha256=light.artifact.sha256,
-            analysis_id=AnalysisArtifactId(str(uuid4())),
-            artifact_id=AssetId(str(uuid4())),
-            artifact_path=analysis_artifact.path,
-            artifact_sha256=analysis_artifact.sha256,
-            artifact_size=analysis_artifact.size,
-            proposal=proposal,
-        )
-        final_values = CanonicalJsonObject((("title", "final"),))
-        final_revision = row[1] + 1
-        metadata = FinalMetadataFact(
-            work_version_id=light.work_version_id,
-            expected_snapshot_id=MetadataSnapshotId(row[0]),
-            expected_revision=row[1],
-            expected_sha256=Sha256(row[2]),
-            snapshot_id=MetadataSnapshotId(str(uuid4())),
-            revision=final_revision,
-            sha256=metadata_snapshot_sha256(final_revision, final_values, EMPTY),
-            values=final_values,
-            provenance=EMPTY,
-        )
-        references = ReferenceSetFact(
-            set_id=ReferenceSetId(str(uuid4())),
-            work_version_id=light.work_version_id,
-            revision=1,
-            members=(),
-        )
-        tags = TagSetFact(
-            set_id=TagSetId(str(uuid4())),
-            work_version_id=light.work_version_id,
-            revision=1,
-            members=(),
-        )
-        provenance = CompletionProvenance(
-            parser_identity="parser@1",
-            model_provider="provider",
-            model_identity="model@1",
-            input_sha256=light.artifact.sha256,
-            parameters_sha256=Sha256("4" * 64),
-            evidence=EMPTY,
-        )
-        submission = CompletionSubmission(
-            work_version_id=light.work_version_id,
-            light_document_id=light.document_id,
-            light_document_sha256=light.artifact.sha256,
-            analysis=analysis,
-            metadata=metadata,
-            references=references,
-            tags=tags,
-            provenance=provenance,
-        )
-        target = TargetProjection(
-            batch_run_id=base.command.target.batch_run_id,
-            work_version_id=light.work_version_id,
-            result=TargetResult(
-                subject_type="work-version",
-                subject_id=str(light.work_version_id),
-                outcome="completed",
-                initial_state="light-text-ready",
-                target_state="completed",
-                final_state="completed",
-                stage="completion",
-                failure=None,
-            ),
-            details=EMPTY,
-            failure_stages_to_clear=("analysis", "feedback"),
-        )
-        return Scenario(
-            base.path,
-            CompletionPublisher(base.path, failpoint=callback),
-            submission,
-            "completion_bundles",
-            target,
-        )
+        from tests.target_publisher_content_scenarios import build_completion
+
+        return build_completion(self, callback)

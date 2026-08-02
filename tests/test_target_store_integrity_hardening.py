@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - one trigger matrix covers cross-table integrity invariants
 from __future__ import annotations
 
 import hashlib
@@ -233,13 +234,10 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
             "VALUES ('raw','raw',?,'raw/aa/value',1)",
             ("a" * 64,),
         )
+        connection.execute("INSERT INTO raw_assets(artifact_id) VALUES ('raw')")
         connection.execute(
-            "INSERT INTO raw_assets(artifact_id,asset_role,source_json) "
-            "VALUES ('raw','primary-pdf','{}')"
-        )
-        connection.execute(
-            "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) "
-            "VALUES ('asset-link','version','raw','primary-pdf')"
+            "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role,source_json) "
+            "VALUES ('asset-link','version','raw','primary-pdf','{}')"
         )
         connection.execute(
             "INSERT INTO accepted_primary_assets(work_version_id,work_version_asset_id) "

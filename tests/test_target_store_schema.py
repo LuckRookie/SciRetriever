@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - one catalog fixture verifies the complete schema manifest
 from __future__ import annotations
 
 import hashlib
@@ -161,13 +162,10 @@ class TargetStoreSchemaTests(unittest.TestCase):
                 "VALUES ('asset','raw',?,'raw/cc/value',1)",
                 (digest,),
             )
+            connection.execute("INSERT INTO raw_assets(artifact_id) VALUES ('asset')")
             connection.execute(
-                "INSERT INTO raw_assets(artifact_id,asset_role,source_json) "
-                "VALUES ('asset','primary-pdf','{}')"
-            )
-            connection.execute(
-                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role) "
-                "VALUES ('link',?,'asset','primary-pdf')",
+                "INSERT INTO work_version_assets(id,work_version_id,artifact_id,role,source_json) "
+                "VALUES ('link',?,'asset','primary-pdf','{}')",
                 (version_ids[0],),
             )
             connection.execute(

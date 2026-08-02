@@ -52,9 +52,10 @@ class TargetPublisherSchemaIdentityTests(unittest.TestCase):
                 "VALUES ('raw','raw',?,'primary/aa/value',1)",
                 ("a" * 64,),
             )
-            connection.execute("INSERT INTO raw_assets VALUES ('raw','primary-pdf','{}')")
+            connection.execute("INSERT INTO raw_assets VALUES ('raw')")
             connection.execute(
-                "INSERT INTO work_version_assets VALUES ('primary','version','raw','primary-pdf')"
+                "INSERT INTO work_version_assets VALUES "
+                "('primary','version','raw','primary-pdf','{}')"
             )
             connection.execute("INSERT INTO accepted_primary_assets VALUES ('version','primary')")
             connection.execute(

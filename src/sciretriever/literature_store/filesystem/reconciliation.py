@@ -20,7 +20,7 @@ from sciretriever.literature_store.filesystem.artifacts import (
 )
 from sciretriever.model.primitives import RelativeArtifactPath
 
-_KINDS: Final = ("primary", "supplementary", "light-document", "analysis")
+_KINDS: Final = ("raw", "light-document", "analysis")
 Checkpoint = Callable[[str], None]
 
 

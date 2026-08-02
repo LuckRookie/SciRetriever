@@ -53,10 +53,8 @@ class ArtifactValidationError(Exception):
 
 def _directory(kind: ArtifactKind) -> str:
     match kind:
-        case ArtifactKind.PRIMARY_PDF:
-            return "primary"
-        case ArtifactKind.SUPPLEMENTARY:
-            return "supplementary"
+        case ArtifactKind.PRIMARY_PDF | ArtifactKind.SUPPLEMENTARY:
+            return "raw"
         case ArtifactKind.LIGHT_DOCUMENT:
             return "light-document"
         case ArtifactKind.ANALYSIS:
