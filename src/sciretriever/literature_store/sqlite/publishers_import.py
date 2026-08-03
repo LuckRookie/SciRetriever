@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Callable
 
 from sciretriever.core.execution import (
@@ -72,27 +73,32 @@ class ImportAcceptancePublisher:
         except ExecutionRejectedError as error:
             raise StalePublicationError("import result envelope is invalid") from error
         point = StatementFailpoint(self._failpoint)
-        with immediate(self._catalog_path) as connection:
-            publish_bibliography(connection, point, command.bibliography)
-            _references(connection, point, command.references)
-            _tags(connection, point, command.tags)
-            record = command.record
-            cursor = execute(
-                connection,
-                point,
-                "UPDATE batch_targets SET result_json=? WHERE batch_run_id=? AND target_id=? "
-                "AND input_ordinal=? AND target_kind='import-record' AND result_json IS NULL",
-                (
-                    result_json,
-                    str(record.batch_run_id),
-                    str(record.work_version_id),
-                    record.input_ordinal,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise StalePublicationError("import target changed")
-            point.before_commit()
-            connection.commit()
+        try:
+            with immediate(self._catalog_path) as connection:
+                publish_bibliography(connection, point, command.bibliography)
+                _references(connection, point, command.references)
+                _tags(connection, point, command.tags)
+                record = command.record
+                cursor = execute(
+                    connection,
+                    point,
+                    "UPDATE batch_targets SET result_json=? WHERE batch_run_id=? AND target_id=? "
+                    "AND input_ordinal=? AND target_kind='import-record' AND result_json IS NULL",
+                    (
+                        result_json,
+                        str(record.batch_run_id),
+                        str(record.work_version_id),
+                        record.input_ordinal,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StalePublicationError("import target changed")
+                point.before_commit()
+                connection.commit()
+        except sqlite3.IntegrityError as error:
+            raise StalePublicationError(
+                "import publication violated persisted integrity"
+            ) from error
 
 
 __all__ = ("ImportAcceptancePublisher",)

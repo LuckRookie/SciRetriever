@@ -6,7 +6,6 @@ from uuid import uuid4
 from pydantic import ValidationError
 from target_completion_support import prepare_completion, publish_completion_submission
 
-from sciretriever.interoperability.library import LibraryReadService
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     SqliteLibraryReadRepository,
@@ -15,6 +14,8 @@ from sciretriever.literature_store.sqlite import (
 )
 from sciretriever.model.library_pages import LibraryPageRequest
 from sciretriever.model.library_query import QueryFilterV1
+from sciretriever.model.primitives import CollectionId
+from sciretriever.services.library import LibraryService
 from sciretriever.services.literature.api import accept_completion
 from tests.target_library_support import LibraryCase
 from tests.target_publisher_support import ScenarioFactory
@@ -58,7 +59,7 @@ class TargetLibraryTests(LibraryCase):
                 (other_id, source[2]),
             )
             connection.commit()
-        service = LibraryReadService(SqliteLibraryReadRepository(self.catalog))
+        service = LibraryService(SqliteLibraryReadRepository(self.catalog))
 
         representative = service.search(
             QueryFilterV1(),
@@ -93,7 +94,7 @@ class TargetLibraryTests(LibraryCase):
             submission,
             prepared.target,
         )
-        service = LibraryReadService(SqliteLibraryReadRepository(prepared.path))
+        service = LibraryService(SqliteLibraryReadRepository(prepared.path))
 
         before = service.authority_fingerprint()
         for term in ("Title", "atomic", "alpha"):
@@ -120,6 +121,40 @@ class TargetLibraryTests(LibraryCase):
                 ),
                 1,
             )
+
+    def test_collection_page_returns_membership_for_requested_collection(self) -> None:
+        work_id, _version_id = self._publish("Multi Collection Work", "formal", "multi")
+        first_collection = "00000000-0000-0000-0000-000000000001"
+        requested_collection = "00000000-0000-0000-0000-000000000002"
+        with create_or_open_catalog(self.catalog) as connection:
+            for collection_id, name in (
+                (first_collection, "First"),
+                (requested_collection, "Requested"),
+            ):
+                run_id = f"10000000-0000-0000-0000-{collection_id[-12:]}"
+                membership_id = f"20000000-0000-0000-0000-{collection_id[-12:]}"
+                connection.execute(
+                    "INSERT INTO collections(id,name) VALUES(?,?)",
+                    (collection_id, name),
+                )
+                connection.execute(
+                    "INSERT INTO collection_runs(id,collection_id,mode,topic_conditions_json,"
+                    "requested_advance_to,status) VALUES(?,?,'topic','[]','unreviewed','created')",
+                    (run_id, collection_id),
+                )
+                connection.execute(
+                    "INSERT INTO collection_memberships"
+                    "(id,collection_id,work_id,first_collection_run_id) VALUES(?,?,?,?)",
+                    (membership_id, collection_id, work_id, run_id),
+                )
+            connection.commit()
+
+        page = LibraryService(SqliteLibraryReadRepository(self.catalog)).collection_memberships(
+            CollectionId(requested_collection), None, 10
+        )
+
+        self.assertEqual(len(page.memberships), 1)
+        self.assertEqual(str(page.memberships[0][1].collection_id), requested_collection)
 
 
 if __name__ == "__main__":

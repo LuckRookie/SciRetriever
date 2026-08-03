@@ -3,10 +3,10 @@ from __future__ import annotations
 import multiprocessing
 import os
 import unittest
+from importlib import import_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.filesystem import (
     AdmissionBindingError,
     AdmissionConflictError,
@@ -15,8 +15,6 @@ from sciretriever.literature_store.filesystem import (
 )
 from sciretriever.literature_store.sqlite import (
     CurationStaleError,
-    OpaqueExtensionConflictError,
-    OpaqueExtensionRecordStore,
     SqliteCollectionRepository,
     SqliteCurationTransaction,
     SqliteLiteratureRepository,
@@ -40,7 +38,6 @@ from sciretriever.model.primitives import (
     CollectionRunId,
     CollectionRunStatus,
     CurationPlanId,
-    ExtensionRecordId,
     UtcTimestamp,
     WorkId,
     WorkVersionId,
@@ -238,26 +235,13 @@ class TargetStorePortTests(unittest.TestCase):
             process.join(5)
         self.assertEqual((process.exitcode, queue.get(timeout=1)), (0, "conflict"))
 
-    def test_opaque_namespace_pagination_and_cas_remain_payload_agnostic(self) -> None:
-        store = OpaqueExtensionRecordStore(self.catalog)
-        identifiers = tuple(ExtensionRecordId(value) for value in UUIDS[6:9])
-        for index, identifier in enumerate(reversed(identifiers)):
-            store.compare_and_set(
-                "opaque.test",
-                identifier,
-                None,
-                CanonicalJsonObject((("uninterpreted", index),)),
-            )
-        first = store.list_namespace("opaque.test", None, 2)
-        second = store.list_namespace("opaque.test", first[-1].record_id, 2)
-        self.assertEqual(tuple(item.record_id for item in first + second), identifiers)
-        with self.assertRaises(OpaqueExtensionConflictError):
-            store.compare_and_set(
-                "opaque.test",
-                identifiers[0],
-                9,
-                CanonicalJsonObject((("different", True),)),
-            )
+    def test_generic_extension_store_surface_is_absent(self) -> None:
+        sqlite = import_module("sciretriever.literature_store.sqlite")
+
+        self.assertFalse(hasattr(sqlite, "OpaqueExtensionConflictError"))
+        self.assertFalse(hasattr(sqlite, "OpaqueExtensionRecordStore"))
+        with self.assertRaises(ModuleNotFoundError):
+            import_module("sciretriever.literature_store.sqlite.opaque_extensions")
 
 
 if __name__ == "__main__":

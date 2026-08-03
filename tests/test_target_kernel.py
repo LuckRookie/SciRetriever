@@ -10,13 +10,10 @@ from pydantic import ValidationError
 from sciretriever.kernel import (
     BoundaryError,
     CanonicalJsonObject,
-    CanonicalJsonValue,
-    OpaqueExtensionRecord,
-    OpaqueExtensionRecordStorePort,
     canonical_json_bytes,
     parse_canonical_json,
-    validate_page_request,
 )
+from sciretriever.model import primitives
 from sciretriever.model.documents import (
     EvidenceText,
     SourceLocator,
@@ -25,7 +22,6 @@ from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     AssetId,
-    ExtensionRecordId,
     ProvenanceId,
     RelativeArtifactPath,
     Sha256,
@@ -33,65 +29,12 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
     WorkId,
     WorkVersionId,
-    sha256_digest,
 )
 from sciretriever.model.sources import Provenance
 
 UUIDS = tuple(f"00000000-0000-4000-8000-{index:012x}" for index in range(1, 12))
 SHA_A = "a" * 64
 NOW = "2026-07-31T12:00:00.123Z"
-
-
-class InMemoryOpaqueStore:
-    def __init__(self) -> None:
-        self._records: dict[tuple[str, ExtensionRecordId], OpaqueExtensionRecord] = {}
-
-    def get(self, namespace: str, record_id: ExtensionRecordId) -> OpaqueExtensionRecord | None:
-        return self._records.get((namespace, record_id))
-
-    def list_namespace(
-        self, namespace: str, after_record_id: ExtensionRecordId | None, limit: int
-    ) -> tuple[OpaqueExtensionRecord, ...]:
-        validate_page_request(after_record_id=after_record_id, limit=limit)
-        records = tuple(
-            sorted(
-                (
-                    record
-                    for (record_namespace, _record_id), record in self._records.items()
-                    if record_namespace == namespace
-                    and (after_record_id is None or record.record_id.root > after_record_id.root)
-                ),
-                key=lambda record: record.record_id.root,
-            )
-        )
-        return records[:limit]
-
-    def compare_and_set(
-        self,
-        namespace: str,
-        record_id: ExtensionRecordId,
-        expected_revision: int | None,
-        payload: CanonicalJsonValue,
-    ) -> OpaqueExtensionRecord:
-        current = self.get(namespace, record_id)
-        actual_revision = None if current is None else current.revision
-        if actual_revision != expected_revision:
-            raise BoundaryError.for_field("expected_revision", "does not match current revision")
-        record = OpaqueExtensionRecord(
-            namespace=namespace,
-            record_id=record_id,
-            revision=1 if current is None else current.revision + 1,
-            payload_sha256=sha256_digest(canonical_json_bytes(payload)),
-            payload=payload,
-        )
-        self._records[(namespace, record_id)] = record
-        return record
-
-    def delete(self, namespace: str, record_id: ExtensionRecordId, expected_revision: int) -> None:
-        current = self.get(namespace, record_id)
-        if current is None or current.revision != expected_revision:
-            raise BoundaryError.for_field("expected_revision", "does not match current revision")
-        del self._records[(namespace, record_id)]
 
 
 class KernelValueTests(TestCase):
@@ -195,15 +138,14 @@ class CanonicalJsonTests(TestCase):
 
 
 class ContractTests(TestCase):
-    def make_record(self) -> OpaqueExtensionRecord:
-        payload = parse_canonical_json('{"status":"prepared","attempt":1}')
-        return OpaqueExtensionRecord(
-            namespace="example.extension.v1",
-            record_id=ExtensionRecordId(UUIDS[0]),
-            revision=1,
-            payload_sha256=sha256_digest(canonical_json_bytes(payload)),
-            payload=payload,
-        )
+    def test_generic_extension_kernel_surface_is_absent(self) -> None:
+        kernel = import_module("sciretriever.kernel")
+
+        self.assertFalse(hasattr(kernel, "OpaqueExtensionRecord"))
+        self.assertFalse(hasattr(kernel, "OpaqueExtensionRecordStorePort"))
+        self.assertFalse(hasattr(primitives, "ExtensionRecordId"))
+        with self.assertRaises(ModuleNotFoundError):
+            import_module("sciretriever.kernel.extensions")
 
     def test_foundation_contracts_are_frozen_and_round_trip(self) -> None:
         provenance = Provenance(
@@ -255,53 +197,6 @@ class ContractTests(TestCase):
                 with self.assertRaises(ValidationError) as raised:
                     provenance_type(**arguments)
                 self.assertEqual(raised.exception.errors()[0]["loc"], (field,))
-
-    def test_opaque_record_round_trip_and_payload_hash_are_strict(self) -> None:
-        record = self.make_record()
-
-        self.assertEqual(OpaqueExtensionRecord.from_json(record.to_json()), record)
-        with self.assertRaisesRegex(BoundaryError, "payload_sha256 does not match"):
-            OpaqueExtensionRecord(
-                namespace=record.namespace,
-                record_id=record.record_id,
-                revision=record.revision,
-                payload_sha256=Sha256("b" * 64),
-                payload=record.payload,
-            )
-
-        with self.assertRaises(BoundaryError):
-            OpaqueExtensionRecord.from_json(record.to_json()[:-1] + ',"unknown":true}')
-
-        malformed_id = record.to_json().replace(str(record.record_id), "not-a-uuid")
-        with self.assertRaisesRegex(BoundaryError, "extension_record"):
-            OpaqueExtensionRecord.from_json(malformed_id)
-
-    def test_compare_and_set_is_deterministic_and_rejects_stale_revision(self) -> None:
-        store: OpaqueExtensionRecordStorePort = InMemoryOpaqueStore()
-        record_id = ExtensionRecordId(UUIDS[0])
-        first_payload = parse_canonical_json('{"b":2,"a":1}')
-        equivalent_payload = parse_canonical_json('{"a":1,"b":2}')
-
-        first = store.compare_and_set("example.extension.v1", record_id, None, first_payload)
-        with self.assertRaisesRegex(BoundaryError, "does not match current revision"):
-            store.compare_and_set("example.extension.v1", record_id, None, equivalent_payload)
-        second = store.compare_and_set("example.extension.v1", record_id, 1, equivalent_payload)
-
-        self.assertEqual(first.payload_sha256, second.payload_sha256)
-        self.assertEqual(second.revision, 2)
-        self.assertEqual(store.list_namespace("example.extension.v1", None, 1), (second,))
-
-    def test_store_port_is_schema_opaque_and_page_bounds_are_closed(self) -> None:
-        self.assertTrue(hasattr(OpaqueExtensionRecordStorePort, "compare_and_set"))
-        self.assertTrue(hasattr(OpaqueExtensionRecordStorePort, "list_namespace"))
-        self.assertEqual(validate_page_request(after_record_id=None, limit=1), (None, 1))
-        self.assertEqual(
-            validate_page_request(after_record_id=ExtensionRecordId(UUIDS[0]), limit=1000),
-            (ExtensionRecordId(UUIDS[0]), 1000),
-        )
-        for invalid_limit in (0, 1001, True):
-            with self.subTest(limit=invalid_limit), self.assertRaises(BoundaryError):
-                validate_page_request(after_record_id=None, limit=invalid_limit)
 
     def test_reason_action_errors_have_stable_typed_fields(self) -> None:
         evidence = FailureEvidence(

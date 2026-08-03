@@ -28,7 +28,7 @@ def json_output(payload: str) -> CanonicalJsonObject:
     return json.loads(canonical_json_bytes(json_value(payload)))
 
 
-def _metadata(payload: str) -> UnifiedMetadataValues:
+def _metadata(payload: str) -> tuple[UnifiedMetadataValues, tuple[str, ...]]:
     value = json.loads(payload)
     author_values = value.get("authors", ())
     authors: list[Author] = []
@@ -57,31 +57,41 @@ def _metadata(payload: str) -> UnifiedMetadataValues:
         Identifier(namespace=item["namespace"], value=item["value"])
         for item in value.get("identifiers", ())
     )
-    return UnifiedMetadataValues(
-        title=value["title"],
-        authors=tuple(authors),
-        abstract=value.get("abstract"),
-        publication_date=value.get("publication_date"),
-        publication_year=value.get("publication_year", value.get("year")),
-        document_type=value.get("document_type", value.get("item_type")),
-        language=value.get("language"),
-        venue=value.get("venue"),
-        publisher=value.get("publisher"),
-        volume=value.get("volume"),
-        issue=value.get("issue"),
-        pages=value.get("pages"),
-        article_number=value.get("article_number"),
-        open_access_status=value.get("open_access_status"),
-        identifiers=identifiers,
+    keyword_values = value.get("keywords", ())
+    if not isinstance(keyword_values, (list, tuple)) or any(
+        not isinstance(item, str) for item in keyword_values
+    ):
+        raise sqlite3.DatabaseError("metadata keywords must be an array of text")
+    return (
+        UnifiedMetadataValues(
+            title=value["title"],
+            authors=tuple(authors),
+            abstract=value.get("abstract"),
+            publication_date=value.get("publication_date"),
+            publication_year=value.get("publication_year", value.get("year")),
+            document_type=value.get("document_type", value.get("item_type")),
+            language=value.get("language"),
+            venue=value.get("venue"),
+            publisher=value.get("publisher"),
+            volume=value.get("volume"),
+            issue=value.get("issue"),
+            pages=value.get("pages"),
+            article_number=value.get("article_number"),
+            open_access_status=value.get("open_access_status"),
+            identifiers=identifiers,
+        ),
+        tuple(keyword_values),
     )
 
 
 def metadata_view(row: tuple[int, str, str, str]) -> MetadataView:
     revision, digest, values_json, _provenance_json = row
+    values, keywords = _metadata(values_json)
     return MetadataView(
         revision=revision,
         sha256=Sha256(digest),
-        values=_metadata(values_json),
+        values=values,
+        keywords=keywords,
         provenance=(),
     )
 
@@ -202,27 +212,8 @@ def reference(payload: str) -> ReferenceView:
     )
 
 
-def extension_fields(payload: str) -> tuple[str, str | None, str | None, CanonicalJsonObject]:
-    value = json_value(payload)
-    if not isinstance(value, CanonicalJsonObject):
-        return "1", None, None, json.loads(canonical_json_bytes(value))
-    fields = dict(value.entries)
-    schema, artifact, digest = (
-        fields.get("schema_version", "1"),
-        fields.get("artifact_id"),
-        fields.get("sha256"),
-    )
-    return (
-        schema if isinstance(schema, str) else "1",
-        artifact if isinstance(artifact, str) else None,
-        digest if isinstance(digest, str) else None,
-        json.loads(canonical_json_bytes(fields.get("value", value))),
-    )
-
-
 __all__ = (
     "analysis_view",
-    "extension_fields",
     "json_value",
     "json_output",
     "light_view",

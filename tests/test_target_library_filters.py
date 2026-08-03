@@ -1,24 +1,28 @@
 from __future__ import annotations
 
+from inspect import signature
 from uuid import uuid4
 
-from sciretriever.interoperability.library import LibraryReadService
+from pydantic import ValidationError
+
 from sciretriever.literature_store.sqlite import SqliteLibraryReadRepository, create_or_open_catalog
+from sciretriever.model import library_views
+from sciretriever.model.library_details import WorkVersionDetail
 from sciretriever.model.library_pages import LibraryPageRequest
 from sciretriever.model.library_query import QueryFilterV1
 from sciretriever.model.literature import Identifier
-from sciretriever.model.primitives import CollectionId, WorkId
+from sciretriever.model.primitives import CollectionId, WorkId, WorkVersionId
+from sciretriever.services.library import LibraryService
 from tests.target_library_support import LibraryCase
 
 
 class TargetLibraryFilterTests(LibraryCase):
-    def test_filters_details_graph_extensions_and_fts_use_current_facts(self) -> None:
+    def test_filters_details_graph_and_fts_use_current_facts(self) -> None:
         work_id, version_id = self._publish("Alpha Search", "formal", "detail")
         collection_id, run_id, membership_id = (str(uuid4()) for _ in range(3))
         reference_id = str(uuid4())
         unresolved_id = str(uuid4())
         reference_set_id = str(uuid4())
-        extension_id = str(uuid4())
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
                 "INSERT INTO collections(id,name) VALUES(?,'topic')", (collection_id,)
@@ -62,15 +66,6 @@ class TargetLibraryFilterTests(LibraryCase):
                 "INSERT INTO unresolved_references VALUES(?,?,1,'unresolved evidence',?)",
                 (unresolved_id, reference_set_id, unresolved),
             )
-            payload = (
-                '{"artifact_id":null,"schema_version":"1","sha256":null,'
-                '"value":{"term":"extension alpha"},"work_version_id":"%s"}' % version_id
-            )
-            connection.execute(
-                "INSERT INTO opaque_extension_records "
-                "VALUES('example.ns',?,1,sciretriever_sha256(?),?)",
-                (extension_id, payload, payload),
-            )
             connection.execute(
                 "INSERT INTO current_failures VALUES(?,?,?,?,?,?,?,1,?)",
                 (
@@ -85,7 +80,7 @@ class TargetLibraryFilterTests(LibraryCase):
                 ),
             )
             connection.commit()
-        service = LibraryReadService(SqliteLibraryReadRepository(self.catalog))
+        service = LibraryService(SqliteLibraryReadRepository(self.catalog))
 
         filters = (
             QueryFilterV1(query="alpha"),
@@ -105,7 +100,6 @@ class TargetLibraryFilterTests(LibraryCase):
             QueryFilterV1(asset_available=False),
             QueryFilterV1(light_document_available=False),
             QueryFilterV1(analysis_available=False),
-            QueryFilterV1(extension_namespaces=("example.ns",)),
         )
         for query_filter in filters:
             self.assertEqual(
@@ -135,7 +129,6 @@ class TargetLibraryFilterTests(LibraryCase):
             QueryFilterV1(asset_available=True),
             QueryFilterV1(light_document_available=True),
             QueryFilterV1(analysis_available=True),
-            QueryFilterV1(extension_namespaces=("absent.ns",)),
         )
         for query_filter in negative_filters:
             self.assertEqual(
@@ -148,12 +141,11 @@ class TargetLibraryFilterTests(LibraryCase):
                 0,
             )
 
-        detail = service.get_work(WorkId(work_id), True, ("example.ns",))
-        resolved = service.references(version_id, True, 100, None)
+        detail = service.get_work(WorkId(work_id), True)
+        resolved = service.references(WorkVersionId(version_id), True, 100, None)
         memberships = service.collection_memberships(CollectionId(collection_id), None, 1)
         self.assertEqual(str(detail.work_id), work_id)
         self.assertTrue(detail.versions[0].observations_included)
-        self.assertEqual(detail.versions[0].extension_namespaces, ("example.ns",))
         self.assertEqual((len(resolved.edges), len(resolved.unresolved)), (1, 1))
         self.assertEqual(str(memberships.memberships[0][0]), work_id)
         self.assertEqual(len(memberships.memberships[0][1].causes), 1)
@@ -182,3 +174,12 @@ class TargetLibraryFilterTests(LibraryCase):
             ),
             1,
         )
+
+    def test_generic_extension_filter_is_absent(self) -> None:
+        with self.assertRaises(ValidationError):
+            QueryFilterV1.model_validate_json('{"extension_namespaces":["example.ns"]}')
+        self.assertNotIn("extension_namespaces", WorkVersionDetail.model_fields)
+        self.assertNotIn("extensions", WorkVersionDetail.model_fields)
+        self.assertFalse(hasattr(library_views, "ExtensionResultView"))
+        self.assertNotIn("namespaces", signature(LibraryService.get_work).parameters)
+        self.assertNotIn("namespaces", signature(LibraryService.get_version).parameters)

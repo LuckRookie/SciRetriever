@@ -12,13 +12,10 @@ from sciretriever.core.literature.completion import metadata_snapshot_sha256
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     SCHEMA_FINGERPRINT,
-    OpaqueExtensionConflictError,
-    OpaqueExtensionRecordStore,
     UnsupportedCatalogError,
     create_or_open_catalog,
     validate_catalog,
 )
-from sciretriever.model.primitives import ExtensionRecordId
 
 
 class TargetStoreIntegrityHardeningTests(unittest.TestCase):
@@ -89,23 +86,6 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
                     "metadata_snapshot_id,reference_set_id,tag_set_id) "
                     "VALUES ('version','light-2','analysis-1','metadata','references','tags')"
                 )
-
-    def test_opaque_store_canonicalizes_hashes_and_enforces_cas(self) -> None:
-        with create_or_open_catalog(self.catalog):
-            pass
-        store = OpaqueExtensionRecordStore(self.catalog)
-        record_id = ExtensionRecordId("30000000-0000-0000-0000-000000000001")
-        payload = CanonicalJsonObject((("b", 1), ("a", 2)))
-
-        created = store.compare_and_set("example", record_id, None, payload)
-        loaded = store.get("example", record_id)
-
-        self.assertEqual(loaded, created)
-        self.assertEqual(created.payload, CanonicalJsonObject((("a", 2), ("b", 1))))
-        with self.assertRaises(OpaqueExtensionConflictError):
-            store.compare_and_set("example", record_id, None, payload)
-        updated = store.compare_and_set("example", record_id, 1, CanonicalJsonObject((("c", 3),)))
-        self.assertEqual(updated.revision, 2)
 
     def test_opaque_direct_sql_shape_guards_remain_independent(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:

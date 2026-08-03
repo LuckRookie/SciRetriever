@@ -14,10 +14,6 @@ from sciretriever.literature_store.sqlite.library_repository import SqliteLibrar
 from sciretriever.literature_store.sqlite.literature_repository import (
     SqliteLiteratureRepository,
 )
-from sciretriever.literature_store.sqlite.opaque_extensions import (
-    OpaqueExtensionConflictError,
-    OpaqueExtensionRecordStore,
-)
 from sciretriever.literature_store.sqlite.publisher_support import StalePublicationError
 from sciretriever.literature_store.sqlite.publishers_collection import CollectionAcceptancePublisher
 from sciretriever.literature_store.sqlite.publishers_completion import CompletionPublisher
@@ -36,8 +32,6 @@ __all__ = (
     "ContentAcceptancePublisher",
     "CurationStaleError",
     "ImportAcceptancePublisher",
-    "OpaqueExtensionConflictError",
-    "OpaqueExtensionRecordStore",
     "SCHEMA_FINGERPRINT",
     "SCHEMA_MANIFEST",
     "SCHEMA_TABLES",

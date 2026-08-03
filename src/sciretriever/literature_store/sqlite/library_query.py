@@ -130,12 +130,6 @@ def _where(  # noqa: C901
                 )
                 parameters.append(relation)
         clauses.append("(" + " OR ".join(relation_clauses) + ")")
-    for namespace in filters.extension_namespaces:
-        clauses.append(
-            "EXISTS(SELECT 1 FROM opaque_extension_records x WHERE x.namespace=? AND "
-            "json_extract(x.payload_json,'$.work_version_id')=v.id)"
-        )
-        parameters.append(namespace)
     if filters.query is not None:
         clauses.append(
             "EXISTS(SELECT 1 FROM (SELECT work_version_id FROM metadata_fts WHERE metadata_fts "
@@ -206,4 +200,22 @@ def search(
     return LibraryPage(items=items, next_cursor=next_cursor)
 
 
-__all__ = ("search",)
+def export_candidates(
+    connection: sqlite3.Connection, filters: QueryFilterV1
+) -> tuple[tuple[WorkId, WorkVersionId, VersionRole], ...]:
+    where, parameters = _where(filters)
+    rows = connection.execute(
+        "SELECT v.work_id,v.id,v.version_role FROM work_versions v "
+        "JOIN work_version_current_metadata c ON c.work_version_id=v.id "
+        "JOIN metadata_snapshots s ON s.id=c.metadata_snapshot_id "
+        "JOIN work_version_state_view st ON st.work_version_id=v.id "
+        f"WHERE {where} "
+        "ORDER BY lower(json_extract(s.values_json,'$.title')),v.work_id,"
+        "CASE v.version_role WHEN 'formal' THEN 0 WHEN 'accepted-manuscript' THEN 1 "
+        "WHEN 'preprint' THEN 2 ELSE 3 END,v.id",
+        parameters,
+    ).fetchall()
+    return tuple((WorkId(row[0]), WorkVersionId(row[1]), VersionRole(row[2])) for row in rows)
+
+
+__all__ = ("export_candidates", "search")
