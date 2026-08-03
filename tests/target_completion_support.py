@@ -7,22 +7,26 @@ from uuid import uuid4
 
 from target_analysis_support import proposal_value
 
-from sciretriever.batching.completion import CompletionContext
+from sciretriever.core.analysis import analysis_bytes, assemble_completion_submission
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
-from sciretriever.model.analysis import AnalysisProposalV1
-from sciretriever.model.assets import PublishedArtifact, StagedArtifact
+from sciretriever.model.analysis import AnalysisProposalV1, AnalysisTarget
+from sciretriever.model.assets import ArtifactKind, PublishedArtifact, StagedArtifact
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection, TargetResult
+from sciretriever.model.literature import CompletionSubmission
 from sciretriever.model.primitives import (
     MetadataSnapshotId,
+    RelativeArtifactPath,
     Sha256,
     WorkId,
+    sha256_digest,
 )
+from sciretriever.services.analysis import AnalysisArtifactStorePort
 from tests.target_publisher_support import ScenarioFactory
 
 SqlValue = str | int | float | bytes | None
@@ -32,7 +36,7 @@ SqlValue = str | int | float | bytes | None
 class PreparedCompletion:
     path: Path
     storage: Path
-    context: CompletionContext
+    context: AnalysisTarget
     target: TargetProjection
     proposal: AnalysisProposalV1
     publisher: CompletionPublisher
@@ -88,17 +92,17 @@ def prepare_completion(
         connection.commit()
     assert metadata is not None
     storage = Path(factory.root) / f"storage-{uuid4()}"
-    context = CompletionContext(
-        light.work_version_id,
-        light.document_id,
-        light.artifact.sha256,
-        MetadataSnapshotId(metadata[0]),
-        metadata[1],
-        Sha256(metadata[2]),
-        "parser@1",
-        "openai",
-        "model@1",
-        Sha256("8" * 64),
+    context = AnalysisTarget(
+        work_version_id=light.work_version_id,
+        light_document_id=light.document_id,
+        light_document_sha256=light.artifact.sha256,
+        metadata_snapshot_id=MetadataSnapshotId(metadata[0]),
+        metadata_revision=metadata[1],
+        metadata_sha256=Sha256(metadata[2]),
+        parser_identity="parser@1",
+        model_provider="openai",
+        model_identity="model@1",
+        parameters_sha256=Sha256("8" * 64),
     )
     target = TargetProjection(
         batch_run_id=base.command.target.batch_run_id,
@@ -134,6 +138,24 @@ def prepare_completion(
         proposal,
         CompletionPublisher(base.path, failpoint=failpoint),
     )
+
+
+def publish_completion_submission(
+    proposal: AnalysisProposalV1,
+    context: AnalysisTarget,
+    target: TargetProjection,
+    artifact_store: AnalysisArtifactStorePort,
+) -> CompletionSubmission:
+    content = analysis_bytes(proposal)
+    published = artifact_store.publish(
+        StagedArtifact(
+            kind=ArtifactKind.ANALYSIS,
+            path=RelativeArtifactPath("staged"),
+            sha256=sha256_digest(content),
+            content=content,
+        )
+    )
+    return assemble_completion_submission(proposal, context, target, published)
 
 
 def _reference(identifier: str, raw_text: str, work_id: str | None):
@@ -247,4 +269,5 @@ __all__ = (
     "PreparedCompletion",
     "authority_snapshot",
     "prepare_completion",
+    "publish_completion_submission",
 )

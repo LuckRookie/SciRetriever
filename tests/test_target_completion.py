@@ -9,10 +9,10 @@ from target_completion_support import (
     FailingArtifactStore,
     authority_snapshot,
     prepare_completion,
+    publish_completion_submission,
 )
 
-from sciretriever.batching.completion import complete_analysis
-from sciretriever.content.analysis import analysis_bytes
+from sciretriever.core.analysis import analysis_bytes
 from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
 )
@@ -68,7 +68,9 @@ class TargetCompletionTests(unittest.TestCase):
                     ),
                 )
             connection.commit()
-        submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
+        submission = publish_completion_submission(
+            proposal, context, target, CoreArtifactStore(storage)
+        )
         outcome = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
         replay = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
 
@@ -102,7 +104,9 @@ class TargetCompletionTests(unittest.TestCase):
 
     def test_artifact_is_durable_before_stale_acceptance_and_is_reused(self) -> None:
         path, storage, context, target, proposal, publisher = self._prepared()
-        submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
+        submission = publish_completion_submission(
+            proposal, context, target, CoreArtifactStore(storage)
+        )
         stale = replace(
             submission,
             metadata=replace(submission.metadata, expected_revision=context.metadata_revision + 1),
@@ -111,7 +115,9 @@ class TargetCompletionTests(unittest.TestCase):
             accept_completion(SqliteLiteratureRepository(path), publisher, stale, target)
         artifact = storage / "core" / str(submission.analysis.artifact_path)
         self.assertEqual(artifact.read_bytes(), analysis_bytes(proposal))
-        replay_submission = complete_analysis(proposal, context, target, CoreArtifactStore(storage))
+        replay_submission = publish_completion_submission(
+            proposal, context, target, CoreArtifactStore(storage)
+        )
         self.assertEqual(replay_submission.analysis.artifact_id, submission.analysis.artifact_id)
         with open_read_only_snapshot(path) as reader:
             self.assertEqual(
@@ -123,7 +129,7 @@ class TargetCompletionTests(unittest.TestCase):
         before = authority_snapshot(path, str(context.work_version_id), str(target.batch_run_id))
 
         with self.assertRaisesRegex(RuntimeError, "artifact publication failed"):
-            complete_analysis(proposal, context, target, FailingArtifactStore())
+            publish_completion_submission(proposal, context, target, FailingArtifactStore())
 
         self.assertEqual(
             authority_snapshot(path, str(context.work_version_id), str(target.batch_run_id)),

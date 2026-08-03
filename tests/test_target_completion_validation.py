@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from sciretriever.batching.completion import complete_analysis
 from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
     validate_completion_submission_contract,
@@ -26,7 +25,7 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.services.literature.api import accept_completion
-from tests.target_completion_support import prepare_completion
+from tests.target_completion_support import prepare_completion, publish_completion_submission
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -46,7 +45,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_reference_member_rejects_resolved_version_without_work(self) -> None:
         prepared = self._prepared()
-        valid = complete_analysis(
+        valid = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -76,7 +75,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_reference_member_identity_is_scoped_to_completion_set(self) -> None:
         prepared = self._prepared()
-        first = complete_analysis(
+        first = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -95,7 +94,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
                 subject_id=str(other_context.work_version_id),
             ),
         )
-        second = complete_analysis(
+        second = publish_completion_submission(
             prepared.proposal,
             other_context,
             other_target,
@@ -109,7 +108,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_domain_gate_rejects_resolved_version_owned_by_other_work(self) -> None:
         prepared = self._prepared()
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -147,7 +146,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_completed_replay_rejects_every_divergent_submission_fact(self) -> None:
         prepared = self._prepared()
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -214,7 +213,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_completed_replay_rejects_divergent_target_projection(self) -> None:
         prepared = self._prepared()
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -235,7 +234,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
 
     def test_transaction_rechecks_resolved_reference_topology(self) -> None:
         prepared = self._prepared()
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,

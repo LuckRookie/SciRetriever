@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 from uuid import uuid4
 
-from sciretriever.batching.completion import complete_analysis
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
@@ -12,7 +11,11 @@ from sciretriever.literature_store.sqlite import (
 )
 from sciretriever.model.literature import CompletionOutcome
 from sciretriever.services.literature.api import accept_completion
-from tests.target_completion_support import authority_snapshot, prepare_completion
+from tests.target_completion_support import (
+    authority_snapshot,
+    prepare_completion,
+    publish_completion_submission,
+)
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -27,7 +30,7 @@ class CompletionDurabilityTests(unittest.TestCase):
 
     def test_completed_provider_observation_cannot_change_final_pointers_or_fts(self) -> None:
         prepared = prepare_completion(self.factory)
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -75,7 +78,7 @@ class CompletionDurabilityTests(unittest.TestCase):
     def test_every_completion_write_and_before_commit_is_complete_old_or_new(self) -> None:
         points: list[str] = []
         prepared = prepare_completion(self.factory, lambda point: points.append(point))
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
@@ -95,7 +98,7 @@ class CompletionDurabilityTests(unittest.TestCase):
                     raise InjectedFailure(point)
 
             failed = prepare_completion(self.factory, fail)
-            failed_submission = complete_analysis(
+            failed_submission = publish_completion_submission(
                 failed.proposal,
                 failed.context,
                 failed.target,

@@ -17,13 +17,13 @@ from sciretriever.core.literature.completion import (
     completion_submission_canonical,
     metadata_snapshot_sha256,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
     StalePublicationError,
     StatementFailpoint,
     execute,
     immediate,
 )
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.execution import TargetProjection
 from sciretriever.model.literature import (
     CompletionOutcome,

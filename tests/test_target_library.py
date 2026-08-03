@@ -4,9 +4,8 @@ import unittest
 from uuid import uuid4
 
 from pydantic import ValidationError
-from target_completion_support import prepare_completion
+from target_completion_support import prepare_completion, publish_completion_submission
 
-from sciretriever.batching.completion import complete_analysis
 from sciretriever.interoperability.library import LibraryReadService
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
@@ -22,7 +21,6 @@ from tests.target_publisher_support import ScenarioFactory
 
 
 class TargetLibraryTests(LibraryCase):
-
     def test_query_filter_rejects_duplicates_ranges_and_blank_values(self) -> None:
         with self.assertRaises(ValidationError):
             QueryFilterV1(authors=("Ada", "Ada"))
@@ -83,7 +81,7 @@ class TargetLibraryTests(LibraryCase):
         factory = ScenarioFactory()
         self.addCleanup(factory.cleanup)
         prepared = prepare_completion(factory)
-        submission = complete_analysis(
+        submission = publish_completion_submission(
             prepared.proposal,
             prepared.context,
             prepared.target,
