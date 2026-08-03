@@ -91,10 +91,7 @@ class TargetCompletionContractTests(TestCase):
             self.assertEqual(contract.model_config["extra"], "forbid", name)
 
     def test_legacy_modules_do_not_define_migrated_data_contracts(self) -> None:
-        legacy_paths = (
-            SRC / "bibliography" / "publisher_contracts.py",
-            SRC / "content" / "analysis.py",
-        )
+        legacy_paths = (SRC / "bibliography" / "publisher_contracts.py",)
         for path in legacy_paths:
             self.assertEqual(
                 _class_names(path) & (LITERATURE_NAMES | ANALYSIS_NAMES),
@@ -102,14 +99,27 @@ class TargetCompletionContractTests(TestCase):
                 str(path),
             )
 
-        for module_name, names in (
-            ("sciretriever.bibliography.api", LITERATURE_NAMES),
-            ("sciretriever.content.api", ANALYSIS_NAMES),
-        ):
+        for module_name, names in (("sciretriever.bibliography.api", LITERATURE_NAMES),):
             module = _optional_module(module_name)
             if module is None:
                 continue
             self.assertEqual(set(module.__dict__) & names, set(), module_name)
+
+    def test_legacy_content_analysis_modules_are_removed(self) -> None:
+        for filename in ("analysis.py", "api.py", "model.py", "ports.py"):
+            self.assertFalse((SRC / "content" / filename).exists(), filename)
+
+    def test_analysis_rules_and_service_ports_have_target_owners(self) -> None:
+        core = _module("sciretriever.core.analysis")
+        service = _module("sciretriever.services.analysis")
+        ports = _module("sciretriever.services.analysis.ports")
+
+        self.assertEqual(core.analysis_bytes.__module__, "sciretriever.core.analysis.serialization")
+        self.assertEqual(
+            core.validate_analysis_text.__module__, "sciretriever.core.analysis.validation"
+        )
+        self.assertEqual(service.AnalysisService.__module__, "sciretriever.services.analysis.api")
+        self.assertEqual(ports.LLMPort.__module__, "sciretriever.services.analysis.ports")
 
     def test_core_owns_completion_rules_and_legacy_paths_do_not(self) -> None:
         core_paths = (

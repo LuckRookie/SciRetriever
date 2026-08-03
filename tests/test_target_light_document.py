@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import os
 import unittest
@@ -43,8 +42,6 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.services.documents import DocumentServiceDependencies, LightDocumentService
 
-legacy_content_api = importlib.import_module("sciretriever.content.api")
-
 
 class TargetLightDocumentTests(unittest.TestCase):
     def test_document_contracts_have_one_strict_model_owner(self) -> None:
@@ -71,8 +68,8 @@ class TargetLightDocumentTests(unittest.TestCase):
             self.assertTrue(contract.model_config["frozen"])
             self.assertTrue(contract.model_config["strict"])
             self.assertEqual(contract.model_config["extra"], "forbid")
-            self.assertNotIn(name, legacy_content_api.__dict__)
         for module_name in (
+            "sciretriever.content.api",
             "sciretriever.content.light_models",
             "sciretriever.content.light_document",
             "sciretriever.content.light_serialization",

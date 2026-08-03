@@ -45,9 +45,6 @@ class TargetParsingLlmModelTests(TestCase):
 
     def test_legacy_modules_do_not_define_or_reexport_parser_and_llm_contracts(self) -> None:
         legacy_paths = (
-            SRC / "content" / "model.py",
-            SRC / "content" / "analysis.py",
-            SRC / "content" / "ports.py",
             SRC / "adapters" / "mineru.py",
             SRC / "adapters" / "analysis.py",
         )
@@ -59,9 +56,6 @@ class TargetParsingLlmModelTests(TestCase):
             )
 
         for module_name in (
-            "sciretriever.content.model",
-            "sciretriever.content.analysis",
-            "sciretriever.content.ports",
             "sciretriever.adapters.mineru",
             "sciretriever.adapters.analysis",
         ):

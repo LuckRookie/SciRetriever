@@ -101,17 +101,12 @@ class TargetContentAssetTests(unittest.TestCase):
         self.assertEqual(assets_api.__all__, expected)
         self.assertEqual(assets_package.__all__, expected)
 
-        import sciretriever.content.api as content_api
-
         for module_name in (
             "sciretriever.content.assets",
             "sciretriever.content.asset_acquisition",
             "sciretriever.content.asset_validation",
         ):
             self.assertIsNone(importlib.util.find_spec(module_name), module_name)
-        for name in ("AssetAcceptancePolicy", "ContentAssetService", "ResolverTier"):
-            self.assertNotIn(name, content_api.__dict__)
-            self.assertNotIn(name, content_api.__all__)
 
     def test_exact_doi_primary_publishes_file_before_catalog(self) -> None:
         first = candidate("https://source.invalid/article")

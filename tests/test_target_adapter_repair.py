@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,27 +107,9 @@ class TargetAdapterRepairTests(unittest.TestCase):
         target_classes = {node.name for node in access_tree.body if isinstance(node, ast.ClassDef)}
         self.assertTrue(expected <= target_classes)
 
-        legacy_path = repository / "src" / "sciretriever" / "content" / "model.py"
-        legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
-        legacy_classes = {node.name for node in legacy_tree.body if isinstance(node, ast.ClassDef)}
-        self.assertTrue(expected.isdisjoint(legacy_classes))
-
-        legacy_exports = next(
-            (
-                ast.literal_eval(node.value)
-                for node in legacy_tree.body
-                if isinstance(node, ast.Assign)
-                and any(
-                    isinstance(target, ast.Name) and target.id == "__all__"
-                    for target in node.targets
-                )
-            ),
-            (),
-        )
-        self.assertTrue(expected.isdisjoint(set(legacy_exports)))
+        self.assertIsNone(importlib.util.find_spec("sciretriever.content.model"))
 
         target_module = importlib.import_module("sciretriever.model.access")
-        legacy_module = importlib.import_module("sciretriever.content.model")
         for name in expected:
             contract = getattr(target_module, name)
             self.assertTrue(issubclass(contract, BaseModel))
@@ -134,7 +117,6 @@ class TargetAdapterRepairTests(unittest.TestCase):
             self.assertTrue(contract.model_config["frozen"])
             self.assertTrue(contract.model_config["strict"])
             self.assertEqual(contract.model_config["extra"], "forbid")
-            self.assertNotIn(name, legacy_module.__dict__)
 
     def test_production_registry_contains_complete_supported_inventory(self) -> None:
         metadata: dict[str, MetadataClient] = {

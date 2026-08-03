@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import importlib
 import unittest
-from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
@@ -35,14 +33,6 @@ from sciretriever.model.primitives import (
 class TargetAssetModelTests(unittest.TestCase):
     def test_asset_contracts_have_one_strict_model_owner(self) -> None:
         asset_models = importlib.import_module("sciretriever.model.assets")
-        legacy_modules = tuple(
-            importlib.import_module(module_name)
-            for module_name in (
-                "sciretriever.content.api",
-                "sciretriever.content.model",
-                "sciretriever.content.ports",
-            )
-        )
         model_names = {
             "AssetCandidate",
             "AcceptedContentReference",
@@ -56,13 +46,7 @@ class TargetAssetModelTests(unittest.TestCase):
             "ContentAssetSuccess",
         }
         enum_names = {"ArtifactKind"}
-        legacy_path = Path(__file__).parents[1] / "src" / "sciretriever" / "content" / "model.py"
-        legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
-        legacy_definitions = {
-            node.name for node in ast.walk(legacy_tree) if isinstance(node, ast.ClassDef)
-        }
 
-        self.assertEqual(legacy_definitions & model_names, set())
         for name in model_names:
             contract = getattr(asset_models, name)
             self.assertTrue(issubclass(contract, BaseModel))
@@ -70,14 +54,8 @@ class TargetAssetModelTests(unittest.TestCase):
             self.assertTrue(contract.model_config["frozen"])
             self.assertTrue(contract.model_config["strict"])
             self.assertEqual(contract.model_config["extra"], "forbid")
-            for legacy_module in legacy_modules:
-                self.assertNotIn(name, legacy_module.__dict__)
-                self.assertNotIn(name, getattr(legacy_module, "__all__", ()))
         for name in enum_names:
             self.assertEqual(getattr(asset_models, name).__module__, asset_models.__name__)
-            for legacy_module in legacy_modules:
-                self.assertNotIn(name, legacy_module.__dict__)
-                self.assertNotIn(name, getattr(legacy_module, "__all__", ()))
 
     def test_asset_contracts_round_trip_without_mutation(self) -> None:
         candidate = AssetCandidate(

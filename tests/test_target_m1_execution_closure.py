@@ -49,7 +49,6 @@ class TargetM1ExecutionClosureTests(unittest.TestCase):
     def test_acceptance_contracts_have_one_strict_frozen_model_owner(self) -> None:
         assets = importlib.import_module("sciretriever.model.assets")
         documents = importlib.import_module("sciretriever.model.documents")
-        legacy_modules = (importlib.import_module("sciretriever.content.api"),)
 
         owners = (
             (assets, "PrimaryPdfAcceptance"),
@@ -67,9 +66,6 @@ class TargetM1ExecutionClosureTests(unittest.TestCase):
             self.assertEqual(contract.model_config["extra"], "forbid", name)
             self.assertNotIn("__post_init__", contract.__dict__, name)
             self.assertNotIn("__str__", contract.__dict__, name)
-            for legacy_module in legacy_modules:
-                self.assertNotIn(name, legacy_module.__dict__)
-                self.assertNotIn(name, legacy_module.__all__)
 
     def test_business_invalid_acceptance_remains_representable_in_model(self) -> None:
         assets = importlib.import_module("sciretriever.model.assets")
