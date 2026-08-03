@@ -33,6 +33,7 @@ from sciretriever.model.primitives import (
     TagSetId,
     WorkVersionAssetId,
 )
+
 if TYPE_CHECKING:
     from tests.target_publisher_support import Scenario, ScenarioFactory
 
