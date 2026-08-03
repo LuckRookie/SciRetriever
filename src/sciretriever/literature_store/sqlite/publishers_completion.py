@@ -1,3 +1,4 @@
+# noqa: E501  # noqa: SIZE_OK - completion facts and target result share one atomic transaction
 from __future__ import annotations
 
 import os
@@ -324,8 +325,14 @@ class CompletionPublisher:
                 connection,
                 point,
                 "UPDATE batch_targets SET started=1,result_json=? WHERE batch_run_id=? AND "
-                "target_id=? AND target_kind='work-version' AND result_json IS NULL",
-                (result_json, str(target.batch_run_id), str(submission.work_version_id)),
+                "target_id=? AND target_kind='work-version' AND EXISTS(SELECT 1 FROM batch_runs "
+                "b WHERE b.id=? AND b.status='running')",
+                (
+                    result_json,
+                    str(target.batch_run_id),
+                    str(submission.work_version_id),
+                    str(target.batch_run_id),
+                ),
             )
             if cursor.rowcount != 1:
                 raise StalePublicationError("completion target changed")

@@ -24,6 +24,7 @@ from sciretriever.literature_store.sqlite import (
     CompletionPublisher,
     ContentAcceptancePublisher,
     StalePublicationError,
+    create_or_open_catalog,
     open_read_only_snapshot,
 )
 from sciretriever.model.assets import PrimaryPdfAcceptance
@@ -164,6 +165,54 @@ class TargetPublisherTests(unittest.TestCase):
             assert isinstance(scenario.publisher, ContentAcceptancePublisher)
             scenario.publisher.publish(command)
         self.assertIn("published artifact identity is inconsistent", str(raised.exception))
+
+    def test_content_publisher_rejects_result_after_batch_terminalization(self) -> None:
+        scenario = self.factory.primary()
+        assert isinstance(scenario.command, ContentAcceptanceCommand)
+        batch_run_id = str(scenario.command.target.batch_run_id)
+        with create_or_open_catalog(scenario.path) as connection:
+            before = connection.execute(
+                "SELECT started,result_json FROM batch_targets WHERE batch_run_id=?",
+                (batch_run_id,),
+            ).fetchone()
+            connection.execute("UPDATE batch_runs SET status='failed' WHERE id=?", (batch_run_id,))
+            connection.commit()
+
+        with self.assertRaises(StalePublicationError):
+            scenario.invoke()
+
+        with open_read_only_snapshot(scenario.path) as connection:
+            accepted = connection.execute("SELECT COUNT(*) FROM accepted_primary_assets").fetchone()
+            after = connection.execute(
+                "SELECT started,result_json FROM batch_targets WHERE batch_run_id=?",
+                (batch_run_id,),
+            ).fetchone()
+        self.assertEqual(accepted, (0,))
+        self.assertEqual(after, before)
+
+    def test_completion_publisher_rejects_result_after_batch_terminalization(self) -> None:
+        scenario = self.factory.completion()
+        assert scenario.target is not None
+        batch_run_id = str(scenario.target.batch_run_id)
+        with create_or_open_catalog(scenario.path) as connection:
+            before = connection.execute(
+                "SELECT started,result_json FROM batch_targets WHERE batch_run_id=?",
+                (batch_run_id,),
+            ).fetchone()
+            connection.execute("UPDATE batch_runs SET status='failed' WHERE id=?", (batch_run_id,))
+            connection.commit()
+
+        with self.assertRaises(StalePublicationError):
+            scenario.invoke()
+
+        with open_read_only_snapshot(scenario.path) as connection:
+            bundles = connection.execute("SELECT COUNT(*) FROM completion_bundles").fetchone()
+            after = connection.execute(
+                "SELECT started,result_json FROM batch_targets WHERE batch_run_id=?",
+                (batch_run_id,),
+            ).fetchone()
+        self.assertEqual(bundles, (0,))
+        self.assertEqual(after, before)
 
     def test_pairwise_result_enums_with_identical_details_persist_differently(self) -> None:
         details = CanonicalJsonObject((("reason", "same"),))

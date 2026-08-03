@@ -92,9 +92,6 @@ def build_light(factory: ScenarioFactory, callback=None) -> Scenario:
     assert isinstance(base.command, ContentAcceptanceCommand)
     acceptance = base.command.acceptance
     assert isinstance(acceptance, PrimaryPdfAcceptance)
-    with create_or_open_catalog(base.path) as connection:
-        connection.execute("UPDATE batch_targets SET result_json=NULL")
-        connection.commit()
     document = CanonicalJsonObject((("blocks", (CanonicalJsonObject((("text", "atomic"),)),)),))
     artifact = factory.artifact(ArtifactKind.LIGHT_DOCUMENT, b'{"blocks":[{"text":"atomic"}]}')
     light = LightDocumentAcceptance(
@@ -147,8 +144,6 @@ def build_completion(factory: ScenarioFactory, callback=None) -> Scenario:
             "WHERE work_version_current_metadata.work_version_id=?",
             (str(light.work_version_id),),
         ).fetchone()
-        connection.execute("UPDATE batch_targets SET result_json=NULL")
-        connection.commit()
     assert row is not None
     proposal = CanonicalJsonObject(
         (

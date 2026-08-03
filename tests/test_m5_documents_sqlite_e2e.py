@@ -10,7 +10,6 @@ from sciretriever.core.documents import validate_light_document
 from sciretriever.literature_store.filesystem import CoreArtifactStore
 from sciretriever.literature_store.sqlite import (
     ContentAcceptancePublisher,
-    create_or_open_catalog,
     open_read_only_snapshot,
 )
 from sciretriever.model.assets import PrimaryPdfAcceptance
@@ -32,9 +31,6 @@ class M5DocumentsSqliteE2ETests(unittest.TestCase):
         command = scenario.command
         acceptance = command.acceptance
         assert isinstance(acceptance, PrimaryPdfAcceptance)
-        with create_or_open_catalog(scenario.path) as connection:
-            connection.execute("UPDATE batch_targets SET result_json=NULL")
-            connection.commit()
         pdf = b"%PDF-primary"
 
         class StaticParser:

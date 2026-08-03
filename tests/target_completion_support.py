@@ -88,8 +88,6 @@ def prepare_completion(
             "WHERE c.work_version_id=?",
             (str(light.work_version_id),),
         ).fetchone()
-        connection.execute("UPDATE batch_targets SET result_json=NULL")
-        connection.commit()
     assert metadata is not None
     storage = Path(factory.root) / f"storage-{uuid4()}"
     context = AnalysisTarget(

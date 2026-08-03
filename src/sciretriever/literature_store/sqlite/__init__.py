@@ -10,6 +10,7 @@ from sciretriever.literature_store.sqlite.engine import (
     open_read_only_snapshot,
     validate_catalog,
 )
+from sciretriever.literature_store.sqlite.execution_repository import SqliteExecutionRepository
 from sciretriever.literature_store.sqlite.library_repository import SqliteLibraryReadRepository
 from sciretriever.literature_store.sqlite.literature_repository import (
     SqliteLiteratureRepository,
@@ -38,6 +39,7 @@ __all__ = (
     "SqliteLiteratureRepository",
     "SqliteCollectionRepository",
     "SqliteCurationTransaction",
+    "SqliteExecutionRepository",
     "SqliteLibraryReadRepository",
     "StalePublicationError",
     "UnsupportedCatalogError",
