@@ -20,6 +20,10 @@ from sciretriever.model.primitives import (
 _UUID_PATTERN: Final = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
+class _DocumentValidationError(ValueError):
+    pass
+
+
 class _DocumentModel(BaseModel):
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -29,9 +33,18 @@ class _DocumentModel(BaseModel):
     )
 
 
+class LightDocumentBounds(_DocumentModel):
+    max_pages: int = Field(default=10_000, gt=0)
+    max_blocks: int = Field(default=100_000, gt=0)
+    max_spans: int = Field(default=500_000, gt=0)
+    max_text_characters: int = Field(default=20_000_000, gt=0)
+    max_table_cells: int = Field(default=1_000_000, gt=0)
+    max_section_depth: int = Field(default=32, gt=0)
+
+
 def _nonblank(value: str) -> str:
     if not value.strip():
-        raise ValueError("must be a nonblank string")
+        raise _DocumentValidationError("must be a nonblank string")
     return unicodedata.normalize("NFC", value)
 
 
@@ -80,9 +93,9 @@ class SourceLocator(_DocumentModel):
     @model_validator(mode="after")
     def validate_ranges(self) -> SourceLocator:
         if self.page_end < self.page_start:
-            raise ValueError("page_end must be at least page_start")
-        if self.char_end < self.char_start:
-            raise ValueError("char_end must be at least char_start")
+            raise _DocumentValidationError("page_end must be at least page_start")
+        if self.char_end <= self.char_start:
+            raise _DocumentValidationError("char_end must be greater than char_start")
         return self
 
 
@@ -146,7 +159,7 @@ class TableBlock(_DocumentModel):
     @model_validator(mode="after")
     def validate_row_widths(self) -> TableBlock:
         if any(len(row) != len(self.columns) for row in self.rows):
-            raise ValueError("table rows must match columns")
+            raise _DocumentValidationError("table rows must match columns")
         return self
 
 
@@ -225,7 +238,7 @@ class ReferenceView(_DocumentModel):
     @classmethod
     def validate_identifiers(cls, value: tuple[Identifier, ...]) -> tuple[Identifier, ...]:
         if len(value) != len(set(value)):
-            raise ValueError("duplicate identifiers")
+            raise _DocumentValidationError("duplicate identifiers")
         return value
 
 
@@ -241,11 +254,18 @@ class LightDocumentV1(_DocumentModel):
     def validate_unique_entries(self) -> LightDocumentV1:
         reference_ids = tuple(item.reference_id for item in self.references)
         if len(reference_ids) != len(set(reference_ids)):
-            raise ValueError("duplicate references")
+            raise _DocumentValidationError("duplicate references")
         provenance_ids = tuple(item.provenance_id for item in self.provenance)
         if len(provenance_ids) != len(set(provenance_ids)):
-            raise ValueError("duplicate provenance")
+            raise _DocumentValidationError("duplicate provenance")
         return self
+
+
+class LightDocumentPublication(_DocumentModel):
+    document_id: LightDocumentId
+    artifact_id: AssetId
+    artifact: PublishedArtifact
+    document: LightDocumentV1
 
 
 __all__ = (
@@ -254,6 +274,8 @@ __all__ = (
     "EvidenceText",
     "FigureCaptionBlock",
     "FormulaBlock",
+    "LightDocumentBounds",
+    "LightDocumentPublication",
     "LightDocumentV1",
     "LightDocumentAcceptance",
     "LightPublicationTarget",
