@@ -7,17 +7,10 @@ from typing import Protocol
 
 import anthropic
 import openai
+from pydantic import ValidationError
 
 import sciretriever.model.llm as llm_models
-from sciretriever.content.api import (
-    AnalysisBounds,
-    AnalysisValidationError,
-    analysis_json_schema,
-    validate_analysis_input,
-    validate_analysis_text,
-)
 from sciretriever.model.analysis import AnalysisProposalV1
-from sciretriever.model.documents import LightDocumentV1
 from sciretriever.model.primitives import sha256_digest
 
 
@@ -36,18 +29,8 @@ class _OpenAIResponse(Protocol):
     choices: Sequence[_OpenAIChoice]
 
 
-class _OpenAICompletions(Protocol):
-    def create(self, **kwargs) -> _OpenAIResponse: ...
-
-
-class _OpenAIChat(Protocol):
-    @property
-    def completions(self) -> _OpenAICompletions: ...
-
-
 class _OpenAIClient(Protocol):
-    @property
-    def chat(self) -> _OpenAIChat: ...
+    def create(self, **kwargs) -> _OpenAIResponse: ...
 
 
 class _OpenAIFactory(Protocol):
@@ -67,13 +50,8 @@ class _AnthropicResponse(Protocol):
     content: Sequence[_AnthropicBlock]
 
 
-class _AnthropicMessages(Protocol):
-    def create(self, **kwargs) -> _AnthropicResponse: ...
-
-
 class _AnthropicClient(Protocol):
-    @property
-    def messages(self) -> _AnthropicMessages: ...
+    def create(self, **kwargs) -> _AnthropicResponse: ...
 
 
 class _AnthropicFactory(Protocol):
@@ -82,47 +60,20 @@ class _AnthropicFactory(Protocol):
     ) -> _AnthropicClient: ...
 
 
-class _OpenAISdkCompletions:
-    def __init__(self, client: openai.OpenAI) -> None:
-        self._client = client
-
-    def create(self, **kwargs):
-        return self._client.chat.completions.create(**kwargs)
-
-
-class _OpenAISdkChat:
-    def __init__(self, client: openai.OpenAI) -> None:
-        self._completions = _OpenAISdkCompletions(client)
-
-    @property
-    def completions(self) -> _OpenAISdkCompletions:
-        return self._completions
-
-
 class _OpenAISdkClient:
     def __init__(self, client: openai.OpenAI) -> None:
-        self._chat = _OpenAISdkChat(client)
-
-    @property
-    def chat(self) -> _OpenAISdkChat:
-        return self._chat
-
-
-class _AnthropicSdkMessages:
-    def __init__(self, client: anthropic.Anthropic) -> None:
         self._client = client
 
-    def create(self, **kwargs):
-        return self._client.messages.create(**kwargs)
+    def create(self, **kwargs) -> _OpenAIResponse:
+        return self._client.chat.completions.create(**kwargs)
 
 
 class _AnthropicSdkClient:
     def __init__(self, client: anthropic.Anthropic) -> None:
-        self._messages = _AnthropicSdkMessages(client)
+        self._client = client
 
-    @property
-    def messages(self) -> _AnthropicSdkMessages:
-        return self._messages
+    def create(self, **kwargs) -> _AnthropicResponse:
+        return self._client.messages.create(**kwargs)
 
 
 def _openai_factory(
@@ -158,7 +109,6 @@ class AnalysisAdapterSettings:
     timeout_seconds: float
     max_output_tokens: int
     max_input_characters: int
-    max_source_units: int
 
 
 class AnalysisAdapterError(Exception):
@@ -170,35 +120,24 @@ class AnalysisAdapterError(Exception):
         return self.code
 
 
-def _bounds(config: AnalysisAdapterSettings) -> AnalysisBounds:
-    return AnalysisBounds(
-        config.max_input_characters,
-        config.max_source_units,
-        config.max_output_tokens * 16,
-    )
+def _source(request: llm_models.LLMRequest, config: AnalysisAdapterSettings) -> str:
+    if len(request.source) > config.max_input_characters:
+        raise AnalysisAdapterError("analysis_input_too_large")
+    return request.source
 
 
-def _input(request: llm_models.LLMRequest, config: AnalysisAdapterSettings) -> str:
-    try:
-        return validate_analysis_input(request.document, _bounds(config))
-    except AnalysisValidationError as error:
-        raise AnalysisAdapterError(error.code) from None
-
-
-def _proposal(
-    payload: str, document: LightDocumentV1, config: AnalysisAdapterSettings
-) -> AnalysisProposalV1:
+def _proposal(payload: str, config: AnalysisAdapterSettings) -> AnalysisProposalV1:
+    if len(payload) > config.max_output_tokens * 16:
+        raise AnalysisAdapterError("analysis_output_too_large")
     if not payload.strip() or not payload.lstrip().startswith("{"):
         raise AnalysisAdapterError("analysis_invalid_content")
     try:
-        return validate_analysis_text(payload, document, _bounds(config))
-    except AnalysisValidationError as error:
-        raise AnalysisAdapterError(error.code) from None
+        return AnalysisProposalV1.model_validate_json(payload)
+    except ValidationError:
+        raise AnalysisAdapterError("analysis_invalid_output") from None
 
 
-def _provenance(
-    provider: str, request: llm_models.LLMRequest, source: str
-) -> llm_models.LLMProvenance:
+def _provenance(provider: str, request: llm_models.LLMRequest) -> llm_models.LLMProvenance:
     parameters = json.dumps(
         {
             "max_output_tokens": request.max_output_tokens,
@@ -211,7 +150,7 @@ def _provenance(
     return llm_models.LLMProvenance(
         provider=provider,
         model=request.model,
-        input_sha256=sha256_digest(source.encode("ascii")),
+        input_sha256=request.input_sha256,
         parameters_sha256=sha256_digest(parameters),
     )
 
@@ -228,7 +167,7 @@ class OpenAIAnalysisAdapter:
         self._factory: _OpenAIFactory = client_factory or _openai_factory
 
     def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
-        source = _input(request, self._config)
+        source = _source(request, self._config)
         try:
             client = self._factory(
                 api_key=self._secret,
@@ -236,14 +175,14 @@ class OpenAIAnalysisAdapter:
                 timeout=self._config.timeout_seconds,
                 max_retries=0,
             )
-            response = client.chat.completions.create(
+            response = client.create(
                 model=request.model,
                 messages=(
                     {
                         "role": "system",
                         "content": (
                             "Return one complete analysis object grounded only in the supplied "
-                            "LightDocumentV1."
+                            "source."
                         ),
                     },
                     {"role": "user", "content": source},
@@ -252,7 +191,7 @@ class OpenAIAnalysisAdapter:
                     "type": "json_schema",
                     "json_schema": {
                         "name": "analysis_proposal_v1",
-                        "schema": analysis_json_schema(),
+                        "schema": AnalysisProposalV1.model_json_schema(),
                         "strict": True,
                     },
                 },
@@ -277,13 +216,13 @@ class OpenAIAnalysisAdapter:
                     else "analysis_unknown_status"
                 )
             content = choice.message.content
-            if content is None:
+            if not isinstance(content, str):
                 raise AnalysisAdapterError("analysis_invalid_content")
         except (AttributeError, IndexError, TypeError):
             raise AnalysisAdapterError("analysis_unknown_response") from None
         return llm_models.LLMStructuredResponse(
-            proposal=_proposal(content, request.document, self._config),
-            provenance=_provenance("openai", request, source),
+            proposal=_proposal(content, self._config),
+            provenance=_provenance("openai", request),
         )
 
 
@@ -299,7 +238,7 @@ class AnthropicAnalysisAdapter:
         self._factory: _AnthropicFactory = client_factory or _anthropic_factory
 
     def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
-        source = _input(request, self._config)
+        source = _source(request, self._config)
         try:
             client = self._factory(
                 api_key=self._secret,
@@ -307,11 +246,16 @@ class AnthropicAnalysisAdapter:
                 timeout=self._config.timeout_seconds,
                 max_retries=0,
             )
-            response = client.messages.create(
+            response = client.create(
                 model=request.model,
                 max_tokens=request.max_output_tokens,
                 messages=({"role": "user", "content": source},),
-                output_config={"format": {"type": "json_schema", "schema": analysis_json_schema()}},
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": AnalysisProposalV1.model_json_schema(),
+                    }
+                },
             )
         except NotImplementedError:
             raise AnalysisAdapterError("capability_unavailable") from None
@@ -336,11 +280,13 @@ class AnthropicAnalysisAdapter:
                     "analysis_refused" if block.type == "refusal" else "analysis_unknown_block"
                 )
             text = block.text
+            if not isinstance(text, str):
+                raise AnalysisAdapterError("analysis_invalid_content")
         except (AttributeError, IndexError, TypeError):
             raise AnalysisAdapterError("analysis_unknown_response") from None
         return llm_models.LLMStructuredResponse(
-            proposal=_proposal(text, request.document, self._config),
-            provenance=_provenance("anthropic", request, source),
+            proposal=_proposal(text, self._config),
+            provenance=_provenance("anthropic", request),
         )
 
 

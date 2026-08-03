@@ -3,7 +3,6 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sciretriever.model.analysis import AnalysisProposalV1
-from sciretriever.model.documents import LightDocumentV1
 from sciretriever.model.primitives import Sha256
 
 
@@ -21,13 +20,21 @@ class _LlmModel(BaseModel):
 
 
 class LLMRequest(_LlmModel):
-    document: LightDocumentV1 = Field(repr=False)
+    source: str = Field(min_length=1, repr=False)
+    input_sha256: Sha256
     model: str = Field(min_length=1, max_length=512)
     max_output_tokens: int = Field(strict=True, ge=1)
 
     @field_validator("model")
     @classmethod
     def validate_model_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise _LlmValidationError("must be a nonblank string")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
         if not value.strip():
             raise _LlmValidationError("must be a nonblank string")
         return value

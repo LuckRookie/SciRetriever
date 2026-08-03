@@ -4,11 +4,16 @@ import json
 
 from target_light_document_support import ASSET_ID, manifest_blocks, parsed_document
 
-from sciretriever.adapters.analysis import AnalysisAdapterSettings, OpenAIAnalysisAdapter
-from sciretriever.core.documents import validate_light_document
+from sciretriever.adapters.analysis import (
+    AnalysisAdapterSettings,
+    AnthropicAnalysisAdapter,
+    OpenAIAnalysisAdapter,
+)
+from sciretriever.core.documents import document_bytes, validate_light_document
 from sciretriever.model.canonical_json import CanonicalJsonInput
 from sciretriever.model.documents import LightDocumentBounds, LightDocumentV1
 from sciretriever.model.llm import LLMRequest
+from sciretriever.model.primitives import sha256_digest
 
 
 def proposal_value() -> dict[str, CanonicalJsonInput]:
@@ -68,12 +73,17 @@ def adapter_settings() -> AnalysisAdapterSettings:
         timeout_seconds=17.0,
         max_output_tokens=321,
         max_input_characters=200_000,
-        max_source_units=100,
     )
 
 
 def analysis_request(document: LightDocumentV1) -> LLMRequest:
-    return LLMRequest(document=document, model="exact-model", max_output_tokens=321)
+    serialized = document_bytes(document)
+    return LLMRequest(
+        source=serialized.decode("ascii"),
+        input_sha256=sha256_digest(serialized),
+        model="exact-model",
+        max_output_tokens=321,
+    )
 
 
 class OpenAIClient:
@@ -117,3 +127,20 @@ def openai_adapter(value: dict[str, CanonicalJsonInput]) -> OpenAIAnalysisAdapte
         return client
 
     return OpenAIAnalysisAdapter(adapter_settings(), "runtime-secret", factory)
+
+
+def anthropic_adapter(value: dict[str, CanonicalJsonInput]) -> AnthropicAnalysisAdapter:
+    text = type("Text", (), {"type": "text", "text": json.dumps(value)})()
+    response = type(
+        "Response",
+        (),
+        {"model": "exact-model", "stop_reason": "end_turn", "content": [text]},
+    )()
+    client = AnthropicClient(response)
+
+    def factory(
+        *, api_key: str, base_url: str, timeout: float, max_retries: int
+    ) -> AnthropicClient:
+        return client
+
+    return AnthropicAnalysisAdapter(adapter_settings(), "runtime-secret", factory)

@@ -1,27 +1,84 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
+from sciretriever.model.assets import PublishedArtifact
 from sciretriever.model.canonical_json import JsonOutput
-from sciretriever.model.documents import EvidenceText, ReferenceView, SourceLocator
-from sciretriever.model.literature import Author, Identifier
+from sciretriever.model.documents import EvidenceText, LightDocumentV1, ReferenceView, SourceLocator
+from sciretriever.model.literature import (
+    Author,
+    CompletionSubmission,
+    Identifier,
+)
+from sciretriever.model.primitives import (
+    LightDocumentId,
+    MetadataSnapshotId,
+    Sha256,
+    WorkVersionId,
+)
 
 
 class _AnalysisModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+class _AnalysisStructureError(ValueError):
+    pass
+
+
 def _strict_text(value: str | None) -> str | None:
     if value is not None and not value.strip():
-        raise ValueError("text must be nonblank or null")
+        raise _AnalysisStructureError("text must be nonblank or null")
     return value
 
 
 Text = Annotated[str, Field(min_length=1, max_length=100_000), AfterValidator(_strict_text)]
 OptionalText = Annotated[str | None, Field(max_length=100_000), AfterValidator(_strict_text)]
 AnalysisJsonSchema: TypeAlias = dict[str, JsonOutput]
+
+ANALYSIS_CATEGORIES: Final[tuple[str, ...]] = (
+    "final_bibliography",
+    "classification",
+    "content_overview",
+    "research_objectives",
+    "methods",
+    "key_results",
+    "conclusions_and_limitations",
+    "keywords_and_tags",
+    "references",
+)
+
+
+class AnalysisBounds(_AnalysisModel):
+    max_input_characters: int = Field(strict=True, gt=0)
+    max_source_units: int = Field(strict=True, gt=0)
+    max_output_characters: int = Field(default=10_000_000, strict=True, gt=0)
+
+
+class AnalysisContext(_AnalysisModel):
+    document: LightDocumentV1 = Field(repr=False)
+    bounds: AnalysisBounds
+    max_output_tokens: int = Field(strict=True, gt=0)
+
+
+class AnalysisTarget(_AnalysisModel):
+    work_version_id: WorkVersionId
+    light_document_id: LightDocumentId
+    light_document_sha256: Sha256
+    metadata_snapshot_id: MetadataSnapshotId
+    metadata_revision: int = Field(strict=True, ge=1)
+    metadata_sha256: Sha256
+    parser_identity: str = Field(min_length=1)
+    model_provider: str = Field(min_length=1)
+    model_identity: str = Field(min_length=1)
+    parameters_sha256: Sha256
+
+
+class AnalysisResult(_AnalysisModel):
+    artifact: PublishedArtifact
+    submission: CompletionSubmission
 
 
 class UnifiedMetadataValues(_AnalysisModel):
@@ -47,7 +104,7 @@ class UnifiedMetadataValues(_AnalysisModel):
         ordered = tuple(sorted(value, key=lambda item: (item.namespace, item.value)))
         keys = tuple((item.namespace, item.value) for item in ordered)
         if len(keys) != len(set(keys)):
-            raise ValueError("duplicate identifiers")
+            raise _AnalysisStructureError("duplicate identifiers")
         return ordered
 
 
@@ -76,7 +133,7 @@ class KeywordsAndTags(_AnalysisModel):
     def canonical_terms(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         ordered = tuple(sorted(value, key=lambda text: (text.casefold(), text)))
         if len(ordered) != len(set(ordered)):
-            raise ValueError("duplicate terms")
+            raise _AnalysisStructureError("duplicate terms")
         return ordered
 
 
@@ -94,8 +151,13 @@ class AnalysisProposalV1(_AnalysisModel):
 
 
 __all__ = (
+    "ANALYSIS_CATEGORIES",
     "AnalysisJsonSchema",
+    "AnalysisBounds",
+    "AnalysisContext",
     "AnalysisProposalV1",
+    "AnalysisResult",
+    "AnalysisTarget",
     "Author",
     "Classification",
     "ConclusionsAndLimitations",

@@ -14,7 +14,6 @@ from sciretriever.batching.ports import (
     CatalogIdentity,
     OutputIdentity,
 )
-from sciretriever.content.ports import AnalysisModelPort
 from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
 from sciretriever.model import documents
 from sciretriever.model.access import (
@@ -61,6 +60,7 @@ from sciretriever.model.sources import (
     ProviderCitationResult,
     ProviderDiscoveryResult,
 )
+from sciretriever.services.analysis.ports import LLMPort
 from sciretriever.services.assets.ports import (
     ArtifactStorePort,
     AssetFetcherPort,
@@ -310,7 +310,7 @@ class TargetCapabilityPortTests(unittest.TestCase):
         resolver: AssetResolverPort = fake
         fetcher: AssetFetcherPort = fake
         parser: ParserPort = fake
-        model: AnalysisModelPort = fake
+        model: LLMPort = fake
         transport: BoundedTransportPort = fake
         store: ArtifactStorePort = fake
         request = MetadataDiscoveryRequest(query="query", year_from=None, year_to=None, limit=10)
@@ -323,7 +323,7 @@ class TargetCapabilityPortTests(unittest.TestCase):
             asset_sha256=sha256_digest(b"".join(stream.chunks)),
             resume_task_id=None,
         )
-        document = parser.parse(parser_request).document
+        self.assertIsNotNone(parser.parse(parser_request).document)
         staged = StagedArtifact(
             kind=ArtifactKind.LIGHT_DOCUMENT,
             path=RelativeArtifactPath("light/a.json"),
@@ -339,7 +339,12 @@ class TargetCapabilityPortTests(unittest.TestCase):
             ).provider,
             "fake",
         )
-        analysis_request = LLMRequest(document=document, model="fake", max_output_tokens=32)
+        analysis_request = LLMRequest(
+            source="document",
+            input_sha256=sha256_digest(b"document"),
+            model="fake",
+            max_output_tokens=32,
+        )
         self.assertEqual(model.analyze(analysis_request).proposal.schema_version, "1")
         self.assertEqual(
             transport.execute(

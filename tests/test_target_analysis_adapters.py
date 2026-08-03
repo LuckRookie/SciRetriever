@@ -19,8 +19,14 @@ from sciretriever.adapters.analysis import (
     AnthropicAnalysisAdapter,
     OpenAIAnalysisAdapter,
 )
-from sciretriever.content.analysis import analysis_bytes, analysis_json_schema
+from sciretriever.core.analysis import (
+    AnalysisValidationError,
+    analysis_bytes,
+    analysis_json_schema,
+    validate_llm_response,
+)
 from sciretriever.kernel.json import CanonicalJsonInput
+from sciretriever.model.analysis import AnalysisBounds
 
 
 class TargetAnalysisAdapterTests(unittest.TestCase):
@@ -51,13 +57,13 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             )
             return client
 
-        proposal = OpenAIAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(
-            analysis_request(complete_document())
-        )
+        request = analysis_request(complete_document())
+        proposal = OpenAIAnalysisAdapter(self.config(), "runtime-secret", factory).analyze(request)
 
         self.assertEqual(proposal.proposal.schema_version, "1")
         self.assertEqual(proposal.provenance.provider, "openai")
         self.assertEqual(proposal.provenance.model, "exact-model")
+        self.assertEqual(proposal.provenance.input_sha256, request.input_sha256)
         self.assertEqual(
             created,
             {
@@ -70,6 +76,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
         assert client.kwargs is not None
         self.assertEqual(client.kwargs["model"], "exact-model")
         self.assertEqual(client.kwargs["max_completion_tokens"], 321)
+        self.assertEqual(client.kwargs["messages"][1]["content"], request.source)
         self.assertEqual(client.kwargs["response_format"]["type"], "json_schema")
         self.assertTrue(client.kwargs["response_format"]["json_schema"]["strict"])
 
@@ -103,16 +110,17 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             )
             return client
 
+        request = analysis_request(complete_document())
         openai_proposal = OpenAIAnalysisAdapter(
             self.config(),
             "runtime-secret",
             openai_factory,
-        ).analyze(analysis_request(complete_document()))
+        ).analyze(request)
         anthropic_proposal = AnthropicAnalysisAdapter(
             self.config(),
             "runtime-secret",
             anthropic_factory,
-        ).analyze(analysis_request(complete_document()))
+        ).analyze(request)
 
         self.assertEqual(
             analysis_bytes(openai_proposal.proposal), analysis_bytes(anthropic_proposal.proposal)
@@ -120,6 +128,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
         self.assertEqual(created["max_retries"], 0)
         assert client.kwargs is not None
         self.assertEqual(client.kwargs["max_tokens"], 321)
+        self.assertEqual(client.kwargs["messages"][0]["content"], request.source)
         self.assertEqual(client.kwargs["output_config"]["format"]["type"], "json_schema")
 
     def test_oversized_input_rejects_before_client_construction(self) -> None:
@@ -139,7 +148,6 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             base.timeout_seconds,
             base.max_output_tokens,
             1,
-            base.max_source_units,
         )
         with self.assertRaisesRegex(AnalysisAdapterError, "analysis_input_too_large"):
             OpenAIAnalysisAdapter(config, "runtime-secret", factory).analyze(
@@ -235,7 +243,7 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, code)
             self.assertNotIn("secret", str(raised.exception))
 
-    def test_invalid_evidence_missing_fields_nonfinite_and_blank_content_reject(self) -> None:
+    def test_structural_parse_leaves_evidence_validation_to_core(self) -> None:
         bad_evidence = proposal_value()
         overview = bad_evidence["content_overview"]
         assert isinstance(overview, dict)
@@ -246,6 +254,23 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
         locator = evidence[0]
         assert isinstance(locator, dict)
         locator["block_id"] = "not-current"
+
+        request = analysis_request(complete_document())
+        response = openai_adapter(bad_evidence).analyze(request)
+        self.assertEqual(response.provenance.input_sha256, request.input_sha256)
+        with self.assertRaises(AnalysisValidationError) as raised:
+            validate_llm_response(
+                request,
+                response,
+                complete_document(),
+                AnalysisBounds(
+                    max_input_characters=200_000,
+                    max_source_units=100,
+                    max_output_characters=10_000,
+                ),
+            )
+        self.assertEqual(raised.exception.code, "analysis_invalid_evidence")
+
         missing = proposal_value()
         del missing["methods"]
         nonfinite = proposal_value()
@@ -253,7 +278,6 @@ class TargetAnalysisAdapterTests(unittest.TestCase):
         assert isinstance(bibliography, dict)
         bibliography["publication_year"] = float("nan")
         for code, content in (
-            ("analysis_invalid_evidence", json.dumps(bad_evidence)),
             ("analysis_invalid_output", json.dumps(missing)),
             ("analysis_invalid_output", json.dumps(nonfinite)),
             ("analysis_invalid_content", "  "),
