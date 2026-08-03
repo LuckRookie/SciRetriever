@@ -75,12 +75,28 @@ class ParserProvenance(_ParsingModel):
         return value
 
 
+class ManifestBlock(_ParsingModel):
+    block_id: str = Field(min_length=1)
+    page_number: int = Field(ge=1)
+    char_length: int = Field(ge=1)
+
+    @field_validator("block_id")
+    @classmethod
+    def validate_block_id(cls, value: str) -> str:
+        if not value.strip():
+            raise _ParsingValidationError("block_id must be nonblank")
+        return value
+
+
 class ParserResult(_ParsingModel):
     document: LightDocumentV1 = Field(repr=False)
+    pdf_pages: int = Field(ge=1)
+    block_manifest: tuple[ManifestBlock, ...]
     provenance: ParserProvenance
 
 
 __all__ = (
+    "ManifestBlock",
     "ParserProvenance",
     "ParserRequest",
     "ParserResult",

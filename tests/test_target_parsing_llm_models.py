@@ -12,7 +12,7 @@ from sciretriever.model.primitives import AssetId, Sha256, sha256_digest
 
 ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src" / "sciretriever"
-PARSING_NAMES = {"ParserRequest", "ParserTask", "ParserProvenance", "ParserResult"}
+PARSING_NAMES = {"ManifestBlock", "ParserRequest", "ParserTask", "ParserProvenance", "ParserResult"}
 LLM_NAMES = {"LLMRequest", "LLMProvenance", "LLMStructuredResponse"}
 
 
@@ -48,7 +48,6 @@ class TargetParsingLlmModelTests(TestCase):
             SRC / "content" / "model.py",
             SRC / "content" / "analysis.py",
             SRC / "content" / "ports.py",
-            SRC / "content" / "light_service.py",
             SRC / "adapters" / "mineru.py",
             SRC / "adapters" / "analysis.py",
         )
@@ -63,7 +62,6 @@ class TargetParsingLlmModelTests(TestCase):
             "sciretriever.content.model",
             "sciretriever.content.analysis",
             "sciretriever.content.ports",
-            "sciretriever.content.light_service",
             "sciretriever.adapters.mineru",
             "sciretriever.adapters.analysis",
         ):
