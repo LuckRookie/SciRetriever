@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 import sciretriever.model.analysis as analysis_models
 import sciretriever.model.execution as execution_models
-from sciretriever.content.light_serialization import document_bytes
+from sciretriever.core.documents import document_bytes
 from sciretriever.model import documents
 from sciretriever.model.analysis import (
     AnalysisProposalV1,
