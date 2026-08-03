@@ -7,10 +7,9 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from sciretriever.content.publisher_contracts import validate_light_document_acceptance
 from sciretriever.core.assets import AssetRuleError, validate_supplementary_asset_acceptance
+from sciretriever.core.documents import LightDocumentError, validate_light_document_acceptance
 from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.kernel.errors import BoundaryError
 from sciretriever.model.assets import ArtifactKind, PublishedArtifact
 from sciretriever.model.primitives import (
     AssetId,
@@ -50,10 +49,7 @@ class TargetM1ExecutionClosureTests(unittest.TestCase):
     def test_acceptance_contracts_have_one_strict_frozen_model_owner(self) -> None:
         assets = importlib.import_module("sciretriever.model.assets")
         documents = importlib.import_module("sciretriever.model.documents")
-        legacy_modules = (
-            importlib.import_module("sciretriever.content.publisher_contracts"),
-            importlib.import_module("sciretriever.content.api"),
-        )
+        legacy_modules = (importlib.import_module("sciretriever.content.api"),)
 
         owners = (
             (assets, "PrimaryPdfAcceptance"),
@@ -119,7 +115,7 @@ class TargetM1ExecutionClosureTests(unittest.TestCase):
 
         with self.assertRaises(AssetRuleError):
             validate_supplementary_asset_acceptance(supplementary)
-        with self.assertRaises(BoundaryError):
+        with self.assertRaises(LightDocumentError):
             validate_light_document_acceptance(light)
 
 

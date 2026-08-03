@@ -5,15 +5,15 @@ from collections.abc import Callable
 from typing import assert_never
 
 import sciretriever.literature_store.sqlite.publishers_assets as publishers_assets
-from sciretriever.content.publisher_contracts import validate_light_document_acceptance
 from sciretriever.core import assets as core_assets
 from sciretriever.core.assets import AssetRuleError
+from sciretriever.core.documents import validate_light_document_acceptance
+from sciretriever.core.documents.validation import LightDocumentError
 from sciretriever.core.execution import (
     ExecutionRejectedError,
     canonical_target_projection,
     validate_content_acceptance_command,
 )
-from sciretriever.kernel import BoundaryError, canonical_json_bytes
 from sciretriever.literature_store.sqlite.publisher_support import (
     StalePublicationError,
     StatementFailpoint,
@@ -25,6 +25,7 @@ from sciretriever.model.assets import (
     PrimaryPdfAcceptance,
     SupplementaryAssetAcceptance,
 )
+from sciretriever.model.canonical_json import canonical_json_bytes
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import ContentAcceptanceCommand
 
@@ -50,7 +51,7 @@ class ContentAcceptancePublisher:
                     validate_light_document_acceptance(acceptance)
                 case unreachable:
                     assert_never(unreachable)
-        except (AssetRuleError, BoundaryError) as error:
+        except (AssetRuleError, LightDocumentError) as error:
             raise StalePublicationError(str(error)) from error
         try:
             validate_content_acceptance_command(command)
