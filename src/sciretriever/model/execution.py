@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - declarative execution contracts remain with one Model owner
 from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
@@ -17,9 +18,11 @@ from sciretriever.model.primitives import (
     BatchType,
     BibliographyFormat,
     CollectionRunId,
+    MissingStep,
     PublicationPhase,
     UtcTimestamp,
     WorkVersionId,
+    WorkVersionState,
 )
 
 NonBlankText: TypeAlias = Annotated[str, StringConstraints(pattern=r".*\S.*")]
@@ -75,6 +78,25 @@ class FailureEvidence(_ExecutionModel):
     retryable: bool
 
 
+class ExecutionCandidate(_ExecutionModel):
+    work_version_id: WorkVersionId
+    state: WorkVersionState
+
+
+class ActualProcessTarget(_ExecutionModel):
+    work_version_id: WorkVersionId
+    initial_state: WorkVersionState
+    target_state: WorkVersionState
+    missing_step: MissingStep
+
+
+class TargetStepRequest(_ExecutionModel):
+    batch_run_id: BatchRunId
+    work_version_id: WorkVersionId
+    initial_state: WorkVersionState
+    target_state: WorkVersionState
+
+
 import sciretriever.model.assets as asset_models  # noqa: E402
 import sciretriever.model.documents as document_models  # noqa: E402
 
@@ -108,6 +130,16 @@ class TargetResult(_ExecutionModel):
 class TargetResultEnvelope(_ExecutionModel):
     result: TargetResult
     details: SkipValidation[CanonicalJsonObject]
+
+
+class RecoveryTarget(_ExecutionModel):
+    batch_run_id: BatchRunId
+    work_version_id: WorkVersionId
+    initial_state: WorkVersionState
+    target_state: WorkVersionState
+    current_state: WorkVersionState | None
+    started: bool
+    result: TargetResult | None
 
 
 class TargetProjection(_ExecutionModel):
@@ -166,6 +198,13 @@ class ProcessBatchScope(_ExecutionModel):
     include_all_versions: bool
     target_state: TargetState
     limit: int = Field(strict=True, ge=1)
+
+
+class RecoverableProcessBatch(_ExecutionModel):
+    batch_run_id: BatchRunId
+    scope: ProcessBatchScope
+    targets: tuple[RecoveryTarget, ...]
+    started_at: UtcTimestamp
 
 
 class ImportBatchScope(_ExecutionModel):
@@ -259,6 +298,7 @@ class ContentAcceptanceCommand(_ExecutionModel):
 
 __all__ = (
     "Action",
+    "ActualProcessTarget",
     "BatchCounts",
     "BatchDetail",
     "BatchResult",
@@ -267,6 +307,7 @@ __all__ = (
     "ContentAcceptance",
     "ContentAcceptanceCommand",
     "CurrentFailure",
+    "ExecutionCandidate",
     "ExecutionStage",
     "ExportBatchScope",
     "ExportCounts",
@@ -281,9 +322,12 @@ __all__ = (
     "ProcessBatchScope",
     "ProcessSelector",
     "Reason",
+    "RecoverableProcessBatch",
+    "RecoveryTarget",
     "StateCounts",
     "TargetProjection",
     "TargetResult",
     "TargetResultEnvelope",
+    "TargetStepRequest",
     "TargetState",
 )

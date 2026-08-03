@@ -6,12 +6,6 @@ from dataclasses import dataclass
 from types import TracebackType
 from uuid import uuid4
 
-from sciretriever.batching.ports import (
-    AdmissionGuard,
-    AdmissionPort,
-    CatalogIdentity,
-    OutputIdentity,
-)
 from sciretriever.literature_store.filesystem.admission_order import (
     AdmissionOrderTracker,
     HeldAdmission,
@@ -25,6 +19,12 @@ from sciretriever.literature_store.filesystem.locks import (
     verify_catalog_entry,
 )
 from sciretriever.model.primitives import AdmissionBindingId, BatchRunId, Sha256, WorkVersionId
+from sciretriever.services.execution.ports import (
+    AdmissionGuard,
+    AdmissionPort,
+    CatalogIdentity,
+    OutputIdentity,
+)
 
 
 class AdmissionConflictError(Exception):

@@ -8,12 +8,6 @@ from typing import get_type_hints
 from pydantic import TypeAdapter, ValidationError
 
 from sciretriever.adapters.assets import BoundedTransportPort
-from sciretriever.batching.ports import (
-    AdmissionGuard,
-    AdmissionPort,
-    CatalogIdentity,
-    OutputIdentity,
-)
 from sciretriever.model import documents
 from sciretriever.model.access import (
     BoundedByteStream,
@@ -42,6 +36,7 @@ from sciretriever.model.primitives import (
     CitationDirection,
     MetadataSnapshotId,
     RelativeArtifactPath,
+    UtcTimestamp,
     WorkId,
     WorkVersionId,
     sha256_digest,
@@ -65,8 +60,18 @@ from sciretriever.services.assets.ports import (
     AssetFetcherPort,
     AssetResolverPort,
 )
-from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
+from sciretriever.services.collection.ports import (
+    CitationDiscoveryPort,
+    Clock,
+    MetadataDiscoveryPort,
+)
 from sciretriever.services.documents.ports import ParserPort
+from sciretriever.services.execution.ports import (
+    AdmissionGuard,
+    AdmissionPort,
+    CatalogIdentity,
+    OutputIdentity,
+)
 from sciretriever.services.library import BibliographyCodec, BinaryInput, BinaryOutput
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
@@ -360,6 +365,15 @@ class TargetCapabilityPortTests(unittest.TestCase):
             200,
         )
         self.assertEqual(store.publish(staged).path, staged.path)
+
+    def test_collection_clock_port_is_owned_and_callable(self) -> None:
+        def fixed_clock() -> UtcTimestamp:
+            return UtcTimestamp("2026-08-03T00:00:00.000Z")
+
+        clock: Clock = fixed_clock
+
+        self.assertEqual(clock(), UtcTimestamp("2026-08-03T00:00:00.000Z"))
+        self.assertEqual(Clock.__module__, "sciretriever.services.collection.ports")
 
     def test_codec_and_admission_fakes_drive_every_method(self) -> None:
         codec: BibliographyCodec = FakeCodec()

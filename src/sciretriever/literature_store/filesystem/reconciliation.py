@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from sciretriever.batching.ports import AdmissionPort, CatalogIdentity
 from sciretriever.literature_store.filesystem.artifact_identity import (
     FormalArtifactCandidate,
     descriptor_identity,
@@ -19,6 +18,7 @@ from sciretriever.literature_store.filesystem.artifacts import (
     open_child,
 )
 from sciretriever.model.primitives import RelativeArtifactPath
+from sciretriever.services.execution.ports import AdmissionPort, CatalogIdentity
 
 _KINDS: Final = ("raw", "light-document", "analysis")
 Checkpoint = Callable[[str], None]

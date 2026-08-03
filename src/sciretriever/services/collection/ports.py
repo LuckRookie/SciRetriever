@@ -149,10 +149,10 @@ class CollectionUseCaseDependencies(Protocol):
 __all__ = (
     "CitationDiscoveryPort",
     "CitationSourcePort",
-    "Clock",
     "CollectionAcceptancePublisher",
     "CollectionRepository",
     "CollectionUseCaseDependencies",
+    "Clock",
     "CoreWriteAcquirer",
     "CoreWriteGuard",
     "LiteratureServicePort",

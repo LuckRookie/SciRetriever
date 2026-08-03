@@ -11,6 +11,15 @@ from sciretriever.model.execution import (
 )
 from sciretriever.model.primitives import WorkVersionId
 
+from .decisions import (
+    derive_process_batch_status,
+    nonexecuted_target_result,
+    recover_interrupted_target,
+    select_actual_targets,
+    state_counts,
+    steps_to_target,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionRejectedError(Exception):
@@ -104,6 +113,12 @@ __all__ = (
     "ExecutionRejectedError",
     "canonical_import_record_projection",
     "canonical_target_projection",
+    "derive_process_batch_status",
+    "nonexecuted_target_result",
+    "recover_interrupted_target",
+    "select_actual_targets",
+    "state_counts",
+    "steps_to_target",
     "target_projection_canonical",
     "validate_completion_target",
     "validate_content_acceptance_command",
