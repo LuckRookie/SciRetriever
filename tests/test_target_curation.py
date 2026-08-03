@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
 
-from sciretriever.core.literature.curation import CurationPlanError
+from sciretriever.core.library.curation import CurationPlanError
 from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
 from sciretriever.literature_store.sqlite import (
     SqliteCurationTransaction,
@@ -23,7 +23,7 @@ from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
 )
-from sciretriever.services.literature.api import CurationService
+from sciretriever.services.library.api import CurationService
 
 UUIDS = tuple(f"d0000000-0000-4000-8000-{value:012d}" for value in range(1, 60))
 
@@ -83,7 +83,7 @@ def _assert_core_factory_ownership(
     test_case: unittest.TestCase, factory_names: tuple[str, ...]
 ) -> None:
     try:
-        core_module = importlib.import_module("sciretriever.core.literature.curation")
+        core_module = importlib.import_module("sciretriever.core.library.curation")
     except ModuleNotFoundError as error:
         test_case.fail(f"target Core curation module is absent: {error.name}")
     legacy_plans = _optional_module("sciretriever.bibliography.curation_plans")
@@ -548,7 +548,7 @@ from sciretriever.literature_store.sqlite import (
     SqliteLiteratureRepository,
     SqliteCurationTransaction,
 )
-from sciretriever.services.literature.api import CurationService
+from sciretriever.services.library.api import CurationService
 catalog = {str(self.catalog)!r}
 factory = LocalAdmissionBindingFactory()
 bound = factory.bind_catalog(catalog)

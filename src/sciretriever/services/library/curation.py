@@ -1,20 +1,27 @@
 from __future__ import annotations
 
-from sciretriever.core.literature import curation as _curation
+from sciretriever.core.library import (
+    delete_version_plan,
+    delete_work_plan,
+    distinct_plan,
+    related_versions_plan,
+    same_version_plan,
+)
 from sciretriever.model.library import CurationCommit
 from sciretriever.model.primitives import WorkId, WorkVersionId
-from sciretriever.services.literature.ports import (
+
+from .ports import (
     CoreWriteAcquirer,
     CurationTransactionPort,
     GuardedArtifactReconciler,
-    LiteratureRepository,
+    LibraryCurationRepository,
 )
 
 
 class CurationService:
     def __init__(
         self,
-        repository: LiteratureRepository,
+        repository: LibraryCurationRepository,
         transaction: CurationTransactionPort,
         acquire_core_write: CoreWriteAcquirer,
         reconciler: GuardedArtifactReconciler | None = None,
@@ -32,9 +39,7 @@ class CurationService:
     ) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
-            commit = self._transaction.apply(
-                _curation.same_version_plan(topology, left, right, survivor)
-            )
+            commit = self._transaction.apply(same_version_plan(topology, left, right, survivor))
             self._reconcile()
             return commit
 
@@ -47,25 +52,25 @@ class CurationService:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
             return self._transaction.apply(
-                _curation.related_versions_plan(topology, left, right, survivor_work)
+                related_versions_plan(topology, left, right, survivor_work)
             )
 
     def distinct(self, left: WorkId, right: WorkId) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
-            return self._transaction.apply(_curation.distinct_plan(topology, left, right))
+            return self._transaction.apply(distinct_plan(topology, left, right))
 
     def delete_work_version(self, identifier: WorkVersionId) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
-            commit = self._transaction.apply(_curation.delete_version_plan(topology, identifier))
+            commit = self._transaction.apply(delete_version_plan(topology, identifier))
             self._reconcile()
             return commit
 
     def delete_work(self, identifier: WorkId) -> CurationCommit:
         with self._acquire_core_write():
             topology = self._repository.load_curation_topology()
-            commit = self._transaction.apply(_curation.delete_work_plan(topology, identifier))
+            commit = self._transaction.apply(delete_work_plan(topology, identifier))
             self._reconcile()
             return commit
 

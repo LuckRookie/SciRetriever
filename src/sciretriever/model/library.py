@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from sciretriever.model.library_details import WorkVersionDetail
+from sciretriever.model.library_query import QueryFilterV1
 from sciretriever.model.literature import Identifier, VersionFacts, WorkFacts
 from sciretriever.model.primitives import (
     AssetId,
@@ -13,13 +15,19 @@ from sciretriever.model.primitives import (
     Sha256,
     StableIdentifierId,
     VersionRelationId,
+    VersionRole,
     WorkId,
     WorkVersionId,
 )
+from sciretriever.model.record import ExportOmission, ImportedBibliographicRecord
 
 
 class _LibraryModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class _LibraryStructureError(ValueError):
+    pass
 
 
 class CurationScope(_LibraryModel):
@@ -161,12 +169,43 @@ class ValidatedCurationPlan(_LibraryModel):
     orphan_artifact_candidates: tuple[AssetId, ...] = ()
 
 
+class ExportSelectionRequest(_LibraryModel):
+    filters: QueryFilterV1
+    all_versions: bool = False
+
+
+class ExportCandidate(_LibraryModel):
+    work_id: WorkId
+    work_version_id: WorkVersionId
+    version_role: VersionRole
+    detail: WorkVersionDetail
+
+    @model_validator(mode="after")
+    def matches_detail_identity(self) -> ExportCandidate:
+        if (
+            self.detail.work_id != self.work_id
+            or self.detail.work_version_id != self.work_version_id
+        ):
+            raise _LibraryStructureError("export candidate identity must match its detail")
+        return self
+
+
+class ExportPreparedRecord(_LibraryModel):
+    work_id: WorkId
+    work_version_id: WorkVersionId
+    record: ImportedBibliographicRecord
+    omissions: tuple[ExportOmission, ...]
+
+
 __all__ = (
     "ArtifactRegistrationFact",
     "CurationCommit",
     "CurationScope",
     "CurationSnapshot",
     "CurationTopology",
+    "ExportCandidate",
+    "ExportPreparedRecord",
+    "ExportSelectionRequest",
     "IdentifierFact",
     "MembershipFact",
     "ObservationFact",

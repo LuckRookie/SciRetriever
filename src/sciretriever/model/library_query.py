@@ -55,7 +55,6 @@ class QueryFilterV1(BaseModel):
     asset_available: bool | None = None
     light_document_available: bool | None = None
     analysis_available: bool | None = None
-    extension_namespaces: Texts = ()
 
     @model_validator(mode="after")
     def valid_combinations(self) -> QueryFilterV1:

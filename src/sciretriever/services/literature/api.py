@@ -9,7 +9,6 @@ from sciretriever.core.literature.acceptance import (
 from sciretriever.model.literature import CompletionSubmission
 from sciretriever.services.literature.ports import CompletionFactsRepository, CompletionPublisher
 
-from .curation import CurationService
 from .identity import LiteratureService, prepare_initial_ingest
 
 ProjectionT = TypeVar("ProjectionT")
@@ -41,7 +40,6 @@ def accept_completion(
 
 
 __all__ = (
-    "CurationService",
     "LiteratureService",
     "accept_completion",
     "prepare_initial_ingest",

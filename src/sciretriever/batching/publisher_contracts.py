@@ -5,16 +5,11 @@ from typing import Protocol
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.execution import (
     ContentAcceptanceCommand,
-    ImportAcceptanceCommand,
 )
 
 
 class CollectionAcceptancePublisher(Protocol):
     def publish(self, command: CollectionAcceptance) -> None: ...
-
-
-class ImportAcceptancePublisher(Protocol):
-    def publish(self, command: ImportAcceptanceCommand) -> None: ...
 
 
 class ContentAcceptancePublisher(Protocol):
@@ -24,5 +19,4 @@ class ContentAcceptancePublisher(Protocol):
 __all__ = (
     "CollectionAcceptancePublisher",
     "ContentAcceptancePublisher",
-    "ImportAcceptancePublisher",
 )

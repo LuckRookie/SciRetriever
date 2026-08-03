@@ -10,7 +10,6 @@ from sciretriever.model.execution import CurrentFailure
 from sciretriever.model.library_views import (
     AnalysisView,
     AssetView,
-    ExtensionResultView,
     LightDocumentView,
     MetadataView,
     ObservationView,
@@ -93,8 +92,6 @@ class WorkVersionDetail(_LibraryDetailModel):
     current_failure: CurrentFailure | None
     observations_included: bool
     observations: tuple[ObservationView, ...]
-    extension_namespaces: tuple[str, ...]
-    extensions: tuple[ExtensionResultView, ...]
     provenance: tuple[Provenance, ...]
 
 

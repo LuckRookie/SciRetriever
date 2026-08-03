@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# noqa: SIZE_OK — cross-contract repair scenarios intentionally share one catalog fixture
+
 import os
 import sqlite3
 import threading
@@ -10,7 +12,7 @@ from tempfile import TemporaryDirectory
 from pydantic import ValidationError
 
 from sciretriever.core.collection import CollectionRuleError, validate_finish_collection_run
-from sciretriever.core.literature.curation import CurationPlanError, validate_curation_plan
+from sciretriever.core.library.curation import CurationPlanError, validate_curation_plan
 from sciretriever.literature_store.filesystem import (
     AdmissionOrderError,
     FilesystemSafetyError,

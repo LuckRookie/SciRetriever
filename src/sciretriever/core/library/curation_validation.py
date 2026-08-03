@@ -11,14 +11,18 @@ from .curation_errors import CurationPlanError
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
 
+class _InvalidCanonicalJsonError(ValueError):
+    pass
+
+
 def _reject_constant(value: str) -> NoReturn:
-    raise ValueError(f"non-finite JSON number: {value}")
+    raise _InvalidCanonicalJsonError(f"non-finite JSON number: {value}")
 
 
 def _unique_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
     keys = tuple(key for key, _value in pairs)
     if len(keys) != len(set(keys)):
-        raise ValueError("JSON object keys must be unique")
+        raise _InvalidCanonicalJsonError("JSON object keys must be unique")
     return dict(pairs)
 
 

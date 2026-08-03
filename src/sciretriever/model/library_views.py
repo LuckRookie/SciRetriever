@@ -35,6 +35,7 @@ class MetadataView(_LibraryViewModel):
     revision: int = Field(ge=0)
     sha256: Sha256
     values: UnifiedMetadataValues
+    keywords: tuple[str, ...]
     provenance: tuple[Provenance, ...]
 
 
@@ -72,14 +73,6 @@ class ObservationView(_LibraryViewModel):
     value: SkipValidation[CanonicalJsonObject]
     observed_at: UtcTimestamp
     provenance: Provenance
-
-
-class ExtensionResultView(_LibraryViewModel):
-    namespace: str = Field(min_length=1)
-    schema_version: str = Field(min_length=1)
-    artifact_id: AssetId | None
-    sha256: Sha256 | None
-    value: SkipValidation[CanonicalJsonObject]
 
 
 class ReferenceSetView(_LibraryViewModel):
@@ -122,7 +115,6 @@ LibrarySummary = WorkSummary | WorkVersionSummary
 __all__ = (
     "AnalysisView",
     "AssetView",
-    "ExtensionResultView",
     "LibrarySummary",
     "LightDocumentView",
     "MetadataView",

@@ -14,7 +14,6 @@ from sciretriever.batching.ports import (
     CatalogIdentity,
     OutputIdentity,
 )
-from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
 from sciretriever.model import documents
 from sciretriever.model.access import (
     BoundedByteStream,
@@ -68,6 +67,7 @@ from sciretriever.services.assets.ports import (
 )
 from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
 from sciretriever.services.documents.ports import ParserPort
+from sciretriever.services.library import BibliographyCodec, BinaryInput, BinaryOutput
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
@@ -212,7 +212,7 @@ class FakeCapabilities:
 
 
 class MemoryInput:
-    def read(self, size: int) -> bytes:
+    def read(self, size: int = -1) -> bytes:
         return b"record"[:size]
 
 

@@ -6,9 +6,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
+import sciretriever.core.library as core_library
 from sciretriever.model.analysis import UnifiedMetadataValues
 from sciretriever.model.documents import ReferenceView
 from sciretriever.model.execution import CurrentFailure
+from sciretriever.model.library import (
+    ExportCandidate,
+    ExportPreparedRecord,
+    ExportSelectionRequest,
+)
 from sciretriever.model.library_details import GraphPage, WorkVersionDetail
 from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
 from sciretriever.model.library_query import QueryFilterV1
@@ -30,6 +36,9 @@ class TargetLibraryModelOwnershipTests(unittest.TestCase):
             (WorkSummary, "sciretriever.model.library_views"),
             (WorkVersionDetail, "sciretriever.model.library_details"),
             (GraphPage, "sciretriever.model.library_details"),
+            (ExportCandidate, "sciretriever.model.library"),
+            (ExportPreparedRecord, "sciretriever.model.library"),
+            (ExportSelectionRequest, "sciretriever.model.library"),
         )
         for model, module_name in owners:
             self.assertEqual(model.__module__, module_name)
@@ -43,12 +52,18 @@ class TargetLibraryModelOwnershipTests(unittest.TestCase):
             Path(inspect.getfile(LibraryPageRequest)),
             Path(inspect.getfile(WorkSummary)),
             Path(inspect.getfile(WorkVersionDetail)),
+            Path(inspect.getfile(ExportSelectionRequest)),
         )
         for source_file in source_files:
             source = source_file.read_text(encoding="utf-8")
             self.assertNotIn("sciretriever.interoperability", source)
             self.assertNotIn("sciretriever.kernel", source)
             self.assertNotIn("sciretriever.literature_store", source)
+
+    def test_export_contracts_are_not_reexported_from_core(self) -> None:
+        self.assertFalse(hasattr(core_library, "ExportCandidate"))
+        self.assertFalse(hasattr(core_library, "ExportPreparedRecord"))
+        self.assertFalse(hasattr(core_library, "ExportSelectionRequest"))
 
     def test_library_page_rejects_malformed_limits_and_round_trips(self) -> None:
         with self.assertRaises(ValidationError):

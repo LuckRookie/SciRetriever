@@ -17,6 +17,14 @@ _RFC3339_UTC = re.compile(
 )
 
 
+class _PrimitiveValueError(ValueError):
+    pass
+
+
+class _PrimitiveTypeError(TypeError):
+    pass
+
+
 class _StringRoot(RootModel[str]):
     model_config = ConfigDict(frozen=True, strict=True)
 
@@ -34,7 +42,7 @@ class UuidValue(_StringRoot):
     @classmethod
     def validate_uuid(cls, value: str) -> str:
         if _CANONICAL_UUID.fullmatch(value) is None:
-            raise ValueError("must be a canonical lowercase UUID")
+            raise _PrimitiveValueError("must be a canonical lowercase UUID")
         return value
 
 
@@ -75,10 +83,6 @@ class MetadataSnapshotId(UuidValue):
 
 
 class ProvenanceId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ExtensionRecordId(UuidValue):
     __hash__ = UuidValue.__hash__
 
 
@@ -145,13 +149,13 @@ class Sha256(_StringRoot):
     @classmethod
     def validate_sha256(cls, value: str) -> str:
         if _SHA256.fullmatch(value) is None:
-            raise ValueError("must be lowercase 64-hex SHA-256")
+            raise _PrimitiveValueError("must be lowercase 64-hex SHA-256")
         return value
 
 
 def sha256_digest(value: bytes) -> Sha256:
     if not isinstance(value, bytes):
-        raise TypeError("value must be bytes")
+        raise _PrimitiveTypeError("value must be bytes")
     return Sha256(hashlib.sha256(value).hexdigest())
 
 
@@ -172,7 +176,7 @@ class RelativeArtifactPath(_StringRoot):
             or any(part in {"", ".", ".."} for part in value.split("/"))
         )
         if invalid:
-            raise ValueError("must be a normalized relative POSIX path without traversal")
+            raise _PrimitiveValueError("must be a normalized relative POSIX path without traversal")
         return value
 
 
@@ -183,11 +187,11 @@ class UtcTimestamp(_StringRoot):
     @classmethod
     def validate_timestamp(cls, value: str) -> str:
         if _RFC3339_UTC.fullmatch(value) is None:
-            raise ValueError("must be RFC3339 UTC ending in Z")
+            raise _PrimitiveValueError("must be RFC3339 UTC ending in Z")
         try:
             datetime.fromisoformat(value[:-1] + "+00:00")
         except ValueError as error:
-            raise ValueError("must be a valid UTC date-time") from error
+            raise _PrimitiveValueError("must be a valid UTC date-time") from error
         return value
 
 
