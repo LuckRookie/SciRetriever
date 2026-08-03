@@ -41,7 +41,6 @@ class TargetAssetModelTests(unittest.TestCase):
                 "sciretriever.content.api",
                 "sciretriever.content.model",
                 "sciretriever.content.ports",
-                "sciretriever.content.light_service",
             )
         )
         model_names = {

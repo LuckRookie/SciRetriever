@@ -6,29 +6,11 @@ from sciretriever.content.analysis import (
     validate_analysis_input,
     validate_analysis_text,
 )
-from sciretriever.content.light_document import (
-    LightDocumentBounds,
-    LightDocumentError,
-    ManifestBlock,
-    validate_light_document,
-)
-from sciretriever.content.light_service import (
-    LightDocumentPublication,
-    LightDocumentService,
-    ParserIdentity,
-)
 
 __all__ = (
     "AnalysisBounds",
     "AnalysisValidationError",
     "analysis_bytes",
-    "LightDocumentBounds",
-    "LightDocumentError",
-    "LightDocumentPublication",
-    "LightDocumentService",
-    "ManifestBlock",
-    "ParserIdentity",
-    "validate_light_document",
     "analysis_json_schema",
     "validate_analysis_input",
     "validate_analysis_text",
