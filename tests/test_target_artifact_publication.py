@@ -182,13 +182,13 @@ class TargetArtifactPublicationTests(unittest.TestCase):
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
         return CoreArtifactReconciler(self.storage, self.catalog, bound.port, bound.identity)
 
-    def test_reconciliation_preserves_references_and_never_observes_extension_root(self) -> None:
+    def test_reconciliation_preserves_references_and_ignores_unmanaged_root(self) -> None:
         referenced = self.store.publish(self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-shared"))
         orphan = self.store.publish(self.artifact(ArtifactKind.ANALYSIS, b'{"orphan":true}'))
-        extension = self.storage / "extensions" / "package" / "private.bin"
-        extension.parent.mkdir(parents=True, mode=0o700)
-        extension.write_bytes(b"extension")
-        os.chmod(extension, 0o000)
+        unmanaged = self.storage / "unmanaged" / "package" / "private.bin"
+        unmanaged.parent.mkdir(parents=True, mode=0o700)
+        unmanaged.write_bytes(b"unmanaged")
+        os.chmod(unmanaged, 0o000)
         with create_or_open_catalog(self.catalog) as connection:
             connection.execute(
                 "INSERT INTO artifacts(id,kind,sha256,storage_path,byte_size) "
@@ -203,7 +203,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
 
         self.assertEqual(result.deleted, (orphan.path,))
         self.assertTrue((self.storage / "core" / str(referenced.path)).exists())
-        self.assertTrue(extension.exists())
+        self.assertTrue(unmanaged.exists())
 
     def test_publication_window_core_write_admission_blocks_reconciliation(self) -> None:
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)

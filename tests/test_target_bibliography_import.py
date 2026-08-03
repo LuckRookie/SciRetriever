@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import ast
+import importlib.util
 import unittest
 from io import BytesIO
-from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
 import sciretriever.model.record as target_record
-from sciretriever.interoperability.codecs import BibtexCodec, CslJsonCodec, RisCodec
-from sciretriever.interoperability.import_preparation import prepare_import_record
+from sciretriever.infrastructure.io import BibtexCodec, CslJsonCodec, RisCodec
 from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import WorkId, WorkVersionId
 from sciretriever.model.record import ImportIdentityResolution, ImportPreparationRequest
+from sciretriever.services.library import prepare_import_record
 
 BIBTEX = (
     b"@article{x,title={Canonical Title},"
@@ -85,18 +84,7 @@ class TargetBibliographyImportTests(unittest.TestCase):
             "ImportedBibliographicRecord",
             "RecordParseResult",
         }
-        legacy_module = __import__("sciretriever.interoperability.model", fromlist=("model",))
-        legacy_path = (
-            Path(__file__).parents[1] / "src" / "sciretriever" / "interoperability" / "model.py"
-        )
-        tree = ast.parse(legacy_path.read_text(encoding="utf-8"))
-        legacy_definitions = {
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-
-        self.assertEqual(legacy_definitions & target_names, set())
+        self.assertIsNone(importlib.util.find_spec("sciretriever.interoperability"))
         for name in target_names:
             contract = getattr(target_record, name)
             self.assertTrue(issubclass(contract, BaseModel))
@@ -104,7 +92,6 @@ class TargetBibliographyImportTests(unittest.TestCase):
             self.assertTrue(contract.model_config["frozen"])
             self.assertTrue(contract.model_config["strict"])
             self.assertEqual(contract.model_config["extra"], "forbid")
-            self.assertNotIn(name, legacy_module.__dict__)
 
     def test_record_and_results_round_trip_deterministically(self) -> None:
         record = self.representative_record()
