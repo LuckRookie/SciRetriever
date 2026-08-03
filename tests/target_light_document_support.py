@@ -6,9 +6,9 @@ from io import BytesIO
 
 from PyPDF2 import PdfWriter
 
-from sciretriever.content.light_document import ManifestBlock
-from sciretriever.kernel.json import CanonicalJsonInput
-from sciretriever.model.parsing import ParserRequest, ParserTask, ParserTaskState
+from sciretriever.model.canonical_json import CanonicalJsonInput
+from sciretriever.model.documents import LightDocumentV1
+from sciretriever.model.parsing import ManifestBlock, ParserRequest, ParserTask, ParserTaskState
 from sciretriever.model.primitives import AssetId, sha256_digest
 
 ASSET_ID = AssetId("00000000-0000-0000-0000-000000000101")
@@ -25,7 +25,7 @@ def parser_request(pdf: bytes, resume_task_id: str | None = None) -> ParserReque
 
 def manifest_blocks() -> tuple[ManifestBlock, ...]:
     return tuple(
-        ManifestBlock(block_id, 1, length)
+        ManifestBlock(block_id=block_id, page_number=1, char_length=length)
         for block_id, length in (
             ("b1", 5),
             ("b2", 4),
@@ -105,6 +105,14 @@ def document_value() -> dict[str, CanonicalJsonInput]:
         "references": [],
         "provenance": [],
     }
+
+
+def parsed_document(
+    value: dict[str, CanonicalJsonInput] | None = None,
+) -> LightDocumentV1:
+    return LightDocumentV1.model_validate_json(
+        json.dumps(document_value() if value is None else value)
+    )
 
 
 def archive_bytes(
