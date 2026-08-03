@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sciretriever.content.analysis import analysis_bytes
-from sciretriever.content.ports import ArtifactStorePort
 from sciretriever.core.execution import validate_target_alignment
 from sciretriever.core.literature.acceptance import validate_completion_submission_contract
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
@@ -40,6 +39,7 @@ from sciretriever.model.primitives import (
     WorkVersionId,
     sha256_digest,
 )
+from sciretriever.services.assets.ports import ArtifactStorePort
 
 
 @dataclass(frozen=True, slots=True)

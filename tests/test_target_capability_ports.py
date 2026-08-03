@@ -14,10 +14,7 @@ from sciretriever.batching.ports import (
     CatalogIdentity,
     OutputIdentity,
 )
-from sciretriever.content.ports import (
-    AnalysisModelPort,
-    ParserPort,
-)
+from sciretriever.content.ports import AnalysisModelPort
 from sciretriever.interoperability.ports import BibliographyCodec, BinaryInput, BinaryOutput
 from sciretriever.model import documents
 from sciretriever.model.access import (
@@ -70,6 +67,7 @@ from sciretriever.services.assets.ports import (
     AssetResolverPort,
 )
 from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort
+from sciretriever.services.documents.ports import ParserPort
 
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
@@ -135,6 +133,8 @@ class FakeCapabilities:
                 references=(),
                 provenance=(),
             ),
+            pdf_pages=1,
+            block_manifest=(),
             provenance=ParserProvenance(
                 parser_name="fake",
                 parser_version="1",
