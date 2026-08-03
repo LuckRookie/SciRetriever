@@ -4,19 +4,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from sciretriever.adapters.assets import (
+from sciretriever.infrastructure.sources.assets import (
     AssetFetcherAdapter,
     AssetResolverAdapter,
     BoundedTransportPort,
     ResolverClient,
 )
-from sciretriever.adapters.providers import (
+from sciretriever.infrastructure.sources.citations import (
     CitationClient,
     CitationProviderAdapter,
+)
+from sciretriever.infrastructure.sources.metadata import (
     MetadataClient,
     MetadataProviderAdapter,
 )
-from sciretriever.adapters.registry import ProviderRegistry
+from sciretriever.infrastructure.sources.registry import ProviderRegistry
 
 METADATA_PROVIDERS: Final = (
     "crossref",

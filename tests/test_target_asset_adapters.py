@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 
-from sciretriever.adapters.assets import (
+from sciretriever.infrastructure.sources.assets import (
     AssetFetcherAdapter,
     AssetResolverAdapter,
     ResolverCandidate,

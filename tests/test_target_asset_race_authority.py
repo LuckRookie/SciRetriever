@@ -5,7 +5,7 @@ from typing import Protocol
 
 import anyio
 
-from sciretriever.adapters.acquisition import CandidateRace
+from sciretriever.infrastructure.access.racing import CandidateRace
 
 
 class _ReadOnlyRaceState(Protocol):

@@ -7,7 +7,7 @@ from typing import get_type_hints
 
 from pydantic import TypeAdapter, ValidationError
 
-from sciretriever.adapters.assets import BoundedTransportPort
+from sciretriever.infrastructure.sources.assets import BoundedTransportPort
 from sciretriever.model import documents
 from sciretriever.model.access import (
     BoundedByteStream,

@@ -10,8 +10,6 @@ from pathlib import Path
 import anyio
 from pydantic import BaseModel
 
-from sciretriever.adapters.budgets import HostBudgetManager, InvalidHostname, canonical_hostname
-from sciretriever.adapters.collection import collect_citations, collect_metadata
 from sciretriever.adapters.production import (
     ACQUISITION_PROVIDERS,
     CITATION_PROVIDERS,
@@ -20,14 +18,23 @@ from sciretriever.adapters.production import (
     ProviderRuntimeConfig,
     build_provider_registry,
 )
-from sciretriever.adapters.providers import (
+from sciretriever.infrastructure.access.budgets import (
+    HostBudgetManager,
+    InvalidHostname,
+    canonical_hostname,
+)
+from sciretriever.infrastructure.sources.citations import (
     CitationClient,
+    VendorCitationRecord,
+    collect_citations,
+)
+from sciretriever.infrastructure.sources.metadata import (
     MetadataClient,
     MetadataProviderAdapter,
-    VendorCitationRecord,
     VendorMetadataRecord,
+    collect_metadata,
 )
-from sciretriever.adapters.registry import Capability, ProviderRegistry
+from sciretriever.infrastructure.sources.registry import Capability, ProviderRegistry
 from sciretriever.model.access import TransportRequest, TransportResponse
 from sciretriever.model.primitives import CitationDirection, WorkId
 from sciretriever.model.sources import (
@@ -208,7 +215,29 @@ class TargetAdapterRepairTests(unittest.TestCase):
         self.assertEqual(canonical_hostname("example.com."), "example.com")
         self.assertEqual(canonical_hostname("BÜCHER.example"), "xn--bcher-kva.example")
         self.assertEqual(canonical_hostname("xn--bcher-kva.example"), "xn--bcher-kva.example")
+        self.assertEqual(canonical_hostname("192.0.2.1"), "192.0.2.1")
+        self.assertEqual(canonical_hostname("192.0.2.1."), "192.0.2.1")
+        self.assertEqual(canonical_hostname("2001:0DB8::1"), "2001:db8::1")
+        self.assertEqual(canonical_hostname("2001:0DB8::1."), "2001:db8::1")
         for value in ("", ".", "example..com", "example.com.."):
+            with self.subTest(value=value), self.assertRaises(InvalidHostname):
+                canonical_hostname(value)
+
+    def test_canonical_hostname_rejects_malformed_dns_after_idna(self) -> None:
+        too_long_label = f"{'a' * 64}.example"
+        too_long_name = ".".join("a" * 63 for _ in range(4))
+        malformed = (
+            "bad host",
+            "-bad.example",
+            "bad-.example",
+            "bad_.example",
+            "bad/example",
+            "[::1]",
+            too_long_label,
+            too_long_name,
+        )
+
+        for value in malformed:
             with self.subTest(value=value), self.assertRaises(InvalidHostname):
                 canonical_hostname(value)
 
