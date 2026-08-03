@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from target_light_document_support import ASSET_ID, document_value, manifest_blocks
+from target_light_document_support import ASSET_ID, manifest_blocks, parsed_document
 
 from sciretriever.adapters.analysis import AnalysisAdapterSettings, OpenAIAnalysisAdapter
-from sciretriever.content.light_document import LightDocumentBounds, validate_light_document
-from sciretriever.kernel.json import CanonicalJsonInput
-from sciretriever.model.documents import LightDocumentV1
+from sciretriever.core.documents import validate_light_document
+from sciretriever.model.canonical_json import CanonicalJsonInput
+from sciretriever.model.documents import LightDocumentBounds, LightDocumentV1
 from sciretriever.model.llm import LLMRequest
 
 
@@ -53,7 +53,7 @@ def proposal_value() -> dict[str, CanonicalJsonInput]:
 
 def complete_document():
     return validate_light_document(
-        document_value(),
+        parsed_document(),
         ASSET_ID,
         2,
         manifest_blocks(),
