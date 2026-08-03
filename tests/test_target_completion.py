@@ -13,17 +13,19 @@ from target_completion_support import (
 )
 
 from sciretriever.core.analysis import analysis_bytes
+from sciretriever.core.execution import build_target_result_envelope
 from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
 )
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage import target_result_envelope_json
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
 from sciretriever.model.literature import CompletionOutcome
-from sciretriever.services.literature.api import accept_completion
+from sciretriever.services.literature.api import CompletionAcceptanceService, accept_completion
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -71,11 +73,22 @@ class TargetCompletionTests(unittest.TestCase):
         submission = publish_completion_submission(
             proposal, context, target, CoreArtifactStore(storage)
         )
-        outcome = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
-        replay = accept_completion(SqliteLiteratureRepository(path), publisher, submission, target)
+        acceptance_service = CompletionAcceptanceService(
+            SqliteLiteratureRepository(path), publisher
+        )
+        outcome = acceptance_service.accept_completion(submission, target)
+        replay = acceptance_service.accept_completion(submission, target)
+
+        with create_or_open_catalog(path) as connection:
+            connection.execute(
+                "UPDATE batch_runs SET status='failed' WHERE id=?", (str(target.batch_run_id),)
+            )
+            connection.commit()
+        terminal_replay = acceptance_service.accept_completion(submission, target)
 
         self.assertEqual(
-            (outcome, replay), (CompletionOutcome.PUBLISHED, CompletionOutcome.REPLAYED)
+            (outcome, replay, terminal_replay),
+            (CompletionOutcome.PUBLISHED, CompletionOutcome.REPLAYED, CompletionOutcome.REPLAYED),
         )
         with open_read_only_snapshot(path) as reader:
             counts = tuple(
@@ -98,9 +111,16 @@ class TargetCompletionTests(unittest.TestCase):
             failures = reader.execute(
                 "SELECT stage FROM current_failures ORDER BY stage"
             ).fetchall()
+            result_json = reader.execute(
+                "SELECT result_json FROM batch_targets WHERE batch_run_id=? AND target_id=?",
+                (str(target.batch_run_id), str(context.work_version_id)),
+            ).fetchone()[0]
         self.assertEqual(counts, (1, 1, 1, 1, 3, 1, 1, 1))
         self.assertEqual(state, ("completed",))
         self.assertEqual(failures, [("parsing",)])
+        self.assertEqual(
+            result_json, target_result_envelope_json(build_target_result_envelope(target))
+        )
 
     def test_artifact_is_durable_before_stale_acceptance_and_is_reused(self) -> None:
         path, storage, context, target, proposal, publisher = self._prepared()

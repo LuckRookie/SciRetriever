@@ -1,3 +1,5 @@
+# noqa: E501  # noqa: SIZE_OK
+# Citation collection scenarios share one seeded catalog fixture.
 from __future__ import annotations
 
 import unittest
@@ -13,11 +15,11 @@ from sciretriever.core.collection import (
     CollectionRuleError,
     citation_run_input_from_validated,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.collection import (
     CausePageRequest,
     CitationCollectionRequest,
@@ -98,7 +100,18 @@ class TargetCitationCollectionTests(CitationCollectionTestCase):
             WorkVersionState.LIGHT_TEXT_READY,
         )
 
-        persisted = self.collections.get_citation_input(result.run_id)
+        with open_read_only_snapshot(self.catalog) as connection:
+            row = connection.execute(
+                "SELECT citation_input_json FROM collection_runs WHERE id=?",
+                (str(result.run_id),),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        persisted = citation_run_input_from_validated(
+            ValidatedCitationInput(
+                canonical_json=row[0],
+                sha256=sha256_digest(row[0].encode("ascii")),
+            )
+        )
         self.assertIsInstance(persisted, CitationRunInput)
         assert persisted is not None
         self.assertEqual(persisted.original_selectors, request.seed_selectors)

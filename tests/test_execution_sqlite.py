@@ -6,7 +6,7 @@ from uuid import uuid4
 from target_publisher_support import ScenarioFactory
 
 from sciretriever.core.execution import select_actual_targets, state_counts
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteExecutionRepository,
     open_read_only_snapshot,
 )

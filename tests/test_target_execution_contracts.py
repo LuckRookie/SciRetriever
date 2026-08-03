@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from sciretriever.model.canonical_json import CanonicalJsonObject
-from sciretriever.model.primitives import BatchRunId, WorkVersionId
+from sciretriever.model.primitives import BatchRunId, UtcTimestamp, WorkVersionId
 
 ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src" / "sciretriever"
@@ -16,6 +16,7 @@ EXECUTION_NAMES = (
     "CurrentFailure",
     "TargetResult",
     "TargetResultEnvelope",
+    "TargetStepOutcome",
     "TargetProjection",
     "ImportResult",
     "ImportRecordProjection",
@@ -94,9 +95,85 @@ class TargetExecutionContractTests(unittest.TestCase):
             core.canonical_target_projection(target),
             b'{"batch_run_id":"10000000-0000-0000-0000-000000000001",'
             b'"details":{},"failure_stages_to_clear":["asset"],'
-            b'"result":"partially-advanced",'
+            b'"result":{"failure":null,'
+            b'"final_state":"asset-ready","initial_state":"unreviewed",'
+            b'"outcome":"partially-advanced","stage":"asset",'
+            b'"subject_id":"20000000-0000-0000-0000-000000000001",'
+            b'"subject_type":"work-version","target_state":"asset-ready"},'
             b'"work_version_id":"20000000-0000-0000-0000-000000000001"}',
         )
+
+    def test_step_outcome_is_a_frozen_typed_write_decision(self) -> None:
+        execution = importlib.import_module("sciretriever.model.execution")
+        self.assertTrue(hasattr(execution, "TargetStepOutcome"))
+
+    def test_every_target_projection_field_changes_canonical_identity(self) -> None:
+        execution = importlib.import_module("sciretriever.model.execution")
+        core = importlib.import_module("sciretriever.core.execution")
+        version_id = WorkVersionId("20000000-0000-0000-0000-000000000001")
+        target = execution.TargetProjection(
+            batch_run_id=BatchRunId("10000000-0000-0000-0000-000000000001"),
+            work_version_id=version_id,
+            result=execution.TargetResult(
+                subject_type="work-version",
+                subject_id=str(version_id),
+                outcome="partially-advanced",
+                initial_state="unreviewed",
+                target_state="asset-ready",
+                final_state="asset-ready",
+                stage="asset",
+                failure=None,
+            ),
+            details=CanonicalJsonObject(()),
+            failure_stages_to_clear=("asset",),
+        )
+        failure = execution.CurrentFailure(
+            stage="asset",
+            code="download-failed",
+            reason="no candidate",
+            action="retry",
+            retryable=True,
+            updated_at=UtcTimestamp("2026-08-03T00:00:00Z"),
+        )
+        variants = (
+            target.model_copy(
+                update={"batch_run_id": BatchRunId("10000000-0000-0000-0000-000000000002")}
+            ),
+            target.model_copy(
+                update={"work_version_id": WorkVersionId("20000000-0000-0000-0000-000000000002")}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"subject_type": "work"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"subject_id": "different"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"outcome": "failed"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"initial_state": "asset-ready"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"target_state": "completed"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"final_state": "completed"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"stage": "parsing"})}
+            ),
+            target.model_copy(
+                update={"result": target.result.model_copy(update={"failure": failure})}
+            ),
+            target.model_copy(update={"details": CanonicalJsonObject((("changed", True),))}),
+            target.model_copy(update={"failure_stages_to_clear": ("parsing",)}),
+        )
+        canonical = core.canonical_target_projection(target)
+
+        self.assertEqual(len(variants), 12)
+        for variant in variants:
+            self.assertNotEqual(core.canonical_target_projection(variant), canonical)
 
     def test_core_rejects_cross_work_version_alignment_before_write(self) -> None:
         execution = importlib.import_module("sciretriever.model.execution")

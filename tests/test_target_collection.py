@@ -7,19 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.core.collection import (
-    CollectionAcceptanceConflict,
-    validated_topic_conditions,
-)
-from sciretriever.kernel import CanonicalJsonObject, parse_canonical_json
-from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
-from sciretriever.literature_store.sqlite import (
+from sciretriever.core.collection import validated_topic_conditions
+from sciretriever.infrastructure.locking import LocalAdmissionBindingFactory
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
     SqliteLiteratureRepository,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.kernel import CanonicalJsonObject, parse_canonical_json
 from sciretriever.model.collection import CausePageRequest, CollectionAcceptance, TopicConditions
 from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
@@ -35,6 +32,7 @@ from sciretriever.services.collection.api import (
     CollectionServiceDependencies,
     MetadataSource,
 )
+from sciretriever.services.collection.errors import CollectionAcceptanceConflict
 from sciretriever.services.literature.api import LiteratureService
 
 

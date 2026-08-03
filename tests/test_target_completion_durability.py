@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from uuid import uuid4
 
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     SqliteLiteratureRepository,
     create_or_open_catalog,

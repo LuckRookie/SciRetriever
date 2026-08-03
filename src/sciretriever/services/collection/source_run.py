@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from sciretriever.core.collection import CollectionAcceptanceConflict, CollectionRuleError
+from sciretriever.core.collection import CollectionRuleError
 from sciretriever.model.collection import (
     CollectionCounts,
     CollectionRunRecord,
@@ -12,6 +12,7 @@ from sciretriever.model.collection import (
 from sciretriever.model.primitives import CollectionRunId, CollectionRunStatus
 from sciretriever.model.sources import MetadataDiscoveryRequest, MetadataObservation
 
+from .errors import CollectionAcceptanceConflict
 from .ports import CollectionRepository, MetadataSourcePort
 from .run_finalization import CollectionRunFinalizer
 from .source_progress import SourceProgress, source_failure

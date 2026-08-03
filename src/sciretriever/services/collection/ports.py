@@ -6,7 +6,6 @@ from typing import Protocol
 from sciretriever.model.collection import (
     CausePage,
     CausePageRequest,
-    CitationRunInput,
     CollectionAcceptance,
     CollectionDefinition,
     CollectionRunRecord,
@@ -100,8 +99,6 @@ class CollectionRepository(Protocol):
     def list_causes(self, request: CausePageRequest) -> CausePage: ...
 
     def list_paths(self, request: PathPageRequest) -> PathPage: ...
-
-    def get_citation_input(self, run_id: CollectionRunId) -> CitationRunInput | None: ...
 
 
 class CoreWriteGuard(Protocol):

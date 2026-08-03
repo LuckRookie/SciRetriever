@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.literature_store.filesystem import CoreArtifactStore
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
 from sciretriever.model.assets import ArtifactKind, StagedArtifact
 from sciretriever.model.primitives import RelativeArtifactPath, sha256_digest
 

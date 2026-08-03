@@ -8,7 +8,6 @@ from .citation_input import (
 )
 from .errors import CollectionRuleError
 from .publisher_contracts import (
-    CollectionAcceptanceConflict,
     validate_collection_acceptance,
     validate_existing_collection_acceptance,
 )
@@ -22,7 +21,6 @@ from .topic import validate_topic_condition_set, validated_topic_conditions
 
 __all__ = (
     "CollectionRuleError",
-    "CollectionAcceptanceConflict",
     "citation_run_input_from_validated",
     "collection_source_failed",
     "validate_citation_collection_request",

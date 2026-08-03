@@ -9,7 +9,7 @@ from test_target_collection import (
     observation,
 )
 
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )

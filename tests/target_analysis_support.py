@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from pathlib import Path
 
 from target_light_document_support import ASSET_ID, manifest_blocks, parsed_document
 
-from sciretriever.adapters.analysis import (
+from sciretriever.core.documents import document_bytes, validate_light_document
+from sciretriever.infrastructure.llm import (
     AnalysisAdapterSettings,
     AnthropicAnalysisAdapter,
     OpenAIAnalysisAdapter,
 )
-from sciretriever.core.documents import document_bytes, validate_light_document
+from sciretriever.infrastructure.storage.sqlite import open_read_only_snapshot
 from sciretriever.model.canonical_json import CanonicalJsonInput
 from sciretriever.model.documents import LightDocumentBounds, LightDocumentV1
 from sciretriever.model.llm import LLMRequest
 from sciretriever.model.primitives import sha256_digest
+
+SqlValue = str | int | float | bytes | None
 
 
 def proposal_value() -> dict[str, CanonicalJsonInput]:
@@ -144,3 +149,101 @@ def anthropic_adapter(value: dict[str, CanonicalJsonInput]) -> AnthropicAnalysis
         return client
 
     return AnthropicAnalysisAdapter(adapter_settings(), "runtime-secret", factory)
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritySnapshot:
+    artifacts: tuple[tuple[SqlValue, ...], ...]
+    analyses: tuple[tuple[SqlValue, ...], ...]
+    metadata: tuple[tuple[SqlValue, ...], ...]
+    metadata_pointer: tuple[tuple[SqlValue, ...], ...]
+    references: tuple[tuple[SqlValue, ...], ...]
+    reference_members: tuple[tuple[SqlValue, ...], ...]
+    unresolved_references: tuple[tuple[SqlValue, ...], ...]
+    tags: tuple[tuple[SqlValue, ...], ...]
+    tag_members: tuple[tuple[SqlValue, ...], ...]
+    bundles: tuple[tuple[SqlValue, ...], ...]
+    fts: tuple[tuple[SqlValue, ...], ...]
+    failures: tuple[tuple[SqlValue, ...], ...]
+    target: tuple[tuple[SqlValue, ...], ...]
+    state: tuple[tuple[SqlValue, ...], ...]
+
+
+def authority_snapshot(
+    path: Path,
+    work_version_id: str,
+    batch_run_id: str,
+) -> AuthoritySnapshot:
+    with open_read_only_snapshot(path) as reader:
+
+        def rows(
+            sql: str,
+            values: tuple[SqlValue, ...] = (),
+        ) -> tuple[tuple[SqlValue, ...], ...]:
+            return tuple(reader.execute(sql, values).fetchall())
+
+        return AuthoritySnapshot(
+            rows(
+                "SELECT id,kind,sha256,storage_path,byte_size FROM artifacts "
+                "WHERE kind='analysis' ORDER BY id"
+            ),
+            rows(
+                "SELECT id,artifact_id,sha256,input_sha256,proposal_json,provenance_json "
+                "FROM analysis_artifacts ORDER BY id"
+            ),
+            rows(
+                "SELECT id,revision,sha256,values_json,provenance_json FROM metadata_snapshots "
+                "WHERE work_version_id=? ORDER BY revision",
+                (work_version_id,),
+            ),
+            rows(
+                "SELECT metadata_snapshot_id FROM work_version_current_metadata "
+                "WHERE work_version_id=?",
+                (work_version_id,),
+            ),
+            rows(
+                "SELECT id,revision,complete FROM reference_sets "
+                "WHERE work_version_id=? ORDER BY id",
+                (work_version_id,),
+            ),
+            rows(
+                "SELECT id,reference_set_id,ordinal,target_work_id,target_work_version_id,"
+                "reference_json FROM reference_members ORDER BY id"
+            ),
+            rows(
+                "SELECT id,reference_set_id,ordinal,raw_text,reference_json "
+                "FROM unresolved_references ORDER BY id"
+            ),
+            rows(
+                "SELECT id,revision,complete FROM tag_sets WHERE work_version_id=? ORDER BY id",
+                (work_version_id,),
+            ),
+            rows("SELECT id,tag_set_id,name,evidence_json FROM tag_members ORDER BY id"),
+            rows(
+                "SELECT light_document_id,analysis_artifact_id,metadata_snapshot_id,"
+                "reference_set_id,tag_set_id,identity_sha256 FROM completion_bundles "
+                "WHERE work_version_id=?",
+                (work_version_id,),
+            ),
+            rows(
+                "SELECT 'metadata',content FROM metadata_fts WHERE work_version_id=? "
+                "UNION ALL SELECT 'light',content FROM light_text_fts WHERE work_version_id=? "
+                "UNION ALL SELECT 'analysis',content FROM analysis_fts "
+                "WHERE work_version_id=? ORDER BY 1",
+                (work_version_id, work_version_id, work_version_id),
+            ),
+            rows(
+                "SELECT stage,code,reason,action,retryable FROM current_failures "
+                "WHERE subject_id=? ORDER BY stage",
+                (work_version_id,),
+            ),
+            rows(
+                "SELECT started,result_json FROM batch_targets "
+                "WHERE batch_run_id=? AND target_id=?",
+                (batch_run_id, work_version_id),
+            ),
+            rows(
+                "SELECT state FROM work_version_state_view WHERE work_version_id=?",
+                (work_version_id,),
+            ),
+        )

@@ -140,8 +140,18 @@ class ExecutionService:
     def _close_abandoned_runs(self) -> None:
         recoverable = self._dependencies.repository.list_recoverable_process_batches()
         for batch in recoverable:
-            results = tuple(recover_interrupted_target(target) for target in batch.targets)
-            counts = state_counts(results)
+            results: list[TargetResult] = []
+            for target in batch.targets:
+                result = recover_interrupted_target(target)
+                if target.result is None:
+                    self._dependencies.repository.save_target_result(
+                        batch.batch_run_id,
+                        TargetResultEnvelope(result=result, details=CanonicalJsonObject(())),
+                        started=target.started,
+                    )
+                results.append(result)
+            result_tuple = tuple(results)
+            counts = state_counts(result_tuple)
             detail = BatchDetail(
                 kind="batch-detail",
                 batch_run_id=batch.batch_run_id,
@@ -153,7 +163,7 @@ class ExecutionService:
                 stop_reason="abandoned",
                 common_error=None,
                 counts=counts,
-                results=results,
+                results=result_tuple,
                 started_at=batch.started_at,
                 finished_at=self._dependencies.clock(),
             )
@@ -185,7 +195,7 @@ class ExecutionService:
                     )
                 return last_result
             step = missing_steps[0]
-            envelope = processors[step].advance(
+            outcome = processors[step].advance(
                 TargetStepRequest(
                     batch_run_id=batch_run_id,
                     work_version_id=target.work_version_id,
@@ -193,8 +203,16 @@ class ExecutionService:
                     target_state=target.target_state,
                 )
             )
-            self._dependencies.repository.save_target_result(batch_run_id, envelope, started=True)
-            result = envelope.result
+            match outcome.result_write:
+                case "publisher-committed":
+                    pass
+                case "execution-required":
+                    self._dependencies.repository.save_target_result(
+                        batch_run_id, outcome.envelope, started=True
+                    )
+                case unreachable:
+                    assert_never(unreachable)
+            result = outcome.envelope.result
             last_result = result
             match result.outcome:
                 case "completed" | "partially-advanced":

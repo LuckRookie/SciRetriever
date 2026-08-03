@@ -4,23 +4,26 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Protocol
+from typing import assert_never
 from uuid import uuid4
 
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     CompletionPublisher,
+    ContentAcceptancePublisher,
     ImportAcceptancePublisher,
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import (
     ArtifactKind,
-    AssetPublication,
+    PrimaryPdfAcceptance,
     PublishedArtifact,
+    SupplementaryAssetAcceptance,
 )
 from sciretriever.model.collection import CollectionAcceptance, CollectionMembershipFact
+from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import (
     ContentAcceptanceCommand,
     ImportAcceptanceCommand,
@@ -47,20 +50,24 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
     sha256_digest,
 )
-from sciretriever.services.literature.api import prepare_initial_ingest
+from sciretriever.services.assets import accept_content
+from sciretriever.services.documents import accept_document
+from sciretriever.services.library import accept_import
+from sciretriever.services.literature.api import accept_completion, prepare_initial_ingest
 from tests import target_publisher_content_scenarios
 
 EMPTY = CanonicalJsonObject(())
 
 
-class Publisher(Protocol):
-    def publish(self, command) -> AssetPublication | None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class Scenario:
     path: Path
-    publisher: Publisher | CompletionPublisher
+    publisher: (
+        CollectionAcceptancePublisher
+        | ImportAcceptancePublisher
+        | ContentAcceptancePublisher
+        | CompletionPublisher
+    )
     command: (
         CollectionAcceptance
         | ImportAcceptanceCommand
@@ -71,12 +78,35 @@ class Scenario:
     target: TargetProjection | None = None
 
     def invoke(self) -> None:
-        if isinstance(self.publisher, CompletionPublisher):
-            assert isinstance(self.command, CompletionSubmission)
-            assert self.target is not None
-            self.publisher.publish_completion(self.command, self.target)
-        else:
-            self.publisher.publish(self.command)
+        match self.publisher:
+            case CompletionPublisher():
+                assert isinstance(self.command, CompletionSubmission)
+                assert self.target is not None
+                accept_completion(
+                    SqliteLiteratureRepository(self.path),
+                    self.publisher,
+                    self.command,
+                    self.target,
+                )
+            case ImportAcceptancePublisher():
+                assert isinstance(self.command, ImportAcceptanceCommand)
+                accept_import(self.publisher, self.command)
+            case ContentAcceptancePublisher():
+                assert isinstance(self.command, ContentAcceptanceCommand)
+                match self.command.acceptance:
+                    case LightDocumentAcceptance():
+                        accept_document(
+                            self.publisher, self.command.acceptance, self.command.target
+                        )
+                    case PrimaryPdfAcceptance() | SupplementaryAssetAcceptance():
+                        accept_content(self.publisher, self.command.acceptance, self.command.target)
+                    case unreachable:
+                        assert_never(unreachable)
+            case CollectionAcceptancePublisher():
+                assert isinstance(self.command, CollectionAcceptance)
+                self.publisher.publish(self.command)
+            case unreachable:
+                assert_never(unreachable)
 
 
 class ScenarioFactory:

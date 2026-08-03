@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import sciretriever.model.record as record_models
+from sciretriever.core.execution import (
+    canonical_import_record_projection,
+    validate_import_acceptance_command,
+)
 from sciretriever.core.library import (
     export_eligible,
     prepare_export_record,
     select_export_candidates,
 )
+from sciretriever.model.canonical_json import CanonicalJsonObject, parse_canonical_json
+from sciretriever.model.execution import ImportAcceptanceCommand, ValidatedImportAcceptance
 from sciretriever.model.library import ExportSelectionRequest
 
 from .import_preparation import prepare_import_record
@@ -13,9 +19,22 @@ from .ports import (
     AtomicOutputPort,
     BibliographyCodec,
     BinaryInput,
+    ImportAcceptancePublisher,
     ImportIdentityPort,
     LibraryExportSelectionPort,
 )
+
+
+def accept_import(
+    publisher: ImportAcceptancePublisher,
+    command: ImportAcceptanceCommand,
+) -> None:
+    validate_import_acceptance_command(command)
+    result = parse_canonical_json(
+        canonical_import_record_projection(command.record).decode("ascii")
+    )
+    assert isinstance(result, CanonicalJsonObject)
+    publisher.publish(ValidatedImportAcceptance(command=command, result=result))
 
 
 class LibraryExchangeService:

@@ -127,7 +127,7 @@ class ExecutionServiceTests(unittest.TestCase):
                 (str(envelope.result.subject_id), started)
                 for _batch_id, envelope, started in repository.results
             ),
-            ((str(VERSION_A), True), (str(VERSION_B), False)),
+            ((str(VERSION_B), False),),
         )
         self.assertIs(repository.states[VERSION_A], WorkVersionState.LIGHT_TEXT_READY)
         self.assertIs(repository.states[VERSION_B], WorkVersionState.UNREVIEWED)
@@ -189,7 +189,7 @@ class ExecutionServiceTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.subject_id for item in target_results), (str(VERSION_A), str(VERSION_C))
         )
-        self.assertEqual(len(repository.results), 4)
+        self.assertEqual(len(repository.results), 2)
         self.assertIs(repository.states[VERSION_A], WorkVersionState.COMPLETED)
         self.assertIs(repository.states[VERSION_C], WorkVersionState.ASSET_READY)
 

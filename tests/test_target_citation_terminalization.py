@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
 from test_target_collection import FakeMetadataPort
 
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
     open_read_only_snapshot,

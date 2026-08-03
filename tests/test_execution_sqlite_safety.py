@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - execution safety coverage remains with one test owner
 from __future__ import annotations
 
 import unittest
@@ -11,9 +12,13 @@ from sciretriever.core.execution import (
     select_actual_targets,
     state_counts,
 )
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteExecutionRepository,
+    create_or_open_catalog,
     open_read_only_snapshot,
+)
+from sciretriever.infrastructure.storage.sqlite.execution_repository import (
+    ExecutionPersistenceError,
 )
 from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.collection import CollectionAcceptance
@@ -264,6 +269,90 @@ class ExecutionSqliteSafetyTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual((row[0], row[1]), ("interrupted", 1))
         self.assertIn('"outcome":"failed"', row[2])
+
+    def test_abandoned_run_preserves_existing_target_result_bytes(self) -> None:
+        abandoned_id = BatchRunId(str(uuid4()))
+        target = self.target()
+        self.repository.create_process_batch(abandoned_id, self.scope(), (target,))
+        self.repository.mark_process_started(abandoned_id, NOW)
+        self.repository.mark_target_started(abandoned_id, self.version_id)
+        existing = TargetResult(
+            subject_type="work-version",
+            subject_id=str(self.version_id),
+            outcome="partially-advanced",
+            initial_state="unreviewed",
+            target_state="completed",
+            final_state="asset-ready",
+            stage="asset",
+            failure=None,
+        )
+        envelope = TargetResultEnvelope(
+            result=existing,
+            details=CanonicalJsonObject((("publisher", "committed"),)),
+        )
+        self.repository.save_target_result(abandoned_id, envelope, started=True)
+        with open_read_only_snapshot(self.catalog) as connection:
+            before = connection.execute(
+                "SELECT result_json FROM batch_targets WHERE batch_run_id=?",
+                (str(abandoned_id),),
+            ).fetchone()[0]
+
+        ExecutionService(
+            ExecutionServiceDependencies(
+                repository=self.repository,
+                acquire_core_write=Guard,
+                clock=lambda: NOW,
+                processors=(),
+            )
+        ).run_process(self.scope(selected=False))
+
+        with open_read_only_snapshot(self.catalog) as connection:
+            after = connection.execute(
+                "SELECT result_json FROM batch_targets WHERE batch_run_id=?",
+                (str(abandoned_id),),
+            ).fetchone()[0]
+        self.assertEqual(after, before)
+
+    def test_recovery_rejects_non_envelope_result_without_overwriting_bytes(self) -> None:
+        abandoned_id = BatchRunId(str(uuid4()))
+        target = self.target()
+        self.repository.create_process_batch(abandoned_id, self.scope(), (target,))
+        self.repository.mark_process_started(abandoned_id, NOW)
+        self.repository.mark_target_started(abandoned_id, self.version_id)
+        malformed = '{"legacy":true}'
+        with create_or_open_catalog(self.catalog) as connection:
+            connection.execute(
+                "UPDATE batch_targets SET result_json=? WHERE batch_run_id=?",
+                (malformed, str(abandoned_id)),
+            )
+            connection.commit()
+
+        with open_read_only_snapshot(self.catalog) as connection:
+            before = connection.execute(
+                "SELECT result_json FROM batch_targets WHERE batch_run_id=?",
+                (str(abandoned_id),),
+            ).fetchone()[0]
+        self.assertEqual(before, malformed)
+
+        with self.assertRaises(ExecutionPersistenceError) as raised:
+            ExecutionService(
+                ExecutionServiceDependencies(
+                    repository=self.repository,
+                    acquire_core_write=Guard,
+                    clock=lambda: NOW,
+                    processors=(),
+                )
+            ).run_process(self.scope(selected=False))
+
+        self.assertEqual(
+            str(raised.exception), "stored target result must be a valid TargetResultEnvelope"
+        )
+        with open_read_only_snapshot(self.catalog) as connection:
+            after = connection.execute(
+                "SELECT result_json FROM batch_targets WHERE batch_run_id=?",
+                (str(abandoned_id),),
+            ).fetchone()[0]
+        self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

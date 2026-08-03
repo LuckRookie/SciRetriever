@@ -174,12 +174,10 @@ class FakeRepository:
 
 class RecordingPublisher:
     def __init__(self) -> None:
-        self.calls: list[tuple[CompletionSubmission, str]] = []
+        self.calls = []
 
-    def publish_completion(
-        self, validated_submission: CompletionSubmission, target_projection: str
-    ) -> str:
-        self.calls.append((validated_submission, target_projection))
+    def publish_completion(self, acceptance) -> str:
+        self.calls.append(acceptance)
         return "published"
 
 

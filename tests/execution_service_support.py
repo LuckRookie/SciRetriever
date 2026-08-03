@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import TracebackType
+from typing import Literal
 
 from sciretriever.model.canonical_json import CanonicalJsonObject, assert_never
 from sciretriever.model.execution import (
@@ -13,6 +14,7 @@ from sciretriever.model.execution import (
     RecoveryTarget,
     TargetResult,
     TargetResultEnvelope,
+    TargetStepOutcome,
     TargetStepRequest,
 )
 from sciretriever.model.primitives import (
@@ -122,7 +124,7 @@ class FakeStepProcessor:
     def step(self) -> MissingStep:
         return self._step
 
-    def advance(self, request: TargetStepRequest) -> TargetResultEnvelope:
+    def advance(self, request: TargetStepRequest) -> TargetStepOutcome:
         current = self._repository.states[request.work_version_id]
         if request.work_version_id in self._missing:
             outcome = "missing"
@@ -145,7 +147,11 @@ class FakeStepProcessor:
                 "failure": None,
             }
         )
-        return TargetResultEnvelope(result=result, details=CanonicalJsonObject(()))
+        envelope = TargetResultEnvelope(result=result, details=CanonicalJsonObject(()))
+        result_write: Literal["publisher-committed", "execution-required"] = (
+            "execution-required" if outcome == "missing" else "publisher-committed"
+        )
+        return TargetStepOutcome(envelope=envelope, result_write=result_write)
 
     def _advanced_state(self) -> WorkVersionState:
         match self._step:

@@ -9,11 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.literature_store.filesystem import (
+from sciretriever.infrastructure.locking import (
     AdvisoryLock,
     canonical_catalog_path,
 )
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SCHEMA_FINGERPRINT,
     SCHEMA_TABLES,
     UnsupportedCatalogError,

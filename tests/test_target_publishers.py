@@ -1,12 +1,15 @@
-# noqa: SIZE_OK - the failpoint matrix covers every publisher variant in one fixture suite
+# noqa: E501  # noqa: SIZE_OK
+# The failpoint matrix covers every publisher variant in one fixture suite.
 from __future__ import annotations
 
 import unittest
 from dataclasses import replace as dataclass_replace
+from typing import cast
 
 from pydantic import BaseModel
 
 from sciretriever.core import assets as core_assets
+from sciretriever.core import documents as core_documents
 from sciretriever.core.collection import CollectionRuleError, validate_collection_acceptance
 from sciretriever.core.execution import (
     ExecutionRejectedError,
@@ -19,14 +22,15 @@ from sciretriever.core.literature.acceptance import (
     CompletionRejectedError,
     validate_completion_submission_contract,
 )
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     ContentAcceptancePublisher,
+    SqliteLiteratureRepository,
     StalePublicationError,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import PrimaryPdfAcceptance
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.documents import LightDocumentAcceptance
@@ -38,6 +42,12 @@ from sciretriever.model.primitives import (
     WorkId,
     WorkVersionId,
 )
+from sciretriever.services.assets import accept_content
+from sciretriever.services.assets.ports import AssetAcceptancePublisher
+from sciretriever.services.collection.errors import CollectionAcceptanceConflict
+from sciretriever.services.documents import accept_document
+from sciretriever.services.documents.ports import DocumentAcceptancePort
+from sciretriever.services.literature.api import accept_completion
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -142,7 +152,13 @@ class TargetPublisherTests(unittest.TestCase):
         object.__setattr__(completion, "work_version_id", other_version)
         for scenario in scenarios:
             with self.subTest(authority=scenario.authority_table):
-                with self.assertRaises(StalePublicationError):
+                expected = {
+                    "collection_memberships": CollectionAcceptanceConflict,
+                    "reference_sets": ExecutionRejectedError,
+                    "accepted_primary_assets": ExecutionRejectedError,
+                    "completion_bundles": CompletionRejectedError,
+                }[scenario.authority_table]
+                with self.assertRaises(expected):
                     scenario.invoke()
 
     def test_asset_validation_precedes_execution_alignment(self) -> None:
@@ -161,10 +177,13 @@ class TargetPublisherTests(unittest.TestCase):
             acceptance=invalid_acceptance,
             target=replace(scenario.command.target, work_version_id=other_version),
         )
-        with self.assertRaises(StalePublicationError) as raised:
+        with self.assertRaises(core_assets.AssetRuleError):
             assert isinstance(scenario.publisher, ContentAcceptancePublisher)
-            scenario.publisher.publish(command)
-        self.assertIn("published artifact identity is inconsistent", str(raised.exception))
+            accept_content(
+                cast(AssetAcceptancePublisher, scenario.publisher),
+                invalid_acceptance,
+                command.target,
+            )
 
     def test_content_publisher_rejects_result_after_batch_terminalization(self) -> None:
         scenario = self.factory.primary()
@@ -214,6 +233,29 @@ class TargetPublisherTests(unittest.TestCase):
         self.assertEqual(bundles, (0,))
         self.assertEqual(after, before)
 
+    def test_completion_publisher_rejects_bibliography_import_target_before_publish(self) -> None:
+        scenario = self.factory.completion()
+        assert scenario.target is not None
+        batch_run_id = str(scenario.target.batch_run_id)
+        with create_or_open_catalog(scenario.path) as connection:
+            connection.execute(
+                "UPDATE batch_runs SET batch_type='bibliography-import' WHERE id=?",
+                (batch_run_id,),
+            )
+            connection.execute(
+                "UPDATE batch_targets SET target_kind='import-record' WHERE batch_run_id=?",
+                (batch_run_id,),
+            )
+            connection.commit()
+
+        with self.assertRaises(StalePublicationError):
+            scenario.invoke()
+
+        with open_read_only_snapshot(scenario.path) as reader:
+            self.assertEqual(
+                reader.execute("SELECT COUNT(*) FROM completion_bundles").fetchone(), (0,)
+            )
+
     def test_pairwise_result_enums_with_identical_details_persist_differently(self) -> None:
         details = CanonicalJsonObject((("reason", "same"),))
         cases = (
@@ -255,8 +297,12 @@ class TargetPublisherTests(unittest.TestCase):
                     )
             with self.subTest(builder=builder.__name__):
                 self.assertNotEqual(stored[0], stored[1])
-                self.assertIn(f'"result":"{result_values[0]}"', stored[0])
-                self.assertIn(f'"result":"{result_values[1]}"', stored[1])
+                if builder.__name__ == "primary":
+                    self.assertIn(f'"outcome":"{result_values[0]}"', stored[0])
+                    self.assertIn(f'"outcome":"{result_values[1]}"', stored[1])
+                else:
+                    self.assertIn(f'"result":"{result_values[0]}"', stored[0])
+                    self.assertIn(f'"result":"{result_values[1]}"', stored[1])
                 self.assertIn('"details":{"reason":"same"}', stored[0])
 
     def test_result_details_cannot_supply_a_second_discriminator(self) -> None:
@@ -280,8 +326,13 @@ class TargetPublisherTests(unittest.TestCase):
         candidate = completion.command.model_copy(update={"metadata": tampered})
         assert isinstance(completion.publisher, CompletionPublisher)
         assert completion.target is not None
-        with self.assertRaises(StalePublicationError):
-            completion.publisher.publish_completion(candidate, completion.target)
+        with self.assertRaises(CompletionRejectedError):
+            accept_completion(
+                SqliteLiteratureRepository(completion.path),
+                completion.publisher,
+                candidate,
+                completion.target,
+            )
         light = self.factory.light()
         assert isinstance(light.command, ContentAcceptanceCommand)
         accepted_light = light.command.acceptance
@@ -290,13 +341,10 @@ class TargetPublisherTests(unittest.TestCase):
             accepted_light,
             document=CanonicalJsonObject((("tampered", True),)),
         )
-        with self.assertRaises(StalePublicationError):
+        with self.assertRaises(core_documents.LightDocumentError):
             assert isinstance(light.publisher, ContentAcceptancePublisher)
-            light.publisher.publish(
-                ContentAcceptanceCommand(
-                    acceptance=tampered_light,
-                    target=light.command.target,
-                )
+            accept_document(
+                cast(DocumentAcceptancePort, light.publisher), tampered_light, light.command.target
             )
         analysis = completion.command.analysis
         with self.assertRaises(CompletionRejectedError):
@@ -337,10 +385,11 @@ class TargetPublisherTests(unittest.TestCase):
         assert isinstance(metadata_command, CompletionSubmission)
         object.__setattr__(metadata_command.metadata, "sha256", Sha256("0" * 64))
         for scenario in scenarios:
-            with (
-                self.subTest(authority=scenario.authority_table),
-                self.assertRaises(StalePublicationError),
-            ):
+            expected = {
+                "light_documents": core_documents.LightDocumentError,
+                "completion_bundles": CompletionRejectedError,
+            }.get(scenario.authority_table, CompletionRejectedError)
+            with self.subTest(authority=scenario.authority_table), self.assertRaises(expected):
                 scenario.invoke()
 
         result = self.factory.primary()
@@ -350,7 +399,7 @@ class TargetPublisherTests(unittest.TestCase):
             "details",
             CanonicalJsonObject((("result", "failed"),)),
         )
-        with self.assertRaises(StalePublicationError):
+        with self.assertRaises(ExecutionRejectedError):
             result.invoke()
 
     def test_every_write_and_commit_failpoint_is_atomic_for_every_variant(self) -> None:

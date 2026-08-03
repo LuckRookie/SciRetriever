@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, StringConstra
 from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.library_query import QueryFilterV1
 from sciretriever.model.literature import (
+    CompletionSubmission,
     PreparedBibliographyAcceptance,
     ReferenceSetFact,
     TagSetFact,
@@ -20,6 +21,7 @@ from sciretriever.model.primitives import (
     CollectionRunId,
     MissingStep,
     PublicationPhase,
+    Sha256,
     UtcTimestamp,
     WorkVersionId,
     WorkVersionState,
@@ -34,6 +36,7 @@ TargetOutcome: TypeAlias = Literal[
     "failed",
     "not-started",
 ]
+TargetResultWrite: TypeAlias = Literal["publisher-committed", "execution-required"]
 TargetState: TypeAlias = Literal[
     "unreviewed",
     "asset-ready",
@@ -130,6 +133,11 @@ class TargetResult(_ExecutionModel):
 class TargetResultEnvelope(_ExecutionModel):
     result: TargetResult
     details: SkipValidation[CanonicalJsonObject]
+
+
+class TargetStepOutcome(_ExecutionModel):
+    envelope: TargetResultEnvelope
+    result_write: TargetResultWrite
 
 
 class RecoveryTarget(_ExecutionModel):
@@ -296,6 +304,32 @@ class ContentAcceptanceCommand(_ExecutionModel):
     target: TargetProjection
 
 
+class ValidatedAssetAcceptance(_ExecutionModel):
+    acceptance: SkipValidation[
+        asset_models.PrimaryPdfAcceptance | asset_models.SupplementaryAssetAcceptance
+    ]
+    target: TargetProjection
+    target_result: TargetResultEnvelope
+
+
+class ValidatedDocumentAcceptance(_ExecutionModel):
+    acceptance: SkipValidation[document_models.LightDocumentAcceptance]
+    target: TargetProjection
+    target_result: TargetResultEnvelope
+
+
+class ValidatedImportAcceptance(_ExecutionModel):
+    command: ImportAcceptanceCommand
+    result: SkipValidation[CanonicalJsonObject]
+
+
+class ValidatedCompletionAcceptance(_ExecutionModel):
+    submission: CompletionSubmission
+    target_projection: TargetProjection
+    target_result: TargetResultEnvelope
+    identity_sha256: Sha256
+
+
 __all__ = (
     "Action",
     "ActualProcessTarget",
@@ -328,6 +362,12 @@ __all__ = (
     "TargetProjection",
     "TargetResult",
     "TargetResultEnvelope",
+    "TargetResultWrite",
+    "TargetStepOutcome",
     "TargetStepRequest",
     "TargetState",
+    "ValidatedAssetAcceptance",
+    "ValidatedCompletionAcceptance",
+    "ValidatedDocumentAcceptance",
+    "ValidatedImportAcceptance",
 )

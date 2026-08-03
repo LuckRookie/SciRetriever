@@ -4,11 +4,11 @@ import unittest
 from dataclasses import replace
 from uuid import uuid4
 
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     ContentAcceptancePublisher,
     create_or_open_catalog,
 )
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.assets import (
     ArtifactKind,
     PrimaryPdfAcceptance,
@@ -24,6 +24,7 @@ from sciretriever.model.primitives import (
     WorkVersionAssetId,
     WorkVersionId,
 )
+from sciretriever.services.assets import accept_content
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -93,9 +94,7 @@ class TargetAssetPublicationReuseTests(unittest.TestCase):
             }
         )
 
-        ContentAcceptancePublisher(first.path).publish(
-            ContentAcceptanceCommand(acceptance=second_acceptance, target=second_target)
-        )
+        accept_content(ContentAcceptancePublisher(first.path), second_acceptance, second_target)
 
         with create_or_open_catalog(first.path) as connection:
             self.assertEqual(
@@ -202,7 +201,7 @@ class TargetAssetPublicationReuseTests(unittest.TestCase):
         batch_id = BatchRunId(str(uuid4()))
         self.factory.batch(scenario.path, batch_id, acceptance.work_version_id)
         target = scenario.command.target.model_copy(update={"batch_run_id": batch_id})
-        return publisher.publish(ContentAcceptanceCommand(acceptance=acceptance, target=target))
+        return accept_content(publisher, acceptance, target)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class AnalysisArtifactStorePort(Protocol):
 
 
 class CompletionAcceptancePort(Protocol):
-    def publish_completion(
+    def accept_completion(
         self,
         submission: literature_models.CompletionSubmission,
         target_projection: execution_models.TargetProjection,

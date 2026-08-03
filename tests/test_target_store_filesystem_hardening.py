@@ -8,14 +8,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from sciretriever.literature_store.filesystem import AdvisoryLock, canonical_catalog_path
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.locking import AdvisoryLock, canonical_catalog_path
+from sciretriever.infrastructure.storage.sqlite import (
     UnsupportedCatalogError,
     create_or_open_catalog,
     open_read_only_snapshot,
     validate_catalog,
 )
-from sciretriever.literature_store.sqlite import engine as engine_module
+from sciretriever.infrastructure.storage.sqlite import engine as engine_module
 
 
 class TargetStoreFilesystemHardeningTests(unittest.TestCase):
@@ -125,7 +125,7 @@ class TargetStoreFilesystemHardeningTests(unittest.TestCase):
         for checkpoint in ("after-temporary-fsync", "after-publication"):
             path = self.root / f"crash-{checkpoint}.sqlite"
             script = (
-                "import os; from sciretriever.literature_store.sqlite "
+                "import os; from sciretriever.infrastructure.storage.sqlite "
                 "import create_or_open_catalog; "
                 f"create_or_open_catalog({str(path)!r},"
                 f"checkpoint=lambda name: os._exit(91) if name=={checkpoint!r} else None)"

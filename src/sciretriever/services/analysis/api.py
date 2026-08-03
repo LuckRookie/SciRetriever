@@ -10,7 +10,7 @@ from sciretriever.core.analysis import (
     validate_llm_response,
 )
 from sciretriever.core.documents import document_bytes
-from sciretriever.core.execution import validate_completion_target, validate_target_alignment
+from sciretriever.core.execution import validate_completion_target
 from sciretriever.model import analysis as analysis_models
 from sciretriever.model import assets as asset_models
 from sciretriever.model import execution as execution_models
@@ -37,8 +37,7 @@ class AnalysisService:
         target: analysis_models.AnalysisTarget,
         target_projection: execution_models.TargetProjection,
     ) -> analysis_models.AnalysisResult:
-        validate_target_alignment(target_projection, target.work_version_id)
-        validate_completion_target(target_projection)
+        validate_completion_target(target_projection, target.work_version_id)
         source_bytes = document_bytes(context.document)
         source = source_bytes.decode("ascii")
         input_sha256 = sha256_digest(source_bytes)
@@ -72,7 +71,7 @@ class AnalysisService:
             target_projection,
             published,
         )
-        self._dependencies.completion.publish_completion(submission, target_projection)
+        self._dependencies.completion.accept_completion(submission, target_projection)
         return analysis_models.AnalysisResult(artifact=published, submission=submission)
 
 

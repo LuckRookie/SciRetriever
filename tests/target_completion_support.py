@@ -5,19 +5,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from target_analysis_support import proposal_value
+from target_analysis_support import AuthoritySnapshot, authority_snapshot, proposal_value
 
 from sciretriever.core.analysis import analysis_bytes, assemble_completion_submission
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.sqlite import (
+from sciretriever.core.execution import (
+    build_target_result_envelope,
+    target_projection_canonical,
+)
+from sciretriever.core.literature.completion import completion_submission_canonical
+from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     create_or_open_catalog,
-    open_read_only_snapshot,
 )
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.analysis import AnalysisProposalV1, AnalysisTarget
 from sciretriever.model.assets import ArtifactKind, PublishedArtifact, StagedArtifact
 from sciretriever.model.documents import LightDocumentAcceptance
-from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection, TargetResult
+from sciretriever.model.execution import (
+    ContentAcceptanceCommand,
+    TargetProjection,
+    TargetResult,
+    ValidatedCompletionAcceptance,
+)
 from sciretriever.model.literature import CompletionSubmission
 from sciretriever.model.primitives import (
     MetadataSnapshotId,
@@ -29,8 +38,6 @@ from sciretriever.model.primitives import (
 from sciretriever.services.analysis import AnalysisArtifactStorePort
 from tests.target_publisher_support import ScenarioFactory
 
-SqlValue = str | int | float | bytes | None
-
 
 @dataclass(frozen=True, slots=True)
 class PreparedCompletion:
@@ -40,24 +47,6 @@ class PreparedCompletion:
     target: TargetProjection
     proposal: AnalysisProposalV1
     publisher: CompletionPublisher
-
-
-@dataclass(frozen=True, slots=True)
-class AuthoritySnapshot:
-    artifacts: tuple[tuple[SqlValue, ...], ...]
-    analyses: tuple[tuple[SqlValue, ...], ...]
-    metadata: tuple[tuple[SqlValue, ...], ...]
-    metadata_pointer: tuple[tuple[SqlValue, ...], ...]
-    references: tuple[tuple[SqlValue, ...], ...]
-    reference_members: tuple[tuple[SqlValue, ...], ...]
-    unresolved_references: tuple[tuple[SqlValue, ...], ...]
-    tags: tuple[tuple[SqlValue, ...], ...]
-    tag_members: tuple[tuple[SqlValue, ...], ...]
-    bundles: tuple[tuple[SqlValue, ...], ...]
-    fts: tuple[tuple[SqlValue, ...], ...]
-    failures: tuple[tuple[SqlValue, ...], ...]
-    target: tuple[tuple[SqlValue, ...], ...]
-    state: tuple[tuple[SqlValue, ...], ...]
 
 
 class FailingArtifactStore:
@@ -156,6 +145,23 @@ def publish_completion_submission(
     return assemble_completion_submission(proposal, context, target, published)
 
 
+def validated_completion(
+    submission: CompletionSubmission, target: TargetProjection
+) -> ValidatedCompletionAcceptance:
+    result = CanonicalJsonObject(
+        (
+            ("submission", completion_submission_canonical(submission)),
+            ("target", target_projection_canonical(target)),
+        )
+    )
+    return ValidatedCompletionAcceptance(
+        submission=submission,
+        target_projection=target,
+        target_result=build_target_result_envelope(target),
+        identity_sha256=sha256_digest(canonical_json_bytes(result)),
+    )
+
+
 def _reference(identifier: str, raw_text: str, work_id: str | None):
     return {
         "reference_id": identifier,
@@ -180,86 +186,6 @@ def _reference(identifier: str, raw_text: str, work_id: str | None):
     }
 
 
-def authority_snapshot(
-    path: Path,
-    work_version_id: str,
-    batch_run_id: str,
-) -> AuthoritySnapshot:
-    with open_read_only_snapshot(path) as reader:
-
-        def rows(
-            sql: str,
-            values: tuple[SqlValue, ...] = (),
-        ) -> tuple[tuple[SqlValue, ...], ...]:
-            return tuple(reader.execute(sql, values).fetchall())
-
-        return AuthoritySnapshot(
-            rows(
-                "SELECT id,kind,sha256,storage_path,byte_size FROM artifacts "
-                "WHERE kind='analysis' ORDER BY id"
-            ),
-            rows(
-                "SELECT id,artifact_id,sha256,input_sha256,proposal_json,provenance_json "
-                "FROM analysis_artifacts ORDER BY id"
-            ),
-            rows(
-                "SELECT id,revision,sha256,values_json,provenance_json FROM metadata_snapshots "
-                "WHERE work_version_id=? ORDER BY revision",
-                (work_version_id,),
-            ),
-            rows(
-                "SELECT metadata_snapshot_id FROM work_version_current_metadata "
-                "WHERE work_version_id=?",
-                (work_version_id,),
-            ),
-            rows(
-                "SELECT id,revision,complete FROM reference_sets "
-                "WHERE work_version_id=? ORDER BY id",
-                (work_version_id,),
-            ),
-            rows(
-                "SELECT id,reference_set_id,ordinal,target_work_id,target_work_version_id,"
-                "reference_json FROM reference_members ORDER BY id"
-            ),
-            rows(
-                "SELECT id,reference_set_id,ordinal,raw_text,reference_json "
-                "FROM unresolved_references ORDER BY id"
-            ),
-            rows(
-                "SELECT id,revision,complete FROM tag_sets WHERE work_version_id=? ORDER BY id",
-                (work_version_id,),
-            ),
-            rows("SELECT id,tag_set_id,name,evidence_json FROM tag_members ORDER BY id"),
-            rows(
-                "SELECT light_document_id,analysis_artifact_id,metadata_snapshot_id,"
-                "reference_set_id,tag_set_id,identity_sha256 FROM completion_bundles "
-                "WHERE work_version_id=?",
-                (work_version_id,),
-            ),
-            rows(
-                "SELECT 'metadata',content FROM metadata_fts WHERE work_version_id=? "
-                "UNION ALL SELECT 'light',content FROM light_text_fts WHERE work_version_id=? "
-                "UNION ALL SELECT 'analysis',content FROM analysis_fts "
-                "WHERE work_version_id=? ORDER BY 1",
-                (work_version_id, work_version_id, work_version_id),
-            ),
-            rows(
-                "SELECT stage,code,reason,action,retryable FROM current_failures "
-                "WHERE subject_id=? ORDER BY stage",
-                (work_version_id,),
-            ),
-            rows(
-                "SELECT started,result_json FROM batch_targets "
-                "WHERE batch_run_id=? AND target_id=?",
-                (batch_run_id, work_version_id),
-            ),
-            rows(
-                "SELECT state FROM work_version_state_view WHERE work_version_id=?",
-                (work_version_id,),
-            ),
-        )
-
-
 __all__ = (
     "AuthoritySnapshot",
     "ArtifactPublicationFailure",
@@ -268,4 +194,5 @@ __all__ = (
     "authority_snapshot",
     "prepare_completion",
     "publish_completion_submission",
+    "validated_completion",
 )

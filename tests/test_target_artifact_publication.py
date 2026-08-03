@@ -7,15 +7,20 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.literature_store.filesystem import (
+from sciretriever.infrastructure.locking import (
     AdmissionConflictError,
+    LocalAdmissionBindingFactory,
+)
+from sciretriever.infrastructure.storage.files import (
     ArtifactConflictError,
     ArtifactValidationError,
     CoreArtifactReconciler,
     CoreArtifactStore,
-    LocalAdmissionBindingFactory,
 )
-from sciretriever.literature_store.sqlite import create_or_open_catalog
+from sciretriever.infrastructure.storage.sqlite import (
+    SqliteArtifactReferenceReader,
+    create_or_open_catalog,
+)
 from sciretriever.model.assets import ArtifactKind, StagedArtifact
 from sciretriever.model.primitives import RelativeArtifactPath, sha256_digest
 
@@ -180,7 +185,12 @@ class TargetArtifactPublicationTests(unittest.TestCase):
 
     def reconciler(self) -> CoreArtifactReconciler:
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
-        return CoreArtifactReconciler(self.storage, self.catalog, bound.port, bound.identity)
+        return CoreArtifactReconciler(
+            self.storage,
+            SqliteArtifactReferenceReader(self.catalog),
+            bound.port,
+            bound.identity,
+        )
 
     def test_reconciliation_preserves_references_and_ignores_unmanaged_root(self) -> None:
         referenced = self.store.publish(self.artifact(ArtifactKind.PRIMARY_PDF, b"%PDF-shared"))
@@ -198,7 +208,10 @@ class TargetArtifactPublicationTests(unittest.TestCase):
             connection.commit()
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
         result = CoreArtifactReconciler(
-            self.storage, self.catalog, bound.port, bound.identity
+            self.storage,
+            SqliteArtifactReferenceReader(self.catalog),
+            bound.port,
+            bound.identity,
         ).reconcile()
 
         self.assertEqual(result.deleted, (orphan.path,))
@@ -207,7 +220,12 @@ class TargetArtifactPublicationTests(unittest.TestCase):
 
     def test_publication_window_core_write_admission_blocks_reconciliation(self) -> None:
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
-        reconciler = CoreArtifactReconciler(self.storage, self.catalog, bound.port, bound.identity)
+        reconciler = CoreArtifactReconciler(
+            self.storage,
+            SqliteArtifactReferenceReader(self.catalog),
+            bound.port,
+            bound.identity,
+        )
 
         with bound.port.acquire_core_write(bound.identity):
             published = self.store.publish(
@@ -232,7 +250,7 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                     "from sciretriever.model.assets import ArtifactKind,StagedArtifact; "
                     "from sciretriever.model.primitives import "
                     "RelativeArtifactPath,sha256_digest; "
-                    "from sciretriever.literature_store.filesystem import CoreArtifactStore; "
+                    "from sciretriever.infrastructure.storage.files import CoreArtifactStore; "
                     f"data={content!r}; s=CoreArtifactStore(Path({str(self.storage)!r})); "
                     "s.publish(StagedArtifact(kind=ArtifactKind.ANALYSIS,path=RelativeArtifactPath('x'),"
                     "sha256=sha256_digest(data),content=data),"
@@ -248,7 +266,10 @@ class TargetArtifactPublicationTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 73, process.stderr)
         bound = LocalAdmissionBindingFactory().bind_catalog(self.catalog)
         result = CoreArtifactReconciler(
-            self.storage, self.catalog, bound.port, bound.identity
+            self.storage,
+            SqliteArtifactReferenceReader(self.catalog),
+            bound.port,
+            bound.identity,
         ).reconcile()
         self.assertEqual(len(result.deleted), 3)
         staging = self.storage / "core" / ".staging"

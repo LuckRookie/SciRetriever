@@ -7,13 +7,13 @@ from importlib import import_module
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.literature_store.filesystem import (
+from sciretriever.infrastructure.locking import (
     AdmissionBindingError,
     AdmissionConflictError,
     AdmissionOrderError,
     LocalAdmissionBindingFactory,
 )
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CurationStaleError,
     SqliteCollectionRepository,
     SqliteCurationTransaction,
@@ -236,12 +236,12 @@ class TargetStorePortTests(unittest.TestCase):
         self.assertEqual((process.exitcode, queue.get(timeout=1)), (0, "conflict"))
 
     def test_generic_extension_store_surface_is_absent(self) -> None:
-        sqlite = import_module("sciretriever.literature_store.sqlite")
+        sqlite = import_module("sciretriever.infrastructure.storage.sqlite")
 
         self.assertFalse(hasattr(sqlite, "OpaqueExtensionConflictError"))
         self.assertFalse(hasattr(sqlite, "OpaqueExtensionRecordStore"))
         with self.assertRaises(ModuleNotFoundError):
-            import_module("sciretriever.literature_store.sqlite.opaque_extensions")
+            import_module("sciretriever.infrastructure.storage.sqlite.opaque_extensions")
 
 
 if __name__ == "__main__":

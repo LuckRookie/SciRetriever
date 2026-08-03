@@ -8,7 +8,7 @@ from test_target_bibliography_identity import (
     observation,
 )
 
-from sciretriever.literature_store.sqlite import create_or_open_catalog
+from sciretriever.infrastructure.storage.sqlite import create_or_open_catalog
 from sciretriever.model.literature import Identifier, InitialMetadata
 from sciretriever.services.literature.api import prepare_initial_ingest
 

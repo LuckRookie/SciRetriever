@@ -1,3 +1,5 @@
+# noqa: E501  # noqa: SIZE_OK
+# Completion validation scenarios share one publication fixture.
 from __future__ import annotations
 
 import unittest
@@ -11,12 +13,12 @@ from sciretriever.core.literature.acceptance import (
     validate_completion_submission_contract,
 )
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     StalePublicationError,
 )
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.literature import CompletionSubmission, ReferenceMemberFact
 from sciretriever.model.primitives import (
     ReferenceMemberId,
@@ -25,7 +27,11 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.services.literature.api import accept_completion
-from tests.target_completion_support import prepare_completion, publish_completion_submission
+from tests.target_completion_support import (
+    prepare_completion,
+    publish_completion_submission,
+    validated_completion,
+)
 from tests.target_publisher_support import ScenarioFactory
 
 
@@ -230,7 +236,7 @@ class TargetCompletionValidationTests(unittest.TestCase):
             details=CanonicalJsonObject((("changed", True),)),
         )
         with self.assertRaises(StalePublicationError):
-            prepared.publisher.publish_completion(submission, divergent)
+            prepared.publisher.publish_completion(validated_completion(submission, divergent))
 
     def test_transaction_rechecks_resolved_reference_topology(self) -> None:
         prepared = self._prepared()
@@ -263,7 +269,9 @@ class TargetCompletionValidationTests(unittest.TestCase):
             )
             with self.subTest(member=member):
                 with self.assertRaisesRegex(StalePublicationError, "topology"):
-                    prepared.publisher.publish_completion(invalid, prepared.target)
+                    prepared.publisher.publish_completion(
+                        validated_completion(invalid, prepared.target)
+                    )
 
 
 if __name__ == "__main__":

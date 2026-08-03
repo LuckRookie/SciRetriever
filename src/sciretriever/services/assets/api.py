@@ -11,7 +11,16 @@ from sciretriever.core.assets import (
     validate_asset_policy,
     validate_content_acceptance,
 )
+from sciretriever.core.execution import (
+    build_target_result_envelope,
+    validate_content_acceptance_command,
+)
 from sciretriever.model.canonical_json import CanonicalJsonObject
+from sciretriever.model.execution import (
+    ContentAcceptanceCommand,
+    TargetProjection,
+    ValidatedAssetAcceptance,
+)
 from sciretriever.model.primitives import (
     AssetId,
     AssetRole,
@@ -39,6 +48,23 @@ class AssetAcceptancePolicy:
 
     def __post_init__(self) -> None:
         validate_asset_policy(self.min_pdf_bytes, self.max_asset_bytes, self.chunk_size)
+
+
+def accept_content(
+    publisher: AssetAcceptancePublisher,
+    acceptance: asset_models.PrimaryPdfAcceptance | asset_models.SupplementaryAssetAcceptance,
+    target: TargetProjection,
+) -> asset_models.AssetPublication:
+    command = ContentAcceptanceCommand(acceptance=acceptance, target=target)
+    validate_content_acceptance(acceptance)
+    validate_content_acceptance_command(command)
+    return publisher.publish(
+        ValidatedAssetAcceptance(
+            acceptance=acceptance,
+            target=target,
+            target_result=build_target_result_envelope(target),
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +103,7 @@ class ContentAssetService:
         self,
         target: asset_models.ContentTarget,
         role: AssetRole,
+        target_projection: TargetProjection,
     ) -> asset_models.ContentAssetResult:
         if role is AssetRole.PRIMARY_PDF:
             current = decide_primary_current(target)
@@ -108,7 +135,7 @@ class ContentAssetService:
                 else self._acquisition.fallback(request)
             )
             if winner is not None:
-                return self._publish(target, winner, tuple(evidence))
+                return self._publish(target, winner, tuple(evidence), target_projection)
         return asset_models.ContentAssetFailure(
             code="candidates-exhausted", evidence=tuple(evidence)
         )
@@ -118,6 +145,7 @@ class ContentAssetService:
         target: asset_models.ContentTarget,
         accepted: asset_models.AcceptedCandidate,
         evidence: tuple[asset_models.CandidateEvidence, ...],
+        target_projection: TargetProjection,
     ) -> asset_models.ContentAssetResult:
         metadata_hash = target.current_metadata.sha256
         if metadata_hash is None:
@@ -183,7 +211,7 @@ class ContentAssetService:
             case unreachable:
                 assert_never(unreachable)
         validate_content_acceptance(acceptance, target)
-        publication = self._dependencies.publisher.publish(acceptance)
+        publication = accept_content(self._dependencies.publisher, acceptance, target_projection)
         if publication.replayed:
             return asset_models.ContentAssetReplay(
                 asset_id=publication.asset_id,
@@ -204,4 +232,5 @@ __all__ = (
     "AssetServiceDependencies",
     "ContentAssetService",
     "ResolverTier",
+    "accept_content",
 )

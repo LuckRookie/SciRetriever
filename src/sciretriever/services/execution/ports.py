@@ -11,6 +11,7 @@ from sciretriever.model.execution import (
     ProcessBatchScope,
     RecoverableProcessBatch,
     TargetResultEnvelope,
+    TargetStepOutcome,
     TargetStepRequest,
 )
 from sciretriever.model.primitives import (
@@ -105,7 +106,7 @@ class StepProcessor(Protocol):
     @property
     def step(self) -> MissingStep: ...
 
-    def advance(self, request: TargetStepRequest) -> TargetResultEnvelope: ...
+    def advance(self, request: TargetStepRequest) -> TargetStepOutcome: ...
 
 
 class InterruptionPort(Protocol):

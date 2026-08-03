@@ -28,11 +28,14 @@ from sciretriever.core.literature.acceptance import (
     validate_completion_submission_contract,
 )
 from sciretriever.core.literature.state import derive_missing_step, derive_work_version_state
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )
+from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.execution import TargetProjection, TargetResult
 from sciretriever.model.primitives import (
+    BatchRunId,
     MissingStep,
     Sha256,
     WorkVersionState,
@@ -45,6 +48,25 @@ def replace(value, **updates):
         candidate = value.model_copy(update=updates)
         return type(value).model_validate(candidate.model_dump())
     return dataclass_replace(value, **updates)
+
+
+def completion_target() -> TargetProjection:
+    return TargetProjection(
+        batch_run_id=BatchRunId("00000000-0000-0000-0000-000000000099"),
+        work_version_id=VERSION_ID,
+        result=TargetResult(
+            subject_type="work-version",
+            subject_id=str(VERSION_ID),
+            outcome="completed",
+            initial_state="light-text-ready",
+            target_state="completed",
+            final_state="completed",
+            stage="completion",
+            failure=None,
+        ),
+        details=CanonicalJsonObject(()),
+        failure_stages_to_clear=("analysis", "feedback"),
+    )
 
 
 class TargetStateTests(unittest.TestCase):
@@ -212,17 +234,19 @@ class TargetStateTests(unittest.TestCase):
         for candidate in invalid:
             with self.subTest(candidate=candidate), self.assertRaises(CompletionRejectedError):
                 accept_completion(
-                    FakeRepository(light_ready_facts()), publisher, candidate, "target"
+                    FakeRepository(light_ready_facts()), publisher, candidate, completion_target()
                 )
         self.assertEqual(publisher.calls, [])
         self.assertEqual(
             accept_completion(
-                FakeRepository(light_ready_facts()), publisher, submission(), "target"
+                FakeRepository(light_ready_facts()), publisher, submission(), completion_target()
             ),
             "published",
         )
         self.assertEqual(
-            accept_completion(FakeRepository(facts()), publisher, submission(), "target"),
+            accept_completion(
+                FakeRepository(facts()), publisher, submission(), completion_target()
+            ),
             "published",
         )
 

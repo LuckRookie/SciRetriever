@@ -45,8 +45,8 @@ class TargetParsingLlmModelTests(TestCase):
 
     def test_legacy_modules_do_not_define_or_reexport_parser_and_llm_contracts(self) -> None:
         legacy_paths = (
-            SRC / "adapters" / "mineru.py",
-            SRC / "adapters" / "analysis.py",
+            SRC / "infrastructure" / "parsers" / "mineru" / "mineru.py",
+            SRC / "infrastructure" / "llm" / "analysis.py",
         )
         for path in legacy_paths:
             self.assertEqual(
@@ -56,8 +56,8 @@ class TargetParsingLlmModelTests(TestCase):
             )
 
         for module_name in (
-            "sciretriever.adapters.mineru",
-            "sciretriever.adapters.analysis",
+            "sciretriever.infrastructure.parsers.mineru",
+            "sciretriever.infrastructure.llm",
         ):
             module = _module(module_name)
             self.assertEqual(set(module.__dict__) & (PARSING_NAMES | LLM_NAMES), set(), module_name)

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
 import sciretriever.model.assets as asset_models
+from sciretriever.model import execution as execution_models
 from sciretriever.model.access import BoundedByteStream
 
 
@@ -44,7 +45,7 @@ class ArtifactStorePort(Protocol):
 class AssetAcceptancePublisher(Protocol):
     def publish(
         self,
-        acceptance: asset_models.PrimaryPdfAcceptance | asset_models.SupplementaryAssetAcceptance,
+        acceptance: execution_models.ValidatedAssetAcceptance,
     ) -> asset_models.AssetPublication: ...
 
 

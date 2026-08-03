@@ -12,8 +12,8 @@ from tempfile import TemporaryDirectory
 from types import ModuleType
 
 from sciretriever.core.library.curation import CurationPlanError
-from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.locking import LocalAdmissionBindingFactory
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteCurationTransaction,
     SqliteLiteratureRepository,
     create_or_open_catalog,
@@ -543,8 +543,8 @@ class TargetCurationTests(unittest.TestCase):
                 script = f"""
 import os
 from sciretriever.model.primitives import WorkVersionId
-from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.locking import LocalAdmissionBindingFactory
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     SqliteCurationTransaction,
 )

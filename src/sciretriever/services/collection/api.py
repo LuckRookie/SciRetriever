@@ -8,6 +8,7 @@ from uuid import uuid4
 import sciretriever.model.collection as collection_models
 from sciretriever.core.collection import (
     CollectionRuleError,
+    validate_topic_condition_set,
     validated_topic_conditions,
 )
 from sciretriever.model.collection import (
@@ -109,7 +110,10 @@ class CollectionService:
         )
 
     def get(self, collection_id: CollectionId) -> CollectionDefinition | None:
-        return self._dependencies.repository.get_definition(collection_id)
+        definition = self._dependencies.repository.get_definition(collection_id)
+        if definition is not None and definition.topic_conditions is not None:
+            validate_topic_condition_set(definition.topic_conditions)
+        return definition
 
     def run_topic(
         self,

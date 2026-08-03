@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Protocol, TypeVar
 
+from sciretriever.model.execution import ValidatedCompletionAcceptance
 from sciretriever.model.literature import (
-    CompletionSubmission,
     IdentityCandidateQuery,
     IdentityCandidateSet,
     IdentityRecord,
@@ -32,14 +32,11 @@ class CompletionFactsRepository(Protocol):
     def get_version_facts(self, version_id: WorkVersionId) -> VersionFacts | None: ...
 
 
-ProjectionT = TypeVar("ProjectionT", contravariant=True)
 ResultT = TypeVar("ResultT", covariant=True)
 
 
-class CompletionPublisher(Protocol[ProjectionT, ResultT]):
-    def publish_completion(
-        self, validated_submission: CompletionSubmission, target_projection: ProjectionT
-    ) -> ResultT: ...
+class CompletionPublisher(Protocol[ResultT]):
+    def publish_completion(self, acceptance: ValidatedCompletionAcceptance) -> ResultT: ...
 
 
 __all__ = (

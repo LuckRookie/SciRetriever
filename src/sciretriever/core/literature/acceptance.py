@@ -12,7 +12,7 @@ from sciretriever.model.literature import CompletionSubmission, VersionFacts
 from sciretriever.model.primitives import WorkVersionState
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class CompletionRejectedError(Exception):
     reason: str
 
@@ -24,12 +24,12 @@ def validate_completion_submission(
     facts: VersionFacts,
     submission: CompletionSubmission,
 ) -> None:
+    validate_completion_submission_contract(submission)
     state = derive_work_version_state(facts)
     if state is WorkVersionState.COMPLETED:
         return
     if state is not WorkVersionState.LIGHT_TEXT_READY:
         raise CompletionRejectedError("work version is not ready for completion")
-    validate_completion_submission_contract(submission)
     _validate_light_input(facts, submission)
     _validate_metadata_revision(facts, submission)
 

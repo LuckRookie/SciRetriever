@@ -6,7 +6,7 @@ from target_citation_fixture import CitationCollectionTestCase, FakeCitationPort
 from test_target_collection import FakeMetadataPort, observation
 
 import sciretriever.services.collection as collection_package
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     SqliteLiteratureRepository,
 )

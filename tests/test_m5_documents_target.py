@@ -17,17 +17,18 @@ from target_light_document_support import (
     pdf_bytes,
 )
 
-from sciretriever.adapters.mineru import (
-    MinerUServiceBounds,
-    OperatorManagedMinerUAdapter,
-)
-from sciretriever.adapters.mineru_archive import MinerUArchiveAdapter, MinerUArchiveBounds
 from sciretriever.core.documents import (
     LightDocumentError,
     document_bytes,
     validate_light_document,
 )
-from sciretriever.literature_store.filesystem import CoreArtifactStore
+from sciretriever.infrastructure.parsers.mineru import (
+    MinerUArchiveAdapter,
+    MinerUArchiveBounds,
+    MinerUServiceBounds,
+    OperatorManagedMinerUAdapter,
+)
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
 from sciretriever.model.assets import AssetPublication, PublishedArtifact, StagedArtifact
 from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.documents import (
@@ -35,7 +36,11 @@ from sciretriever.model.documents import (
     LightDocumentBounds,
     LightPublicationTarget,
 )
-from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection, TargetResult
+from sciretriever.model.execution import (
+    TargetProjection,
+    TargetResult,
+    ValidatedDocumentAcceptance,
+)
 from sciretriever.model.parsing import ManifestBlock, ParserRequest, ParserResult
 from sciretriever.model.primitives import (
     BatchRunId,
@@ -64,9 +69,9 @@ class M5DocumentsTargetTests(unittest.TestCase):
             return modules
 
         service_imports = imports(root / "services" / "documents" / "api.py")
-        adapter_imports = imports(root / "adapters" / "mineru.py") | imports(
-            root / "adapters" / "mineru_archive.py"
-        )
+        adapter_imports = imports(
+            root / "infrastructure" / "parsers" / "mineru" / "mineru.py"
+        ) | imports(root / "infrastructure" / "parsers" / "mineru" / "mineru_archive.py")
         core_source = "".join(
             path.read_text(encoding="utf-8")
             for path in sorted((root / "core" / "documents").glob("*.py"))
@@ -114,8 +119,8 @@ class M5DocumentsTargetTests(unittest.TestCase):
                 raise AssertionError("store must not be called")
 
         class Publisher:
-            def publish(self, command: ContentAcceptanceCommand) -> AssetPublication | None:
-                del command
+            def publish(self, acceptance: ValidatedDocumentAcceptance) -> AssetPublication | None:
+                del acceptance
                 raise AssertionError("publisher must not be called")
 
         pdf = pdf_bytes()
@@ -138,11 +143,11 @@ class M5DocumentsTargetTests(unittest.TestCase):
 
         class Publisher:
             def __init__(self) -> None:
-                self.command: ContentAcceptanceCommand | None = None
+                self.command: ValidatedDocumentAcceptance | None = None
 
-            def publish(self, command: ContentAcceptanceCommand) -> AssetPublication | None:
+            def publish(self, acceptance: ValidatedDocumentAcceptance) -> AssetPublication | None:
                 events.append("catalog")
-                self.command = command
+                self.command = acceptance
                 return None
 
         pdf = pdf_bytes()

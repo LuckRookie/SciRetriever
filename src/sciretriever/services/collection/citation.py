@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from sciretriever.core.collection import (
-    CollectionAcceptanceConflict,
     CollectionRuleError,
     validate_citation_collection_request,
     validate_collection_acceptance,
@@ -31,6 +30,7 @@ from sciretriever.model.sources import CitationDiscoveryRequest
 from .citation_evidence import citation_evidence, membership, seed_acceptance
 from .citation_progress import CitationProgress
 from .citation_source import discover_source
+from .errors import CollectionAcceptanceConflict
 from .membership import existing_work_ids
 from .ports import CollectionUseCaseDependencies
 from .run_finalization import CollectionRunFinalizer

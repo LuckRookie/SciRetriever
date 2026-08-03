@@ -7,8 +7,8 @@ from target_light_document_support import document_value, manifest_blocks, parse
 from target_publisher_support import ScenarioFactory
 
 from sciretriever.core.documents import validate_light_document
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     ContentAcceptancePublisher,
     open_read_only_snapshot,
 )

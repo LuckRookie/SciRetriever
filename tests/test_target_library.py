@@ -6,8 +6,8 @@ from uuid import uuid4
 from pydantic import ValidationError
 from target_completion_support import prepare_completion, publish_completion_submission
 
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLibraryReadRepository,
     SqliteLiteratureRepository,
     create_or_open_catalog,

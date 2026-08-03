@@ -19,7 +19,6 @@ from target_completion_support import (
 )
 from target_publisher_support import ScenarioFactory
 
-from sciretriever.adapters.analysis import AnalysisAdapterError
 from sciretriever.core.analysis import (
     AnalysisValidationError,
     analysis_bytes,
@@ -27,8 +26,9 @@ from sciretriever.core.analysis import (
     validate_analysis_text,
 )
 from sciretriever.core.literature.acceptance import CompletionRejectedError
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.llm import AnalysisAdapterError
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     SqliteLiteratureRepository,
 )

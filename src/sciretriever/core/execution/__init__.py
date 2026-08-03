@@ -8,6 +8,8 @@ from sciretriever.model.execution import (
     ImportAcceptanceCommand,
     ImportRecordProjection,
     TargetProjection,
+    TargetResult,
+    TargetResultEnvelope,
 )
 from sciretriever.model.primitives import WorkVersionId
 
@@ -33,13 +35,18 @@ def canonical_target_projection(target: TargetProjection) -> bytes:
     return canonical_json_bytes(target_projection_canonical(target))
 
 
+def build_target_result_envelope(target: TargetProjection) -> TargetResultEnvelope:
+    _validate_result_discriminator(target.details)
+    return TargetResultEnvelope(result=target.result, details=target.details)
+
+
 def target_projection_canonical(target: TargetProjection) -> CanonicalJsonObject:
     _validate_result_discriminator(target.details)
     return CanonicalJsonObject(
         (
             ("batch_run_id", str(target.batch_run_id)),
             ("work_version_id", str(target.work_version_id)),
-            ("result", target.result.outcome),
+            ("result", _target_result_canonical(target.result)),
             ("details", target.details),
             (
                 "failure_stages_to_clear",
@@ -67,6 +74,8 @@ def validate_target_alignment(
 ) -> None:
     if target.work_version_id != expected_work_version_id:
         raise ExecutionRejectedError("target and owner must share one WorkVersion")
+    if target.result.subject_type != "work-version":
+        raise ExecutionRejectedError("target result subject must be a WorkVersion")
     if target.result.subject_id != str(target.work_version_id):
         raise ExecutionRejectedError("target result subject must match target WorkVersion")
 
@@ -94,14 +103,52 @@ def validate_content_acceptance_command(command: ContentAcceptanceCommand) -> No
     validate_target_alignment(command.target, acceptance.work_version_id)
 
 
-def validate_completion_target(target: TargetProjection) -> None:
-    validate_target_alignment(target, target.work_version_id)
+def validate_completion_target(
+    target: TargetProjection,
+    expected_work_version_id: WorkVersionId,
+) -> None:
+    validate_target_alignment(target, expected_work_version_id)
+    _validate_result_discriminator(target.details)
     if target.result.outcome != "completed":
         raise ExecutionRejectedError("completion target result must be completed")
+    if target.result.target_state != "completed" or target.result.final_state != "completed":
+        raise ExecutionRejectedError("completion target states must be completed")
+    if target.result.stage != "completion":
+        raise ExecutionRejectedError("completion target stage must be completion")
     if target.result.failure is not None:
         raise ExecutionRejectedError("completed target must not contain a failure")
     if target.failure_stages_to_clear != ("analysis", "feedback"):
         raise ExecutionRejectedError("completion may clear only analysis and feedback failures")
+
+
+def _target_result_canonical(result: TargetResult) -> CanonicalJsonObject:
+    failure = result.failure
+    return CanonicalJsonObject(
+        (
+            ("subject_type", result.subject_type),
+            ("subject_id", result.subject_id),
+            ("outcome", result.outcome),
+            ("initial_state", result.initial_state),
+            ("target_state", result.target_state),
+            ("final_state", result.final_state),
+            ("stage", result.stage),
+            (
+                "failure",
+                None
+                if failure is None
+                else CanonicalJsonObject(
+                    (
+                        ("stage", failure.stage),
+                        ("code", failure.code),
+                        ("reason", failure.reason),
+                        ("action", failure.action),
+                        ("retryable", failure.retryable),
+                        ("updated_at", str(failure.updated_at)),
+                    )
+                ),
+            ),
+        )
+    )
 
 
 def _validate_result_discriminator(details: CanonicalJsonObject) -> None:
@@ -111,6 +158,7 @@ def _validate_result_discriminator(details: CanonicalJsonObject) -> None:
 
 __all__ = (
     "ExecutionRejectedError",
+    "build_target_result_envelope",
     "canonical_import_record_projection",
     "canonical_target_projection",
     "derive_process_batch_status",

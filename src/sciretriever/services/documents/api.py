@@ -9,10 +9,18 @@ from sciretriever.core.documents import (
     validate_light_document_acceptance,
 )
 from sciretriever.core.documents.validation import LightDocumentError
+from sciretriever.core.execution import (
+    build_target_result_envelope,
+    validate_content_acceptance_command,
+)
 from sciretriever.model import assets as asset_models
 from sciretriever.model import documents as document_models
 from sciretriever.model.canonical_json import CanonicalJsonObject, parse_canonical_json
-from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection
+from sciretriever.model.execution import (
+    ContentAcceptanceCommand,
+    TargetProjection,
+    ValidatedDocumentAcceptance,
+)
 from sciretriever.model.parsing import ParserRequest, ParserResult
 from sciretriever.model.primitives import (
     AssetId,
@@ -30,6 +38,23 @@ class DocumentServiceDependencies:
     store: DocumentArtifactStorePort
     publisher: DocumentAcceptancePort
     bounds: document_models.LightDocumentBounds = document_models.LightDocumentBounds()
+
+
+def accept_document(
+    publisher: DocumentAcceptancePort,
+    acceptance: document_models.LightDocumentAcceptance,
+    projection: TargetProjection,
+) -> None:
+    command = ContentAcceptanceCommand(acceptance=acceptance, target=projection)
+    validate_light_document_acceptance(acceptance)
+    validate_content_acceptance_command(command)
+    publisher.publish(
+        ValidatedDocumentAcceptance(
+            acceptance=acceptance,
+            target=projection,
+            target_result=build_target_result_envelope(projection),
+        )
+    )
 
 
 class LightDocumentService:
@@ -75,10 +100,7 @@ class LightDocumentService:
             document=value,
             provenance=self._provenance(result, target),
         )
-        validate_light_document_acceptance(acceptance)
-        self._dependencies.publisher.publish(
-            ContentAcceptanceCommand(acceptance=acceptance, target=projection)
-        )
+        accept_document(self._dependencies.publisher, acceptance, projection)
         return document_models.LightDocumentPublication(
             document_id=acceptance.document_id,
             artifact_id=acceptance.artifact_id,
@@ -125,4 +147,4 @@ class LightDocumentService:
         )
 
 
-__all__ = ("DocumentServiceDependencies", "LightDocumentService")
+__all__ = ("DocumentServiceDependencies", "LightDocumentService", "accept_document")

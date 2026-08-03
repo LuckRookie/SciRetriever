@@ -13,14 +13,14 @@ from target_content_assets_support import (
     stream,
 )
 
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import (
     ContentAcceptancePublisher,
     StalePublicationError,
     create_or_open_catalog,
     open_read_only_snapshot,
 )
+from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import ContentAssetSuccess, ContentTarget
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.execution import TargetProjection, TargetResult
@@ -79,7 +79,7 @@ class TargetContentPublicationTests(unittest.TestCase):
         )
         first = self._service(
             factory.root / "storage", publisher, first_projection, "first", body
-        ).accept(content_target, AssetRole.PRIMARY_PDF)
+        ).accept(content_target, AssetRole.PRIMARY_PDF, first_projection)
         assert isinstance(first, ContentAssetSuccess)
 
         second_work_id = WorkId(str(uuid4()))
@@ -124,7 +124,9 @@ class TargetContentPublicationTests(unittest.TestCase):
             self._projection(second_batch, second_version_id),
             "second",
             body,
-        ).accept(second_target, AssetRole.PRIMARY_PDF)
+        ).accept(
+            second_target, AssetRole.PRIMARY_PDF, self._projection(second_batch, second_version_id)
+        )
 
         assert isinstance(second, ContentAssetSuccess)
         self.assertEqual(second.asset_id, first.asset_id)
@@ -196,9 +198,13 @@ class TargetContentPublicationTests(unittest.TestCase):
             second_body,
         )
 
-        first.accept(content_target, AssetRole.PRIMARY_PDF)
+        first.accept(content_target, AssetRole.PRIMARY_PDF, projection)
         with self.assertRaises(StalePublicationError):
-            second.accept(content_target, AssetRole.PRIMARY_PDF)
+            second.accept(
+                content_target,
+                AssetRole.PRIMARY_PDF,
+                projection.model_copy(update={"batch_run_id": second_batch}),
+            )
 
         second_hash = sha256_digest(second_body)
         self.assertTrue(

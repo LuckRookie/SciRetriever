@@ -9,8 +9,8 @@ from pathlib import Path
 from PyPDF2 import PdfWriter
 from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from sciretriever.literature_store.filesystem import CoreArtifactStore
-from sciretriever.literature_store.sqlite import ContentAcceptancePublisher
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
+from sciretriever.infrastructure.storage.sqlite import ContentAcceptancePublisher
 from sciretriever.model.access import BoundedByteStream, Header
 from sciretriever.model.assets import (
     AcceptedContentReference,
@@ -23,8 +23,9 @@ from sciretriever.model.assets import (
     SupplementaryAssetAcceptance,
 )
 from sciretriever.model.execution import (
-    ContentAcceptanceCommand,
     TargetProjection,
+    ValidatedAssetAcceptance,
+    ValidatedDocumentAcceptance,
 )
 from sciretriever.model.literature import Identifier, UnifiedMetadataSnapshot
 from sciretriever.model.primitives import (
@@ -204,16 +205,20 @@ class RecordingPublisher:
     def __init__(self, events: list[str], projection: TargetProjection) -> None:
         self.events = events
         self.projection = projection
-        self.commands: list[ContentAcceptanceCommand] = []
+        self.commands: list[ValidatedAssetAcceptance | ValidatedDocumentAcceptance] = []
 
-    def publish(self, acceptance: AssetAcceptance) -> AssetPublication:
+    def publish(
+        self, acceptance: ValidatedAssetAcceptance | ValidatedDocumentAcceptance
+    ) -> AssetPublication:
         self.events.append("catalog")
-        self.commands.append(
-            ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
-        )
+        self.commands.append(acceptance)
+        if isinstance(acceptance, ValidatedAssetAcceptance):
+            value = acceptance.acceptance
+        else:
+            raise AssertionError("document acceptance is not an asset publication")
         return AssetPublication(
-            asset_id=acceptance.artifact_id,
-            relation_id=acceptance.relation_id,
+            asset_id=value.artifact_id,
+            relation_id=value.relation_id,
             replayed=False,
         )
 
@@ -223,10 +228,10 @@ class ProjectedPublisher:
     publisher: ContentAcceptancePublisher
     projection: TargetProjection
 
-    def publish(self, acceptance: AssetAcceptance) -> AssetPublication:
-        result = self.publisher.publish(
-            ContentAcceptanceCommand(acceptance=acceptance, target=self.projection)
-        )
+    def publish(
+        self, acceptance: ValidatedAssetAcceptance | ValidatedDocumentAcceptance
+    ) -> AssetPublication:
+        result = self.publisher.publish(acceptance)
         assert result is not None
         return result
 

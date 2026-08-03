@@ -14,9 +14,13 @@ from target_light_document_support import (
     pdf_bytes,
 )
 
-from sciretriever.adapters.mineru import MinerUServiceBounds, OperatorManagedMinerUAdapter
-from sciretriever.adapters.mineru_archive import MinerUArchiveAdapter, MinerUArchiveBounds
 from sciretriever.core.documents import LightDocumentError, validate_light_document
+from sciretriever.infrastructure.parsers.mineru import (
+    MinerUArchiveAdapter,
+    MinerUArchiveBounds,
+    MinerUServiceBounds,
+    OperatorManagedMinerUAdapter,
+)
 from sciretriever.model.canonical_json import CanonicalJsonInput
 from sciretriever.model.documents import LightDocumentBounds, ParagraphBlock
 from sciretriever.model.parsing import ParserTask, ParserTaskState

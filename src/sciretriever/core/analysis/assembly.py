@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sciretriever.core.execution import validate_completion_target, validate_target_alignment
+from sciretriever.core.execution import validate_completion_target
 from sciretriever.core.literature.acceptance import validate_completion_submission_contract
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
 from sciretriever.model import analysis as analysis_models
@@ -161,8 +161,7 @@ def assemble_completion_submission(
     target_projection: TargetProjection,
     artifact: PublishedArtifact,
 ) -> CompletionSubmission:
-    validate_target_alignment(target_projection, target.work_version_id)
-    validate_completion_target(target_projection)
+    validate_completion_target(target_projection, target.work_version_id)
     proposal_content = analysis_bytes(proposal)
     validate_analysis_artifact(artifact, proposal_content)
     proposal_hash = sha256_digest(proposal_content)

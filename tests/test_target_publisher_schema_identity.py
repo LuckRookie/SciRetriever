@@ -8,12 +8,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     UnsupportedCatalogError,
     create_or_open_catalog,
     validate_catalog,
 )
+from sciretriever.kernel import CanonicalJsonObject
 
 
 class TargetPublisherSchemaIdentityTests(unittest.TestCase):

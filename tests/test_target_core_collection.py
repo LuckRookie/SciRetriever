@@ -200,7 +200,6 @@ class TargetCoreCollectionTests(unittest.TestCase):
         self._reject(pc.validate_collection_acceptance, invalid_work)
         self._reject(pc.validate_collection_acceptance, invalid_membership)
         self._reject(pc.validate_existing_collection_acceptance, invalid_run)
-        self.assertTrue(issubclass(pc.CollectionAcceptanceConflict, Exception))
 
 
 if __name__ == "__main__":

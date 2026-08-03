@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 
 from test_target_collection import FakeMetadataPort, observation
 
-from sciretriever.literature_store.filesystem import LocalAdmissionBindingFactory
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.locking import LocalAdmissionBindingFactory
+from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     SqliteCollectionRepository,
     SqliteLiteratureRepository,

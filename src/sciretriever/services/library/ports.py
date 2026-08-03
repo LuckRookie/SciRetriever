@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Protocol
 
-from sciretriever.model.execution import ImportAcceptanceCommand
+from sciretriever.model.execution import ValidatedImportAcceptance
 from sciretriever.model.library import (
     CurationCommit,
     CurationTopology,
@@ -19,7 +19,13 @@ from sciretriever.model.library_details import (
 )
 from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
 from sciretriever.model.library_query import QueryFilterV1
-from sciretriever.model.primitives import BibliographyFormat, CollectionId, WorkId, WorkVersionId
+from sciretriever.model.primitives import (
+    BibliographyFormat,
+    CollectionId,
+    RelativeArtifactPath,
+    WorkId,
+    WorkVersionId,
+)
 from sciretriever.model.record import (
     ExportEncodingResult,
     ImportedBibliographicRecord,
@@ -78,12 +84,16 @@ class GuardedArtifactReconciler(Protocol):
     def reconcile_guarded(self) -> None: ...
 
 
+class ArtifactReferenceReader(Protocol):
+    def referenced_artifact_paths(self) -> tuple[RelativeArtifactPath, ...]: ...
+
+
 class ImportIdentityPort(Protocol):
     def prepare_import(self, request: ImportPreparationRequest) -> ImportIdentityResolution: ...
 
 
 class ImportAcceptancePublisher(Protocol):
-    def publish(self, command: ImportAcceptanceCommand) -> None: ...
+    def publish(self, acceptance: ValidatedImportAcceptance) -> None: ...
 
 
 class BinaryInput(Protocol):
@@ -130,6 +140,7 @@ __all__ = (
     "CoreWriteGuard",
     "AtomicOutputContext",
     "AtomicOutputPort",
+    "ArtifactReferenceReader",
     "BibliographyCodec",
     "BinaryInput",
     "BinaryOutput",

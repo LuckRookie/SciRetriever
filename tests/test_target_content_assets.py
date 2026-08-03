@@ -19,7 +19,7 @@ from target_content_assets_support import (
     target,
 )
 
-from sciretriever.adapters.acquisition import CandidateRace
+from sciretriever.infrastructure.access.racing import CandidateRace
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.access import BoundedByteStream
 from sciretriever.model.assets import (
@@ -94,6 +94,7 @@ class TargetContentAssetTests(unittest.TestCase):
             "AssetServiceDependencies",
             "ContentAssetService",
             "ResolverTier",
+            "accept_content",
         )
         import sciretriever.services.assets as assets_package
         from sciretriever.services.assets import api as assets_api
@@ -114,7 +115,7 @@ class TargetContentAssetTests(unittest.TestCase):
             (ResolverTier("first", (Resolver((first,)),), True),), {first.locator: stream(pdf())}
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         self.assertEqual(self.events, ["file", "catalog"])
@@ -131,7 +132,7 @@ class TargetContentAssetTests(unittest.TestCase):
             },
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
 
@@ -158,7 +159,7 @@ class TargetContentAssetTests(unittest.TestCase):
                     (ResolverTier("first", (Resolver((item,)),), False),),
                     {item.locator: stream(body)},
                 )
-                result = service.accept(target(), AssetRole.PRIMARY_PDF)
+                result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
                 self.assertIsInstance(result, ContentAssetFailure)
                 assert isinstance(result, ContentAssetFailure)
                 self.assertEqual(result.code, "candidates-exhausted")
@@ -182,7 +183,7 @@ class TargetContentAssetTests(unittest.TestCase):
             },
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)
@@ -204,8 +205,10 @@ class TargetContentAssetTests(unittest.TestCase):
             (ResolverTier("first", (Resolver((item,)),), False),), {item.locator: stream(body)}
         )
 
-        replay = service.accept(target(current=current), AssetRole.PRIMARY_PDF)
-        replacement = service.accept(target(current=current), AssetRole.PRIMARY_PDF)
+        replay = service.accept(target(current=current), AssetRole.PRIMARY_PDF, self.projection)
+        replacement = service.accept(
+            target(current=current), AssetRole.PRIMARY_PDF, self.projection
+        )
 
         self.assertIsInstance(replay, ContentAssetReplay)
         self.assertIsInstance(replacement, ContentAssetReplay)
@@ -219,7 +222,7 @@ class TargetContentAssetTests(unittest.TestCase):
             {item.locator: stream(xml, "application/xml")},
         )
 
-        result = service.accept(target(), AssetRole.XML)
+        result = service.accept(target(), AssetRole.XML, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         self.assertEqual(self.publisher.commands[0].target, self.projection)
@@ -241,7 +244,7 @@ class TargetContentAssetTests(unittest.TestCase):
             AssetAcceptancePolicy(min_pdf_bytes=300),
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)

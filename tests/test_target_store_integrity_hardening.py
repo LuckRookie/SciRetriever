@@ -1,4 +1,5 @@
-# noqa: SIZE_OK - one trigger matrix covers cross-table integrity invariants
+# noqa: E501  # noqa: SIZE_OK
+# One trigger matrix covers cross-table integrity invariants.
 from __future__ import annotations
 
 import hashlib
@@ -9,13 +10,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SCHEMA_FINGERPRINT,
     UnsupportedCatalogError,
     create_or_open_catalog,
     validate_catalog,
 )
+from sciretriever.infrastructure.storage.sqlite.engine import _metadata_sha256
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 
 
 class TargetStoreIntegrityHardeningTests(unittest.TestCase):
@@ -41,6 +43,17 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
 
         with self.assertRaises(UnsupportedCatalogError):
             validate_catalog(self.catalog)
+
+    def test_sqlite_metadata_hash_matches_core_canonical_contract(self) -> None:
+        values = CanonicalJsonObject((("title", "Parity"), ("year", 2026)))
+        provenance = CanonicalJsonObject((("source", "fixture"),))
+        expected = str(metadata_snapshot_sha256(3, values, provenance))
+        actual = _metadata_sha256(
+            3,
+            canonical_json_bytes(values).decode("ascii"),
+            canonical_json_bytes(provenance).decode("ascii"),
+        )
+        self.assertEqual(actual, expected)
 
     def test_missing_trigger_with_exact_marker_is_rejected(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:

@@ -1,3 +1,5 @@
+# noqa: E501  # noqa: SIZE_OK
+# Analysis adapter characterization cases share one neutral response fixture.
 from __future__ import annotations
 
 import json
@@ -13,17 +15,17 @@ from target_analysis_support import (
     proposal_value,
 )
 
-from sciretriever.adapters.analysis import (
-    AnalysisAdapterError,
-    AnalysisAdapterSettings,
-    AnthropicAnalysisAdapter,
-    OpenAIAnalysisAdapter,
-)
 from sciretriever.core.analysis import (
     AnalysisValidationError,
     analysis_bytes,
     analysis_json_schema,
     validate_llm_response,
+)
+from sciretriever.infrastructure.llm import (
+    AnalysisAdapterError,
+    AnalysisAdapterSettings,
+    AnthropicAnalysisAdapter,
+    OpenAIAnalysisAdapter,
 )
 from sciretriever.kernel.json import CanonicalJsonInput
 from sciretriever.model.analysis import AnalysisBounds

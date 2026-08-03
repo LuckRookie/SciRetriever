@@ -4,13 +4,13 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     ImportAcceptancePublisher,
     SqliteLibraryReadRepository,
     StalePublicationError,
     create_or_open_catalog,
 )
-from sciretriever.literature_store.sqlite.engine import open_read_only_snapshot
+from sciretriever.infrastructure.storage.sqlite.engine import open_read_only_snapshot
 from sciretriever.model.execution import ImportAcceptanceCommand
 from sciretriever.model.library import ExportSelectionRequest
 from sciretriever.model.library_details import WorkVersionDetail
@@ -23,6 +23,7 @@ from sciretriever.services.library import (
 from sciretriever.services.library import (
     LibraryExportSelectionPort,
     LibraryReadPort,
+    accept_import,
 )
 from tests.target_library_support import LibraryCase
 from tests.target_publisher_support import ScenarioFactory
@@ -67,7 +68,7 @@ class M7LibrarySqliteTests(LibraryCase):
         self.assertIs(read_port, selection_port)
         request = ExportSelectionRequest(filters=QueryFilterV1(), all_versions=False)
         with patch(
-            "sciretriever.literature_store.sqlite.library_repository.open_read_only_snapshot",
+            "sciretriever.infrastructure.storage.sqlite.library_repository.open_read_only_snapshot",
             wraps=open_read_only_snapshot,
         ) as snapshots:
             candidates = selection_port.select_snapshot(request)
@@ -91,10 +92,10 @@ class M7LibrarySqliteTests(LibraryCase):
         assert isinstance(scenario.command, ImportAcceptanceCommand)
         publisher: ImportAcceptancePublisherPort = ImportAcceptancePublisher(scenario.path)
 
-        publisher.publish(scenario.command)
+        accept_import(publisher, scenario.command)
 
         with self.assertRaises(StalePublicationError):
-            publisher.publish(scenario.command)
+            accept_import(publisher, scenario.command)
 
 
 if __name__ == "__main__":

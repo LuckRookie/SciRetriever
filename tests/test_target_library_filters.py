@@ -5,7 +5,10 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from sciretriever.literature_store.sqlite import SqliteLibraryReadRepository, create_or_open_catalog
+from sciretriever.infrastructure.storage.sqlite import (
+    SqliteLibraryReadRepository,
+    create_or_open_catalog,
+)
 from sciretriever.model import library_views
 from sciretriever.model.library_details import WorkVersionDetail
 from sciretriever.model.library_pages import LibraryPageRequest

@@ -4,12 +4,12 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     ContentAcceptancePublisher,
     create_or_open_catalog,
 )
+from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.assets import ArtifactKind, PrimaryPdfAcceptance
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.documents import LightDocumentAcceptance

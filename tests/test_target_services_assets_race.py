@@ -20,7 +20,7 @@ from target_content_assets_support import (
     target,
 )
 
-from sciretriever.adapters.acquisition import CandidateRace
+from sciretriever.infrastructure.access.racing import CandidateRace
 from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import ContentAssetFailure, ContentAssetReplay, ContentAssetSuccess
 from sciretriever.model.execution import TargetProjection, TargetResult
@@ -85,7 +85,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
         )
         service = self.service((ResolverTier("first", (Resolver((bad, good)),), True),), fetcher)
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         self.assertEqual(len(self.publisher.commands), 1)
@@ -103,7 +103,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
             ControlledFetcher({good.locator: stream(pdf())}),
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)
@@ -127,7 +127,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
         results: list[ContentAssetSuccess | ContentAssetFailure | ContentAssetReplay] = []
 
         def accept() -> None:
-            results.append(service.accept(target(), AssetRole.PRIMARY_PDF))
+            results.append(service.accept(target(), AssetRole.PRIMARY_PDF, self.projection))
             fetcher.service_done.set()
 
         service_thread = threading.Thread(target=accept)
@@ -161,7 +161,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
             (ResolverTier("first", (Resolver((first, second)),), True),), fetcher
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetFailure)
         assert isinstance(result, ContentAssetFailure)
@@ -178,7 +178,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
             cancellable=True,
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetFailure)
         self.assertTrue(fetcher.cancelled.wait(0.2))
@@ -195,7 +195,7 @@ class TargetContentAssetRaceTests(unittest.TestCase):
             (ResolverTier("first", (Resolver((slow_first, fast_second)),), True),), fetcher
         )
 
-        result = service.accept(target(), AssetRole.PRIMARY_PDF)
+        result = service.accept(target(), AssetRole.PRIMARY_PDF, self.projection)
 
         self.assertIsInstance(result, ContentAssetSuccess)
         assert isinstance(result, ContentAssetSuccess)

@@ -1,4 +1,9 @@
-from .api import LiteratureService, accept_completion, prepare_initial_ingest
+from .api import (
+    CompletionAcceptanceService,
+    LiteratureService,
+    accept_completion,
+    prepare_initial_ingest,
+)
 from .ports import (
     CompletionFactsRepository,
     CompletionPublisher,
@@ -7,6 +12,7 @@ from .ports import (
 
 __all__ = (
     "CompletionFactsRepository",
+    "CompletionAcceptanceService",
     "CompletionPublisher",
     "LiteratureService",
     "LiteratureRepository",

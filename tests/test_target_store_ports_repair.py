@@ -12,12 +12,12 @@ from pydantic import ValidationError
 
 from sciretriever.core.collection import CollectionRuleError, validate_finish_collection_run
 from sciretriever.core.library.curation import CurationPlanError, validate_curation_plan
-from sciretriever.literature_store.filesystem import (
+from sciretriever.infrastructure.locking import (
     AdmissionOrderError,
     FilesystemSafetyError,
     LocalAdmissionBindingFactory,
 )
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteCurationTransaction,
     SqliteLiteratureRepository,
     create_or_open_catalog,

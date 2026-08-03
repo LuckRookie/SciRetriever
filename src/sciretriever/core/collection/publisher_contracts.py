@@ -8,10 +8,6 @@ from sciretriever.model.collection import (
 from .errors import CollectionRuleError
 
 
-class CollectionAcceptanceConflict(Exception):
-    """Signal that a collection acceptance conflicts with an existing fact."""
-
-
 def validate_collection_acceptance(value: CollectionAcceptance) -> None:
     """Validate a new collection membership against its bibliography and evidence."""
     if value.membership.work_id != value.bibliography.work_id:
@@ -36,7 +32,6 @@ def _validate_collection_evidence(
 
 
 __all__ = (
-    "CollectionAcceptanceConflict",
     "validate_collection_acceptance",
     "validate_existing_collection_acceptance",
 )

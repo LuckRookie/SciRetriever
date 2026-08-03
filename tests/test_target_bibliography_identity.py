@@ -1,3 +1,5 @@
+# noqa: E501  # noqa: SIZE_OK
+# Identity characterization scenarios share one catalog fixture.
 from __future__ import annotations
 
 import os
@@ -6,7 +8,7 @@ from itertools import permutations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sciretriever.literature_store.sqlite import (
+from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )

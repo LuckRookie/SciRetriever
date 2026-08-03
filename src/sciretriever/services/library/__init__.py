@@ -1,5 +1,12 @@
-from .api import CurationService, LibraryExchangeService, LibraryService, prepare_import_record
+from .api import (
+    CurationService,
+    LibraryExchangeService,
+    LibraryService,
+    accept_import,
+    prepare_import_record,
+)
 from .ports import (
+    ArtifactReferenceReader,
     AtomicOutputContext,
     AtomicOutputPort,
     BibliographyCodec,
@@ -21,6 +28,7 @@ __all__ = (
     "CoreWriteGuard",
     "AtomicOutputContext",
     "AtomicOutputPort",
+    "ArtifactReferenceReader",
     "BibliographyCodec",
     "BinaryInput",
     "BinaryOutput",
@@ -30,6 +38,7 @@ __all__ = (
     "ImportAcceptancePublisher",
     "ImportIdentityPort",
     "LibraryExchangeService",
+    "accept_import",
     "LibraryExportSelectionPort",
     "LibraryCurationRepository",
     "LibraryReadPort",

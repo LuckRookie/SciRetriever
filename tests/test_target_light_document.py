@@ -18,14 +18,18 @@ from target_light_document_support import (
     pdf_bytes,
 )
 
-from sciretriever.adapters.mineru import MinerUServiceBounds, OperatorManagedMinerUAdapter
-from sciretriever.adapters.mineru_archive import MinerUArchiveAdapter, MinerUArchiveBounds
 from sciretriever.core.documents import (
     LightDocumentError,
     document_bytes,
     validate_light_document,
 )
-from sciretriever.literature_store.filesystem import CoreArtifactStore
+from sciretriever.infrastructure.parsers.mineru import (
+    MinerUArchiveAdapter,
+    MinerUArchiveBounds,
+    MinerUServiceBounds,
+    OperatorManagedMinerUAdapter,
+)
+from sciretriever.infrastructure.storage.files import CoreArtifactStore
 from sciretriever.model import documents as document_models
 from sciretriever.model.assets import AssetPublication, PublishedArtifact, StagedArtifact
 from sciretriever.model.canonical_json import CanonicalJsonInput, CanonicalJsonObject
@@ -33,7 +37,11 @@ from sciretriever.model.documents import (
     LightDocumentBounds,
     LightPublicationTarget,
 )
-from sciretriever.model.execution import ContentAcceptanceCommand, TargetProjection, TargetResult
+from sciretriever.model.execution import (
+    TargetProjection,
+    TargetResult,
+    ValidatedDocumentAcceptance,
+)
 from sciretriever.model.primitives import (
     BatchRunId,
     WorkVersionAssetId,
@@ -143,11 +151,11 @@ class TargetLightDocumentTests(unittest.TestCase):
                 return self._store.publish(artifact)
 
         class Sink:
-            command: ContentAcceptanceCommand | None = None
+            command: ValidatedDocumentAcceptance | None = None
 
-            def publish(self, command: ContentAcceptanceCommand) -> AssetPublication | None:
+            def publish(self, acceptance: ValidatedDocumentAcceptance) -> AssetPublication | None:
                 events.append("catalog")
-                self.command = command
+                self.command = acceptance
                 return None
 
         with TemporaryDirectory(prefix="sciretriever-light-") as directory:

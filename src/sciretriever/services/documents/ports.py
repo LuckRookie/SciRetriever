@@ -23,7 +23,7 @@ class DocumentArtifactStorePort(Protocol):
 
 class DocumentAcceptancePort(Protocol):
     def publish(
-        self, command: execution_models.ContentAcceptanceCommand
+        self, acceptance: execution_models.ValidatedDocumentAcceptance
     ) -> asset_models.AssetPublication | None: ...
 
 
