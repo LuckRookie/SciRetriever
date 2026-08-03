@@ -1,6 +1,5 @@
+# noqa: E501  # noqa: SIZE_OK - cross-contract repair scenarios intentionally share one catalog fixture
 from __future__ import annotations
-
-# noqa: SIZE_OK — cross-contract repair scenarios intentionally share one catalog fixture
 
 import os
 import sqlite3

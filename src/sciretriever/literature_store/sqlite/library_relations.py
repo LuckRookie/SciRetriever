@@ -79,9 +79,7 @@ class _LibraryRelations:
     ) -> tuple[WorkCollectionMembership, ...]:
         collection_clause = "" if collection_id is None else " AND collection_id=?"
         parameters = (
-            (str(work_id),)
-            if collection_id is None
-            else (str(work_id), str(collection_id))
+            (str(work_id),) if collection_id is None else (str(work_id), str(collection_id))
         )
         memberships: list[WorkCollectionMembership] = []
         for membership_id, row_collection_id, run_id in connection.execute(

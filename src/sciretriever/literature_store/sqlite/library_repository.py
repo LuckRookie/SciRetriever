@@ -45,7 +45,6 @@ from sciretriever.model.primitives import (
 
 
 class SqliteLibraryReadRepository(_LibraryRelations):
-
     def search(self, filters: QueryFilterV1, request: LibraryPageRequest) -> LibraryPage:
         with open_read_only_snapshot(self._catalog_path) as connection:
             return search_page(connection, filters, request)
@@ -203,5 +202,6 @@ class SqliteLibraryReadRepository(_LibraryRelations):
             observations=observation_items,
             provenance=(),
         )
+
 
 __all__ = ("SqliteLibraryReadRepository",)

@@ -9,8 +9,13 @@ from sciretriever.model.library_views import (
     TagSetView,
     TagView,
 )
-from sciretriever.model.primitives import ObservationId, ProvenanceId, SourceKind, UtcTimestamp
-from sciretriever.model.primitives import WorkVersionId
+from sciretriever.model.primitives import (
+    ObservationId,
+    ProvenanceId,
+    SourceKind,
+    UtcTimestamp,
+    WorkVersionId,
+)
 from sciretriever.model.sources import Provenance
 
 
@@ -37,8 +42,7 @@ def detail_sets(
         )
     )
     tag_set = connection.execute(
-        "SELECT id,complete FROM tag_sets WHERE work_version_id=? ORDER BY revision DESC "
-        "LIMIT 1",
+        "SELECT id,complete FROM tag_sets WHERE work_version_id=? ORDER BY revision DESC LIMIT 1",
         (str(version_id),),
     ).fetchone()
     tags = (
