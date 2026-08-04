@@ -15,10 +15,25 @@ from sciretriever.infrastructure.locking import (
 )
 from sciretriever.infrastructure.storage.sqlite import (
     SCHEMA_FINGERPRINT,
+    SCHEMA_MANIFEST,
     SCHEMA_TABLES,
     UnsupportedCatalogError,
     create_or_open_catalog,
+    open_read_only_snapshot,
     validate_catalog,
+)
+from sciretriever.infrastructure.storage.sqlite.schema_validation import EXPECTED_SCHEMA_OBJECTS
+
+M9_SCHEMA_FINGERPRINT = "b3fd6d7b1008c7d3aafdd7e5d660d44558a8eb5e90b821c2ba8f709d1bec7704"
+M9_SCHEMA_MANIFEST_COUNT = 74
+M9_EXTENSION_DDL = (
+    "CREATE TABLE opaque_extension_records(namespace TEXT NOT NULL,record_id TEXT NOT NULL,"
+    "revision INTEGER NOT NULL CHECK(revision>=1),payload_sha256 TEXT NOT NULL CHECK(length("
+    "payload_sha256)=64 AND payload_sha256=lower(payload_sha256) AND "
+    "payload_sha256=sciretriever_sha256(payload_json)),payload_json TEXT NOT NULL CHECK("
+    "json_valid(payload_json) AND payload_json=sciretriever_canonical_json(payload_json)),"
+    "PRIMARY KEY(namespace,record_id)) STRICT",
+    "CREATE INDEX idx_extensions_namespace ON opaque_extension_records(namespace,record_id)",
 )
 
 
@@ -46,6 +61,31 @@ class TargetStoreSchemaTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            self.assertNotIn("opaque_extension_records", tables)
+            self.assertNotIn(
+                "idx_extensions_namespace",
+                {
+                    row[1]
+                    for row in connection.execute(
+                        "SELECT type,name FROM sqlite_master WHERE type='index'"
+                    )
+                },
+            )
+
+        self.assertEqual(len(SCHEMA_MANIFEST), 72)
+        self.assertEqual(len(SCHEMA_TABLES), 36)
+        self.assertEqual(len(EXPECTED_SCHEMA_OBJECTS), 87)
+        self.assertEqual(
+            {
+                kind: sum(1 for item in EXPECTED_SCHEMA_OBJECTS if item[0] == kind)
+                for kind in ("index", "table", "trigger", "view")
+            },
+            {"index": 8, "table": 51, "trigger": 22, "view": 6},
+        )
+        self.assertEqual(
+            SCHEMA_FINGERPRINT,
+            "65cc31bc7b411798c141e95fec11409d5814cb54964618c51fdf5acf71b0fa8c",
+        )
 
     def test_existing_validation_is_read_only_and_side_effect_free(self) -> None:
         with create_or_open_catalog(self.catalog):
@@ -82,6 +122,83 @@ class TargetStoreSchemaTests(unittest.TestCase):
             self.assertEqual(after, before)
             self.assertFalse(Path(f"{path}-wal").exists())
             self.assertFalse(Path(f"{path}-shm").exists())
+
+    def test_m9_catalog_is_rejected_without_mutation_or_migration(self) -> None:
+        path = self.root / "m9.sqlite"
+        self._write_m9_catalog(path)
+        self.assertNotEqual(M9_SCHEMA_FINGERPRINT, SCHEMA_FINGERPRINT)
+        before = self._catalog_observation(path)
+
+        for opener in (validate_catalog, create_or_open_catalog, open_read_only_snapshot):
+            with (
+                self.subTest(opener=opener.__name__),
+                self.assertRaisesRegex(
+                    UnsupportedCatalogError,
+                    "catalog schema marker or fingerprint is unsupported",
+                ),
+            ):
+                result = opener(path)
+                if result is not None:
+                    result.__exit__(None, None, None)
+            self.assertEqual(self._catalog_observation(path), before)
+            self.assertEqual(
+                tuple(self.root.glob(f".{path.name}.bootstrap-*.tmp")),
+                (),
+            )
+
+    def _write_m9_catalog(self, path: Path) -> None:
+        with sqlite3.connect(path) as connection:
+            connection.create_function(
+                "sciretriever_canonical_json", 1, lambda payload: payload, deterministic=True
+            )
+            connection.create_function(
+                "sciretriever_sha256", 1, lambda payload: payload, deterministic=True
+            )
+            connection.create_function(
+                "sciretriever_metadata_sha256",
+                3,
+                lambda revision, values, provenance: values,
+                deterministic=True,
+            )
+            connection.execute("PRAGMA foreign_keys=ON")
+            current_manifest = tuple(
+                statement
+                for statement in SCHEMA_MANIFEST
+                if not statement.startswith(
+                    (
+                        "CREATE TABLE opaque_extension_records",
+                        "CREATE INDEX idx_extensions_namespace",
+                    )
+                )
+            )
+            self.assertEqual(len(current_manifest + M9_EXTENSION_DDL), M9_SCHEMA_MANIFEST_COUNT)
+            for statement in current_manifest + M9_EXTENSION_DDL:
+                connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_identity(singleton,product,schema_version,schema_fingerprint) "
+                "VALUES (1,'sciretriever',2,?)",
+                (M9_SCHEMA_FINGERPRINT,),
+            )
+        os.chmod(path, 0o600)
+
+    @staticmethod
+    def _catalog_observation(
+        path: Path,
+    ) -> tuple[int, int, int, int, bytes, tuple[bool, bool, bool]]:
+        stat = path.stat()
+        sidecars = (
+            Path(f"{path}-wal").exists(),
+            Path(f"{path}-shm").exists(),
+            Path(f"{path}-journal").exists(),
+        )
+        return (
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_mode & 0o777,
+            path.read_bytes(),
+            sidecars,
+        )
 
     def test_unsafe_aliases_and_permissions_fail_closed(self) -> None:
         victim = self.root / "victim.sqlite"
@@ -126,13 +243,6 @@ class TargetStoreSchemaTests(unittest.TestCase):
                     "invalid batch type",
                     "INSERT INTO batch_runs(id,batch_type,status,scope_json,counts_json) "
                     "VALUES ('b','other','created','{}','{}')",
-                    (),
-                ),
-                (
-                    "invalid opaque revision",
-                    "INSERT INTO opaque_extension_records("
-                    "namespace,record_id,revision,payload_sha256,payload_json) "
-                    "VALUES ('x','r',0,'" + "b" * 64 + "','{}')",
                     (),
                 ),
             )

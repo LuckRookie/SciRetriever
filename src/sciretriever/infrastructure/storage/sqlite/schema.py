@@ -24,7 +24,6 @@ _INDEX_DDL: Final = (
     "CREATE INDEX idx_assets_version ON work_version_assets(work_version_id,role,id)",
     "CREATE INDEX idx_batch_targets_run ON batch_targets(batch_run_id,input_ordinal,id)",
     "CREATE INDEX idx_failures_subject ON current_failures(subject_kind,subject_id,stage)",
-    "CREATE INDEX idx_extensions_namespace ON opaque_extension_records(namespace,record_id)",
 )
 _TRIGGER_DDL: Final = (
     "CREATE TRIGGER trg_membership_run_collection BEFORE INSERT ON collection_memberships WHEN "
@@ -195,7 +194,6 @@ SCHEMA_TABLES: Final = (
     "batch_counts",
     "current_failures",
     "parser_attempts",
-    "opaque_extension_records",
     "metadata_fts",
     "light_text_fts",
     "analysis_fts",

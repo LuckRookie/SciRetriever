@@ -24,12 +24,6 @@ BATCH_DDL: Final = (
     "work_versions(id) ON DELETE CASCADE,external_task_id TEXT,parser_name TEXT NOT NULL,"
     "input_sha256 TEXT NOT NULL CHECK(length(input_sha256)=64),attempted_at TEXT NOT NULL) "
     "STRICT",
-    "CREATE TABLE opaque_extension_records(namespace TEXT NOT NULL,record_id TEXT NOT NULL,"
-    "revision INTEGER NOT NULL CHECK(revision>=1),payload_sha256 TEXT NOT NULL CHECK(length("
-    "payload_sha256)=64 AND payload_sha256=lower(payload_sha256) AND "
-    "payload_sha256=sciretriever_sha256(payload_json)),payload_json TEXT NOT NULL CHECK("
-    "json_valid(payload_json) AND payload_json=sciretriever_canonical_json(payload_json)),"
-    "PRIMARY KEY(namespace,record_id)) STRICT",
 )
 
 _ASSET_READY: Final = "EXISTS(SELECT 1 FROM accepted_primary_assets p WHERE p.work_version_id=v.id)"

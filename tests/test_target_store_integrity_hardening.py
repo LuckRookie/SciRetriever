@@ -100,57 +100,6 @@ class TargetStoreIntegrityHardeningTests(unittest.TestCase):
                     "VALUES ('version','light-2','analysis-1','metadata','references','tags')"
                 )
 
-    def test_opaque_direct_sql_shape_guards_remain_independent(self) -> None:
-        with create_or_open_catalog(self.catalog) as connection:
-            cases = (
-                (0, "0" * 64, "{}"),
-                (1, "short", "{}"),
-                (1, "A" * 64, "{}"),
-                (1, "0" * 64, '{"b":1,"a":2}'),
-                (1, "0" * 64, '{ "a": 1 }'),
-            )
-            for revision, digest, payload in cases:
-                with (
-                    self.subTest(revision=revision, digest=digest),
-                    self.assertRaises(sqlite3.IntegrityError),
-                ):
-                    connection.execute(
-                        "INSERT INTO opaque_extension_records("
-                        "namespace,record_id,revision,payload_sha256,payload_json) "
-                        "VALUES ('raw',hex(randomblob(16)),?,?,?)",
-                        (revision, digest, payload),
-                    )
-
-    def test_opaque_direct_sql_rejects_wrong_well_shaped_digest(self) -> None:
-        with create_or_open_catalog(self.catalog) as connection:
-            with self.assertRaises(sqlite3.IntegrityError):
-                connection.execute(
-                    "INSERT INTO opaque_extension_records VALUES ('raw','wrong',1,?, '{}')",
-                    ("0" * 64,),
-                )
-        validate_catalog(self.catalog)
-
-    def test_opaque_direct_sql_accepts_exact_digest(self) -> None:
-        digest = hashlib.sha256(b"{}").hexdigest()
-        with create_or_open_catalog(self.catalog) as connection:
-            connection.execute(
-                "INSERT INTO opaque_extension_records VALUES ('raw','correct',1,?, '{}')",
-                (digest,),
-            )
-            connection.commit()
-        validate_catalog(self.catalog)
-
-    def test_opaque_external_connection_without_functions_fails_closed(self) -> None:
-        with create_or_open_catalog(self.catalog):
-            pass
-        digest = hashlib.sha256(b"{}").hexdigest()
-        with sqlite3.connect(self.catalog) as connection:
-            with self.assertRaises(sqlite3.OperationalError):
-                connection.execute(
-                    "INSERT INTO opaque_extension_records VALUES ('raw','external',1,?, '{}')",
-                    (digest,),
-                )
-
     def test_completed_light_hash_cannot_drift(self) -> None:
         with create_or_open_catalog(self.catalog) as connection:
             self._insert_valid_completion(connection)
