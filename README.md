@@ -46,7 +46,7 @@ from sciretriever.services.library import LibraryExchangeService, LibraryService
 from sciretriever.composition import ObjectGraph, build_object_graph, load_configuration
 ```
 
-`build_object_graph` 当前固定组装 `LiteratureService` 和 `LibraryService`。只有调用方提供 secret resolver 时才组装 `AnalysisService`，只有调用方提供 provider dependencies 时才建立 provider registry。其它公开 Service 尚未进入该对象图。
+`build_object_graph` 当前固定组装 `LiteratureService` 和 `LibraryService`。只有调用方提供 secret resolver 时才组装 `AnalysisService`；只有调用方通过 `ProviderDependencies` 注入 metadata、citation、resolver clients 和有界 transport 时才建立 provider registry。其它公开 Service 尚未进入该对象图，registry 也没有连接到 Collection 或 Assets Service。
 
 只有已经由 Composition 连接到 Service 的实现，才构成可运行能力。代码中存在某个 provider 名称、Port、factory 或测试 fake，不代表该外部来源已经作为生产 adapter 对用户开放。
 

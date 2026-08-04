@@ -1,7 +1,7 @@
 [project]
 name = "sciretriever"
 version = "0.1.0"
-description = "Scientific-literature acquisition, cataloging, normalization, and light-structuring system that stops at a versioned, provenance-bearing DocumentPackage; domain-specific extraction is out of scope."
+description = "Scientific-literature database for metadata, assets, light-structured text, domain-neutral analysis, and provenance."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

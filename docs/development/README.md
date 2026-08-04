@@ -5,7 +5,7 @@
 ## 常用入口
 
 - [代码与文档同步映射](documentation-map.md)：代码变化需要同步核对哪些当前文档。
-- [Provider 接入开发手册](provider-integration.md)：新增或实质修改 metadata/acquisition provider、translator 或 browser adapter 时的安全与验收检查。
+- [Provider 接入开发手册](provider-integration.md)：新增或实质修改 metadata、citation 或 asset source client/adapter 时的安全与验收检查。
 - [整体架构](../architecture/README.md)：修改领域边界、数据所有权、持久化或依赖方向前的设计真相源。
 
 ## 验证

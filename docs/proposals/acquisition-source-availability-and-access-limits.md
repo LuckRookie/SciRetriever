@@ -8,15 +8,15 @@ created = "2026-07-28"
 
 ## 1. 提案状态
 
-本文讨论 SciRetriever 当前多种全文来源在真实使用中无法稳定取得主文 PDF，以及如何为下载过程增加符合供应商要求的访问限制。本文是活动提案，不授权实施，不修改当前配置或已发布行为，也不替代项目 README、Provider 注意事项或架构文档。文中的“当前”事实是形成提案时的证据快照，只用于说明问题，不作为当前行为真相源。
+本文源于 2026-07-28 旧实现中多种全文来源无法稳定取得主文 PDF 的问题，讨论未来如何为下载过程增加符合供应商要求的访问限制。本文是活动提案，不授权实施，不修改当前配置或已发布行为，也不替代项目 README、Provider 注意事项或架构文档。带日期的实现事实只作为形成提案时的证据快照，不作为当前行为真相源；当前六层对象图没有可运行的多来源资产获取流程。
 
 本提案只讨论 acquisition。metadata 搜索的分页、并发和限流需要单独评估，不纳入本文建议值。
 
 ## 2. 摘要
 
-SciRetriever 已实现 11 个资产获取入口，其中 10 个声明具有主文 PDF 能力，Springer Nature 当前只提供 XML/HTML。代码覆盖来源数量并不等于真实可用：一次 2026-07-28 的隔离试跑中，开放论文完成了 metadata 入库，但该次 invocation 启用的获取路径耗尽后仍未得到合格主文 PDF，WorkVersion 保持 `ASSET_PENDING`。该试跑没有形成可公开归因的逐来源报告，因此只证明“当次来源组合未成功”，不能证明 11 个入口全部不可用。逐来源判断仍以代码、维护中的 Provider 记录和后续受控验证为准。
+形成本文的 2026-07-28 旧实现曾列出 11 个资产获取入口，其中 10 个声明具有主文 PDF 能力，Springer Nature 只提供 XML/HTML。一次同期隔离试跑中，开放论文完成了 metadata 入库，但当次启用的获取路径耗尽后仍未得到合格主文 PDF，旧状态停留在 `ASSET_PENDING`。该试跑没有形成可公开归因的逐来源报告，因此只证明“当次来源组合未成功”，不能证明 11 个入口全部不可用。
 
-当前系统已有不得低于 30 秒的 acquisition 文献启动间隔、同主机同 catalog 的单 acquisition batch admission 和最终候选主机预算，但还不能完整表达不同来源的官方限制，也不能保证 resolver 查询与随后真正下载 PDF 的请求共享同一主机预算。完整模板中的默认同主机间隔为 0.5 秒、并发为 2；Wiley profile 虽记录了 1 秒间隔，但该值当前只参与新文献启动门，而 Wiley 官方要求下载请求之间间隔 10 秒。30 秒硬下限约束相邻需要 acquisition 的 WorkVersion 启动，仍不能替代逐来源请求规则。Semantic Scholar 和 arXiv 同样缺少明确的专属下载限制。
+当前六层实现只提供通用 source adapter、provider registry、调用方注入的 provider client 合同和 host concurrency primitive。Composition 没有把 provider registry 连接到 `CollectionService` 或 `ContentAssetService`，也没有构造供应商专用 client，因此不存在终端用户可运行的多来源资产获取流程。Schema v2 只表达通用 timeout、provider concurrency、host concurrency 和响应大小上限，没有逐来源请求间隔、周期额度、`Retry-After` 状态或 provider profile。本提案保留旧试跑与供应商规则作为问题证据，但不把已删除的 30 秒启动门、batch admission、profile 或 CLI runtime 写成当前能力。
 
 本提案建议：
 
@@ -32,48 +32,46 @@ SciRetriever 已实现 11 个资产获取入口，其中 10 个声明具有主�
 
 本提案针对当前 PDF-backed analysis 路径讨论来源可用性：`WorkVersion` 只有取得并验证合格的主文 PDF，才能进入该附加分析能力。核心产品需求只要求把受支持资产解析为轻结构化文本；XML/HTML 是否能满足通用解析，不由本提案限制。
 
-第一层 acquisition 会让 direct、出版社、开放来源和显式配置的 Sci-Hub 进行有界竞速；每个来源内部可以返回多个候选。第一层耗尽后才进入 translator 和 browser。所有路径最终都必须通过安全网络、内容验证、文章身份验证和不可变接收。
+当前 `ProviderRegistry` 可以为调用方注入的 `ResolverClient` 建立惰性 asset resolver，并为同一 provider 包装调用方注入的有界 transport。它没有 translator 或 browser 层，当前 Composition 也没有把 registry 连接到资产 Service。若本提案获批，resolver API 请求和最终候选下载都必须经过同一访问政策，随后仍要通过内容验证、文章身份验证和不可变接收。
 
 ### 3.2 来源数量与实际可用性不一致
 
-当前 11 个入口的产品状态如下：
+形成提案时记录的外部能力与历史观察如下。该表不表示当前仓库提供对应 client：
 
-| 来源 | 当前声明能力 | 主要可用条件 | 当前主要风险 |
+| 来源 | 外部能力或历史观察 | 主要可用条件 | 主要风险 |
 |---|---|---|---|
 | Direct HTTPS | 目标资产 | catalog 已有可信 HTTPS 地址 | 最终主机不确定，没有统一供应商规则 |
 | arXiv | 主文 PDF | 有 arXiv identifier | 批量 PDF 访问需要至少 3 秒间隔 |
 | Crossref | 主文 PDF 候选 | Crossref 登记了 PDF link | link 可能需授权、失效或返回 HTML |
 | Unpaywall | 开放主文 PDF 候选 | 配置联系邮箱且存在 OA location | 最终地址分散在不同仓储或出版社 |
 | Europe PMC | 开放主文 PDF | 收录目标且存在开放全文路线 | 当前候选覆盖有限，未找到公开数字限速 |
-| OpenAlex | 主文 PDF 候选 | API 可用且记录提供 PDF URL | 当前实现未接入官方现在建议使用的 key；候选可能失效 |
+| OpenAlex | 主文 PDF 候选 | API 可用且记录提供 PDF URL | 调用方 client 需要处理官方当前要求的 key；候选可能失效 |
 | Semantic Scholar | `openAccessPdf` 主文 PDF | API 可用且记录提供开放 PDF | API key 初始限制为每秒 1 次；匿名请求共享公共额度并可能进一步受限 |
 | Elsevier | 主文/补充 PDF、XML | API key、内容授权和附件 EID 可用 | 真实样本出现外层超时；一个 PDF 需要多次 API 请求 |
-| Wiley | 主文 PDF | TDM token 和内容授权有效 | 官方要求 10 秒请求间隔；当前 profile 的 1 秒只参与文献启动门，不独立约束 Wiley 请求 |
-| Springer Nature | XML、HTML | API key 和对应产品授权有效 | 当前不提供主文 PDF，不能完成资产阶段 |
-| Sci-Hub | 主文 PDF | operator 显式启用并提供获准 endpoint | 无统一官方限速，无 live 验证，默认关闭 |
+| Wiley | 主文 PDF | TDM token 和内容授权有效 | 官方要求 10 秒请求间隔；当前没有供应商专用 client 或访问 profile |
+| Springer Nature | XML、HTML | API key 和对应产品授权有效 | 外部资料不证明主文 PDF 能力，当前也没有具体 client |
+| Sci-Hub | 主文 PDF | operator 显式提供获准 endpoint 与 client | 无统一官方限速，无 live 验证，也没有默认 endpoint 或具体 client |
 
-“已实现”只说明存在代码路径，不证明当前凭据、授权、网络、候选地址和供应商服务可以共同完成下载。后续产品呈现和诊断应避免把这些状态合并为一个简单的 available/unavailable 布尔值。
+表中的能力来自供应商资料或带日期的历史观察，不证明当前凭据、授权、网络、候选地址和供应商服务可以共同完成下载。当前接入状态以 [Provider 注意事项](../notes/providers.md)、Composition wiring、源码和直接测试为准。后续产品呈现和诊断应避免把这些状态合并为一个简单的 available/unavailable 布尔值。
 
 ### 3.3 当前访问限制的缺口
 
-当前完整配置模板采用：
+当前 schema v2 的 `[assets]` 只定义以下通用边界：
 
-- 相邻需要 acquisition 的 WorkVersion 启动间隔默认 30 秒，且不得配置为更低值；
-- 同一主机、同一 catalog 同时只允许一个 acquisition batch；
-- 最多同时运行 3 个 provider；
-- 最终候选下载对所有主机统一使用并发 2、请求启动间隔 0.5 秒；
-- Elsevier profile 记录并发 2、间隔 0.25 秒；
-- Wiley profile 记录并发 1、间隔 1 秒；
-- Springer profile 记录并发 1、间隔 1 秒。
+- provider 选择键；
+- 默认 30 秒的单次 operation timeout；
+- 默认 4 的 provider concurrency；
+- 默认 2 的 host concurrency；
+- 默认 100 MiB 的响应大小上限。
 
-当前运行时没有把 publisher profile 注册为最终候选的逐主机 override。它只取全局主机间隔与 profile 间隔中的较大值，再把结果交给“新文献启动门”；profile 的并发值没有成为对应主机的独立并发限制。30 秒硬下限保证同一 acquisition batch 内相邻适用 WorkVersion 的启动节奏，host-local stage admission 也阻止同一主机、同一 catalog 的第二个 acquisition batch 并行进入，但两者都不能代替逐来源请求限制：同一篇文献内的多个 provider 仍会竞速启动，一个 resolver 内也可能先查询 API、再访问候选文件，不同 catalog 或不同主机的 CLI 进程也不共享该启动门。
+这些字段不是供应商专用访问策略，也没有公开配置模板或命令行覆盖合同。`HostBudgetManager` 提供进程内精确 hostname 并发限制，但当前对象图没有把 provider registry 连接到资产 Service；resolver API 的具体网络行为仍属于调用方注入的 client。当前代码没有逐来源最小间隔、周期额度、`Retry-After` 预算或 provider profile，不能声称已经执行表中的供应商规则。
 
 因此当前模型存在四类缺口：
 
-1. **官方限制未完整建模。** Semantic Scholar、arXiv、Crossref、Unpaywall 等没有独立下载策略；Wiley 现值与官方要求不一致。
-2. **查询和下载可能分属不同主机。** Crossref、Unpaywall、OpenAlex 和 Semantic Scholar 返回的 PDF 可能落在同一家出版社，但当前来源身份不能保证它们共享来源级预算。
-3. **同一来源可能包含多次请求。** Elsevier 先取 FULL XML，再从 Object API 下载 PDF；只限制文献启动不能约束这两个请求的间隔。
-4. **周期额度没有统一表达。** Unpaywall 有每日调用量，Elsevier 有每周额度，OpenAlex 和 Springer 有每日额度或预算，仅靠最小时间间隔不足以表达。
+1. **官方限制未建模。** Semantic Scholar、arXiv、Crossref、Unpaywall 和 Wiley 都没有当前 provider policy。
+2. **来源接口和最终下载分属不同边界。** 调用方注入的 resolver client 可以查询 API，通用 fetcher 再访问候选地址，二者没有共享的来源与主机预算合同。
+3. **同一来源可能包含多次请求。** Elsevier 等来源可能先查询元数据或附件，再下载文件，通用 timeout 和并发值不能表达请求间隔。
+4. **周期额度没有统一表达。** Unpaywall 有每日调用量，Elsevier 有每周额度，OpenAlex 和 Springer 有每日额度或预算，仅靠并发限制不足以表达。
 
 ## 4. 目标与非目标
 
@@ -83,7 +81,7 @@ SciRetriever 已实现 11 个资产获取入口，其中 10 个声明具有主�
 - 遵守供应商公开限速、响应头和重试要求，避免因请求过快导致 `429`、封禁或服务压力。
 - 防止多个 provider 同时请求同一最终网站而绕过限制。
 - 把来源自身不可用、凭据/授权不足、被限流、无候选和最终 PDF 验证失败区分开。
-- 在不增加后台任务系统的前提下，保持 ADR 0002 批准的前台、有界、进程内竞速模型。
+- 不增加后台任务系统，并保持 ADR 0002 规定的单机、部分成功和已提交事实可继续补全边界。
 
 ### 4.2 非目标
 
@@ -136,7 +134,7 @@ provider API / resolver host
 - 没有 `Retry-After` 时使用有上限的退避，并降低该来源后续速度。
 - 对每日或每周额度，应读取供应商响应头并在额度耗尽前停止该来源，而不是把额度耗尽伪装成网络失败。
 - `Retry-After` 超过当前 provider timeout 或 invocation 剩余 deadline 时，不延长整个前台任务；该来源以 `limited` 结束，并保留可脱敏表达的下次可重试提示。
-- 首版共享预算只约束当前进程。同一主机、同一 catalog 的 stage admission 会排除第二个 acquisition batch，但不同 catalog 或不同主机的 CLI 进程仍可能分别消耗同一外部额度；本文建议通过保守默认值和 operator 使用约束降低风险，不为了跨进程或跨机器精确共享配额引入 durable 调度状态。
+- 首版共享预算只约束当前进程，不协调不同调用方进程或不同 catalog。本文建议通过保守默认值和 operator 使用约束降低风险，不为了跨进程或跨机器精确共享配额引入 durable 调度状态。
 
 ## 6. 建议的首版下载限制矩阵
 
@@ -153,7 +151,7 @@ provider API / resolver host
 | Semantic Scholar | API key 初始限制为所有端点合计每秒 1 次；匿名请求共享公共额度并可能进一步受限 | 有无 key 均默认 1 秒一次、并发 1；收到更严格响应时降速 | 外部 PDF 主机按自身规则，未知时 30 秒 |
 | Elsevier | Article Retrieval 公开上限 10 次/秒，并有每周额度 | 默认 1 秒一次，读取每周额度响应头 | `api.elsevier.com` 的 XML/Object 请求共享预算 |
 | Wiley | 每 10 分钟最多 60 次，要求请求间隔 10 秒；同时不超过每秒 3 篇 | 10 秒一次、并发 1 | `api.wiley.com` 使用同一规则 |
-| Springer Nature | 免费层 Open Access/Meta API 每天 500 次、每分钟 100 次 | 1 秒一次、并发 1，并跟踪每日额度 | 当前只用于 XML/HTML，不计为主 PDF 来源 |
+| Springer Nature | 免费层 Open Access/Meta API 每天 500 次、每分钟 100 次 | 1 秒一次、并发 1，并跟踪每日额度 | 本提案只按 XML/HTML 外部能力评估，不计为主 PDF 来源 |
 | Sci-Hub | 无统一可靠规则 | 显式启用但未配置更严格访问速度时，30 秒一次、并发 1 | operator 配置的 landing/PDF 主机分别共享预算 |
 
 Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值时，表中较慢值是产品默认建议，不表示对官方规则的重新解释。后续只有在真实批量验证证明必要且安全时，才讨论提高默认吞吐。
@@ -200,21 +198,21 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 
 - **吞吐下降。** 未知主机 30 秒兜底和 Wiley 10 秒间隔会延长批量下载时间。
 - **官方规则会变化。** 限制值属于易变外部事实，接受后应由 [Provider 注意事项](../notes/providers.md)维护最后核对日期和证据等级。
-- **周期额度难以在多进程间精确共享。** 首版“共享”只指同一 SciRetriever 进程；stage admission 只排除同一主机、同一 catalog 的并行 acquisition batch，不协调不同 catalog 或不同主机。它们仍可能共同超额，只能依赖响应头、保守速度和 operator 约束来降低风险。
+- **周期额度难以在多进程间精确共享。** 首版“共享”只指同一 SciRetriever 进程，不协调不同调用方进程或不同 catalog。它们仍可能共同超额，只能依赖响应头、保守速度和 operator 约束来降低风险。
 - **候选主机很多。** 对未知主机使用统一兜底简单可靠，但不能替代未来针对高价值出版社的正式规则核对。
 - **状态表达增加。** 更细的可用性分类改善解释，但必须避免把它们误写成第二套 completion 状态。
 
 ## 11. 已确认的实现质量约束
 
-项目 owner 已确认以下约束。它们只限定未来方案在另行获批后的代码形状，不单独授权开始实施。特别是，本节不授权创建 `acquisition/access/`、实现周期额度或 provider policy、增加 live verification，也不授权修改配置 schema 或当前默认行为：
+项目 owner 已确认以下约束。它们只限定未来方案在另行获批后的代码形状，不单独授权开始实施。特别是，本节不授权扩展 `infrastructure/access/`、实现周期额度或 provider policy、增加 live verification，也不授权修改配置 schema 或当前默认行为：
 
-1. **访问限制位于真实网络请求边界。** Resolver API 请求、最终候选下载和重定向后的目标请求都必须经过统一的 acquisition request admission；不得用文献启动间隔或在各 resolver 中分散调用 `sleep` 来替代真实请求限速。
-2. **若另行获批，建立小型 `acquisition/access/` 子包。** 目标结构以 `policy.py`、`limiter.py` 和 `transport.py` 分别承载不可变规则与合并、进程内运行状态、受策略约束的网络执行。不得继续把周期额度、`Retry-After` 和 transport 反馈堆入已经同时包含主机预算、健康度与熔断的 `controls.py`。
+1. **访问限制位于真实网络请求边界。** Resolver API 请求、最终候选下载和重定向后的目标请求都必须经过统一的 request admission；不得用文献启动间隔或在各 resolver 中分散调用 `sleep` 来替代真实请求限速。
+2. **若另行获批，在 `infrastructure/access/` 内按责任拆分。** `policy.py`、`limiter.py` 和 `transport.py` 分别承载不可变规则与合并、进程内运行状态、受策略约束的网络执行。周期额度、`Retry-After` 和 transport 反馈不得堆入单个同时负责主机预算、健康度与熔断的 manager。
 3. **官方默认值由代码维护，普通配置默认只能收紧。** 供应商公开限制和项目保守值属于受版本控制的 provider policy；operator 可以按凭据、订阅或 hostname 配置更严格规则，不能通过普通配置放宽官方上限或项目安全默认值。
-4. **Provider profile 是单一静态真相源。** 每个 provider 的稳定名称、支持的 asset role、API hostname、凭据要求、默认访问策略和 live verification 适用范围集中声明；CLI composition 负责构造运行对象，但不得再维护一套相互独立的能力或限速事实。
-5. **只做本功能需要的相邻重构。** 可以迁移现有主机预算并按职责拆分 health/circuit，但保留现有 acquisition orchestration、resolver、secure transport、validation、immutable acceptance 和 completion 契约；不得借本提案全面重写 acquisition、异步框架、integrations、network 或 catalog。
+4. **Provider profile 是单一静态真相源。** 每个 provider 的稳定名称、支持的 asset role、API hostname、凭据要求、默认访问策略和 live verification 适用范围集中声明；Composition wiring 负责构造运行对象，但不得再维护一套相互独立的能力或限速事实。
+5. **只做本功能需要的相邻重构。** 可以扩充现有 host budget 并按职责拆分 health/circuit，但保留 `services/assets/` 编排、`infrastructure/sources/assets/` adapter、受控 transport、validation、immutable acceptance 和 completion 契约；不得借本提案全面重写异步框架、catalog 或其它业务模块。
 
-这些约束要求规则对象与运行状态使用不同类型，规则合并只有一个权威实现，业务编排不计算访问间隔，provider-specific 分支不进入共享 candidate executor。新增模块应保持单一职责，避免形成同时负责 policy、等待、HTTP、诊断和重试的巨型 manager。
+这些约束要求规则对象与运行状态使用不同类型，规则合并只有一个权威实现，业务编排不计算访问间隔，provider-specific 分支不进入 `services/assets/` 的共享候选编排。新增模块应保持单一职责，避免形成同时负责 policy、等待、HTTP、诊断和重试的巨型 manager。
 
 ## 12. 仍需 owner 决定的问题
 
@@ -226,14 +224,14 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 6. 是否接受第 7 节的三层可用性表达，并保持它们只作为能力/诊断事实而非 completion 状态？
 7. 是否要求无需凭据且进入默认下载列表的 provider，按 provider + asset role 维护至少一个注明验证日期的 live verified 样本？凭据或订阅受限 provider 则按授权类别记录验证，不保存凭据身份。
 
-在这些问题得到明确决定前，本文保持 `draft`，不产生实施授权。不得依据本文创建 `acquisition/access/`，实现 quota/provider policy 或 live verification，或把建议矩阵写成当前配置和运行行为。
+在这些问题得到明确决定前，本文保持 `draft`，不产生实施授权。不得依据本文扩展 `infrastructure/access/`，实现 quota/provider policy 或 live verification，或把建议矩阵写成当前配置和运行行为。
 
 ## 13. 接受本提案后的长期文档责任
 
 如果 owner 接受方向，长期规则应分别落到其真相源：
 
 - acquisition 理想流程与预算责任：设计文档和技术文档；
-- 当前已发布配置、默认值和命令行为：README、配置手册和 TOML 模板；
+- 当前程序内入口、配置合同和默认值：README 与配置手册；
 - 供应商限速、额度、凭据与现场事实：Provider 注意事项；
 - 实际实现和验证：源码、离线测试与受控 live 验证记录。
 
@@ -247,10 +245,10 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 - [Provider 接入注意事项](../notes/providers.md)
 - [ADR 0002](../architecture/decisions/0002-literature-identity-and-incremental-processing.md)
 - [设计文档“文献收集”](../architecture/design.md#3-文献收集)
-- `src/sciretriever/acquisition/controls.py`
-- `src/sciretriever/acquisition/pacing.py`
-- `src/sciretriever/acquisition/profiles.py`
-- `src/sciretriever/cli/acquisition_runtime.py`
+- `src/sciretriever/model/configuration.py`
+- `src/sciretriever/infrastructure/access/budgets.py`
+- `src/sciretriever/infrastructure/sources/assets/adapters.py`
+- `src/sciretriever/composition/wiring/provider_registry.py`
 
 ### 供应商公开资料
 
@@ -266,4 +264,4 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 | OpenAlex | [Authentication and pricing](https://developers.openalex.org/api-reference/authentication)：每日预算、额度响应头和每秒硬上限 | OpenAlex API；具体免费预算随当前产品层级变化，不覆盖外部 PDF 主机 |
 | Elsevier | [API key settings](https://dev.elsevier.com/api_key_settings.html)：Article Retrieval 10 requests/second，并返回周额度响应头 | ScienceDirect Article Retrieval；Object API 采用更保守的共享 1 秒默认值，不声称官方同一上限 |
 | Wiley | [Text and Data Mining](https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining)：每 10 分钟最多 60 次，并要求请求间隔 10 秒；同时最多每秒 3 篇 | Wiley TDM article 下载 |
-| Springer Nature | [API subscriptions](https://dev.springernature.com/subscription/)：免费层 Open Access/Meta API 每天 500 次、每分钟 100 次 | Open Access 与 Meta API；当前 SciRetriever 只获取 XML/HTML |
+| Springer Nature | [API subscriptions](https://dev.springernature.com/subscription/)：免费层 Open Access/Meta API 每天 500 次、每分钟 100 次 | 外部 Open Access 与 Meta API 能力及限额证据；不证明 SciRetriever 当前已有 Springer 专用 client 或可运行的多来源获取能力 |

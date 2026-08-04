@@ -23,7 +23,7 @@ credentials
 
 十组都必须存在。未知组、未知字段、错误类型、未知协议枚举、空 provider 数组、空名称和重复名称会被拒绝。Pydantic 模型是 strict、frozen 且 `extra="forbid"`，配置解析不会静默接纳拼写错误。
 
-Provider 名称先由 Composition 按当前允许集合检查，再作为 wiring 的选择键。通过配置检查不等于生产 adapter 已经接入。只有 wiring 已连接到对应 Service Port 的实现才可运行。
+Provider 名称先由 Composition 按当前允许集合检查，再作为 wiring 的选择键。通过配置检查不等于生产 adapter 已经接入。当前具体 provider clients 和有界 transport 由调用方通过 `ProviderDependencies` 注入，provider registry 也没有连接到 Collection 或 Assets Service。只有 wiring 已连接到对应 Service Port 的实现才可运行。
 
 ## 配置选择与读取
 

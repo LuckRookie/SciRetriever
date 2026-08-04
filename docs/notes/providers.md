@@ -39,7 +39,7 @@
 - 当前对象图没有把 registry 连接到 `CollectionService` 或 `ContentAssetService`，项目也没有受支持的终端用户 CLI。Provider key、adapter 类型或旧树实现存在，都不能写成当前可运行的用户工作流。
 - `credentials.metadata` 和 `credentials.acquisition` 只保存通用 secret reference。当前 wiring 不把它们解析并绑定到 provider-specific client；具体 client 和认证材料仍由调用方提供的依赖负责。
 - Provider 返回 observation 或 locator，不代表业务接纳。文献身份、资产内容、目标对齐、不可变发布和 provenance 仍由 Core 与 Service 规则决定。
-- Sci-Hub 没有默认 endpoint。Translator、browser 和其它尚未接入当前 Composition 的实现不能扩大发布能力。Operator 仍负责确认 endpoint、会话和内容访问的授权范围。
+- Sci-Hub 没有默认 endpoint。Translator 和 browser 只存在于历史记录，当前六层树和 Composition 没有这些实现。Operator 仍负责确认 endpoint、会话和内容访问的授权范围。
 
 ### 1.4 通用排障顺序
 
@@ -65,9 +65,9 @@
 | Elsevier | `elsevier` | 是 | 主文 PDF、补充 PDF、XML | API key 必需，内容授权另计 |
 | Wiley | `wiley` | 否 | 主文 PDF | TDM token 必需，内容授权另计 |
 | Springer Nature | `springer` | 是 | XML、HTML | API key 必需，端点授权另计 |
-| Configured Sci-Hub | `sci-hub` | 否 | 第一层主文 PDF | 默认关闭；无默认 endpoint |
+| Configured Sci-Hub | `sci-hub` | 否 | 外部主文 PDF 声明 | 由 operator 显式提供 client 与获准 endpoint；仓库没有默认 endpoint 或具体 client |
 
-表中的 Metadata 和 Asset 列只汇总外部 API 能力或响应字段，不表示对应供应商 client 已实现。`direct` 是对 WorkVersion 已持久化 HTTPS locator 的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。Translator 和 browser 不是 schema v2 的 provider 选择键，也没有接入当前 Composition。Sci-Hub 和其它外部访问方式的安全边界以当前代码、架构和 [Provider 接入开发手册](../development/provider-integration.md)为准；本文不写入 endpoint、profile path 或 session 数据。
+表中的 Metadata 和 Asset 列只汇总外部 API 能力或响应字段，不表示对应供应商 client 已实现。`direct` 是对 WorkVersion 已持久化 HTTPS locator 的通用入口，不对应单一外部机构，因此不在逐机构条目中重复说明。历史 translator 和 browser 不是 schema v2 的 provider 选择键，当前六层树也没有对应实现。Sci-Hub 和其它外部访问方式的安全边界以当前代码、架构和 [Provider 接入开发手册](../development/provider-integration.md)为准；本文不写入 endpoint、profile path 或 session 数据。
 
 ## 3. Semantic Scholar
 
@@ -103,7 +103,7 @@
 
 ### 已知实现边界
 
-- 当前通用 `ResolverClient` Protocol 不规定 `openAccessPdf.url` 提取或 landing page 解析，仓库也没有 Semantic Scholar resolver client。旧树中的 translator/browser 路径没有接入当前 Composition。
+- 当前通用 `ResolverClient` Protocol 不规定 `openAccessPdf.url` 提取或 landing page 解析，仓库也没有 Semantic Scholar resolver client。归档中的 translator/browser 路径不是当前实现。
 - API 返回元数据成功不代表存在全文，也不代表具备版权内容访问权。
 
 ## 4. Elsevier

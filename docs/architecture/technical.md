@@ -12,7 +12,7 @@
 设计文档已经确定模块化单体、六层结构、七个业务模块和七类功能模块。技术实现使用 Python 与 Ports/Adapters 落实这些边界：
 
 - Python 3.10+，开发基线 Python 3.12；
-- 一个可安装的 `sciretriever` 包和一个前台 CLI composition root；
+- 一个可安装的 `sciretriever` 包；目标结构保留一个前台 CLI composition root，当前实现尚未提供受支持 CLI；
 - `model` 统一保存纯数据定义，`core` 保存纯业务规则，`services` 编排应用用例；
 - `infrastructure` 实现 SQLite、文件系统、外部来源、HTTP、浏览器、parser、LLM、书目文件和本机锁；
 - `interface` 只处理用户交互，`composition` 是唯一配置和依赖组装入口；
@@ -605,5 +605,5 @@ AST 架构门禁必须拒绝：
 - [产品需求](requirements.md)决定用户问题、核心能力、产品结果和验收场景。
 - [设计文档](design.md)决定系统架构、逻辑模块、事实所有权、状态和业务协作。
 - 本文决定目标代码分层、目录、依赖、端口、持久化、访问、运行和安全技术。
-- 项目 `README`、CLI `--help`、源码和测试说明当前已经实现的行为。
+- 项目 `README`、已实现 Interface 的帮助文本、源码和测试说明当前已经实现的行为；当前没有受支持 CLI 时不存在 CLI `--help` 真相源。
 - 实施顺序、差距和逐项 TODO 只进入后续执行文档，不进入设计或技术文档。

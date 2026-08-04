@@ -1,6 +1,6 @@
 # Provider 接入开发手册
 
-新增或实质修改 metadata/acquisition provider、translator 或 browser adapter 前，维护者应填写一份准入记录，并由责任 spec 明确其当前能力和资产角色。本模板保留 provider 安全、可维护性和证据要求，不属于任何旧下载阶段或 checkpoint 计划。
+新增或实质修改 metadata、citation 或 asset source client/adapter 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
 
 记录不得包含凭据值、完整签名 URL、Cookie、Token、用户身份、响应正文或内部工单内容。未知信息写“待核对”，不得猜测。
 
@@ -9,7 +9,7 @@
 | 字段 | 内容 |
 |---|---|
 | provider / adapter ID |  |
-| 能力类型 | metadata / direct asset / translator / browser |
+| 能力类型 | metadata / citation / asset resolver / asset fetcher |
 | 产品阶段 | current implementation / approved target / unapproved proposal |
 | 运行状态 | proposed / active / degraded / retiring / retired；仅适用于 current implementation |
 | 维护责任人 |  |
@@ -26,7 +26,7 @@
 | 支持的标识符 | DOI / arXiv / PMID / URL / 其它 |
 | 输入与归属 | Work 查询 / WorkVersion asset gap / landing page |
 | metadata 字段或资产角色 |  |
-| 输出语义 | observation / zero-or-more candidate / accepted content |
+| 输出语义 | observation / citation result / zero-or-more candidate / bounded bytes |
 | 身份核对规则 |  |
 | 匿名能力 |  |
 | 凭据引用名 | 仅配置字段或环境变量名 |
@@ -59,11 +59,11 @@
 - metadata provider 如何转成 `MetadataObservation`，不泄漏 vendor dict：
 - metadata provider 如何在有界并发和独立 timeout 下运行，并按 configured precedence/fill-missing 得到与完成顺序无关的 canonical 结果：
 - provider record 如何只形成 observation，而不按来源膨胀 `WorkVersion`：
-- acquisition candidate 如何通过 URL policy、有限 timeout 和 redirect 检查：
-- acquisition 如何只填补指定 `WorkVersion` 的资产缺口：
-- primary PDF 与 supplemental XML/HTML 的角色验证；XML/HTML 不得提升为 PDF 或独立满足 analyze：
+- asset candidate 如何通过 URL policy、有限 timeout 和 redirect 检查：
+- asset source 如何只填补指定 `WorkVersion` 的资产缺口：
+- primary PDF 与 supplemental XML/HTML 的角色验证；XML/HTML 不得提升为 PDF 或独立满足结构化分析：
 - MIME、magic、EOF、解析、大小和目标文献身份检查：
-- 何时允许进入 immutable RawAsset acceptance：
+- 何时允许进入不可变资产接纳：
 - race loser、取消和 timeout 如何禁止 late acceptance：
 
 ## 6. 失败与动作映射
@@ -96,7 +96,7 @@
 - 敏感 query/header/cookie 不进入 durable state 或输出；
 - race winner 后无 late acceptance；
 - provenance、WorkVersion asset link 和 catalog 对账；
-- PDF-only 可完成 analyze、XML/HTML-only 必须 blocked、PDF 与补充资产冲突时 PDF 控制结果及 PDF locator；
+- 只有 PDF 可以进入结构化分析，只有 XML/HTML 时必须阻断；PDF 与补充资产冲突时，由 PDF 控制结果并保留 PDF locator；
 - 关闭 provider 后其它已批准路径保持可用。
 
 记录 fixture 来源、版本、最后核对日期、预期结果和刷新规则。
@@ -116,10 +116,10 @@
 - [ ] 责任 spec 明确该 provider/adapter 是当前能力还是尚未实现目标。
 - [ ] 凭据、签名 URL、正文和用户身份未进入文档或 fixture。
 - [ ] metadata provider 使用有界并发、独立 timeout 和 completion-order-independent merge；provider precedence/fill-missing 有确定性配置语义。
-- [ ] provider record 只形成 observation；acquisition 只填补 `WorkVersion` asset gap。
-- [ ] acquisition priority 和回退层级与责任 spec 一致。
-- [ ] primary PDF 是 analyze 的必需权威基准；XML/HTML 只补充且不能覆盖 PDF。
+- [ ] provider record 只形成 observation；asset source 只填补 `WorkVersion` asset gap。
+- [ ] provider 选择、候选顺序和失败隔离与责任文档一致。
+- [ ] primary PDF 是结构化分析的必需权威基准；XML/HTML 只补充且不能覆盖 PDF。
 - [ ] HTTPS、DNS、redirect、有限 timeout、响应上限和失败映射完整。
 - [ ] 资产经过共享 validation 和 immutable acceptance，没有直接写目标文件。
 - [ ] 离线 fixture、维护责任、复核日期和退役条件完整。
-- [ ] 关闭能力后，其它已批准前台流程和既有 RawAsset 不受影响。
+- [ ] 关闭能力后，其它已批准程序内流程和既有已接纳资产不受影响。
