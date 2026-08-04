@@ -4,8 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import assert_never
 from uuid import uuid4
+
+from typing_extensions import assert_never
 
 from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,

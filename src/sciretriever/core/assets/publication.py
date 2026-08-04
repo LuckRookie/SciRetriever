@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TypeAlias, assert_never
+from typing import TypeAlias
+
+from typing_extensions import assert_never
 
 from sciretriever.model import assets as asset_models
 

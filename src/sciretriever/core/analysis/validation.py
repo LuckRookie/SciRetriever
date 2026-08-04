@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Final, assert_never
+from typing import Final
 
 from pydantic import ValidationError
+from typing_extensions import assert_never
 
 from sciretriever.model import analysis as analysis_models
 from sciretriever.model import documents, llm

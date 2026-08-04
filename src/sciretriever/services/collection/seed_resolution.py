@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import assert_never
+from typing_extensions import assert_never
 
 from sciretriever.core.collection import CollectionRuleError
 from sciretriever.model.collection import (

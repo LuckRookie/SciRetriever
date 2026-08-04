@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import assert_never
 from uuid import UUID, uuid5
+
+from typing_extensions import assert_never
 
 from sciretriever.core.collection import CollectionRuleError
 from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar, assert_never
+from typing import Generic, TypeVar
 
 import anyio
+from typing_extensions import assert_never
 
 from sciretriever.services.assets.ports import (
     CandidateRaceExhausted,

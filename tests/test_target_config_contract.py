@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import sciretriever.model.configuration as configuration_module  # noqa: E402
-from sciretriever.runtime.config import load_target_config  # noqa: E402
+from sciretriever.composition.configuration import load_target_config  # noqa: E402
 
 
 class TargetConfigContractTests(TestCase):

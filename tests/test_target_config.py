@@ -16,8 +16,8 @@ SRC = REPOSITORY / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from sciretriever.composition.configuration import load_target_config  # noqa: E402
 from sciretriever.model.configuration import LLMProtocol  # noqa: E402
-from sciretriever.runtime.config import load_target_config  # noqa: E402
 
 
 class TargetConfigTests(TestCase):
@@ -132,9 +132,19 @@ model = "mineru-3.4.4"
 
     def test_templates_parse_without_environment_or_network(self) -> None:
         sentinel = "SECRET-MUST-NOT-APPEAR"
+        analysis = (
+            'protocol = "openai"\nbase_url = "https://api.openai.com/v1"\n'
+            'model = "gpt-5.1"\nsecret_ref = "env:ANALYSIS_API_KEY"\n'
+        )
+        minimal_body = self.base(analysis).replace(
+            'providers = ["crossref"]',
+            'providers = ["crossref", "europe-pmc", "arxiv"]',
+            1,
+        )
+        full_body = self.base(analysis)
         with mock.patch.dict(os.environ, {"ANALYSIS_API_KEY": sentinel}, clear=True):
-            minimal = load_target_config(REPOSITORY / "docs/guides/config.target.minimal.toml")
-            full = load_target_config(REPOSITORY / "docs/guides/config.target.toml")
+            minimal = load_target_config(self.write(minimal_body, "minimal.toml"))
+            full = load_target_config(self.write(full_body, "full.toml"))
         self.assertEqual(minimal.sources.providers, ("crossref", "europe-pmc", "arxiv"))
         self.assertEqual(full.analysis.protocol, LLMProtocol.OPENAI)
         self.assertNotIn(sentinel, repr(full))
@@ -222,7 +232,17 @@ model = "mineru-3.4.4"
             ("max_input_bytes = 67108864", 'max_input_bytes = "67108864"'),
             ("max_results = 100", 'max_results = "100"'),
         )
-        full = (REPOSITORY / "docs/guides/config.target.toml").read_text(encoding="utf-8")
+        full = self.base(valid_analysis)
+        full = full.replace("[parsing]\n", "[parsing]\nremote_upload = false\n", 1)
+        full = full.replace("[collection]\n", "[collection]\ntopic_limit = 1000\n", 1)
+        full = full.replace("[sources]\n", "[sources]\ntimeout_seconds = 30.0\n", 1)
+        full = full.replace("[assets]\n", "[assets]\nmax_asset_bytes = 104857600\n", 1)
+        full = full.replace("[execution]\n", "[execution]\nmax_targets = 1000\n", 1)
+        full = full.replace(
+            "[library]\n",
+            "[library]\nmax_input_bytes = 67108864\nmax_results = 100\n",
+            1,
+        )
         for index, (valid, invalid) in enumerate(cases):
             with self.subTest(index=index), self.assertRaises(ValidationError):
                 load_target_config(

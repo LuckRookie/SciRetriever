@@ -84,7 +84,7 @@ class AssetFetcherAdapter:
         self,
         transport: BoundedTransportPort,
         *,
-        timeout_seconds: int,
+        timeout_seconds: float,
         max_response_bytes: int,
     ) -> None:
         self._transport = transport

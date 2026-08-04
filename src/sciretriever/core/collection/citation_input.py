@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import assert_never
+
+from typing_extensions import assert_never
 
 from sciretriever.model.canonical_json import (
     CanonicalJsonObject,

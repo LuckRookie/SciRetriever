@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import assert_never
+
+from typing_extensions import assert_never
 
 from sciretriever.model import documents
 from sciretriever.model.canonical_json import JsonOutput

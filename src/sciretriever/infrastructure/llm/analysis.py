@@ -1,9 +1,10 @@
+# noqa: E501  # noqa: SIZE_OK - OpenAI and Anthropic adapters share one response-boundary contract.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import anthropic
 import openai
@@ -120,6 +121,22 @@ class AnalysisAdapterError(Exception):
         return self.code
 
 
+ResultT = TypeVar("ResultT")
+
+
+def _provider_call(callback: Callable[[], ResultT]) -> ResultT:
+    error_code = "analysis_provider_error"
+    try:
+        result = callback()
+    except NotImplementedError:
+        error_code = "capability_unavailable"
+    except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+        error_code = "analysis_provider_error"
+    else:
+        return result
+    raise AnalysisAdapterError(error_code) from None
+
+
 def _source(request: llm_models.LLMRequest, config: AnalysisAdapterSettings) -> str:
     if len(request.source) > config.max_input_characters:
         raise AnalysisAdapterError("analysis_input_too_large")
@@ -168,14 +185,16 @@ class OpenAIAnalysisAdapter:
 
     def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
         source = _source(request, self._config)
-        try:
-            client = self._factory(
+        client = _provider_call(
+            lambda: self._factory(
                 api_key=self._secret,
                 base_url=self._config.base_url,
                 timeout=self._config.timeout_seconds,
                 max_retries=0,
             )
-            response = client.create(
+        )
+        response = _provider_call(
+            lambda: client.create(
                 model=request.model,
                 messages=(
                     {
@@ -197,10 +216,7 @@ class OpenAIAnalysisAdapter:
                 },
                 max_completion_tokens=request.max_output_tokens,
             )
-        except NotImplementedError:
-            raise AnalysisAdapterError("capability_unavailable") from None
-        except (openai.APIError, OSError, TimeoutError):
-            raise AnalysisAdapterError("analysis_provider_error") from None
+        )
         try:
             if response.model != request.model:
                 raise AnalysisAdapterError("analysis_model_mismatch")
@@ -239,14 +255,16 @@ class AnthropicAnalysisAdapter:
 
     def analyze(self, request: llm_models.LLMRequest) -> llm_models.LLMStructuredResponse:
         source = _source(request, self._config)
-        try:
-            client = self._factory(
+        client = _provider_call(
+            lambda: self._factory(
                 api_key=self._secret,
                 base_url=self._config.base_url,
                 timeout=self._config.timeout_seconds,
                 max_retries=0,
             )
-            response = client.create(
+        )
+        response = _provider_call(
+            lambda: client.create(
                 model=request.model,
                 max_tokens=request.max_output_tokens,
                 messages=({"role": "user", "content": source},),
@@ -257,10 +275,7 @@ class AnthropicAnalysisAdapter:
                     }
                 },
             )
-        except NotImplementedError:
-            raise AnalysisAdapterError("capability_unavailable") from None
-        except (anthropic.APIError, OSError, TimeoutError):
-            raise AnalysisAdapterError("analysis_provider_error") from None
+        )
         try:
             if response.model != request.model:
                 raise AnalysisAdapterError("analysis_model_mismatch")

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import assert_never
 from uuid import uuid4
+
+from typing_extensions import assert_never
 
 import sciretriever.model.assets as asset_models
 from sciretriever.core.assets import (

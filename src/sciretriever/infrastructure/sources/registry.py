@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypeAlias, TypeVar, assert_never
+from typing import TypeAlias, TypeVar
+
+from typing_extensions import assert_never
 
 from sciretriever.services.assets.ports import AssetFetcherPort, AssetResolverPort
 from sciretriever.services.collection.ports import CitationDiscoveryPort, MetadataDiscoveryPort

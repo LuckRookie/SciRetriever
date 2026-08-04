@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from typing import assert_never
 
 from target_light_document_support import document_value, manifest_blocks, parsed_document
 from target_publisher_support import ScenarioFactory
+from typing_extensions import assert_never
 
 from sciretriever.core.documents import validate_light_document
 from sciretriever.infrastructure.storage.files import CoreArtifactStore

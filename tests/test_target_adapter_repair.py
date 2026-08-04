@@ -10,7 +10,7 @@ from pathlib import Path
 import anyio
 from pydantic import BaseModel
 
-from sciretriever.adapters.production import (
+from sciretriever.composition.wiring import (
     ACQUISITION_PROVIDERS,
     CITATION_PROVIDERS,
     METADATA_PROVIDERS,

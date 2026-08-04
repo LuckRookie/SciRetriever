@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import assert_never
+
+from typing_extensions import assert_never
 
 from sciretriever.model import documents
 from sciretriever.model.parsing import ManifestBlock

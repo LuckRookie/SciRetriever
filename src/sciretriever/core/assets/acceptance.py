@@ -5,10 +5,10 @@ import unicodedata
 import xml.etree.ElementTree as ElementTree
 from html.parser import HTMLParser
 from io import BytesIO
-from typing import assert_never
 
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
+from typing_extensions import assert_never
 
 from sciretriever.model import assets as asset_models
 from sciretriever.model.access import BoundedByteStream

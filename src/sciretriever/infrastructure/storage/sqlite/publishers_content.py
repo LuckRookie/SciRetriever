@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from typing import assert_never, overload
+from typing import overload
+
+from typing_extensions import assert_never
 
 import sciretriever.infrastructure.storage.sqlite.publishers_assets as publishers_assets
 from sciretriever.infrastructure.storage import target_result_envelope_json

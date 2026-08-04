@@ -7,10 +7,10 @@ import stat
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
-from typing import assert_never
 
 from pydantic import ValidationError
 from PyPDF2 import PdfReader
+from typing_extensions import assert_never
 
 import sciretriever.model.parsing as parsing_models
 from sciretriever.model.canonical_json import CanonicalJsonInput
