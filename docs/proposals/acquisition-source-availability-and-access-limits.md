@@ -246,7 +246,7 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 - [项目 README](../../README.md)
 - [Provider 接入注意事项](../notes/providers.md)
 - [ADR 0002](../architecture/decisions/0002-literature-identity-and-incremental-processing.md)
-- [设计文档 Acquisition 流](../architecture/design.md#acquisition-流)
+- [设计文档“文献收集”](../architecture/design.md#3-文献收集)
 - `src/sciretriever/acquisition/controls.py`
 - `src/sciretriever/acquisition/pacing.py`
 - `src/sciretriever/acquisition/profiles.py`

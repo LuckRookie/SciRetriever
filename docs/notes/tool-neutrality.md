@@ -4,7 +4,7 @@
 - 记录日期：2026-07-22
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
-本声明规定项目立场，不声明某项能力已经实现。当前可用来源和命令以项目 [README](../../README.md) 为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
+本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Composition wiring、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
 
 ## 1. 核心立场
 
@@ -18,7 +18,7 @@ SciRetriever 对当前已实现或活动 ADR、proposal 和 execution plan 明�
 
 - **文献来源接入**：接入公开 API、静默页面和用户配置的端点。项目对来源本身不做"合法/灰色/非法"的分类标签。
 - **下载执行**：用户配置的 provider 按指定策略执行下载。工具不对特定 provider（如 Sci-Hub）施加超越工程安全的使用限制。
-- **网络与访问方式**：当前已实现显式配置、默认关闭的 profile-copy browser fallback，但不提供交互登录、CAPTCHA、通用代理轮换或机构登录编排。任何后续新增能力必须先进入活动 ADR/proposal/plan，并满足工程安全边界。
+- **网络与访问方式**：browser 和 profile-copy fallback 仅见于历史归档，尚未进入当前实现、schema v2 配置合同或 Composition 公开组装面；当前也不提供交互登录、CAPTCHA、通用代理轮换或机构登录编排。任何后续新增能力必须先进入活动 ADR/proposal/plan，并满足工程安全边界。
 
 ## 3. 工程约束 vs 使用限制
 

@@ -1,230 +1,122 @@
 # MinerU 接入注意事项
 
-> Status: current released PDF analysis behavior. Accepted configuration is defined by `config.py`, the complete `docs/guides/config.toml` template and the configuration guide; operator-only `mineru-api` commands manage the external service independently of SciRetriever.
+> 状态：当前外部依赖说明。配置合同以 [schema v2 配置手册](../guides/configuration.md)和 `src/sciretriever/model/configuration.py` 为准；已组装能力以 Composition wiring 和直接测试为准。
 
-This note records the external MinerU contract approved in [ADR 0003](../architecture/decisions/0003-operator-managed-mineru-service.md). Product behavior is owned by the requirements and system design; this document explains deployment, readiness, incident handling and evidence needed to use that capability safely.
+本文记录 [ADR 0003](../architecture/decisions/0003-operator-managed-mineru-service.md) 接受的 MinerU 外部服务边界、版本目标和运维注意事项。它不定义新的程序入口，也不表示 parser 已经由当前对象图连接到可运行的 Service。
 
-No credential value, private endpoint, model token, user PDF content or runtime task URL belongs in this guide.
+秘密值、私有 endpoint、模型 token、用户 PDF 内容和运行时 task URL 都不能写入本文。
 
-## 1. Pinned contract
+## 1. 已接受的外部目标
 
-PDF analysis currently targets:
-
-| Item | Approved value |
+| 项目 | 已接受值 |
 |---|---|
 | MinerU release | `3.4.4` |
 | MinerU API protocol | `2` |
 | Parser backend | `vlm-engine` |
-| Parser service | operator-managed persistent `mineru-api` |
-| Primary structure | `middle.json` |
-| Supporting outputs | `content_list.json`, model output, extracted images |
-| Authority | accepted primary PDF and validated page/span evidence |
+| 服务所有权 | operator-managed persistent service |
+| 主要结构 | `middle.json` |
+| 辅助输出 | `content_list.json`、model output、提取图片 |
+| 权威输入 | 已接纳的 primary PDF 及其 hash |
 
-MinerU 4.x changes the standalone VLM contract and is not an automatic upgrade. A service, model, inference engine or output-schema change requires the parser acceptance corpus and owner review before the pinned values change.
+这些值约束 operator 管理的外部部署和 adapter 验收方向。当前 schema v2 的 `[parsing]` 只接受连接协议、服务地址、模型标识、可选 secret reference、上传确认和资源上限，不接受 `service_version`、`api_protocol` 或 `backend` 字段。不要把旧配置字段复制到当前配置中。
 
-Official 3.4.4 references, checked 2026-07-24:
+MinerU 4.x 改变了独立 VLM 服务合同，不能自动替换 3.4.4。服务、模型、推理引擎或输出 schema 变化前，必须重新运行 parser acceptance corpus，并经 owner 审查。
+
+官方 3.4.4 资料，最后核对于 2026-07-24：
 
 - [release](https://github.com/opendatalab/MinerU/releases/tag/mineru-3.4.4-released)
-- [CLI and service usage](https://github.com/opendatalab/MinerU/blob/0dfc9460cd9ab693b9af60ae3fbffd7bc111b062/docs/en/usage/cli_tools.md)
+- [service usage](https://github.com/opendatalab/MinerU/blob/0dfc9460cd9ab693b9af60ae3fbffd7bc111b062/docs/en/usage/cli_tools.md)
 - [API request schema](https://github.com/opendatalab/MinerU/blob/0dfc9460cd9ab693b9af60ae3fbffd7bc111b062/mineru/cli/api_request.py)
 - [FastAPI task lifecycle](https://github.com/opendatalab/MinerU/blob/0dfc9460cd9ab693b9af60ae3fbffd7bc111b062/mineru/cli/fast_api.py)
 - [model preload](https://github.com/opendatalab/MinerU/blob/0dfc9460cd9ab693b9af60ae3fbffd7bc111b062/mineru/cli/vlm_preload.py)
 
-The parser comparison that motivated the decision is outside this repository at `literature/parsed/parser_comparison/README.md`. It is supporting evidence, not a runtime fixture or normative specification.
+## 2. 当前代码边界
 
-## 2. Ownership boundary
+当前 Infrastructure 提供 `OperatorManagedMinerUAdapter`、`MinerUServicePort` 和 `MinerUArchiveAdapter`。Adapter 会核对 primary PDF hash，限制 task ID 和轮询次数，并在任务完成后把归档交给本地不可信输入校验。
 
-```text
-Operator                                  SciRetriever
---------                                  ------------
-deploy mineru-api                         validate configured endpoint
-stage model/runtime                       check health/version/protocol
-own GPU and VRAM                          upload one accepted primary PDF
-preload and cache model                   submit/poll one bounded task
-set service concurrency/retention         validate and publish result artifacts
-provide TLS/auth for remote access        build PDF source units/evidence
-upgrade only after acceptance             run LLM and atomic current replacement
-```
+`build_object_graph` 当前没有构造 MinerU service client，也没有把 parser adapter 连接到 `LightDocumentService`。因此：
 
-SciRetriever never starts, stops, reloads or upgrades MinerU. It also does not configure the service's internal vLLM endpoint through request `server_url`. The connector talks to `mineru-api`, not directly to `mineru-openai-server` or a generic OpenAI-compatible inference endpoint.
+- `[parsing]` 通过 schema v2 验证，只证明配置结构和安全约束成立；
+- `OperatorManagedMinerUAdapter` 存在，只证明 Infrastructure 有可复用实现；
+- 在 Composition 增加具体 service client 并连接 `LightDocumentService` 之前，二者都不能写成终端用户可运行的 PDF 解析入口。
 
-## 3. Recommended deployment
+## 3. 所有权边界
 
-For a trusted workstation, keep the service on loopback and preload the model:
+| Operator 负责 | SciRetriever 边界 |
+|---|---|
+| 部署、启动、停止和升级 MinerU | 校验调用方提供的 parser 输入与结果 |
+| 准备模型、推理运行时、GPU 和显存 | 通过 `MinerUServicePort` 提交和轮询有界任务 |
+| 管理服务并发、队列和 task retention | 限制轮询，校验 task ID 与归档 |
+| 为远程访问提供 TLS、认证和上传策略 | 保持 secret、URL 和供应商类型不进入 Core |
+| 记录部署与模型身份 | 保存经过接纳的中性 parser provenance |
 
-```bash
-MINERU_MODEL_SOURCE=local \
-MINERU_API_MAX_CONCURRENT_REQUESTS=1 \
-mineru-api \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --enable-vlm-preload true
-```
+SciRetriever 不启动、停止、重载或升级 MinerU，也不管理服务内部的 vLLM endpoint。
 
-Preload occurs during FastAPI startup. A healthy response therefore means startup, including requested preload, completed. MinerU caches the local VLM in the service process and releases it when that process exits.
+## 4. 部署与配置安全
 
-For remote access:
+可信工作站应优先把 MinerU 保持在 loopback。远程访问必须由 operator 放在经过认证的 HTTPS 入口后，并明确确认 PDF 会离开本机数据边界。不要把无认证、无 TLS 的服务直接暴露到不可信网络。
 
-1. Keep `mineru-api` on loopback on the GPU host.
-2. Put it behind an authenticated HTTPS reverse proxy, private ingress or VPN.
-3. Enforce request-body limits and connection limits at that boundary.
-4. Run one MinerU process per task namespace. Do not put independent workers behind a non-sticky load balancer because task state is process-local.
-5. Disable public FastAPI docs when not needed with `MINERU_API_ENABLE_FASTAPI_DOCS=0`.
+Schema v2 的 `[parsing]` 字段、默认值和完整约束只在[配置手册](../guides/configuration.md)维护。关键边界如下：
 
-Do not expose plain `mineru-api --host 0.0.0.0` directly to an untrusted network. MinerU 3.4.4 does not provide native authentication, TLS or application-level upload-size limits.
+- `loopback` 只接受 loopback HTTP，禁止 secret reference 和 remote upload；
+- `remote` 要求非 loopback HTTPS、`secret_ref` 和 `remote_upload = true`；
+- `base_url` 拒绝 userinfo、query、fragment、路径跳转和编码后的路径分隔符；
+- secret 只能以 `env:VARIABLE_NAME` reference 保存，配置解析不会读取 secret 值；
+- `model` 是 operator 提供的部署标识，不能替代版本、协议或模型文件的独立 attestation。
 
-## 4. Health and readiness
+当前 Composition 不根据 `[parsing]` 构造 service client。调用方不能把配置解析成功当成服务 health、模型身份或任务容量已经验证。
 
-`GET /health` must return HTTP 200 and include:
+## 5. 外部服务协议
 
-```json
-{
-  "status": "healthy",
-  "version": "3.4.4",
-  "protocol_version": 2,
-  "max_concurrent_requests": 1,
-  "processing_window_size": 64,
-  "task_retention_seconds": 86400
-}
-```
+MinerU 3.4.4 的外部服务资料定义了 health、任务提交、状态查询和结果获取接口。当前 SciRetriever Infrastructure 只依赖抽象的 `submit(pdf)` 与 `poll(task_id)` port，没有发布这些 HTTP 路径的 SDK 合同，也没有在 Composition 中组装具体 HTTP client。
 
-SciRetriever checks the fixed service origin and requires health status `healthy`, version `3.4.4` and protocol `2` before submission. It does not currently validate the health response's concurrency, window or retention values. The API does not report model ID, model revision, CUDA/vLLM identity or a cryptographic deployment fingerprint; those remain operator-attested configuration and provenance.
+Operator 应在仓库外记录：
 
-`sciretriever config check` is offline by default and does not contact MinerU. The explicit `config check --runtime` mode performs one bounded, read-only health identity probe for an enabled target. A ready probe confirms the configured service/version/protocol identity only; it does not prove model attestation, capacity, future task success or acceptance of parser output.
+- MinerU wheel、lock 或 container digest；
+- 精确模型 ID、revision 和文件 hash；
+- 推理引擎、CUDA/driver 和 GPU 类型；
+- 服务并发、retention 和输出目录；
+- 部署标识和最近一次 acceptance corpus 结果。
 
-The operator should record, outside the repository:
+## 6. 结果接纳
 
-- MinerU wheel/version and lock or container digest;
-- exact model ID, revision and file hashes;
-- inference engine, CUDA/driver and GPU class;
-- service concurrency, retention and output root;
-- deployment identifier and last acceptance-corpus result.
+MinerU 归档即使来自受信 endpoint，也按不可信输入处理。当前 `MinerUArchiveAdapter` 要求归档恰好提供 `middle`、`model` 和 `content` 三类 JSON，并拒绝：
 
-## 5. Current connection configuration
+- 绝对路径、父目录跳转、反斜杠路径、重复路径、目录、符号链接和额外文件；
+- 超过单文件、总解压字节、归档字节或 JSON 字节上限的内容；
+- 重复 JSON key、非有限数字、过深结构和错误 schema；
+- PDF 无效、页数不一致、错误 backend、重复 block ID 或超量 block；
+- 无法与输入 primary PDF hash 对齐的请求。
 
-This is a minimal accepted shape. The complete [`config.toml`](../guides/config.toml) template and [configuration guide](../guides/configuration.md) list every accepted safety bound and exact field name:
+归档通过解析后仍要由 `LightDocumentService` 执行业务接纳和发布。后续阶段失败不能修改已接纳 primary PDF，也不能把部分 parser 输出当成完整文档事实。
 
-```toml
-[analysis.mineru]
-mode = "loopback" # or "remote"
-endpoint = "http://127.0.0.1:8000"
-service_version = "3.4.4"
-api_protocol = 2
-backend = "vlm-engine"
-model = "operator/model@revision"
-overall_deadline = 900.0
-poll_interval = 2.0
-max_upload_bytes = 104857600
-max_archive_bytes = 536870912
-max_archive_files = 10000
-max_extracted_bytes = 1073741824
-max_attempts = 3
-```
+## 7. 中断与恢复
 
-Remote mode additionally requires a runtime credential reference and an explicit remote-PDF-upload acknowledgement. Secret values never enter TOML examples, terminal output, diagnostics, provenance or current results.
+MinerU 3.4.4 的 task state 属于外部服务进程。服务重启或 retention 到期后，旧 task 可能不再存在。当前 adapter 支持调用方提供 `resume_task_id`，会在有 task ID 时继续轮询而不重复提交；轮询达到 adapter bounds 仍未完成时稳定失败。
 
-Loopback mode accepts only an explicit loopback origin. Remote mode requires HTTPS, authentication, `remote_upload = true`, and a globally routable DNS target; private remote address support is not implemented. Both modes reject userinfo, query/fragment, cross-origin redirects and response-supplied absolute task URLs.
+调用方和 operator 必须遵守以下规则：
 
-## 6. Request lifecycle
+- 中断本地调用不等于外部 task 已取消；
+- 只有同一可信部署仍认识 task ID 时才恢复轮询；
+- 不认识或过期的 task 由上层用例记录为失败，再决定是否建立新 attempt；
+- 已接纳的本地产物优先于远程 task 状态，不能被迟到结果覆盖；
+- parser 失败不得撤销已经提交的 metadata 或资产事实。
 
-SciRetriever uses the asynchronous API:
+## 8. 事故检查
 
-```text
-GET  /health
-POST /tasks
-GET  /tasks/{validated_uuid}
-GET  /tasks/{validated_uuid}/result
-```
+服务不可用时，operator 应检查 health、3.4.4 部署身份、协议 2、模型预加载和 GPU 日志。不要让 SciRetriever 代替 operator 启动备用进程。
 
-The request uploads one accepted primary PDF and fixes these fields:
+任务长期未完成时，检查服务并发、队列、GPU 容量和 retention。不要在同一 task 仍有效时无界重复提交。
 
-```text
-backend=vlm-engine
-formula_enable=true
-table_enable=true
-image_analysis=true
-return_md=false
-return_middle_json=true
-return_model_output=true
-return_content_list=true
-return_images=true
-response_format_zip=true
-return_original_file=false
-client_side_output_generation=false
-```
+结果被拒绝时，区分归档、JSON、PDF 对齐、页数、block 和文档 schema 错误。诊断只能保留有界、脱敏信息，不能保存 secret、task URL 或不安全解压路径。
 
-The connector validates a UUID task ID and derives status/result paths from the configured origin. It ignores response-provided absolute URLs. It submits at most the configured bounded number of tasks and does not fill MinerU's unbounded in-memory queue.
+## 9. 升级门禁
 
-## 7. Interruption and recovery
+改变 MinerU、模型、backend、推理引擎或输出 schema 前：
 
-MinerU task states are `pending`, `processing`, `completed` and `failed`. They live only in one service process. Completed/failed tasks are retained for 24 hours by default and then deleted.
-
-MinerU 3.4.4 has no cancellation endpoint and no idempotency key. Therefore:
-
-- Ctrl+C stops SciRetriever submission and polling; it does not claim the external task was cancelled.
-- The task ID is stored only as processing-attempt metadata under a deterministic run keyed by PDF hash and parser/model/config identity.
-- A rerun polls the existing task when the same service deployment still knows it.
-- `404` means unknown, expired or restarted service state; SciRetriever creates a new attempt under the same run.
-- A validated local derived artifact wins over any remote task state and is reused without another upload.
-- No parser result changes the current analysis until all local validation and atomic replacement gates succeed.
-
-Operators should set service retention longer than the maximum SciRetriever task deadline and expected interruption window.
-
-## 8. Result admission
-
-The result ZIP is hostile input even from a trusted endpoint. SciRetriever must stream it with a byte limit and reject:
-
-- absolute paths, `..`, duplicate paths, symlinks and unexpected file types;
-- excessive compressed/uncompressed size, compression ratio or file count;
-- excessive JSON depth, page/block/span count or text size;
-- oversized, malformed or unsupported images;
-- missing or malformed `middle.json`/content/model outputs;
-- backend/version mismatch, invalid page index/size, NaN/infinite/inverted/out-of-page bbox;
-- output that cannot be connected to the exact accepted primary PDF hash.
-
-Accepted raw parser outputs are published as immutable derived artifacts. `middle.json` supplies page, paragraph, line and span geometry; SciRetriever assigns stable source IDs and normalized offsets. `content_list.json`, model output and images provide supporting structure. Markdown is generated later and never substitutes for source evidence.
-
-## 9. Incident checklist
-
-### Service unavailable or unhealthy
-
-1. Check `/health` without printing credentials.
-2. Confirm version `3.4.4` and protocol `2`.
-3. Check the operator's model preload and GPU logs.
-4. Do not let SciRetriever start a replacement process.
-5. Keep old current results unchanged and rerun after readiness is restored.
-
-### Task remains pending
-
-1. Inspect `queued_ahead` and service concurrency.
-2. Confirm SciRetriever did not submit more than its configured in-flight limit.
-3. Check GPU capacity and the single-process deployment assumption.
-4. Do not resubmit while the same task remains known unless the processing deadline policy explicitly permits a new attempt.
-
-### Task disappears
-
-1. Treat `404` as expired or restarted in-memory state.
-2. Preserve the failed/lost attempt metadata.
-3. Submit a new attempt under the same deterministic processing run.
-4. Never publish two conflicting artifacts for the same derivation identity.
-
-### Result rejected
-
-1. Distinguish transport/archive/schema/geometry/evidence-validation categories.
-2. Preserve only bounded, redacted diagnostics; do not retain unsafe extracted paths.
-3. Keep the prior current result and immutable primary PDF untouched.
-4. Re-run the fixture before changing MinerU/model/config versions.
-
-## 10. Upgrade and retirement gate
-
-Before changing MinerU, model, backend, engine or output schema:
-
-1. Pin the candidate version and model revision.
-2. Run the scientific-PDF parser comparison and offline malicious-result fixtures.
-3. Compare reading order, formulas, tables, figures and page/bbox evidence quality.
-4. Review code/model/dependency licenses and deployment requirements.
-5. Update ADR/spec/plan/provenance schema only after owner acceptance.
-6. Keep the old service available until the new parser artifacts pass local validation; parser service availability must never force replacement of an existing current result.
-## SciRetriever invocation
-
-Configure the pinned target under `[analysis.mineru]`, configure the OpenAI-compatible analysis target under `[analysis.llm]`, export only the named credential variables at runtime, and run `sciretriever analyze` with an explicit selector. `search --level analyze` sends only that invocation's targets through the shared completion pipeline to the COMPLETE stop. SciRetriever does not own service lifecycle operations.
+1. 固定候选版本和模型 revision。
+2. 运行科学 PDF acceptance corpus 与恶意归档离线 fixture。
+3. 比较阅读顺序、公式、表格、图片和页级证据质量。
+4. 审查代码、模型、依赖许可和部署要求。
+5. 由 owner 接受后再更新 ADR、配置合同、provenance 或实现。
+6. 新产物通过本地接纳前，保留已有有效文档和资产，不因外部服务升级原地覆盖。
