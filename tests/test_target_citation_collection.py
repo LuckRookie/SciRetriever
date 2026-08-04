@@ -19,7 +19,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     CollectionAcceptancePublisher,
     open_read_only_snapshot,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.collection import (
     CausePageRequest,
     CitationCollectionRequest,

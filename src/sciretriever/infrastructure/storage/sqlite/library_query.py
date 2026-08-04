@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.kernel import BoundaryError
 from sciretriever.model.library_pages import LibraryPage, LibraryPageRequest
 from sciretriever.model.library_query import QueryFilterV1
 from sciretriever.model.library_views import WorkSummary, WorkVersionSummary
@@ -150,7 +149,8 @@ def search(
         cursor_clause = " AND (lower(json_extract(s.values_json,'$.title')),v.work_id,v.id)>(?,?,?)"
         parts = request.cursor.split("\0")
         if len(parts) != 3:
-            raise BoundaryError.for_field("cursor", "must encode a library ordering key")
+            message = "cursor must encode a library ordering key"
+            raise ValueError(message)
         parameters += tuple(parts)
     representative = (
         ""

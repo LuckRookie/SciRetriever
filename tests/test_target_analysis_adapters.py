@@ -27,8 +27,8 @@ from sciretriever.infrastructure.llm import (
     AnthropicAnalysisAdapter,
     OpenAIAnalysisAdapter,
 )
-from sciretriever.kernel.json import CanonicalJsonInput
 from sciretriever.model.analysis import AnalysisBounds
+from sciretriever.model.canonical_json import CanonicalJsonInput
 
 
 class TargetAnalysisAdapterTests(unittest.TestCase):

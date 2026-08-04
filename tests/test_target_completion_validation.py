@@ -18,7 +18,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     StalePublicationError,
 )
-from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.literature import CompletionSubmission, ReferenceMemberFact
 from sciretriever.model.primitives import (
     ReferenceMemberId,

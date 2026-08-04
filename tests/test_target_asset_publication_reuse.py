@@ -8,12 +8,12 @@ from sciretriever.infrastructure.storage.sqlite import (
     ContentAcceptancePublisher,
     create_or_open_catalog,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.assets import (
     ArtifactKind,
     PrimaryPdfAcceptance,
     SupplementaryAssetAcceptance,
 )
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.execution import ContentAcceptanceCommand
 from sciretriever.model.primitives import (
     AssetId,

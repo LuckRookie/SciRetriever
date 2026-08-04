@@ -9,8 +9,7 @@ from sciretriever.infrastructure.storage.sqlite.engine import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
-from sciretriever.kernel import (
-    BoundaryError,
+from sciretriever.model.canonical_json import (
     CanonicalJsonObject,
     parse_canonical_json,
 )
@@ -302,7 +301,8 @@ class SqliteCollectionRepository:
 
     def list_memberships(self, request: MembershipPageRequest) -> MembershipPage:
         if not 1 <= request.limit <= 1000:
-            raise BoundaryError.for_field("limit", "must be from 1 through 1000")
+            message = "limit must be from 1 through 1000"
+            raise ValueError(message)
         after = "" if request.after_work_id is None else str(request.after_work_id)
         with open_read_only_snapshot(self._catalog_path) as connection:
             rows = connection.execute(

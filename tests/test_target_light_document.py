@@ -76,14 +76,7 @@ class TargetLightDocumentTests(unittest.TestCase):
             self.assertTrue(contract.model_config["frozen"])
             self.assertTrue(contract.model_config["strict"])
             self.assertEqual(contract.model_config["extra"], "forbid")
-        for module_name in (
-            "sciretriever.content.api",
-            "sciretriever.content.light_models",
-            "sciretriever.content.light_document",
-            "sciretriever.content.light_serialization",
-            "sciretriever.content.light_service",
-        ):
-            self.assertIsNone(importlib.util.find_spec(module_name), module_name)
+        self.assertIsNone(importlib.util.find_spec("sciretriever.content"))
 
     def test_target_model_round_trip_keeps_nested_block_variants(self) -> None:
         document = validate_light_document(

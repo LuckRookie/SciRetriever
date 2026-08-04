@@ -17,7 +17,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     validate_catalog,
 )
 from sciretriever.infrastructure.storage.sqlite.engine import _metadata_sha256
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 
 
 class TargetStoreIntegrityHardeningTests(unittest.TestCase):

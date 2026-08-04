@@ -16,13 +16,13 @@ from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import (
     ArtifactKind,
     PrimaryPdfAcceptance,
     PublishedArtifact,
     SupplementaryAssetAcceptance,
 )
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.collection import CollectionAcceptance, CollectionMembershipFact
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import (

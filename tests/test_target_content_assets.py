@@ -20,7 +20,6 @@ from target_content_assets_support import (
 )
 
 from sciretriever.infrastructure.access.racing import CandidateRace
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.access import BoundedByteStream
 from sciretriever.model.assets import (
     AcceptedContentReference,
@@ -28,6 +27,7 @@ from sciretriever.model.assets import (
     ContentAssetReplay,
     ContentAssetSuccess,
 )
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.execution import TargetProjection, TargetResult
 from sciretriever.model.primitives import (
     AssetId,
@@ -102,12 +102,7 @@ class TargetContentAssetTests(unittest.TestCase):
         self.assertEqual(assets_api.__all__, expected)
         self.assertEqual(assets_package.__all__, expected)
 
-        for module_name in (
-            "sciretriever.content.assets",
-            "sciretriever.content.asset_acquisition",
-            "sciretriever.content.asset_validation",
-        ):
-            self.assertIsNone(importlib.util.find_spec(module_name), module_name)
+        self.assertIsNone(importlib.util.find_spec("sciretriever.content"))
 
     def test_exact_doi_primary_publishes_file_before_catalog(self) -> None:
         first = candidate("https://source.invalid/article")

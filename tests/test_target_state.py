@@ -32,7 +32,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     SqliteLiteratureRepository,
     create_or_open_catalog,
 )
-from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.execution import TargetProjection, TargetResult
 from sciretriever.model.primitives import (
     BatchRunId,

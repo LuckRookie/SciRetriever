@@ -16,7 +16,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
-from sciretriever.kernel import CanonicalJsonObject, parse_canonical_json
+from sciretriever.model.canonical_json import CanonicalJsonObject, parse_canonical_json
 from sciretriever.model.collection import CausePageRequest, CollectionAcceptance, TopicConditions
 from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier

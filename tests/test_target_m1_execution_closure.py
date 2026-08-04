@@ -9,8 +9,8 @@ from pydantic import BaseModel
 
 from sciretriever.core.assets import AssetRuleError, validate_supplementary_asset_acceptance
 from sciretriever.core.documents import LightDocumentError, validate_light_document_acceptance
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import ArtifactKind, PublishedArtifact
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.primitives import (
     AssetId,
     AssetRole,

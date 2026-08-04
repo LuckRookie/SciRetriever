@@ -13,7 +13,7 @@ from sciretriever.infrastructure.storage.sqlite import (
     create_or_open_catalog,
     validate_catalog,
 )
-from sciretriever.kernel import CanonicalJsonObject
+from sciretriever.model.canonical_json import CanonicalJsonObject
 
 
 class TargetPublisherSchemaIdentityTests(unittest.TestCase):

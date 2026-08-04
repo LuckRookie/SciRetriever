@@ -21,8 +21,8 @@ from target_content_assets_support import (
 )
 
 from sciretriever.infrastructure.access.racing import CandidateRace
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import ContentAssetFailure, ContentAssetReplay, ContentAssetSuccess
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.execution import TargetProjection, TargetResult
 from sciretriever.model.primitives import AssetRole, BatchRunId, WorkVersionId
 from sciretriever.services.assets import (

@@ -10,7 +10,7 @@ from sciretriever.infrastructure.storage.sqlite.library_maintenance import (
     rebuild_search_indexes,
 )
 from sciretriever.infrastructure.storage.sqlite.library_parse import reference
-from sciretriever.kernel import BoundaryError, parse_canonical_json
+from sciretriever.model.canonical_json import parse_canonical_json
 from sciretriever.model.library_details import (
     CollectionCause,
     CollectionMembershipPage,
@@ -140,7 +140,8 @@ class _LibraryRelations:
         self, version_id: WorkVersionId, unresolved: bool, limit: int, cursor: str | None
     ) -> GraphPage:
         if not 1 <= limit <= 1000:
-            raise BoundaryError.for_field("limit", "must be from 1 through 1000")
+            message = "limit must be from 1 through 1000"
+            raise ValueError(message)
         after = "" if cursor is None else cursor
         with open_read_only_snapshot(self._catalog_path) as connection:
             source = connection.execute(
@@ -198,7 +199,8 @@ class _LibraryRelations:
         self, collection_id: CollectionId, after: WorkId | None, limit: int
     ) -> CollectionMembershipPage:
         if not 1 <= limit <= 1000:
-            raise BoundaryError.for_field("limit", "must be from 1 through 1000")
+            message = "limit must be from 1 through 1000"
+            raise ValueError(message)
         after_id = "" if after is None else str(after)
         with open_read_only_snapshot(self._catalog_path) as connection:
             rows = connection.execute(

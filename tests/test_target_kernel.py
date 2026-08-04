@@ -2,23 +2,23 @@ from __future__ import annotations
 
 import ast
 from importlib import import_module
+from importlib.util import find_spec
 from pathlib import Path
 from unittest import TestCase
 
 from pydantic import ValidationError
 
-from sciretriever.kernel import (
-    BoundaryError,
+from sciretriever.model import primitives
+from sciretriever.model.canonical_json import (
+    CanonicalJsonError,
     CanonicalJsonObject,
     canonical_json_bytes,
     parse_canonical_json,
 )
-from sciretriever.model import primitives
 from sciretriever.model.documents import (
     EvidenceText,
     SourceLocator,
 )
-from sciretriever.model.execution import Action, FailureEvidence, Reason
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import (
     AssetId,
@@ -96,20 +96,20 @@ class KernelValueTests(TestCase):
 
 
 class CanonicalJsonTests(TestCase):
-    def test_public_kernel_uses_only_python_310_typing_apis(self) -> None:
-        kernel_root = Path(__file__).parents[1] / "src" / "sciretriever" / "kernel"
+    def test_canonical_json_uses_only_python_310_typing_apis(self) -> None:
+        canonical_json_path = (
+            Path(__file__).parents[1] / "src" / "sciretriever" / "model" / "canonical_json.py"
+        )
 
-        for source_path in kernel_root.glob("*.py"):
-            source = source_path.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=str(source_path), feature_version=(3, 10))
-            typing_imports = {
-                alias.name
-                for node in ast.walk(tree)
-                if isinstance(node, ast.ImportFrom) and node.module == "typing"
-                for alias in node.names
-            }
-            with self.subTest(source=source_path.name):
-                self.assertNotIn("assert_never", typing_imports)
+        source = canonical_json_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(canonical_json_path), feature_version=(3, 10))
+        typing_imports = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "typing"
+            for alias in node.names
+        }
+        self.assertNotIn("assert_never", typing_imports)
 
     def test_parser_rejects_duplicate_nonfinite_and_invalid_values(self) -> None:
         malformed = (
@@ -120,12 +120,12 @@ class CanonicalJsonTests(TestCase):
         )
 
         for payload in malformed:
-            with self.subTest(payload=payload), self.assertRaises(BoundaryError):
+            with self.subTest(payload=payload), self.assertRaises(CanonicalJsonError):
                 parse_canonical_json(payload)
 
         for value in (float("nan"), float("inf"), -float("inf")):
             with self.subTest(value=value):
-                with self.assertRaises(BoundaryError):
+                with self.assertRaises(CanonicalJsonError):
                     canonical_json_bytes(value)
 
     def test_parser_round_trip_preserves_canonical_value(self) -> None:
@@ -138,14 +138,9 @@ class CanonicalJsonTests(TestCase):
 
 
 class ContractTests(TestCase):
-    def test_generic_extension_kernel_surface_is_absent(self) -> None:
-        kernel = import_module("sciretriever.kernel")
-
-        self.assertFalse(hasattr(kernel, "OpaqueExtensionRecord"))
-        self.assertFalse(hasattr(kernel, "OpaqueExtensionRecordStorePort"))
+    def test_kernel_package_is_absent(self) -> None:
+        self.assertIsNone(find_spec("sciretriever.kernel"))
         self.assertFalse(hasattr(primitives, "ExtensionRecordId"))
-        with self.assertRaises(ModuleNotFoundError):
-            import_module("sciretriever.kernel.extensions")
 
     def test_foundation_contracts_are_frozen_and_round_trip(self) -> None:
         provenance = Provenance(
@@ -197,20 +192,6 @@ class ContractTests(TestCase):
                 with self.assertRaises(ValidationError) as raised:
                     provenance_type(**arguments)
                 self.assertEqual(raised.exception.errors()[0]["loc"], (field,))
-
-    def test_reason_action_errors_have_stable_typed_fields(self) -> None:
-        evidence = FailureEvidence(
-            code="invalid-boundary",
-            reason=Reason(value="The supplied value is invalid."),
-            action=Action(value="Supply a canonical value."),
-            retryable=False,
-        )
-        error = BoundaryError.from_evidence(evidence, field="work_id")
-
-        self.assertEqual(error.code, "invalid-boundary")
-        self.assertEqual(error.reason, evidence.reason)
-        self.assertEqual(error.action, evidence.action)
-        self.assertEqual(error.field, "work_id")
 
 
 if __name__ == "__main__":

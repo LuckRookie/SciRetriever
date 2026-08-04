@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import ast
 import importlib
+import importlib.util
 import unittest
 from pathlib import Path
 
@@ -12,6 +12,7 @@ from sciretriever.model.primitives import BatchRunId, UtcTimestamp, WorkVersionI
 
 ROOT = Path(__file__).parents[1]
 SRC = ROOT / "src" / "sciretriever"
+RETIRED_PACKAGES = ("adapters", "runtime", "batching", "content", "enrichment")
 EXECUTION_NAMES = (
     "CurrentFailure",
     "TargetResult",
@@ -47,28 +48,11 @@ class TargetExecutionContractTests(unittest.TestCase):
             self.assertNotIn("canonical", contract.__dict__, name)
             self.assertNotIn("result_envelope", contract.__dict__, name)
 
-    def test_batching_no_longer_defines_execution_data_contracts(self) -> None:
-        path = SRC / "batching" / "publisher_contracts.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        defined = {
-            node.name
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-        }
-        self.assertTrue(
-            defined.isdisjoint(
-                {
-                    "CurrentFailure",
-                    "TargetResult",
-                    "TargetResultEnvelope",
-                    "TargetProjection",
-                    "ImportResult",
-                    "ImportRecordProjection",
-                    "BatchSummary",
-                    "BatchDetail",
-                }
-            )
-        )
+    def test_retired_packages_are_absent(self) -> None:
+        for package in RETIRED_PACKAGES:
+            with self.subTest(package=package):
+                self.assertFalse((SRC / package).exists())
+                self.assertIsNone(importlib.util.find_spec(f"sciretriever.{package}"))
 
     def test_core_canonicalization_preserves_target_payload_bytes(self) -> None:
         execution = importlib.import_module("sciretriever.model.execution")

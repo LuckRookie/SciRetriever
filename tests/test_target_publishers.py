@@ -30,8 +30,8 @@ from sciretriever.infrastructure.storage.sqlite import (
     create_or_open_catalog,
     open_read_only_snapshot,
 )
-from sciretriever.kernel import CanonicalJsonObject
 from sciretriever.model.assets import PrimaryPdfAcceptance
+from sciretriever.model.canonical_json import CanonicalJsonObject
 from sciretriever.model.collection import CollectionAcceptance
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import ContentAcceptanceCommand, ImportAcceptanceCommand

@@ -7,12 +7,12 @@ from sciretriever.infrastructure.storage.sqlite.publisher_support import (
     StatementFailpoint,
     execute,
 )
-from sciretriever.kernel import canonical_json_bytes
 from sciretriever.model.assets import (
     AssetPublication,
     PrimaryPdfAcceptance,
     SupplementaryAssetAcceptance,
 )
+from sciretriever.model.canonical_json import canonical_json_bytes
 from sciretriever.model.primitives import AssetId
 
 

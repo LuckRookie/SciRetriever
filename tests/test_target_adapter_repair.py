@@ -114,7 +114,7 @@ class TargetAdapterRepairTests(unittest.TestCase):
         target_classes = {node.name for node in access_tree.body if isinstance(node, ast.ClassDef)}
         self.assertTrue(expected <= target_classes)
 
-        self.assertIsNone(importlib.util.find_spec("sciretriever.content.model"))
+        self.assertIsNone(importlib.util.find_spec("sciretriever.content"))
 
         target_module = importlib.import_module("sciretriever.model.access")
         for name in expected:

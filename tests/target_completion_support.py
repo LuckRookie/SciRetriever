@@ -17,9 +17,9 @@ from sciretriever.infrastructure.storage.sqlite import (
     CompletionPublisher,
     create_or_open_catalog,
 )
-from sciretriever.kernel import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.analysis import AnalysisProposalV1, AnalysisTarget
 from sciretriever.model.assets import ArtifactKind, PublishedArtifact, StagedArtifact
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.documents import LightDocumentAcceptance
 from sciretriever.model.execution import (
     ContentAcceptanceCommand,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from sciretriever.core.literature.completion import metadata_snapshot_sha256
-from sciretriever.kernel import (
+from sciretriever.model.canonical_json import (
     CanonicalJsonObject,
     canonical_json_bytes,
 )

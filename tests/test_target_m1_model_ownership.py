@@ -105,7 +105,7 @@ class TargetM1ModelOwnershipTests(TestCase):
     def test_ast_inventory_classifies_every_legacy_class_and_alias(self) -> None:
         inventory = _inventory()
 
-        self.assertTrue(inventory)
+        self.assertEqual(inventory, ())
         self.assertTrue(all(category for _path, _name, category in inventory))
         self.assertEqual(
             {name for _path, name, category in inventory if category == "pure-business-data"},

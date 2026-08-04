@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from sciretriever.kernel import canonical_json_bytes
-from sciretriever.kernel.json import CanonicalJsonObject
+from sciretriever.model.canonical_json import CanonicalJsonObject, canonical_json_bytes
 from sciretriever.model.library import CurationScope, SnapshotToken
 from sciretriever.model.primitives import sha256_digest
 

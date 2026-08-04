@@ -1,47 +1,20 @@
 from __future__ import annotations
 
-import json
-from typing import NoReturn, TypeAlias
-
+from sciretriever.model.canonical_json import (
+    CanonicalJsonError,
+    canonical_json_bytes,
+    parse_canonical_json,
+)
 from sciretriever.model.library import ValidatedCurationPlan
 from sciretriever.model.primitives import WorkId, WorkVersionId
 
 from .curation_errors import CurationPlanError
 
-JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
-
-
-class _InvalidCanonicalJsonError(ValueError):
-    pass
-
-
-def _reject_constant(value: str) -> NoReturn:
-    raise _InvalidCanonicalJsonError(f"non-finite JSON number: {value}")
-
-
-def _unique_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
-    keys = tuple(key for key, _value in pairs)
-    if len(keys) != len(set(keys)):
-        raise _InvalidCanonicalJsonError("JSON object keys must be unique")
-    return dict(pairs)
-
 
 def _canonical_json(payload: str) -> str:
     try:
-        decoded = json.loads(
-            payload,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-        payload.encode("utf-8")
-        return json.dumps(
-            decoded,
-            ensure_ascii=True,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    except (TypeError, UnicodeError, ValueError) as error:
+        return canonical_json_bytes(parse_canonical_json(payload)).decode("ascii")
+    except CanonicalJsonError as error:
         raise CurationPlanError("reference downgrade payload must be canonical JSON") from error
 
 

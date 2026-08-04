@@ -11,7 +11,7 @@ from sciretriever.infrastructure.storage.sqlite.publisher_support import (
     immediate,
     publish_bibliography,
 )
-from sciretriever.kernel import canonical_json_bytes
+from sciretriever.model.canonical_json import canonical_json_bytes
 from sciretriever.model.collection import CollectionAcceptance, ExistingCollectionAcceptance
 from sciretriever.services.collection.errors import CollectionAcceptanceConflict
 
