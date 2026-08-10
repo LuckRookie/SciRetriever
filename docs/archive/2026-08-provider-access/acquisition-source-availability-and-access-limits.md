@@ -6,6 +6,8 @@ created = "2026-07-28"
 
 # 多下载源可用性与合理访问限制提案
 
+> 归档说明：本提案已由 2026-08-07 接受的 [ADR 0009](../../architecture/decisions/0009-provider-scoped-global-access-scheduling.md)和当前 design/technical 取代。文内只覆盖 acquisition、只协调单进程以及供应商建议数值等内容均保留为历史讨论，不再构成当前目标设计或实施授权。
+
 ## 1. 提案状态
 
 本文源于 2026-07-28 旧实现中多种全文来源无法稳定取得主文 PDF 的问题，讨论未来如何为下载过程增加符合供应商要求的访问限制。本文是活动提案，不授权实施，不修改当前配置或已发布行为，也不替代项目 README、Provider 注意事项或架构文档。带日期的实现事实只作为形成提案时的证据快照，不作为当前行为真相源；当前六层对象图没有可运行的多来源资产获取流程。
@@ -52,7 +54,7 @@ created = "2026-07-28"
 | Springer Nature | XML、HTML | API key 和对应产品授权有效 | 外部资料不证明主文 PDF 能力，当前也没有具体 client |
 | Sci-Hub | 主文 PDF | operator 显式提供获准 endpoint 与 client | 无统一官方限速，无 live 验证，也没有默认 endpoint 或具体 client |
 
-表中的能力来自供应商资料或带日期的历史观察，不证明当前凭据、授权、网络、候选地址和供应商服务可以共同完成下载。当前接入状态以 [Provider 注意事项](../notes/providers.md)、Composition wiring、源码和直接测试为准。后续产品呈现和诊断应避免把这些状态合并为一个简单的 available/unavailable 布尔值。
+表中的能力来自供应商资料或带日期的历史观察，不证明当前凭据、授权、网络、候选地址和供应商服务可以共同完成下载。当前接入状态以 [Provider 注意事项](../../notes/providers/README.md)、Composition wiring、源码和直接测试为准。后续产品呈现和诊断应避免把这些状态合并为一个简单的 available/unavailable 布尔值。
 
 ### 3.3 当前访问限制的缺口
 
@@ -197,7 +199,7 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 ## 10. 风险与权衡
 
 - **吞吐下降。** 未知主机 30 秒兜底和 Wiley 10 秒间隔会延长批量下载时间。
-- **官方规则会变化。** 限制值属于易变外部事实，接受后应由 [Provider 注意事项](../notes/providers.md)维护最后核对日期和证据等级。
+- **官方规则会变化。** 限制值属于易变外部事实，接受后应由 [Provider 注意事项](../../notes/providers/README.md)维护最后核对日期和证据等级。
 - **周期额度难以在多进程间精确共享。** 首版“共享”只指同一 SciRetriever 进程，不协调不同调用方进程或不同 catalog。它们仍可能共同超额，只能依赖响应头、保守速度和 operator 约束来降低风险。
 - **候选主机很多。** 对未知主机使用统一兜底简单可靠，但不能替代未来针对高价值出版社的正式规则核对。
 - **状态表达增加。** 更细的可用性分类改善解释，但必须避免把它们误写成第二套 completion 状态。
@@ -241,10 +243,10 @@ Crossref、Elsevier 和 OpenAlex 的官方上限高于表中的保守运行值�
 
 ### 当前项目
 
-- [项目 README](../../README.md)
-- [Provider 接入注意事项](../notes/providers.md)
-- [ADR 0002](../architecture/decisions/0002-literature-identity-and-incremental-processing.md)
-- [设计文档“文献收集”](../architecture/design.md#3-文献收集)
+- [项目 README](../../../README.md)
+- [Provider 接入注意事项](../../notes/providers/README.md)
+- [ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)
+- [设计文档“PDF 获取与状态记录”](../../architecture/design.md#33-pdf-获取与状态记录)
 - `src/sciretriever/model/configuration.py`
 - `src/sciretriever/infrastructure/access/budgets.py`
 - `src/sciretriever/infrastructure/sources/assets/adapters.py`

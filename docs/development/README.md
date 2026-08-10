@@ -15,4 +15,8 @@ uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
 ```
 
+Quick 只运行 Ruff lint、format check 和 compileall，适合重构开发循环。Full 另外运行
+Pyright strict、全部 unittest、wheel 构建与内容核对，只在集成里程碑、PR、主分支和发布边界要求。
+普通重构工作包优先运行相关测试，不要求每次都执行 Full；精确规则见根目录 `HARNESS.md`。
+
 测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。

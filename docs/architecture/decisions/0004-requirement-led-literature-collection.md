@@ -2,15 +2,17 @@
 
 - Status: Accepted
 - Date: 2026-07-29
+- Revised: 2026-08-05
 - Supersedes: 旧文档中把 Work、状态机、CLI、解析器协议和其它技术机制写成产品需求的表述
 - Superseded by: none
+- Amended by: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[技术文档](../technical.md)
 
 ## 背景
 
 旧需求文档混入了数据模型、状态、命令、配置、解析器协议和实现验收，使技术方案反过来定义了用户问题。这样既掩盖了真正需求，也会把尚未讨论的设计提前固化成产品合同。
 
-Owner 已重新确认产品需求：用户指定领域条件，系统从多家供应商搜索文献元数据，使用元数据获取文献资产，解析文献并获得轻结构化文本，最终形成文献数据库。
+Owner 已重新确认产品需求：用户指定领域条件，系统从多家供应商搜索文献元数据，使用元数据获取文献资产，解析文献并获得轻结构化文档，最终形成文献数据库。
 
 ## 决策
 
@@ -23,8 +25,8 @@ Owner 已重新确认产品需求：用户指定领域条件，系统从多家�
 
 ## 后果
 
-- 阅读产品需求时不需要先理解 Work、状态机、MinerU 或 CLI。
-- Work/WorkVersion、不可变资产和 parser adapter 可以继续作为设计，但必须以解决多来源重复、版本、追溯和解析等需求压力为理由。
+- 阅读产品需求时不需要先理解 MetaLiterature、Literature、状态机、MinerU 或 CLI。
+- MetaLiterature/Literature、不可变资产和 parser adapter 可以继续作为设计，但必须以解决多来源重复、版本、追溯和解析等需求压力为理由。
 - 新设计先更新设计文档或形成讨论结论；只有需要长期锁定的关键选择才新增或修改 ADR。
 - 当前代码行为不能因为已经实现就自动升级为产品需求。
 

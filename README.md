@@ -6,9 +6,9 @@
 
 ## 产品定位
 
-SciRetriever 面向需要持续建立专题文献集合的研究者和文献整理人员。产品目标是汇总多来源文献元数据，获取并保存文献资产，生成轻结构化文本和通用结构化分析结果，最终形成可查询、可补充、可交换书目信息的文献数据库。
+SciRetriever 面向需要持续建立专题文献集合的研究者和文献整理人员。产品目标是汇总多来源文献元数据，获取并保存文献资产，生成可直接阅读、导出和结构化使用的总结型轻结构化文档，最终形成可查询、可补充、可交换书目信息的文献数据库。
 
-产品边界止于通用文献元数据、资产、轻结构化文本、通用结构化文献分析结果及其 provenance。反应、分子、路线、产率、材料性质等领域数据由下游系统处理。完整目标见[产品需求](docs/architecture/requirements.md)，已接受约束见[架构决策索引](docs/architecture/decisions/README.md)。
+产品边界止于通用文献元数据、资产、总结型轻结构化文档及其同源结构化章节、引用关系和 provenance。反应、分子、路线、产率、材料性质等领域数据由下游系统处理。完整目标见[产品需求](docs/architecture/requirements.md)，已接受约束见[架构决策索引](docs/architecture/decisions/README.md)。
 
 ## 当前使用方式
 
@@ -81,7 +81,7 @@ Provider 或 MinerU 的外部说明不能扩大发布能力。是否可用仍以
 
 ## 数据与安全边界
 
-- `Work` 和 `WorkVersion` 是当前接受的内部身份机制，来源 observation 必须保留。
+- 当前迁移前源码仍使用 `Work` 和 `WorkVersion`；目标身份已经确定为 `MetaLiterature` 和 `Literature`。来源 observation 在两者中都必须保留。
 - SQLite 保存关系、相对引用、hash 和 provenance，不保存大型文献 BLOB 或机器相关绝对资产路径。
 - 已接受资产和发布产物采用不可变发布，不能原地覆盖不同字节。
 - Secret 值不能进入 Model、SQLite、provenance、diagnostics、URL、文件名或用户输出。
@@ -95,6 +95,8 @@ uv sync --locked --dev
 uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
 ```
+
+Quick 用于重构开发循环中的 lint、format 和编译检查；Full 用于严格类型、全量测试和安装包集成验收。
 
 协作规则见 [`AGENTS.md`](AGENTS.md) 和 [`HARNESS.md`](HARNESS.md)，代码与文档同步关系见[开发手册](docs/development/README.md)。
 

@@ -2,7 +2,8 @@
 
 本目录保存外部供应商和工具随时间变化、但又需要集中维护的事实。它们帮助调用方理解外部依赖和排障，不重新定义产品架构、配置合同或已发布能力。
 
-- [Provider 接入注意事项](providers.md)：各 metadata/asset Provider 的认证要求、限流、外部能力、已知限制和检查重点。
+- [Provider 接入注意事项](providers/README.md)：各 metadata/asset Provider 的总览、认证要求、限流、外部能力、已知限制和厂商调研索引。
+- [PDF 获取路径参考实现调研](pdf-acquisition-reference-paths.md)：两个本地下载项目与 Zotero 官方实现的公开来源、授权 API、浏览器路径、候选顺序和验证边界对比。
 - [MinerU 接入注意事项](mineru.md)：外部 MinerU 服务的固定目标、所有权、安全、恢复和升级注意事项。
 - [工具中立性声明](tool-neutrality.md)：项目对来源和工具的中立立场及工程安全边界。
 

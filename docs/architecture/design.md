@@ -1,839 +1,834 @@
 # SciRetriever 设计
 
+- Owner 确认：2026-08-10
 - 需求依据：[产品需求](requirements.md)
-- 技术实现：[技术设计](technical.md)
+- 技术实现：[技术文档](technical.md)
 - 重要决策：[架构决策](decisions/README.md)
 
-本文说明为了满足产品需求，SciRetriever 采用什么系统架构，在逻辑上由哪些业务模块和功能模块组成，各模块叫什么、承担什么责任、拥有哪些信息以及如何交换结果。本文不规定代码目录、类、函数、接口协议、数据库表、算法、依赖库、配置、部署或运行维护方式。
+本文说明 SciRetriever 为满足产品需求所采用的整体架构、模块责任、核心数据流和事实所有权。本文只描述已经确认的目标设计，不描述当前代码完成度，也不规定类、函数、数据库表、供应商协议或部署参数；这些内容由[技术文档](technical.md)、当前源码和测试说明。
 
-设计文档按模块逐项讨论和确认。本文只保留已经确认的设计结论，不从当前代码或旧设计反向补全。
+## 1. 设计边界
 
-## 1. 设计起点
+SciRetriever 围绕统一文献数据库设计。用户通过领域条件或种子文献发起有边界的外部发现，系统从多个来源获得元数据并写入数据库；用户随后可以按数据库当前事实独立补齐 PDF 与总结型内容。发现和补全不强制绑定成一次线性运行，最终共同维护可以持续查询、补充和交换书目信息的文献数据库。
 
-设计从[产品需求](requirements.md)确认的八项核心能力出发：
+设计必须覆盖[产品需求](requirements.md)中的八项能力：
 
 1. 按主题领域收集文献；
 2. 按引用关系迭代收集文献；
 3. 从多个来源汇总和整理文献元数据；
 4. 获取文献全文及相关资产；
-5. 解析文献内容并获得轻结构化文本；
-6. 使用语言模型获得结构化文献分析结果；
+5. 解析文献资产并获得语言模型可用的中间内容；
+6. 使用语言模型判断内容，先确定最终元数据，再以该元数据为上下文形成总结型轻结构化文档；
 7. 持续建立、查询和补充文献数据库；
 8. 通过主流文献格式导入和导出书目信息。
 
-系统还必须共同满足大批量处理、局部成功、重复运行、持续补充、一致性、可追溯性和数据完整性要求。
+系统保持领域中立，只管理通用文献元数据、资产、总结型轻结构化文档、引用关系和必要的 provenance。轻结构化文档的规范 Markdown 与结构化章节是同一内容的两种表示，不再建立平行分析或标签结果。反应、分子、路线、产率、材料性质等领域数据不进入 SciRetriever 文献数据库。
 
-## 2. 总体结构
+## 2. 整体架构
 
-系统采用模块化单体、统一业务核心和明确技术能力边界。主题领域收集、引用迭代收集和书目信息导入最终进入同一文献数据库；资产获取、内容解析和结构化分析共同补充数据库中的文献内容；查询与导出读取同一套文献事实。任何可替换能力都不得形成第二套核心流程或彼此隔离的文献结果。
-
-### 2.1 系统分层
-
-系统固定为六层：
-
-| 层 | 系统责任 | 不负责 |
-|---|---|---|
-| Model | 统一定义系统内部交换的纯数据，并通过 Pydantic 完成字段类型、必填项、额外字段拒绝及受控边界格式转换等结构解析 | 业务合法性判断、业务规范化、流程、存储和外部调用 |
-| Core | 保存全部业务规则和决定，是文献身份、资产验收、文档完整性、分析验收和执行结果含义的唯一解释者 | 数据库、文件、网络、浏览器和供应商协议 |
-| Services | 把用户用例组织为可执行流程，调用 Core 并请求功能模块完成外部能力或持久化 | 重新定义业务规则和拥有技术实现 |
-| Infrastructure | 提供存储、外部访问、文献来源、parser、LLM、书目文件和本机锁等功能能力 | 文献身份、最终验收、状态和导出资格判断 |
-| Interface | 接受用户输入并呈现用例结果 | 业务规则、持久化和外部能力实现 |
-| Composition | 读取运行配置并选择、组装具体能力 | 产品规则和用户交互语义 |
-
-依赖方向由外向内：Interface 只调用 Services，Services 调用 Core 并通过能力需求使用 Infrastructure，Core 只消费 Model。Infrastructure 可以实现 Services 所需要的能力，但不能反向决定业务含义；Composition 是唯一了解全部具体模块并完成组装的边界。
-
-### 2.2 业务模块
-
-Core 和 Services 使用同一组业务模块名称，但承担不同责任：Core 决定规则，Services 编排用例。
-
-| 业务模块 | 名称 | 业务责任 |
-|---|---|---|
-| 文献收集 | Collection | 长期收集目标、主题收集、引用迭代、发现原因、成员归属和停止边界 |
-| 文献管理 | Literature | 文献身份、版本、来源元数据、统一元数据、引用、标签和当前可用程度 |
-| 资产处理 | Assets | 资产候选、主文献归属、文件有效性、主正文和身份验收 |
-| 文档处理 | Documents | 轻结构化文档、完整性、资产对应关系和 lineage |
-| 结构化分析 | Analysis | 九类通用分析、输入对齐、最终元数据、引用和标签提案 |
-| 文献库使用 | Library | 查询、检查、有限整理以及书目信息导入导出规则 |
-| 执行与结果 | Execution | 实际目标筛选、局部成功、中断、重跑、逐目标结果和摘要 |
-
-`Literature` 表示产品管理的文献及其版本，不使用 `Bibliography` 作为整个文献领域的名称。Bibliography 只用于描述 BibTeX、RIS、CSL JSON 等书目记录和文件交换语义。
-
-### 2.3 功能模块
-
-功能模块提供可替换的技术能力，不拥有业务事实：
-
-| 功能模块 | 名称 | 功能责任 |
-|---|---|---|
-| 持久化 | Storage | 关系事实、事务、读取模型以及不可变大文件保存 |
-| 外部访问 | Access | 共享访问政策、普通 HTTP 和受控浏览器执行 |
-| 文献来源 | Sources | metadata、citation 和 asset 来源协议及中性转换 |
-| 文档解析 | Parsers | MinerU 等 parser 协议及中性轻结构化结果转换 |
-| 模型调用 | LLM | 语言模型协议、请求映射和结构化响应解析 |
-| 对外记录 I/O | IO | BibTeX/BibLaTeX、RIS、CSL JSON 文件读写 |
-| 运行互斥 | Locking | 单机写入准入和同目标输出互斥 |
-
-Access 内部的 Policy、HTTP 和 Browser 是平级能力。Policy 统一解释 URL、DNS、redirect、origin 和脱敏安全边界；HTTP 负责普通网络请求；Browser 负责浏览器进程、隔离会话、页面导航和下载捕获。来源专属的页面步骤属于 Sources，最终资产验收属于 Assets。
-
-### 2.4 总体协作
-
-总体协作关系为：
+整体架构遵循[以文献数据库为中心的增量维护](decisions/0011-literature-database-centered-incremental-maintenance.md)和[外部发现与数据库补全解耦](decisions/0013-decoupled-discovery-and-database-maintenance.md)：每项产品操作都由用户输入和当前逻辑文献数据库共同启动。查询和只读导出直接读取一致的当前事实；外部发现和数据库补全分别形成自己的明确操作，新的有效结果再提交回同一数据库。
 
 ```text
-主题领域条件 ─────────────┐
-                          ├─> 文献收集 ────────┐
-种子文献与引用关系 ───────┘                    |
-                                               v
-书目信息导入 ─────────────────────────> 文献信息管理
-                                               |
-                                               v
-                                          文献数据库
-                                               |
-                                               v
-                                          文献内容处理
-                                 文献资产 -> 解析 -> 结构化分析
-                                               |
-                                               v
-                                     查询、补充与书目信息导出
+用户输入 + 当前逻辑文献数据库
+  -> Entry 形成实际目标范围
+  -> Literature 与各读取 Port 提供当前权威事实
+  -> 推导缺失或明确失效的步骤
+  -> Metadata / Acquisition / Parsing / Analysis 执行必要能力
+  -> 对应业务所有者验证结果
+  -> Storage 原子保存确认事实
+  -> 得到新的文献数据库状态
 ```
 
-Execution 横跨整个流程，但不重新定义或复制文献事实。Storage 保存其它业务模块已经确认的事实，不能根据存储内容自行形成新的业务决定。基于文献数据库的可选能力只消费核心结果，不进入上述核心流程。
+新的 DiscoveryRun 和书目导入也先结合已有数据库完成身份命中、去重和接纳；查询、导出和重复处理读取同一套事实。数据库补全只在当前进程内展开 selector、冻结目标和形成报告，不建立持久化 BatchRun。Provider、网络、Parser、LLM、运行报告和临时文件只服务于形成确认事实或反馈本次操作，不构成与文献数据库并列的状态或结果来源。数据库在这里是产品级统一逻辑边界，不等同于具体存储引擎，也不改变各业务模块对事实含义的所有权。
 
-以下章节按产品流程详细说明这些业务模块和功能模块的责任、逻辑信息及协作规则。为了保持阅读连续性，资产、文档和分析在“文献内容处理”章节共同说明，Library 与 IO 在“文献库使用与互操作”章节共同说明。所有模块使用统一文献数据库和同一套文献可用程度，不得另建平行核心流程。
-
-## 3. 文献收集
-
-### 3.1 设计目标
-
-文献收集负责把用户的长期收集目标转化为一次或多次可追溯的收集执行，并解释每篇文献为什么进入某个收集。主题领域和引用迭代是同一模块提供的两种收集方式，它们共享后续文献信息管理和文献数据库，不形成两套文献体系。
-
-### 3.2 责任边界
-
-文献收集负责：
-
-- 保存可重复使用的长期收集目标；
-- 按用户选择执行主题领域收集或引用迭代收集；
-- 记录每次执行采用的收集方式、输入条件和整体结果；
-- 保留文献被发现的条件、种子文献或引用路径；
-- 将发现的文献信息及其来源交给文献信息管理；
-- 支持同一收集目标重复执行，并保留已有有效结果。
-
-文献收集不负责：
-
-- 判断来自不同来源的结果是否代表同一文献；
-- 决定文献最终采用哪些元数据信息；
-- 获取、解析或分析文献内容；
-- 定义文献数据库的统一文献事实；
-- 决定具体来源如何查询、如何分页或如何限制请求。
-
-### 3.3 逻辑信息
-
-文献收集拥有三类逻辑信息。它们描述业务含义，不等同于数据库表或代码类型。
-
-| 逻辑信息 | 含义 | 主要内容 |
-|---|---|---|
-| 收集定义 | 用户长期想收集什么 | 收集目标、名称、创建信息和可重复使用的条件 |
-| 收集执行 | 某次实际进行了什么收集 | 所属收集、收集方式、本次输入、开始与结束结果 |
-| 收集归属 | 某篇文献为什么进入该收集 | 所属收集、发现它的执行、命中条件、种子文献或引用发现路径 |
-
-一个长期收集可以包含多次收集执行。每次执行必须明确选择主题领域或引用迭代中的一种方式，不能在一次执行中混合两种不同语义。同一篇文献可以属于多个收集，每个收集归属独立保留原因。
-
-### 3.4 主题领域收集
-
-主题领域收集读取用户已经保存的领域条件，向多个文献来源查找相关结果，并把各来源成功返回的文献信息和来源信息交给文献信息管理。
+### 2.1 端到端框架
 
 ```text
-收集定义中的领域条件
-  -> 发起一次主题领域收集执行
-  -> 从多个文献来源发现结果
-  -> 将发现结果交给文献信息管理
-  -> 获得统一文献引用
-  -> 建立或补充收集归属
-  -> 汇总本次执行结果
+用户操作 + 当前逻辑文献数据库
+  │
+  ├─ 领域条件或种子文献
+  │    -> DiscoveryRun
+  │    -> Metadata 多来源搜索或有界引用扩展
+  │    -> Literature 身份接纳、统一元数据与引用关系
+  │    -> 保存发现结果和原因
+  │
+  ├─ 缺失 PDF 或最终内容补全
+  │    -> 运行时 BatchSelector 从当前数据库展开范围
+  │    -> 在当前进程内冻结实际 MetaLiterature/Literature 目标
+  │    -> 按当前事实选择具体版本和第一个缺失步骤
+  │    -> Acquisition -> Parsing -> Analysis -> Literature 接纳
+  │    -> 各阶段确认事实写回数据库
+  │    -> 返回本次运行报告，不保存批次历史
+  │
+  ├─ 手动 PDF
+  │    -> 明确具体 Literature
+  │    -> Acquisition 复制、基本检查并发布内部主资产
+  │
+  └─ 查询、书目导入导出
+       -> 读取或更新同一数据库
 ```
 
-某个来源失败不能撤销其它来源已经成功发现的结果。重复执行同一收集时，已有收集归属继续保留，新发现文献和先前缺失结果得到补充，不因重复执行持续制造无意义的归属记录。
-
-### 3.5 引用迭代收集
-
-引用迭代收集从一篇或一组种子文献出发，沿文献引用关系逐层发现相关文献。种子可以来自文献数据库中已经存在的文献，也可以从当前收集中选择。
-
-每次引用迭代执行由用户指定：
-
-- 种子文献；
-- 扩展方向：参考文献、被引用文献或双向；
-- 最大迭代层数；
-- 最大新增文献数。
+单个具体 Literature 的内容补全继续使用以下处理链：
 
 ```text
-种子文献
-  -> 读取用户选择方向上的引用关系
-  -> 发现当前层候选文献
-  -> 将候选文献信息交给文献信息管理
-  -> 获得统一文献引用并记录发现路径
-  -> 以本层新增文献继续下一层
+Acquisition（PDF 获取或已有当前主 PDF）
+  -> 当前 PDF、来源和关系入库
+  -> Parsing（选定 Parser，当前为 MinerU）
+  -> parser-neutral Markdown 中间解析结果
+  -> LLM 分析与总结：第一阶段
+       判断实际内容并确定结构化最终元数据
+       ├─ 没有当前文献实际内容
+       │    -> 删除内部 PDF 和对应中间结果
+       │    -> 当前 Literature 继续其它候选；候选耗尽后才允许尝试其它版本
+       └─ 具有实际内容
+            -> LLM 分析与总结：第二阶段
+            -> 使用最终元数据总结正文与参考文献
+            -> Literature 验收最终元数据、关键词和 LiteratureContent
+            -> Storage 保存单一当前内容、规范 Markdown、参考文献与 Analysis provenance
 ```
 
-达到以下任一条件时停止本次执行：
+`Model` 为图中除 Logging 外的模块提供统一数据合同；`网络基础设施`为元数据供应商、Acquisition、Parsing 和 LLM 提供共同的外部访问能力；`存储`保存其它模块已经确认的事实，不自行作出业务判断；`Logging` 统一提供命名 logger、进程启动配置和最终脱敏防线。DiscoveryRun 由 Entry 编排并通过 Storage 持久化，因为它保存无法从当前文献反推的发现 provenance；批量 selector、目标、候选和报告只属于当前操作内存。
 
-- 已达到最大迭代层数；
-- 已达到最大新增文献数；
-- 当前层没有发现新的文献。
+Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍只承担横向运行支撑：生产启动时统一配置，具有运行行为的模块通过它输出安全实时诊断，Entry 独立形成 typed Report。日志不会被反向解析为 Report，不进入逻辑文献数据库，也不影响状态、回退、重试或恢复。
 
-同一文献不会因为在本次执行中通过多条引用路径被发现而重复计为新增文献，也不会在同一次执行中被无意义地重复扩展；不同发现路径仍可保留，用于解释文献为什么进入收集。如何判断候选是否代表同一文献由文献信息管理负责，文献收集只依据其返回的统一文献引用继续迭代。
+查询、书目信息导入导出和重复处理使用同一入口、文献管理和存储，不建立第二条文献流程。
 
-### 3.6 与其它模块的协作
+### 2.2 模块划分
 
-| 协作模块 | 文献收集提供 | 文献收集获得 |
+系统只使用六个核心功能模块和四个公用基础模块描述产品架构。
+
+| 类别 | 模块 | 主要责任 |
 |---|---|---|
-| 文献信息管理 | 各来源发现的文献信息、来源和发现上下文 | 已接纳的统一文献引用及引用关系判断结果 |
-| 文献数据库 | 收集定义、收集执行和收集归属 | 可作为种子或已有成员使用的文献 |
-| 批量执行与结果说明 | 每次执行的发现、新增、缺失和来源失败结果 | 面向整批执行的推进与统一结果呈现 |
+| 核心功能 | 入口与流程编排 | 接收用户操作，分别组织 DiscoveryRun、运行时 selector 与内存目标冻结、逐目标补全、运行报告、手动 PDF、查询和书目交换 |
+| 核心功能 | 元数据供应商 | 执行元数据搜索和引用查询，把供应商结果转换为统一内部数据 |
+| 核心功能 | 文献管理 | 管理文献身份、版本、来源元数据、统一元数据、引用和当前状态 |
+| 核心功能 | Acquisition | 根据元数据按三阶段自动获取主 PDF，或接纳用户明确绑定的本地 PDF，并执行相同基本文件检查 |
+| 核心功能 | Parsing | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果 |
+| 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索 |
+| 公用基础 | Model | 定义除 Logging 外各模块交换的领域中立数据合同 |
+| 公用基础 | 网络基础设施 | 统一提供安全 HTTP、受控浏览器、资源预算和脱敏 |
+| 公用基础 | 存储 | 保存 DiscoveryRun、文献当前关系事实、自动 PDF 获取耗尽事实和不可变文件，提供一致查询与事务边界；不保存批量运行现场或报告 |
+| 公用基础 | Logging | 统一 logger 获取、生产进程配置、stderr 输出、formatter 和最终脱敏防线；不形成 Report 或业务事件系统 |
 
-文献内容处理和文献库使用与互操作不参与收集结果的身份判断。它们只在文献已经进入统一文献数据库后继续工作。
+书目格式编解码、运行配置、对象组装和本机写入互斥是上述模块内部或启动阶段需要的技术能力，不增加新的产品模块。具体代码位置由技术文档规定。
 
-### 3.7 一致性与可追溯性
+### 2.3 按功能模块组织
 
-- 每个收集归属都必须能够回到产生它的收集执行；
-- 主题领域收集必须保留命中的领域条件和发现来源；
-- 引用迭代收集必须保留种子、扩展方向、发现层次和引用路径；
-- 单一来源失败只影响该来源的结果，不使其它成功发现失效；
-- 重复执行不得删除已有有效归属，也不得把同一文献无控制地重复加入同一收集；
-- 执行达到用户设置的停止边界时，应明确说明停止原因，而不能表现为不明原因的遗漏。
+代码按六个核心功能模块和四个公用基础模块组织，不再建立 `core`、`services`、`infrastructure`、`interface`、`composition` 等顶层分层目录。目录名称与本设计中的模块名称保持一一对应，使一个功能的规则、用例、Ports 和供应商适配能够在同一模块内阅读和维护。
 
-### 3.8 需求追踪
+```text
+sciretriever/
+  entry/              # 入口与流程编排
+  metadata/           # 元数据供应商
+  literature/         # 文献管理
+  acquisition/        # Acquisition：PDF 获取
+  parsing/            # Parsing：PDF 解析
+  analysis/           # LLM 分析与总结
 
-| 产品需求 | 本模块的设计响应 |
+  model/              # 统一数据合同
+  network/            # 网络基础设施
+  storage/            # 数据库、文件和本机写入互斥
+  logging/            # logger 获取、进程配置与最终脱敏防线
+
+  bootstrap.py        # 实现选择和对象组装
+  configuration.py    # 运行配置读取与边界解析
+```
+
+每个核心功能模块可以在内部按需要区分以下职责，但这些职责不再成为项目级目录层次：
+
+- `api.py`：模块对外提供的稳定操作；
+- `service.py` 或按用例命名的文件：组织本模块用例；
+- `rules.py` 或更具体的规则文件：保存纯业务判断；
+- `ports.py`：声明本模块需要的外部能力；
+- `providers/`、`sources/` 或其它明确命名的适配目录：实现本模块专属的外部协议。
+
+只有实际需要时才创建这些文件或子目录，不要求每个模块机械复制同一模板。
+
+模块依赖遵守：
+
+1. 除 `logging` 外的模块可以使用 `model` 中的中性数据合同；
+2. `entry` 只通过其它核心模块的公开 API 编排流程，不导入其私有实现；
+3. 核心功能模块之间只通过公开 API 和 Model 数据协作，不跨模块调用私有规则或适配器；
+4. 需要网络或持久化的模块在自己的 `ports.py` 声明能力，由 `network`、`storage` 或本模块专属适配器实现；
+5. `network` 和 `storage` 不拥有文献身份、元数据收敛、内容判断和状态等业务规则；
+6. 除纯声明的 `model` 外，具有运行行为的模块只通过 `logging.api` 获取 logger，不直接配置 Python root logger、Handler 或 formatter；`logging` 只依赖 Python 标准库，不反向调用业务模块；
+7. 根级 `configuration.py` 负责读取并解析运行配置，`bootstrap.py` 是唯一选择具体实现并构造完整对象图的位置，并通过 `logging.api` 触发生产日志初始化；二者都不承载产品规则；
+8. Vendor、HTTP、浏览器、SQL、MinerU 和 LLM 私有类型只能存在于对应模块的适配边界，不能进入公共 API 或 Model。
+
+### 2.4 Provider 能力与启动配置
+
+外部文献服务只按两类不互斥能力接入：Metadata Provider 负责领域搜索、稳定标识符 lookup 及可选引用关系/资产线索；Acquisition Provider 负责为具体 Literature 发现或取得主 PDF。引用查询属于 Metadata 的可选能力，不形成第三类 Provider；同一机构可以分别实现 metadata 和 acquisition adapter，也可以只实现其中之一。`direct` 是对已有 locator 的通用公开 Source，用户手动 PDF 是独立接纳操作，二者都不是 Provider。
+
+目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的全部 Provider 能力，但“目标 adapter”“用户启用”“普通参数/凭据/AccessPolicy 就绪”和“当前 Literature 适用”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 还要按具体 Literature 的证据形成适用 Source 集合。全面接入不会把每次运行变成对全部服务的无条件调用。
+
+普通配置由根级 `configuration.py` 解析；Provider 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界原子修改。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
+
+## 3. 核心数据流
+
+### 3.1 DiscoveryRun 与两种发现输入
+
+用户通过两种方式发起外部发现：
+
+1. 提交领域条件，通过多个元数据供应商搜索相关文献；
+2. 提交一篇或一组种子文献，沿参考文献、被引用文献或双向引用关系继续发现文献。
+
+每次外部发现形成一个独立 `DiscoveryRun`。它只冻结类型化输入和停止边界，作为逐来源结果、发现对象和原因的稳定锚点，并表达本次发现是否完整执行。Run 本体只有 ID、输入、状态和开始时间；创建即运行，零结果可以正常完成，不保存完成时间、cursor、页码、重试现场或结果数组。本地数据库查询只读取当前事实，不创建 DiscoveryRun。
+
+DiscoveryRun 的结束点是发现结果已经经 Metadata 中性转换和 Literature 接纳进入数据库。运行完成后不自动获取 PDF，不启动 Parsing、Analysis 或另一轮引用扩展；`ReferenceLookup` 只在用户明确发起的引用 DiscoveryRun 内按需使用。当前产品不创建领域占位 Collection，也不预留 Zotero 式人工文件夹的 membership。
+
+主题输入只包含查询文本、可选年份范围和逐 Provider 原始扫描上限。引用输入包含具体 Literature 种子、方向、深度、按 MetaLiterature 去重的结果上限和逐 Provider 原始扫描上限；Provider 上限作用于整个 Run，结果上限统计新入库和既有的发现对象但不统计种子。引用扩展逐层执行，达到这些边界或没有新文献时停止。相同 MetaLiterature 在同次运行中只形成一个发现结果。
+
+引用扩展有两种目标发现方式：元数据供应商可以返回结构化引用关系；已经保存的参考文献原文也可以由 LLM 临时提取检索线索，再查询本地 Literature 或元数据供应商。供应商每返回一条结构化有向边，先独立保存一个 `ProviderRelationObservation`；它可以在目标尚未入库时作为待扩展单位存在。Entry 只选择当前用户方向、深度和数量边界内的目标继续解析，两种方式得到的选中目标都先按普通元数据规则形成或命中具体 `Literature`，之后才建立本地 Literature 之间的引用关系及其来源支持。
+
+```text
+元数据供应商返回 A→B、A→C、A→D
+  -> 分别保存三个 ProviderRelationObservation
+  -> Entry 按当前扩展范围选择目标
+  -> 本地精确查询；必要时获取 MetadataObservation
+  -> 目标 Literature 入库
+  -> Reference + ProviderRelationSupport
+
+参考文献原文
+  -> LLM ReferenceLookup
+  -> 本地精确查询或 Metadata
+  -> 目标 Literature 入库
+  -> Reference + 对应文本 ReferenceSupport
+```
+
+`ReferenceLookup` 只服务当前搜索，不进入数据库；本地已经精确命中目标时不强制访问外部供应商。保存 `ProviderRelationObservation` 不等于创建目标 Literature，也不自动触发下一层递归；未选中的 observation 留待后续 DiscoveryRun。`Reference` 只连接已经入库的两个具体 `Literature`，`ReferenceSupport` 定位供应商结构化关系、供应商参考文献原文或 PDF 参考文献原文中的实际形成依据。
+
+每个发现对象只保存 `(discovery_run_id, meta_literature_id)`。同一对象可以有多个原因：主题原因指向实际 `MetadataObservation`；引用原因保存本次发现时的 citing source Literature、cited target Literature 和 depth。引用原因是运行历史，不依赖以后可能删除的当前 Reference。直接原因和 depth 已经能够表达发现链，不另存重复且可能组合膨胀的完整路径。
+
+### 3.2 元数据搜索与入库
+
+```text
+领域 DiscoveryRun 输入
+  -> 调用本次选择、已启用且 readiness 通过的全部元数据搜索能力
+  -> 每个供应商分别运行到结果耗尽或达到整个 Run 的原始 scan limit
+  -> 各供应商结果转换为中性元数据 observation
+  -> 文献管理执行身份判断和版本区分
+  -> 形成或补充当前统一元数据
+  -> 保存来源 observation、统一文献、DiscoveryRun 结果与发现原因
+```
+
+每个供应商独立返回结果并具有自己的 `scan_limit`。过滤和去重前的每条原始 item 都消耗上限，因此无标题/DOI、重复或最终未接纳的 item 不能让 Provider 无限分页。自然耗尽和达到上限都是正常完成；单个供应商失败只影响该来源，其它来源的成功结果继续进入文献管理。已接纳结果可以逐条提交，不等待全部 Provider 结束。具有标题或 DOI 的不完整记录可以先入库，后续运行继续补充；标题和 DOI 都缺失的记录不能形成数据库中的文献，但仍消耗扫描额度。
+
+Web of Science、Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、Elsevier/Scopus、Springer Nature、DataCite 和 CORE 的目标生产 adapter 各自直接在其官方覆盖范围内执行领域查询；OpenCitations Meta 当前只参与稳定标识符 lookup 和引用能力，不伪装成领域搜索。Entry 不先判断出版社：Springer Nature 只返回自身覆盖内容、Scopus 可以返回多家出版社文献，都是 Provider 自己的正常检索语义。明确启用但缺少生产 adapter、必需凭据或 AccessPolicy 时在运行开始前形成配置错误，不能静默跳过或记录为零结果。
+
+逐来源结果只说明 Provider 是自然耗尽、达到扫描上限还是失败；失败时附稳定脱敏信息，不持久化扫描、接纳或拒绝计数。所有 Provider 正常到达边界时 Run 为 `COMPLETED`，正常与失败并存时为 `PARTIAL`，全部失败时为 `FAILED`。用户在正常边界前停止或恢复时发现遗留运行才是 `INTERRUPTED`；已接纳结果不回滚，下一次运行重新从数据库去重。
+
+领域 DiscoveryRun 完成初始多来源搜索后结束。系统不为每一篇已发现 Literature 自动再执行一次全部 Provider 的精确补查，也不自动进入 PDF 获取；用户需要更多来源信息时发起新的明确发现或补充操作。元数据阶段不使用 LLM、embedding、搜索分数、标题关键词、摘要分类或连续低收益规则判断领域相关性或提前停止；Provider 返回只表示本次查询命中。有实际内容但偏题的 Literature 仍然有效，不属于 `NoUsableContent`。搜索候选、相关度、Provider cursor、请求/响应、运行时扫描计数和未接纳结果只存在于当前调用中，不能因为保存 DiscoveryRun 而成为数据库事实。
+
+供应商记录不是文献主身份，也不能直接覆盖统一元数据。一个 Literature 可以关联多个独立、不可变且长期保留的 `MetadataObservation`；后续来源观察增加新 observation，不覆盖旧对象。文献管理根据全部已关联 observations 按确定规则形成一份当前统一 `LiteratureMetadata`。
+
+内容分析前，当前统一元数据是 observations 的确定性投影；Analysis 第一阶段再以它和 PDF 为输入提出最终元数据。提案不是新的 observation，只有与完整 LiteratureContent 一起通过 Literature 验收后，才原子替换当前统一元数据。`CONTENT_READY` 后新增 observation 继续保存，但不能单独覆盖与当前内容对齐的最终元数据，只能进入以后完整重分析的输入。来源 observations 始终保留，Catalog 不保存旧的统一元数据快照；`metadata_revision` 只作为当前值的单调版本令牌，用于 stale 复检及当前内容对齐。
+
+Metadata 可以并行组织多个供应商，但每个真实请求都先经过当前进程的供应商级共享准入。同一 API 产品或额度池被 metadata search、reference query 或其它调用方共同使用时共享一个访问 scope；供应商 adapter 声明并解释政策，Network 在当前进程的模块、用户操作和文献目标之间执行并发、间隔、额度和 `Retry-After`。
+
+### 3.3 PDF 获取与状态记录
+
+文献管理向 Acquisition 提供具体 `Literature` 和当前 `LiteratureMetadata`。Acquisition 对同一 Literature 按三个阶段串行寻找和获取候选：公开来源全部耗尽后才启动已授权 Provider API，授权 API 全部耗尽后才启动受控浏览器；任一候选成功后立即停止后续来源。不同阶段不能并发竞速。
+
+```text
+公开来源
+  -> 已授权 Provider API
+  -> 受控浏览器
+  -> 全部耗尽时没有获得主 PDF
+```
+
+公开来源内部先使用 Metadata 已保存的直接主 PDF 线索，再使用公开全文服务、OA locator 和普通 HTTP landing-page discovery。一个外部机构可以分别提供 metadata adapter、授权 API PdfSource 和浏览器 PdfSource；Provider 只实现自己的能力，阶段归类与顺序由 Acquisition 统一决定。`AssetHint` 不保存阶段或授权决定，同一个公开线索实际访问出版社网站时仍服从该供应商网页 scope。
+
+Acquisition 不把 metadata 来源机构等同于原文提供方，也不依据 `LiteratureMetadata.publisher` 自由文本建立硬编码路由。它在当前进程根据明确 AssetHint、arXiv ID/PMCID/PII 等来源稳定定位、Provider record identity，或 DOI 经 Network 安全解析后的实际 landing origin，选择启用、就绪且适用的 Source。publisher 名称或单独 DOI 前缀最多产生待核实候选，不能证明归属、凭据或 entitlement。Scopus 返回 Wiley 文献时不能因此调用 Elsevier 内容 API；Crossref 返回的 Elsevier 文献仍可以在实际落地到 Elsevier 后使用其适用内容能力。
+
+项目目标覆盖 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite、CORE 和 operator 明确配置的 Sci-Hub locator 所能提供的 PDF 字节、locator 或受控内容路径。Metadata adapter 已经产生中性 `AssetHint` 时由通用公开 Source 消费，不为名称对称复制同一 URL。未启用 Source 不属于本次当前能力；已启用但凭据/readiness 缺失或运行时发生 Network/API/权限错误时不能伪装成完整耗尽。
+
+候选通过基本检查后立即成为当前主 PDF，存储保存 PDF、hash、来源和与 `Literature` 的关系。文献状态由这些已经提交的事实推导为“已有文献资产”，而不是由下载任务单独维护。内容有效性留给后续 Analysis；下载阶段不提前建立严格正文验收。
+
+只有三个阶段在当前元数据和已配置自动能力下都正常遍历完毕、且该具体 Literature 的最小自动获取耗尽事实已经安全保存后，Acquisition 才返回 `NoPrimaryPdf`；查询据此投影 `needs_manual_pdf = true`。该事实不保存候选或失败原因，也不改变 Literature 的三级状态；全库自动补全默认跳过它。用户中断、Network/API/权限/配置错误或 Storage 提交错误只是本次运行失败，不能形成耗尽事实。新的 MetadataObservation、成功接纳主 PDF 或用户明确重试会清除该事实。
+
+用户也可以通过独立入口为一个明确的具体 `Literature` 提供本地 PDF。Entry 把该文件交给 Acquisition；Acquisition 复制字节到自己的临时边界，执行与自动获取相同的非空 PDF、reader 和页面树检查，再通过 Storage 正常发布 `Asset` 和唯一 `primary-pdf` 关系，并清除已有自动获取耗尽事实。手动接纳使用 user provenance，不保存用户文件的绝对路径，不加入三阶段 `AcquisitionPath`，也不产生 `NoPrimaryPdf`。无效文件是输入错误；已有主 PDF 时默认拒绝，不能静默替换。
+
+手动接纳成功只形成 `ASSET_READY`，不在同一操作中自动执行 Parsing 或 Analysis。用户原文件始终留在原处且不由 SciRetriever 修改或删除；后续 Analysis 明确无内容时，清理范围只包括 SciRetriever 管理的内部副本与派生结果。
+
+### 3.4 Parser、LLM 与最终入库
+
+```text
+当前主 PDF
+  -> 选定 Parser 解析
+  -> 转换并检查统一 Markdown ParserResult 与实际引用资源
+  -> 原子保存为该输入 Asset 的唯一当前 ParserResult
+  -> Analysis 第一阶段使用 LLM 判断实际内容并确定最终 LiteratureMetadata
+       ├─ 明确没有：删除 PDF 和对应中间结果，继续下一个候选
+       └─ 具有内容：验证结构化最终元数据
+  -> Analysis 第二阶段同时使用 ParserResult 和已确定元数据总结正文与参考文献
+  -> 解析 LiteratureSection[] 和参考文献
+  -> Literature 验收结果与当前 Literature、PDF 和元数据输入的对应关系
+  -> 整体保存最终元数据、当前 LiteratureContent、规范 Markdown 和 Analysis provenance
+  -> Literature 达到内容完成状态
+```
+
+Parser 负责中间解析，Analysis 负责按先元数据、后正文的顺序执行 LLM、验证内容草稿并完成结构化解析，Literature 负责最终元数据与内容接纳，三者不能互相替代。`ParserResult` 不是产品文档或状态事实；第一阶段元数据提案也不能单独发布。最终 `LiteratureContent` 同时承载程序可读的有序章节和可确定性渲染的 Markdown。若第一阶段 LLM 明确判断 PDF 没有实际内容，PDF 和对应中间结果一起删除，不执行第二阶段，也不发布 `LiteratureContent`；任一阶段的其它失败都不能触发删除。
+
+每个输入 Asset 只保存一个当前 `ParserResult`，每个 Literature 只保存一个当前 `LiteratureContent`。重新处理先在临时区形成并验证新的不可变 artifact；全部成功且通过相应模块接纳后原子切换当前关系，失败时保留完整旧结果。旧 artifact 不进入数据库历史，只作为可回收缓存存在。任何派生结果的替换都不能覆盖或破坏当前主 PDF 和来源 observation；当前 LiteratureContent 只能由新 Analysis 完整结果经 Literature 接纳后替换。
+
+### 3.5 局部失败与继续处理
+
+每篇文献独立推进。某个来源、PDF、解析或 LLM 调用失败时，同次操作的其它文献继续处理，已经提交的有效结果保持可用。后续运行重新读取数据库中的当前权威事实，从第一个缺失或明确失效的步骤继续；运行报告只说明本轮发生了什么，不持久化、不决定 Literature 当前状态，也不要求恢复旧线程、队列、HTTP 请求、浏览器页面、Parser 或 LLM 调用现场。
+
+语言模型明确判断 PDF 没有属于当前目标 Literature 的实际内容时，删除该 PDF 和对应解析结果并继续其它候选。这个候选、来源、无效决定和候选级失败不形成长期记录；同次运行只在内存中保留已尝试集合，避免立即重新选择，后续新运行仍可重新发现。ParserResult 乱码、截断、只剩资源引用或不足以判断，以及 Parser 或 LLM 调用失败，都不等同于内容无效，不能据此删除 PDF。
+
+普通 MetaLiterature 目标只有在当前具体版本正常耗尽自动 PDF 路径并形成耗尽事实，或明确无内容且该版本其余候选已经耗尽时，才继续尝试内存候选列表中的下一版本。Network/Storage 系统错误、Parser 或 LLM 失败、取消和无法判断都停止该目标并只进入本次报告，不能通过切换版本掩盖当前问题。
+
+## 4. 六个核心功能模块
+
+### 4.1 入口与流程编排
+
+入口与流程编排是用户操作进入系统的唯一边界，并把一次操作组织成对其它模块的顺序调用。
+
+它负责：
+
+- 接收领域条件和种子文献两种发现输入，建立独立且有边界的 DiscoveryRun；
+- 对元数据供应商结构化关系直接发现的相关文献，或 LLM 从原文形成的临时 `ReferenceLookup`，顺序编排本地精确查询、必要的目标元数据搜索、Literature 接纳以及 Reference 与 support 建立；
+- 接收手动 PDF、查询、引用正反向浏览、Artifact 读取/导出、书目信息导入导出和明确的数据库补全请求；
+- 根据全库、DiscoveryRun、导入、查询或明确 ID 的运行时 selector，从当前数据库展开范围并在内存中冻结实际目标；
+- 普通范围按 MetaLiterature 去重，在内存中冻结有序 Literature 候选并从选中版本第一个缺失步骤开始推进；
+- 只在稳定缺失时尝试下一版本，系统、Parser、LLM 或无法判断的失败不触发跨版本回退；
+- 在 LLM 明确判断内容不可用时，协调删除当前 PDF 和解析结果并继续其它候选；
+- 协调建立或清除自动 PDF 获取耗尽事实，使全库操作不会无限重试已经正常耗尽的 Literature；
+- 隔离单篇失败，并为每次操作在内存中汇总成功、缺失、失败、未处理和中断情况，返回操作特有 Report，同时可以输出不替代 Report 的安全实时日志；
+- 在重复执行时读取当前数据库事实，只补充缺失内容。
+
+它不负责：
+
+- 判断两条记录是否属于同一文献；
+- 选择统一元数据字段；
+- 判断 PDF、解析结果或 LLM 输出是否有效；
+- 直接实现供应商、网络、数据库、MinerU 或 LLM 协议；
+- 把 DiscoveryRun、运行报告或内存补全状态当作文献当前状态；
+- 维护独立于文献事实的第二套文献状态。
+
+目标 CLI 使用 `sciretriever` 作为命令根，并按用户动作设置六个一级名称：
+
+```text
+discover  -> topic | citations
+complete  -> 类型化范围 + pdf/content 目标
+literature -> search | show | references | cited-by
+import    -> metadata | pdf
+export    -> metadata | pdf | content
+config    -> set | remove | status | test
+```
+
+`literature` 只读取本地数据库；手动 PDF 属于 `import pdf`，不是 Literature 查询动作；PDF 与轻结构化文档分别通过 `export pdf` 和 `export content` 导出。`config set/remove/status/test` 只管理同一用户级 Provider 凭据文件、呈现安全本地状态或执行显式最小只读连通性测试，不访问文献数据库。CLI 不建立 `exchange`、`bibliography`、`artifact` 或内部 Metadata/Acquisition/Parsing/Analysis 模块一级命令。具体参数只能把外部输入映射到已经确定的中性合同，不能改变模块业务含义。
+
+入口未来可以增加 GUI 或其它形式，但不会改变这些用户操作的业务边界。当前公开入口和已经实现的命令仍只由 README 与用户指南说明；目标命令在安装入口与离线测试完成前不能写成已发布行为。
+
+### 4.2 元数据供应商
+
+元数据供应商模块统一承接外部文献来源能力，包括主题元数据搜索、稳定标识符 lookup 和引用关系查询。引用是 Metadata Provider 的可选能力，不建立平行 Citation Provider 类型。目标生产范围包括 Web of Science、Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、Elsevier/Scopus、Springer Nature、DataCite、CORE 以及只按当前官方能力提供精确 lookup/引用的 OpenCitations；每项能力只有在真实 adapter、配置、凭据和 AccessPolicy 就绪后才能调用。
+
+它负责：
+
+- 为一次领域 DiscoveryRun 调用本次选择的全部已配置供应商，并分别执行到结果耗尽或达到各自在整个 Run 内的原始扫描上限；
+- 执行供应商特有的查询、分页和响应解释，声明 API 产品/额度 scope，并把限速、`429`、`Retry-After` 与 quota 响应转换为 Network 可执行的访问政策；
+- 把 vendor 数据转换成领域中立的元数据 observation、明确的同文献 `version_links`、原始参考文献文本或逐边 `ProviderRelationObservation`；
+- 按数据含义区分已经明确目标的结构化引用关系和仍需解析目标的参考文献原文，不按专门接口或默认返回方式分类；
+- 把供应商返回的直接文件 URL、落地页 URL、媒体类型、资产角色、版本角色、访问状态和许可证转换为中性资产线索；
+- 保留供应商身份、供应商记录标识和观察时间；
+- 把已知的单个供应商失败转换为稳定结果，不撤销其它来源成功内容。
+
+Metadata 不为每条已发现 Literature 自动发起全供应商逐篇补查；是否开始新的发现属于 Entry 的用户操作边界。
+
+它不负责：
+
+- 创建 `MetaLiterature` 或 `Literature`；
+- 合并不同供应商记录；
+- 选择统一元数据；
+- 下载 PDF 或判断文献处理状态；
+- 根据 publisher 名称选择出版社内容 API；
+- 把 vendor model、HTTP response 或浏览器对象暴露给其它业务模块。
+
+供应商可以增加或替换，只要产生相同含义的中性结果并遵守共同网络边界，就不改变产品主流程。Adapter 不自行维护只对本模块可见的 limiter；真实请求由当前进程共享的 Network Coordinator 准入。
+
+### 4.3 文献管理
+
+文献管理是文献身份、统一元数据、引用关系和当前状态的唯一业务所有者。所有元数据入口——领域搜索、引用扩展和书目信息导入——都必须先经过文献管理。
+
+它负责：
+
+- 管理 `MetaLiterature` 和 `Literature` 两层身份；
+- 保留供应商与用户书目导入的来源 observation 和来源差异；
+- 使用来源 observation 中明确的 `version_links` 作为版本收敛证据，并以单一 MetaLiterature 成员归属表达最终结果；
+- 形成未完成文献的当前统一初始元数据；
+- 区分同一 Literature、同一 MetaLiterature 内的不同 Literature，以及不同 MetaLiterature；
+- 在来源和目标都已获得本地 Literature 身份后建立 Literature 级引用事实，以独立 `ReferenceSupport` 保留每项形成依据，并提供 MetaLiterature 级汇总；
+- 根据已提交事实推导每个 `Literature` 的当前状态；
+- 确认 Analysis 结果属于当前具体 Literature、当前主 PDF 和当前元数据输入；
+- 验收最终 `LiteratureMetadata`，并用它全量替换该版本的统一初始元数据，同时保留来源 observation；
+- 整体接纳最终元数据、关键词、单一当前 `LiteratureContent`、规范 Markdown 和 Analysis provenance，使文献达到内容完成状态；
+- 为查询、PDF 获取和书目导出提供一致文献视图。
+
+它不负责：
+
+- 查询外部供应商；
+- 下载或解析 PDF；
+- 调用 LLM；
+- 决定数据库表、文件路径或网络协议；
+- 根据模糊相似度静默合并身份。
+
+### 4.4 Acquisition
+
+Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文献 PDF，或者接纳用户明确提供给该 Literature 的本地 PDF，并把成功结果交给存储。
+
+获取对象保持四层语义：`AssetHint` 是来源 observation 中的线索，`PdfCandidate` 是单次运行中的候选，`Asset` 是不可变文件事实，`LiteratureAsset` 是具体 Literature 与资产之间的角色和来源关系。线索和候选都不是已经获得的资产。
+
+它负责：
+
+- 从稳定标识符、供应商记录或已配置资产来源发现 PDF 候选；
+- 先根据 AssetHint、来源稳定定位、Provider record identity 或 DOI 安全解析后的实际 landing origin 判断 Source 对当前 Literature 是否适用，不把 metadata 来源机构或 publisher 自由文本当作原文归属；
+- 把已配置 PdfSource 归入公开来源、已授权 Provider API 和受控浏览器三个阶段；
+- 在公开阶段优先尝试供应商明确返回的直接主 PDF 线索，再尝试公开全文服务、OA locator 和普通 HTTP landing page；
+- 对同一 Literature 严格按三个阶段及阶段内 Source 顺序串行短路，不跨阶段竞速；
+- 对每个候选执行统一基本检查；
+- 对手动提供的文件复制内部副本并执行同一基本检查，不移动、修改或删除用户原文件；
+- 一个候选正常未命中或未通过基本检查时继续其它候选；Network/API/权限/配置错误和取消不能被解释为正常耗尽；
+- 为通过检查的 PDF 形成 hash、来源和 Literature 关系；
+- 保证同一 `Literature` 只有一个当前主 PDF 驱动后续处理；
+- 在内容被明确判定无效时撤销当前关系并删除对应资产和中间结果，使 Entry 能继续其它候选。
+- 已有当前主 PDF 时拒绝普通手动接纳，不能静默替换。
+
+下载阶段只做以下基本检查：
+
+1. 实际字节非空，并根据字节确认是 PDF，不能信任扩展名、文件名、HTTP `Content-Type` 或下载事件；
+2. 标准 PDF reader 能够打开；
+3. 页面树可读取且至少有一页；没有可用密码而无法读取的加密 PDF 不能通过；
+4. 候选来自目标 `Literature` 的 `AssetHint`、稳定标识符或已配置文献来源，而不是无依据地关联文件。
+
+轻微不规范但仍能正常打开和读取页面的 PDF 可以接纳。下载阶段不证明正文完整性，也不判断摘要、目录、封面或学术内容，不比较标题、作者、年份或 DOI，不使用固定最小页数、固定最小字节数或正文字符数。HTTP 成功、浏览器下载事件、HTTP 类型、文件扩展名、文件名或网页声称提供全文都不能单独代表已经获得 PDF。
+
+一个 `Literature` 可以发现多个候选来源，但只有一个当前主 PDF。同次运行只以临时已尝试集合避免立即重复候选，不长期保存无效候选及其失败信息。已经形成有效 `LiteratureContent` 后，不因发现其它候选自动替换当前主 PDF。补充材料和其它相关资产可以保存为补充资产，但不驱动 Parsing、Analysis 或核心状态。
+
+阶段表示 Acquisition 选择的访问上下文，不等于网络限速范围。公开 `AssetHint` 指向出版社网页时，普通 HTTP 和后续浏览器流程都使用该出版社的网页 scope；授权 API 使用独立 API scope。Acquisition 不计算等待间隔，也不把网页繁忙解释为来源失败，所有真实请求在当前进程共享的 Network permit 下执行。用户配置了密钥只表示 adapter 可以尝试认证；认证成功仍不能代替对当前 Literature 的内容 entitlement 判断。
+
+Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获得当前主 PDF”。单个候选未通过文件检查时删除临时文件，不创建 `Asset`/`LiteratureAsset`、不保存候选级原因并继续下一候选；没有候选、正常未命中、浏览器流程正常结束但没有下载、非 PDF 或损坏 PDF，在全部当前自动路径都正常结束后归入无字段的 `NoPrimaryPdf`，并只保存该具体 Literature 已自动耗尽这一最小事实。Network/API/权限/配置错误、用户中断、数据库、文件系统或关系提交错误直接形成本次失败，不能虚构“没有获得”或需要人工 PDF。唯一的 `primary-pdf` 关系就是该 Literature 的当前主 PDF，不再维护平行 `is_current` 状态。
+
+上述二值结果只属于自动获取。手动 PDF 是单独操作：有效文件发布后返回已经接纳的 Asset 与 LiteratureAsset，无效文件形成输入验证错误；它既不产生 `NoPrimaryPdf`，也不增加自动获取的第三种结果或第四种 `AcquisitionPath`。
+
+供应商返回的 URL、媒体类型、开放状态和许可证只是某次来源观察到的获取线索，不属于 `LiteratureMetadata`，也不证明已经获得有效资产。Metadata 将这些线索转换为中性 `AssetHint`，Entry 把它们交给 Acquisition；Acquisition 使用时仍经过统一网络政策和 PDF 基本检查。一个线索失败后继续其它线索，直接主 PDF 获取成功后不再进行无意义的来源搜索。
+
+### 4.5 Parsing
+
+Parsing 模块把当前主 PDF 转换为领域中立的 `ParserResult` 中间结果。当前解析实现选择 operator-managed MinerU 服务，但 MinerU 不是产品合同，也不拥有 SciRetriever 的文献状态、轻结构化文档或引用事实。
+
+它负责：
+
+- 把当前主 PDF 提交给选定解析器；
+- 把解析器私有结果转换为统一、规范化 Markdown `ParserResult`；
+- 保存 Markdown 实际引用的资源及其 hash，但不解释图片内容；
+- 检查返回协议、Markdown、资源、路径、页数和输入资产对应关系；
+- 保存解析器身份、输入 PDF hash、必要参数和结果 hash；
+- 在新结果完整接纳后替换同一输入 Asset 的当前 ParserResult，并把旧字节交给缓存回收；
+- 在单篇解析失败时返回稳定失败，不影响其它文献。
+
+`ParserResult` 至少为后续 LLM 保留：
+
+- 规范化 Markdown 的不可变 artifact 引用；
+- Markdown 实际引用资源的相对引用、媒体类型、大小和 hash；
+- 输入 PDF identity/hash 与物理页数；
+- parser identity、版本、mode、model identity、参数 hash 和 ParserResult hash。
+
+`ParserResult` 由 Analysis 的消费需要定义，不复制 MinerU `middle.json`、GROBID TEI、Docling JSON、block、bbox 或逐段 source locator。不能直接产生 Markdown 的 Parser 由自己的 Adapter 完成确定性转换；原生 JSON、TEI、模型输出和未引用资源只作为过程文件，转换结束后清理。
+
+`ParserResult` 不是 `LiteratureContent`，不作为可独立导出的文档，也不推进 Literature 状态。解析器不判断文献身份、实际内容、参考文献边界或最终元数据，也不产生引用检索线索或权威引用关系。一次处理只使用一个解析器，不竞赛、不合并，也不在失败后自动回退到另一解析器。
+
+### 4.6 LLM 分析与总结
+
+LLM 分析与总结模块消费经过验证且对齐当前 PDF 的 `ParserResult`。对普通长度文献，一项逻辑内容分析包含两次有序核心请求：第一阶段同时使用当前统一初始元数据和 `ParserResult`，判断实际内容并确定结构化最终 `LiteratureMetadata`，其中包括最终关键词和原文摘要；内容有效且元数据通过结构验证后，第二阶段同时使用同一 `ParserResult` 与第一阶段的完整元数据，总结正文并识别参考文献文本。第二阶段不能提前开始，也不能重新生成另一份元数据、关键词或摘要。超长文献可以在各阶段内部使用有界分段和汇总，但不能改变先元数据、后正文的依赖顺序；对其它模块仍是一项逻辑 Analysis 和一份最终结果。
+
+第一阶段形成的是一份完整最终元数据，而不是零散字段补丁。它保留统一初始元数据中没有冲突的可靠值，只根据 PDF 明示内容补齐摘要、页码等缺失项，并在能够确认同一出版社时统一来源中的名称变体；不能确认的值保持缺失。供应商身份仍属于来源 observation 的 provenance，不随出版社名称一起进入或改写 `LiteratureMetadata`。
+
+内容判断遵守：
+
+- 必须存在属于当前目标 Literature、足以说明该文献实际研究、论证、综述、讨论或报告了什么的内容；
+- 只有封面、目录、标题与元数据、摘要、访问提示、错误页、下载说明，或者内容明确属于另一篇文献时，判定为不可用；
+- 一页 PDF 不自动无效，完整短文、通信、评论、更正或技术说明可以通过；
+- 只有结构有效且明确的 `NoUsableContent` 可以触发删除 PDF 和对应解析结果；
+- ParserResult 乱码、截断、只剩资源引用或不足以判断，以及 LLM 调用失败、响应缺失、未知结构或输入不对齐，都只是处理失败，必须保留 PDF。
+
+第一阶段结果的封闭合同为：
+
+```text
+NoUsableContent
+  outcome: Literal["no_usable_content"]
+
+FinalMetadataProposal
+  outcome: Literal["usable"]
+  metadata: LiteratureMetadata
+
+MetadataAnalysisResult = NoUsableContent | FinalMetadataProposal
+```
+
+`NoUsableContent` 不携带评分、置信度或详细原因；`FinalMetadataProposal` 直接使用 `LiteratureMetadata`，不建立第二个元数据类。LLM provenance 由程序补充，不由模型输出。
+
+Markdown 固定一级标题及顺序为：
+
+```markdown
+# 元数据
+
+# 摘要
+
+# 研究背景与目标
+
+# 研究方法
+
+# 数据
+
+# 结论与局限性
+
+# 参考文献
+```
+
+七个标题必须存在且不能改名、删除或重排。允许在摘要之后、参考文献之前增加必要的额外正文一级标题；研究背景与目标、研究方法、数据、结论与局限性及额外正文一级标题可以具有二级标题。元数据、摘要和参考文献下不增加二级标题；当前只承诺 H1/H2，参考文献始终最后。原文未明确提供固定内容时保留标题并使用精确字符串“未提供”，不能使用 `N/A`、`null`、`None`、空字符串或其它自然语言表达同一缺失事实；没有内容的额外标题不创建。
+
+`# 元数据` 是封闭填空块，字段与顺序固定为 Title、Authors、DOI、Other Identifiers、Publication Date、Year、Document Type、Language、Venue、Publisher、Volume、Issue、Pages、Keywords。程序 renderer 不能增删、改名或重排；URL、开放获取、许可证、引用计数、供应商、状态和 provenance 不进入。结构化可选字段使用 `None`、关键词缺失使用空 tuple，渲染时统一显示“未提供”。Abstract 属于第一阶段确定的 `LiteratureMetadata`，但单独渲染为 `# 摘要`；缺失 abstract 以 `None` 保存并显示“未提供”。
+
+标题、原文摘要、写入文档的原始数据、数值、单位、公式和参考文献文本必须忠于 PDF；背景、目标、方法、数据解释、结论与局限允许跨原文章节总结。最终关键词只有 `LiteratureMetadata.keywords` 一个扁平列表，突出核心领域、问题、方法、对象、材料、理论或贡献，不要求维度齐全，也不为测试、对照、背景或次要案例机械加标签。
+
+参考文献字段固定为：
+
+```text
+LiteratureContent.references: tuple[str, ...]
+```
+
+第二阶段必须在最后使用 `# 参考文献` 和 Markdown 有序列表，一项对应一条参考文献原文。程序去掉编号后按顺序保存每条非空文本。LLM 可以清理断行、空白和明确的 OCR 分隔问题，但不能补写 PDF 没有表达的标题、作者或标识符。文本即使缺少标题或 DOI 仍然保留，使 `LiteratureContent` 无需查询引用关系即可独立导出。没有可识别参考文献时保存空 tuple，最终 Markdown 显示“未提供”；缺失标记不能解析成一条参考文献。整份内容通过单一 Analysis provenance 的输入 hash 回溯到 PDF、ParserResult 和最终 metadata，不建立逐条 block/source-locator 合同。
+
+Analysis 验证 Markdown 结构和输入对齐后，把正文解析为统一有序的 `LiteratureSection[]`：
+
+```text
+LiteratureSubsection
+  title: str
+  markdown: str
+
+LiteratureSection
+  role: LiteratureSectionRole
+  title: str | None
+  markdown: str
+  subsections: tuple[LiteratureSubsection, ...]
+```
+
+一级章节角色为 `background-and-objectives`、`methods`、`data`、`conclusions-and-limitations` 和 `additional`。程序只理解 H1/H2；章节内部段落、列表、表格、公式和代码块继续作为 Markdown 字符串保存。四个固定角色各出现一次并保持相对顺序，其 `title = None`；固定 section 整体没有相关信息时使用 `markdown = "未提供"` 和空 subsections，有实际内容时由非空 H1 直属 Markdown 或至少一个有内容的 H2 表达，只有 H2 有内容时 H1 直属 `markdown` 可以为空。“未提供”不能与有内容的 H2 混用。`additional` 可出现零到多次且必须携带不与七个固定标题冲突的非空 title，没有内容时不创建。全部一级章节处于同一个序列中以保留实际 Markdown 顺序，H2 作为所属 H1 的有序子项。元数据、摘要和参考文献不作为 additional section。
+
+Analysis 从第一阶段的结构化响应取得最终元数据和摘要，从第二阶段内容 Markdown 草稿解析章节与有序参考文献文本。Literature 验收最终 `LiteratureMetadata` 后，程序从已验收 metadata、sections 和 references 确定性渲染规范 Markdown；`# 元数据` 和 `# 摘要` 不由第二阶段重复生成。两阶段临时结果都不长期保存。
+
+最终 `LiteratureContent` 保存内容 hash、metadata revision/hash、有序 sections、references、规范 Markdown `ArtifactRef` 和一项 Analysis provenance。内容 hash 只覆盖 metadata hash、sections 和 references 的规范序列化，不包含 metadata revision、provenance、模型、时间、路径、Markdown hash 或数据库 ID；Markdown hash 只覆盖 UTF-8 `text/markdown` 字节。provenance 的输入 hash 覆盖 PDF、ParserResult 和最终 metadata，参数 hash 覆盖 prompt 版本和有效模型参数；不保存两个调用的独立 provenance、Parser provenance 副本或完整 prompt/request/response。
+
+每个 Literature 只保留一个当前 LiteratureContent。新结果必须完整生成、验证并接纳后原子替换当前关系，失败保留旧结果；旧结构化内容和 Markdown 字节不形成数据库历史，只成为可回收缓存。当前内容缺失、损坏或输入不再对齐时，可以从权威元数据和当前 PDF 重新解析、分析生成。
+
+`ReferenceLookup` 是 Analysis 内按引用扩展需要调用的另一个 LLM 用例。Lookup 只包含原文中明确识别出的稳定标识符、标题、作者和年份等搜索线索；它不持久化，也不能作为被引文献的权威元数据。明确格式的 DOI、PMID、arXiv ID 等由代码校验和规范化。引用 lookup 失败不影响原文保存、文档导出或内容完成。
+
+当前不建立公共 LLM 基础设施模块。文献总结和 `ReferenceLookup` 共用 Analysis 内部的 LLM Port 与 provider adapter，adapter 经过 Network；其它模块只调用 Analysis 的业务 API。只有未来至少两个独立功能模块真实需要中性的 LLM 能力时，才通过新 ADR 讨论提升。
+
+## 5. 四个公用基础模块
+
+### 5.1 Model
+
+Model 定义除 Logging 外各模块之间交换的统一数据合同，包括：
+
+- 发现输入、运行时批量选择、当前操作报告和发现原因；
+- 供应商元数据、原始参考文献文本与引用查询结果；
+- `MetaLiterature`、`Literature`、`LiteratureMetadata`、`MetadataObservation.version_links`、`ProviderRelationObservation`、`Reference` 和 `ReferenceSupport`；
+- PDF 候选、资产和来源关系；
+- 总结型 `LiteratureContent`、有序 `LiteratureSection`、规范 Markdown 和文本参考文献；
+- 内容可用判断、最终元数据提案和临时 `ReferenceLookup`；
+- 查询、书目交换、自动 PDF 获取耗尽事实，以及当前操作使用的内存目标和结果。
+
+结构化业务数据统一使用 Pydantic。Model 默认不可变，只完成字段类型、必填项、额外字段拒绝、不可变容器转换和必要的跨字段结构约束，不执行身份判断、状态推导、I/O、环境读取或供应商调用。
+
+`LibraryQuery`、搜索请求/页面、列表项、资产组合 view、`LiteratureDetail`、引用关系页面和 `ReferenceDetail` 也使用 Pydantic，以便 CLI、JSON 和程序调用共享稳定读取合同；但这些只是查询时形成的不可变投影，不是新的数据库主体或长期业务事实。Artifact binary stream 和用户目标路径是 I/O boundary 对象，不进入 Pydantic，也不让 Detail 执行 I/O。
+
+Vendor、HTTP、浏览器、SQL、MinerU 私有响应和 LLM 私有响应必须在对应模块的适配边界转换成 Model，不能进入模块公开 API 或业务规则。
+
+### 5.2 网络基础设施
+
+网络基础设施为元数据供应商、Acquisition、Parsing 和 LLM 提供共同的安全访问能力，逻辑上包含共享访问政策、进程内供应商级准入、普通 HTTP 和受控浏览器。
+
+它负责：
+
+- URL 规范化、scheme、port 和 userinfo 限制；
+- DNS 结果和公网、私网、loopback 判断；
+- redirect 逐跳复检、origin 和凭据转发控制；
+- 按 provider、`api`/`web` 通道、必要的 API service 和实际 host 执行当前进程共享的访问准入；
+- 在 adapter 声明的规则基础上执行并发、最小间隔、窗口额度、`Retry-After`、`next_allowed_at` 和 `blocked_until`；
+- 对同一供应商网页执行进程内独占，并在页面或浏览器流程完整结束后执行至少 30 秒冷却；
+- HTTPS、TLS、timeout、连接复用和有界响应读取；
+- 浏览器隔离上下文、页面导航、下载捕获和资源清理；
+- URL、header、query、错误和凭据脱敏；
+- 响应大小、导航次数和访问预算。
+
+网络基础设施不理解 Crossref、arXiv、出版商、MinerU 或某个 LLM 的业务协议，也不判断记录身份、PDF 归属或文献状态。供应商分页、配额含义和页面步骤属于相应 adapter；adapter 负责声明政策，Network 负责在当前进程的全部调用方之间执行。等待队列、permit、窗口计数和截止时间只存在于当前进程内存，不属于由 Catalog 与 ArtifactStore 组成的文献数据库，也不携带 DOI、Literature、候选、URL 或凭据。Network 不持久化动态限速状态，不提供跨进程或跨重启的访问协调。
+
+### 5.3 存储
+
+统一逻辑文献数据库由结构化 Catalog 和同一配置存储根下的 ArtifactStore 共同构成，二者由 Storage 提供技术实现：
+
+- Catalog 保存 DiscoveryRun、文献身份、元数据、关系、hash、相对引用、状态所需事实和自动 PDF 获取耗尽事实；
+- ArtifactStore 保存 PDF、结构化 `LiteratureContent` 的规范序列化和规范 Markdown 产物；
+- Catalog 不保存大型 BLOB 或机器相关绝对路径；
+- 文件发布使用 create-if-absent，不原地覆盖已接受内容；
+- 相同字节可以复用，不同字节不能无声覆盖；
+- Catalog 关系只引用已经成功发布的 artifact。
+
+Storage 还实现消费模块拥有的一致 read-model 与 artifact reader Port。关系页面/详情在一个 read-only snapshot 中从同一权威 Reference 正反向组装；artifact reader 只按已提交的 Asset/ArtifactRef 解析正式对象并复核大小、hash 与媒体类型，不暴露内部绝对路径。导出到用户文件使用独立的同目录 staging 和原子发布，不把用户副本纳入 ArtifactStore，也不修改数据库。
+
+Storage 只保存其它模块已经确认的事实，不自行合并文献、选择统一元数据、选择主 PDF、判断内容可用或改变业务状态。Catalog 与 ArtifactStore 共同构成产品数据库，不表示 Storage 拥有其中事实的业务含义。
+
+Storage 在一个 read-only snapshot 中为 Literature 组装 SearchPage、LiteratureDetail、Reference 正反向页面和 ReferenceDetail，但不保存查询条件、cursor、页面、详情或其派生计数。查询投影丢弃后可以从相同 current facts 重新形成；持久化它们只会复制 metadata/status/关系并产生漂移，因此当前不建立对应表或 artifact。
+
+Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservation`，并且只保存一份当前统一 `LiteratureMetadata`。新的 observation 不覆盖旧来源事实；当前统一元数据替换时递增 revision 令牌但不保留旧统一元数据历史。LLM 最终提案只有和当前 LiteratureContent 整体接纳后才替换当前元数据，不作为 observation 保存。
+
+在文献内容处理链中，来源 observation、当前权威元数据和原始 PDF 是优先长期可靠保存的权威输入；当前 ParserResult、Parser Markdown 与引用资源、当前 LiteratureContent、总结型 Markdown 和由当前内容形成的 `ContentReferenceTextSupport` 是可以重建的派生产物。派生产物仍须有一个完整当前结果、hash、轻量 provenance 和原子发布，但不维护历史；它们的损坏、清理或丢失不能破坏元数据和 PDF。本节只确定该逻辑合同，不提前规定物理目录、备份、缓存配额、清理周期或恢复算法。
+
+#### 5.3.1 事实所有权
+
+| 事实 | 业务所有者 | 存储责任 |
+|---|---|---|
+| DiscoveryRun、来源结果、发现对象和原因 | 入口与流程编排 | 保存冻结输入、逐来源终止结果、到 MetaLiterature 的结果关系及直接原因；不保存过程计数或完整路径 |
+| 自动 PDF 获取耗尽 | Acquisition | 只保存具体 Literature 已正常耗尽当前自动路径这一最小事实；不保存原因、候选、尝试或配置快照，并在输入变化、主 PDF 成功或明确重试时清除 |
+| 来源 observation | 元数据供应商 | 保存元数据事实、同文献版本连接、逐边 ProviderRelationObservation 和供应商身份 |
+| MetaLiterature、Literature、LiteratureMetadata、Reference、ReferenceSupport 和状态 | 文献管理 | 保存权威身份、信息、关系及其来源支持 |
+| 当前主 PDF、补充资产及来源 | Acquisition | 保存不可变文件和版本关系 |
+| 当前 ParserResult、实际引用资源及 parser provenance | Parsing | 只保存每个输入 Asset 的当前中间结果；新结果完整接纳后替换当前关系，旧字节进入可回收缓存，不形成历史或文献状态 |
+| 第一阶段元数据提案、第二阶段内容 Markdown 草稿、内容判断和待验收解析结果 | LLM 分析与总结 | 两阶段临时结果不长期保存；只保存最终接纳内容的一项 Analysis provenance |
+| 最终 LiteratureMetadata、当前 LiteratureContent 与规范 Markdown | 文献管理 | 权威元数据长期保存；结构化章节、参考文献和 artifact 关系只保存一个可重建当前结果，不形成历史 |
+| BatchSelector、冻结目标候选、逐目标运行结果和 Report | 入口与流程编排 | 只在当前进程内展开、冻结、汇总并返回；不进入 Catalog，也不参与下次选择 |
+
+#### 5.3.2 一致提交
+
+以下逻辑更新必须整体成功，用户不能观察到互相矛盾的部分结果：
+
+- 来源 observation、身份结果、统一初始元数据、DiscoveryRun 结果与直接原因；
+- 新 MetadataObservation 接纳与对应自动 PDF 获取耗尽事实的清除；
+- 手动 PDF 内部副本、user provenance、唯一 `primary-pdf` 关系和已有耗尽事实清除；用户原路径和原文件不进入提交；
+- 主 PDF、与 `Literature` 的关系、“已有文献资产”事实和已有耗尽事实清除；
+- Acquisition 正常遍历全部当前自动路径后，建立该具体 Literature 的自动获取耗尽事实；
+- 新 ParserResult artifact 发布、同一输入 Asset 当前关系替换和旧关系解除；
+- 最终元数据、关键词、当前 `LiteratureContent`、规范 Markdown、与当前 PDF/metadata revision 的关系和内容完成事实；替换旧内容时同步删除旧 `ContentReferenceTextSupport`，并删除因此失去全部 support 的 Reference；
+- 两个具体 Literature 之间已经确认的 Reference 及其第一项 ReferenceSupport；
+- 内容无效时当前 PDF、解析结果和对应关系的删除；
+- 身份整理或删除涉及的全部关系变化；
+- 用户明确重新尝试自动 PDF 获取时，先清除相应耗尽事实。
+
+网络、浏览器、MinerU 和 LLM 调用发生在数据库事务之外。提交前必须重新确认输入 `Literature`、当前元数据和 PDF 没有变化，拒绝过期结果。
+
+### 5.4 Logging
+
+Logging 是公用基础模块，拥有独立的 `sciretriever/logging/` 目录和 `api.py` 公开边界。它统一提供命名 logger，配置 `sciretriever` logger 层级、stderr handler、formatter 和最终脱敏 Filter，并承载当前进程中的操作开始、阶段推进、局部失败、限速等待、目标完成和受控停止信息，为用户提供实时反馈、为实现者提供安全诊断。
+
+Logging 不拥有业务结果：各模块先形成 typed result 或稳定 failure，Entry 据此累计 Report，同时选择少量进度信息进入日志；日志缺失、过滤或输出失败不能改变数据库提交、Report、退出结果和后续选择。项目不建立全局可变 Observer、事件总线、LogEvent Model、Logging Port 或日志 repository。
+
+具有运行行为的模块通过 `logging.api.get_logger(__name__)` 获取 logger，不直接调用标准库配置函数。生产 Bootstrap 只通过 `logging.api.configure_logging(...)` 传入 level 并触发一次生产配置；formatter、最终脱敏 Filter 和 stderr handler 全部由 Logging 模块实现。模块 import、adapter 构造和每次操作不得私自安装 handler。Logging 不修改宿主应用的 root logger，纯声明的 Model 不依赖 Logging。
+
+日志和用户主要结果使用不同通道：实时日志与进度进入 stderr，CLI 文本结果、JSON Report 和其它可管道结果进入 stdout。日志格式不是稳定公开 API，也不能成为批次历史或恢复输入。Network 负责 URL、header、Cookie、凭据和网络异常的边界脱敏；Provider、Parser 和 LLM adapter 负责各自私有对象、响应、prompt 和异常的边界转换；Logging 的 Filter 只提供最终防线，不能替代这些来源边界。Entry 只记录已经稳定化的 failure 与安全 ID，不直接记录原始外部对象或文献正文。
+
+## 6. 文献身份、元数据与状态
+
+### 6.1 MetaLiterature 与 Literature
+
+系统使用两层内部身份：
+
+| 身份 | 含义 |
 |---|---|
-| R1 发起文献收集 | 长期收集、单次执行、主题领域与引用迭代两种方式、可追溯收集归属 |
-| R2 多来源元数据搜索 | 主题领域执行保留各来源独立成功结果，并把来源事实交给文献信息管理 |
-| R8 大批量处理 | 收集执行保留局部成功、支持重复执行并汇总范围、实际目标、新增、缺失和失败 |
+| `MetaLiterature` | 同一文献多个明确版本的稳定聚合身份 |
+| `Literature` | 能够独立拥有 `LiteratureMetadata`、PDF 和 `LiteratureContent` 的具体文献 |
 
-## 4. 文献信息管理
+预印本、作者接受稿和正式发表版只有在来源 observation 存在明确同文献版本连接时才共享 `MetaLiterature`，并保留为不同 `Literature`。不同 Literature 之间不混合元数据、资产或内容。
 
-### 4.1 设计目标
-
-文献信息管理负责把领域搜索、引用扩展和书目信息导入得到的初始元数据整理为统一、可持续补充的文献信息。它必须同时解决跨来源重复、真实书目版本、来源冲突、引用关系和最终审阅结果，向其它模块提供稳定的统一文献引用。
-
-三种初始元数据获取方式进入同一流程：
+核心归属关系为：
 
 ```text
-领域搜索 ─────┐
-引用扩展 ─────┼─> 初始元数据 -> 未审阅文献
-书目信息导入 ─┘
+MetaLiterature
+  -> 聚合一个或多个 Literature
+  -> 必须选择其中一个代表 Literature
+
+Literature
+  metadata: LiteratureMetadata
+  content: LiteratureContent | None
 ```
 
-任何入口都不能直接产生已完成文献。文献必须继续完成资产获取、内容解析、轻结构化文本构建、结构化分析和最终信息反馈，才能进入已完成状态。
+每个 `Literature` 从创建开始必须且只能属于一个 `MetaLiterature`，即使当前只有一个版本也不例外。成员关系只由 Literature 指向 MetaLiterature 的归属保存，不在 MetaLiterature 中重复维护成员 ID 集合。`MetaLiterature` 至少包含一个 Literature，代表 Literature 必填且必须属于当前聚合。
 
-### 4.2 责任边界
+`MetaLiterature` 只负责聚合和选择代表 Literature，不拥有元数据、标识符、PDF、`LiteratureContent`、状态、observation 或关系列表。每个 Literature 独立拥有自己的元数据、资产和内容。代表 Literature 默认优先选择正式发表版（`published`），其次是作者接受稿、预印本和其它已确认版本；代表关系变化只影响聚合视图，不删除其它 Literature，也不转移或覆盖版本数据。共同的 `meta_literature_id` 和各自 `version_role` 已经完整表达版本聚合，不再建立独立 `LiteratureRelation`。
 
-文献信息管理负责：
+### 6.2 保守身份收敛
 
-- 接收三种入口产生的初始元数据；
-- 保留文献来源实际提供的信息和来源差异；
-- 判断不同记录属于同一书目版本、同一文献作品的不同版本，还是彼此独立的文献；
-- 为未审阅文献形成当前可使用的统一初始元数据；
-- 在文献完成分析后，用根据文献内容生成的最终元数据整体替换统一初始元数据；
-- 维护文献作品、书目版本和引用关系；
-- 维护每个书目版本的处理状态，并为作品层提供状态汇总；
-- 向文献收集、内容处理、数据库使用和书目互操作提供统一文献引用。
+自动身份收敛只使用确定、可解释的证据，不使用模糊相似度静默合并。
 
-文献信息管理不负责：
+文献 identifier 的值不使用 SciRetriever 私有格式，而是在公共 Model 边界转换为官方 canonical form：
 
-- 决定用户想收集什么或执行引用迭代；
-- 获取文献资产；
-- 解析文献内容或调用语言模型；
-- 决定文献数据的物理保存方式；
-- 决定书目文件的具体读写格式；
-- 调度整批文献的处理顺序和资源使用方式。
-
-### 4.3 两层文献身份
-
-文献信息采用“文献作品 + 书目版本”的两层逻辑身份。二者是业务概念，不预设代码类型或数据库表。
-
-| 逻辑信息 | 含义 | 主要关系 |
+| namespace | 接受的传输表示 | 当前 Literature 身份值 |
 |---|---|---|
-| 文献作品 | 同一个研究成果的统一身份 | 可以包含一个或多个书目版本 |
-| 书目版本 | 具有具体书目信息和文献内容的真实版本 | 归属于一个文献作品，独立关联元数据、资产、文本、分析和状态 |
+| `doi` | 裸 DOI、`doi:`、`https://doi.org/` 或 `http://dx.doi.org/` 包装 | 去壳、去边界空白并转为小写的 `10.xxxx/...` |
+| `arxiv` | 官方新式/旧式 ID、`arXiv:` 或官方 arXiv URL，可带 `vN` revision | 不带 `vN` 的新式 `2501.01234` 或旧式 `hep-th/9901001` 基础 ID |
+| `pmid` | 官方 PMID 值 | 纯数字 |
+| `pmcid` | 官方 PMCID 值 | 大写 `PMC` 加数字 |
+| 其它受支持 namespace | 官方规范允许的表示 | 各自官方 canonical form，不附加项目自定义前缀 |
 
-预印本、作者接受稿和正式发表版属于同一研究成果时，共享文献作品，但保留为不同书目版本。不同版本之间不得混合元数据、文献资产、轻结构化文本或结构化分析结果。
+只有确实标识当前具体 Literature 的官方 ID 才能进入 `LiteratureMetadata.identifiers`。OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID 等 Provider record identity 即使格式稳定，也只能进入 `Provenance.source_record_id` 或 `ProviderLiteratureKey.record_id`。它们可以定位同一 Provider 中的来源记录或版本端点，不能作为跨供应商文献自身标识符。
 
-作品层优先使用正式发表版作为代表版本，其次为作者接受稿、预印本和其它已确认版本。作品查询默认展示代表版本，同时允许查看全部版本。代表版本变化只改变作品层的展示入口，不删除或改写其它版本。
+身份判断按以下顺序执行：
 
-### 4.4 来源记录与统一信息
+1. 先对已知 namespace 形成 canonical `(namespace, value)`，再查询当前数据库中的精确身份映射；
+2. 至少共享一项身份型稳定标识符且不存在其它身份型稳定标识符冲突时，命中同一 `Literature`；一条记录同时把对象指向相同和不同身份时返回稳定身份冲突接纳失败，不选择其中一个值继续；
+3. 双方都没有稳定文献标识符时，才允许使用规范化标题、完整作者顺序、发表年份和 `document_type` 的严格复合后备；四项必须全部存在且完全一致；
+4. 没有共享稳定标识符、后备条件不完整或证据不足时保持独立；不同 DOI 默认是不同 `Literature`，即使标题相同；
+5. 标题或作者相似不能覆盖稳定标识符冲突，身份冲突也不能自动建立版本关系。
 
-每个文献来源实际返回的信息作为独立来源记录保留，不能被其它来源覆盖。每个书目版本同时维护当前统一书目信息，用于普通查询和后续处理。
+标题和作者比较键只执行 Unicode NFC、首尾空白清理、连续 Unicode 空白合并和 Unicode casefold。来源题名与署名展示值不被这个比较键改写；标点、连字符、姓名组成和完整作者顺序均保留，不做翻译、拼音或其它转写、姓名倒置、首字母展开、标点删除、编辑距离或模糊匹配。
 
-未审阅阶段的统一初始元数据按以下原则形成：
+相同规范化 DOI 默认是同一 `Literature`，`version_role` 不得把它强行拆开。同一基础 arXiv ID 的 `v1`、`v2` 等 revision 也是同一 `Literature`；revision 可以保留在来源已有的 record、locator、URL 或 Provenance 中，但不新增业务字段。arXiv 预印本和具有正式 DOI 的发表版是两个具体 Literature；正式记录中的相关 arXiv ID 应形成 `version_links` 目标，而不是混入正式 Literature 自身 identifiers。
 
-1. 来源顺序必须显式、确定并可追溯；
-2. 每个字段按来源顺序独立选择；
-3. 高优先来源存在有效值时采用其值；
-4. 高优先来源缺少某字段时，低优先来源可以补充；
-5. 各来源之间的冲突继续保留；
-6. 非冲突稳定标识符可以共同保留；
-7. 相同来源记录和相同规则重复处理，应得到相同统一结果。
+只有 `MetadataObservation.version_links` 保留了供应商明确声明的同文献版本连接时，才能认定两个不同 `Literature` 属于同一 `MetaLiterature`。当前 observation 自身定位一端，每个 `ProviderLiteratureKey` 定位另一端；目标必须具有非空供应商记录 ID 或稳定 Identifier。引用、更正、撤稿、不同 `version_role`、相似标题、相似作者或 publisher 都不触发版本聚合。
 
-书目信息导入不建立 Zotero 或其它工具专属的数据体系。导入内容先转换为 SciRetriever 自己的初始元数据，不保留外部工具对象、内部标识或原始格式副本，然后以未审阅文献进入统一处理流程。
+`version_links` 复用所属 `MetadataObservation` 的 Provenance，只作为身份收敛证据。目标尚未解析或证据不足时继续保留来源 observation，但不创建占位 Literature，也不改变任何 `MetaLiterature` 归属。系统不建立通用 `LiteratureRelationObservation`、`LiteratureRelation` 或引用以外的关系图谱；更正、撤稿和其它供应商关系当前不进入业务 Model。
 
-### 4.5 精确身份判断
+身份冲突只形成稳定接纳失败；当前不建立候选、冲突历史或人工审核状态机。来源中的描述性差异继续由独立 observation 保留，不能反向改变已经由无冲突稳定标识符确认的身份。
 
-自动身份判断只使用可解释的精确证据，不使用模糊相似度直接合并文献。
+### 6.3 来源 observation 与统一元数据
 
-满足以下任一条件，并且不存在明确冲突时，可以自动认定两条记录属于同一书目版本：
+每个供应商实际返回并被接纳的中性记录，以及每条带来新来源事实并通过接纳的用户书目导入记录，都作为独立、不可变的 `MetadataObservation` 长期保存，一个 Literature 可以关联多个 observation；重复导入相同规范化内容只形成 matched，不增加 observation。导入记录直接复用 `LiteratureMetadata`，不建立 `ImportedMetadata` 或其它平行字段体系。统一初始元数据按以下优先顺序逐字段形成：
 
-1. 具有相同的规范化稳定标识符；
-2. 一条来源记录同时携带多个稳定标识符，能够明确连接其它分别持有其中一个标识符的记录；
-3. 双方都缺少稳定标识符，但规范化后的标题、完整作者顺序、发表年份和文献类型全部存在且完全一致。
+1. 用户导入 observation 中存在非空值时采用该值；
+2. 用户导入缺少字段时，按显式配置顺序选择供应商 observation 的有效值补充；
+3. 来源冲突继续保留，不被统一视图覆盖；
+4. 非冲突稳定标识符可以共同保留；
+5. 相同输入和规则重复执行得到相同结果。
 
-只有存在明确版本关系证据时，才能自动认定两条记录属于同一文献作品的不同版本，例如来源明确说明二者是预印本与正式发表版，或明确声明两个稳定标识符之间的版本关系。
+数据库只保存一份当前统一 `LiteratureMetadata`，不保存旧统一元数据的 revision 历史。revision 是当前元数据的并发与 lineage 令牌，不是历史对象。Analysis 最终提案在完整内容接纳时替换当前元数据，但不删除或改写任何来源 observation；LLM 结果也不伪装成 MetadataObservation。
 
-以下情况阻止自动合并：
+元数据不完整的文献可以先入库并继续处理，但必须至少具有标题或 DOI。DOI 继续作为带 namespace 的稳定标识符表达，不建立平行顶层字段；其它标识符不能替代 DOI 满足最低入库条件。
 
-- 来源明确说明二者是不同文献；
-- 双方具有不同的同类稳定标识符，且没有等价或版本关系证据；
-- 完整标题与完整作者信息同时明确不一致；
-- 已存在明确的不同版本关系，因而不能再作为同一书目版本合并。
+供应商返回的 `declared_keywords` 保留在来源 observation 中，不直接进入统一 `LiteratureMetadata`。用户书目导入中的 keywords 保存在该 observation 的 `metadata.keywords`，可以进入统一初始元数据；完整 Analysis 仍按全文形成最终 `LiteratureMetadata.keywords`。最终关键词不再建立平行分类或标签结果，并使用一个扁平列表突出核心信息，不要求领域、方法、材料等维度全部存在。供应商明确声明的同文献版本目标保存在 `MetadataObservation.version_links: ProviderLiteratureKey[]` 中，不进入 `LiteratureMetadata`，也不产生独立权威关系。开放获取等访问状态描述具体获取渠道，归入资产线索，也不进入 `LiteratureMetadata`。来源 observation 只显式保存产品需要的中性信息，不建立容纳全部 vendor 字段的通用扩展对象。
 
-只具有标题、作者或其它字段相似性的记录保持独立。相似性只能产生“可能重复”或“可能属于另一版本”的待核对关系，不能自动改变文献身份；后续新增精确证据或明确确认后再处理该关系。
+`LiteratureMetadata.authors` 按署名顺序保存具体 Literature 的结构化作者列表。每个供应商 observation 独立保留自己的作者列表；统一初始列表选择第一个非空高优先来源作为基础，只有 ORCID 相同，或者作者数量、顺序和规范化展示名全部一致时，才允许从其它来源补齐缺失字段。补齐只增加缺失的姓名组成、ORCID 或单位，不覆盖高优先来源已有值；单位只按相同 ROR 或完全规范化名称去重。系统不按姓氏、作者位置或模糊名称匹配作者，也不建立全局 Author 实体。
 
-### 4.6 引用关系
+Analysis 对有效文献形成一份最终元数据与内容提案后，文献管理验收并用最终 `LiteratureMetadata` 整体替换该版本的统一初始元数据。规范 Markdown 的元数据块和摘要从这份已验收 metadata 确定性渲染，避免保存两份可能漂移的信息。所有来源 observations 继续保留用于说明元数据依据，但不再参与内容完成版本的普通统一展示。已经 `CONTENT_READY` 的 Literature 接纳新导入 observation 时，不立即拆开替换当前 metadata/content；下一次完整 Analysis 使用新的导入优先初始投影，并且只有新的最终 metadata/content 整体接纳后才切换当前视图。
 
-引用事实属于产生引用的具体书目版本，因为同一作品的不同版本可能具有不同参考文献。引用目标可以处于三种情况：
+### 6.4 引用关系
 
-- 已明确对应到具体书目版本；
-- 只能确认对应到某个文献作品，暂时无法确认版本；
-- 只有引用文本或外部标识，暂时无法对应到数据库中的文献。
+供应商关系 observation、参考文献原文、目标检索、权威引用关系和关系形成依据是五个不同事实：
 
-作品级引用网络由版本级引用事实汇总得到，用于文献收集和普通查询。未解析引用继续保留；后续获得更多信息时可以补充解析，但原始引用事实不能丢失。
+- 供应商明确返回的每条有向关系保存为独立 `ProviderRelationObservation`，可以先于目标 Literature 存在；
+- PDF 中识别的有序参考文献文本保存在当前 `LiteratureContent.references`，并通过整份内容的 Analysis provenance 与输入 hash 回溯来源，不保存逐条位置；
+- 供应商只返回原始文本时，文本保存在该 `MetadataObservation`；
+- LLM 从原文形成的 `ReferenceLookup` 只在当前检索过程中使用；
+- 目标先在本地精确查询，未命中时经 Metadata 形成 `MetadataObservation`，再按普通身份规则创建或命中具体 `Literature`；
+- 只有来源与目标都具有本地 `LiteratureId` 后，Literature 才建立从引用方到被引用方的权威 `Reference`；
+- `ReferenceSupport` 指回供应商结构化关系、`MetadataObservation.reference_texts` 中的具体条目，或当前 `LiteratureContent.references` 中的具体条目。
 
-### 4.7 书目版本状态
+`ProviderRelationObservation` 是供应商关系的最小持久化和待扩展单位，一项 observation 只表达 `citing -> cited` 一条边。它不是任务，不维护扩展状态；Entry 根据当前收集范围和现有 Literature/Reference 事实决定是否继续物化目标。未进入范围、元数据不足或接纳失败时，只保留 observation，不创建 Literature、Reference 或 ReferenceSupport。
 
-每个书目版本独立沿四级逻辑状态前进：
+`Reference` 的字段只有 `reference_id`、`source_literature_id` 和 `target_literature_id`。它只连接两个不同的具体 `Literature`，不指向供应商记录、原始文本、临时 lookup 或 `MetaLiterature`，也不平铺 provenance。每条权威关系至少具有一项 support；相同 source/target 只形成一条 Reference，多个来源只增加 support。ReferenceSupport 本身不复制原文、目标元数据、evidence 或 provenance，这些内容继续由其指向的来源对象拥有。`ProviderRelationObservation` 只有在目标接纳并形成 Reference 后，才通过 `ProviderRelationSupport.observation_id` 成为该权威边的支持。
+
+当前 LiteratureContent 被替换时，删除全部指向旧内容 hash 的 `ContentReferenceTextSupport`；Reference 因此没有任何剩余 support 时一并删除。新参考文献按普通 lookup 流程重新建立关系支持，ProviderRelationSupport 和 MetadataReferenceTextSupport 不受内容替换影响。
+
+元数据供应商返回结构化关系还是参考文献原文，由数据语义决定：已经明确给出稳定目标标识的是结构化关系；只有格式化文字的是参考文献原文。两者可能来自专门关系接口，也可能由普通元数据响应默认携带，调用方式不是分类标准。只有计数、原文、lookup、供应商目标 ID 或不确定候选时都不形成 Reference。被引用视图和 `MetaLiterature` 级引用网络由 Literature 级关系反向查询或汇总；后续运行可以重新尝试尚未解析的原文。
+
+### 6.5 三级文献状态
+
+每个 `Literature` 根据已经提交的权威事实推导三级状态：
 
 ```text
 未审阅
   -> 已有文献资产
-  -> 已有轻结构化文本
-  -> 已完成
+  -> 内容完成
 ```
 
-各状态含义为：
-
-| 状态 | 含义 |
+| 状态 | 推导依据 |
 |---|---|
-| 未审阅 | 已获得初始元数据，但核心处理链尚未完成 |
-| 已有文献资产 | 已获得可供后续处理的文献文件 |
-| 已有轻结构化文本 | 已完成文献解析和轻结构化文本构建 |
-| 已完成 | 结构化分析结果、最终元数据、引用和标签已经一起完整反馈到数据库 |
+| 未审阅 | 已有当前统一元数据，但没有当前主 PDF |
+| 已有文献资产 | 当前主 PDF 已通过基本检查并与该版本关联 |
+| 内容完成 | 当前最终元数据、关键词、`LiteratureContent` 和规范 Markdown 已由 Literature 整体接纳，对齐当前主 PDF 和 metadata revision，并具有 Analysis provenance |
 
-某一步失败时，版本停留在最后一个成功状态。产生失败的业务模块提供步骤和原因，批量执行与结果说明保存本次目标结果和当前失败说明；文献信息管理只根据已提交事实维护状态，不重复拥有失败事实。失败不是终态，后续可以从缺失步骤继续。作品层不维护另一套可变状态，只汇总代表版本和其它版本的当前状态，并说明是否至少存在一个已完成版本。
+状态不是可以独立修改的第二份字段。任务、失败、MinerU task 或 LLM 调用记录不能直接决定文献状态。
 
-正常完成的版本默认稳定。普通来源补充不使其回退。若确认本地条目、身份或文献文件错误，用户可以明确删除错误记录并重新加入文献，从初始流程重新处理，不保留错误结果作为可用旧版本。出版物正式发布的勘误属于新的有效文献，应与原文建立勘误关系，而不是删除原文。
+内部枚举分别为 `UNREVIEWED`、`ASSET_READY` 和 `CONTENT_READY`；`CONTENT_READY` 已表示本产品内容处理完成。普通后续失败不撤销已经提交的有效前序结果。语言模型明确判断当前 PDF 没有实际内容时，删除 PDF 和对应解析结果，状态随现有事实回到未审阅；这是清理无效内容，不是失败回滚有效结果。`ReferenceLookup` 和权威引用关系解析是补充操作，不参与状态推导。
 
-### 4.8 最终元数据反馈
+### 6.6 Provenance 与数据完整性
 
-未完成阶段的来源元数据用于识别、查找、导出和获取文献。语言模型分析完整轻结构化文本后，文献内容处理生成包含最终元数据与规范化引用提案的完整九类结构化结果；文献信息管理是统一元数据和引用事实的唯一所有者，负责自动验收提案并形成最终信息，不要求人工审批。
+- DiscoveryRun 结果能够追溯到领域条件、种子或直接引用原因；
+- 元数据能够追溯到供应商 observation；
+- 同一 MetaLiterature 内不同 Literature 的版本归属能够追溯到来源 observation 中明确的 `version_links`；
+- 权威 Reference 能够通过 `ReferenceSupport` 追溯到供应商结构化关系或来源中的具体参考文献原文；
+- 当前 PDF 能够追溯到获取来源并具有内容 hash；
+- 当前 ParserResult 能够通过输入 Asset/hash、结果 hash 和 parser provenance 回溯来源；
+- `LiteratureContent`、最终 metadata revision 和规范 Markdown 能够通过内容 hash、Markdown 字节 hash 和单一 Analysis provenance 共同追溯到 PDF hash、`ParserResult` hash、最终 metadata hash 和 LLM identity；Parser identity 由 ParserResult 自身的 provenance 保存；
+- 已经提交的有效事实不因其它来源失败、运行中断或重复运行被无声破坏；
+- 被判断为没有实际内容的 PDF 及其解析结果直接删除，不保存该候选的资产、来源、解析结果或候选级失败信息。
 
-最终反馈遵守以下规则：
+## 7. 查询与书目信息交换
 
-- 语言模型直接根据文献内容生成最终元数据和规范化引用提案，不执行逐字段来源比较或人工审批；
-- 文献信息管理验收完整提案后，以最终元数据整体替换该版本的统一初始元数据，并更新引用和标签；
-- 来自文献来源的初始来源记录继续保留用于说明文献如何被发现和处理，但不再参与已完成文献的统一展示与导出；书目信息导入的临时初始元数据在最终整体替换后不再作为独立来源记录保留；
-- 九类结构化结果、最终元数据、引用、标签和“已完成”状态必须作为一个逻辑更新整体写入，不能只完成其中一部分；
-- 返回结果不符合产品规定的结构、提案无法验收或整体写入失败时，版本停留在“已有轻结构化文本”，不能保存为有效结构化结果或进入已完成；
-- 已完成结果错误时，通过删除并重新执行完整流程修复，不建设复杂的字段冲突和旧错误版本保留机制。
+查询和书目交换不是另一套文献模块。入口接收用户操作，文献管理决定业务含义，存储提供一致读取或写入。
 
-已完成文献的普通查询和书目导出信任 SciRetriever 根据文献内容形成的最终元数据，不回放导入文件或外部来源的原始字段组合。尚未完成的文献使用元数据收集阶段形成的当前统一信息查询和导出。
+### 7.1 查询
 
-### 4.9 与其它模块的协作
+本地文献查询与外部元数据发现是两种不同操作。`LibraryQuery` 只读取当前统一逻辑文献数据库，不访问 Metadata Provider、不创建 `DiscoveryRun`、不执行 Parser/Analysis，也不修改数据库。`QuerySelector` 可以复用同一查询条件在补全开始时形成范围，但只复用条件本身，不复用用户列表读取的排序、分页或 cursor。
 
-| 协作模块 | 文献信息管理获得 | 文献信息管理提供 |
-|---|---|---|
-| 文献收集 | 发现的初始元数据、来源、收集上下文和引用发现路径 | 统一文献引用、身份判断结果和已解析引用关系 |
-| 文献内容处理 | 已获得的资产、轻结构化文本、最终元数据与引用提案和结构化分析结果 | 待处理书目版本、当前状态，以及对完整提案的验收和统一信息更新结果 |
-| 文献数据库 | 持久保存和读取所需的统一文献事实 | 文献作品、书目版本、来源记录、统一信息、引用关系和状态 |
-| 文献库使用与互操作 | 书目导入产生的初始元数据 | 可查询和可导出的当前统一元数据 |
-| 批量执行与结果说明 | 各处理步骤的目标结果和当前失败说明 | 每个书目版本的当前状态和缺失步骤 |
-
-### 4.10 一致性与简化边界
-
-- 三种初始元数据入口使用同一身份判断和状态流程；
-- 文献作品与书目版本的身份不能由资产、解析或语言模型模块另行建立；
-- 来源记录与统一信息分离，形成统一视图不删除来源差异；
-- 不同书目版本不混合元数据、资产、文本或分析结果；
-- 模糊相似不能自动改变身份；
-- 内容处理生成最终元数据和引用提案，文献信息管理自动验收并成为唯一权威信息所有者；
-- 九类结构化结果、最终元数据、引用、标签和“已完成”状态整体写入，不保留中间分析状态；
-- 明确错误通过删除并重新处理解决，正式勘误作为独立文献关系处理。
-
-### 4.11 需求追踪
-
-| 产品需求 | 本模块的设计响应 |
-|---|---|
-| R2 多来源元数据搜索 | 来源记录保留、逐字段统一初始元数据、精确身份判断和不完整信息补充 |
-| R5 语言模型结构化分析 | 结构化分析、最终元数据、引用和标签整体反馈，并作为进入已完成的必要条件 |
-| R6 文献数据库 | 文献作品、书目版本、统一信息、来源差异、引用关系和版本状态 |
-| R7 书目信息导入与导出 | 导入转换为未审阅初始元数据；元数据收集完成后即可导出当前统一元数据 |
-| R8 大批量处理 | 每个版本独立前进、失败停留在最后成功状态并可继续处理 |
-
-## 5. 文献内容处理
-
-### 5.1 设计目标
-
-文献内容处理负责把一个未审阅书目版本逐步推进为已完成版本。它从文献信息管理取得待处理版本和统一初始元数据，获取并验收主文献 PDF，生成完整的轻结构化文档，再通过语言模型产生最终元数据、规范化引用和结构化分析提案，交由文献信息管理验收并整体完成最终反馈。
+查询的主要读取关系为：
 
 ```text
-未审阅书目版本
-  -> 获取并验收主文献 PDF
-  -> 解析完整文献
-  -> 生成轻结构化文档
-  -> 语言模型生成最终元数据、引用和结构化分析提案
-  -> 文献信息管理验收并整体写入最终结果
-  -> 已完成
+LibrarySearchRequest(LibraryQuery + sort + page)
+  -> LibrarySearchPage
+       -> LiteratureSearchItem[]          # 每项是一篇具体 Literature
+            -> literature_id
+                 -> LiteratureDetail      # 单篇当前详情读取投影
+                      -> Asset/ArtifactRef # 再交给独立 verified reader
+
+LiteratureReferenceRequest(literature_id + direction + page)
+  -> LiteratureReferencePage
+       -> Reference + related LiteratureSearchItem + support_count
+            -> reference_id
+                 -> ReferenceDetail       # source + target + supports
 ```
 
-### 5.2 责任边界
+搜索结果以具体 `Literature` 为单位，不按 `MetaLiterature` 折叠。多个供应商 observation 已经收敛到同一具体 Literature，因此不会制造多条结果；同一 MetaLiterature 下的预印本、作者接受稿和正式发表版是不同具体版本，可以分别出现并通过 `meta_literature_id` 归组。
 
-文献内容处理负责：
+`LiteratureSearchItem` 返回具体 Literature 的完整当前元数据、状态、metadata revision/hash、第一缺失步骤和人工 PDF 标记。`LiteratureDetail` 在一个一致的只读 snapshot 中进一步聚合当前 MetaLiterature 上下文、全部来源 observation、主 PDF 与补充资产、与当前主 PDF 对齐的 ParserResult、当前 LiteratureContent、其它版本以及本地权威引用数量。它和资产组合视图都只是临时、不可变的 read model：不建立数据库表、独立 ID、provenance、hash、revision 或写入生命周期，每次读取都从当前事实重新组装。
 
-- 根据书目版本的初始元数据寻找文献资产；
-- 验收唯一主文献 PDF，并区分主文献与补充资产；
-- 使用选定解析器生成完整的轻结构化文档；
-- 验收解析结果是否具有可用正文和基本结构；
-- 使用语言模型生成产品规定的最终元数据、规范化引用和通用结构化分析提案；
-- 将每一步成功结果和失败原因反馈给文献信息管理及批量执行与结果说明；
-- 保证单篇文献失败不破坏其它文献或前面已经完成的结果。
+详情不嵌入 PDF 或规范 Markdown 的完整字节，也不无界嵌入全部权威引用边、ReferenceSupport、ProviderRelationObservation 或 DiscoveryRun 历史。主 PDF、Parser Markdown/资源和规范轻结构化 Markdown 都通过 Detail 中已经存在的 `Asset | ParserArtifactRef | ArtifactRef` 交给独立 verified reader；Detail 本身不执行 I/O。向用户文件导出时默认拒绝已有目标，只允许显式覆盖并使用原子发布。
 
-文献内容处理不负责：
+references 与 cited-by 页面是同一权威 `Reference` 的正向和反向读取，不建立第二套边。普通关系列表只返回相关 `LiteratureSearchItem` 和 `support_count`；打开具体 `ReferenceDetail` 时才返回 source、target 和全部当前 support。参考文献原文已经在 MetadataObservation 或 LiteratureContent 中可见，support 只定位这些来源；详情中的引用数量和关系页面 total 只统计本地权威 Reference，不能冒充供应商报告的全网引用次数。
 
-- 创建或合并文献作品与书目版本身份；
-- 决定文献属于哪个收集；
-- 定义用户查询和书目导出方式；
-- 形成第二套文献处理状态；
-- 决定文件、文本和分析结果的物理保存方式；
-- 规定下载工具、解析器、语言模型或外部服务的具体协议。
+用户至少能够：
 
-### 5.3 核心处理资产
+- 按标题、作者、年份、文献类型和稳定标识符查询；
+- 在当前统一元数据和 `LiteratureContent` 中进行关键词与正文检索；
+- 按 DiscoveryRun、Literature 状态和缺失步骤筛选；
+- 筛选已经正常耗尽自动 PDF 获取能力、需要用户人工提供 PDF 的具体 Literature；
+- 查看 `MetaLiterature`、全部 `Literature` 和代表文献；
+- 查看来源差异、引用关系、引用关系形成依据和 DiscoveryRun 发现记录；
+- 查看当前 PDF、`LiteratureContent` 的结构化章节和规范 Markdown；
+- 从一篇文献沿参考文献或被引用关系继续浏览。
 
-完整 PDF 是核心处理流程唯一认可的主文献资产。一个书目版本必须先获得并验收完整主文献 PDF，才能继续解析并最终成为已完成版本。
+查询只读取当前统一事实，不重新执行身份判断、解析或分析。完全空的查询表示列出全部具体 Literature；筛选条件、组合语义、排序、分页、详情、引用读取和 artifact 引用边界的精确合同见 [Model 技术文档](technical/model.md#25-本地文献数据库查询与详情)。
 
-每个书目版本只允许一个已验收主文献 PDF 驱动解析和分析。系统可以从多个位置发现主 PDF 候选，但候选只是获取途径，不能同时产生多套当前正文。补充材料、附件、XML、HTML 或其它相关文件可以作为补充资产存在，但不能替代主文献 PDF，也不决定书目版本的处理状态。
+### 7.2 书目信息导入
 
-主 PDF 一旦验收并进入后续处理，普通新增来源不自动替换它。若后来确认文件属于错误文献或不是有效主正文，则按文献信息管理的错误处理规则删除错误记录并重新获取，不把错误文件保留为可用旧版本。
+核心书目交换格式为：
 
-### 5.4 主文献 PDF 获取与验收
+- BibTeX/BibLaTeX；
+- RIS；
+- CSL JSON。
 
-文献内容处理根据统一初始元数据寻找主文献 PDF 候选。一个候选失败时可以继续尝试其它候选。候选可以通过普通 HTTP 请求或受控浏览器访问获得；两种方式只是不同的外部访问能力，必须产生同一种候选或临时资产结果，并进入完全相同的文件、主正文和书目版本身份验收。HTTP 成功、浏览器下载事件或网页声称提供全文都不能直接代表资产已经验收。
+导入逐条把外部记录直接转换为现有 `LiteratureMetadata`，再组合为普通 `MetadataObservation` 交给文献管理；它不建立第二套导入元数据 schema。导入 observation 使用最小用户 provenance，表达“用户通过书目导入明确提供了这份元数据”。文献管理继续使用与供应商记录相同的保守身份规则：未命中时创建文献，命中且导入值补齐缺失字段或替换供应商当前值时形成 enriched，命中且当前统一投影不变时形成 matched；格式不合格、缺少最低识别信息或稳定标识符明确冲突时只拒绝该条。首次与 Provider 当前值相同的 matched 仍保存 user observation；只有已经存在相同规范化 user observation 的完全重复 matched 才不增加 observation。单条拒绝不撤销其它成功记录。
 
-浏览器访问用于需要 JavaScript、会话或页面交互的来源。浏览器进程、隔离上下文、登录 profile、页面导航和下载捕获属于技术能力；来源专属的页面步骤属于对应来源接入。它们都不能拥有资产身份、绕过统一验收或直接发布最终资产。具体来源顺序、访问方式选择、浏览器实现和资源限制由技术设计规定。
+导入 observation 的非空书目信息在统一初始投影中优先于全部供应商 observations，供应商只能补齐它缺少的字段。导入 keywords 可以进入统一初始 metadata；完整 Analysis 仍根据全文形成最终 keywords。已经完成内容分析的 Literature 仍保存新的非重复导入 observation，但不立刻覆盖与当前 `LiteratureContent` 对齐的最终 metadata，只在下一次完整 Analysis 整体成功时更新当前视图。
 
-候选必须同时通过三类验收，才能成为主文献 PDF：
+导入 observation 的 provenance 固定表达用户书目导入，不追踪外部工具数据库 ID、本地附件路径、同步状态、私有插件字段、界面设置、用户笔记、外部集合层级、原始书目文件或导入批次历史。这些内容都不进入核心文献数据库。
 
-1. **文件有效性**：确实获得完整、可读取的 PDF，而不是损坏内容或其它响应；
-2. **主正文判断**：内容是目标文献的主正文，而不是封面页、错误页、目录页或补充材料；
-3. **书目版本身份确认**：稳定标识符、标题或完整书目信息能够证明内容属于目标书目版本。
+### 7.3 书目信息导出
 
-无法确认所属书目版本的 PDF 不得验收。只有三项验收全部成功后，文献信息管理才能把该版本推进到“已有文献资产”。访问成功、文件扩展名正确或来源声称是全文，都不能单独代表验收成功。
+Literature 形成可转换的当前统一元数据后即可导出，不要求先获得 PDF 或 `LiteratureContent`。未达到 `CONTENT_READY` 的 Literature 导出当前统一初始元数据；达到 `CONTENT_READY` 后导出经 Literature 验收的最终元数据。
 
-### 5.5 轻结构化文档
-
-解析的产品结果是有顺序的轻量文档结构。它至少能够表达：
-
-- 文献标题和摘要；
-- 章节及其层级；
-- 按阅读顺序排列的段落和列表；
-- 表格内容；
-- 公式文本；
-- 图片说明；
-- 参考文献列表；
-- 内容与主文献 PDF 的对应关系。
-
-轻结构化文档不要求完整保存页面排版、字体、坐标或复杂视觉布局，也不负责抽取反应、分子、路线、产率、材料性质等特定领域知识。具体数据格式和呈现格式由技术文档决定。
-
-### 5.6 解析器边界
-
-PDF 解析器是可替换能力，但每次处理一个主文献 PDF 时只选择一个解析器。解析器必须把结果转换为相同含义的轻结构化文档，不能建立解析器专属的第二套文献内容体系。
-
-核心流程不自动竞赛多个解析器，不合并多个解析器的输出，也不在一个解析器失败后自动组织其它解析器回退。解析失败时保留失败信息；用户可以更换解析器后重新处理该文献。
-
-只有验收为完整的轻结构化文档才能进入语言模型分析。验收至少确认正文主体可用、主要内容没有明显截断、基本结构能够连续阅读，并且结果对应当前主文献 PDF。只解析出摘要、前几页或零散正文时，不能进入“已有轻结构化文本”，也不能生成最终分析。局部产物可以用于说明失败，但不能冒充完整文档。
-
-### 5.7 语言模型结构化分析
-
-语言模型只分析已经完整验收的轻结构化文档。无论后续技术实现如何分段处理，最终结果都必须代表整篇文献，不能把局部片段结果冒充全文分析。
-
-核心结构化分析固定包含九类通用信息：
-
-1. **最终书目信息**：标题、作者、机构、发表信息和稳定标识符等；
-2. **文献基本分类**：文献类型、语言和通用主题；
-3. **内容概述**：文献研究内容和整体结论；
-4. **研究目标或问题**：作者试图解决的问题；
-5. **方法概述**：文献采用的主要研究方法；
-6. **关键结果**：文献报告的主要发现；
-7. **结论与局限**：作者得出的结论和明确说明的限制；
-8. **关键词和通用标签**：供文献库查询和整理使用；
-9. **规范化参考文献信息**：供版本级引用事实和作品级引用网络补充使用。
-
-不同文献类型不一定具备全部内容，文献没有明确表达的项目可以为空。结构化分析只处理通用文献信息，不扩展到特定领域知识。完整轻结构化文档独立保存，不嵌入结构化分析结果成为唯一内容副本。
-
-语言模型根据当前书目版本的实际文献内容直接生成包含最终元数据与规范化引用提案在内的九类结构化结果，不执行逐字段来源比较或人工审批。文献信息管理自动验收完整提案；九类结果、最终统一元数据、引用、标签和状态必须作为一个逻辑更新整体写入。返回内容不符合产品规定结构、验收失败或任一部分未能完整写入时，该版本停留在“已有轻结构化文本”，不能保留部分有效结果或进入已完成。
-
-语言模型服务可以替换，但一次分析只产生一份当前结果。不同服务不能建立不同含义的核心分析结构，也不能形成并行核心流程。具体服务、模型、调用协议和结构表达由技术文档规定。
-
-### 5.8 状态协作与局部失败
-
-文献内容处理不维护独立状态机，而是向文献信息管理报告已经完成的事实，由文献信息管理推进书目版本的四级状态：
-
-| 文献内容处理完成的结果 | 书目版本状态 |
-|---|---|
-| 主文献 PDF 已验收 | 已有文献资产 |
-| 完整轻结构化文档已验收 | 已有轻结构化文本 |
-| 九类结构化结果、最终元数据、引用和标签已整体写入 | 已完成 |
-
-任何一步失败时：
-
-- 书目版本停留在最后一个成功状态；
-- 前面已经验收的结果继续可用；
-- 失败原因能够说明发生在资产获取、PDF 验收、解析、轻结构化文档验收、语言模型分析还是最终反馈；
-- 同批其它文献继续处理；
-- 后续执行从尚未完成的步骤继续，不要求重新完成全部前置步骤。
-
-语言模型已经返回但尚未完成整体写入的内容只属于本次处理尝试，不能成为有效结构化分析结果或独立业务状态。可以保留必要的失败说明，但后续执行仍从“已有轻结构化文本”重新完成分析和整体写入。
-
-### 5.9 与其它模块的协作
-
-| 协作模块 | 文献内容处理获得 | 文献内容处理提供 |
-|---|---|---|
-| 文献信息管理 | 待处理书目版本、统一初始元数据、当前状态，以及提案验收和统一信息更新结果 | 主 PDF、轻结构化文档、最终元数据与引用提案、结构化分析结果及步骤结果 |
-| 文献数据库 | 已有资产和处理结果 | 需要持续保存的主 PDF、轻结构化文档和结构化分析结果 |
-| 批量执行与结果说明 | 待处理目标和继续处理请求 | 每篇文献各步骤的成功、缺失和失败结果 |
-
-文献收集不直接调用解析或语言模型；它只负责发现初始元数据。文献库使用与互操作只读取文献数据库中已经形成的结果，不参与内容处理决策。
-
-### 5.10 一致性与简化边界
-
-- 一个书目版本只有一个驱动核心流程的已验收主文献 PDF；
-- 主 PDF 必须同时通过文件、主正文和书目版本身份验收；
-- 一次解析只使用一个解析器，不自动竞赛、回退或合并；
-- 只有完整轻结构化文档才能进入语言模型分析；
-- 核心结构化分析固定为九类通用信息，不允许不同模型重新定义结果含义；
-- 九类结构化结果、最终元数据、引用、标签和“已完成”状态必须作为完整整体反馈；
-- 不保留“分析完成但最终信息尚未反馈”的中间状态；
-- 内容处理只报告事实，由文献信息管理维护统一状态；
-- 单篇失败不破坏前序成功结果，也不阻止同批其它文献继续处理。
-
-### 5.11 需求追踪
-
-| 产品需求 | 本模块的设计响应 |
-|---|---|
-| R3 文献资产获取 | 唯一主文献 PDF、多候选获取和三项内容验收 |
-| R4 文献解析 | 单解析器、有序轻量文档结构、完整性验收和资产对应关系 |
-| R5 语言模型结构化分析 | 完整文档输入、包含最终元数据在内的九类通用结果和完整反馈 |
-| R8 大批量处理 | 单篇局部失败、前序结果保留、从缺失步骤继续和跨文献隔离 |
-
-## 6. 文献数据库
-
-### 6.1 设计目标
-
-文献数据库是 SciRetriever 持续积累的统一产品结果。它完整保存并关联文献收集、文献信息管理、文献内容处理和批量执行产生的核心事实，向其它模块提供一致的文献视图，但不代替这些模块重新执行身份、收集、解析或分析判断。
-
-系统只有一个统一逻辑文献数据库。即使后续技术实现使用不同存储方式，用户和各模块看到的仍然是一套相互关联的文献事实，不能形成模块私有的第二份权威文献数据。
-
-### 6.2 事实所有权
-
-各模块只能创建和修改自己负责的事实；文献数据库负责完整保存、关联和一致提供这些事实。
-
-| 事实类别 | 唯一业务所有者 | 文献数据库的责任 |
-|---|---|---|
-| 收集定义、收集执行和收集归属 | 文献收集 | 保存收集事实并关联统一文献引用 |
-| 文献作品、书目版本、来源记录、统一信息、引用关系和版本状态 | 文献信息管理 | 保存身份、权威统一信息和关系，并提供一致读取 |
-| 主文献 PDF、补充资产、轻结构化文档和包含最终元数据与引用提案的九类结构化结果 | 文献内容处理 | 保存内容结果并关联具体书目版本；提案不形成第二份权威统一信息 |
-| 批量摘要、实际目标结果和当前失败说明 | 批量执行与结果说明 | 保存可供继续处理和排障的结果投影 |
-| 扩展分析结果 | 对应扩展 | 保持与核心事实隔离并通过稳定引用关联 |
-
-文献数据库不能根据存储内容自行合并文献、改变版本状态、选择主 PDF 或重新解释结构化分析。业务判断必须由相应事实所有者完成后整体提交。
-
-### 6.3 稳定内部引用
-
-收集、文献作品和书目版本分别具有稳定内部引用。内部引用用于数据库中的长期关系，不依赖标题、DOI、PMID 或某个来源记录，也不规定具体 ID 格式。
-
-```text
-收集引用
-  -> 收集执行
-  -> 收集归属
-  -> 文献作品引用
-       -> 书目版本引用
-            -> 元数据、资产、文本、分析、引用和状态
-```
-
-外部稳定标识符仍作为文献信息保留，用于身份判断、检索和互操作，但不能代替内部引用。元数据被补充、最终元数据整体替换或代表版本变化时，内部关系保持稳定。
-
-### 6.4 逻辑数据范围
-
-统一文献数据库长期组织四组核心信息。
-
-#### 6.4.1 收集信息
-
-- 长期收集定义；
-- 每次主题领域或引用迭代收集执行；
-- 文献与收集的归属关系；
-- 主题条件、种子文献、引用方向、发现层次和发现路径；
-- 每次执行的停止原因和结果汇总。
-
-#### 6.4.2 文献信息
-
-- 文献作品和书目版本；
-- 版本关系和代表版本；
-- 各文献来源实际提供的元数据；
-- 未审阅阶段的统一初始元数据；
-- 已完成阶段由文献内容生成并经文献信息管理验收的最终元数据；
-- 版本级引用事实、作品级引用汇总和未解析引用；
-- 每个书目版本的四级状态。
-
-#### 6.4.3 文献内容
-
-- 每个书目版本唯一的已验收主文献 PDF；
-- 补充资产及其与书目版本的关系；
-- 完整轻结构化文档；
-- 包含最终元数据与引用提案在内的九类结构化结果；
-- 各结果与对应书目版本及主文献 PDF 的关系。
-
-#### 6.4.4 处理结果
-
-- 每个书目版本当前缺失的处理步骤；
-- 资产获取、PDF 验收、解析、轻结构化文档验收、语言模型分析或最终反馈中最近一次有意义的失败；
-- 收集执行和批量处理的当前结果汇总。
-
-数据库不长期保存每个下载候选、每次内部轮询或每次底层重试。新的成功结果清除相同步骤当前显示的失败，但不影响其它步骤的失败说明。
-
-### 6.5 逐阶段长期保存
-
-每个成功阶段立即成为统一文献数据库中的长期事实，不等待整个核心流程完成后再一次性保存。
-
-```text
-初始元数据写入
-  -> 未审阅文献可查询
-
-主文献 PDF 验收
-  -> 文献资产长期可用
-
-轻结构化文档验收
-  -> 解析内容长期可用
-
-九类结构化结果生成并通过验收
-  -> 最终元数据、引用、标签和分析结果整体写入
-  -> 书目版本进入已完成
-```
-
-后续步骤失败不能撤销前面已经保存的有效结果。用户能够查询未审阅文献，判断它当前完成到哪一步，并在后续执行中继续补充缺失内容。
-
-### 6.6 一致更新边界
-
-以下逻辑更新必须整体成功，用户不能观察到只完成一部分的中间状态：
-
-- 主文献 PDF、它与书目版本的关系和“已有文献资产”状态；
-- 轻结构化文档、它与主 PDF 的关系和“已有轻结构化文本”状态；
-- 包含最终元数据与引用提案在内的九类结构化结果、最终统一元数据、引用、标签和“已完成”状态；
-- 身份合并涉及的来源记录、收集归属和引用关系转移；
-- 删除书目版本时该版本全部核心事实的移除。
-
-具体如何实现整体成功由技术文档规定。设计文档只规定数据库不能对外暴露互相矛盾的部分结果。
-
-### 6.7 当前结果与失败范围
-
-核心数据库保存每个书目版本当前有效的主 PDF、轻结构化文档和包含最终元数据在内的九类结构化结果，不建设完整的内容处理版本历史。
-
-处理失败只保留每个步骤最近一次有意义的失败，用于说明：
-
-- 当前缺失什么；
-- 最近为什么没有完成；
-- 前面哪些结果已经成功；
-- 后续可以从哪一步继续。
-
-完整的来源元数据记录、收集执行和文献引用事实属于核心来源与关系证据，不受“只保留最近失败”限制。
-
-### 6.8 删除语义
-
-默认删除范围是具体书目版本。删除书目版本时，移除该版本的统一信息、来源关系、主 PDF、补充资产关系、轻结构化文档、结构化结果、版本级引用事实、状态和当前失败，不影响同一作品的其它版本。
-
-只有用户明确选择删除整个文献作品时，才删除其全部书目版本和它们与收集的归属关系。删除不能沿引用关系或收集关系扩散到其它文献；其它文献中指向已删除目标的引用证据可以继续作为未解析引用保留。
-
-具体文件字节如何清理、共享内容如何判断和删除如何落实由技术文档规定。设计文档只固定用户可观察的删除范围。
-
-### 6.9 扩展数据边界
-
-知识图谱、领域文献关系分析等可选扩展拥有独立结果命名空间。扩展通过稳定内部引用关联核心收集、文献作品或书目版本，可以与核心结果一起查询，但不能：
-
-- 向核心文献记录任意增加字段；
-- 修改作品、版本、最终元数据、引用事实或四级状态；
-- 把扩展结果变成文献已完成的前提；
-- 让某个扩展的数据结构成为其它核心模块必须理解的内容。
-
-扩展删除或重新计算不影响核心文献事实。扩展结果的具体保存方式由技术文档或扩展自身设计规定。
-
-### 6.10 统一读取视图
-
-文献数据库为其它模块提供一个一致的作品视图和版本详情。
-
-作品视图至少能够关联展示：
-
-- 稳定作品引用；
-- 当前代表版本；
-- 全部已知书目版本及其状态；
-- 所属收集；
-- 作品级引用关系；
-- 是否至少存在一个已完成版本。
-
-书目版本详情至少能够关联展示：
-
-- 稳定版本引用；
-- 来源元数据、统一初始元数据或最终元数据；
-- 主文献 PDF 和补充资产的可用情况；
-- 轻结构化文档；
-- 九类结构化结果；
-- 版本级引用事实和未解析引用；
-- 当前状态、缺失步骤和最近失败。
-
-具体查询入口、过滤条件、全文检索和用户交互属于“文献库使用与互操作”模块；文献数据库只保证这些事实能够从同一逻辑数据体系中一致取得。
-
-### 6.11 与其它模块的协作
-
-| 协作模块 | 文献数据库获得 | 文献数据库提供 |
-|---|---|---|
-| 文献收集 | 收集定义、执行、归属和发现路径 | 已保存收集及其关联文献 |
-| 文献信息管理 | 作品、版本、来源记录、统一信息、引用关系和状态 | 当前统一文献事实及稳定内部引用 |
-| 文献内容处理 | 主 PDF、补充资产、轻结构化文档和九类结构化结果 | 已有内容、当前状态和缺失步骤 |
-| 文献库使用与互操作 | 查询、导入和导出所需的读取或修改请求 | 一致作品视图、版本详情和当前统一元数据 |
-| 批量执行与结果说明 | 批量汇总和当前失败 | 待处理范围、现有结果和缺失步骤 |
-
-### 6.12 需求追踪
-
-| 产品需求 | 本模块的设计响应 |
-|---|---|
-| R1 发起文献收集 | 长期保存收集定义、执行、归属和发现原因 |
-| R2 多来源元数据搜索 | 保存来源记录、统一信息、精确身份结果和来源差异 |
-| R3 文献资产获取 | 保存唯一主 PDF、补充资产、关系和资产状态 |
-| R4 文献解析 | 保存完整轻结构化文档及其与主 PDF 的关系 |
-| R5 语言模型结构化分析 | 整体保存九类结构化结果、最终元数据、引用、标签和已完成状态 |
-| R6 文献数据库 | 一个统一逻辑数据库、稳定引用、统一读取视图和逐阶段长期保存 |
-| R7 书目信息导入与导出 | 接纳导入形成的未审阅元数据，并为元数据收集完成后的导出提供当前统一元数据 |
-| R8 大批量处理 | 保存阶段结果、当前缺失步骤、最近失败和批量汇总 |
-
-## 7. 文献库使用与互操作
-
-### 7.1 设计目标
-
-文献库使用与互操作负责让用户查找、检查和整理统一文献数据库，并通过通用书目格式与 Zotero 等外部工具交换书目信息。它读取文献数据库中的统一事实，不重新生成元数据、解析文献或维护另一套外部工具数据模型。
-
-### 7.2 责任边界
-
-文献库使用与互操作负责：
-
-- 提供文献作品和书目版本的统一查询；
-- 支持按文献信息、收集、状态、引用和内容进行检索与筛选；
-- 展示主 PDF、轻结构化文档、结构化结果、缺失步骤和最近失败；
-- 提供有限的身份关系确认和明确删除操作；
-- 从三类核心书目格式导入通用文献信息；
-- 把已经完成元数据信息收集的文献当前统一元数据导出为三类核心书目格式；
-- 对导入和导出的成功、跳过与失败结果作出说明。
-
-文献库使用与互操作不负责：
-
-- 判断收集目标或执行引用迭代；
-- 自动决定文献身份、版本或最终元数据；
-- 获取、解析或分析文献内容；
-- 修改主 PDF、轻结构化文档或结构化分析结果；
-- 保存 Zotero 或其它工具的内部对象、同步状态和私有数据；
-- 提供向量检索、相似推荐或领域知识查询等可选分析能力。
-
-### 7.3 核心查询范围
-
-核心查询同时覆盖未完成文献和已完成文献：
-
-- 未完成版本使用元数据收集阶段形成的当前统一初始元数据参与查询；
-- 已完成版本使用根据文献内容生成的最终元数据参与查询；
-- 普通查询默认返回文献作品及其代表版本；
-- 用户可以展开同一作品的全部书目版本和各版本状态；
-- 来源记录可供检查，但不与当前统一信息混合成一份不可解释的结果。
-
-核心查询至少支持：
-
-1. 通过稳定内部引用、DOI、PMID 等稳定标识符精确查找；
-2. 通过标题、作者、年份、发表来源、文献类型和语言筛选；
-3. 按长期收集、收集方式和发现关系筛选；
-4. 按四级书目版本状态、缺失步骤和最近失败筛选；
-5. 在当前统一元数据、轻结构化文档和九类结构化结果中进行关键词检索；
-6. 查看参考文献、被引用关系、作品级引用网络和未解析引用；
-7. 查看主 PDF、补充资产、轻结构化文档和结构化分析结果是否可用；
-8. 查看可选扩展通过独立命名空间提供的结果。
-
-向量检索、语义相似文献和自动推荐不属于核心查询。它们可以作为扩展读取核心数据库，但不能改变核心查询结果、文献身份或已完成状态。具体查询入口、交互形式和检索实现由技术文档规定。
-
-### 7.4 有限身份整理
-
-当精确身份规则无法自动处理“可能重复”或“可能属于另一版本”的关系时，用户可以执行以下有限整理操作：
-
-- 确认两条记录属于同一书目版本；
-- 确认两条记录属于同一文献作品的不同版本；
-- 确认两条记录应保持独立；
-- 删除错误书目版本；
-- 明确删除整个文献作品。
-
-确认身份关系后，文献信息管理负责整体更新来源记录、收集归属、引用关系和稳定内部引用。文献库使用与互操作只提交明确的用户决定，不自行修改关联事实。
-
-核心不提供逐字段手工编辑最终元数据。已完成元数据错误时，按已确认规则删除错误记录并重新执行完整流程。
-
-### 7.5 核心书目格式
-
-核心导入和导出固定支持三类通用书目格式：
-
-1. BibTeX/BibLaTeX；
-2. RIS；
-3. CSL JSON。
-
-三类格式进入和离开同一文献数据库，不得形成格式专属文献体系。每种格式只负责表达通用书目信息；具体字段名称、编码、文件结构和读写方式由技术文档规定。
-
-### 7.6 书目信息导入
-
-导入读取书目文件中能够转换为通用文献信息的全部内容，包括：
-
-- 标题、作者和机构；
-- 摘要；
-- 发表时间、期刊或会议、卷期页码；
-- DOI、PMID、ISBN、ISSN 等稳定标识；
-- 文献类型和语言；
-- 关键词和通用标签；
-- 格式中明确表达的参考文献信息。
-
-以下外部工具专有内容不进入核心文献数据库：
-
-- 外部工具数据库内部 ID；
-- 本地文件路径；
-- 外部同步状态和界面设置；
-- 私有插件字段；
-- 用户笔记和批注；
-- 外部附件路径；
-- 外部工具的集合层级。
-
-导入流程为：
-
-```text
-书目文件
-  -> 读取并转换通用书目信息
-  -> 使用统一精确身份规则整理重复记录
-  -> 创建或补充未审阅书目版本
-  -> 进入元数据搜索、PDF 获取、解析和结构化分析的核心流程
-```
-
-书目文件只是初始元数据入口。SciRetriever 不保留 Zotero 或其它工具对象，也不保留原始格式副本。导入产生的临时初始元数据在最终元数据整体替换后不作为独立来源记录保留。
-
-单条记录格式错误、缺少必要识别信息或无法转换时，只拒绝该条记录，不撤销同批其它成功导入结果。导入结果必须说明成功创建、补充已有、判定重复和拒绝的数量及原因。
-
-### 7.7 书目信息导出
-
-书目版本经过元数据信息收集并形成当前统一元数据后即可导出，不要求先获得主 PDF、轻结构化文本或结构化分析结果。未完成版本导出当前统一初始元数据；已完成版本导出根据文献内容形成的最终元数据。来源记录和未完成的处理产物不能直接拼接成导出内容。
-
-用户可以按长期收集、查询结果或明确选择的文献范围导出。默认情况下，每个文献作品只导出一个具有当前统一元数据的最佳版本，选择顺序为：
+用户可以按收集、查询结果或明确选择导出。默认每个 `MetaLiterature` 导出一个具有当前统一元数据的代表 Literature，顺序为：
 
 ```text
 正式发表版
@@ -842,284 +837,105 @@ PDF 解析器是可替换能力，但每次处理一个主文献 PDF 时只选�
   > 其它版本
 ```
 
-用户明确要求时，可以导出同一作品中全部已经形成当前统一元数据的版本。默认选择只影响本次导出，不改变作品的代表版本或数据库事实。尚未形成可转换统一元数据的记录，或因必要信息不足而无法生成有效目标格式记录时，只跳过该条并说明原因，不使其它记录的导出失效。
+用户明确要求时可以导出全部可导出版本。单条记录无法转换时只跳过该条并说明原因。目标格式不能表达的字段必须明确说明，不能静默改成其它含义。
 
-书目导出包含目标格式能够表达的当前统一书目信息、摘要、关键词和通用标签。不在书目格式中嵌入主 PDF、轻结构化全文或完整结构化分析结果。若以后需要导出完整文献数据集，应作为独立功能或扩展讨论，不能隐式扩大书目交换的含义。
+书目交换是文件级双向交换，不直接连接或同步 Zotero 等外部工具数据库，也不共享内部 ID 或同步状态。
 
-某些目标格式无法表达全部通用字段时，导出结果必须明确说明被省略的内容，不能静默把字段改成其它含义。
+## 8. DiscoveryRun 与数据库补全操作
 
-### 7.8 文件交换而非外部同步
+二者都由入口与流程编排负责，但持久化边界不同：
 
-SciRetriever 通过三类书目格式与外部工具进行文件级双向交换，不直接连接、同步或拥有 Zotero 等工具的数据库。
-
-- 外部工具导出的书目文件可以导入 SciRetriever；
-- SciRetriever 导出的书目文件可以由外部工具读取；
-- 两边没有共享内部 ID、实时同步状态或双向冲突解决；
-- 重复导入相同书目信息仍使用 SciRetriever 的统一身份规则处理。
-
-这保证文献数据库可以与主流工具协作，同时保持独立产品身份和数据所有权。
-
-### 7.9 与其它模块的协作
-
-| 协作模块 | 文献库使用与互操作获得 | 文献库使用与互操作提供 |
+| 概念 | 含义 | 生命周期 |
 |---|---|---|
-| 文献信息管理 | 统一文献身份、版本关系、初始或最终元数据、引用关系和状态 | 导入初始元数据、有限身份确认和明确删除决定 |
-| 文献数据库 | 作品视图、版本详情、内容结果、收集关系和扩展结果 | 查询范围及导入、导出和整理请求 |
-| 批量执行与结果说明 | 记录交换批次的执行封套和结果汇总 | 待导入记录、待导出范围，以及导入或导出的逐条业务结果 |
+| `DiscoveryRun` | 一次领域搜索或引用扩展的冻结输入、来源结果、发现对象和原因 | 运行中追加已确认结果，完成后作为不可反推的发现 provenance 长期保存 |
+| 数据库补全操作 | 从当前数据库范围补齐 PDF 或最终内容的一次调用 | Selector、目标、候选和 Report 只存在于当前进程，不形成运行历史 |
 
-文献收集和文献内容处理不直接读写外部书目格式。导入结果必须先进入文献信息管理；导出只从文献数据库读取元数据收集阶段已经形成的当前统一元数据。
+当前产品不建立 Collection。一次历史发现由 DiscoveryRun 表达，动态语义范围由本地查询表达，明确处理对象由 MetaLiterature/Literature ID 表达；系统不创建领域占位符，也不判断文献是否属于某个集合。未来 Zotero 式人工文件夹只有在形成独立产品需求后才设计。本地只读查询不保存为 DiscoveryRun，但可以成为本次补全的类型化 selector。
 
-### 7.10 一致性与简化边界
+### 8.1 运行时范围与目标冻结
 
-- 普通查询读取当前统一信息，不把来源记录混入统一展示；
-- 核心检索包括结构化筛选、关键词全文检索、收集、状态和引用查询；
-- 语义向量检索和推荐属于扩展；
-- 有限身份整理只确认关系或删除，不允许逐字段修改最终元数据；
-- 三类书目格式共享同一导入和导出语义；
-- 导入记录统一进入未审阅流程，不直接生成已完成文献；
-- 元数据收集完成后即可导出，不以全文、解析或结构化分析完成为前提；
-- 默认每个作品导出一个具有当前统一元数据的最佳版本，用户可以明确导出全部可导出版本；
-- 文件交换不建立外部工具数据库同步或所有权关系。
+数据库补全请求由一个 `BatchSelector` 和一个 `BatchGoal` 组成。当前 selector 为：
 
-### 7.11 需求追踪
+1. `AllPendingSelector`：全库当前仍可自动推进的对象；
+2. `DiscoveryRunSelector`：某次 DiscoveryRun 已接纳的对象；
+3. `ImportReportSelector`：调用方从一次非持久化 ImportReport 明确重新提交的 MetaLiterature ID；
+4. `QuerySelector`：类型化本地数据库查询；
+5. `MetaLiteratureSelector`：明确选择的逻辑文献；
+6. `LiteratureSelector`：明确选择的具体版本。
 
-| 产品需求 | 本模块的设计响应 |
+Selector 本身不保存，不混入目标、Provider、并发、Parser、LLM、强制重试或 cursor。`ImportReportSelector` 不引用 ImportRunId；同一进程可以直接使用 Report 返回的有序去重 ID，跨进程只有用户明确保存并再次提交这些 ID 时才成立，Entry 仍重新验证 ID 和 current facts。Entry 在一次一致读取中展开范围，排除已经满足目标或当前不能自动推进的对象，并把实际目标 tuple 冻结在当前进程内存。运行期间后来进入数据库、DiscoveryRun 或查询条件的文献不动态加入；重跑重新展开 selector 并依据当时的 current facts 形成新目标。
+
+支持两个内容维护目标：
+
+| 目标 | 含义 |
 |---|---|
-| R2 多来源元数据搜索 | 查询当前统一信息并允许检查来源差异和待核对身份关系 |
-| R6 文献数据库 | 作品与版本查询、结构化筛选、关键词全文检索、状态和引用查询 |
-| R7 书目信息导入与导出 | 三类核心格式、通用导入边界、未审阅入口和元数据收集完成后的导出规则 |
-| R8 大批量处理 | 导入和导出局部成功、逐条失败隔离和结果汇总 |
+| `ASSET_READY` | 为尚无可用版本主 PDF 的 MetaLiterature，或用户明确指定的具体 Literature，执行 PDF 获取和基本检查 |
+| `CONTENT_READY` | 从所选版本第一个缺失步骤继续，必要时补充主 PDF，再经 Parsing、Analysis 和 Literature 接纳形成最终内容；这是默认端到端目标 |
 
-## 8. 批量执行与结果说明
+### 8.2 MetaLiterature 版本候选
 
-### 8.1 设计目标
+普通全库、DiscoveryRun、导入和查询范围先按 `MetaLiterature` 去重。一个 MetaLiterature 只要已有任一成员达到所选目标，就不进入实际目标；系统不默认补齐全部版本。用户明确选择具体 Literature 时只处理该版本，不创建跨版本候选。
 
-批量执行与结果说明为大批量业务操作提供统一执行封套，并向用户说明范围筛选、实际目标、成功、缺失、失败和中断结果。它支持状态推进批次与记录交换批次，但不重新定义两类操作的业务含义，也不拥有文献身份、元数据、资产、文本、分析或版本状态。
-
-### 8.2 责任边界
-
-批量执行与结果说明负责：
-
-- 根据用户范围和目标状态选择实际需要处理的书目版本；
-- 默认把每个状态推进目标从当前缺失步骤推进到已完成；
-- 允许状态推进批次只推进到主 PDF 或轻结构化文本等较早目标状态；
-- 为导入和导出提供独立于书目版本状态的记录交换执行封套；
-- 保证单篇文献失败不阻止其它目标继续；
-- 保留各模块已经长期提交的成功结果；
-- 在中断后通过重新执行相同范围继续缺失步骤；
-- 长期保存批量摘要和实际目标的本次最终结果；
-- 根据各业务模块提供的失败证据，维护状态推进目标的当前失败说明；
-- 区分单篇失败与阻止整批运行的共同问题。
-
-批量执行与结果说明不负责：
-
-- 重新判断文献身份或版本关系；
-- 直接下载、解析或分析文献；
-- 定义书目格式转换、导入接纳或导出资格；
-- 维护独立于四级书目版本状态的第二套文献状态；
-- 保存每个下载候选、底层轮询或内部重试的完整历史；
-- 决定并发数量、调度算法、进程模型或资源分配方式。
-
-### 8.3 两类批量操作
-
-#### 8.3.1 状态推进批次
-
-状态推进批次的含义是：用户发起一次会产生书目版本的收集或导入，或者从数据库中选择一批已有书目版本，并指定希望它们推进到哪个目标状态；系统只对本次形成的实际缺失目标逐条处理并汇总结果。
-
-| 目标状态 | 批量执行含义 |
-|---|---|
-| 已有文献资产 | 批量下载 |
-| 已有轻结构化文本 | 为目标补充主 PDF 和完整轻结构化文档 |
-| 已完成 | 默认端到端批量处理，整体完成结构化分析和最终信息反馈 |
-
-批量下载是目标状态为“已有文献资产”的批量执行。它只选择尚无已验收主 PDF 的书目版本，为每个版本寻找并验收唯一主文献 PDF；成功后停止，不继续解析或语言模型分析。
-
-批量下载遵守：
-
-- 已有主 PDF 的版本在目标筛选阶段排除，不进入本批目标集合；
-- 同一书目版本在本批中只处理一次；
-- 每个版本独立尝试 PDF 候选；
-- 一个版本失败不影响其它版本；
-- 主 PDF 验收成功后立即长期保存；
-- 中断后重新执行相同范围，只选择仍缺主 PDF 的版本。
-
-默认端到端批量处理则在主 PDF 成功后继续解析、结构化分析和最终反馈，直到版本进入已完成或某个缺失步骤失败。
-
-#### 8.3.2 记录交换批次
-
-记录交换批次用于书目信息导入和导出，不使用书目版本目标状态：
-
-- 导入逐条读取和转换书目记录，业务结果由文献库使用与互操作定义为创建、补充、重复或拒绝；
-- 导出逐条读取已经完成元数据信息收集的当前统一元数据，业务结果由文献库使用与互操作定义为导出、跳过或失败；
-- 导出是只读批次，已完成状态不是导出资格，也不能用于排除导出目标；
-- 导入是写入批次，成功形成的书目版本可以作为随后状态推进批次的范围。
-
-一次用户操作可以先完成记录交换，再把本次成功形成的书目版本交给状态推进批次。两类批次分别保留各自的业务结果和摘要，不能把导出结果解释为书目版本状态推进。
-
-### 8.4 状态推进目标范围
-
-用户可以通过四种逻辑范围选择批量处理候选：
-
-1. **按收集处理**：选择某个长期收集中的书目版本；
-2. **按导入批次处理**：选择某次书目信息导入产生或补充的书目版本；
-3. **按查询或明确选择处理**：选择查询结果或用户明确选中的作品与版本；
-4. **按数据库缺失状态处理**：选择全库未审阅版本，或所有缺少某个指定步骤的版本。
-
-范围只定义候选集合。系统在执行前根据目标状态筛选，只有尚未达到目标状态的版本才进入实际目标集合。同一版本即使由多个条件命中，也只进入一次。
-
-主题领域收集、引用迭代收集或书目信息导入本身作为写入批次运行时，候选随着本次收集或导入结果形成。每条候选先由文献信息管理返回统一书目版本；只有该版本尚未达到本批目标状态时，才成为实际目标。批次不能因为候选对应数据库已有文献而把整个数据库扩展为处理范围。
-
-例如全库有一百万个版本，仅三千个版本缺少主 PDF 时，全库批量下载的实际目标只有这三千个版本。其余已有主 PDF 的版本不进入目标集合，也不创建一百万条“已有”结果；批量摘要和逐项目标结果只围绕实际需要处理的版本。
-
-### 8.5 默认完整推进与指定步骤
-
-默认情况下，状态推进批次读取每个目标当前四级状态，从第一个缺失步骤开始，持续推进到已完成：
+对于尚未满足目标的 MetaLiterature，Entry 在当前进程内冻结有序 Literature 候选。先按当前完成度复用：
 
 ```text
-实际目标集合
-  -> 读取每个版本当前状态
-  -> 从第一个缺失步骤开始
-  -> 主 PDF
-  -> 轻结构化文档
-  -> 结构化分析与最终信息整体反馈
-  -> 已完成
+CONTENT_READY
+  > 已有当前 ParserResult
+  > 已有当前主 PDF
+  > 没有上述结果
 ```
 
-用户明确指定较早的目标状态时，批量执行在达到该状态后停止。例如批量下载只推进到“已有文献资产”。指定步骤只是同一状态链的停止位置，不能形成独立身份、独立结果体系或另一套核心工作流。
-
-### 8.6 写入并发边界
-
-同一时间只允许一个会修改核心文献事实的批量执行。主题收集、引用扩展、书目信息导入和内容处理不能作为两个独立写入批次同时运行。
-
-查询可以在写入批次运行期间读取已经完整提交的结果。书目导出也可以读取已经完成元数据信息收集的当前统一元数据。批次内部是否并行处理不同文献，以及如何控制资源，属于技术文档。
-
-这一边界只限制写入型批次，不把普通查询和导出变成批量处理状态的一部分。
-
-### 8.7 批量执行状态
-
-两类批量操作共用以下执行状态，但逐项目标的业务结果由相应操作类型解释：
+完成度相同才按代表版本顺序选择：
 
 ```text
-创建
-  -> 筛选实际目标
-       ├─ 没有目标 -> 无目标
-       └─ 存在目标 -> 执行中
-                        ├─ 全部目标完成 -> 完成
-                        ├─ 至少一个目标完成或推进 -> 部分完成
-                        ├─ 没有目标完成或推进，或整批无法运行 -> 失败
-                        └─ 用户或运行环境停止 -> 中断
+published
+  > accepted-manuscript
+  > preprint
+  > other
 ```
 
-| 批次状态 | 含义 |
+每个候选按自己的缺失步骤端到端推进。只有 Acquisition 正常遍历全部当前自动路径并形成耗尽事实，或者 Analysis 明确 `NoUsableContent` 且该版本其它 PDF 候选已经耗尽时，才继续下一 Literature。Network/Storage 系统错误、Parser 失败、LLM 失败、取消或无法判断只进入本次报告，不触发跨版本回退。成功的 PDF、ParserResult 和 LiteratureContent 始终归实际成功的具体 Literature；MetaLiterature 只通过成员 current facts 推导是否已有可用版本，不保存状态。
+
+`AllPendingSelector` 默认排除需要 PDF 且已经具有自动获取耗尽事实的具体 Literature；当一个 MetaLiterature 的所有可用版本都已耗尽时，整个 MetaLiterature 不进入自动补全目标，而由 `needs_manual_pdf` 查询交给用户处理。用户以 `LiteratureSelector` 明确选择这个具体 Literature 并发起需要 PDF 的目标时构成明确重试，开始前清除耗尽事实；宽范围 selector 不自动清除。
+
+### 8.3 运行报告
+
+处理型 Entry 操作分别返回 `DiscoveryReport`、`DatabaseCompletionReport`、`ManualPdfReport`、`ImportReport` 或 `ExportReport`；它们组成判别联合但没有大而全的通用 envelope。纯查询直接返回 read result，不再套报告。PDF 获取、Parsing 和 Analysis 作为一次数据库补全中的内部阶段时，其 typed result、稳定失败和当前具体 Literature 归入同一个 `DatabaseCompletionReport`；未来只有出现独立用户操作时才需要新的操作特有 Report。
+
+Report 只共享三种最终停止方式：正常走到边界、用户受控中断、操作级失败。正常结束允许 Provider、目标或记录局部失败，不增加 `PARTIAL` 通用状态；DiscoveryRun 继续使用自己的五态持久 status。数据库补全对实际冻结目标按达到目标、需要人工 PDF、失败、处理中断、尚未开始做不重不漏分区，并以单独的具体 Literature ID 列表说明本次发生过明确 `NoUsableContent` 清理而不保存候选细节；手动 PDF 报告接纳或拒绝；导入按记录报告并返回可形成 `ImportReportSelector` 的 MetaLiterature ID；导出区分原子发布、跳过、字段损失和未发布对象。CLI 摘要从这些精确结果计算，不另存一套 counts。
+
+Report 不设置 ReportId、时间、持续时间、通用任务 status、自由 details 或日志数组，不进入 Catalog 或 ArtifactStore，不参与 Literature 状态、自动耗尽判断、版本回退或下一次 selector 展开。硬崩溃可以没有最终 Report；已经提交的当前事实仍然有效。
+
+实时 Logging 与 Report 正交：模块日志是可过滤、可丢失的运行旁路，Entry Report 始终从 typed result 和稳定 failure 独立累计，不能解析日志反向生成。CLI 的稳定结果或 JSON 写 stdout，实时进度与诊断写 stderr；日志文案和字段不是公共业务合同。
+
+### 8.4 局部失败、中断与重跑
+
+- 不同内存目标可以在资源预算内有界并行，每个目标按缺失步骤端到端推进；
+- 每个确认事实立即独立提交，局部失败不回滚其它目标或本目标已经确认的前序事实；
+- 正常结束、普通失败或用户受控中断时，报告汇总截至当时已经完成和未处理的情况；
+- `kill -9`、断电等硬崩溃可能没有最终报告，但已经提交的数据库事实继续有效；
+- 重跑重新读取 current facts，不恢复旧 selector 展开结果、网络、候选、Parser、LLM、线程或队列现场；
+- 数据库不可用、全部目标共同依赖的能力不可用或无法安全保存结果属于本次操作失败，不产生批次状态记录。
+
+同一时间只允许一个会修改核心文献事实的补全操作。查询和书目导出可以读取已经完整提交的结果。目标并发不改变同一 Literature 的 PDF Source 串行短路，也不能绕过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 的进程内共享访问准入。
+
+## 9. 需求对应
+
+| 产品需求 | 主要设计响应 |
 |---|---|
-| 无目标 | 形成实际目标后没有需要处理的记录，是正常空结果 |
-| 执行中 | 正在逐条处理实际目标 |
-| 完成 | 全部实际目标都获得成功业务结果 |
-| 部分完成 | 至少一个目标成功或向前推进，同时仍有缺失、失败或未完成目标 |
-| 失败 | 没有任何目标成功或向前推进，或存在阻止整批启动或继续的共同问题 |
-| 中断 | 用户或运行环境停止执行，已经提交的成功结果继续有效 |
+| R1 发起文献收集 | 入口与流程编排把领域搜索和引用扩展分别保存为有边界 DiscoveryRun；它不创建 Collection 或自动启动内容处理，供应商关系只有当前范围选中的目标接纳后才建立本地引用 |
+| R2 多来源元数据搜索 | 领域 DiscoveryRun 对本次全部 Provider 按过滤前原始 item 分别执行 scan limit；文献管理保留满足标题或 DOI 最低条件的 observation、收敛身份并形成统一元数据，不对每条结果自动执行逐篇全源补查或元数据阶段语义过滤 |
+| R3 文献资产获取 | Acquisition 根据明确资产线索、稳定定位和实际 landing origin 选择适用 Source，不按 publisher 或 metadata 来源硬编码；自动三阶段和手动接纳都按实际字节、标准 PDF reader 和可读页面树执行最低文件检查；手动操作复制并保护用户原文件；全部自动路径正常耗尽时保存最小 `needs_manual_pdf` 当前事实，临时错误不冒充耗尽 |
+| R4 文献解析 | Parsing 通过可替换 Parser 生成规范化 Markdown `ParserResult`，保留实际引用资源、输入/结果 hash 与 parser provenance，并只维护一个当前结果 |
+| R5 语言模型内容判断与总结 | Analysis 用一次有序两阶段逻辑分析先判断属于当前 Literature 的实际内容并确定最终元数据与关键词，再以该元数据为上下文生成和解析 Markdown 字符串章节与有序参考文献；Literature 整体接纳单一当前内容并以统一“未提供”缺失值确定性渲染规范 Markdown |
+| R6 文献数据库 | 所有操作从当前逻辑文献数据库出发并把确认结果提交回同一数据库；DiscoveryRun 保存发现 provenance，数据库补全只保存确认的文献事实和自动获取耗尽，Catalog + ArtifactStore 提供稳定引用、逐阶段保存和一致查询 |
+| R7 书目信息导入与导出 | 入口、文献管理和存储共同提供三类书目格式的逐条导入导出；导入复用 MetadataObservation、用户非空值优先且不保存过程历史，导出不要求全文完成 |
+| R8 大批量处理 | 入口与流程编排从运行时 selector 在内存冻结目标、按 MetaLiterature 选择具体版本并只在稳定缺失时回退，负责逐目标隔离、当前运行报告、受控中断和基于当前事实的重跑；不保存批次运行历史 |
 
-批次状态只说明一次执行的整体结果，不替代书目版本的四级状态或记录交换的业务结果。
+## 10. 文档责任
 
-### 8.8 状态推进目标结果
-
-批量执行只为实际进入目标集合的书目版本记录本次结果：
-
-| 目标结果 | 含义 |
-|---|---|
-| 完成 | 本次成功达到批量目标状态 |
-| 部分推进 | 完成了部分缺失步骤，但未达到端到端目标状态 |
-| 缺失 | 没有可用来源、资产或其它完成当前步骤所需的必要内容 |
-| 失败 | 执行当前步骤时发生错误，或返回结果未通过验收 |
-| 未开始 | 批次中断时尚未处理 |
-| 跳过 | 进入目标集合后，记录被删除或已不再满足处理条件 |
-
-“已有”不是实际目标结果。运行前已经达到目标状态的版本在筛选阶段排除，不创建逐项批量记录。对于批量下载，由于只推进一个状态步骤，目标通常只有完成、缺失、失败、未开始或跳过；“部分推进”主要用于端到端批量处理。
-
-记录交换批次沿用文献库使用与互操作定义的逐条结果，不套用上述状态推进结果。批量模块只负责隔离单条失败、保存摘要并统一说明批次是否完成、部分完成、失败或中断。
-
-### 8.9 批量摘要
-
-每次批量执行长期保存一个可查询摘要，至少包括：
-
-- 用户选择的逻辑范围；
-- 批量操作类型，以及状态推进批次适用的目标状态；
-- 实际目标数量；
-- 批次开始和结束结果；
-- 该操作类型定义的各类逐项目标结果数量；
-- 每个实际目标的最终业务结果，以及状态推进目标结束时的书目版本状态；
-- 批次停止原因；
-- 影响整批的共同错误。
-
-状态推进批次的摘要不保存范围内所有已经满足目标状态的文献，也不复制文献数据库中的主 PDF、文本、分析或来源事实。记录交换摘要同样只保存本次实际输入与逐条结果，不形成导入来源历史或第二份书目信息。
-
-### 8.10 局部失败与整批失败
-
-以下属于单个目标失败，只影响该书目版本：
-
-- 没有 PDF 候选通过验收；
-- PDF 解析失败或轻结构化文档不完整；
-- 语言模型分析失败或结果不符合规定结构；
-- 最终结果未能完整反馈。
-
-记录交换中的单条格式转换、接纳或导出失败同样只影响该条记录，其业务失败证据由文献库使用与互操作提供。
-
-以下属于整批共同问题，可以阻止批次启动或继续：
-
-- 批量范围或目标状态无效；
-- 文献数据库不可用；
-- 所有目标共同依赖的必需能力不可用；
-- 无法安全保存任何成功结果。
-
-状态推进目标失败时，书目版本停留在最后成功状态；产生失败的业务模块提供失败证据，批量执行与结果说明更新该版本相应步骤的当前失败说明。新的成功结果清除相同步骤当前显示的失败，但不影响其它步骤的失败说明。整批共同问题必须明确说明受影响范围，不能把它伪装成每篇文献分别失败。
-
-### 8.11 中断与重新执行
-
-批量执行中断时：
-
-- 已经长期提交的主 PDF、轻结构化文档和已完成结果继续有效；
-- 尚未处理的实际目标记录为未开始；
-- 已经部分推进但未达到目标的版本保留当前四级状态；
-- 当前批次结束为中断并保存摘要。
-
-用户再次执行相同逻辑范围时，系统创建新的批量执行，重新读取数据库当前事实，重新筛选实际目标，并只继续缺失步骤。系统不恢复旧批次的内部队列、处理位置或运行现场；旧批次摘要继续用于解释上一次发生了什么。
-
-### 8.12 与其它模块的协作
-
-| 协作模块 | 批量执行与结果说明获得 | 批量执行与结果说明提供 |
-|---|---|---|
-| 文献收集 | 收集范围、发现结果和收集执行结果 | 收集批次的推进与汇总结果 |
-| 文献信息管理 | 稳定版本引用、当前四级状态和身份判断结果 | 实际目标范围及各步骤推进结果和当前失败说明 |
-| 文献内容处理 | 每个目标的 PDF、解析、分析和反馈结果 | 待处理版本、目标状态和继续处理请求 |
-| 文献数据库 | 当前事实、缺失步骤和既有批量摘要 | 新批量摘要、实际目标结果和当前失败说明 |
-| 文献库使用与互操作 | 查询范围、导入或导出目标及其逐条业务结果 | 记录交换的执行封套和结果汇总 |
-
-### 8.13 一致性与简化边界
-
-- 批量执行只处理筛选后的实际缺失目标，不为大量已有文献创建逐项结果；
-- 状态推进与记录交换使用不同逐条结果合同，不把导出解释为状态推进；
-- 状态推进默认端到端执行，指定步骤只是同一状态链的停止位置；
-- 同一时间只有一个写入型批次，查询和导出可以读取完整提交结果；
-- 每个目标独立提交，局部失败不回滚其它成功结果；
-- 批次状态与书目版本状态分离，批次不成为第二套文献真相源；
-- 中断后重新执行相同范围，根据数据库事实继续，不恢复旧任务现场；
-- 长期保存批量摘要和实际目标结果，不保存底层完整尝试历史。
-
-### 8.14 需求追踪
-
-| 产品需求 | 本模块的设计响应 |
-|---|---|
-| R1 发起文献收集 | 按长期收集选择批量范围并保存收集执行摘要 |
-| R3 文献资产获取 | 批量下载定义、主 PDF 缺失筛选和逐目标结果 |
-| R4 文献解析 | 从已有状态继续到完整轻结构化文档 |
-| R5 语言模型结构化分析 | 从轻结构化文档整体完成九类结果、最终信息反馈和已完成状态 |
-| R6 文献数据库 | 读取当前事实、保存批量摘要并支持缺失状态选择 |
-| R7 书目信息导入与导出 | 为导入和导出提供独立记录交换批次及结果汇总 |
-| R8 大批量处理 | 实际目标筛选、局部成功、单写入批次、中断重执行和结果说明 |
-
-## 9. 文档责任边界
-
-- [产品需求](requirements.md)定义用户问题、核心功能、产品结果、质量要求和验收标准。
-- 本文定义系统的逻辑模块、责任、信息所有权、协作关系和数据流。
-- [技术文档](technical.md)在设计确认后规定代码组织、依赖、具体接口、数据格式、运行技术和维护方式。
-- [架构原则](principles.md)与[架构决策](decisions/README.md)只能约束已经确认的设计，不能用旧实现替代尚未讨论的模块设计。
+- [产品需求](requirements.md)定义用户问题、核心能力、产品结果和验收标准。
+- 本文定义整体框架、十个模块、数据流、事实所有权和用户可观察的协作语义。
+- [架构决策](decisions/README.md)保存长期有效的关键选择及其理由。
+- [技术文档](technical.md)把本文映射为代码目录、依赖、Ports、持久化和运行技术。
+- README、用户指南、源码和测试说明当前已经实现的行为，不得把本文中的目标架构写成已经发布的能力。

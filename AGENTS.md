@@ -1,153 +1,132 @@
-# SciRetriever 仓库协作规范
+# SciRetriever 仓库协作说明
 
-> 本文件是 SciRetriever 的项目画像、真相源索引和项目级约束入口。稳定的工程工作流、质量门禁、Git 纪律和通用完成标准见 [HARNESS.md](HARNESS.md)。修改仓库前先读本文件，再按任务范围读取对应真相源。
+> SciRetriever 当前处于 pre-v1 目标架构替换阶段。本文只保留代理进入仓库时需要知道的项目入口、重构自由度和安全底线；产品与架构事实以 requirements、Accepted ADR、design 和各模块 technical 文档为准，本文不再复制整套派生约束。工程验证见 [HARNESS.md](HARNESS.md)。
 
-## 1. 文件职责与工作顺序
+## 1. 当前阶段
 
-1. 阅读 [HARNESS.md](HARNESS.md)，确认工作树保护、实施、验证和交付规则。
-2. 从[产品需求](docs/architecture/requirements.md)确认用户问题、产品结果和验收标准。
-3. 通过[架构决策索引](docs/architecture/decisions/README.md)查找当前问题适用的 Accepted ADR。
-4. 涉及架构、模块责任、数据所有权、持久化或外部访问时，依次阅读[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)和[技术文档](docs/architecture/technical.md)。
-5. 阅读当前实现、直接调用方和测试，并按[代码与文档同步映射](docs/development/documentation-map.md)确定同步范围。
+当前工作不是在稳定产品上做小步兼容维护，而是依据已经确认的目标架构重建主要源码、测试、组装和用户入口。
 
-需求、ADR、设计和技术文档描述产品目标与已接受的派生设计；README、源码和测试描述当前实现。不得把理想能力写成已经发布的行为，也不得用当前代码反向证明目标设计正确。
+因此：
+
+- 当前旧源码、旧目录、旧内部 API 和只验证旧架构的测试是迁移材料，不是必须兼容的产品合同。
+- 可以在任务范围内成组删除、移动、重命名或重写模块、测试、内部 schema、SQLite schema 和对象图。
+- 可以在迁移期间短暂保留新旧实现并存或不完整的内部切片；不能把这种中间状态描述为已经集成或发布。
+- 当前 pre-v1 不默认承担旧内部 API、旧数据库、旧配置或旧文件格式的兼容与迁移成本；只有用户明确要求时才增加兼容层。
+- 不要求每个工作包都保持全库 Full Harness 绿色。相关切片应尽量可验证，完整集成质量在里程碑、PR、主分支和发布边界统一检查。
+- 现有测试若与 Accepted 目标设计冲突，应更新或删除，不得为了保住旧测试而恢复已经撤销的概念。
+- 大范围重构不要求实现、全部测试和全部文档在一个最小原子修改中完成；应按能够理解和继续集成的工作包推进，并明确当前完成范围和已知缺口。
+
+这些自由只放宽迁移过程，不放宽产品边界、凭据安全、外部访问安全、用户数据保护和最终集成质量。
+
+## 2. 真相源与阅读顺序
+
+按当前任务需要渐进读取，不要求每次遍历全部文档：
+
+1. 先确认用户当前要求和任务边界。
+2. 产品能力、范围或验收问题读取[产品需求](docs/architecture/requirements.md)。
+3. 长期设计选择从[架构决策索引](docs/architecture/decisions/README.md)找到适用的 Accepted ADR。
+4. 模块责任、数据所有权、依赖或持久化问题读取[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)及对应[模块技术文档](docs/architecture/technical.md)。
+5. 再读取当前实现、相关测试和必要的[代码与文档映射](docs/development/documentation-map.md)。
+
+| 内容 | 权威位置 |
+| --- | --- |
+| 产品问题、范围和 R1-R8 验收 | docs/architecture/requirements.md |
+| 已接受且长期有效的选择 | docs/architecture/decisions/ |
+| 目标模块、数据流和事实所有权 | docs/architecture/design.md |
+| 目标代码结构、Model、Ports 和运行技术 | docs/architecture/technical.md、docs/architecture/technical/ |
+| 当前已经实现的安装与用户行为 | README.md、docs/guides/、源码和测试 |
+| 易变 Provider、MinerU 等外部事实 | docs/notes/ |
+| 实施顺序和临时计划 | .omo/plans/；不属于项目真相源 |
+
+目标文档描述应当实现什么，旧代码描述迁移起点。不得用旧实现否定已经接受的目标设计，也不得把尚未实现的目标能力写成当前已发布行为。
 
 默认沟通和项目文档使用中文；代码标识符、异常、日志和提交信息使用英文。
 
-### 1.1 架构约束如何演进
-
-本文件汇总当前已接受的项目级约束，但不取代 requirements、ADR、design 和 technical，也不把当前目录永久冻结：
-
-- 普通实现和重构必须遵守当前已接受的边界。
-- 仅调整文件、命名或内部实现且不改变责任边界时，更新代码、测试和受影响的当前文档即可。
-- 改变模块责任、依赖方向、持久化所有权或关键技术选择时，先更新 ADR、design 或 technical，再同步本文件。
-- 改变产品能力、数据边界或用户可观察合同的任务，先更新 requirement；需要长期约束的关键选择再新增或替代 ADR。
-- 已获 owner 批准的架构演进可以修改本文件；不得仅以旧代码或本文件拒绝已经获批的变化。
-
-## 2. 项目画像
+## 3. 项目画像
 
 | 字段 | 值 |
 | --- | --- |
-| 项目定位 | 面向用户指定研究领域的大批量文献收集工具；产品自身保持领域中立 |
-| 产品结果 | 可持续积累、查询并交换书目信息的文献数据库 |
-| 权威数据边界 | 通用文献元数据、资产信息、轻结构化文本、通用结构化文献分析结果及其 provenance；领域数据留在下游 |
-| 主要语言与运行时 | Python 3.10+；开发基线 Python 3.12 |
-| 包管理器 | `uv`；锁文件为 `uv.lock` |
-| 活动源码 | `src/sciretriever/` |
-| 测试 | `tests/`；标准库 `unittest` |
-| Harness | `scripts/harness.py`，只提供 `quick` 和 `full` 两种模式 |
-| CI | `.github/workflows/ci.yml`；Python 3.10 和 3.12 均运行 Full Harness |
-| 临时文件 | 系统临时目录下的 `sciretriever-*`；不得散落在仓库根目录 |
-| 构建产物 | `build/`、`dist/`；均不得提交 |
+| 项目定位 | 面向用户指定研究领域的大批量文献收集与文献数据库维护工具 |
+| 主要语言 | Python 3.10+；开发基线 Python 3.12 |
+| 包管理 | uv，锁文件 uv.lock |
+| 活动源码 | src/sciretriever/ |
+| 测试 | tests/，标准库 unittest |
+| 质量入口 | scripts/harness.py quick / full |
+| CI | 普通分支 push 运行 Quick；PR、master 和手动运行执行 Python 3.10/3.12 Full |
+| 临时文件 | 系统临时目录下的 sciretriever-* |
+| 不提交内容 | .omo/、个人配置、运行时 catalog、文献资产、用户语料、.venv/、build/、dist/、缓存和临时文件 |
 
-## 3. 环境与命令入口
+当前目标是按功能模块组织的模块化单体：
 
-所有命令从仓库根目录执行。Ruff、编译、Pyright、全部测试和 wheel 检查的准确范围由 [HARNESS.md](HARNESS.md) 与 `scripts/harness.py` 定义，本文件不复制其内部命令。
+~~~text
+entry/
+metadata/
+literature/
+acquisition/
+parsing/
+analysis/
+model/
+network/
+storage/
+logging/
+bootstrap.py
+~~~
 
-| 层级 | 用途 | 命令 | 规则强度 |
-| --- | --- | --- | --- |
-| - | 安装锁定开发依赖 | `uv sync --locked --dev` | 环境准备 / CI |
-| L0 | 包导入与版本冒烟 | `uv run --frozen python -c "import sciretriever; print(sciretriever.__version__)"` | LOCAL GATE |
-| L0 | 单个测试文件 | `uv run --frozen python -m unittest discover -s tests -p 'test_<name>.py'` | LOCAL GATE |
-| L1 | 快速机械检查 | `uv run --frozen python scripts/harness.py quick` | LOCAL GATE |
-| L1-L3 | 完整质量检查 | `uv run --frozen python scripts/harness.py full` | LOCAL GATE / CI GATE |
-| L4 | 语义审查 | 对照需求、适用 ADR、责任文档、测试和最终 diff | POLICY |
-| L5 | 人工判断 | 新 ADR、公开边界变化、受支持数据迁移或生产数据操作 | HUMAN GATE |
+模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 api.py 和中性 Model 协作；外部协议在对应 adapter 边界转换；根级 bootstrap.py 负责生产组装。迁移可以分阶段实现这些边界，不需要为了旧目录保持平行的长期架构。
 
-环境约束：
+## 4. 重构工作方式
 
-- 优先使用仓库现有 `.venv`；不要复制归档环境或创建平行环境。
-- 未经用户授权，不升级运行时依赖，不修改 `uv.lock`。
-- 测试、构建和 Harness 不得连接真实供应商、生产数据库或用户语料。
-- 根目录 `config.toml` 可能包含个人运行配置；除非任务明确要求并完成敏感信息检查，否则不得提交。
+- 先围绕一个可说明的能力切片确定目标合同，再改相关源码、测试和组装；不以最小 diff 为目标。
+- 允许删除只服务旧分层、旧命名、旧状态机、旧兼容格式或旧测试假设的代码。
+- 允许先建立目标 package、Model 或 Port，再迁移调用方；工作包结束时说明哪些路径仍是临时桥接。
+- 旧测试只有在仍验证用户结果、安全边界或 Accepted 合同时才必须保留。测试内部实现细节或已撤销合同的测试可以重写、合并或删除。
+- 不强制 red-green-refactor、Given/When/Then 命名、每个函数单一固定形态或每个中间提交可发布；测试应证明最终重要行为，而不是维护过程仪式。
+- 文档同步以合同变化和集成里程碑为单位。普通内部搬迁无需逐文件改写架构文档；公开行为真正实现后再更新 README 和用户指南。
+- 代码与目标文档发生矛盾时，先判断是实现尚未迁移还是目标合同真的需要修改。只有后者才更新 requirements、ADR、design 或 technical。
+- 实施中发现问题可以回到设计修订，但不得顺手增加当前需求之外的新模块、状态、持久化事实或兼容体系。
 
-## 4. 真相源与任务路由
+## 5. 验证入口
 
-| 主题 | 首要真相源 |
-| --- | --- |
-| 产品问题、核心流程、产品结果与验收 | [产品需求](docs/architecture/requirements.md) |
-| ADR 的效力、状态与阅读顺序 | [架构决策索引](docs/architecture/decisions/README.md) |
-| 领域与数据边界 | [ADR 0001](docs/architecture/decisions/0001-sciretriever-scope-and-boundary.md) |
-| Work/WorkVersion 身份与单机增量处理 | [ADR 0002](docs/architecture/decisions/0002-literature-identity-and-incremental-processing.md) |
-| MinerU 服务所有权和 parser 边界 | [ADR 0003](docs/architecture/decisions/0003-operator-managed-mineru-service.md) |
-| requirements 与派生设计的责任边界 | [ADR 0004](docs/architecture/decisions/0004-requirement-led-literature-collection.md) |
-| DocumentPackage 2.0 不兼容合同 | [ADR 0005](docs/architecture/decisions/0005-document-package-2-breaking-contract.md) |
-| 长期实现与审查原则 | [架构原则](docs/architecture/principles.md) |
-| 理想系统的数据流、模块责任与事实所有权 | [设计文档](docs/architecture/design.md) |
-| 目标代码结构、依赖、Ports、持久化和运行技术 | [技术文档](docs/architecture/technical.md) |
-| 当前用户安装、命令和配置 | [README](README.md)、[用户指南](docs/guides/README.md)和[配置手册](docs/guides/configuration.md) |
-| Provider、MinerU 等易变外部事实 | [Notes 索引](docs/notes/README.md) |
-| 代码变化需要同步的文档 | [代码与文档同步映射](docs/development/documentation-map.md) |
-| 工程流程、机械门禁与完成标准 | [HARNESS.md](HARNESS.md) |
+从仓库根目录执行：
 
-`docs/proposals/` 只保存活动提案，`docs/archive/` 只保存历史材料；两者都不能越过当前真相源授权实现。`.omo/` 保存个人执行计划和状态，不属于项目真相源，不进入正式提交。
+~~~bash
+uv sync --locked --dev
+uv run --frozen python -m unittest discover -s tests -p 'test_<name>.py'
+uv run --frozen python scripts/harness.py quick
+uv run --frozen python scripts/harness.py full
+~~~
 
-## 5. 当前目标架构
+- 相关测试：开发循环和单个能力切片的首选验证。
+- Quick：Ruff lint、Ruff format check 和 compileall；用于发现基础机械问题，不包含全库严格类型检查和全量测试。
+- Full：Quick、Pyright strict、全部 unittest、wheel 构建和 wheel 内容核对；用于集成里程碑、PR、master、发布或用户明确要求的全库验收。
+- 文档-only 修改不要求运行 Python Harness；检查 diff、链接、术语和 Markdown 结构即可。
+- 中间重构工作包可以交付已知的全库失败，但必须准确说明已运行的检查、失败范围和为什么尚未达到集成里程碑。声称完成集成或可发布时必须通过 Full。
 
-当前已接受的目标是模块化单体和六层结构。该结构定义责任与依赖方向，不代表迁移已经完成，也不要求在迁移计划中记录的每个文件位置永久不变。
+精确步骤由 [HARNESS.md](HARNESS.md)、scripts/harness.py 和 CI 定义。
 
-| 层 | 负责 | 不负责 |
-| --- | --- | --- |
-| Model | 使用 Pydantic v2 声明内部交换的纯数据，并完成受控的结构解析 | 业务判断、业务流程、I/O 和外部调用 |
-| Core | 纯业务规则与决定；解释身份、验收、状态和 evidence 含义 | 数据库、文件、网络、供应商协议和用例编排 |
-| Services | 编排用例、调用 Core，并通过自己拥有的 Ports 请求外部能力 | 重新定义业务规则或选择具体技术实现 |
-| Infrastructure | 实现 Ports，以及存储、访问、来源、parser、LLM、记录 I/O 和本机锁 | 文献身份、最终验收、状态推导和导出资格判断 |
-| Interface | 解析用户输入、调用公开 Service API、呈现稳定结果 | 业务规则、持久化和具体外部能力 |
-| Composition | 读取运行配置、选择实现并构造对象图 | 产品规则和用户交互语义 |
+## 6. 必须保留的安全边界
 
-依赖由外向内：Core 只消费 Model；Services 消费 Core 和 Model；Infrastructure 实现 Services 所拥有的 Ports；Interface 只依赖公开 Service API 和 Model；Composition 是唯一可以了解全部具体实现并完成组装的边界。
+- 工作树默认不干净。不得回滚、覆盖、格式化掉或顺手提交任务无关的用户改动。
+- 未经明确授权，不执行 commit、amend、rebase、push、PR、发布、破坏性 Git 或会丢失数据的清理。
+- 测试和 Harness 不连接真实 Provider、真实凭据、生产数据库或用户语料。
+- 不读取、打印、硬编码或提交 secret、Cookie、Token、签名 URL、个人 config.toml 或用户凭据文件。
+- 不对用户资产、真实 catalog 或仓库外材料执行修改、迁移或删除，除非任务明确授权并先解析精确目标。
+- 临时文件和测试数据库进入系统临时目录，不散落到仓库根目录。
+- 依赖或 uv.lock 可以在当前实现明确需要时修改，但不得顺手升级无关依赖；交付时说明原因和影响。
+- 外部 HTTP、浏览器、MinerU 和 LLM 测试使用 fake、fixture 或明确的离线边界。真实只读探测也必须由用户明确要求。
+- 产品和数据边界、事实所有权、不可变资产、凭据与网络安全仍由 requirements 和 Accepted ADR 约束；重构模式不能绕过它们。
 
-项目级建模约束：
+## 7. 文档与交付
 
-- 结构化业务数据统一使用 Pydantic v2，不用 dataclass、裸字典或 vendor model 建立第二套内部业务合同。
-- Model 默认不可变。validator 只做纯结构验证、格式转换、不可变容器转换和跨字段结构约束，不执行 I/O、环境读取、provider 调用或业务决定。
-- 除已确认的边界需求外，Model 不增加自定义 serializer、自定义 `__init__`、`model_post_init`、普通业务方法或 property；身份、precedence、状态和 evidence 含义由 Core 决定。
-- Ports 归消费它们的 Service 所有；不建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` 包。
-- 外部输入在 Interface 或 Infrastructure 边界解析为中性 Model；vendor、HTTP、浏览器、SQL 和文件系统类型不得进入 Core 或 Service API。
-- 跨业务模块只调用公开 Service API，不导入其它模块的私有实现。
+docs/development/documentation-map.md 是影响分析索引，不是要求每个内部文件改动都同步全部文档的阻断清单。
 
-迁移期间，当前实现与目标目录可以暂时并存；新增代码应进入目标责任边界，迁移不得伪造尚未实现的公开 API。实施顺序、文件清单和完成进度只保存在 `.omo/plans/`，不写入本文件、design 或 technical。
+交付时说明：
 
-## 6. 不可协商的产品与数据边界
+- 本工作包实际完成了什么；
+- 仍有哪些临时桥接或未迁移调用方；
+- 运行了哪些相关测试、Quick 或 Full；
+- 已知失败是否只属于未完成的集成范围；
+- 是否修改依赖、公开行为、schema 或目标合同；
+- 没有夹带凭据、真实数据、构建产物或无关改动。
 
-- SciRetriever 止于通用文献元数据、资产、轻结构化文本、产品规定含义的通用结构化文献分析结果，以及必要的 provenance、lineage、处理证据和失败信息。
-- 反应、分子、路线、产率、材料性质等特定领域 schema 和数据属于下游消费者，不进入 SciRetriever 文献数据库。
-- `Work` 和 `WorkVersion` 是当前接受的内部身份机制；来源 observation 必须保留，身份收敛必须保守、确定且可审计。
-- 系统只有一个统一逻辑文献数据库；每项可变业务事实只有一个业务写入所有者。Storage 保存已确认事实，不自行形成业务决定。
-- SQLite/catalog 不保存大型 BLOB 或机器相关的绝对资产路径；文件系统保存字节，catalog 保存规范化相对引用、hash、关系和 provenance。
-- 已接受的原始资产和发布产物不得原地覆盖。发布采用 create-if-absent；目标路径存在不同字节时保留冲突证据并拒绝覆盖。
-- 元数据、资产、轻结构化文本和分析结果不得丢失来源、输入 hash、provenance 或 lineage；后续阶段失败不得撤销已经提交的有效事实。
-- MinerU 是 operator-managed 的外部 parser service。它的协议、输出格式和运行状态不得反向成为核心产品需求或第二套业务状态。
-- 下游只能依赖文档化的稳定 ID、hash、provenance 和领域中立合同，不直接依赖内部数据库表。
-- 当前 pre-v1 内部 catalog/schema 的直接替换已获 owner 批准；这不自动授权未来受支持数据迁移，也不降低 ADR 0005 对 DocumentPackage 2.0 的合同约束。
-
-## 7. 高风险修改路由
-
-| 变化范围 | 修改前至少阅读 | 必须重点证明 |
-| --- | --- | --- |
-| 产品能力或领域边界 | requirements、ADR 0001、ADR 0004 | 用户结果、范围边界和验收仍一致 |
-| Work/WorkVersion、身份或来源合并 | ADR 0002、principles、design | 保守收敛、来源事实和稳定关系不丢失 |
-| DocumentPackage 合同 | ADR 0005、design、technical | schema、canonicalization、hash、URN、重放和版本拒绝语义 |
-| SQLite、文件系统或不可变发布 | principles、design、technical、直接测试 | 所有权、相对路径、hash、事务、崩溃恢复和冲突证据 |
-| 网络、浏览器、凭据或外部访问 | technical、provider 文档、直接安全测试 | URL/DNS/redirect、预算、清理和脱敏边界 |
-| MinerU、其它 parser 或 LLM | ADR 0003、design、technical、对应 notes | operator/service 边界、中性输出、provenance 和输入对齐 |
-| 六层责任或依赖方向 | requirements、适用 ADR、design、technical | 变更有上游依据，且同步更新本文件和验收证据 |
-| CLI、配置或公开用户行为 | README、用户指南、配置手册、documentation map | 文档只描述已经实现并测试的行为 |
-
-公开契约、不可变存储、网络安全、产品边界和未来受支持数据迁移需要人工判断。机械检查不能替代这些语义审查。
-
-## 8. 文档、Git 与交付边界
-
-- 代码变化按 [documentation map](docs/development/documentation-map.md) 同步责任文档。
-- 实现、直接测试和必要的契约文档属于同一个原子变更；纯用户指南可以独立变更。
-- 提交信息使用英文 Conventional Commits；当前是 POLICY，没有 commit-msg hook。
-- 只有用户明确要求时才执行 commit、amend、rebase、push、PR、发布或其它历史修改。
-- 不提交 `.omo/`、个人配置、运行时 catalog、下载资产、用户语料、`.venv/`、`build/`、`dist/`、缓存或临时文件。
-
-项目交付前除 [HARNESS.md](HARNESS.md) 的通用完成标准外，还要确认：
-
-- [ ] 改动能够追溯到需求、Accepted ADR 或明确的当前行为修复。
-- [ ] 目标设计、当前实现和迁移计划没有被混写为同一种事实。
-- [ ] 产品与数据边界、事实所有权、provenance 和不可变性仍然成立。
-- [ ] README、用户指南和配置示例没有宣称尚未实现的能力。
-- [ ] diff 不包含 `.omo` 状态、个人配置、真实数据或构建产物。
+只有在声称一个集成里程碑已经完成时，才要求目标路径、直接测试、对象图和必要当前文档形成完整闭环。

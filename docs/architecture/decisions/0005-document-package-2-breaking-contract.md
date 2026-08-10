@@ -1,10 +1,14 @@
 # ADR 0005：DocumentPackage 2.0 不兼容合同
 
-- Status: Accepted
+- Status: Superseded by [ADR 0008](0008-summarized-markdown-literature-content.md)
 - Date: 2026-07-31
+- Revised: 2026-08-06
 - Supersedes: `DocumentPackage` schema 1.x 序列化合同
-- Superseded by: none
+- Superseded by: [ADR 0008](0008-summarized-markdown-literature-content.md)
+- Amended by: [ADR 0006](0006-llm-produced-literature-content.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)
 - Related: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[设计文档](../design.md)、[技术文档](../technical.md)
+
+> 本 ADR 保存已被替代的历史 Package 2.0 设计，不再约束当前目标架构。当前项目不实现、读取或迁移此处定义的 Package 2.0；未来完整快照必须重新形成需求和 ADR。
 
 ## 背景
 
@@ -23,10 +27,10 @@ Package 的内容 hash 同时承担快照完整性、内容身份和重放判断
 顶层是 closed object，且字段恰好为：
 
 ```text
-{schema_version:"2.0",package_id:PackageUrn,work_id:UUID,
- work_version_id:UUID,published_at:UTC-RFC3339,package_sha256:sha256,
- metadata:MetadataSnapshot,assets:[PackageAssetView],
- light_document:LightDocumentSnapshot|null,
+{schema_version:"2.0",package_id:PackageUrn,meta_literature_id:UUID,
+ literature_id:UUID,published_at:UTC-RFC3339,package_sha256:sha256,
+ metadata:LiteratureMetadataSnapshot,assets:[PackageAssetView],
+ content:LiteratureContentSnapshot|null,
  analysis:AnalysisSnapshot|null,references:ReferenceSnapshot,
  tags:TagSnapshot,provenance:[Provenance],lineage:[LineageEntry]}
 ```
@@ -37,21 +41,23 @@ Package 的内容 hash 同时承担快照完整性、内容身份和重放判断
 - `Identifier = {namespace:str,value:str}`。
 - `Provenance = {provenance_id:UUID,source_kind:"metadata-provider"|"asset-provider"|"parser"|"analysis-model"|"user",source_name:str,source_record_id:str|null,observed_at:UTC-RFC3339,input_sha256:sha256|null,parameters_sha256:sha256|null}`。
 - `Author = {display_name:str,family_name:str|null,given_name:str|null,orcid:str|null,affiliations:[str]}`。
-- `MetadataValues = {title:str,authors:[Author],abstract:str|null,publication_date:str|null,publication_year:int|null,document_type:str|null,language:str|null,venue:str|null,publisher:str|null,volume:str|null,issue:str|null,pages:str|null,article_number:str|null,open_access_status:str|null,identifiers:[Identifier]}`。
-- `MetadataSnapshot = {revision:int>=1,sha256:sha256,values:MetadataValues,provenance:[Provenance]}`。
+- `LiteratureMetadata = {title:str|null,authors:[Author],abstract:str|null,publication_date:str|null,publication_year:int|null,document_type:str|null,language:str|null,venue:str|null,publisher:str|null,volume:str|null,issue:str|null,pages:str|null,identifiers:[Identifier],keywords:[str]}`；`pages` 原样保存传统页码范围或供应商返回的电子文章定位号，不再建立独立 `article_number` 字段。
+- `LiteratureMetadataSnapshot = {revision:int>=1,sha256:sha256,values:LiteratureMetadata,provenance:[Provenance]}`。
 - `PackageAssetView = {asset_id:UUID,role:"primary-pdf"|"supplementary-pdf"|"xml"|"html"|"supplementary",sha256:sha256,media_type:str,byte_size:int>=0,provenance:[Provenance]}`；catalog 相对存储路径不进入 Package。
 - `SourceLocator = {asset_id:UUID,page_start:int>=1,page_end:int>=page_start,block_id:str,char_start:int>=0,char_end:int>=char_start}`。
 - `EvidenceText = {text:str,evidence:[SourceLocator]}`。
-- `ReferenceView = {reference_id:UUID,raw_text:str,title:str|null,authors:[Author],publication_year:int|null,source:str|null,identifiers:[Identifier],resolved_work_id:UUID|null,resolved_work_version_id:UUID|null,evidence:[SourceLocator]}`。
+- `ReferenceView = {reference_id:UUID,source_literature_id:UUID,target_literature_id:UUID,provenance:[Provenance]}`；只表达已经连接两个具体 Literature 的权威引用关系。`provenance` 是从该关系的 `ReferenceSupport` 来源投影得到的 Package 视图，不是 `Reference` 领域对象自身的字段；精确关系与支持边界见 ADR 0007。
 - `Block` 恰为 paragraph `{kind:"paragraph",block_id:str,text:str,evidence:[SourceLocator]}`、list `{kind:"list",block_id:str,ordered:bool,items:[EvidenceText]}`、table `{kind:"table",block_id:str,caption:EvidenceText|null,columns:[str],rows:[[str]],evidence:[SourceLocator]}`、formula `{kind:"formula",block_id:str,text:str,label:str|null,evidence:[SourceLocator]}` 或 figure-caption `{kind:"figure-caption",block_id:str,text:str,evidence:[SourceLocator]}`。
 - `Section = {section_id:str,level:int>=1,title:EvidenceText|null,blocks:[Block],children:[Section]}`。
-- `LightDocument = {schema_version:"1",title:EvidenceText|null,abstract:[EvidenceText],sections:[Section],references:[ReferenceView],provenance:[Provenance]}`。
-- `LightDocumentSnapshot = {artifact_id:UUID,sha256:sha256,document:LightDocument,provenance:[Provenance]}`。
+- `LiteratureContent = {schema_version:"1",title:EvidenceText|null,abstract:[EvidenceText],sections:[Section],references:[EvidenceText],provenance:[Provenance]}`；`references` 保存 LLM 从当前 PDF 中识别的逐条参考文献文本和 source locator，不嵌入结构化引用关系。
+- `LiteratureContentSnapshot = {artifact_id:UUID,sha256:sha256,content:LiteratureContent,provenance:[Provenance]}`。
 - `Classification = {document_type:str|null,language:str|null,subjects:[EvidenceText]}`，`ContentOverview = {summary:EvidenceText|null,conclusions:[EvidenceText]}`，`ConclusionsAndLimitations = {conclusions:[EvidenceText],limitations:[EvidenceText]}`，`KeywordsAndTags = {keywords:[str],tags:[str]}`。
-- `AnalysisProposal = {schema_version:"1",final_bibliography:MetadataValues,classification:Classification,content_overview:ContentOverview,research_objectives:[EvidenceText],methods:[EvidenceText],key_results:[EvidenceText],conclusions_and_limitations:ConclusionsAndLimitations,keywords_and_tags:KeywordsAndTags,references:[ReferenceView]}`。
+- `AnalysisProposal = {schema_version:"1",final_metadata:LiteratureMetadata,classification:Classification,content_overview:ContentOverview,research_objectives:[EvidenceText],methods:[EvidenceText],key_results:[EvidenceText],conclusions_and_limitations:ConclusionsAndLimitations,keywords_and_tags:KeywordsAndTags}`；临时 `ReferenceLookup` 不属于持久化分析结果。
 - `AnalysisSnapshot = {artifact_id:UUID,sha256:sha256,provider:str,model:str,input_sha256:sha256,proposal:AnalysisProposal,provenance:[Provenance]}`。
-- `ReferenceSnapshot = {complete:bool,items:[ReferenceView]}`，`TagView = {name:str,evidence:[SourceLocator]}`，`TagSnapshot = {complete:bool,items:[TagView]}`。
+- `ReferenceSnapshot = {items:[ReferenceView]}`，`TagView = {name:str,evidence:[SourceLocator]}`，`TagSnapshot = {complete:bool,items:[TagView]}`；引用集合只包含已经解析的权威关系，不声明原始参考文献列表完整性。
 - `LineageItem = {id:str,sha256:sha256}`，`LineageEntry = {lineage_id:UUID,stage:str,inputs:[LineageItem],outputs:[LineageItem],parameters_sha256:sha256,completed_at:UTC-RFC3339}`。
+
+`LiteratureMetadata` 必须具有非空 `title`，或者 `identifiers` 中至少存在一个 namespace 为 `doi` 的标识符；其它 namespace 的标识符不能替代 DOI 满足该条件。`document_type` 是 `str|null` 开放词汇，不定义封闭枚举。`keywords` 保存 Literature 已验收的 LLM 总结关键词；供应商返回的 `declared_keywords` 不属于 `LiteratureMetadata`。开放获取等访问状态属于资产线索而非文献元数据。
 
 未知字段、重复 set-like 元素、非有限数字、缺失字段、错误 union 形状和不满足上述范围的值一律拒绝；不允许由实现自行补全嵌套形状。
 
@@ -62,8 +68,8 @@ Canonical Package JSON 是 UTF-8 文本：`ensure_ascii=true`、`allow_nan=false
 数组顺序完整固定为：
 
 - identifiers 按 `(namespace,value)`；provenance 按 `provenance_id`；assets 按 `(role,asset_id)`；lineage 按 `(stage,lineage_id)`，其 inputs/outputs 按 `(id,sha256)`；
-- affiliations、analysis keywords 与 `keywords_and_tags.tags` 按 `(casefold(text),text)`；`TagView` 按 `(casefold(name),name)`；evidence 按 `(asset_id,page_start,page_end,block_id,char_start,char_end)`；
-- authors 保留书目顺序；list block items、abstract、sections、blocks、child sections、analysis 中的 EvidenceText lists 和 authoritative references 保留明确的阅读或引用顺序；table columns/rows/cells 保留来源顺序。
+- affiliations、`LiteratureMetadata.keywords`、analysis keywords 与 `keywords_and_tags.tags` 按 `(casefold(text),text)`；`TagView` 按 `(casefold(name),name)`；evidence 按 `(asset_id,page_start,page_end,block_id,char_start,char_end)`；
+- `ReferenceSnapshot.items` 按 `(source_literature_id,target_literature_id,reference_id)`；authors 保留书目顺序；list block items、abstract、sections、blocks、child sections、`LiteratureContent.references` 和 analysis 中的 EvidenceText lists 保留明确的阅读顺序；table columns/rows/cells 保留来源顺序。
 
 Package 2.0 内不存在其它 array 形状。
 

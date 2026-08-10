@@ -146,8 +146,8 @@ Owner 于 2026-07-24 单独确认的是 5.2 的两级调度。以下细节不是
 
 ### SciRetriever
 
-- [需求规格 FR-10 至 FR-12](../../architecture/requirements.md#6-全文获取)
-- [系统设计 Acquisition 流](../../architecture/design.md#5-acquisition-流)
+- [当前需求 R3 文献资产获取](../../architecture/requirements.md#r3-文献资产获取)
+- [当前系统设计 Acquisition](../../architecture/design.md#44-acquisition)
 - [WP3 实施证据](implementation-progress.md#5-能力覆盖与差距)
 - `src/sciretriever/acquisition/`
 - `src/sciretriever/network/secure.py`

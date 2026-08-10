@@ -45,20 +45,22 @@ class HarnessTests(unittest.TestCase):
 
         self.assertEqual(
             tuple(check.name for check in commands),
-            ("lint", "format", "compile", "typecheck", "harness tests"),
+            ("lint", "format", "compile"),
         )
-        for check in commands[:4]:
+        for check in commands:
             self.assertEqual(check.command[-len(files) :], files)
-        self.assertEqual(commands[-1].minimum_tests, 1)
 
-    def test_full_commands_extend_quick_with_tests_and_wheel(self) -> None:
+    def test_full_commands_extend_quick_with_typecheck_tests_and_wheel(self) -> None:
         files = ("main.py",)
 
         quick = _commands("quick", files)
         full = _commands("full", files)
 
         self.assertEqual(full[: len(quick)], quick)
-        self.assertEqual(tuple(check.name for check in full[-2:]), ("tests", "wheel"))
+        self.assertEqual(
+            tuple(check.name for check in full[-3:]),
+            ("typecheck", "tests", "wheel"),
+        )
         self.assertEqual(full[-2].minimum_tests, 1)
 
     def test_test_command_fails_when_command_reports_zero_tests(self) -> None:

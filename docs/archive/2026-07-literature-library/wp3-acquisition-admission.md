@@ -1,6 +1,6 @@
 # WP3 Acquisition Provider 与 Adapter 准入记录
 
-本记录依据 [Provider 准入与退役模板](../../development/provider-integration.md)，登记 2026-07-24 已实现的 WorkVersion acquisition 能力。它是 `implementation` 级离线证据，不表示任何外部 endpoint、会话或内容授权已经现场验证，也不作官方或法律结论。当前用户行为以 [README](../../../README.md) 为准，运维背景见 [Provider 运维手册](../../notes/providers.md)。
+本记录依据 [Provider 准入与退役模板](../../development/provider-integration.md)，登记 2026-07-24 已实现的 WorkVersion acquisition 能力。它是 `implementation` 级离线证据，不表示任何外部 endpoint、会话或内容授权已经现场验证，也不作官方或法律结论。当前用户行为以 [README](../../../README.md) 为准，运维背景见 [Provider 运维手册](../../notes/providers/README.md)。
 
 本记录不包含 endpoint、profile path、凭据值、签名 URL、Cookie、响应正文或用户身份。
 

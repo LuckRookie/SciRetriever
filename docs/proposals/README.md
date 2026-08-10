@@ -4,7 +4,7 @@
 
 ## 当前提案
 
-- [多下载源可用性与合理访问限制提案](acquisition-source-availability-and-access-limits.md)：讨论当前全文获取存在的真实可用性缺口，以及来源接口与最终下载主机的两层访问限制。
+当前没有活动提案。已经确认或被替代的材料见 `docs/archive/`；供应商访问调度的当前决策见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)。
 
 活动提案使用 TOML front matter：
 

@@ -138,25 +138,11 @@ def _commands(
             "compile",
             (sys.executable, "-m", "compileall", "-q", *files),
         ),
-        CommandCheck("typecheck", ("pyright", *files)),
-        CommandCheck(
-            "harness tests",
-            (
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                "tests",
-                "-p",
-                "test_harness*.py",
-            ),
-            minimum_tests=1,
-        ),
     )
     if mode == "quick":
         return shared
     return shared + (
+        CommandCheck("typecheck", ("pyright", *files)),
         CommandCheck(
             "tests",
             (sys.executable, "-m", "unittest", "discover", "-s", "tests"),

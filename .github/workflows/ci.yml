@@ -3,13 +3,36 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Python ${{ matrix.python-version }}
+  quick:
+    if: github.event_name == 'push' && github.ref != 'refs/heads/master'
+    name: Python 3.12 quick
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Run quick harness
+        run: uv run --frozen python scripts/harness.py quick
+
+  full:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/master'
+    name: Python ${{ matrix.python-version }} full
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

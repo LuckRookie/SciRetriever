@@ -10,4 +10,4 @@
 - `wp3-acquisition-reference-comparison.md`：WP3 方案比较；
 - `wp3-acquisition-admission.md`：WP3 acquisition 准入记录。
 
-当前用户行为见项目 [`README`](../../../README.md)，长期架构见[整体架构](../../architecture/README.md)，Provider 的当前注意事项见[Provider 接入注意事项](../../notes/providers.md)。
+当前用户行为见项目 [`README`](../../../README.md)，长期架构见[整体架构](../../architecture/README.md)，Provider 的当前注意事项见[Provider 接入注意事项](../../notes/providers/README.md)。
