@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+      xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <opensearch:totalResults>1</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>1</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2106.14834v1</id>
+    <title>Exact arXiv lookup</title>
+    <summary>Lookup summary.</summary>
+    <published>2021-06-28T16:21:21Z</published>
+    <author>
+      <name>Mariarosa Example</name>
+      <arxiv:affiliation>Numerical Analysis Institute</arxiv:affiliation>
+    </author>
+    <link href="https://arxiv.org/abs/2106.14834v1"
+          rel="alternate" type="text/html" />
+    <link href="https://arxiv.org/pdf/2106.14834v1"
+          rel="related" type="application/pdf" title="pdf" />
+  </entry>
+</feed>

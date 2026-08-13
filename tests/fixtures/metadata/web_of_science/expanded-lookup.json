@@ -1,0 +1,167 @@
+{
+  "Data": {
+    "Records": {
+      "records": {
+        "REC": [
+          {
+            "UID": "WOS:000222222200001",
+            "static_data": {
+              "summary": {
+                "titles": {
+                  "title": [
+                    {
+                      "type": "source",
+                      "content": "Journal of Expanded Evidence"
+                    },
+                    {
+                      "type": "item",
+                      "content": "A Web of Science Expanded article"
+                    }
+                  ]
+                },
+                "pub_info": {
+                  "pubyear": "2025",
+                  "sortdate": "2025-03-14",
+                  "vol": "19",
+                  "issue": "2",
+                  "page": {
+                    "content": "201-220"
+                  }
+                },
+                "names": {
+                  "name": [
+                    {
+                      "seq_no": 1,
+                      "role": "author",
+                      "display_name": "Lovelace, Ada",
+                      "full_name": "Lovelace, Ada",
+                      "first_name": "Ada",
+                      "last_name": "Lovelace",
+                      "addr_no": [
+                        1
+                      ]
+                    }
+                  ]
+                },
+                "publishers": {
+                  "publisher": [
+                    {
+                      "names": {
+                        "name": [
+                          {
+                            "display_name": "Evidence Publishing"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "doctypes": {
+                  "doctype": [
+                    "Article"
+                  ]
+                }
+              },
+              "fullrecord_metadata": {
+                "abstracts": {
+                  "abstract": [
+                    {
+                      "abstract_text": {
+                        "p": [
+                          "Expanded lookup abstract."
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "languages": {
+                  "language": [
+                    {
+                      "type": "primary",
+                      "content": "English"
+                    }
+                  ]
+                },
+                "normalized_languages": {
+                  "language": [
+                    {
+                      "type": "primary",
+                      "content": "English"
+                    }
+                  ]
+                },
+                "keywords": {
+                  "keyword": [
+                    "expanded retrieval"
+                  ]
+                },
+                "addresses": {
+                  "address_name": [
+                    {
+                      "address_spec": {
+                        "addr_no": 1,
+                        "full_address": "Analytical Engine Institute, London, England",
+                        "organizations": {
+                          "organization": [
+                            {
+                              "pref": "Y",
+                              "content": "Analytical Engine Institute"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "refs": {
+                  "count": 42
+                }
+              },
+              "item": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.expanded.one"
+                    }
+                  ]
+                }
+              }
+            },
+            "dynamic_data": {
+              "cluster_related": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.expanded.one"
+                    },
+                    {
+                      "type": "pmid",
+                      "value": "87654321"
+                    }
+                  ]
+                }
+              },
+              "citation_related": {
+                "tc_list": {
+                  "silo_tc": [
+                    {
+                      "coll_id": "WOS",
+                      "local_count": 11
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "QueryResult": {
+    "QueryID": 67890,
+    "RecordsSearched": 1,
+    "RecordsFound": 1
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "Data": [
+    {
+      "citedAuthor": "Reference, Two",
+      "citedTitle": "A DOI-only referenced work",
+      "citedWork": "Reference Journal",
+      "year": 2021,
+      "page": "30",
+      "doi": "10.5555/wos.reference.two",
+      "timesCited": 8
+    }
+  ],
+  "QueryResult": {
+    "RecordsFound": 3
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "Data": {
+    "Records": {
+      "records": {
+        "REC": [
+          {
+            "UID": "WOS:000222222200003",
+            "static_data": {
+              "summary": {
+                "titles": {
+                  "title": [
+                    {
+                      "type": "source",
+                      "content": "Review Evidence"
+                    },
+                    {
+                      "type": "item",
+                      "content": "The final Expanded record"
+                    }
+                  ]
+                },
+                "pub_info": {
+                  "pubyear": "2023",
+                  "page": {
+                    "content": "1-12"
+                  }
+                },
+                "names": {
+                  "name": []
+                },
+                "publishers": {
+                  "publisher": []
+                },
+                "doctypes": {
+                  "doctype": [
+                    "Review"
+                  ]
+                }
+              },
+              "fullrecord_metadata": {
+                "abstracts": {
+                  "abstract": []
+                },
+                "languages": {
+                  "language": []
+                },
+                "normalized_languages": {
+                  "language": []
+                },
+                "keywords": {
+                  "keyword": [
+                    "review"
+                  ]
+                },
+                "addresses": {
+                  "address_name": []
+                },
+                "refs": {
+                  "count": 5
+                }
+              },
+              "item": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.expanded.three"
+                    }
+                  ]
+                }
+              }
+            },
+            "dynamic_data": {
+              "cluster_related": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.expanded.three"
+                    }
+                  ]
+                }
+              },
+              "citation_related": {
+                "tc_list": {
+                  "silo_tc": [
+                    {
+                      "coll_id": "WOS",
+                      "local_count": 1
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "QueryResult": {
+    "QueryID": 12345,
+    "RecordsSearched": 999999,
+    "RecordsFound": 3
+  }
+}

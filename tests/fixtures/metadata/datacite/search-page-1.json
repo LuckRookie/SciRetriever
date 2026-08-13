@@ -1,0 +1,152 @@
+{
+  "data": [
+    {
+      "type": "dois",
+      "id": "10.5555/DATACITE.ARTICLE",
+      "attributes": {
+        "doi": "DOI:10.5555/DATACITE.ARTICLE",
+        "titles": [
+          {"title": "A DataCite journal article", "titleType": "Title"},
+          {"title": "A subtitle that must not be concatenated", "titleType": "Subtitle"}
+        ],
+        "creators": [
+          {
+            "name": "Example, Ada",
+            "nameType": "Personal",
+            "givenName": "Ada",
+            "familyName": "Example",
+            "affiliation": [
+              {
+                "name": "DataCite Research Institute",
+                "affiliationIdentifier": "https://ror.org/03yrm5c26",
+                "affiliationIdentifierScheme": "ROR"
+              }
+            ],
+            "nameIdentifiers": [
+              {
+                "nameIdentifierScheme": "ORCID",
+                "nameIdentifier": "https://orcid.org/0000-0002-1825-0097"
+              }
+            ]
+          },
+          {
+            "name": "DataCite Literature Consortium",
+            "nameType": "Organizational",
+            "affiliation": ["Consortium Office"]
+          },
+          {
+            "name": "No Type Orcid",
+            "nameIdentifiers": [
+              {
+                "nameIdentifierScheme": "ORCID",
+                "nameIdentifier": "0000-0001-5109-3700"
+              }
+            ]
+          }
+        ],
+        "contributors": [
+          {"name": "Editor Must Not Become Author", "contributorType": "Editor"}
+        ],
+        "publisher": {"name": "Example DOI Publisher", "publisherIdentifier": "fixture"},
+        "publicationYear": 2024,
+        "dates": [{"date": "2024-05-06", "dateType": "Published"}],
+        "language": "en",
+        "types": {
+          "resourceTypeGeneral": "JournalArticle",
+          "resourceType": "Research Article",
+          "schemaOrg": "ScholarlyArticle"
+        },
+        "descriptions": [
+          {"descriptionType": "Abstract", "description": "A DataCite abstract."},
+          {"descriptionType": "Other", "description": "private-description"}
+        ],
+        "subjects": [{"subject": "classification-must-not-be-keyword"}],
+        "container": {
+          "title": "Journal of DOI Contracts",
+          "identifier": "0000-0000",
+          "identifierType": "ISSN",
+          "volume": "7",
+          "issue": "2",
+          "firstPage": "15",
+          "lastPage": "29"
+        },
+        "relatedIdentifiers": [
+          {
+            "relationType": "References",
+            "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "10.5555/DATACITE.REF.ONE"
+          },
+          {
+            "relationType": "IsCitedBy",
+            "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "10.5555/DATACITE.CITING.ONE"
+          },
+          {
+            "relationType": "IsVersionOf",
+            "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "10.5555/DATACITE.VERSION.ONE"
+          },
+          {
+            "relationType": "IsPartOf",
+            "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "not-a-doi-private-container"
+          }
+        ],
+        "url": "https://repository.example.org/articles/datacite-article",
+        "contentUrl": [
+          "https://repository.example.org/files/datacite-article.pdf",
+          "https://repository.example.org/files/datacite-data.zip"
+        ],
+        "rightsList": [{"rightsIdentifier": "cc-by-4.0"}],
+        "formats": ["application/pdf", "application/zip"],
+        "referenceCount": 2,
+        "citationCount": 3,
+        "privateVendorState": "fixture-secret-must-not-leak"
+      },
+      "relationships": {
+        "references": {
+          "data": [{"type": "dois", "id": "10.5555/DATACITE.REF.ONE"}]
+        },
+        "citations": {
+          "data": [{"type": "dois", "id": "10.5555/DATACITE.CITING.ONE"}]
+        },
+        "versions": {
+          "data": [{"type": "dois", "id": "10.5555/DATACITE.VERSION.ONE"}]
+        }
+      }
+    },
+    {
+      "type": "dois",
+      "id": "10.5555/datacite.dataset",
+      "attributes": {
+        "doi": "10.5555/datacite.dataset",
+        "titles": [{"title": "A dataset that must not become Literature"}],
+        "types": {"resourceTypeGeneral": "Dataset"},
+        "relatedIdentifiers": [
+          {
+            "relationType": "References",
+            "relatedIdentifierType": "DOI",
+            "relatedIdentifier": "10.5555/must.not.be.a.literature.edge"
+          }
+        ],
+        "contentUrl": "https://repository.example.org/data/private-dataset.zip",
+        "privateDatasetSchema": {"payload": "must-not-leak"}
+      }
+    },
+    {
+      "type": "dois",
+      "id": "fixture-text-source-record",
+      "attributes": {
+        "titles": [],
+        "types": {"resourceTypeGeneral": "Text"},
+        "creators": [],
+        "privateIncompleteCandidate": "must-not-leak"
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.datacite.org/dois?page%5Bcursor%5D=1&page%5Bsize%5D=3",
+    "next": "https://api.datacite.org/dois?page%5Bcursor%5D=opaque%2Btwo%3D%3D&page%5Bsize%5D=3"
+  },
+  "meta": {"total": 4, "totalPages": 2}
+}

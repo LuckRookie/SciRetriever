@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message": {
+    "DOI": "10.5555/LOOKUP.VALUE",
+    "URL": "https://doi.org/10.5555/LOOKUP.VALUE",
+    "title": ["Exact Crossref lookup"],
+    "published": {"date-parts": [[2021, 6]]},
+    "page": "101-109"
+  }
+}

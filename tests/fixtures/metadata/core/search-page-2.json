@@ -1,0 +1,17 @@
+{
+  "totalHits": 3,
+  "limit": 2,
+  "offset": 2,
+  "results": [
+    {
+      "id": 143262547,
+      "title": "A final CORE work",
+      "doi": "10.5555/CORE.FINAL",
+      "authors": [{"name": "Final Author"}],
+      "yearPublished": 2024,
+      "documentType": "journal article",
+      "references": []
+    }
+  ],
+  "searchId": "private-search-token-two"
+}

@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "total": 3,
+    "page": 2,
+    "limit": 2
+  },
+  "hits": [
+    {
+      "uid": "WOS:000111111100003",
+      "title": "The final Starter record",
+      "types": [
+        "Review"
+      ],
+      "source": {
+        "sourceTitle": "Review Evidence",
+        "publishYear": 2022,
+        "pages": {
+          "range": "1-9",
+          "begin": "1",
+          "end": "9",
+          "count": 9
+        }
+      },
+      "names": {
+        "authors": [
+          {
+            "displayName": "Reviewer, Robin"
+          }
+        ]
+      },
+      "citations": [],
+      "identifiers": {
+        "doi": "10.5555/wos.starter.three"
+      },
+      "keywords": {
+        "authorKeywords": [
+          "review"
+        ]
+      }
+    }
+  ]
+}

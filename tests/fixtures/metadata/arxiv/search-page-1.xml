@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+      xmlns:arxiv="http://arxiv.org/schemas/atom"
+      xmlns:unknown="https://example.org/unknown">
+  <title>Fixture feed title must not persist</title>
+  <id>https://export.arxiv.org/api/query?search_query=private</id>
+  <updated>2026-08-11T04:00:00Z</updated>
+  <opensearch:totalResults>3</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2501.01234v2</id>
+    <title>
+      A deliberately wrapped
+      arXiv title
+    </title>
+    <summary>
+      A summary with   provider whitespace
+      normalized safely.
+    </summary>
+    <published>2025-01-03T10:11:12Z</published>
+    <updated>2025-01-04T10:11:12Z</updated>
+    <author>
+      <name>Ada Example</name>
+      <arxiv:affiliation>Institute One</arxiv:affiliation>
+      <arxiv:affiliation>Institute Two</arxiv:affiliation>
+    </author>
+    <author><name>Research Collaboration</name></author>
+    <category term="cs.IR" />
+    <arxiv:primary_category term="cs.IR" />
+    <arxiv:doi>https://doi.org/10.5555/SHARED.RECORD</arxiv:doi>
+    <arxiv:journal_ref>Must not create a version link or relation.</arxiv:journal_ref>
+    <link href="https://arxiv.org/abs/2501.01234v2"
+          rel="alternate" type="text/html" />
+    <link href="https://arxiv.org/pdf/2501.01234v2"
+          rel="related" type="application/pdf" title="pdf" />
+    <link href="http://arxiv.org/pdf/2501.01234v2"
+          rel="related" type="application/pdf" title="pdf" />
+    <link href="https://arxiv.org/pdf/2501.01234v2?token=fixture-secret"
+          rel="related" type="application/pdf" title="pdf" />
+    <unknown:score>100</unknown:score>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/hep-th/9901001v3</id>
+    <title>Old-style identifier example</title>
+    <summary>Second summary.</summary>
+    <published>1999-01-04T00:00:00Z</published>
+    <author><name>Grace Example</name></author>
+    <category term="hep-th" />
+    <link href="https://arxiv.org/abs/hep-th/9901001v3"
+          rel="alternate" type="text/html" />
+  </entry>
+</feed>

@@ -1,0 +1,33 @@
+[
+  {
+    "oci": "06120343876-061901512048",
+    "citing": "omid:br/06120343876 doi:10.5555/opencitations.anchor openalex:W3099878876 pmid:32939066",
+    "cited": "omid:br/061901512048 doi:10.5555/opencitations.cited.one openalex:W2035776949",
+    "creation": "2020-09-16",
+    "timespan": "P13Y",
+    "journal_sc": "no",
+    "author_sc": "no",
+    "count": "37",
+    "debug": "fixture-secret-reference-one"
+  },
+  {
+    "oci": "06120343876-061901512049",
+    "citing": "[coci] => omid:br/06120343876 doi:10.5555/opencitations.anchor; [poci] => pmid:32939066",
+    "cited": "[coci] => doi:10.5555/opencitations.cited.two omid:br/061901512049; [croci] => openalex:W2035776950; [doci] => doi:10.5555/opencitations.cited.two",
+    "creation": "2019-05",
+    "timespan": "P2Y",
+    "journal_sc": "yes",
+    "author_sc": "no",
+    "debug": "fixture-secret-reference-two"
+  },
+  {
+    "oci": "06120343876-061901512050",
+    "citing": "doi:10.5555/opencitations.anchor",
+    "cited": "openalex:W2035776951",
+    "creation": "2018",
+    "timespan": "P1Y",
+    "journal_sc": "no",
+    "author_sc": "yes",
+    "debug": "fixture-secret-reference-three"
+  }
+]

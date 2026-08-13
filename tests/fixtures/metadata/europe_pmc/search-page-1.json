@@ -1,0 +1,115 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "nextCursorMark": "AoIIPMC+/two==",
+  "request": {
+    "queryString": "private transport echo",
+    "resultType": "CORE",
+    "cursorMark": "*",
+    "pageSize": 2
+  },
+  "resultList": {
+    "result": [
+      {
+        "id": "32939066",
+        "source": "MED",
+        "pmid": "32939066",
+        "pmcid": "pmc7759461",
+        "doi": "DOI:10.5555/EPMC.ARTICLE",
+        "title": "A Europe PMC article",
+        "abstractText": "A <i>biomedical</i> abstract.<script>private-script</script>",
+        "authorString": "Example A, Consortium",
+        "authorList": {
+          "author": [
+            {
+              "fullName": "Ada Example",
+              "firstName": "Ada",
+              "lastName": "Example",
+              "authorId": {
+                "type": "ORCID",
+                "value": "https://orcid.org/0000-0002-1825-0097"
+              },
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {"affiliation": "Biomedical Retrieval Institute"}
+                ]
+              }
+            },
+            {
+              "collectiveName": "Europe PMC Research Consortium",
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {"affiliation": "Consortium Office"}
+                ]
+              }
+            },
+            {
+              "fullName": "Noorcid Example",
+              "firstName": "Noorcid",
+              "lastName": "Example"
+            }
+          ]
+        },
+        "authorIdList": {
+          "authorId": [
+            {"type": "ORCID", "value": "0000-0001-5109-3700"}
+          ]
+        },
+        "journalInfo": {
+          "issue": "4",
+          "volume": "12",
+          "dateOfPublication": "2024 Apr",
+          "journal": {
+            "title": "Journal of Biomedical Retrieval",
+            "issn": "0000-0000",
+            "nlmid": "fixture-nlmid"
+          }
+        },
+        "pubYear": "2024",
+        "pageInfo": "101-119",
+        "firstPublicationDate": "2024-04-03",
+        "language": "eng",
+        "pubTypeList": {"pubType": ["Journal Article", "Research Support"]},
+        "keywordList": {"keyword": ["source-declared one", "source-declared two"]},
+        "meshHeadingList": {"meshHeading": ["provider-index-topic-must-not-leak"]},
+        "fullTextUrlList": {
+          "fullTextUrl": [
+            {
+              "availability": "Open access",
+              "availabilityCode": "OA",
+              "documentStyle": "html",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC7759461"
+            },
+            {
+              "availability": "Open access",
+              "availabilityCode": "OA",
+              "documentStyle": "pdf",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC7759461?pdf=render"
+            },
+            {
+              "availability": "Subscription required",
+              "documentStyle": "doi",
+              "site": "DOI",
+              "url": "https://doi.org/10.5555/EPMC.ARTICLE"
+            }
+          ]
+        },
+        "isOpenAccess": "Y",
+        "hasPDF": "Y",
+        "hasReferences": "Y",
+        "citedByCount": 8,
+        "privateVendorObject": {"secret": "fixture-secret-must-not-leak"}
+      },
+      {
+        "id": "PMC10000001",
+        "source": "PMC",
+        "pmcid": "PMC10000001",
+        "title": "A second Europe PMC record",
+        "pubYear": "2023",
+        "unknownProviderScore": 0.98
+      }
+    ]
+  }
+}

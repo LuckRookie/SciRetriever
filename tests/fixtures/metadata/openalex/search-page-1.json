@@ -1,0 +1,154 @@
+{
+  "meta": {
+    "count": 3,
+    "page": null,
+    "per_page": 2,
+    "next_cursor": "cursor-two",
+    "db_response_time_ms": 2,
+    "cost_usd": 0.001,
+    "x_query": "fixture-secret query explanation"
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W1111111111",
+      "doi": "https://doi.org/10.5555/SEMANTIC.OPENALEX",
+      "ids": {
+        "openalex": "https://openalex.org/W1111111111",
+        "doi": "doi:10.5555/semantic.openalex",
+        "pmid": "https://pubmed.ncbi.nlm.nih.gov/01234567/",
+        "pmcid": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7654321/",
+        "mag": "private-mag-id"
+      },
+      "title": "An OpenAlex record",
+      "display_name": "Duplicate display name must be ignored",
+      "type": "article",
+      "language": "en",
+      "publication_year": 2024,
+      "publication_date": "2024-02-29",
+      "abstract_inverted_index": {
+        "A": [0],
+        "reconstructed": [1],
+        "OpenAlex": [2],
+        "abstract.": [3]
+      },
+      "authorships": [
+        {
+          "author_position": "first",
+          "author": {
+            "id": "https://openalex.org/A111",
+            "display_name": "Ada OpenAlex",
+            "orcid": "https://orcid.org/0000-0002-1825-0097"
+          },
+          "institutions": [
+            {
+              "id": "https://openalex.org/I111",
+              "display_name": "Example Institute",
+              "ror": "https://ror.org/03yrm5c26",
+              "lineage": ["private-lineage"]
+            }
+          ],
+          "raw_affiliation_strings": ["Do not duplicate aligned institutions"]
+        },
+        {
+          "author_position": "last",
+          "author": {"display_name": "Second OpenAlex Author", "orcid": null},
+          "institutions": []
+        }
+      ],
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.5555/semantic.openalex",
+        "pdf_url": "https://assets.example.org/openalex-published.pdf",
+        "is_oa": true,
+        "license": "cc-by",
+        "version": "publishedVersion",
+        "source": {
+          "id": "https://openalex.org/S111",
+          "display_name": "OpenAlex Journal",
+          "issn_l": "0000-0000",
+          "type": "journal"
+        }
+      },
+      "best_oa_location": {
+        "landing_page_url": "https://repository.example.org/openalex-record",
+        "pdf_url": "https://repository.example.org/openalex-record.pdf",
+        "is_oa": true,
+        "license": "cc-by",
+        "version": "submittedVersion"
+      },
+      "locations": [
+        {
+          "landing_page_url": "https://doi.org/10.5555/semantic.openalex",
+          "pdf_url": "https://assets.example.org/openalex-published.pdf",
+          "is_oa": true,
+          "license": "cc-by",
+          "version": "publishedVersion"
+        },
+        {
+          "landing_page_url": "https://publisher.example.org/accepted-record",
+          "pdf_url": "https://publisher.example.org/accepted-record.pdf",
+          "is_oa": false,
+          "license": "publisher-terms",
+          "version": "acceptedVersion"
+        },
+        {
+          "pdf_url": "https://shared.example.org/same-url-different-semantics.pdf",
+          "is_oa": false,
+          "license": "publisher-terms",
+          "version": "publishedVersion"
+        },
+        {
+          "pdf_url": "https://shared.example.org/same-url-different-semantics.pdf",
+          "is_oa": true,
+          "license": "cc-by",
+          "version": "submittedVersion"
+        },
+        {
+          "landing_page_url": "http://unsafe.example.org/plain-http",
+          "pdf_url": "https://unsafe.example.org/file.pdf?token=fixture-secret",
+          "version": "publishedVersion"
+        }
+      ],
+      "open_access": {
+        "is_oa": true,
+        "oa_status": "gold",
+        "oa_url": "https://aggregate.example.org/not-an-extra-location",
+        "any_repository_has_fulltext": true
+      },
+      "biblio": {
+        "volume": "42",
+        "issue": "7",
+        "first_page": "101",
+        "last_page": "119"
+      },
+      "referenced_works": [
+        "https://openalex.org/W5555555555",
+        "https://openalex.org/W6666666666"
+      ],
+      "referenced_works_count": 17,
+      "cited_by_count": 29,
+      "related_works": ["https://openalex.org/W9999999999"],
+      "is_retracted": true,
+      "topics": [{"display_name": "Must not become keyword", "score": 0.99}],
+      "keywords": [{"display_name": "Algorithmic keyword", "score": 0.98}],
+      "concepts": [{"display_name": "Private concept", "score": 0.97}],
+      "unknown_private": "adapter-whitelist-must-ignore-this-key"
+    },
+    {
+      "id": "https://openalex.org/W2222222222",
+      "doi": null,
+      "ids": {"openalex": "https://openalex.org/W2222222222", "mag": "222"},
+      "title": null,
+      "abstract_inverted_index": null,
+      "authorships": [],
+      "primary_location": null,
+      "best_oa_location": null,
+      "locations": [],
+      "biblio": {},
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "cited_by_count": 0,
+      "topics": [{"display_name": "Still not a keyword"}]
+    }
+  ],
+  "group_by": []
+}

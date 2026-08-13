@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "type": "dois",
+      "id": "10.5555/datacite.preprint",
+      "attributes": {
+        "doi": "10.5555/DATACITE.PREPRINT",
+        "titles": [{"title": "A DataCite preprint"}],
+        "types": {"resourceTypeGeneral": "Preprint"},
+        "publicationYear": 2025,
+        "url": "https://repository.example.org/preprints/datacite-preprint"
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.datacite.org/dois?page%5Bcursor%5D=opaque%2Btwo%3D%3D&page%5Bsize%5D=3",
+    "next": null
+  },
+  "meta": {"total": 4, "totalPages": 2}
+}

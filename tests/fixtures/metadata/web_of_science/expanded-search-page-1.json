@@ -1,0 +1,309 @@
+{
+  "Data": {
+    "Records": {
+      "records": {
+        "REC": [
+          {
+            "UID": "WOS:000222222200001",
+            "static_data": {
+              "summary": {
+                "titles": {
+                  "title": [
+                    {
+                      "type": "source",
+                      "content": "Journal of Expanded Evidence"
+                    },
+                    {
+                      "type": "item",
+                      "content": "A Web of Science Expanded article"
+                    }
+                  ]
+                },
+                "pub_info": {
+                  "pubyear": "2025",
+                  "sortdate": "2025-03-14",
+                  "vol": "19",
+                  "issue": "2",
+                  "page": {
+                    "content": "201-220",
+                    "page_begin": "201",
+                    "page_end": "220"
+                  }
+                },
+                "names": {
+                  "name": [
+                    {
+                      "seq_no": 2,
+                      "role": "author",
+                      "display_name": "Turing, Alan",
+                      "full_name": "Turing, Alan M",
+                      "first_name": "Alan M",
+                      "last_name": "Turing",
+                      "orcid_id": "0000-0002-1825-0097",
+                      "r_id": "RID-EXCLUDED",
+                      "addr_no": [
+                        2
+                      ]
+                    },
+                    {
+                      "seq_no": 1,
+                      "role": "author",
+                      "display_name": "Lovelace, Ada",
+                      "full_name": "Lovelace, Ada",
+                      "first_name": "Ada",
+                      "last_name": "Lovelace",
+                      "addr_no": [
+                        1,
+                        2
+                      ]
+                    },
+                    {
+                      "seq_no": 3,
+                      "role": "editor",
+                      "display_name": "Excluded, Editor",
+                      "addr_no": [
+                        1
+                      ]
+                    }
+                  ]
+                },
+                "publishers": {
+                  "publisher": [
+                    {
+                      "names": {
+                        "name": [
+                          {
+                            "display_name": "Evidence Publishing"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "doctypes": {
+                  "doctype": [
+                    "Article"
+                  ]
+                }
+              },
+              "fullrecord_metadata": {
+                "abstracts": {
+                  "abstract": [
+                    {
+                      "abstract_text": {
+                        "p": [
+                          "First abstract paragraph.",
+                          "Second abstract paragraph."
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "languages": {
+                  "language": [
+                    {
+                      "type": "primary",
+                      "content": "English"
+                    }
+                  ]
+                },
+                "normalized_languages": {
+                  "language": [
+                    {
+                      "type": "primary",
+                      "content": "English"
+                    }
+                  ]
+                },
+                "keywords": {
+                  "keyword": [
+                    "expanded retrieval",
+                    "author metadata"
+                  ]
+                },
+                "keywords_plus": {
+                  "keyword": [
+                    "excluded generated topic"
+                  ]
+                },
+                "addresses": {
+                  "address_name": [
+                    {
+                      "address_spec": {
+                        "addr_no": 1,
+                        "full_address": "Analytical Engine Institute, London, England",
+                        "organizations": {
+                          "organization": [
+                            {
+                              "pref": "Y",
+                              "content": "Analytical Engine Institute"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "address_spec": {
+                        "addr_no": 2,
+                        "full_address": "Computing Laboratory, Manchester, England",
+                        "organizations": {
+                          "organization": [
+                            {
+                              "pref": "Y",
+                              "content": "Computing Laboratory"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "refs": {
+                  "count": 42
+                }
+              },
+              "item": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/WOS.EXPANDED.ONE"
+                    }
+                  ]
+                },
+                "keywords_plus": {
+                  "keyword": [
+                    "excluded item keyword"
+                  ]
+                }
+              }
+            },
+            "dynamic_data": {
+              "cluster_related": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/WOS.EXPANDED.ONE"
+                    },
+                    {
+                      "type": "pmid",
+                      "value": "87654321"
+                    },
+                    {
+                      "type": "issn",
+                      "value": "9999-8888"
+                    }
+                  ]
+                }
+              },
+              "citation_related": {
+                "tc_list": {
+                  "silo_tc": [
+                    {
+                      "coll_id": "BIOSIS",
+                      "local_count": 500
+                    },
+                    {
+                      "coll_id": "WOS",
+                      "local_count": 11
+                    }
+                  ]
+                }
+              }
+            },
+            "fund_ack": {
+              "funding": "excluded"
+            },
+            "unknownVendorObject": {
+              "secret": "must-not-cross-the-adapter"
+            }
+          },
+          {
+            "UID": "WOS:000222222200002",
+            "static_data": {
+              "summary": {
+                "titles": {
+                  "title": [
+                    {
+                      "type": "source",
+                      "content": "Expanded Proceedings"
+                    },
+                    {
+                      "type": "item",
+                      "content": "A second Expanded record"
+                    }
+                  ]
+                },
+                "pub_info": {
+                  "pubyear": "2024",
+                  "page": {
+                    "content": "e77"
+                  }
+                },
+                "names": {
+                  "name": []
+                },
+                "publishers": {
+                  "publisher": []
+                },
+                "doctypes": {
+                  "doctype": [
+                    "Proceedings Paper"
+                  ]
+                }
+              },
+              "fullrecord_metadata": {
+                "abstracts": {
+                  "abstract": []
+                },
+                "languages": {
+                  "language": []
+                },
+                "normalized_languages": {
+                  "language": []
+                },
+                "keywords": {
+                  "keyword": []
+                },
+                "addresses": {
+                  "address_name": []
+                },
+                "refs": {
+                  "count": 0
+                }
+              },
+              "item": {
+                "identifiers": {
+                  "identifier": []
+                }
+              }
+            },
+            "dynamic_data": {
+              "cluster_related": {
+                "identifiers": {
+                  "identifier": []
+                }
+              },
+              "citation_related": {
+                "tc_list": {
+                  "silo_tc": [
+                    {
+                      "coll_id": "WOS",
+                      "local_count": 0
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "QueryResult": {
+    "QueryID": 12345,
+    "RecordsSearched": 999999,
+    "RecordsFound": 3
+  }
+}

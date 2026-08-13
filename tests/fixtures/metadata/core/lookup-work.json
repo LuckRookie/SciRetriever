@@ -1,0 +1,21 @@
+{
+  "id": 143262545,
+  "title": "A CORE work lookup",
+  "doi": "10.5555/SHARED.EPMC.CORE",
+  "authors": [{"name": "Example, Ada"}],
+  "yearPublished": 2025,
+  "documentType": "research article",
+  "references": [
+    {
+      "id": "2001",
+      "doi": "10.5555/CORE.REF.ONE",
+      "raw": "First CORE reference text."
+    },
+    {
+      "doi": "10.5555/CORE.REF.TWO",
+      "raw": "Second CORE reference text."
+    }
+  ],
+  "downloadUrl": "https://core.ac.uk/download/571215426.pdf",
+  "fullText": "private lookup full text"
+}

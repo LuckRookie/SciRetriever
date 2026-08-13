@@ -1,0 +1,20 @@
+{
+  "offset": 0,
+  "next": 1,
+  "data": [
+    {
+      "contexts": ["Vendor-generated citation context must be ignored."],
+      "intents": ["background"],
+      "isInfluential": true,
+      "citedPaper": {
+        "paperId": "5555555555555555555555555555555555555555",
+        "externalIds": {"DOI": "10.5555/s2.cited.one", "CorpusId": "555"},
+        "title": "An inline cited paper",
+        "year": 2020,
+        "authors": [{"name": "Cited Author"}],
+        "referenceCount": 1,
+        "citationCount": 9
+      }
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "total": 3,
+    "page": 1,
+    "limit": 2
+  },
+  "hits": [
+    {
+      "uid": "WOS:000111111100001",
+      "title": "A Web of Science Starter article",
+      "types": [
+        "Article"
+      ],
+      "sourceTypes": [
+        "Journal"
+      ],
+      "source": {
+        "sourceTitle": "Journal of Retrieval Evidence",
+        "publishYear": 2024,
+        "volume": "12",
+        "issue": "3",
+        "articleNumber": "e0042",
+        "pages": {
+          "range": "101-119",
+          "begin": "101",
+          "end": "119",
+          "count": 19
+        }
+      },
+      "names": {
+        "authors": [
+          {
+            "displayName": "Example, Ada",
+            "wosStandard": "Example, A",
+            "researcherId": "RID-PRIVATE-NOT-AN-ORCID"
+          },
+          {
+            "displayName": "Retrieval Consortium"
+          }
+        ],
+        "contributors": [
+          {
+            "displayName": "Excluded Contributor"
+          }
+        ],
+        "editors": [
+          {
+            "displayName": "Excluded Editor"
+          }
+        ]
+      },
+      "links": {
+        "record": "https://www.webofscience.com/wos/woscc/full-record/WOS:000111111100001",
+        "references": "https://www.webofscience.com/wos/woscc/cited-references/WOS:000111111100001",
+        "citingArticles": "https://www.webofscience.com/wos/woscc/citing-summary/WOS:000111111100001"
+      },
+      "citations": [
+        {
+          "db": "BIOSIS",
+          "count": 99
+        },
+        {
+          "db": "WOS",
+          "count": 7
+        }
+      ],
+      "identifiers": {
+        "doi": "HTTPS://DOI.ORG/10.5555/WOS.STARTER.ONE",
+        "pmid": "12345678",
+        "issn": "1234-5678",
+        "eissn": "8765-4321"
+      },
+      "keywords": {
+        "authorKeywords": [
+          "source-declared retrieval",
+          "source-declared metadata"
+        ],
+        "keywordsPlus": [
+          "excluded generated term"
+        ]
+      },
+      "unknownVendorObject": {
+        "secret": "must-not-cross-the-adapter"
+      }
+    },
+    {
+      "uid": "WOS:000111111100002",
+      "title": "An article-number-only Starter record",
+      "types": [
+        "Proceedings Paper"
+      ],
+      "source": {
+        "sourceTitle": "Proceedings of Safe Retrieval",
+        "publishYear": 2023,
+        "articleNumber": "ARTN-22"
+      },
+      "names": {
+        "authors": []
+      },
+      "citations": [
+        {
+          "db": "WOS",
+          "count": 0
+        }
+      ],
+      "identifiers": {},
+      "keywords": {
+        "authorKeywords": []
+      }
+    }
+  ]
+}

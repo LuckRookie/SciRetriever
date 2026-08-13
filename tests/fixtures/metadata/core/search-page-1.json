@@ -1,0 +1,78 @@
+{
+  "totalHits": 3,
+  "limit": 2,
+  "offset": 0,
+  "results": [
+    {
+      "id": 143262545,
+      "title": "A CORE work shared with Europe PMC",
+      "abstract": "A CORE aggregate abstract.",
+      "doi": "DOI:10.5555/SHARED.EPMC.CORE",
+      "arxivId": "arXiv:2401.01234v2",
+      "pubmedId": "40000001",
+      "authors": [
+        {"name": "Example, Ada"},
+        {"name": "Ada Example"},
+        {"name": "Example, Ada"}
+      ],
+      "publishedDate": "2025-01-02T00:00:00+00:00",
+      "yearPublished": 2025,
+      "documentType": "research article",
+      "language": "en",
+      "publisher": "CORE Fixture Press",
+      "journals": [
+        {"title": "Journal of Open Retrieval", "identifiers": ["0000-0000"]}
+      ],
+      "identifiers": [
+        {"identifier": "10.5555/SHARED.EPMC.CORE", "type": "doi"},
+        {"identifier": "oai:fixture.example:143262545", "type": "oai"}
+      ],
+      "outputs": [
+        "https://api.core.ac.uk/v3/outputs/571215426",
+        "https://api.core.ac.uk/v3/outputs/571215427"
+      ],
+      "downloadUrl": "https://core.ac.uk/download/571215426.pdf",
+      "sourceFulltextUrls": [
+        "https://repository.example.org/records/143262545/article.pdf"
+      ],
+      "links": [
+        {"type": "download", "url": "https://core.ac.uk/download/571215426.pdf"},
+        {"type": "display", "url": "https://core.ac.uk/works/143262545"},
+        {"type": "reader", "url": "https://core.ac.uk/reader/143262545"},
+        {"type": "thumbnail", "url": "https://core.ac.uk/thumbnails/private.png"}
+      ],
+      "references": [
+        {
+          "id": "2001",
+          "doi": "10.5555/CORE.REF.ONE",
+          "title": "First CORE target",
+          "raw": "First CORE reference text.",
+          "cites": "ambiguous-cites-value"
+        },
+        {
+          "doi": "10.5555/CORE.REF.TWO",
+          "title": "Second CORE target",
+          "raw": "Second CORE reference text."
+        },
+        {
+          "title": "Text-only CORE target",
+          "raw": "Third CORE reference text without a stable target.",
+          "cites": "must-not-create-an-incoming-edge"
+        }
+      ],
+      "citationCount": 999,
+      "fieldOfStudy": ["provider-topic-must-not-leak"],
+      "fullText": "private extracted full text must never leave the adapter",
+      "privateVendorPayload": {"secret": "fixture-secret-must-not-leak"}
+    },
+    {
+      "id": 143262546,
+      "title": null,
+      "doi": null,
+      "authors": [],
+      "outputs": ["https://api.core.ac.uk/v3/outputs/571215499"],
+      "fullText": "private incomplete full text"
+    }
+  ],
+  "searchId": "private-search-token-one"
+}

@@ -1,0 +1,99 @@
+{
+  "abstracts-retrieval-response": {
+    "coredata": {
+      "eid": "2-s2.0-85000000001",
+      "dc:identifier": "SCOPUS_ID:85000000001",
+      "dc:title": "Shared retrieval evidence",
+      "dc:description": "The complete abstract returned by Abstract Retrieval.",
+      "prism:doi": "https://doi.org/10.5555/SHARED.ELSEVIER.SPRINGER",
+      "pubmed-id": "12345",
+      "pii": "S000000000000001X",
+      "prism:publicationName": "Journal of Retrieval Evidence",
+      "prism:coverDate": "2025-03-04",
+      "prism:volume": "12",
+      "prism:issueIdentifier": "3",
+      "prism:pageRange": "101-119",
+      "subtypeDescription": "Article",
+      "citedby-count": "21",
+      "link": [
+        {
+          "@ref": "scopus",
+          "@href": "https://www.scopus.com/inward/record.uri?eid=2-s2.0-85000000001"
+        },
+        {
+          "@ref": "full-text",
+          "@href": "https://api.elsevier.com/content/article/pii/S000000000000001X"
+        }
+      ]
+    },
+    "affiliation": [
+      {
+        "@id": "60000001",
+        "affilname": "Example Research Institute"
+      },
+      {
+        "@id": "60000002",
+        "affilname": "Unaligned Institute"
+      }
+    ],
+    "authors": {
+      "author": [
+        {
+          "@auid": "7000000001",
+          "ce:indexed-name": "Example, Ada",
+          "ce:given-name": "Ada",
+          "ce:surname": "Example",
+          "orcid": "0000-0002-1825-0097",
+          "affiliation": [{"@id": "60000001"}]
+        },
+        {
+          "@auid": "7000000002",
+          "ce:indexed-name": "Consortium Alpha"
+        }
+      ]
+    },
+    "authkeywords": {
+      "author-keyword": [
+        {"$": "information retrieval"},
+        {"$": "evidence synthesis"}
+      ]
+    },
+    "item": {
+      "bibrecord": {
+        "tail": {
+          "bibliography": {
+            "@refcount": "3",
+            "reference": [
+              {
+                "ref-info": {
+                  "refd-itemidlist": {
+                    "itemid": [
+                      {"@idtype": "DOI", "$": "10.5555/TARGET.ONE"}
+                    ]
+                  }
+                },
+                "ref-fulltext": "Ada Target. First explicit reference."
+              },
+              {
+                "ref-info": {
+                  "refd-itemidlist": {
+                    "itemid": [
+                      {"@idtype": "PMID", "$": "24680"}
+                    ]
+                  }
+                },
+                "ref-fulltext": {"$": "Ben Target. Second explicit reference."}
+              },
+              {
+                "ref-fulltext": "Raw-only reference without a stable target."
+              }
+            ]
+          }
+        }
+      }
+    },
+    "classificationgroup": {
+      "classifications": [{"$": "Supplier generated category"}]
+    }
+  }
+}

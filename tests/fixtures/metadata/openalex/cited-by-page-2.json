@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "count": 2,
+    "page": null,
+    "per_page": 2,
+    "next_cursor": null
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W8888888888",
+      "ids": {"openalex": "https://openalex.org/W8888888888"},
+      "title": "Second citing OpenAlex work",
+      "publication_year": 2020,
+      "authorships": [],
+      "locations": [],
+      "biblio": {},
+      "referenced_works": [],
+      "referenced_works_count": 0,
+      "cited_by_count": 1
+    }
+  ],
+  "group_by": []
+}

@@ -1,0 +1,122 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message-version": "1.0.0",
+  "message": {
+    "total-results": 3,
+    "items-per-page": 2,
+    "next-cursor": "cursor+/two==",
+    "items": [
+      {
+        "DOI": "10.5555/CR.ARXIV",
+        "URL": "https://doi.org/10.5555/CR.ARXIV",
+        "title": ["A Crossref record"],
+        "abstract": "<jats:p> A <jats:bold>safe</jats:bold> abstract. </jats:p>",
+        "author": [
+          {
+            "given": "Ada",
+            "family": "Lovelace",
+            "ORCID": "https://orcid.org/0000-0002-1825-0097",
+            "affiliation": [
+              {"name": "Analytical Engine Institute"}
+            ]
+          },
+          {
+            "name": "Crossref Research Consortium",
+            "affiliation": [
+              {"name": "Consortium Office"}
+            ]
+          }
+        ],
+        "type": "journal-article",
+        "container-title": ["Journal of Provider Contracts"],
+        "publisher": "Example Scholarly Press",
+        "language": "en",
+        "volume": "12",
+        "issue": "3",
+        "page": "10-20",
+        "article-number": "e42",
+        "published-print": {"date-parts": [[2024, 3, 2]]},
+        "published-online": {"date-parts": [[2023, 12, 1]]},
+        "published": {"date-parts": [[2024, 2]]},
+        "issued": {"date-parts": [[2022]]},
+        "subject": ["Provider classification must not become keywords"],
+        "reference-count": 4,
+        "is-referenced-by-count": 9,
+        "reference": [
+          {
+            "DOI": "10.5555/CITED.ONE",
+            "unstructured": "First cited source, in provider order."
+          },
+          {
+            "unstructured": "Second source has text but no stable identifier."
+          },
+          {"DOI": "https://doi.org/10.5555/CITED.TWO"},
+          {
+            "DOI": "not-a-doi",
+            "unstructured": "Malformed target still leaves its raw reference text."
+          }
+        ],
+        "link": [
+          {
+            "URL": "https://assets.example.org/article.pdf",
+            "content-type": "application/pdf",
+            "content-version": "vor",
+            "intended-application": "text-mining"
+          },
+          {
+            "URL": "https://assets.example.org/article.html",
+            "content-type": "text/html",
+            "content-version": "am"
+          },
+          {
+            "URL": "https://assets.example.org/signed.pdf?signature=fixture-secret",
+            "content-type": "application/pdf",
+            "content-version": "vor"
+          },
+          {
+            "URL": "http://assets.example.org/insecure.pdf",
+            "content-type": "application/pdf",
+            "content-version": "vor"
+          },
+          {
+            "URL": "https://assets.example.org/article.xml",
+            "content-type": "application/xml",
+            "content-version": "vor"
+          }
+        ],
+        "license": [
+          {
+            "URL": "https://creativecommons.org/licenses/by/4.0/",
+            "content-version": "vor",
+            "delay-in-days": 0
+          },
+          {
+            "URL": "https://example.org/licenses/accepted-manuscript",
+            "content-version": "am",
+            "delay-in-days": 0
+          }
+        ],
+        "resource": {
+          "primary": {
+            "URL": "https://publisher.example.org/articles/cr-arxiv"
+          }
+        },
+        "score": 99.0,
+        "member": "fixture-member",
+        "relation": {"is-correction-of": [{"id": "10.5555/not-a-citation"}]},
+        "update-to": [{"DOI": "10.5555/not-a-version"}],
+        "private_vendor_payload": "adapter-whitelist-must-ignore-this-key"
+      },
+      {
+        "URL": "https://api.crossref.org/works/provider-record-without-doi",
+        "publisher": "Sparse Registration Press",
+        "article-number": "sparse-7",
+        "subject": ["Not a keyword"],
+        "unknown": "ignored"
+      }
+    ],
+    "query": {"search-terms": "must not persist"},
+    "facets": {"subject": {"value-count": 1}}
+  }
+}

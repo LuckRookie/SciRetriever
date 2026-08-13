@@ -1,0 +1,23 @@
+{
+  "version": "6.9",
+  "hitCount": 1,
+  "request": {
+    "queryString": "PMCID:PMC7759461",
+    "resultType": "CORE",
+    "cursorMark": "*",
+    "pageSize": 1
+  },
+  "resultList": {
+    "result": [
+      {
+        "id": "32939066",
+        "source": "MED",
+        "pmid": "32939066",
+        "pmcid": "PMC7759461",
+        "doi": "10.5555/EPMC.ARTICLE",
+        "title": "A Europe PMC lookup",
+        "pubYear": "2024"
+      }
+    ]
+  }
+}

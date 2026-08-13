@@ -1,0 +1,24 @@
+{
+  "apiMessage": "This JSON was provided by Springer Nature",
+  "query": "keyword:redacted fixture query",
+  "result": [
+    {
+      "total": "3",
+      "start": "3",
+      "pageLength": "2",
+      "recordsDisplayed": "1"
+    }
+  ],
+  "records": [
+    {
+      "contentType": "Article",
+      "identifier": "doi:10.5555/springer.doi.only",
+      "doi": "10.5555/springer.doi.only",
+      "creators": [],
+      "publicationDate": "2023-01-02",
+      "year": "2023",
+      "subjects": ["Not declared keywords"],
+      "url": []
+    }
+  ]
+}

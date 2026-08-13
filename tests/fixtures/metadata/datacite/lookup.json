@@ -1,0 +1,41 @@
+{
+  "data": {
+    "type": "dois",
+    "id": "10.5555/DATACITE.ARTICLE",
+    "attributes": {
+      "doi": "10.5555/DATACITE.ARTICLE",
+      "titles": [{"title": "A DataCite lookup", "titleType": "Title"}],
+      "types": {"resourceTypeGeneral": "JournalArticle"},
+      "publicationYear": 2024,
+      "relatedIdentifiers": [
+        {
+          "relationType": "References",
+          "relatedIdentifierType": "DOI",
+          "relatedIdentifier": "10.5555/DATACITE.REF.ONE"
+        },
+        {
+          "relationType": "IsCitedBy",
+          "relatedIdentifierType": "DOI",
+          "relatedIdentifier": "10.5555/DATACITE.CITING.ONE"
+        },
+        {
+          "relationType": "IsVersionOf",
+          "relatedIdentifierType": "DOI",
+          "relatedIdentifier": "10.5555/DATACITE.VERSION.ONE"
+        }
+      ],
+      "url": "https://repository.example.org/articles/datacite-article"
+    },
+    "relationships": {
+      "references": {
+        "data": [{"type": "dois", "id": "10.5555/DATACITE.REF.ONE"}]
+      },
+      "citations": {
+        "data": [{"type": "dois", "id": "10.5555/DATACITE.CITING.ONE"}]
+      },
+      "versionOf": {
+        "data": [{"type": "dois", "id": "10.5555/DATACITE.VERSION.ONE"}]
+      }
+    }
+  }
+}

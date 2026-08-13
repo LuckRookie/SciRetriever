@@ -1,0 +1,23 @@
+{
+  "version": "6.9",
+  "hitCount": 1,
+  "request": {
+    "id": "32939066",
+    "source": "MED",
+    "offSet": 0,
+    "page": 1,
+    "pageSize": 2
+  },
+  "citationList": {
+    "citation": [
+      {
+        "id": "22222222",
+        "source": "MED",
+        "doi": "10.5555/EPMC.CITING.ONE",
+        "title": "A citing Europe PMC record",
+        "authorString": "Citing A",
+        "pubYear": "2025"
+      }
+    ]
+  }
+}

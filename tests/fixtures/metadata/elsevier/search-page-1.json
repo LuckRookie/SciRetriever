@@ -1,0 +1,84 @@
+{
+  "search-results": {
+    "opensearch:totalResults": "3",
+    "opensearch:startIndex": "0",
+    "opensearch:itemsPerPage": "2",
+    "cursor": {
+      "@current": "*",
+      "@next": "cursor-page-2"
+    },
+    "entry": [
+      {
+        "eid": "2-s2.0-85000000001",
+        "dc:identifier": "SCOPUS_ID:85000000001",
+        "dc:title": "Shared retrieval evidence",
+        "dc:description": "A structured Scopus search observation.",
+        "dc:creator": "Creator summary must not replace authorship",
+        "prism:doi": "DOI:10.5555/SHARED.ELSEVIER.SPRINGER",
+        "pubmed-id": "12345",
+        "pii": "S000000000000001X",
+        "prism:publicationName": "Journal of Retrieval Evidence",
+        "prism:coverDate": "2025-03-04",
+        "prism:volume": "12",
+        "prism:issueIdentifier": "3",
+        "prism:pageRange": "101-119",
+        "subtypeDescription": "Article",
+        "citedby-count": "12",
+        "author": [
+          {
+            "@auid": "7000000001",
+            "authname": "Example, Ada",
+            "given-name": "Ada",
+            "surname": "Example",
+            "orcid": "https://orcid.org/0000-0002-1825-0097",
+            "afid": [{"$": "60000001"}]
+          },
+          {
+            "@auid": "7000000002",
+            "authname": "Consortium Alpha"
+          }
+        ],
+        "affiliation": [
+          {
+            "afid": "60000001",
+            "affilname": "Example Research Institute"
+          },
+          {
+            "afid": "60000002",
+            "affilname": "Unaligned Institute"
+          }
+        ],
+        "authkeywords": {
+          "author-keyword": [
+            {"$": "information retrieval"},
+            {"$": "evidence synthesis"}
+          ]
+        },
+        "subject-area": [
+          {"@abbrev": "COMP", "$": "Computer Science"}
+        ],
+        "link": [
+          {
+            "@ref": "scopus",
+            "@href": "https://www.scopus.com/inward/record.uri?eid=2-s2.0-85000000001"
+          },
+          {
+            "@ref": "full-text",
+            "@href": "https://api.elsevier.com/content/article/pii/S000000000000001X"
+          }
+        ],
+        "unknownVendorField": {
+          "score": 999
+        }
+      },
+      {
+        "eid": "2-s2.0-85000000002",
+        "dc:creator": "Summary Creator Only",
+        "citedby-count": "0",
+        "subject-area": [
+          {"@abbrev": "MEDI", "$": "Medicine"}
+        ]
+      }
+    ]
+  }
+}

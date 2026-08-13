@@ -1,0 +1,41 @@
+{
+  "apiMessage": "This JSON was provided by Springer Nature",
+  "query": "doi:10.5555/shared.elsevier.springer",
+  "result": [
+    {
+      "total": "1",
+      "start": "1",
+      "pageLength": "1",
+      "recordsDisplayed": "1"
+    }
+  ],
+  "records": [
+    {
+      "contentType": "Article",
+      "identifier": "doi:10.5555/SHARED.ELSEVIER.SPRINGER",
+      "doi": "10.5555/SHARED.ELSEVIER.SPRINGER",
+      "title": "Shared retrieval evidence",
+      "abstract": "The foundational metadata lookup result.",
+      "creators": [{"creator": "Ada Example"}],
+      "publicationName": "Journal of Retrieval Evidence",
+      "publisher": "Springer Nature",
+      "publicationDate": "2025-03-04",
+      "year": "2025",
+      "language": "en",
+      "openaccess": "false",
+      "subjects": ["Classification only"],
+      "url": [
+        {
+          "format": "html",
+          "platform": "web",
+          "value": "https://link.springer.com/article/10.5555/shared.elsevier.springer"
+        },
+        {
+          "format": "pdf",
+          "platform": "web",
+          "value": "https://link.springer.com/content/pdf/10.5555/shared.elsevier.springer.pdf"
+        }
+      ]
+    }
+  ]
+}

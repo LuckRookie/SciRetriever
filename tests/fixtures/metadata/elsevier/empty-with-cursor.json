@@ -1,0 +1,12 @@
+{
+  "search-results": {
+    "opensearch:totalResults": "2",
+    "opensearch:startIndex": "0",
+    "opensearch:itemsPerPage": "0",
+    "cursor": {
+      "@current": "*",
+      "@next": "cursor-without-progress"
+    },
+    "entry": []
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "offset": 1,
+  "data": [
+    {
+      "citedPaper": {
+        "paperId": "6666666666666666666666666666666666666666"
+      },
+      "vendor_private": "relation-only-record-must-not-grow-metadata"
+    }
+  ]
+}

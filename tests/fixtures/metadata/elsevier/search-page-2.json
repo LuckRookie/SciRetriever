@@ -1,0 +1,19 @@
+{
+  "search-results": {
+    "opensearch:totalResults": "3",
+    "opensearch:startIndex": "2",
+    "opensearch:itemsPerPage": "1",
+    "cursor": {
+      "@current": "cursor-page-2"
+    },
+    "entry": [
+      {
+        "eid": "2-s2.0-85000000003",
+        "prism:doi": "10.5555/elsevier.doi.only",
+        "dc:creator": "Another summary creator",
+        "prism:coverDate": "2024-01-01",
+        "citedby-count": "4"
+      }
+    ]
+  }
+}

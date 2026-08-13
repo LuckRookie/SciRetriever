@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="urn:sciretriever:contract">
+  <record id="first"> First record </record>
+  <unknown>adapter whitelist ignores this sibling</unknown>
+  <record id="second">Second record</record>
+</feed>

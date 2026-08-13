@@ -1,0 +1,71 @@
+{
+  "total": 3,
+  "offset": 0,
+  "next": 2,
+  "data": [
+    {
+      "paperId": "1111111111111111111111111111111111111111",
+      "corpusId": 123456,
+      "externalIds": {
+        "DOI": "https://doi.org/10.5555/SEMANTIC.OPENALEX",
+        "ArXiv": "arXiv:2501.01234v2",
+        "PubMed": "01234567",
+        "PubMedCentral": "pmc7654321",
+        "CorpusId": "123456",
+        "MAG": "987654",
+        "DBLP": "journals/example/private"
+      },
+      "title": "A Semantic Scholar record",
+      "abstract": "An explicit provider abstract.",
+      "url": "https://www.semanticscholar.org/paper/fixture",
+      "venue": "Fallback Venue",
+      "publicationVenue": {
+        "id": "venue-private-id",
+        "name": "Publication Venue",
+        "type": "journal",
+        "alternate_names": ["Private alias"]
+      },
+      "journal": {
+        "name": "Journal of Neutral Metadata",
+        "pages": "101-119",
+        "volume": "42"
+      },
+      "year": 2024,
+      "publicationDate": "2024-02-29",
+      "publicationTypes": ["JournalArticle", "Review"],
+      "authors": [
+        {"authorId": "author-private-1", "name": "Ada Example"},
+        {"authorId": "author-private-2", "name": "Research Collaboration"}
+      ],
+      "referenceCount": 17,
+      "citationCount": 29,
+      "influentialCitationCount": 7,
+      "isOpenAccess": true,
+      "openAccessPdf": {
+        "url": "https://assets.example.org/semantic-paper.pdf",
+        "status": "HYBRID",
+        "license": "CCBY",
+        "disclaimer": "fixture-secret must not enter the neutral model"
+      },
+      "fieldsOfStudy": ["Computer Science"],
+      "s2FieldsOfStudy": [{"category": "Computer Science", "source": "s2-fos-model"}],
+      "tldr": {"model": "fixture-private", "text": "Must not become content."},
+      "score": 999.5,
+      "unknown_private": "adapter-whitelist-must-ignore-this-key"
+    },
+    {
+      "paperId": "2222222222222222222222222222222222222222",
+      "externalIds": {"CorpusId": "222"},
+      "title": null,
+      "abstract": null,
+      "authors": [],
+      "referenceCount": 0,
+      "citationCount": 0,
+      "openAccessPdf": {
+        "url": "https://assets.example.org/file.pdf?api_key=fixture-secret",
+        "status": "OPEN"
+      },
+      "fieldsOfStudy": ["Must not become a keyword"]
+    }
+  ]
+}

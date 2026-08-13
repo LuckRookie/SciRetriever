@@ -1,0 +1,20 @@
+[
+  {
+    "id": "doi:10.5555/OPENCITATIONS.LOOKUP pmid:12345678 isbn:9781402096327 openalex:W4249829199 omid:br/0612058700",
+    "title": "An OpenCitations Meta record",
+    "author": "Ada Meta [orcid:0000-0002-1825-0097 omid:ra/069012996]; Open Citations Consortium [omid:ra/061808486861]",
+    "pub_date": "2024-02-29",
+    "issue": "7",
+    "volume": "42",
+    "venue": "Journal of Open Citations [issn:1234-5678 openalex:S123456789 omid:br/0610123456]",
+    "page": "101-119",
+    "type": "journal article",
+    "publisher": "Example Publisher [crossref:297 omid:ra/0610116006]",
+    "editor": "Ignored Editor [orcid:0000-0003-2098-4759 omid:ra/069012997]",
+    "abstract": "Meta does not declare this field and it must be ignored.",
+    "keywords": ["must not become a keyword"],
+    "citation_count": "999",
+    "pdf_url": "https://assets.example.org/must-not-become-a-hint.pdf",
+    "debug": "fixture-secret"
+  }
+]

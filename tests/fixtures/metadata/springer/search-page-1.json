@@ -1,0 +1,73 @@
+{
+  "apiMessage": "This JSON was provided by Springer Nature",
+  "query": "keyword:redacted fixture query",
+  "result": [
+    {
+      "total": "3",
+      "start": "1",
+      "pageLength": "2",
+      "recordsDisplayed": "2"
+    }
+  ],
+  "records": [
+    {
+      "contentType": "Article",
+      "identifier": "doi:10.5555/SHARED.ELSEVIER.SPRINGER",
+      "doi": "10.5555/SHARED.ELSEVIER.SPRINGER",
+      "title": "Shared retrieval evidence",
+      "abstract": "A Springer Nature Meta API v2 observation.",
+      "creators": [
+        {"creator": "Ada Example"},
+        {"creator": "Consortium Alpha"}
+      ],
+      "publicationName": "Journal of Retrieval Evidence",
+      "publisher": "Springer Nature",
+      "publicationDate": "2025-03-04",
+      "year": "2025",
+      "language": "en",
+      "openaccess": "false",
+      "subjects": ["Computer Science", "Information Retrieval"],
+      "url": [
+        {
+          "format": "html",
+          "platform": "web",
+          "value": "https://link.springer.com/article/10.5555/shared.elsevier.springer"
+        },
+        {
+          "format": "pdf",
+          "platform": "web",
+          "value": "https://link.springer.com/content/pdf/10.5555/shared.elsevier.springer.pdf"
+        },
+        {
+          "format": "jats",
+          "platform": "open-access",
+          "value": "https://api.springernature.com/openaccess/jats/10.5555/shared.elsevier.springer.xml"
+        },
+        {
+          "format": "pdf",
+          "platform": "legacy",
+          "value": "http://link.springer.com/content/pdf/legacy.pdf"
+        },
+        {
+          "format": "pdf",
+          "platform": "unsafe-query",
+          "value": "https://link.springer.com/content/pdf/private.pdf?api_key=not-a-real-key"
+        }
+      ],
+      "unknownVendorField": {"score": 42}
+    },
+    {
+      "contentType": "Chapter",
+      "identifier": "doi:10.5555/springer.chapter.two",
+      "doi": "https://doi.org/10.5555/SPRINGER.CHAPTER.TWO",
+      "title": "A chapter in the provider coverage",
+      "creators": [{"creator": "Name Only"}],
+      "publicationName": "Handbook of Retrieval",
+      "publisher": "Springer Nature",
+      "publicationDate": "2024-08-01",
+      "year": "2024",
+      "subjects": ["Supplier taxonomy"],
+      "url": []
+    }
+  ]
+}

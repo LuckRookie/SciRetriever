@@ -1,0 +1,22 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "request": {
+    "id": "32939066",
+    "source": "MED",
+    "offSet": 2,
+    "page": 2,
+    "pageSize": 2
+  },
+  "referenceList": {
+    "reference": [
+      {
+        "title": "Text-only referenced record",
+        "unstructuredInformation": "Third reference text without a stable target.",
+        "citedOrder": 3,
+        "match": "N",
+        "privatePayload": "must-not-leak"
+      }
+    ]
+  }
+}

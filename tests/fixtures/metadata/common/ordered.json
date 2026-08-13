@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"title": " First record ", "count": 0},
+    {"title": "Second record", "count": 2}
+  ],
+  "unknown": {"opaque": "adapter-whitelist-must-ignore-this-key"}
+}

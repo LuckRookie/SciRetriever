@@ -1,0 +1,22 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "request": {
+    "resultType": "CORE",
+    "cursorMark": "AoIIPMC+/two==",
+    "pageSize": 2
+  },
+  "resultList": {
+    "result": [
+      {
+        "id": "40000001",
+        "source": "MED",
+        "pmid": "40000001",
+        "pmcid": "PMC9990001",
+        "doi": "10.5555/SHARED.EPMC.CORE",
+        "title": "A record shared with CORE",
+        "pubYear": "2025"
+      }
+    ]
+  }
+}

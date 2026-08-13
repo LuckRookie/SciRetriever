@@ -1,0 +1,14 @@
+{
+  "id": "https://openalex.org/W9999999991",
+  "title": "A structurally invalid abstract",
+  "abstract_inverted_index": {
+    "conflicting": [0],
+    "positions": [0, 2]
+  },
+  "authorships": [],
+  "locations": [],
+  "biblio": {},
+  "referenced_works": [],
+  "referenced_works_count": 0,
+  "cited_by_count": 0
+}

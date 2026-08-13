@@ -1,0 +1,14 @@
+{
+  "id": 571215426,
+  "title": "A CORE source Output",
+  "doi": "10.5555/CORE.OUTPUT",
+  "authors": [{"name": "Output Author"}],
+  "yearPublished": 2023,
+  "documentType": "journal article",
+  "downloadUrl": "https://repository.example.org/outputs/571215426.pdf",
+  "sourceFulltextUrls": ["https://repository.example.org/outputs/571215426/source.pdf"],
+  "license": "CC BY 4.0",
+  "rawRecordXml": "<private>must not leave adapter</private>",
+  "fullText": "private output full text",
+  "references": []
+}

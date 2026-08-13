@@ -1,0 +1,14 @@
+{
+  "offset": 0,
+  "data": [
+    {
+      "citingPaper": {
+        "paperId": "7777777777777777777777777777777777777777",
+        "externalIds": {"PMID": "7654321"},
+        "title": "An inline citing paper",
+        "publicationDate": "2023-01-02",
+        "authors": [{"name": "Citing Author"}]
+      }
+    }
+  ]
+}

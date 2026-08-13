@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "count": 3,
+    "page": null,
+    "per_page": 2,
+    "next_cursor": null
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W3333333333",
+      "doi": "10.5555/second.openalex",
+      "ids": {"openalex": "https://openalex.org/W3333333333"},
+      "title": "A second OpenAlex page",
+      "type": "article",
+      "publication_year": 2021,
+      "authorships": [{"author": {"display_name": "Second Page Author"}, "institutions": []}],
+      "locations": [],
+      "biblio": {},
+      "referenced_works": ["https://openalex.org/W7777777777"],
+      "referenced_works_count": 1,
+      "cited_by_count": 4
+    }
+  ],
+  "group_by": []
+}

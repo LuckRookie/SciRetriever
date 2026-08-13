@@ -1,0 +1,25 @@
+{
+  "Data": [
+    {
+      "UID": "WOS:000333333300001",
+      "citedAuthor": "Reference, One",
+      "citedTitle": "A stable referenced work",
+      "citedWork": "Reference Journal",
+      "year": 2020,
+      "page": "10",
+      "doi": "10.5555/WOS.REFERENCE.ONE",
+      "timesCited": 77
+    },
+    {
+      "citedAuthor": "Unresolved, Author",
+      "citedTitle": "A reference without a stable target",
+      "citedWork": "Unknown Journal",
+      "year": 2019,
+      "page": "20",
+      "timesCited": 5
+    }
+  ],
+  "QueryResult": {
+    "RecordsFound": 3
+  }
+}

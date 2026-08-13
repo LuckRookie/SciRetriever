@@ -1,0 +1,14 @@
+{
+  "id": "https://openalex.org/W9999999992",
+  "title": "An abstract with a missing position",
+  "abstract_inverted_index": {
+    "missing": [0],
+    "position": [2]
+  },
+  "authorships": [],
+  "locations": [],
+  "biblio": {},
+  "referenced_works": [],
+  "referenced_works_count": 0,
+  "cited_by_count": 0
+}

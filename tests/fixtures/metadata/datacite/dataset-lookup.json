@@ -1,0 +1,12 @@
+{
+  "data": {
+    "type": "dois",
+    "id": "10.5555/datacite.dataset",
+    "attributes": {
+      "doi": "10.5555/datacite.dataset",
+      "titles": [{"title": "A dataset that is outside Literature"}],
+      "types": {"resourceTypeGeneral": "Dataset"},
+      "url": "https://repository.example.org/datasets/datacite-dataset"
+    }
+  }
+}

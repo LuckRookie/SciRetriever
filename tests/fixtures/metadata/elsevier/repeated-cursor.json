@@ -1,0 +1,17 @@
+{
+  "search-results": {
+    "opensearch:totalResults": "2",
+    "opensearch:startIndex": "0",
+    "opensearch:itemsPerPage": "1",
+    "cursor": {
+      "@current": "*",
+      "@next": "*"
+    },
+    "entry": [
+      {
+        "eid": "2-s2.0-85000000009",
+        "dc:title": "Cursor must advance"
+      }
+    ]
+  }
+}

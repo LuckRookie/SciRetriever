@@ -1,0 +1,15 @@
+{
+  "total": 3,
+  "offset": 2,
+  "data": [
+    {
+      "paperId": "3333333333333333333333333333333333333333",
+      "externalIds": {"DOI": "10.5555/second.semantic"},
+      "title": "A second Semantic Scholar page",
+      "year": 2021,
+      "authors": [{"name": "Second Author"}],
+      "referenceCount": 3,
+      "citationCount": 4
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "oci": "061701500001-06120343876",
+    "citing": "omid:br/061701500001 doi:10.5555/opencitations.citing.one",
+    "cited": "omid:br/06120343876 doi:10.5555/opencitations.anchor pmid:32939066",
+    "creation": "2025-01-12",
+    "timespan": "P5Y",
+    "journal_sc": "no",
+    "author_sc": "no",
+    "debug": "fixture-secret-citation-one"
+  },
+  {
+    "oci": "061701500002-06120343876",
+    "citing": "openalex:W7777777777 pmid:40000002",
+    "cited": "[coci] => doi:10.5555/opencitations.anchor omid:br/06120343876; [poci] => pmid:32939066",
+    "creation": "2026",
+    "timespan": "P6Y",
+    "journal_sc": "yes",
+    "author_sc": "yes",
+    "debug": "fixture-secret-citation-two"
+  }
+]

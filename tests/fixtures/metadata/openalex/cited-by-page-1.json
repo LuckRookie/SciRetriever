@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "count": 2,
+    "page": null,
+    "per_page": 2,
+    "next_cursor": "cited-by-two"
+  },
+  "results": [
+    {
+      "id": "https://openalex.org/W7777777777",
+      "doi": "10.5555/openalex.citing.one",
+      "ids": {"openalex": "https://openalex.org/W7777777777"},
+      "title": "First citing OpenAlex work",
+      "publication_year": 2023,
+      "authorships": [{"author": {"display_name": "Citing Author One"}, "institutions": []}],
+      "locations": [],
+      "biblio": {},
+      "referenced_works": ["https://openalex.org/W1111111111"],
+      "referenced_works_count": 1,
+      "cited_by_count": 0
+    }
+  ],
+  "group_by": []
+}

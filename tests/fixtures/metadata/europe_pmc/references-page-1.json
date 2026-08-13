@@ -1,0 +1,38 @@
+{
+  "version": "6.9",
+  "hitCount": 3,
+  "request": {
+    "id": "32939066",
+    "source": "MED",
+    "offSet": 0,
+    "page": 1,
+    "pageSize": 2
+  },
+  "referenceList": {
+    "reference": [
+      {
+        "id": "11111111",
+        "source": "MED",
+        "doi": "10.5555/EPMC.REF.ONE",
+        "title": "First referenced record",
+        "authorString": "One A",
+        "journalAbbreviation": "J Fixture",
+        "pubYear": "2020",
+        "volume": "1",
+        "issue": "2",
+        "pageInfo": "1-4",
+        "unstructuredInformation": "First reference text, in cited order.",
+        "citedOrder": 1,
+        "match": "Y"
+      },
+      {
+        "doi": "10.5555/EPMC.REF.TWO",
+        "title": "Second referenced record",
+        "pubYear": "2019",
+        "unstructuredInformation": "Second reference text, in cited order.",
+        "citedOrder": 2,
+        "match": "N"
+      }
+    ]
+  }
+}

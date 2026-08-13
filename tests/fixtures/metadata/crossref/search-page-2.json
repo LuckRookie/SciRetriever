@@ -1,0 +1,19 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message": {
+    "total-results": 3,
+    "items-per-page": 2,
+    "next-cursor": "unused-final-cursor",
+    "items": [
+      {
+        "DOI": "10.5555/SHARED.RECORD",
+        "URL": "https://doi.org/10.5555/SHARED.RECORD",
+        "title": ["Shared provider result"],
+        "type": "posted-content",
+        "published-online": {"date-parts": [[2025, 1, 5]]},
+        "article-number": "e100"
+      }
+    ]
+  }
+}

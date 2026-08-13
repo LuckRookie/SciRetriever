@@ -1,0 +1,103 @@
+{
+  "Data": {
+    "Records": {
+      "records": {
+        "REC": [
+          {
+            "UID": "WOS:000444444400001",
+            "static_data": {
+              "summary": {
+                "titles": {
+                  "title": [
+                    {
+                      "type": "source",
+                      "content": "Citing Evidence"
+                    },
+                    {
+                      "type": "item",
+                      "content": "A work citing the expanded anchor"
+                    }
+                  ]
+                },
+                "pub_info": {
+                  "pubyear": "2026",
+                  "page": {
+                    "content": "55-60"
+                  }
+                },
+                "names": {
+                  "name": []
+                },
+                "publishers": {
+                  "publisher": []
+                },
+                "doctypes": {
+                  "doctype": [
+                    "Article"
+                  ]
+                }
+              },
+              "fullrecord_metadata": {
+                "abstracts": {
+                  "abstract": []
+                },
+                "languages": {
+                  "language": []
+                },
+                "normalized_languages": {
+                  "language": []
+                },
+                "keywords": {
+                  "keyword": []
+                },
+                "addresses": {
+                  "address_name": []
+                },
+                "refs": {
+                  "count": 3
+                }
+              },
+              "item": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.citing.one"
+                    }
+                  ]
+                }
+              }
+            },
+            "dynamic_data": {
+              "cluster_related": {
+                "identifiers": {
+                  "identifier": [
+                    {
+                      "type": "doi",
+                      "value": "10.5555/wos.citing.one"
+                    }
+                  ]
+                }
+              },
+              "citation_related": {
+                "tc_list": {
+                  "silo_tc": [
+                    {
+                      "coll_id": "WOS",
+                      "local_count": 2
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "QueryResult": {
+    "QueryID": 24680,
+    "RecordsSearched": 999999,
+    "RecordsFound": 1
+  }
+}

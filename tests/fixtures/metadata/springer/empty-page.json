@@ -1,0 +1,13 @@
+{
+  "apiMessage": "This JSON was provided by Springer Nature",
+  "query": "keyword:redacted fixture query",
+  "result": [
+    {
+      "total": "2",
+      "start": "1",
+      "pageLength": "2",
+      "recordsDisplayed": "0"
+    }
+  ],
+  "records": []
+}

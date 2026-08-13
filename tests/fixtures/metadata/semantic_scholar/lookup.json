@@ -1,0 +1,12 @@
+{
+  "paperId": "4444444444444444444444444444444444444444",
+  "externalIds": {"DOI": "doi:10.5555/LOOKUP.S2"},
+  "title": "Semantic Scholar exact lookup",
+  "year": 2022,
+  "publicationDate": "2022-08-09",
+  "publicationTypes": ["Conference"],
+  "authors": [{"authorId": "ignored-author-id", "name": "Lookup Author"}],
+  "referenceCount": 2,
+  "citationCount": 5,
+  "openAccessPdf": null
+}
