@@ -1,0 +1,1516 @@
+from __future__ import annotations
+
+import logging
+import os
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from typing import Any, Iterator, Mapping, TypeVar, cast, overload
+from unittest import mock
+
+from sciretriever.analysis.ports import AnalysisLLMCall
+from sciretriever.configuration import (
+    ConfigurationError,
+    load_credentials,
+    parse_configuration,
+    set_credentials,
+)
+from sciretriever.model.configuration import (
+    AnalysisProvider,
+    Configuration,
+    ParserConnectionMode,
+    ProbeOutcome,
+    ProviderCapability,
+    ProviderName,
+)
+from sciretriever.model.library import LibraryQuery, LibrarySearchRequest
+from sciretriever.model.llm import LLMStructuredResponse
+from sciretriever.model.parsing import ParserRequest
+from sciretriever.parsing.ports import StagedParserOutput
+
+_DefaultT = TypeVar("_DefaultT")
+
+
+class ProductionConfigurationContractTests(unittest.TestCase):
+    def test_production_groups_use_only_the_frozen_ordinary_fields(self) -> None:
+        configuration = parse_configuration(
+            """
+            [paths]
+            catalog_path = "/tmp/catalog.sqlite3"
+            artifact_root = "/tmp/artifacts"
+
+            [parsing]
+            base_url = "http://127.0.0.1:8000"
+            connection_mode = "loopback"
+            model_identity = "mineru-3.4.4-vlm"
+            remote_upload_authorized = false
+
+            [analysis]
+            provider = "openai"
+            model = "fixture-model"
+            metadata_max_output_tokens = 256
+            content_max_output_tokens = 1024
+            reference_max_output_tokens = 256
+            max_input_bytes = 1048576
+            max_chunk_bytes = 1048576
+            max_chunk_count = 1
+            max_total_llm_requests = 3
+            max_total_output_tokens = 1536
+
+            [execution]
+            max_concurrency = 4
+
+            [library]
+            max_input_bytes = 67108864
+            """
+        )
+
+        self.assertEqual(configuration.paths.catalog_path, "/tmp/catalog.sqlite3")
+        self.assertEqual(configuration.paths.artifact_root, "/tmp/artifacts")
+        self.assertIs(configuration.parsing.connection_mode, ParserConnectionMode.LOOPBACK)
+        self.assertIs(configuration.analysis.provider, AnalysisProvider.OPENAI)
+
+    def test_retired_paths_and_dynamic_runtime_fields_fail_closed(self) -> None:
+        invalid = (
+            '[paths]\ncatalog = "catalog.sqlite3"\n',
+            '[paths]\nstorage_root = "artifacts"\n',
+            '[parsing]\nsecret_ref = "env:MINERU_TOKEN"\n',
+            '[analysis]\nsecret_ref = "env:OPENAI_API_KEY"\n',
+            '[analysis]\nbase_url = "https://example.invalid"\n',
+            '[analysis]\nruntime_factory = "package:callable"\n',
+        )
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ConfigurationError):
+                    parse_configuration(payload)
+
+    def test_loopback_parser_forbids_remote_upload_authorization(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            parse_configuration(
+                """
+                [parsing]
+                connection_mode = "loopback"
+                remote_upload_authorized = true
+                """
+            )
+
+    def test_runtime_secrets_read_only_the_selected_fixed_environment_fields(self) -> None:
+        import sciretriever.configuration as configuration_boundary
+
+        openai = parse_configuration(
+            """
+            [parsing]
+            connection_mode = "loopback"
+            [analysis]
+            provider = "openai"
+            """
+        )
+        openai_environment = _TrackingEnvironment({"SCIRETRIEVER_OPENAI_API_KEY": "openai-secret"})
+        secrets = configuration_boundary.load_runtime_secrets(
+            openai,
+            environment=openai_environment,
+        )
+        self.assertEqual(
+            openai_environment.reads,
+            ["SCIRETRIEVER_OPENAI_API_KEY"],
+        )
+        self.assertEqual(repr(secrets), "<RuntimeSecrets>")
+        self.assertNotIn("openai-secret", repr(secrets))
+
+        anthropic = parse_configuration(
+            """
+            [parsing]
+            connection_mode = "remote"
+            [analysis]
+            provider = "anthropic"
+            """
+        )
+        anthropic_environment = _TrackingEnvironment(
+            {
+                "SCIRETRIEVER_MINERU_BEARER_TOKEN": "mineru-secret",
+                "SCIRETRIEVER_ANTHROPIC_API_KEY": "anthropic-secret",
+            }
+        )
+        configuration_boundary.load_runtime_secrets(
+            anthropic,
+            environment=anthropic_environment,
+        )
+        self.assertEqual(
+            anthropic_environment.reads,
+            [
+                "SCIRETRIEVER_MINERU_BEARER_TOKEN",
+                "SCIRETRIEVER_ANTHROPIC_API_KEY",
+            ],
+        )
+
+
+class ConfigurationReadinessTests(unittest.TestCase):
+    def test_status_is_local_typed_and_separates_readiness_layers(self) -> None:
+        import sciretriever.configuration as configuration_boundary
+        from sciretriever.configuration import configuration_status, load_credentials
+        from sciretriever.model.configuration import CredentialStatus
+
+        configuration = parse_configuration(
+            """
+            [discovery]
+            metadata_scan_limit = 10
+            [sources.metadata]
+            providers = ["crossref"]
+            [sources.metadata.crossref]
+            mode = "anonymous"
+            """
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            credentials = load_credentials(home=Path(temporary))
+            with (
+                mock.patch(
+                    "sciretriever.network.http.HttpClient",
+                    side_effect=AssertionError("status must not construct Network"),
+                ),
+                mock.patch(
+                    "sciretriever.storage.sqlite.engine.CatalogEngine",
+                    side_effect=AssertionError("status must not construct Catalog"),
+                ),
+                mock.patch.object(
+                    configuration_boundary,
+                    "load_credentials",
+                    side_effect=AssertionError("offline status must not read default credentials"),
+                ),
+            ):
+                status = configuration_status(configuration, credentials=credentials)
+
+        crossref = next(
+            item
+            for item in status.capabilities
+            if item.provider.value == "crossref" and item.capability.value == "metadata"
+        )
+        self.assertTrue(crossref.production_available)
+        self.assertTrue(crossref.enabled)
+        self.assertTrue(crossref.ordinary_parameters_ready)
+        self.assertIs(crossref.credential.status, CredentialStatus.NOT_REQUIRED)
+        self.assertTrue(crossref.access_policy_ready)
+        self.assertTrue(crossref.local_ready)
+
+    def test_fake_probes_report_passed_failed_and_skipped_without_short_circuit(self) -> None:
+        import sciretriever.configuration as configuration_boundary
+        from sciretriever.configuration import (
+            configuration_status,
+            load_credentials,
+            run_configuration_probes,
+        )
+        from sciretriever.model.configuration import (
+            ConfigurationProbeResult,
+        )
+
+        configuration = parse_configuration(
+            """
+            [discovery]
+            metadata_scan_limit = 10
+            [sources.metadata]
+            providers = ["crossref", "web-of-science", "arxiv"]
+            [sources.metadata.crossref]
+            mode = "anonymous"
+            """
+        )
+        probe = _FakeProbe(
+            {
+                ("crossref", "metadata"): ConfigurationProbeResult(
+                    provider=ProviderName.CROSSREF,
+                    capability=ProviderCapability.METADATA,
+                    outcome=ProbeOutcome.PASSED,
+                    local_ready=True,
+                    network_reachable=True,
+                    authentication_accepted=True,
+                    api_product_usable=True,
+                    minimal_response_parseable=True,
+                ),
+                ("arxiv", "metadata"): RuntimeError("secret provider response"),
+            },
+            supported=frozenset(
+                {
+                    (ProviderName.WEB_OF_SCIENCE, ProviderCapability.METADATA),
+                    (ProviderName.CROSSREF, ProviderCapability.METADATA),
+                    (ProviderName.ARXIV, ProviderCapability.METADATA),
+                }
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            credentials = load_credentials(home=Path(temporary))
+            snapshot = configuration_status(configuration, credentials=credentials)
+        with mock.patch.object(
+            configuration_boundary,
+            "load_credentials",
+            side_effect=AssertionError("offline probes must not read default credentials"),
+        ):
+            summary = run_configuration_probes(
+                configuration,
+                probe,
+                test_all=True,
+                status_snapshot=snapshot,
+            )
+
+        self.assertEqual(
+            tuple(result.outcome for result in summary.results),
+            (ProbeOutcome.SKIPPED, ProbeOutcome.PASSED, ProbeOutcome.FAILED),
+        )
+        self.assertEqual(
+            probe.calls,
+            [("crossref", "metadata"), ("arxiv", "metadata")],
+        )
+        for result in summary.results:
+            self.assertEqual(result.acquisition_entitlement, "not-proven")
+            self.assertNotIn("secret provider response", repr(result))
+
+
+class _FakeProbe:
+    def __init__(
+        self,
+        results: Mapping[tuple[str, str], object],
+        *,
+        supported: frozenset[tuple[ProviderName, ProviderCapability]] | None = None,
+    ) -> None:
+        self._results = dict(results)
+        self._supported = supported
+        self.calls: list[tuple[str, str]] = []
+
+    @property
+    def supported_capabilities(
+        self,
+    ) -> frozenset[tuple[ProviderName, ProviderCapability]]:
+        if self._supported is not None:
+            return self._supported
+        return frozenset(
+            (ProviderName(provider), ProviderCapability(capability))
+            for provider, capability in self._results
+        )
+
+    def probe(self, provider: Any, capability: Any) -> Any:
+        key = (provider.value, capability.value)
+        self.calls.append(key)
+        result = self._results[key]
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+class _TrackingEnvironment(Mapping[str, str]):
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = dict(values)
+        self.reads: list[str] = []
+
+    def __getitem__(self, key: str) -> str:
+        raise AssertionError("runtime secret selection must use bounded get")
+
+    def __iter__(self) -> Iterator[str]:
+        raise AssertionError("runtime secret selection must not enumerate environment")
+
+    def __len__(self) -> int:
+        raise AssertionError("runtime secret selection must not inspect environment size")
+
+    @overload
+    def get(self, key: str) -> str | None: ...
+
+    @overload
+    def get(self, key: str, default: str) -> str: ...
+
+    @overload
+    def get(self, key: str, default: _DefaultT) -> str | _DefaultT: ...
+
+    def get(self, key: str, default: _DefaultT | None = None) -> str | _DefaultT | None:
+        self.reads.append(key)
+        return self._values.get(key, default)
+
+
+def _production_configuration(root: Path) -> Configuration:
+    return parse_configuration(
+        f"""
+        [paths]
+        catalog_path = {str(root / "catalog.sqlite3")!r}
+        artifact_root = {str(root / "artifacts")!r}
+
+        [parsing]
+        base_url = "http://127.0.0.1:8000"
+        connection_mode = "loopback"
+        model_identity = "mineru-3.4.4-vlm"
+        remote_upload_authorized = false
+
+        [analysis]
+        provider = "openai"
+        model = "offline-model"
+        metadata_max_output_tokens = 256
+        content_max_output_tokens = 256
+        reference_max_output_tokens = 256
+        max_input_bytes = 1048576
+        max_chunk_bytes = 1048576
+        max_chunk_count = 1
+        max_total_llm_requests = 3
+        max_total_output_tokens = 768
+        """
+    )
+
+
+def _probe_configuration() -> Configuration:
+    return parse_configuration(
+        """
+        [discovery]
+        metadata_scan_limit = 11
+        [sources.metadata]
+        providers = ["crossref"]
+        [sources.metadata.crossref]
+        mode = "anonymous"
+        """
+    )
+
+
+def _passed_probe(provider: ProviderName) -> Any:
+    from sciretriever.model.configuration import ConfigurationProbeResult
+
+    return ConfigurationProbeResult(
+        provider=provider,
+        capability=ProviderCapability.METADATA,
+        outcome=ProbeOutcome.PASSED,
+        local_ready=True,
+        network_reachable=True,
+        authentication_accepted=True,
+        api_product_usable=True,
+        minimal_response_parseable=True,
+    )
+
+
+class BootstrapObjectGraphTests(unittest.TestCase):
+    def _dependencies(
+        self,
+        *,
+        parser_factory: Any | None = None,
+        llm_factory: Any | None = None,
+    ) -> Any:
+        from sciretriever.bootstrap import BootstrapExternalDependencies
+
+        return BootstrapExternalDependencies(
+            parser_factory=parser_factory or (lambda _http, _coordinator: _OfflineParser()),
+            analysis_llm_factory=llm_factory or (lambda _http, _coordinator: _OfflineAnalysisLlm()),
+            analysis_model="offline-contract-model",
+            metadata_max_output_tokens=256,
+            content_max_output_tokens=256,
+            reference_max_output_tokens=256,
+        )
+
+    def test_full_and_scoped_acquisition_use_the_same_production_web_profiles(
+        self,
+    ) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.acquisition import registry as acquisition_registry
+        from sciretriever.network.admission import AccessScope
+        from sciretriever.network.policy import normalize_url
+
+        captured: list[Any] = []
+        original = acquisition_registry.build_acquisition_registry
+
+        def record(configuration: Any, dependencies: Any) -> Any:
+            captured.append(dependencies.web_access_profile_resolver)
+            return original(configuration, dependencies)
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-web-profiles-") as temporary:
+            root = Path(temporary)
+            full_root = root / "full"
+            scoped_root = root / "scoped"
+            full_root.mkdir()
+            scoped_root.mkdir()
+            full_configuration = _production_configuration(full_root)
+            scoped_configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(scoped_root / "catalog.sqlite3")!r}
+                artifact_root = {str(scoped_root / "artifacts")!r}
+                """
+            )
+            with mock.patch.object(
+                acquisition_registry,
+                "build_acquisition_registry",
+                side_effect=record,
+            ):
+                bootstrap.build_production_object_graph(
+                    full_configuration,
+                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
+                    credentials_home=root / "home",
+                    configure_process_logging=False,
+                )
+                bootstrap.build_production_object_graph(
+                    scoped_configuration,
+                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                    configure_process_logging=False,
+                )
+
+        self.assertEqual(len(captured), 2)
+        for resolver in captured:
+            api_scope, api_policy = resolver.resolve(
+                normalize_url("https://api.springernature.com/meta/v2/json")
+            )
+            content_scope, content_policy = resolver.resolve(
+                normalize_url("https://link.springer.com/content/pdf/example.pdf")
+            )
+            unknown_scope, unknown_policy = resolver.resolve(
+                normalize_url("https://repository.example.invalid/paper.pdf")
+            )
+            self.assertEqual(api_scope, AccessScope("springer", "web"))
+            self.assertEqual(content_scope, api_scope)
+            self.assertEqual(api_policy, content_policy)
+            self.assertGreaterEqual(content_policy.cooldown_after_completion, 30.0)
+            self.assertEqual(
+                unknown_scope,
+                AccessScope("repository.example.invalid", "web"),
+            )
+            self.assertGreaterEqual(unknown_policy.cooldown_after_completion, 30.0)
+
+    def test_local_library_scope_uses_only_paths_and_no_external_assembly(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e13-local-") as temporary:
+            root = Path(temporary)
+            configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(root / "catalog.sqlite3")!r}
+                artifact_root = {str(root / "artifacts")!r}
+                """
+            )
+            forbidden = AssertionError("local scope constructed an external capability")
+            with (
+                mock.patch.object(bootstrap, "load_runtime_secrets", side_effect=forbidden),
+                mock.patch.object(bootstrap, "load_credentials", side_effect=forbidden),
+                mock.patch(
+                    "sciretriever.metadata.registry.build_metadata_registry",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.acquisition.registry.build_acquisition_registry",
+                    side_effect=forbidden,
+                ),
+            ):
+                graph = cast(
+                    bootstrap.LocalLibraryObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration,
+                        scope=bootstrap.ProductionEntryScope.LOCAL_LIBRARY,
+                        configure_process_logging=False,
+                    ),
+                )
+
+            page = graph.entry_api.search_literature(LibrarySearchRequest(query=LibraryQuery()))
+            self.assertEqual(page.items, ())
+            self.assertTrue((root / "catalog.sqlite3").is_file())
+            self.assertTrue((root / "artifacts").is_dir())
+
+    def test_citation_scope_uses_only_reference_analysis_configuration(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.analysis.api import AnalysisApi
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e13-citation-") as temporary:
+            root = Path(temporary)
+            configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(root / "catalog.sqlite3")!r}
+                artifact_root = {str(root / "artifacts")!r}
+
+                [discovery]
+                metadata_scan_limit = 11
+
+                [sources.metadata]
+                providers = ["crossref"]
+
+                [sources.metadata.crossref]
+                mode = "anonymous"
+
+                [analysis]
+                provider = "openai"
+                model = "reference-only-model"
+                reference_max_output_tokens = 256
+                """
+            )
+            environment = _TrackingEnvironment(
+                {"SCIRETRIEVER_OPENAI_API_KEY": "reference-only-secret"}
+            )
+            forbidden = AssertionError("citation scope constructed content analysis or Parser")
+            with (
+                mock.patch(
+                    "sciretriever.parsing.adapters.mineru.OperatorManagedMinerUAdapter.__init__",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.parsing.service.ParsingService.__init__",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.analysis.service.AnalysisService.__init__",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.storage.sqlite.analysis_artifacts.AnalysisArtifactReader.__init__",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.storage.sqlite.analysis_inputs.SqliteAnalysisCurrentInputs.__init__",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.storage.analysis_artifacts.AnalysisArtifactPublisher.__init__",
+                    side_effect=forbidden,
+                ),
+            ):
+                graph = cast(
+                    bootstrap.CitationDiscoveryObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration,
+                        scope=bootstrap.ProductionEntryScope.CITATION_DISCOVERY,
+                        environment=environment,
+                        credentials_home=root / "home",
+                        configure_process_logging=False,
+                    ),
+                )
+
+            self.assertEqual(environment.reads, ["SCIRETRIEVER_OPENAI_API_KEY"])
+            operation = cast(Any, graph.entry_api)._operation
+            analysis = cast(AnalysisApi, operation._analysis)
+            self.assertIsInstance(analysis, AnalysisApi)
+            with self.assertRaisesRegex(RuntimeError, "content analysis is not assembled"):
+                analysis.analyze_content(cast(Any, object()))
+            self.assertTrue((root / "catalog.sqlite3").is_file())
+            self.assertTrue((root / "artifacts").is_dir())
+
+    def test_external_scopes_keep_their_required_capabilities_fail_closed(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e13-external-") as temporary:
+            root = Path(temporary)
+            configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(root / "catalog.sqlite3")!r}
+                artifact_root = {str(root / "artifacts")!r}
+                """
+            )
+            cases = (
+                (bootstrap.ProductionEntryScope.TOPIC_DISCOVERY, "metadata-not-ready"),
+                (bootstrap.ProductionEntryScope.CITATION_DISCOVERY, "analysis-not-ready"),
+                (bootstrap.ProductionEntryScope.CONTENT_COMPLETION, "parser-not-ready"),
+            )
+            for scope, code in cases:
+                with self.subTest(scope=scope):
+                    with self.assertRaises(bootstrap.BootstrapError) as raised:
+                        bootstrap.build_production_object_graph(
+                            configuration,
+                            scope=scope,
+                            credentials_home=root / "home",
+                            configure_process_logging=False,
+                        )
+                    self.assertEqual(raised.exception.code, code)
+
+            with (
+                mock.patch.object(bootstrap, "load_runtime_secrets") as load_secrets,
+                mock.patch.object(bootstrap, "load_credentials") as load_credentials,
+                mock.patch(
+                    "sciretriever.parsing.adapters.mineru.OperatorManagedMinerUAdapter",
+                    side_effect=AssertionError("asset completion constructed Parser"),
+                ),
+                mock.patch(
+                    "sciretriever.analysis.providers.openai.OpenAIAnalysisLLMAdapter",
+                    side_effect=AssertionError("asset completion constructed Analysis"),
+                ),
+            ):
+                graph = bootstrap.build_production_object_graph(
+                    configuration,
+                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                    credentials_home=root / "home",
+                    configure_process_logging=False,
+                )
+            self.assertIsInstance(graph.entry_api, object)
+            load_secrets.assert_called_once_with(
+                configuration,
+                environment=None,
+                include_parser=False,
+                include_analysis=False,
+            )
+            load_credentials.assert_not_called()
+
+    def test_fresh_catalog_builds_an_explicit_application_object_graph(self) -> None:
+        from sciretriever.bootstrap import (
+            ApplicationObjectGraph,
+            build_object_graph,
+        )
+        from sciretriever.entry.api import EntryApi
+        from sciretriever.storage.files.output import AtomicOutput
+        from sciretriever.storage.files.paths import StorageRoot
+        from sciretriever.storage.files.reader import VerifiedReader
+        from sciretriever.storage.files.store import ArtifactStore
+        from sciretriever.storage.sqlite.artifact_references import (
+            SqliteArtifactReferenceStore,
+        )
+        from sciretriever.storage.sqlite.discovery_repository import (
+            SqliteDiscoveryRepository,
+        )
+        from sciretriever.storage.sqlite.engine import CatalogEngine
+        from sciretriever.storage.sqlite.entry_reader import SqliteEntryReader
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-") as temporary:
+            root = Path(temporary)
+            graph = build_object_graph(
+                Configuration(),
+                catalog_path=root / "catalog.sqlite3",
+                artifact_root=root / "artifacts",
+                external_dependencies=self._dependencies(),
+                credentials_home=root / "home",
+            )
+
+        self.assertIsInstance(graph, ApplicationObjectGraph)
+        self.assertIsInstance(graph.catalog_engine, CatalogEngine)
+        self.assertIsInstance(graph.storage_root, StorageRoot)
+        self.assertIsInstance(graph.artifact_store, ArtifactStore)
+        self.assertIsInstance(graph.verified_reader, VerifiedReader)
+        self.assertIsInstance(graph.atomic_user_output, AtomicOutput)
+        self.assertIsInstance(graph.discovery_repository, SqliteDiscoveryRepository)
+        self.assertIsInstance(graph.entry_reader, SqliteEntryReader)
+        self.assertIsInstance(graph.artifact_reference_store, SqliteArtifactReferenceStore)
+        self.assertIsInstance(graph.entry_api, EntryApi)
+        registry = cast(Any, graph.metadata_registry)
+        http_client = cast(Any, graph.http_client)
+        artifact_store = cast(Any, graph.artifact_store)
+        verified_reader = cast(Any, graph.verified_reader)
+        self.assertIs(graph.topic_provider_limits, registry.topic_limits)
+        self.assertIs(graph.citation_provider_limits, registry.citation_limits)
+        self.assertIs(http_client._coordinator, graph.access_coordinator)
+        self.assertIs(artifact_store._root, graph.storage_root)
+        self.assertIs(verified_reader._root, graph.storage_root)
+        for operation in EntryApi.__slots__:
+            self.assertTrue(callable(getattr(graph.entry_api, operation)))
+
+    def test_write_admission_recovers_artifact_orphans_before_business_writes(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+        from sciretriever.model.primitives import sha256_digest
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-recovery-") as temporary:
+            root = Path(temporary)
+            graph = build_object_graph(
+                Configuration(),
+                catalog_path=root / "catalog.sqlite3",
+                artifact_root=root / "artifacts",
+                external_dependencies=self._dependencies(),
+                credentials_home=root / "home",
+            )
+            payload = b"post-commit-orphan"
+            published = cast(Any, graph.artifact_store).publish(
+                payload,
+                sha256=sha256_digest(payload),
+                byte_size=len(payload),
+                media_type="application/octet-stream",
+            )
+            physical = root / "artifacts" / published.path.root
+            self.assertTrue(physical.is_file())
+
+            with cast(Any, graph.write_admission).acquire_nowait():
+                self.assertFalse(physical.exists())
+
+            with cast(Any, graph.write_admission).acquire_nowait():
+                self.assertFalse(physical.exists())
+
+    def test_write_admission_reconciles_only_at_operation_boundaries(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+        from sciretriever.model.primitives import sha256_digest
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-boundaries-") as temporary:
+            root = Path(temporary)
+            graph = build_object_graph(
+                Configuration(),
+                catalog_path=root / "catalog.sqlite3",
+                artifact_root=root / "artifacts",
+                external_dependencies=self._dependencies(),
+                credentials_home=root / "home",
+            )
+            payload = b"published during admitted operation"
+
+            with cast(Any, graph.write_admission).acquire_nowait():
+                published = cast(Any, graph.artifact_store).publish(
+                    payload,
+                    sha256=sha256_digest(payload),
+                    byte_size=len(payload),
+                    media_type="text/markdown",
+                )
+                physical = root / "artifacts" / published.path.root
+                self.assertTrue(physical.is_file())
+
+            self.assertFalse(physical.exists())
+
+    def test_business_exception_is_not_masked_by_exit_reconciliation(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+        from sciretriever.storage.files.reconciliation import ArtifactStoreReconciler
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-exit-order-") as temporary:
+            root = Path(temporary)
+            graph = build_object_graph(
+                Configuration(),
+                catalog_path=root / "catalog.sqlite3",
+                artifact_root=root / "artifacts",
+                external_dependencies=self._dependencies(),
+                credentials_home=root / "home",
+            )
+            original = RuntimeError("business failure sentinel")
+
+            with (
+                mock.patch.object(
+                    ArtifactStoreReconciler,
+                    "reconcile_admitted",
+                    wraps=cast(Any, graph.artifact_reconciler).reconcile_admitted,
+                ) as reconcile,
+                self.assertRaises(RuntimeError) as caught,
+            ):
+                with cast(Any, graph.write_admission).acquire_nowait():
+                    raise original
+
+            self.assertIs(caught.exception, original)
+            self.assertEqual(reconcile.call_count, 1)
+
+    def test_full_graph_wires_shared_network_storage_and_entry_precedence(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+
+        parser_arguments: list[tuple[object, object]] = []
+        llm_arguments: list[tuple[object, object]] = []
+
+        def parser_factory(http: object, coordinator: object) -> _OfflineParser:
+            parser_arguments.append((http, coordinator))
+            return _OfflineParser()
+
+        def llm_factory(http: object, coordinator: object) -> _OfflineAnalysisLlm:
+            llm_arguments.append((http, coordinator))
+            return _OfflineAnalysisLlm()
+
+        configuration = parse_configuration(
+            """
+            [discovery]
+            metadata_scan_limit = 7
+            [sources.metadata]
+            providers = ["crossref", "arxiv"]
+            [sources.metadata.crossref]
+            mode = "anonymous"
+            [sources.acquisition]
+            providers = ["arxiv"]
+            """
+        )
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-wire-") as temporary:
+            root = Path(temporary)
+            graph = build_object_graph(
+                configuration,
+                catalog_path=root / "catalog.sqlite3",
+                artifact_root=root / "artifacts",
+                external_dependencies=self._dependencies(
+                    parser_factory=parser_factory,
+                    llm_factory=llm_factory,
+                ),
+                credentials_home=root / "home",
+            )
+            cast(Any, graph.catalog_engine).validate()
+
+            metadata_registry = cast(Any, graph.metadata_registry)
+            expected_precedence = tuple(
+                registration.provider_name for registration in metadata_registry.registrations
+            )
+            for registration in metadata_registry.registrations:
+                self.assertIs(registration.adapter._http_client, graph.http_client)
+                self.assertIs(
+                    registration.adapter._access_coordinator,
+                    graph.access_coordinator,
+                )
+
+            acquisition_registry = cast(Any, graph.acquisition_registry)
+            for binding in acquisition_registry.source_bindings:
+                source = binding.source
+                if hasattr(source, "_direct_source"):
+                    source = source._direct_source
+                fetcher = getattr(source, "_fetcher", None)
+                if fetcher is None:
+                    fetcher = getattr(source, "_locator_fetcher", None)
+                if fetcher is not None:
+                    self.assertIs(fetcher._http_client, graph.http_client)
+            self.assertIs(
+                acquisition_registry.doi_landing_resolver._http_client,
+                graph.http_client,
+            )
+
+            self.assertIs(cast(Any, graph.discovery_repository)._engine, graph.catalog_engine)
+            self.assertIs(cast(Any, graph.entry_reader)._engine, graph.catalog_engine)
+            self.assertIs(
+                cast(Any, graph.artifact_reference_store)._engine,
+                graph.catalog_engine,
+            )
+
+            entry = cast(Any, graph.entry_api)
+            topic = entry._discover_topic_operation
+            citations = entry._discover_citations_operation
+            completion = entry._complete_database_operation
+            manual = entry._admit_manual_pdf_operation
+            bibliography = entry._import_bibliography_operation.__self__
+            library = entry._export_artifact_operation.__self__
+            for operation in (topic, citations, completion, manual, bibliography):
+                self.assertIs(operation._write_admission, graph.write_admission)
+            self.assertIs(library._output, graph.atomic_user_output)
+            self.assertIs(bibliography._output, graph.atomic_user_output)
+            self.assertEqual(topic._provider_precedence, expected_precedence)
+            self.assertEqual(citations._provider_precedence, expected_precedence)
+            self.assertEqual(bibliography._provider_precedence, expected_precedence)
+
+        self.assertEqual(parser_arguments, [(graph.http_client, graph.access_coordinator)])
+        self.assertEqual(llm_arguments, [(graph.http_client, graph.access_coordinator)])
+
+    def test_parser_and_llm_preflight_fail_before_either_storage_root(self) -> None:
+        from sciretriever.bootstrap import BootstrapError, build_object_graph
+
+        cases = (
+            (
+                self._dependencies(parser_factory=lambda _http, _coordinator: object()),
+                "parser-not-ready",
+            ),
+            (
+                self._dependencies(llm_factory=lambda _http, _coordinator: object()),
+                "analysis-not-ready",
+            ),
+        )
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-preflight-") as temporary:
+            root = Path(temporary)
+            for index, (dependencies, code) in enumerate(cases):
+                with self.subTest(code=code):
+                    catalog = root / f"catalog-{index}.sqlite3"
+                    artifacts = root / f"artifacts-{index}"
+                    with self.assertRaises(BootstrapError) as raised:
+                        build_object_graph(
+                            Configuration(),
+                            catalog_path=catalog,
+                            artifact_root=artifacts,
+                            external_dependencies=dependencies,
+                            credentials_home=root / "home",
+                        )
+                    self.assertEqual(raised.exception.code, code)
+                    self.assertFalse(catalog.exists())
+                    self.assertFalse(artifacts.exists())
+
+    def test_fresh_foundation_failure_removes_only_the_owned_pair(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-rollback-") as temporary:
+            root = Path(temporary)
+            catalog = root / "catalog.sqlite3"
+            artifacts = root / "artifacts"
+            unrelated = root / "unrelated.lock"
+            unrelated.write_text("keep", encoding="utf-8")
+            with mock.patch(
+                "sciretriever.storage.files.store.ArtifactStore",
+                side_effect=RuntimeError("after-catalog"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    bootstrap._build_storage_foundation(catalog, artifacts)
+
+            self.assertFalse(catalog.exists())
+            self.assertFalse(artifacts.exists())
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep")
+
+    def test_fresh_foundation_closes_owned_descriptors_on_success_and_failure(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-fd-") as temporary:
+            root = Path(temporary)
+            opened: list[int] = []
+            real_owned_node = bootstrap._owned_node
+
+            def record_owned(path: Path, *, directory: bool) -> Any:
+                node = real_owned_node(path, directory=directory)
+                opened.append(node.descriptor)
+                return node
+
+            with mock.patch.object(bootstrap, "_owned_node", side_effect=record_owned):
+                graph = bootstrap.build_object_graph(
+                    Configuration(),
+                    catalog_path=root / "ok.sqlite3",
+                    artifact_root=root / "ok-artifacts",
+                    external_dependencies=self._dependencies(),
+                    credentials_home=root / "home",
+                )
+            self.assertIsInstance(graph.entry_api, object)
+            self.assertGreaterEqual(len(opened), 2)
+            for descriptor in opened:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+            opened.clear()
+            with (
+                mock.patch.object(bootstrap, "_owned_node", side_effect=record_owned),
+                mock.patch(
+                    "sciretriever.storage.files.store.ArtifactStore",
+                    side_effect=KeyboardInterrupt(),
+                ),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                bootstrap._build_storage_foundation(
+                    root / "failed.sqlite3",
+                    root / "failed-artifacts",
+                )
+            for descriptor in opened:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_fresh_success_creates_no_sidecar_or_storage_lock(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-sidecar-") as temporary:
+            root = Path(temporary)
+            catalog = root / "catalog.sqlite3"
+            artifacts = root / "artifacts"
+            graph = build_object_graph(
+                Configuration(),
+                catalog_path=catalog,
+                artifact_root=artifacts,
+                external_dependencies=self._dependencies(),
+                credentials_home=root / "home",
+            )
+            cast(Any, graph.catalog_engine).validate()
+            for suffix in ("-wal", "-shm", "-journal"):
+                self.assertFalse(Path(f"{catalog}{suffix}").exists())
+            self.assertFalse((root / ".sciretriever-locks").exists())
+
+    def test_fresh_rollback_preserves_nonempty_or_replaced_evidence(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-race-") as temporary:
+            root = Path(temporary)
+            for scenario in ("nonempty", "replaced"):
+                with self.subTest(scenario=scenario):
+                    artifacts = root / scenario
+                    os.mkdir(artifacts, 0o700)
+                    owned = bootstrap._owned_node(artifacts, directory=True)
+                    if scenario == "nonempty":
+                        (artifacts / "evidence").write_text("keep", encoding="utf-8")
+                    else:
+                        artifacts.rmdir()
+                        os.mkdir(artifacts, 0o700)
+                    bootstrap._rollback_fresh_storage(
+                        bootstrap._FreshStorageOwnership(artifact_root=owned)
+                    )
+                    self.assertTrue(artifacts.exists())
+
+    def test_logging_occurs_only_after_a_complete_graph(self) -> None:
+        from sciretriever.bootstrap import build_object_graph
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-logging-") as temporary:
+            root = Path(temporary)
+            configured: list[int] = []
+            with mock.patch(
+                "sciretriever.logging.api.configure_logging",
+                side_effect=lambda *, level: configured.append(level),
+            ):
+                build_object_graph(
+                    Configuration(),
+                    catalog_path=root / "ok.sqlite3",
+                    artifact_root=root / "ok-artifacts",
+                    external_dependencies=self._dependencies(),
+                    credentials_home=root / "home",
+                    configure_process_logging=True,
+                )
+            self.assertEqual(configured, [20])
+
+            configured.clear()
+            with mock.patch(
+                "sciretriever.logging.api.configure_logging",
+                side_effect=lambda *, level: configured.append(level),
+            ):
+                with self.assertRaises(RuntimeError):
+                    with mock.patch(
+                        "sciretriever.storage.sqlite.discovery_repository.SqliteDiscoveryRepository",
+                        side_effect=RuntimeError("post-storage"),
+                    ):
+                        build_object_graph(
+                            Configuration(),
+                            catalog_path=root / "failed.sqlite3",
+                            artifact_root=root / "failed-artifacts",
+                            external_dependencies=self._dependencies(),
+                            credentials_home=root / "home",
+                            configure_process_logging=True,
+                        )
+            self.assertEqual(configured, [])
+            self.assertFalse((root / "failed.sqlite3").exists())
+            self.assertFalse((root / "failed-artifacts").exists())
+
+    def test_logging_failure_restores_logger_and_rolls_back_fresh_storage(self) -> None:
+        from sciretriever.bootstrap import BootstrapError, build_object_graph
+
+        logger = logging.getLogger("sciretriever")
+        host_handler = logging.NullHandler()
+        before_handlers = list(logger.handlers)
+        before_level = logger.level
+        before_propagate = logger.propagate
+        before_disabled = logger.disabled
+        logger.handlers[:] = [host_handler]
+        logger.setLevel(logging.WARNING)
+        logger.propagate = True
+        logger.disabled = True
+        installed = logging.NullHandler()
+
+        def partial_failure(*, level: int) -> None:
+            del level
+            logger.addHandler(installed)
+            logger.setLevel(logging.DEBUG)
+            logger.propagate = False
+            logger.disabled = False
+            raise RuntimeError("sentinel-secret /private/catalog.sqlite3")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="sciretriever-e11-logfail-") as temporary:
+                root = Path(temporary)
+                with (
+                    mock.patch(
+                        "sciretriever.logging.api.configure_logging",
+                        side_effect=partial_failure,
+                    ),
+                    self.assertRaises(BootstrapError) as raised,
+                ):
+                    build_object_graph(
+                        Configuration(),
+                        catalog_path=root / "catalog.sqlite3",
+                        artifact_root=root / "artifacts",
+                        external_dependencies=self._dependencies(),
+                        credentials_home=root / "home",
+                        configure_process_logging=True,
+                    )
+                self.assertEqual(raised.exception.code, "assembly-failed")
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertNotIn("sentinel-secret", repr(raised.exception))
+                self.assertFalse((root / "catalog.sqlite3").exists())
+                self.assertFalse((root / "artifacts").exists())
+            self.assertEqual(logger.handlers, [host_handler])
+            self.assertEqual(logger.level, logging.WARNING)
+            self.assertTrue(logger.propagate)
+            self.assertTrue(logger.disabled)
+        finally:
+            logger.handlers[:] = before_handlers
+            logger.setLevel(before_level)
+            logger.propagate = before_propagate
+            logger.disabled = before_disabled
+
+    def test_scoped_logging_failure_restores_logger_and_rolls_back_fresh_storage(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        logger = logging.getLogger("sciretriever")
+        host_handler = logging.NullHandler()
+        before_handlers = list(logger.handlers)
+        before_level = logger.level
+        before_propagate = logger.propagate
+        before_disabled = logger.disabled
+        logger.handlers[:] = [host_handler]
+        logger.setLevel(logging.WARNING)
+        logger.propagate = True
+        logger.disabled = True
+        installed = logging.NullHandler()
+
+        def partial_failure(*, level: int) -> None:
+            del level
+            logger.addHandler(installed)
+            logger.setLevel(logging.DEBUG)
+            logger.propagate = False
+            logger.disabled = False
+            raise RuntimeError("sentinel-secret /private/catalog.sqlite3")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="sciretriever-e13-logfail-") as temporary:
+                root = Path(temporary)
+                configuration = parse_configuration(
+                    f"""
+                    [paths]
+                    catalog_path = {str(root / "catalog.sqlite3")!r}
+                    artifact_root = {str(root / "artifacts")!r}
+                    """
+                )
+                with (
+                    mock.patch(
+                        "sciretriever.logging.api.configure_logging",
+                        side_effect=partial_failure,
+                    ),
+                    self.assertRaises(bootstrap.BootstrapError) as raised,
+                ):
+                    bootstrap.build_production_object_graph(
+                        configuration,
+                        scope=bootstrap.ProductionEntryScope.LOCAL_LIBRARY,
+                        configure_process_logging=True,
+                    )
+                self.assertEqual(raised.exception.code, "assembly-failed")
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertNotIn("sentinel-secret", repr(raised.exception))
+                self.assertNotIn(str(root), repr(raised.exception))
+                self.assertFalse((root / "catalog.sqlite3").exists())
+                self.assertFalse((root / "artifacts").exists())
+            self.assertEqual(logger.handlers, [host_handler])
+            self.assertEqual(logger.level, logging.WARNING)
+            self.assertTrue(logger.propagate)
+            self.assertTrue(logger.disabled)
+        finally:
+            logger.handlers[:] = before_handlers
+            logger.setLevel(before_level)
+            logger.propagate = before_propagate
+            logger.disabled = before_disabled
+
+    def test_production_graph_loads_credentials_once(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        import sciretriever.configuration as configuration_boundary
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-single-") as temporary:
+            root = Path(temporary)
+            configuration = _production_configuration(root)
+            original = configuration_boundary.load_credentials
+            calls: list[object] = []
+
+            def one_load(*, home: Any = None) -> Any:
+                calls.append(home)
+                if len(calls) > 1:
+                    raise AssertionError("credentials must not be read twice")
+                return original(home=home)
+
+            with mock.patch("sciretriever.bootstrap.load_credentials", side_effect=one_load):
+                graph = bootstrap.build_production_object_graph(
+                    configuration,
+                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
+                    credentials_home=root / "home",
+                    configure_process_logging=False,
+                )
+            self.assertEqual(len(calls), 1)
+            self.assertIsInstance(graph.entry_api, object)
+
+    def test_production_assembly_performs_no_external_io(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        def forbidden(label: str) -> Any:
+            return mock.patch(label, side_effect=AssertionError(f"external I/O: {label}"))
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-noio-") as temporary:
+            root = Path(temporary)
+            configuration = _production_configuration(root)
+            with (
+                forbidden("sciretriever.network.http.SystemResolver.resolve"),
+                forbidden("sciretriever.network.http.SecureHttpTransport.send"),
+                forbidden("sciretriever.network.http.HttpClient.request"),
+                forbidden("sciretriever.network.browser.BrowserClient.run"),
+                forbidden(
+                    "sciretriever.parsing.adapters.mineru.MinerUProtocol2ServiceClient.health"
+                ),
+                forbidden(
+                    "sciretriever.parsing.adapters.mineru.OperatorManagedMinerUAdapter.parse"
+                ),
+                forbidden("sciretriever.analysis.providers.ProviderHttpAdapterBase.complete"),
+                forbidden("sciretriever.metadata.registry.MetadataProbeRegistry.probe"),
+            ):
+                graph = bootstrap.build_production_object_graph(
+                    configuration,
+                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
+                    credentials_home=root / "home",
+                    configure_process_logging=False,
+                )
+            self.assertIsInstance(graph.entry_api, object)
+
+    def test_production_errors_are_stable_path_secret_free_and_without_cause(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.acquisition.registry import AcquisitionRegistryError
+        from sciretriever.metadata.registry import MetadataRegistryError
+        from sciretriever.storage.files.store import ArtifactStoreError
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-errors-") as temporary:
+            root = Path(temporary)
+            configuration = _production_configuration(root)
+            cases: tuple[tuple[str, str, type[Exception]], ...] = (
+                (
+                    "sciretriever.metadata.registry.build_metadata_registry",
+                    "metadata-not-ready",
+                    MetadataRegistryError,
+                ),
+                (
+                    "sciretriever.acquisition.registry.build_acquisition_registry",
+                    "acquisition-not-ready",
+                    AcquisitionRegistryError,
+                ),
+                (
+                    "sciretriever.storage.files.store.ArtifactStore",
+                    "storage-unavailable",
+                    ArtifactStoreError,
+                ),
+                (
+                    "sciretriever.storage.sqlite.discovery_repository.SqliteDiscoveryRepository",
+                    "assembly-failed",
+                    RuntimeError,
+                ),
+            )
+            for index, (target, expected, exception_type) in enumerate(cases):
+                with self.subTest(code=expected):
+                    secret = f"sentinel-secret-{index}"
+                    error = exception_type(f"{secret} {root / 'private.sqlite3'}")
+                    with (
+                        mock.patch(target, side_effect=error),
+                        self.assertRaises(bootstrap.BootstrapError) as raised,
+                    ):
+                        bootstrap.build_production_object_graph(
+                            configuration,
+                            environment={"SCIRETRIEVER_OPENAI_API_KEY": secret},
+                            credentials_home=root / "home",
+                            configure_process_logging=False,
+                        )
+                    self.assertEqual(raised.exception.code, expected)
+                    self.assertIsNone(raised.exception.__cause__)
+                    self.assertNotIn(secret, repr(raised.exception))
+                    self.assertNotIn(str(root), repr(raised.exception))
+                    self.assertFalse((root / "catalog.sqlite3").exists())
+                    self.assertFalse((root / "artifacts").exists())
+
+    def test_scoped_storage_and_internal_type_errors_use_stable_assembly_codes(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.storage.files.store import ArtifactStoreError
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e13-errors-") as temporary:
+            root = Path(temporary)
+            cases: tuple[tuple[type[Exception], str], ...] = (
+                (ArtifactStoreError, "storage-unavailable"),
+                (TypeError, "assembly-failed"),
+            )
+            for index, (exception_type, expected) in enumerate(cases):
+                with self.subTest(code=expected):
+                    catalog = root / f"catalog-{index}.sqlite3"
+                    artifacts = root / f"artifacts-{index}"
+                    configuration = parse_configuration(
+                        f"""
+                        [paths]
+                        catalog_path = {str(catalog)!r}
+                        artifact_root = {str(artifacts)!r}
+                        """
+                    )
+                    secret = f"sentinel-secret-{index}"
+                    error = exception_type(f"{secret} {root / 'private.sqlite3'}")
+                    with (
+                        mock.patch(
+                            "sciretriever.storage.files.store.ArtifactStore",
+                            side_effect=error,
+                        ),
+                        self.assertRaises(bootstrap.BootstrapError) as raised,
+                    ):
+                        bootstrap.build_production_object_graph(
+                            configuration,
+                            scope=bootstrap.ProductionEntryScope.LOCAL_LIBRARY,
+                            configure_process_logging=False,
+                        )
+                    self.assertEqual(raised.exception.code, expected)
+                    self.assertIsNone(raised.exception.__cause__)
+                    self.assertNotIn(secret, repr(raised.exception))
+                    self.assertNotIn(str(root), repr(raised.exception))
+                    self.assertFalse(catalog.exists())
+                    self.assertFalse(artifacts.exists())
+
+    def test_probe_session_uses_one_snapshot_and_no_runtime_or_storage(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        import sciretriever.configuration as configuration_boundary
+
+        configuration = _probe_configuration()
+        loads: list[object] = []
+        status_bundles: list[object] = []
+        registry_bundles: list[object] = []
+        original_status = bootstrap.configuration_status
+        from sciretriever.metadata import registry as metadata_registry_boundary
+
+        original_registry = metadata_registry_boundary.build_metadata_probe_registry
+
+        def load_once(*, home: Any = None) -> Any:
+            loads.append(home)
+            return first if len(loads) == 1 else second
+
+        def record_status(
+            value: Configuration,
+            *,
+            credentials: Any = None,
+            configured_sci_hub_resolver: Any = None,
+        ) -> Any:
+            status_bundles.append(credentials)
+            return original_status(
+                value,
+                credentials=credentials,
+                configured_sci_hub_resolver=configured_sci_hub_resolver,
+            )
+
+        def record_registry(value: Any, credentials: Any, dependencies: Any) -> Any:
+            registry_bundles.append(credentials)
+            return original_registry(value, credentials, dependencies)
+
+        forbidden = (
+            "sciretriever.storage.sqlite.engine.CatalogEngine",
+            "sciretriever.storage.files.paths.StorageRoot",
+            "sciretriever.storage.files.store.ArtifactStore",
+            "sciretriever.entry.api.EntryApi",
+            "sciretriever.logging.api.configure_logging",
+        )
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-probe-") as temporary:
+            root = Path(temporary)
+            first = load_credentials(home=root / "first-home")
+            second_home = root / "second-home"
+            second_home.mkdir(mode=0o700)
+            set_credentials(
+                ProviderName.CORE,
+                {"api_key": "must-never-load"},
+                home=second_home,
+            )
+            second = load_credentials(home=second_home)
+            patches = [
+                mock.patch(name, side_effect=AssertionError("probe session side effect"))
+                for name in forbidden
+            ]
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(bootstrap, "load_credentials", side_effect=load_once),
+                mock.patch.object(bootstrap, "configuration_status", side_effect=record_status),
+                mock.patch.object(
+                    metadata_registry_boundary,
+                    "build_metadata_probe_registry",
+                    side_effect=record_registry,
+                ),
+                mock.patch.object(
+                    bootstrap,
+                    "load_runtime_secrets",
+                    side_effect=AssertionError("probe session read runtime environment"),
+                ),
+                mock.patch(
+                    "sciretriever.metadata.providers.crossref.CrossrefAdapter.probe_metadata",
+                    side_effect=AssertionError("factory invoked a probe"),
+                ) as probe,
+            ):
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=root / "home",
+                )
+                self.assertEqual(probe.call_count, 0)
+
+            self.assertEqual(loads, [root / "home"])
+            self.assertEqual(status_bundles, [first])
+            self.assertEqual(registry_bundles, [first])
+            self.assertIs(session.probe_port.http_client, session.http_client)
+            self.assertIs(
+                session.probe_port.access_coordinator,
+                session.access_coordinator,
+            )
+            self.assertIs(session.http_client._coordinator, session.access_coordinator)
+            self.assertEqual(
+                session.probe_port.supported_capabilities,
+                frozenset(
+                    (provider, ProviderCapability.METADATA)
+                    for provider in (
+                        ProviderName.WEB_OF_SCIENCE,
+                        ProviderName.CROSSREF,
+                        ProviderName.SEMANTIC_SCHOLAR,
+                        ProviderName.ARXIV,
+                        ProviderName.OPENALEX,
+                        ProviderName.EUROPE_PMC,
+                        ProviderName.ELSEVIER,
+                        ProviderName.SPRINGER,
+                        ProviderName.DATACITE,
+                        ProviderName.CORE,
+                        ProviderName.OPENCITATIONS,
+                    )
+                ),
+            )
+            self.assertFalse(root.joinpath("catalog.sqlite3").exists())
+            self.assertFalse(root.joinpath("artifacts").exists())
+
+            with (
+                mock.patch.object(
+                    bootstrap,
+                    "load_credentials",
+                    side_effect=AssertionError("run reread credentials"),
+                ),
+                mock.patch.object(
+                    configuration_boundary,
+                    "configuration_status",
+                    side_effect=AssertionError("run recomputed status"),
+                ),
+                mock.patch.object(
+                    type(session.probe_port),
+                    "probe",
+                    return_value=_passed_probe(ProviderName.CROSSREF),
+                ) as run_probe,
+            ):
+                summary = session.run(provider=ProviderName.CROSSREF)
+            self.assertTrue(summary.passed)
+            run_probe.assert_called_once_with(
+                ProviderName.CROSSREF,
+                ProviderCapability.METADATA,
+            )
+
+    def test_probe_session_selection_is_named_or_enabled_and_metadata_only(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-e11-selection-") as temporary:
+            root = Path(temporary)
+            session = bootstrap.build_production_configuration_probe_session(
+                _probe_configuration(),
+                credentials_home=root / "home",
+            )
+            calls: list[tuple[ProviderName, ProviderCapability]] = []
+
+            def pass_probe(
+                provider: ProviderName,
+                capability: ProviderCapability,
+            ) -> Any:
+                calls.append((provider, capability))
+                return _passed_probe(provider)
+
+            with mock.patch.object(
+                type(session.probe_port),
+                "probe",
+                side_effect=pass_probe,
+            ):
+                named = session.run(provider=ProviderName.ARXIV)
+                all_enabled = session.run(test_all=True)
+                skipped = session.run(provider=ProviderName.WEB_OF_SCIENCE)
+
+            self.assertEqual(
+                calls,
+                [
+                    (ProviderName.ARXIV, ProviderCapability.METADATA),
+                    (ProviderName.CROSSREF, ProviderCapability.METADATA),
+                ],
+            )
+            self.assertTrue(named.passed)
+            self.assertTrue(all_enabled.passed)
+            self.assertEqual(skipped.results[0].outcome, ProbeOutcome.SKIPPED)
+            self.assertTrue(
+                all(
+                    result.capability is ProviderCapability.METADATA
+                    for summary in (named, all_enabled, skipped)
+                    for result in summary.results
+                )
+            )
+
+
+class _OfflineParser:
+    def parse(
+        self,
+        request: ParserRequest,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> StagedParserOutput:
+        del request, cancel_event
+        raise AssertionError("construction must not invoke the Parser")
+
+
+class _OfflineAnalysisLlm:
+    @property
+    def provider_name(self) -> str:
+        return "offline-analysis"
+
+    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+        del call
+        raise AssertionError("construction must not invoke the LLM")
+
+
+if __name__ == "__main__":
+    unittest.main()
