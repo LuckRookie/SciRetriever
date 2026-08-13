@@ -1,8 +1,15 @@
+"""Small, side-effect-free values shared by the target Model contracts.
+
+The types in this module deliberately describe representation only.  They do not
+resolve identifiers, inspect the filesystem, read configuration, or make any
+decision about a literature record.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum, unique
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
@@ -17,16 +24,10 @@ _RFC3339_UTC = re.compile(
 )
 
 
-class _PrimitiveValueError(ValueError):
-    pass
-
-
-class _PrimitiveTypeError(TypeError):
-    pass
-
-
 class _StringRoot(RootModel[str]):
-    model_config = ConfigDict(frozen=True, strict=True)
+    """An immutable, strict string value object with deterministic string output."""
+
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, strict=True)
 
     def __hash__(self) -> int:
         return hash((type(self), self.root))
@@ -35,140 +36,102 @@ class _StringRoot(RootModel[str]):
         return self.root
 
 
-class UuidValue(_StringRoot):
+class InternalId(_StringRoot):
+    """A canonical UUID used for an internal domain identity.
+
+    The base value intentionally carries no domain meaning.  Domain-specific
+    IDs below are nominal wrappers so that one kind of identity cannot be
+    accidentally passed where another is expected.
+    """
+
     __hash__ = _StringRoot.__hash__
 
     @field_validator("root")
     @classmethod
-    def validate_uuid(cls, value: str) -> str:
+    def validate_id(cls, value: str) -> str:
         if _CANONICAL_UUID.fullmatch(value) is None:
-            raise _PrimitiveValueError("must be a canonical lowercase UUID")
+            raise ValueError("must be a canonical lowercase UUID")
         return value
 
 
-class WorkId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class ProvenanceId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class WorkVersionId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class MetaLiteratureId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class CollectionId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class LiteratureId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class CollectionRunId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class ObservationId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class BatchRunId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class ReferenceId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class AssetId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class AssetId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class LightDocumentId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class LiteratureAssetId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
-class AnalysisArtifactId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class MetadataSnapshotId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ProvenanceId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class AdmissionBindingId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class CurationPlanId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class VersionRelationId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class WorkVersionAssetId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ObservationId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class StableIdentifierId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class MembershipId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ReferenceFactId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ReferenceSetId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class ReferenceMemberId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class TagSetId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class TagMemberId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class CollectionCauseId(UuidValue):
-    __hash__ = UuidValue.__hash__
-
-
-class CollectionPathId(UuidValue):
-    __hash__ = UuidValue.__hash__
+class DiscoveryRunId(InternalId):
+    __hash__ = InternalId.__hash__
 
 
 class Sha256(_StringRoot):
+    """A lowercase hexadecimal SHA-256 digest."""
+
     __hash__ = _StringRoot.__hash__
 
     @field_validator("root")
     @classmethod
     def validate_sha256(cls, value: str) -> str:
         if _SHA256.fullmatch(value) is None:
-            raise _PrimitiveValueError("must be lowercase 64-hex SHA-256")
+            raise ValueError("must be lowercase 64-hex SHA-256")
         return value
 
 
 def sha256_digest(value: bytes) -> Sha256:
+    """Return the SHA-256 digest for an exact byte sequence."""
+
     if not isinstance(value, bytes):
-        raise _PrimitiveTypeError("value must be bytes")
+        raise TypeError("value must be bytes")
     return Sha256(hashlib.sha256(value).hexdigest())
 
 
 class RelativeArtifactPath(_StringRoot):
+    """A canonical, relative POSIX path within the configured artifact store.
+
+    This is a representation boundary, not a filesystem path object.  It does
+    not resolve symlinks or access the filesystem; callers must perform those
+    checks at the storage boundary.
+    """
+
     __hash__ = _StringRoot.__hash__
 
     @field_validator("root")
     @classmethod
     def validate_path(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        path = PurePosixPath(value)
+        try:
+            parsed = urlsplit(value)
+            path = PurePosixPath(value)
+        except ValueError as error:
+            raise ValueError("must be a normalized relative POSIX path") from error
+
+        has_control_character = any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        )
         invalid = (
             not value
+            or has_control_character
             or "\\" in value
             or bool(parsed.scheme or parsed.netloc or parsed.query or parsed.fragment)
             or path.is_absolute()
@@ -176,146 +139,75 @@ class RelativeArtifactPath(_StringRoot):
             or any(part in {"", ".", ".."} for part in value.split("/"))
         )
         if invalid:
-            raise _PrimitiveValueError("must be a normalized relative POSIX path without traversal")
+            raise ValueError("must be a normalized relative POSIX path")
         return value
 
 
 class UtcTimestamp(_StringRoot):
+    """An RFC 3339 timestamp whose offset is UTC and whose output uses ``Z``.
+
+    String input must already use an RFC 3339 UTC representation.  An aware
+    ``datetime`` is accepted as a convenience at the Python boundary and is
+    immediately converted to the same canonical string representation.  Naive
+    and non-UTC datetimes are rejected instead of being silently interpreted.
+    """
+
     __hash__ = _StringRoot.__hash__
 
-    @field_validator("root")
+    @field_validator("root", mode="before")
     @classmethod
-    def validate_timestamp(cls, value: str) -> str:
-        if _RFC3339_UTC.fullmatch(value) is None:
-            raise _PrimitiveValueError("must be RFC3339 UTC ending in Z")
+    def normalize_timestamp(cls, value: object) -> str:
+        if isinstance(value, datetime):
+            if value.tzinfo is None or value.utcoffset() != timedelta(0):
+                raise ValueError("must be an aware UTC timestamp")
+            candidate = value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+            if "." in candidate:
+                prefix, fraction = candidate[:-1].split(".", maxsplit=1)
+                candidate = f"{prefix}.{fraction.rstrip('0')}Z"
+                if candidate.endswith(".Z"):
+                    candidate = candidate[:-2] + "Z"
+            return candidate
+        if not isinstance(value, str):
+            raise TypeError("must be an RFC 3339 UTC timestamp")
+
+        candidate = value
+        if candidate.endswith("+00:00"):
+            candidate = candidate[:-6] + "Z"
+        if _RFC3339_UTC.fullmatch(candidate) is None:
+            raise ValueError("must be RFC3339 UTC ending in Z")
         try:
-            datetime.fromisoformat(value[:-1] + "+00:00")
+            parsed = datetime.fromisoformat(candidate[:-1] + "+00:00")
         except ValueError as error:
-            raise _PrimitiveValueError("must be a valid UTC date-time") from error
-        return value
-
-
-class _StrEnum(str, Enum):
-    pass
+            raise ValueError("must be a valid UTC date-time") from error
+        if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+            raise ValueError("must be an aware UTC timestamp")
+        return candidate
 
 
 @unique
-class SourceKind(_StrEnum):
+class SourceKind(str, Enum):
+    """The closed set of source contexts understood by the target Model."""
+
     METADATA_PROVIDER = "metadata-provider"
     ASSET_PROVIDER = "asset-provider"
     PARSER = "parser"
-    ANALYSIS_MODEL = "analysis-model"
+    ANALYSIS = "analysis"
     USER = "user"
 
 
-@unique
-class AssetRole(_StrEnum):
-    PRIMARY_PDF = "primary-pdf"
-    SUPPLEMENTARY_PDF = "supplementary-pdf"
-    XML = "xml"
-    HTML = "html"
-    SUPPLEMENTARY = "supplementary"
-
-
-@unique
-class WorkVersionState(_StrEnum):
-    UNREVIEWED = "unreviewed"
-    ASSET_READY = "asset-ready"
-    LIGHT_TEXT_READY = "light-text-ready"
-    COMPLETED = "completed"
-
-
-@unique
-class CollectionMode(_StrEnum):
-    TOPIC = "topic"
-    CITATION = "citation"
-
-
-@unique
-class CollectionRunStatus(_StrEnum):
-    CREATED = "created"
-    RUNNING = "running"
-    NO_TARGET = "no-target"
-    COMPLETED = "completed"
-    PARTIAL = "partial"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-
-
-@unique
-class CollectionCauseKind(_StrEnum):
-    TOPIC_MATCH = "topic-match"
-    SEED = "seed"
-    REFERENCE = "reference"
-    CITED_BY = "cited-by"
-
-
-@unique
-class CurationDecision(_StrEnum):
-    SAME_VERSION = "same-version"
-    RELATED_VERSIONS = "related-versions"
-    DISTINCT = "distinct"
-    DELETE_VERSION = "delete-version"
-    DELETE_WORK = "delete-work"
-
-
-@unique
-class DiscoveryRelation(_StrEnum):
-    MEMBER = "member"
-    SEED = "seed"
-    REFERENCE = "reference"
-    CITED_BY = "cited-by"
-
-
-@unique
-class CitationDirection(_StrEnum):
-    REFERENCES = "references"
-    CITED_BY = "cited-by"
-    BOTH = "both"
-
-
-@unique
-class MissingStep(_StrEnum):
-    PRIMARY_PDF = "primary-pdf"
-    LIGHT_DOCUMENT = "light-document"
-    COMPLETION = "completion"
-
-
-@unique
-class VersionRole(_StrEnum):
-    FORMAL = "formal"
-    ACCEPTED_MANUSCRIPT = "accepted-manuscript"
-    PREPRINT = "preprint"
-    OTHER = "other"
-
-
-@unique
-class BatchType(_StrEnum):
-    PROCESS = "process"
-    BIBLIOGRAPHY_IMPORT = "bibliography-import"
-    BIBLIOGRAPHY_EXPORT = "bibliography-export"
-
-
-@unique
-class BatchStatus(_StrEnum):
-    CREATED = "created"
-    RUNNING = "running"
-    NO_TARGET = "no-target"
-    COMPLETED = "completed"
-    PARTIAL = "partial"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-
-
-@unique
-class PublicationPhase(_StrEnum):
-    NONE = "none"
-    PREPARED = "prepared"
-    PUBLISHED = "published"
-
-
-@unique
-class BibliographyFormat(_StrEnum):
-    BIBTEX = "bibtex"
-    RIS = "ris"
-    CSL_JSON = "csl-json"
+__all__ = (
+    "AssetId",
+    "DiscoveryRunId",
+    "InternalId",
+    "LiteratureAssetId",
+    "LiteratureId",
+    "MetaLiteratureId",
+    "ObservationId",
+    "ProvenanceId",
+    "ReferenceId",
+    "RelativeArtifactPath",
+    "Sha256",
+    "SourceKind",
+    "UtcTimestamp",
+    "sha256_digest",
+)
