@@ -1,0 +1,15 @@
+{
+  "backend": "vlm-engine",
+  "client_side_output_generation": "false",
+  "formula_enable": "true",
+  "image_analysis": "true",
+  "parse_method": "auto",
+  "response_format_zip": "true",
+  "return_content_list": "true",
+  "return_images": "true",
+  "return_md": "false",
+  "return_middle_json": "true",
+  "return_model_output": "true",
+  "return_original_file": "false",
+  "table_enable": "true"
+}

@@ -1,0 +1,33 @@
+{
+  "_backend": "vlm",
+  "pdf_info": [
+    {
+      "discarded_blocks": [],
+      "page_idx": 0,
+      "page_size": [612, 792],
+      "para_blocks": [
+        {
+          "bbox": [10, 10, 200, 100],
+          "blocks": [],
+          "lines": [
+            {
+              "bbox": [10, 10, 200, 30],
+              "spans": [
+                {
+                  "bbox": [10, 10, 50, 30],
+                  "image_path": "images/figure.png"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "discarded_blocks": [],
+      "page_idx": 1,
+      "page_size": [612, 792],
+      "para_blocks": []
+    }
+  ]
+}
