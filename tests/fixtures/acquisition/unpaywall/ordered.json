@@ -1,0 +1,27 @@
+{
+  "doi": "10.5555/example",
+  "is_oa": true,
+  "best_oa_location": {
+    "url_for_pdf": "https://publisher.example.test/article.pdf",
+    "url_for_landing_page": "https://publisher.example.test/article"
+  },
+  "oa_locations": [
+    {
+      "url_for_pdf": "https://publisher.example.test/article.pdf",
+      "url_for_landing_page": "https://publisher.example.test/article"
+    },
+    {
+      "url": "https://repository.example.test/item/1"
+    },
+    {
+      "is_under_embargo": true,
+      "url_for_pdf": "https://embargoed.example.test/article.pdf"
+    }
+  ],
+  "first_oa_location": {
+    "url_for_pdf": "https://first.example.test/article.pdf"
+  },
+  "oa_locations_embargoed": [
+    {"url_for_pdf": "https://never.example.test/article.pdf"}
+  ]
+}

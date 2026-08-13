@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2201.00001v1</id>
+    <link href="https://arxiv.org/pdf/2201.00001v1"
+          rel="related" type="application/pdf" />
+  </entry>
+</feed>

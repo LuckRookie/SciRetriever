@@ -1,0 +1,1054 @@
+"""Closed Acquisition provider matrix and production Source assembly.
+
+This module is the A10 composition boundary below the root Bootstrap.  It
+turns secret-free ordinary configuration and already-constructed shared
+Network dependencies into a deterministic tuple of neutral
+``PdfSourceBinding`` values.  Construction performs no DNS, HTTP, Browser,
+resolver, storage, or user-data operation.
+
+The matrix deliberately distinguishes Provider capability mappings from
+runtime Sources.  One non-Provider ``direct`` Source is shared by ordered views
+that consume every accepted AssetHint: a global direct-file prefix, configured
+Provider landing slots, then an unconfigured-history fallback.  Unsupported
+authorized and Browser paths remain explicit mapping facts without being
+registered as executable production Sources.
+"""
+
+from __future__ import annotations
+
+import re
+import threading
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field, replace
+from enum import Enum
+from typing import Final
+
+from sciretriever.acquisition.authorized import (
+    PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
+    UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
+)
+from sciretriever.acquisition.ports import (
+    CandidateKeyTracker,
+    PdfSource,
+    PdfSourceBinding,
+    SourceReadiness,
+    TemporaryPdf,
+)
+from sciretriever.acquisition.routing import (
+    AcquisitionEvidence,
+    AcquisitionRequest,
+    build_acquisition_evidence,
+)
+from sciretriever.acquisition.sources import (
+    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    PRODUCTION_BROWSER_RULE_CATALOG,
+    ArxivPdfSource,
+    ConfiguredLocatorResolver,
+    ConfiguredSciHubPdfSource,
+    ControlledBrowserPdfSource,
+    DirectPdfSource,
+    DoiLandingResolver,
+    EuropePmcPdfSource,
+    PublicLocatorFetcher,
+    UnpaywallPdfSource,
+    WebAccessProfileResolver,
+    configured_sci_hub_readiness,
+)
+from sciretriever.acquisition.sources.arxiv import (
+    ACCESS_SCOPE as ARXIV_ACCESS_SCOPE,
+)
+from sciretriever.acquisition.sources.arxiv import (
+    BASELINE_ACCESS_POLICY as ARXIV_ACCESS_POLICY,
+)
+from sciretriever.acquisition.sources.europe_pmc import (
+    ACCESS_SCOPE as EUROPE_PMC_ACCESS_SCOPE,
+)
+from sciretriever.acquisition.sources.europe_pmc import (
+    BASELINE_ACCESS_POLICY as EUROPE_PMC_ACCESS_POLICY,
+)
+from sciretriever.acquisition.sources.unpaywall import (
+    ACCESS_SCOPE as UNPAYWALL_ACCESS_SCOPE,
+)
+from sciretriever.acquisition.sources.unpaywall import (
+    BASELINE_ACCESS_POLICY as UNPAYWALL_ACCESS_POLICY,
+)
+from sciretriever.model.acquisition import (
+    AcquisitionPath,
+    AssetHint,
+    AssetHintKind,
+    AssetRole,
+)
+from sciretriever.model.configuration import Configuration, ProviderName
+from sciretriever.model.metadata import MetadataObservation
+from sciretriever.model.primitives import ProvenanceId, UtcTimestamp
+from sciretriever.network.admission import (
+    AccessCoordinator,
+    AccessPolicy,
+    AccessScope,
+)
+from sciretriever.network.browser import BrowserClient
+from sciretriever.network.http import HttpClient
+from sciretriever.network.policy import PolicyError, normalize_url
+
+_STABLE_TOKEN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
+
+
+class AcquisitionCapability(str, Enum):
+    """One explicit mechanism by which a Provider can contribute a PDF."""
+
+    GENERIC_ASSET_HINT = "generic-asset-hint"
+    PUBLIC_PROTOCOL = "public-protocol"
+    AUTHORIZED_PROVIDER_API = "authorized-provider-api"
+    CONTROLLED_BROWSER = "controlled-browser"
+    OPERATOR_LOCATOR = "operator-locator"
+
+
+class _DirectSlice(str, Enum):
+    """One ordered view over the single non-Provider DirectPdfSource."""
+
+    DIRECT_PREFIX = "direct-prefix"
+    PROVIDER_LANDING = "provider-landing"
+    FALLBACK_LANDING = "fallback-landing"
+
+
+ACQUISITION_PROVIDER_ORDER: Final[tuple[str, ...]] = (
+    "arxiv",
+    "crossref",
+    "semantic-scholar",
+    "openalex",
+    "europe-pmc",
+    "unpaywall",
+    "elsevier",
+    "springer",
+    "wiley",
+    "datacite",
+    "core",
+    "sci-hub",
+)
+
+# Exact hosts recorded by the checked Provider Notes as an API, landing, or
+# content/download host owned by that Provider.  The table is deliberately
+# closed: an aggregator locator is classified by its final host, never by
+# metadata provenance, DOI prefix, publisher text, or a domain-suffix guess.
+# API adapters still use their own provider/api scopes; these profiles apply
+# when a host is consumed through ordinary landing/direct/Browser access.
+PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("arxiv", ("arxiv.org", "export.arxiv.org")),
+    ("europe-pmc", ("europepmc.org", "www.ebi.ac.uk")),
+    ("elsevier", ("api.elsevier.com",)),
+    (
+        "springer",
+        (
+            "api.springernature.com",
+            "link.springer.com",
+            "www.nature.com",
+        ),
+    ),
+    ("wiley", ("onlinelibrary.wiley.com",)),
+    ("core", ("api.core.ac.uk", "core.ac.uk")),
+)
+
+_PRODUCTION_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
+    max_concurrency=1,
+    cooldown_after_completion=30.0,
+)
+
+_AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset(
+    {"elsevier", "springer", "wiley", "core"}
+)
+
+
+class AcquisitionRegistryError(RuntimeError):
+    """A stable and secret-free error raised before any Source I/O."""
+
+    __slots__ = ("code", "provider_name")
+
+    def __init__(self, code: str, provider_name: str = "acquisition") -> None:
+        safe_code = (
+            code
+            if type(code) is str and _STABLE_TOKEN.fullmatch(code) is not None
+            else "registry-invalid"
+        )
+        safe_provider = (
+            provider_name
+            if type(provider_name) is str and _STABLE_TOKEN.fullmatch(provider_name) is not None
+            else "acquisition"
+        )
+        self.code = safe_code
+        self.provider_name = safe_provider
+        super().__init__(f"acquisition registry error [{safe_provider}:{safe_code}]")
+
+    def __repr__(self) -> str:
+        return f"AcquisitionRegistryError(code={self.code!r}, provider_name={self.provider_name!r})"
+
+
+def _stable_name(value: object, *, field_name: str) -> str:
+    if type(value) is not str or _STABLE_TOKEN.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be a stable token")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionProviderMapping:
+    """One static Provider-to-mechanism mapping, including unsupported state."""
+
+    capability: AcquisitionCapability
+    source_name: str
+    acquisition_path: AcquisitionPath
+    production_implementation: type[object] | None
+    production_available: bool
+    failure_code: str | None
+    uses_shared_network: bool = True
+    uses_private_limiter: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capability, AcquisitionCapability):
+            raise TypeError("capability must be an AcquisitionCapability")
+        object.__setattr__(
+            self,
+            "source_name",
+            _stable_name(self.source_name, field_name="source_name"),
+        )
+        if not isinstance(self.acquisition_path, AcquisitionPath):
+            raise TypeError("acquisition_path must be an AcquisitionPath")
+        if self.production_implementation is not None and not isinstance(
+            self.production_implementation,
+            type,
+        ):
+            raise TypeError("production_implementation must be a type or None")
+        for field_name, value in (
+            ("production_available", self.production_available),
+            ("uses_shared_network", self.uses_shared_network),
+            ("uses_private_limiter", self.uses_private_limiter),
+        ):
+            if type(value) is not bool:
+                raise TypeError(f"{field_name} must be a bool")
+        if self.failure_code is not None:
+            object.__setattr__(
+                self,
+                "failure_code",
+                _stable_name(self.failure_code, field_name="failure_code"),
+            )
+        if self.production_available != (self.failure_code is None):
+            raise ValueError("production availability and failure code disagree")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionProviderStatus:
+    """Static mappings plus local ordinary/dependency readiness for one Provider."""
+
+    provider_name: str
+    mappings: tuple[AcquisitionProviderMapping, ...]
+    enabled: bool
+    ready: bool
+    failure_code: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_name",
+            _stable_name(self.provider_name, field_name="provider_name"),
+        )
+        if not isinstance(self.mappings, tuple) or not self.mappings:
+            raise ValueError("mappings must be a nonempty tuple")
+        if any(not isinstance(item, AcquisitionProviderMapping) for item in self.mappings):
+            raise TypeError("mappings must contain AcquisitionProviderMapping values")
+        if type(self.enabled) is not bool or type(self.ready) is not bool:
+            raise TypeError("enabled and ready must be bool values")
+        if self.failure_code is not None:
+            object.__setattr__(
+                self,
+                "failure_code",
+                _stable_name(self.failure_code, field_name="failure_code"),
+            )
+        if self.ready != (self.failure_code is None):
+            raise ValueError("readiness and failure code disagree")
+
+    def __repr__(self) -> str:
+        mechanisms = tuple(mapping.capability.value for mapping in self.mappings)
+        return (
+            "AcquisitionProviderStatus("
+            f"provider_name={self.provider_name!r}, mappings={mechanisms!r}, "
+            f"enabled={self.enabled!r}, ready={self.ready!r}, "
+            f"failure_code={self.failure_code!r})"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionSourceRegistration:
+    """One actual Source binding and any enabled Provider it independently serves."""
+
+    provider_names: tuple[str, ...]
+    binding: PdfSourceBinding = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.binding, PdfSourceBinding):
+            raise TypeError("binding must be a PdfSourceBinding")
+        if not isinstance(self.provider_names, tuple):
+            raise TypeError("provider_names must be a tuple")
+        normalized = tuple(
+            _stable_name(value, field_name="provider_name") for value in self.provider_names
+        )
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("provider_names must be unique")
+        if any(value not in ACQUISITION_PROVIDER_ORDER for value in normalized):
+            raise ValueError("provider_names contains an unsupported Provider")
+        if self.binding.source_name == "direct":
+            if normalized:
+                raise ValueError("the non-Provider direct Source must not name Providers")
+        elif not normalized:
+            raise ValueError("Provider Source registrations must name a Provider")
+        object.__setattr__(self, "provider_names", normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionAssemblyDependencies:
+    """Shared process-local objects supplied later by the production Bootstrap."""
+
+    http_client: HttpClient = field(repr=False)
+    access_coordinator: AccessCoordinator = field(repr=False)
+    web_access_profile_resolver: WebAccessProfileResolver = field(repr=False)
+    provenance_id_factory: Callable[[], ProvenanceId] = field(repr=False)
+    clock: Callable[[], UtcTimestamp] = field(repr=False)
+    cancel_event: threading.Event | None = field(default=None, repr=False)
+    configured_sci_hub_resolver: ConfiguredLocatorResolver | None = field(
+        default=None,
+        repr=False,
+    )
+    browser_client: BrowserClient | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.http_client, HttpClient):
+            raise TypeError("http_client must be an HttpClient")
+        if not isinstance(self.access_coordinator, AccessCoordinator):
+            raise TypeError("access_coordinator must be an AccessCoordinator")
+        if not isinstance(self.web_access_profile_resolver, WebAccessProfileResolver):
+            raise TypeError("web_access_profile_resolver must be a WebAccessProfileResolver")
+        if not callable(self.provenance_id_factory) or not callable(self.clock):
+            raise TypeError("acquisition assembly factories must be callable")
+        if self.cancel_event is not None and not isinstance(
+            self.cancel_event,
+            threading.Event,
+        ):
+            raise TypeError("cancel_event must be a threading.Event or None")
+        if self.browser_client is not None and not isinstance(
+            self.browser_client,
+            BrowserClient,
+        ):
+            raise TypeError("browser_client must be a BrowserClient or None")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionRegistry:
+    """Deterministic Source bindings and DOI-routing seam for later assembly."""
+
+    statuses: tuple[AcquisitionProviderStatus, ...]
+    registrations: tuple[AcquisitionSourceRegistration, ...]
+    source_bindings: tuple[PdfSourceBinding, ...] = field(repr=False)
+    doi_landing_resolver: DoiLandingResolver = field(repr=False)
+    requires_doi_landing_origin: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.statuses, tuple) or any(
+            not isinstance(item, AcquisitionProviderStatus) for item in self.statuses
+        ):
+            raise TypeError("statuses must contain AcquisitionProviderStatus values")
+        if not isinstance(self.registrations, tuple) or any(
+            not isinstance(item, AcquisitionSourceRegistration) for item in self.registrations
+        ):
+            raise TypeError("registrations must contain AcquisitionSourceRegistration values")
+        if not isinstance(self.source_bindings, tuple) or any(
+            not isinstance(item, PdfSourceBinding) for item in self.source_bindings
+        ):
+            raise TypeError("source_bindings must contain PdfSourceBinding values")
+        if tuple(item.binding for item in self.registrations) != self.source_bindings:
+            raise ValueError("registrations and source_bindings disagree")
+        if not isinstance(self.doi_landing_resolver, DoiLandingResolver):
+            raise TypeError("doi_landing_resolver must be a DoiLandingResolver")
+        if type(self.requires_doi_landing_origin) is not bool:
+            raise TypeError("requires_doi_landing_origin must be a bool")
+        validate_acquisition_provider_matrix(self.statuses)
+
+    def __repr__(self) -> str:
+        sources = tuple(binding.source_name for binding in self.source_bindings)
+        return (
+            "AcquisitionRegistry("
+            f"sources={sources!r}, "
+            f"requires_doi_landing_origin={self.requires_doi_landing_origin!r})"
+        )
+
+
+def _mapping(
+    capability: AcquisitionCapability,
+    source_name: str,
+    acquisition_path: AcquisitionPath,
+    implementation: type[object] | None,
+    *,
+    failure_code: str | None = None,
+) -> AcquisitionProviderMapping:
+    return AcquisitionProviderMapping(
+        capability=capability,
+        source_name=source_name,
+        acquisition_path=acquisition_path,
+        production_implementation=implementation,
+        production_available=failure_code is None,
+        failure_code=failure_code,
+    )
+
+
+def _generic_mapping() -> AcquisitionProviderMapping:
+    return _mapping(
+        AcquisitionCapability.GENERIC_ASSET_HINT,
+        "direct",
+        AcquisitionPath.PUBLIC,
+        DirectPdfSource,
+    )
+
+
+def _authorized_unsupported(provider_name: str) -> AcquisitionProviderMapping:
+    return _mapping(
+        AcquisitionCapability.AUTHORIZED_PROVIDER_API,
+        provider_name,
+        AcquisitionPath.AUTHORIZED_PROVIDER_API,
+        None,
+        failure_code="authorized-api-unsupported",
+    )
+
+
+def _browser_unavailable() -> AcquisitionProviderMapping:
+    return _mapping(
+        AcquisitionCapability.CONTROLLED_BROWSER,
+        "controlled-browser",
+        AcquisitionPath.CONTROLLED_BROWSER,
+        ControlledBrowserPdfSource,
+        failure_code="browser-production-unavailable",
+    )
+
+
+_FIXED_MAPPINGS: Final[dict[str, tuple[AcquisitionProviderMapping, ...]]] = {
+    "arxiv": (
+        _generic_mapping(),
+        _mapping(
+            AcquisitionCapability.PUBLIC_PROTOCOL,
+            "arxiv",
+            AcquisitionPath.PUBLIC,
+            ArxivPdfSource,
+        ),
+    ),
+    "crossref": (_generic_mapping(),),
+    "semantic-scholar": (_generic_mapping(),),
+    "openalex": (_generic_mapping(),),
+    "europe-pmc": (
+        _generic_mapping(),
+        _mapping(
+            AcquisitionCapability.PUBLIC_PROTOCOL,
+            "europe-pmc",
+            AcquisitionPath.PUBLIC,
+            EuropePmcPdfSource,
+        ),
+    ),
+    "unpaywall": (
+        _mapping(
+            AcquisitionCapability.PUBLIC_PROTOCOL,
+            "unpaywall",
+            AcquisitionPath.PUBLIC,
+            UnpaywallPdfSource,
+        ),
+    ),
+    "elsevier": (
+        _generic_mapping(),
+        _authorized_unsupported("elsevier"),
+        _browser_unavailable(),
+    ),
+    "springer": (
+        _generic_mapping(),
+        _authorized_unsupported("springer"),
+        _browser_unavailable(),
+    ),
+    "wiley": (
+        _authorized_unsupported("wiley"),
+        _browser_unavailable(),
+    ),
+    "datacite": (_generic_mapping(),),
+    "core": (
+        _generic_mapping(),
+        _authorized_unsupported("core"),
+    ),
+    "sci-hub": (
+        _mapping(
+            AcquisitionCapability.OPERATOR_LOCATOR,
+            "sci-hub",
+            AcquisitionPath.PUBLIC,
+            ConfiguredSciHubPdfSource,
+        ),
+    ),
+}
+
+
+def _readiness_failure(
+    provider_name: str,
+    configuration: Configuration,
+    configured_resolver: ConfiguredLocatorResolver | None,
+) -> str | None:
+    mappings = _FIXED_MAPPINGS[provider_name]
+    if not any(mapping.production_available for mapping in mappings):
+        return "missing-production-route"
+    if provider_name == ProviderName.UNPAYWALL.value:
+        if configuration.sources.acquisition.unpaywall is None:
+            return "missing-ordinary-parameter"
+    if provider_name == ProviderName.SCI_HUB.value:
+        try:
+            readiness = configured_sci_hub_readiness(configured_resolver)
+        except (TypeError, ValueError):
+            raise AcquisitionRegistryError(
+                "configured-resolver-invalid",
+                provider_name,
+            ) from None
+        if not readiness.is_ready:
+            return "missing-configured-resolver"
+    return None
+
+
+def acquisition_provider_statuses(
+    configuration: Configuration,
+    *,
+    configured_sci_hub_resolver: ConfiguredLocatorResolver | None = None,
+) -> tuple[AcquisitionProviderStatus, ...]:
+    """Compute the full local matrix without constructing a client or probing."""
+
+    if not isinstance(configuration, Configuration):
+        raise AcquisitionRegistryError("configuration-invalid")
+    enabled = frozenset(provider.value for provider in configuration.sources.acquisition.providers)
+    statuses = tuple(
+        AcquisitionProviderStatus(
+            provider_name=provider_name,
+            mappings=_FIXED_MAPPINGS[provider_name],
+            enabled=provider_name in enabled,
+            ready=(
+                failure_code := _readiness_failure(
+                    provider_name,
+                    configuration,
+                    configured_sci_hub_resolver,
+                )
+            )
+            is None,
+            failure_code=failure_code,
+        )
+        for provider_name in ACQUISITION_PROVIDER_ORDER
+    )
+    validate_acquisition_provider_matrix(statuses)
+    return statuses
+
+
+def production_web_access_profile_resolver() -> WebAccessProfileResolver:
+    """Build the closed production host-to-provider/web admission table."""
+
+    profiles: dict[str, tuple[AccessScope, AccessPolicy]] = {}
+    for provider_name, hostnames in PRODUCTION_WEB_HOSTS_BY_PROVIDER:
+        if provider_name not in ACQUISITION_PROVIDER_ORDER:
+            raise AcquisitionRegistryError("web-profile-provider-mismatch")
+        scope = AccessScope(provider_name, "web")
+        for hostname in hostnames:
+            if hostname in profiles:
+                raise AcquisitionRegistryError(
+                    "web-profile-host-duplicate",
+                    provider_name,
+                )
+            profiles[hostname] = (scope, _PRODUCTION_WEB_POLICY)
+    try:
+        return WebAccessProfileResolver(profiles)
+    except (TypeError, ValueError):
+        raise AcquisitionRegistryError("web-profile-invalid") from None
+
+
+def _validate_external_catalogs() -> None:
+    if dict(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG):
+        raise AcquisitionRegistryError("authorized-catalog-mismatch")
+    if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
+        raise AcquisitionRegistryError("authorized-unsupported-mismatch")
+    if PRODUCTION_BROWSER_RULE_CATALOG.rules:
+        raise AcquisitionRegistryError("browser-catalog-mismatch")
+    if CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready:
+        raise AcquisitionRegistryError("browser-readiness-mismatch")
+
+
+def _validate_matrix_names(statuses: tuple[AcquisitionProviderStatus, ...]) -> None:
+    if not isinstance(statuses, tuple) or any(
+        not isinstance(status, AcquisitionProviderStatus) for status in statuses
+    ):
+        raise AcquisitionRegistryError("matrix-invalid")
+    names = tuple(status.provider_name for status in statuses)
+    if names != ACQUISITION_PROVIDER_ORDER:
+        if len(names) != len(set(names)):
+            raise AcquisitionRegistryError("duplicate-provider")
+        if set(names) != set(ACQUISITION_PROVIDER_ORDER):
+            raise AcquisitionRegistryError("missing-provider")
+        raise AcquisitionRegistryError("provider-order-mismatch")
+
+
+def _validate_provider_status(status: AcquisitionProviderStatus) -> None:
+    expected = _FIXED_MAPPINGS[status.provider_name]
+    if status.mappings != expected:
+        raise AcquisitionRegistryError("mapping-mismatch", status.provider_name)
+    for mapping in status.mappings:
+        if not mapping.uses_shared_network:
+            raise AcquisitionRegistryError("network-bypass", status.provider_name)
+        if mapping.uses_private_limiter:
+            raise AcquisitionRegistryError(
+                "private-limiter-forbidden",
+                status.provider_name,
+            )
+    if status.ready != (status.failure_code is None):
+        raise AcquisitionRegistryError("readiness-state-invalid", status.provider_name)
+
+
+def validate_acquisition_provider_matrix(
+    statuses: tuple[AcquisitionProviderStatus, ...],
+) -> None:
+    """Reject missing, reordered, duplicated, inferred, or Network-bypassing mappings."""
+
+    _validate_external_catalogs()
+    _validate_matrix_names(statuses)
+    for status in statuses:
+        _validate_provider_status(status)
+
+
+def _eligible_primary_hint(hint: AssetHint) -> bool:
+    return hint.asset_role is None or hint.asset_role is AssetRole.PRIMARY_PDF
+
+
+def _canonical_hint_url(hint: AssetHint) -> str | None:
+    try:
+        return normalize_url(hint.url).url
+    except (PolicyError, TypeError, ValueError):
+        return None
+
+
+def _direct_hint_urls(hints: Iterable[AssetHint]) -> frozenset[str]:
+    return frozenset(
+        canonical
+        for hint in hints
+        if hint.kind is AssetHintKind.DIRECT_FILE and _eligible_primary_hint(hint)
+        if (canonical := _canonical_hint_url(hint)) is not None
+    )
+
+
+def _excluded_direct_providers(value: object) -> frozenset[str]:
+    if not isinstance(value, tuple):
+        raise TypeError("excluded_provider_names must be a tuple")
+    if len(set(value)) != len(value):
+        raise ValueError("excluded_provider_names must be unique")
+    if any(provider not in ACQUISITION_PROVIDER_ORDER for provider in value):
+        raise ValueError("excluded_provider_names contains an unsupported Provider")
+    return frozenset(value)
+
+
+def _validated_direct_slice_provider(
+    direct_slice: _DirectSlice,
+    provider_name: str | None,
+    excluded_provider_names: frozenset[str],
+) -> str | None:
+    if direct_slice is _DirectSlice.PROVIDER_LANDING:
+        if provider_name not in ACQUISITION_PROVIDER_ORDER:
+            raise ValueError("provider landing slices require one supported Provider")
+        if excluded_provider_names:
+            raise ValueError("provider landing slices cannot exclude Providers")
+        return provider_name
+    if provider_name is not None:
+        raise ValueError("only provider landing slices may name a Provider")
+    if direct_slice is not _DirectSlice.FALLBACK_LANDING and excluded_provider_names:
+        raise ValueError("only fallback landing slices may exclude Providers")
+    return None
+
+
+class _OrderedDirectSource:
+    """An ordered evidence slice over one shared, non-Provider A5 Source."""
+
+    __slots__ = (
+        "_direct_source",
+        "_excluded_provider_names",
+        "_provider_name",
+        "_slice",
+    )
+
+    def __init__(
+        self,
+        *,
+        direct_source: DirectPdfSource,
+        direct_slice: _DirectSlice,
+        provider_name: str | None = None,
+        excluded_provider_names: tuple[str, ...] = (),
+    ) -> None:
+        if not isinstance(direct_source, DirectPdfSource):
+            raise TypeError("direct_source must be a DirectPdfSource")
+        if not isinstance(direct_slice, _DirectSlice):
+            raise TypeError("direct_slice must be a _DirectSlice")
+        excluded = _excluded_direct_providers(excluded_provider_names)
+        provider = _validated_direct_slice_provider(direct_slice, provider_name, excluded)
+        self._direct_source = direct_source
+        self._slice = direct_slice
+        self._provider_name = provider
+        self._excluded_provider_names = excluded
+
+    @property
+    def source_name(self) -> str:
+        return self._direct_source.source_name
+
+    @property
+    def acquisition_path(self) -> AcquisitionPath:
+        return self._direct_source.acquisition_path
+
+    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
+        if not isinstance(evidence, AcquisitionEvidence):
+            raise TypeError("evidence must be AcquisitionEvidence")
+        direct_urls = _direct_hint_urls(observed.hint for observed in evidence.asset_hints)
+        filtered_hints = tuple(
+            observed
+            for observed in evidence.asset_hints
+            if self._includes(
+                source_name=observed.source_name,
+                hint=observed.hint,
+                direct_urls=direct_urls,
+            )
+        )
+        filtered = replace(evidence, asset_hints=filtered_hints)
+        return self._direct_source.is_applicable(filtered)
+
+    def acquire(
+        self,
+        request: AcquisitionRequest,
+        evidence: AcquisitionEvidence,
+        candidate_keys: CandidateKeyTracker,
+    ) -> Iterable[TemporaryPdf]:
+        if not isinstance(request, AcquisitionRequest):
+            raise TypeError("request must be AcquisitionRequest")
+        if not isinstance(evidence, AcquisitionEvidence):
+            raise TypeError("evidence must be AcquisitionEvidence")
+        if not isinstance(candidate_keys, CandidateKeyTracker):
+            raise TypeError("candidate_keys must be CandidateKeyTracker")
+        if evidence != build_acquisition_evidence(request):
+            raise ValueError("evidence must describe request")
+        direct_urls = _direct_hint_urls(
+            hint for observation in request.observations for hint in observation.asset_hints
+        )
+        observations = self._filtered_observations(
+            request.observations,
+            direct_urls=direct_urls,
+        )
+        filtered_request = replace(request, observations=observations)
+        filtered_evidence = build_acquisition_evidence(filtered_request)
+        if not self._direct_source.is_applicable(filtered_evidence):
+            return ()
+        return self._direct_source.acquire(
+            filtered_request,
+            filtered_evidence,
+            candidate_keys,
+        )
+
+    def _filtered_observations(
+        self,
+        observations: tuple[MetadataObservation, ...],
+        *,
+        direct_urls: frozenset[str],
+    ) -> tuple[MetadataObservation, ...]:
+        return tuple(
+            observation.model_copy(
+                update={
+                    "asset_hints": tuple(
+                        hint
+                        for hint in observation.asset_hints
+                        if self._includes(
+                            source_name=observation.provenance.source_name,
+                            hint=hint,
+                            direct_urls=direct_urls,
+                        )
+                    )
+                }
+            )
+            for observation in observations
+        )
+
+    def _includes(
+        self,
+        *,
+        source_name: str,
+        hint: AssetHint,
+        direct_urls: frozenset[str],
+    ) -> bool:
+        if not _eligible_primary_hint(hint):
+            return False
+        canonical = _canonical_hint_url(hint)
+        duplicates_direct = canonical is not None and canonical in direct_urls
+        if self._slice is _DirectSlice.DIRECT_PREFIX:
+            return hint.kind is AssetHintKind.DIRECT_FILE or (
+                hint.kind is AssetHintKind.LANDING_PAGE and duplicates_direct
+            )
+        if hint.kind is not AssetHintKind.LANDING_PAGE or duplicates_direct:
+            return False
+        normalized_source = source_name.casefold()
+        if self._slice is _DirectSlice.PROVIDER_LANDING:
+            return normalized_source == self._provider_name
+        return normalized_source not in self._excluded_provider_names
+
+
+def _has_generic_mapping(provider_name: str) -> bool:
+    return any(
+        mapping.capability is AcquisitionCapability.GENERIC_ASSET_HINT
+        and mapping.production_available
+        for mapping in _FIXED_MAPPINGS[provider_name]
+    )
+
+
+_READY: Final[SourceReadiness] = SourceReadiness(is_ready=True)
+
+
+def _binding(source: PdfSource, *, readiness: SourceReadiness = _READY) -> PdfSourceBinding:
+    return PdfSourceBinding(
+        source_name=source.source_name,
+        acquisition_path=source.acquisition_path,
+        enabled=True,
+        production=True,
+        readiness=readiness,
+        source=source,
+    )
+
+
+def _public_protocol_source(
+    provider_name: str,
+    configuration: Configuration,
+    dependencies: AcquisitionAssemblyDependencies,
+    locator_fetcher: PublicLocatorFetcher,
+) -> PdfSource:
+    common = {
+        "http_client": dependencies.http_client,
+        "locator_fetcher": locator_fetcher,
+        "cancel_event": dependencies.cancel_event,
+    }
+    if provider_name == ProviderName.ARXIV.value:
+        return ArxivPdfSource(
+            **common,
+            access_scope=ARXIV_ACCESS_SCOPE,
+            access_policy=ARXIV_ACCESS_POLICY,
+        )
+    if provider_name == ProviderName.EUROPE_PMC.value:
+        return EuropePmcPdfSource(
+            **common,
+            access_scope=EUROPE_PMC_ACCESS_SCOPE,
+            access_policy=EUROPE_PMC_ACCESS_POLICY,
+        )
+    if provider_name == ProviderName.UNPAYWALL.value:
+        ordinary = configuration.sources.acquisition.unpaywall
+        if ordinary is None:
+            raise AcquisitionRegistryError("missing-ordinary-parameter", provider_name)
+        return UnpaywallPdfSource(
+            **common,
+            access_scope=UNPAYWALL_ACCESS_SCOPE,
+            access_policy=UNPAYWALL_ACCESS_POLICY,
+            contact_email=ordinary.contact_email,
+        )
+    if provider_name == ProviderName.SCI_HUB.value:
+        return ConfiguredSciHubPdfSource(
+            resolver=dependencies.configured_sci_hub_resolver,
+            locator_fetcher=locator_fetcher,
+            cancel_event=dependencies.cancel_event,
+        )
+    raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
+
+
+def _validate_source(
+    source: PdfSource,
+    provider_name: str,
+    dependencies: AcquisitionAssemblyDependencies,
+    locator_fetcher: PublicLocatorFetcher,
+) -> None:
+    if source.source_name != provider_name or source.acquisition_path is not AcquisitionPath.PUBLIC:
+        raise AcquisitionRegistryError("source-contract-mismatch", provider_name)
+    if provider_name == ProviderName.SCI_HUB.value:
+        if getattr(source, "_locator_fetcher", None) is not locator_fetcher:
+            raise AcquisitionRegistryError("network-bypass", provider_name)
+        if getattr(source, "_cancel_event", None) is not dependencies.cancel_event:
+            raise AcquisitionRegistryError("cancel-boundary-mismatch", provider_name)
+        return
+    if getattr(source, "_http_client", None) is not dependencies.http_client:
+        raise AcquisitionRegistryError("network-bypass", provider_name)
+    if getattr(source, "_locator_fetcher", None) is not locator_fetcher:
+        raise AcquisitionRegistryError("network-bypass", provider_name)
+    if getattr(source, "_cancel_event", None) is not dependencies.cancel_event:
+        raise AcquisitionRegistryError("cancel-boundary-mismatch", provider_name)
+    expected_access = {
+        ProviderName.ARXIV.value: (ARXIV_ACCESS_SCOPE, ARXIV_ACCESS_POLICY),
+        ProviderName.EUROPE_PMC.value: (
+            EUROPE_PMC_ACCESS_SCOPE,
+            EUROPE_PMC_ACCESS_POLICY,
+        ),
+        ProviderName.UNPAYWALL.value: (
+            UNPAYWALL_ACCESS_SCOPE,
+            UNPAYWALL_ACCESS_POLICY,
+        ),
+    }[provider_name]
+    if (
+        getattr(source, "_access_scope", None),
+        getattr(source, "_access_policy", None),
+    ) != expected_access:
+        raise AcquisitionRegistryError("access-contract-mismatch", provider_name)
+
+
+def _validate_dependencies(dependencies: AcquisitionAssemblyDependencies) -> None:
+    if (
+        getattr(dependencies.http_client, "_coordinator", None)
+        is not dependencies.access_coordinator
+    ):
+        raise AcquisitionRegistryError("network-bypass")
+    browser = dependencies.browser_client
+    if browser is not None and (
+        getattr(browser, "_coordinator", None) is not dependencies.access_coordinator
+    ):
+        raise AcquisitionRegistryError("network-bypass", "controlled-browser")
+
+
+def build_acquisition_registry(
+    configuration: Configuration,
+    dependencies: AcquisitionAssemblyDependencies,
+) -> AcquisitionRegistry:
+    """Assemble all enabled and ready production Sources without performing I/O."""
+
+    if not isinstance(dependencies, AcquisitionAssemblyDependencies):
+        raise AcquisitionRegistryError("dependencies-invalid")
+    _validate_dependencies(dependencies)
+    statuses = acquisition_provider_statuses(
+        configuration,
+        configured_sci_hub_resolver=dependencies.configured_sci_hub_resolver,
+    )
+    status_by_name = {status.provider_name: status for status in statuses}
+    selected = tuple(provider.value for provider in configuration.sources.acquisition.providers)
+
+    # Fail all enabled capability readiness before constructing even the first
+    # Source.  A broken later Provider must not be hidden by an earlier hit.
+    for provider_name in selected:
+        status = status_by_name[provider_name]
+        if not status.ready:
+            raise AcquisitionRegistryError(
+                status.failure_code or "readiness-failed",
+                provider_name,
+            )
+
+    locator_fetcher = PublicLocatorFetcher(
+        http_client=dependencies.http_client,
+        web_access_profile_resolver=dependencies.web_access_profile_resolver,
+        cancel_event=dependencies.cancel_event,
+        provenance_id_factory=dependencies.provenance_id_factory,
+        clock=dependencies.clock,
+    )
+    registrations: list[AcquisitionSourceRegistration] = []
+
+    configured_landing_providers = tuple(
+        provider_name for provider_name in selected if _has_generic_mapping(provider_name)
+    )
+    direct = DirectPdfSource(fetcher=locator_fetcher)
+    registrations.append(
+        AcquisitionSourceRegistration(
+            provider_names=(),
+            binding=_binding(
+                _OrderedDirectSource(
+                    direct_source=direct,
+                    direct_slice=_DirectSlice.DIRECT_PREFIX,
+                )
+            ),
+        )
+    )
+
+    independent_public = frozenset(
+        {
+            ProviderName.ARXIV.value,
+            ProviderName.EUROPE_PMC.value,
+            ProviderName.UNPAYWALL.value,
+            ProviderName.SCI_HUB.value,
+        }
+    )
+    for provider_name in selected:
+        # After the global direct-file prefix, each configured Provider owns one
+        # stable public-order slot.  Its independent protocol runs before its
+        # ordinary landing hints; Providers without either simply add nothing.
+        if provider_name in independent_public:
+            source = _public_protocol_source(
+                provider_name,
+                configuration,
+                dependencies,
+                locator_fetcher,
+            )
+            _validate_source(source, provider_name, dependencies, locator_fetcher)
+            readiness = (
+                source.readiness if isinstance(source, ConfiguredSciHubPdfSource) else _READY
+            )
+            registrations.append(
+                AcquisitionSourceRegistration(
+                    provider_names=(provider_name,),
+                    binding=_binding(source, readiness=readiness),
+                )
+            )
+
+        if provider_name not in configured_landing_providers:
+            continue
+        registrations.append(
+            AcquisitionSourceRegistration(
+                provider_names=(),
+                binding=_binding(
+                    _OrderedDirectSource(
+                        direct_source=direct,
+                        direct_slice=_DirectSlice.PROVIDER_LANDING,
+                        provider_name=provider_name,
+                    )
+                ),
+            )
+        )
+
+    # Metadata-only Providers and already-saved hints from a currently disabled
+    # Provider remain valid evidence.  Their non-duplicate landing hints form a
+    # deterministic fallback after every explicitly configured public slot.
+    registrations.append(
+        AcquisitionSourceRegistration(
+            provider_names=(),
+            binding=_binding(
+                _OrderedDirectSource(
+                    direct_source=direct,
+                    direct_slice=_DirectSlice.FALLBACK_LANDING,
+                    excluded_provider_names=configured_landing_providers,
+                )
+            ),
+        )
+    )
+
+    source_bindings = tuple(registration.binding for registration in registrations)
+    if any(binding.acquisition_path is not AcquisitionPath.PUBLIC for binding in source_bindings):
+        raise AcquisitionRegistryError("production-stage-mismatch")
+    doi_landing_resolver = DoiLandingResolver(
+        http_client=dependencies.http_client,
+        cancel_event=dependencies.cancel_event,
+    )
+    return AcquisitionRegistry(
+        statuses=statuses,
+        registrations=tuple(registrations),
+        source_bindings=source_bindings,
+        doi_landing_resolver=doi_landing_resolver,
+        # A7 has no production contract and A8 has no production rule/per-hop
+        # admission hook.  Block 7 therefore has no reason to resolve DOI
+        # landing origins for the current object graph.
+        requires_doi_landing_origin=False,
+    )
+
+
+__all__ = (
+    "ACQUISITION_PROVIDER_ORDER",
+    "PRODUCTION_WEB_HOSTS_BY_PROVIDER",
+    "AcquisitionAssemblyDependencies",
+    "AcquisitionCapability",
+    "AcquisitionProviderMapping",
+    "AcquisitionProviderStatus",
+    "AcquisitionRegistry",
+    "AcquisitionRegistryError",
+    "AcquisitionSourceRegistration",
+    "acquisition_provider_statuses",
+    "build_acquisition_registry",
+    "production_web_access_profile_resolver",
+    "validate_acquisition_provider_matrix",
+)

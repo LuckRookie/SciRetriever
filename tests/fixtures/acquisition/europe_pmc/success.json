@@ -1,0 +1,38 @@
+{
+  "version": "6.9",
+  "hitCount": 1,
+  "resultList": {
+    "result": [
+      {
+        "pmcid": "PMC7759461",
+        "isOpenAccess": "Y",
+        "hasPDF": "Y",
+        "inPMC": "Y",
+        "fullTextUrlList": {
+          "fullTextUrl": [
+            {
+              "documentStyle": "html",
+              "url": "https://europepmc.org/articles/PMC7759461"
+            },
+            {
+              "documentStyle": "pdf",
+              "url": "https://europepmc.org/articles/PMC7759461?pdf=render"
+            },
+            {
+              "documentStyle": "xml",
+              "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC7759461/fullTextXML"
+            },
+            {
+              "documentStyle": "pdf",
+              "url": "https://europepmc.org/articles/PMC7759461?pdf=render"
+            },
+            {
+              "documentStyle": "pdf",
+              "url": "https://cdn.example.test/PMC7759461.pdf"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

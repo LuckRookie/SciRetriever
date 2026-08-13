@@ -1,0 +1,18 @@
+{
+  "hitCount": 1,
+  "resultList": {
+    "result": [
+      {
+        "pmcid": "PMC7759461",
+        "fullTextUrlList": {
+          "fullTextUrl": [
+            {
+              "documentStyle": "pdf",
+              "url": "https://example.test/article.pdf?email=private@example.test"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

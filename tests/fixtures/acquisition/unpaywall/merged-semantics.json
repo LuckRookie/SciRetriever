@@ -1,0 +1,14 @@
+{
+  "doi": "10.5555/example",
+  "is_oa": true,
+  "best_oa_location": {
+    "url_for_pdf": "https://repository.example.test/item/merged",
+    "url_for_landing_page": "https://repository.example.test/item/merged"
+  },
+  "oa_locations": [
+    {
+      "url_for_landing_page": "https://repository.example.test/item/merged"
+    }
+  ],
+  "first_oa_location": null
+}

@@ -1,0 +1,8 @@
+{
+  "outcome": "primary-pdf",
+  "entitlement": "granted",
+  "locator_namespace": "fixture-pdf",
+  "locator_value": "primary-object-v1",
+  "media_type": "application/pdf",
+  "source_record_id": "PII:S123456789"
+}

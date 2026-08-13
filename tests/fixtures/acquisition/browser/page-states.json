@@ -1,0 +1,13 @@
+{
+  "ordinary": {},
+  "login": {
+    "#login-required": "Sign in to continue"
+  },
+  "mfa": {
+    "#mfa-required": "Enter a verification code"
+  },
+  "login-and-mfa": {
+    "#login-required": "Sign in to continue",
+    "#mfa-required": "Enter a verification code"
+  }
+}
