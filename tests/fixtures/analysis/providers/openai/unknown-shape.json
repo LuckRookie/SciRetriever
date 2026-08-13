@@ -1,0 +1,9 @@
+{
+  "id": "resp_fixture_unknown",
+  "object": "response",
+  "status": "completed",
+  "model": "fixture-openai-model",
+  "output": {
+    "unexpected": "shape"
+  }
+}

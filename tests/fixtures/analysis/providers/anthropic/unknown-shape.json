@@ -1,0 +1,11 @@
+{
+  "id": "msg_fixture_unknown",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-anthropic-model",
+  "content": {
+    "unexpected": "shape"
+  },
+  "stop_reason": "end_turn",
+  "stop_sequence": null
+}

@@ -1,0 +1,21 @@
+{
+  "id": "resp_fixture_success",
+  "object": "response",
+  "status": "completed",
+  "model": "fixture-openai-model",
+  "output": [
+    {
+      "id": "msg_fixture_success",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "{\"outcome\":\"usable\",\"title\":\"Fixture\"}",
+          "annotations": []
+        }
+      ]
+    }
+  ]
+}

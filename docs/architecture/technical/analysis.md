@@ -12,18 +12,30 @@
 
 ```text
 analysis/
+  __init__.py
   api.py
+  content.py
   service.py
+  metadata.py
+  metadata_rules.py
   markdown.py
-  rules.py
+  markdown_rules.py
+  references.py
   ports.py
   providers/
+    __init__.py
+    openai.py
+    anthropic.py
 ```
 
 - `api.py` 提供文献内容分析和参考文献 lookup 两个公开业务操作；
+- `content.py` 声明完整内容分析的输入、资源预算和稳定失败；
 - `service.py` 按顺序组织元数据确定、内容总结、草稿解析和中性结果返回；
+- `metadata.py` 组织第一阶段元数据请求、严格响应解析和阶段结果；
+- `metadata_rules.py` 检查结构化最终元数据、用户输入保护和 Parser 输入对齐；
 - `markdown.py` 解析第二阶段内容草稿并从已验收 metadata/content 确定性渲染规范 Markdown；
-- `rules.py` 检查内容决定、结构化最终元数据、固定标题、章节角色、reference 和输入对齐；
+- `markdown_rules.py` 检查固定标题、章节角色、reference 和 Markdown 结构；
+- `references.py` 形成临时、按原文对齐且不持久化的参考文献 lookup；
 - `ports.py` 声明 Analysis 消费的中性 LLM 能力；
 - `providers/` 实现具体 provider/model 协议，并通过 Network 访问外部服务。
 

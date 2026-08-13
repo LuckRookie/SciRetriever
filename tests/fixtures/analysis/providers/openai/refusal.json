@@ -1,0 +1,20 @@
+{
+  "id": "resp_fixture_refusal",
+  "object": "response",
+  "status": "completed",
+  "model": "fixture-openai-model",
+  "output": [
+    {
+      "id": "msg_fixture_refusal",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "refusal",
+          "refusal": "fixture refusal text that must never cross the adapter"
+        }
+      ]
+    }
+  ]
+}

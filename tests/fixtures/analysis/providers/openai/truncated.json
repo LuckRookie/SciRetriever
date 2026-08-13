@@ -1,0 +1,10 @@
+{
+  "id": "resp_fixture_truncated",
+  "object": "response",
+  "status": "incomplete",
+  "incomplete_details": {
+    "reason": "max_output_tokens"
+  },
+  "model": "fixture-openai-model",
+  "output": []
+}
