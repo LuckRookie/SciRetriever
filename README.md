@@ -6,57 +6,128 @@
 
 ## 产品定位
 
-SciRetriever 面向需要持续建立专题文献集合的研究者和文献整理人员。产品目标是汇总多来源文献元数据，获取并保存文献资产，生成可直接阅读、导出和结构化使用的总结型轻结构化文档，最终形成可查询、可补充、可交换书目信息的文献数据库。
+SciRetriever 面向需要持续建立专题文献数据库的研究者和文献整理人员。它把主题发现、引用发现、书目信息导入、手动 PDF、自动补全、本地查询和导出汇入同一个逻辑数据库：关系与运行事实保存在 SQLite Catalog，文献资产和派生产物保存在 ArtifactStore。
 
-产品边界止于通用文献元数据、资产、总结型轻结构化文档及其同源结构化章节、引用关系和 provenance。反应、分子、路线、产率、材料性质等领域数据由下游系统处理。完整目标见[产品需求](docs/architecture/requirements.md)，已接受约束见[架构决策索引](docs/architecture/decisions/README.md)。
+产品边界止于通用文献元数据、原始资产、总结型轻结构化内容及其同源章节、引用关系和 provenance。反应、分子、路线、产率、材料性质等领域数据由下游系统处理。完整目标见[产品需求](docs/architecture/requirements.md)，长期约束见[架构决策索引](docs/architecture/decisions/README.md)。
 
-## 当前使用方式
+## 安装与最小本地启动
 
-当前仓库发布的是 Python 包，没有受支持的终端用户 CLI。`pyproject.toml` 没有声明 `project.scripts`，包内也没有 `__main__.py`。历史材料中的命令示例不是当前可执行入口。
-
-从源码检出安装锁定依赖并验证包导入：
+SciRetriever 支持 Python 3.10 及以上版本，开发基线为 Python 3.12。当前仓库没有声明已经发布到 PyPI；从源码检出后使用锁定依赖运行：
 
 ```bash
 uv sync --locked
-uv run --frozen python -c "import sciretriever; print(sciretriever.__version__)"
 ```
 
-当前公开的程序内 Service 定义位于 `sciretriever.services` 各业务模块：
+最小本地配置只需要指定 Catalog 和 ArtifactStore 的绝对路径：
 
-| 模块 | 公开 Service | 责任 |
-|---|---|---|
-| `sciretriever.services.collection` | `CollectionService` | 建立收集定义并执行主题或引用收集用例 |
-| `sciretriever.services.literature` | `LiteratureService`、`CompletionAcceptanceService` | 文献身份接纳与完成事实接纳 |
-| `sciretriever.services.assets` | `ContentAssetService` | 获取、验收并发布文献资产 |
-| `sciretriever.services.documents` | `LightDocumentService` | 调用 parser 并验收轻结构化文档 |
-| `sciretriever.services.analysis` | `AnalysisService` | 调用 LLM 并提交完整分析结果 |
-| `sciretriever.services.execution` | `ExecutionService` | 选择实际目标并编排可继续的批量处理 |
-| `sciretriever.services.library` | `LibraryService`、`LibraryExchangeService`、`CurationService` | 查询、书目交换和有限整理 |
-
-这些类从各模块的 `__init__.py` 导出。构造 Service 时必须提供对应的依赖对象和 Service 自己拥有的 Ports，不能把测试 fake、Protocol 或 Infrastructure 私有构造器当成稳定用户 API。例如，下面的导入是当前公开路径：
-
-```python
-from sciretriever.services.collection import CollectionService, CollectionServiceDependencies
-from sciretriever.services.library import LibraryExchangeService, LibraryService
+```toml
+[paths]
+catalog_path = "/absolute/private/path/catalog.sqlite3"
+artifact_root = "/absolute/private/path/artifacts"
 ```
 
-运行配置、具体 adapter 选择和对象图组装属于 Composition。当前公开的 Composition 入口可以直接导入：
+保存为私有位置的 `config.toml`，再选择该文件并查看安装后的控制台入口：
 
-```python
-from sciretriever.composition import ObjectGraph, build_object_graph, load_configuration
+```bash
+export SCIRETRIEVER_CONFIG=/absolute/private/path/config.toml
+uv run --frozen sciretriever --help
 ```
 
-`build_object_graph` 当前固定组装 `LiteratureService` 和 `LibraryService`。只有调用方提供 secret resolver 时才组装 `AnalysisService`；只有调用方通过 `ProviderDependencies` 注入 metadata、citation、resolver clients 和有界 transport 时才建立 provider registry。其它公开 Service 尚未进入该对象图，registry 也没有连接到 Collection 或 Assets Service。
+一个完全本地的最小旅程如下；它不会访问外部 Provider：
 
-只有已经由 Composition 连接到 Service 的实现，才构成可运行能力。代码中存在某个 provider 名称、Port、factory 或测试 fake，不代表该外部来源已经作为生产 adapter 对用户开放。
+```bash
+uv run --frozen sciretriever import metadata bibtex library.bib --json
+uv run --frozen sciretriever literature search --json
+uv run --frozen sciretriever literature show LITERATURE_ID --json
+uv run --frozen sciretriever import pdf LITERATURE_ID article.pdf --json
+uv run --frozen sciretriever export pdf LITERATURE_ID article-copy.pdf --json
+```
 
-## 配置
+## 命令行入口
 
-当前配置合同使用 `schema_version = 2`，由以下十个严格责任组组成：
+安装包公开且固定的命令树是：
+
+```text
+sciretriever discover topic
+sciretriever discover citations
+
+sciretriever complete pdf
+sciretriever complete content
+
+sciretriever literature search
+sciretriever literature show
+sciretriever literature references
+sciretriever literature cited-by
+
+sciretriever import metadata
+sciretriever import pdf
+
+sciretriever export metadata
+sciretriever export pdf
+sciretriever export content
+
+sciretriever config set
+sciretriever config remove
+sciretriever config status
+sciretriever config test
+```
+
+每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。稳定进程退出码如下：
+
+| 退出码 | 含义 |
+| ---: | --- |
+| `0` | 成功，或正常到达操作边界 |
+| `2` | 命令输入或 usage 错误 |
+| `3` | 业务失败，或显式 probe 未通过 |
+| `4` | 配置或生产 Bootstrap readiness 失败 |
+| `70` | 未分类的内部失败 |
+| `130` | 受控中断 |
+
+## 发现与补全是两类操作
+
+`discover topic` 和 `discover citations` 负责有边界的外部发现。它们接纳文献身份、保留来源 observation、去重，并记录 DiscoveryRun、来源结果和直接原因；不会顺带下载 PDF、解析内容、运行分析，也不会对每篇文献逐一调用全部 Provider 做二次补查。
+
+`complete` 从数据库的 current facts 出发补齐已经入库的文献：
+
+```text
+sciretriever complete pdf ...
+sciretriever complete content ...
+```
+
+`pdf` 的目标是达到 `ASSET_READY`，`content` 的目标是达到 `CONTENT_READY`。每次运行必须通过以下一种 selector 明确选择范围：
+
+- `--all-pending`
+- `--discovery-run-id`
+- 一个或多个 `--import-meta-literature-id`
+- `--query`
+- 一个或多个 `--meta-literature-id`
+- 一个或多个 `--literature-id`
+
+实际目标集合只在本次进程内冻结，不会作为新的持久实体写入数据库。重跑会重新读取 current facts，从第一个缺失步骤继续。普通范围按 MetaLiterature 去重，并默认只补一个可用 Literature 版本；只有明确的 `NoPrimaryPdf`，或候选耗尽后的明确 `NoUsableContent`，才会跨版本尝试。网络、存储、Parser、LLM 失败，取消，或无法判断的结果都不会触发跨版本。
+
+## 本地导入、查询与导出
+
+书目信息交换支持三个格式值：`bibtex`、`ris` 和 `csl-json`；其中 `bibtex` codec 同时覆盖 BibTeX 与 BibLaTeX。导入结果区分 `created`、`enriched`、`matched` 和 `rejected`，完全重复的记录不会复制 observation。即使文献还只有元数据，也可以从数据库导出书目信息。
+
+`literature search`、`show`、`references` 和 `cited-by` 都是纯本地、只读操作；它们不会访问 Provider、创建 DiscoveryRun 或写入数据库事实。`literature references --reference-id ...` 可进一步读取一条 ReferenceDetail。
+
+手动 PDF 使用：
+
+```bash
+uv run --frozen sciretriever import pdf LITERATURE_ID input.pdf --json
+```
+
+该命令要求选择已经存在的具体 Literature。SciRetriever 复制而不移动用户文件，并在内部副本上检查实际 PDF 字节、标准 reader 和页面树；不会保存用户文件的绝对路径，也不会修改或删除原文件。若已有主 PDF，导入会拒绝而不是静默替换。成功只达到 `ASSET_READY`，不会隐式运行 Parsing 或 Analysis；同时会清除该 Literature 先前的自动获取耗尽事实。
+
+`export metadata`、`export pdf` 和 `export content` 默认拒绝覆盖已有目标；只有显式提供 `--overwrite` 才会替换。三种书目格式都采用原子发布。PDF 和 content 的目标设为 `-` 时可把原始 artifact 写入 stdout，因此不能同时使用 `--json`。
+
+## 配置、凭据与外部 readiness
+
+普通配置没有版本标记，由九个严格、不可变的责任组组成：
 
 ```text
 paths
-collection
+discovery
 sources
 assets
 parsing
@@ -64,29 +135,62 @@ analysis
 execution
 library
 access
-credentials
 ```
 
-未知组、未知字段和未知协议枚举会被拒绝。配置只保存 `env:VARIABLE_NAME` 形式的 secret reference，不保存或展示秘密值。程序内选择配置时，显式路径优先，其次是 `SCIRETRIEVER_CONFIG`，最后是当前目录的 `config.toml`。没有配置时会失败，不存在隐式默认文件，也没有命令行覆盖合同。
+未知组和未知字段会 fail closed。程序按以下顺序选择普通配置：
 
-字段、默认值、路径限制和 secret reference 边界见[配置手册](docs/guides/configuration.md)。仓库根目录 `config.toml` 可能是个人运行配置，不是公开模板，也不应提交。
+1. Python API 提供的显式路径；
+2. `SCIRETRIEVER_CONFIG`；
+3. 当前目录中已经存在的 `config.toml`；
+4. 均不存在时失败。
 
-## 外部服务边界
+CLI 不提供 `--config` 覆盖参数，也不创建隐式默认配置。完整字段和路径限制见[配置手册](docs/guides/configuration.md)。仓库根目录的个人 `config.toml` 不是公开模板，不应提交。
 
-MinerU 是 operator-managed 的外部 parser service。SciRetriever 只通过 parser adapter 调用已经由 operator 部署并授权的服务，不负责安装、启动、停止、重载或升级 MinerU。远程解析会离开本机数据边界，必须由 operator 明确确认上传授权、服务端保留策略和凭据来源。
+Provider 凭据与普通配置分离，固定保存在 `~/.sciretriever/credentials.toml`。其目录必须是当前用户拥有、权限为 `0700` 的普通非符号链接目录；文件必须是当前用户拥有、权限为 `0600` 的普通非符号链接文件。
 
-Metadata、citation、asset 和 LLM 网络访问同样依赖 Composition 实际选择并连接的 adapter。配置中的 provider 字符串只是选择键，不证明真实 adapter 已接入。网络成功也不等于业务接纳，文献身份、资产有效性、文档完整性和分析完整性仍由 Core 规则决定。
+- `config set` 通过不回显的交互输入写入单个 Provider 凭据，不接受命令位置参数或 option 中的 secret。
+- `config remove` 只删除指定 Provider section。
+- `config status` 只做本地状态检查，不联网，也不显示 secret、mask、长度、hash 或 fingerprint。
+- `config test` 是用户显式触发的最小只读 Provider probe；它经过共享 Network/Access Coordinator，不创建 Catalog、DiscoveryRun、Literature、Report 或测试历史。
 
-Provider 或 MinerU 的外部说明不能扩大发布能力。是否可用仍以当前 Composition 对象图、具体 adapter 和直接测试为准。
+Parser 和 Analysis 的运行 secret 使用固定环境变量边界：`SCIRETRIEVER_MINERU_BEARER_TOKEN`、`SCIRETRIEVER_OPENAI_API_KEY` 和 `SCIRETRIEVER_ANTHROPIC_API_KEY`。
+
+外部命令只有在 adapter、普通参数、凭据、AccessPolicy 和所需外部服务全部就绪时才会发起调用。缺少任一条件时，生产 Bootstrap 会在创建 Storage 之前稳定 fail closed，例如返回 `metadata-not-ready`、`acquisition-not-ready`、`parser-not-ready` 或 `analysis-not-ready`；这类结果表示当前运行环境尚未就绪，不表示控制流会静默降级。
+
+## 当前验收边界
+
+当前证据严格分为三层，不能互相替代：
+
+### A. 安装 wheel、真实 console 与生产 Bootstrap
+
+已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、`config set/status/remove`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
+
+同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
+
+这层证明安装产物、生产对象图和已实现 adapter 的离线接线，不等于真实 Provider、Parser 或 LLM 服务已经在线成功。
+
+### B. 安装包与显式 Port 注入的深度合同验收
+
+补充场景使用安装 wheel 中真实的 Entry、Metadata、Literature、Acquisition、Parsing、Analysis 和 Storage 模块，并在公开 Port 边界注入受控 fake，以精确驱动难以稳定在线重现的中断、失败和版本组合。
+
+该层已经覆盖 Topic/Citation Discovery 的多来源、深度、边界、部分失败、去重和关系 publication；PDF/Content Completion 的六类 selector、目标冻结、稳定排序、受控跨版本和 exhaustion；Parser/LLM 局部失败、重跑只补缺失步骤、受控中断、五分区 Report，以及已提交事实保留。它证明这些精细控制流合同，不替代 A 层的真实 console 与 production Bootstrap 证据，也不代表外部服务已经在线验证。
+
+### C. 受控协议与安全组件 QA
+
+MinerU QA 使用安装 wheel 中的 production resolver、policy、transport、client、converter 和 adapter，连接当前测试进程内的受控 loopback HTTP service，验证 `health → submit → poll → archive`，并形成 parser-neutral Markdown、resource 和 provenance；私有 MinerU 中间文件不会泄漏。这不代表 operator 的真实 MinerU 部署已经在线验证。
+
+Browser 已完成受控组件 QA 和真实 Chromium/Playwright QA；真实 Chromium 场景覆盖 JavaScript、selector、click、fetch、Blob、download、TLS/DNS/binding 和清理。Playwright 只属于开发依赖，不进入 wheel runtime dependency。当前 production Browser rule catalog 仍为空，生产 readiness 明确返回 `acquisition-browser-production-unavailable`，因此尚未对出版社开放生产受控浏览器获取。
+
+验收从未使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog；本项目也不据此宣称这些环境已被验证。
 
 ## 数据与安全边界
 
-- 当前迁移前源码仍使用 `Work` 和 `WorkVersion`；目标身份已经确定为 `MetaLiterature` 和 `Literature`。来源 observation 在两者中都必须保留。
-- SQLite 保存关系、相对引用、hash 和 provenance，不保存大型文献 BLOB 或机器相关绝对资产路径。
-- 已接受资产和发布产物采用不可变发布，不能原地覆盖不同字节。
-- Secret 值不能进入 Model、SQLite、provenance、diagnostics、URL、文件名或用户输出。
-- MinerU、LLM、HTTP、浏览器和供应商类型不能进入 Core 或 Service API。
-- 文献数据、运行时 catalog、下载资产、用户语料和个人配置不能提交到代码仓库。
+- 主题发现、引用发现、书目导入、手动 PDF、补全、查询和导出共享同一文献数据库，不创建平行结果集合。
+- SQLite 保存关系、相对引用、hash 和 provenance，不保存大型文献 BLOB 或机器相关的绝对资产路径。
+- 已接纳资产和发布产物采用不可变发布；不同字节不能原地覆盖。
+- Secret 不能进入 Model、SQLite、provenance、diagnostics、URL、文件名或用户输出。
+- MinerU、LLM、HTTP、浏览器和供应商私有类型不能越过对应 adapter 边界进入中性 Model。
+- 文献数据、运行时 Catalog、下载资产、用户语料、个人配置和凭据不能提交到代码仓库。
 
 ## 开发与验证
 
@@ -96,15 +200,14 @@ uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
 ```
 
-Quick 用于重构开发循环中的 lint、format 和编译检查；Full 用于严格类型、全量测试和安装包集成验收。
-
-协作规则见 [`AGENTS.md`](AGENTS.md) 和 [`HARNESS.md`](HARNESS.md)，代码与文档同步关系见[开发手册](docs/development/README.md)。
+Quick 执行 Ruff lint、Ruff format check 和 compileall，适合开发循环；Full 还执行 Pyright strict、全部 `unittest`、wheel 构建和 wheel 内容核对，用于集成里程碑、PR、主分支和发布边界。精确合同见 [`HARNESS.md`](HARNESS.md)。
 
 ## 项目文档
 
 - [当前用户指南](docs/guides/README.md)
 - [配置手册](docs/guides/configuration.md)
+- [产品需求](docs/architecture/requirements.md)
+- [架构与设计](docs/architecture/README.md)
 - [开发手册](docs/development/README.md)
-- [整体架构](docs/architecture/README.md)
 - [活动提案](docs/proposals/README.md)
 - [历史归档](docs/archive/)

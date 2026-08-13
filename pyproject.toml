@@ -5,23 +5,18 @@ description = "Scientific-literature database for metadata, assets, light-struct
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "anthropic>=0.116.0",
-    "bibtexparser>=1.4.3",
-    "bs4>=0.0.2",
-    "fake-useragent>=2.2.0",
-    "ipykernel>=6.30.1",
-    "openai>=2.8.1",
-    "playwright>=1.55.0",
     "pydantic>=2.12.0",
     "pypdf2>=3.0.1",
-    "requests>=2.32.3",
-    "sqlalchemy>=2.0.41",
     "tomli>=1.1.0; python_version < '3.11'",
 ]
+
+[project.scripts]
+sciretriever = "sciretriever.entry.cli.main:main"
 
 [dependency-groups]
 dev = [
     "build>=1.5.0",
+    "playwright>=1.55.0",
     "pyright>=1.1.407",
     "ruff>=0.12.0",
     "setuptools>=42",

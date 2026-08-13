@@ -1,10 +1,10 @@
-# 用户教程
+# 用户指南
 
-本目录只索引当前实现能够支持的用户文档。SciRetriever 目前是程序内使用的 Python 包，没有受支持的终端用户 CLI。历史命令不能作为当前运行入口，也不能从旧命令推断现有 Service 能力。
+本目录只描述安装产物已经公开且经过验收的用户行为。当前公开入口是 `sciretriever` console script；主题/引用发现与数据库补全是两类独立操作，书目导入、手动 PDF、补全、查询和导出都作用于同一个 SQLite Catalog 与 ArtifactStore。
 
-- [项目 README](../../README.md)：说明安装、导入、公开 Service、配置责任和外部服务边界。
-- [SciRetriever 配置手册](configuration.md)：说明 `schema_version = 2` 的十个严格配置组、字段约束、路径规则和 secret reference 边界。
+- [项目 README](../../README.md)：安装方式、固定命令树、最小本地旅程、发现与补全边界，以及生产 Bootstrap、离线外部 Port 注入和受控协议/安全 QA 三层验收证据。
+- [SciRetriever 配置手册](configuration.md)：九组普通配置、配置文件选择、固定凭据文件、Provider readiness 和显式只读 probe。
 
-本目录不保留旧命令手册或独立配置模板。配置手册中的最小结构只用于解释合同，不能单独证明 provider、parser 或其它外部能力已经接入。
+用户指南只把安装后可观察、且已有对应验收证据的行为写成当前能力。外部 Port 的受控 fake 验收、loopback 协议 QA 或 Chromium 安全 QA 不等于生产环境已经对真实 Provider、Parser、LLM 或出版社开放；具体证据边界以项目 README 的“当前验收边界”为准。
 
-当前公开 Service 以 `src/sciretriever/services/*/__init__.py` 的导出为准。运行配置和具体实现选择由 `src/sciretriever/composition/configuration/` 与 `src/sciretriever/composition/wiring/` 负责。配置 schema、默认值、Composition 入口或 Service 导出变化时，必须同步核对本目录文档和项目 README。
+普通配置、Provider 凭据和运行 secret 是三个分离的边界。个人配置、凭据、运行时 Catalog、文献资产和用户语料都不属于仓库内容，也不能作为示例或测试数据提交。
