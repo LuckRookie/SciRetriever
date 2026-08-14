@@ -66,7 +66,12 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessPolicy, AccessScope
-from sciretriever.network.browser import BrowserBudget, BrowserClient
+from sciretriever.network.browser import (
+    BrowserBudget,
+    BrowserClient,
+    BrowserDestinationGuard,
+    BrowserDestinationKind,
+)
 
 _TIME = UtcTimestamp("2026-08-11T12:00:00Z")
 _FIXTURES = Path(__file__).parent / "fixtures" / "acquisition" / "browser"
@@ -179,6 +184,7 @@ class _FakeRunner:
         policy: AccessPolicy,
         *,
         flow: Callable[[BrowserFlowSession], object] | None = None,
+        destination_guard: BrowserDestinationGuard | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -192,6 +198,7 @@ class _FakeRunner:
                 "scope": scope,
                 "request": request,
                 "policy": policy,
+                "destination_guard": destination_guard,
                 "budget": budget,
                 "timeout_seconds": timeout_seconds,
                 "cancel_event": cancel_event,
@@ -809,6 +816,27 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(browser_request, BrowserRequest)
         self.assertEqual(browser_request.url, "https://doi.org/10.1234/alpha%281%29")
 
+        guard = call["destination_guard"]
+        self.assertIsInstance(guard, BrowserDestinationGuard)
+        assert isinstance(guard, BrowserDestinationGuard)
+        guard.check(browser_request.url, BrowserDestinationKind.INITIAL_NAVIGATION)
+        guard.check(browser_request.url, BrowserDestinationKind.NAVIGATION)
+        guard.check(
+            "https://publisher.test/article",
+            BrowserDestinationKind.NAVIGATION,
+        )
+        guard.check(
+            "https://downloads.publisher.test/article.pdf",
+            BrowserDestinationKind.DOWNLOAD,
+        )
+        with self.assertRaises(ValueError):
+            guard.check(browser_request.url, BrowserDestinationKind.REQUEST)
+        with self.assertRaises(ValueError):
+            guard.check(
+                "https://public-but-forbidden.test/article.pdf",
+                BrowserDestinationKind.DOWNLOAD,
+            )
+
     def test_no_download_is_normal_but_every_other_browser_failure_is_system_failure(
         self,
     ) -> None:
@@ -913,7 +941,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(policy.min_start_interval, 5.0)
         self.assertEqual(policy.cooldown_after_completion, 1.0)
 
-    def test_final_download_origin_is_fail_closed_but_only_after_runner_access(self) -> None:
+    def test_final_download_origin_remains_a_defence_in_depth_check(self) -> None:
         request = _request(observations=(_observation(56, (_landing_hint(),)),))
         allowed_runner = _FakeRunner(
             [
@@ -946,8 +974,8 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 )
             )
         self.assertEqual(caught.exception.failure.code, "acquisition-browser-policy-failed")
-        # The neutral result exists only after the fake runner accessed it;
-        # this assertion prevents tests from overstating postcheck semantics.
+        # The fake does not execute Network's per-hop guard.  The Source still
+        # refuses publication if a nonconforming runner returns an invalid locator.
         self.assertEqual(len(forbidden_runner.calls), 1)
         self.assertEqual(forbidden_runner.completed, 1)
 

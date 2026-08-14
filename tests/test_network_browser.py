@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Callable, Iterable, cast
+from urllib.parse import urlsplit
 
 from sciretriever.model.access import AccessFailure, BoundedByteStream
 from sciretriever.network.admission import (
@@ -14,7 +15,11 @@ from sciretriever.network.admission import (
     AccessScope,
     HostPermit,
 )
-from sciretriever.network.browser import BrowserBudget, BrowserClient
+from sciretriever.network.browser import (
+    BrowserBudget,
+    BrowserClient,
+    BrowserDestinationKind,
+)
 from sciretriever.network.policy import AddressClass, DestinationPolicy
 
 _PUBLIC_POLICY = DestinationPolicy(allowed_classes=frozenset({AddressClass.PUBLIC}))
@@ -45,6 +50,19 @@ class _Resolver:
     def resolve(self, hostname: str) -> Iterable[str]:
         self.calls.append(hostname)
         return self.answers[hostname]
+
+
+class _OriginGuard:
+    def __init__(self, *origins: str) -> None:
+        self.origins = frozenset(origins)
+        self.calls: list[tuple[str, BrowserDestinationKind]] = []
+
+    def check(self, url: str, kind: BrowserDestinationKind) -> None:
+        self.calls.append((url, kind))
+        parsed = urlsplit(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in self.origins:
+            raise ValueError("fixture origin rejected")
 
 
 class _RecordingCoordinator(AccessCoordinator):
@@ -96,6 +114,13 @@ class _FakeRoute:
 
     def abort(self) -> None:
         self.aborted = True
+
+
+class _FakeResponse:
+    def __init__(self, request: _FakeRequest) -> None:
+        self.request = request
+        self.url = request.url
+        self.status = 200
 
 
 class _FakeDownload:
@@ -233,6 +258,10 @@ class _FakeContext:
         if self.route_handler is None:
             raise AssertionError("route handler was not installed")
         self.route_handler(route)
+        if route.continued:
+            response = _FakeResponse(route.request)
+            for handler in self.handlers.get("response", ()):
+                handler(response)
         if route.continued and navigation:
             for handler in self.handlers.get("requestfinished", ()):
                 handler(route.request)
@@ -637,6 +666,158 @@ class NetworkBrowserTests(unittest.TestCase):
             rejected_client.run(self.scope, "https://landing.test/start", self.policy)
         )
         self.assertEqual(rejected.code, "policy")
+
+    def test_destination_guard_rejects_initial_origin_before_dns_or_runtime(self) -> None:
+        guard = _OriginGuard("https://landing.test")
+
+        result = _failure(
+            self.client.run(
+                self.scope,
+                "https://other.test/start",
+                self.policy,
+                destination_guard=guard,
+            )
+        )
+
+        self.assertEqual(result.code, "policy")
+        self.assertEqual(self.resolver.calls, [])
+        self.assertEqual(self.factory.events, [])
+        self.assertEqual(
+            guard.calls,
+            [
+                (
+                    "https://other.test/start",
+                    BrowserDestinationKind.INITIAL_NAVIGATION,
+                )
+            ],
+        )
+
+    def test_destination_guard_rejects_each_external_hop_before_its_dns_lookup(
+        self,
+    ) -> None:
+        cases: tuple[
+            tuple[
+                str,
+                _FakeFactory,
+                Callable[[object], None] | None,
+                str,
+                BrowserDestinationKind,
+            ],
+            ...,
+        ] = (
+            (
+                "redirect",
+                _FakeFactory(
+                    redirects={
+                        "https://landing.test/start": "https://other.test/redirect",
+                    }
+                ),
+                None,
+                "https://other.test/redirect",
+                BrowserDestinationKind.NAVIGATION,
+            ),
+            (
+                "subresource",
+                _FakeFactory(subresources=("https://other.test/tracker.js",)),
+                None,
+                "https://other.test/tracker.js",
+                BrowserDestinationKind.REQUEST,
+            ),
+            (
+                "popup",
+                _FakeFactory(),
+                lambda session: session.open_popup(  # type: ignore[attr-defined]
+                    "https://other.test/viewer"
+                ),
+                "https://other.test/viewer",
+                BrowserDestinationKind.POPUP,
+            ),
+            (
+                "download",
+                _FakeFactory(
+                    configured_download=_FakeDownload(
+                        "https://other.test/article.pdf",
+                        b"blocked",
+                    )
+                ),
+                None,
+                "https://other.test/article.pdf",
+                BrowserDestinationKind.REQUEST,
+            ),
+        )
+        for name, factory, flow, expected_url, expected_kind in cases:
+            with self.subTest(name=name):
+                resolver = _Resolver(self.resolver.answers)
+                guard = _OriginGuard("https://landing.test")
+                client = BrowserClient(
+                    factory=factory,
+                    resolver=resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+
+                result = _failure(
+                    client.run(
+                        self.scope,
+                        "https://landing.test/start",
+                        self.policy,
+                        flow=flow,
+                        destination_guard=guard,
+                    )
+                )
+
+                self.assertEqual(result.code, "policy")
+                self.assertNotIn("other.test", resolver.calls)
+                self.assertIn(
+                    (expected_url, expected_kind),
+                    guard.calls,
+                )
+
+    def test_destination_guard_covers_popup_request_and_download_capture(self) -> None:
+        factory = _FakeFactory(
+            configured_download=_FakeDownload(
+                "https://download.test/article.pdf?view=full",
+                b"fixture",
+            )
+        )
+        guard = _OriginGuard(
+            "https://landing.test",
+            "https://popup.test",
+            "https://download.test",
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _download(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=lambda session: session.open_popup(  # type: ignore[attr-defined]
+                    "https://popup.test/viewer"
+                ),
+                destination_guard=guard,
+            )
+        )
+
+        self.assertEqual(result.chunks, (b"fixture",))
+        kinds = {kind for _url, kind in guard.calls}
+        self.assertTrue(
+            {
+                BrowserDestinationKind.INITIAL_NAVIGATION,
+                BrowserDestinationKind.NAVIGATION,
+                BrowserDestinationKind.REQUEST,
+                BrowserDestinationKind.POPUP,
+                BrowserDestinationKind.RESPONSE,
+                BrowserDestinationKind.DOWNLOAD,
+            }
+            <= kinds
+        )
+        self.assertTrue(all("?" not in url for url, _kind in guard.calls))
 
     def test_download_oversize_and_popup_budget_fail_closed(self) -> None:
         def oversized(session: object) -> None:
