@@ -10,28 +10,35 @@ from io import BytesIO
 from typing import BinaryIO, cast
 
 import sciretriever.acquisition.sources.configured_sci_hub as configured_module
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
 from sciretriever.acquisition.ports import (
     AcquisitionExhaustionPublicationCommand,
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     CandidateKeyTracker,
-    PdfSource,
-    PdfSourceBinding,
     PrimaryPdfPreparation,
-    SourceReadiness,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import AcquisitionRouteRegistry, RouteAdapterBinding
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
     build_acquisition_evidence,
 )
-from sciretriever.acquisition.service import AcquisitionService
 from sciretriever.acquisition.sources.configured_sci_hub import (
     ConfiguredLocatorResolver,
     ConfiguredSciHubPdfSource,
-    configured_sci_hub_readiness,
+    configured_sci_hub_route_status,
 )
+from sciretriever.acquisition.tiered_service import TieredAcquisitionService
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
@@ -252,20 +259,17 @@ def _rendered_failure(error: AcquisitionFailure) -> str:
 
 
 class ConfiguredSciHubContractTests(unittest.TestCase):
-    def test_public_source_local_applicability_and_missing_resolver_readiness(self) -> None:
+    def test_public_route_and_missing_resolver_status_are_explicit(self) -> None:
         request = _request()
         no_identifier_request = _request(())
         fetcher = _Fetcher()
         source = _source(None, fetcher)
 
-        self.assertIsInstance(source, PdfSource)
         self.assertEqual(source.source_name, "sci-hub")
         self.assertIs(source.acquisition_path, AcquisitionPath.PUBLIC)
-        self.assertTrue(source.is_applicable(_evidence(request)))
-        self.assertFalse(source.is_applicable(_evidence(no_identifier_request)))
         self.assertEqual(
             list(
-                source.acquire(
+                source._deliveries(
                     no_identifier_request,
                     _evidence(no_identifier_request),
                     CandidateKeyTracker(),
@@ -274,21 +278,22 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
             [],
         )
 
-        readiness = configured_sci_hub_readiness(None)
-        self.assertIsInstance(readiness, SourceReadiness)
-        self.assertFalse(readiness.is_ready)
-        self.assertIsNotNone(readiness.failure)
-        assert readiness.failure is not None
+        status = configured_sci_hub_route_status(None)
+        self.assertIs(status.readiness, RouteReadiness.UNCONFIGURED)
+        self.assertIsNotNone(status.failure)
+        assert status.failure is not None
         self.assertEqual(
-            readiness.failure.code,
+            status.failure.code,
             "acquisition-configured-sci-hub-resolver-missing",
         )
-        self.assertEqual(source.readiness, readiness)
-        self.assertTrue(configured_sci_hub_readiness(_Resolver(())).is_ready)
+        self.assertIs(
+            configured_sci_hub_route_status(_Resolver(())).readiness,
+            RouteReadiness.READY,
+        )
 
         with self.assertRaises(AcquisitionFailure) as raised:
-            list(source.acquire(request, _evidence(request), CandidateKeyTracker()))
-        self.assertEqual(raised.exception.failure, readiness.failure)
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+        self.assertEqual(raised.exception.failure, status.failure)
         self.assertEqual(fetcher.calls, [])
 
     def test_missing_resolver_binding_fails_preflight_without_exhaustion(self) -> None:
@@ -332,16 +337,24 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         fetcher = _Fetcher()
         source = _source(None, fetcher)
         exhaustion = Exhaustion()
-        service = AcquisitionService(
-            source_bindings=(
-                PdfSourceBinding(
-                    source_name=source.source_name,
-                    acquisition_path=source.acquisition_path,
-                    enabled=True,
-                    production=True,
-                    readiness=source.readiness,
-                    source=source,
-                ),
+        catalog = PublisherAccessProfileCatalog(())
+        spec = RouteSpec(
+            route_key=source.route_key,
+            tier=AcquisitionPath.PUBLIC,
+            capability=RouteCapability.PUBLIC_PROTOCOL,
+            readiness=RouteReadiness.UNCONFIGURED,
+            requires_any_identifier=True,
+        )
+        service = TieredAcquisitionService(
+            route_registry=AcquisitionRouteRegistry(
+                profile_catalog=catalog,
+                bindings=(RouteAdapterBinding(spec=spec, adapter=None),),
+            ),
+            planner=ProgressiveAcquisitionPlanner(
+                resolver=PublisherAccessResolver(catalog),
+                builder=AcquisitionPlanBuilder(catalog),
+                route_specs=(spec,),
+                doi_landing_resolver=None,
             ),
             publication_port=Publication(),
             exhaustion_port=exhaustion,
@@ -353,7 +366,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
 
         self.assertEqual(
             raised.exception.failure.code,
-            "acquisition-configured-sci-hub-resolver-missing",
+            "acquisition-route-unconfigured",
         )
         self.assertEqual(exhaustion.calls, 0)
         self.assertEqual(fetcher.calls, [])
@@ -387,7 +400,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         fetcher = _Fetcher()
         source = _source(resolver, fetcher, cancel_event=cancel_event)
 
-        deliveries = list(source.acquire(request, evidence, tracker))
+        deliveries = list(source._deliveries(request, evidence, tracker))
 
         self.assertEqual(resolver.calls, [(evidence.identifiers, cancel_event)])
         self.assertEqual(len(fetcher.calls), 1)
@@ -439,7 +452,13 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         first_tracker = CandidateKeyTracker()
 
         self.assertEqual(
-            list(_source(first_resolver, first_fetcher).acquire(request, evidence, first_tracker)),
+            list(
+                _source(first_resolver, first_fetcher)._deliveries(
+                    request,
+                    evidence,
+                    first_tracker,
+                )
+            ),
             [],
         )
         self.assertEqual(len(first_resolver.calls), 1)
@@ -451,7 +470,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         second_fetcher = _Fetcher()
         self.assertEqual(
             list(
-                _source(second_resolver, second_fetcher).acquire(
+                _source(second_resolver, second_fetcher)._deliveries(
                     request,
                     evidence,
                     CandidateKeyTracker((resolver_key,)),
@@ -477,7 +496,11 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         )
         fetcher = _Fetcher()
         deliveries = list(
-            _source(resolver, fetcher).acquire(request, evidence, CandidateKeyTracker())
+            _source(resolver, fetcher)._deliveries(
+                request,
+                evidence,
+                CandidateKeyTracker(),
+            )
         )
 
         self.assertEqual(
@@ -500,7 +523,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         )
         untouched_fetcher = _Fetcher()
         iterator = iter(
-            _source(invalid_resolver, untouched_fetcher).acquire(
+            _source(invalid_resolver, untouched_fetcher)._deliveries(
                 request,
                 evidence,
                 CandidateKeyTracker(),
@@ -528,7 +551,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
             _source(
                 _Resolver(("https://landing.test/article",)),
                 fetcher,
-            ).acquire(request, evidence, tracker)
+            )._deliveries(request, evidence, tracker)
         )
 
         self.assertEqual(len(fetcher.calls), 1)
@@ -573,7 +596,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
                 fetcher = _Fetcher()
                 with self.assertRaises(AcquisitionFailure) as raised:
                     list(
-                        _source(_Resolver(result), fetcher).acquire(
+                        _source(_Resolver(result), fetcher)._deliveries(
                             request,
                             evidence,
                             CandidateKeyTracker(),
@@ -601,7 +624,10 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
 
         with self.assertRaises(AcquisitionFailure) as resolver_raised:
             list(
-                _source(_Resolver((), failure=RuntimeError(private_message)), _Fetcher()).acquire(
+                _source(
+                    _Resolver((), failure=RuntimeError(private_message)),
+                    _Fetcher(),
+                )._deliveries(
                     request,
                     evidence,
                     CandidateKeyTracker(),
@@ -615,7 +641,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
 
         with self.assertRaises(AcquisitionFailure) as locator_raised:
             list(
-                _source(_Resolver((private_message,)), _Fetcher()).acquire(
+                _source(_Resolver((private_message,)), _Fetcher())._deliveries(
                     request,
                     evidence,
                     CandidateKeyTracker(),
@@ -645,7 +671,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         pre_tracker = CandidateKeyTracker()
         with self.assertRaises(AcquisitionFailure) as pre_raised:
             list(
-                _source(pre_resolver, pre_fetcher, cancel_event=pre_cancel).acquire(
+                _source(pre_resolver, pre_fetcher, cancel_event=pre_cancel)._deliveries(
                     request,
                     evidence,
                     pre_tracker,
@@ -676,7 +702,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         post_tracker = CandidateKeyTracker()
         with self.assertRaises(AcquisitionFailure) as post_raised:
             list(
-                _source(post_resolver, post_fetcher, cancel_event=post_cancel).acquire(
+                _source(post_resolver, post_fetcher, cancel_event=post_cancel)._deliveries(
                     request,
                     evidence,
                     post_tracker,
@@ -697,7 +723,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
                     _Resolver(("https://public.test/file",)),
                     delivery_fetcher,
                     cancel_event=delivery_cancel,
-                ).acquire(request, evidence, CandidateKeyTracker())
+                )._deliveries(request, evidence, CandidateKeyTracker())
             )
         self.assertEqual(
             delivery_raised.exception.failure.code,
@@ -724,7 +750,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
                 _source(
                     _Resolver(("https://public.test/file",)),
                     failing_fetcher,
-                ).acquire(request, evidence, CandidateKeyTracker())
+                )._deliveries(request, evidence, CandidateKeyTracker())
             )
         self.assertIs(raised.exception, marker)
 
@@ -733,7 +759,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
             _source(
                 _Resolver(("https://public.test/file",)),
                 closing_fetcher,
-            ).acquire(request, evidence, CandidateKeyTracker())
+            )._deliveries(request, evidence, CandidateKeyTracker())
         )
         temporary = next(iterator)
         self.assertIsNone(temporary.safe_source_url)
@@ -751,7 +777,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         fetcher = _Fetcher()
         with self.assertRaises(AcquisitionFailure) as mismatch:
             list(
-                _source(resolver, fetcher).acquire(
+                _source(resolver, fetcher)._deliveries(
                     request,
                     _evidence(other_request),
                     CandidateKeyTracker(),
@@ -770,7 +796,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
                 _source(
                     _Resolver(("https://public.test/file",)),
                     wrong_fetcher,
-                ).acquire(request, _evidence(request), CandidateKeyTracker())
+                )._deliveries(request, _evidence(request), CandidateKeyTracker())
             )
         self.assertEqual(
             wrong_source.exception.failure.code,

@@ -13,24 +13,32 @@ from urllib.parse import parse_qs, urlsplit
 
 from PyPDF2 import PdfWriter
 
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     CandidateKeyTracker,
-    PdfSourceBinding,
     PrimaryPdfPreparation,
-    SourceReadiness,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import AcquisitionRouteRegistry, RouteAdapterBinding
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
     build_acquisition_evidence,
 )
-from sciretriever.acquisition.service import AcquisitionService
 from sciretriever.acquisition.sources import arxiv as arxiv_source
 from sciretriever.acquisition.sources import europe_pmc as europe_pmc_source
 from sciretriever.acquisition.sources import unpaywall as unpaywall_source
+from sciretriever.acquisition.tiered_service import TieredAcquisitionService
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.metadata.providers.arxiv import ACCESS_SCOPE as METADATA_ARXIV_SCOPE
 from sciretriever.metadata.providers.europe_pmc import (
@@ -367,7 +375,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             ),
         )
 
-    def test_applicability_uses_only_strong_provider_evidence(self) -> None:
+    def test_route_lookup_inputs_use_only_strong_provider_evidence(self) -> None:
         doi = Identifier(namespace="doi", value="10.5555/example")
         arxiv = Identifier(namespace="arxiv", value="2106.14834")
         pmcid = Identifier(namespace="pmcid", value="PMC7759461")
@@ -377,16 +385,24 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         _, arxiv_evidence = _request(identifiers=(arxiv,))
         _, pmcid_evidence = _request(identifiers=(pmcid,))
         _, pmid_evidence = _request(identifiers=(pmid,))
-        inert_http = _HttpFake(())
-        inert_locator = _LocatorFake()
-
-        self.assertTrue(_arxiv(inert_http, inert_locator).is_applicable(arxiv_evidence))
-        self.assertFalse(_arxiv(inert_http, inert_locator).is_applicable(doi_evidence))
-        self.assertTrue(_europe_pmc(inert_http, inert_locator).is_applicable(pmcid_evidence))
-        self.assertFalse(_europe_pmc(inert_http, inert_locator).is_applicable(pmid_evidence))
-        self.assertFalse(_europe_pmc(inert_http, inert_locator).is_applicable(doi_evidence))
-        self.assertTrue(_unpaywall(inert_http, inert_locator).is_applicable(doi_evidence))
-        self.assertFalse(_unpaywall(inert_http, inert_locator).is_applicable(arxiv_evidence))
+        cases = (
+            (_arxiv, arxiv_evidence, doi_evidence),
+            (_europe_pmc, pmcid_evidence, pmid_evidence),
+            (_unpaywall, doi_evidence, arxiv_evidence),
+        )
+        for factory, matching, nonmatching in cases:
+            with self.subTest(factory=factory.__name__):
+                http = _HttpFake((_response(status=404),))
+                source = factory(http, _LocatorFake())
+                request, _ = _request(
+                    identifiers=tuple(matching.identifiers),
+                )
+                list(source._deliveries(request, matching, CandidateKeyTracker()))
+                request, _ = _request(
+                    identifiers=tuple(nonmatching.identifiers),
+                )
+                list(source._deliveries(request, nonmatching, CandidateKeyTracker()))
+                self.assertEqual(len(http.calls), 1)
 
         _, records = _request(
             observations=(
@@ -394,8 +410,22 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                 _observation(11, provider_name="europe-pmc", record_id="PMC:7759461"),
             )
         )
-        self.assertTrue(_arxiv(inert_http, inert_locator).is_applicable(records))
-        self.assertTrue(_europe_pmc(inert_http, inert_locator).is_applicable(records))
+        record_request, _ = _request(
+            observations=(
+                _observation(10, provider_name="arxiv", record_id="2106.14834v2"),
+                _observation(11, provider_name="europe-pmc", record_id="PMC:7759461"),
+            )
+        )
+        for factory in (_arxiv, _europe_pmc):
+            http = _HttpFake((_response(status=404),))
+            list(
+                factory(http, _LocatorFake())._deliveries(
+                    record_request,
+                    records,
+                    CandidateKeyTracker(),
+                )
+            )
+            self.assertEqual(len(http.calls), 1)
 
     def test_arxiv_versioned_records_precede_uncovered_canonical_bases(self) -> None:
         request, evidence = _request(
@@ -411,7 +441,10 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         http = _HttpFake([_response(_fixture("arxiv", "zero.xml"))] * 2)
         tracker = CandidateKeyTracker()
 
-        self.assertEqual(list(_arxiv(http, _LocatorFake()).acquire(request, evidence, tracker)), [])
+        self.assertEqual(
+            list(_arxiv(http, _LocatorFake())._deliveries(request, evidence, tracker)),
+            [],
+        )
 
         self.assertEqual(
             [_query(call)["id_list"] for call in http.calls],
@@ -427,7 +460,9 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         http = _HttpFake([_response(_fixture("arxiv", "success.xml"))])
         locator = _LocatorFake()
 
-        deliveries = list(_arxiv(http, locator).acquire(request, evidence, CandidateKeyTracker()))
+        deliveries = list(
+            _arxiv(http, locator)._deliveries(request, evidence, CandidateKeyTracker())
+        )
 
         self.assertEqual(len(deliveries), 1)
         self.assertEqual(locator.calls[0]["locator"], "https://arxiv.org/pdf/2106.14834v2")
@@ -450,7 +485,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             with self.subTest(status=response.status, body=bool(response.body)):
                 locator = _LocatorFake()
                 result = list(
-                    _arxiv(_HttpFake((response,)), locator).acquire(
+                    _arxiv(_HttpFake((response,)), locator)._deliveries(
                         request,
                         evidence,
                         CandidateKeyTracker(),
@@ -476,7 +511,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                         _arxiv(
                             _HttpFake((_response(_fixture("arxiv", name)),)),
                             _LocatorFake(),
-                        ).acquire(request, evidence, CandidateKeyTracker())
+                        )._deliveries(request, evidence, CandidateKeyTracker())
                     )
                 self.assertEqual(caught.exception.failure.code, expected_code)
 
@@ -492,7 +527,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                 _arxiv(
                     _HttpFake((_response(wrong_revision),)),
                     _LocatorFake(),
-                ).acquire(request, evidence, CandidateKeyTracker())
+                )._deliveries(request, evidence, CandidateKeyTracker())
             )
 
         self.assertEqual(caught.exception.failure.code, "acquisition-arxiv-protocol")
@@ -507,7 +542,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         locator = _LocatorFake((None, "yield"))
 
         deliveries = list(
-            _europe_pmc(http, locator).acquire(request, evidence, CandidateKeyTracker())
+            _europe_pmc(http, locator)._deliveries(request, evidence, CandidateKeyTracker())
         )
 
         self.assertEqual(len(deliveries), 1)
@@ -536,7 +571,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                     _europe_pmc(
                         _HttpFake((_response(_fixture("europe_pmc", name)),)),
                         locator,
-                    ).acquire(request, evidence, CandidateKeyTracker())
+                    )._deliveries(request, evidence, CandidateKeyTracker())
                 )
                 self.assertEqual(deliveries, [])
                 self.assertEqual(locator.calls, [])
@@ -554,7 +589,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                         _europe_pmc(
                             _HttpFake((_response(_fixture("europe_pmc", name)),)),
                             _LocatorFake(),
-                        ).acquire(request, evidence, CandidateKeyTracker())
+                        )._deliveries(request, evidence, CandidateKeyTracker())
                     )
                 self.assertEqual(caught.exception.failure.code, "acquisition-europe-pmc-protocol")
 
@@ -575,7 +610,10 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         http = _HttpFake([_response(_fixture("unpaywall", "no-oa.json"))])
         source = _unpaywall(http, _LocatorFake())
 
-        self.assertEqual(list(source.acquire(request, evidence, CandidateKeyTracker())), [])
+        self.assertEqual(
+            list(source._deliveries(request, evidence, CandidateKeyTracker())),
+            [],
+        )
 
         args, kwargs = http.calls[0]
         self.assertEqual(args[1], "https://api.unpaywall.org/v2")
@@ -597,7 +635,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             _unpaywall(
                 _HttpFake((_response(_fixture("unpaywall", "ordered.json")),)),
                 locator,
-            ).acquire(request, evidence, CandidateKeyTracker())
+            )._deliveries(request, evidence, CandidateKeyTracker())
         )
 
         expected = [
@@ -636,7 +674,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             _unpaywall(
                 _HttpFake((_response(_fixture("unpaywall", "merged-semantics.json")),)),
                 locator,
-            ).acquire(request, evidence, CandidateKeyTracker())
+            )._deliveries(request, evidence, CandidateKeyTracker())
         )
 
         self.assertEqual(len(locator.calls), 1)
@@ -673,7 +711,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         locator = _LocatorFake((None, None, None))
 
         list(
-            _unpaywall(_HttpFake((_response(payload),)), locator).acquire(
+            _unpaywall(_HttpFake((_response(payload),)), locator)._deliveries(
                 request,
                 evidence,
                 CandidateKeyTracker(),
@@ -724,7 +762,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                         factory(
                             _HttpFake((_response(payload),)),
                             _LocatorFake(),
-                        ).acquire(request, evidence, CandidateKeyTracker())
+                        )._deliveries(request, evidence, CandidateKeyTracker())
                     )
                 self.assertEqual(caught.exception.failure.code, expected_code)
 
@@ -741,7 +779,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             with self.subTest(status=response.status, body=bool(response.body)):
                 locator = _LocatorFake()
                 deliveries = list(
-                    _unpaywall(_HttpFake((response,)), locator).acquire(
+                    _unpaywall(_HttpFake((response,)), locator)._deliveries(
                         request,
                         evidence,
                         CandidateKeyTracker(),
@@ -769,7 +807,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                         _unpaywall(
                             _HttpFake((_response(payload),)),
                             _LocatorFake(),
-                        ).acquire(request, evidence, CandidateKeyTracker())
+                        )._deliveries(request, evidence, CandidateKeyTracker())
                     )
                 self.assertEqual(caught.exception.failure.code, "acquisition-unpaywall-protocol")
 
@@ -799,7 +837,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                 )
                 http = _HttpFake(())
                 deliveries = list(
-                    factory(http, _LocatorFake()).acquire(
+                    factory(http, _LocatorFake())._deliveries(
                         request,
                         evidence,
                         CandidateKeyTracker(request.excluded_candidate_keys),
@@ -838,7 +876,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
 
                 with self.assertRaises(AcquisitionFailure) as caught:
                     list(
-                        factory(http, locator).acquire(
+                        factory(http, locator)._deliveries(
                             request,
                             wrong_evidence,
                             CandidateKeyTracker(),
@@ -859,7 +897,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             _arxiv(
                 _HttpFake((_response(_fixture("arxiv", "success.xml")),)),
                 locator,
-            ).acquire(request, evidence, CandidateKeyTracker((key,)))
+            )._deliveries(request, evidence, CandidateKeyTracker((key,)))
         )
         self.assertEqual(deliveries, [])
         self.assertEqual(locator.io_events, [])
@@ -898,7 +936,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                 ):
                     with self.assertRaises(AcquisitionFailure) as caught:
                         list(
-                            factory(_HttpFake((action,)), _LocatorFake()).acquire(
+                            factory(_HttpFake((action,)), _LocatorFake())._deliveries(
                                 request,
                                 evidence,
                                 CandidateKeyTracker(),
@@ -920,7 +958,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                         factory(
                             _HttpFake((_response(status=302),)),
                             _LocatorFake(),
-                        ).acquire(request, evidence, CandidateKeyTracker())
+                        )._deliveries(request, evidence, CandidateKeyTracker())
                     )
 
     def test_lookup_cancellation_is_forwarded_and_never_enters_locator_access(self) -> None:
@@ -954,7 +992,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
 
                 with self.assertRaises(AcquisitionFailure) as caught:
                     list(
-                        factory(http, locator, cancel_event=cancel_event).acquire(
+                        factory(http, locator, cancel_event=cancel_event)._deliveries(
                             request,
                             evidence,
                             CandidateKeyTracker(),
@@ -1001,7 +1039,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
 
                 with self.assertRaises(AcquisitionFailure) as caught:
                     list(
-                        factory(http, locator, cancel_event=cancel_event).acquire(
+                        factory(http, locator, cancel_event=cancel_event)._deliveries(
                             request,
                             evidence,
                             CandidateKeyTracker(),
@@ -1026,7 +1064,13 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         for status in (429, 500):
             http = _HttpFake((_response(status=status),))
             with self.assertRaises(AcquisitionFailure):
-                list(_arxiv(http, _LocatorFake()).acquire(request, evidence, CandidateKeyTracker()))
+                list(
+                    _arxiv(http, _LocatorFake())._deliveries(
+                        request,
+                        evidence,
+                        CandidateKeyTracker(),
+                    )
+                )
             feedback = cast(AccessFeedback, http.feedback[0])
             self.assertIsNotNone(feedback)
             self.assertTrue(feedback.throttled)
@@ -1039,7 +1083,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
         iterator = _europe_pmc(
             _HttpFake((_response(_fixture("europe_pmc", "success.json")),)),
             locator,
-        ).acquire(request, evidence, CandidateKeyTracker())
+        )._deliveries(request, evidence, CandidateKeyTracker())
 
         first = next(iterator)
         self.assertEqual(first.candidate.source_name, "europe-pmc")
@@ -1058,7 +1102,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                 _arxiv(
                     _HttpFake((_response(_fixture("arxiv", "success.xml")),)),
                     _LocatorFake(("close-fail",)),
-                ).acquire(request, evidence, CandidateKeyTracker())
+                )._deliveries(request, evidence, CandidateKeyTracker())
             )
         self.assertEqual(caught.exception.failure.code, "acquisition-arxiv-cleanup")
 
@@ -1071,7 +1115,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             _europe_pmc(
                 _HttpFake((_response(_fixture("europe_pmc", "success.json")),)),
                 locator,
-            ).acquire(request, evidence, CandidateKeyTracker())
+            )._deliveries(request, evidence, CandidateKeyTracker())
         )
         for call in locator.calls:
             url = cast(str, call["locator"])
@@ -1114,16 +1158,26 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
                     cancel_event=event,
                 )
                 exhaustion = _ExhaustionPort()
-                service = AcquisitionService(
-                    source_bindings=(
-                        PdfSourceBinding(
-                            source_name="arxiv",
-                            acquisition_path=AcquisitionPath.PUBLIC,
-                            enabled=True,
-                            production=True,
-                            readiness=SourceReadiness(is_ready=True),
-                            source=source,
-                        ),
+                catalog = PublisherAccessProfileCatalog(())
+                spec = RouteSpec(
+                    route_key=source.route_key,
+                    tier=AcquisitionPath.PUBLIC,
+                    capability=RouteCapability.PUBLIC_PROTOCOL,
+                    readiness=RouteReadiness.READY,
+                    required_identifier_namespaces=("arxiv",),
+                    required_provider_record_names=("arxiv",),
+                )
+                registry = AcquisitionRouteRegistry(
+                    profile_catalog=catalog,
+                    bindings=(RouteAdapterBinding(spec=spec, adapter=source),),
+                )
+                service = TieredAcquisitionService(
+                    route_registry=registry,
+                    planner=ProgressiveAcquisitionPlanner(
+                        resolver=PublisherAccessResolver(catalog),
+                        builder=AcquisitionPlanBuilder(catalog),
+                        route_specs=(spec,),
+                        doi_landing_resolver=None,
                     ),
                     publication_port=_PublicationPort(),
                     exhaustion_port=exhaustion,

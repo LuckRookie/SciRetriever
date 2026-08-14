@@ -15,6 +15,7 @@ from sciretriever.acquisition.authorized import (
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
     AuthorizedPdfSource,
 )
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import CandidateKeyTracker
 from sciretriever.acquisition.registry import (
     ACQUISITION_PROVIDER_ORDER,
@@ -22,18 +23,20 @@ from sciretriever.acquisition.registry import (
     AcquisitionAssemblyDependencies,
     AcquisitionCapability,
     AcquisitionProviderStatus,
+    AcquisitionRegistry,
     AcquisitionRegistryError,
     acquisition_provider_statuses,
     build_acquisition_registry,
     production_web_access_profile_resolver,
     validate_acquisition_provider_matrix,
 )
+from sciretriever.acquisition.routes import PdfRouteAdapter, RouteExecutionContext
 from sciretriever.acquisition.routing import (
     AcquisitionRequest,
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.sources import (
-    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
     PRODUCTION_BROWSER_RULE_CATALOG,
     ArxivPdfSource,
     ConfiguredSciHubPdfSource,
@@ -230,6 +233,36 @@ def _request(
     )
 
 
+def _route_bindings(registry: AcquisitionRegistry) -> tuple[Any, ...]:
+    return registry.route_registry.bindings
+
+
+def _route_adapters(registry: AcquisitionRegistry) -> tuple[PdfRouteAdapter, ...]:
+    return tuple(
+        binding.adapter
+        for binding in registry.route_registry.bindings
+        if binding.adapter is not None
+    )
+
+
+def _execute_route(
+    adapter: PdfRouteAdapter,
+    request: AcquisitionRequest,
+    *,
+    candidate_keys: CandidateKeyTracker | None = None,
+) -> tuple[object, ...]:
+    return tuple(
+        adapter.execute(
+            RouteExecutionContext(
+                request=request,
+                evidence=build_acquisition_evidence(request),
+                route_hints=(),
+                candidate_keys=candidate_keys or CandidateKeyTracker(),
+            )
+        )
+    )
+
+
 class OrdinaryAcquisitionConfigurationTests(unittest.TestCase):
     def test_exact_provider_allowlist_preserves_order_and_is_secret_free(self) -> None:
         value = _configuration(
@@ -410,7 +443,10 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             frozenset({"elsevier", "springer"}),
         )
         self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
-        self.assertFalse(CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready)
+        self.assertIsNot(
+            CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
+            RouteReadiness.READY,
+        )
 
     def test_readiness_is_per_provider_and_optional_paths_do_not_block_generic_path(self) -> None:
         missing = acquisition_provider_statuses(_configuration(_ALL_PROVIDERS))
@@ -482,7 +518,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             registry = build_acquisition_registry(_configuration(("core",)), dependencies)
 
         self.assertEqual(
-            tuple(binding.acquisition_path for binding in registry.source_bindings),
+            tuple(binding.spec.tier for binding in _route_bindings(registry)),
             (
                 AcquisitionPath.PUBLIC,
                 AcquisitionPath.PUBLIC,
@@ -490,8 +526,8 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 AcquisitionPath.AUTHORIZED_PROVIDER_API,
             ),
         )
-        self.assertEqual(registry.registrations[-1].provider_names, ("core",))
-        authorized = registry.source_bindings[-1].source
+        self.assertEqual(registry.route_registry.bindings[-1].spec.route_key, "api:core")
+        authorized = registry.route_registry.bindings[-1].adapter
         self.assertIsInstance(authorized, AuthorizedPdfSource)
         authorized = cast(AuthorizedPdfSource, authorized)
         core_client = getattr(authorized, "_client")
@@ -499,17 +535,18 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertIs(getattr(client, "_coordinator"), dependencies.access_coordinator)
 
         missing, _client = _dependencies()
-        with self.assertRaises(AcquisitionRegistryError) as caught:
-            build_acquisition_registry(_configuration(("core",)), missing)
-        self.assertEqual(caught.exception.code, "acquisition-authorized-credential-missing")
+        unconfigured = build_acquisition_registry(_configuration(("core",)), missing)
+        core_route = unconfigured.route_registry.binding_for("api:core")
+        self.assertEqual(core_route.spec.readiness.value, "unconfigured")
+        self.assertIsNone(core_route.adapter)
 
         # CORE credentials are irrelevant when the authorized Source is not
         # enabled; assembling the shared public direct Source remains valid.
         disabled = build_acquisition_registry(_configuration(()), missing)
         self.assertTrue(
             all(
-                binding.acquisition_path is AcquisitionPath.PUBLIC
-                for binding in disabled.source_bindings
+                binding.spec.tier is AcquisitionPath.PUBLIC
+                for binding in disabled.route_registry.bindings
             )
         )
 
@@ -521,14 +558,17 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             dependencies, client = _dependencies(credentials=load_credentials(home=home))
             registry = build_acquisition_registry(_configuration(("wiley",)), dependencies)
 
-        self.assertTrue(registry.requires_doi_landing_origin)
-        self.assertEqual(registry.registrations[-1].provider_names, ("wiley",))
-        authorized = registry.source_bindings[-1].source
+        self.assertEqual(registry.route_registry.bindings[-1].spec.route_key, "api:wiley-tdm-v1")
+        authorized = registry.route_registry.bindings[-1].adapter
         self.assertIsInstance(authorized, AuthorizedPdfSource)
         wiley_client = getattr(cast(AuthorizedPdfSource, authorized), "_client")
         self.assertIs(getattr(wiley_client, "_http_client"), client)
         self.assertNotIn(token, repr(registry))
         self.assertNotIn(token, repr(authorized))
+        planning = registry.planner.start(
+            _request((), identifiers=(Identifier(namespace="doi", value="10.1002/example"),))
+        )
+        self.assertEqual(planning.doi_resolution_state.value, "eligible")
 
     def test_direct_is_not_a_provider_and_consumes_all_saved_hints_when_none_enabled(
         self,
@@ -558,32 +598,25 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 _observation(3, "semantic-scholar", "https://s2.test/paper.pdf"),
             )
         )
-        evidence = build_acquisition_evidence(request)
         calls: list[tuple[tuple[str, str], ...]] = []
 
         def record(
             direct: DirectPdfSource,
-            filtered_request: AcquisitionRequest,
-            filtered_evidence: object,
-            candidate_keys: CandidateKeyTracker,
+            context: RouteExecutionContext,
         ) -> tuple[()]:
-            del direct, filtered_evidence, candidate_keys
+            del direct
             calls.append(
                 tuple(
                     (observation.provenance.source_name, hint.kind.value)
-                    for observation in filtered_request.observations
+                    for observation in context.request.observations
                     for hint in observation.asset_hints
                 )
             )
             return ()
 
-        with mock.patch.object(DirectPdfSource, "acquire", autospec=True, side_effect=record):
-            for binding in registry.source_bindings:
-                source = binding.source
-                self.assertIsNotNone(source)
-                assert source is not None
-                if source.is_applicable(evidence):
-                    tuple(source.acquire(request, evidence, CandidateKeyTracker()))
+        with mock.patch.object(DirectPdfSource, "execute", autospec=True, side_effect=record):
+            for adapter in _route_adapters(registry):
+                _execute_route(adapter, request)
 
         self.assertEqual(
             calls,
@@ -596,12 +629,10 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 (("web-of-science", "landing-page"),),
             ],
         )
-        self.assertTrue(registry.registrations)
         self.assertTrue(
             all(
-                registration.provider_names == ()
-                for registration in registry.registrations
-                if registration.binding.source_name == "direct"
+                binding.adapter is not None and binding.adapter.source_name == "direct"
+                for binding in registry.route_registry.bindings
             )
         )
 
@@ -650,22 +681,19 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             (arxiv, crossref, historical),
             identifiers=(Identifier(namespace="arxiv", value="2106.14834"),),
         )
-        evidence = build_acquisition_evidence(request)
         calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
 
         def record_direct(
             direct: DirectPdfSource,
-            filtered_request: AcquisitionRequest,
-            filtered_evidence: object,
-            candidate_keys: CandidateKeyTracker,
+            context: RouteExecutionContext,
         ) -> tuple[()]:
-            del direct, filtered_evidence, candidate_keys
+            del direct
             calls.append(
                 (
                     "direct",
                     tuple(
                         (observation.provenance.source_name, hint.kind.value)
-                        for observation in filtered_request.observations
+                        for observation in context.request.observations
                         for hint in observation.asset_hints
                     ),
                 )
@@ -674,35 +702,29 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
 
         def record_arxiv(
             source: ArxivPdfSource,
-            filtered_request: AcquisitionRequest,
-            filtered_evidence: object,
-            candidate_keys: CandidateKeyTracker,
+            context: RouteExecutionContext,
         ) -> tuple[()]:
-            del source, filtered_request, filtered_evidence, candidate_keys
+            del source, context
             calls.append(("arxiv", ()))
             return ()
 
         with (
             mock.patch.object(
                 DirectPdfSource,
-                "acquire",
+                "execute",
                 autospec=True,
                 side_effect=record_direct,
             ),
             mock.patch.object(
                 ArxivPdfSource,
-                "acquire",
+                "execute",
                 autospec=True,
                 side_effect=record_arxiv,
             ),
         ):
             tracker = CandidateKeyTracker()
-            for binding in registry.source_bindings:
-                source = binding.source
-                self.assertIsNotNone(source)
-                assert source is not None
-                if source.is_applicable(evidence):
-                    tuple(source.acquire(request, evidence, tracker))
+            for adapter in _route_adapters(registry):
+                _execute_route(adapter, request, candidate_keys=tracker)
 
         self.assertEqual(
             calls,
@@ -733,32 +755,25 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             }
         )
         request = _request((observation,))
-        evidence = build_acquisition_evidence(request)
         calls: list[tuple[str, ...]] = []
 
         def record(
             direct: DirectPdfSource,
-            filtered_request: AcquisitionRequest,
-            filtered_evidence: object,
-            candidate_keys: CandidateKeyTracker,
+            context: RouteExecutionContext,
         ) -> tuple[()]:
-            del direct, filtered_evidence, candidate_keys
+            del direct
             calls.append(
                 tuple(
                     hint.kind.value
-                    for item in filtered_request.observations
+                    for item in context.request.observations
                     for hint in item.asset_hints
                 )
             )
             return ()
 
-        with mock.patch.object(DirectPdfSource, "acquire", autospec=True, side_effect=record):
-            for binding in registry.source_bindings:
-                source = binding.source
-                self.assertIsNotNone(source)
-                assert source is not None
-                if source.is_applicable(evidence):
-                    tuple(source.acquire(request, evidence, CandidateKeyTracker()))
+        with mock.patch.object(DirectPdfSource, "execute", autospec=True, side_effect=record):
+            for adapter in _route_adapters(registry):
+                _execute_route(adapter, request)
 
         self.assertEqual(calls, [("direct-file", "landing-page")])
 
@@ -778,7 +793,11 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         registry = build_acquisition_registry(configuration, dependencies)
 
         self.assertEqual(
-            tuple(binding.source_name for binding in registry.source_bindings),
+            tuple(
+                binding.adapter.source_name
+                for binding in registry.route_registry.bindings
+                if binding.adapter is not None
+            ),
             (
                 "direct",
                 "direct",
@@ -792,20 +811,20 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            tuple(registration.provider_names for registration in registry.registrations),
+            tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
             (
-                (),
-                (),
-                ("arxiv",),
-                (),
-                ("unpaywall",),
-                ("sci-hub",),
-                ("europe-pmc",),
-                (),
-                (),
+                "public:direct",
+                "public:landing-crossref",
+                "public:arxiv",
+                "public:landing-arxiv",
+                "public:unpaywall",
+                "public:sci-hub",
+                "public:europe-pmc",
+                "public:landing-europe-pmc",
+                "public:landing-fallback",
             ),
         )
-        sources = tuple(binding.source for binding in registry.source_bindings)
+        sources = tuple(binding.adapter for binding in registry.route_registry.bindings)
         direct_wrappers = tuple(
             source for source in sources if source is not None and source.source_name == "direct"
         )
@@ -825,9 +844,9 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertIsInstance(by_name["unpaywall"], UnpaywallPdfSource)
         self.assertIsInstance(by_name["sci-hub"], ConfiguredSciHubPdfSource)
         self.assertIsInstance(by_name["europe-pmc"], EuropePmcPdfSource)
-        self.assertFalse(registry.requires_doi_landing_origin)
-        self.assertIs(getattr(registry.doi_landing_resolver, "_http_client"), client)
-        self.assertIs(getattr(registry.doi_landing_resolver, "_cancel_event"), cancel_event)
+        doi_landing_resolver = getattr(cast(Any, registry.planner), "_doi_landing")
+        self.assertIs(getattr(doi_landing_resolver, "_http_client"), client)
+        self.assertIs(getattr(doi_landing_resolver, "_cancel_event"), cancel_event)
         self.assertEqual(configured_resolver.calls, 0)
 
         fetcher = cast(PublicLocatorFetcher, getattr(direct, "_fetcher"))
@@ -861,8 +880,9 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             _configuration(("openalex", "crossref")),
             dependencies,
         )
-        source = registry.source_bindings[0].source
+        source = registry.route_registry.bindings[0].adapter
         self.assertIsNotNone(source)
+        assert source is not None
         request = _request(
             (
                 _observation(10, "crossref", "https://crossref.test/paper.pdf"),
@@ -871,54 +891,45 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 _observation(13, "crossref", "https://crossref.test/second.pdf"),
             )
         )
-        evidence = build_acquisition_evidence(request)
         seen: list[tuple[str, ...]] = []
 
         def record(
             direct: DirectPdfSource,
-            filtered_request: AcquisitionRequest,
-            filtered_evidence: object,
-            candidate_keys: CandidateKeyTracker,
+            context: RouteExecutionContext,
         ) -> tuple[()]:
-            del direct, filtered_evidence, candidate_keys
-            seen.append(
-                tuple(item.provenance.source_name for item in filtered_request.observations)
-            )
+            del direct
+            seen.append(tuple(item.provenance.source_name for item in context.request.observations))
             return ()
 
-        with mock.patch.object(DirectPdfSource, "acquire", autospec=True, side_effect=record):
-            self.assertEqual(
-                tuple(source.acquire(request, evidence, CandidateKeyTracker())),
-                (),
-            )
+        with mock.patch.object(DirectPdfSource, "execute", autospec=True, side_effect=record):
+            self.assertEqual(_execute_route(source, request), ())
         self.assertEqual(
             seen,
             [("crossref", "semantic-scholar", "openalex", "crossref")],
         )
-        self.assertTrue(source.is_applicable(evidence))
+        self.assertEqual(registry.route_registry.bindings[0].spec.route_key, "public:direct")
 
-        disabled_only = build_acquisition_evidence(
-            _request((_observation(20, "semantic-scholar", "https://s2.test/only.pdf"),))
-        )
-        self.assertTrue(source.is_applicable(disabled_only))
-
-    def test_disabled_sources_are_absent_and_unready_enabled_provider_fails_before_io(self) -> None:
+    def test_unready_enabled_capabilities_are_route_scoped_without_global_failure(self) -> None:
         dependencies, _client = _dependencies()
         registry = build_acquisition_registry(
             _configuration(("unpaywall",), unpaywall_email="x@y.invalid"), dependencies
         )
         self.assertEqual(
-            tuple(binding.source_name for binding in registry.source_bindings),
-            ("direct", "unpaywall", "direct"),
+            tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
+            ("public:direct", "public:unpaywall", "public:landing-fallback"),
         )
-        self.assertEqual(
-            tuple(item.provider_names for item in registry.registrations),
-            ((), ("unpaywall",), ()),
-        )
-        for providers in (("unpaywall",), ("sci-hub",), ("wiley",)):
-            with self.subTest(providers=providers):
-                with self.assertRaises(AcquisitionRegistryError):
-                    build_acquisition_registry(_configuration(providers), dependencies)
+        for providers, route_key in (
+            (("unpaywall",), "public:unpaywall"),
+            (("sci-hub",), "public:sci-hub"),
+            (("wiley",), "api:wiley-tdm-v1"),
+        ):
+            with self.subTest(providers=providers, route_key=route_key):
+                unready = build_acquisition_registry(_configuration(providers), dependencies)
+                binding = unready.route_registry.binding_for(route_key)
+                self.assertEqual(binding.spec.readiness.value, "unconfigured")
+                self.assertIsNone(binding.adapter)
+                plan = unready.planner.start(_request(())).plan
+                self.assertNotIn(route_key, tuple(route.route_key for route in plan.routes))
 
     def test_rejects_a_client_bound_to_another_coordinator_without_io(self) -> None:
         expected = AccessCoordinator(clock=lambda: 100.0)
@@ -958,8 +969,8 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             replace(dependencies, browser_client=shared_browser),
         )
         self.assertEqual(
-            tuple(binding.source_name for binding in registry.source_bindings),
-            ("direct", "direct", "direct"),
+            tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
+            ("public:direct", "public:landing-crossref", "public:landing-fallback"),
         )
 
     def test_two_registries_share_the_process_http_client_and_coordinator(self) -> None:
@@ -967,7 +978,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         first = build_acquisition_registry(_configuration(("crossref",)), dependencies)
         second = build_acquisition_registry(_configuration(("openalex",)), dependencies)
         for registry in (first, second):
-            wrapper = cast(Any, registry.source_bindings[0].source)
+            wrapper = cast(Any, registry.route_registry.bindings[0].adapter)
             direct = cast(Any, getattr(wrapper, "_direct_source"))
             fetcher = cast(Any, getattr(direct, "_fetcher"))
             self.assertIs(getattr(fetcher, "_http_client"), client)

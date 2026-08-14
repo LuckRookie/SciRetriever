@@ -22,25 +22,39 @@ from typing import BinaryIO, Callable, Iterator
 
 from PyPDF2 import PdfWriter
 
-import sciretriever.acquisition.service as acquisition_service_module
+import sciretriever.acquisition.tiered_service as acquisition_service_module
 import sciretriever.analysis.service as analysis_service_module
 import sciretriever.entry.completion as entry_completion_module
 import sciretriever.literature.service as literature_service_module
 import sciretriever.parsing.service as parsing_service_module
 import sciretriever.storage.completion as storage_completion_module
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
 from sciretriever.acquisition.api import AcquisitionApi
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
 from sciretriever.acquisition.ports import (
     CandidateKeyTracker,
-    PdfSourceBinding,
-    SourceReadiness,
     TemporaryPdf,
 )
 from sciretriever.acquisition.publication import (
     PrimaryPdfPublisher,
     ValidatedPrimaryPdfPublisher,
 )
-from sciretriever.acquisition.routing import AcquisitionEvidence, AcquisitionRequest
-from sciretriever.acquisition.service import AcquisitionService
+from sciretriever.acquisition.routes import (
+    AcquisitionRouteRegistry,
+    RouteAdapterBinding,
+    RouteExecutionContext,
+    delivery_results,
+)
+from sciretriever.acquisition.routing import AcquisitionRequest
+from sciretriever.acquisition.tiered_service import TieredAcquisitionService
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.content import ContentAnalysisLimits
 from sciretriever.analysis.ports import AnalysisLLMCall, AnalysisLLMFailure
@@ -243,17 +257,20 @@ class _Source:
     def acquisition_path(self) -> AcquisitionPath:
         return AcquisitionPath.PUBLIC
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        del evidence
-        return True
+    @property
+    def route_key(self) -> str:
+        return "public:acceptance-fixture"
 
-    def acquire(
+    def execute(self, context: RouteExecutionContext) -> Iterator[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        return delivery_results(self._deliveries(context.request, context.candidate_keys))
+
+    def _deliveries(
         self,
         request: AcquisitionRequest,
-        evidence: AcquisitionEvidence,
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
-        del evidence
         title = request.literature.metadata.title
         if title is None:
             raise RuntimeError("controlled Literature must have a title")
@@ -608,17 +625,29 @@ acquisition_publication = SqliteAcquisitionPublication(
     artifact_store,
     verified_reader,
 )
+acquisition_profile_catalog = PublisherAccessProfileCatalog(())
+acquisition_route_spec = RouteSpec(
+    route_key=source.route_key,
+    tier=source.acquisition_path,
+    capability=RouteCapability.DIRECT_PDF,
+    readiness=RouteReadiness.READY,
+)
 acquisition = AcquisitionApi(
-    AcquisitionService(
-        source_bindings=(
-            PdfSourceBinding(
-                source_name=source.source_name,
-                acquisition_path=source.acquisition_path,
-                enabled=True,
-                production=True,
-                readiness=SourceReadiness(is_ready=True),
-                source=source,
+    TieredAcquisitionService(
+        route_registry=AcquisitionRouteRegistry(
+            profile_catalog=acquisition_profile_catalog,
+            bindings=(
+                RouteAdapterBinding(
+                    spec=acquisition_route_spec,
+                    adapter=source,
+                ),
             ),
+        ),
+        planner=ProgressiveAcquisitionPlanner(
+            resolver=PublisherAccessResolver(acquisition_profile_catalog),
+            builder=AcquisitionPlanBuilder(acquisition_profile_catalog),
+            route_specs=(acquisition_route_spec,),
+            doi_landing_resolver=None,
         ),
         publication_port=PrimaryPdfPublisher(
             ValidatedPrimaryPdfPublisher(acquisition_publication),

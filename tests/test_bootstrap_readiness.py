@@ -626,7 +626,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             )
             load_credentials.assert_not_called()
 
-    def test_scoped_core_authorized_credentials_fail_before_storage_is_touched(self) -> None:
+    def test_scoped_core_missing_credentials_remain_route_scoped(self) -> None:
         import sciretriever.bootstrap as bootstrap
 
         with tempfile.TemporaryDirectory(prefix="sciretriever-core-preflight-") as temporary:
@@ -641,21 +641,20 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 providers = ["core"]
                 """
             )
-            with (
-                mock.patch.object(bootstrap, "_build_scoped_storage") as build_storage,
-                self.assertRaises(bootstrap.BootstrapError) as raised,
-            ):
-                bootstrap.build_production_object_graph(
-                    configuration,
-                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
-                    credentials_home=root / "empty-home",
-                    configure_process_logging=False,
-                )
+            graph = bootstrap.build_production_object_graph(
+                configuration,
+                scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                credentials_home=root / "empty-home",
+                configure_process_logging=False,
+            )
 
-        self.assertEqual(raised.exception.code, "acquisition-not-ready")
-        build_storage.assert_not_called()
+        operation = cast(Any, graph.entry_api)._operation
+        service = cast(Any, operation._acquisition)._service
+        binding = service._route_registry.binding_for("api:core")
+        self.assertEqual(binding.spec.readiness.value, "unconfigured")
+        self.assertIsNone(binding.adapter)
 
-    def test_scoped_wiley_authorized_credentials_fail_before_storage_is_touched(self) -> None:
+    def test_scoped_wiley_missing_credentials_remain_route_scoped(self) -> None:
         import sciretriever.bootstrap as bootstrap
 
         with tempfile.TemporaryDirectory(prefix="sciretriever-wiley-preflight-") as temporary:
@@ -670,19 +669,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 providers = ["wiley"]
                 """
             )
-            with (
-                mock.patch.object(bootstrap, "_build_scoped_storage") as build_storage,
-                self.assertRaises(bootstrap.BootstrapError) as raised,
-            ):
-                bootstrap.build_production_object_graph(
-                    configuration,
-                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
-                    credentials_home=root / "empty-home",
-                    configure_process_logging=False,
-                )
+            graph = bootstrap.build_production_object_graph(
+                configuration,
+                scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                credentials_home=root / "empty-home",
+                configure_process_logging=False,
+            )
 
-        self.assertEqual(raised.exception.code, "acquisition-not-ready")
-        build_storage.assert_not_called()
+        operation = cast(Any, graph.entry_api)._operation
+        service = cast(Any, operation._acquisition)._service
+        binding = service._route_registry.binding_for("api:wiley-tdm-v1")
+        self.assertEqual(binding.spec.readiness.value, "unconfigured")
+        self.assertIsNone(binding.adapter)
 
     def test_fresh_catalog_builds_an_explicit_application_object_graph(self) -> None:
         from sciretriever.bootstrap import (
@@ -872,8 +870,8 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 )
 
             acquisition_registry = cast(Any, graph.acquisition_registry)
-            for binding in acquisition_registry.source_bindings:
-                source = binding.source
+            for binding in acquisition_registry.route_registry.bindings:
+                source = binding.adapter
                 if hasattr(source, "_direct_source"):
                     source = source._direct_source
                 fetcher = getattr(source, "_fetcher", None)
@@ -881,8 +879,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     fetcher = getattr(source, "_locator_fetcher", None)
                 if fetcher is not None:
                     self.assertIs(fetcher._http_client, graph.http_client)
+            doi_landing_resolver = acquisition_registry.planner._doi_landing
             self.assertIs(
-                acquisition_registry.doi_landing_resolver._http_client,
+                doi_landing_resolver._http_client,
                 graph.http_client,
             )
 

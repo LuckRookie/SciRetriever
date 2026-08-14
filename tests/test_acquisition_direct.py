@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import threading
 import unittest
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from io import BytesIO
@@ -11,13 +11,14 @@ from typing import BinaryIO, cast
 
 from PyPDF2 import PdfWriter
 
+from sciretriever.acquisition.outcomes import RouteOutcome
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     CandidateKeyTracker,
-    PdfSource,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import RouteExecutionContext
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
@@ -337,6 +338,30 @@ def _evidence(request: AcquisitionRequest) -> AcquisitionEvidence:
     return build_acquisition_evidence(request)
 
 
+def _route_deliveries(
+    source: DirectPdfSource,
+    request: AcquisitionRequest,
+    evidence: AcquisitionEvidence,
+    tracker: CandidateKeyTracker,
+) -> Iterator[TemporaryPdf]:
+    results = source.execute(
+        RouteExecutionContext(
+            request=request,
+            evidence=evidence,
+            route_hints=(),
+            candidate_keys=tracker,
+        )
+    )
+    for result in results:
+        if result.outcome is RouteOutcome.PDF_DELIVERED:
+            temporary_pdf = result.temporary_pdf
+            if temporary_pdf is None:
+                raise AssertionError("delivery result lost its TemporaryPdf")
+            yield temporary_pdf
+        elif result.outcome is not RouteOutcome.NORMAL_MISS:
+            raise AssertionError(f"unexpected direct route outcome: {result.outcome}")
+
+
 def _payload(temporary_pdf: TemporaryPdf) -> bytes:
     context = temporary_pdf.content.open()
     if not isinstance(context, AbstractContextManager):
@@ -444,13 +469,12 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                 }
             )
 
-    def test_interfaces_and_local_applicability_do_not_promote_weak_or_non_primary_hints(
+    def test_route_ignores_weak_and_non_primary_hints_without_network_io(
         self,
     ) -> None:
         client, transport, _resolver, _coordinator = _http_environment([], {})
         source = DirectPdfSource(fetcher=_fetcher(client))
 
-        self.assertIsInstance(source, PdfSource)
         self.assertEqual(source.source_name, "direct")
         self.assertIs(source.acquisition_path, AcquisitionPath.PUBLIC)
         weak_request = _request(
@@ -459,7 +483,17 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                 publisher="Publisher text is not routing authority",
             )
         )
-        self.assertFalse(source.is_applicable(_evidence(weak_request)))
+        self.assertEqual(
+            list(
+                _route_deliveries(
+                    source,
+                    weak_request,
+                    _evidence(weak_request),
+                    CandidateKeyTracker(),
+                )
+            ),
+            [],
+        )
 
         non_primary = _observation(
             10,
@@ -483,8 +517,10 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         )
         request = _request(observations=(non_primary,))
         evidence = _evidence(request)
-        self.assertFalse(source.is_applicable(evidence))
-        self.assertEqual(list(source.acquire(request, evidence, CandidateKeyTracker())), [])
+        self.assertEqual(
+            list(_route_deliveries(source, request, evidence, CandidateKeyTracker())),
+            [],
+        )
         self.assertEqual(transport.calls, [])
 
     def test_direct_first_stable_order_canonical_dedup_and_claim_before_io(self) -> None:
@@ -527,7 +563,7 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         evidence = _evidence(request)
         source = DirectPdfSource(fetcher=_fetcher(client))
 
-        deliveries = list(source.acquire(request, evidence, tracker))
+        deliveries = list(_route_deliveries(source, request, evidence, tracker))
 
         self.assertEqual(
             [_payload(item) for item in deliveries],
@@ -582,7 +618,8 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         )
         request = _request(observations=(_observation(12, hints),))
         iterator = iter(
-            DirectPdfSource(fetcher=_fetcher(client)).acquire(
+            _route_deliveries(
+                DirectPdfSource(fetcher=_fetcher(client)),
                 request,
                 _evidence(request),
                 CandidateKeyTracker(),
@@ -639,10 +676,13 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         source = DirectPdfSource(fetcher=_fetcher(client))
 
         with self.assertRaises(AcquisitionFailure):
-            source.acquire(
-                first_request,
-                _evidence(other_request),
-                CandidateKeyTracker(),
+            list(
+                _route_deliveries(
+                    source,
+                    first_request,
+                    _evidence(other_request),
+                    CandidateKeyTracker(),
+                )
             )
         self.assertEqual(transport.calls, [])
 
@@ -941,9 +981,11 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         )
         request = _request(observations=(_observation(12, hints),))
         tracker = CandidateKeyTracker()
+        source = DirectPdfSource(fetcher=_fetcher(client))
 
         deliveries = list(
-            DirectPdfSource(fetcher=_fetcher(client)).acquire(
+            _route_deliveries(
+                source,
                 request,
                 _evidence(request),
                 tracker,
@@ -982,9 +1024,11 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             ),
         )
         request = _request(observations=(_observation(13, hints),))
+        source = DirectPdfSource(fetcher=_fetcher(client))
 
         deliveries = list(
-            DirectPdfSource(fetcher=_fetcher(client)).acquire(
+            _route_deliveries(
+                source,
                 request,
                 _evidence(request),
                 CandidateKeyTracker(),
@@ -1378,11 +1422,12 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
 
 
 class DoiLandingResolverTests(unittest.TestCase):
-    def test_no_doi_and_non_doi_identifier_are_local_none(self) -> None:
+    def test_invalid_input_is_rejected_and_non_doi_identifier_is_a_local_miss(self) -> None:
         client, transport, resolver, _coordinator = _http_environment([], {})
         landing = DoiLandingResolver(http_client=client)
 
-        self.assertIsNone(landing.resolve(None))
+        with self.assertRaises(TypeError):
+            landing.resolve(None)  # type: ignore[arg-type]
         self.assertIsNone(landing.resolve(Identifier(namespace="pmid", value="123")))
         self.assertEqual(transport.calls, [])
         self.assertEqual(resolver.calls, [])
@@ -1436,7 +1481,13 @@ class DoiLandingResolverTests(unittest.TestCase):
             Identifier(namespace="doi", value="doi:10.1234/Example")
         )
 
-        self.assertEqual(result, "https://publisher.test")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.origin, "https://publisher.test")
+        self.assertEqual(
+            result.canonical_landing_url,
+            "https://publisher.test/articles/file.pdf?download=1",
+        )
         self.assertEqual(coordinator.hosts, ["doi.org", "publisher.test"])
         self.assertTrue(
             all(

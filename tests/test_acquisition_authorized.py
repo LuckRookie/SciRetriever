@@ -14,6 +14,7 @@ from PyPDF2 import PdfWriter
 
 import sciretriever.acquisition.api as acquisition_api
 import sciretriever.acquisition.authorized as authorized
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
 from sciretriever.acquisition.authorized import (
     AuthorizedClientFailure,
     AuthorizedClientFailureKind,
@@ -32,15 +33,21 @@ from sciretriever.acquisition.authorized import (
     AuthorizedProviderClient,
     AuthorizedProviderContract,
     AuthorizedRecordIdentityRule,
-    authorized_source_readiness,
+    authorized_route_status,
+)
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
 )
 from sciretriever.acquisition.ports import (
     AcquisitionExhaustionPublicationCommand,
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     CandidateKeyTracker,
-    PdfSource,
-    PdfSourceBinding,
     PrimaryPdfPreparation,
     PrimaryPdfPreparationPort,
     PrimaryPdfPublicationResult,
@@ -52,12 +59,13 @@ from sciretriever.acquisition.publication import (
     PrimaryPdfPublisher,
     ValidatedPrimaryPdfPublisher,
 )
+from sciretriever.acquisition.routes import AcquisitionRouteRegistry, RouteAdapterBinding
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
     build_acquisition_evidence,
 )
-from sciretriever.acquisition.service import AcquisitionService
+from sciretriever.acquisition.tiered_service import TieredAcquisitionService
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
@@ -411,23 +419,32 @@ def _service(
     *,
     publication_port: PrimaryPdfPreparationPort,
     exhaustion_port: _ExhaustionPort,
-) -> AcquisitionService:
-    readiness = authorized_source_readiness(
+) -> TieredAcquisitionService:
+    status = authorized_route_status(
         source.contract,
         product_ready=True,
         access_policy_ready=True,
         present_credential_fields=frozenset({"api_key", "institution_token", "api_metric"}),
     )
-    return AcquisitionService(
-        source_bindings=(
-            PdfSourceBinding(
-                source_name=source.source_name,
-                acquisition_path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
-                enabled=True,
-                production=True,
-                readiness=readiness,
-                source=source,
-            ),
+    if status.readiness is not RouteReadiness.READY:
+        raise AssertionError("fixture authorized route must be ready")
+    catalog = PublisherAccessProfileCatalog(())
+    spec = RouteSpec(
+        route_key=source.route_key,
+        tier=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+        capability=RouteCapability.DIRECT_PDF,
+        readiness=RouteReadiness.READY,
+    )
+    return TieredAcquisitionService(
+        route_registry=AcquisitionRouteRegistry(
+            profile_catalog=catalog,
+            bindings=(RouteAdapterBinding(spec=spec, adapter=source),),
+        ),
+        planner=ProgressiveAcquisitionPlanner(
+            resolver=PublisherAccessResolver(catalog),
+            builder=AcquisitionPlanBuilder(catalog),
+            route_specs=(spec,),
+            doi_landing_resolver=None,
         ),
         publication_port=publication_port,
         exhaustion_port=exhaustion_port,
@@ -488,31 +505,30 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         )
         for contract_value, product, policy, fields, expected_code in cases:
             with self.subTest(expected_code=expected_code):
-                result = authorized_source_readiness(
+                result = authorized_route_status(
                     contract_value,
                     product_ready=product,
                     access_policy_ready=policy,
                     present_credential_fields=fields,
                 )
-                self.assertFalse(result.is_ready)
+                self.assertIsNot(result.readiness, RouteReadiness.READY)
                 failure = result.failure
                 if failure is None:
                     raise AssertionError("non-ready state must have a stable failure")
                 self.assertEqual(failure.code, expected_code)
 
-        ready = authorized_source_readiness(
+        ready = authorized_route_status(
             contract,
             product_ready=True,
             access_policy_ready=True,
             present_credential_fields=frozenset({"api_key", "institution_token", "api_metric"}),
         )
-        self.assertTrue(ready.is_ready)
+        self.assertIs(ready.readiness, RouteReadiness.READY)
         self.assertIsNone(ready.failure)
         self.assertFalse(hasattr(ready, "entitlement"))
         self.assertNotIn(_PRIVATE_SENTINEL, repr(contract))
 
-    def test_applicability_accepts_only_contract_recognized_strong_evidence(self) -> None:
-        source = _source(_ClientFake(()))
+    def test_contract_lookup_accepts_only_recognized_strong_evidence(self) -> None:
         strong_requests = (
             _request(identifiers=(Identifier(namespace="pii", value="S123456789"),)),
             _request(identifiers=(Identifier(namespace="future-document", value="DOC-2026-1"),)),
@@ -530,12 +546,23 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                 resolved_landing_origin="https://publisher.example.test",
             ),
         )
-        for _request_value, evidence in strong_requests:
+        for request_value, evidence in strong_requests:
             with self.subTest(priority=evidence.priority):
-                self.assertTrue(source.is_applicable(evidence))
+                client = _FixtureClient("no-primary.json")
+                source = _source(client)
+                self.assertEqual(
+                    list(
+                        source._deliveries(
+                            request_value,
+                            evidence,
+                            CandidateKeyTracker(),
+                        )
+                    ),
+                    [],
+                )
+                self.assertEqual(len(client.lookup_calls), 1)
 
-    def test_publisher_prefix_scopus_source_and_wrong_origin_are_not_applicable(self) -> None:
-        source = _source(_ClientFake(()))
+    def test_publisher_prefix_scopus_source_and_wrong_origin_do_not_create_lookups(self) -> None:
         weak_requests = (
             _request(publisher="Fixture Publisher"),
             _request(
@@ -565,25 +592,40 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                 resolved_landing_origin="https://other-publisher.example.test",
             ),
         )
-        for _request_value, evidence in weak_requests:
+        for request_value, evidence in weak_requests:
             with self.subTest(priority=evidence.priority):
-                self.assertFalse(source.is_applicable(evidence))
+                client = _ClientFake(())
+                source = _source(client)
+                self.assertEqual(
+                    list(
+                        source._deliveries(
+                            request_value,
+                            evidence,
+                            CandidateKeyTracker(),
+                        )
+                    ),
+                    [],
+                )
+                self.assertEqual(client.lookup_calls, [])
 
-    def test_applicability_is_local_and_evidence_mismatch_fails_before_client_io(self) -> None:
-        client = _FixtureClient("success.json")
+    def test_target_selection_is_local_and_evidence_mismatch_fails_before_client_io(self) -> None:
+        client = _FixtureClient("no-primary.json")
         source = _source(client)
         request, evidence = _request(identifiers=(Identifier(namespace="pii", value="S123456789"),))
-        self.assertTrue(source.is_applicable(evidence))
-        self.assertEqual(client.lookup_calls, [])
+        self.assertEqual(
+            list(source._deliveries(request, evidence, CandidateKeyTracker())),
+            [],
+        )
+        self.assertEqual(len(client.lookup_calls), 1)
 
         other_request, other_evidence = _request(
             identifiers=(Identifier(namespace="future-document", value="DOC-2"),)
         )
         self.assertEqual(request.literature.literature_id, other_request.literature.literature_id)
         with self.assertRaises(AcquisitionFailure) as caught:
-            list(source.acquire(request, other_evidence, CandidateKeyTracker()))
+            list(source._deliveries(request, other_evidence, CandidateKeyTracker()))
         self.assertEqual(caught.exception.failure.code, "acquisition-authorized-evidence-mismatch")
-        self.assertEqual(client.lookup_calls, [])
+        self.assertEqual(len(client.lookup_calls), 1)
 
     def test_lookup_decision_for_another_target_fails_before_download_or_publication(
         self,
@@ -641,7 +683,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             )
         )
         with self.assertRaises(AcquisitionFailure) as lookup_miss_failure:
-            list(_source(lookup_miss_for_b).acquire(request, evidence, CandidateKeyTracker()))
+            list(
+                _source(lookup_miss_for_b)._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(
             lookup_miss_failure.exception.failure.code,
             "acquisition-authorized-response-schema",
@@ -676,7 +724,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             ),
         )
         with self.assertRaises(AcquisitionFailure) as download_miss_failure:
-            list(_source(download_miss_for_b).acquire(request, evidence, CandidateKeyTracker()))
+            list(
+                _source(download_miss_for_b)._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(
             download_miss_failure.exception.failure.code,
             "acquisition-authorized-response-schema",
@@ -696,7 +750,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             ),
         )
         with self.assertRaises(AcquisitionFailure) as download_pdf_failure:
-            list(_source(download_pdf_for_b).acquire(request, evidence, CandidateKeyTracker()))
+            list(
+                _source(download_pdf_for_b)._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(
             download_pdf_failure.exception.failure.code,
             "acquisition-authorized-response-schema",
@@ -712,7 +772,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         request, evidence = _request(identifiers=(Identifier(namespace="pii", value="S123456789"),))
         tracker = CandidateKeyTracker()
 
-        deliveries = list(source.acquire(request, evidence, tracker))
+        deliveries = list(source._deliveries(request, evidence, tracker))
 
         self.assertEqual(len(deliveries), 1)
         temporary = deliveries[0]
@@ -742,7 +802,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         request, evidence = _request(identifiers=(Identifier(namespace="pii", value="S123456789"),))
         first_client = _FixtureClient("success.json")
         first_tracker = CandidateKeyTracker()
-        first = list(_source(first_client).acquire(request, evidence, first_tracker))[0]
+        first = list(_source(first_client)._deliveries(request, evidence, first_tracker))[0]
         first.content.discard()
         lookup_key = next(key for key in first_tracker.tried_candidate_keys if ":lookup:" in key)
         download_key = next(
@@ -752,7 +812,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         lookup_blocked = _FixtureClient("success.json")
         self.assertEqual(
             list(
-                _source(lookup_blocked).acquire(
+                _source(lookup_blocked)._deliveries(
                     request,
                     evidence,
                     CandidateKeyTracker((lookup_key,)),
@@ -766,7 +826,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         download_blocked = _FixtureClient("success.json")
         self.assertEqual(
             list(
-                _source(download_blocked).acquire(
+                _source(download_blocked)._deliveries(
                     request,
                     evidence,
                     CandidateKeyTracker((download_key,)),
@@ -783,7 +843,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 client = _ClientFake((AuthorizedLookupMiss(target=_pii_target(), reason=reason),))
                 self.assertEqual(
-                    list(_source(client).acquire(request, evidence, CandidateKeyTracker())),
+                    list(
+                        _source(client)._deliveries(
+                            request,
+                            evidence,
+                            CandidateKeyTracker(),
+                        )
+                    ),
                     [],
                 )
 
@@ -800,7 +866,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                         )
                     ),
                     contract=restrictive,
-                ).acquire(request, evidence, CandidateKeyTracker())
+                )._deliveries(request, evidence, CandidateKeyTracker())
             )
         self.assertEqual(caught.exception.failure.code, "acquisition-authorized-response-schema")
 
@@ -823,7 +889,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            list(_source(normal_miss).acquire(request, evidence, CandidateKeyTracker())),
+            list(
+                _source(normal_miss)._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            ),
             [],
         )
         self.assertEqual(normal_miss.download_calls, [locator])
@@ -833,7 +905,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             (AuthorizedClientFailure(AuthorizedClientFailureKind.ENTITLEMENT),),
         )
         with self.assertRaises(AcquisitionFailure) as denied_failure:
-            list(_source(denied).acquire(request, evidence, CandidateKeyTracker()))
+            list(_source(denied)._deliveries(request, evidence, CandidateKeyTracker()))
         self.assertEqual(
             denied_failure.exception.failure.code,
             "acquisition-authorized-entitlement",
@@ -852,7 +924,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             ),
         )
         with self.assertRaises(AcquisitionFailure) as xml_failure:
-            list(_source(xml_response).acquire(request, evidence, CandidateKeyTracker()))
+            list(
+                _source(xml_response)._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(
             xml_failure.exception.failure.code,
             "acquisition-authorized-non-pdf-product",
@@ -887,7 +965,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 source = _source(_ClientFake((AuthorizedClientFailure(kind),)))
                 with self.assertRaises(AcquisitionFailure) as caught:
-                    list(source.acquire(request, evidence, CandidateKeyTracker()))
+                    list(source._deliveries(request, evidence, CandidateKeyTracker()))
                 self.assertEqual(caught.exception.failure.code, expected_code)
                 self.assertIs(caught.exception.failure.retryable, retryable)
 
@@ -908,7 +986,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             )
             with self.subTest(entitlement=entitlement):
                 with self.assertRaises(AcquisitionFailure) as caught:
-                    list(_source(client).acquire(request, evidence, CandidateKeyTracker()))
+                    list(
+                        _source(client)._deliveries(
+                            request,
+                            evidence,
+                            CandidateKeyTracker(),
+                        )
+                    )
                 self.assertEqual(caught.exception.failure.code, expected_code)
                 self.assertEqual(client.download_calls, [])
 
@@ -923,7 +1007,13 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             client = _FixtureClient(fixture_name)
             with self.subTest(fixture_name=fixture_name):
                 with self.assertRaises(AcquisitionFailure) as caught:
-                    list(_source(client).acquire(request, evidence, CandidateKeyTracker()))
+                    list(
+                        _source(client)._deliveries(
+                            request,
+                            evidence,
+                            CandidateKeyTracker(),
+                        )
+                    )
                 self.assertEqual(caught.exception.failure.code, expected_code)
                 self.assertEqual(client.download_calls, [])
 
@@ -1096,7 +1186,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
             ),
         )
         request, evidence = _request(identifiers=(Identifier(namespace="pii", value="S123456789"),))
-        iterator = _source(client).acquire(request, evidence, CandidateKeyTracker())
+        iterator = _source(client)._deliveries(request, evidence, CandidateKeyTracker())
         first_delivery = next(iterator)
         self.assertEqual(first_delivery.candidate.source_name, "fixture-authorized")
         close = getattr(iterator, "close")
@@ -1108,7 +1198,7 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
     def test_client_http_credentials_and_vendor_types_do_not_cross_public_boundary(self) -> None:
         client = _FixtureClient("success.json")
         source = _source(client)
-        self.assertIsInstance(source, PdfSource)
+        self.assertEqual(source.route_key, "api:fixture-authorized")
         self.assertNotIn(_PRIVATE_SENTINEL, repr(source))
         self.assertNotIn(_ENDPOINT_SENTINEL, repr(source))
         self.assertNotIn("AuthorizedPdfSource", vars(acquisition_api))

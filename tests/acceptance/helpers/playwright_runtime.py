@@ -687,10 +687,11 @@ def run_acceptance() -> None:  # noqa: C901
     product_module_files = _load_fresh_product()
     from playwright import __file__ as playwright_file
 
+    from sciretriever.acquisition.planning import RouteReadiness
     from sciretriever.acquisition.ports import AcquisitionExpectedFacts, CandidateKeyTracker
     from sciretriever.acquisition.routing import AcquisitionRequest, build_acquisition_evidence
     from sciretriever.acquisition.sources.browser import (
-        CONTROLLED_BROWSER_PRODUCTION_READINESS,
+        CONTROLLED_BROWSER_PRODUCTION_STATUS,
         ControlledBrowserPdfSource,
     )
     from sciretriever.acquisition.sources.browser_rules import (
@@ -820,7 +821,7 @@ def run_acceptance() -> None:  # noqa: C901
         )
         try:
             deliveries = list(
-                source.acquire(
+                source._deliveries(
                     request,
                     build_acquisition_evidence(request),
                     CandidateKeyTracker(),
@@ -887,8 +888,8 @@ def run_acceptance() -> None:  # noqa: C901
             },
             "production_boundary": {
                 "catalog_rule_count": len(PRODUCTION_BROWSER_RULE_CATALOG.rules),
-                "ready": CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready,
-                "readiness_code": CONTROLLED_BROWSER_PRODUCTION_READINESS.failure.code,
+                "ready": (CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY),
+                "readiness_code": CONTROLLED_BROWSER_PRODUCTION_STATUS.failure.code,
             },
         }
     finally:

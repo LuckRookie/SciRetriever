@@ -166,7 +166,7 @@ class InstalledCliSurfaceTests(unittest.TestCase):
                 self.assertIn("usage:", result.stderr_text)
                 self.assertNotIn("Traceback", result.stderr_text)
 
-    def test_production_console_scopes_fail_closed_before_creating_storage(self) -> None:
+    def test_production_console_scopes_apply_readiness_before_creating_storage(self) -> None:
         root = self.install.root
         assert root is not None
         cases = (
@@ -196,15 +196,6 @@ authentication = "api-key"
 reference_max_output_tokens = 64
 """,
                 "metadata-not-ready",
-            ),
-            (
-                "pdf",
-                ("complete", "pdf", "--all-pending", "--json"),
-                """
-[sources.acquisition]
-providers = ["wiley"]
-""",
-                "acquisition-not-ready",
             ),
             (
                 "content",
@@ -246,6 +237,39 @@ providers = ["wiley"]
                 self.assertNotIn("Traceback", result.stderr_text)
                 self.assertFalse(catalog.exists())
                 self.assertFalse(artifacts.exists())
+
+        # Acquisition readiness is route-scoped.  An unconfigured Wiley route
+        # must not globally block an empty frozen target cohort.  Unlike the
+        # bootstrap-only readiness failures above, Acquisition may open the
+        # catalog first because target selection defines route applicability.
+        work = root / "production-pdf-readiness"
+        work.mkdir(mode=0o700)
+        catalog = work / "catalog.sqlite3"
+        artifacts = work / "artifacts"
+        configuration = work / "config.toml"
+        configuration.write_text(
+            "\n".join(
+                (
+                    "[paths]",
+                    f"catalog_path = {json.dumps(os.fspath(catalog))}",
+                    f"artifact_root = {json.dumps(os.fspath(artifacts))}",
+                    "[sources.acquisition]",
+                    'providers = ["wiley"]',
+                )
+            ),
+            encoding="utf-8",
+        )
+        configuration.chmod(0o600)
+        result = self.install.run_console(
+            ("complete", "pdf", "--all-pending", "--json"),
+            environment={"SCIRETRIEVER_CONFIG": os.fspath(configuration)},
+            cwd=work,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr_text)
+        self.assertNotIn("bootstrap failed", result.stderr_text)
+        self.assertNotIn("Traceback", result.stderr_text)
+        self.assertIsInstance(json.loads(result.stdout), dict)
+        self.assertTrue(catalog.is_file())
 
     def test_config_test_skips_an_unready_provider_without_storage_or_network(self) -> None:
         root = self.install.root

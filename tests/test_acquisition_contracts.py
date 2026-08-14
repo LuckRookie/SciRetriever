@@ -3,40 +3,49 @@ from __future__ import annotations
 import inspect
 import pickle
 import unittest
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from typing import BinaryIO
 
 import sciretriever.acquisition.api as acquisition_api
 import sciretriever.acquisition.ports as acquisition_ports
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
 from sciretriever.acquisition.api import AcquisitionApi, PreparedAcquisition
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
 from sciretriever.acquisition.ports import (
-    AcquisitionExhaustionClearPort,
     AcquisitionExhaustionPublicationCommand,
-    AcquisitionExhaustionPublicationPort,
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     AcquisitionRequest,
     AcquisitionSourceFailure,
-    CandidateKeyTracker,
-    PdfSourceBinding,
+    CancellationEvent,
     PrimaryPdfPreparation,
     PrimaryPdfPreparationPort,
-    SourceReadiness,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import (
+    AcquisitionRouteRegistry,
+    RouteAdapterBinding,
+    RouteExecutionContext,
+)
 from sciretriever.acquisition.routing import (
-    AcquisitionEvidence,
     RoutingEvidenceKind,
     build_acquisition_evidence,
 )
-from sciretriever.acquisition.service import AcquisitionService
+from sciretriever.acquisition.tiered_service import TieredAcquisitionService
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
     AcquisitionPath,
-    AcquisitionResult,
     Asset,
     AssetHint,
     AssetHintKind,
@@ -76,12 +85,12 @@ def _id(index: int) -> str:
     return f"{index:08x}-e89b-12d3-a456-426614174000"
 
 
-def _stable_failure(code: str) -> StableFailure:
+def _failure(code: str, *, retryable: bool = True) -> StableFailure:
     return StableFailure(
         code=code,
         reason="The acquisition operation could not complete.",
         action="Check the local configuration and retry.",
-        retryable=True,
+        retryable=retryable,
     )
 
 
@@ -105,8 +114,8 @@ def _provenance(
 
 def _literature(
     *,
-    publisher: str | None = None,
     identifiers: tuple[Identifier, ...] = (),
+    publisher: str | None = None,
 ) -> Literature:
     return Literature(
         literature_id=LiteratureId(_id(1)),
@@ -121,23 +130,40 @@ def _literature(
     )
 
 
-def _observation(
-    index: int,
-    *,
-    provider_name: str,
-    record_id: str,
-    asset_hints: tuple[AssetHint, ...] = (),
-) -> MetadataObservation:
+def _observation(index: int, *, asset_hints: tuple[AssetHint, ...] = ()) -> MetadataObservation:
     return MetadataObservation(
         observation_id=ObservationId(_id(index)),
         provenance=_provenance(
             index + 100,
-            source_name=provider_name,
+            source_name="fixture-metadata",
             source_kind=SourceKind.METADATA_PROVIDER,
-            source_record_id=record_id,
+            source_record_id=f"record-{index}",
         ),
         metadata=LiteratureMetadata(title="A source observation"),
         asset_hints=asset_hints,
+    )
+
+
+def _request(
+    *,
+    literature: Literature | None = None,
+    observations: tuple[MetadataObservation, ...] = (),
+    excluded_candidate_keys: frozenset[str] = frozenset(),
+    current_assets: tuple[LiteratureAsset, ...] = (),
+) -> AcquisitionRequest:
+    target = literature or _literature()
+    return AcquisitionRequest(
+        literature=target,
+        expected_facts=AcquisitionExpectedFacts(
+            literature_id=target.literature_id,
+            meta_literature_id=target.meta_literature_id,
+            metadata_revision=1,
+            metadata_sha256=metadata_sha256(target.metadata),
+            expected_no_primary_pdf=True,
+        ),
+        observations=observations,
+        current_assets=current_assets,
+        excluded_candidate_keys=excluded_candidate_keys,
     )
 
 
@@ -181,129 +207,109 @@ def _temporary(
 def _discard_count(temporary_pdf: TemporaryPdf) -> int:
     content = temporary_pdf.content
     if not isinstance(content, _Content):
-        raise AssertionError("test temporary content must use _Content")
+        raise AssertionError("fixture content type changed")
     return content.discard_count
 
 
-class _SourceItem:
+class _RouteItem:
     def __init__(self, key: str, temporary_pdf: TemporaryPdf | None) -> None:
         self.key = key
         self.temporary_pdf = temporary_pdf
 
 
-class _SourceFake:
+class _RouteFake:
     def __init__(
         self,
+        route_key: str,
         source_name: str,
         path: AcquisitionPath,
         *,
         events: list[str],
-        items: tuple[_SourceItem, ...] = (),
-        applicable: bool | Callable[[AcquisitionEvidence], bool] = True,
+        items: tuple[_RouteItem, ...] = (),
         failure: AcquisitionFailure | None = None,
     ) -> None:
+        self.route_key = route_key
         self.source_name = source_name
         self.acquisition_path = path
         self._events = events
         self._items = items
-        self._applicable = applicable
         self._failure = failure
         self.close_count = 0
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        self._events.append(f"applicable:{self.source_name}")
-        if callable(self._applicable):
-            return self._applicable(evidence)
-        return self._applicable
-
-    def acquire(
-        self,
-        request: AcquisitionRequest,
-        evidence: AcquisitionEvidence,
-        candidate_keys: CandidateKeyTracker,
-    ) -> Iterator[TemporaryPdf]:
-        del request, evidence
+    def execute(self, context: RouteExecutionContext) -> Iterator[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        delivered = False
         try:
-            self._events.append(f"acquire:{self.source_name}")
+            self._events.append(f"execute:{self.route_key}")
             if self._failure is not None:
                 raise self._failure
             for item in self._items:
-                # ``claim`` is deliberately before the simulated I/O event.
-                # The Source Port requires the same ordering for real access.
-                if not candidate_keys.claim(item.key):
+                if not context.candidate_keys.claim(item.key):
                     continue
-                self._events.append(f"attempt:{self.source_name}:{item.key}")
+                self._events.append(f"attempt:{self.route_key}:{item.key}")
                 if item.temporary_pdf is not None:
-                    yield item.temporary_pdf
+                    delivered = True
+                    yield RouteExecutionResult.delivered(item.temporary_pdf)
+            if not delivered:
+                yield RouteExecutionResult.normal_miss()
         finally:
             self.close_count += 1
 
 
-class _PreparedFake:
-    def __init__(
-        self,
-        *,
-        request: AcquisitionRequest,
-        temporary_pdf: TemporaryPdf,
-        events: list[str],
-    ) -> None:
+class _Prepared:
+    def __init__(self, request: AcquisitionRequest, temporary_pdf: TemporaryPdf) -> None:
         self.request = request
         self.temporary_pdf = temporary_pdf
-        self.events = events
         self.discard_count = 0
 
     def discard(self) -> None:
         self.discard_count += 1
 
 
-class _PublicationFake(PrimaryPdfPreparationPort):
+class _Publication:
     def __init__(
         self,
         *,
         events: list[str],
         success_key: str | None = None,
         failure: AcquisitionFailure | None = None,
-        after_prepare: Callable[[], None] | None = None,
+        after_prepare: object | None = None,
     ) -> None:
-        self._events = events
-        self._success_key = success_key
-        self._failure = failure
-        self._after_prepare = after_prepare
-        self.expected_facts: list[AcquisitionExpectedFacts] = []
-        self.prepared_values: list[_PreparedFake] = []
+        self.events = events
+        self.success_key = success_key
+        self.failure = failure
+        self.after_prepare = after_prepare
+        self.prepared_values: list[_Prepared] = []
 
     def prepare_primary_pdf(
         self,
         request: AcquisitionRequest,
         temporary_pdf: TemporaryPdf,
         *,
-        cancel_event: object | None = None,
+        cancel_event: CancellationEvent | None = None,
     ) -> PrimaryPdfPreparation | None:
         del cancel_event
-        self.expected_facts.append(request.expected_facts)
         key = temporary_pdf.candidate.candidate_key
-        self._events.append(f"prepare:{key}")
-        if self._failure is not None:
-            raise self._failure
-        if key != self._success_key:
+        self.events.append(f"prepare:{key}")
+        if self.failure is not None:
+            raise self.failure
+        if key != self.success_key:
             return None
-        prepared = _PreparedFake(
-            request=request,
-            temporary_pdf=temporary_pdf,
-            events=self._events,
-        )
+        prepared = _Prepared(request, temporary_pdf)
         self.prepared_values.append(prepared)
-        if self._after_prepare is not None:
-            self._after_prepare()
+        callback = self.after_prepare
+        if callable(callback):
+            callback()
         return prepared
 
     def commit_primary_pdf(self, prepared: PrimaryPdfPreparation) -> AcquiredPrimaryPdf:
-        if not isinstance(prepared, _PreparedFake):
-            raise AssertionError("unexpected prepared value")
+        if not isinstance(prepared, _Prepared):
+            raise AssertionError("unexpected preparation")
         request = prepared.request
         temporary_pdf = prepared.temporary_pdf
         key = temporary_pdf.candidate.candidate_key
-        self._events.append(f"publish:{key}")
+        self.events.append(f"publish:{key}")
         asset = Asset(
             asset_id=AssetId(_id(500)),
             sha256=_HASH,
@@ -322,15 +328,10 @@ class _PublicationFake(PrimaryPdfPreparationPort):
         return AcquiredPrimaryPdf(asset=asset, relation=relation, candidate_key=key)
 
 
-class _ExhaustionFake(AcquisitionExhaustionPublicationPort):
-    def __init__(
-        self,
-        *,
-        events: list[str],
-        failure: AcquisitionFailure | None = None,
-    ) -> None:
-        self._events = events
-        self._failure = failure
+class _Exhaustion:
+    def __init__(self, *, events: list[str], failure: AcquisitionFailure | None = None) -> None:
+        self.events = events
+        self.failure = failure
         self.calls = 0
         self.commands: list[AcquisitionExhaustionPublicationCommand] = []
 
@@ -340,108 +341,23 @@ class _ExhaustionFake(AcquisitionExhaustionPublicationPort):
     ) -> AutomaticPdfAcquisitionExhaustion:
         self.calls += 1
         self.commands.append(command)
-        self._events.append("publish-exhaustion")
-        if self._failure is not None:
-            raise self._failure
+        self.events.append("publish-exhaustion")
+        if self.failure is not None:
+            raise self.failure
         return AutomaticPdfAcquisitionExhaustion(literature_id=command.expected_facts.literature_id)
 
 
-class _ExhaustionClearFake(AcquisitionExhaustionClearPort):
-    def __init__(
-        self,
-        *,
-        events: list[str],
-        failure: AcquisitionFailure | None = None,
-    ) -> None:
-        self._events = events
-        self._failure = failure
+class _Clear:
+    def __init__(self, *, events: list[str], failure: AcquisitionFailure | None = None) -> None:
+        self.events = events
+        self.failure = failure
         self.expected_facts: list[AcquisitionExpectedFacts] = []
 
     def clear_exhaustion(self, expected_facts: AcquisitionExpectedFacts) -> None:
         self.expected_facts.append(expected_facts)
-        self._events.append("clear-exhaustion")
-        if self._failure is not None:
-            raise self._failure
-
-
-_READY = SourceReadiness(is_ready=True)
-
-
-def _binding(
-    source: _SourceFake | None,
-    *,
-    source_name: str | None = None,
-    path: AcquisitionPath | None = None,
-    enabled: bool = True,
-    production: bool = True,
-    readiness: SourceReadiness | None = _READY,
-) -> PdfSourceBinding:
-    if source is not None:
-        source_name = source.source_name if source_name is None else source_name
-        path = source.acquisition_path if path is None else path
-    assert source_name is not None
-    assert path is not None
-    return PdfSourceBinding(
-        source_name=source_name,
-        acquisition_path=path,
-        enabled=enabled,
-        production=production,
-        readiness=readiness,
-        source=source,
-    )
-
-
-def _request(
-    *,
-    literature: Literature | None = None,
-    observations: tuple[MetadataObservation, ...] = (),
-    resolved_landing_origin: str | None = None,
-    excluded_candidate_keys: frozenset[str] = frozenset(),
-    current_assets: tuple[LiteratureAsset, ...] = (),
-) -> AcquisitionRequest:
-    target = _literature() if literature is None else literature
-    return AcquisitionRequest(
-        literature=target,
-        expected_facts=AcquisitionExpectedFacts(
-            literature_id=target.literature_id,
-            meta_literature_id=target.meta_literature_id,
-            metadata_revision=1,
-            metadata_sha256=metadata_sha256(target.metadata),
-            expected_no_primary_pdf=True,
-        ),
-        observations=observations,
-        current_assets=current_assets,
-        resolved_landing_origin=resolved_landing_origin,
-        excluded_candidate_keys=excluded_candidate_keys,
-    )
-
-
-def _api(
-    bindings: tuple[PdfSourceBinding, ...],
-    publication: PrimaryPdfPreparationPort,
-    exhaustion: AcquisitionExhaustionPublicationPort,
-    *,
-    exhaustion_clear: AcquisitionExhaustionClearPort | None = None,
-    doi_landing_resolver: object | None = None,
-    requires_doi_landing_origin: bool = False,
-) -> AcquisitionApi:
-    if exhaustion_clear is None:
-        exhaustion_clear = _ExhaustionClearFake(events=[])
-    return AcquisitionApi(
-        AcquisitionService(
-            source_bindings=bindings,
-            publication_port=publication,
-            exhaustion_port=exhaustion,
-            exhaustion_clear_port=exhaustion_clear,
-            doi_landing_resolver=doi_landing_resolver,  # type: ignore[arg-type]
-            requires_doi_landing_origin=requires_doi_landing_origin,
-        )
-    )
-
-
-def _prepare_and_commit(api: AcquisitionApi, request: AcquisitionRequest) -> AcquisitionResult:
-    prepared = api.prepare_primary_pdf(request)
-    return api.commit_primary_pdf(prepared)
+        self.events.append("clear-exhaustion")
+        if self.failure is not None:
+            raise self.failure
 
 
 class _CancelEvent:
@@ -452,35 +368,69 @@ class _CancelEvent:
         return self.cancelled
 
 
-class _DoiResolverFake:
-    def __init__(
-        self,
-        result: str | None = None,
-        failure: AcquisitionFailure | None = None,
-    ) -> None:
-        self.result = result
-        self.failure = failure
-        self.calls: list[Identifier | None] = []
-
-    def resolve(self, doi: Identifier | None) -> str | None:
-        self.calls.append(doi)
-        if self.failure is not None:
-            raise self.failure
-        return self.result
-
-
-class _CancelAfterChecks:
-    def __init__(self, threshold: int) -> None:
-        self.threshold = threshold
-        self.calls = 0
-
-    def is_set(self) -> bool:
-        self.calls += 1
-        return self.calls >= self.threshold
+def _spec(
+    route_key: str,
+    path: AcquisitionPath,
+    *,
+    readiness: RouteReadiness = RouteReadiness.READY,
+    required_identifier_namespaces: tuple[str, ...] = (),
+) -> RouteSpec:
+    capability = (
+        RouteCapability.PUBLIC_PROTOCOL
+        if path is AcquisitionPath.PUBLIC
+        else RouteCapability.DIRECT_PDF
+    )
+    return RouteSpec(
+        route_key=route_key,
+        tier=path,
+        capability=capability,
+        readiness=readiness,
+        required_identifier_namespaces=required_identifier_namespaces,
+    )
 
 
-class AcquisitionWorkflowContractTests(unittest.TestCase):
-    def test_prepare_is_publication_free_and_commit_consumes_the_receipt_once(self) -> None:
+def _binding(
+    spec: RouteSpec,
+    route: _RouteFake | None,
+) -> RouteAdapterBinding:
+    return RouteAdapterBinding(spec=spec, adapter=route)
+
+
+def _api(
+    bindings: tuple[RouteAdapterBinding, ...],
+    publication: PrimaryPdfPreparationPort,
+    exhaustion: _Exhaustion,
+    *,
+    clear: _Clear | None = None,
+) -> AcquisitionApi:
+    catalog = PublisherAccessProfileCatalog(())
+    route_registry = AcquisitionRouteRegistry(
+        profile_catalog=catalog,
+        bindings=bindings,
+    )
+    planner = ProgressiveAcquisitionPlanner(
+        resolver=PublisherAccessResolver(catalog),
+        builder=AcquisitionPlanBuilder(catalog),
+        route_specs=tuple(binding.spec for binding in bindings),
+        doi_landing_resolver=None,
+    )
+    return AcquisitionApi(
+        TieredAcquisitionService(
+            route_registry=route_registry,
+            planner=planner,
+            publication_port=publication,
+            exhaustion_port=exhaustion,
+            exhaustion_clear_port=clear or _Clear(events=[]),
+        )
+    )
+
+
+def _prepare_and_commit(api: AcquisitionApi, request: AcquisitionRequest) -> object:
+    return api.commit_primary_pdf(api.prepare_primary_pdf(request))
+
+
+class TieredAcquisitionContractTests(unittest.TestCase):
+    def test_prepare_is_publication_free_and_commit_consumes_receipt_once(self) -> None:
         events: list[str] = []
         temporary = _temporary(
             1,
@@ -488,36 +438,34 @@ class AcquisitionWorkflowContractTests(unittest.TestCase):
             source_name="public-one",
             path=AcquisitionPath.PUBLIC,
         )
-        publication = _PublicationFake(events=events, success_key="public/candidate")
+        route = _RouteFake(
+            "public:one",
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            items=(_RouteItem("public/candidate", temporary),),
+        )
+        publication = _Publication(events=events, success_key="public/candidate")
         api = _api(
-            (
-                _binding(
-                    _SourceFake(
-                        "public-one",
-                        AcquisitionPath.PUBLIC,
-                        events=events,
-                        items=(_SourceItem("public/candidate", temporary),),
-                    )
-                ),
-            ),
+            (_binding(_spec(route.route_key, route.acquisition_path), route),),
             publication,
-            _ExhaustionFake(events=events),
+            _Exhaustion(events=events),
         )
 
         prepared = api.prepare_primary_pdf(_request())
 
         self.assertIsInstance(prepared, PreparedAcquisition)
         self.assertNotIn("publish:public/candidate", events)
-        result = api.commit_primary_pdf(prepared)
-        self.assertIsInstance(result, AcquiredPrimaryPdf)
-        self.assertIn("publish:public/candidate", events)
+        self.assertEqual(_discard_count(temporary), 1)
+        self.assertIsInstance(api.commit_primary_pdf(prepared), AcquiredPrimaryPdf)
+        self.assertEqual(publication.prepared_values[0].discard_count, 1)
         with self.assertRaises(AcquisitionFailure):
             api.commit_primary_pdf(prepared)
 
-    def test_receipt_is_opaque_redacted_service_bound_and_discard_is_idempotent(self) -> None:
-        api = _api((), _PublicationFake(events=[]), _ExhaustionFake(events=[]))
-        other = _api((), _PublicationFake(events=[]), _ExhaustionFake(events=[]))
-        prepared = api.prepare_primary_pdf(_request())
+    def test_receipt_is_opaque_service_bound_and_discard_is_idempotent(self) -> None:
+        first = _api((), _Publication(events=[]), _Exhaustion(events=[]))
+        other = _api((), _Publication(events=[]), _Exhaustion(events=[]))
+        prepared = first.prepare_primary_pdf(_request())
 
         self.assertEqual(repr(prepared), "<PreparedAcquisition opaque>")
         self.assertEqual(prepared.__slots__, ("__weakref__",))
@@ -526,743 +474,214 @@ class AcquisitionWorkflowContractTests(unittest.TestCase):
             pickle.dumps(prepared)
         with self.assertRaises(AcquisitionFailure):
             other.commit_primary_pdf(prepared)
+        first.discard_prepared(prepared)
+        first.discard_prepared(prepared)
         with self.assertRaises(AcquisitionFailure):
-            other.discard_prepared(prepared)
+            first.commit_primary_pdf(prepared)
 
-        api.discard_prepared(prepared)
-        api.discard_prepared(prepared)
-        with self.assertRaises(AcquisitionFailure):
-            api.commit_primary_pdf(prepared)
-
-    def test_forged_receipt_and_cancelled_prepare_fail_without_exhaustion_commit(self) -> None:
+    def test_cancel_after_validation_discards_both_temporary_and_preparation(self) -> None:
         events: list[str] = []
-        exhaustion = _ExhaustionFake(events=events)
-        api = _api((), _PublicationFake(events=events), exhaustion)
-
-        with self.assertRaises(AcquisitionFailure):
-            api.commit_primary_pdf(PreparedAcquisition())
-        with self.assertRaises(AcquisitionFailure) as raised:
-            api.prepare_primary_pdf(_request(), cancel_event=_CancelEvent(cancelled=True))
-
-        self.assertEqual(raised.exception.failure.code, "acquisition-interrupted")
-        self.assertEqual(exhaustion.calls, 0)
-
-    def test_cancel_after_candidate_validation_discards_prepared_bytes_and_returns_no_receipt(
-        self,
-    ) -> None:
-        events: list[str] = []
+        cancel = _CancelEvent()
         temporary = _temporary(
             1,
             key="public/candidate",
             source_name="public-one",
             path=AcquisitionPath.PUBLIC,
         )
-        cancel_event = _CancelEvent()
-        publication = _PublicationFake(
-            events=events,
-            success_key="public/candidate",
-            after_prepare=lambda: setattr(cancel_event, "cancelled", True),
-        )
-        source = _SourceFake(
+        route = _RouteFake(
+            "public:one",
             "public-one",
             AcquisitionPath.PUBLIC,
             events=events,
-            items=(_SourceItem("public/candidate", temporary),),
+            items=(_RouteItem("public/candidate", temporary),),
         )
-        exhaustion = _ExhaustionFake(events=events)
-        api = _api((_binding(source),), publication, exhaustion)
+        publication = _Publication(
+            events=events,
+            success_key="public/candidate",
+            after_prepare=lambda: setattr(cancel, "cancelled", True),
+        )
+        exhaustion = _Exhaustion(events=events)
+        api = _api(
+            (_binding(_spec(route.route_key, route.acquisition_path), route),),
+            publication,
+            exhaustion,
+        )
 
         with self.assertRaises(AcquisitionFailure) as raised:
-            api.prepare_primary_pdf(
-                _request(),
-                cancel_event=cancel_event,
-            )
+            api.prepare_primary_pdf(_request(), cancel_event=cancel)
 
         self.assertEqual(raised.exception.failure.code, "acquisition-interrupted")
-        self.assertEqual(exhaustion.calls, 0)
         self.assertEqual(_discard_count(temporary), 1)
-        if publication.prepared_values:
-            self.assertEqual(publication.prepared_values[0].discard_count, 1)
-
-    def test_discard_releases_candidate_preparation_once(self) -> None:
-        events: list[str] = []
-        temporary = _temporary(
-            1,
-            key="public/candidate",
-            source_name="public-one",
-            path=AcquisitionPath.PUBLIC,
-        )
-        publication = _PublicationFake(events=events, success_key="public/candidate")
-        api = _api(
-            (
-                _binding(
-                    _SourceFake(
-                        "public-one",
-                        AcquisitionPath.PUBLIC,
-                        events=events,
-                        items=(_SourceItem("public/candidate", temporary),),
-                    )
-                ),
-            ),
-            publication,
-            _ExhaustionFake(events=events),
-        )
-
-        prepared = api.prepare_primary_pdf(_request())
-        api.discard_prepared(prepared)
-        api.discard_prepared(prepared)
-
         self.assertEqual(publication.prepared_values[0].discard_count, 1)
-        self.assertNotIn("publish:public/candidate", events)
+        self.assertEqual(exhaustion.calls, 0)
 
-    def test_public_second_candidate_commits_and_short_circuits_later_stages(self) -> None:
+    def test_rejected_candidate_continues_but_success_stops_higher_tiers(self) -> None:
         events: list[str] = []
         first = _temporary(
-            1, key="public/first", source_name="public-one", path=AcquisitionPath.PUBLIC
+            1,
+            key="public/rejected",
+            source_name="public-one",
+            path=AcquisitionPath.PUBLIC,
         )
         second = _temporary(
             2,
-            key="public/second",
+            key="public/accepted",
             source_name="public-one",
             path=AcquisitionPath.PUBLIC,
         )
-        public = _SourceFake(
+        public = _RouteFake(
+            "public:one",
             "public-one",
             AcquisitionPath.PUBLIC,
             events=events,
             items=(
-                _SourceItem("public/first", first),
-                _SourceItem("public/second", second),
+                _RouteItem("public/rejected", first),
+                _RouteItem("public/accepted", second),
             ),
         )
-        authorized = _SourceFake(
-            "authorized-one",
+        authorized = _RouteFake(
+            "api:later",
+            "api-later",
             AcquisitionPath.AUTHORIZED_PROVIDER_API,
             events=events,
         )
-        browser = _SourceFake(
-            "browser-one",
-            AcquisitionPath.CONTROLLED_BROWSER,
-            events=events,
-        )
-        exhaustion = _ExhaustionFake(events=events)
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(public), _binding(authorized), _binding(browser)),
-                _PublicationFake(events=events, success_key="public/second"),
-                exhaustion,
-            ),
-            _request(),
-        )
-
-        self.assertIsInstance(result, AcquiredPrimaryPdf)
-        assert isinstance(result, AcquiredPrimaryPdf)
-        self.assertEqual(result.candidate_key, "public/second")
-        self.assertEqual(
-            events,
-            [
-                "applicable:public-one",
-                "acquire:public-one",
-                "attempt:public-one:public/first",
-                "prepare:public/first",
-                "attempt:public-one:public/second",
-                "prepare:public/second",
-                "publish:public/second",
-            ],
-        )
-        self.assertEqual(exhaustion.calls, 0)
-        self.assertEqual(_discard_count(first), 1)
-        self.assertEqual(_discard_count(second), 1)
-        self.assertEqual(public.close_count, 1)
-        self.assertEqual(authorized.close_count, 0)
-        self.assertEqual(browser.close_count, 0)
-
-    def test_normal_misses_cross_each_stage_only_after_the_previous_stage(self) -> None:
-        events: list[str] = []
-        sources = (
-            _SourceFake(
-                "public-one",
-                AcquisitionPath.PUBLIC,
-                events=events,
-                items=(_SourceItem("public/one", None),),
-            ),
-            _SourceFake(
-                "public-two",
-                AcquisitionPath.PUBLIC,
-                events=events,
-                items=(_SourceItem("public/two", None),),
-            ),
-            _SourceFake(
-                "authorized-one",
-                AcquisitionPath.AUTHORIZED_PROVIDER_API,
-                events=events,
-                items=(_SourceItem("authorized/one", None),),
-            ),
-            _SourceFake(
-                "browser-one",
-                AcquisitionPath.CONTROLLED_BROWSER,
-                events=events,
-                items=(_SourceItem("browser/one", None),),
-            ),
-        )
-        exhaustion = _ExhaustionFake(events=events)
-
-        result = _prepare_and_commit(
-            _api(
-                tuple(_binding(source) for source in sources),
-                _PublicationFake(events=events),
-                exhaustion,
-            ),
-            _request(),
-        )
-
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertEqual(
-            [event for event in events if event.startswith(("acquire:", "publish-exhaustion"))],
-            [
-                "acquire:public-one",
-                "acquire:public-two",
-                "acquire:authorized-one",
-                "acquire:browser-one",
-                "publish-exhaustion",
-            ],
-        )
-
-    def test_doi_origin_resolution_is_deferred_until_public_sources_miss(self) -> None:
-        events: list[str] = []
-        resolver = _DoiResolverFake("https://onlinelibrary.wiley.com")
-        public_hit = _temporary(
-            9,
-            key="public/hit",
-            source_name="public-one",
-            path=AcquisitionPath.PUBLIC,
-        )
-        public = _SourceFake(
-            "public-one",
-            AcquisitionPath.PUBLIC,
-            events=events,
-            items=(_SourceItem("public/hit", public_hit),),
-        )
-        authorized = _SourceFake(
-            "wiley",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=lambda evidence: (
-                evidence.resolved_landing_origin == "https://onlinelibrary.wiley.com"
-            ),
-        )
-        request = _request(
-            literature=_literature(
-                identifiers=(Identifier(namespace="doi", value="10.1002/example"),)
-            )
-        )
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(public), _binding(authorized)),
-                _PublicationFake(events=events, success_key="public/hit"),
-                _ExhaustionFake(events=events),
-                doi_landing_resolver=resolver,
-                requires_doi_landing_origin=True,
-            ),
-            request,
-        )
-
-        self.assertIsInstance(result, AcquiredPrimaryPdf)
-        self.assertEqual(resolver.calls, [])
-        self.assertNotIn("applicable:wiley", events)
-
-    def test_public_miss_resolves_one_doi_once_before_authorized_applicability(self) -> None:
-        events: list[str] = []
-        doi = Identifier(namespace="doi", value="10.1002/example")
-        resolver = _DoiResolverFake("https://onlinelibrary.wiley.com")
-        seen_origins: list[str | None] = []
-
-        def applicable(evidence: AcquisitionEvidence) -> bool:
-            seen_origins.append(evidence.resolved_landing_origin)
-            return False
-
-        public = _SourceFake("public-one", AcquisitionPath.PUBLIC, events=events)
-        authorized = _SourceFake(
-            "wiley",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=applicable,
-        )
-        exhaustion = _ExhaustionFake(events=events)
-        result = _prepare_and_commit(
-            _api(
-                (_binding(public), _binding(authorized)),
-                _PublicationFake(events=events),
-                exhaustion,
-                doi_landing_resolver=resolver,
-                requires_doi_landing_origin=True,
-            ),
-            _request(literature=_literature(identifiers=(doi,))),
-        )
-
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertEqual(resolver.calls, [doi])
-        self.assertEqual(seen_origins, ["https://onlinelibrary.wiley.com"])
-        self.assertLess(events.index("acquire:public-one"), events.index("applicable:wiley"))
-
-    def test_doi_normal_miss_exhausts_but_resolution_failure_propagates(self) -> None:
-        events: list[str] = []
-        doi = Identifier(namespace="doi", value="10.1002/example")
-        authorized = _SourceFake(
-            "wiley",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-        )
-        exhaustion = _ExhaustionFake(events=events)
-        normal = _DoiResolverFake(None)
-        result = _prepare_and_commit(
-            _api(
-                (_binding(authorized),),
-                _PublicationFake(events=events),
-                exhaustion,
-                doi_landing_resolver=normal,
-                requires_doi_landing_origin=True,
-            ),
-            _request(literature=_literature(identifiers=(doi,))),
-        )
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertEqual(normal.calls, [doi])
-        self.assertEqual(exhaustion.calls, 1)
-
-        failure = AcquisitionFailure(
-            StableFailure(
-                code="acquisition-doi-resolution-network-failed",
-                reason="DOI resolution failed.",
-                action="Retry.",
-                retryable=True,
-            )
-        )
-        failed_exhaustion = _ExhaustionFake(events=[])
-        with self.assertRaises(AcquisitionFailure) as caught:
-            _api(
-                (_binding(authorized),),
-                _PublicationFake(events=[]),
-                failed_exhaustion,
-                doi_landing_resolver=_DoiResolverFake(failure=failure),
-                requires_doi_landing_origin=True,
-            ).prepare_primary_pdf(_request(literature=_literature(identifiers=(doi,))))
-        self.assertEqual(caught.exception.failure.code, failure.failure.code)
-        self.assertEqual(failed_exhaustion.calls, 0)
-
-    def test_candidate_key_is_claimed_before_io_and_duplicate_or_excluded_keys_are_skipped(
-        self,
-    ) -> None:
-        events: list[str] = []
-        candidate = _temporary(
-            1,
-            key="same/key",
-            source_name="public-one",
-            path=AcquisitionPath.PUBLIC,
-        )
-        duplicate = _temporary(
-            2,
-            key="same/key",
-            source_name="public-one",
-            path=AcquisitionPath.PUBLIC,
-        )
-        source = _SourceFake(
-            "public-one",
-            AcquisitionPath.PUBLIC,
-            events=events,
-            items=(
-                _SourceItem("already/excluded", None),
-                _SourceItem("same/key", candidate),
-                _SourceItem("same/key", duplicate),
-            ),
-        )
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(source),),
-                _PublicationFake(events=events),
-                _ExhaustionFake(events=events),
-            ),
-            _request(excluded_candidate_keys=frozenset({"already/excluded"})),
-        )
-
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertEqual(
-            [event for event in events if event.startswith("attempt:")],
-            ["attempt:public-one:same/key"],
-        )
-        self.assertEqual(
-            [event for event in events if event == "prepare:same/key"], ["prepare:same/key"]
-        )
-        self.assertEqual(_discard_count(candidate), 1)
-        self.assertEqual(_discard_count(duplicate), 0)
-
-    def test_no_primary_pdf_exists_only_after_field_free_exhaustion_is_published(self) -> None:
-        events: list[str] = []
-        temporary = _temporary(
-            1,
-            key="public/miss",
-            source_name="public-one",
-            path=AcquisitionPath.PUBLIC,
-        )
-        source = _SourceFake(
-            "public-one",
-            AcquisitionPath.PUBLIC,
-            events=events,
-            items=(_SourceItem("public/miss", temporary),),
-        )
-        publication = _PublicationFake(events=events)
-        exhaustion = _ExhaustionFake(events=events)
-        later_observation = _observation(
-            12,
-            provider_name="index-two",
-            record_id="record-two",
-        )
-        earlier_observation = _observation(
-            11,
-            provider_name="index-one",
-            record_id="record-one",
-        )
-        request = _request(observations=(later_observation, earlier_observation, later_observation))
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(source),),
-                publication,
-                exhaustion,
-            ),
-            request,
-        )
-
-        self.assertEqual(result, NoPrimaryPdf())
-        self.assertEqual(result.model_dump(), {})
-        self.assertEqual(exhaustion.calls, 1)
-        self.assertEqual(events[-1], "publish-exhaustion")
-        self.assertEqual(publication.expected_facts, [request.expected_facts])
-        self.assertEqual(len(exhaustion.commands), 1)
-        exhaustion_command = exhaustion.commands[0]
-        self.assertEqual(exhaustion_command.expected_facts, request.expected_facts)
-        self.assertEqual(
-            exhaustion_command.observation_ids,
-            (earlier_observation.observation_id, later_observation.observation_id),
-        )
-        self.assertEqual(exhaustion_command.observation_ids, request.observation_closure)
-        self.assertEqual(request.expected_facts.literature_id, request.literature.literature_id)
-        self.assertEqual(
-            request.expected_facts.meta_literature_id,
-            request.literature.meta_literature_id,
-        )
-        self.assertEqual(request.expected_facts.metadata_revision, 1)
-        self.assertEqual(
-            request.expected_facts.metadata_sha256,
-            metadata_sha256(request.literature.metadata),
-        )
-        self.assertTrue(request.expected_facts.expected_no_primary_pdf)
-
-    def test_disabled_and_inapplicable_sources_do_not_join_the_exhaustion_set(self) -> None:
-        events: list[str] = []
-        disabled_broken = _SourceFake(
-            "disabled",
-            AcquisitionPath.PUBLIC,
-            events=events,
-        )
-        inapplicable = _SourceFake(
-            "inapplicable",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=False,
-        )
-
         result = _prepare_and_commit(
             _api(
                 (
+                    _binding(_spec(public.route_key, public.acquisition_path), public),
                     _binding(
-                        disabled_broken,
-                        enabled=False,
-                        production=False,
-                        readiness=None,
+                        _spec(authorized.route_key, authorized.acquisition_path),
+                        authorized,
                     ),
-                    _binding(inapplicable),
                 ),
-                _PublicationFake(events=events),
-                _ExhaustionFake(events=events),
+                _Publication(events=events, success_key="public/accepted"),
+                _Exhaustion(events=events),
             ),
             _request(),
         )
 
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertNotIn("applicable:disabled", events)
-        self.assertNotIn("acquire:disabled", events)
-        self.assertIn("applicable:inapplicable", events)
-        self.assertNotIn("acquire:inapplicable", events)
-
-
-class AcquisitionFailureBoundaryTests(unittest.TestCase):
-    def test_isolated_source_failures_fall_back_to_a_later_source_success(self) -> None:
-        for code in ("network-policy", "http-403", "http-429", "network-timeout"):
-            with self.subTest(code=code):
-                events: list[str] = []
-                failed = _SourceFake(
-                    "public-one",
-                    AcquisitionPath.PUBLIC,
-                    events=events,
-                    failure=AcquisitionSourceFailure(_stable_failure(code)),
-                )
-                temporary = _temporary(
-                    1,
-                    key="authorized/hit",
-                    source_name="core",
-                    path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
-                )
-                successful = _SourceFake(
-                    "core",
-                    AcquisitionPath.AUTHORIZED_PROVIDER_API,
-                    events=events,
-                    items=(_SourceItem("authorized/hit", temporary),),
-                )
-                exhaustion = _ExhaustionFake(events=events)
-
-                result = _prepare_and_commit(
-                    _api(
-                        (_binding(failed), _binding(successful)),
-                        _PublicationFake(events=events, success_key="authorized/hit"),
-                        exhaustion,
-                    ),
-                    _request(),
-                )
-
-                self.assertIsInstance(result, AcquiredPrimaryPdf)
-                self.assertIn("acquire:public-one", events)
-                self.assertIn("acquire:core", events)
-                self.assertEqual(exhaustion.calls, 0)
-
-    def test_isolated_source_failure_is_raised_after_later_normal_misses(self) -> None:
-        events: list[str] = []
-        failure = AcquisitionSourceFailure(_stable_failure("network-timeout"))
-        failed = _SourceFake(
-            "public-one",
-            AcquisitionPath.PUBLIC,
-            events=events,
-            failure=failure,
-        )
-        missed = _SourceFake(
-            "public-two",
-            AcquisitionPath.PUBLIC,
-            events=events,
-            items=(_SourceItem("public/miss", None),),
-        )
-        exhaustion = _ExhaustionFake(events=events)
-
-        with self.assertRaises(AcquisitionSourceFailure) as raised:
-            _api(
-                (_binding(failed), _binding(missed)),
-                _PublicationFake(events=events),
-                exhaustion,
-            ).prepare_primary_pdf(_request())
-
-        self.assertIs(raised.exception, failure)
-        self.assertIn("acquire:public-two", events)
-        self.assertEqual(exhaustion.calls, 0)
-        self.assertNotIn("publish-exhaustion", events)
-
-    def test_doi_source_failure_does_not_block_an_origin_independent_core_source(self) -> None:
-        events: list[str] = []
-        doi = Identifier(namespace="doi", value="10.1002/example")
-        resolver_failure = AcquisitionSourceFailure(
-            _stable_failure("acquisition-doi-resolution-network-failed")
-        )
-        wiley = _SourceFake(
-            "wiley",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=lambda evidence: evidence.resolved_landing_origin is not None,
-        )
-        core_pdf = _temporary(
-            2,
-            key="core/hit",
-            source_name="core",
-            path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
-        )
-        core = _SourceFake(
-            "core",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            items=(_SourceItem("core/hit", core_pdf),),
-        )
-        exhaustion = _ExhaustionFake(events=events)
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(wiley), _binding(core)),
-                _PublicationFake(events=events, success_key="core/hit"),
-                exhaustion,
-                doi_landing_resolver=_DoiResolverFake(failure=resolver_failure),
-                requires_doi_landing_origin=True,
-            ),
-            _request(literature=_literature(identifiers=(doi,))),
-        )
-
         self.assertIsInstance(result, AcquiredPrimaryPdf)
-        self.assertIn("applicable:wiley", events)
-        self.assertNotIn("acquire:wiley", events)
-        self.assertIn("acquire:core", events)
-        self.assertEqual(exhaustion.calls, 0)
+        self.assertEqual(_discard_count(first), 1)
+        self.assertEqual(_discard_count(second), 1)
+        self.assertIn("attempt:public:one:public/accepted", events)
+        self.assertNotIn("execute:api:later", events)
 
-    def test_source_failure_log_contains_stage_source_code_and_safe_reason(self) -> None:
+    def test_transient_public_failure_defers_without_api_escalation_or_exhaustion(self) -> None:
         events: list[str] = []
-        failure = AcquisitionFailure(_stable_failure("public-timeout"))
-        source = _SourceFake(
+        transient = AcquisitionSourceFailure(_failure("network-timeout"))
+        public = _RouteFake(
+            "public:one",
             "public-one",
             AcquisitionPath.PUBLIC,
             events=events,
-            failure=failure,
+            failure=transient,
         )
-        api = _api(
-            (_binding(source),),
-            _PublicationFake(events=events),
-            _ExhaustionFake(events=events),
+        authorized = _RouteFake(
+            "api:later",
+            "api-later",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
         )
-
-        with self.assertLogs("sciretriever.acquisition.service", level="DEBUG") as captured:
-            with self.assertRaises(AcquisitionFailure):
-                api.prepare_primary_pdf(_request())
-
-        output = "\n".join(captured.output)
-        self.assertIn("event=acquisition-source-failed", output)
-        self.assertIn("stage=public", output)
-        self.assertIn("source=public-one", output)
-        self.assertIn("code=public-timeout", output)
-        self.assertIn("reason=The acquisition operation could not complete.", output)
-        self.assertNotIn("https://", output)
-
-    def test_explicit_retry_clear_passes_complete_expected_facts_without_source_io(self) -> None:
-        source_events: list[str] = []
-        clear_events: list[str] = []
-        source = _SourceFake("public-one", AcquisitionPath.PUBLIC, events=source_events)
-        clear = _ExhaustionClearFake(events=clear_events)
-        request = _request()
+        exhaustion = _Exhaustion(events=events)
         api = _api(
-            (_binding(source),),
-            _PublicationFake(events=[]),
-            _ExhaustionFake(events=[]),
-            exhaustion_clear=clear,
-        )
-
-        result = api.clear_exhaustion_for_explicit_retry(request.expected_facts)
-
-        self.assertIsNone(result)
-        self.assertEqual(clear.expected_facts, [request.expected_facts])
-        self.assertEqual(clear_events, ["clear-exhaustion"])
-        self.assertEqual(source_events, [])
-        self.assertEqual(source.close_count, 0)
-
-    def test_explicit_retry_clear_failure_propagates_without_source_io(self) -> None:
-        source_events: list[str] = []
-        clear_events: list[str] = []
-        source = _SourceFake("public-one", AcquisitionPath.PUBLIC, events=source_events)
-        failure = AcquisitionFailure(_stable_failure("exhaustion-clear-failed"))
-        clear = _ExhaustionClearFake(events=clear_events, failure=failure)
-        api = _api(
-            (_binding(source),),
-            _PublicationFake(events=[]),
-            _ExhaustionFake(events=[]),
-            exhaustion_clear=clear,
+            (
+                _binding(_spec(public.route_key, public.acquisition_path), public),
+                _binding(_spec(authorized.route_key, authorized.acquisition_path), authorized),
+            ),
+            _Publication(events=events),
+            exhaustion,
         )
 
         with self.assertRaises(AcquisitionFailure) as raised:
-            api.clear_exhaustion_for_explicit_retry(_request().expected_facts)
+            api.prepare_primary_pdf(_request())
 
-        self.assertIs(raised.exception, failure)
-        self.assertEqual(clear_events, ["clear-exhaustion"])
-        self.assertEqual(source_events, [])
-        self.assertEqual(source.close_count, 0)
+        self.assertEqual(raised.exception.failure.code, "network-timeout")
+        self.assertNotIn("execute:api:later", events)
+        self.assertEqual(exhaustion.calls, 0)
 
-    def test_every_enabled_source_must_have_production_implementation_and_readiness(self) -> None:
-        cases: tuple[tuple[str, Callable[[_SourceFake], PdfSourceBinding], str], ...] = (
-            (
-                "not-production",
-                lambda source: _binding(source, production=False),
-                "acquisition-source-not-production",
-            ),
-            (
-                "implementation",
-                lambda _source: _binding(
-                    None,
-                    source_name="configured",
-                    path=AcquisitionPath.PUBLIC,
-                ),
-                "acquisition-source-not-implemented",
-            ),
-            (
-                "readiness",
-                lambda source: _binding(source, readiness=None),
-                "acquisition-source-readiness-missing",
-            ),
-            (
-                "policy",
-                lambda source: _binding(
-                    source,
-                    readiness=SourceReadiness(
-                        is_ready=False,
-                        failure=_stable_failure("access-policy-missing"),
-                    ),
-                ),
-                "access-policy-missing",
-            ),
-            (
-                "credential",
-                lambda source: _binding(
-                    source,
-                    readiness=SourceReadiness(
-                        is_ready=False,
-                        failure=_stable_failure("provider-credential-missing"),
-                    ),
-                ),
-                "provider-credential-missing",
-            ),
+    def test_unrelated_unconfigured_route_is_omitted_but_selected_route_requires_action(
+        self,
+    ) -> None:
+        spec = _spec(
+            "api:configured-only",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            readiness=RouteReadiness.UNCONFIGURED,
+            required_identifier_namespaces=("doi",),
         )
-        for label, make_binding, expected_code in cases:
-            with self.subTest(label=label):
-                events: list[str] = []
-                source = _SourceFake("configured", AcquisitionPath.PUBLIC, events=events)
-                binding = make_binding(source)
-                exhaustion = _ExhaustionFake(events=events)
+        exhaustion = _Exhaustion(events=[])
+        api = _api(
+            (_binding(spec, None),),
+            _Publication(events=[]),
+            exhaustion,
+        )
 
-                with self.assertRaises(AcquisitionFailure) as raised:
-                    _api(
-                        (binding,),
-                        _PublicationFake(events=events),
-                        exhaustion,
-                    ).prepare_primary_pdf(_request())
+        result = _prepare_and_commit(api, _request())
+        self.assertIsInstance(result, NoPrimaryPdf)
+        self.assertEqual(exhaustion.calls, 1)
 
-                self.assertEqual(raised.exception.failure.code, expected_code)
-                self.assertEqual(exhaustion.calls, 0)
-                self.assertFalse(any(event.startswith("acquire:") for event in events))
-
-    def test_network_cancellation_and_coordinator_failures_never_publish_exhaustion(self) -> None:
-        for code in ("network-transport", "cancelled", "access-coordinator"):
-            with self.subTest(code=code):
-                events: list[str] = []
-                source = _SourceFake(
-                    "public-one",
-                    AcquisitionPath.PUBLIC,
-                    events=events,
-                    failure=AcquisitionFailure(_stable_failure(code)),
+        with self.assertRaises(AcquisitionFailure) as raised:
+            api.prepare_primary_pdf(
+                _request(
+                    literature=_literature(
+                        identifiers=(Identifier(namespace="doi", value="10.1234/example"),)
+                    )
                 )
-                exhaustion = _ExhaustionFake(events=events)
+            )
+        self.assertEqual(raised.exception.failure.code, "acquisition-route-unconfigured")
+        self.assertEqual(exhaustion.calls, 1)
 
-                with self.assertRaises(AcquisitionFailure) as raised:
-                    _api(
-                        (_binding(source),),
-                        _PublicationFake(events=events),
-                        exhaustion,
-                    ).prepare_primary_pdf(_request())
+    def test_normal_miss_publishes_exhaustion_only_at_commit(self) -> None:
+        events: list[str] = []
+        route = _RouteFake(
+            "public:one",
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+        )
+        exhaustion = _Exhaustion(events=events)
+        api = _api(
+            (_binding(_spec(route.route_key, route.acquisition_path), route),),
+            _Publication(events=events),
+            exhaustion,
+        )
 
-                self.assertEqual(raised.exception.failure.code, code)
-                self.assertEqual(exhaustion.calls, 0)
+        prepared = api.prepare_primary_pdf(_request())
+        self.assertEqual(exhaustion.calls, 0)
+        result = api.commit_primary_pdf(prepared)
 
-    def test_primary_publication_failure_is_system_failure_not_no_primary_pdf(self) -> None:
+        self.assertIsInstance(result, NoPrimaryPdf)
+        self.assertEqual(exhaustion.calls, 1)
+        self.assertEqual(exhaustion.commands[0].observation_ids, ())
+
+    def test_excluded_candidate_skips_attempt_and_exhausts_normally(self) -> None:
+        events: list[str] = []
+        temporary = _temporary(
+            1,
+            key="public/excluded",
+            source_name="public-one",
+            path=AcquisitionPath.PUBLIC,
+        )
+        route = _RouteFake(
+            "public:one",
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            items=(_RouteItem("public/excluded", temporary),),
+        )
+        result = _prepare_and_commit(
+            _api(
+                (_binding(_spec(route.route_key, route.acquisition_path), route),),
+                _Publication(events=events),
+                _Exhaustion(events=events),
+            ),
+            _request(excluded_candidate_keys=frozenset({"public/excluded"})),
+        )
+
+        self.assertIsInstance(result, NoPrimaryPdf)
+        self.assertNotIn("attempt:public:one:public/excluded", events)
+        self.assertEqual(_discard_count(temporary), 0)
+
+    def test_publication_and_exhaustion_failures_never_become_no_primary_pdf(self) -> None:
         events: list[str] = []
         temporary = _temporary(
             1,
@@ -1270,86 +689,95 @@ class AcquisitionFailureBoundaryTests(unittest.TestCase):
             source_name="public-one",
             path=AcquisitionPath.PUBLIC,
         )
-        source = _SourceFake(
+        route = _RouteFake(
+            "public:one",
             "public-one",
             AcquisitionPath.PUBLIC,
             events=events,
-            items=(_SourceItem("public/candidate", temporary),),
+            items=(_RouteItem("public/candidate", temporary),),
         )
-        exhaustion = _ExhaustionFake(events=events)
-
-        with self.assertRaises(AcquisitionFailure) as raised:
-            _prepare_and_commit(
-                _api(
-                    (_binding(source),),
-                    _PublicationFake(
-                        events=events,
-                        failure=AcquisitionFailure(_stable_failure("primary-publication-failed")),
-                    ),
-                    exhaustion,
+        with self.assertRaises(AcquisitionFailure) as publication_error:
+            _api(
+                (_binding(_spec(route.route_key, route.acquisition_path), route),),
+                _Publication(
+                    events=events,
+                    failure=AcquisitionFailure(_failure("primary-publication-failed")),
                 ),
-                _request(),
-            )
-
-        self.assertEqual(raised.exception.failure.code, "primary-publication-failed")
-        self.assertEqual(exhaustion.calls, 0)
+                _Exhaustion(events=events),
+            ).prepare_primary_pdf(_request())
+        self.assertEqual(publication_error.exception.failure.code, "primary-publication-failed")
         self.assertEqual(_discard_count(temporary), 1)
 
-    def test_exhaustion_publication_failure_is_system_failure_not_no_primary_pdf(self) -> None:
-        events: list[str] = []
-        source = _SourceFake("public-one", AcquisitionPath.PUBLIC, events=events)
-        exhaustion = _ExhaustionFake(
-            events=events,
-            failure=AcquisitionFailure(_stable_failure("exhaustion-publication-failed")),
+        exhaustion = _Exhaustion(
+            events=[],
+            failure=AcquisitionFailure(_failure("exhaustion-publication-failed")),
         )
-
-        with self.assertRaises(AcquisitionFailure) as raised:
-            api = _api(
-                (_binding(source),),
-                _PublicationFake(events=events),
-                exhaustion,
-            )
-            prepared = api.prepare_primary_pdf(_request())
-            api.commit_primary_pdf(prepared)
-
-        self.assertEqual(raised.exception.failure.code, "exhaustion-publication-failed")
+        api = _api((), _Publication(events=[]), exhaustion)
+        with self.assertRaises(AcquisitionFailure) as exhaustion_error:
+            api.commit_primary_pdf(api.prepare_primary_pdf(_request()))
+        self.assertEqual(
+            exhaustion_error.exception.failure.code,
+            "exhaustion-publication-failed",
+        )
         self.assertEqual(exhaustion.calls, 1)
 
+    def test_explicit_retry_clear_is_source_free_and_preserves_failure(self) -> None:
+        events: list[str] = []
+        route = _RouteFake(
+            "public:one",
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+        )
+        request = _request()
+        clear = _Clear(events=events)
+        api = _api(
+            (_binding(_spec(route.route_key, route.acquisition_path), route),),
+            _Publication(events=events),
+            _Exhaustion(events=events),
+            clear=clear,
+        )
 
-class AcquisitionRoutingContractTests(unittest.TestCase):
+        api.clear_exhaustion_for_explicit_retry(request.expected_facts)
+
+        self.assertEqual(clear.expected_facts, [request.expected_facts])
+        self.assertEqual(events, ["clear-exhaustion"])
+        self.assertEqual(route.close_count, 0)
+
+        failure = AcquisitionFailure(_failure("exhaustion-clear-failed"))
+        failing = _api(
+            (),
+            _Publication(events=[]),
+            _Exhaustion(events=[]),
+            clear=_Clear(events=[], failure=failure),
+        )
+        with self.assertRaises(AcquisitionFailure) as raised:
+            failing.clear_exhaustion_for_explicit_retry(request.expected_facts)
+        self.assertIs(raised.exception, failure)
+
+
+class AcquisitionBoundaryShapeTests(unittest.TestCase):
     def test_request_has_one_ports_owned_definition_and_public_api_export(self) -> None:
         self.assertIs(acquisition_ports.AcquisitionRequest, AcquisitionRequest)
         self.assertIs(acquisition_api.AcquisitionRequest, AcquisitionRequest)
-        self.assertEqual(
-            AcquisitionRequest.__module__,
-            "sciretriever.acquisition.ports",
-        )
+        self.assertEqual(AcquisitionRequest.__module__, "sciretriever.acquisition.ports")
 
-    def test_evidence_is_local_and_ordered_without_performing_source_io(self) -> None:
+    def test_evidence_is_local_ordered_and_contains_no_route_execution(self) -> None:
         hint = AssetHint(
             url="https://repository.example.invalid/paper.pdf",
             kind=AssetHintKind.DIRECT_FILE,
             media_type="application/pdf",
             asset_role=AssetRole.PRIMARY_PDF,
         )
-        literature = _literature(
-            publisher="Example Publisher",
-            identifiers=(
-                Identifier(namespace="doi", value="10.1016/example"),
-                Identifier(namespace="pii", value="S012345678900001X"),
-            ),
-        )
         request = _request(
-            literature=literature,
-            observations=(
-                _observation(
-                    10,
-                    provider_name="example-index",
-                    record_id="record-10",
-                    asset_hints=(hint,),
+            literature=_literature(
+                publisher="Example Publisher",
+                identifiers=(
+                    Identifier(namespace="doi", value="10.1016/example"),
+                    Identifier(namespace="pii", value="S012345678900001X"),
                 ),
             ),
-            resolved_landing_origin="https://publisher.example.invalid",
+            observations=(_observation(10, asset_hints=(hint,)),),
         )
 
         evidence = build_acquisition_evidence(request)
@@ -1360,104 +788,28 @@ class AcquisitionRoutingContractTests(unittest.TestCase):
                 RoutingEvidenceKind.ASSET_HINT,
                 RoutingEvidenceKind.STABLE_PROVIDER_LOCATOR,
                 RoutingEvidenceKind.PROVIDER_RECORD_IDENTITY,
-                RoutingEvidenceKind.RESOLVED_LANDING_ORIGIN,
                 RoutingEvidenceKind.WEAK_PUBLISHER_OR_DOI_PREFIX,
             ),
         )
         self.assertEqual(evidence.asset_hints[0].hint, hint)
         self.assertEqual(evidence.stable_provider_locators[0].namespace, "pii")
-        self.assertEqual(evidence.provider_record_identities[0].provider_name, "example-index")
-        self.assertEqual(evidence.provider_record_identities[0].record_id, "record-10")
-        self.assertEqual(evidence.resolved_landing_origin, "https://publisher.example.invalid")
         self.assertEqual(evidence.weak_hints.publisher, "Example Publisher")
         self.assertEqual(evidence.weak_hints.doi_prefixes, ("10.1016",))
 
-    def test_publisher_doi_prefix_and_observation_source_do_not_prove_authorized_applicability(
-        self,
-    ) -> None:
-        events: list[str] = []
-        literature = _literature(
-            publisher="Elsevier",
-            identifiers=(Identifier(namespace="doi", value="10.1016/example"),),
-        )
-        observation = _observation(
-            10,
-            provider_name="elsevier",
-            record_id="scopus-index-record",
-        )
-
-        def has_strong_elsevier_location(evidence: AcquisitionEvidence) -> bool:
-            return any(
-                locator.namespace == "pii" for locator in evidence.stable_provider_locators
-            ) or any(
-                identity.provider_name == "elsevier" and identity.record_id.startswith("pii:")
-                for identity in evidence.provider_record_identities
-            )
-
-        authorized = _SourceFake(
-            "elsevier-content",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=has_strong_elsevier_location,
-            items=(_SourceItem("authorized/should-not-run", None),),
-        )
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(authorized),),
-                _PublicationFake(events=events),
-                _ExhaustionFake(events=events),
-            ),
-            _request(literature=literature, observations=(observation,)),
-        )
-
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertIn("applicable:elsevier-content", events)
-        self.assertNotIn("acquire:elsevier-content", events)
-
-    def test_is_applicable_receives_only_prebuilt_evidence_and_never_opens_source_io(self) -> None:
-        events: list[str] = []
-        source = _SourceFake(
-            "authorized-one",
-            AcquisitionPath.AUTHORIZED_PROVIDER_API,
-            events=events,
-            applicable=False,
-            items=(_SourceItem("authorized/not-applicable", None),),
-        )
-
-        result = _prepare_and_commit(
-            _api(
-                (_binding(source),),
-                _PublicationFake(events=events),
-                _ExhaustionFake(events=events),
-            ),
-            _request(),
-        )
-
-        self.assertIsInstance(result, NoPrimaryPdf)
-        self.assertEqual(events.count("applicable:authorized-one"), 1)
-        self.assertNotIn("acquire:authorized-one", events)
-
-    def test_public_api_and_ports_have_no_transport_browser_or_vendor_types(self) -> None:
-        prepare_signature = str(inspect.signature(AcquisitionApi.prepare_primary_pdf))
-        commit_signature = str(inspect.signature(AcquisitionApi.commit_primary_pdf))
-        discard_signature = str(inspect.signature(AcquisitionApi.discard_prepared))
-        clear_signature = str(inspect.signature(AcquisitionApi.clear_exhaustion_for_explicit_retry))
-        source_signature = str(inspect.signature(acquisition_ports.PdfSource.acquire))
-        publication_signature = str(
-            inspect.signature(acquisition_ports.PrimaryPdfPreparationPort.prepare_primary_pdf)
-        )
+    def test_public_ports_expose_route_execution_and_no_legacy_source_contract(self) -> None:
         exposed = " ".join(
             (
-                prepare_signature,
-                commit_signature,
-                discard_signature,
-                clear_signature,
-                source_signature,
-                publication_signature,
+                str(inspect.signature(AcquisitionApi.prepare_primary_pdf)),
+                str(inspect.signature(AcquisitionApi.commit_primary_pdf)),
+                str(inspect.signature(AcquisitionApi.discard_prepared)),
+                str(inspect.signature(RouteExecutionContext)),
+                str(
+                    inspect.signature(
+                        acquisition_ports.PrimaryPdfPreparationPort.prepare_primary_pdf
+                    )
+                ),
             )
         )
-
         for forbidden in (
             "AccessFailure",
             "BoundedByteStream",
@@ -1470,6 +822,13 @@ class AcquisitionRoutingContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, exposed)
             self.assertFalse(hasattr(acquisition_api, forbidden))
             self.assertFalse(hasattr(acquisition_ports, forbidden))
+        for legacy in (
+            "PdfSource",
+            "PdfSourceBinding",
+            "SourceReadiness",
+            "DoiLandingOriginResolver",
+        ):
+            self.assertFalse(hasattr(acquisition_ports, legacy))
 
 
 if __name__ == "__main__":

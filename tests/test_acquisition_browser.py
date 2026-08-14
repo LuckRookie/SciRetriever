@@ -10,11 +10,11 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import BinaryIO, cast
 
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     CandidateKeyTracker,
-    PdfSource,
     TemporaryPdf,
 )
 from sciretriever.acquisition.routing import (
@@ -23,7 +23,7 @@ from sciretriever.acquisition.routing import (
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.sources.browser import (
-    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
     BrowserFlowSession,
     BrowserRunner,
     ControlledBrowserPdfSource,
@@ -349,21 +349,23 @@ def _payload(temporary_pdf: TemporaryPdf) -> bytes:
 class BrowserRuleContractTests(unittest.TestCase):
     def test_production_catalog_and_readiness_are_explicitly_empty(self) -> None:
         self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
-        self.assertFalse(CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready)
-        self.assertIsNotNone(CONTROLLED_BROWSER_PRODUCTION_READINESS.failure)
-        assert CONTROLLED_BROWSER_PRODUCTION_READINESS.failure is not None
+        self.assertIs(
+            CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
+            RouteReadiness.UNSUPPORTED,
+        )
+        self.assertIsNotNone(CONTROLLED_BROWSER_PRODUCTION_STATUS.failure)
+        assert CONTROLLED_BROWSER_PRODUCTION_STATUS.failure is not None
         self.assertEqual(
-            CONTROLLED_BROWSER_PRODUCTION_READINESS.failure.code,
+            CONTROLLED_BROWSER_PRODUCTION_STATUS.failure.code,
             "acquisition-browser-production-unavailable",
         )
 
         runner = _FakeRunner([])
         source = ControlledBrowserPdfSource(runner=runner)
-        self.assertIsInstance(source, PdfSource)
         request = _request(
             observations=(_observation(10, (_landing_hint(),)),),
         )
-        self.assertFalse(source.is_applicable(_evidence(request)))
+        self.assertEqual(source._actions(_evidence(request)), ())
         self.assertEqual(runner.calls, [])
 
     def test_rule_uses_exact_https_dns_origins_and_canonical_tokens(self) -> None:
@@ -499,7 +501,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
             )
         )
 
-        deliveries = list(source.acquire(request, _evidence(request), CandidateKeyTracker()))
+        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
 
         self.assertEqual(len(deliveries), 1)
         self.assertEqual(deliveries[0].safe_source_url, f"{origin}/article.pdf")
@@ -513,7 +515,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         wrong_port_source = _source(wrong_port_runner, rule=rule)
         with self.assertRaises(AcquisitionFailure) as caught:
             list(
-                wrong_port_source.acquire(
+                wrong_port_source._deliveries(
                     request,
                     _evidence(request),
                     CandidateKeyTracker(),
@@ -534,7 +536,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         for index, hint in enumerate(applicable_hints, start=10):
             with self.subTest(hint=hint):
                 request = _request(observations=(_observation(index, (hint,)),))
-                self.assertTrue(source.is_applicable(_evidence(request)))
+                self.assertTrue(source._actions(_evidence(request)))
 
         excluded_hints = (
             _landing_hint(kind=AssetHintKind.DIRECT_FILE),
@@ -546,7 +548,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         for index, hint in enumerate(excluded_hints, start=20):
             with self.subTest(hint=hint):
                 request = _request(observations=(_observation(index, (hint,)),))
-                self.assertFalse(source.is_applicable(_evidence(request)))
+                self.assertFalse(source._actions(_evidence(request)))
         self.assertEqual(runner.calls, [])
 
     def test_doi_requires_matching_resolved_origin_while_weak_evidence_never_applies(self) -> None:
@@ -561,22 +563,22 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
             literature=doi_literature,
             observations=(_observation(30, provider_name="publisher.test"),),
         )
-        self.assertFalse(source.is_applicable(_evidence(weak)))
+        self.assertFalse(source._actions(_evidence(weak)))
 
         origin_without_doi = _request(resolved_landing_origin="https://publisher.test")
-        self.assertFalse(source.is_applicable(_evidence(origin_without_doi)))
+        self.assertFalse(source._actions(_evidence(origin_without_doi)))
 
         mismatched = _request(
             literature=doi_literature,
             resolved_landing_origin="https://unknown.test",
         )
-        self.assertFalse(source.is_applicable(_evidence(mismatched)))
+        self.assertFalse(source._actions(_evidence(mismatched)))
 
         strong = _request(
             literature=doi_literature,
             resolved_landing_origin="https://publisher.test",
         )
-        self.assertTrue(source.is_applicable(_evidence(strong)))
+        self.assertTrue(source._actions(_evidence(strong)))
         self.assertEqual(runner.calls, [])
 
     def test_evidence_from_another_request_fails_before_browser_io(self) -> None:
@@ -593,7 +595,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(AcquisitionFailure) as caught:
-            source.acquire(first, _evidence(other), CandidateKeyTracker())
+            source._deliveries(first, _evidence(other), CandidateKeyTracker())
         self.assertEqual(caught.exception.failure.code, "acquisition-browser-contract")
         self.assertEqual(runner.calls, [])
 
@@ -628,7 +630,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         )
         request = _request(observations=(_observation(42, (_landing_hint(),)),))
         self.assertEqual(
-            list(source.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
             [],
         )
         call = runner.calls[0]
@@ -675,7 +677,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             )
         )
 
-        deliveries = list(source.acquire(request, _evidence(request), tracker))
+        deliveries = list(source._deliveries(request, _evidence(request), tracker))
 
         self.assertEqual(len(deliveries), 1)
         delivery = deliveries[0]
@@ -710,7 +712,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         request = _request(observations=(_observation(51, duplicate_hints),))
         first_tracker = CandidateKeyTracker()
-        first = list(first_source.acquire(request, _evidence(request), first_tracker))
+        first = list(first_source._deliveries(request, _evidence(request), first_tracker))
         self.assertEqual(len(first), 1)
         self.assertEqual(len(first_runner.calls), 1)
         key = first[0].candidate.candidate_key
@@ -719,7 +721,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         excluded_runner = _FakeRunner([])
         excluded_source = _source(excluded_runner)
         excluded = list(
-            excluded_source.acquire(
+            excluded_source._deliveries(
                 request,
                 _evidence(request),
                 CandidateKeyTracker((key,)),
@@ -740,7 +742,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            list(source.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
             [],
         )
         self.assertEqual(len(runner.calls), 1)
@@ -758,14 +760,26 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         observe_source = _source(observe_runner, rule=observe_rule)
         request = _request(observations=(_observation(52, (_landing_hint(),)),))
         self.assertEqual(
-            list(observe_source.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(
+                observe_source._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            ),
             [],
         )
         self.assertEqual(observe_runner.sessions[0].clicks, [])
 
         click_runner = _FakeRunner([_download()])
         click_source = _source(click_runner)
-        clicked = list(click_source.acquire(request, _evidence(request), CandidateKeyTracker()))
+        clicked = list(
+            click_source._deliveries(
+                request,
+                _evidence(request),
+                CandidateKeyTracker(),
+            )
+        )
         self.assertEqual(
             click_runner.sessions[0].clicks,
             ["a[data-action='pdf']"],
@@ -784,7 +798,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            list(source.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
             [],
         )
 
@@ -802,7 +816,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
 
         no_download = _source(_FakeRunner([_failure("no-download")]))
         self.assertEqual(
-            list(no_download.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(
+                no_download._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            ),
             [],
         )
 
@@ -820,7 +840,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             with self.subTest(code=code):
                 source = _source(_FakeRunner([_failure(code)]))
                 with self.assertRaises(AcquisitionFailure) as caught:
-                    list(source.acquire(request, _evidence(request), CandidateKeyTracker()))
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
                 self.assertEqual(
                     caught.exception.failure.code,
                     f"acquisition-browser-{code}-failed",
@@ -841,7 +867,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 )
                 source = _source(runner)
                 with self.assertRaises(AcquisitionFailure) as caught:
-                    list(source.acquire(request, _evidence(request), CandidateKeyTracker()))
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
                 self.assertEqual(caught.exception.failure.code, expected_code)
                 self.assertEqual(runner.sessions[0].clicks, [])
                 self.assertEqual(runner.sessions[0].fill_calls, [])
@@ -863,7 +895,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         request = _request(observations=(_observation(55, (_landing_hint(),)),))
 
         self.assertEqual(
-            list(source.acquire(request, _evidence(request), CandidateKeyTracker())),
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
             [],
         )
 
@@ -891,7 +923,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             ]
         )
         allowed_source = _source(allowed_runner)
-        allowed = list(allowed_source.acquire(request, _evidence(request), CandidateKeyTracker()))
+        allowed = list(
+            allowed_source._deliveries(
+                request,
+                _evidence(request),
+                CandidateKeyTracker(),
+            )
+        )
         self.assertEqual(len(allowed), 1)
         allowed[0].content.discard()
 
@@ -900,7 +938,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         forbidden_source = _source(forbidden_runner)
         with self.assertRaises(AcquisitionFailure) as caught:
-            list(forbidden_source.acquire(request, _evidence(request), CandidateKeyTracker()))
+            list(
+                forbidden_source._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(caught.exception.failure.code, "acquisition-browser-policy-failed")
         # The neutral result exists only after the fake runner accessed it;
         # this assertion prevents tests from overstating postcheck semantics.
@@ -911,7 +955,13 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         request = _request(observations=(_observation(57, (_landing_hint(),)),))
         exception_source = _source(_FakeRunner([RuntimeError("private sentinel")]))
         with self.assertRaises(AcquisitionFailure) as exception_caught:
-            list(exception_source.acquire(request, _evidence(request), CandidateKeyTracker()))
+            list(
+                exception_source._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(
             exception_caught.exception.failure.code,
             "acquisition-browser-runtime-failed",
@@ -920,14 +970,20 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
 
         contract_source = _source(_FakeRunner([object()]))
         with self.assertRaises(AcquisitionFailure) as contract_caught:
-            list(contract_source.acquire(request, _evidence(request), CandidateKeyTracker()))
+            list(
+                contract_source._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            )
         self.assertEqual(contract_caught.exception.failure.code, "acquisition-browser-contract")
 
     def test_generator_close_and_explicit_discard_release_temporary_bytes(self) -> None:
         runner = _FakeRunner([_download(b"temporary")])
         source = _source(runner)
         request = _request(observations=(_observation(58, (_landing_hint(),)),))
-        iterator = iter(source.acquire(request, _evidence(request), CandidateKeyTracker()))
+        iterator = iter(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
         delivery = next(iterator)
         self.assertEqual(_payload(delivery), b"temporary")
 

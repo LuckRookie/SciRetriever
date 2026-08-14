@@ -19,10 +19,11 @@ from PyPDF2 import PdfWriter
 
 import sciretriever.acquisition.sources.browser as source_module
 import sciretriever.network.browser as browser_module
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import AcquisitionExpectedFacts, CandidateKeyTracker
 from sciretriever.acquisition.routing import AcquisitionRequest, build_acquisition_evidence
 from sciretriever.acquisition.sources.browser import (
-    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
     ControlledBrowserPdfSource,
 )
 from sciretriever.acquisition.sources.browser_rules import (
@@ -350,7 +351,7 @@ request = AcquisitionRequest(
 )
 evidence = build_acquisition_evidence(request)
 tracker = CandidateKeyTracker()
-deliveries = list(source.acquire(request, evidence, tracker))
+deliveries = list(source._deliveries(request, evidence, tracker))
 if len(deliveries) != 1:
     raise RuntimeError("controlled Browser did not produce exactly one delivery")
 delivery = deliveries[0]
@@ -375,7 +376,7 @@ payload = {
         "source_name": delivery.candidate.source_name,
     },
     "evidence": {
-        "applicable": source.is_applicable(evidence),
+        "applicable": bool(source._actions(evidence)),
         "priority": [item.value for item in evidence.priority],
         "tried_candidate_keys": sorted(tracker.tried_candidate_keys),
     },
@@ -386,9 +387,9 @@ payload = {
     "production_boundary": {
         "catalog_rule_count": len(PRODUCTION_BROWSER_RULE_CATALOG.rules),
         "readiness_code": None
-        if CONTROLLED_BROWSER_PRODUCTION_READINESS.failure is None
-        else CONTROLLED_BROWSER_PRODUCTION_READINESS.failure.code,
-        "ready": CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready,
+        if CONTROLLED_BROWSER_PRODUCTION_STATUS.failure is None
+        else CONTROLLED_BROWSER_PRODUCTION_STATUS.failure.code,
+        "ready": CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY,
     },
     "provenance": delivery.provenance.model_dump(mode="json"),
     "runtime": {
