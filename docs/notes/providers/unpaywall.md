@@ -1,9 +1,10 @@
 # Unpaywall
 
-- 最后核对：2026-08-07
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：asset `unpaywall`
 - 供应商角色：按 DOI 或标题查询开放获取状态与全文 locator；不是 SciRetriever 元数据或引用 provider
-- 当前仓库接入状态：只有 asset 选择键、通用 Protocol/adapter/registry；没有 Unpaywall 专用生产 client，registry 未连接到当前 Assets Service
+- 当前仓库接入状态：专用 DOI lookup 与公开 PDF locator Source 已进入生产 Acquisition registry；不作为 Metadata 或 citation provider
 
 ## 1. 官方入口与证据
 
@@ -21,6 +22,8 @@
 Unpaywall API 不使用 API key，但每个请求必须提供用于识别调用方的 `email` query 参数。生产实现应使用团队控制的有效联系邮箱，不应复制文档中的公开示例值；邮箱属于请求配置，不能进入日志、持久 URL、业务 Model 或 provenance。
 
 官方当前要求合理使用，并建议每日不超过 100,000 calls。公开页面没有给出稳定的每秒并发或响应 header 合同；实现仍需使用有界并发、timeout、退避和缓存。HTTP 429 应按限流处理，不能通过高频重试消耗共享服务。
+
+当前实现以 `unpaywall/api` 为共享 scope，采用项目审慎的 `max_concurrency = 1`，并把官方建议落实为 100,000 次/24 小时 rolling window。100,000/日来自官方建议；单并发是项目安全值，不是供应商宣称的每秒上限。标准 `Retry-After` 会形成共享阻塞，无 header 的 `5xx` 使用保守退避。
 
 ## 3. 查询接口与响应层级
 
@@ -159,4 +162,6 @@ raw_affiliation_strings[]
 
 ## 10. 当前实现边界
 
-`unpaywall` 仅是当前 asset 允许键。仓库没有 email 注入、DOI/title 请求、分页、location 解析、去重或 OA 字段转换。通用 resolver adapter 只有调用方注入 `ResolverClient` 后才能工作，且 registry 当前未接到 Assets Service；配置接受该键不代表用户已能运行 Unpaywall acquisition。
+`src/sciretriever/acquisition/sources/unpaywall.py` 已实现按规范 DOI 调用 `/v2/{doi}`、校验响应 DOI 与 `is_oa`、跳过 embargoed location，并按 `best_oa_location`、`first_oa_location`、`oa_locations[]` 的运行时顺序去重 `url_for_pdf` 与 landing locator。联系邮箱来自普通配置，只作为绑定到 `https://api.unpaywall.org` 的私有 query credential 交给 Network；安全日志、候选、provenance 和异常不保留邮箱。
+
+locator 必须再经统一 `PublicLocatorFetcher` 的 redirect 重新准入、实际响应和 PDF 检查；Unpaywall 的 `is_oa`、`url_for_pdf` 或格式声明不直接形成资产事实。当前没有标题搜索、Unpaywall Metadata adapter、引用能力或 Browser 站点规则。本轮 2026-08-15 没有调用真实 API、发送真实联系邮箱或下载 PDF；所有实现验证使用 fake transport、fixture 与可注入 clock，既有匿名请求证据仍以 2026-08-07 记录为准。

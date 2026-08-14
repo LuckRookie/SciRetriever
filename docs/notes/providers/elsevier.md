@@ -1,9 +1,10 @@
 # Elsevier
 
-- 最后核对：2026-08-07
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：metadata `elsevier`；asset `elsevier`
 - 供应商角色：Scopus/Elsevier 元数据查询，以及受产品订阅和授权约束的文章全文/对象获取
-- 当前仓库接入状态：只有选择键、通用 Protocol/adapter/registry；没有 Elsevier 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter 已进入生产 registry；Elsevier 授权主 PDF route 仍明确标记为 unsupported
 
 ## 1. 官方入口与证据
 
@@ -42,6 +43,14 @@ X-RateLimit-Reset
 | ScienceDirect Search v2 | 20,000 | 2 req/s | 与 Scopus Search 是不同产品 |
 
 这些是供应商默认值，不是 SciRetriever 应用级预算。429 既可能表示 quota exceeded，也可能是瞬时 throttle；实现需结合响应体/headers、重置时间和有界退避判断。key、token、机构身份和 usage headers 不进入业务 Model 或日志。
+
+当前实现没有因为两项产品都叫 Scopus 而合并额度：topic search/probe 使用
+`elsevier/api/scopus-search`，以 20,000/7 天 rolling window 为本地保守上限；单条 lookup
+使用 `elsevier/api/abstract-retrieval`，以 10,000/7 天为独立上限。两者都采用单并发和
+0.125 秒 start interval，略严于官方 9 req/s。rolling window 是对固定重置周期的项目
+保守表达；实时 `X-RateLimit-Limit`、`Remaining`、`Reset` 和标准 `Retry-After` 只反馈到
+实际请求的产品 scope，畸形或无 header 的 429/5xx fail closed。operator policy 可以同时
+收紧两项产品，但不能放宽官方基线。
 
 历史 `verified`，2026-07-21：当时配置的一枚 key 对官方 API 最小请求返回 HTTP 200；与此同时，旧分层 acquisition 路径在两个真实样本上均超过外层 90 秒限制。这只证明该时间点 key/API 可达，以及历史 client/transport 存在 timeout 问题；不证明当前凭据仍有效、内容已授权或 Composition 已接入。本轮没有读取或复用该 key。
 
@@ -194,4 +203,6 @@ full-text-retrieval-response {
 
 ## 10. 当前实现边界
 
-`elsevier` 是 metadata/asset 两类允许键，但仓库没有 API key/token 注入、Scopus query/cursor、WADL schema、Abstract/Article/Object 解析、entitlement 或 asset media type 选择。`VendorMetadataRecord` 当前也只有精简 title/authors/year/identifiers/abstract，不能承载本文列出的全部目标字段。所有实际协议仍需调用方注入具体 client，且 registry 未接业务 Service；配置选择不代表生产接入。
+`src/sciretriever/metadata/providers/elsevier/adapter.py` 已实现显式 credential readiness、Scopus `COMPLETE` topic search/pagination、按 EID/Scopus ID/DOI/PII/PMID 的 Abstract Retrieval lookup、结构化作者/单位、关键词、bibliography 原文与显式 target ID、引用计数和安全 landing AssetHint 转换。API key 与可选 institution token 只作为绑定到 `https://api.elsevier.com` 的私有 header 进入 Network；不会写入 URL、日志、Model 或 provenance。
+
+该 adapter 不调用 Article Retrieval 或 Object Retrieval，也不把 `@ref=full-text`、Article XML/JSON、对象资源或机构认证成功冒充主 PDF。Acquisition registry 对 `elsevier` 的 authorized PDF capability 继续明确返回 unsupported；公开 landing locator 仍只能走统一的公开页面路径，Browser 生产规则尚未接入。2026-08-15 本轮没有读取真实 key、调用真实 Elsevier API、验证账户 entitlement 或下载内容；Search/Abstract schema、两套额度隔离与反馈均由离线 fake/fixture 验证。

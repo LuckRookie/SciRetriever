@@ -1,9 +1,10 @@
 # arXiv
 
-- 最后核对：2026-08-07
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：metadata `arxiv`；asset `arxiv`
 - 供应商角色：预印本元数据与主文 PDF 线索
-- 当前仓库接入状态：只有选择键、通用 `MetadataClient` / `ResolverClient` Protocol、通用 adapter 与 lazy registry；没有 arXiv 专用生产 client，registry 也未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：专用 Metadata Atom adapter 与公开 PDF Source 均已进入生产 registry；两者共享 `arxiv/api` 准入范围
 
 ## 1. 官方入口与证据
 
@@ -18,6 +19,8 @@
 ## 2. 认证、政策与限流
 
 Legacy arXiv API 不要求 API key。官方 Terms 要求所有受调用方控制的机器合计最多每三秒一次请求，并且同一时间只使用一个连接；规则可能变化，超过该速率需联系 arXiv。版权归作者或出版者，API 可访问不等于内容可任意再利用。
+
+当前 Metadata 与 Acquisition 都声明 `max_concurrency = 1`、`min_start_interval = 3s`，并使用同一 `AccessScope(provider_name="arxiv", channel="api")`，所以同一进程内的搜索、lookup 和 PDF locator lookup 不会分别绕开官方限制。标准 `Retry-After` 会形成共享阻塞；无可用 header 的 `5xx` 也按项目保守退避处理。这里的数值来自上述官方 Terms，`5xx` 退避则是项目安全策略，不是 arXiv 公布的额外额度。
 
 API 文档仍以 `http://export.arxiv.org/api/query` 举例；实际核验时 HTTPS 可用。SciRetriever 候选实现仍应只接受经过统一 Network policy 检查的 HTTPS URL，不能把官方历史 HTTP 示例直接变成生产例外。
 
@@ -137,9 +140,6 @@ arXiv 记录代表预印本这一事实很强，但 `MetadataObservation.version
 
 ## 10. 当前实现边界
 
-`src/sciretriever/composition/configuration/validation.py` 和
-`composition/wiring/provider_registry.py` 接受 `arxiv` metadata/asset 选择键。当前
-`infrastructure/sources/metadata/providers.py` 只定义窄的通用
-`VendorMetadataRecord` 与 `MetadataClient`，asset 侧只定义通用 `ResolverClient`；没有
-Atom 解析、arXiv 查询构造、三秒节流、版本字段或 PDF link 转换代码。选择键、Protocol、fake
-或 lazy factory 都不是生产 client，也没有当前可运行的终端用户 workflow。
+`src/sciretriever/metadata/providers/arxiv/adapter.py` 已实现匿名 probe、topic search、按 arXiv ID lookup、Atom 分页与中性 Metadata 转换；`src/sciretriever/acquisition/sources/arxiv.py` 按版本对齐的 arXiv identity 查询 Atom，只把明确的官方 PDF link 交给统一 `PublicLocatorFetcher`。最终字节仍经过 Network 安全边界、PDF 检查和不可变发布，Atom 的媒体类型声明不会直接形成资产事实。
+
+Metadata 与 Acquisition 共用 `arxiv/api` scope 和上述官方政策。当前实现不提供引用扩展、补充材料、许可证推断或 Browser 站点规则。本轮 2026-08-15 只使用 fake transport、fixture 和可注入 clock 复验实现，没有调用真实 arXiv endpoint，也没有下载真实 PDF；第 6 节保留的匿名响应来自 2026-08-07 的既有核对记录。

@@ -1,6 +1,7 @@
 # CORE
 
-- 最后核对：2026-08-13
+- 官方资料最后在线核对：2026-08-13
+- 当前实现离线对照：2026-08-15
 - 当前配置选择键：`core`；支持 Metadata 与 Acquisition
 - 外部角色：聚合开放获取 repository/journal 的 metadata、全文 locator、文本与解析参考文献
 - 当前仓库接入状态：Metadata Works/Outputs search/lookup/reference/AssetHint adapter 已接入；Acquisition 先消费公开 locator，再可使用注册用户 Work/Output PDF download endpoint
@@ -11,7 +12,7 @@
 - [CORE API v3 OpenAPI](https://api.core.ac.uk/swagger/v3.json)：机器可读 endpoints、参数与 schema。
 - [CORE API service](https://core.ac.uk/services/api)：API key 申请与服务入口。
 
-均为 `official`，download endpoint 与认证合同于 2026-08-13 重新核对。2026-08-07 曾对 `search/works` 做一次匿名 `limit=1` DOI 查询，返回 HTTP 200、`application/json`；顶层、字段名与 rate-limit headers 属于 `verified`。本次实现没有使用真实 key，也没有调用真实 download endpoint、保存或展示 full text；download 行为的当前证据为官方 OpenAPI 与离线合同测试。
+均为 `official`，download endpoint 与认证合同于 2026-08-13 重新核对。2026-08-07 曾对 `search/works` 做一次匿名 `limit=1` DOI 查询，返回 HTTP 200、`application/json`；顶层、字段名与 rate-limit headers 属于 `verified`。2026-08-15 的实现对照没有使用真实 key，也没有调用真实 endpoint、保存或展示 full text；download 行为的当前证据为官方 OpenAPI 与离线合同测试。
 
 ## 2. Works、Outputs 与 SciRetriever 身份边界
 
@@ -228,8 +229,12 @@ record identity 时注册并适用。它在全部公开 Source 之后调用官�
 经过媒体类型、实际 PDF 字节、reader、页面树和 Storage 不可变发布检查。
 
 Metadata 与 Acquisition 共用 `core/api` AccessScope 和相同保守本地 policy。当前实现对
-429/服务失败施加共享保守退避，但 Acquisition client 尚未利用 CORE 自定义 rate-limit
-header 的精确数值；这不影响 fail closed，不过后续可在不让 Acquisition 依赖 Metadata
-模块的前提下抽取中性反馈解释器。受控 Browser 仍没有 CORE 生产站点规则。上述生产
-接线只由离线 fixture/transport 与对象图测试验证，不表示真实账户或具体文献 entitlement
-已经在线成功。
+匿名额度存在按 operation 变化的 token cost，不能伪装成固定“每请求一个 token”的本地日
+计数；因此基线采用更保守的单并发、6 秒 start interval 与 10/60 秒窗口，并以服务器反馈
+收紧实际 scope。Metadata 与 Acquisition 都已解释标准 `Retry-After` 以及
+`X-RateLimit-Retry-After`、`X-RateLimit-Remaining`、`X-RateLimit-Limit`；额度归零、429、
+无 header 的服务失败或畸形反馈会延长共享阻塞，不会立即重试或切换 Browser 绕过。
+
+受控 Browser 仍没有 CORE 生产站点规则。上述生产接线只由离线 fixture/transport、可注入
+clock 与对象图测试验证，不表示真实账户或具体文献 entitlement 已经在线成功；2026-08-15
+本轮没有读取本地 key、调用真实 API 或下载真实 PDF。

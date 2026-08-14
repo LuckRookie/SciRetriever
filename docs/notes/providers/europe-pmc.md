@@ -1,9 +1,10 @@
 # Europe PMC
 
-- 最后核对：2026-08-07
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：metadata `europe-pmc`；asset `europe-pmc`
 - 供应商角色：生命科学元数据、references/citations 与开放全文线索
-- 当前仓库接入状态：只有选择键和通用 Protocol/adapter/registry；没有 Europe PMC 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：专用 Metadata REST adapter 与公开 PDF Source 均已进入生产 registry；两者共享 `europe-pmc/api` 准入范围
 
 ## 1. 官方入口与证据
 
@@ -20,6 +21,8 @@
 ## 2. 认证、政策与限流
 
 上述公开 REST endpoint 的最小请求无需 API key。官方 Web Service 页面本轮未发现明确、当前且可引用的固定 requests/s、并发数或日配额，因此记录为“未找到公开明确数值”，实现不得猜测。应使用可识别 User-Agent、连接复用、有界分页、缓存和指数退避；遇到 `429`/`5xx` 时按响应信息处理。
+
+因为没有核实到官方固定数值，当前 Metadata 与 Acquisition 共享项目审慎政策：`max_concurrency = 1`、`min_start_interval = 1s`。标准 `Retry-After` 会更新同一共享 scope；无可用 header 的 `5xx` 也形成保守退避。1 秒间隔和无 header 退避均是项目安全值，不标记为 Europe PMC 官方额度。
 
 Europe PMC 的开放全文能力只适用于相应收录与许可集合。元数据命中、`inEPMC=Y`、
 `inPMC=Y`、`isOpenAccess=Y`、`hasPDF=Y` 是不同字段，不能互相替代。
@@ -201,7 +204,6 @@ primary PDF 接纳。
 
 ## 10. 当前实现边界
 
-当前配置只允许 `europe-pmc` 作为 metadata/asset key。通用 `MetadataClient` 不认识 cursor、
-core result、作者嵌套、references/citations 或 fullTextUrl；通用 `ResolverClient` 也不实现
-PMCID lookup。没有 Europe PMC endpoint 或解析器代码，测试只使用 fake。引用选择键当前也不包含
-Europe PMC，所以外部引用能力尤其不能写成已接入行为。
+`src/sciretriever/metadata/providers/europe_pmc/adapter.py` 已实现匿名 probe、topic search、稳定 lookup、cursor 分页以及双向 relation 查询，并把 core JSON 转换为中性 observation/relation；`src/sciretriever/acquisition/sources/europe_pmc.py` 只对明确 PMCID 查询 `resultType=core`，从 `fullTextUrlList` 中选择 `documentStyle=pdf` 的安全 HTTPS locator，再交给统一 `PublicLocatorFetcher`。
+
+两条路径共用 `europe-pmc/api` scope 和上述项目审慎政策。当前 Acquisition 不把 `fullTextXML`、supplementary archive 或 `hasPDF` flag 当作已经取得的主 PDF，也没有 Europe PMC Browser 站点规则。本轮 2026-08-15 没有调用真实 endpoint、下载真实 PDF 或 supplementary archive；实现验证全部使用 fake transport、fixture 与可注入 clock，历史匿名核验仍以第 1 节记录的 2026-08-07 为准。

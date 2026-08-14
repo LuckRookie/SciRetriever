@@ -1,6 +1,7 @@
 # Wiley
 
-- 最后核对：2026-08-14
+- 官方资料与最小只读链路最后在线核对：2026-08-14
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：Acquisition `wiley`
 - 供应商角色：在 operator 已取得 Wiley TDM token、运行环境位于可授权公网 IP 范围且具体文章有 entitlement 时提供主文 PDF；不是 SciRetriever Metadata 或引用 Provider
 - 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；生产 Browser 站点规则仍为空
@@ -38,6 +39,11 @@ DOI 是一个完整 opaque path parameter，必须 percent-encode `/`、括号�
 ```text
 https://alm.wiley.com/alm/api/v2/download/<opaque-locator>
 ```
+
+这里的 `/alm/api/v2/download/` 是 TDM V1 首跳响应签发的下载 locator 形状，不是另一套
+“Wiley TDM V2” API。SciRetriever 的唯一正式内容 API 合同仍是
+`/onlinelibrary/tdm/v1/articles/{doi}`；不会把 ALM 内部路径版本外推成可独立调用、搜索或
+配置的 V2 产品。
 
 该 locator 是 Provider 生成的单个 opaque path segment，实测不同请求会产生不同层次的
 percent encoding。SciRetriever 不对这个签发值做多层本地 path 解释，只为上述精确 HTTPS
@@ -111,8 +117,10 @@ WileyLabs README 引用 Wiley TDM resources 的限制：
 提示长期连续使用应提高到 10 秒。SciRetriever 在共享 `wiley/api` Access Coordinator 中
 同时表达两项上限：`max_concurrency=3`、最小启动间隔 `1/3` 秒、`60 requests / 600s`。
 因此允许官方范围内的短突发，但窗口预算会约束持续调用；`429` 向同一共享 scope 反馈
-throttled 状态。当前未核实 Wiley 专用 quota header 或固定 `Retry-After` 合同，不猜测
-自定义 header。
+throttled 状态。当前实现解释标准 HTTP `Retry-After`（delta-seconds 或 HTTP-date），并在
+没有有效 header 的 `429/5xx` 上使用保守共享退避。未核实 Wiley 专用 quota header，因此
+不猜测自定义字段；标准 header 支持和无 header 退避是通用 HTTP/项目策略，不冒充 Wiley
+另外公布的额度合同。
 
 ## 5. Source 适用性与阶段顺序
 
@@ -164,5 +172,6 @@ status 接线，以及离线 endpoint/凭据泄漏/跨 origin/阶段顺序/PDF �
 仍未闭合的外部事实是：官方客户端未详细规定 `401/429` 及其它错误 body、token 有效期/
 自动过期策略、专用 quota response header、ALM locator 的长期版本保证，以及非
 IP-based TDM API 支持。更新这些事实前应再次核对 Wiley 官方材料；真实 Provider 探测
-只能由用户明确发起，仓库测试继续使用离线 fake。生产 Browser 仍没有 Wiley 站点规则，
-因此 Wiley API 正常 miss 后当前不会自动使用浏览器凭证模式。
+只能由用户明确发起，仓库测试继续使用离线 fake。2026-08-15 本轮没有读取 token、调用
+真实 Wiley API 或下载真实 PDF。生产 Browser 仍没有 Wiley 站点规则，因此 Wiley API
+正常 miss 后当前不会自动使用浏览器凭证模式。

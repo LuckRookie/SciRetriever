@@ -1,9 +1,10 @@
 # Springer Nature
 
-- 最后核对：2026-08-07
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
 - schema v2 选择键：metadata `springer`；asset `springer`
 - 供应商角色：Springer Nature 元数据，以及 OA/协议授权的 JATS/XML 全文和资产 locator
-- 当前仓库接入状态：只有选择键、通用 Protocol/adapter/registry；没有 Springer Nature 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；Springer 授权主 PDF route 仍明确标记为 unsupported
 
 ## 1. 官方入口与证据
 
@@ -34,6 +35,8 @@
 | Full Text API | 200 | 500 | 200 | 20,000 |
 
 Full Text Premium 取决于具体 agreement，其它 Premium 也需联系销售/支持。这些是供应商账户上限，不是建议把应用并发开到同值；SciRetriever 仍需自己的资源预算和有界并发。官方 throttle 页面以 HTTP 429 表示 rate limit/daily quota，并建议 exponential backoff。
+
+当前 `springer/api/meta-v2` 基线只按 Basic Meta v2 合同运行：单并发、0.6 秒 start interval（100/min）以及 500 次/24 小时 rolling window。rolling window 比依赖未知账户重置时刻更保守；不会因配置了 Premium key 就自行放宽。标准 `Retry-After` 与 `X-RateLimit-Remaining` / `RateLimit-Remaining` 会收紧共享 scope，无 header 的 429/5xx 使用保守退避。当前公开材料不足以确定 `RateLimit-Reset` 在所有部署中的稳定单位和时钟语义，因此实现不会猜测并转换为正式 deadline。
 
 ## 3. 查询、分页与响应顶层
 
@@ -235,4 +238,6 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 
 ## 11. 当前实现边界
 
-`springer` 是当前 metadata/asset 允许键；选择键故意不是 `springer-nature`。仓库没有 API key/metric 注入、query/pagination、Meta/Metadata/OA/JATS schema、主机迁移、URL format 解析或产品授权处理。通用 metadata adapter 当前只承载精简 title/authors/year/identifiers/abstract，asset adapter 也只包装调用方给出的 candidates。只有注入具体 client 才能构造 capability，且 registry 未接业务 Service；官方外部能力不等于当前生产接入。
+`springer` 是当前配置选择键；`src/sciretriever/metadata/providers/springer/adapter.py` 已实现显式 API-key readiness、Meta v2 JSON probe、topic search、按 DOI/ISBN lookup、`s`/`p` 分页、记录身份与中性 Metadata 转换，并把明确 `url[].format` 转为有 provenance 的 PDF/landing AssetHint。API key 虽按官方合同作为 query credential 发送，但只允许绑定到 `https://api.springernature.com`，Network 在日志、redirect 和异常边界剥离/脱敏，不把带凭据的完整 URL 写入业务事实。
+
+当前 adapter 不调用 Open Access JATS、Full Text JATS/BITS 或旧主机，也不把 metadata 中的 `format=pdf` locator、XML/JATS 内容、HTTP 200 或有效 key 冒充已授权主 PDF。Acquisition registry 对 `springer` 的 authorized PDF capability 继续明确为 unsupported；安全 locator 仍需经过公开路径的实际字节与 PDF 验证，Browser 生产规则尚未接入。2026-08-15 本轮没有读取真实 key、调用真实 Springer Nature API、验证产品 entitlement 或下载内容；Meta v2 schema、额度与失败行为仅由离线 fake/fixture 验证。
