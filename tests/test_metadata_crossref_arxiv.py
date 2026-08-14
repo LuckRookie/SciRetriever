@@ -1701,6 +1701,28 @@ class ArxivAdapterTests(ProviderContractCase, unittest.TestCase):
         permit = environment.coordinator.acquire_scope(environment.scope, timeout=0.01)
         permit.release()
 
+    def test_arxiv_service_failure_uses_bounded_shared_backoff(self) -> None:
+        environment = self._arxiv()
+        environment.queue_http_response(status=503)
+
+        result = self.assert_topic_scan(
+            environment,
+            _topic_request("arxiv", 1),
+            outcome="FAILED",
+            raw_item_count=0,
+            observation_count=0,
+        )
+
+        self.assert_stable_failure(
+            result,
+            expected_code="metadata-provider-http-status",
+        )
+        feedback = self._assert_arxiv_atomic_feedback(environment)
+        self.assertTrue(feedback.throttled)
+        self.assertIsNone(feedback.retry_after)
+        with self.assertRaises(AdmissionTimeout):
+            environment.coordinator.acquire_scope(environment.scope, timeout=0.005)
+
     def test_arxiv_conflicting_feedback_blocks_same_scope_until_backoff(self) -> None:
         environment = self._arxiv()
         environment.queue_http_response(

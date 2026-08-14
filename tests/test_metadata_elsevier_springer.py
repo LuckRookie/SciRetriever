@@ -21,13 +21,19 @@ from metadata_provider_contract import (
 
 from sciretriever.metadata.ports import MetadataLookupPort, TopicSearchPort
 from sciretriever.metadata.providers.elsevier import (
-    ACCESS_SCOPE as ELSEVIER_ACCESS_SCOPE,
+    ABSTRACT_ACCESS_SCOPE as ELSEVIER_ABSTRACT_ACCESS_SCOPE,
+)
+from sciretriever.metadata.providers.elsevier import (
+    ABSTRACT_BASELINE_ACCESS_POLICY as ELSEVIER_ABSTRACT_BASELINE_ACCESS_POLICY,
 )
 from sciretriever.metadata.providers.elsevier import (
     ADAPTER_REVISION as ELSEVIER_ADAPTER_REVISION,
 )
 from sciretriever.metadata.providers.elsevier import (
-    BASELINE_ACCESS_POLICY as ELSEVIER_BASELINE_ACCESS_POLICY,
+    SEARCH_ACCESS_SCOPE as ELSEVIER_SEARCH_ACCESS_SCOPE,
+)
+from sciretriever.metadata.providers.elsevier import (
+    SEARCH_BASELINE_ACCESS_POLICY as ELSEVIER_SEARCH_BASELINE_ACCESS_POLICY,
 )
 from sciretriever.metadata.providers.elsevier import (
     ElsevierScopusAdapter,
@@ -140,7 +146,9 @@ def _environment(
     id_start: int = 10_000,
 ) -> ContractEnvironment:
     ids = _IdFactories(id_start)
-    expected_scope = ELSEVIER_ACCESS_SCOPE if provider == "elsevier" else SPRINGER_ACCESS_SCOPE
+    expected_scope = (
+        ELSEVIER_SEARCH_ACCESS_SCOPE if provider == "elsevier" else SPRINGER_ACCESS_SCOPE
+    )
 
     def assemble(environment: ContractEnvironment) -> ContractPorts:
         private_key = environment.secret_sentinel if api_key is _DEFAULT_API_KEY else api_key
@@ -302,7 +310,7 @@ def _elsevier_contract_binding() -> ContractBinding:
     return ContractBinding(
         provider_name="elsevier",
         capabilities=frozenset({"search", "lookup"}),
-        expected_scope=ELSEVIER_ACCESS_SCOPE,
+        expected_scope=ELSEVIER_SEARCH_ACCESS_SCOPE,
         credential_mode="header",
         port_factory=lambda environment: _environment_ports(environment, "elsevier"),
         scenarios=(
@@ -333,6 +341,7 @@ def _elsevier_contract_binding() -> ContractBinding:
                 ),
                 evidence=_elsevier_contract_evidence,
                 credential_redirect="cross-origin",
+                expected_scope=ELSEVIER_ABSTRACT_ACCESS_SCOPE,
             ),
             ContractScenario(
                 name="throttle-feedback",
@@ -928,6 +937,45 @@ class ElsevierScopusAdapterTests(ProviderContractCase, unittest.TestCase):
             [(throttled.scope, AccessFeedback(throttled=True))],
         )
 
+    def test_elsevier_search_and_abstract_quota_scopes_are_independent(self) -> None:
+        environment = self._elsevier(id_start=15_200)
+        environment.queue_http_response(
+            status=429,
+            headers=(("Retry-After", "5"),),
+            body=_fixture("elsevier", "access-error.json"),
+        )
+
+        result = self.assert_lookup_scan(
+            environment,
+            _lookup_request("elsevier"),
+            outcome="FAILED",
+            raw_item_count=0,
+            observation_count=0,
+            relation_count=0,
+        )
+
+        self.assert_stable_failure(result, expected_code="metadata-provider-throttled")
+        self.assertEqual(
+            environment.coordinator.feedback_records,
+            [
+                (
+                    ELSEVIER_ABSTRACT_ACCESS_SCOPE,
+                    AccessFeedback(retry_after=5.0, throttled=True),
+                )
+            ],
+        )
+        with self.assertRaises(AdmissionTimeout):
+            environment.coordinator.acquire_scope(
+                ELSEVIER_ABSTRACT_ACCESS_SCOPE,
+                timeout=0.001,
+            )
+        search_permit = environment.coordinator.acquire_scope(
+            ELSEVIER_SEARCH_ACCESS_SCOPE,
+            ELSEVIER_SEARCH_BASELINE_ACCESS_POLICY,
+            timeout=0.01,
+        )
+        search_permit.release()
+
     def test_elsevier_wrong_shape_malformed_and_oversize_are_redacted(self) -> None:
         scenarios = (
             (
@@ -1344,11 +1392,32 @@ class SpringerMetaV2AdapterTests(ProviderContractCase, unittest.TestCase):
 class M8AdapterBoundaryTests(unittest.TestCase):
     def test_scopes_policies_revisions_and_capabilities_are_explicit(self) -> None:
         self.assertEqual(
-            ELSEVIER_ACCESS_SCOPE,
-            AccessScope(provider_name="elsevier", channel="api", service_name="scopus"),
+            ELSEVIER_SEARCH_ACCESS_SCOPE,
+            AccessScope(
+                provider_name="elsevier",
+                channel="api",
+                service_name="scopus-search",
+            ),
         )
         self.assertEqual(
-            ELSEVIER_BASELINE_ACCESS_POLICY,
+            ELSEVIER_SEARCH_BASELINE_ACCESS_POLICY,
+            AccessPolicy(
+                max_concurrency=1,
+                min_start_interval=0.125,
+                burst_limit=20_000,
+                window_seconds=604_800.0,
+            ),
+        )
+        self.assertEqual(
+            ELSEVIER_ABSTRACT_ACCESS_SCOPE,
+            AccessScope(
+                provider_name="elsevier",
+                channel="api",
+                service_name="abstract-retrieval",
+            ),
+        )
+        self.assertEqual(
+            ELSEVIER_ABSTRACT_BASELINE_ACCESS_POLICY,
             AccessPolicy(
                 max_concurrency=1,
                 min_start_interval=0.125,
@@ -1369,7 +1438,10 @@ class M8AdapterBoundaryTests(unittest.TestCase):
                 window_seconds=86_400.0,
             ),
         )
-        self.assertEqual(ELSEVIER_ADAPTER_REVISION, "scopus-json-2026-08-15")
+        self.assertEqual(
+            ELSEVIER_ADAPTER_REVISION,
+            "scopus-search-abstract-json-2026-08-15",
+        )
         self.assertEqual(SPRINGER_ADAPTER_REVISION, "meta-v2-json-2026-08-07")
 
         providers: tuple[_Provider, ...] = ("elsevier", "springer")
@@ -1385,7 +1457,11 @@ class M8AdapterBoundaryTests(unittest.TestCase):
 
     def test_operator_policy_only_tightens_and_wrong_scopes_are_rejected(self) -> None:
         cases = (
-            ("elsevier", ELSEVIER_BASELINE_ACCESS_POLICY, ElsevierScopusAdapter),
+            (
+                "elsevier",
+                ELSEVIER_SEARCH_BASELINE_ACCESS_POLICY,
+                ElsevierScopusAdapter,
+            ),
             ("springer", SPRINGER_BASELINE_ACCESS_POLICY, SpringerMetaV2Adapter),
         )
         for raw_provider, baseline, constructor in cases:

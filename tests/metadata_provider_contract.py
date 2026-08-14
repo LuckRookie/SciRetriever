@@ -399,6 +399,7 @@ class ContractScenario:
     evidence: ScenarioEvidence
     expects_feedback: bool = False
     credential_redirect: ContractRedirect | None = None
+    expected_scope: AccessScope | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,6 +688,12 @@ class ProviderContractCase:
             case.assertTrue(callable(scenario.evidence))
             case.assertIs(type(scenario.expects_feedback), bool)
             case.assertIsInstance(scenario.expected, ContractExpectedResult)
+            if scenario.expected_scope is not None:
+                case.assertIsInstance(scenario.expected_scope, AccessScope)
+                case.assertEqual(
+                    scenario.expected_scope.provider_name,
+                    binding.provider_name,
+                )
             self._assert_scenario_request(binding, scenario)
             semantic_evidence = semantic_evidence or (
                 scenario.expected.observation_count > 0 or scenario.expected.relation_count > 0
@@ -783,9 +790,10 @@ class ProviderContractCase:
                 environment.coordinator.scope_acquisitions,
                 "adapter scenario must acquire through the environment Coordinator",
             )
+            expected_scope = scenario.expected_scope or binding.expected_scope
             case.assertEqual(
                 set(environment.coordinator.scope_acquisitions),
-                {binding.expected_scope},
+                {expected_scope},
             )
             self._assert_scenario_result(result, scenario.expected)
             self.assert_no_private_payload(
@@ -799,7 +807,10 @@ class ProviderContractCase:
             )
             scenario.evidence(self, environment, result)
             if require_feedback:
-                self._assert_feedback_reached_coordinator(binding, environment)
+                self._assert_feedback_reached_coordinator(
+                    expected_scope,
+                    environment,
+                )
 
     def _invoke_contract_scenario(
         self,
@@ -886,7 +897,7 @@ class ProviderContractCase:
 
     def _assert_feedback_reached_coordinator(
         self,
-        binding: ContractBinding,
+        expected_scope: AccessScope,
         environment: ContractEnvironment,
     ) -> None:
         case = self._test_case()
@@ -895,7 +906,7 @@ class ProviderContractCase:
             records,
             "expects_feedback scenario did not update the environment Coordinator",
         )
-        case.assertEqual({scope for scope, _feedback in records}, {binding.expected_scope})
+        case.assertEqual({scope for scope, _feedback in records}, {expected_scope})
         case.assertEqual(len(environment.coordinator.feedback_sources), len(records))
         for source in environment.coordinator.feedback_sources:
             case.assertIsInstance(
@@ -925,12 +936,12 @@ class ProviderContractCase:
         case.assertGreater(delay, 0.0)
         with case.assertRaises(AdmissionTimeout):
             environment.coordinator.acquire_scope(
-                binding.expected_scope,
+                expected_scope,
                 timeout=0.01,
             )
         environment.monotonic_clock.advance(delay)
         resumed = environment.coordinator.acquire_scope(
-            binding.expected_scope,
+            expected_scope,
             timeout=0.01,
         )
         resumed.release()

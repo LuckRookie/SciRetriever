@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from sciretriever.metadata.ports import ReferenceQueryPort
 from sciretriever.metadata.probe import MetadataProbeEvidence, MetadataProbeFailure
 from sciretriever.metadata.providers.elsevier import (
-    ACCESS_SCOPE as ELSEVIER_SCOPE,
+    SEARCH_ACCESS_SCOPE as ELSEVIER_SCOPE,
 )
 from sciretriever.metadata.providers.elsevier import (
     ElsevierScopusAdapter,
