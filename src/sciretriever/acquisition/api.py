@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol, TypeAlias, runtime_checkable
 
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
@@ -111,6 +112,12 @@ class PreparedAcquisitionCohort:
         raise TypeError("PreparedAcquisitionCohort cannot be copied")
 
 
+CohortPreparationObserver: TypeAlias = Callable[
+    [tuple[CohortPreparationItem, ...]],
+    None,
+]
+
+
 @runtime_checkable
 class AutomaticAcquisitionService(Protocol):
     """Internal service surface behind the stable Acquisition API."""
@@ -127,6 +134,7 @@ class AutomaticAcquisitionService(Protocol):
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: CancellationEvent | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...
@@ -162,12 +170,14 @@ class AcquisitionApi:
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: CancellationEvent | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
-        """Prepare one bounded tiered cohort without committing its receipts."""
+        """Prepare one cohort and optionally publish tier-terminal receipts early."""
 
         return self._service.prepare_primary_pdf_cohort(
             requests,
             cancel_event=cancel_event,
+            on_prepared=on_prepared,
         )
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
@@ -196,6 +206,7 @@ __all__ = (
     "AcquisitionFailure",
     "AcquisitionRequest",
     "CancellationEvent",
+    "CohortPreparationObserver",
     "CohortPreparationItem",
     "ManualPdfInputError",
     "PdfValidationCancelled",

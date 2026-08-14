@@ -7,7 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import Final
+from typing import Final, TypeAlias
 
 from sciretriever.acquisition.browser_admission import (
     BrowserAdmissionCandidate,
@@ -175,6 +175,10 @@ class CohortExecutionResult:
 
 RouteExecutor = Callable[[AcquisitionWorkItem, RouteSpec], RouteExecutionResult]
 PlanRefresher = Callable[[AcquisitionWorkItem], AcquisitionPlan]
+TierCompletionObserver: TypeAlias = Callable[
+    [AcquisitionPath, tuple[AcquisitionWorkItemResult, ...]],
+    None,
+]
 
 
 class TieredCohortExecutor:
@@ -206,8 +210,14 @@ class TieredCohortExecutor:
         execute_route: RouteExecutor,
         *,
         refresh_plan: PlanRefresher | None = None,
+        on_tier_completed: TierCompletionObserver | None = None,
     ) -> CohortExecutionResult:
-        self._validate_inputs(items, execute_route, refresh_plan)
+        self._validate_inputs(
+            items,
+            execute_route,
+            refresh_plan,
+            on_tier_completed,
+        )
         for tier in _TIER_ORDER[:2]:
             self._execute_tier_with_replanning(
                 items,
@@ -215,6 +225,7 @@ class TieredCohortExecutor:
                 execute_route,
                 refresh_plan,
             )
+            self._notify_tier_completed(items, tier, on_tier_completed)
         browser_admission = self._admit_browser(items)
         self._apply_browser_admission(items, browser_admission)
         self._execute_browser_tier(items, browser_admission, execute_route)
@@ -222,6 +233,11 @@ class TieredCohortExecutor:
             if item.disposition is WorkItemDisposition.PENDING:
                 item.disposition = WorkItemDisposition.EXHAUSTED
                 item.current_tier = None
+        self._notify_tier_completed(
+            items,
+            AcquisitionPath.CONTROLLED_BROWSER,
+            on_tier_completed,
+        )
         return CohortExecutionResult(
             tuple(_freeze_result(item) for item in items),
             browser_admission=browser_admission,
@@ -232,6 +248,7 @@ class TieredCohortExecutor:
         items: tuple[AcquisitionWorkItem, ...],
         execute_route: RouteExecutor,
         refresh_plan: PlanRefresher | None,
+        on_tier_completed: TierCompletionObserver | None,
     ) -> None:
         if not isinstance(items, tuple) or any(
             not isinstance(item, AcquisitionWorkItem) for item in items
@@ -244,8 +261,20 @@ class TieredCohortExecutor:
             raise TypeError("execute_route must be callable")
         if refresh_plan is not None and not callable(refresh_plan):
             raise TypeError("refresh_plan must be callable or None")
+        if on_tier_completed is not None and not callable(on_tier_completed):
+            raise TypeError("on_tier_completed must be callable or None")
         if any(item.disposition is not WorkItemDisposition.PENDING for item in items):
             raise ValueError("cohort work items must be fresh")
+
+    @staticmethod
+    def _notify_tier_completed(
+        items: tuple[AcquisitionWorkItem, ...],
+        tier: AcquisitionPath,
+        observer: TierCompletionObserver | None,
+    ) -> None:
+        if observer is None:
+            return
+        observer(tier, tuple(_freeze_result(item) for item in items))
 
     def _execute_tier(
         self,

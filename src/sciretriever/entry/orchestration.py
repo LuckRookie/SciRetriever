@@ -26,6 +26,7 @@ from sciretriever.acquisition.api import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     AcquisitionRequest,
+    CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
@@ -117,6 +118,7 @@ class AutomaticAcquisitionPort(Protocol):
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: threading.Event | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...

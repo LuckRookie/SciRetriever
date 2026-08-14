@@ -14,6 +14,8 @@ from sciretriever.acquisition.api import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     AcquisitionRequest,
+    CohortPreparationItem,
+    CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
@@ -122,6 +124,12 @@ class _CohortAcquisitionPort:
         self._delivery_index: dict[int, int] = {}
         self._receipt_tokens: dict[PreparedAcquisition, tuple[int, _ParticipantKey]] = {}
         self._cleanup_failures: dict[tuple[int, _ParticipantKey], _CohortCleanupFailure] = {}
+        self._batch_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="sciretriever-entry-acquisition-cohort",
+        )
+        self._batch_futures: list[Future[None]] = []
+        self._closed = False
         self._running = False
 
     @contextmanager
@@ -155,7 +163,7 @@ class _CohortAcquisitionPort:
             batch = self._start_ready_batch_locked()
             self._condition.notify_all()
         if batch is not None:
-            self._run_batch(*batch)
+            self._launch_batch(batch)
 
     def prepare_primary_pdf(
         self,
@@ -178,7 +186,7 @@ class _CohortAcquisitionPort:
             self._requests[key] = request
             batch = self._start_ready_batch_locked()
         if batch is not None:
-            self._run_batch(*batch)
+            self._launch_batch(batch)
         token = (generation, key)
         try:
             outcome = self._await_outcome(token)
@@ -222,15 +230,29 @@ class _CohortAcquisitionPort:
             self._cleanup_failures.clear()
         return failures
 
+    def close(self) -> None:
+        """Join the operation-local coordinator before inspecting cleanup state."""
+
+        with self._condition:
+            if self._closed:
+                return
+            self._closed = True
+            futures = tuple(self._batch_futures)
+        self._batch_executor.shutdown(wait=True)
+        for future in futures:
+            future.result()
+
     def prepare_primary_pdf_cohort(
         self,
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: threading.Event | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         return self._acquisition.prepare_primary_pdf_cohort(
             requests,
             cancel_event=cancel_event,
+            on_prepared=on_prepared,
         )
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
@@ -278,23 +300,140 @@ class _CohortAcquisitionPort:
             ),
         )
 
+    def _launch_batch(
+        self,
+        batch: tuple[int, tuple[tuple[_ParticipantKey, AcquisitionRequest], ...]],
+    ) -> None:
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("completion cohort coordinator is closed")
+            future = self._batch_executor.submit(self._run_batch, *batch)
+            self._batch_futures.append(future)
+
     def _run_batch(
         self,
         generation: int,
         indexed_requests: tuple[tuple[_ParticipantKey, AcquisitionRequest], ...],
     ) -> None:
         requests = tuple(request for _key, request in indexed_requests)
+        emitted: dict[_ParticipantKey, CohortPreparationItem] = {}
+        literature_ids = {
+            key: request.literature.literature_id for key, request in indexed_requests
+        }
+
+        def publish_prepared(items: tuple[CohortPreparationItem, ...]) -> None:
+            observed = self._map_observed_items(
+                indexed_requests,
+                items,
+                emitted,
+            )
+            self._publish_batch_outcomes(
+                generation,
+                tuple((key, outcome) for key, _item, outcome in observed),
+                literature_ids=literature_ids,
+                final=False,
+                emitted_keys=(),
+            )
+            for key, item, _outcome in observed:
+                emitted[key] = item
+
+        outcomes: tuple[tuple[_ParticipantKey, _CohortOutcome], ...] = ()
         try:
-            prepared = self._acquisition.prepare_primary_pdf_cohort(
-                requests,
-                cancel_event=self._cancel_event,
+            try:
+                prepared = self._acquisition.prepare_primary_pdf_cohort(
+                    requests,
+                    cancel_event=self._cancel_event,
+                    on_prepared=publish_prepared,
+                )
+                outcomes = self._map_batch_outcomes(
+                    indexed_requests,
+                    prepared,
+                    emitted,
+                )
+                _log_browser_escalation(prepared)
+            except BaseException as error:
+                outcomes = tuple(
+                    (key, _clone_cohort_error(error))
+                    for key, _request in indexed_requests
+                    if key not in emitted
+                )
+            self._publish_batch_outcomes(
+                generation,
+                outcomes,
+                literature_ids=literature_ids,
+                final=True,
+                emitted_keys=tuple(emitted),
             )
-            outcomes = self._map_batch_outcomes(indexed_requests, prepared)
-            _log_browser_escalation(prepared)
         except BaseException as error:
-            outcomes = tuple(
-                (key, _clone_cohort_error(error)) for key, _request in indexed_requests
+            cleanup_error = self._discard_outcome_receipts(outcomes)
+            terminal_error = error if cleanup_error is None else cleanup_error
+            self._abort_batch_after_coordinator_error(
+                generation,
+                indexed_requests,
+                emitted,
+                terminal_error,
             )
+            raise terminal_error
+
+    def _discard_outcome_receipts(
+        self,
+        outcomes: tuple[tuple[_ParticipantKey, _CohortOutcome], ...],
+    ) -> BaseException | None:
+        first_failure: BaseException | None = None
+        for _key, outcome in outcomes:
+            if not isinstance(outcome, PreparedAcquisition):
+                continue
+            try:
+                self._acquisition.discard_prepared(outcome)
+            except BaseException as error:
+                first_failure = first_failure or error
+        return first_failure
+
+    def _abort_batch_after_coordinator_error(
+        self,
+        generation: int,
+        indexed_requests: tuple[tuple[_ParticipantKey, AcquisitionRequest], ...],
+        emitted: dict[_ParticipantKey, CohortPreparationItem],
+        error: BaseException,
+    ) -> None:
+        delivery_keys: list[_ParticipantKey] = []
+        with self._condition:
+            if generation != self._generation or not self._running:
+                self._condition.notify_all()
+                return
+            for key, _request in indexed_requests:
+                token = (generation, key)
+                if key in emitted:
+                    self._abandoned.discard(token)
+                    continue
+                if token in self._abandoned:
+                    self._abandoned.remove(token)
+                    continue
+                if token in self._outcomes or token in self._cleanup_failures:
+                    continue
+                self._outcomes[token] = _clone_cohort_error(error)
+                delivery_keys.append(key)
+            if delivery_keys:
+                existing_order = self._delivery_order.get(generation)
+                if existing_order is None:
+                    self._delivery_order[generation] = tuple(delivery_keys)
+                    self._delivery_index[generation] = 0
+                else:
+                    self._delivery_order[generation] = existing_order + tuple(delivery_keys)
+            self._requests.clear()
+            self._running = False
+            self._generation += 1
+            self._condition.notify_all()
+
+    def _publish_batch_outcomes(
+        self,
+        generation: int,
+        outcomes: tuple[tuple[_ParticipantKey, _CohortOutcome], ...],
+        *,
+        literature_ids: dict[_ParticipantKey, LiteratureId],
+        final: bool,
+        emitted_keys: tuple[_ParticipantKey, ...],
+    ) -> None:
         discarded: list[
             tuple[
                 tuple[int, _ParticipantKey],
@@ -303,9 +442,6 @@ class _CohortAcquisitionPort:
             ]
         ] = []
         delivery_keys: list[_ParticipantKey] = []
-        literature_ids = {
-            key: request.literature.literature_id for key, request in indexed_requests
-        }
         with self._condition:
             for key, outcome in outcomes:
                 token = (generation, key)
@@ -317,11 +453,18 @@ class _CohortAcquisitionPort:
                     self._outcomes[token] = outcome
                     delivery_keys.append(key)
             if delivery_keys:
-                self._delivery_order[generation] = tuple(delivery_keys)
-                self._delivery_index[generation] = 0
-            self._requests.clear()
-            self._running = False
-            self._generation += 1
+                existing_order = self._delivery_order.get(generation)
+                if existing_order is None:
+                    self._delivery_order[generation] = tuple(delivery_keys)
+                    self._delivery_index[generation] = 0
+                else:
+                    self._delivery_order[generation] = existing_order + tuple(delivery_keys)
+            if final:
+                for key in emitted_keys:
+                    self._abandoned.discard((generation, key))
+                self._requests.clear()
+                self._running = False
+                self._generation += 1
             self._condition.notify_all()
         for token, literature_id, receipt in discarded:
             try:
@@ -338,45 +481,100 @@ class _CohortAcquisitionPort:
                     "event=completion-cohort-cleanup-failed code=acquisition-port-contract"
                 )
 
+    def _map_observed_items(
+        self,
+        indexed_requests: tuple[tuple[_ParticipantKey, AcquisitionRequest], ...],
+        items: tuple[CohortPreparationItem, ...],
+        emitted: dict[_ParticipantKey, CohortPreparationItem],
+    ) -> tuple[
+        tuple[_ParticipantKey, CohortPreparationItem, _CohortOutcome],
+        ...,
+    ]:
+        if not isinstance(items, tuple) or any(
+            not isinstance(item, CohortPreparationItem) for item in items
+        ):
+            raise AcquisitionFailure(_cohort_contract_failure())
+        by_literature = {
+            request.literature.literature_id: (position, key, request)
+            for position, (key, request) in enumerate(indexed_requests)
+        }
+        previous_position = -1
+        observed: list[tuple[_ParticipantKey, CohortPreparationItem, _CohortOutcome]] = []
+        for item in items:
+            match = by_literature.get(item.literature_id)
+            if match is None:
+                raise AcquisitionFailure(_cohort_contract_failure())
+            position, key, request = match
+            if position <= previous_position or key in emitted:
+                raise AcquisitionFailure(_cohort_contract_failure())
+            previous_position = position
+            observed.append((key, item, self._cohort_item_outcome(request, item)))
+        return tuple(observed)
+
     def _map_batch_outcomes(
         self,
         indexed_requests: tuple[tuple[_ParticipantKey, AcquisitionRequest], ...],
         prepared: PreparedAcquisitionCohort,
+        emitted: dict[_ParticipantKey, CohortPreparationItem],
     ) -> tuple[tuple[_ParticipantKey, _CohortOutcome], ...]:
         if not isinstance(prepared, PreparedAcquisitionCohort) or len(prepared.items) != len(
             indexed_requests
         ):
-            self._discard_cohort_receipts(prepared)
-            return tuple(
-                (key, AcquisitionFailure(_cohort_contract_failure()))
-                for key, _request in indexed_requests
-            )
+            return self._reject_final_cohort(indexed_requests, prepared, emitted)
         outcomes: list[tuple[_ParticipantKey, _CohortOutcome]] = []
         for (key, request), item in zip(indexed_requests, prepared.items, strict=True):
             if item.literature_id != request.literature.literature_id:
-                self._discard_cohort_receipts(prepared)
-                return tuple(
-                    (value, AcquisitionFailure(_cohort_contract_failure()))
-                    for value, _request in indexed_requests
-                )
-            if item.prepared is not None:
-                outcomes.append((key, item.prepared))
-            elif item.failure is not None:
-                outcomes.append((key, AcquisitionFailure(item.failure)))
-            else:
-                self._discard_cohort_receipts(prepared)
-                return tuple(
-                    (value, AcquisitionFailure(_cohort_contract_failure()))
-                    for value, _request in indexed_requests
-                )
+                return self._reject_final_cohort(indexed_requests, prepared, emitted)
+            observed = emitted.get(key)
+            if observed is not None:
+                if item != observed:
+                    return self._reject_final_cohort(indexed_requests, prepared, emitted)
+                continue
+            try:
+                outcome = self._cohort_item_outcome(request, item)
+            except AcquisitionFailure:
+                return self._reject_final_cohort(indexed_requests, prepared, emitted)
+            outcomes.append((key, outcome))
         return tuple(outcomes)
 
-    def _discard_cohort_receipts(self, prepared: object) -> None:
+    @staticmethod
+    def _cohort_item_outcome(
+        request: AcquisitionRequest,
+        item: CohortPreparationItem,
+    ) -> _CohortOutcome:
+        if item.literature_id != request.literature.literature_id:
+            raise AcquisitionFailure(_cohort_contract_failure())
+        if item.prepared is not None:
+            return item.prepared
+        if item.failure is not None:
+            return AcquisitionFailure(item.failure)
+        raise AcquisitionFailure(_cohort_contract_failure())
+
+    def _reject_final_cohort(
+        self,
+        indexed_requests: tuple[tuple[_ParticipantKey, AcquisitionRequest], ...],
+        prepared: object,
+        emitted: dict[_ParticipantKey, CohortPreparationItem],
+    ) -> tuple[tuple[_ParticipantKey, _CohortOutcome], ...]:
+        issued = frozenset(item.prepared for item in emitted.values() if item.prepared is not None)
+        self._discard_cohort_receipts(prepared, excluded=issued)
+        return tuple(
+            (key, AcquisitionFailure(_cohort_contract_failure()))
+            for key, _request in indexed_requests
+            if key not in emitted
+        )
+
+    def _discard_cohort_receipts(
+        self,
+        prepared: object,
+        *,
+        excluded: frozenset[PreparedAcquisition],
+    ) -> None:
         if not isinstance(prepared, PreparedAcquisitionCohort):
             return
         first_failure: BaseException | None = None
         for item in prepared.items:
-            if item.prepared is None:
+            if item.prepared is None or item.prepared in excluded:
                 continue
             try:
                 self._acquisition.discard_prepared(item.prepared)
@@ -409,7 +607,7 @@ class _CohortAcquisitionPort:
         if discarded is not None:
             self._acquisition.discard_prepared(discarded)
         if batch is not None:
-            self._run_batch(*batch)
+            self._launch_batch(batch)
 
     def _delivery_ready_locked(
         self,
@@ -786,16 +984,19 @@ def _run_cohort_chunks(
             participant_keys=participant_keys,
             cancel_event=cancel_event,
         )
-        run = _CompletionScheduler(
-            targets=chunk,
-            request=request,
-            orchestrator=orchestrator_factory(cohort),
-            max_concurrency=len(chunk),
-            cancel_event=cancel_event,
-            acquisition_cohort=cohort,
-            index_offset=offset,
-            total_target_count=len(targets),
-        ).run()
+        try:
+            run = _CompletionScheduler(
+                targets=chunk,
+                request=request,
+                orchestrator=orchestrator_factory(cohort),
+                max_concurrency=len(chunk),
+                cancel_event=cancel_event,
+                acquisition_cohort=cohort,
+                index_offset=offset,
+                total_target_count=len(targets),
+            ).run()
+        finally:
+            cohort.close()
         run = _apply_cohort_cleanup_failures(
             chunk=chunk,
             run=run,

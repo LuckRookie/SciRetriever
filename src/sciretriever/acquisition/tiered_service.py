@@ -10,11 +10,13 @@ from weakref import WeakKeyDictionary
 
 from sciretriever.acquisition.api import (
     CohortPreparationItem,
+    CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
 from sciretriever.acquisition.cohort import (
     AcquisitionWorkItem,
+    AcquisitionWorkItemResult,
     TieredCohortExecutor,
     WorkItemDisposition,
 )
@@ -145,10 +147,15 @@ class TieredAcquisitionService:
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: CancellationEvent | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         self._validate_requests(requests)
+        if on_prepared is not None and not callable(on_prepared):
+            raise TypeError("on_prepared must be callable or None")
         self._check_cancel(cancel_event)
         work_items = tuple(self._new_work_item(request) for request in requests)
+        prepared_by_literature: dict[LiteratureId, CohortPreparationItem] = {}
+
         try:
             result = self._cohort_executor.execute(
                 work_items,
@@ -161,11 +168,28 @@ class TieredAcquisitionService:
                     item,
                     cancel_event=cancel_event,
                 ),
+                on_tier_completed=(
+                    None
+                    if on_prepared is None
+                    else lambda _tier, frozen: self._publish_terminal_items(
+                        work_items,
+                        frozen,
+                        prepared_by_literature,
+                        on_prepared,
+                    )
+                ),
             )
-            prepared_items = tuple(
-                self._prepare_cohort_item(item, frozen)
-                for item, frozen in zip(work_items, result.items, strict=True)
-            )
+            if on_prepared is None:
+                prepared_items = self._prepare_complete_cohort_items(
+                    work_items,
+                    result.items,
+                )
+            else:
+                if len(prepared_by_literature) != len(work_items):
+                    raise AcquisitionFailure(_contract_failure())
+                prepared_items = tuple(
+                    prepared_by_literature[request.literature.literature_id] for request in requests
+                )
             return PreparedAcquisitionCohort(
                 prepared_items,
                 browser_escalation=result.browser_admission.summary,
@@ -173,6 +197,86 @@ class TieredAcquisitionService:
         except BaseException:
             self._discard_work_preparations(work_items)
             raise
+
+    def _prepare_complete_cohort_items(
+        self,
+        work_items: tuple[AcquisitionWorkItem, ...],
+        frozen_items: tuple[AcquisitionWorkItemResult, ...],
+    ) -> tuple[CohortPreparationItem, ...]:
+        prepared = self._prepare_new_terminal_items(
+            work_items,
+            frozen_items,
+            {},
+        )
+        if len(prepared) != len(work_items):
+            self._discard_prepared_items(prepared)
+            raise AcquisitionFailure(_contract_failure())
+        return prepared
+
+    def _publish_terminal_items(
+        self,
+        work_items: tuple[AcquisitionWorkItem, ...],
+        frozen_items: tuple[AcquisitionWorkItemResult, ...],
+        prepared_by_literature: dict[LiteratureId, CohortPreparationItem],
+        observer: CohortPreparationObserver,
+    ) -> None:
+        newly_prepared = self._prepare_new_terminal_items(
+            work_items,
+            frozen_items,
+            prepared_by_literature,
+        )
+        if not newly_prepared:
+            return
+        try:
+            observer(newly_prepared)
+        except BaseException:
+            self._discard_prepared_items(newly_prepared)
+            raise
+
+    def _prepare_new_terminal_items(
+        self,
+        work_items: tuple[AcquisitionWorkItem, ...],
+        frozen_items: tuple[AcquisitionWorkItemResult, ...],
+        prepared_by_literature: dict[LiteratureId, CohortPreparationItem],
+    ) -> tuple[CohortPreparationItem, ...]:
+        if len(work_items) != len(frozen_items):
+            raise AcquisitionFailure(_contract_failure())
+        prepared: list[CohortPreparationItem] = []
+        try:
+            for item, frozen in zip(work_items, frozen_items, strict=True):
+                if frozen.work_key != item.work_key:
+                    raise AcquisitionFailure(_contract_failure())
+                if frozen.disposition is WorkItemDisposition.PENDING:
+                    continue
+                request = item.request
+                if request is None:
+                    raise AcquisitionFailure(_contract_failure())
+                literature_id = request.literature.literature_id
+                if item.work_key != str(literature_id):
+                    raise AcquisitionFailure(_contract_failure())
+                if literature_id in prepared_by_literature:
+                    continue
+                prepared.append(self._prepare_cohort_item(item, frozen))
+        except BaseException:
+            self._discard_prepared_items(tuple(prepared))
+            raise
+        prepared_by_literature.update((item.literature_id, item) for item in prepared)
+        return tuple(prepared)
+
+    def _discard_prepared_items(
+        self,
+        items: tuple[CohortPreparationItem, ...],
+    ) -> None:
+        first_failure: BaseException | None = None
+        for item in items:
+            if item.prepared is None:
+                continue
+            try:
+                self.discard_prepared(item.prepared)
+            except BaseException as error:
+                first_failure = first_failure or error
+        if first_failure is not None:
+            raise first_failure
 
     def _validate_requests(self, requests: tuple[AcquisitionRequest, ...]) -> None:
         if not isinstance(requests, tuple) or any(
@@ -448,6 +552,7 @@ class TieredAcquisitionService:
             payload = item.publication_receipt
             if not isinstance(payload, _CandidatePreparation):
                 raise AcquisitionFailure(_contract_failure())
+            item.publication_receipt = None
             receipt = self._issue_receipt(payload)
         elif frozen.disposition is WorkItemDisposition.EXHAUSTED:
             receipt = self._issue_receipt(
