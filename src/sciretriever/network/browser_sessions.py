@@ -1,0 +1,596 @@
+"""Process-local broker for opaque operator-managed Browser sessions.
+
+The broker owns persistent process/context objects keyed by a stable session
+identity.  One lease covers exactly one article flow.  Vendor objects never
+leave Network: :mod:`network.browser` is the sole consumer of the private
+lease surface.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import stat
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Final, Protocol, runtime_checkable
+
+_SESSION_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    re.ASCII,
+)
+_SENSITIVE_MARKERS: Final[frozenset[str]] = frozenset(
+    {"cookie", "credential", "password", "secret", "signature", "token"}
+)
+_EVENT_NAMES: Final[tuple[str, ...]] = (
+    "page",
+    "download",
+    "response",
+    "requestfinished",
+    "requestfailed",
+)
+
+BrowserFactory = Callable[..., object]
+RouteHandler = Callable[[object], object]
+EventHandler = Callable[[object], object]
+Clock = Callable[[], float]
+
+
+@runtime_checkable
+class BrowserSessionCancellation(Protocol):
+    def is_set(self) -> bool: ...
+
+
+class BrowserSessionError(RuntimeError):
+    """A persistent Browser session could not be created, used, or cleaned."""
+
+
+class BrowserSessionCancelled(BrowserSessionError):
+    """A session lease was cancelled before its article flow started."""
+
+
+class BrowserSessionTimeout(BrowserSessionError):
+    """A session lease could not start before its bounded deadline."""
+
+
+def _session_key(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("session_key must be a string")
+    candidate = value.strip().casefold()
+    if _SESSION_KEY.fullmatch(candidate) is None or any(
+        marker in candidate.split("-") for marker in _SENSITIVE_MARKERS
+    ):
+        raise ValueError("session_key must be a stable non-sensitive identity")
+    return candidate
+
+
+def _positive_timeout(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("timeout must be a number")
+    candidate = float(value)
+    if candidate <= 0.0 or candidate == float("inf") or candidate != candidate:
+        raise ValueError("timeout must be finite and positive")
+    return candidate
+
+
+def _check_cancel(cancel_event: BrowserSessionCancellation | None) -> None:
+    if cancel_event is None:
+        return
+    try:
+        cancelled = cancel_event.is_set()
+    except Exception:
+        raise BrowserSessionCancelled("Browser session acquisition was interrupted") from None
+    if type(cancelled) is not bool or cancelled:
+        raise BrowserSessionCancelled("Browser session acquisition was interrupted")
+
+
+def _callable(value: object, name: str) -> Callable[..., object]:
+    candidate = getattr(value, name, None)
+    if not callable(candidate):
+        raise BrowserSessionError("Browser session runtime contract is unavailable")
+    return candidate
+
+
+def _acknowledge_binding(value: object, connection_binding: object) -> None:
+    binder = _callable(value, "bind_connection")
+    try:
+        acknowledged = binder(connection_binding)
+    except Exception:
+        raise BrowserSessionError("Browser session connection binding was rejected") from None
+    if acknowledged is not connection_binding:
+        raise BrowserSessionError("Browser session connection binding was not acknowledged")
+
+
+def _close_object(value: object | None) -> bool:
+    if value is None:
+        return True
+    close = getattr(value, "close", None)
+    if not callable(close):
+        return True
+    try:
+        close()
+    except Exception:
+        return False
+    return True
+
+
+class _SessionEntry:
+    __slots__ = (
+        "session_key",
+        "lease_lock",
+        "handler_lock",
+        "factory",
+        "profile",
+        "process_manager",
+        "process_runtime",
+        "context",
+        "entered_process",
+        "session_directory",
+        "active_route_handler",
+        "active_event_handlers",
+        "broken",
+        "closed",
+    )
+
+    def __init__(self, session_key: str) -> None:
+        self.session_key = session_key
+        self.lease_lock = threading.Lock()
+        self.handler_lock = threading.Lock()
+        self.factory: BrowserFactory | None = None
+        self.profile: object | None = None
+        self.process_manager: object | None = None
+        self.process_runtime: object | None = None
+        self.context: object | None = None
+        self.entered_process = False
+        self.session_directory: tempfile.TemporaryDirectory[str] | None = None
+        self.active_route_handler: RouteHandler | None = None
+        self.active_event_handlers: dict[str, EventHandler] = {}
+        self.broken = False
+        self.closed = False
+
+    def acquire(
+        self,
+        *,
+        deadline: float,
+        clock: Clock,
+        cancel_event: BrowserSessionCancellation | None,
+    ) -> None:
+        while True:
+            _check_cancel(cancel_event)
+            remaining = deadline - clock()
+            if remaining <= 0.0:
+                raise BrowserSessionTimeout("Browser session acquisition timed out")
+            if self.lease_lock.acquire(timeout=min(remaining, 0.05)):
+                try:
+                    _check_cancel(cancel_event)
+                except BaseException:
+                    self.lease_lock.release()
+                    raise
+                return
+
+    def ensure_started(
+        self,
+        *,
+        factory: BrowserFactory,
+        profile: object | None,
+        connection_binding: object,
+    ) -> None:
+        if self.closed or self.broken:
+            raise BrowserSessionError("Browser session is not reusable")
+        if self.context is not None:
+            if self.factory is not factory or self.profile is not profile:
+                raise BrowserSessionError("Browser session identity changed after assembly")
+            return
+        self.factory = factory
+        self.profile = profile
+        try:
+            temporary = tempfile.TemporaryDirectory(prefix="sciretriever-browser-session-")
+            self.session_directory = temporary
+            session_path = Path(temporary.name)
+            os.chmod(session_path, stat.S_IRWXU)
+            manager = factory(
+                profile=profile,
+                downloads_path=os.fspath(session_path),
+                connection_binding=connection_binding,
+            )
+            self.process_manager = manager
+            runtime = manager
+            enter = getattr(manager, "__enter__", None)
+            if callable(enter):
+                entered = enter()
+                self.entered_process = True
+                if entered is not None:
+                    runtime = entered
+            if runtime is None:
+                raise BrowserSessionError("Browser session runtime is unavailable")
+            self.process_runtime = runtime
+            _acknowledge_binding(runtime, connection_binding)
+            new_context = _callable(runtime, "new_context")
+            context = new_context(
+                profile=profile,
+                downloads_path=os.fspath(session_path),
+                accept_downloads=True,
+                connection_binding=connection_binding,
+            )
+            if context is None:
+                raise BrowserSessionError("Browser session context is unavailable")
+            self.context = context
+            _acknowledge_binding(context, connection_binding)
+            self._install_dispatchers(context)
+        except BrowserSessionError:
+            self.broken = True
+            raise
+        except Exception:
+            self.broken = True
+            raise BrowserSessionError("Browser session could not be started") from None
+
+    def _install_dispatchers(self, context: object) -> None:
+        route = _callable(context, "route")
+        on = _callable(context, "on")
+        route("**/*", self._dispatch_route)
+        for event in _EVENT_NAMES:
+            on(event, lambda value, event=event: self._dispatch_event(event, value))
+
+    def begin_article(
+        self,
+        *,
+        downloads_path: str,
+        connection_binding: object,
+        route_handler: RouteHandler,
+        event_handlers: Mapping[str, EventHandler],
+    ) -> None:
+        context = self.context
+        if context is None or self.broken or self.closed:
+            raise BrowserSessionError("Browser session context is unavailable")
+        if not callable(route_handler):
+            raise TypeError("route_handler must be callable")
+        if set(event_handlers) != set(_EVENT_NAMES) or any(
+            not callable(handler) for handler in event_handlers.values()
+        ):
+            raise TypeError("event_handlers must provide the closed Browser event set")
+        with self.handler_lock:
+            if self.active_route_handler is not None or self.active_event_handlers:
+                raise BrowserSessionError("Browser session already owns an article flow")
+            self.active_route_handler = route_handler
+            self.active_event_handlers = dict(event_handlers)
+        try:
+            begin = _callable(context, "begin_article")
+            acknowledged = begin(
+                downloads_path=downloads_path,
+                connection_binding=connection_binding,
+            )
+            if acknowledged is not connection_binding:
+                raise BrowserSessionError("Browser article binding was not acknowledged")
+        except BrowserSessionError:
+            self._clear_handlers()
+            self.broken = True
+            raise
+        except Exception:
+            self._clear_handlers()
+            self.broken = True
+            raise BrowserSessionError("Browser article session could not start") from None
+
+    def end_article(self) -> None:
+        context = self.context
+        failed = False
+        try:
+            if context is None:
+                failed = True
+            else:
+                end = _callable(context, "end_article")
+                acknowledged = end()
+                if acknowledged is not True:
+                    failed = True
+        except Exception:
+            failed = True
+        finally:
+            self._clear_handlers()
+        if failed:
+            self.broken = True
+            raise BrowserSessionError("Browser article session could not be drained")
+
+    def _clear_handlers(self) -> None:
+        with self.handler_lock:
+            self.active_route_handler = None
+            self.active_event_handlers = {}
+
+    def _dispatch_route(self, route: object) -> object | None:
+        with self.handler_lock:
+            handler = self.active_route_handler
+        if handler is not None:
+            return handler(route)
+        abort = getattr(route, "abort", None)
+        if callable(abort):
+            try:
+                abort()
+            except Exception:
+                pass
+        return None
+
+    def _dispatch_event(self, event: str, value: object) -> object | None:
+        with self.handler_lock:
+            handler = self.active_event_handlers.get(event)
+        if handler is not None:
+            return handler(value)
+        if event == "page":
+            _close_object(value)
+        elif event == "download":
+            delete = getattr(value, "delete", None)
+            if callable(delete):
+                try:
+                    delete()
+                except Exception:
+                    pass
+        return None
+
+    def close(self) -> bool:
+        if self.closed:
+            return True
+        self.closed = True
+        self._clear_handlers()
+        failed = False
+        if not _close_object(self.context):
+            failed = True
+        manager = self.process_manager
+        runtime = self.process_runtime
+        if manager is not None and self.entered_process:
+            exit_method = getattr(manager, "__exit__", None)
+            if callable(exit_method):
+                try:
+                    exit_method(None, None, None)
+                except Exception:
+                    failed = True
+            elif not _close_object(runtime or manager):
+                failed = True
+        elif not _close_object(runtime or manager):
+            failed = True
+        temporary = self.session_directory
+        if temporary is not None:
+            try:
+                temporary.cleanup()
+            except Exception:
+                failed = True
+        self.context = None
+        self.process_runtime = None
+        self.process_manager = None
+        self.session_directory = None
+        return not failed
+
+
+class BrowserSessionLease:
+    """Private one-article lease consumed only by ``BrowserClient``."""
+
+    __slots__ = ("_broker", "_entry", "_drain_attempted", "_released", "_invalidate")
+
+    def __init__(self, broker: BrowserSessionBroker, entry: _SessionEntry) -> None:
+        self._broker = broker
+        self._entry = entry
+        self._drain_attempted = False
+        self._released = False
+        self._invalidate = False
+
+    @property
+    def process_runtime(self) -> object:
+        value = self._entry.process_runtime
+        if value is None:
+            raise BrowserSessionError("Browser session runtime is unavailable")
+        return value
+
+    @property
+    def context(self) -> object:
+        value = self._entry.context
+        if value is None:
+            raise BrowserSessionError("Browser session context is unavailable")
+        return value
+
+    def invalidate(self) -> None:
+        self._invalidate = True
+
+    def drain_article(self) -> None:
+        """Drain late runtime events while this article's handlers are active."""
+
+        if self._released:
+            raise BrowserSessionError("Browser session lease is already released")
+        if self._drain_attempted:
+            return
+        self._drain_attempted = True
+        try:
+            self._entry.end_article()
+        except BrowserSessionError:
+            self._invalidate = True
+            raise
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._broker._release(
+            self._entry,
+            invalidate=self._invalidate,
+            article_drain_attempted=self._drain_attempted,
+        )
+
+    def __enter__(self) -> BrowserSessionLease:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> bool:
+        del exc_type, exc_value, traceback
+        self.release()
+        return False
+
+
+class BrowserSessionBroker:
+    """Own persistent Browser contexts without persisting dynamic health state."""
+
+    __slots__ = ("_clock", "_state_lock", "_entries", "_closed")
+
+    def __init__(self, *, clock: Clock = time.monotonic) -> None:
+        if not callable(clock):
+            raise TypeError("clock must be callable")
+        self._clock = clock
+        self._state_lock = threading.Lock()
+        self._entries: dict[str, _SessionEntry] = {}
+        self._closed = False
+
+    @staticmethod
+    def validate_session_key(session_key: object) -> str:
+        """Validate and normalize one stable, non-sensitive session identity."""
+
+        return _session_key(session_key)
+
+    def acquire(
+        self,
+        session_key: str,
+        *,
+        factory: BrowserFactory,
+        profile: object | None,
+        downloads_path: str,
+        connection_binding: object,
+        route_handler: RouteHandler,
+        event_handlers: Mapping[str, EventHandler],
+        cancel_event: BrowserSessionCancellation | None = None,
+        timeout: float,
+    ) -> BrowserSessionLease:
+        key = _session_key(session_key)
+        if not callable(factory):
+            raise TypeError("factory must be callable")
+        if type(downloads_path) is not str or not downloads_path:
+            raise ValueError("downloads_path must be a nonblank string")
+        if cancel_event is not None and not isinstance(
+            cancel_event,
+            BrowserSessionCancellation,
+        ):
+            raise TypeError("cancel_event must expose is_set() or be None")
+        deadline = self._clock() + _positive_timeout(timeout)
+        while True:
+            entry = self._entry(key)
+            entry.acquire(deadline=deadline, clock=self._clock, cancel_event=cancel_event)
+            with self._state_lock:
+                current = self._entries.get(key)
+                closed = self._closed
+            if closed:
+                entry.lease_lock.release()
+                raise BrowserSessionError("Browser session broker is closed")
+            if current is not entry or entry.broken or entry.closed:
+                entry.lease_lock.release()
+                continue
+            try:
+                entry.ensure_started(
+                    factory=factory,
+                    profile=profile,
+                    connection_binding=connection_binding,
+                )
+                entry.begin_article(
+                    downloads_path=downloads_path,
+                    connection_binding=connection_binding,
+                    route_handler=route_handler,
+                    event_handlers=event_handlers,
+                )
+                return BrowserSessionLease(self, entry)
+            except Exception:
+                entry.close()
+                self._retire(entry)
+                entry.lease_lock.release()
+                raise BrowserSessionError("Browser session acquisition failed") from None
+
+    def _entry(self, key: str) -> _SessionEntry:
+        with self._state_lock:
+            if self._closed:
+                raise BrowserSessionError("Browser session broker is closed")
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = _SessionEntry(key)
+                self._entries[key] = entry
+            return entry
+
+    def _release(
+        self,
+        entry: _SessionEntry,
+        *,
+        invalidate: bool,
+        article_drain_attempted: bool,
+    ) -> None:
+        failed = False
+        if not article_drain_attempted:
+            try:
+                entry.end_article()
+            except BrowserSessionError:
+                failed = True
+                invalidate = True
+        if invalidate:
+            entry.broken = True
+            if not entry.close():
+                failed = True
+            self._retire(entry)
+        entry.lease_lock.release()
+        if failed:
+            raise BrowserSessionError("Browser session cleanup failed")
+
+    def _retire(self, entry: _SessionEntry) -> None:
+        with self._state_lock:
+            if self._entries.get(entry.session_key) is entry:
+                self._entries.pop(entry.session_key, None)
+
+    def invalidate(self, session_key: str) -> None:
+        key = _session_key(session_key)
+        with self._state_lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                entry.broken = True
+        if entry is None:
+            return
+        entry.lease_lock.acquire()
+        try:
+            if not entry.close():
+                raise BrowserSessionError("Browser session cleanup failed")
+            self._retire(entry)
+        finally:
+            entry.lease_lock.release()
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            entries = tuple(self._entries.values())
+            self._entries.clear()
+        failed = False
+        for entry in entries:
+            entry.lease_lock.acquire()
+            try:
+                entry.broken = True
+                if not entry.close():
+                    failed = True
+            finally:
+                entry.lease_lock.release()
+        if failed:
+            raise BrowserSessionError("Browser session broker cleanup failed")
+
+    def __enter__(self) -> BrowserSessionBroker:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> bool:
+        del exc_type, exc_value, traceback
+        self.close()
+        return False
+
+
+__all__ = (
+    "BrowserSessionBroker",
+    "BrowserSessionCancelled",
+    "BrowserSessionError",
+    "BrowserSessionTimeout",
+)

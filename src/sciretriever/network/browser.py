@@ -39,6 +39,13 @@ from .admission import (
     AdmissionTimeout,
     HostPermit,
 )
+from .browser_sessions import (
+    BrowserSessionBroker,
+    BrowserSessionCancelled,
+    BrowserSessionError,
+    BrowserSessionLease,
+    BrowserSessionTimeout,
+)
 from .policy import (
     DestinationPolicy,
     PolicyError,
@@ -746,6 +753,7 @@ class BrowserClient:
         "_coordinator",
         "_destination_policy",
         "_operator_profile",
+        "_session_broker",
         "_clock",
         "_timeout_seconds",
         "_budget",
@@ -759,6 +767,7 @@ class BrowserClient:
         coordinator: AccessCoordinator,
         destination_policy: DestinationPolicy | None = None,
         operator_profile: object | None = None,
+        session_broker: BrowserSessionBroker | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         budget: BrowserBudget | None = None,
         clock: Clock | None = None,
@@ -775,6 +784,11 @@ class BrowserClient:
             raise ValueError("timeout_seconds must be positive")
         if budget is not None and not isinstance(budget, BrowserBudget):
             raise TypeError("budget must be a BrowserBudget")
+        if session_broker is not None and not isinstance(
+            session_broker,
+            BrowserSessionBroker,
+        ):
+            raise TypeError("session_broker must be a BrowserSessionBroker or None")
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
         self._factory = factory
@@ -782,6 +796,7 @@ class BrowserClient:
         self._coordinator = coordinator
         self._destination_policy = destination_policy or DestinationPolicy()
         self._operator_profile = operator_profile
+        self._session_broker = session_broker
         self._clock = clock or time.monotonic
         self._timeout_seconds = float(timeout_seconds)
         self._budget = budget or BrowserBudget()
@@ -806,6 +821,7 @@ class BrowserClient:
         *,
         flow: Callable[[_BrowserSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
+        session_key: str | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -836,6 +852,13 @@ class BrowserClient:
                 BrowserDestinationGuard,
             ):
                 raise _Abort("policy")
+            if (self._session_broker is None) != (session_key is None):
+                raise _Abort("policy")
+            normalized_session_key = (
+                None
+                if session_key is None
+                else BrowserSessionBroker.validate_session_key(session_key)
+            )
         except _Abort as error:
             return _failure(error.code)
         except Exception:
@@ -855,6 +878,7 @@ class BrowserClient:
         process_manager: object | None = None
         process_runtime: object | None = None
         context: _PageContext | None = None
+        session_lease: BrowserSessionLease | None = None
         state: _FlowState | None = None
         result: BrowserResult = _failure("runtime")
         cleanup_error = False
@@ -892,36 +916,54 @@ class BrowserClient:
             os.chmod(temporary_path, stat.S_IRWXU)
             state.check()
 
-            process_manager = self._factory(
-                profile=self._operator_profile,
-                downloads_path=str(temporary_path),
-                connection_binding=initial_binding,
-            )
-            process_runtime = process_manager
-            enter = getattr(process_manager, "__enter__", None)
-            if callable(enter):
-                entered_value = enter()
-                entered_process = True
-                if entered_value is not None:
-                    process_runtime = entered_value
-            if process_runtime is None:
-                raise _Abort("runtime")
-            self._acknowledge_binding(process_runtime, initial_binding)
-            state.runtime = process_runtime
-            launch = getattr(process_runtime, "new_context", None)
-            if not callable(launch):
-                raise _Abort("runtime")
-            context = cast(
-                _PageContext,
-                launch(
+            if self._session_broker is None:
+                process_manager = self._factory(
                     profile=self._operator_profile,
                     downloads_path=str(temporary_path),
-                    accept_downloads=True,
                     connection_binding=initial_binding,
-                ),
-            )
-            self._acknowledge_binding(context, initial_binding)
-            self._install_handlers(state, context)
+                )
+                process_runtime = process_manager
+                enter = getattr(process_manager, "__enter__", None)
+                if callable(enter):
+                    entered_value = enter()
+                    entered_process = True
+                    if entered_value is not None:
+                        process_runtime = entered_value
+                if process_runtime is None:
+                    raise _Abort("runtime")
+                self._acknowledge_binding(process_runtime, initial_binding)
+                state.runtime = process_runtime
+                launch = getattr(process_runtime, "new_context", None)
+                if not callable(launch):
+                    raise _Abort("runtime")
+                context = cast(
+                    _PageContext,
+                    launch(
+                        profile=self._operator_profile,
+                        downloads_path=str(temporary_path),
+                        accept_downloads=True,
+                        connection_binding=initial_binding,
+                    ),
+                )
+                self._acknowledge_binding(context, initial_binding)
+                self._install_handlers(state, context)
+            else:
+                if normalized_session_key is None:
+                    raise _Abort("policy")
+                session_lease = self._session_broker.acquire(
+                    normalized_session_key,
+                    factory=self._factory,
+                    profile=self._operator_profile,
+                    downloads_path=str(temporary_path),
+                    connection_binding=initial_binding,
+                    route_handler=self._route_handler(state),
+                    event_handlers=self._event_handlers(state),
+                    cancel_event=cancel_event,
+                    timeout=max(deadline - self._clock(), 0.001),
+                )
+                process_runtime = session_lease.process_runtime
+                context = cast(_PageContext, session_lease.context)
+                state.runtime = process_runtime
             new_page = getattr(context, "new_page", None)
             if not callable(new_page):
                 raise _Abort("runtime")
@@ -945,6 +987,12 @@ class BrowserClient:
             result = state.download_result
         except _Abort as error:
             result = _failure(error.code)
+        except BrowserSessionCancelled:
+            result = _failure("cancelled")
+        except BrowserSessionTimeout:
+            result = _failure("timeout")
+        except BrowserSessionError:
+            result = _failure("runtime")
         except TimeoutError:
             result = _failure(
                 state.error.code if state is not None and state.error is not None else "timeout"
@@ -956,7 +1004,12 @@ class BrowserClient:
         finally:
             if state is not None:
                 cleanup_error = self._cleanup_state(
-                    state, context, process_manager, process_runtime, entered_process
+                    state,
+                    context,
+                    process_manager,
+                    process_runtime,
+                    entered_process,
+                    keep_session=session_lease is not None,
                 )
             elif process_manager is not None:
                 cleanup_error = self._cleanup_process(
@@ -964,6 +1017,21 @@ class BrowserClient:
                     process_runtime,
                     entered_process,
                 )
+            if session_lease is not None:
+                if cleanup_error or self._result_requires_session_retirement(result):
+                    session_lease.invalidate()
+                try:
+                    session_lease.drain_article()
+                except BrowserSessionError:
+                    cleanup_error = True
+                    session_lease.invalidate()
+                if state is not None and state.finish_all_requests():
+                    cleanup_error = True
+                    session_lease.invalidate()
+                try:
+                    session_lease.release()
+                except BrowserSessionError:
+                    cleanup_error = True
             if temporary is not None:
                 try:
                     temporary.cleanup()
@@ -977,6 +1045,14 @@ class BrowserClient:
         if cleanup_error:
             return _failure("cleanup")
         return result
+
+    @staticmethod
+    def _result_requires_session_retirement(result: BrowserResult) -> bool:
+        return isinstance(result, AccessFailure) and result.code in {
+            "cancelled",
+            "runtime",
+            "timeout",
+        }
 
     def _request_values(self, request: BrowserRequest | str) -> tuple[str, float, int]:
         if isinstance(request, BrowserRequest):
@@ -1148,15 +1224,27 @@ class BrowserClient:
         on = getattr(context, "on", None)
         if not callable(route) or not callable(on):
             raise _Abort("runtime")
-        route("**/*", lambda value: self._handle_route(state, value))
-        on("page", lambda value: self._handle_popup(state, value))
-        on("download", lambda value: self._handle_download(state, value))
-        on("response", lambda value: self._handle_response(state, value))
+        route("**/*", self._route_handler(state))
+        for event, handler in self._event_handlers(state).items():
+            on(event, handler)
+
+    def _route_handler(self, state: _FlowState) -> Callable[[object], object]:
+        return lambda value: self._handle_route(state, value)
+
+    def _event_handlers(
+        self,
+        state: _FlowState,
+    ) -> dict[str, Callable[[object], object]]:
         # Playwright-like runtimes emit these only after the response body is
         # complete or the request has failed.  They are deliberately distinct
         # from ``response``: a response header event is not request completion.
-        on("requestfinished", lambda value: self._handle_request_finished(state, value))
-        on("requestfailed", lambda value: self._handle_request_finished(state, value))
+        return {
+            "page": lambda value: self._handle_popup(state, value),
+            "download": lambda value: self._handle_download(state, value),
+            "response": lambda value: self._handle_response(state, value),
+            "requestfinished": lambda value: self._handle_request_finished(state, value),
+            "requestfailed": lambda value: self._handle_request_finished(state, value),
+        }
 
     def _handle_route(self, state: _FlowState, raw_route: object) -> None:
         route = cast(_Route, raw_route)
@@ -1522,11 +1610,13 @@ class BrowserClient:
         process_manager: object | None,
         process_runtime: object | None,
         entered_process: bool,
+        *,
+        keep_session: bool = False,
     ) -> bool:
         failed = False
         state.close_for_results()
         pages: list[object] = list(state.pages)
-        if context is not None:
+        if context is not None and not keep_session:
             try:
                 pages.extend(page for page in context.pages if page not in pages)
             except Exception:
@@ -1537,17 +1627,21 @@ class BrowserClient:
         for download in reversed(state.downloads):
             if not self._delete_object(download):
                 failed = True
-        if context is not None and not self._close_object(context):
+        if context is not None and not keep_session and not self._close_object(context):
             failed = True
         # Context close is the runtime-level abort/completion acknowledgement
         # for any subresource that did not emit requestfinished/requestfailed.
         # Keep its host lease until after that close returns.
-        if state.finish_all_requests():
+        if not keep_session and state.finish_all_requests():
             failed = True
-        if process_manager is not None and not self._cleanup_process(
-            process_manager,
-            process_runtime,
-            entered_process,
+        if (
+            not keep_session
+            and process_manager is not None
+            and not self._cleanup_process(
+                process_manager,
+                process_runtime,
+                entered_process,
+            )
         ):
             failed = True
         return failed
