@@ -14,27 +14,37 @@
 ```text
 acquisition/
   api.py
-  service.py
+  tiered_service.py
+  cohort.py
+  browser_admission.py
   planning.py
   access_profiles.py
+  profile_catalog.py
+  outcomes.py
+  routes.py
   manual.py
   rules.py
   ports.py
   authorized.py
   providers/
-  routes/
+  sources/
 ```
 
 - `api.py` 提供具体 `Literature` 的计划、分层获取和手动接纳操作；
-- `service.py` 执行计划中的当前风险层、组织候选、基本检查和发布；
+- `tiered_service.py` 执行分层计划，形成当前操作的候选或耗尽 receipt，并在 Entry 的提交边界消费 receipt；
+- `cohort.py` 保存无持久化副作用的 work item，并对一个有界请求集合执行层级屏障；
+- `browser_admission.py` 在 Browser route 前形成允许、延期、待处理或拒绝决定及脱敏汇总；
 - `planning.py` 根据当前 Literature 证据形成运行时访问方 Resolution、Plan 和 route hints；
 - `access_profiles.py` 保存无 secret、版本化的 Publisher access/profile catalog；
+- `profile_catalog.py` 组装当前已核实的生产访问画像；
+- `outcomes.py` 定义 route 的 PDF、hint、正常未命中、延期和待处理结果；
+- `routes.py` 把已安装的 route adapter 与 Planner 形成的稳定 route key 对齐；
 - `manual.py` 接纳用户明确绑定到具体 Literature 的本地 PDF 内部副本；
 - `rules.py` 实现协议无关的 PDF 基本检查和当前主资产决定；
 - `ports.py` 声明 asset source、临时获取、原子资产发布和自动获取耗尽事实 publication/clear 能力；
 - `authorized.py` 固定已核实的授权主 PDF 合同和协议无关 route helper；
 - `providers/` 保存授权内容 API client；
-- `routes/` 保存公开协议、通用 direct、授权 API 与 Browser route adapter。
+- `sources/` 保存公开协议、通用 direct 与受控 Browser 的外部访问实现；`routes.py` 将这些实现和授权 Provider client 包装成中性 route adapter。
 
 Pre-v1 切换直接用 `PdfRouteAdapter`、Profile catalog 和 Planner 替换旧 `PdfSource`/registry/
 Browser rule 内部合同，不保留双注册、adapter shim 或按旧 Source 列表执行的兼容层。该切换
@@ -339,7 +349,7 @@ Provider 专属路径，并在跨 origin 前移除 token。Wiley 本地 lookup �
 
 `AssetHint` 不增加 `acquisition_path`、`requires_browser` 或 `requires_authorization`。它保存来源当时声明的线索；同一线索可以先匿名尝试，之后由相应授权或 Browser route 使用，但每次真实访问仍受自己的 Network scope 和 candidate key 约束。
 
-每个 `routes/<route>/` 或 `providers/<provider>/` adapter 负责 endpoint、请求字段、API AccessScope 和官方政策声明、quota/`Retry-After` 解释、候选/hint 转换和来源失败边界。`PublisherAccessProfile` 负责跨 route 共享的 access identity、origin、Browser risk/session group、页面规则和补充材料排除；Network 负责中性准入和 Browser runtime。普通 HTTP、API SDK 和 Browser 执行必须经过 Network 的共享访问准入。
+每个 `sources/<source>` 或 `providers/<provider>` adapter 负责 endpoint、请求字段、API AccessScope 和官方政策声明、quota/`Retry-After` 解释、候选/hint 转换和来源失败边界。`PublisherAccessProfile` 负责跨 route 共享的 access identity、origin、Browser risk/session group、页面规则和补充材料排除；Network 负责中性准入和 Browser runtime。普通 HTTP、API SDK 和 Browser 执行必须经过 Network 的共享访问准入。
 
 Adapter 不能把候选直接写成当前主 PDF，也不能执行 Literature 身份判断、正文语义判断或状态推进。
 
@@ -411,6 +421,22 @@ LiteratureAsset
 后续 route 成功时正常短路；最终没有成功时选择稳定失败、deferred 或 action-required 结果，绝不能在尝试其它候选后伪装成完整耗尽。配置预检、取消、Port 合同、临时文件清理、发布和 stale 失败不属于可隔离的 route 失败，必须立即终止。不同候选可以有各自来源，但同一 `Literature` 只有一个主 PDF 驱动解析。候选通过基本检查并完整提交后立即形成 `ASSET_READY`，不等待正文内容判断。补充 PDF 或其它相关文件可以保存为补充资产，但不驱动 Parsing、Analysis 或 Literature 状态。
 
 单个 Literature 内同一层的 routes 与候选按 plan 确定顺序短路，不进行跨层竞速。Entry 可以有界并行处理 cohort 内不同 Literature；API 并发最终由官方 quota scope 门控，Browser 并发最终由 risk group 门控。等待 Network/Browser permit 不等于候选失败，不改变层级顺序，也不形成新的 Acquisition 业务结果。
+
+当前实现通过 `prepare_primary_pdf_cohort()` 一次接收按冻结顺序排列的请求，在 Public 与
+Authorized API pass 中对不同 Literature 使用有界 worker；每篇内部的 route 顺序保持
+确定，整个 cohort 完成当前层后才进入下一层。每层结束都重新生成 Resolution/Plan；新出现
+且尚未尝试的同层 route 会在离开该层前补跑，已经尝试的 route/candidate 不会重复，plan
+revision 回环作为稳定合同失败终止。返回的 `PreparedAcquisitionCohort` 只包含按输入顺序
+排列的 opaque receipt 或稳定失败，以及当前 Browser admission summary；它不可序列化，
+不会在 prepare 阶段发布 Asset 或写入耗尽事实。Entry 随后仍通过单一串行提交边界逐个
+commit/discard receipt，stale/CAS 只影响对应 Literature；任何 receipt 清理失败都必须作为
+稳定 Acquisition 失败或原始程序错误传播，不能只写日志。
+
+截至本段对应实现，生产对象图仍以 Browser disabled 且 execution unconfirmed 组装；因此
+Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
+真实 Browser 流量。Provider session broker、risk-group Browser executor 与用户确认 UX 完成
+前，不得从配置或 CLI 打开生产 Browser。当前 cohort 内部保留的 Browser 执行分支也只是
+保守串行兜底，不代表第 4.1 节的组间并行会话能力已经 production-ready。
 
 ### 4.1 Browser admission、会话与调度
 

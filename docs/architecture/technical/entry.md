@@ -235,6 +235,27 @@ Parsing/Analysis；缺少主 PDF 的当前具体 Literature 组成有界 PDF coh
 提前打开 Browser。Resolution、Plan、route hint、Browser queue 和 scheduler 状态都只属于
 当前操作。
 
+当前 Entry 实现按 `DatabaseCompletionOperation.max_concurrency` 将冻结目标的确定顺序切成
+固定大小 chunk；最后一个 chunk 可以更小。一个 chunk 是一次进程内 cohort 协调范围，不是
+持久 BatchRun，也不会跨进程恢复。每个 target worker 先绑定稳定 participant identity：缺
+PDF 的 participant 提交当代 `AcquisitionRequest`，已有 PDF、已经满足目标、失败、取消或完成
+的 participant 退出本代等待集合，因此已有 PDF 的 Literature 可以直接继续 Parsing/Analysis，
+不会被同 chunk 的 Acquisition 等待阻塞。其余请求全部到齐后才调用一次
+`prepare_primary_pdf_cohort()`；receipt 按冻结 target 顺序交付，而不是按 worker 唤醒顺序
+交付。
+
+MetaLiterature 的首选版本正常耗尽后，下一版本在同一 target 的下一代重新加入 cohort；
+`NoUsableContent` 完成原子清理后，同一 Literature 也在本次操作的下一代重新加入，并继续
+携带 operation-local tried candidate keys。每一代的 prepare 可以有界并行，但所有
+publication/exhaustion commit 仍经过一个 operation-scoped 串行 commit executor。预取消的
+chunk 会让全部 participant 形成 `not_started` 而不调用 Acquisition；已经形成的 receipt
+必须 commit 或 discard，清理失败不能被中断结果掩盖。重复操作重新读取数据库当前事实，
+不依赖上一轮 chunk、generation、request、receipt 或 route hint。
+
+生产 Browser 当前仍默认关闭且没有用户确认入口；Entry 只记录 Acquisition 返回的脱敏
+Browser escalation summary，不把该 summary 误作已获得用户确认。真实 Browser 执行启用前
+还必须完成 session/scheduler 与“side effect 前展示并确认”的产品边界。
+
 每个实际 `Literature` 的结果继续按下面的缺失步骤消费：
 
 ```text
