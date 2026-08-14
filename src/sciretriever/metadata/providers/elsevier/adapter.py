@@ -92,13 +92,24 @@ _EID = re.compile(r"^2-s2\.0-[1-9][0-9]*$", re.ASCII)
 _SCOPUS_ID = re.compile(r"^SCOPUS_ID:([1-9][0-9]*)$", re.IGNORECASE | re.ASCII)
 _YEAR_PREFIX = re.compile(r"^(?P<year>[0-9]{4})(?:-|$)", re.ASCII)
 
-ADAPTER_REVISION = "scopus-json-2026-08-15"
-ACCESS_SCOPE = AccessScope(
+ADAPTER_REVISION = "scopus-search-abstract-json-2026-08-15"
+SEARCH_ACCESS_SCOPE = AccessScope(
     provider_name=_PROVIDER_NAME,
     channel="api",
-    service_name="scopus",
+    service_name="scopus-search",
 )
-BASELINE_ACCESS_POLICY = AccessPolicy(
+SEARCH_BASELINE_ACCESS_POLICY = AccessPolicy(
+    max_concurrency=1,
+    min_start_interval=0.125,
+    burst_limit=20_000,
+    window_seconds=604_800.0,
+)
+ABSTRACT_ACCESS_SCOPE = AccessScope(
+    provider_name=_PROVIDER_NAME,
+    channel="api",
+    service_name="abstract-retrieval",
+)
+ABSTRACT_BASELINE_ACCESS_POLICY = AccessPolicy(
     max_concurrency=1,
     min_start_interval=0.125,
     burst_limit=10_000,
@@ -178,7 +189,12 @@ class ElsevierScopusAdapter:
         self._access_coordinator = access_coordinator
         self._access_scope = access_scope
         self._access_policy = AccessPolicy.strictest(
-            BASELINE_ACCESS_POLICY,
+            SEARCH_BASELINE_ACCESS_POLICY,
+            access_policy,
+        )
+        self._abstract_access_scope = ABSTRACT_ACCESS_SCOPE
+        self._abstract_access_policy = AccessPolicy.strictest(
+            ABSTRACT_BASELINE_ACCESS_POLICY,
             access_policy,
         )
         self._observation_id_factory = observation_id_factory
@@ -215,6 +231,7 @@ class ElsevierScopusAdapter:
                         ("view", "COMPLETE"),
                     )
                 ),
+                product="search",
                 probe=True,
             )
             _search_page(
@@ -250,7 +267,8 @@ class ElsevierScopusAdapter:
                         ("count", str(self._page_size)),
                         ("view", "COMPLETE"),
                     )
-                )
+                ),
+                product="search",
             )
             assert response is not None
             values, next_cursor, total, start = _search_page(
@@ -307,6 +325,7 @@ class ElsevierScopusAdapter:
                 raise TypeError("Scopus Abstract Retrieval lookup has no cursor")
             response = self._request(
                 f"{target.endpoint}?{urlencode((('view', 'FULL'),))}",
+                product="abstract",
                 path_parameter=target.path_parameter,
                 allow_not_found=True,
             )
@@ -338,6 +357,7 @@ class ElsevierScopusAdapter:
         self,
         url: str,
         *,
+        product: Literal["search", "abstract"],
         path_parameter: str | None = None,
         allow_not_found: Literal[False] = False,
         probe: Literal[False] = False,
@@ -348,6 +368,7 @@ class ElsevierScopusAdapter:
         self,
         url: str,
         *,
+        product: Literal["search", "abstract"],
         path_parameter: str | None = None,
         allow_not_found: Literal[True],
         probe: Literal[False] = False,
@@ -358,6 +379,7 @@ class ElsevierScopusAdapter:
         self,
         url: str,
         *,
+        product: Literal["search", "abstract"],
         path_parameter: str | None = None,
         allow_not_found: bool = False,
         probe: Literal[True],
@@ -367,6 +389,7 @@ class ElsevierScopusAdapter:
         self,
         url: str,
         *,
+        product: Literal["search", "abstract"],
         path_parameter: str | None = None,
         allow_not_found: bool = False,
         probe: bool = False,
@@ -400,10 +423,18 @@ class ElsevierScopusAdapter:
             self._api_key,
             self._institution_token,
         )
+        if product == "search":
+            access_scope = self._access_scope
+            access_policy = self._access_policy
+        elif product == "abstract":
+            access_scope = self._abstract_access_scope
+            access_policy = self._abstract_access_policy
+        else:
+            raise TypeError("product must identify one supported Elsevier API")
         result = self._http_client.request(
-            self._access_scope,
+            access_scope,
             url,
-            self._access_policy,
+            access_policy,
             headers=(Header(name="Accept", value="application/json"),),
             credential_headers=credential_headers,
             credential_allowed_origins=(_CREDENTIAL_ORIGIN,),
@@ -1073,8 +1104,8 @@ def _validate_access_inputs(
         raise TypeError("access_coordinator must be an AccessCoordinator")
     if not isinstance(access_scope, AccessScope):
         raise TypeError("access_scope must be an AccessScope")
-    if access_scope != ACCESS_SCOPE:
-        raise ValueError("Elsevier requires the shared Scopus API AccessScope")
+    if access_scope != SEARCH_ACCESS_SCOPE:
+        raise ValueError("Elsevier requires the Scopus Search API AccessScope")
     if not isinstance(access_policy, AccessPolicy):
         raise TypeError("access_policy must be an AccessPolicy")
 
@@ -1174,8 +1205,10 @@ def _http_status_failure(status: int) -> MetadataProviderFailure:
 
 
 __all__ = (
-    "ACCESS_SCOPE",
+    "ABSTRACT_ACCESS_SCOPE",
+    "ABSTRACT_BASELINE_ACCESS_POLICY",
     "ADAPTER_REVISION",
-    "BASELINE_ACCESS_POLICY",
     "ElsevierScopusAdapter",
+    "SEARCH_ACCESS_SCOPE",
+    "SEARCH_BASELINE_ACCESS_POLICY",
 )

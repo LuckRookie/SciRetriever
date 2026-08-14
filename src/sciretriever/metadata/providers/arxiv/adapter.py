@@ -234,7 +234,7 @@ class ArxivAdapter:
         def response_feedback(result: TransportResponse) -> AccessFeedback | None:
             nonlocal observed_at
             observed_at = None if probe else self._observed_at()
-            return retry_after_feedback(
+            feedback = retry_after_feedback(
                 result.status,
                 result.headers,
                 wall_now=(
@@ -243,6 +243,9 @@ class ArxivAdapter:
                     else _timestamp_datetime(observed_at)
                 ),
             )
+            if feedback is None and result.status >= 500:
+                return AccessFeedback(throttled=True)
+            return feedback
 
         result = self._http_client.request(
             self._access_scope,

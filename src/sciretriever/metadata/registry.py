@@ -69,10 +69,10 @@ from sciretriever.metadata.providers.datacite import (
     DataCiteAdapter,
 )
 from sciretriever.metadata.providers.elsevier import (
-    ACCESS_SCOPE as ELSEVIER_ACCESS_SCOPE,
+    SEARCH_ACCESS_SCOPE as ELSEVIER_SEARCH_ACCESS_SCOPE,
 )
 from sciretriever.metadata.providers.elsevier import (
-    BASELINE_ACCESS_POLICY as ELSEVIER_ACCESS_POLICY,
+    SEARCH_BASELINE_ACCESS_POLICY as ELSEVIER_SEARCH_ACCESS_POLICY,
 )
 from sciretriever.metadata.providers.elsevier import (
     ElsevierScopusAdapter,
@@ -222,7 +222,10 @@ _FIXED_ACCESS: Final[dict[str, tuple[AccessScope, AccessPolicy]]] = {
     "arxiv": (ARXIV_ACCESS_SCOPE, ARXIV_ACCESS_POLICY),
     "openalex": (OPENALEX_ACCESS_SCOPE, OPENALEX_ACCESS_POLICY),
     "europe-pmc": (EUROPE_PMC_ACCESS_SCOPE, EUROPE_PMC_ACCESS_POLICY),
-    "elsevier": (ELSEVIER_ACCESS_SCOPE, ELSEVIER_ACCESS_POLICY),
+    "elsevier": (
+        ELSEVIER_SEARCH_ACCESS_SCOPE,
+        ELSEVIER_SEARCH_ACCESS_POLICY,
+    ),
     "springer": (SPRINGER_ACCESS_SCOPE, SPRINGER_ACCESS_POLICY),
     "datacite": (DATACITE_ACCESS_SCOPE, DATACITE_ACCESS_POLICY),
     "core": (CORE_ACCESS_SCOPE, CORE_ACCESS_POLICY),

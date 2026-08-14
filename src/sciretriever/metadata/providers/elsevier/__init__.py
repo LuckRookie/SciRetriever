@@ -1,15 +1,19 @@
 """Elsevier Scopus Search and Abstract Retrieval metadata adapter."""
 
 from .adapter import (
-    ACCESS_SCOPE,
+    ABSTRACT_ACCESS_SCOPE,
+    ABSTRACT_BASELINE_ACCESS_POLICY,
     ADAPTER_REVISION,
-    BASELINE_ACCESS_POLICY,
+    SEARCH_ACCESS_SCOPE,
+    SEARCH_BASELINE_ACCESS_POLICY,
     ElsevierScopusAdapter,
 )
 
 __all__ = (
-    "ACCESS_SCOPE",
+    "ABSTRACT_ACCESS_SCOPE",
+    "ABSTRACT_BASELINE_ACCESS_POLICY",
     "ADAPTER_REVISION",
-    "BASELINE_ACCESS_POLICY",
     "ElsevierScopusAdapter",
+    "SEARCH_ACCESS_SCOPE",
+    "SEARCH_BASELINE_ACCESS_POLICY",
 )
