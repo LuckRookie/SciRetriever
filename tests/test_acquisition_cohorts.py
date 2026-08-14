@@ -36,7 +36,11 @@ from sciretriever.acquisition.ports import TemporaryPdf
 from sciretriever.model.acquisition import AcquisitionPath, PdfCandidate
 from sciretriever.model.primitives import ProvenanceId, Sha256, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+from sciretriever.network.browser_scheduler import (
+    BrowserGroupPolicy,
+    BrowserGroupScheduler,
+    BrowserSchedulerCancellation,
+)
 
 _TIME = UtcTimestamp("2026-08-15T00:00:00Z")
 _HASH = Sha256("a" * 64)
@@ -45,6 +49,25 @@ _PREFIX = {
     AcquisitionPath.AUTHORIZED_PROVIDER_API: "api",
     AcquisitionPath.CONTROLLED_BROWSER: "browser",
 }
+
+
+class _AdvancingBrowserClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+        self._lock = threading.Lock()
+
+    def now(self) -> float:
+        with self._lock:
+            return self.current
+
+    def wait_until(
+        self,
+        deadline: float,
+        cancel_event: BrowserSchedulerCancellation | None,
+    ) -> None:
+        del cancel_event
+        with self._lock:
+            self.current = max(self.current, deadline)
 
 
 def _id(index: int) -> str:
@@ -112,6 +135,10 @@ def _executor(
 ) -> TieredCohortExecutor:
     return TieredCohortExecutor(
         max_concurrency=max_concurrency,
+        browser_scheduler=BrowserGroupScheduler(
+            clock=_AdvancingBrowserClock(),
+            max_concurrency=max_concurrency,
+        ),
         browser_admission=BrowserAdmissionController(
             BrowserAdmissionConfiguration(
                 explicitly_enabled=True,
@@ -121,8 +148,10 @@ def _executor(
                     BrowserGroupAdmissionState(
                         policy=BrowserGroupPolicy(
                             rate_limit_group=group,
+                            policy_revision="fixture-v1",
                             minimum_start_interval=10.0,
                         ),
+                        session_key=group,
                         readiness=BrowserGroupReadiness.READY,
                     )
                     for group in groups
@@ -300,6 +329,64 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             ("c",),
         )
         self.assertEqual(result.browser_admission.summary.groups[0].paper_count, 1)
+
+    def test_browser_groups_overlap_but_each_group_keeps_one_article_flow(self) -> None:
+        items = tuple(
+            AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
+            for key, group in (
+                ("w1", "wiley"),
+                ("w2", "wiley"),
+                ("e1", "elsevier"),
+                ("e2", "elsevier"),
+            )
+        )
+        first_group_barrier = threading.Barrier(2)
+        lock = threading.Lock()
+        active_by_group: dict[str, int] = {}
+        maximum_by_group: dict[str, int] = {}
+        maximum_total = 0
+        starts: list[tuple[str, str]] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            nonlocal maximum_total
+            if route.tier is not AcquisitionPath.CONTROLLED_BROWSER:
+                return RouteExecutionResult.normal_miss()
+            group = route.risk_group
+            self.assertIsNotNone(group)
+            assert group is not None
+            with lock:
+                active_by_group[group] = active_by_group.get(group, 0) + 1
+                maximum_by_group[group] = max(
+                    maximum_by_group.get(group, 0),
+                    active_by_group[group],
+                )
+                maximum_total = max(maximum_total, sum(active_by_group.values()))
+                starts.append((group, item.work_key))
+            if item.work_key in {"w1", "e1"}:
+                first_group_barrier.wait(1.0)
+            with lock:
+                active_by_group[group] -= 1
+            return RouteExecutionResult.normal_miss()
+
+        result = _executor("wiley", "elsevier", max_concurrency=2).execute(
+            items,
+            execute,
+        )
+
+        self.assertEqual(maximum_by_group, {"wiley": 1, "elsevier": 1})
+        self.assertEqual(maximum_total, 2)
+        self.assertEqual(
+            tuple(key for group, key in starts if group == "wiley"),
+            ("w1", "w2"),
+        )
+        self.assertEqual(
+            tuple(key for group, key in starts if group == "elsevier"),
+            ("e1", "e2"),
+        )
+        self.assertTrue(all(item.exhausted for item in result.items))
 
     def test_tier_observer_exposes_public_terminal_items_before_browser_execution(
         self,

@@ -42,8 +42,10 @@ def _group(
     return BrowserGroupAdmissionState(
         policy=BrowserGroupPolicy(
             rate_limit_group=group,
+            policy_revision="fixture-v1",
             minimum_start_interval=interval,
         ),
+        session_key=group,
         readiness=readiness,
         earliest_start_in_seconds=earliest,
     )

@@ -5,6 +5,8 @@ import unittest
 
 from sciretriever.network.browser_scheduler import (
     BrowserArticleAttempt,
+    BrowserAttemptCompletion,
+    BrowserAttemptDisposition,
     BrowserSchedulerCancellation,
 )
 
@@ -18,6 +20,10 @@ class _AdvancingClock:
     def now(self) -> float:
         with self._lock:
             return self.current
+
+    def advance(self, seconds: float) -> None:
+        with self._lock:
+            self.current += seconds
 
     def wait_until(
         self,
@@ -37,6 +43,11 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         group: str,
         *,
         interval: float = 0.0,
+        maximum_starts_per_window: int | None = None,
+        window_seconds: float | None = None,
+        cooldown_after_completion: float = 0.0,
+        failure_cooldown: float = 0.0,
+        revision: str = "fixture-v1",
     ) -> BrowserArticleAttempt:
         from sciretriever.network.browser_scheduler import (
             BrowserArticleAttempt,
@@ -49,7 +60,12 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
             session_key=group,
             policy=BrowserGroupPolicy(
                 rate_limit_group=group,
+                policy_revision=revision,
                 minimum_start_interval=interval,
+                maximum_starts_per_window=maximum_starts_per_window,
+                window_seconds=window_seconds,
+                cooldown_after_completion=cooldown_after_completion,
+                failure_cooldown=failure_cooldown,
             ),
         )
 
@@ -63,7 +79,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         maximum_by_group: dict[str, int] = {}
         lock = threading.Lock()
 
-        def run(attempt: BrowserArticleAttempt) -> str:
+        def run(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[str]:
             with lock:
                 active_by_group[attempt.rate_limit_group] = (
                     active_by_group.get(attempt.rate_limit_group, 0) + 1
@@ -79,7 +95,10 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
             release.wait(1.0)
             with lock:
                 active_by_group[attempt.rate_limit_group] -= 1
-            return attempt.attempt_key
+            return BrowserAttemptCompletion(
+                attempt.attempt_key,
+                BrowserAttemptDisposition.COMPLETED,
+            )
 
         result = scheduler.execute(
             (
@@ -106,11 +125,183 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
                 self._attempt("w2", "wiley", interval=12.0),
                 self._attempt("w3", "wiley", interval=12.0),
             ),
-            lambda _attempt: starts.append(clock.now()),
+            lambda _attempt: BrowserAttemptCompletion(
+                starts.append(clock.now()),
+                BrowserAttemptDisposition.COMPLETED,
+            ),
         )
 
         self.assertEqual(starts, [0.0, 12.0, 24.0])
         self.assertEqual(clock.waited_until, [12.0, 24.0])
+
+    def test_window_completion_and_failure_cooldowns_are_all_enforced(self) -> None:
+        from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+
+        clock = _AdvancingClock()
+        scheduler = BrowserGroupScheduler(clock=clock, max_concurrency=2)
+        starts: list[float] = []
+        attempts = tuple(
+            self._attempt(
+                f"w{index}",
+                "wiley",
+                interval=1.0,
+                maximum_starts_per_window=2,
+                window_seconds=10.0,
+                cooldown_after_completion=2.0,
+                failure_cooldown=5.0,
+            )
+            for index in range(1, 5)
+        )
+
+        def run(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[str]:
+            starts.append(clock.now())
+            disposition = (
+                BrowserAttemptDisposition.FAILED
+                if attempt.attempt_key == "w2"
+                else BrowserAttemptDisposition.COMPLETED
+            )
+            return BrowserAttemptCompletion(attempt.attempt_key, disposition)
+
+        result = scheduler.execute(attempts, run)
+
+        self.assertEqual(result, ("w1", "w2", "w3", "w4"))
+        self.assertEqual(starts, [0.0, 2.0, 10.0, 12.0])
+        self.assertEqual(clock.waited_until, [2.0, 10.0, 12.0])
+
+    def test_callback_exception_retains_failure_cooldown_for_next_execution(self) -> None:
+        from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+
+        clock = _AdvancingClock()
+        scheduler = BrowserGroupScheduler(clock=clock, max_concurrency=1)
+        first = self._attempt("w1", "wiley", failure_cooldown=10.0)
+
+        def fail(_attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[None]:
+            clock.advance(3.0)
+            raise RuntimeError("fixture Browser crash")
+
+        with self.assertRaisesRegex(RuntimeError, "fixture Browser crash"):
+            scheduler.execute((first,), fail)
+
+        starts: list[float] = []
+        second = self._attempt("w2", "wiley", failure_cooldown=10.0)
+        scheduler.execute(
+            (second,),
+            lambda _attempt: BrowserAttemptCompletion(
+                starts.append(clock.now()),
+                BrowserAttemptDisposition.COMPLETED,
+            ),
+        )
+        self.assertEqual(starts, [13.0])
+        self.assertEqual(clock.waited_until, [13.0])
+
+    def test_cancelled_waiter_never_enters_or_releases_an_active_group(self) -> None:
+        from sciretriever.network.browser_scheduler import (
+            BrowserGroupScheduler,
+            BrowserSchedulingCancelled,
+        )
+
+        scheduler = BrowserGroupScheduler(clock=_AdvancingClock(), max_concurrency=2)
+        entered = threading.Event()
+        release = threading.Event()
+        first_result: list[tuple[str, ...]] = []
+
+        def hold(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[str]:
+            entered.set()
+            release.wait(1.0)
+            return BrowserAttemptCompletion(
+                attempt.attempt_key,
+                BrowserAttemptDisposition.COMPLETED,
+            )
+
+        worker = threading.Thread(
+            target=lambda: first_result.append(
+                scheduler.execute((self._attempt("w1", "wiley"),), hold)
+            )
+        )
+        worker.start()
+        self.assertTrue(entered.wait(1.0))
+
+        cancelled = threading.Event()
+        cancelled.set()
+        second_entered = False
+
+        def should_not_run(
+            _attempt: BrowserArticleAttempt,
+        ) -> BrowserAttemptCompletion[None]:
+            nonlocal second_entered
+            second_entered = True
+            return BrowserAttemptCompletion(None, BrowserAttemptDisposition.COMPLETED)
+
+        with self.assertRaises(BrowserSchedulingCancelled):
+            scheduler.execute(
+                (self._attempt("w2", "wiley"),),
+                should_not_run,
+                cancel_event=cancelled,
+            )
+
+        self.assertFalse(second_entered)
+        self.assertFalse(release.is_set())
+        release.set()
+        worker.join(1.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(first_result, [("w1",)])
+
+    def test_policy_is_explicit_fixed_serial_and_operator_can_only_tighten(self) -> None:
+        from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+
+        declared = BrowserGroupPolicy(
+            rate_limit_group="wiley",
+            policy_revision="2026-08-15",
+            minimum_start_interval=10.0,
+            maximum_starts_per_window=4,
+            window_seconds=120.0,
+            cooldown_after_completion=2.0,
+            failure_cooldown=30.0,
+        )
+        operator = BrowserGroupPolicy(
+            rate_limit_group="WILEY",
+            policy_revision="2026-08-15",
+            minimum_start_interval=20.0,
+            maximum_starts_per_window=2,
+            window_seconds=180.0,
+            cooldown_after_completion=5.0,
+            failure_cooldown=45.0,
+        )
+
+        tightened = declared.tightened_by(operator)
+
+        self.assertEqual(tightened.rate_limit_group, "wiley")
+        self.assertEqual(tightened.max_concurrency, 1)
+        self.assertEqual(tightened.minimum_start_interval, 20.0)
+        self.assertEqual(tightened.maximum_starts_per_window, 2)
+        self.assertEqual(tightened.window_seconds, 180.0)
+        self.assertEqual(tightened.cooldown_after_completion, 5.0)
+        self.assertEqual(tightened.failure_cooldown, 45.0)
+
+        with self.assertRaises(ValueError):
+            BrowserGroupPolicy(
+                rate_limit_group="wiley",
+                policy_revision="2026-08-15",
+                minimum_start_interval=10.0,
+                max_concurrency=2,
+            )
+        with self.assertRaises(ValueError):
+            BrowserGroupPolicy(
+                rate_limit_group="wiley",
+                policy_revision="2026-08-15",
+                minimum_start_interval=10.0,
+                maximum_starts_per_window=2,
+            )
+        with self.assertRaises(ValueError):
+            declared.tightened_by(
+                BrowserGroupPolicy(
+                    rate_limit_group="wiley",
+                    policy_revision="2026-08-15",
+                    minimum_start_interval=5.0,
+                    maximum_starts_per_window=8,
+                    window_seconds=60.0,
+                )
+            )
 
 
 if __name__ == "__main__":

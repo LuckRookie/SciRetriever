@@ -72,10 +72,30 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+from sciretriever.network.browser_scheduler import (
+    BrowserGroupPolicy,
+    BrowserGroupScheduler,
+    BrowserSchedulerCancellation,
+)
 
 _TIME = UtcTimestamp("2026-08-15T00:00:00Z")
 _HASH = Sha256("a" * 64)
+
+
+class _AdvancingBrowserClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def now(self) -> float:
+        return self.current
+
+    def wait_until(
+        self,
+        deadline: float,
+        cancel_event: BrowserSchedulerCancellation | None,
+    ) -> None:
+        del cancel_event
+        self.current = max(self.current, deadline)
 
 
 def _id(index: int) -> str:
@@ -358,6 +378,11 @@ def _failure_matrix_service(
         policy_revision="2026-08-15",
         notes_reference="docs/notes/providers/wiley.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        browser_policy=BrowserGroupPolicy(
+            rate_limit_group="fixture-publisher",
+            policy_revision="2026-08-15",
+            minimum_start_interval=0.0,
+        ),
     )
     catalog = PublisherAccessProfileCatalog((profile,))
     adapters = (
@@ -422,6 +447,10 @@ def _failure_matrix_service(
         exhaustion_port=exhaustion,
         exhaustion_clear_port=_ExhaustionClearPort(),
         cohort_executor=TieredCohortExecutor(
+            browser_scheduler=BrowserGroupScheduler(
+                clock=_AdvancingBrowserClock(),
+                max_concurrency=4,
+            ),
             browser_admission=BrowserAdmissionController(
                 BrowserAdmissionConfiguration(
                     explicitly_enabled=True,
@@ -431,13 +460,15 @@ def _failure_matrix_service(
                         BrowserGroupAdmissionState(
                             policy=BrowserGroupPolicy(
                                 rate_limit_group="fixture-publisher",
+                                policy_revision="fixture-v1",
                                 minimum_start_interval=0.0,
                             ),
+                            session_key="fixture-publisher",
                             readiness=BrowserGroupReadiness.READY,
                         ),
                     ),
                 )
-            )
+            ),
         ),
     )
 

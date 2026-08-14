@@ -51,6 +51,7 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 
 def _id(index: int) -> str:
@@ -83,6 +84,11 @@ def _profile(
         policy_revision="2026-08-15",
         notes_reference=f"docs/notes/providers/{provider_name}.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        browser_policy=BrowserGroupPolicy(
+            rate_limit_group=access_key,
+            policy_revision="2026-08-15",
+            minimum_start_interval=10.0,
+        ),
         browser_rules=BrowserRuleSet(primary_pdf_url_markers=("/pdf/",)),
     )
 

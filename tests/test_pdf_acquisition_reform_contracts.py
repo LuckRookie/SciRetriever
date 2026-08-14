@@ -8,6 +8,27 @@ from sciretriever.acquisition.cohort import AcquisitionWorkItem, TieredCohortExe
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import AcquisitionPlan, RouteSpec
 from sciretriever.model.acquisition import AcquisitionPath
+from sciretriever.network.browser_scheduler import (
+    BrowserGroupPolicy,
+    BrowserGroupScheduler,
+    BrowserSchedulerCancellation,
+)
+
+
+class _AdvancingBrowserClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def now(self) -> float:
+        return self.current
+
+    def wait_until(
+        self,
+        deadline: float,
+        cancel_event: BrowserSchedulerCancellation | None,
+    ) -> None:
+        del cancel_event
+        self.current = max(self.current, deadline)
 
 
 def _profile() -> PublisherAccessProfile:
@@ -42,6 +63,11 @@ def _profile() -> PublisherAccessProfile:
         policy_revision="2026-08-15",
         notes_reference="docs/notes/providers/wiley.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        browser_policy=BrowserGroupPolicy(
+            rate_limit_group="wiley-online-library",
+            policy_revision="2026-08-15",
+            minimum_start_interval=10.0,
+        ),
     )
 
 
@@ -242,6 +268,10 @@ class TieredCohortContractTests(unittest.TestCase):
         from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
         return TieredCohortExecutor(
+            browser_scheduler=BrowserGroupScheduler(
+                clock=_AdvancingBrowserClock(),
+                max_concurrency=4,
+            ),
             browser_admission=BrowserAdmissionController(
                 BrowserAdmissionConfiguration(
                     explicitly_enabled=True,
@@ -251,13 +281,15 @@ class TieredCohortContractTests(unittest.TestCase):
                         BrowserGroupAdmissionState(
                             policy=BrowserGroupPolicy(
                                 rate_limit_group="publisher-a",
+                                policy_revision="fixture-v1",
                                 minimum_start_interval=0.0,
                             ),
+                            session_key="publisher-a",
                             readiness=BrowserGroupReadiness.READY,
                         ),
                     ),
                 )
-            )
+            ),
         )
 
     def test_whole_cohort_finishes_each_tier_before_the_next_one_starts(self) -> None:

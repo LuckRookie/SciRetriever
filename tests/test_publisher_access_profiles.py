@@ -15,6 +15,7 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfileCatalog,
     normalize_profile_origin,
 )
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 
 def _profile(
@@ -45,6 +46,15 @@ def _profile(
         policy_revision=policy_revision,
         notes_reference=f"docs/notes/providers/{access_key}.md",
         production_status=status,
+        browser_policy=BrowserGroupPolicy(
+            rate_limit_group=access_key,
+            policy_revision=policy_revision,
+            minimum_start_interval=10.0,
+            maximum_starts_per_window=4,
+            window_seconds=120.0,
+            cooldown_after_completion=2.0,
+            failure_cooldown=30.0,
+        ),
         browser_rules=BrowserRuleSet() if rules is None else rules,
     )
 
@@ -102,10 +112,21 @@ class PublisherAccessProfileTests(unittest.TestCase):
         revised = _profile(
             rules=dataclasses.replace(rules, pdf_action_selectors=("a.pdf-download",))
         )
+        first_policy = first.browser_policy
+        self.assertIsNotNone(first_policy)
+        assert first_policy is not None
+        revised_policy = dataclasses.replace(
+            first,
+            browser_policy=dataclasses.replace(
+                first_policy,
+                minimum_start_interval=20.0,
+            ),
+        )
 
         self.assertEqual(first, second)
         self.assertEqual(first.revision_hash, second.revision_hash)
         self.assertNotEqual(first.revision_hash, revised.revision_hash)
+        self.assertNotEqual(first.revision_hash, revised_policy.revision_hash)
         self.assertEqual(len({first, second}), 1)
         self.assertNotIn("download-pdf", repr(first))
         with self.assertRaises(dataclasses.FrozenInstanceError):
@@ -116,6 +137,17 @@ class PublisherAccessProfileTests(unittest.TestCase):
             dataclasses.replace(_profile(), browser_session_key=None)
         with self.assertRaises(ValueError):
             dataclasses.replace(_profile(), browser_route_key=None)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(_profile(), browser_policy=None)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(
+                _profile(),
+                browser_policy=BrowserGroupPolicy(
+                    rate_limit_group="another-provider",
+                    policy_revision="2026-08-15",
+                    minimum_start_interval=10.0,
+                ),
+            )
         with self.assertRaises(ValueError):
             _profile(
                 status=ProfileProductionStatus.PRODUCTION_READY,
@@ -133,6 +165,15 @@ class PublisherAccessProfileTests(unittest.TestCase):
             rules=BrowserRuleSet(primary_pdf_url_markers=("/doi/pdf/",)),
         )
         self.assertEqual(production.production_status, ProfileProductionStatus.PRODUCTION_READY)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(
+                production,
+                browser_policy=BrowserGroupPolicy(
+                    rate_limit_group="wiley-online-library",
+                    policy_revision="2026-08-15",
+                    minimum_start_interval=0.0,
+                ),
+            )
 
     def test_catalog_rejects_duplicate_access_identity_but_not_shared_platform_knowledge(
         self,
