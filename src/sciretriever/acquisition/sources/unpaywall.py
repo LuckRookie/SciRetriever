@@ -11,12 +11,14 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import NoReturn, Protocol, cast
 
+from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import RouteExecutionContext, delivery_results
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
@@ -81,6 +83,7 @@ class UnpaywallPdfSource:
 
     source_name = _PROVIDER_NAME
     acquisition_path = AcquisitionPath.PUBLIC
+    route_key = "public:unpaywall"
 
     def __init__(
         self,
@@ -109,12 +112,14 @@ class UnpaywallPdfSource:
     def __repr__(self) -> str:
         return "<UnpaywallPdfSource ready=True>"
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        return bool(_doi_tasks(evidence))
+    def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        return delivery_results(
+            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        )
 
-    def acquire(
+    def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,

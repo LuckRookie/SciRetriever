@@ -126,7 +126,7 @@ class RoutingEvidenceKind(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionEvidence:
-    """Immutable request-local evidence available to ``PdfSource.is_applicable``."""
+    """Immutable request-local evidence consumed by planning and route execution."""
 
     metadata: LiteratureMetadata
     identifiers: tuple[Identifier, ...]

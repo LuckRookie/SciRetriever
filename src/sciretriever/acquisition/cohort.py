@@ -1,0 +1,302 @@
+"""In-memory tier barriers for one bounded PDF-acquisition cohort."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import Enum, unique
+from typing import Final
+
+from sciretriever.acquisition.outcomes import RouteExecutionResult, RouteOutcome
+from sciretriever.acquisition.planning import (
+    AccessRouteHint,
+    AcquisitionPlan,
+    AcquisitionPlanningSession,
+    RouteReadiness,
+    RouteSpec,
+)
+from sciretriever.acquisition.ports import (
+    AcquisitionRequest,
+    CandidateKeyTracker,
+    TemporaryPdf,
+)
+from sciretriever.model.acquisition import AcquisitionPath
+from sciretriever.model.report import StableFailure
+
+_WORK_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+    re.ASCII,
+)
+_TIER_ORDER: Final[tuple[AcquisitionPath, ...]] = (
+    AcquisitionPath.PUBLIC,
+    AcquisitionPath.AUTHORIZED_PROVIDER_API,
+    AcquisitionPath.CONTROLLED_BROWSER,
+)
+
+
+@unique
+class WorkItemDisposition(str, Enum):
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    EXHAUSTED = "exhausted"
+    DEFERRED = "deferred"
+    ACTION_REQUIRED = "action-required"
+    FAILED = "failed"
+
+
+def _work_key(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("work_key must be a string")
+    candidate = value.strip()
+    if _WORK_KEY.fullmatch(candidate) is None:
+        raise ValueError("work_key must be a stable operation-local identity")
+    return candidate
+
+
+@dataclass(slots=True)
+class AcquisitionWorkItem:
+    """Mutable operation-local state for one frozen Literature snapshot."""
+
+    work_key: str
+    plan: AcquisitionPlan
+    request: AcquisitionRequest | None = field(default=None, repr=False)
+    planning_session: AcquisitionPlanningSession | None = field(default=None, repr=False)
+    disposition: WorkItemDisposition = field(
+        default=WorkItemDisposition.PENDING,
+        init=False,
+    )
+    current_tier: AcquisitionPath | None = field(default=None, init=False)
+    attempted_route_keys: list[str] = field(default_factory=list, init=False, repr=False)
+    route_hints: list[AccessRouteHint] = field(default_factory=list, init=False, repr=False)
+    temporary_pdf: TemporaryPdf | None = field(default=None, init=False, repr=False)
+    failure: StableFailure | None = field(default=None, init=False)
+    publication_receipt: object | None = field(default=None, init=False, repr=False)
+    candidate_keys: CandidateKeyTracker = field(init=False, repr=False)
+    delivered_candidate_keys: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.work_key = _work_key(self.work_key)
+        if not isinstance(self.plan, AcquisitionPlan):
+            raise TypeError("plan must be AcquisitionPlan")
+        if self.request is not None and not isinstance(self.request, AcquisitionRequest):
+            raise TypeError("request must be AcquisitionRequest or None")
+        if self.planning_session is not None and not isinstance(
+            self.planning_session,
+            AcquisitionPlanningSession,
+        ):
+            raise TypeError("planning_session must be AcquisitionPlanningSession or None")
+        if self.planning_session is not None and (
+            self.request is not self.planning_session.request
+            or self.plan != self.planning_session.plan
+        ):
+            raise ValueError("planning_session must describe the work item request and plan")
+        excluded = () if self.request is None else self.request.excluded_candidate_keys
+        self.candidate_keys = CandidateKeyTracker(excluded)
+        self.delivered_candidate_keys.update(excluded)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.disposition is WorkItemDisposition.EXHAUSTED
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("AcquisitionWorkItem cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionWorkItemResult:
+    work_key: str
+    disposition: WorkItemDisposition
+    attempted_route_keys: tuple[str, ...]
+    route_hints: tuple[AccessRouteHint, ...]
+    temporary_pdf: TemporaryPdf | None = field(default=None, repr=False)
+    failure: StableFailure | None = None
+
+    def __post_init__(self) -> None:
+        _work_key(self.work_key)
+        if not isinstance(self.disposition, WorkItemDisposition):
+            raise TypeError("disposition must be WorkItemDisposition")
+        if not isinstance(self.attempted_route_keys, tuple):
+            raise TypeError("attempted_route_keys must be a tuple")
+        if not isinstance(self.route_hints, tuple) or any(
+            not isinstance(hint, AccessRouteHint) for hint in self.route_hints
+        ):
+            raise TypeError("route_hints must contain AccessRouteHint values")
+        if self.temporary_pdf is not None and not isinstance(self.temporary_pdf, TemporaryPdf):
+            raise TypeError("temporary_pdf must be TemporaryPdf or None")
+        if self.failure is not None and not isinstance(self.failure, StableFailure):
+            raise TypeError("failure must be StableFailure or None")
+        if (self.disposition is WorkItemDisposition.DELIVERED) != (self.temporary_pdf is not None):
+            raise ValueError("only a delivered work item carries TemporaryPdf")
+        has_failure_disposition = self.disposition in {
+            WorkItemDisposition.DEFERRED,
+            WorkItemDisposition.ACTION_REQUIRED,
+            WorkItemDisposition.FAILED,
+        }
+        if has_failure_disposition != (self.failure is not None):
+            raise ValueError("only nonterminal-success dispositions carry failure")
+
+    @property
+    def exhausted(self) -> bool:
+        return self.disposition is WorkItemDisposition.EXHAUSTED
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("AcquisitionWorkItemResult cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
+class CohortExecutionResult:
+    items: tuple[AcquisitionWorkItemResult, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.items, tuple) or any(
+            not isinstance(item, AcquisitionWorkItemResult) for item in self.items
+        ):
+            raise TypeError("items must contain AcquisitionWorkItemResult values")
+        keys = tuple(item.work_key for item in self.items)
+        if len(keys) != len(set(keys)):
+            raise ValueError("cohort result work keys must be unique")
+
+
+RouteExecutor = Callable[[AcquisitionWorkItem, RouteSpec], RouteExecutionResult]
+PlanRefresher = Callable[[AcquisitionWorkItem], AcquisitionPlan]
+
+
+class TieredCohortExecutor:
+    """Finish every active work item in one tier before opening the next."""
+
+    def execute(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        execute_route: RouteExecutor,
+        *,
+        refresh_plan: PlanRefresher | None = None,
+    ) -> CohortExecutionResult:
+        self._validate_inputs(items, execute_route, refresh_plan)
+        for tier in _TIER_ORDER:
+            for item in items:
+                if item.disposition is WorkItemDisposition.PENDING:
+                    self._execute_tier(item, tier, execute_route)
+            if refresh_plan is not None:
+                self._refresh_pending(items, refresh_plan)
+        for item in items:
+            if item.disposition is WorkItemDisposition.PENDING:
+                item.disposition = WorkItemDisposition.EXHAUSTED
+                item.current_tier = None
+        return CohortExecutionResult(tuple(_freeze_result(item) for item in items))
+
+    def _validate_inputs(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        execute_route: RouteExecutor,
+        refresh_plan: PlanRefresher | None,
+    ) -> None:
+        if not isinstance(items, tuple) or any(
+            not isinstance(item, AcquisitionWorkItem) for item in items
+        ):
+            raise TypeError("items must contain AcquisitionWorkItem values")
+        keys = tuple(item.work_key for item in items)
+        if len(keys) != len(set(keys)):
+            raise ValueError("cohort work keys must be unique")
+        if not callable(execute_route):
+            raise TypeError("execute_route must be callable")
+        if refresh_plan is not None and not callable(refresh_plan):
+            raise TypeError("refresh_plan must be callable or None")
+        if any(item.disposition is not WorkItemDisposition.PENDING for item in items):
+            raise ValueError("cohort work items must be fresh")
+
+    def _execute_tier(
+        self,
+        item: AcquisitionWorkItem,
+        tier: AcquisitionPath,
+        execute_route: RouteExecutor,
+    ) -> None:
+        item.current_tier = tier
+        for route in item.plan.routes_for(tier):
+            if item.disposition is not WorkItemDisposition.PENDING:
+                break
+            if route.route_key in item.attempted_route_keys:
+                continue
+            item.attempted_route_keys.append(route.route_key)
+            readiness = _readiness_outcome(route)
+            result = readiness if readiness is not None else execute_route(item, route)
+            if not isinstance(result, RouteExecutionResult):
+                raise TypeError("execute_route must return RouteExecutionResult")
+            _apply_route_result(item, result)
+
+    def _refresh_pending(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        refresh_plan: PlanRefresher,
+    ) -> None:
+        for item in items:
+            if item.disposition is not WorkItemDisposition.PENDING:
+                continue
+            plan = refresh_plan(item)
+            if not isinstance(plan, AcquisitionPlan):
+                raise TypeError("refresh_plan must return AcquisitionPlan")
+            item.plan = plan
+
+
+def _readiness_outcome(route: RouteSpec) -> RouteExecutionResult | None:
+    if route.readiness is RouteReadiness.READY:
+        return None
+    if route.readiness in {RouteReadiness.DISABLED, RouteReadiness.UNSUPPORTED}:
+        return RouteExecutionResult.normal_miss()
+    if route.readiness is RouteReadiness.UNCONFIGURED:
+        if route.allows_browser_after_unconfigured:
+            return RouteExecutionResult.normal_miss()
+        return RouteExecutionResult.action_required(
+            StableFailure(
+                code="acquisition-route-unconfigured",
+                reason="An applicable acquisition route is not configured.",
+                action="Configure the route or disable it before retrying.",
+                retryable=False,
+            )
+        )
+    return RouteExecutionResult.deferred(
+        StableFailure(
+            code="acquisition-route-temporarily-unavailable",
+            reason="An applicable acquisition route is temporarily unavailable.",
+            action="Retry after the route becomes available.",
+            retryable=True,
+        )
+    )
+
+
+def _apply_route_result(item: AcquisitionWorkItem, result: RouteExecutionResult) -> None:
+    for hint in result.hints:
+        if hint not in item.route_hints:
+            item.route_hints.append(hint)
+    if result.outcome in {RouteOutcome.NORMAL_MISS, RouteOutcome.HINTS}:
+        return
+    if result.outcome is RouteOutcome.PDF_DELIVERED:
+        item.temporary_pdf = result.temporary_pdf
+        item.disposition = WorkItemDisposition.DELIVERED
+        return
+    item.failure = result.failure
+    item.disposition = {
+        RouteOutcome.DEFERRED: WorkItemDisposition.DEFERRED,
+        RouteOutcome.ACTION_REQUIRED: WorkItemDisposition.ACTION_REQUIRED,
+        RouteOutcome.FAILURE: WorkItemDisposition.FAILED,
+    }[result.outcome]
+
+
+def _freeze_result(item: AcquisitionWorkItem) -> AcquisitionWorkItemResult:
+    return AcquisitionWorkItemResult(
+        work_key=item.work_key,
+        disposition=item.disposition,
+        attempted_route_keys=tuple(item.attempted_route_keys),
+        route_hints=tuple(item.route_hints),
+        temporary_pdf=item.temporary_pdf,
+        failure=item.failure,
+    )
+
+
+__all__ = (
+    "AcquisitionWorkItem",
+    "AcquisitionWorkItemResult",
+    "CohortExecutionResult",
+    "TieredCohortExecutor",
+    "WorkItemDisposition",
+)

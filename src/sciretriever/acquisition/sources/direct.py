@@ -21,12 +21,14 @@ from typing import BinaryIO, Final
 from urllib.parse import urljoin
 from uuid import uuid4
 
+from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
     TemporaryPdf,
 )
+from sciretriever.acquisition.routes import RouteExecutionContext, delivery_results
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
@@ -780,7 +782,7 @@ def _ordered_unique_hints(
 
 
 class DirectPdfSource:
-    """Public-stage ``PdfSource`` for neutral direct-file and landing hints."""
+    """Public route for neutral direct-file and landing hints."""
 
     __slots__ = ("_fetcher",)
 
@@ -797,12 +799,18 @@ class DirectPdfSource:
     def acquisition_path(self) -> AcquisitionPath:
         return AcquisitionPath.PUBLIC
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        return any(_eligible_primary_hint(observed.hint) for observed in evidence.asset_hints)
+    @property
+    def route_key(self) -> str:
+        return "public:direct"
 
-    def acquire(
+    def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        return delivery_results(
+            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        )
+
+    def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,

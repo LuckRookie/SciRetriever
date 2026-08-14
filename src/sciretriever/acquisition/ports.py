@@ -19,14 +19,13 @@ from urllib.parse import urlsplit
 from sciretriever.model.access import has_sensitive_query_parameter
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
-    AcquisitionPath,
     Asset,
     AssetRole,
     AutomaticPdfAcquisitionExhaustion,
     LiteratureAsset,
     PdfCandidate,
 )
-from sciretriever.model.literature import Identifier, Literature
+from sciretriever.model.literature import Literature
 from sciretriever.model.metadata import MetadataObservation
 from sciretriever.model.primitives import (
     AssetId,
@@ -41,7 +40,7 @@ from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
 
 if TYPE_CHECKING:
-    from sciretriever.acquisition.routing import AcquisitionEvidence
+    pass
 
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -338,13 +337,6 @@ class CancellationEvent(Protocol):
 
 
 @runtime_checkable
-class DoiLandingOriginResolver(Protocol):
-    """Resolve one canonical DOI to a safe final origin or a normal miss."""
-
-    def resolve(self, doi: Identifier | None) -> str | None: ...
-
-
-@runtime_checkable
 class PdfValidationStage(Protocol):
     """One path-free owner-only stage used only for bounded PDF validation."""
 
@@ -456,75 +448,6 @@ class CandidateKeyTracker:
         return frozenset(self._candidate_keys)
 
 
-@dataclass(frozen=True, slots=True)
-class SourceReadiness:
-    """A local readiness decision produced before Acquisition performs I/O."""
-
-    is_ready: bool
-    failure: StableFailure | None = None
-
-    def __post_init__(self) -> None:
-        if type(self.is_ready) is not bool:
-            raise TypeError("is_ready must be a bool")
-        if self.failure is not None and not isinstance(self.failure, StableFailure):
-            raise TypeError("failure must be a StableFailure or None")
-        if self.is_ready and self.failure is not None:
-            raise ValueError("a ready Source cannot carry a readiness failure")
-
-
-@runtime_checkable
-class PdfSource(Protocol):
-    """One capability-scoped Source in exactly one automatic acquisition stage."""
-
-    @property
-    def source_name(self) -> str: ...
-
-    @property
-    def acquisition_path(self) -> AcquisitionPath: ...
-
-    def is_applicable(self, evidence: "AcquisitionEvidence") -> bool:
-        """Interpret only prebuilt local evidence; this method must perform no I/O."""
-        ...
-
-    def acquire(
-        self,
-        request: "AcquisitionRequest",
-        evidence: "AcquisitionEvidence",
-        candidate_keys: CandidateKeyTracker,
-    ) -> Iterable[TemporaryPdf]:
-        """Yield temporary PDFs serially after claiming each real candidate action."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class PdfSourceBinding:
-    """Configuration/assembly state for one potential Source capability."""
-
-    source_name: str
-    acquisition_path: AcquisitionPath
-    enabled: bool
-    production: bool
-    readiness: SourceReadiness | None
-    source: PdfSource | None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "source_name",
-            _nonblank(self.source_name, field_name="source_name"),
-        )
-        if not isinstance(self.acquisition_path, AcquisitionPath):
-            raise TypeError("acquisition_path must be an AcquisitionPath")
-        if type(self.enabled) is not bool:
-            raise TypeError("enabled must be a bool")
-        if type(self.production) is not bool:
-            raise TypeError("production must be a bool")
-        if self.readiness is not None and not isinstance(self.readiness, SourceReadiness):
-            raise TypeError("readiness must be a SourceReadiness or None")
-        if self.source is not None and not isinstance(self.source, PdfSource):
-            raise TypeError("source must implement PdfSource or be None")
-
-
 @runtime_checkable
 class PrimaryPdfPreparationPort(Protocol):
     """Validate now and commit later without exposing staging outside Acquisition."""
@@ -569,16 +492,12 @@ __all__ = (
     "AcquisitionFailure",
     "AcquisitionSourceFailure",
     "CancellationEvent",
-    "DoiLandingOriginResolver",
     "CandidateKeyTracker",
-    "PdfSource",
-    "PdfSourceBinding",
     "PdfValidationStage",
     "PdfValidationStagingPort",
     "PrimaryPdfPublicationResult",
     "PrimaryPdfPreparation",
     "PrimaryPdfPreparationPort",
-    "SourceReadiness",
     "TemporaryPdf",
     "TemporaryPdfContent",
     "ValidatedPdfContent",

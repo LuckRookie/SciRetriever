@@ -28,13 +28,18 @@ from typing import BinaryIO, Final, Protocol, runtime_checkable
 from urllib.parse import quote
 from uuid import uuid4
 
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
-    PdfSource,
-    SourceReadiness,
     TemporaryPdf,
+)
+from sciretriever.acquisition.routes import (
+    RouteExecutionContext,
+    RouteInstallationStatus,
+    delivery_results,
 )
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
@@ -220,8 +225,8 @@ _PRODUCTION_FAILURE: Final[StableFailure] = _stable_failure(
     action="Keep controlled Browser acquisition disabled until both are verified.",
     retryable=False,
 )
-CONTROLLED_BROWSER_PRODUCTION_READINESS: Final[SourceReadiness] = SourceReadiness(
-    is_ready=False,
+CONTROLLED_BROWSER_PRODUCTION_STATUS: Final[RouteInstallationStatus] = RouteInstallationStatus(
+    readiness=RouteReadiness.UNSUPPORTED,
     failure=_PRODUCTION_FAILURE,
 )
 
@@ -329,7 +334,7 @@ def _eligible_landing_role(role: AssetRole | None) -> bool:
     return role is None or role is AssetRole.PRIMARY_PDF
 
 
-class ControlledBrowserPdfSource(PdfSource):
+class ControlledBrowserPdfSource:
     """Controlled-Browser Source driven only by strong, local routing evidence."""
 
     __slots__ = (
@@ -398,19 +403,23 @@ class ControlledBrowserPdfSource(PdfSource):
         return AcquisitionPath.CONTROLLED_BROWSER
 
     @property
+    def route_key(self) -> str:
+        return "browser:controlled"
+
+    @property
     def browser_budget(self) -> BrowserBudget:
         """Expose the immutable conservative budget for assembly/tests."""
 
         return _CONSERVATIVE_BROWSER_BUDGET
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        """Interpret only already-built evidence; never call the Browser runner."""
+    def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        return delivery_results(
+            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        )
 
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        return bool(self._actions(evidence))
-
-    def acquire(
+    def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,
@@ -641,6 +650,6 @@ class ControlledBrowserPdfSource(PdfSource):
 __all__ = (
     "BrowserFlowSession",
     "BrowserRunner",
-    "CONTROLLED_BROWSER_PRODUCTION_READINESS",
+    "CONTROLLED_BROWSER_PRODUCTION_STATUS",
     "ControlledBrowserPdfSource",
 )

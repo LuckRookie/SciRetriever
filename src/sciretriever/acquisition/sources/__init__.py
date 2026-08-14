@@ -7,7 +7,7 @@ handoff descriptions rather than three competing package APIs.
 
 from sciretriever.acquisition.sources.arxiv import ArxivPdfSource
 from sciretriever.acquisition.sources.browser import (
-    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
     BrowserFlowSession,
     BrowserRunner,
     ControlledBrowserPdfSource,
@@ -21,7 +21,7 @@ from sciretriever.acquisition.sources.browser_rules import (
 from sciretriever.acquisition.sources.configured_sci_hub import (
     ConfiguredLocatorResolver,
     ConfiguredSciHubPdfSource,
-    configured_sci_hub_readiness,
+    configured_sci_hub_route_status,
 )
 from sciretriever.acquisition.sources.direct import (
     DirectPdfSource,
@@ -39,7 +39,7 @@ __all__ = (
     "BrowserRuleCatalog",
     "BrowserRunner",
     "BrowserSiteRule",
-    "CONTROLLED_BROWSER_PRODUCTION_READINESS",
+    "CONTROLLED_BROWSER_PRODUCTION_STATUS",
     "ConfiguredLocatorResolver",
     "ConfiguredSciHubPdfSource",
     "ControlledBrowserPdfSource",
@@ -50,5 +50,5 @@ __all__ = (
     "PublicLocatorFetcher",
     "UnpaywallPdfSource",
     "WebAccessProfileResolver",
-    "configured_sci_hub_readiness",
+    "configured_sci_hub_route_status",
 )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
@@ -19,7 +19,6 @@ from sciretriever.acquisition.rules import (
     PdfValidationCancelled,
     ReadablePdfSource,
 )
-from sciretriever.acquisition.service import AcquisitionService
 from sciretriever.model.acquisition import AcquisitionResult
 
 AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
@@ -49,12 +48,33 @@ class PreparedAcquisition:
         raise TypeError("PreparedAcquisition cannot be copied")
 
 
-class AcquisitionApi:
-    """Thin boundary over an injected :class:`AcquisitionService`."""
+@runtime_checkable
+class AutomaticAcquisitionService(Protocol):
+    """Internal service surface behind the stable Acquisition API."""
 
-    def __init__(self, service: AcquisitionService) -> None:
-        if not isinstance(service, AcquisitionService):
-            raise TypeError("service must be an AcquisitionService")
+    def prepare_primary_pdf(
+        self,
+        request: AcquisitionRequest,
+        *,
+        cancel_event: CancellationEvent | None = None,
+    ) -> PreparedAcquisition: ...
+
+    def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...
+
+    def discard_prepared(self, prepared: PreparedAcquisition) -> None: ...
+
+    def clear_exhaustion_for_explicit_retry(
+        self,
+        expected_facts: AcquisitionExpectedFacts,
+    ) -> None: ...
+
+
+class AcquisitionApi:
+    """Thin boundary over one injected automatic Acquisition service."""
+
+    def __init__(self, service: AutomaticAcquisitionService) -> None:
+        if not isinstance(service, AutomaticAcquisitionService):
+            raise TypeError("service must implement AutomaticAcquisitionService")
         self._service = service
 
     def prepare_primary_pdf(

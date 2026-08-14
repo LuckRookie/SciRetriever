@@ -25,13 +25,19 @@ from typing import Final, Protocol, TypeAlias, runtime_checkable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
-    SourceReadiness,
     TemporaryPdf,
     TemporaryPdfContent,
+)
+from sciretriever.acquisition.routes import (
+    RouteExecutionContext,
+    RouteInstallationStatus,
+    delivery_results,
 )
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
@@ -588,13 +594,13 @@ class AuthorizedProviderClient(Protocol):
     def download(self, locator: AuthorizedDownloadLocator) -> AuthorizedDownloadResult: ...
 
 
-def authorized_source_readiness(
+def authorized_route_status(
     contract: AuthorizedProviderContract | None,
     *,
     product_ready: bool,
     access_policy_ready: bool,
     present_credential_fields: frozenset[str],
-) -> SourceReadiness:
+) -> RouteInstallationStatus:
     """Evaluate local readiness using field presence only, never secret values.
 
     Authentication acceptance and a concrete Literature's content entitlement
@@ -612,8 +618,8 @@ def authorized_source_readiness(
         raise TypeError("present_credential_fields must be a frozenset")
     present = frozenset(_credential_field(value) for value in present_credential_fields)
     if contract is None:
-        return SourceReadiness(
-            is_ready=False,
+        return RouteInstallationStatus(
+            readiness=RouteReadiness.UNSUPPORTED,
             failure=_stable_failure(
                 code="acquisition-authorized-source-unsupported",
                 reason="The authorized acquisition Source has no verified production contract.",
@@ -622,8 +628,8 @@ def authorized_source_readiness(
             ),
         )
     if not product_ready:
-        return SourceReadiness(
-            is_ready=False,
+        return RouteInstallationStatus(
+            readiness=RouteReadiness.UNCONFIGURED,
             failure=_stable_failure(
                 code="acquisition-authorized-product-not-ready",
                 reason="The configured authorized content product is not ready.",
@@ -632,8 +638,8 @@ def authorized_source_readiness(
             ),
         )
     if not access_policy_ready:
-        return SourceReadiness(
-            is_ready=False,
+        return RouteInstallationStatus(
+            readiness=RouteReadiness.UNSUPPORTED,
             failure=_stable_failure(
                 code="acquisition-authorized-access-policy-missing",
                 reason="The authorized content API has no executable access policy.",
@@ -642,8 +648,8 @@ def authorized_source_readiness(
             ),
         )
     if any(field not in present for field in contract.required_credential_fields):
-        return SourceReadiness(
-            is_ready=False,
+        return RouteInstallationStatus(
+            readiness=RouteReadiness.UNCONFIGURED,
             failure=_stable_failure(
                 code="acquisition-authorized-credential-missing",
                 reason="Required authorized content credentials are not configured.",
@@ -651,7 +657,7 @@ def authorized_source_readiness(
                 retryable=False,
             ),
         )
-    return SourceReadiness(is_ready=True)
+    return RouteInstallationStatus(readiness=RouteReadiness.READY)
 
 
 class AuthorizedPdfSource:
@@ -697,15 +703,21 @@ class AuthorizedPdfSource:
     def acquisition_path(self) -> AcquisitionPath:
         return AcquisitionPath.AUTHORIZED_PROVIDER_API
 
+    @property
+    def route_key(self) -> str:
+        return "api:wiley-tdm-v1" if self.source_name == "wiley" else f"api:{self.source_name}"
+
     def __repr__(self) -> str:
         return f"<AuthorizedPdfSource source_name={self.source_name!r}>"
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        return bool(_lookup_targets(self._contract, evidence))
+    def execute(self, context: RouteExecutionContext) -> Iterator[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        yield from delivery_results(
+            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        )
 
-    def acquire(
+    def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,
@@ -1386,5 +1398,5 @@ __all__ = (
     "ProvenanceIdFactory",
     "UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS",
     "WILEY_AUTHORIZED_CONTRACT",
-    "authorized_source_readiness",
+    "authorized_route_status",
 )

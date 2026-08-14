@@ -15,12 +15,18 @@ import threading
 from collections.abc import Iterable, Iterator
 from typing import Final, Protocol
 
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
-    SourceReadiness,
     TemporaryPdf,
+)
+from sciretriever.acquisition.routes import (
+    RouteExecutionContext,
+    RouteInstallationStatus,
+    delivery_results,
 )
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
@@ -75,16 +81,19 @@ class _Sha256Digest(Protocol):
     def update(self, data: bytes, /) -> None: ...
 
 
-def configured_sci_hub_readiness(
+def configured_sci_hub_route_status(
     resolver: ConfiguredLocatorResolver | None,
-) -> SourceReadiness:
+) -> RouteInstallationStatus:
     """Return the local resolver readiness used later by Acquisition assembly."""
 
     if resolver is None:
-        return SourceReadiness(is_ready=False, failure=_missing_resolver_failure())
+        return RouteInstallationStatus(
+            readiness=RouteReadiness.UNCONFIGURED,
+            failure=_missing_resolver_failure(),
+        )
     if not _has_callable_method(resolver, "resolve"):
         raise TypeError("resolver must expose resolve() or be None")
-    return SourceReadiness(is_ready=True)
+    return RouteInstallationStatus(readiness=RouteReadiness.READY)
 
 
 class ConfiguredSciHubPdfSource:
@@ -92,6 +101,7 @@ class ConfiguredSciHubPdfSource:
 
     source_name = _SOURCE_NAME
     acquisition_path = AcquisitionPath.PUBLIC
+    route_key = "public:sci-hub"
 
     def __init__(
         self,
@@ -100,7 +110,7 @@ class ConfiguredSciHubPdfSource:
         locator_fetcher: PublicLocatorFetcher,
         cancel_event: threading.Event | None = None,
     ) -> None:
-        configured_sci_hub_readiness(resolver)
+        configured_sci_hub_route_status(resolver)
         if not _has_callable_method(locator_fetcher, "acquire"):
             raise TypeError("locator_fetcher must expose acquire()")
         if cancel_event is not None and not isinstance(cancel_event, threading.Event):
@@ -109,18 +119,14 @@ class ConfiguredSciHubPdfSource:
         self._locator_fetcher = locator_fetcher
         self._cancel_event = cancel_event
 
-    @property
-    def readiness(self) -> SourceReadiness:
-        """Expose the same secret-free local decision consumed by A10 assembly."""
+    def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
+        return delivery_results(
+            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        )
 
-        return configured_sci_hub_readiness(self._resolver)
-
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        return bool(evidence.identifiers)
-
-    def acquire(
+    def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,
@@ -508,5 +514,5 @@ __all__ = (
     "ConfiguredLocatorResolver",
     "ConfiguredSciHubPdfSource",
     "PublicLocatorFetcher",
-    "configured_sci_hub_readiness",
+    "configured_sci_hub_route_status",
 )

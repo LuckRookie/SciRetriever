@@ -1,16 +1,16 @@
-"""Closed Acquisition provider matrix and production Source assembly.
+"""Closed Acquisition capability matrix and production route assembly.
 
 This module is the A10 composition boundary below the root Bootstrap.  It
 turns secret-free ordinary configuration and already-constructed shared
-Network dependencies into a deterministic tuple of neutral
-``PdfSourceBinding`` values.  Construction performs no DNS, HTTP, Browser,
-resolver, storage, or user-data operation.
+Network dependencies into a deterministic :class:`AcquisitionRouteRegistry`.
+Construction performs no DNS, HTTP, Browser, resolver, storage, or user-data
+operation.
 
 The matrix deliberately distinguishes Provider capability mappings from
-runtime Sources.  One non-Provider ``direct`` Source is shared by ordered views
+runtime routes.  One non-Provider ``direct`` adapter is shared by ordered views
 that consume every accepted AssetHint: a global direct-file prefix, configured
 Provider landing slots, then an unconfigured-history fallback.  Verified
-authorized Sources follow the complete public prefix.  Unsupported authorized
+authorized routes follow the complete public prefix.  Unsupported authorized
 and Browser paths remain explicit mapping facts without being registered.
 """
 
@@ -27,23 +27,32 @@ from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
     AuthorizedPdfSource,
-    authorized_source_readiness,
+    authorized_route_status,
 )
-from sciretriever.acquisition.ports import (
-    CandidateKeyTracker,
-    PdfSource,
-    PdfSourceBinding,
-    SourceReadiness,
-    TemporaryPdf,
+from sciretriever.acquisition.outcomes import RouteExecutionResult
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    ProgressiveAcquisitionPlanner,
+    PublisherAccessResolver,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
+from sciretriever.acquisition.profile_catalog import (
+    PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
 )
 from sciretriever.acquisition.providers import CoreAuthorizedPdfClient, WileyAuthorizedPdfClient
+from sciretriever.acquisition.routes import (
+    AcquisitionRouteRegistry,
+    PdfRouteAdapter,
+    RouteAdapterBinding,
+    RouteExecutionContext,
+)
 from sciretriever.acquisition.routing import (
-    AcquisitionEvidence,
-    AcquisitionRequest,
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.sources import (
-    CONTROLLED_BROWSER_PRODUCTION_READINESS,
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
     PRODUCTION_BROWSER_RULE_CATALOG,
     ArxivPdfSource,
     ConfiguredLocatorResolver,
@@ -55,7 +64,7 @@ from sciretriever.acquisition.sources import (
     PublicLocatorFetcher,
     UnpaywallPdfSource,
     WebAccessProfileResolver,
-    configured_sci_hub_readiness,
+    configured_sci_hub_route_status,
 )
 from sciretriever.acquisition.sources.arxiv import (
     ACCESS_SCOPE as ARXIV_ACCESS_SCOPE,
@@ -277,33 +286,6 @@ class AcquisitionProviderStatus:
 
 
 @dataclass(frozen=True, slots=True)
-class AcquisitionSourceRegistration:
-    """One actual Source binding and any enabled Provider it independently serves."""
-
-    provider_names: tuple[str, ...]
-    binding: PdfSourceBinding = field(repr=False)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.binding, PdfSourceBinding):
-            raise TypeError("binding must be a PdfSourceBinding")
-        if not isinstance(self.provider_names, tuple):
-            raise TypeError("provider_names must be a tuple")
-        normalized = tuple(
-            _stable_name(value, field_name="provider_name") for value in self.provider_names
-        )
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("provider_names must be unique")
-        if any(value not in ACQUISITION_PROVIDER_ORDER for value in normalized):
-            raise ValueError("provider_names contains an unsupported Provider")
-        if self.binding.source_name == "direct":
-            if normalized:
-                raise ValueError("the non-Provider direct Source must not name Providers")
-        elif not normalized:
-            raise ValueError("Provider Source registrations must name a Provider")
-        object.__setattr__(self, "provider_names", normalized)
-
-
-@dataclass(frozen=True, slots=True)
 class AcquisitionAssemblyDependencies:
     """Shared process-local objects supplied later by the production Bootstrap."""
 
@@ -345,42 +327,26 @@ class AcquisitionAssemblyDependencies:
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionRegistry:
-    """Deterministic Source bindings and DOI-routing seam for later assembly."""
+    """Deterministic capability directory and Planner for production assembly."""
 
     statuses: tuple[AcquisitionProviderStatus, ...]
-    registrations: tuple[AcquisitionSourceRegistration, ...]
-    source_bindings: tuple[PdfSourceBinding, ...] = field(repr=False)
-    doi_landing_resolver: DoiLandingResolver = field(repr=False)
-    requires_doi_landing_origin: bool
+    route_registry: AcquisitionRouteRegistry = field(repr=False)
+    planner: ProgressiveAcquisitionPlanner = field(repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.statuses, tuple) or any(
             not isinstance(item, AcquisitionProviderStatus) for item in self.statuses
         ):
             raise TypeError("statuses must contain AcquisitionProviderStatus values")
-        if not isinstance(self.registrations, tuple) or any(
-            not isinstance(item, AcquisitionSourceRegistration) for item in self.registrations
-        ):
-            raise TypeError("registrations must contain AcquisitionSourceRegistration values")
-        if not isinstance(self.source_bindings, tuple) or any(
-            not isinstance(item, PdfSourceBinding) for item in self.source_bindings
-        ):
-            raise TypeError("source_bindings must contain PdfSourceBinding values")
-        if tuple(item.binding for item in self.registrations) != self.source_bindings:
-            raise ValueError("registrations and source_bindings disagree")
-        if not isinstance(self.doi_landing_resolver, DoiLandingResolver):
-            raise TypeError("doi_landing_resolver must be a DoiLandingResolver")
-        if type(self.requires_doi_landing_origin) is not bool:
-            raise TypeError("requires_doi_landing_origin must be a bool")
+        if not isinstance(self.route_registry, AcquisitionRouteRegistry):
+            raise TypeError("route_registry must be an AcquisitionRouteRegistry")
+        if not isinstance(self.planner, ProgressiveAcquisitionPlanner):
+            raise TypeError("planner must be a ProgressiveAcquisitionPlanner")
         validate_acquisition_provider_matrix(self.statuses)
 
     def __repr__(self) -> str:
-        sources = tuple(binding.source_name for binding in self.source_bindings)
-        return (
-            "AcquisitionRegistry("
-            f"sources={sources!r}, "
-            f"requires_doi_landing_origin={self.requires_doi_landing_origin!r})"
-        )
+        routes = tuple(binding.spec.route_key for binding in self.route_registry.bindings)
+        return f"AcquisitionRegistry(routes={routes!r})"
 
 
 def _mapping(
@@ -512,13 +478,13 @@ def _readiness_failure(
             return "missing-ordinary-parameter"
     if provider_name == ProviderName.SCI_HUB.value:
         try:
-            readiness = configured_sci_hub_readiness(configured_resolver)
+            status = configured_sci_hub_route_status(configured_resolver)
         except (TypeError, ValueError):
             raise AcquisitionRegistryError(
                 "configured-resolver-invalid",
                 provider_name,
             ) from None
-        if not readiness.is_ready:
+        if status.readiness is not RouteReadiness.READY:
             return "missing-configured-resolver"
     return None
 
@@ -582,7 +548,7 @@ def _validate_external_catalogs() -> None:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
     if PRODUCTION_BROWSER_RULE_CATALOG.rules:
         raise AcquisitionRegistryError("browser-catalog-mismatch")
-    if CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready:
+    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY:
         raise AcquisitionRegistryError("browser-readiness-mismatch")
 
 
@@ -675,8 +641,8 @@ def _validated_direct_slice_provider(
     return None
 
 
-class _OrderedDirectSource:
-    """An ordered evidence slice over one shared, non-Provider A5 Source."""
+class _OrderedDirectRoute:
+    """An ordered evidence slice over one shared, non-Provider direct adapter."""
 
     __slots__ = (
         "_direct_source",
@@ -712,51 +678,36 @@ class _OrderedDirectSource:
     def acquisition_path(self) -> AcquisitionPath:
         return self._direct_source.acquisition_path
 
-    def is_applicable(self, evidence: AcquisitionEvidence) -> bool:
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        direct_urls = _direct_hint_urls(observed.hint for observed in evidence.asset_hints)
-        filtered_hints = tuple(
-            observed
-            for observed in evidence.asset_hints
-            if self._includes(
-                source_name=observed.source_name,
-                hint=observed.hint,
-                direct_urls=direct_urls,
-            )
-        )
-        filtered = replace(evidence, asset_hints=filtered_hints)
-        return self._direct_source.is_applicable(filtered)
+    @property
+    def route_key(self) -> str:
+        if self._slice is _DirectSlice.DIRECT_PREFIX:
+            return "public:direct"
+        if self._slice is _DirectSlice.PROVIDER_LANDING:
+            return f"public:landing-{self._provider_name}"
+        return "public:landing-fallback"
 
-    def acquire(
-        self,
-        request: AcquisitionRequest,
-        evidence: AcquisitionEvidence,
-        candidate_keys: CandidateKeyTracker,
-    ) -> Iterable[TemporaryPdf]:
-        if not isinstance(request, AcquisitionRequest):
-            raise TypeError("request must be AcquisitionRequest")
-        if not isinstance(evidence, AcquisitionEvidence):
-            raise TypeError("evidence must be AcquisitionEvidence")
-        if not isinstance(candidate_keys, CandidateKeyTracker):
-            raise TypeError("candidate_keys must be CandidateKeyTracker")
-        if evidence != build_acquisition_evidence(request):
-            raise ValueError("evidence must describe request")
+    def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
+        if not isinstance(context, RouteExecutionContext):
+            raise TypeError("context must be RouteExecutionContext")
         direct_urls = _direct_hint_urls(
-            hint for observation in request.observations for hint in observation.asset_hints
+            hint for observation in context.request.observations for hint in observation.asset_hints
         )
         observations = self._filtered_observations(
-            request.observations,
+            context.request.observations,
             direct_urls=direct_urls,
         )
-        filtered_request = replace(request, observations=observations)
+        filtered_request = replace(context.request, observations=observations)
         filtered_evidence = build_acquisition_evidence(filtered_request)
-        if not self._direct_source.is_applicable(filtered_evidence):
-            return ()
-        return self._direct_source.acquire(
-            filtered_request,
-            filtered_evidence,
-            candidate_keys,
+        if not filtered_evidence.asset_hints:
+            return (RouteExecutionResult.normal_miss(),)
+        return self._direct_source.execute(
+            RouteExecutionContext(
+                request=filtered_request,
+                evidence=filtered_evidence,
+                route_hints=context.route_hints,
+                candidate_keys=context.candidate_keys,
+                cancel_event=context.cancel_event,
+            )
         )
 
     def _filtered_observations(
@@ -813,26 +764,12 @@ def _has_generic_mapping(provider_name: str) -> bool:
     )
 
 
-_READY: Final[SourceReadiness] = SourceReadiness(is_ready=True)
-
-
-def _binding(source: PdfSource, *, readiness: SourceReadiness = _READY) -> PdfSourceBinding:
-    return PdfSourceBinding(
-        source_name=source.source_name,
-        acquisition_path=source.acquisition_path,
-        enabled=True,
-        production=True,
-        readiness=readiness,
-        source=source,
-    )
-
-
 def _public_protocol_source(
     provider_name: str,
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
     locator_fetcher: PublicLocatorFetcher,
-) -> PdfSource:
+) -> PdfRouteAdapter:
     common = {
         "http_client": dependencies.http_client,
         "locator_fetcher": locator_fetcher,
@@ -872,20 +809,20 @@ def _public_protocol_source(
 def _authorized_source(
     provider_name: str,
     dependencies: AcquisitionAssemblyDependencies,
-) -> tuple[AuthorizedPdfSource, SourceReadiness]:
+) -> AuthorizedPdfSource:
     contract = PRODUCTION_AUTHORIZED_PROVIDER_CATALOG.get(provider_name)
     credentials = dependencies.credentials
     present_fields = (
         frozenset() if credentials is None else frozenset(credentials.field_names(provider_name))
     )
-    readiness = authorized_source_readiness(
+    status = authorized_route_status(
         contract,
         product_ready=contract is not None,
         access_policy_ready=provider_name in {ProviderName.CORE.value, ProviderName.WILEY.value},
         present_credential_fields=present_fields,
     )
-    if not readiness.is_ready:
-        failure = readiness.failure
+    if status.readiness is not RouteReadiness.READY:
+        failure = status.failure
         raise AcquisitionRegistryError(
             "authorized-readiness-failed" if failure is None else failure.code,
             provider_name,
@@ -924,19 +861,16 @@ def _authorized_source(
             ) from None
     else:
         raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
-    return (
-        AuthorizedPdfSource(
-            contract=contract,
-            client=client,
-            provenance_id_factory=dependencies.provenance_id_factory,
-            clock=dependencies.clock,
-        ),
-        readiness,
+    return AuthorizedPdfSource(
+        contract=contract,
+        client=client,
+        provenance_id_factory=dependencies.provenance_id_factory,
+        clock=dependencies.clock,
     )
 
 
 def _validate_source(
-    source: PdfSource,
+    source: PdfRouteAdapter,
     provider_name: str,
     dependencies: AcquisitionAssemblyDependencies,
     locator_fetcher: PublicLocatorFetcher,
@@ -986,11 +920,121 @@ def _validate_dependencies(dependencies: AcquisitionAssemblyDependencies) -> Non
         raise AcquisitionRegistryError("network-bypass", "controlled-browser")
 
 
+def _route_requirements(
+    source_name: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    if source_name == ProviderName.ARXIV.value:
+        return ("arxiv",), ("arxiv",), False
+    if source_name == ProviderName.EUROPE_PMC.value:
+        return ("pmcid",), ("europe-pmc",), False
+    if source_name == ProviderName.UNPAYWALL.value:
+        return ("doi",), (), False
+    if source_name == ProviderName.SCI_HUB.value:
+        return (), (), True
+    if source_name == ProviderName.CORE.value:
+        return (), ("core",), False
+    if source_name == ProviderName.WILEY.value:
+        return ("doi",), (), False
+    return (), (), False
+
+
+def _route_spec_for_source(source: PdfRouteAdapter) -> RouteSpec:
+    source_name = getattr(source, "source_name", "direct")
+    acquisition_path = getattr(source, "acquisition_path", None)
+    if type(source_name) is not str or not isinstance(acquisition_path, AcquisitionPath):
+        raise AcquisitionRegistryError("route-contract-mismatch")
+    identifiers, providers, any_identifier = _route_requirements(source_name)
+    profile_access_key = {
+        ProviderName.CORE.value: "core-open-access",
+        ProviderName.WILEY.value: "wiley-online-library",
+    }.get(source_name)
+    if acquisition_path is AcquisitionPath.AUTHORIZED_PROVIDER_API:
+        capability = RouteCapability.DIRECT_PDF
+        quota_group = "core-api" if source_name == "core" else "wiley-tdm"
+    elif source_name == "direct":
+        capability = RouteCapability.DIRECT_PDF
+        quota_group = None
+    else:
+        capability = RouteCapability.PUBLIC_PROTOCOL
+        quota_group = f"{source_name}-public"
+    return RouteSpec(
+        route_key=source.route_key,
+        tier=acquisition_path,
+        capability=capability,
+        readiness=RouteReadiness.READY,
+        profile_access_key=profile_access_key,
+        quota_group=quota_group,
+        required_identifier_namespaces=identifiers,
+        required_provider_record_names=providers,
+        requires_any_identifier=any_identifier,
+    )
+
+
+def _pending_route_spec(provider_name: str, *, authorized: bool) -> RouteSpec:
+    identifiers, providers, any_identifier = _route_requirements(provider_name)
+    if authorized:
+        route_key = "api:wiley-tdm-v1" if provider_name == "wiley" else f"api:{provider_name}"
+        tier = AcquisitionPath.AUTHORIZED_PROVIDER_API
+        capability = RouteCapability.DIRECT_PDF
+        profile_access_key = {
+            "core": "core-open-access",
+            "wiley": "wiley-online-library",
+        }.get(provider_name)
+        quota_group = "core-api" if provider_name == "core" else "wiley-tdm"
+    else:
+        route_key = f"public:{provider_name}"
+        tier = AcquisitionPath.PUBLIC
+        capability = RouteCapability.PUBLIC_PROTOCOL
+        profile_access_key = None
+        quota_group = f"{provider_name}-public"
+    return RouteSpec(
+        route_key=route_key,
+        tier=tier,
+        capability=capability,
+        readiness=RouteReadiness.UNCONFIGURED,
+        profile_access_key=profile_access_key,
+        quota_group=quota_group,
+        required_identifier_namespaces=identifiers,
+        required_provider_record_names=providers,
+        requires_any_identifier=any_identifier,
+    )
+
+
+def _assemble_authorized_routes(
+    selected: tuple[str, ...],
+    dependencies: AcquisitionAssemblyDependencies,
+    route_bindings: list[RouteAdapterBinding],
+) -> None:
+    expected_unready = {
+        "acquisition-authorized-credential-missing",
+        "acquisition-authorized-product-not-ready",
+        "acquisition-authorized-access-policy-missing",
+    }
+    for provider_name in selected:
+        if provider_name not in PRODUCTION_AUTHORIZED_PROVIDER_CATALOG:
+            continue
+        try:
+            source = _authorized_source(provider_name, dependencies)
+        except AcquisitionRegistryError as error:
+            if error.code not in expected_unready:
+                raise
+            route_bindings.append(
+                RouteAdapterBinding(
+                    spec=_pending_route_spec(provider_name, authorized=True),
+                    adapter=None,
+                )
+            )
+            continue
+        route_bindings.append(
+            RouteAdapterBinding(spec=_route_spec_for_source(source), adapter=source)
+        )
+
+
 def build_acquisition_registry(
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
 ) -> AcquisitionRegistry:
-    """Assemble all enabled and ready production Sources without performing I/O."""
+    """Assemble installed route capabilities without performing external I/O."""
 
     if not isinstance(dependencies, AcquisitionAssemblyDependencies):
         raise AcquisitionRegistryError("dependencies-invalid")
@@ -1002,16 +1046,6 @@ def build_acquisition_registry(
     status_by_name = {status.provider_name: status for status in statuses}
     selected = tuple(provider.value for provider in configuration.sources.acquisition.providers)
 
-    # Fail all enabled capability readiness before constructing even the first
-    # Source.  A broken later Provider must not be hidden by an earlier hit.
-    for provider_name in selected:
-        status = status_by_name[provider_name]
-        if not status.ready:
-            raise AcquisitionRegistryError(
-                status.failure_code or "readiness-failed",
-                provider_name,
-            )
-
     locator_fetcher = PublicLocatorFetcher(
         http_client=dependencies.http_client,
         web_access_profile_resolver=dependencies.web_access_profile_resolver,
@@ -1019,21 +1053,20 @@ def build_acquisition_registry(
         provenance_id_factory=dependencies.provenance_id_factory,
         clock=dependencies.clock,
     )
-    registrations: list[AcquisitionSourceRegistration] = []
+    route_bindings: list[RouteAdapterBinding] = []
 
     configured_landing_providers = tuple(
         provider_name for provider_name in selected if _has_generic_mapping(provider_name)
     )
     direct = DirectPdfSource(fetcher=locator_fetcher)
-    registrations.append(
-        AcquisitionSourceRegistration(
-            provider_names=(),
-            binding=_binding(
-                _OrderedDirectSource(
-                    direct_source=direct,
-                    direct_slice=_DirectSlice.DIRECT_PREFIX,
-                )
-            ),
+    direct_prefix = _OrderedDirectRoute(
+        direct_source=direct,
+        direct_slice=_DirectSlice.DIRECT_PREFIX,
+    )
+    route_bindings.append(
+        RouteAdapterBinding(
+            spec=_route_spec_for_source(direct_prefix),
+            adapter=direct_prefix,
         )
     )
 
@@ -1050,85 +1083,91 @@ def build_acquisition_registry(
         # stable public-order slot.  Its independent protocol runs before its
         # ordinary landing hints; Providers without either simply add nothing.
         if provider_name in independent_public:
-            source = _public_protocol_source(
-                provider_name,
-                configuration,
-                dependencies,
-                locator_fetcher,
-            )
-            _validate_source(source, provider_name, dependencies, locator_fetcher)
-            readiness = (
-                source.readiness if isinstance(source, ConfiguredSciHubPdfSource) else _READY
-            )
-            registrations.append(
-                AcquisitionSourceRegistration(
-                    provider_names=(provider_name,),
-                    binding=_binding(source, readiness=readiness),
+            status = status_by_name[provider_name]
+            if status.ready:
+                source = _public_protocol_source(
+                    provider_name,
+                    configuration,
+                    dependencies,
+                    locator_fetcher,
                 )
-            )
+                _validate_source(source, provider_name, dependencies, locator_fetcher)
+                route_bindings.append(
+                    RouteAdapterBinding(
+                        spec=_route_spec_for_source(source),
+                        adapter=source,
+                    )
+                )
+            else:
+                route_bindings.append(
+                    RouteAdapterBinding(
+                        spec=_pending_route_spec(provider_name, authorized=False),
+                        adapter=None,
+                    )
+                )
 
         if provider_name not in configured_landing_providers:
             continue
-        registrations.append(
-            AcquisitionSourceRegistration(
-                provider_names=(),
-                binding=_binding(
-                    _OrderedDirectSource(
-                        direct_source=direct,
-                        direct_slice=_DirectSlice.PROVIDER_LANDING,
-                        provider_name=provider_name,
-                    )
-                ),
+        provider_landing = _OrderedDirectRoute(
+            direct_source=direct,
+            direct_slice=_DirectSlice.PROVIDER_LANDING,
+            provider_name=provider_name,
+        )
+        route_bindings.append(
+            RouteAdapterBinding(
+                spec=_route_spec_for_source(provider_landing),
+                adapter=provider_landing,
             )
         )
 
     # Metadata-only Providers and already-saved hints from a currently disabled
     # Provider remain valid evidence.  Their non-duplicate landing hints form a
     # deterministic fallback after every explicitly configured public slot.
-    registrations.append(
-        AcquisitionSourceRegistration(
-            provider_names=(),
-            binding=_binding(
-                _OrderedDirectSource(
-                    direct_source=direct,
-                    direct_slice=_DirectSlice.FALLBACK_LANDING,
-                    excluded_provider_names=configured_landing_providers,
-                )
-            ),
+    fallback_landing = _OrderedDirectRoute(
+        direct_source=direct,
+        direct_slice=_DirectSlice.FALLBACK_LANDING,
+        excluded_provider_names=configured_landing_providers,
+    )
+    route_bindings.append(
+        RouteAdapterBinding(
+            spec=_route_spec_for_source(fallback_landing),
+            adapter=fallback_landing,
         )
     )
 
-    for provider_name in selected:
-        if provider_name not in PRODUCTION_AUTHORIZED_PROVIDER_CATALOG:
-            continue
-        source, readiness = _authorized_source(provider_name, dependencies)
-        registrations.append(
-            AcquisitionSourceRegistration(
-                provider_names=(provider_name,),
-                binding=_binding(source, readiness=readiness),
-            )
-        )
+    _assemble_authorized_routes(
+        selected,
+        dependencies,
+        route_bindings,
+    )
 
-    source_bindings = tuple(registration.binding for registration in registrations)
     stage_order = {
         AcquisitionPath.PUBLIC: 0,
         AcquisitionPath.AUTHORIZED_PROVIDER_API: 1,
         AcquisitionPath.CONTROLLED_BROWSER: 2,
     }
-    if tuple(stage_order[item.acquisition_path] for item in source_bindings) != tuple(
-        sorted(stage_order[item.acquisition_path] for item in source_bindings)
+    if tuple(stage_order[item.spec.tier] for item in route_bindings) != tuple(
+        sorted(stage_order[item.spec.tier] for item in route_bindings)
     ):
         raise AcquisitionRegistryError("production-stage-mismatch")
     doi_landing_resolver = DoiLandingResolver(
         http_client=dependencies.http_client,
         cancel_event=dependencies.cancel_event,
     )
+    route_registry = AcquisitionRouteRegistry(
+        profile_catalog=PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+        bindings=tuple(route_bindings),
+    )
+    planner = ProgressiveAcquisitionPlanner(
+        resolver=PublisherAccessResolver(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG),
+        builder=AcquisitionPlanBuilder(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG),
+        route_specs=route_registry.route_specs,
+        doi_landing_resolver=doi_landing_resolver,
+    )
     return AcquisitionRegistry(
         statuses=statuses,
-        registrations=tuple(registrations),
-        source_bindings=source_bindings,
-        doi_landing_resolver=doi_landing_resolver,
-        requires_doi_landing_origin=ProviderName.WILEY.value in selected,
+        route_registry=route_registry,
+        planner=planner,
     )
 
 
@@ -1141,7 +1180,6 @@ __all__ = (
     "AcquisitionProviderStatus",
     "AcquisitionRegistry",
     "AcquisitionRegistryError",
-    "AcquisitionSourceRegistration",
     "acquisition_provider_statuses",
     "build_acquisition_registry",
     "production_web_access_profile_resolver",

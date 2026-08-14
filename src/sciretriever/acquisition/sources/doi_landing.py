@@ -6,6 +6,7 @@ import threading
 from typing import Final
 from urllib.parse import urlsplit
 
+from sciretriever.acquisition.planning import DoiLandingResolution
 from sciretriever.acquisition.ports import AcquisitionFailure, AcquisitionSourceFailure
 from sciretriever.model.access import AccessFailure, TransportResponse
 from sciretriever.model.literature import Identifier
@@ -90,6 +91,22 @@ def _final_origin(value: str) -> str:
         raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
 
 
+def _resolution_from_response(result: TransportResponse) -> DoiLandingResolution | None:
+    if result.status in {204, 404, 410}:
+        return None
+    if not 200 <= result.status < 300:
+        retryable = result.status in {408, 425, 429} or result.status >= 500
+        raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
+    origin = _final_origin(result.final_url)
+    if origin in _DOI_RESOLVER_ORIGINS:
+        return None
+    try:
+        canonical = normalize_url(result.final_url).url
+        return DoiLandingResolution(canonical_landing_url=canonical, origin=origin)
+    except (PolicyError, TypeError, ValueError):
+        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
+
+
 class DoiLandingResolver:
     """Resolve one canonical DOI to its final safe origin without creating a candidate."""
 
@@ -116,13 +133,11 @@ class DoiLandingResolver:
         )
         self._cancel_event = cancel_event
 
-    def resolve(self, doi: Identifier | None) -> str | None:
-        """Return only the normalized final origin, or ``None`` for no DOI/not found."""
+    def resolve(self, doi: Identifier) -> DoiLandingResolution | None:
+        """Return a safe canonical landing and origin, or a normal miss."""
 
-        if doi is None:
-            return None
         if not isinstance(doi, Identifier):
-            raise TypeError("doi must be an Identifier or None")
+            raise TypeError("doi must be an Identifier")
         if doi.namespace != "doi":
             return None
 
@@ -145,14 +160,7 @@ class DoiLandingResolver:
             raise AcquisitionSourceFailure(failure)
         if not isinstance(result, TransportResponse):
             raise AcquisitionSourceFailure(_network_failure())
-        if result.status in {204, 404, 410}:
-            return None
-        if not 200 <= result.status < 300:
-            retryable = result.status in {408, 425, 429} or result.status >= 500
-            raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
-
-        origin = _final_origin(result.final_url)
-        return None if origin in _DOI_RESOLVER_ORIGINS else origin
+        return _resolution_from_response(result)
 
 
 __all__ = ("DoiLandingResolver",)

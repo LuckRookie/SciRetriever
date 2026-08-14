@@ -1071,7 +1071,7 @@ def build_object_graph(  # noqa: C901, PLR0915
         build_acquisition_registry,
         production_web_access_profile_resolver,
     )
-    from sciretriever.acquisition.service import AcquisitionService
+    from sciretriever.acquisition.tiered_service import TieredAcquisitionService
     from sciretriever.analysis.api import AnalysisApi
     from sciretriever.analysis.content import ContentAnalysisLimits
     from sciretriever.analysis.references import ReferenceLookupStage
@@ -1232,13 +1232,12 @@ def build_object_graph(  # noqa: C901, PLR0915
             staging=pdf_validation_staging,
         )
         acquisition_api = AcquisitionApi(
-            AcquisitionService(
-                source_bindings=acquisition_registry.source_bindings,
+            TieredAcquisitionService(
+                route_registry=acquisition_registry.route_registry,
+                planner=acquisition_registry.planner,
                 publication_port=primary_pdf_publisher,
                 exhaustion_port=acquisition_publication,
                 exhaustion_clear_port=acquisition_publication,
-                doi_landing_resolver=acquisition_registry.doi_landing_resolver,
-                requires_doi_landing_origin=(acquisition_registry.requires_doi_landing_origin),
             )
         )
         manual_admission = ManualPdfAdmissionService(
@@ -1919,7 +1918,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         build_acquisition_registry,
         production_web_access_profile_resolver,
     )
-    from sciretriever.acquisition.service import AcquisitionService
+    from sciretriever.acquisition.tiered_service import TieredAcquisitionService
     from sciretriever.analysis.api import AnalysisApi
     from sciretriever.analysis.references import ReferenceLookupStage
     from sciretriever.analysis.service import AnalysisService
@@ -2120,16 +2119,15 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
             )
             validated = ValidatedPrimaryPdfPublisher(acquisition_publication)
             acquisition_api = AcquisitionApi(
-                AcquisitionService(
-                    source_bindings=acquisition_registry.source_bindings,
+                TieredAcquisitionService(
+                    route_registry=acquisition_registry.route_registry,
+                    planner=acquisition_registry.planner,
                     publication_port=PrimaryPdfPublisher(
                         validated,
                         staging=pdf_validation_staging,
                     ),
                     exhaustion_port=acquisition_publication,
                     exhaustion_clear_port=acquisition_publication,
-                    doi_landing_resolver=acquisition_registry.doi_landing_resolver,
-                    requires_doi_landing_origin=(acquisition_registry.requires_doi_landing_origin),
                 )
             )
             inputs = CompletionInputBuilder(engine, storage.foundation.verified_reader)
