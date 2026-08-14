@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from sciretriever.acquisition.api import (
     CohortPreparationItem,
+    CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
@@ -24,7 +25,10 @@ from sciretriever.analysis.content import ContentAnalysisFailure, ContentAnalysi
 from sciretriever.entry.completion import (
     AssetDatabaseCompletionOperation,
     DatabaseCompletionOperation,
+    _CohortAcquisitionPort,  # pyright: ignore[reportPrivateUsage]
+    _CohortOutcome,  # pyright: ignore[reportPrivateUsage]
     _CompletionScheduler,  # pyright: ignore[reportPrivateUsage]
+    _ParticipantKey,  # pyright: ignore[reportPrivateUsage]
 )
 from sciretriever.entry.orchestration import CompletionStageFailure, TargetOrchestrationResult
 from sciretriever.entry.ports import (
@@ -524,6 +528,14 @@ class _World:
         self.cancel_event: threading.Event | None = None
         self.acquisition_discard_failures: dict[LiteratureId, BaseException] = {}
         self.acquisition_cohort_identity_overrides: dict[LiteratureId, LiteratureId] = {}
+        self.acquisition_cohort_final_identity_overrides: dict[
+            LiteratureId,
+            LiteratureId,
+        ] = {}
+        self.acquisition_cohort_early_ids: set[LiteratureId] = set()
+        self.acquisition_cohort_final_only_ids: set[LiteratureId] = set()
+        self.acquisition_cohort_early_published: threading.Event | None = None
+        self.acquisition_cohort_release: threading.Event | None = None
         self.parser_discard_failures: dict[LiteratureId, BaseException] = {}
         self.current_read_failures: dict[LiteratureId, BaseException] = {}
 
@@ -625,6 +637,7 @@ class _World:
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: threading.Event | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         self.acquisition_cohort_calls.append(
             tuple(request.literature.literature_id for request in requests)
@@ -686,10 +699,64 @@ class _World:
                     prepared=value,
                 )
             )
+        prepared_items = tuple(items)
+        self._publish_fake_cohort_items(prepared_items, on_prepared)
+        final_items = tuple(
+            dataclasses.replace(
+                item,
+                literature_id=self.acquisition_cohort_final_identity_overrides.get(
+                    item.literature_id,
+                    item.literature_id,
+                ),
+            )
+            for item in prepared_items
+        )
         return PreparedAcquisitionCohort(
-            items=tuple(items),
+            items=final_items,
             browser_escalation=BrowserEscalationSummary(),
         )
+
+    def _publish_fake_cohort_items(
+        self,
+        prepared_items: tuple[CohortPreparationItem, ...],
+        observer: CohortPreparationObserver | None,
+    ) -> None:
+        if observer is None:
+            return
+        early = tuple(
+            item
+            for item in prepared_items
+            if item.literature_id in self.acquisition_cohort_early_ids
+        )
+        remaining = tuple(
+            item
+            for item in prepared_items
+            if item not in early
+            and item.literature_id not in self.acquisition_cohort_final_only_ids
+        )
+        if early:
+            self._notify_fake_cohort_observer(observer, early)
+            if self.acquisition_cohort_early_published is not None:
+                self.acquisition_cohort_early_published.set()
+            if self.acquisition_cohort_release is not None and not (
+                self.acquisition_cohort_release.wait(_EVENT_TIMEOUT)
+            ):
+                raise AssertionError("cohort release event was not set")
+        if remaining:
+            self._notify_fake_cohort_observer(observer, remaining)
+
+    def _notify_fake_cohort_observer(
+        self,
+        observer: CohortPreparationObserver,
+        items: tuple[CohortPreparationItem, ...],
+    ) -> None:
+        try:
+            observer(items)
+        except BaseException:
+            for item in items:
+                if item.prepared is not None:
+                    self.discard_prepared(item.prepared)
+            raise
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition):  # noqa: ANN201
         self._enter_write()
@@ -1438,6 +1505,106 @@ class DatabaseCompletionTests(unittest.TestCase):
         ready_acceptance = world.stage_events.index(("acceptance", ready_id))
         missing_prepare = world.stage_events.index(("acquisition-prepared", missing_id))
         self.assertLess(ready_acceptance, missing_prepare)
+
+    def test_public_success_continues_content_before_later_tier_cohort_finishes(self) -> None:
+        public_id = _literature_id(1)
+        later_tier_id = _literature_id(2)
+        world = _World((_current(1, 1), _current(2, 2)))
+        world.acquisition_cohort_early_ids.add(public_id)
+        world.acquisition_cohort_early_published = threading.Event()
+        world.acquisition_cohort_release = threading.Event()
+        world.prepared_events[("parsing", public_id)] = threading.Event()
+
+        thread, results = _run_in_thread(
+            _operation(world, max_concurrency=2),
+            _request((public_id, later_tier_id), goal="CONTENT_READY"),
+        )
+        try:
+            self.assertTrue(world.acquisition_cohort_early_published.wait(_EVENT_TIMEOUT))
+            self.assertTrue(world.prepared_events[("parsing", public_id)].wait(_EVENT_TIMEOUT))
+            with world.lock:
+                self.assertIn(("parsing-prepared", public_id), world.stage_events)
+                self.assertNotIn(
+                    ("parsing-prepared", later_tier_id),
+                    world.stage_events,
+                )
+        finally:
+            world.acquisition_cohort_release.set()
+        report = _join(thread, results)
+
+        self.assertEqual(
+            tuple(item.literature_id for item in report.goal_reached),
+            (public_id, later_tier_id),
+        )
+
+    def test_coordinator_failure_releases_final_only_participant_and_receipt(self) -> None:
+        public_id = _literature_id(1)
+        final_id = _literature_id(2)
+        world = _World((_current(1, 1), _current(2, 2)))
+        world.acquisition_cohort_early_ids.add(public_id)
+        world.acquisition_cohort_final_only_ids.add(final_id)
+        coordinator_error = AssertionError("cohort coordinator programming failure")
+        original_publish = _CohortAcquisitionPort._publish_batch_outcomes
+
+        def fail_final_publish(
+            cohort: _CohortAcquisitionPort,
+            generation: int,
+            outcomes: tuple[tuple[_ParticipantKey, _CohortOutcome], ...],
+            *,
+            literature_ids: dict[_ParticipantKey, LiteratureId],
+            final: bool,
+            emitted_keys: tuple[_ParticipantKey, ...],
+        ) -> None:
+            if final:
+                raise coordinator_error
+            original_publish(
+                cohort,
+                generation,
+                outcomes,
+                literature_ids=literature_ids,
+                final=final,
+                emitted_keys=emitted_keys,
+            )
+
+        with (
+            patch.object(
+                _CohortAcquisitionPort,
+                "_publish_batch_outcomes",
+                new=fail_final_publish,
+            ),
+            self.assertRaises(AssertionError) as raised,
+        ):
+            _operation(world, max_concurrency=2)(
+                _request((public_id, final_id), goal="ASSET_READY")
+            )
+
+        self.assertIs(raised.exception, coordinator_error)
+        self.assertEqual(len(world.acquisition_commit_calls), 1)
+        self.assertEqual(len(world.acquisition_discard_calls), 1)
+
+    def test_final_cohort_mismatch_preserves_early_commit_and_rejects_remaining(
+        self,
+    ) -> None:
+        public_id = _literature_id(1)
+        final_id = _literature_id(2)
+        world = _World((_current(1, 1), _current(2, 2)))
+        world.acquisition_cohort_early_ids.add(public_id)
+        world.acquisition_cohort_final_only_ids.add(final_id)
+        world.acquisition_cohort_final_identity_overrides[public_id] = _literature_id(3)
+
+        report = _operation(world, max_concurrency=2)(
+            _request((public_id, final_id), goal="ASSET_READY")
+        )
+
+        self.assertEqual(
+            tuple(item.literature_id for item in report.goal_reached),
+            (public_id,),
+        )
+        self.assertEqual(len(report.failed), 1)
+        self.assertEqual(report.failed[0].literature_id, final_id)
+        self.assertEqual(report.failed[0].failure.code, "acquisition-port-contract")
+        self.assertEqual(len(world.acquisition_commit_calls), 1)
+        self.assertEqual(len(world.acquisition_discard_calls), 1)
 
     def test_no_usable_content_retries_rejoin_one_operation_cohort(self) -> None:
         first_id = _literature_id(1)

@@ -301,6 +301,44 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         )
         self.assertEqual(result.browser_admission.summary.groups[0].paper_count, 1)
 
+    def test_tier_observer_exposes_public_terminal_items_before_browser_execution(
+        self,
+    ) -> None:
+        items = tuple(AcquisitionWorkItem(work_key=key, plan=_plan(key)) for key in ("a", "b"))
+        observed: list[tuple[AcquisitionPath, tuple[WorkItemDisposition, ...]]] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if item.work_key == "a" and route.tier is AcquisitionPath.PUBLIC:
+                return RouteExecutionResult.delivered(_temporary(1, AcquisitionPath.PUBLIC))
+            if route.tier is AcquisitionPath.CONTROLLED_BROWSER:
+                self.assertEqual(
+                    observed[0],
+                    (
+                        AcquisitionPath.PUBLIC,
+                        (
+                            WorkItemDisposition.DELIVERED,
+                            WorkItemDisposition.PENDING,
+                        ),
+                    ),
+                )
+            return RouteExecutionResult.normal_miss()
+
+        _executor("publisher-a").execute(
+            items,
+            execute,
+            on_tier_completed=lambda tier, results: observed.append(
+                (tier, tuple(item.disposition for item in results))
+            ),
+        )
+
+        self.assertEqual(
+            tuple(tier for tier, _items in observed),
+            tuple(AcquisitionPath),
+        )
+
     def test_default_admission_never_starts_hidden_browser_traffic(self) -> None:
         item = AcquisitionWorkItem(work_key="a", plan=_plan("a"))
         browser_work: list[str] = []

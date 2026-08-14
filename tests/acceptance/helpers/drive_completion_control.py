@@ -26,6 +26,7 @@ import sciretriever.entry.orchestration as orchestration_module
 import sciretriever.model.execution as execution_model_module
 from sciretriever.acquisition.api import (
     CohortPreparationItem,
+    CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
@@ -560,6 +561,7 @@ class _World:
         requests: tuple[AcquisitionRequest, ...],
         *,
         cancel_event: threading.Event | None = None,
+        on_prepared: CohortPreparationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         items = []
         for request in requests:
@@ -590,8 +592,11 @@ class _World:
                     prepared=prepared,
                 )
             )
+        prepared_items = tuple(items)
+        if on_prepared is not None:
+            on_prepared(prepared_items)
         return PreparedAcquisitionCohort(
-            items=tuple(items),
+            items=prepared_items,
             browser_escalation=BrowserEscalationSummary(),
         )
 

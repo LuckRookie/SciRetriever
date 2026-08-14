@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
 from typing import BinaryIO
+from unittest.mock import patch
 
 from sciretriever.acquisition.access_profiles import (
     PolicyEvidence,
@@ -12,13 +13,14 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfile,
     PublisherAccessProfileCatalog,
 )
+from sciretriever.acquisition.api import CohortPreparationItem
 from sciretriever.acquisition.browser_admission import (
     BrowserAdmissionConfiguration,
     BrowserAdmissionController,
     BrowserGroupAdmissionState,
     BrowserGroupReadiness,
 )
-from sciretriever.acquisition.cohort import TieredCohortExecutor
+from sciretriever.acquisition.cohort import AcquisitionWorkItem, TieredCohortExecutor
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -80,10 +82,14 @@ def _id(index: int) -> str:
     return f"{index:08x}-e89b-12d3-a456-426614174000"
 
 
-def _request(*, resolved_landing_origin: str | None = None) -> AcquisitionRequest:
+def _request(
+    *,
+    index: int = 1,
+    resolved_landing_origin: str | None = None,
+) -> AcquisitionRequest:
     literature = Literature(
-        literature_id=LiteratureId(_id(1)),
-        meta_literature_id=MetaLiteratureId(_id(2)),
+        literature_id=LiteratureId(_id(index)),
+        meta_literature_id=MetaLiteratureId(_id(index + 1)),
         version_role=VersionRole.PUBLISHED,
         metadata=LiteratureMetadata(title="A tiered acquisition fixture"),
         status=LiteratureStatus.UNREVIEWED,
@@ -144,9 +150,12 @@ class _Prepared:
         self.request = request
         self.temporary_pdf = temporary_pdf
         self.discard_count = 0
+        self.discard_error: BaseException | None = None
 
     def discard(self) -> None:
         self.discard_count += 1
+        if self.discard_error is not None:
+            raise self.discard_error
 
 
 class _PublicationPort:
@@ -441,6 +450,116 @@ def _discard_count(temporary_pdf: TemporaryPdf) -> int:
 
 
 class TieredAcquisitionServiceTests(unittest.TestCase):
+    def test_cohort_observer_receives_the_same_public_receipt_before_return(self) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        service = _service(_RouteAdapter((accepted,)), publication, _ExhaustionPort())
+        observed = []
+
+        cohort = service.prepare_primary_pdf_cohort(
+            (_request(),),
+            on_prepared=lambda items: observed.extend(items),
+        )
+
+        self.assertEqual(observed, [cohort.items[0]])
+        receipt = cohort.items[0].prepared
+        self.assertIsNotNone(receipt)
+        if receipt is None:
+            self.fail("public terminal item did not expose its receipt")
+        self.assertIsInstance(service.commit_primary_pdf(receipt), AcquiredPrimaryPdf)
+
+    def test_cohort_observer_error_discards_every_new_receipt(self) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        service = _service(_RouteAdapter((accepted,)), publication, _ExhaustionPort())
+        observer_error = RuntimeError("fixture observer failure")
+
+        def reject(_items: object) -> None:
+            raise observer_error
+
+        with self.assertRaises(RuntimeError) as raised:
+            service.prepare_primary_pdf_cohort(
+                (_request(index=1), _request(index=10)),
+                on_prepared=reject,
+            )
+
+        self.assertIs(raised.exception, observer_error)
+        self.assertEqual(
+            tuple(prepared.discard_count for prepared in publication.prepared_values),
+            (1, 1),
+        )
+
+    def test_cohort_observer_cleanup_error_wins_after_all_receipts_are_attempted(
+        self,
+    ) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        service = _service(_RouteAdapter((accepted,)), publication, _ExhaustionPort())
+        observer_error = RuntimeError("fixture observer failure")
+        cleanup_error = AssertionError("fixture receipt cleanup failure")
+
+        def reject(_items: object) -> None:
+            publication.prepared_values[0].discard_error = cleanup_error
+            raise observer_error
+
+        with self.assertRaises(AcquisitionFailure) as raised:
+            service.prepare_primary_pdf_cohort(
+                (_request(index=1), _request(index=10)),
+                on_prepared=reject,
+            )
+
+        self.assertEqual(
+            raised.exception.failure.code,
+            "acquisition-temporary-cleanup-failed",
+        )
+        self.assertEqual(
+            tuple(prepared.discard_count for prepared in publication.prepared_values),
+            (1, 1),
+        )
+
+    def test_partial_final_cohort_construction_discards_every_preparation(self) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        service = _service(_RouteAdapter((accepted,)), publication, _ExhaustionPort())
+        construction_error = RuntimeError("fixture final cohort construction failure")
+        original_prepare = (
+            TieredAcquisitionService._prepare_cohort_item  # pyright: ignore[reportPrivateUsage]
+        )
+        call_count = 0
+
+        def fail_second_item(
+            current_service: TieredAcquisitionService,
+            item: AcquisitionWorkItem,
+            frozen: object,
+        ) -> CohortPreparationItem:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise construction_error
+            return original_prepare(
+                current_service,
+                item,
+                frozen,
+            )
+
+        with (
+            patch.object(
+                TieredAcquisitionService,
+                "_prepare_cohort_item",
+                new=fail_second_item,
+            ),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            service.prepare_primary_pdf_cohort(
+                (_request(index=1), _request(index=10)),
+            )
+
+        self.assertIs(raised.exception, construction_error)
+        self.assertEqual(
+            tuple(prepared.discard_count for prepared in publication.prepared_values),
+            (1, 1),
+        )
+
     def test_rejected_candidate_is_cleaned_and_the_route_continues(self) -> None:
         rejected = _temporary(1, "fixture:rejected")
         accepted = _temporary(2, "fixture:accepted")
