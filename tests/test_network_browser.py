@@ -450,7 +450,10 @@ class NetworkBrowserTests(unittest.TestCase):
             operator_profile=object(),
         )
         self.scope = AccessScope("fixture-provider", "web")
-        self.policy = AccessPolicy(max_concurrency=8)
+        self.policy = AccessPolicy(
+            max_concurrency=1,
+            cooldown_after_completion=30.0,
+        )
 
     def test_custom_port_requires_an_explicit_exact_browser_policy(self) -> None:
         rejected = _failure(

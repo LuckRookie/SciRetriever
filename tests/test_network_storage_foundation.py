@@ -46,7 +46,10 @@ from sciretriever.storage.sqlite.artifacts import (
 from sciretriever.storage.sqlite.engine import CatalogEngine
 
 _PUBLIC_POLICY = DestinationPolicy(allowed_classes=frozenset({AddressClass.PUBLIC}))
-_WEB_POLICY = AccessPolicy(max_concurrency=8)
+_WEB_POLICY = AccessPolicy(
+    max_concurrency=1,
+    cooldown_after_completion=30.0,
+)
 
 
 class _FakeClock:
