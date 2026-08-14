@@ -12,6 +12,13 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfile,
     PublisherAccessProfileCatalog,
 )
+from sciretriever.acquisition.browser_admission import (
+    BrowserAdmissionConfiguration,
+    BrowserAdmissionController,
+    BrowserGroupAdmissionState,
+    BrowserGroupReadiness,
+)
+from sciretriever.acquisition.cohort import TieredCohortExecutor
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -63,6 +70,7 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 _TIME = UtcTimestamp("2026-08-15T00:00:00Z")
 _HASH = Sha256("a" * 64)
@@ -404,6 +412,24 @@ def _failure_matrix_service(
         publication_port=_PublicationPort(None),
         exhaustion_port=exhaustion,
         exhaustion_clear_port=_ExhaustionClearPort(),
+        cohort_executor=TieredCohortExecutor(
+            browser_admission=BrowserAdmissionController(
+                BrowserAdmissionConfiguration(
+                    explicitly_enabled=True,
+                    execution_confirmed=True,
+                    runtime_ready=True,
+                    groups=(
+                        BrowserGroupAdmissionState(
+                            policy=BrowserGroupPolicy(
+                                rate_limit_group="fixture-publisher",
+                                minimum_start_interval=0.0,
+                            ),
+                            readiness=BrowserGroupReadiness.READY,
+                        ),
+                    ),
+                )
+            )
+        ),
     )
 
 
@@ -558,7 +584,15 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
                     "browser:fixture" in trace,
                     browser_allowed,
                 )
+                self.assertEqual(
+                    bool(result.browser_escalation.groups),
+                    browser_allowed,
+                )
                 if browser_allowed:
+                    self.assertEqual(
+                        result.browser_escalation.groups[0].paper_count,
+                        1,
+                    )
                     self.assertIsNotNone(item.prepared)
                     assert item.prepared is not None
                     self.assertIsInstance(service.commit_primary_pdf(item.prepared), NoPrimaryPdf)

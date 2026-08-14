@@ -4,7 +4,7 @@ import pickle
 import unittest
 
 from sciretriever.acquisition.access_profiles import PublisherAccessProfile
-from sciretriever.acquisition.cohort import AcquisitionWorkItem
+from sciretriever.acquisition.cohort import AcquisitionWorkItem, TieredCohortExecutor
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import AcquisitionPlan, RouteSpec
 from sciretriever.model.acquisition import AcquisitionPath
@@ -195,14 +195,25 @@ class TieredCohortContractTests(unittest.TestCase):
         from sciretriever.acquisition.planning import (
             AcquisitionPlan,
             PublisherAccessResolution,
+            ResolutionEvidence,
+            ResolutionEvidenceKind,
             RouteCapability,
             RouteReadiness,
             RouteSpec,
         )
 
+        evidence = ResolutionEvidence(
+            kind=ResolutionEvidenceKind.LANDING_ORIGIN,
+            value="https://publisher-a.test",
+            source="doi-landing",
+        )
         return AcquisitionPlan(
             revision="sha256:" + "a" * 64,
-            resolution=PublisherAccessResolution.unresolved(),
+            resolution=PublisherAccessResolution(
+                access_key="publisher-a",
+                selected_evidence_kind=ResolutionEvidenceKind.LANDING_ORIGIN,
+                evidence=(evidence,),
+            ),
             routes=tuple(
                 RouteSpec(
                     route_key=f"{tier.value}:{key}",
@@ -221,10 +232,37 @@ class TieredCohortContractTests(unittest.TestCase):
             ),
         )
 
+    def _executor(self) -> TieredCohortExecutor:
+        from sciretriever.acquisition.browser_admission import (
+            BrowserAdmissionConfiguration,
+            BrowserAdmissionController,
+            BrowserGroupAdmissionState,
+            BrowserGroupReadiness,
+        )
+        from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+
+        return TieredCohortExecutor(
+            browser_admission=BrowserAdmissionController(
+                BrowserAdmissionConfiguration(
+                    explicitly_enabled=True,
+                    execution_confirmed=True,
+                    runtime_ready=True,
+                    groups=(
+                        BrowserGroupAdmissionState(
+                            policy=BrowserGroupPolicy(
+                                rate_limit_group="publisher-a",
+                                minimum_start_interval=0.0,
+                            ),
+                            readiness=BrowserGroupReadiness.READY,
+                        ),
+                    ),
+                )
+            )
+        )
+
     def test_whole_cohort_finishes_each_tier_before_the_next_one_starts(self) -> None:
         from sciretriever.acquisition.cohort import (
             AcquisitionWorkItem,
-            TieredCohortExecutor,
             WorkItemDisposition,
         )
         from sciretriever.acquisition.outcomes import RouteExecutionResult
@@ -232,7 +270,8 @@ class TieredCohortContractTests(unittest.TestCase):
         trace: list[tuple[str, AcquisitionPath]] = []
         items = tuple(AcquisitionWorkItem(work_key=key, plan=self._plan(key)) for key in ("a", "b"))
 
-        result = TieredCohortExecutor().execute(
+        executor = self._executor()
+        result = executor.execute(
             items,
             lambda item, route: (
                 trace.append((item.work_key, route.tier)) or RouteExecutionResult.normal_miss()
@@ -257,7 +296,6 @@ class TieredCohortContractTests(unittest.TestCase):
     def test_transient_api_failure_defers_and_never_escalates_to_browser(self) -> None:
         from sciretriever.acquisition.cohort import (
             AcquisitionWorkItem,
-            TieredCohortExecutor,
             WorkItemDisposition,
         )
         from sciretriever.acquisition.outcomes import RouteExecutionResult
@@ -282,7 +320,8 @@ class TieredCohortContractTests(unittest.TestCase):
                 )
             return RouteExecutionResult.normal_miss()
 
-        result = TieredCohortExecutor().execute(
+        executor = self._executor()
+        result = executor.execute(
             (AcquisitionWorkItem(work_key="a", plan=self._plan("a")),),
             execute,
         )
@@ -294,7 +333,6 @@ class TieredCohortContractTests(unittest.TestCase):
     def test_action_required_and_failure_are_never_reported_as_exhaustion(self) -> None:
         from sciretriever.acquisition.cohort import (
             AcquisitionWorkItem,
-            TieredCohortExecutor,
             WorkItemDisposition,
         )
         from sciretriever.acquisition.outcomes import RouteExecutionResult
@@ -306,7 +344,8 @@ class TieredCohortContractTests(unittest.TestCase):
             action="Open Browser Access configuration and sign in.",
             retryable=False,
         )
-        result = TieredCohortExecutor().execute(
+        executor = self._executor()
+        result = executor.execute(
             (AcquisitionWorkItem(work_key="a", plan=self._plan("a")),),
             lambda _item, route: (
                 RouteExecutionResult.action_required(failure)
