@@ -27,6 +27,7 @@ from sciretriever.acquisition.api import (
     AcquisitionFailure,
     AcquisitionRequest,
     PreparedAcquisition,
+    PreparedAcquisitionCohort,
 )
 from sciretriever.analysis.api import ContentAnalysisFailure, ContentAnalysisInput
 from sciretriever.entry.execution import (
@@ -110,6 +111,13 @@ class AutomaticAcquisitionPort(Protocol):
         *,
         cancel_event: threading.Event | None = None,
     ) -> PreparedAcquisition: ...
+
+    def prepare_primary_pdf_cohort(
+        self,
+        requests: tuple[AcquisitionRequest, ...],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...
 

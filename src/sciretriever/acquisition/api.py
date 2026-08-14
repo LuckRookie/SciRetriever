@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Final, Protocol, runtime_checkable
 
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
 )
+from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
+from sciretriever.acquisition.cohort import WorkItemDisposition
 from sciretriever.acquisition.manual import ManualPdfInputError
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
@@ -20,6 +23,8 @@ from sciretriever.acquisition.rules import (
     ReadablePdfSource,
 )
 from sciretriever.model.acquisition import AcquisitionResult
+from sciretriever.model.primitives import LiteratureId
+from sciretriever.model.report import StableFailure
 
 AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG
@@ -48,6 +53,64 @@ class PreparedAcquisition:
         raise TypeError("PreparedAcquisition cannot be copied")
 
 
+@dataclass(frozen=True, slots=True)
+class CohortPreparationItem:
+    """One operation-local preparation receipt or stable non-exhaustion failure."""
+
+    literature_id: LiteratureId
+    disposition: WorkItemDisposition
+    prepared: PreparedAcquisition | None = field(default=None, repr=False)
+    failure: StableFailure | None = None
+    attempted_route_keys: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.literature_id, LiteratureId):
+            raise TypeError("literature_id must be LiteratureId")
+        if not isinstance(self.disposition, WorkItemDisposition):
+            raise TypeError("disposition must be WorkItemDisposition")
+        if self.prepared is not None and not isinstance(self.prepared, PreparedAcquisition):
+            raise TypeError("prepared must be PreparedAcquisition or None")
+        if self.failure is not None and not isinstance(self.failure, StableFailure):
+            raise TypeError("failure must be StableFailure or None")
+        has_receipt = self.disposition in {
+            WorkItemDisposition.DELIVERED,
+            WorkItemDisposition.EXHAUSTED,
+        }
+        if has_receipt != (self.prepared is not None):
+            raise ValueError("only delivered or exhausted items carry a receipt")
+        if (not has_receipt) != (self.failure is not None):
+            raise ValueError("every non-receipt item requires a stable failure")
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAcquisitionCohort:
+    """Opaque process-local preparation result in frozen request order."""
+
+    items: tuple[CohortPreparationItem, ...]
+    browser_escalation: BrowserEscalationSummary
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.items, tuple) or any(
+            not isinstance(item, CohortPreparationItem) for item in self.items
+        ):
+            raise TypeError("items must contain CohortPreparationItem values")
+        identities = tuple(item.literature_id for item in self.items)
+        if len(identities) != len(set(identities)):
+            raise ValueError("cohort Literature identities must be unique")
+        if not isinstance(self.browser_escalation, BrowserEscalationSummary):
+            raise TypeError("browser_escalation must be BrowserEscalationSummary")
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("PreparedAcquisitionCohort cannot be serialized")
+
+    def __copy__(self) -> object:
+        raise TypeError("PreparedAcquisitionCohort cannot be copied")
+
+    def __deepcopy__(self, memo: object) -> object:
+        del memo
+        raise TypeError("PreparedAcquisitionCohort cannot be copied")
+
+
 @runtime_checkable
 class AutomaticAcquisitionService(Protocol):
     """Internal service surface behind the stable Acquisition API."""
@@ -58,6 +121,13 @@ class AutomaticAcquisitionService(Protocol):
         *,
         cancel_event: CancellationEvent | None = None,
     ) -> PreparedAcquisition: ...
+
+    def prepare_primary_pdf_cohort(
+        self,
+        requests: tuple[AcquisitionRequest, ...],
+        *,
+        cancel_event: CancellationEvent | None = None,
+    ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...
 
@@ -87,6 +157,19 @@ class AcquisitionApi:
 
         return self._service.prepare_primary_pdf(request, cancel_event=cancel_event)
 
+    def prepare_primary_pdf_cohort(
+        self,
+        requests: tuple[AcquisitionRequest, ...],
+        *,
+        cancel_event: CancellationEvent | None = None,
+    ) -> PreparedAcquisitionCohort:
+        """Prepare one bounded tiered cohort without committing its receipts."""
+
+        return self._service.prepare_primary_pdf_cohort(
+            requests,
+            cancel_event=cancel_event,
+        )
+
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
         """Consume exactly one receipt in the caller's serialized commit boundary."""
 
@@ -113,9 +196,11 @@ __all__ = (
     "AcquisitionFailure",
     "AcquisitionRequest",
     "CancellationEvent",
+    "CohortPreparationItem",
     "ManualPdfInputError",
     "PdfValidationCancelled",
     "PreparedAcquisition",
+    "PreparedAcquisitionCohort",
     "ReadablePdfSource",
     "UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS",
 )

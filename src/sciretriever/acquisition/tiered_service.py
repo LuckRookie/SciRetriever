@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 from weakref import WeakKeyDictionary
 
-from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
+from sciretriever.acquisition.api import (
+    CohortPreparationItem,
+    PreparedAcquisition,
+    PreparedAcquisitionCohort,
+)
 from sciretriever.acquisition.cohort import (
     AcquisitionWorkItem,
     TieredCohortExecutor,
@@ -53,9 +57,6 @@ from sciretriever.model.report import StableFailure
 
 _LOGGER = get_logger(__name__)
 
-if TYPE_CHECKING:
-    from sciretriever.acquisition.api import PreparedAcquisition
-
 
 @dataclass(slots=True)
 class _CandidatePreparation:
@@ -74,59 +75,6 @@ class _ExhaustionPreparation:
 class _ReceiptState:
     status: Literal["pending", "committed", "discarded"]
     payload: _CandidatePreparation | _ExhaustionPreparation | None
-
-
-@dataclass(frozen=True, slots=True)
-class CohortPreparationItem:
-    """One work item's receipt or stable non-exhaustion failure."""
-
-    literature_id: LiteratureId
-    disposition: WorkItemDisposition
-    prepared: PreparedAcquisition | None = field(default=None, repr=False)
-    failure: StableFailure | None = None
-    attempted_route_keys: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        from sciretriever.acquisition.api import PreparedAcquisition
-
-        if not isinstance(self.literature_id, LiteratureId):
-            raise TypeError("literature_id must be LiteratureId")
-        if not isinstance(self.disposition, WorkItemDisposition):
-            raise TypeError("disposition must be WorkItemDisposition")
-        if self.prepared is not None and not isinstance(self.prepared, PreparedAcquisition):
-            raise TypeError("prepared must be PreparedAcquisition or None")
-        if self.failure is not None and not isinstance(self.failure, StableFailure):
-            raise TypeError("failure must be StableFailure or None")
-        has_receipt = self.disposition in {
-            WorkItemDisposition.DELIVERED,
-            WorkItemDisposition.EXHAUSTED,
-        }
-        if has_receipt != (self.prepared is not None):
-            raise ValueError("only delivered or exhausted items carry a receipt")
-        if (not has_receipt) != (self.failure is not None):
-            raise ValueError("every non-receipt item requires a stable failure")
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedAcquisitionCohort:
-    """Opaque process-local preparation result in frozen request order."""
-
-    items: tuple[CohortPreparationItem, ...]
-    browser_escalation: BrowserEscalationSummary
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.items, tuple) or any(
-            not isinstance(item, CohortPreparationItem) for item in self.items
-        ):
-            raise TypeError("items must contain CohortPreparationItem values")
-        identities = tuple(item.literature_id for item in self.items)
-        if len(identities) != len(set(identities)):
-            raise ValueError("cohort Literature identities must be unique")
-        if not isinstance(self.browser_escalation, BrowserEscalationSummary):
-            raise TypeError("browser_escalation must be BrowserEscalationSummary")
-
-    def __reduce__(self) -> str | tuple[object, ...]:
-        raise TypeError("PreparedAcquisitionCohort cannot be serialized")
 
 
 class TieredAcquisitionService:
@@ -564,8 +512,6 @@ class TieredAcquisitionService:
         return NoPrimaryPdf()
 
     def discard_prepared(self, prepared: PreparedAcquisition) -> None:
-        from sciretriever.acquisition.api import PreparedAcquisition
-
         if not isinstance(prepared, PreparedAcquisition):
             raise AcquisitionFailure(_contract_failure())
         with self._receipt_lock:
@@ -589,8 +535,6 @@ class TieredAcquisitionService:
         self,
         payload: _CandidatePreparation | _ExhaustionPreparation,
     ) -> PreparedAcquisition:
-        from sciretriever.acquisition.api import PreparedAcquisition
-
         receipt = PreparedAcquisition()
         with self._receipt_lock:
             self._receipts[receipt] = _ReceiptState(status="pending", payload=payload)
@@ -600,8 +544,6 @@ class TieredAcquisitionService:
         self,
         prepared: PreparedAcquisition,
     ) -> _CandidatePreparation | _ExhaustionPreparation:
-        from sciretriever.acquisition.api import PreparedAcquisition
-
         if not isinstance(prepared, PreparedAcquisition):
             raise AcquisitionFailure(_contract_failure())
         with self._receipt_lock:
@@ -770,8 +712,4 @@ def _interruption_failure() -> StableFailure:
     )
 
 
-__all__ = (
-    "CohortPreparationItem",
-    "PreparedAcquisitionCohort",
-    "TieredAcquisitionService",
-)
+__all__ = ("TieredAcquisitionService",)
