@@ -6,7 +6,12 @@ from contextlib import contextmanager
 from io import BytesIO
 from typing import BinaryIO
 
-from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
+from sciretriever.acquisition.access_profiles import (
+    PolicyEvidence,
+    ProfileProductionStatus,
+    PublisherAccessProfile,
+    PublisherAccessProfileCatalog,
+)
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -21,6 +26,7 @@ from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     AcquisitionRequest,
+    AcquisitionSourceFailure,
     CancellationEvent,
     PrimaryPdfPreparation,
     TemporaryPdf,
@@ -56,6 +62,7 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
 )
 from sciretriever.model.provenance import Provenance
+from sciretriever.model.report import StableFailure
 
 _TIME = UtcTimestamp("2026-08-15T00:00:00Z")
 _HASH = Sha256("a" * 64)
@@ -65,7 +72,7 @@ def _id(index: int) -> str:
     return f"{index:08x}-e89b-12d3-a456-426614174000"
 
 
-def _request() -> AcquisitionRequest:
+def _request(*, resolved_landing_origin: str | None = None) -> AcquisitionRequest:
     literature = Literature(
         literature_id=LiteratureId(_id(1)),
         meta_literature_id=MetaLiteratureId(_id(2)),
@@ -82,6 +89,7 @@ def _request() -> AcquisitionRequest:
             metadata_sha256=metadata_sha256(literature.metadata),
             expected_no_primary_pdf=True,
         ),
+        resolved_landing_origin=resolved_landing_origin,
     )
 
 
@@ -251,6 +259,33 @@ class _RouteAdapter:
         return iterator
 
 
+class _FailureMatrixRouteAdapter:
+    source_name = "fixture"
+
+    def __init__(
+        self,
+        *,
+        route_key: str,
+        acquisition_path: AcquisitionPath,
+        trace: list[str],
+        failure: StableFailure | None = None,
+    ) -> None:
+        self.route_key = route_key
+        self.acquisition_path = acquisition_path
+        self._trace = trace
+        self._failure = failure
+
+    def execute(
+        self,
+        context: RouteExecutionContext,
+    ) -> tuple[RouteExecutionResult, ...]:
+        del context
+        self._trace.append(self.route_key)
+        if self._failure is not None:
+            raise AcquisitionSourceFailure(self._failure)
+        return (RouteExecutionResult.normal_miss(),)
+
+
 def _service(
     adapter: _RouteAdapter,
     publication: _PublicationPort,
@@ -277,6 +312,96 @@ def _service(
         route_registry=registry,
         planner=planner,
         publication_port=publication,
+        exhaustion_port=exhaustion,
+        exhaustion_clear_port=_ExhaustionClearPort(),
+    )
+
+
+def _failure_matrix_service(
+    failure: StableFailure,
+    trace: list[str],
+    exhaustion: _ExhaustionPort,
+) -> TieredAcquisitionService:
+    profile = PublisherAccessProfile(
+        access_key="fixture-publisher",
+        platform_key="fixture-platform",
+        landing_origins=("https://publisher.test",),
+        asset_origins=("https://publisher.test",),
+        stable_locator_namespaces=(),
+        provider_record_names=(),
+        weak_doi_prefixes=(),
+        weak_publisher_names=(),
+        public_route_keys=("public:fixture",),
+        api_route_keys=("api:fixture",),
+        browser_route_key="browser:fixture",
+        browser_allowed_origins=("https://publisher.test",),
+        browser_rate_limit_group="fixture-publisher",
+        browser_session_key="fixture-publisher",
+        policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
+        policy_revision="2026-08-15",
+        notes_reference="docs/notes/providers/wiley.md",
+        production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+    )
+    catalog = PublisherAccessProfileCatalog((profile,))
+    adapters = (
+        _FailureMatrixRouteAdapter(
+            route_key="public:fixture",
+            acquisition_path=AcquisitionPath.PUBLIC,
+            trace=trace,
+        ),
+        _FailureMatrixRouteAdapter(
+            route_key="api:fixture",
+            acquisition_path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            trace=trace,
+            failure=failure,
+        ),
+        _FailureMatrixRouteAdapter(
+            route_key="browser:fixture",
+            acquisition_path=AcquisitionPath.CONTROLLED_BROWSER,
+            trace=trace,
+        ),
+    )
+    routes = (
+        RouteSpec(
+            route_key="public:fixture",
+            tier=AcquisitionPath.PUBLIC,
+            capability=RouteCapability.DIRECT_PDF,
+            readiness=RouteReadiness.READY,
+        ),
+        RouteSpec(
+            route_key="api:fixture",
+            tier=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            capability=RouteCapability.DIRECT_PDF,
+            readiness=RouteReadiness.READY,
+            profile_access_key="fixture-publisher",
+            quota_group="fixture-api",
+        ),
+        RouteSpec(
+            route_key="browser:fixture",
+            tier=AcquisitionPath.CONTROLLED_BROWSER,
+            capability=RouteCapability.BROWSER_PDF,
+            readiness=RouteReadiness.READY,
+            profile_access_key="fixture-publisher",
+            risk_group="fixture-publisher",
+        ),
+    )
+    registry = AcquisitionRouteRegistry(
+        profile_catalog=catalog,
+        bindings=tuple(
+            RouteAdapterBinding(spec=route, adapter=adapter)
+            for route, adapter in zip(routes, adapters, strict=True)
+        ),
+    )
+    planner = ProgressiveAcquisitionPlanner(
+        resolver=PublisherAccessResolver(catalog),
+        builder=AcquisitionPlanBuilder(catalog),
+        route_specs=registry.route_specs,
+        doi_landing_resolver=None,
+    )
+    return TieredAcquisitionService(
+        route_registry=registry,
+        planner=planner,
+        publication_port=_PublicationPort(None),
         exhaustion_port=exhaustion,
         exhaustion_clear_port=_ExhaustionClearPort(),
     )
@@ -354,6 +479,96 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
         with self.assertRaises(AcquisitionFailure) as raised:
             service.commit_primary_pdf(receipt)
         self.assertEqual(raised.exception.failure.code, "acquisition-port-contract")
+
+    def test_authorized_failure_matrix_controls_browser_admission_and_exhaustion(self) -> None:
+        from sciretriever.acquisition.cohort import WorkItemDisposition
+
+        cases = (
+            (
+                "acquisition-authorized-quota",
+                True,
+                WorkItemDisposition.DEFERRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-access",
+                True,
+                WorkItemDisposition.DEFERRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-service",
+                True,
+                WorkItemDisposition.DEFERRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-cancelled",
+                True,
+                WorkItemDisposition.DEFERRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-response-schema",
+                False,
+                WorkItemDisposition.FAILED,
+                False,
+            ),
+            (
+                "acquisition-authorized-authentication",
+                False,
+                WorkItemDisposition.ACTION_REQUIRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-credential-missing",
+                False,
+                WorkItemDisposition.ACTION_REQUIRED,
+                False,
+            ),
+            (
+                "acquisition-authorized-entitlement",
+                False,
+                WorkItemDisposition.EXHAUSTED,
+                True,
+            ),
+        )
+        for code, retryable, expected_disposition, browser_allowed in cases:
+            with self.subTest(code=code):
+                trace: list[str] = []
+                exhaustion = _ExhaustionPort()
+                service = _failure_matrix_service(
+                    StableFailure(
+                        code=code,
+                        reason="A synthetic authorized route outcome occurred.",
+                        action="Follow the stable failure classification.",
+                        retryable=retryable,
+                    ),
+                    trace,
+                    exhaustion,
+                )
+
+                result = service.prepare_primary_pdf_cohort(
+                    (_request(resolved_landing_origin="https://publisher.test"),)
+                )
+                item = result.items[0]
+
+                self.assertEqual(item.disposition, expected_disposition)
+                self.assertEqual(
+                    "browser:fixture" in trace,
+                    browser_allowed,
+                )
+                if browser_allowed:
+                    self.assertIsNotNone(item.prepared)
+                    assert item.prepared is not None
+                    self.assertIsInstance(service.commit_primary_pdf(item.prepared), NoPrimaryPdf)
+                    self.assertEqual(len(exhaustion.commands), 1)
+                else:
+                    self.assertIsNone(item.prepared)
+                    self.assertIsNotNone(item.failure)
+                    assert item.failure is not None
+                    self.assertEqual(item.failure.code, code)
+                    self.assertEqual(exhaustion.commands, [])
 
 
 if __name__ == "__main__":
