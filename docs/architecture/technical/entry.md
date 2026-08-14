@@ -241,8 +241,13 @@ Parsing/Analysis；缺少主 PDF 的当前具体 Literature 组成有界 PDF coh
 PDF 的 participant 提交当代 `AcquisitionRequest`，已有 PDF、已经满足目标、失败、取消或完成
 的 participant 退出本代等待集合，因此已有 PDF 的 Literature 可以直接继续 Parsing/Analysis，
 不会被同 chunk 的 Acquisition 等待阻塞。其余请求全部到齐后才调用一次
-`prepare_primary_pdf_cohort()`；receipt 按冻结 target 顺序交付，而不是按 worker 唤醒顺序
-交付。
+`prepare_primary_pdf_cohort()`。operation-local 单 worker coordinator 独立执行 cohort，target
+worker 只等待自己的终态；因此触发 cohort 的最后一个 participant 也能在 Public/API 层结束
+时消费自己的早期 receipt，不会被 coordinator 同步占住。receipt 按层级形成 Public、API、
+Browser/final 波次，每个波次内按冻结 target 顺序交付，而不是按 route 完成或 worker 唤醒
+顺序交付；前一波已经安全提交的目标可以继续下游，后续波仍受 acquisition 层级屏障约束。
+coordinator 在 chunk 退出前确定性关闭，内部错误会解除所有等待者并清理尚未交付 receipt，
+不能留下后台线程或永久等待。
 
 MetaLiterature 的首选版本正常耗尽后，下一版本在同一 target 的下一代重新加入 cohort；
 `NoUsableContent` 完成原子清理后，同一 Literature 也在本次操作的下一代重新加入，并继续

@@ -428,9 +428,17 @@ Authorized API pass 中对不同 Literature 使用有界 worker；每篇内部�
 且尚未尝试的同层 route 会在离开该层前补跑，已经尝试的 route/candidate 不会重复，plan
 revision 回环作为稳定合同失败终止。返回的 `PreparedAcquisitionCohort` 只包含按输入顺序
 排列的 opaque receipt 或稳定失败，以及当前 Browser admission summary；它不可序列化，
-不会在 prepare 阶段发布 Asset 或写入耗尽事实。Entry 随后仍通过单一串行提交边界逐个
-commit/discard receipt，stale/CAS 只影响对应 Literature；任何 receipt 清理失败都必须作为
-稳定 Acquisition 失败或原始程序错误传播，不能只写日志。
+不会在 prepare 阶段发布 Asset 或写入耗尽事实。调用方提供 observer 时，Acquisition 在每层
+屏障结束后把该层刚到终态的 item 作为不可变波次提前交付：波次按 Public、Authorized API、
+Browser/final 顺序发生，波内保持输入冻结顺序，每个 Literature 只交付一次。最终 cohort
+必须复用已经提前交付的同一 item 与同一 receipt，并补齐尚未交付项；不能生成第二份 receipt
+或改变早期结果。observer 拒绝波次或合同构造中途失败时，Acquisition 尝试清理该波全部新
+receipt，清理错误优先传播且不能阻止其余 receipt 的清理尝试。
+
+Entry 可以在 cohort 继续处理后续层时，通过单一串行提交边界逐个 commit/discard 已提前
+交付的 receipt；stale/CAS 只影响对应 Literature。任何 receipt 清理失败都必须作为稳定
+Acquisition 失败或原始程序错误传播，不能只写日志。最终 cohort 合同不一致时，不回滚已经
+安全提交的局部成功，但必须清理尚未交付 receipt 并让未交付目标稳定失败。
 
 截至本段对应实现，生产对象图仍以 Browser disabled 且 execution unconfirmed 组装；因此
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
