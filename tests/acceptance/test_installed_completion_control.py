@@ -22,7 +22,13 @@ class InstalledCompletionControlTests(unittest.TestCase):
         driver = Path(__file__).parent / "helpers" / "drive_completion_control.py"
         result = self.install.run_driver(driver, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr_text)
-        self.assertEqual(result.stderr, b"")
+        diagnostics = result.stderr_text
+        self.assertIn("event=completion-target-failed", diagnostics)
+        self.assertIn("code=control-network-failed", diagnostics)
+        self.assertIn("reason=", diagnostics)
+        self.assertIn("action=", diagnostics)
+        self.assertNotIn("Traceback", diagnostics)
+        self.assertNotIn("://", diagnostics)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["evidence_kind"], "installed-port-injection")
 

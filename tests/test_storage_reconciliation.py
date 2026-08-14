@@ -360,8 +360,8 @@ class StorageReconciliationTests(unittest.TestCase):
                             (1,),
                         )
 
-    def test_symlink_fifo_wrong_mode_and_abnormal_objects_entries_fail_fast(self) -> None:
-        cases = ("symlink", "fifo", "wrong-mode", "abnormal-prefix", "abnormal-name")
+    def test_symlink_fifo_and_abnormal_objects_entries_fail_fast(self) -> None:
+        cases = ("symlink", "fifo", "abnormal-prefix", "abnormal-name")
         for case in cases:
             with self.subTest(case=case):
                 with TemporaryDirectory(prefix=f"sciretriever-reconciliation-{case}-") as name:
@@ -386,8 +386,6 @@ class StorageReconciliationTests(unittest.TestCase):
                     elif case == "fifo":
                         artifact_file.unlink()
                         os.mkfifo(artifact_file, 0o600)
-                    elif case == "wrong-mode":
-                        os.chmod(artifact_file, 0o400)
                     elif case == "abnormal-prefix":
                         abnormal = root_path / ".objects" / "zz"
                         abnormal.mkdir(mode=0o700)
@@ -406,24 +404,18 @@ class StorageReconciliationTests(unittest.TestCase):
                     if case == "fifo":
                         self.assertTrue(stat.S_ISFIFO(os.lstat(artifact_file).st_mode))
 
-    def test_owner_mismatch_fails_closed_when_supported(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("owner mismatch fixture requires a non-root test process")
-        artifact = self._publish(b"wrong-owner")
+    def test_artifact_permissions_do_not_control_reconciliation(self) -> None:
+        artifact = self._publish(b"permissive-mode")
         artifact_file = self._artifact_file(artifact)
-        try:
-            os.chown(artifact_file, 0, -1)
-        except PermissionError:
-            self.skipTest("test process cannot construct a wrong-owner fixture")
-        self.addCleanup(os.chown, artifact_file, os.geteuid(), -1)
+        os.chmod(self.storage_path, 0o777)
+        os.chmod(artifact_file.parent.parent, 0o777)
+        os.chmod(artifact_file.parent, 0o777)
+        os.chmod(artifact_file, 0o666)
 
-        with self.assertRaisesRegex(
-            ArtifactReconciliationError,
-            r"^artifact store reconciliation integrity check failed$",
-        ):
-            self.reconciler.reconcile()
+        result = self.reconciler.reconcile()
 
-        self.assertTrue(artifact_file.exists())
+        self.assertEqual(result.deleted, (artifact.path,))
+        self.assertFalse(artifact_file.exists())
 
     def test_identity_replacement_before_row_retirement_preserves_evidence(self) -> None:
         candidate = self._publish(b"replace-before-retirement")

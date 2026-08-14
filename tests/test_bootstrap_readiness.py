@@ -6,14 +6,16 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from typing import Any, Iterator, Mapping, TypeVar, cast, overload
+from typing import Any, Mapping, cast
 from unittest import mock
 
 from sciretriever.analysis.ports import AnalysisLLMCall
 from sciretriever.configuration import (
     ConfigurationError,
     load_credentials,
+    load_runtime_secrets,
     parse_configuration,
+    set_core_credentials,
     set_credentials,
 )
 from sciretriever.model.configuration import (
@@ -28,8 +30,6 @@ from sciretriever.model.library import LibraryQuery, LibrarySearchRequest
 from sciretriever.model.llm import LLMStructuredResponse
 from sciretriever.model.parsing import ParserRequest
 from sciretriever.parsing.ports import StagedParserOutput
-
-_DefaultT = TypeVar("_DefaultT")
 
 
 class ProductionConfigurationContractTests(unittest.TestCase):
@@ -48,7 +48,11 @@ class ProductionConfigurationContractTests(unittest.TestCase):
 
             [analysis]
             provider = "openai"
+            protocol = "openai-responses"
+            base_url = "https://api.openai.com/v1"
             model = "fixture-model"
+            context_window_tokens = 1000000
+            authentication = "api-key"
             metadata_max_output_tokens = 256
             content_max_output_tokens = 1024
             reference_max_output_tokens = 256
@@ -77,7 +81,7 @@ class ProductionConfigurationContractTests(unittest.TestCase):
             '[paths]\nstorage_root = "artifacts"\n',
             '[parsing]\nsecret_ref = "env:MINERU_TOKEN"\n',
             '[analysis]\nsecret_ref = "env:OPENAI_API_KEY"\n',
-            '[analysis]\nbase_url = "https://example.invalid"\n',
+            '[analysis]\nprovider = "openai"\nbase_url = "https://example.invalid"\n',
             '[analysis]\nruntime_factory = "package:callable"\n',
         )
         for payload in invalid:
@@ -95,54 +99,52 @@ class ProductionConfigurationContractTests(unittest.TestCase):
                 """
             )
 
-    def test_runtime_secrets_read_only_the_selected_fixed_environment_fields(self) -> None:
-        import sciretriever.configuration as configuration_boundary
-
-        openai = parse_configuration(
+    def test_runtime_secrets_use_only_the_selected_core_credential_sections(self) -> None:
+        selected = parse_configuration(
             """
             [parsing]
-            connection_mode = "loopback"
-            [analysis]
-            provider = "openai"
-            """
-        )
-        openai_environment = _TrackingEnvironment({"SCIRETRIEVER_OPENAI_API_KEY": "openai-secret"})
-        secrets = configuration_boundary.load_runtime_secrets(
-            openai,
-            environment=openai_environment,
-        )
-        self.assertEqual(
-            openai_environment.reads,
-            ["SCIRETRIEVER_OPENAI_API_KEY"],
-        )
-        self.assertEqual(repr(secrets), "<RuntimeSecrets>")
-        self.assertNotIn("openai-secret", repr(secrets))
-
-        anthropic = parse_configuration(
-            """
-            [parsing]
+            base_url = "https://mineru.example.invalid"
             connection_mode = "remote"
+            model_identity = "mineru-3.4.4-vlm"
+            remote_upload_authorized = true
             [analysis]
             provider = "anthropic"
+            protocol = "anthropic-messages"
+            base_url = "https://api.anthropic.com/v1"
+            model = "fixture-model"
+            context_window_tokens = 128000
+            authentication = "api-key"
             """
         )
-        anthropic_environment = _TrackingEnvironment(
-            {
-                "SCIRETRIEVER_MINERU_BEARER_TOKEN": "mineru-secret",
-                "SCIRETRIEVER_ANTHROPIC_API_KEY": "anthropic-secret",
-            }
-        )
-        configuration_boundary.load_runtime_secrets(
-            anthropic,
-            environment=anthropic_environment,
-        )
-        self.assertEqual(
-            anthropic_environment.reads,
-            [
-                "SCIRETRIEVER_MINERU_BEARER_TOKEN",
-                "SCIRETRIEVER_ANTHROPIC_API_KEY",
-            ],
-        )
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_core_credentials(
+                "mineru",
+                secret="mineru-secret",
+                origin="https://mineru.example.invalid",
+                home=home,
+            )
+            credentials = set_core_credentials(
+                "llm",
+                secret="anthropic-secret",
+                origin="https://api.anthropic.com",
+                home=home,
+            )
+            parser_only = load_runtime_secrets(
+                selected,
+                credentials=credentials,
+                include_analysis=False,
+            )
+            analysis_only = load_runtime_secrets(
+                selected,
+                credentials=credentials,
+                include_parser=False,
+            )
+        self.assertEqual(parser_only.mineru_bearer_token, "mineru-secret")
+        self.assertIsNone(parser_only.analysis_api_key)
+        self.assertIsNone(analysis_only.mineru_bearer_token)
+        self.assertEqual(analysis_only.analysis_api_key, "anthropic-secret")
+        self.assertNotIn("anthropic-secret", repr(analysis_only))
 
 
 class ConfigurationReadinessTests(unittest.TestCase):
@@ -294,34 +296,6 @@ class _FakeProbe:
         return result
 
 
-class _TrackingEnvironment(Mapping[str, str]):
-    def __init__(self, values: Mapping[str, str]) -> None:
-        self._values = dict(values)
-        self.reads: list[str] = []
-
-    def __getitem__(self, key: str) -> str:
-        raise AssertionError("runtime secret selection must use bounded get")
-
-    def __iter__(self) -> Iterator[str]:
-        raise AssertionError("runtime secret selection must not enumerate environment")
-
-    def __len__(self) -> int:
-        raise AssertionError("runtime secret selection must not inspect environment size")
-
-    @overload
-    def get(self, key: str) -> str | None: ...
-
-    @overload
-    def get(self, key: str, default: str) -> str: ...
-
-    @overload
-    def get(self, key: str, default: _DefaultT) -> str | _DefaultT: ...
-
-    def get(self, key: str, default: _DefaultT | None = None) -> str | _DefaultT | None:
-        self.reads.append(key)
-        return self._values.get(key, default)
-
-
 def _production_configuration(root: Path) -> Configuration:
     return parse_configuration(
         f"""
@@ -337,7 +311,11 @@ def _production_configuration(root: Path) -> Configuration:
 
         [analysis]
         provider = "openai"
+        protocol = "openai-responses"
+        base_url = "https://api.openai.com/v1"
         model = "offline-model"
+        context_window_tokens = 1000000
+        authentication = "api-key"
         metadata_max_output_tokens = 256
         content_max_output_tokens = 256
         reference_max_output_tokens = 256
@@ -415,9 +393,17 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             root = Path(temporary)
             full_root = root / "full"
             scoped_root = root / "scoped"
-            full_root.mkdir()
-            scoped_root.mkdir()
+            full_root.mkdir(mode=0o700)
+            scoped_root.mkdir(mode=0o700)
             full_configuration = _production_configuration(full_root)
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "llm",
+                secret="offline-key",
+                origin="https://api.openai.com",
+                home=credentials_home,
+            )
             scoped_configuration = parse_configuration(
                 f"""
                 [paths]
@@ -432,8 +418,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             ):
                 bootstrap.build_production_object_graph(
                     full_configuration,
-                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
-                    credentials_home=root / "home",
+                    credentials_home=credentials_home,
                     configure_process_logging=False,
                 )
                 bootstrap.build_production_object_graph(
@@ -525,12 +510,21 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
                 [analysis]
                 provider = "openai"
+                protocol = "openai-responses"
+                base_url = "https://api.openai.com/v1"
                 model = "reference-only-model"
+                context_window_tokens = 128000
+                authentication = "api-key"
                 reference_max_output_tokens = 256
                 """
             )
-            environment = _TrackingEnvironment(
-                {"SCIRETRIEVER_OPENAI_API_KEY": "reference-only-secret"}
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "llm",
+                secret="reference-only-secret",
+                origin="https://api.openai.com",
+                home=credentials_home,
             )
             forbidden = AssertionError("citation scope constructed content analysis or Parser")
             with (
@@ -564,13 +558,11 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     bootstrap.build_production_object_graph(
                         configuration,
                         scope=bootstrap.ProductionEntryScope.CITATION_DISCOVERY,
-                        environment=environment,
-                        credentials_home=root / "home",
+                        credentials_home=credentials_home,
                         configure_process_logging=False,
                     ),
                 )
 
-            self.assertEqual(environment.reads, ["SCIRETRIEVER_OPENAI_API_KEY"])
             operation = cast(Any, graph.entry_api)._operation
             analysis = cast(AnalysisApi, operation._analysis)
             self.assertIsInstance(analysis, AnalysisApi)
@@ -628,11 +620,69 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertIsInstance(graph.entry_api, object)
             load_secrets.assert_called_once_with(
                 configuration,
-                environment=None,
+                credentials=None,
                 include_parser=False,
                 include_analysis=False,
             )
             load_credentials.assert_not_called()
+
+    def test_scoped_core_authorized_credentials_fail_before_storage_is_touched(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-core-preflight-") as temporary:
+            root = Path(temporary)
+            configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(root / "catalog.sqlite3")!r}
+                artifact_root = {str(root / "artifacts")!r}
+
+                [sources.acquisition]
+                providers = ["core"]
+                """
+            )
+            with (
+                mock.patch.object(bootstrap, "_build_scoped_storage") as build_storage,
+                self.assertRaises(bootstrap.BootstrapError) as raised,
+            ):
+                bootstrap.build_production_object_graph(
+                    configuration,
+                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                    credentials_home=root / "empty-home",
+                    configure_process_logging=False,
+                )
+
+        self.assertEqual(raised.exception.code, "acquisition-not-ready")
+        build_storage.assert_not_called()
+
+    def test_scoped_wiley_authorized_credentials_fail_before_storage_is_touched(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-wiley-preflight-") as temporary:
+            root = Path(temporary)
+            configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(root / "catalog.sqlite3")!r}
+                artifact_root = {str(root / "artifacts")!r}
+
+                [sources.acquisition]
+                providers = ["wiley"]
+                """
+            )
+            with (
+                mock.patch.object(bootstrap, "_build_scoped_storage") as build_storage,
+                self.assertRaises(bootstrap.BootstrapError) as raised,
+            ):
+                bootstrap.build_production_object_graph(
+                    configuration,
+                    scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                    credentials_home=root / "empty-home",
+                    configure_process_logging=False,
+                )
+
+        self.assertEqual(raised.exception.code, "acquisition-not-ready")
+        build_storage.assert_not_called()
 
     def test_fresh_catalog_builds_an_explicit_application_object_graph(self) -> None:
         from sciretriever.bootstrap import (
@@ -1161,6 +1211,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-single-") as temporary:
             root = Path(temporary)
             configuration = _production_configuration(root)
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "llm",
+                secret="offline-key",
+                origin="https://api.openai.com",
+                home=credentials_home,
+            )
             original = configuration_boundary.load_credentials
             calls: list[object] = []
 
@@ -1173,8 +1231,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             with mock.patch("sciretriever.bootstrap.load_credentials", side_effect=one_load):
                 graph = bootstrap.build_production_object_graph(
                     configuration,
-                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
-                    credentials_home=root / "home",
+                    credentials_home=credentials_home,
                     configure_process_logging=False,
                 )
             self.assertEqual(len(calls), 1)
@@ -1189,6 +1246,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-noio-") as temporary:
             root = Path(temporary)
             configuration = _production_configuration(root)
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "llm",
+                secret="offline-key",
+                origin="https://api.openai.com",
+                home=credentials_home,
+            )
             with (
                 forbidden("sciretriever.network.http.SystemResolver.resolve"),
                 forbidden("sciretriever.network.http.SecureHttpTransport.send"),
@@ -1205,8 +1270,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             ):
                 graph = bootstrap.build_production_object_graph(
                     configuration,
-                    environment={"SCIRETRIEVER_OPENAI_API_KEY": "offline-key"},
-                    credentials_home=root / "home",
+                    credentials_home=credentials_home,
                     configure_process_logging=False,
                 )
             self.assertIsInstance(graph.entry_api, object)
@@ -1220,6 +1284,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-errors-") as temporary:
             root = Path(temporary)
             configuration = _production_configuration(root)
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "llm",
+                secret="offline-key",
+                origin="https://api.openai.com",
+                home=credentials_home,
+            )
             cases: tuple[tuple[str, str, type[Exception]], ...] = (
                 (
                     "sciretriever.metadata.registry.build_metadata_registry",
@@ -1252,8 +1324,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     ):
                         bootstrap.build_production_object_graph(
                             configuration,
-                            environment={"SCIRETRIEVER_OPENAI_API_KEY": secret},
-                            credentials_home=root / "home",
+                            credentials_home=credentials_home,
                             configure_process_logging=False,
                         )
                     self.assertEqual(raised.exception.code, expected)

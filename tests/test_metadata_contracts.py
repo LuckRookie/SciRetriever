@@ -387,7 +387,7 @@ class MetadataCapabilityContractTests(unittest.TestCase):
                 self.assertEqual(result.outcome, expected)
                 self.assertEqual(fetched, [None])
 
-    def test_budget_is_consumed_before_conversion_failure_and_prior_items_survive(self) -> None:
+    def test_conversion_failure_consumes_budget_but_later_items_still_survive(self) -> None:
         events: list[str] = []
 
         def convert(raw: _VendorItem) -> NeutralMetadataItem:
@@ -410,17 +410,25 @@ class MetadataCapabilityContractTests(unittest.TestCase):
             ),
         )
 
-        result = (
-            MetadataApi(MetadataService(topic_search_ports=(provider,)))
-            .search_topic(_topic_request(("fake", 10)))
-            .providers[0]
-        )
+        with self.assertLogs("sciretriever.metadata.service", level="DEBUG") as captured:
+            result = (
+                MetadataApi(MetadataService(topic_search_ports=(provider,)))
+                .search_topic(_topic_request(("fake", 10)))
+                .providers[0]
+            )
 
-        self.assertEqual(events, ["convert-1", "convert-2"])
-        self.assertEqual(result.raw_item_count, 2)
+        self.assertEqual(events, ["convert-1", "convert-2", "convert-3"])
+        self.assertEqual(result.raw_item_count, 3)
         self.assertEqual(result.outcome, "FAILED")
         self.assertEqual(result.failure, _failure(code="item-conversion-failed"))
-        self.assertEqual(result.observations, (_observation(1),))
+        self.assertEqual(result.observations, (_observation(1), _observation(3)))
+        output = "\n".join(captured.output)
+        self.assertIn("event=metadata-record-rejected", output)
+        self.assertIn("provider=fake", output)
+        self.assertIn("raw_item_ordinal=2", output)
+        self.assertIn("code=item-conversion-failed", output)
+        self.assertIn("rejected_record_count=1", output)
+        self.assertNotIn("vendor-response-must-not-leak", output)
 
     def test_incomplete_and_duplicate_items_count_and_are_not_admitted_or_deduplicated(
         self,

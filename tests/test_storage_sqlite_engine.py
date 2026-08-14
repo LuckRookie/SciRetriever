@@ -150,7 +150,7 @@ class StorageSqliteEngineTests(unittest.TestCase):
                 connection.execute(statement)
             self.assertEqual(engine_module._schema_objects(connection), expected)
 
-    def test_canonical_binding_rejects_symlink_hardlink_and_unsafe_permissions(self) -> None:
+    def test_canonical_binding_rejects_symlink_and_hardlink_but_not_permissions(self) -> None:
         victim = self.root / "victim.sqlite"
         victim.write_bytes(b"preserve")
         os.chmod(victim, 0o600)
@@ -164,13 +164,12 @@ class StorageSqliteEngineTests(unittest.TestCase):
         symlink.unlink()
         hardlink.unlink()
         os.chmod(victim, 0o644)
-        with self.assertRaises(CatalogPathError):
-            canonical_catalog_path(victim)
-        unsafe_parent = self.root / "unsafe"
-        unsafe_parent.mkdir()
-        os.chmod(unsafe_parent, 0o777)
-        with self.assertRaises(CatalogPathError):
-            canonical_catalog_path(unsafe_parent / "catalog.sqlite")
+        self.assertEqual(canonical_catalog_path(victim), victim)
+        writable_parent = self.root / "writable"
+        writable_parent.mkdir()
+        os.chmod(writable_parent, 0o777)
+        candidate = writable_parent / "catalog.sqlite"
+        self.assertEqual(canonical_catalog_path(candidate), candidate)
 
     def test_unknown_old_and_fingerprint_tampered_catalogs_fail_without_migration(self) -> None:
         self.catalog.write_bytes(b"not sqlite")

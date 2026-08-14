@@ -45,9 +45,9 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             _configuration(catalog, artifacts),
             encoding="utf-8",
         )
+        self._write_llm_credentials()
         environment = {
             "SCIRETRIEVER_CONFIG": os.fspath(configuration),
-            "SCIRETRIEVER_OPENAI_API_KEY": "offline-analysis-key",
             "SCIRETRIEVER_TEST_MINERU_ARCHIVE": base64.b64encode(_mineru_archive()).decode("ascii"),
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
@@ -56,6 +56,11 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             ("discover", "topic", "production bootstrap", "--json"),
             environment,
             root,
+            expected_log_events=(
+                "discovery-started",
+                "metadata-provider-failed",
+                "discovery-finished",
+            ),
         )
         self.assertEqual(
             topic["run_status"],
@@ -120,6 +125,11 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             environment,
             root,
             timeout=60,
+            expected_log_events=(
+                "completion-started",
+                "completion-target-finished",
+                "completion-finished",
+            ),
         )
         self.assertEqual(completion["end"], {"kind": "finished"})
         self.assertEqual(len(completion["goal_reached"]), 1)
@@ -222,7 +232,10 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 3, result.stderr_text)
-        self.assertEqual(result.stderr, b"")
+        self.assertIn("event=completion-failed", result.stderr_text)
+        self.assertIn("code=write-admission-failed", result.stderr_text)
+        self.assertIn("reason=", result.stderr_text)
+        self.assertIn("action=", result.stderr_text)
         report = json.loads(result.stdout)
         self.assertEqual(report["kind"], "database-completion")
         self.assertEqual(report["end"]["kind"], "failed")
@@ -387,11 +400,11 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             _configuration(catalog, artifacts),
             encoding="utf-8",
         )
+        self._write_llm_credentials()
         environment = {
             "SCIRETRIEVER_ACCEPTANCE_CASE_ROOT": os.fspath(root),
             "SCIRETRIEVER_ACCEPTANCE_SCENARIO": "no-usable-content",
             "SCIRETRIEVER_CONFIG": os.fspath(configuration),
-            "SCIRETRIEVER_OPENAI_API_KEY": "offline-analysis-key",
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
         topic = self._json(
@@ -511,6 +524,10 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             ("complete", "pdf", "--discovery-run-id", run_id, "--json"),
             environment,
             root,
+            expected_log_events=(
+                "completion-target-failed",
+                "completion-finished",
+            ),
         )
         self.assertEqual(first["end"], {"kind": "finished"})
         self.assertEqual(len(first["goal_reached"]), 1)
@@ -523,9 +540,15 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
         retry_id = first["failed"][0]["literature_id"]
 
         second = self._json(
-            ("complete", "pdf", "--discovery-run-id", run_id, "--json"),
+            ("--debug", "complete", "pdf", "--discovery-run-id", run_id, "--json"),
             environment,
             root,
+            expected_log_events=(
+                "completion-target-started",
+                "completion-current-facts-read",
+                "completion-stage-started",
+                "completion-finished",
+            ),
         )
         self.assertEqual(second["end"], {"kind": "finished"})
         self.assertEqual(
@@ -685,6 +708,18 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             for line in path.read_text(encoding="utf-8").splitlines()
         )
 
+    def _write_llm_credentials(self) -> None:
+        assert self.install.home is not None
+        directory = self.install.home / ".sciretriever"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+        credentials = directory / "credentials.toml"
+        credentials.write_text(
+            '[llm]\napi_key = "offline-analysis-key"\norigin = "https://api.openai.com"\n',
+            encoding="utf-8",
+        )
+        credentials.chmod(0o600)
+
     def _wire_requests(self, scenario: str) -> list[dict[str, Any]]:
         assert self.install.root is not None
         path = self.install.root / "production-wire.ndjson"
@@ -701,6 +736,7 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
         root: Path,
         *,
         timeout: float = 30,
+        expected_log_events: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         result = self.install.run_console(
             arguments,
@@ -709,7 +745,20 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
             timeout=timeout,
         )
         self.assertEqual(result.returncode, 0, result.stderr_text)
-        self.assertEqual(result.stderr, b"")
+        diagnostics = result.stderr_text
+        for event in expected_log_events:
+            self.assertIn(f"event={event}", diagnostics)
+        for unsafe in (
+            "Traceback",
+            "Authorization",
+            "Cookie",
+            "://",
+            os.fspath(root),
+        ):
+            self.assertNotIn(unsafe, diagnostics)
+        if "--debug" not in arguments:
+            self.assertNotIn(" DEBUG ", diagnostics)
+            self.assertNotIn("event=completion-current-facts-read", diagnostics)
         return json.loads(result.stdout)
 
 
@@ -787,7 +836,11 @@ remote_upload_authorized = false
 
 [analysis]
 provider = "openai"
+protocol = "openai-responses"
+base_url = "https://api.openai.com/v1"
 model = "acceptance-model"
+context_window_tokens = 1000000
+authentication = "api-key"
 metadata_max_output_tokens = 2048
 content_max_output_tokens = 4096
 reference_max_output_tokens = 2048

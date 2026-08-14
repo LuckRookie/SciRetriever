@@ -276,7 +276,9 @@ def _openai_response(body: bytes | None) -> _Response:
     request = json.loads(body)
     model = request["model"]
     structured_input = json.loads(request["input"][1]["content"][0]["text"])
-    if "initial_metadata" in structured_input:
+    if structured_input == {"probe": "sciretriever-configuration"}:
+        result = {"ok": True}
+    elif "initial_metadata" in structured_input:
         parser_markdown = structured_input.get("parser_markdown", "")
         if _scenario() == "no-usable-content" and "Rejected candidate" in parser_markdown:
             result = {"outcome": "no_usable_content", "metadata": None}

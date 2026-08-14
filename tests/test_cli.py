@@ -4,6 +4,7 @@ import importlib
 import inspect
 import io
 import json
+import logging
 import sys
 import tempfile
 import unittest
@@ -15,12 +16,28 @@ from unittest.mock import Mock, call, patch
 
 from sciretriever.entry.ports import UserOutputConflictError
 from sciretriever.model.configuration import (
+    AnalysisAuthentication,
+    AnalysisConfig,
+    AnalysisConfigurationStatus,
+    AnalysisProtocol,
     Configuration,
+    ConfigurationCapabilityStatus,
     ConfigurationProbeResult,
     ConfigurationProbeSummary,
+    ConfigurationRuntimeStatus,
+    ConfigurationStatus,
+    CoreConfigurationProbeResult,
+    CoreCredentialService,
     CredentialFieldSpec,
+    CredentialFieldStatus,
+    CredentialStatus,
+    LLMConfigurationProbeDetails,
+    MinerUConfigurationProbeDetails,
+    ParserConnectionMode,
+    ParsingConfigurationStatus,
     ProbeOutcome,
     ProviderCapability,
+    ProviderCredentialStatus,
     ProviderName,
 )
 from sciretriever.model.discovery import (
@@ -65,7 +82,7 @@ EXPECTED_COMMANDS = {
     "literature": ("search", "show", "references", "cited-by"),
     "import": ("metadata", "pdf"),
     "export": ("metadata", "pdf", "content"),
-    "config": ("set", "remove", "status", "test"),
+    "config": ("status", "test"),
 }
 FORBIDDEN_COMMANDS = {
     "collection",
@@ -282,6 +299,9 @@ class CliCommandTreeTests(unittest.TestCase):
             ("exchange",),
             ("literature", "detail"),
             ("config", "check"),
+            ("config", "set"),
+            ("config", "remove"),
+            ("config", "--json"),
             ("import", "asset"),
         ):
             with self.subTest(path=path):
@@ -348,6 +368,35 @@ class CliProductionRoutingTests(unittest.TestCase):
                     cursor=None,
                 )
             ],
+        )
+
+    def test_debug_option_selects_debug_logging_for_the_production_graph(self) -> None:
+        module = _cli_module()
+        configuration = Configuration()
+        entry_api = _RecordingEntryApi()
+        graph = _RoutingObjectGraph(entry_api)
+
+        with (
+            patch.object(module, "load_selected_configuration", return_value=configuration),
+            patch.object(
+                module,
+                "build_production_object_graph",
+                return_value=graph,
+            ) as build_graph,
+        ):
+            code, _stdout, stderr = _invoke(
+                "complete",
+                "pdf",
+                "--all-pending",
+                "--debug",
+                "--json",
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        build_graph.assert_called_once_with(
+            configuration,
+            scope=module.ProductionEntryScope.ASSET_COMPLETION,
+            logging_level=logging.DEBUG,
         )
 
     def test_each_business_command_selects_only_its_required_production_scope(self) -> None:
@@ -913,7 +962,270 @@ class CliExchangeRoutingTests(unittest.TestCase):
 
 
 class CliConfigurationTests(unittest.TestCase):
-    def test_config_set_collects_all_fields_without_echo_and_honors_replace_cancel(
+    def test_plain_manager_configures_official_llm_and_never_renders_secret(self) -> None:
+        module = _cli_module()
+        secret = "llm-manager-secret-sentinel"
+        before = Configuration()
+        with (
+            patch(
+                "builtins.input",
+                side_effect=("l", "1", "1", "fixture-model", "", "2", "y", "b", "q"),
+            ),
+            patch.object(module.getpass, "getpass", return_value=secret),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=before),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("LLM Analysis", stderr)
+        self.assertIn("Proposed ordinary configuration changes", stderr)
+        self.assertIn("configuration was saved", stderr)
+        self.assertNotIn(secret, stdout + stderr)
+        update.assert_called_once()
+        call_args = update.call_args
+        self.assertEqual(call_args.args[:2], (Path("config.toml"), "llm"))
+        candidate = call_args.kwargs["analysis"]
+        self.assertIsInstance(candidate, AnalysisConfig)
+        self.assertIs(candidate.protocol, AnalysisProtocol.OPENAI_RESPONSES)
+        self.assertIs(candidate.authentication, AnalysisAuthentication.API_KEY)
+        self.assertEqual(candidate.base_url, "https://api.openai.com/v1")
+        self.assertEqual(candidate.model, "fixture-model")
+        self.assertEqual(candidate.context_window_tokens, 1_000_000)
+        self.assertEqual(call_args.kwargs["secret"], secret)
+        self.assertEqual(call_args.kwargs["origin"], "https://api.openai.com")
+
+    def test_plain_manager_configures_loopback_llm_without_reading_secret(self) -> None:
+        module = _cli_module()
+        before = Configuration()
+        with (
+            patch(
+                "builtins.input",
+                side_effect=(
+                    "l",
+                    "1",
+                    "3",
+                    "local-llm",
+                    "2",
+                    "http://127.0.0.1:1234/v1",
+                    "2",
+                    "local-model",
+                    "128000",
+                    "1",
+                    "y",
+                    "b",
+                    "q",
+                ),
+            ),
+            patch.object(
+                module.getpass,
+                "getpass",
+                side_effect=AssertionError("loopback none-auth must not request a secret"),
+            ),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=before),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("configuration was saved", stderr)
+        candidate = update.call_args.kwargs["analysis"]
+        self.assertIs(candidate.protocol, AnalysisProtocol.OPENAI_CHAT_COMPLETIONS)
+        self.assertIs(candidate.authentication, AnalysisAuthentication.NONE)
+        self.assertEqual(update.call_args.kwargs["secret"], None)
+        self.assertEqual(update.call_args.kwargs["origin"], None)
+
+    def test_plain_manager_configures_loopback_mineru_without_upload_consent_or_token(
+        self,
+    ) -> None:
+        module = _cli_module()
+        before = Configuration()
+        with (
+            patch("builtins.input", side_effect=("m", "1", "1", "", "", "y", "b", "q")),
+            patch.object(
+                module.getpass,
+                "getpass",
+                side_effect=AssertionError("loopback MinerU must not request a token"),
+            ),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=before),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("MinerU 3.4.4", stderr)
+        self.assertNotIn("Authorize remote PDF upload", stderr)
+        candidate = update.call_args.kwargs["parsing"]
+        self.assertIs(candidate.connection_mode, ParserConnectionMode.LOOPBACK)
+        self.assertEqual(candidate.base_url, "http://127.0.0.1:8000")
+        self.assertFalse(candidate.remote_upload_authorized)
+        self.assertEqual(update.call_args.kwargs["secret"], None)
+        self.assertEqual(update.call_args.kwargs["origin"], None)
+
+    def test_plain_manager_remote_mineru_refuses_save_without_upload_consent(self) -> None:
+        module = _cli_module()
+        with (
+            patch(
+                "builtins.input",
+                side_effect=(
+                    "m",
+                    "1",
+                    "2",
+                    "https://mineru.example.invalid",
+                    "",
+                    "n",
+                    "b",
+                    "q",
+                ),
+            ),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("uploads source PDFs outside this machine", stderr)
+        self.assertIn("Remote upload was not authorized", stderr)
+        update.assert_not_called()
+
+    def test_core_reset_removes_ordinary_configuration_and_bound_credential_together(self) -> None:
+        module = _cli_module()
+        configured = Configuration(
+            analysis=AnalysisConfig(
+                provider=module.AnalysisProvider.OPENAI,
+                protocol=AnalysisProtocol.OPENAI_RESPONSES,
+                base_url="https://api.openai.com/v1",
+                model="fixture-model",
+                context_window_tokens=128_000,
+                authentication=AnalysisAuthentication.API_KEY,
+            )
+        )
+        with (
+            patch("builtins.input", side_effect=("l", "3", "y", "b", "q")),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=configured),
+            patch.object(module, "core_credential_section_exists", return_value=True),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("configuration was reset", stderr)
+        update.assert_called_once_with(
+            Path("config.toml"),
+            "llm",
+            analysis=AnalysisConfig(),
+            secret=None,
+            origin=None,
+        )
+
+    def test_config_test_all_human_mode_confirms_combined_side_effects_before_probe(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+            patch("builtins.input", return_value="n"),
+        ):
+            code, stdout, stderr = _invoke("config", "test", "--all")
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("may consume a small amount of quota", stderr)
+        self.assertIn("uploads no PDF", stderr)
+        self.assertIn("cancelled", stderr)
+        session.run.assert_not_called()
+        session.run_llm.assert_not_called()
+        session.run_mineru.assert_not_called()
+
+    def test_eof_during_hidden_core_secret_input_is_a_controlled_interruption(self) -> None:
+        module = _cli_module()
+        with (
+            patch(
+                "builtins.input",
+                side_effect=("l", "1", "1", "fixture-model", "", "1", "y", "b", "q"),
+            ),
+            patch.object(module.getpass, "getpass", side_effect=EOFError),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=Configuration()),
+            patch.object(module, "update_core_service_configuration") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertNotIn("Traceback", stderr)
+        update.assert_not_called()
+
+    def test_real_config_status_separates_public_authorized_and_browser_routes(self) -> None:
+        import sciretriever.configuration as configuration_boundary
+
+        module = _cli_module()
+        configuration = configuration_boundary.parse_configuration(
+            """
+            [sources.acquisition]
+            providers = ["arxiv", "unpaywall", "core"]
+
+            [sources.acquisition.unpaywall]
+            contact_email = "reader@example.invalid"
+            """
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            configuration_boundary.set_credentials(
+                ProviderName.CORE,
+                {"api_key": "status-secret-sentinel"},
+                home=home,
+            )
+            with (
+                patch.object(module, "load_selected_configuration", return_value=configuration),
+                patch.object(
+                    module,
+                    "configuration_status",
+                    side_effect=configuration_boundary.configuration_status,
+                ),
+                patch.object(
+                    module,
+                    "load_credentials",
+                    return_value=configuration_boundary.load_credentials(home=home),
+                ),
+            ):
+                code, stdout, stderr = _invoke("config", "status")
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("saved direct-PDF/landing hints", stdout)
+        self.assertIn("arxiv", stdout)
+        self.assertIn("unpaywall", stdout)
+        self.assertIn("core", stdout)
+        self.assertIn("api_key=configured", stdout)
+        self.assertIn("known unavailable: elsevier, springer", stdout)
+        self.assertIn("Controlled browser", stdout)
+        self.assertIn("not implemented", stdout)
+        self.assertNotIn("status-secret-sentinel", stdout)
+
+    def test_config_manager_sets_updates_and_removes_without_secret_output_or_storage(
         self,
     ) -> None:
         module = _cli_module()
@@ -921,117 +1233,253 @@ class CliConfigurationTests(unittest.TestCase):
             CredentialFieldSpec(name="api_key", required=True),
             CredentialFieldSpec(name="institution_token", required=False),
         )
-        with (
-            patch.object(module, "credential_field_specs", return_value=specs),
-            patch.object(module, "credential_section_exists", return_value=True),
-            patch.object(module, "set_credentials") as set_credentials,
-            patch.object(module, "_confirm", return_value=False),
-            patch.object(
-                module,
-                "build_production_object_graph",
-                side_effect=AssertionError("config set must not build Storage"),
-            ),
-        ):
-            cancelled = _invoke("config", "set", "elsevier", "--json")
-
-        self.assertEqual(cancelled, (0, '{"provider":"elsevier","status":"cancelled"}\n', ""))
-        set_credentials.assert_not_called()
-
         secret = "set-secret-sentinel"
         optional = "optional-secret-sentinel"
         with (
+            patch.object(
+                module,
+                "configurable_credential_providers",
+                return_value=(ProviderName.ELSEVIER,),
+            ),
+            patch.object(module, "load_credentials") as load_credentials,
             patch.object(module, "credential_field_specs", return_value=specs),
-            patch.object(module, "credential_section_exists", return_value=True),
-            patch.object(module, "_confirm", return_value=True),
+            patch.object(module, "credential_section_exists", side_effect=(True, True)),
+            patch(
+                "builtins.input",
+                side_effect=("p", "elsevier", "1", "y", "elsevier", "2", "y", "q", "q"),
+            ),
             patch.object(module.getpass, "getpass", side_effect=(secret, optional)) as hidden_input,
             patch.object(module, "set_credentials") as set_credentials,
+            patch.object(module, "remove_credentials") as remove_credentials,
             patch.object(
                 module,
                 "build_production_object_graph",
-                side_effect=AssertionError("config set must not build Storage"),
+                side_effect=AssertionError("config manager must not build Storage"),
             ),
         ):
-            replaced = _invoke("config", "set", "elsevier", "--json")
+            load_credentials.return_value.has_provider.return_value = True
+            load_credentials.return_value.field_names.return_value = (
+                "api_key",
+                "institution_token",
+            )
+            code, stdout, stderr = _invoke("config")
 
-        self.assertEqual(replaced, (0, '{"provider":"elsevier","status":"replaced"}\n', ""))
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("SciRetriever Provider credential manager", stderr)
+        self.assertIn("Manage Elsevier / Scopus [elsevier]", stderr)
+        self.assertIn("Set or update credentials", stderr)
+        self.assertIn("Remove credentials", stderr)
+        self.assertIn("Replace credentials for elsevier?", stderr)
+        self.assertIn("Remove credentials for elsevier?", stderr)
+        self.assertIn("were updated", stderr)
+        self.assertIn("were removed", stderr)
+        self.assertIn("Next steps:", stderr)
         self.assertEqual(hidden_input.call_count, 2)
         set_credentials.assert_called_once_with(
             "elsevier",
             {"api_key": secret, "institution_token": optional},
             home=None,
         )
-        rendered = "".join(replaced[1:])
-        self.assertNotIn(secret, rendered)
-        self.assertNotIn(optional, rendered)
+        remove_credentials.assert_called_once_with(ProviderName.ELSEVIER, home=None)
+        self.assertNotIn(secret, stderr)
+        self.assertNotIn(optional, stderr)
 
-    def test_config_set_omits_blank_optional_and_rejects_blank_required_without_write(
+    def test_config_manager_selects_by_number_reprompts_required_and_omits_optional(
         self,
     ) -> None:
         module = _cli_module()
+        providers = (ProviderName.WEB_OF_SCIENCE, ProviderName.WILEY)
         specs = (
-            CredentialFieldSpec(name="api_key", required=True),
-            CredentialFieldSpec(name="institution_token", required=False),
+            CredentialFieldSpec(name="tdm_api_token", required=True),
+            CredentialFieldSpec(name="optional_token", required=False),
         )
+        secret = "interactive-wiley-secret-sentinel"
         with (
-            patch.object(module, "credential_field_specs", return_value=specs),
+            patch.object(module, "configurable_credential_providers", return_value=providers),
+            patch.object(module, "load_credentials") as load_credentials,
             patch.object(module, "credential_section_exists", return_value=False),
-            patch.object(module.getpass, "getpass", side_effect=("required-value", "   ")),
+            patch.object(module, "credential_field_specs", return_value=specs),
+            patch("builtins.input", side_effect=("p", "2", "1", "q", "q")),
+            patch.object(
+                module.getpass, "getpass", side_effect=("", secret, "   ")
+            ) as hidden_input,
             patch.object(module, "set_credentials") as set_credentials,
         ):
-            result = _invoke("config", "set", "elsevier", "--json")
-        self.assertEqual(result, (0, '{"provider":"elsevier","status":"created"}\n', ""))
+            load_credentials.return_value.has_provider.return_value = False
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("Web of Science [web-of-science]", stderr)
+        self.assertIn("Wiley Online Library [wiley]", stderr)
+        self.assertIn("https://static.wiley.com/tdm/", stderr)
+        self.assertIn("This credential is required", stderr)
+        self.assertIn("Wiley TDM API token", hidden_input.call_args_list[0].args[0])
+        self.assertIn('Add "wiley" to [sources.acquisition].providers.', stderr)
+        self.assertIn("No standalone live credential probe is available", stderr)
+        self.assertEqual(hidden_input.call_count, 3)
         set_credentials.assert_called_once_with(
-            "elsevier", {"api_key": "required-value"}, home=None
+            "wiley",
+            {"tdm_api_token": secret},
+            home=None,
         )
+        self.assertNotIn(secret, stdout + stderr)
 
-        with (
-            patch.object(module, "credential_field_specs", return_value=specs),
-            patch.object(module, "credential_section_exists", return_value=False),
-            patch.object(module.getpass, "getpass", side_effect=("", "unused")),
-            patch.object(module, "set_credentials") as set_credentials,
+    def test_config_manager_back_invalid_and_quit_never_write(self) -> None:
+        module = _cli_module()
+        providers = (ProviderName.WEB_OF_SCIENCE, ProviderName.WILEY)
+        for selections, invalid_provider, invalid_action in (
+            (("q",), False, False),
+            (("p", "99", "q", "q"), True, False),
+            (("p", "unknown-provider", "q", "q"), True, False),
+            (("p", "1", "invalid", "b", "q", "q"), False, True),
         ):
-            code, stdout, stderr = _invoke("config", "set", "elsevier", "--json")
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("required credential field was empty", stderr)
-        set_credentials.assert_not_called()
+            with (
+                self.subTest(selections=selections),
+                patch.object(module, "configurable_credential_providers", return_value=providers),
+                patch.object(module, "load_credentials") as load_credentials,
+                patch("builtins.input", side_effect=selections),
+                patch.object(module, "set_credentials") as set_credentials,
+                patch.object(module, "remove_credentials") as remove_credentials,
+            ):
+                load_credentials.return_value.has_provider.return_value = False
+                code, stdout, stderr = _invoke("config")
+            self.assertEqual((code, stdout), (0, ""))
+            if invalid_provider:
+                self.assertIn("Invalid Provider selection", stderr)
+            if invalid_action:
+                self.assertIn("Invalid action", stderr)
+            set_credentials.assert_not_called()
+            remove_credentials.assert_not_called()
 
-    def test_config_remove_distinguishes_removed_and_not_configured_without_storage(
+    def test_config_manager_cancels_replace_remove_optional_blank_and_eof_safely(
         self,
     ) -> None:
         module = _cli_module()
+        scenarios = (
+            (ProviderName.ELSEVIER, True, "1", ("n", "q"), (), "No credentials were changed"),
+            (ProviderName.ELSEVIER, True, "2", ("n", "q"), (), "No credentials were changed"),
+            (
+                ProviderName.SEMANTIC_SCHOLAR,
+                False,
+                "1",
+                ("q",),
+                ("",),
+                "No credential value was entered",
+            ),
+            (
+                ProviderName.WEB_OF_SCIENCE,
+                False,
+                "1",
+                ("q",),
+                (EOFError(),),
+                "Credential input ended",
+            ),
+        )
+        for provider, existed, action, remaining_input, hidden_input, expected in scenarios:
+            with (
+                self.subTest(provider=provider, action=action, hidden_input=hidden_input),
+                patch.object(
+                    module,
+                    "configurable_credential_providers",
+                    return_value=(provider,),
+                ),
+                patch.object(module, "load_credentials") as load_credentials,
+                patch.object(module, "credential_section_exists", return_value=existed),
+                patch.object(
+                    module,
+                    "credential_field_specs",
+                    return_value=(
+                        CredentialFieldSpec(
+                            name="api_key",
+                            required=provider is not ProviderName.SEMANTIC_SCHOLAR,
+                        ),
+                    ),
+                ),
+                patch(
+                    "builtins.input",
+                    side_effect=("p", provider.value, action, *remaining_input, "q"),
+                ),
+                patch.object(module.getpass, "getpass", side_effect=hidden_input),
+                patch.object(module, "set_credentials") as set_credentials,
+                patch.object(module, "remove_credentials") as remove_credentials,
+            ):
+                load_credentials.return_value.has_provider.return_value = existed
+                load_credentials.return_value.field_names.return_value = ("api_key",)
+                code, stdout, stderr = _invoke("config")
+            self.assertEqual((code, stdout), (0, ""))
+            self.assertIn(expected, stderr)
+            set_credentials.assert_not_called()
+            remove_credentials.assert_not_called()
+
+    def test_config_manager_remove_not_configured_does_not_prompt_or_write(self) -> None:
+        module = _cli_module()
         with (
-            patch.object(module, "credential_section_exists", side_effect=(True, False)),
-            patch.object(module, "remove_credentials") as remove_credentials,
             patch.object(
                 module,
-                "build_production_object_graph",
-                side_effect=AssertionError("config remove must not build Storage"),
+                "configurable_credential_providers",
+                return_value=(ProviderName.WEB_OF_SCIENCE,),
             ),
+            patch.object(module, "load_credentials") as load_credentials,
+            patch.object(module, "credential_section_exists", return_value=False),
+            patch("builtins.input", side_effect=("p", "1", "2", "q", "q")),
+            patch.object(module, "remove_credentials") as remove_credentials,
         ):
-            removed = _invoke("config", "remove", "web-of-science", "--json")
-            missing = _invoke("config", "remove", "web-of-science", "--json")
+            load_credentials.return_value.has_provider.return_value = False
+            code, stdout, stderr = _invoke("config")
 
-        self.assertEqual(removed, (0, '{"provider":"web-of-science","status":"removed"}\n', ""))
-        self.assertEqual(
-            missing,
-            (0, '{"provider":"web-of-science","status":"not-configured"}\n', ""),
-        )
-        remove_credentials.assert_called_once_with("web-of-science", home=None)
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("is not configured; nothing changed", stderr)
+        self.assertNotIn("Remove credentials for web-of-science?", stderr)
+        remove_credentials.assert_not_called()
 
     def test_config_status_uses_configuration_boundary_only_and_omits_fingerprint(self) -> None:
         module = _cli_module()
-        status = {
-            "configuration_fingerprint": "sha256:" + "f" * 64,
-            "capabilities": [{"provider": "crossref", "status": "configured"}],
-        }
+        configuration = Configuration()
+        capability = ConfigurationCapabilityStatus(
+            provider=ProviderName.CROSSREF,
+            capability=ProviderCapability.METADATA,
+            production_available=True,
+            enabled=False,
+            ordinary_parameters_ready=False,
+            credential=ProviderCredentialStatus(
+                provider=ProviderName.CROSSREF,
+                capability=ProviderCapability.METADATA,
+                status=CredentialStatus.NOT_REQUIRED,
+            ),
+            access_policy_ready=False,
+            probe_available=True,
+            local_ready=False,
+            failure_code="missing-ordinary-parameter",
+        )
+        status = Mock(spec=ConfigurationStatus)
+        status.capabilities = (capability,)
+        runtime = ConfigurationRuntimeStatus(
+            storage_configuration_complete=False,
+            storage_missing_fields=("catalog_path", "artifact_root"),
+            parsing=ParsingConfigurationStatus(
+                configuration_complete=False,
+                bearer_token_required=False,
+                missing_fields=("base_url", "connection_mode", "model_identity"),
+            ),
+            analysis=AnalysisConfigurationStatus(
+                api_key_required=False,
+                reference_configuration_complete=False,
+                content_configuration_complete=False,
+                reference_missing_fields=("provider", "model", "reference_max_output_tokens"),
+                content_missing_fields=("provider", "model"),
+            ),
+        )
         with (
             patch.object(
-                module, "load_selected_configuration", return_value=Configuration()
+                module, "load_selected_configuration", return_value=configuration
             ) as load_configuration,
+            patch.object(module, "load_credentials") as load_credentials,
             patch.object(
                 module, "configuration_status", return_value=status
             ) as configuration_status,
+            patch.object(
+                module, "configuration_runtime_status", return_value=runtime
+            ) as configuration_runtime_status,
             patch.object(
                 module,
                 "build_production_object_graph",
@@ -1041,15 +1489,85 @@ class CliConfigurationTests(unittest.TestCase):
             code, stdout, stderr = _invoke("config", "status", "--json")
 
         self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
         self.assertEqual(
-            json.loads(stdout),
-            {"capabilities": [{"provider": "crossref", "status": "configured"}]},
+            set(payload),
+            {"storage", "providers", "parsing", "analysis", "execution", "library"},
         )
+        self.assertEqual(
+            payload["providers"]["metadata"][0]["missing_ordinary_fields"],
+            ["mode"],
+        )
+        self.assertEqual(payload["analysis"]["provider"], None)
         self.assertNotIn("fingerprint", stdout)
         load_configuration.assert_called_once_with(None)
         configuration_status.assert_called_once_with(
-            load_configuration.return_value, credentials_home=None
+            load_configuration.return_value, credentials=load_credentials.return_value
         )
+        configuration_runtime_status.assert_called_once_with(
+            configuration, credentials=load_credentials.return_value
+        )
+
+    def test_config_status_human_output_is_sectioned_and_never_renders_secret_value(self) -> None:
+        module = _cli_module()
+        configuration = Configuration()
+        capability = ConfigurationCapabilityStatus(
+            provider=ProviderName.WEB_OF_SCIENCE,
+            capability=ProviderCapability.METADATA,
+            production_available=True,
+            enabled=False,
+            ordinary_parameters_ready=False,
+            credential=ProviderCredentialStatus(
+                provider=ProviderName.WEB_OF_SCIENCE,
+                capability=ProviderCapability.METADATA,
+                status=CredentialStatus.CONFIGURED,
+                fields=(CredentialFieldStatus(name="api_key", required=True, present=True),),
+            ),
+            access_policy_ready=False,
+            probe_available=True,
+            local_ready=False,
+            failure_code="missing-ordinary-parameter",
+        )
+        status = Mock(spec=ConfigurationStatus)
+        status.capabilities = (capability,)
+        runtime = ConfigurationRuntimeStatus(
+            storage_configuration_complete=False,
+            storage_missing_fields=("catalog_path", "artifact_root"),
+            parsing=ParsingConfigurationStatus(
+                configuration_complete=False,
+                bearer_token_required=False,
+                missing_fields=("base_url",),
+            ),
+            analysis=AnalysisConfigurationStatus(
+                api_key_required=False,
+                reference_configuration_complete=False,
+                content_configuration_complete=False,
+                reference_missing_fields=("provider",),
+                content_missing_fields=("provider",),
+            ),
+        )
+        with (
+            patch.object(module, "load_selected_configuration", return_value=configuration),
+            patch.object(module, "load_credentials"),
+            patch.object(module, "configuration_status", return_value=status),
+            patch.object(module, "configuration_runtime_status", return_value=runtime),
+        ):
+            code, stdout, stderr = _invoke("config", "status")
+        self.assertEqual((code, stderr), (0, ""))
+        for heading in (
+            "Core services",
+            "LLM Analysis",
+            "MinerU Parser",
+            "Literature Provider credentials",
+            "PDF acquisition routes",
+            "Public",
+            "Authorized API",
+            "Controlled browser",
+            "Storage",
+        ):
+            self.assertIn(heading, stdout)
+        self.assertIn("api_key=configured", stdout)
+        self.assertNotIn("secret-value", stdout)
 
     def test_config_test_routes_named_and_all_to_probe_session_and_uses_result_exit_code(
         self,
@@ -1083,6 +1601,20 @@ class CliConfigurationTests(unittest.TestCase):
 
         session = Mock()
         session.run.side_effect = (passed, skipped)
+        session.run_llm.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.LLM,
+            outcome=ProbeOutcome.SKIPPED,
+            local_ready=False,
+            failure_code="analysis-not-ready",
+            details=LLMConfigurationProbeDetails(),
+        )
+        session.run_mineru.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.MINERU,
+            outcome=ProbeOutcome.SKIPPED,
+            local_ready=False,
+            failure_code="parser-not-ready",
+            details=MinerUConfigurationProbeDetails(),
+        )
         with (
             patch.object(module, "load_selected_configuration", return_value=Configuration()),
             patch.object(
@@ -1107,14 +1639,14 @@ class CliConfigurationTests(unittest.TestCase):
             "not-proven",
         )
         self.assertEqual(
-            json.loads(all_result[1])["results"][0]["acquisition_entitlement"],
+            json.loads(all_result[1])["providers"]["results"][0]["acquisition_entitlement"],
             "not-proven",
         )
         self.assertEqual(
             session.run.call_args_list,
             [
-                call(provider="crossref", test_all=False),
-                call(provider=None, test_all=True),
+                call(provider="crossref"),
+                call(test_all=True),
             ],
         )
         self.assertEqual(build_probe.call_count, 2)
@@ -1133,21 +1665,33 @@ class CliConfigurationTests(unittest.TestCase):
 
 
 class CliResultAndFailureBoundaryTests(unittest.TestCase):
-    def test_config_replacement_prompt_is_stderr_and_json_stdout_remains_one_value(self) -> None:
+    def test_config_manager_prompts_are_stderr_only_and_manager_has_no_json_stream(self) -> None:
         module = _cli_module()
+        secret = "manager-secret-sentinel"
         with (
-            patch.object(module, "credential_field_specs", return_value=()),
+            patch.object(
+                module,
+                "configurable_credential_providers",
+                return_value=(ProviderName.ELSEVIER,),
+            ),
+            patch.object(module, "load_credentials") as load_credentials,
+            patch.object(
+                module,
+                "credential_field_specs",
+                return_value=(CredentialFieldSpec(name="api_key", required=True),),
+            ),
             patch.object(module, "credential_section_exists", return_value=True),
-            patch.object(module.sys, "stdin", io.StringIO("n\n")),
+            patch.object(module.sys, "stdin", io.StringIO("p\n1\n1\nn\nq\nq\n")),
             patch.object(module, "set_credentials") as set_credentials,
         ):
-            code, stdout, stderr = _invoke("config", "set", "elsevier", "--json")
+            load_credentials.return_value.has_provider.return_value = True
+            load_credentials.return_value.field_names.return_value = ("api_key",)
+            code, stdout, stderr = _invoke("config")
 
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(stdout), {"provider": "elsevier", "status": "cancelled"})
-        self.assertEqual(stdout.count("\n"), 1)
+        self.assertEqual((code, stdout), (0, ""))
         self.assertIn("Replace credentials", stderr)
-        self.assertNotIn("Replace credentials", stdout)
+        self.assertNotIn("{", stdout)
+        self.assertNotIn(secret, stdout + stderr)
         set_credentials.assert_not_called()
 
     def test_typed_failed_and_interrupted_reports_are_the_only_json_stdout_value(self) -> None:

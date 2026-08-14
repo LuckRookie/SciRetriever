@@ -18,6 +18,7 @@ from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
     AcquisitionRequest,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     PdfSourceBinding,
     PrimaryPdfPreparation,
@@ -421,6 +422,8 @@ def _api(
     exhaustion: AcquisitionExhaustionPublicationPort,
     *,
     exhaustion_clear: AcquisitionExhaustionClearPort | None = None,
+    doi_landing_resolver: object | None = None,
+    requires_doi_landing_origin: bool = False,
 ) -> AcquisitionApi:
     if exhaustion_clear is None:
         exhaustion_clear = _ExhaustionClearFake(events=[])
@@ -430,6 +433,8 @@ def _api(
             publication_port=publication,
             exhaustion_port=exhaustion,
             exhaustion_clear_port=exhaustion_clear,
+            doi_landing_resolver=doi_landing_resolver,  # type: ignore[arg-type]
+            requires_doi_landing_origin=requires_doi_landing_origin,
         )
     )
 
@@ -445,6 +450,23 @@ class _CancelEvent:
 
     def is_set(self) -> bool:
         return self.cancelled
+
+
+class _DoiResolverFake:
+    def __init__(
+        self,
+        result: str | None = None,
+        failure: AcquisitionFailure | None = None,
+    ) -> None:
+        self.result = result
+        self.failure = failure
+        self.calls: list[Identifier | None] = []
+
+    def resolve(self, doi: Identifier | None) -> str | None:
+        self.calls.append(doi)
+        if self.failure is not None:
+            raise self.failure
+        return self.result
 
 
 class _CancelAfterChecks:
@@ -707,6 +729,128 @@ class AcquisitionWorkflowContractTests(unittest.TestCase):
             ],
         )
 
+    def test_doi_origin_resolution_is_deferred_until_public_sources_miss(self) -> None:
+        events: list[str] = []
+        resolver = _DoiResolverFake("https://onlinelibrary.wiley.com")
+        public_hit = _temporary(
+            9,
+            key="public/hit",
+            source_name="public-one",
+            path=AcquisitionPath.PUBLIC,
+        )
+        public = _SourceFake(
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            items=(_SourceItem("public/hit", public_hit),),
+        )
+        authorized = _SourceFake(
+            "wiley",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
+            applicable=lambda evidence: (
+                evidence.resolved_landing_origin == "https://onlinelibrary.wiley.com"
+            ),
+        )
+        request = _request(
+            literature=_literature(
+                identifiers=(Identifier(namespace="doi", value="10.1002/example"),)
+            )
+        )
+
+        result = _prepare_and_commit(
+            _api(
+                (_binding(public), _binding(authorized)),
+                _PublicationFake(events=events, success_key="public/hit"),
+                _ExhaustionFake(events=events),
+                doi_landing_resolver=resolver,
+                requires_doi_landing_origin=True,
+            ),
+            request,
+        )
+
+        self.assertIsInstance(result, AcquiredPrimaryPdf)
+        self.assertEqual(resolver.calls, [])
+        self.assertNotIn("applicable:wiley", events)
+
+    def test_public_miss_resolves_one_doi_once_before_authorized_applicability(self) -> None:
+        events: list[str] = []
+        doi = Identifier(namespace="doi", value="10.1002/example")
+        resolver = _DoiResolverFake("https://onlinelibrary.wiley.com")
+        seen_origins: list[str | None] = []
+
+        def applicable(evidence: AcquisitionEvidence) -> bool:
+            seen_origins.append(evidence.resolved_landing_origin)
+            return False
+
+        public = _SourceFake("public-one", AcquisitionPath.PUBLIC, events=events)
+        authorized = _SourceFake(
+            "wiley",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
+            applicable=applicable,
+        )
+        exhaustion = _ExhaustionFake(events=events)
+        result = _prepare_and_commit(
+            _api(
+                (_binding(public), _binding(authorized)),
+                _PublicationFake(events=events),
+                exhaustion,
+                doi_landing_resolver=resolver,
+                requires_doi_landing_origin=True,
+            ),
+            _request(literature=_literature(identifiers=(doi,))),
+        )
+
+        self.assertIsInstance(result, NoPrimaryPdf)
+        self.assertEqual(resolver.calls, [doi])
+        self.assertEqual(seen_origins, ["https://onlinelibrary.wiley.com"])
+        self.assertLess(events.index("acquire:public-one"), events.index("applicable:wiley"))
+
+    def test_doi_normal_miss_exhausts_but_resolution_failure_propagates(self) -> None:
+        events: list[str] = []
+        doi = Identifier(namespace="doi", value="10.1002/example")
+        authorized = _SourceFake(
+            "wiley",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
+        )
+        exhaustion = _ExhaustionFake(events=events)
+        normal = _DoiResolverFake(None)
+        result = _prepare_and_commit(
+            _api(
+                (_binding(authorized),),
+                _PublicationFake(events=events),
+                exhaustion,
+                doi_landing_resolver=normal,
+                requires_doi_landing_origin=True,
+            ),
+            _request(literature=_literature(identifiers=(doi,))),
+        )
+        self.assertIsInstance(result, NoPrimaryPdf)
+        self.assertEqual(normal.calls, [doi])
+        self.assertEqual(exhaustion.calls, 1)
+
+        failure = AcquisitionFailure(
+            StableFailure(
+                code="acquisition-doi-resolution-network-failed",
+                reason="DOI resolution failed.",
+                action="Retry.",
+                retryable=True,
+            )
+        )
+        failed_exhaustion = _ExhaustionFake(events=[])
+        with self.assertRaises(AcquisitionFailure) as caught:
+            _api(
+                (_binding(authorized),),
+                _PublicationFake(events=[]),
+                failed_exhaustion,
+                doi_landing_resolver=_DoiResolverFake(failure=failure),
+                requires_doi_landing_origin=True,
+            ).prepare_primary_pdf(_request(literature=_literature(identifiers=(doi,))))
+        self.assertEqual(caught.exception.failure.code, failure.failure.code)
+        self.assertEqual(failed_exhaustion.calls, 0)
+
     def test_candidate_key_is_claimed_before_io_and_duplicate_or_excluded_keys_are_skipped(
         self,
     ) -> None:
@@ -855,6 +999,143 @@ class AcquisitionWorkflowContractTests(unittest.TestCase):
 
 
 class AcquisitionFailureBoundaryTests(unittest.TestCase):
+    def test_isolated_source_failures_fall_back_to_a_later_source_success(self) -> None:
+        for code in ("network-policy", "http-403", "http-429", "network-timeout"):
+            with self.subTest(code=code):
+                events: list[str] = []
+                failed = _SourceFake(
+                    "public-one",
+                    AcquisitionPath.PUBLIC,
+                    events=events,
+                    failure=AcquisitionSourceFailure(_stable_failure(code)),
+                )
+                temporary = _temporary(
+                    1,
+                    key="authorized/hit",
+                    source_name="core",
+                    path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+                )
+                successful = _SourceFake(
+                    "core",
+                    AcquisitionPath.AUTHORIZED_PROVIDER_API,
+                    events=events,
+                    items=(_SourceItem("authorized/hit", temporary),),
+                )
+                exhaustion = _ExhaustionFake(events=events)
+
+                result = _prepare_and_commit(
+                    _api(
+                        (_binding(failed), _binding(successful)),
+                        _PublicationFake(events=events, success_key="authorized/hit"),
+                        exhaustion,
+                    ),
+                    _request(),
+                )
+
+                self.assertIsInstance(result, AcquiredPrimaryPdf)
+                self.assertIn("acquire:public-one", events)
+                self.assertIn("acquire:core", events)
+                self.assertEqual(exhaustion.calls, 0)
+
+    def test_isolated_source_failure_is_raised_after_later_normal_misses(self) -> None:
+        events: list[str] = []
+        failure = AcquisitionSourceFailure(_stable_failure("network-timeout"))
+        failed = _SourceFake(
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            failure=failure,
+        )
+        missed = _SourceFake(
+            "public-two",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            items=(_SourceItem("public/miss", None),),
+        )
+        exhaustion = _ExhaustionFake(events=events)
+
+        with self.assertRaises(AcquisitionSourceFailure) as raised:
+            _api(
+                (_binding(failed), _binding(missed)),
+                _PublicationFake(events=events),
+                exhaustion,
+            ).prepare_primary_pdf(_request())
+
+        self.assertIs(raised.exception, failure)
+        self.assertIn("acquire:public-two", events)
+        self.assertEqual(exhaustion.calls, 0)
+        self.assertNotIn("publish-exhaustion", events)
+
+    def test_doi_source_failure_does_not_block_an_origin_independent_core_source(self) -> None:
+        events: list[str] = []
+        doi = Identifier(namespace="doi", value="10.1002/example")
+        resolver_failure = AcquisitionSourceFailure(
+            _stable_failure("acquisition-doi-resolution-network-failed")
+        )
+        wiley = _SourceFake(
+            "wiley",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
+            applicable=lambda evidence: evidence.resolved_landing_origin is not None,
+        )
+        core_pdf = _temporary(
+            2,
+            key="core/hit",
+            source_name="core",
+            path=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+        )
+        core = _SourceFake(
+            "core",
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            events=events,
+            items=(_SourceItem("core/hit", core_pdf),),
+        )
+        exhaustion = _ExhaustionFake(events=events)
+
+        result = _prepare_and_commit(
+            _api(
+                (_binding(wiley), _binding(core)),
+                _PublicationFake(events=events, success_key="core/hit"),
+                exhaustion,
+                doi_landing_resolver=_DoiResolverFake(failure=resolver_failure),
+                requires_doi_landing_origin=True,
+            ),
+            _request(literature=_literature(identifiers=(doi,))),
+        )
+
+        self.assertIsInstance(result, AcquiredPrimaryPdf)
+        self.assertIn("applicable:wiley", events)
+        self.assertNotIn("acquire:wiley", events)
+        self.assertIn("acquire:core", events)
+        self.assertEqual(exhaustion.calls, 0)
+
+    def test_source_failure_log_contains_stage_source_code_and_safe_reason(self) -> None:
+        events: list[str] = []
+        failure = AcquisitionFailure(_stable_failure("public-timeout"))
+        source = _SourceFake(
+            "public-one",
+            AcquisitionPath.PUBLIC,
+            events=events,
+            failure=failure,
+        )
+        api = _api(
+            (_binding(source),),
+            _PublicationFake(events=events),
+            _ExhaustionFake(events=events),
+        )
+
+        with self.assertLogs("sciretriever.acquisition.service", level="DEBUG") as captured:
+            with self.assertRaises(AcquisitionFailure):
+                api.prepare_primary_pdf(_request())
+
+        output = "\n".join(captured.output)
+        self.assertIn("event=acquisition-source-failed", output)
+        self.assertIn("stage=public", output)
+        self.assertIn("source=public-one", output)
+        self.assertIn("code=public-timeout", output)
+        self.assertIn("reason=The acquisition operation could not complete.", output)
+        self.assertNotIn("https://", output)
+
     def test_explicit_retry_clear_passes_complete_expected_facts_without_source_io(self) -> None:
         source_events: list[str] = []
         clear_events: list[str] = []

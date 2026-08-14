@@ -10,10 +10,12 @@ from pydantic import ValidationError
 import sciretriever.configuration as configuration_boundary
 from sciretriever.configuration import (
     ConfigurationError,
+    configuration_runtime_status,
     configuration_status,
     load_credentials,
     parse_configuration,
     run_configuration_probes,
+    set_core_credentials,
 )
 from sciretriever.model.configuration import (
     Configuration,
@@ -144,10 +146,7 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
             ProviderName.SEMANTIC_SCHOLAR,
             ProviderName.OPENALEX,
             ProviderName.EUROPE_PMC,
-            ProviderName.ELSEVIER,
-            ProviderName.SPRINGER,
             ProviderName.DATACITE,
-            ProviderName.CORE,
         }
         for provider in ready:
             with self.subTest(provider=provider.value):
@@ -158,6 +157,27 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
                 self.assertIs(item.credential.status, CredentialStatus.NOT_REQUIRED)
                 self.assertFalse(item.probe_available)
                 self.assertIsNone(item.failure_code)
+
+        for provider in (ProviderName.ELSEVIER, ProviderName.SPRINGER):
+            with self.subTest(provider=provider.value):
+                item = acquisition[provider]
+                # The shared public AssetHint path is executable, so the
+                # Provider can still be locally ready.  Its distinct
+                # authorized primary-PDF API remains unsupported.
+                self.assertTrue(item.production_available)
+                self.assertTrue(item.local_ready)
+                self.assertTrue(item.access_policy_ready)
+                self.assertIs(item.credential.status, CredentialStatus.UNSUPPORTED)
+                self.assertFalse(item.probe_available)
+                self.assertIsNone(item.failure_code)
+
+        core = acquisition[ProviderName.CORE]
+        self.assertTrue(core.production_available)
+        self.assertFalse(core.local_ready)
+        self.assertTrue(core.access_policy_ready)
+        self.assertIs(core.credential.status, CredentialStatus.MISSING)
+        self.assertEqual(tuple(field.name for field in core.credential.fields), ("api_key",))
+        self.assertEqual(core.failure_code, "missing-required-credential")
 
         unpaywall = acquisition[ProviderName.UNPAYWALL]
         self.assertTrue(unpaywall.production_available)
@@ -174,11 +194,15 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
         self.assertEqual(sci_hub.failure_code, "missing-configured-resolver")
 
         wiley = acquisition[ProviderName.WILEY]
-        self.assertFalse(wiley.production_available)
+        self.assertTrue(wiley.production_available)
         self.assertFalse(wiley.local_ready)
-        self.assertFalse(wiley.access_policy_ready)
-        self.assertIs(wiley.credential.status, CredentialStatus.UNSUPPORTED)
-        self.assertEqual(wiley.failure_code, "missing-production-route")
+        self.assertTrue(wiley.access_policy_ready)
+        self.assertIs(wiley.credential.status, CredentialStatus.MISSING)
+        self.assertEqual(
+            tuple(field.name for field in wiley.credential.fields),
+            ("tdm_api_token",),
+        )
+        self.assertEqual(wiley.failure_code, "missing-required-credential")
 
     def test_unpaywall_and_configured_locator_can_be_locally_ready_without_a_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -199,6 +223,98 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
         }
         self.assertTrue(all(item.local_ready for item in selected.values()))
         self.assertTrue(all(not item.probe_available for item in selected.values()))
+
+
+class RuntimeConfigurationStatusTests(unittest.TestCase):
+    def test_reports_storage_parser_analysis_and_secret_presence_without_values(self) -> None:
+        configuration = parse_configuration(
+            """
+            [paths]
+            catalog_path = "/private/catalog.sqlite3"
+            artifact_root = "/private/artifacts"
+
+            [parsing]
+            base_url = "https://mineru.example.invalid"
+            connection_mode = "remote"
+            model_identity = "mineru-vlm"
+            remote_upload_authorized = true
+
+            [analysis]
+            provider = "openai"
+            protocol = "openai-responses"
+            base_url = "https://api.openai.com/v1"
+            model = "analysis-model"
+            context_window_tokens = 128000
+            authentication = "api-key"
+            metadata_max_output_tokens = 100
+            content_max_output_tokens = 200
+            reference_max_output_tokens = 50
+            max_input_bytes = 1000
+            max_chunk_bytes = 500
+            max_chunk_count = 2
+            max_total_llm_requests = 4
+            max_total_output_tokens = 500
+            """
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_core_credentials(
+                "mineru",
+                secret=_SENTINEL,
+                origin="https://mineru.example.invalid",
+                home=home,
+            )
+            credentials = set_core_credentials(
+                "llm",
+                secret=_SENTINEL,
+                origin="https://api.openai.com",
+                home=home,
+            )
+            status = configuration_runtime_status(
+                configuration,
+                credentials=credentials,
+            )
+        self.assertTrue(status.storage_configuration_complete)
+        self.assertTrue(status.parsing.configuration_complete)
+        self.assertTrue(status.parsing.bearer_token_required)
+        self.assertTrue(status.parsing.bearer_token_configured)
+        self.assertTrue(status.analysis.reference_configuration_complete)
+        self.assertTrue(status.analysis.content_configuration_complete)
+        self.assertTrue(status.analysis.api_key_required)
+        self.assertTrue(status.analysis.api_key_configured)
+        self.assertTrue(status.analysis.credential_origin_matches)
+        self.assertNotIn(_SENTINEL, status.model_dump_json())
+
+    def test_incomplete_local_configuration_lists_exact_missing_fields(self) -> None:
+        with mock.patch.object(
+            configuration_boundary,
+            "load_credentials",
+            side_effect=AssertionError("empty local status must not read credentials"),
+        ) as load:
+            status = configuration_runtime_status(Configuration())
+        load.assert_not_called()
+        self.assertEqual(
+            status.storage_missing_fields,
+            ("catalog_path", "artifact_root"),
+        )
+        self.assertEqual(
+            status.parsing.missing_fields,
+            ("base_url", "connection_mode", "model_identity"),
+        )
+        self.assertEqual(
+            status.analysis.reference_missing_fields,
+            (
+                "provider",
+                "protocol",
+                "base_url",
+                "model",
+                "context_window_tokens",
+                "authentication",
+                "reference_max_output_tokens",
+            ),
+        )
+        self.assertIn("max_total_llm_requests", status.analysis.content_missing_fields)
+        self.assertIsNone(status.analysis.api_key_configured)
 
 
 class ConfigurationProbeSessionTests(unittest.TestCase):

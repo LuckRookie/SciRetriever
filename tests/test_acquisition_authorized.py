@@ -436,14 +436,22 @@ def _service(
 
 
 class AuthorizedProviderBoundaryTests(unittest.TestCase):
-    def test_production_catalog_is_empty_and_known_authorized_apis_are_unsupported(self) -> None:
-        self.assertEqual(dict(authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG), {})
+    def test_production_catalog_contains_only_verified_primary_pdf_apis(self) -> None:
+        self.assertEqual(
+            set(authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG),
+            {"core", "wiley"},
+        )
+        self.assertIs(
+            authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG["core"],
+            authorized.CORE_AUTHORIZED_CONTRACT,
+        )
         self.assertEqual(
             authorized.UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
-            frozenset({"elsevier", "springer", "wiley", "core"}),
+            frozenset({"elsevier", "springer"}),
         )
         exported = set(authorized.__all__)
-        for provider in ("Elsevier", "Springer", "Wiley", "Core"):
+        self.assertIn("WILEY_AUTHORIZED_CONTRACT", exported)
+        for provider in ("Elsevier", "Springer"):
             self.assertFalse(any(provider in name for name in exported))
 
     def test_secret_free_readiness_precedes_io_but_does_not_claim_entitlement(self) -> None:
@@ -953,6 +961,60 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
         self.assertEqual(exhaustion.calls, 0)
         self.assertEqual(len(commit.commands), 1)
         self.assertGreaterEqual(client.contents[0].discard_count, 1)
+
+    def test_one_target_access_failure_does_not_hide_a_later_authorized_target(self) -> None:
+        request, _evidence = _request(
+            identifiers=(
+                Identifier(namespace="pii", value="A"),
+                Identifier(namespace="future-document", value="B"),
+            )
+        )
+        second_target = AuthorizedLookupTarget(
+            evidence_kind=AuthorizedEvidenceKind.STABLE_PROVIDER_LOCATOR,
+            namespace="future-document",
+            value="B",
+        )
+        locator = _locator("object-for-B")
+        content = _MemoryContent(_valid_pdf())
+        client = _ClientFake(
+            (
+                AuthorizedClientFailure(AuthorizedClientFailureKind.ACCESS),
+                AuthorizedLookupDownloads(
+                    target=second_target,
+                    entitlement=AuthorizedEntitlement.GRANTED,
+                    downloads=(locator,),
+                ),
+            ),
+            (
+                AuthorizedPdfDownload(
+                    locator=locator,
+                    content=content,
+                    media_type="application/pdf",
+                    safe_source_url=None,
+                ),
+            ),
+        )
+        commit = _CommitPort()
+        publication = PrimaryPdfPublisher(
+            ValidatedPrimaryPdfPublisher(commit),
+            staging=_PDF_VALIDATION_STAGING,
+        )
+        exhaustion = _ExhaustionPort()
+        service = _service(
+            _source(client),
+            publication_port=publication,
+            exhaustion_port=exhaustion,
+        )
+
+        prepared = service.prepare_primary_pdf(request)
+        result = service.commit_primary_pdf(prepared)
+
+        self.assertIsInstance(result, AcquiredPrimaryPdf)
+        self.assertEqual(client.lookup_calls, [_pii_target("A"), second_target])
+        self.assertEqual(client.download_calls, [locator])
+        self.assertEqual(exhaustion.calls, 0)
+        self.assertEqual(len(commit.commands), 1)
+        self.assertGreaterEqual(content.discard_count, 1)
 
     def test_declared_pdf_with_invalid_bytes_is_a_normal_candidate_miss_after_a2(self) -> None:
         request, _evidence = _request(

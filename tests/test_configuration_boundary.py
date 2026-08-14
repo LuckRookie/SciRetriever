@@ -6,7 +6,6 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Iterator, Mapping, TypeVar, overload
 from unittest import mock
 
 from pydantic import ValidationError
@@ -14,51 +13,27 @@ from pydantic import ValidationError
 import sciretriever.configuration as configuration
 from sciretriever.configuration import (
     ConfigurationError,
+    configurable_credential_providers,
     credential_diagnostic,
+    credential_field_specs,
     credential_path,
     credential_section_exists,
     credential_status_for,
     load_credentials,
+    load_runtime_secrets,
     parse_configuration,
     remove_credentials,
+    set_core_credentials,
     set_credentials,
 )
 from sciretriever.model.configuration import (
     Configuration,
+    CoreCredentialService,
     CredentialStatus,
     ProviderCapability,
 )
 
 SENTINEL = "CONFIGURATION-SECRET-SENTINEL"
-_DefaultT = TypeVar("_DefaultT")
-
-
-class _TrackingEnvironment(Mapping[str, str]):
-    def __init__(self, values: Mapping[str, str]) -> None:
-        self._values = dict(values)
-        self.reads: list[str] = []
-
-    def __getitem__(self, key: str) -> str:
-        raise AssertionError("runtime secret selection must use bounded get")
-
-    def __iter__(self) -> Iterator[str]:
-        raise AssertionError("runtime secret selection must not enumerate environment")
-
-    def __len__(self) -> int:
-        raise AssertionError("runtime secret selection must not inspect environment size")
-
-    @overload
-    def get(self, key: str) -> str | None: ...
-
-    @overload
-    def get(self, key: str, default: str) -> str: ...
-
-    @overload
-    def get(self, key: str, default: _DefaultT) -> str | _DefaultT: ...
-
-    def get(self, key: str, default: _DefaultT | None = None) -> str | _DefaultT | None:
-        self.reads.append(key)
-        return self._values.get(key, default)
 
 
 class ConfigurationModelBoundaryTests(unittest.TestCase):
@@ -66,60 +41,92 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         selected = parse_configuration(
             """
             [parsing]
+            base_url = "https://mineru.example.invalid"
             connection_mode = "remote"
+            model_identity = "mineru-3.4.4-vlm"
+            remote_upload_authorized = true
             [analysis]
             provider = "openai"
+            protocol = "openai-responses"
+            base_url = "https://api.openai.com/v1"
+            model = "fixture-model"
+            context_window_tokens = 128000
+            authentication = "api-key"
             """
-        )
-        runtime = configuration.load_runtime_secrets(
-            selected,
-            environment={
-                "SCIRETRIEVER_MINERU_BEARER_TOKEN": f"mineru-{SENTINEL}",
-                "SCIRETRIEVER_OPENAI_API_KEY": f"analysis-{SENTINEL}",
-            },
         )
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             set_credentials("web-of-science", {"api_key": SENTINEL}, home=home)
+            set_core_credentials(
+                CoreCredentialService.MINERU,
+                secret=f"mineru-{SENTINEL}",
+                origin="https://mineru.example.invalid",
+                home=home,
+            )
+            set_core_credentials(
+                CoreCredentialService.LLM,
+                secret=f"analysis-{SENTINEL}",
+                origin="https://api.openai.com",
+                home=home,
+            )
             credentials = load_credentials(home=home)
+            runtime = load_runtime_secrets(selected, credentials=credentials)
 
-        for container in (runtime, credentials):
-            with self.subTest(container=type(container).__name__):
-                with self.assertRaises(TypeError) as caught:
-                    pickle.dumps(container)
-                self.assertEqual(str(caught.exception), "secret container is not serializable")
-                self.assertNotIn(SENTINEL, str(caught.exception))
-                self.assertNotIn(SENTINEL, repr(caught.exception))
-                self.assertNotIn(SENTINEL, repr(container))
+            for container in (runtime, credentials):
+                with self.subTest(container=type(container).__name__):
+                    with self.assertRaises(TypeError) as caught:
+                        pickle.dumps(container)
+                    self.assertEqual(str(caught.exception), "secret container is not serializable")
+                    self.assertNotIn(SENTINEL, str(caught.exception))
+                    self.assertNotIn(SENTINEL, repr(caught.exception))
+                    self.assertNotIn(SENTINEL, repr(container))
 
-    def test_runtime_secret_selection_reads_only_requested_fixed_capabilities(self) -> None:
+    def test_runtime_secret_selection_uses_only_requested_core_services(self) -> None:
         selected = parse_configuration(
             """
             [parsing]
+            base_url = "https://mineru.example.invalid"
             connection_mode = "remote"
+            model_identity = "mineru-3.4.4-vlm"
+            remote_upload_authorized = true
             [analysis]
             provider = "openai"
+            protocol = "openai-responses"
+            base_url = "https://api.openai.com/v1"
+            model = "fixture-model"
+            context_window_tokens = 128000
+            authentication = "api-key"
             """
         )
-        values = {
-            "SCIRETRIEVER_MINERU_BEARER_TOKEN": "mineru-secret",
-            "SCIRETRIEVER_OPENAI_API_KEY": "analysis-secret",
-        }
-        cases = (
-            (True, False, ["SCIRETRIEVER_MINERU_BEARER_TOKEN"]),
-            (False, True, ["SCIRETRIEVER_OPENAI_API_KEY"]),
-            (False, False, []),
-        )
-        for include_parser, include_analysis, expected_reads in cases:
-            with self.subTest(parser=include_parser, analysis=include_analysis):
-                environment = _TrackingEnvironment(values)
-                configuration.load_runtime_secrets(
-                    selected,
-                    environment=environment,
-                    include_parser=include_parser,
-                    include_analysis=include_analysis,
-                )
-                self.assertEqual(environment.reads, expected_reads)
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_core_credentials(
+                "mineru",
+                secret="mineru-secret",
+                origin="https://mineru.example.invalid",
+                home=home,
+            )
+            credentials = set_core_credentials(
+                "llm",
+                secret="analysis-secret",
+                origin="https://api.openai.com",
+                home=home,
+            )
+            cases = (
+                (True, False, "mineru-secret", None),
+                (False, True, None, "analysis-secret"),
+                (False, False, None, None),
+            )
+            for include_parser, include_analysis, expected_parser, expected_analysis in cases:
+                with self.subTest(parser=include_parser, analysis=include_analysis):
+                    runtime = load_runtime_secrets(
+                        selected,
+                        credentials=credentials,
+                        include_parser=include_parser,
+                        include_analysis=include_analysis,
+                    )
+                    self.assertEqual(runtime.mineru_bearer_token, expected_parser)
+                    self.assertEqual(runtime.analysis_api_key, expected_analysis)
 
     def test_only_nine_empty_responsibility_groups_are_ordinary_configuration(self) -> None:
         configuration_model = parse_configuration(
@@ -167,6 +174,106 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     parse_configuration(payload)
                 self.assertNotIn(SENTINEL, str(caught.exception))
 
+    def test_llm_service_urls_and_budget_combinations_fail_before_runtime(self) -> None:
+        valid = {
+            "provider": "custom",
+            "service_name": "fixture-service",
+            "protocol": "openai-responses",
+            "base_url": "https://llm.example.invalid/v1",
+            "model": "fixture-model",
+            "context_window_tokens": 128_000,
+            "authentication": "api-key",
+            "metadata_max_output_tokens": 512,
+            "content_max_output_tokens": 2_048,
+            "reference_max_output_tokens": 512,
+            "max_input_bytes": 262_144,
+            "max_chunk_bytes": 131_072,
+            "max_chunk_count": 2,
+            "max_total_llm_requests": 4,
+            "max_total_output_tokens": 4_096,
+        }
+        invalid_urls = (
+            "http://llm.example.invalid/v1",
+            "https://user@llm.example.invalid/v1",
+            "https://llm.example.invalid/v1?key=value",
+            "https://llm.example.invalid/v1#fragment",
+            "https://llm.example.invalid:0443/v1",
+            "https://127.0.0.1/v1",
+            "https://192.0.2.1/v1",
+            "https://llm.example.invalid/v1/../v2",
+            "https://llm.example.invalid/v1%2fhidden",
+        )
+        for base_url in invalid_urls:
+            with self.subTest(base_url=base_url), self.assertRaises(ValidationError):
+                configuration.AnalysisConfig(**{**valid, "base_url": base_url})
+
+        invalid_budgets = (
+            {"max_chunk_bytes": 262_145},
+            {"max_total_llm_requests": 1},
+            {"max_total_output_tokens": 2_559},
+            {"content_max_output_tokens": 4_097},
+            {"context_window_tokens": 1_024, "reference_max_output_tokens": 1_024},
+        )
+        for changes in invalid_budgets:
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                configuration.AnalysisConfig(**{**valid, **changes})
+
+    def test_official_llm_and_mineru_urls_match_adapter_endpoint_policy(self) -> None:
+        official_cases = (
+            {
+                "provider": "openai",
+                "protocol": "openai-responses",
+                "base_url": "https://api.openai.com:8443/v1",
+                "model": "fixture-model",
+                "context_window_tokens": 128_000,
+                "authentication": "api-key",
+            },
+            {
+                "provider": "anthropic",
+                "protocol": "anthropic-messages",
+                "base_url": "https://api.anthropic.com/v1/extra",
+                "model": "fixture-model",
+                "context_window_tokens": 128_000,
+                "authentication": "api-key",
+            },
+            {
+                "provider": "custom",
+                "service_name": "local",
+                "protocol": "anthropic-messages",
+                "base_url": "https://127.0.0.1:1234/v1",
+                "model": "fixture-model",
+                "context_window_tokens": 32_768,
+                "authentication": "none",
+            },
+        )
+        for payload in official_cases:
+            with self.subTest(payload=payload), self.assertRaises(ValidationError):
+                configuration.AnalysisConfig(**payload)
+
+        parser_cases = (
+            {
+                "base_url": "https://192.0.2.1",
+                "connection_mode": "remote",
+                "model_identity": "mineru-3.4.4-vlm",
+                "remote_upload_authorized": True,
+            },
+            {
+                "base_url": "https://mineru.example.invalid?token=value",
+                "connection_mode": "remote",
+                "model_identity": "mineru-3.4.4-vlm",
+                "remote_upload_authorized": True,
+            },
+            {
+                "base_url": "http://localhost:8000",
+                "connection_mode": "loopback",
+                "model_identity": "mineru-3.4.4-vlm",
+                "remote_upload_authorized": True,
+            },
+        )
+        for payload in parser_cases:
+            with self.subTest(payload=payload), self.assertRaises(ValidationError):
+                configuration.ParsingConfig(**payload)
+
     def test_model_contracts_are_frozen_and_secret_free(self) -> None:
         model = parse_configuration("[paths]\n")
         with self.assertRaises(ValidationError):
@@ -180,6 +287,30 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
 
 
 class CredentialStatusTests(unittest.TestCase):
+    def test_interactive_set_catalog_exposes_only_current_credential_contracts(self) -> None:
+        self.assertEqual(
+            tuple(provider.value for provider in configurable_credential_providers()),
+            (
+                "web-of-science",
+                "semantic-scholar",
+                "openalex",
+                "elsevier",
+                "springer",
+                "core",
+                "opencitations",
+                "wiley",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in credential_field_specs("springer")),
+            ("api_key",),
+        )
+        self.assertEqual(
+            tuple(field.name for field in credential_field_specs("wiley")),
+            ("tdm_api_token",),
+        )
+        self.assertEqual(credential_field_specs("crossref"), ())
+
     def test_provider_matrix_and_exact_status_vocabulary(self) -> None:
         expected = {
             "web-of-science": ("metadata",),
@@ -249,7 +380,7 @@ class CredentialStatusTests(unittest.TestCase):
                     credentials=credentials,
                     supported_capabilities=("acquisition",),
                 ).status,
-                CredentialStatus.UNSUPPORTED,
+                CredentialStatus.MISSING,
             )
             with self.assertRaises(ConfigurationError):
                 credential_status_for(
@@ -360,11 +491,12 @@ class CredentialFileSecurityTests(unittest.TestCase):
             self.assertIs(present, True)
             self.assertNotIn(SENTINEL, repr(present))
 
-            for provider in ("crossref", "wiley", "sci-hub"):
+            for provider in ("crossref", "sci-hub"):
                 with self.subTest(provider=provider):
                     with self.assertRaises(ConfigurationError) as caught:
                         credential_section_exists(provider, home=home)
                     self.assertEqual(str(caught.exception), "credentials provider is unsupported")
+            self.assertIs(credential_section_exists("wiley", home=home), False)
 
             os.chmod(credential_path(home=home), 0o644)
             with self.assertRaises(ConfigurationError) as caught:
@@ -467,6 +599,40 @@ class CredentialFileSecurityTests(unittest.TestCase):
                         load_credentials(home=home)
                     self.assertNotIn(SENTINEL, str(caught.exception))
 
+    def test_core_recovery_fields_are_private_and_incomplete_groups_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            valid_transition = (
+                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                'next_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n'
+            )
+            credentials = load_credentials(home=home)  # missing remains a valid empty snapshot
+            self.assertEqual(credentials.core_field_names("llm"), ())
+            path = self._write(home, valid_transition.encode("utf-8"))
+            credentials = load_credentials(home=home)
+            self.assertEqual(credentials.core_field_names("llm"), ("api_key", "origin"))
+            self.assertEqual(
+                credentials.core_secret_for_origin("llm", "https://llm.example.invalid"),
+                "new",
+            )
+            self.assertNotIn("next_", repr(credentials))
+            self.assertNotIn("old", repr(credentials))
+            self.assertNotIn("new", repr(credentials))
+
+            invalid = (
+                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\nnext_api_key = "new"\n',
+                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                'next_origin = "https://llm.example.invalid"\n',
+                '[llm]\nnext_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n',
+                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                'next_api_key = "new"\nnext_origin = "https://api.openai.com"\n',
+            )
+            for payload in invalid:
+                path.write_text(payload, encoding="utf-8")
+                os.chmod(path, 0o600)
+                with self.subTest(payload=payload), self.assertRaises(ConfigurationError):
+                    load_credentials(home=home)
+
 
 class CredentialPublicationTests(unittest.TestCase):
     def test_set_remove_are_atomic_and_keep_providers_separate(self) -> None:
@@ -484,6 +650,18 @@ class CredentialPublicationTests(unittest.TestCase):
                 remove_credentials("web-of-science", home=home).field_names("web-of-science"), ()
             )
             self.assertNotEqual(original, payload)
+
+    def test_wiley_tdm_token_has_one_private_set_remove_contract(self) -> None:
+        token = "12345678-1234-4234-9234-123456789abc"
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            returned = set_credentials("wiley", {"tdm_api_token": token}, home=home)
+            self.assertEqual(returned.field_names("wiley"), ("tdm_api_token",))
+            self.assertEqual(returned.get("wiley", "tdm_api_token"), token)
+            self.assertNotIn(token, repr(returned))
+            removed = remove_credentials("wiley", home=home)
+            self.assertEqual(removed.field_names("wiley"), ())
+            self.assertNotIn(b"wiley", credential_path(home=home).read_bytes())
 
     def test_each_prepublication_failure_keeps_old_bytes_and_cleans_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

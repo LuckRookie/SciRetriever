@@ -73,8 +73,11 @@ class WheelContentsTests(unittest.TestCase):
             normalized,
             (
                 "pydantic>=2.12.0",
+                "prompt-toolkit>=3.0.51",
                 "pypdf2>=3.0.1",
+                "rich>=14.1.0",
                 'tomli>=1.1.0; python-version < "3.11"',
+                "tomlkit>=0.13.3",
             ),
         )
         for forbidden in FORBIDDEN_RUNTIME_REQUIREMENTS:

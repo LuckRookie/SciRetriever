@@ -1352,10 +1352,10 @@ class ProviderContractHarnessTests(ProviderContractCase, unittest.TestCase):
             failure_environment,
             _topic_request(10),
             outcome="FAILED",
-            raw_item_count=2,
-            observation_count=1,
+            raw_item_count=3,
+            observation_count=2,
         )
-        self.assertEqual(counted_before_failure, [1, 2])
+        self.assertEqual(counted_before_failure, [1, 2, 3])
         self.assert_stable_failure(
             failed,
             expected_code="metadata-provider-invalid-record",

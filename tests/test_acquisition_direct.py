@@ -562,6 +562,49 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             )
         )
 
+    def test_first_hint_transport_failure_does_not_hide_a_later_hint_candidate(self) -> None:
+        client, transport, _resolver, _coordinator = _http_environment(
+            [TimeoutError("fixture timeout"), _raw(body=_valid_pdf())],
+            {
+                "timeout.test": (_PUBLIC_IP,),
+                "success.test": (_PUBLIC_IP,),
+            },
+        )
+        hints = (
+            AssetHint(
+                url="https://timeout.test/article.pdf",
+                kind=AssetHintKind.DIRECT_FILE,
+            ),
+            AssetHint(
+                url="https://success.test/article.pdf",
+                kind=AssetHintKind.DIRECT_FILE,
+            ),
+        )
+        request = _request(observations=(_observation(12, hints),))
+        iterator = iter(
+            DirectPdfSource(fetcher=_fetcher(client)).acquire(
+                request,
+                _evidence(request),
+                CandidateKeyTracker(),
+            )
+        )
+
+        delivery = next(iterator)
+
+        self.assertEqual(delivery.safe_source_url, "https://success.test/article.pdf")
+        self.assertTrue(_payload(delivery).startswith(b"%PDF-"))
+        self.assertEqual(
+            [_request_url(call) for call in transport.calls],
+            [
+                "https://timeout.test/article.pdf",
+                "https://success.test/article.pdf",
+            ],
+        )
+        delivery.content.discard()
+        close = getattr(iterator, "close", None)
+        self.assertTrue(callable(close))
+        cast(Callable[[], object], close)()
+
     def test_asset_hint_evidence_from_another_request_fails_before_io(self) -> None:
         client, transport, _resolver, _coordinator = _http_environment(
             [],
@@ -963,27 +1006,11 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                     [_raw(status)],
                     {"status.test": (_PUBLIC_IP,)},
                 )
-                result = list(
-                    _fetcher(client).acquire(
-                        locator="https://status.test/file",
-                        candidate_key=f"fixture:status:{status}",
-                        source_name="fixture-source",
-                        source_record_id=None,
-                        declared_media_type=None,
-                        candidate_keys=CandidateKeyTracker(),
-                        allow_static_landing_discovery=False,
-                    )
-                )
-                self.assertEqual(result, [])
-
-        for status in (300, 400, 401, 403, 429, 500, 503):
-            with self.subTest(status=status, result="failure"):
-                client, _transport, _resolver, _coordinator = _http_environment(
-                    [_raw(status)],
-                    {"status.test": (_PUBLIC_IP,)},
-                )
-                with self.assertRaises(AcquisitionFailure):
-                    list(
+                with self.assertNoLogs(
+                    "sciretriever.acquisition.sources.direct",
+                    level="INFO",
+                ):
+                    result = list(
                         _fetcher(client).acquire(
                             locator="https://status.test/file",
                             candidate_key=f"fixture:status:{status}",
@@ -994,6 +1021,71 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                             allow_static_landing_discovery=False,
                         )
                     )
+                self.assertEqual(result, [])
+
+        for status in (300, 400, 401, 403, 429, 500, 503):
+            with self.subTest(status=status, result="failure"):
+                client, _transport, _resolver, _coordinator = _http_environment(
+                    [_raw(status)],
+                    {"status.test": (_PUBLIC_IP,)},
+                )
+                with self.assertLogs(
+                    "sciretriever.acquisition.sources.direct",
+                    level="INFO",
+                ) as captured:
+                    with self.assertRaises(AcquisitionFailure):
+                        list(
+                            _fetcher(client).acquire(
+                                locator="https://status.test/file",
+                                candidate_key=f"fixture:status:{status}",
+                                source_name="fixture-source",
+                                source_record_id=None,
+                                declared_media_type=None,
+                                candidate_keys=CandidateKeyTracker(),
+                                allow_static_landing_discovery=False,
+                            )
+                        )
+                output = "\n".join(captured.output)
+                self.assertIn("event=public-locator-response-failed", output)
+                self.assertIn(f"status={status}", output)
+                self.assertIn("code=acquisition-public-locator-response-failed", output)
+                self.assertIn(
+                    "reason=A public PDF locator returned a non-miss failure response.",
+                    output,
+                )
+                self.assertNotIn("https://", output)
+                self.assertNotIn("status.test", output)
+
+    def test_debug_log_records_normal_public_locator_miss_without_locator(self) -> None:
+        client, _transport, _resolver, _coordinator = _http_environment(
+            [_raw(404)],
+            {"private-locator-sentinel.test": (_PUBLIC_IP,)},
+        )
+
+        with self.assertLogs(
+            "sciretriever.acquisition.sources.direct",
+            level="DEBUG",
+        ) as captured:
+            result = list(
+                _fetcher(client).acquire(
+                    locator="https://private-locator-sentinel.test/file?opaque=value",
+                    candidate_key="fixture:debug-miss",
+                    source_name="fixture-source",
+                    source_record_id=None,
+                    declared_media_type=None,
+                    candidate_keys=CandidateKeyTracker(),
+                    allow_static_landing_discovery=False,
+                )
+            )
+
+        self.assertEqual(result, [])
+        output = "\n".join(captured.output)
+        self.assertIn("event=public-locator-started", output)
+        self.assertIn("event=public-locator-finished", output)
+        self.assertIn("outcome=miss", output)
+        self.assertIn("status=404", output)
+        self.assertNotIn("private-locator-sentinel", output)
+        self.assertNotIn("opaque=value", output)
 
     def test_network_cancellation_is_typed_without_masking_a_racing_transport_failure(
         self,

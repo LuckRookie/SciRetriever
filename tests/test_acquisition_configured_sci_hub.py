@@ -462,7 +462,7 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
         self.assertEqual(second_resolver.calls, [])
         self.assertEqual(second_fetcher.calls, [])
 
-    def test_all_locators_validate_before_fetch_then_canonical_dedup_preserves_order(
+    def test_locators_deduplicate_and_one_invalid_locator_does_not_hide_valid_work(
         self,
     ) -> None:
         request = _request()
@@ -499,15 +499,21 @@ class ConfiguredSciHubContractTests(unittest.TestCase):
             )
         )
         untouched_fetcher = _Fetcher()
-        with self.assertRaises(AcquisitionFailure):
-            list(
-                _source(invalid_resolver, untouched_fetcher).acquire(
-                    request,
-                    evidence,
-                    CandidateKeyTracker(),
-                )
+        iterator = iter(
+            _source(invalid_resolver, untouched_fetcher).acquire(
+                request,
+                evidence,
+                CandidateKeyTracker(),
             )
-        self.assertEqual(untouched_fetcher.calls, [])
+        )
+        valid_delivery = next(iterator)
+        valid_delivery.content.discard()
+        with self.assertRaises(AcquisitionFailure):
+            next(iterator)
+        self.assertEqual(
+            [call["locator"] for call in untouched_fetcher.calls],
+            ["https://valid-before-invalid.test/file"],
+        )
 
     def test_a5_landing_can_deliver_initial_body_and_a_distinct_discovered_candidate(
         self,

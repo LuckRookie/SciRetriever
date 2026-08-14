@@ -1137,6 +1137,23 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertNotIn(target_secret, repr(result))
         self.assertNotIn(target_secret, result.model_dump_json())
 
+    def test_encoded_redirect_separator_opt_in_requires_an_explicit_guard(self) -> None:
+        resolver = _Resolver({"example.test": ("93.184.216.34",)})
+        transport = _FakeTransport([_response()])
+
+        result = _failure_value(
+            self._client(transport, resolver).request(
+                AccessScope("fixture-provider", "api"),
+                "https://example.test/start",
+                AccessPolicy(max_concurrency=1),
+                allow_guarded_redirect_encoded_path_separators=True,
+            )
+        )
+
+        self.assertEqual(result.code, "policy")
+        self.assertEqual(resolver.calls, [])
+        self.assertEqual(transport.calls, [])
+
     def test_redirect_loop_stops_at_limit_and_releases_one_scope_permit_per_hop(self) -> None:
         resolver = _Resolver({"example.test": ("93.184.216.34",)})
         responses = [
@@ -1281,6 +1298,59 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertNotIn(secret, result.model_dump_json())
         self.assertNotIn(secret, repr(client))
 
+    def test_wiley_tdm_token_header_is_private_and_cross_origin_safe(self) -> None:
+        secret = "12345678-1234-4234-9234-123456789abc"
+        header_name = "Wiley-TDM-Client-Token"
+        redirect_target = (
+            "https://alm.wiley.com/alm/api/v2/download/synthetic%252Fopaque%253Dlocator"
+        )
+        resolver = _Resolver(
+            {
+                "api.wiley.com": ("93.184.216.34",),
+                "alm.wiley.com": ("1.1.1.1",),
+            }
+        )
+        transport = _FakeTransport(
+            [
+                _response(302, location=redirect_target),
+                _response(body=b"done"),
+            ]
+        )
+        client = self._client(transport, resolver)
+        guarded_targets: list[str] = []
+
+        def guard_target(value: str) -> None:
+            guarded_targets.append(value)
+            if value != redirect_target:
+                raise ValueError("unexpected Wiley redirect target")
+
+        with self.assertNoLogs("sciretriever.network", level="DEBUG"):
+            result = _response_value(
+                client.request(
+                    AccessScope("wiley", "api"),
+                    "https://api.wiley.com/onlinelibrary/tdm/v1/articles/example",
+                    AccessPolicy(max_concurrency=1),
+                    credential_headers={header_name: secret},
+                    credential_allowed_origins=(Origin("https", "api.wiley.com", 443),),
+                    max_redirects=1,
+                    redirect_target_guard=guard_target,
+                    allow_guarded_redirect_encoded_path_separators=True,
+                )
+            )
+
+        self.assertEqual(result.body, b"done")
+        self.assertEqual(guarded_targets, [redirect_target])
+        self.assertEqual(transport.calls[0]["headers"], ((header_name, secret),))
+        self.assertEqual(transport.calls[1]["headers"], ())
+        for call in transport.calls:
+            safe_request = _safe_request_from_call(call)
+            self.assertEqual(safe_request.headers, ())
+            self.assertNotIn(secret, repr(safe_request))
+            self.assertNotIn(secret, safe_request.model_dump_json())
+        self.assertNotIn(secret, repr(result))
+        self.assertNotIn(secret, result.model_dump_json())
+        self.assertNotIn(secret, repr(client))
+
     def test_every_private_header_requires_an_explicit_matching_initial_origin(self) -> None:
         header_names = (
             "Authorization",
@@ -1290,6 +1360,7 @@ class NetworkHttpTests(unittest.TestCase):
             "X-ELS-APIKey",
             "X-Insttoken",
             "X-ELS-Insttoken",
+            "Wiley-TDM-Client-Token",
         )
         for header_name in header_names:
             for allowed_origins in ((), (_credential_origin("other.test"),)):
@@ -1329,6 +1400,7 @@ class NetworkHttpTests(unittest.TestCase):
             "X-ELS-APIKey",
             "X-Insttoken",
             "X-ELS-Insttoken",
+            "Wiley-TDM-Client-Token",
         )
         for header_name in header_names:
             with self.subTest(header_name=header_name):
@@ -1596,6 +1668,7 @@ class NetworkHttpTests(unittest.TestCase):
             "X-ELS-APIKey",
             "X-Insttoken",
             "X-ELS-Insttoken",
+            "Wiley-TDM-Client-Token",
         )
         for header_name in header_names:
             secret = f"initial-alias-{header_name.casefold()}-sentinel"

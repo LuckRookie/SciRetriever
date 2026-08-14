@@ -24,7 +24,14 @@ class InstalledTopicDiscoveryTests(unittest.TestCase):
         driver = Path(__file__).parent / "helpers" / "drive_topic_discovery.py"
         result = self.install.run_driver(driver, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr_text)
-        self.assertEqual(result.stderr, b"")
+        diagnostics = result.stderr_text
+        self.assertIn("event=metadata-provider-failed", diagnostics)
+        self.assertIn("provider=beta", diagnostics)
+        self.assertIn("code=offline-provider-failed", diagnostics)
+        self.assertIn("reason=", diagnostics)
+        self.assertIn("action=", diagnostics)
+        self.assertNotIn("Traceback", diagnostics)
+        self.assertNotIn("://", diagnostics)
         payload = json.loads(result.stdout)
 
         venv = os.fspath(self.install.venv.resolve(strict=True))

@@ -32,16 +32,14 @@ class StoragePathTests(unittest.TestCase):
     def bind_root(self) -> StorageRoot:
         return StorageRoot(self.root_path)
 
-    def test_root_is_canonical_owner_only_regular_directory(self) -> None:
+    def test_root_is_canonical_directory_with_restrictive_creation_default(self) -> None:
         root = self.bind_root()
 
         self.assertTrue(root.canonical_path.is_absolute())
         metadata = self.root_path.lstat()
         self.assertTrue(stat.S_ISDIR(metadata.st_mode))
         self.assertFalse(stat.S_ISLNK(metadata.st_mode))
-        self.assertEqual(metadata.st_uid, os.geteuid())
         self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o700)
-        self.assertEqual(root.owner, os.geteuid())
 
     def test_paths_expose_only_canonical_public_names(self) -> None:
         removed = (
@@ -63,11 +61,13 @@ class StoragePathTests(unittest.TestCase):
             {"ReferenceKind", "StoragePathError", "StorageRoot", "content_addressed_reference"},
         )
 
-    def test_existing_root_with_wrong_mode_or_owner_fails_closed(self) -> None:
+    def test_existing_root_permissions_do_not_control_admission(self) -> None:
         self.root_path.mkdir()
-        os.chmod(self.root_path, 0o755)
-        with self.assertRaises(StoragePathError):
-            StorageRoot(self.root_path)
+        os.chmod(self.root_path, 0o777)
+
+        root = StorageRoot(self.root_path)
+
+        self.assertEqual(root.canonical_path, self.root_path)
 
     def test_symlink_and_nondirectory_ancestor_are_rejected(self) -> None:
         target = self.parent / "target"
@@ -82,20 +82,16 @@ class StoragePathTests(unittest.TestCase):
         with self.assertRaises(StoragePathError):
             StorageRoot(file_parent / "root")
 
-    def test_world_writable_nontemporary_ancestor_is_rejected(self) -> None:
-        unsafe_parent = self.parent / "unsafe-parent"
-        unsafe_parent.mkdir()
-        os.chmod(unsafe_parent, 0o777)
-        with self.assertRaises(StoragePathError):
-            StorageRoot(unsafe_parent / "root")
+    def test_group_and_world_writable_ancestors_do_not_control_admission(self) -> None:
+        group_writable = self.parent / "group-writable"
+        world_writable = group_writable / "world-writable"
+        world_writable.mkdir(parents=True)
+        os.chmod(group_writable, 0o775)
+        os.chmod(world_writable, 0o777)
 
-    def test_sticky_temporary_ancestor_is_allowed_only_with_private_anchor(self) -> None:
-        sticky_parent = self.parent / "sticky-parent"
-        sticky_parent.mkdir()
-        os.chmod(sticky_parent, 0o1777)
-        root = StorageRoot(sticky_parent / "owner-anchor")
-        self.assertEqual(stat.S_IMODE((sticky_parent / "owner-anchor").stat().st_mode), 0o700)
-        self.assertEqual(root.owner, os.geteuid())
+        root = StorageRoot(world_writable / "root")
+
+        self.assertEqual(root.canonical_path, world_writable / "root")
 
     def test_replaced_root_or_ancestor_fails_closed(self) -> None:
         root = self.bind_root()

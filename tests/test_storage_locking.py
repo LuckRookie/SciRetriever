@@ -160,6 +160,19 @@ class StorageLockingTests(unittest.TestCase):
             self.assertNotIn(str(self.catalog), entry.name)
             self.assertNotIn(str(self.catalog), repr(CatalogWriteLock(self.catalog)))
 
+    def test_existing_catalog_and_lock_permissions_do_not_control_admission(self) -> None:
+        os.chmod(self.parent, 0o777)
+        os.chmod(self.catalog, 0o666)
+        with CatalogWriteLock(self.catalog):
+            pass
+        lock_directory = self.parent / ".sciretriever-locks"
+        lock_file = self._lock_entries()[0]
+        os.chmod(lock_directory, 0o777)
+        os.chmod(lock_file, 0o666)
+
+        with CatalogWriteLock(self.catalog):
+            pass
+
     def test_replaced_lock_entry_is_rejected(self) -> None:
         first = CatalogWriteLock(self.catalog)
         first.acquire()

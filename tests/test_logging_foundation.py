@@ -172,6 +172,26 @@ assert before == after
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual(stderr.getvalue().count("progress sentinel"), 1)
 
+    def test_info_mode_hides_step_details_and_debug_mode_includes_them(self) -> None:
+        logger = get_logger("sciretriever.logging.modes")
+        normal_stderr = io.StringIO()
+        with redirect_stderr(normal_stderr):
+            configure_logging(level=logging.INFO)
+            logger.info("normal progress sentinel")
+            logger.debug("debug step sentinel")
+
+        self.assertIn("normal progress sentinel", normal_stderr.getvalue())
+        self.assertNotIn("debug step sentinel", normal_stderr.getvalue())
+
+        debug_stderr = io.StringIO()
+        with redirect_stderr(debug_stderr):
+            configure_logging(level=logging.DEBUG)
+            logger.info("normal progress sentinel")
+            logger.debug("debug step sentinel")
+
+        self.assertIn("normal progress sentinel", debug_stderr.getvalue())
+        self.assertIn("debug step sentinel", debug_stderr.getvalue())
+
     def test_final_filter_redacts_secret_header_cookie_query_and_exception(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()

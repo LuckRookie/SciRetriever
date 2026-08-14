@@ -451,6 +451,56 @@ class DestinationPolicyTests(unittest.TestCase):
         self.assertEqual(resolver.calls, ["example.test", "other.test"])
         self.assertEqual(decision.destination.hostname, "other.test")
 
+    def test_only_explicitly_guarded_redirects_allow_encoded_opaque_separators(self) -> None:
+        target = "https://alm.wiley.test/alm/api/v2/download/signed%252Flocator"
+        with self.assertRaises(PolicyError):
+            evaluate_redirect(
+                "https://api.wiley.test/articles/example",
+                target,
+                FakeResolver([["93.184.216.34"]]),
+                target_guard=lambda _value: None,
+            )
+
+        guarded_targets: list[str] = []
+        resolver = FakeResolver([["93.184.216.34"], ["1.1.1.1"], ["1.1.1.1"]])
+        decision = evaluate_redirect(
+            "https://api.wiley.test/articles/example",
+            target,
+            resolver,
+            target_guard=guarded_targets.append,
+            allow_guarded_encoded_path_separators=True,
+        )
+
+        self.assertEqual(guarded_targets, [target])
+        self.assertEqual(decision.destination.url.url, target)
+        rechecked = resolve_destination(
+            decision.destination.url,
+            resolver,
+            previous=decision.destination,
+        )
+        self.assertTrue(rechecked.guarded_opaque_path)
+        self.assertFalse(decision.same_origin)
+        self.assertFalse(decision.forward_credentials)
+
+    def test_encoded_redirect_opt_in_requires_a_guard_and_rejects_raw_traversal(self) -> None:
+        resolver = FakeResolver([["93.184.216.34"], ["1.1.1.1"]])
+        with self.assertRaises(PolicyError):
+            evaluate_redirect(
+                "https://api.wiley.test/articles/example",
+                "https://alm.wiley.test/alm/api/v2/download/signed%252Flocator",
+                resolver,
+                allow_guarded_encoded_path_separators=True,
+            )
+
+        with self.assertRaises(PolicyError):
+            evaluate_redirect(
+                "https://api.wiley.test/articles/example",
+                "https://alm.wiley.test/alm/api/v2/download/../signed%252Flocator",
+                FakeResolver([["93.184.216.34"]]),
+                target_guard=lambda _value: None,
+                allow_guarded_encoded_path_separators=True,
+            )
+
 
 class BudgetAndRedactionTests(unittest.TestCase):
     def test_resource_budget_is_the_only_budget_export(self) -> None:

@@ -107,6 +107,16 @@ class AtomicOutputTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o600)
         self.assertEqual(self._staging_entries(), ())
 
+    def test_parent_and_existing_target_permissions_do_not_control_admission(self) -> None:
+        self._write_old()
+        os.chmod(self.parent, 0o777)
+        os.chmod(self.target, 0o666)
+
+        result = write_atomic(self.target, self.payload, overwrite=True)
+
+        self._assert_result(result, self.payload)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+
     def test_open_atomic_spools_past_memory_threshold_then_publishes(self) -> None:
         writer = AtomicOutput(max_bytes=16, spool_memory_bytes=4)
         payload = b"spooled output"

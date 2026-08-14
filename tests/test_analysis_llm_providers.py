@@ -24,6 +24,9 @@ from sciretriever.analysis.providers import (
 )
 from sciretriever.analysis.providers.anthropic import AnthropicAnalysisLLMAdapter
 from sciretriever.analysis.providers.openai import OpenAIAnalysisLLMAdapter
+from sciretriever.analysis.providers.openai_chat import (
+    OpenAIChatCompletionsAnalysisLLMAdapter,
+)
 from sciretriever.model.access import Header, TransportRequest
 from sciretriever.model.llm import (
     LLMProvenance,
@@ -417,6 +420,126 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         self.assertEqual(messages[0]["content"], _INPUT)
         self.assertEqual(result.provenance.provider, "anthropic")
         self.assertEqual(result.provenance.model, _ANTHROPIC_MODEL)
+
+    def test_chat_completions_uses_strict_schema_and_parses_one_assistant_choice(self) -> None:
+        response = {
+            "id": "chatcmpl-fixture",
+            "object": "chat.completion",
+            "model": _OPENAI_MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"outcome":"usable","title":"Fixture"}',
+                        "refusal": None,
+                    },
+                }
+            ],
+        }
+        client, transport, _, _ = _client([_response(json.dumps(response).encode("utf-8"))])
+        adapter = OpenAIChatCompletionsAnalysisLLMAdapter(
+            http_client=client,
+            api_key=_API_KEY,
+        )
+
+        result = adapter.complete(_call(_OPENAI_MODEL))
+
+        request = _safe_request(transport)
+        body = _body(transport)
+        self.assertEqual(request.url, "https://api.openai.com/v1/chat/completions")
+        messages = cast(list[dict[str, object]], body["messages"])
+        self.assertEqual([item["role"] for item in messages], ["developer", "user"])
+        response_format = cast(dict[str, object], body["response_format"])
+        self.assertEqual(response_format["type"], "json_schema")
+        schema = cast(dict[str, object], response_format["json_schema"])
+        self.assertTrue(schema["strict"])
+        self.assertEqual(body["max_completion_tokens"], 64)
+        self.assertEqual(result.provenance.provider, "openai")
+
+    def test_custom_loopback_chat_service_never_requires_or_sends_a_credential(self) -> None:
+        response = {
+            "model": _OPENAI_MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"ok":true}'},
+                }
+            ],
+        }
+        client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
+        resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
+        adapter = OpenAIChatCompletionsAnalysisLLMAdapter(
+            http_client=client,
+            api_key=None,
+            base_url="http://127.0.0.1:1234/v1",
+            provider_name="local-llm",
+        )
+
+        result = adapter.complete(_call(_OPENAI_MODEL))
+
+        self.assertEqual(result.result, '{"ok":true}')
+        request = _safe_request(transport)
+        self.assertEqual(request.url, "http://127.0.0.1:1234/v1/chat/completions")
+        headers = cast(tuple[tuple[str, str], ...], transport.calls[0]["headers"])
+        self.assertFalse(any(name.casefold() == "authorization" for name, _ in headers))
+
+    def test_custom_loopback_anthropic_service_never_requires_or_sends_a_credential(
+        self,
+    ) -> None:
+        response = {
+            "type": "message",
+            "role": "assistant",
+            "model": _ANTHROPIC_MODEL,
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"ok":true}'}],
+        }
+        client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
+        resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
+        adapter = AnthropicAnalysisLLMAdapter(
+            http_client=client,
+            api_key=None,
+            base_url="http://127.0.0.1:1234/v1",
+            provider_name="local-anthropic",
+        )
+
+        result = adapter.complete(_call(_ANTHROPIC_MODEL))
+
+        self.assertEqual(result.result, '{"ok":true}')
+        request = _safe_request(transport)
+        self.assertEqual(request.url, "http://127.0.0.1:1234/v1/messages")
+        headers = cast(tuple[tuple[str, str], ...], transport.calls[0]["headers"])
+        self.assertFalse(any(name.casefold() == "x-api-key" for name, _ in headers))
+
+    def test_context_window_fails_before_transport_with_a_stable_error(self) -> None:
+        client, transport, _, _ = _client([])
+        adapter = OpenAIAnalysisLLMAdapter(
+            http_client=client,
+            api_key=_API_KEY,
+            limits=LLMProviderLimits(context_window_tokens=64),
+        )
+
+        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+
+        self.assertEqual(failure.failure.code, "analysis-llm-context-budget")
+        self.assertEqual(transport.calls, [])
+
+    def test_custom_remote_endpoint_is_exact_and_credential_bound_to_its_origin(self) -> None:
+        client, transport, _, _ = _client([_response(_fixture("openai", "success"))])
+        adapter = OpenAIAnalysisLLMAdapter(
+            http_client=client,
+            api_key=_API_KEY,
+            base_url="https://llm.example.invalid:8443/v1",
+            provider_name="operator-service",
+        )
+
+        adapter.complete(_call(_OPENAI_MODEL))
+
+        request = _safe_request(transport)
+        self.assertEqual(request.url, "https://llm.example.invalid:8443/v1/responses")
+        self.assertEqual(_destination(transport).origin.text, "https://llm.example.invalid:8443")
 
     def test_real_metadata_stage_schema_is_embedded_in_both_provider_request_shapes(
         self,

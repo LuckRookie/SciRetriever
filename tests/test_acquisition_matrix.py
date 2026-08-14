@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
+    AuthorizedPdfSource,
 )
 from sciretriever.acquisition.ports import CandidateKeyTracker
 from sciretriever.acquisition.registry import (
@@ -44,13 +45,15 @@ from sciretriever.acquisition.sources import (
 )
 from sciretriever.configuration import (
     ConfigurationError,
+    CredentialLookup,
     credential_status_for,
     load_credentials,
     parse_configuration,
+    set_credentials,
 )
 from sciretriever.literature.content import metadata_sha256
-from sciretriever.model.acquisition import AssetHint, AssetHintKind
-from sciretriever.model.configuration import CredentialStatus
+from sciretriever.model.acquisition import AcquisitionPath, AssetHint, AssetHintKind
+from sciretriever.model.configuration import CredentialStatus, ProviderName
 from sciretriever.model.literature import (
     Identifier,
     Literature,
@@ -152,6 +155,7 @@ def _dependencies(
     http_coordinator: AccessCoordinator | None = None,
     configured_resolver: _ConfiguredLocatorResolver | None = None,
     cancel_event: threading.Event | None = None,
+    credentials: CredentialLookup | None = None,
 ) -> tuple[AcquisitionAssemblyDependencies, HttpClient]:
     shared = coordinator or AccessCoordinator(clock=lambda: 100.0)
     client = HttpClient(
@@ -168,6 +172,7 @@ def _dependencies(
         web_access_profile_resolver=WebAccessProfileResolver(),
         provenance_id_factory=lambda: ProvenanceId(_id(900)),
         clock=lambda: _TIME,
+        credentials=credentials,
         cancel_event=cancel_event,
         configured_sci_hub_resolver=configured_resolver,
     )
@@ -317,7 +322,7 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                         "www.nature.com",
                     ),
                 ),
-                ("wiley", ("onlinelibrary.wiley.com",)),
+                ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
                 ("core", ("api.core.ac.uk", "core.ac.uk")),
             ),
         )
@@ -326,6 +331,7 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             ("arxiv.org", "export.arxiv.org", "arxiv"),
             ("europepmc.org", "www.ebi.ac.uk", "europe-pmc"),
             ("api.springernature.com", "link.springer.com", "springer"),
+            ("onlinelibrary.wiley.com", "alm.wiley.com", "wiley"),
             ("api.core.ac.uk", "core.ac.uk", "core"),
         ):
             first_scope, first_policy = resolver.resolve(normalize_url(f"https://{first}/"))
@@ -398,10 +404,10 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                 "sci-hub": ("operator-locator",),
             },
         )
-        self.assertEqual(dict(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG), {})
+        self.assertEqual(set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG), {"core", "wiley"})
         self.assertEqual(
             UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
-            frozenset({"elsevier", "springer", "wiley", "core"}),
+            frozenset({"elsevier", "springer"}),
         )
         self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
         self.assertFalse(CONTROLLED_BROWSER_PRODUCTION_READINESS.is_ready)
@@ -413,9 +419,15 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
         self.assertEqual(by_name["unpaywall"].failure_code, "missing-ordinary-parameter")
         self.assertFalse(by_name["sci-hub"].ready)
         self.assertEqual(by_name["sci-hub"].failure_code, "missing-configured-resolver")
-        self.assertFalse(by_name["wiley"].ready)
-        self.assertEqual(by_name["wiley"].failure_code, "missing-production-route")
-        for provider in ("elsevier", "springer", "core"):
+        self.assertTrue(by_name["wiley"].ready)
+        self.assertTrue(
+            any(
+                mapping.capability is AcquisitionCapability.AUTHORIZED_PROVIDER_API
+                and mapping.production_available
+                for mapping in by_name["wiley"].mappings
+            )
+        )
+        for provider in ("elsevier", "springer"):
             self.assertTrue(by_name[provider].ready)
             self.assertTrue(
                 any(
@@ -424,6 +436,13 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                     for mapping in by_name[provider].mappings
                 )
             )
+        self.assertTrue(by_name["core"].ready)
+        core_authorized = next(
+            mapping
+            for mapping in by_name["core"].mappings
+            if mapping.capability is AcquisitionCapability.AUTHORIZED_PROVIDER_API
+        )
+        self.assertTrue(core_authorized.production_available)
 
         ready = acquisition_provider_statuses(
             _configuration(_ALL_PROVIDERS, unpaywall_email="researcher@example.invalid"),
@@ -432,7 +451,7 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
         ready_by_name = {status.provider_name: status for status in ready}
         self.assertTrue(ready_by_name["unpaywall"].ready)
         self.assertTrue(ready_by_name["sci-hub"].ready)
-        self.assertFalse(ready_by_name["wiley"].ready)
+        self.assertTrue(ready_by_name["wiley"].ready)
 
     def test_matrix_validator_rejects_order_duplicates_and_contract_tampering(self) -> None:
         statuses = acquisition_provider_statuses(_configuration(()))
@@ -452,6 +471,65 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
 
 
 class AcquisitionRegistryAssemblyTests(unittest.TestCase):
+    def test_core_authorized_source_is_last_and_requires_one_local_credential_snapshot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_credentials(ProviderName.CORE, {"api_key": "synthetic-core-key"}, home=home)
+            credentials = load_credentials(home=home)
+            dependencies, client = _dependencies(credentials=credentials)
+            registry = build_acquisition_registry(_configuration(("core",)), dependencies)
+
+        self.assertEqual(
+            tuple(binding.acquisition_path for binding in registry.source_bindings),
+            (
+                AcquisitionPath.PUBLIC,
+                AcquisitionPath.PUBLIC,
+                AcquisitionPath.PUBLIC,
+                AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            ),
+        )
+        self.assertEqual(registry.registrations[-1].provider_names, ("core",))
+        authorized = registry.source_bindings[-1].source
+        self.assertIsInstance(authorized, AuthorizedPdfSource)
+        authorized = cast(AuthorizedPdfSource, authorized)
+        core_client = getattr(authorized, "_client")
+        self.assertIs(getattr(core_client, "_http_client"), client)
+        self.assertIs(getattr(client, "_coordinator"), dependencies.access_coordinator)
+
+        missing, _client = _dependencies()
+        with self.assertRaises(AcquisitionRegistryError) as caught:
+            build_acquisition_registry(_configuration(("core",)), missing)
+        self.assertEqual(caught.exception.code, "acquisition-authorized-credential-missing")
+
+        # CORE credentials are irrelevant when the authorized Source is not
+        # enabled; assembling the shared public direct Source remains valid.
+        disabled = build_acquisition_registry(_configuration(()), missing)
+        self.assertTrue(
+            all(
+                binding.acquisition_path is AcquisitionPath.PUBLIC
+                for binding in disabled.source_bindings
+            )
+        )
+
+    def test_wiley_authorized_source_requires_one_token_and_doi_resolution(self) -> None:
+        token = "synthetic-wiley-tdm-token"
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_credentials(ProviderName.WILEY, {"tdm_api_token": token}, home=home)
+            dependencies, client = _dependencies(credentials=load_credentials(home=home))
+            registry = build_acquisition_registry(_configuration(("wiley",)), dependencies)
+
+        self.assertTrue(registry.requires_doi_landing_origin)
+        self.assertEqual(registry.registrations[-1].provider_names, ("wiley",))
+        authorized = registry.source_bindings[-1].source
+        self.assertIsInstance(authorized, AuthorizedPdfSource)
+        wiley_client = getattr(cast(AuthorizedPdfSource, authorized), "_client")
+        self.assertIs(getattr(wiley_client, "_http_client"), client)
+        self.assertNotIn(token, repr(registry))
+        self.assertNotIn(token, repr(authorized))
+
     def test_direct_is_not_a_provider_and_consumes_all_saved_hints_when_none_enabled(
         self,
     ) -> None:

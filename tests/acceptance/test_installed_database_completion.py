@@ -24,7 +24,12 @@ class InstalledDatabaseCompletionTests(unittest.TestCase):
         driver = Path(__file__).parent / "helpers" / "drive_database_completion.py"
         result = self.install.run_driver(driver, timeout=90)
         self.assertEqual(result.returncode, 0, result.stderr_text)
-        self.assertEqual(result.stderr, b"")
+        diagnostics = result.stderr_text
+        self.assertIn("event=completion-target-failed", diagnostics)
+        self.assertIn("reason=", diagnostics)
+        self.assertIn("action=", diagnostics)
+        self.assertNotIn("Traceback", diagnostics)
+        self.assertNotIn("://", diagnostics)
         payload = json.loads(result.stdout)
         catalog = payload["catalog"]
 

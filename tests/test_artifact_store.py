@@ -141,6 +141,21 @@ class ArtifactStoreTests(unittest.TestCase):
         )
         self.assertEqual(tuple((self.root.canonical_path / ".staging").iterdir()), ())
 
+    def test_root_and_existing_artifact_permissions_do_not_control_admission(self) -> None:
+        content = self._content("permissions")
+        reference = self.publish(content)
+        target = self.target_path(reference)
+        os.chmod(self.root.canonical_path, 0o777)
+        os.chmod(target.parent.parent, 0o777)
+        os.chmod(target.parent, 0o777)
+        os.chmod(target, 0o666)
+
+        replay = self.publish(content)
+        with self.reader.open(reference) as stream:
+            self.assertEqual(stream.read(), content)
+
+        self.assertEqual(replay, reference)
+
     def test_existing_different_bytes_are_preserved_as_conflict_evidence(self) -> None:
         content = self._content("conflict")
         reference = self.publish(content)
