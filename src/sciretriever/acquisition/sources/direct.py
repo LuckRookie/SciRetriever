@@ -47,9 +47,10 @@ from sciretriever.model.acquisition import (
 from sciretriever.model.primitives import ProvenanceId, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
-from sciretriever.network.admission import AccessPolicy, AccessScope
+from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import NormalizedURL, PolicyError, normalize_url
+from sciretriever.network.response_feedback import FeedbackHeaderError, retry_after_feedback
 
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 _DIRECT_SOURCE_NAME: Final[str] = "direct"
@@ -57,12 +58,28 @@ _LANDING_RESPONSE_BYTES: Final[int] = 2 * 1024 * 1024
 _MAX_STATIC_LOCATORS: Final[int] = 64
 _CONSERVATIVE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
-    cooldown_after_completion=30.0,
+    min_start_interval=1.0,
 )
 _LOGGER = get_logger(__name__)
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
 Clock = Callable[[], UtcTimestamp]
+
+
+def _throttling_feedback(response: TransportResponse) -> AccessFeedback | None:
+    try:
+        standard = retry_after_feedback(
+            response.status,
+            response.headers,
+            wall_now=datetime.now(timezone.utc),
+        )
+    except FeedbackHeaderError:
+        return AccessFeedback(throttled=True)
+    if standard is not None:
+        return standard
+    if response.status >= 500:
+        return AccessFeedback(throttled=True)
+    return None
 
 
 def _default_provenance_id() -> ProvenanceId:
@@ -703,6 +720,7 @@ class PublicLocatorFetcher:
                 # only after A2 has had the opportunity to accept the body.
                 max_response_bytes=self._max_pdf_response_bytes,
                 cancel_event=self._cancel_event,
+                response_feedback=_throttling_feedback,
                 redirect_target_guard=guard_redirect_target,
             )
         except Exception:

@@ -8,6 +8,7 @@ not assert that Elsevier owns, licenses, or has downloaded any full text.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -75,6 +76,11 @@ from sciretriever.network.admission import (
 )
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import Origin
+from sciretriever.network.response_feedback import (
+    FeedbackHeaderError,
+    nonnegative_integer_header,
+    quota_reset_deadline,
+)
 
 _PROVIDER_NAME = "elsevier"
 _ORIGIN = "https://api.elsevier.com"
@@ -86,7 +92,7 @@ _EID = re.compile(r"^2-s2\.0-[1-9][0-9]*$", re.ASCII)
 _SCOPUS_ID = re.compile(r"^SCOPUS_ID:([1-9][0-9]*)$", re.IGNORECASE | re.ASCII)
 _YEAR_PREFIX = re.compile(r"^(?P<year>[0-9]{4})(?:-|$)", re.ASCII)
 
-ADAPTER_REVISION = "scopus-json-2026-08-07"
+ADAPTER_REVISION = "scopus-json-2026-08-15"
 ACCESS_SCOPE = AccessScope(
     provider_name=_PROVIDER_NAME,
     channel="api",
@@ -154,6 +160,7 @@ class ElsevierScopusAdapter:
         api_key: str | None,
         institution_token: str | None = None,
         page_size: int = 25,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         _validate_access_inputs(
             http_client,
@@ -164,6 +171,8 @@ class ElsevierScopusAdapter:
         if http_client._coordinator is not access_coordinator:
             raise ValueError("Elsevier must share the HttpClient AccessCoordinator")
         _validate_factories(observation_id_factory, provenance_id_factory, clock)
+        if not callable(monotonic_clock):
+            raise TypeError("monotonic_clock must be callable")
         _validate_page_size(page_size)
         self._http_client = http_client
         self._access_coordinator = access_coordinator
@@ -175,6 +184,7 @@ class ElsevierScopusAdapter:
         self._observation_id_factory = observation_id_factory
         self._provenance_id_factory = provenance_id_factory
         self._clock = clock
+        self._monotonic_clock = monotonic_clock
         self._api_key = _private_api_key(api_key)
         self._institution_token = _private_institution_token(institution_token)
         self._page_size = page_size
@@ -378,9 +388,12 @@ class ElsevierScopusAdapter:
                         if observed_at is None
                         else _timestamp_datetime(observed_at)
                     ),
+                    monotonic_now=self._monotonic_clock(),
                 )
             except MetadataProviderFailure as error:
                 feedback_failure = error
+                return AccessFeedback(throttled=True)
+            except FeedbackHeaderError:
                 return AccessFeedback(throttled=True)
 
         credential_headers = _elsevier_credential_headers(
@@ -981,10 +994,27 @@ def _elsevier_feedback(
     headers: Sequence[Header],
     *,
     wall_now: datetime,
+    monotonic_now: float,
 ) -> AccessFeedback | None:
     standard = retry_after_feedback(status, headers, wall_now=wall_now)
-    remaining = _nonnegative_header_integer(header_value(headers, "X-RateLimit-Remaining"))
+    remaining = nonnegative_integer_header(headers, "X-RateLimit-Remaining")
+    limit = nonnegative_integer_header(headers, "X-RateLimit-Limit")
+    reset_at = quota_reset_deadline(
+        header_value(headers, "X-RateLimit-Reset"),
+        wall_now=wall_now,
+        monotonic_now=monotonic_now,
+    )
     throttled = status == 429 or remaining == 0
+    if remaining is not None and reset_at is not None:
+        if limit is not None and remaining > limit:
+            raise FeedbackHeaderError("quota remaining exceeds quota limit")
+        return AccessFeedback(
+            retry_after=None if standard is None else standard.retry_after,
+            quota_reset_at=reset_at,
+            quota_remaining=remaining,
+            quota_limit=limit,
+            throttled=throttled,
+        )
     if standard is not None or throttled:
         return AccessFeedback(
             retry_after=None if standard is None else standard.retry_after,
@@ -993,15 +1023,6 @@ def _elsevier_feedback(
     if status >= 500:
         return AccessFeedback(throttled=True)
     return standard
-
-
-def _nonnegative_header_integer(value: str | None) -> int | None:
-    if value is None:
-        return None
-    candidate = value.strip()
-    if not candidate.isdigit():
-        return None
-    return int(candidate, 10)
 
 
 def _timestamp_datetime(value: UtcTimestamp) -> datetime:

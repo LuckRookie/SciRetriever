@@ -11,6 +11,7 @@ import re
 import threading
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Protocol
 from urllib.parse import urlencode, urlsplit
 from xml.etree import ElementTree
@@ -35,6 +36,7 @@ from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import PolicyError, normalize_url
+from sciretriever.network.response_feedback import FeedbackHeaderError, retry_after_feedback
 
 _PROVIDER_NAME = "arxiv"
 _ENDPOINT = "https://export.arxiv.org/api/query"
@@ -426,7 +428,17 @@ def _validate_acquire_inputs(
 
 
 def _throttling_feedback(response: TransportResponse) -> AccessFeedback | None:
-    if response.status == 429 or response.status >= 500:
+    try:
+        standard = retry_after_feedback(
+            response.status,
+            response.headers,
+            wall_now=datetime.now(timezone.utc),
+        )
+    except FeedbackHeaderError:
+        return AccessFeedback(throttled=True)
+    if standard is not None:
+        return standard
+    if response.status >= 500:
         return AccessFeedback(throttled=True)
     return None
 

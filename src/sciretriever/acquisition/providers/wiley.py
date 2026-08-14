@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import AbstractContextManager, closing
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import BinaryIO, Final
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import Origin
+from sciretriever.network.response_feedback import FeedbackHeaderError, retry_after_feedback
 
 _ORIGIN: Final[str] = "https://api.wiley.com"
 _ARTICLES_ROOT: Final[str] = f"{_ORIGIN}/onlinelibrary/tdm/v1/articles"
@@ -88,7 +90,19 @@ def _media_type(headers: tuple[Header, ...]) -> str | None:
 
 
 def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
-    return AccessFeedback(throttled=True) if response.status == 429 else None
+    try:
+        standard = retry_after_feedback(
+            response.status,
+            response.headers,
+            wall_now=datetime.now(timezone.utc),
+        )
+    except FeedbackHeaderError:
+        return AccessFeedback(throttled=True)
+    if standard is not None:
+        return standard
+    if response.status >= 500:
+        return AccessFeedback(throttled=True)
+    return None
 
 
 def _guard_alm_download_redirect(target_url: str) -> None:

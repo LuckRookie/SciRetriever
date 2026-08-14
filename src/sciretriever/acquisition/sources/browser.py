@@ -83,7 +83,7 @@ _TIMEOUT_SECONDS: Final[float] = 60.0
 _MAX_DOWNLOAD_BYTES: Final[int] = 64 * 1024 * 1024
 _BASELINE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
-    cooldown_after_completion=30.0,
+    min_start_interval=1.0,
 )
 _CONSERVATIVE_BROWSER_BUDGET: Final[BrowserBudget] = BrowserBudget(
     max_navigations=2,

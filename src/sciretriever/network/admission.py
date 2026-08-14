@@ -14,7 +14,7 @@ import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 Clock = Callable[[], float]
@@ -66,6 +66,24 @@ def _finite_number(value: float, *, field_name: str, minimum: float = 0.0) -> fl
     return candidate
 
 
+def _positive_integer(value: object, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 1:
+        raise ValueError(f"{field_name} must be positive")
+    return value
+
+
+def _optional_nonnegative_integer(value: object | None, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must be nonnegative")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class AccessScope:
     """Stable provider/channel/service identity used for shared admission."""
@@ -93,6 +111,72 @@ class AccessScope:
 
 
 @dataclass(frozen=True, slots=True)
+class PeriodicQuota:
+    """A fixed-boundary request allowance in a wall-clock period."""
+
+    limit: int
+    period_seconds: float
+    reset_offset_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        _positive_integer(self.limit, field_name="limit")
+        period = _finite_number(
+            self.period_seconds,
+            field_name="period_seconds",
+            minimum=0.000001,
+        )
+        offset = _finite_number(
+            self.reset_offset_seconds,
+            field_name="reset_offset_seconds",
+        )
+        if offset >= period:
+            raise ValueError("reset_offset_seconds must be less than period_seconds")
+        object.__setattr__(self, "period_seconds", period)
+        object.__setattr__(self, "reset_offset_seconds", offset)
+
+    @property
+    def identity(self) -> tuple[float, float]:
+        """Return the non-secret quota-pool identity within one AccessScope."""
+
+        return (self.period_seconds, self.reset_offset_seconds)
+
+
+def _validate_burst_policy(burst_limit: int | None, window_seconds: float | None) -> None:
+    if burst_limit is None:
+        if window_seconds is not None:
+            raise ValueError("window_seconds requires burst_limit")
+        return
+    _positive_integer(burst_limit, field_name="burst_limit")
+    if window_seconds is None:
+        raise ValueError("burst_limit requires window_seconds")
+    _finite_number(window_seconds, field_name="window_seconds", minimum=0.000001)
+
+
+def _validated_periodic_quotas(value: object) -> tuple[PeriodicQuota, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError("periodic_quotas must be a tuple")
+    identities: set[tuple[float, float]] = set()
+    quotas: list[PeriodicQuota] = []
+    for quota in value:
+        if not isinstance(quota, PeriodicQuota):
+            raise TypeError("periodic_quotas must contain PeriodicQuota values")
+        if quota.identity in identities:
+            raise ValueError("periodic_quotas must have unique reset boundaries")
+        identities.add(quota.identity)
+        quotas.append(quota)
+    return tuple(
+        sorted(
+            quotas,
+            key=lambda quota: (
+                quota.period_seconds,
+                quota.reset_offset_seconds,
+                quota.limit,
+            ),
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class AccessPolicy:
     """A normalized static policy declared by an adapter."""
 
@@ -101,27 +185,20 @@ class AccessPolicy:
     cooldown_after_completion: float = 0.0
     burst_limit: int | None = None
     window_seconds: float | None = None
+    periodic_quotas: tuple[PeriodicQuota, ...] = ()
     backoff_seconds: float = 1.0
     max_backoff_seconds: float = 60.0
 
     def __post_init__(self) -> None:
-        if isinstance(self.max_concurrency, bool) or not isinstance(self.max_concurrency, int):
-            raise TypeError("max_concurrency must be an integer")
-        if self.max_concurrency < 1:
-            raise ValueError("max_concurrency must be positive")
+        _positive_integer(self.max_concurrency, field_name="max_concurrency")
         for field_name in ("min_start_interval", "cooldown_after_completion"):
             _finite_number(getattr(self, field_name), field_name=field_name)
-        if self.burst_limit is None:
-            if self.window_seconds is not None:
-                raise ValueError("window_seconds requires burst_limit")
-        else:
-            if isinstance(self.burst_limit, bool) or not isinstance(self.burst_limit, int):
-                raise TypeError("burst_limit must be an integer")
-            if self.burst_limit < 1:
-                raise ValueError("burst_limit must be positive")
-            if self.window_seconds is None:
-                raise ValueError("burst_limit requires window_seconds")
-            _finite_number(self.window_seconds, field_name="window_seconds", minimum=0.000001)
+        _validate_burst_policy(self.burst_limit, self.window_seconds)
+        object.__setattr__(
+            self,
+            "periodic_quotas",
+            _validated_periodic_quotas(self.periodic_quotas),
+        )
         _finite_number(self.backoff_seconds, field_name="backoff_seconds", minimum=0.000001)
         _finite_number(self.max_backoff_seconds, field_name="max_backoff_seconds", minimum=0.000001)
         if self.max_backoff_seconds < self.backoff_seconds:
@@ -141,15 +218,35 @@ class AccessPolicy:
             for policy in policies
             if policy.burst_limit is not None and policy.window_seconds is not None
         ]
+        periodic_quotas: dict[tuple[float, float], PeriodicQuota] = {}
+        for policy in policies:
+            for quota in policy.periodic_quotas:
+                existing = periodic_quotas.get(quota.identity)
+                if existing is None or quota.limit < existing.limit:
+                    periodic_quotas[quota.identity] = quota
         return cls(
             max_concurrency=min(policy.max_concurrency for policy in policies),
             min_start_interval=max(policy.min_start_interval for policy in policies),
             cooldown_after_completion=max(policy.cooldown_after_completion for policy in policies),
             burst_limit=min(burst_limits) if burst_limits else None,
             window_seconds=max(windows) if windows else None,
+            periodic_quotas=tuple(periodic_quotas.values()),
             backoff_seconds=max(policy.backoff_seconds for policy in policies),
             max_backoff_seconds=max(policy.max_backoff_seconds for policy in policies),
         )
+
+
+def _validate_feedback_quota(
+    remaining: int | None,
+    limit: int | None,
+    reset_at: float | None,
+) -> None:
+    if limit is not None and remaining is None:
+        raise ValueError("quota_limit requires quota_remaining")
+    if remaining is not None and reset_at is None:
+        raise ValueError("quota_remaining requires quota_reset_at")
+    if remaining is not None and limit is not None and remaining > limit:
+        raise ValueError("quota_remaining must not exceed quota_limit")
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -159,6 +256,8 @@ class AccessFeedback:
     retry_after: float | None
     blocked_until: float | None
     quota_reset_at: float | None
+    quota_remaining: int | None
+    quota_limit: int | None
     throttled: bool
 
     def __init__(
@@ -166,6 +265,8 @@ class AccessFeedback:
         retry_after: float | None = None,
         blocked_until: float | None = None,
         quota_reset_at: float | None = None,
+        quota_remaining: int | None = None,
+        quota_limit: int | None = None,
         throttled: bool = False,
     ) -> None:
         retry_value = (
@@ -177,12 +278,26 @@ class AccessFeedback:
             _finite_number(blocked_until, field_name="blocked_until")
         if quota_reset_at is not None:
             _finite_number(quota_reset_at, field_name="quota_reset_at")
+        remaining = _optional_nonnegative_integer(
+            quota_remaining,
+            field_name="quota_remaining",
+        )
+        limit = _optional_nonnegative_integer(quota_limit, field_name="quota_limit")
+        _validate_feedback_quota(remaining, limit, quota_reset_at)
         if not isinstance(throttled, bool):
             raise TypeError("throttled must be a boolean")
         object.__setattr__(self, "retry_after", retry_value)
         object.__setattr__(self, "blocked_until", blocked_until)
         object.__setattr__(self, "quota_reset_at", quota_reset_at)
+        object.__setattr__(self, "quota_remaining", remaining)
+        object.__setattr__(self, "quota_limit", limit)
         object.__setattr__(self, "throttled", throttled)
+
+
+@dataclass(slots=True)
+class _PeriodicQuotaUsage:
+    period_started_at: float
+    count: int = 0
 
 
 @dataclass(slots=True)
@@ -193,6 +308,10 @@ class _ResourceState:
     blocked_until: float = 0.0
     window_started_at: float | None = None
     window_count: int = 0
+    periodic_usage: dict[tuple[float, float], _PeriodicQuotaUsage] = field(default_factory=dict)
+    feedback_quota_remaining: int | None = None
+    feedback_quota_limit: int | None = None
+    feedback_quota_reset_at: float | None = None
     backoff_level: int = 0
 
 
@@ -348,13 +467,17 @@ class AccessCoordinator:
         self,
         *,
         clock: Clock | None = None,
+        quota_clock: Clock | None = None,
         minimum_policy: AccessPolicy | None = None,
     ) -> None:
         if clock is not None and not callable(clock):
             raise TypeError("clock must be callable")
+        if quota_clock is not None and not callable(quota_clock):
+            raise TypeError("quota_clock must be callable")
         if minimum_policy is not None and not isinstance(minimum_policy, AccessPolicy):
             raise TypeError("minimum_policy must be an AccessPolicy")
         self._clock: Clock = clock or time.monotonic
+        self._quota_clock: Clock = quota_clock or time.time
         self._minimum_policy = minimum_policy
         self._condition = threading.Condition(threading.RLock())
         self._policies: dict[AccessScope, AccessPolicy] = {}
@@ -395,8 +518,6 @@ class AccessCoordinator:
             policies.append(self._minimum_policy)
         if operator_policy is not None:
             policies.append(operator_policy)
-        if scope.channel == "web":
-            policies.append(AccessPolicy(max_concurrency=1, cooldown_after_completion=30.0))
         effective = AccessPolicy.strictest(*policies)
         with self._condition:
             existing = self._policies.get(scope)
@@ -447,7 +568,7 @@ class AccessCoordinator:
                 self._check_ticket(ticket, self._scope_waiters, now)
                 if self._select_scope_ticket(now) is ticket:
                     _remove_ticket(ticket, self._scope_waiters)
-                    self._start_scope(scope, now)
+                    self._start_scope(scope, now, self._quota_clock())
                     permit_id = self._next_scope_permit_id
                     self._next_scope_permit_id += 1
                     permit = AccessPermit(self, permit_id, scope)
@@ -510,7 +631,7 @@ class AccessCoordinator:
                 self._check_ticket(ticket, self._host_waiters, now)
                 if self._select_host_ticket(now) is ticket:
                     _remove_ticket(ticket, self._host_waiters)
-                    self._start_host(normalized_host, policy, now)
+                    self._start_host(normalized_host, policy, now, self._quota_clock())
                     permit_id = self._next_host_permit_id
                     self._next_host_permit_id += 1
                     permit = HostPermit(self, permit_id, owner, normalized_host)
@@ -550,44 +671,52 @@ class AccessCoordinator:
             permit._owner._host_permits.discard(permit)
             self._condition.notify_all()
 
-    def _start_scope(self, scope: AccessScope, now: float) -> None:
+    def _start_scope(self, scope: AccessScope, now: float, quota_now: float) -> None:
         state = self._scope_states[scope]
-        self._refresh_window(state, now)
+        self._refresh_resource(state, now, quota_now)
         state.active += 1
-        self._consume_window(state, now)
+        self._consume_quotas(state, now, quota_now)
         state.next_allowed_at = max(
             state.next_allowed_at,
             now + state.policy.min_start_interval,
         )
 
-    def _start_host(self, host: str, policy: AccessPolicy, now: float) -> None:
+    def _start_host(
+        self,
+        host: str,
+        policy: AccessPolicy,
+        now: float,
+        quota_now: float,
+    ) -> None:
         state = self._host_state(host, policy)
-        self._refresh_window(state, now)
+        self._refresh_resource(state, now, quota_now)
         state.active += 1
-        self._consume_window(state, now)
+        self._consume_quotas(state, now, quota_now)
         state.next_allowed_at = max(
             state.next_allowed_at,
             now + state.policy.min_start_interval,
         )
 
     def _select_scope_ticket(self, now: float) -> _ScopeTicket | None:
+        quota_now = self._quota_clock()
         for index, ticket in enumerate(self._scope_waiters):
             if any(
                 previous.scope == ticket.scope for previous in list(self._scope_waiters)[:index]
             ):
                 continue
             state = self._scope_states[ticket.scope]
-            self._refresh_window(state, now)
+            self._refresh_resource(state, now, quota_now)
             if self._resource_available(state, now):
                 return ticket
         return None
 
     def _select_host_ticket(self, now: float) -> _HostTicket | None:
+        quota_now = self._quota_clock()
         for index, ticket in enumerate(self._host_waiters):
             if any(previous.host == ticket.host for previous in list(self._host_waiters)[:index]):
                 continue
             state = self._host_state(ticket.host, ticket.policy)
-            self._refresh_window(state, now)
+            self._refresh_resource(state, now, quota_now)
             if self._resource_available(state, now):
                 return ticket
         return None
@@ -598,17 +727,29 @@ class AccessCoordinator:
             return False
         if now < state.next_allowed_at or now < state.blocked_until:
             return False
-        return state.policy.burst_limit is None or state.window_count < state.policy.burst_limit
+        if state.policy.burst_limit is not None and state.window_count >= state.policy.burst_limit:
+            return False
+        if state.feedback_quota_remaining is not None and state.feedback_quota_remaining <= 0:
+            return False
+        return all(
+            state.periodic_usage[quota.identity].count < quota.limit
+            for quota in state.policy.periodic_quotas
+        )
 
     def _scope_wait_duration(self, ticket: _ScopeTicket, now: float) -> float:
         return self._wait_duration(
-            self._scope_states[ticket.scope], now, ticket.deadline, ticket.wall_deadline
+            self._scope_states[ticket.scope],
+            now,
+            self._quota_clock(),
+            ticket.deadline,
+            ticket.wall_deadline,
         )
 
     def _host_wait_duration(self, ticket: _HostTicket, now: float) -> float:
         return self._wait_duration(
             self._host_state(ticket.host, ticket.policy),
             now,
+            self._quota_clock(),
             ticket.deadline,
             ticket.wall_deadline,
         )
@@ -617,13 +758,25 @@ class AccessCoordinator:
         self,
         state: _ResourceState,
         now: float,
+        quota_now: float,
         deadline: float | None,
         wall_deadline: float | None,
     ) -> float:
         wait_for = 0.05
         future_times = [state.next_allowed_at, state.blocked_until]
         if state.policy.burst_limit is not None and state.window_started_at is not None:
-            future_times.append(state.window_started_at + state.policy.window_seconds)  # type: ignore[operator]
+            window_seconds = state.policy.window_seconds
+            if window_seconds is None:
+                raise PolicyError("burst policy lost its window")
+            future_times.append(state.window_started_at + window_seconds)
+        if state.feedback_quota_reset_at is not None:
+            future_times.append(state.feedback_quota_reset_at)
+        for quota in state.policy.periodic_quotas:
+            usage = state.periodic_usage[quota.identity]
+            if usage.count >= quota.limit:
+                future_times.append(
+                    now + max(usage.period_started_at + quota.period_seconds - quota_now, 0.0)
+                )
         future = max(future_times)
         if future > now:
             wait_for = min(wait_for, future - now)
@@ -642,6 +795,12 @@ class AccessCoordinator:
             state.policy = AccessPolicy.strictest(state.policy, policy)
         return state
 
+    @classmethod
+    def _refresh_resource(cls, state: _ResourceState, now: float, quota_now: float) -> None:
+        cls._refresh_window(state, now)
+        cls._refresh_periodic_quotas(state, quota_now)
+        cls._refresh_feedback_quota(state, now)
+
     @staticmethod
     def _refresh_window(state: _ResourceState, now: float) -> None:
         if state.policy.burst_limit is None or state.policy.window_seconds is None:
@@ -653,24 +812,60 @@ class AccessCoordinator:
             state.window_count = 0
 
     @staticmethod
-    def _consume_window(state: _ResourceState, now: float) -> None:
+    def _refresh_periodic_quotas(state: _ResourceState, quota_now: float) -> None:
+        identities = {quota.identity for quota in state.policy.periodic_quotas}
+        for identity in tuple(state.periodic_usage):
+            if identity not in identities:
+                del state.periodic_usage[identity]
+        for quota in state.policy.periodic_quotas:
+            period_started_at = _period_start(quota, quota_now)
+            usage = state.periodic_usage.get(quota.identity)
+            if usage is None or usage.period_started_at != period_started_at:
+                state.periodic_usage[quota.identity] = _PeriodicQuotaUsage(period_started_at)
+
+    @staticmethod
+    def _refresh_feedback_quota(state: _ResourceState, now: float) -> None:
+        reset_at = state.feedback_quota_reset_at
+        if reset_at is not None and now >= reset_at:
+            state.feedback_quota_remaining = None
+            state.feedback_quota_limit = None
+            state.feedback_quota_reset_at = None
+
+    @staticmethod
+    def _consume_quotas(state: _ResourceState, now: float, quota_now: float) -> None:
         if state.policy.burst_limit is not None:
             if state.window_started_at is None:
                 state.window_started_at = now
             state.window_count += 1
+        for quota in state.policy.periodic_quotas:
+            usage = state.periodic_usage.get(quota.identity)
+            if usage is None:
+                usage = _PeriodicQuotaUsage(_period_start(quota, quota_now))
+                state.periodic_usage[quota.identity] = usage
+            usage.count += 1
+        if state.feedback_quota_remaining is not None:
+            state.feedback_quota_remaining -= 1
 
     @staticmethod
     def _apply_feedback(state: _ResourceState, feedback: AccessFeedback, now: float) -> None:
+        AccessCoordinator._refresh_feedback_quota(state, now)
         candidates = [state.blocked_until]
         if feedback.retry_after is not None:
             candidates.append(now + feedback.retry_after)
         if feedback.blocked_until is not None:
             candidates.append(feedback.blocked_until)
-        if feedback.quota_reset_at is not None:
-            candidates.append(feedback.quota_reset_at)
-            if state.policy.window_seconds is not None:
-                state.window_started_at = feedback.quota_reset_at - state.policy.window_seconds
-        if feedback.throttled and feedback.retry_after is None and feedback.blocked_until is None:
+        quota_blocked = AccessCoordinator._apply_quota_feedback(
+            state,
+            feedback,
+            now,
+            candidates,
+        )
+        if (
+            feedback.throttled
+            and feedback.retry_after is None
+            and feedback.blocked_until is None
+            and not quota_blocked
+        ):
             delay = min(
                 state.policy.max_backoff_seconds,
                 state.policy.backoff_seconds * (2**state.backoff_level),
@@ -680,6 +875,47 @@ class AccessCoordinator:
         elif not feedback.throttled:
             state.backoff_level = 0
         state.blocked_until = max(candidates)
+
+    @staticmethod
+    def _apply_quota_feedback(
+        state: _ResourceState,
+        feedback: AccessFeedback,
+        now: float,
+        candidates: list[float],
+    ) -> bool:
+        remaining = feedback.quota_remaining
+        reset_at = feedback.quota_reset_at
+        if remaining is None:
+            if reset_at is not None and reset_at > now:
+                candidates.append(reset_at)
+                return True
+            return False
+        if reset_at is None:
+            raise PolicyError("quota feedback lost its reset boundary")
+        if reset_at <= now:
+            return False
+        current_remaining = state.feedback_quota_remaining
+        state.feedback_quota_remaining = (
+            remaining if current_remaining is None else min(current_remaining, remaining)
+        )
+        AccessCoordinator._tighten_feedback_limit(state, feedback.quota_limit)
+        state.feedback_quota_reset_at = max(
+            state.feedback_quota_reset_at or 0.0,
+            reset_at,
+        )
+        if state.feedback_quota_remaining > 0:
+            return False
+        candidates.append(state.feedback_quota_reset_at)
+        return True
+
+    @staticmethod
+    def _tighten_feedback_limit(state: _ResourceState, quota_limit: int | None) -> None:
+        if quota_limit is None:
+            return
+        current_limit = state.feedback_quota_limit
+        state.feedback_quota_limit = (
+            quota_limit if current_limit is None else min(current_limit, quota_limit)
+        )
 
     def _scope_ticket(
         self,
@@ -785,6 +1021,13 @@ def _normalize_host(host: str) -> str:
     return candidate
 
 
+def _period_start(quota: PeriodicQuota, now: float) -> float:
+    return (
+        math.floor((now - quota.reset_offset_seconds) / quota.period_seconds) * quota.period_seconds
+        + quota.reset_offset_seconds
+    )
+
+
 def _remove_ticket(
     ticket: Any,
     waiters: Any,
@@ -807,4 +1050,5 @@ __all__ = (
     "HostPermit",
     "PolicyError",
     "PolicyRequired",
+    "PeriodicQuota",
 )

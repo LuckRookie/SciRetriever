@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from contextlib import AbstractContextManager, closing
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import BinaryIO, Final
 
@@ -26,6 +27,12 @@ from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import Origin
+from sciretriever.network.response_feedback import (
+    FeedbackHeaderError,
+    nonnegative_integer_header,
+    nonnegative_number_header,
+    retry_after_feedback,
+)
 
 _ORIGIN: Final[str] = "https://api.core.ac.uk"
 _V3_ROOT: Final[str] = f"{_ORIGIN}/v3"
@@ -116,11 +123,35 @@ def _normal_miss(
 
 
 def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
-    if response.status == 429:
+    try:
+        standard = retry_after_feedback(
+            response.status,
+            response.headers,
+            wall_now=datetime.now(timezone.utc),
+        )
+        custom_delay = nonnegative_number_header(
+            response.headers,
+            "X-RateLimit-Retry-After",
+        )
+        remaining = nonnegative_integer_header(
+            response.headers,
+            "X-RateLimit-Remaining",
+        )
+        nonnegative_integer_header(response.headers, "X-RateLimit-Limit")
+    except FeedbackHeaderError:
         return AccessFeedback(throttled=True)
-    if response.status >= 500:
-        return AccessFeedback(throttled=True)
-    return None
+    delays = tuple(
+        delay
+        for delay in (
+            None if standard is None else standard.retry_after,
+            custom_delay,
+        )
+        if delay is not None
+    )
+    throttled = response.status == 429 or response.status >= 500 or remaining == 0
+    if not delays:
+        return AccessFeedback(throttled=True) if throttled else None
+    return AccessFeedback(retry_after=max(delays), throttled=throttled)
 
 
 def _successful_download(

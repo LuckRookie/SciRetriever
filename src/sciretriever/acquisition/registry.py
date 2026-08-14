@@ -163,7 +163,7 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
 
 _PRODUCTION_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
-    cooldown_after_completion=30.0,
+    min_start_interval=1.0,
 )
 
 _AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset({"elsevier", "springer"})
