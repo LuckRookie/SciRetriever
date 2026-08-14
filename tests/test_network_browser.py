@@ -20,6 +20,7 @@ from sciretriever.network.browser import (
     BrowserClient,
     BrowserDestinationKind,
 )
+from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.policy import AddressClass, DestinationPolicy
 
 _PUBLIC_POLICY = DestinationPolicy(allowed_classes=frozenset({AddressClass.PUBLIC}))
@@ -233,11 +234,29 @@ class _FakeContext:
         self.closed = False
         self.binding: object | None = None
         self.bindings: list[object] = []
+        self.article_paths: list[str] = []
+        self.article_bindings: list[object] = []
+        self.article_active = False
 
     def bind_connection(self, binding: object) -> object:
         self.binding = binding
         self.bindings.append(binding)
         return binding
+
+    def begin_article(self, *, downloads_path: str, connection_binding: object) -> object:
+        if self.article_active:
+            raise RuntimeError("overlapping article sentinel")
+        self.article_active = True
+        self.article_paths.append(downloads_path)
+        self.article_bindings.append(connection_binding)
+        self.configured_download_emitted = False
+        return connection_binding
+
+    def end_article(self) -> bool:
+        if not self.article_active:
+            raise RuntimeError("article was not active")
+        self.article_active = False
+        return True
 
     def route(self, pattern: str, handler: Callable[[_FakeRoute], object]) -> None:
         self.events.append(f"route:{pattern}")
@@ -444,6 +463,37 @@ class _FakeFactory:
         self.downloads_path = downloads_path
         self.binding = connection_binding
         return self.process
+
+
+class _RotatingFakeFactory:
+    def __init__(self, *, fail_first_navigation: bool = False) -> None:
+        self.fail_first_navigation = fail_first_navigation
+        self.processes: list[_FakeProcess] = []
+        self.session_paths: list[str] = []
+
+    def __call__(
+        self,
+        *,
+        profile: object | None,
+        downloads_path: str,
+        connection_binding: object,
+    ) -> _FakeProcess:
+        del profile, connection_binding
+        process = _FakeProcess(
+            events=[],
+            goto_error=(
+                RuntimeError("first navigation sentinel")
+                if self.fail_first_navigation and not self.processes
+                else None
+            ),
+            configured_download=_FakeDownload(
+                "https://download.test/article.pdf",
+                b"%PDF-persistent-fixture",
+            ),
+        )
+        self.processes.append(process)
+        self.session_paths.append(downloads_path)
+        return process
 
 
 def _failure(value: object) -> AccessFailure:
@@ -1122,6 +1172,159 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertTrue(factory.process.context.pages[0].abort_event.is_set())
         self.assertTrue(context.closed)
         self.assertTrue(factory.process.closed)
+
+    def test_persistent_session_reuses_context_but_isolates_article_resources(self) -> None:
+        factory = _FakeFactory(
+            configured_download=_FakeDownload(
+                "https://download.test/article.pdf",
+                b"%PDF-persistent-fixture",
+            )
+        )
+        broker = BrowserSessionBroker()
+        self.addCleanup(broker.close)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            operator_profile=self.client.operator_profile,
+            session_broker=broker,
+        )
+        policy = AccessPolicy(max_concurrency=1)
+
+        first = _download(
+            client.run(
+                self.scope,
+                "https://landing.test/first",
+                policy,
+                session_key="fixture-publisher",
+            )
+        )
+        second = _download(
+            client.run(
+                self.scope,
+                "https://landing.test/second",
+                policy,
+                session_key="fixture-publisher",
+            )
+        )
+
+        self.assertEqual(first.chunks, (b"%PDF-persistent-fixture",))
+        self.assertEqual(second.chunks, (b"%PDF-persistent-fixture",))
+        self.assertEqual(factory.events.count("process-enter"), 1)
+        self.assertEqual(factory.events.count("context-create"), 1)
+        self.assertEqual(factory.events.count("route:**/*"), 1)
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertFalse(context.closed)
+        self.assertFalse(factory.process.closed)
+        self.assertFalse(context.article_active)
+        self.assertEqual(len(context.article_paths), 2)
+        self.assertNotEqual(context.article_paths[0], context.article_paths[1])
+        self.assertTrue(all(not Path(path).exists() for path in context.article_paths))
+        self.assertEqual(len(context.article_bindings), 2)
+        self.assertIsNot(context.article_bindings[0], context.article_bindings[1])
+        self.assertEqual(len(context.pages), 2)
+        self.assertTrue(all(page.closed for page in context.pages))
+
+        session_path = factory.downloads_path
+        self.assertIsNotNone(session_path)
+        assert session_path is not None
+        self.assertTrue(Path(session_path).is_dir())
+        broker.close()
+        self.assertTrue(context.closed)
+        self.assertTrue(factory.process.closed)
+        self.assertFalse(Path(session_path).exists())
+
+    def test_persistent_session_configuration_is_explicit_and_closed(self) -> None:
+        resolver = _Resolver({"landing.test": ("93.184.216.34",)})
+        factory = _FakeFactory()
+        broker = BrowserSessionBroker()
+        self.addCleanup(broker.close)
+        persistent = BrowserClient(
+            factory=factory,
+            resolver=resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            session_broker=broker,
+        )
+        ephemeral = BrowserClient(
+            factory=factory,
+            resolver=resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        policy = AccessPolicy(max_concurrency=1)
+
+        self.assertEqual(
+            _failure(persistent.run(self.scope, "https://landing.test/start", policy)).code,
+            "policy",
+        )
+        self.assertEqual(
+            _failure(
+                ephemeral.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    policy,
+                    session_key="fixture-publisher",
+                )
+            ).code,
+            "policy",
+        )
+        self.assertEqual(
+            _failure(
+                persistent.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    policy,
+                    session_key="publisher-token",
+                )
+            ).code,
+            "policy",
+        )
+        self.assertEqual(resolver.calls, [])
+        self.assertEqual(factory.events, [])
+
+    def test_runtime_failure_retires_persistent_session_before_retry(self) -> None:
+        factory = _RotatingFakeFactory(fail_first_navigation=True)
+        broker = BrowserSessionBroker()
+        self.addCleanup(broker.close)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            session_broker=broker,
+        )
+        policy = AccessPolicy(max_concurrency=1)
+
+        first = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/first",
+                policy,
+                session_key="fixture-publisher",
+            )
+        )
+        self.assertEqual(first.code, "runtime")
+        self.assertEqual(len(factory.processes), 1)
+        self.assertTrue(factory.processes[0].closed)
+        self.assertIsNotNone(factory.processes[0].context)
+        assert factory.processes[0].context is not None
+        self.assertTrue(factory.processes[0].context.closed)
+
+        second = _download(
+            client.run(
+                self.scope,
+                "https://landing.test/second",
+                policy,
+                session_key="fixture-publisher",
+            )
+        )
+        self.assertEqual(second.chunks, (b"%PDF-persistent-fixture",))
+        self.assertEqual(len(factory.processes), 2)
+        self.assertFalse(factory.processes[1].closed)
 
 
 if __name__ == "__main__":
