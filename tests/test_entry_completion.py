@@ -5,12 +5,19 @@ import io
 import threading
 import unittest
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from types import TracebackType
 from unittest.mock import patch
 
-from sciretriever.acquisition.api import PreparedAcquisition
+from sciretriever.acquisition.api import (
+    CohortPreparationItem,
+    PreparedAcquisition,
+    PreparedAcquisitionCohort,
+)
+from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
+from sciretriever.acquisition.cohort import WorkItemDisposition
 from sciretriever.acquisition.ports import AcquisitionExpectedFacts, AcquisitionFailure
 from sciretriever.acquisition.routing import AcquisitionRequest
 from sciretriever.analysis.content import ContentAnalysisFailure, ContentAnalysisInput
@@ -467,6 +474,7 @@ class _World:
         self.events: list[str] = []
         self.reads: list[LiteratureId] = []
         self.acquisition_calls: list[AcquisitionRequest] = []
+        self.acquisition_cohort_calls: list[tuple[LiteratureId, ...]] = []
         self.parser_calls: list[ParserRequest] = []
         self.analysis_calls: list[LiteratureId] = []
         self.acceptance_calls: list[LiteratureId] = []
@@ -515,6 +523,7 @@ class _World:
         self.cancel_on_commit: tuple[str, LiteratureId] | None = None
         self.cancel_event: threading.Event | None = None
         self.acquisition_discard_failures: dict[LiteratureId, BaseException] = {}
+        self.acquisition_cohort_identity_overrides: dict[LiteratureId, LiteratureId] = {}
         self.parser_discard_failures: dict[LiteratureId, BaseException] = {}
         self.current_read_failures: dict[LiteratureId, BaseException] = {}
 
@@ -610,6 +619,77 @@ class _World:
             return prepared
         finally:
             self._leave_external()
+
+    def prepare_primary_pdf_cohort(
+        self,
+        requests: tuple[AcquisitionRequest, ...],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> PreparedAcquisitionCohort:
+        self.acquisition_cohort_calls.append(
+            tuple(request.literature.literature_id for request in requests)
+        )
+        if not requests:
+            return PreparedAcquisitionCohort(
+                items=(),
+                browser_escalation=BrowserEscalationSummary(),
+            )
+        with ThreadPoolExecutor(max_workers=len(requests)) as executor:
+            futures = tuple(
+                executor.submit(
+                    self.prepare_primary_pdf,
+                    request,
+                    cancel_event=cancel_event,
+                )
+                for request in requests
+            )
+            prepared_or_errors: list[PreparedAcquisition | AcquisitionFailure] = []
+            fatal: BaseException | None = None
+            for future in futures:
+                try:
+                    prepared_or_errors.append(future.result())
+                except AcquisitionFailure as error:
+                    prepared_or_errors.append(error)
+                except BaseException as error:
+                    fatal = fatal or error
+            if fatal is not None:
+                for value in prepared_or_errors:
+                    if isinstance(value, PreparedAcquisition):
+                        self.discard_prepared(value)
+                raise fatal
+        items = []
+        for request, value in zip(requests, prepared_or_errors, strict=True):
+            literature_id = request.literature.literature_id
+            reported_literature_id = self.acquisition_cohort_identity_overrides.get(
+                literature_id,
+                literature_id,
+            )
+            if isinstance(value, AcquisitionFailure):
+                items.append(
+                    CohortPreparationItem(
+                        literature_id=reported_literature_id,
+                        disposition=WorkItemDisposition.FAILED,
+                        failure=value.failure,
+                    )
+                )
+                continue
+            with self.lock:
+                _identity, result = self._prepared_acquisitions[value]
+            items.append(
+                CohortPreparationItem(
+                    literature_id=reported_literature_id,
+                    disposition=(
+                        WorkItemDisposition.EXHAUSTED
+                        if isinstance(result, NoPrimaryPdf)
+                        else WorkItemDisposition.DELIVERED
+                    ),
+                    prepared=value,
+                )
+            )
+        return PreparedAcquisitionCohort(
+            items=tuple(items),
+            browser_escalation=BrowserEscalationSummary(),
+        )
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition):  # noqa: ANN201
         self._enter_write()
@@ -1181,6 +1261,36 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertEqual(world.acquisition_commit_calls, [])
         self.assertEqual(len(world.acquisition_discard_calls), 1)
 
+    def test_invalid_cohort_contract_surfaces_typed_receipt_cleanup_failure(self) -> None:
+        literature_id = _literature_id(1)
+        world = _World((_current(1, 1),))
+        cleanup_failure = AcquisitionFailure(_failure("acquisition-staging-cleanup-failed"))
+        world.acquisition_cohort_identity_overrides[literature_id] = _literature_id(2)
+        world.acquisition_discard_failures[literature_id] = cleanup_failure
+
+        report = _operation(world)(_request((literature_id,), goal="ASSET_READY"))
+
+        self.assertEqual(report.end.kind, "finished")
+        self.assertEqual(report.interrupted, ())
+        self.assertEqual(report.failed[0].stage, "acquisition")
+        self.assertEqual(report.failed[0].failure, cleanup_failure.failure)
+        self.assertEqual(world.acquisition_commit_calls, [])
+        self.assertEqual(len(world.acquisition_discard_calls), 1)
+
+    def test_invalid_cohort_contract_propagates_unknown_receipt_cleanup_error(self) -> None:
+        literature_id = _literature_id(1)
+        world = _World((_current(1, 1),))
+        bug = AssertionError("cohort receipt cleanup programming bug")
+        world.acquisition_cohort_identity_overrides[literature_id] = _literature_id(2)
+        world.acquisition_discard_failures[literature_id] = bug
+
+        with self.assertRaises(AssertionError) as raised:
+            _operation(world)(_request((literature_id,), goal="ASSET_READY"))
+
+        self.assertIs(raised.exception, bug)
+        self.assertEqual(world.acquisition_commit_calls, [])
+        self.assertEqual(len(world.acquisition_discard_calls), 1)
+
     def test_queued_commit_not_started_reports_typed_parsing_discard_failure(self) -> None:
         first_id = _literature_id(1)
         second_id = _literature_id(2)
@@ -1258,6 +1368,101 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertEqual(world.max_active_external, 2)
         self.assertEqual(world.max_active_writes, 1)
         self.assertEqual(len(world.commit_thread_ids), 1)
+        self.assertEqual(world.acquisition_cohort_calls, [(first_id, second_id)])
+
+    def test_completion_chunks_and_fallbacks_form_deterministic_cohort_rounds(self) -> None:
+        world = _World(
+            (
+                _current(1, 1),
+                _current(2, 1),
+                _current(3, 2),
+                _current(4, 2),
+            )
+        )
+        world.acquisition_plans[_literature_id(1)] = ["exhaust"]
+        world.acquisition_plans[_literature_id(2)] = ["meta-one-fallback"]
+        world.acquisition_plans[_literature_id(3)] = ["exhaust"]
+        world.acquisition_plans[_literature_id(4)] = ["meta-two-fallback"]
+
+        report = _operation(world, max_concurrency=2)(
+            BatchRequest(
+                selector=MetaLiteratureSelector(
+                    kind="meta-literatures",
+                    meta_literature_ids=(_meta_id(1), _meta_id(2)),
+                ),
+                goal="ASSET_READY",
+            )
+        )
+
+        self.assertEqual(
+            tuple(item.literature_id for item in report.goal_reached),
+            (_literature_id(2), _literature_id(4)),
+        )
+        self.assertEqual(
+            world.acquisition_cohort_calls,
+            [
+                (_literature_id(1), _literature_id(3)),
+                (_literature_id(2), _literature_id(4)),
+            ],
+        )
+
+        chunked = _World(tuple(_current(index, index) for index in range(1, 4)))
+        chunked_report = _operation(chunked, max_concurrency=2)(
+            _request(tuple(_literature_id(index) for index in range(1, 4)))
+        )
+        self.assertEqual(len(chunked_report.goal_reached), 3)
+        self.assertEqual(
+            chunked.acquisition_cohort_calls,
+            [
+                (_literature_id(1), _literature_id(2)),
+                (_literature_id(3),),
+            ],
+        )
+
+    def test_existing_pdf_target_finishes_content_while_peer_waits_for_cohort(self) -> None:
+        missing_id = _literature_id(1)
+        ready_id = _literature_id(2)
+        world = _World(
+            (
+                _current(1, 1),
+                _current(2, 2, primary=True, parsed=True),
+            )
+        )
+
+        report = _operation(world, max_concurrency=2)(
+            _request((missing_id, ready_id), goal="CONTENT_READY")
+        )
+
+        self.assertEqual(len(report.goal_reached), 2)
+        self.assertEqual(world.acquisition_cohort_calls, [(missing_id,)])
+        ready_acceptance = world.stage_events.index(("acceptance", ready_id))
+        missing_prepare = world.stage_events.index(("acquisition-prepared", missing_id))
+        self.assertLess(ready_acceptance, missing_prepare)
+
+    def test_no_usable_content_retries_rejoin_one_operation_cohort(self) -> None:
+        first_id = _literature_id(1)
+        second_id = _literature_id(2)
+        world = _World(
+            (
+                _current(1, 1, primary=True, parsed=True),
+                _current(2, 2, primary=True, parsed=True),
+            )
+        )
+        world.analysis_plans[first_id] = ["no-content"]
+        world.analysis_plans[second_id] = ["no-content"]
+
+        report = _operation(world, max_concurrency=2)(
+            _request((first_id, second_id), goal="CONTENT_READY")
+        )
+
+        self.assertEqual(len(report.goal_reached), 2)
+        self.assertEqual(
+            report.no_usable_content_literature_ids,
+            (first_id, second_id),
+        )
+        self.assertEqual(world.acquisition_cohort_calls, [(first_id, second_id)])
+        for request in world.acquisition_calls:
+            self.assertEqual(request.excluded_candidate_keys, frozenset())
 
     def test_parsing_prepare_overlaps_and_one_final_cas_stale_isolated(self) -> None:
         stale_id = _literature_id(1)
@@ -1911,19 +2116,26 @@ class DatabaseCompletionTests(unittest.TestCase):
             "acquisition-arxiv-access",
         )
 
-    def test_pre_cancelled_target_does_not_prepare_or_commit(self) -> None:
-        literature_id = _literature_id(1)
-        world = _World((_current(1, 1),))
+    def test_pre_cancelled_cohort_marks_every_target_not_started_without_acquisition(
+        self,
+    ) -> None:
+        first_id = _literature_id(1)
+        second_id = _literature_id(2)
+        world = _World((_current(1, 1), _current(2, 2)))
         cancel_event = threading.Event()
         cancel_event.set()
-        report = _operation(world, cancel_event=cancel_event)(
-            _request((literature_id,), goal="ASSET_READY")
+        report = _operation(world, max_concurrency=2, cancel_event=cancel_event)(
+            _request((first_id, second_id), goal="ASSET_READY")
         )
 
         self.assertEqual(report.end.kind, "interrupted")
         self.assertEqual(report.interrupted, ())
-        self.assertEqual(len(report.not_started), 1)
+        self.assertEqual(
+            tuple(getattr(item.target, "literature_id") for item in report.not_started),
+            (first_id, second_id),
+        )
         self.assertEqual(world.acquisition_calls, [])
+        self.assertEqual(world.acquisition_cohort_calls, [])
         self.assertEqual(world.acquisition_commit_calls, [])
 
     def test_cancel_after_prepare_discards_receipt_without_commit(self) -> None:

@@ -11,7 +11,11 @@ from typing import BinaryIO
 import sciretriever.acquisition.api as acquisition_api
 import sciretriever.acquisition.ports as acquisition_ports
 from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
-from sciretriever.acquisition.api import AcquisitionApi, PreparedAcquisition
+from sciretriever.acquisition.api import (
+    AcquisitionApi,
+    PreparedAcquisition,
+    PreparedAcquisitionCohort,
+)
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -430,6 +434,24 @@ def _prepare_and_commit(api: AcquisitionApi, request: AcquisitionRequest) -> obj
 
 
 class TieredAcquisitionContractTests(unittest.TestCase):
+    def test_public_api_exposes_runtime_only_cohort_preparation(self) -> None:
+        exhaustion = _Exhaustion(events=[])
+        api = _api((), _Publication(events=[]), exhaustion)
+
+        cohort = api.prepare_primary_pdf_cohort((_request(),))
+
+        self.assertIsInstance(cohort, PreparedAcquisitionCohort)
+        self.assertEqual(len(cohort.items), 1)
+        self.assertEqual(cohort.browser_escalation.groups, ())
+        self.assertEqual(exhaustion.calls, 0)
+        prepared = cohort.items[0].prepared
+        self.assertIsNotNone(prepared)
+        if prepared is None:
+            self.fail("exhausted cohort item did not carry a preparation receipt")
+        self.assertIsInstance(api.commit_primary_pdf(prepared), NoPrimaryPdf)
+        with self.assertRaises(TypeError):
+            pickle.dumps(cohort)
+
     def test_prepare_is_publication_free_and_commit_consumes_receipt_once(self) -> None:
         events: list[str] = []
         temporary = _temporary(

@@ -24,7 +24,13 @@ import sciretriever.entry.completion as completion_module
 import sciretriever.entry.execution as execution_module
 import sciretriever.entry.orchestration as orchestration_module
 import sciretriever.model.execution as execution_model_module
-from sciretriever.acquisition.api import PreparedAcquisition
+from sciretriever.acquisition.api import (
+    CohortPreparationItem,
+    PreparedAcquisition,
+    PreparedAcquisitionCohort,
+)
+from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
+from sciretriever.acquisition.cohort import WorkItemDisposition
 from sciretriever.acquisition.ports import AcquisitionExpectedFacts, AcquisitionFailure
 from sciretriever.acquisition.routing import AcquisitionRequest
 from sciretriever.analysis.content import ContentAnalysisFailure, ContentAnalysisInput
@@ -548,6 +554,46 @@ class _World:
         prepared = PreparedAcquisition()
         self._prepared_acquisitions[prepared] = (literature_id, result)
         return prepared
+
+    def prepare_primary_pdf_cohort(
+        self,
+        requests: tuple[AcquisitionRequest, ...],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> PreparedAcquisitionCohort:
+        items = []
+        for request in requests:
+            literature_id = request.literature.literature_id
+            try:
+                prepared = self.prepare_primary_pdf(
+                    request,
+                    cancel_event=cancel_event,
+                )
+            except AcquisitionFailure as error:
+                items.append(
+                    CohortPreparationItem(
+                        literature_id=literature_id,
+                        disposition=WorkItemDisposition.FAILED,
+                        failure=error.failure,
+                    )
+                )
+                continue
+            _identity, result = self._prepared_acquisitions[prepared]
+            items.append(
+                CohortPreparationItem(
+                    literature_id=literature_id,
+                    disposition=(
+                        WorkItemDisposition.EXHAUSTED
+                        if isinstance(result, NoPrimaryPdf)
+                        else WorkItemDisposition.DELIVERED
+                    ),
+                    prepared=prepared,
+                )
+            )
+        return PreparedAcquisitionCohort(
+            items=tuple(items),
+            browser_escalation=BrowserEscalationSummary(),
+        )
 
     def commit_primary_pdf(
         self,
