@@ -36,6 +36,7 @@ from sciretriever.literature.api import (
     ProviderRelationObservationReadRequest,
     provider_key_matches_seed,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.metadata.api import (
     CancellationEvent,
     MetadataApi,
@@ -81,6 +82,7 @@ DiscoveryRunIdFactory: TypeAlias = Callable[[], DiscoveryRunId]
 
 _LOCAL_PAGE_SIZE = 200
 _RELATION_PAGE_SIZE = 200
+_LOGGER = get_logger(__name__)
 
 
 class _ControlledInterruption(BaseException):
@@ -239,6 +241,15 @@ class CitationDiscoveryOperation:
                 seed_details = self._seed_details(request.seed_literature_ids)
                 self._run_repository.create(run)
                 created = True
+                _LOGGER.info(
+                    "event=citation-discovery-started discovery_run_id=%s seed_count=%d "
+                    "provider_count=%d max_depth=%d result_limit=%d",
+                    run_id,
+                    len(request.seed_literature_ids),
+                    len(request.providers),
+                    request.max_depth,
+                    request.result_limit,
+                )
                 self._check_cancelled()
                 seed_meta_ids = {
                     detail.literature.meta_literature_id for detail in seed_details.values()
@@ -327,6 +338,14 @@ class CitationDiscoveryOperation:
             if not frontier or len(stats.result_meta_ids) >= request.result_limit:
                 break
             self._check_cancelled()
+            _LOGGER.debug(
+                "event=citation-depth-started discovery_run_id=%s depth=%d "
+                "frontier_count=%d result_count=%d",
+                run_id,
+                depth,
+                len(frontier),
+                len(stats.result_meta_ids),
+            )
             next_frontier: list[LiteratureId] = []
             for provider_limit in request.providers:
                 provider_name = provider_limit.provider_name
@@ -426,7 +445,9 @@ class CitationDiscoveryOperation:
             )
         except Exception:
             state.terminal_outcome = "FAILED"
-            state.failure = _provider_failure()
+            failure = _provider_failure()
+            state.failure = failure
+            _log_citation_provider_failure(provider_name, failure)
             return None
         self._consume_provider_invocation(state, invocation)
         return invocation
@@ -610,7 +631,9 @@ class CitationDiscoveryOperation:
             )
         except Exception:
             state.terminal_outcome = "FAILED"
-            state.failure = _provider_failure()
+            failure = _provider_failure()
+            state.failure = failure
+            _log_citation_provider_failure(provider_name, failure)
             return _Resolution("miss")
         self._consume_provider_invocation(state, invocation)
         self._publish_returned_relations(invocation.relations)
@@ -834,7 +857,9 @@ class CitationDiscoveryOperation:
                 )
         except Exception:
             state.terminal_outcome = "FAILED"
-            state.failure = _provider_failure()
+            failure = _provider_failure()
+            state.failure = failure
+            _log_citation_provider_failure(provider_name, failure)
             return None
         self._consume_provider_invocation(state, invocation)
         self._publish_returned_relations(invocation.relations)
@@ -872,6 +897,10 @@ class CitationDiscoveryOperation:
         if not isinstance(accepted, ObservationAcceptanceResult):
             raise _CitationContractError()
         if accepted.decision == "rejected":
+            _LOGGER.debug(
+                "event=citation-observation-rejected observation_id=%s",
+                observation.observation_id,
+            )
             return _Resolution("miss")
         if accepted.literature is None or accepted.meta_literature is None:
             raise _CitationContractError()
@@ -882,6 +911,15 @@ class CitationDiscoveryOperation:
             stats.new_literature_count += 1
         if _accepted_meta_was_created(accepted):
             stats.new_meta_literature_count += 1
+        _LOGGER.debug(
+            "event=citation-observation-accepted observation_id=%s literature_id=%s "
+            "meta_literature_id=%s decision=%s deduplicated=%s",
+            observation.observation_id,
+            accepted.literature.literature_id,
+            accepted.meta_literature.meta_literature_id,
+            accepted.decision,
+            str(accepted.deduplicated).lower(),
+        )
         return _Resolution("hit", accepted.literature)
 
     def _consume_provider_invocation(
@@ -944,6 +982,15 @@ class CitationDiscoveryOperation:
             ),
         )
         stats.result_meta_ids.add(meta_id)
+        _LOGGER.debug(
+            "event=citation-result-published discovery_run_id=%s meta_literature_id=%s "
+            "depth=%d source_literature_id=%s target_literature_id=%s",
+            run_id,
+            meta_id,
+            depth,
+            source.literature_id,
+            target.literature_id,
+        )
 
     def _seed_details(
         self,
@@ -1032,7 +1079,7 @@ class CitationDiscoveryOperation:
             )
             for name, state in states.items()
         )
-        return DiscoveryReport(
+        report = DiscoveryReport(
             kind="discovery",
             end=end,
             discovery_run_id=run_id,
@@ -1043,6 +1090,8 @@ class CitationDiscoveryOperation:
             new_literature_count=stats.new_literature_count,
             new_metadata_observation_count=stats.new_metadata_observation_count,
         )
+        _log_citation_report(report)
+        return report
 
     def _check_cancelled(self) -> None:
         if self._cancel_event is not None and self._cancel_event.is_set():
@@ -1209,6 +1258,48 @@ def _operation_failure() -> StableFailure:
         action="Check the local catalog and retry the discovery.",
         retryable=True,
     )
+
+
+def _log_citation_provider_failure(provider_name: str, failure: StableFailure) -> None:
+    _LOGGER.warning(
+        "event=citation-provider-failed provider=%s code=%s retryable=%s reason=%s action=%s",
+        provider_name,
+        failure.code,
+        str(failure.retryable).lower(),
+        failure.reason,
+        failure.action,
+    )
+
+
+def _log_citation_report(report: DiscoveryReport) -> None:
+    if isinstance(report.end, FailedReportEnd):
+        failure = report.end.failure
+        _LOGGER.error(
+            "event=citation-discovery-failed discovery_run_id=%s status=%s code=%s "
+            "retryable=%s reason=%s action=%s",
+            report.discovery_run_id,
+            report.run_status,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+    elif isinstance(report.end, InterruptedReportEnd):
+        _LOGGER.warning(
+            "event=citation-discovery-interrupted discovery_run_id=%s result_count=%d",
+            report.discovery_run_id,
+            report.discovery_result_count,
+        )
+    else:
+        _LOGGER.info(
+            "event=citation-discovery-finished discovery_run_id=%s status=%s "
+            "provider_count=%d result_count=%d new_literature_count=%d",
+            report.discovery_run_id,
+            report.run_status,
+            len(report.providers),
+            report.discovery_result_count,
+            report.new_literature_count,
+        )
 
 
 __all__ = ("CitationDiscoveryOperation", "DiscoveryRunIdFactory")

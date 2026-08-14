@@ -30,6 +30,7 @@ from uuid import uuid4
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     PdfSource,
     SourceReadiness,
@@ -485,21 +486,29 @@ class ControlledBrowserPdfSource(PdfSource):
         actions: tuple[_BrowserAction, ...],
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
+        first_failure: AcquisitionSourceFailure | None = None
         for action in actions:
-            key = _candidate_key(action)
-            if not self._claim_candidate(candidate_keys, key):
-                continue
-            result, authentication = self._run_action(action)
-            if authentication is not None:
-                raise AcquisitionFailure(_authentication_failure(authentication))
-            temporary_pdf = self._temporary_from_result(action, key, result)
-            if temporary_pdf is None:
-                continue
             try:
-                yield temporary_pdf
-            except BaseException:
-                temporary_pdf.content.discard()
-                raise
+                key = _candidate_key(action)
+                if not self._claim_candidate(candidate_keys, key):
+                    continue
+                result, authentication = self._run_action(action)
+                if authentication is not None:
+                    raise AcquisitionSourceFailure(_authentication_failure(authentication))
+                temporary_pdf = self._temporary_from_result(action, key, result)
+                if temporary_pdf is None:
+                    continue
+                try:
+                    yield temporary_pdf
+                except BaseException:
+                    temporary_pdf.content.discard()
+                    raise
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
+                continue
+        if first_failure is not None:
+            raise first_failure
 
     @staticmethod
     def _claim_candidate(candidate_keys: CandidateKeyTracker, key: str) -> bool:
@@ -517,14 +526,20 @@ class ControlledBrowserPdfSource(PdfSource):
         if isinstance(result, AccessFailure):
             if result.code == "no-download":
                 return None
-            raise AcquisitionFailure(_browser_failure(result.code))
+            failure = _browser_failure(result.code)
+            if result.code in {"cancelled", "cleanup"}:
+                raise AcquisitionFailure(failure)
+            raise AcquisitionSourceFailure(failure)
         if not isinstance(result, BoundedByteStream):
             raise AcquisitionFailure(_contract_failure())
-        final_url = _normalized_url(result.final_locator)
+        try:
+            final_url = _normalized_url(result.final_locator)
+        except AcquisitionFailure as error:
+            raise AcquisitionSourceFailure(error.failure) from None
         if not action.rule.allows_url(final_url.url):
             # This is intentionally a post-access fail-closed check.  It
             # prevents publication but is not a pre-navigation allowlist.
-            raise AcquisitionFailure(_browser_failure("policy"))
+            raise AcquisitionSourceFailure(_browser_failure("policy"))
         content = _BrowserTemporaryPdfContent(result.chunks)
         try:
             return TemporaryPdf(
@@ -569,7 +584,7 @@ class ControlledBrowserPdfSource(PdfSource):
         except AcquisitionFailure:
             raise
         except Exception:
-            raise AcquisitionFailure(_browser_failure("runtime")) from None
+            raise AcquisitionSourceFailure(_browser_failure("runtime")) from None
         return result, marker[0] if marker else None
 
     @staticmethod

@@ -17,6 +17,7 @@ from typing import Final, Protocol
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     SourceReadiness,
     TemporaryPdf,
@@ -145,7 +146,7 @@ class ConfiguredSciHubPdfSource:
             cancel_event=self._cancel_event,
         )
         _raise_if_cancelled(self._cancel_event)
-        locators = _validated_unique_locators(raw_locators)
+        locators, first_failure = _validated_unique_locators(raw_locators)
         _raise_if_cancelled(self._cancel_event)
 
         for locator in locators:
@@ -160,15 +161,20 @@ class ConfiguredSciHubPdfSource:
                     candidate_keys=candidate_keys,
                     allow_static_landing_discovery=True,
                 )
+                yield from _repackage_and_close(
+                    deliveries,
+                    candidate_keys=candidate_keys,
+                    cancel_event=self._cancel_event,
+                )
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
             except AcquisitionFailure:
                 raise
             except Exception:
-                raise AcquisitionFailure(_fetcher_failure()) from None
-            yield from _repackage_and_close(
-                deliveries,
-                candidate_keys=candidate_keys,
-                cancel_event=self._cancel_event,
-            )
+                raise AcquisitionSourceFailure(_fetcher_failure()) from None
+        if first_failure is not None:
+            raise first_failure
 
 
 def _has_callable_method(value: object, name: str) -> bool:
@@ -242,30 +248,38 @@ def _call_resolver(
     except Exception:
         if cancel_event is not None and cancel_event.is_set():
             raise AcquisitionFailure(_cancelled_failure()) from None
-        raise AcquisitionFailure(_resolver_failure()) from None
+        raise AcquisitionSourceFailure(_resolver_failure()) from None
 
 
-def _validated_unique_locators(value: object) -> tuple[NormalizedURL, ...]:
+def _validated_unique_locators(
+    value: object,
+) -> tuple[tuple[NormalizedURL, ...], AcquisitionSourceFailure | None]:
     if type(value) is not tuple:
-        raise AcquisitionFailure(_resolver_contract_failure())
+        raise AcquisitionSourceFailure(_resolver_contract_failure())
     result: list[NormalizedURL] = []
     seen: set[str] = set()
+    first_failure: AcquisitionSourceFailure | None = None
     for raw_locator in value:
-        locator = _validated_locator(raw_locator)
+        try:
+            locator = _validated_locator(raw_locator)
+        except AcquisitionSourceFailure as error:
+            if first_failure is None:
+                first_failure = error
+            continue
         if locator.url in seen:
             continue
         seen.add(locator.url)
         result.append(locator)
-    return tuple(result)
+    return tuple(result), first_failure
 
 
 def _validated_locator(value: object) -> NormalizedURL:
     if type(value) is not str:
-        raise AcquisitionFailure(_locator_failure())
+        raise AcquisitionSourceFailure(_locator_failure())
     try:
         locator = normalize_url(value, allowed_schemes=("https",))
     except (PolicyError, TypeError, ValueError):
-        raise AcquisitionFailure(_locator_failure()) from None
+        raise AcquisitionSourceFailure(_locator_failure()) from None
 
     try:
         literal = ipaddress.ip_address(locator.hostname)
@@ -274,9 +288,9 @@ def _validated_locator(value: object) -> NormalizedURL:
     try:
         address_class = classify_address(literal)
     except (PolicyError, TypeError, ValueError):
-        raise AcquisitionFailure(_locator_failure()) from None
+        raise AcquisitionSourceFailure(_locator_failure()) from None
     if address_class is not AddressClass.PUBLIC:
-        raise AcquisitionFailure(_locator_failure())
+        raise AcquisitionSourceFailure(_locator_failure())
     return locator
 
 
@@ -300,7 +314,7 @@ def _repackage_and_close(
             except AcquisitionFailure:
                 raise
             except Exception:
-                raise AcquisitionFailure(_fetcher_failure()) from None
+                raise AcquisitionSourceFailure(_fetcher_failure()) from None
 
             if not isinstance(delivery, TemporaryPdf):
                 raise AcquisitionFailure(_fetcher_contract_failure())

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Generator, Mapping, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, BinaryIO, Generator, NoReturn, Protocol, cast
 from uuid import uuid4
 
 from sciretriever.acquisition.sources.configured_sci_hub import ConfiguredLocatorResolver
@@ -27,17 +27,24 @@ from sciretriever.configuration import (
     ConfigurationError,
     CredentialLookup,
     RuntimeSecretLookup,
+    configuration_runtime_status,
     configuration_status,
     load_credentials,
     load_runtime_secrets,
     run_configuration_probes,
 )
 from sciretriever.model.configuration import (
+    AnalysisAuthentication,
     AnalysisProvider,
     Configuration,
     ConfigurationProbeSummary,
     ConfigurationStatus,
+    CoreConfigurationProbeResult,
+    CoreCredentialService,
+    LLMConfigurationProbeDetails,
+    MinerUConfigurationProbeDetails,
     ParserConnectionMode,
+    ProbeOutcome,
     ProviderName,
 )
 from sciretriever.model.discovery import (
@@ -324,6 +331,7 @@ class ProductionConfigurationProbeSession:
     """A no-Storage configuration-test session from one credential snapshot."""
 
     configuration: Configuration
+    credentials: CredentialLookup = field(repr=False)
     status: ConfigurationStatus
     probe_port: MetadataProbeRegistry = field(repr=False)
     access_coordinator: AccessCoordinator = field(repr=False)
@@ -342,6 +350,207 @@ class ProductionConfigurationProbeSession:
             test_all=test_all,
             status_snapshot=self.status,
         )
+
+    def run_llm(self) -> CoreConfigurationProbeResult:
+        """Run one minimal strict LLM request without user Literature content."""
+
+        from sciretriever.analysis.ports import (
+            AnalysisLLMCall,
+            AnalysisLLMFailure,
+            parse_strict_json_object,
+        )
+        from sciretriever.model.llm import LLMRequest, LLMRequestKind
+        from sciretriever.model.primitives import sha256_digest
+
+        runtime = configuration_runtime_status(
+            self.configuration,
+            credentials=self.credentials,
+        )
+        locally_ready = runtime.analysis.reference_configuration_complete and (
+            not runtime.analysis.api_key_required
+            or (
+                runtime.analysis.api_key_configured is True
+                and runtime.analysis.credential_origin_matches is True
+            )
+        )
+        if not locally_ready:
+            return _core_probe_payload(
+                "llm",
+                outcome="skipped",
+                local_ready=False,
+                failure_code="analysis-not-ready",
+            )
+        try:
+            secrets = load_runtime_secrets(
+                self.configuration,
+                credentials=self.credentials,
+                include_parser=False,
+                include_analysis=True,
+            )
+            adapter = _build_analysis_llm(
+                self.configuration,
+                secrets,
+                self.http_client,
+                self.access_coordinator,
+            )
+            structured_input = '{"probe":"sciretriever-configuration"}'
+            response = adapter.complete(
+                AnalysisLLMCall(
+                    request=LLMRequest(
+                        kind=LLMRequestKind.REFERENCE_LOOKUP,
+                        input_sha256=sha256_digest(structured_input.encode("utf-8")),
+                        model=self.configuration.analysis.model or "",
+                        max_output_tokens=min(
+                            self.configuration.analysis.reference_max_output_tokens or 16,
+                            64,
+                        ),
+                    ),
+                    prompt_version="configuration-probe-v1",
+                    prompt=(
+                        "Return exactly one JSON object matching the schema. "
+                        "Set ok to true. Do not add fields."
+                    ),
+                    structured_input=structured_input,
+                    response_schema=(
+                        '{"type":"object","properties":{"ok":{"type":"boolean",'
+                        '"const":true}},"required":["ok"],"additionalProperties":false}'
+                    ),
+                )
+            )
+            result = parse_strict_json_object(response.result)
+            if result != {"ok": True}:
+                return _core_probe_payload(
+                    "llm",
+                    outcome="failed",
+                    local_ready=True,
+                    failure_code="analysis-llm-probe-contract",
+                )
+        except AnalysisLLMFailure as error:
+            return _core_probe_payload(
+                "llm",
+                outcome="failed",
+                local_ready=True,
+                failure_code=error.failure.code,
+            )
+        except (BootstrapError, ConfigurationError, TypeError, ValueError):
+            return _core_probe_payload(
+                "llm",
+                outcome="failed",
+                local_ready=True,
+                failure_code="analysis-llm-probe-failed",
+            )
+        return _core_probe_payload(
+            "llm",
+            outcome="passed",
+            local_ready=True,
+            failure_code=None,
+            details={
+                "strict_response_parseable": True,
+                "model": self.configuration.analysis.model,
+                "protocol": (
+                    None
+                    if self.configuration.analysis.protocol is None
+                    else self.configuration.analysis.protocol.value
+                ),
+            },
+        )
+
+    def run_mineru(self) -> CoreConfigurationProbeResult:
+        """Run MinerU health/version/protocol checks without uploading a PDF."""
+
+        from sciretriever.network.admission import AccessPolicy, AccessScope
+        from sciretriever.parsing.adapters.mineru import (
+            MinerUProtocol2Error,
+            MinerUProtocol2ServiceClient,
+        )
+
+        runtime = configuration_runtime_status(
+            self.configuration,
+            credentials=self.credentials,
+        )
+        locally_ready = runtime.parsing.configuration_complete and (
+            not runtime.parsing.bearer_token_required
+            or (
+                runtime.parsing.bearer_token_configured is True
+                and runtime.parsing.credential_origin_matches is True
+            )
+        )
+        if not locally_ready:
+            return _core_probe_payload(
+                "mineru",
+                outcome="skipped",
+                local_ready=False,
+                failure_code="parser-not-ready",
+            )
+        try:
+            secrets = load_runtime_secrets(
+                self.configuration,
+                credentials=self.credentials,
+                include_parser=True,
+                include_analysis=False,
+            )
+            parser = self.configuration.parsing
+            client = MinerUProtocol2ServiceClient(
+                http_client=self.http_client,
+                base_url=parser.base_url or "",
+                connection_mode=(parser.connection_mode or ParserConnectionMode.LOOPBACK).value,
+                access_scope=AccessScope("mineru", "api", "protocol-2"),
+                access_policy=AccessPolicy(max_concurrency=1),
+                bearer_token=secrets.mineru_bearer_token,
+                remote_upload_authorized=parser.remote_upload_authorized,
+            )
+            health = client.probe_health()
+        except MinerUProtocol2Error as error:
+            return _core_probe_payload(
+                "mineru",
+                outcome="failed",
+                local_ready=True,
+                failure_code=f"mineru-{error.code}",
+            )
+        except (ConfigurationError, TypeError, ValueError):
+            return _core_probe_payload(
+                "mineru",
+                outcome="failed",
+                local_ready=True,
+                failure_code="mineru-probe-failed",
+            )
+        return _core_probe_payload(
+            "mineru",
+            outcome="passed",
+            local_ready=True,
+            failure_code=None,
+            details={
+                "health": health.status,
+                "release": health.release,
+                "api_protocol": health.api_protocol,
+                "profile": "vlm-engine",
+                "uploaded_pdf": False,
+            },
+        )
+
+
+def _core_probe_payload(
+    service: str,
+    *,
+    outcome: str,
+    local_ready: bool,
+    failure_code: str | None,
+    details: dict[str, object] | None = None,
+) -> CoreConfigurationProbeResult:
+    service_name = CoreCredentialService(service)
+    detail_payload = {} if details is None else details
+    checked_details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails
+    if service_name is CoreCredentialService.LLM:
+        checked_details = LLMConfigurationProbeDetails.model_validate(detail_payload)
+    else:
+        checked_details = MinerUConfigurationProbeDetails.model_validate(detail_payload)
+    return CoreConfigurationProbeResult(
+        service=service_name,
+        outcome=ProbeOutcome(outcome),
+        local_ready=local_ready,
+        failure_code=failure_code,
+        details=checked_details,
+    )
 
 
 class _UtcClock:
@@ -570,8 +779,6 @@ class _OwnedNode:
     descriptor: int = field(repr=False)
     device: int
     inode: int
-    mode: int
-    owner: int
     links: int
 
 
@@ -646,8 +853,6 @@ def _owned_node(path: Path, *, directory: bool) -> _OwnedNode:
         stat.S_ISLNK(path_metadata.st_mode)
         or not expected(metadata.st_mode)
         or not expected(path_metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or path_metadata.st_uid != metadata.st_uid
         or (path_metadata.st_dev, path_metadata.st_ino) != (metadata.st_dev, metadata.st_ino)
     ):
         os.close(descriptor)
@@ -657,8 +862,6 @@ def _owned_node(path: Path, *, directory: bool) -> _OwnedNode:
         descriptor=descriptor,
         device=metadata.st_dev,
         inode=metadata.st_ino,
-        mode=metadata.st_mode,
-        owner=metadata.st_uid,
         links=metadata.st_nlink,
     )
 
@@ -677,21 +880,15 @@ def _same_owned_node(node: _OwnedNode, *, directory: bool) -> bool:
         and (
             descriptor_metadata.st_dev,
             descriptor_metadata.st_ino,
-            descriptor_metadata.st_mode,
-            descriptor_metadata.st_uid,
             descriptor_metadata.st_nlink,
         )
         == (
             node.device,
             node.inode,
-            node.mode,
-            node.owner,
             node.links,
         )
         and (path_metadata.st_dev, path_metadata.st_ino)
         == (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
-        and path_metadata.st_mode == descriptor_metadata.st_mode
-        and path_metadata.st_uid == descriptor_metadata.st_uid
         and path_metadata.st_nlink == descriptor_metadata.st_nlink
     )
 
@@ -963,6 +1160,7 @@ def build_object_graph(  # noqa: C901, PLR0915
             web_access_profile_resolver=production_web_access_profile_resolver(),
             provenance_id_factory=_new_provenance_id,
             clock=clock.now,
+            credentials=credential_snapshot,
             configured_sci_hub_resolver=external_dependencies.configured_sci_hub_resolver,  # type: ignore[arg-type]
             browser_client=browser_client,
         ),
@@ -1039,6 +1237,8 @@ def build_object_graph(  # noqa: C901, PLR0915
                 publication_port=primary_pdf_publisher,
                 exhaustion_port=acquisition_publication,
                 exhaustion_clear_port=acquisition_publication,
+                doi_landing_resolver=acquisition_registry.doi_landing_resolver,
+                requires_doi_landing_origin=(acquisition_registry.requires_doi_landing_origin),
             )
         )
         manual_admission = ManualPdfAdmissionService(
@@ -1234,7 +1434,11 @@ def _require_analysis_configuration(configuration: Configuration) -> None:
         value is None
         for value in (
             analysis.provider,
+            analysis.protocol,
+            analysis.base_url,
             analysis.model,
+            analysis.context_window_tokens,
+            analysis.authentication,
             analysis.metadata_max_output_tokens,
             analysis.content_max_output_tokens,
             analysis.reference_max_output_tokens,
@@ -1254,7 +1458,11 @@ def _require_reference_analysis_configuration(configuration: Configuration) -> N
         value is None
         for value in (
             analysis.provider,
+            analysis.protocol,
+            analysis.base_url,
             analysis.model,
+            analysis.context_window_tokens,
+            analysis.authentication,
             analysis.reference_max_output_tokens,
         )
     ):
@@ -1277,6 +1485,21 @@ def _analysis_limits(configuration: Configuration):  # noqa: ANN202
         max_chunk_count=analysis.max_chunk_count or 0,
         max_total_llm_requests=analysis.max_total_llm_requests or 0,
         max_total_output_tokens=analysis.max_total_output_tokens or 0,
+    )
+
+
+def _analysis_provider_limits(configuration: Configuration):  # noqa: ANN202
+    from sciretriever.analysis.ports import LLMProviderLimits
+
+    analysis = configuration.analysis
+    return LLMProviderLimits(
+        max_input_bytes=analysis.max_input_bytes or 1,
+        max_output_tokens=max(
+            analysis.metadata_max_output_tokens or 1,
+            analysis.content_max_output_tokens or 1,
+            analysis.reference_max_output_tokens or 1,
+        ),
+        context_window_tokens=analysis.context_window_tokens or 1_024,
     )
 
 
@@ -1398,6 +1621,7 @@ def build_production_configuration_probe_session(
         raise BootstrapError("metadata-not-ready") from None
     return ProductionConfigurationProbeSession(
         configuration=configuration,
+        credentials=credentials,
         status=status,
         probe_port=probe_port,
         access_coordinator=coordinator,
@@ -1628,27 +1852,44 @@ def _build_analysis_llm(
     from sciretriever.analysis.ports import AnalysisLLMFailure
     from sciretriever.analysis.providers.anthropic import AnthropicAnalysisLLMAdapter
     from sciretriever.analysis.providers.openai import OpenAIAnalysisLLMAdapter
+    from sciretriever.analysis.providers.openai_chat import (
+        OpenAIChatCompletionsAnalysisLLMAdapter,
+    )
+    from sciretriever.model.configuration import AnalysisProtocol
 
     if getattr(http_client, "_coordinator", None) is not coordinator:
         raise BootstrapError("analysis-not-ready")
     analysis = configuration.analysis
-    adapter = (
-        OpenAIAnalysisLLMAdapter
-        if analysis.provider is AnalysisProvider.OPENAI
-        else AnthropicAnalysisLLMAdapter
-    )
+    adapter_by_protocol = {
+        AnalysisProtocol.OPENAI_RESPONSES: OpenAIAnalysisLLMAdapter,
+        AnalysisProtocol.OPENAI_CHAT_COMPLETIONS: OpenAIChatCompletionsAnalysisLLMAdapter,
+        AnalysisProtocol.ANTHROPIC_MESSAGES: AnthropicAnalysisLLMAdapter,
+    }
     try:
         analysis_api_key = secrets.analysis_api_key
-        if analysis_api_key is None:
+        if analysis.authentication is AnalysisAuthentication.API_KEY and analysis_api_key is None:
             raise BootstrapError("analysis-not-ready")
+        protocol = analysis.protocol
+        base_url = analysis.base_url
+        if protocol is None or base_url is None:
+            raise BootstrapError("analysis-not-ready")
+        adapter = adapter_by_protocol[protocol]
+        provider_name = (
+            analysis.provider.value
+            if analysis.provider is not AnalysisProvider.CUSTOM
+            else analysis.service_name or "custom"
+        )
         return cast(
             AnalysisLLMPort,
             adapter(
                 http_client=http_client,
                 api_key=analysis_api_key,
+                base_url=base_url,
+                provider_name=provider_name,
+                limits=_analysis_provider_limits(configuration),
             ),
         )
-    except (AnalysisLLMFailure, TypeError, ValueError):
+    except (AnalysisLLMFailure, KeyError, TypeError, ValueError):
         raise BootstrapError("analysis-not-ready") from None
 
 
@@ -1656,7 +1897,6 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
     configuration: Configuration,
     *,
     scope: ProductionEntryScope,
-    environment: Mapping[str, str] | None,
     credentials_home: str | Path | None,
     configure_process_logging: bool,
     logging_level: int,
@@ -1675,6 +1915,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
     )
     from sciretriever.acquisition.registry import (
         AcquisitionAssemblyDependencies,
+        AcquisitionRegistry,
         build_acquisition_registry,
         production_web_access_profile_resolver,
     )
@@ -1718,7 +1959,15 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         ProductionEntryScope.CITATION_DISCOVERY,
         ProductionEntryScope.CONTENT_COMPLETION,
     }
-    needs_credentials = needs_metadata
+    needs_provider_credentials = needs_metadata or (
+        needs_acquisition and bool(configuration.sources.acquisition.providers)
+    )
+    needs_runtime_credentials = (
+        needs_parser and configuration.parsing.connection_mode is ParserConnectionMode.REMOTE
+    ) or (
+        needs_analysis and configuration.analysis.authentication is AnalysisAuthentication.API_KEY
+    )
+    needs_credentials = needs_provider_credentials or needs_runtime_credentials
     _require_paths_configuration(configuration)
     if needs_parser:
         _require_parser_configuration(configuration)
@@ -1729,21 +1978,39 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
     if needs_metadata and not configuration.sources.metadata.providers:
         raise BootstrapError("metadata-not-ready")
 
+    credentials = load_credentials(home=credentials_home) if needs_credentials else None
     secrets = load_runtime_secrets(
         configuration,
-        environment=environment,
+        credentials=credentials,
         include_parser=needs_parser,
         include_analysis=needs_analysis,
     )
-    credentials = load_credentials(home=credentials_home) if needs_credentials else None
     coordinator, http_client = (
         _new_shared_network()
         if (needs_metadata or needs_acquisition or needs_parser or needs_analysis)
         else (None, None)
     )
+    clock = _UtcClock()
+    acquisition_registry: AcquisitionRegistry | None = None
+    if needs_acquisition:
+        assert coordinator is not None and http_client is not None
+        acquisition_registry = build_acquisition_registry(
+            configuration,
+            AcquisitionAssemblyDependencies(
+                http_client=http_client,
+                access_coordinator=coordinator,
+                web_access_profile_resolver=production_web_access_profile_resolver(),
+                provenance_id_factory=_new_provenance_id,
+                clock=clock.now,
+                credentials=credentials,
+            ),
+        )
+
+    # Acquisition readiness includes enabled authorized-API credentials.  It
+    # must be closed before Catalog or ArtifactStore construction, even though
+    # a later rollback could otherwise hide that persistent roots were touched.
     storage = _build_scoped_storage(configuration)
     try:
-        clock = _UtcClock()
         pdf_validation_staging = SystemPdfValidationStaging()
         engine = storage.foundation.engine
         literature_api = storage.literature_api
@@ -1845,31 +2112,24 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 )
         else:
             assert coordinator is not None and http_client is not None
+            assert acquisition_registry is not None
             acquisition_publication = SqliteAcquisitionPublication(
                 engine,
                 storage.foundation.artifact_store,
                 storage.foundation.verified_reader,
             )
             validated = ValidatedPrimaryPdfPublisher(acquisition_publication)
-            registry = build_acquisition_registry(
-                configuration,
-                AcquisitionAssemblyDependencies(
-                    http_client=http_client,
-                    access_coordinator=coordinator,
-                    web_access_profile_resolver=production_web_access_profile_resolver(),
-                    provenance_id_factory=_new_provenance_id,
-                    clock=clock.now,
-                ),
-            )
             acquisition_api = AcquisitionApi(
                 AcquisitionService(
-                    source_bindings=registry.source_bindings,
+                    source_bindings=acquisition_registry.source_bindings,
                     publication_port=PrimaryPdfPublisher(
                         validated,
                         staging=pdf_validation_staging,
                     ),
                     exhaustion_port=acquisition_publication,
                     exhaustion_clear_port=acquisition_publication,
+                    doi_landing_resolver=acquisition_registry.doi_landing_resolver,
+                    requires_doi_landing_origin=(acquisition_registry.requires_doi_landing_origin),
                 )
             )
             inputs = CompletionInputBuilder(engine, storage.foundation.verified_reader)
@@ -1964,7 +2224,6 @@ def build_production_object_graph(  # noqa: C901
     configuration: Configuration,
     *,
     scope: ProductionEntryScope | None = None,
-    environment: Mapping[str, str] | None = None,
     credentials_home: str | Path | None = None,
     configure_process_logging: bool = True,
     logging_level: int = logging.INFO,
@@ -1994,16 +2253,15 @@ def build_production_object_graph(  # noqa: C901
             return _build_scoped_production_graph(
                 configuration,
                 scope=scope,
-                environment=environment,
                 credentials_home=credentials_home,
                 configure_process_logging=configure_process_logging,
                 logging_level=logging_level,
             )
         _required_production_configuration(configuration)
-        secrets = load_runtime_secrets(configuration, environment=environment)
         # Load ADR 0014 credentials exactly once.  The same short-lived bundle
         # is consumed by every readiness check and Provider adapter below.
         credentials = load_credentials(home=credentials_home)
+        secrets = load_runtime_secrets(configuration, credentials=credentials)
         dependencies = _production_dependencies(configuration, secrets)
         return build_object_graph(
             configuration,

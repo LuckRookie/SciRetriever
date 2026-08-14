@@ -5,6 +5,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Callable, Iterable
 
+from sciretriever.logging.api import get_logger
 from sciretriever.metadata.ports import (
     MetadataLookupPort,
     MetadataProviderFailure,
@@ -30,6 +31,8 @@ from sciretriever.metadata.rules import (
 from sciretriever.model.discovery import TopicDiscoveryInput
 from sciretriever.model.metadata import MetadataObservation, ProviderRelationObservation
 from sciretriever.model.report import StableFailure
+
+_LOGGER = get_logger(__name__)
 
 
 class MetadataService:
@@ -167,9 +170,16 @@ class MetadataService:
         raw_item_count = 0
         observations: list[MetadataObservation] = []
         relations: list[ProviderRelationObservation] = []
+        first_record_failure: StableFailure | None = None
+        rejected_record_count = 0
+        _LOGGER.info(
+            "event=metadata-provider-started provider=%s scan_limit=%d",
+            provider_name,
+            scan_limit,
+        )
         try:
             if _cancelled(cancel_event):
-                return _provider_invocation(
+                return _logged_provider_invocation(
                     provider_name=provider_name,
                     observations=observations,
                     relations=relations,
@@ -183,7 +193,7 @@ class MetadataService:
                 # ``pull_raw_item`` is the lazy boundary that may fetch a new
                 # provider page.  Never cross it after cancellation.
                 if _cancelled(cancel_event):
-                    return _provider_invocation(
+                    return _logged_provider_invocation(
                         provider_name=provider_name,
                         observations=observations,
                         relations=relations,
@@ -192,12 +202,14 @@ class MetadataService:
                     )
                 delivery = session.pull_raw_item()
                 if delivery is None:
-                    return _provider_invocation(
+                    return _completed_scan_invocation(
                         provider_name=provider_name,
                         observations=observations,
                         relations=relations,
                         raw_item_count=raw_item_count,
-                        outcome="EXHAUSTED",
+                        normal_outcome="EXHAUSTED",
+                        record_failure=first_record_failure,
+                        rejected_record_count=rejected_record_count,
                     )
                 if not isinstance(delivery, RawItemDelivery):
                     raise TypeError("raw item session returned an invalid delivery")
@@ -205,53 +217,91 @@ class MetadataService:
                 # The raw item consumes its provider-wide budget before any
                 # vendor-to-neutral conversion, acceptance, or deduplication.
                 raw_item_count += 1
-                item = session.convert_raw_item(delivery.raw_item)
-                if not isinstance(item, NeutralMetadataItem):
-                    raise TypeError("raw item conversion must return NeutralMetadataItem")
-                if reference_query is not None and any(
-                    not relation_matches_query(relation, reference_query)
-                    for relation in item.relations
-                ):
-                    raise MetadataProviderFailure(_reference_direction_failure())
-                observations.extend(item.observations)
-                relations.extend(item.relations)
+                try:
+                    item = session.convert_raw_item(delivery.raw_item)
+                except MetadataProviderFailure as error:
+                    rejected_record_count += 1
+                    if first_record_failure is None:
+                        first_record_failure = error.failure
+                    _LOGGER.warning(
+                        "event=metadata-record-rejected provider=%s raw_item_ordinal=%d "
+                        "code=%s retryable=%s reason=%s action=%s",
+                        provider_name,
+                        raw_item_count,
+                        error.failure.code,
+                        str(error.failure.retryable).lower(),
+                        error.failure.reason,
+                        error.failure.action,
+                    )
+                else:
+                    if not isinstance(item, NeutralMetadataItem):
+                        raise TypeError("raw item conversion must return NeutralMetadataItem")
+                    if reference_query is not None and any(
+                        not relation_matches_query(relation, reference_query)
+                        for relation in item.relations
+                    ):
+                        raise MetadataProviderFailure(_reference_direction_failure())
+                    observations.extend(item.observations)
+                    relations.extend(item.relations)
+                    _LOGGER.debug(
+                        "event=metadata-item-converted provider=%s raw_item_count=%d "
+                        "observation_count=%d relation_count=%d",
+                        provider_name,
+                        raw_item_count,
+                        len(observations),
+                        len(relations),
+                    )
 
                 # Preserve the converted neutral facts while returning control
                 # before another item/page is requested.
                 if _cancelled(cancel_event):
-                    return _provider_invocation(
+                    return _logged_provider_invocation(
                         provider_name=provider_name,
                         observations=observations,
                         relations=relations,
                         raw_item_count=raw_item_count,
                         outcome="INTERRUPTED",
+                        rejected_record_count=rejected_record_count,
                     )
 
                 if delivery.source_exhausted_after:
-                    return _provider_invocation(
+                    return _completed_scan_invocation(
                         provider_name=provider_name,
                         observations=observations,
                         relations=relations,
                         raw_item_count=raw_item_count,
-                        outcome="EXHAUSTED",
+                        normal_outcome="EXHAUSTED",
+                        record_failure=first_record_failure,
+                        rejected_record_count=rejected_record_count,
                     )
                 if raw_item_count == scan_limit:
-                    return _provider_invocation(
+                    return _completed_scan_invocation(
                         provider_name=provider_name,
                         observations=observations,
                         relations=relations,
                         raw_item_count=raw_item_count,
-                        outcome="SCAN_LIMIT_REACHED",
+                        normal_outcome="SCAN_LIMIT_REACHED",
+                        record_failure=first_record_failure,
+                        rejected_record_count=rejected_record_count,
                     )
         except MetadataProviderFailure as error:
-            return _provider_invocation(
+            return _logged_provider_invocation(
                 provider_name=provider_name,
                 observations=observations,
                 relations=relations,
                 raw_item_count=raw_item_count,
                 outcome="FAILED",
                 failure=error.failure,
+                rejected_record_count=rejected_record_count,
             )
+        except Exception:
+            _LOGGER.error(
+                "event=metadata-provider-crashed provider=%s raw_item_count=%d "
+                "code=metadata-provider-unexpected",
+                provider_name,
+                raw_item_count,
+            )
+            raise
 
 
 def _provider_invocation(
@@ -270,6 +320,78 @@ def _provider_invocation(
         raw_item_count=raw_item_count,
         outcome=outcome,
         failure=failure,
+    )
+
+
+def _logged_provider_invocation(
+    *,
+    provider_name: str,
+    observations: list[MetadataObservation],
+    relations: list[ProviderRelationObservation],
+    raw_item_count: int,
+    outcome: MetadataProviderInvocationOutcome,
+    failure: StableFailure | None = None,
+    rejected_record_count: int = 0,
+) -> MetadataProviderInvocation:
+    result = _provider_invocation(
+        provider_name=provider_name,
+        observations=observations,
+        relations=relations,
+        raw_item_count=raw_item_count,
+        outcome=outcome,
+        failure=failure,
+    )
+    if failure is not None:
+        _LOGGER.warning(
+            "event=metadata-provider-failed provider=%s raw_item_count=%d "
+            "observation_count=%d relation_count=%d rejected_record_count=%d "
+            "code=%s retryable=%s "
+            "reason=%s action=%s",
+            provider_name,
+            raw_item_count,
+            len(observations),
+            len(relations),
+            rejected_record_count,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+    else:
+        _LOGGER.info(
+            "event=metadata-provider-finished provider=%s outcome=%s "
+            "raw_item_count=%d observation_count=%d relation_count=%d "
+            "rejected_record_count=%d",
+            provider_name,
+            outcome,
+            raw_item_count,
+            len(observations),
+            len(relations),
+            rejected_record_count,
+        )
+    return result
+
+
+def _completed_scan_invocation(
+    *,
+    provider_name: str,
+    observations: list[MetadataObservation],
+    relations: list[ProviderRelationObservation],
+    raw_item_count: int,
+    normal_outcome: MetadataProviderInvocationOutcome,
+    record_failure: StableFailure | None,
+    rejected_record_count: int,
+) -> MetadataProviderInvocation:
+    """Finish a complete scan without erasing isolated record failures."""
+
+    return _logged_provider_invocation(
+        provider_name=provider_name,
+        observations=observations,
+        relations=relations,
+        raw_item_count=raw_item_count,
+        outcome="FAILED" if record_failure is not None else normal_outcome,
+        failure=record_failure,
+        rejected_record_count=rejected_record_count,
     )
 
 

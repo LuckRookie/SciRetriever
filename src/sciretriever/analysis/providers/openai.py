@@ -9,11 +9,9 @@ from sciretriever.analysis.ports import (
     parse_strict_json_object,
 )
 from sciretriever.analysis.providers import (
-    OPENAI_ACCESS_SCOPE,
     OPENAI_BASELINE_ACCESS_POLICY,
-    OPENAI_CREDENTIAL_ORIGIN,
-    OPENAI_ENDPOINT,
     ProviderHttpAdapterBase,
+    analysis_http_connection,
     provider_failure,
 )
 from sciretriever.model.access import Header
@@ -31,19 +29,30 @@ class OpenAIAnalysisLLMAdapter(ProviderHttpAdapterBase):
         self,
         *,
         http_client: HttpClient,
-        api_key: str,
+        api_key: str | None,
+        base_url: str = "https://api.openai.com/v1",
         limits: LLMProviderLimits | None = None,
         access_policy: AccessPolicy | None = None,
+        provider_name: str = _PROVIDER_NAME,
+        service_name: str = "responses",
     ) -> None:
+        from sciretriever.network.admission import AccessScope
+
+        endpoint, credential_origin, destination_policy = analysis_http_connection(
+            base_url=base_url,
+            endpoint_suffix="/responses",
+            api_key=api_key,
+        )
         super().__init__(
             http_client=http_client,
             api_key=api_key,
             limits=limits or LLMProviderLimits(),
             access_policy=access_policy,
-            provider_name=_PROVIDER_NAME,
-            endpoint=OPENAI_ENDPOINT,
-            credential_origin=OPENAI_CREDENTIAL_ORIGIN,
-            access_scope=OPENAI_ACCESS_SCOPE,
+            provider_name=provider_name,
+            endpoint=endpoint,
+            credential_origin=credential_origin,
+            destination_policy=destination_policy,
+            access_scope=AccessScope(provider_name, "api", service_name),
             baseline_policy=OPENAI_BASELINE_ACCESS_POLICY,
             protocol_revision=_PROTOCOL_REVISION,
         )
@@ -55,7 +64,7 @@ class OpenAIAnalysisLLMAdapter(ProviderHttpAdapterBase):
         )
 
     def _credential_headers(self) -> tuple[tuple[str, str], ...]:
-        return (("Authorization", f"Bearer {self._api_key}"),)
+        return () if self._api_key is None else (("Authorization", f"Bearer {self._api_key}"),)
 
     def _build_request_body(self, call: AnalysisLLMCall) -> bytes:
         schema = parse_strict_json_object(call.response_schema)

@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     TemporaryPdf,
 )
@@ -32,6 +33,7 @@ from sciretriever.acquisition.routing import (
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.rules import DEFAULT_MAX_PDF_BYTES
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.model.acquisition import (
     AcquisitionPath,
@@ -55,6 +57,7 @@ _CONSERVATIVE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
     cooldown_after_completion=30.0,
 )
+_LOGGER = get_logger(__name__)
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
 Clock = Callable[[], UtcTimestamp]
@@ -167,11 +170,11 @@ def _is_pdf_media_type(value: str | None) -> bool:
 
 def _canonical_locator(value: object) -> NormalizedURL:
     if not isinstance(value, str):
-        raise AcquisitionFailure(_network_failure(retryable=False))
+        raise AcquisitionSourceFailure(_network_failure(retryable=False))
     try:
         return normalize_url(value)
     except (PolicyError, TypeError, ValueError):
-        raise AcquisitionFailure(_network_failure(retryable=False)) from None
+        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
 
 
 def _fingerprint(value: str) -> str:
@@ -233,8 +236,34 @@ def _is_normal_miss(response: TransportResponse) -> bool:
         return True
     if not 200 <= response.status < 300:
         retryable = response.status in {408, 425, 429} or response.status >= 500
-        raise AcquisitionFailure(_status_failure(retryable=retryable))
+        raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
     return False
+
+
+def _logged_normal_miss(
+    response: TransportResponse,
+    *,
+    source_name: str,
+    candidate_id: str,
+) -> bool:
+    """Classify a response while preserving a safe reason for non-miss failures."""
+
+    try:
+        return _is_normal_miss(response)
+    except AcquisitionFailure as error:
+        failure = error.failure
+        _LOGGER.warning(
+            "event=public-locator-response-failed source=%s candidate_id=%s status=%d "
+            "code=%s retryable=%s reason=%s action=%s",
+            source_name,
+            candidate_id,
+            response.status,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+        raise
 
 
 class WebAccessProfileResolver:
@@ -351,7 +380,10 @@ class _StaticPdfLocatorParser(HTMLParser):
             self.overflowed = True
 
 
-def _static_pdf_locators(body: bytes, final_url: str) -> tuple[NormalizedURL, ...]:
+def _static_pdf_locators(
+    body: bytes,
+    final_url: str,
+) -> tuple[tuple[NormalizedURL, ...], AcquisitionSourceFailure | None]:
     try:
         parser = _StaticPdfLocatorParser()
         parser.feed(body.decode("utf-8-sig", errors="replace"))
@@ -359,17 +391,23 @@ def _static_pdf_locators(body: bytes, final_url: str) -> tuple[NormalizedURL, ..
         if parser.overflowed:
             raise ValueError("too many static PDF locators")
     except Exception:
-        raise AcquisitionFailure(_protocol_failure()) from None
+        raise AcquisitionSourceFailure(_protocol_failure()) from None
 
     result: list[NormalizedURL] = []
     seen: set[str] = set()
+    first_failure: AcquisitionSourceFailure | None = None
     for raw_locator in parser.locators:
-        candidate = _canonical_locator(urljoin(final_url, raw_locator))
+        try:
+            candidate = _canonical_locator(urljoin(final_url, raw_locator))
+        except AcquisitionSourceFailure as error:
+            if first_failure is None:
+                first_failure = error
+            continue
         if candidate.url in seen:
             continue
         seen.add(candidate.url)
         result.append(candidate)
-    return tuple(result)
+    return tuple(result), first_failure
 
 
 class PublicLocatorFetcher:
@@ -483,53 +521,150 @@ class PublicLocatorFetcher:
             source_record_id=source_record_id,
             declared_media_type=declared_media_type,
         )
+        candidate_id = _fingerprint(key)[:16]
         if not _claim_candidate(candidate_keys, key):
+            _LOGGER.debug(
+                "event=public-locator-skipped source=%s candidate_id=%s reason=already-tried",
+                name,
+                candidate_id,
+            )
             return
 
+        _LOGGER.debug(
+            "event=public-locator-started source=%s candidate_id=%s landing_discovery=%s",
+            name,
+            candidate_id,
+            str(allow_static_landing_discovery).lower(),
+        )
         result = self._request(canonical)
-        if _is_normal_miss(result):
+        normal_miss = _logged_normal_miss(
+            result,
+            source_name=name,
+            candidate_id=candidate_id,
+        )
+        if normal_miss:
+            _LOGGER.debug(
+                "event=public-locator-finished source=%s candidate_id=%s outcome=miss status=%d",
+                name,
+                candidate_id,
+                result.status,
+            )
             return
 
+        _LOGGER.debug(
+            "event=public-locator-response source=%s candidate_id=%s status=%d response_bytes=%d",
+            name,
+            candidate_id,
+            result.status,
+            len(result.body),
+        )
+        temporary_pdf = self._temporary_pdf_from_response(
+            result=result,
+            candidate_key=key,
+            source_name=name,
+            source_record_id=record_id,
+            declared_media_type=input_media_type,
+        )
+        yield from self._deliver_temporary_pdf(
+            temporary_pdf,
+            source_name=name,
+            candidate_id=candidate_id,
+        )
+        if allow_static_landing_discovery:
+            yield from self._acquire_static_locators(
+                result=result,
+                source_name=name,
+                source_record_id=record_id,
+                parent_candidate_id=candidate_id,
+                candidate_keys=candidate_keys,
+            )
+
+    def _temporary_pdf_from_response(
+        self,
+        *,
+        result: TransportResponse,
+        candidate_key: str,
+        source_name: str,
+        source_record_id: str | None,
+        declared_media_type: str | None,
+    ) -> TemporaryPdf:
         final_locator = _canonical_locator(result.final_url)
-        media_type = input_media_type or _header_media_type(result.headers)
+        media_type = declared_media_type or _header_media_type(result.headers)
         content = _MemoryTemporaryPdfContent(result.body)
         try:
-            temporary_pdf = TemporaryPdf(
+            return TemporaryPdf(
                 candidate=PdfCandidate(
-                    candidate_key=key,
-                    source_name=name,
+                    candidate_key=candidate_key,
+                    source_name=source_name,
                     acquisition_path=AcquisitionPath.PUBLIC,
                     declared_media_type=media_type,
                 ),
                 content=content,
                 safe_source_url=final_locator.url,
                 provenance=self._provenance(
-                    source_name=name,
-                    source_record_id=record_id,
+                    source_name=source_name,
+                    source_record_id=source_record_id,
                 ),
             )
         except Exception:
             content.discard()
             raise AcquisitionFailure(_contract_failure()) from None
+
+    @staticmethod
+    def _deliver_temporary_pdf(
+        temporary_pdf: TemporaryPdf,
+        *,
+        source_name: str,
+        candidate_id: str,
+    ) -> Iterator[TemporaryPdf]:
         try:
+            _LOGGER.debug(
+                "event=public-locator-candidate-delivered source=%s candidate_id=%s",
+                source_name,
+                candidate_id,
+            )
             yield temporary_pdf
         except BaseException:
-            content.discard()
+            temporary_pdf.content.discard()
             raise
-        if not allow_static_landing_discovery:
-            return
+
+    def _acquire_static_locators(
+        self,
+        *,
+        result: TransportResponse,
+        source_name: str,
+        source_record_id: str | None,
+        parent_candidate_id: str,
+        candidate_keys: CandidateKeyTracker,
+    ) -> Iterator[TemporaryPdf]:
         if len(result.body) > self._max_landing_response_bytes:
-            raise AcquisitionFailure(_protocol_failure())
-        for discovered in _static_pdf_locators(result.body, result.final_url):
-            yield from self._acquire_locator(
-                locator=discovered.url,
-                candidate_key=_locator_candidate_key(name, discovered),
-                source_name=name,
-                source_record_id=record_id,
-                declared_media_type="application/pdf",
-                candidate_keys=candidate_keys,
-                allow_static_landing_discovery=False,
-            )
+            raise AcquisitionSourceFailure(_protocol_failure())
+        discovered_locators, first_discovered_failure = _static_pdf_locators(
+            result.body,
+            result.final_url,
+        )
+        _LOGGER.debug(
+            "event=public-landing-parsed source=%s candidate_id=%s discovered_count=%d",
+            source_name,
+            parent_candidate_id,
+            len(discovered_locators),
+        )
+        for discovered in discovered_locators:
+            try:
+                yield from self._acquire_locator(
+                    locator=discovered.url,
+                    candidate_key=_locator_candidate_key(source_name, discovered),
+                    source_name=source_name,
+                    source_record_id=source_record_id,
+                    declared_media_type="application/pdf",
+                    candidate_keys=candidate_keys,
+                    allow_static_landing_discovery=False,
+                )
+            except AcquisitionSourceFailure as error:
+                if first_discovered_failure is None:
+                    first_discovered_failure = error
+        if first_discovered_failure is not None:
+            raise first_discovered_failure
 
     def _request(self, locator: NormalizedURL) -> TransportResponse:
         try:
@@ -569,11 +704,17 @@ class PublicLocatorFetcher:
                 redirect_target_guard=guard_redirect_target,
             )
         except Exception:
-            raise AcquisitionFailure(_network_failure()) from None
+            _LOGGER.warning(
+                "event=public-locator-failed code=acquisition-public-locator-network-failed"
+            )
+            raise AcquisitionSourceFailure(_network_failure()) from None
         if isinstance(result, AccessFailure):
-            raise AcquisitionFailure(_access_failure(result))
+            failure = _access_failure(result)
+            if result.code == "cancelled":
+                raise AcquisitionFailure(failure)
+            raise AcquisitionSourceFailure(failure)
         if not isinstance(result, TransportResponse):
-            raise AcquisitionFailure(_protocol_failure())
+            raise AcquisitionSourceFailure(_protocol_failure())
         return result
 
     def _provenance(
@@ -606,16 +747,25 @@ def _eligible_primary_hint(hint: AssetHint) -> bool:
 
 def _ordered_unique_hints(
     evidence: AcquisitionEvidence,
-) -> tuple[tuple[AssetHint, NormalizedURL, bool], ...]:
+) -> tuple[
+    tuple[tuple[AssetHint, NormalizedURL, bool], ...],
+    AcquisitionSourceFailure | None,
+]:
     eligible = [
         observed for observed in evidence.asset_hints if _eligible_primary_hint(observed.hint)
     ]
     eligible.sort(key=lambda observed: 0 if observed.hint.kind is AssetHintKind.DIRECT_FILE else 1)
     result: list[tuple[AssetHint, NormalizedURL, bool]] = []
     positions: dict[str, int] = {}
+    first_failure: AcquisitionSourceFailure | None = None
     for observed in eligible:
         hint = observed.hint
-        canonical = _canonical_locator(hint.url)
+        try:
+            canonical = _canonical_locator(hint.url)
+        except AcquisitionSourceFailure as error:
+            if first_failure is None:
+                first_failure = error
+            continue
         existing_position = positions.get(canonical.url)
         if existing_position is None:
             positions[canonical.url] = len(result)
@@ -626,7 +776,7 @@ def _ordered_unique_hints(
             # A duplicate landing declaration does not issue a second request,
             # but it permits static discovery if A2 rejects the shared body.
             result[existing_position] = (prior_hint, prior_locator, True)
-    return tuple(result)
+    return tuple(result), first_failure
 
 
 class DirectPdfSource:
@@ -677,16 +827,30 @@ class DirectPdfSource:
         evidence: AcquisitionEvidence,
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
-        for hint, canonical, allow_static in _ordered_unique_hints(evidence):
-            yield from self._fetcher.acquire(
-                locator=canonical.url,
-                candidate_key=_locator_candidate_key(self.source_name, canonical),
-                source_name=self.source_name,
-                source_record_id=None,
-                declared_media_type=hint.media_type,
-                candidate_keys=candidate_keys,
-                allow_static_landing_discovery=allow_static,
+        hints, first_failure = _ordered_unique_hints(evidence)
+        for index, (hint, canonical, allow_static) in enumerate(hints, start=1):
+            _LOGGER.debug(
+                "event=public-hint-started source=%s hint=%d/%d kind=%s",
+                self.source_name,
+                index,
+                len(hints),
+                hint.kind.value,
             )
+            try:
+                yield from self._fetcher.acquire(
+                    locator=canonical.url,
+                    candidate_key=_locator_candidate_key(self.source_name, canonical),
+                    source_name=self.source_name,
+                    source_record_id=None,
+                    declared_media_type=hint.media_type,
+                    candidate_keys=candidate_keys,
+                    allow_static_landing_discovery=allow_static,
+                )
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
+        if first_failure is not None:
+            raise first_failure
 
 
 __all__ = (

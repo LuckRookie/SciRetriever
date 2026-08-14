@@ -1,10 +1,10 @@
 """Verified-contract boundary for authorized primary-PDF Provider APIs.
 
-This module deliberately contains no publisher endpoint, credential value,
-HTTP response shape, or production Source registration.  A future Provider
-adapter may use :class:`AuthorizedPdfSource` only after its endpoint,
-credential, response, entitlement, primary-PDF, and access-policy contracts
-have all been verified.  Until then the production catalog remains empty.
+This module contains only secret-free contracts.  Concrete endpoints,
+credential values, HTTP response handling, and Network calls remain in each
+Provider client.  A Provider adapter may use :class:`AuthorizedPdfSource`
+only after its endpoint, credential, response, entitlement, primary-PDF, and
+access-policy contracts have all been verified.
 
 The injected client owns Network and vendor-private work.  Only closed,
 secret-free lookup/download decisions cross into the generic Source, which
@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     SourceReadiness,
     TemporaryPdf,
@@ -38,6 +39,7 @@ from sciretriever.acquisition.routing import (
     ProviderRecordIdentity,
     build_acquisition_evidence,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.acquisition import AcquisitionPath, PdfCandidate
 from sciretriever.model.primitives import ProvenanceId, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
@@ -47,6 +49,7 @@ _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 _STABLE_KEY = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _CREDENTIAL_FIELD = re.compile(r"^[a-z][a-z0-9_]*$")
 _MAX_IDENTITY_CHARS = 4096
+_LOGGER = get_logger(__name__)
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
 Clock = Callable[[], UtcTimestamp]
@@ -215,15 +218,16 @@ def _failure(
     reason: str,
     action: str,
     retryable: bool,
+    isolated: bool = False,
 ) -> AcquisitionFailure:
-    return AcquisitionFailure(
-        _stable_failure(
-            code=code,
-            reason=reason,
-            action=action,
-            retryable=retryable,
-        )
+    failure = _stable_failure(
+        code=code,
+        reason=reason,
+        action=action,
+        retryable=retryable,
     )
+    failure_type = AcquisitionSourceFailure if isolated else AcquisitionFailure
+    return failure_type(failure)
 
 
 @unique
@@ -344,6 +348,7 @@ class AuthorizedProviderContract:
     doi_landing_origins: tuple[str, ...]
     download_locator_namespaces: tuple[str, ...]
     normal_miss_reasons: frozenset[AuthorizedNormalMiss]
+    download_proves_entitlement: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -401,6 +406,8 @@ class AuthorizedProviderContract:
             "normal_miss_reasons",
             _normal_miss_set(self.normal_miss_reasons),
         )
+        if type(self.download_proves_entitlement) is not bool:
+            raise TypeError("download_proves_entitlement must be a bool")
         if not (
             self.stable_locator_namespaces
             or self.provider_record_identity_rules
@@ -552,6 +559,7 @@ class AuthorizedPdfDownload:
     content: TemporaryPdfContent
     media_type: str | None
     safe_source_url: str | None
+    entitlement: AuthorizedEntitlement = AuthorizedEntitlement.GRANTED
 
     def __post_init__(self) -> None:
         if not isinstance(self.locator, AuthorizedDownloadLocator):
@@ -561,6 +569,8 @@ class AuthorizedPdfDownload:
         object.__setattr__(self, "media_type", _media_type(self.media_type))
         if self.safe_source_url is not None and not isinstance(self.safe_source_url, str):
             raise TypeError("safe_source_url must be a string or None")
+        if not isinstance(self.entitlement, AuthorizedEntitlement):
+            raise TypeError("entitlement must be an AuthorizedEntitlement")
 
     def __repr__(self) -> str:
         return "<AuthorizedPdfDownload>"
@@ -702,42 +712,171 @@ class AuthorizedPdfSource:
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
         _validate_acquire_inputs(request, evidence, candidate_keys)
-        for target in _lookup_targets(self._contract, evidence):
-            lookup_key = _lookup_candidate_key(self._contract, target)
-            if not _claim(candidate_keys, lookup_key):
-                continue
+        targets = _lookup_targets(self._contract, evidence)
+        _LOGGER.debug(
+            "event=authorized-source-started source=%s literature_id=%s target_count=%d",
+            self.source_name,
+            request.literature.literature_id,
+            len(targets),
+        )
+        first_failure: AcquisitionSourceFailure | None = None
+        for target_index, target in enumerate(targets, start=1):
+            try:
+                yield from self._acquire_target(
+                    target=target,
+                    target_index=target_index,
+                    target_count=len(targets),
+                    candidate_keys=candidate_keys,
+                )
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
+        if first_failure is not None:
+            raise first_failure
+
+    def _acquire_target(
+        self,
+        *,
+        target: AuthorizedLookupTarget,
+        target_index: int,
+        target_count: int,
+        candidate_keys: CandidateKeyTracker,
+    ) -> Iterator[TemporaryPdf]:
+        lookup_key = _lookup_candidate_key(self._contract, target)
+        if not _claim(candidate_keys, lookup_key):
+            _LOGGER.debug(
+                "event=authorized-lookup-skipped source=%s target=%d/%d reason=already-tried",
+                self.source_name,
+                target_index,
+                target_count,
+            )
+            return
+        _LOGGER.debug(
+            "event=authorized-lookup-started source=%s target=%d/%d candidate_id=%s",
+            self.source_name,
+            target_index,
+            target_count,
+            _diagnostic_key(lookup_key),
+        )
+        try:
             lookup = self._lookup(target)
             self._require_lookup_binding(lookup, target)
             if isinstance(lookup, AuthorizedLookupMiss):
                 self._accept_normal_miss(lookup.reason)
-                continue
-            self._require_entitlement(lookup.entitlement)
-            for locator in lookup.downloads:
-                self._validate_download_locator(locator)
-                download_key = _download_candidate_key(self._contract, locator)
-                if not _claim(candidate_keys, download_key):
-                    continue
-                result = self._download(locator)
-                self._require_download_binding(result, locator)
-                if isinstance(result, AuthorizedDownloadMiss):
-                    self._accept_normal_miss(result.reason)
-                    continue
-                try:
-                    _require_primary_pdf_media(result.media_type)
-                except AcquisitionFailure:
-                    self._discard_content(result.content)
-                    raise
-                temporary = self._temporary_pdf(
+                _LOGGER.debug(
+                    "event=authorized-lookup-finished source=%s target=%d/%d "
+                    "outcome=miss reason=%s",
+                    self.source_name,
+                    target_index,
+                    target_count,
+                    lookup.reason.value,
+                )
+                return
+            self._require_lookup_entitlement(lookup.entitlement)
+        except AcquisitionSourceFailure as error:
+            _log_isolated_failure(
+                event="authorized-lookup-failed",
+                source_name=self.source_name,
+                ordinal=target_index,
+                total=target_count,
+                error=error,
+            )
+            raise
+        _LOGGER.debug(
+            "event=authorized-lookup-finished source=%s target=%d/%d "
+            "outcome=downloads download_count=%d",
+            self.source_name,
+            target_index,
+            target_count,
+            len(lookup.downloads),
+        )
+        first_failure: AcquisitionSourceFailure | None = None
+        for download_index, locator in enumerate(lookup.downloads, start=1):
+            try:
+                yield from self._acquire_download(
                     target=target,
                     locator=locator,
-                    download=result,
-                    candidate_key=download_key,
+                    download_index=download_index,
+                    download_count=len(lookup.downloads),
+                    candidate_keys=candidate_keys,
                 )
-                try:
-                    yield temporary
-                except BaseException:
-                    self._discard_content(temporary.content)
-                    raise
+            except AcquisitionSourceFailure as error:
+                _log_isolated_failure(
+                    event="authorized-download-failed",
+                    source_name=self.source_name,
+                    ordinal=download_index,
+                    total=len(lookup.downloads),
+                    error=error,
+                )
+                if first_failure is None:
+                    first_failure = error
+        if first_failure is not None:
+            raise first_failure
+
+    def _acquire_download(
+        self,
+        *,
+        target: AuthorizedLookupTarget,
+        locator: AuthorizedDownloadLocator,
+        download_index: int,
+        download_count: int,
+        candidate_keys: CandidateKeyTracker,
+    ) -> Iterator[TemporaryPdf]:
+        self._validate_download_locator(locator)
+        download_key = _download_candidate_key(self._contract, locator)
+        if not _claim(candidate_keys, download_key):
+            _LOGGER.debug(
+                "event=authorized-download-skipped source=%s download=%d/%d reason=already-tried",
+                self.source_name,
+                download_index,
+                download_count,
+            )
+            return
+        _LOGGER.debug(
+            "event=authorized-download-started source=%s download=%d/%d candidate_id=%s",
+            self.source_name,
+            download_index,
+            download_count,
+            _diagnostic_key(download_key),
+        )
+        result = self._download(locator)
+        self._require_download_binding(result, locator)
+        if isinstance(result, AuthorizedDownloadMiss):
+            self._accept_normal_miss(result.reason)
+            _LOGGER.debug(
+                "event=authorized-download-finished source=%s download=%d/%d "
+                "outcome=miss reason=%s",
+                self.source_name,
+                download_index,
+                download_count,
+                result.reason.value,
+            )
+            return
+        try:
+            self._require_entitlement(result.entitlement)
+            _require_primary_pdf_media(result.media_type)
+        except AcquisitionFailure:
+            self._discard_content(result.content)
+            raise
+        temporary = self._temporary_pdf(
+            target=target,
+            locator=locator,
+            download=result,
+            candidate_key=download_key,
+        )
+        try:
+            _LOGGER.debug(
+                "event=authorized-download-finished source=%s download=%d/%d "
+                "outcome=pdf candidate_id=%s",
+                self.source_name,
+                download_index,
+                download_count,
+                _diagnostic_key(download_key),
+            )
+            yield temporary
+        except BaseException:
+            self._discard_content(temporary.content)
+            raise
 
     def _lookup(self, target: AuthorizedLookupTarget) -> AuthorizedLookupResult:
         try:
@@ -791,6 +930,14 @@ class AuthorizedPdfSource:
             raise _client_failure(AuthorizedClientFailureKind.ENTITLEMENT)
         raise _entitlement_unproven_failure()
 
+    def _require_lookup_entitlement(self, entitlement: AuthorizedEntitlement) -> None:
+        if (
+            entitlement is AuthorizedEntitlement.UNKNOWN
+            and self._contract.download_proves_entitlement
+        ):
+            return
+        self._require_entitlement(entitlement)
+
     def _validate_download_locator(self, locator: AuthorizedDownloadLocator) -> None:
         if locator.namespace not in self._contract.download_locator_namespaces:
             raise _response_schema_failure()
@@ -842,6 +989,32 @@ class AuthorizedPdfSource:
             content.discard()
         except Exception:
             raise _client_failure(AuthorizedClientFailureKind.CLEANUP) from None
+
+
+def _diagnostic_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "strict")).hexdigest()[:16]
+
+
+def _log_isolated_failure(
+    *,
+    event: str,
+    source_name: str,
+    ordinal: int,
+    total: int,
+    error: AcquisitionSourceFailure,
+) -> None:
+    failure = error.failure
+    _LOGGER.warning(
+        "event=%s source=%s item=%d/%d code=%s retryable=%s reason=%s action=%s",
+        event,
+        source_name,
+        ordinal,
+        total,
+        failure.code,
+        str(failure.retryable).lower(),
+        failure.reason,
+        failure.action,
+    )
 
 
 def _validate_acquire_inputs(
@@ -1087,6 +1260,11 @@ def _client_failure(kind: AuthorizedClientFailureKind) -> AcquisitionFailure:
         reason=reason,
         action=action,
         retryable=retryable,
+        isolated=kind
+        not in {
+            AuthorizedClientFailureKind.CANCELLED,
+            AuthorizedClientFailureKind.CLEANUP,
+        },
     )
 
 
@@ -1100,6 +1278,7 @@ def _entitlement_unproven_failure() -> AcquisitionFailure:
         reason="The Provider did not prove this Literature's primary content entitlement.",
         action="Verify the content product entitlement before retrying.",
         retryable=False,
+        isolated=True,
     )
 
 
@@ -1121,15 +1300,65 @@ def _client_contract_failure() -> AcquisitionFailure:
     )
 
 
-# A7 intentionally records the verified current state instead of guessing
-# endpoints, credential fields, or PDF response shapes.  CORE can still
-# contribute Metadata AssetHints through the public A5 path; this set refers
-# only to a dedicated authorized Provider API Source.
+# CORE API v3 documents registered-key PDF downloads for exact Work/Output
+# identities.  The download response itself proves the concrete document's
+# entitlement; the local lookup is deliberately I/O-free and returns UNKNOWN.
+CORE_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProviderContract(
+    source_name="core",
+    product_name="CORE API v3 PDF download",
+    contract_revision="core-v3-2026-08-13",
+    required_credential_fields=("api_key",),
+    stable_locator_namespaces=(),
+    provider_record_identity_rules=(
+        AuthorizedRecordIdentityRule(
+            provider_name="core",
+            record_id_prefix="work:",
+            target_namespace="core-work",
+        ),
+        AuthorizedRecordIdentityRule(
+            provider_name="core",
+            record_id_prefix="output:",
+            target_namespace="core-output",
+        ),
+    ),
+    doi_landing_origins=(),
+    download_locator_namespaces=("core-work-pdf", "core-output-pdf"),
+    normal_miss_reasons=frozenset(
+        {
+            AuthorizedNormalMiss.HTTP_204,
+            AuthorizedNormalMiss.HTTP_404,
+            AuthorizedNormalMiss.HTTP_410,
+        }
+    ),
+    download_proves_entitlement=True,
+)
+
+WILEY_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProviderContract(
+    source_name="wiley",
+    product_name="Wiley Online Library TDM API PDF download",
+    contract_revision="wiley-tdm-v1-client-1.2.0-2026-08-13",
+    required_credential_fields=("tdm_api_token",),
+    stable_locator_namespaces=(),
+    provider_record_identity_rules=(),
+    doi_landing_origins=("https://onlinelibrary.wiley.com",),
+    download_locator_namespaces=("wiley-tdm-pdf",),
+    normal_miss_reasons=frozenset({AuthorizedNormalMiss.HTTP_404}),
+    download_proves_entitlement=True,
+)
+
+# Elsevier Article Retrieval and Springer Full Text are verified XML/JATS or
+# object products rather than primary-PDF APIs, so neither is registered as an
+# authorized PDF Source.
 UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
-    {"elsevier", "springer", "wiley", "core"}
+    {"elsevier", "springer"}
 )
 PRODUCTION_AUTHORIZED_PROVIDER_CATALOG: Final[Mapping[str, AuthorizedProviderContract]] = (
-    MappingProxyType({})
+    MappingProxyType(
+        {
+            "core": CORE_AUTHORIZED_CONTRACT,
+            "wiley": WILEY_AUTHORIZED_CONTRACT,
+        }
+    )
 )
 
 
@@ -1151,9 +1380,11 @@ __all__ = (
     "AuthorizedProviderClient",
     "AuthorizedProviderContract",
     "AuthorizedRecordIdentityRule",
+    "CORE_AUTHORIZED_CONTRACT",
     "Clock",
     "PRODUCTION_AUTHORIZED_PROVIDER_CATALOG",
     "ProvenanceIdFactory",
     "UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS",
+    "WILEY_AUTHORIZED_CONTRACT",
     "authorized_source_readiness",
 )

@@ -5,12 +5,19 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import logging
+import os
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, NoReturn, TypeAlias, TypeVar, cast
 
 from pydantic import ValidationError
 
+from sciretriever.acquisition.api import (
+    AUTHORIZED_PDF_API_PROVIDER_KEYS,
+    UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS,
+)
 from sciretriever.bootstrap import (
     BibliographyExchangeObjectGraph,
     BootstrapError,
@@ -25,15 +32,50 @@ from sciretriever.bootstrap import (
 )
 from sciretriever.configuration import (
     ConfigurationError,
+    CredentialLookup,
+    configurable_credential_providers,
+    configuration_diff,
+    configuration_runtime_status,
+    configuration_service_origin,
     configuration_status,
+    core_credential_section_exists,
     credential_field_specs,
+    credential_path,
     credential_section_exists,
+    load_credentials,
+    load_editable_configuration,
     load_selected_configuration,
     remove_credentials,
+    select_configuration_edit_path,
     set_credentials,
+    update_core_service_configuration,
+)
+from sciretriever.entry.cli.config_ui import (
+    ConfigConsole,
+    ConfigStatusPresenter,
+    ConfigTheme,
+    TerminalChoice,
+    interactive_terminal,
 )
 from sciretriever.entry.ports import UserOutputConflictError
 from sciretriever.literature.api import LiteratureArtifactReference
+from sciretriever.logging.api import configure_logging
+from sciretriever.model.configuration import (
+    AnalysisAuthentication,
+    AnalysisConfig,
+    AnalysisProtocol,
+    AnalysisProvider,
+    Configuration,
+    ConfigurationCapabilityStatus,
+    ConfigurationProbeSummary,
+    ConfigurationRuntimeStatus,
+    CoreConfigurationProbeResult,
+    ParserConnectionMode,
+    ParsingConfig,
+    ProbeOutcome,
+    ProviderCapability,
+    ProviderName,
+)
 from sciretriever.model.discovery import (
     CitationDiscoveryInput,
     ProviderDiscoveryLimit,
@@ -70,11 +112,158 @@ _BUSINESS_FAILURE = 3
 _CONFIGURATION_FAILURE = 4
 _INTERNAL_FAILURE = 70
 _INTERRUPTED = 130
+_ANALYSIS_BUDGET_PRESETS: dict[str, dict[str, int]] = {
+    "conservative": {
+        "metadata_max_output_tokens": 1_024,
+        "content_max_output_tokens": 4_096,
+        "reference_max_output_tokens": 1_024,
+        "max_input_bytes": 1_048_576,
+        "max_chunk_bytes": 262_144,
+        "max_chunk_count": 4,
+        "max_total_llm_requests": 6,
+        "max_total_output_tokens": 12_288,
+    },
+    "balanced": {
+        "metadata_max_output_tokens": 2_048,
+        "content_max_output_tokens": 8_192,
+        "reference_max_output_tokens": 2_048,
+        "max_input_bytes": 4_194_304,
+        "max_chunk_bytes": 1_048_576,
+        "max_chunk_count": 4,
+        "max_total_llm_requests": 8,
+        "max_total_output_tokens": 32_768,
+    },
+    "large": {
+        "metadata_max_output_tokens": 4_096,
+        "content_max_output_tokens": 16_384,
+        "reference_max_output_tokens": 4_096,
+        "max_input_bytes": 8_388_608,
+        "max_chunk_bytes": 2_097_152,
+        "max_chunk_count": 8,
+        "max_total_llm_requests": 16,
+        "max_total_output_tokens": 65_536,
+    },
+}
+_DEFAULT_ANALYSIS_BUDGETS: dict[str, int] = {
+    "metadata_max_output_tokens": 2_048,
+    "content_max_output_tokens": 8_192,
+    "reference_max_output_tokens": 2_048,
+    "max_input_bytes": 4_194_304,
+    "max_chunk_bytes": 1_048_576,
+    "max_chunk_count": 4,
+    "max_total_llm_requests": 8,
+    "max_total_output_tokens": 32_768,
+}
 _InputT = TypeVar("_InputT")
 _CLI_INPUT_VALIDATION_PROVIDER = ProviderDiscoveryLimit(
     provider_name="cli-input-validation",
     scan_limit=1,
 )
+
+_PUBLIC_ACQUISITION_SERVICES: dict[str, tuple[str, str]] = {
+    "arxiv": ("public-pdf-api", "public PDF API"),
+    "europe-pmc": ("public-pdf-api", "public PDF API"),
+    "unpaywall": ("oa-locator-api", "OA locator API"),
+    "sci-hub": ("operator-locator", "operator locator"),
+}
+
+_UNSUPPORTED_AUTHORIZED_API_DETAILS: dict[str, str] = {
+    "elsevier": "no verified primary-PDF API contract",
+    "springer": "Full Text product returns JATS/XML, not primary PDF",
+}
+
+
+@dataclass(frozen=True)
+class _CredentialGuide:
+    display_name: str
+    purpose: str
+    credential_help: str
+    application_url: str
+    enablement_hint: str
+    probe_available: bool = True
+
+
+_CREDENTIAL_GUIDES: dict[ProviderName, _CredentialGuide] = {
+    ProviderName.WEB_OF_SCIENCE: _CredentialGuide(
+        display_name="Web of Science",
+        purpose="Metadata search and citation data",
+        credential_help="Clarivate API key (X-ApiKey)",
+        application_url="https://developer.clarivate.com/",
+        enablement_hint=(
+            'Add "web-of-science" to [sources.metadata].providers and configure '
+            "[sources.metadata.web-of-science] product/database."
+        ),
+    ),
+    ProviderName.SEMANTIC_SCHOLAR: _CredentialGuide(
+        display_name="Semantic Scholar",
+        purpose="Metadata, citations, and open-PDF locators",
+        credential_help="Optional Semantic Scholar API key (x-api-key)",
+        application_url="https://www.semanticscholar.org/product/api",
+        enablement_hint=(
+            'Add "semantic-scholar" to [sources.metadata].providers and/or '
+            "[sources.acquisition].providers."
+        ),
+    ),
+    ProviderName.OPENALEX: _CredentialGuide(
+        display_name="OpenAlex",
+        purpose="Metadata, citations, and open-content locators",
+        credential_help="Optional OpenAlex API key for a larger usage budget",
+        application_url="https://developers.openalex.org/guides/authentication",
+        enablement_hint=(
+            'Add "openalex" to [sources.metadata].providers and/or [sources.acquisition].providers.'
+        ),
+    ),
+    ProviderName.ELSEVIER: _CredentialGuide(
+        display_name="Elsevier / Scopus",
+        purpose="Scopus metadata; no verified primary-PDF API route yet",
+        credential_help="Elsevier API key; institution token is optional",
+        application_url="https://dev.elsevier.com/",
+        enablement_hint='Add "elsevier" to [sources.metadata].providers.',
+    ),
+    ProviderName.SPRINGER: _CredentialGuide(
+        display_name="Springer Nature",
+        purpose="Springer Nature metadata; authorized primary-PDF API unavailable",
+        credential_help="Springer Nature API key",
+        application_url="https://dev.springernature.com/",
+        enablement_hint='Add "springer" to [sources.metadata].providers.',
+    ),
+    ProviderName.CORE: _CredentialGuide(
+        display_name="CORE",
+        purpose="Metadata and authorized full-text PDF download",
+        credential_help="CORE API key; required for the authorized PDF route",
+        application_url="https://core.ac.uk/services/api",
+        enablement_hint=(
+            'Add "core" to [sources.metadata].providers and/or [sources.acquisition].providers.'
+        ),
+    ),
+    ProviderName.OPENCITATIONS: _CredentialGuide(
+        display_name="OpenCitations",
+        purpose="Identifier lookup and citation relations",
+        credential_help="Optional OpenCitations access token",
+        application_url="https://opencitations.net/accesstoken",
+        enablement_hint='Add "opencitations" to [sources.metadata].providers.',
+    ),
+    ProviderName.WILEY: _CredentialGuide(
+        display_name="Wiley Online Library",
+        purpose="IP-authorized Wiley TDM PDF download",
+        credential_help="Wiley-issued TDM token",
+        application_url="https://static.wiley.com/tdm/",
+        enablement_hint='Add "wiley" to [sources.acquisition].providers.',
+        probe_available=False,
+    ),
+}
+
+_CREDENTIAL_FIELD_LABELS: dict[tuple[ProviderName, str], str] = {
+    (ProviderName.WEB_OF_SCIENCE, "api_key"): "Clarivate API key",
+    (ProviderName.SEMANTIC_SCHOLAR, "api_key"): "Semantic Scholar API key",
+    (ProviderName.OPENALEX, "api_key"): "OpenAlex API key",
+    (ProviderName.ELSEVIER, "api_key"): "Elsevier API key",
+    (ProviderName.ELSEVIER, "institution_token"): "Elsevier institution token",
+    (ProviderName.SPRINGER, "api_key"): "Springer Nature API key",
+    (ProviderName.CORE, "api_key"): "CORE API key",
+    (ProviderName.OPENCITATIONS, "access_token"): "OpenCitations access token",
+    (ProviderName.WILEY, "tdm_api_token"): "Wiley TDM API token",
+}
 
 
 class _CliInputError(ValueError):
@@ -99,6 +288,24 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 
 def _add_json(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Write one JSON result to stdout.")
+
+
+def _add_nested_debug(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Write detailed step-by-step diagnostics to stderr.",
+    )
+
+
+def _add_theme(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--theme",
+        choices=tuple(item.value for item in ConfigTheme),
+        default=ConfigTheme.AUTO.value,
+        help="Terminal theme for human-readable output.",
+    )
 
 
 def _add_library_query(parser: argparse.ArgumentParser, *, text_option: str = "--text") -> None:
@@ -153,6 +360,7 @@ def _leaf(parent: argparse.ArgumentParser, name: str, help_text: str) -> argpars
     subcommands = getattr(parent, "_sciretriever_subcommands")
     parser = subcommands.add_parser(name, help=help_text, description=help_text)
     _add_json(parser)
+    _add_nested_debug(parser)
     return parser
 
 
@@ -162,6 +370,7 @@ def _group(
     help_text: str,
 ) -> argparse.ArgumentParser:
     parser = root.add_parser(name, help=help_text, description=help_text)
+    _add_nested_debug(parser)
     subcommands = parser.add_subparsers(dest="action", metavar="COMMAND", required=True)
     setattr(parser, "_sciretriever_subcommands", subcommands)
     return parser
@@ -171,6 +380,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(
         prog="sciretriever",
         description="Build and maintain a scientific-literature database.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write detailed step-by-step diagnostics to stderr.",
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
 
@@ -200,6 +414,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Complete selected database literature.",
     )
     _add_json(complete)
+    _add_nested_debug(complete)
     complete.add_argument("goal", choices=("pdf", "content"))
     completion_selector = complete.add_mutually_exclusive_group(required=True)
     completion_selector.add_argument("--all-pending", action="store_true")
@@ -265,13 +480,26 @@ def _build_parser() -> argparse.ArgumentParser:
         artifact.add_argument("output", help="Output file, or - for raw stdout.")
         artifact.add_argument("--overwrite", action="store_true")
 
-    config = _group(commands, "config", "Manage local Provider credentials and readiness.")
-    set_parser = _leaf(config, "set", "Set one Provider credential section.")
-    set_parser.add_argument("provider")
-    remove_parser = _leaf(config, "remove", "Remove one Provider credential section.")
-    remove_parser.add_argument("provider")
-    _leaf(config, "status", "Show local Provider readiness.")
-    test_parser = _leaf(config, "test", "Run an explicit minimal read-only Provider probe.")
+    config = commands.add_parser(
+        "config",
+        help="Manage local services, Provider credentials, and readiness.",
+        description=(
+            "Interactively configure LLM Analysis, MinerU Parser, and Literature Provider "
+            "credentials, or inspect readiness and run explicit probes."
+        ),
+    )
+    _add_nested_debug(config)
+    _add_theme(config)
+    config_commands = config.add_subparsers(
+        dest="action",
+        metavar="COMMAND",
+        required=False,
+    )
+    setattr(config, "_sciretriever_subcommands", config_commands)
+    status_parser = _leaf(config, "status", "Show local configuration readiness.")
+    _add_theme(status_parser)
+    test_parser = _leaf(config, "test", "Run an explicit minimal read-only service probe.")
+    _add_theme(test_parser)
     selection = test_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("provider", nargs="?")
     selection.add_argument("--all", action="store_true", dest="test_all")
@@ -319,7 +547,7 @@ def _run_search(arguments: argparse.Namespace) -> int:
             cursor=arguments.cursor,
         )
     )
-    graph = _load_local_library_graph()
+    graph = _load_local_library_graph(debug=arguments.debug)
     result = graph.entry_api.search_literature(request)
     return _present_result(result, as_json=arguments.json)
 
@@ -356,8 +584,17 @@ def _library_query(arguments: argparse.Namespace) -> LibraryQuery:
     )
 
 
-def _load_local_library_graph() -> LocalLibraryObjectGraph:
+def _load_local_library_graph(*, debug: bool) -> LocalLibraryObjectGraph:
     configuration = load_selected_configuration(None)
+    if debug:
+        return cast(
+            LocalLibraryObjectGraph,
+            build_production_object_graph(
+                configuration,
+                scope=ProductionEntryScope.LOCAL_LIBRARY,
+                logging_level=logging.DEBUG,
+            ),
+        )
     return cast(
         LocalLibraryObjectGraph,
         build_production_object_graph(
@@ -367,8 +604,14 @@ def _load_local_library_graph() -> LocalLibraryObjectGraph:
     )
 
 
-def _load_scoped_graph(scope: ProductionEntryScope) -> object:
+def _load_scoped_graph(scope: ProductionEntryScope, *, debug: bool) -> object:
     configuration = load_selected_configuration(None)
+    if debug:
+        return build_production_object_graph(
+            configuration,
+            scope=scope,
+            logging_level=logging.DEBUG,
+        )
     return build_production_object_graph(configuration, scope=scope)
 
 
@@ -385,7 +628,10 @@ def _run_discovery(arguments: argparse.Namespace) -> int:
         )
         graph = cast(
             TopicDiscoveryObjectGraph,
-            _load_scoped_graph(ProductionEntryScope.TOPIC_DISCOVERY),
+            _load_scoped_graph(
+                ProductionEntryScope.TOPIC_DISCOVERY,
+                debug=arguments.debug,
+            ),
         )
         request = request.model_copy(
             update={"providers": graph.topic_provider_limits},
@@ -407,7 +653,10 @@ def _run_discovery(arguments: argparse.Namespace) -> int:
         )
         graph = cast(
             CitationDiscoveryObjectGraph,
-            _load_scoped_graph(ProductionEntryScope.CITATION_DISCOVERY),
+            _load_scoped_graph(
+                ProductionEntryScope.CITATION_DISCOVERY,
+                debug=arguments.debug,
+            ),
         )
         request = request.model_copy(
             update={"providers": graph.citation_provider_limits},
@@ -459,7 +708,10 @@ def _run_complete(arguments: argparse.Namespace) -> int:
     request = _input_value(
         lambda: BatchRequest(selector=_completion_selector(arguments), goal=goal)
     )
-    graph = cast(DatabaseCompletionObjectGraph, _load_scoped_graph(scope))
+    graph = cast(
+        DatabaseCompletionObjectGraph,
+        _load_scoped_graph(scope, debug=arguments.debug),
+    )
     result = graph.entry_api.complete_database(request)
     return _present_result(result, as_json=arguments.json)
 
@@ -481,7 +733,7 @@ def _run_literature_read(arguments: argparse.Namespace) -> int:
                 cursor=arguments.cursor,
             )
         )
-    graph = _load_local_library_graph()
+    graph = _load_local_library_graph(debug=arguments.debug)
     if arguments.action == "show":
         result = graph.entry_api.get_literature_detail(cast(LiteratureId, input_value))
     elif arguments.action == "references" and arguments.reference_id is not None:
@@ -528,13 +780,19 @@ def _run_import(arguments: argparse.Namespace) -> int:
             assert format is not None
             graph = cast(
                 BibliographyExchangeObjectGraph,
-                _load_scoped_graph(ProductionEntryScope.BIBLIOGRAPHY_EXCHANGE),
+                _load_scoped_graph(
+                    ProductionEntryScope.BIBLIOGRAPHY_EXCHANGE,
+                    debug=arguments.debug,
+                ),
             )
             result = graph.entry_api.import_bibliography(format, source)
         else:
             graph = cast(
                 ManualPdfObjectGraph,
-                _load_scoped_graph(ProductionEntryScope.MANUAL_PDF),
+                _load_scoped_graph(
+                    ProductionEntryScope.MANUAL_PDF,
+                    debug=arguments.debug,
+                ),
             )
             assert literature_id is not None
             result = graph.entry_api.admit_manual_pdf(literature_id, source)
@@ -569,7 +827,10 @@ def _run_export_metadata(arguments: argparse.Namespace) -> int:
     selector = _input_value(lambda: _bibliography_selector(arguments))
     graph = cast(
         BibliographyExchangeObjectGraph,
-        _load_scoped_graph(ProductionEntryScope.BIBLIOGRAPHY_EXCHANGE),
+        _load_scoped_graph(
+            ProductionEntryScope.BIBLIOGRAPHY_EXCHANGE,
+            debug=arguments.debug,
+        ),
     )
     result = graph.entry_api.export_bibliography(
         format,
@@ -601,7 +862,7 @@ def _copy_to_stdout(source: Any) -> None:
 
 def _run_export_artifact(arguments: argparse.Namespace) -> int:
     literature_id = _input_value(lambda: LiteratureId(arguments.literature_id))
-    graph = _load_local_library_graph()
+    graph = _load_local_library_graph(debug=arguments.debug)
     detail = graph.entry_api.get_literature_detail(literature_id)
     reference = _select_artifact(detail, arguments.action)
     if reference is None:
@@ -629,83 +890,1121 @@ def _confirm(prompt: str) -> bool:
     return answer.strip().lower() in {"y", "yes"}
 
 
-def _run_config_set(arguments: argparse.Namespace) -> int:
-    specs = credential_field_specs(arguments.provider)
-    existed = credential_section_exists(arguments.provider, home=None)
-    if existed and not _confirm(f"Replace credentials for {arguments.provider}? [y/N] "):
-        _write_result(
-            {"provider": arguments.provider, "status": "cancelled"},
-            as_json=arguments.json,
+def _credential_guide(provider: ProviderName) -> _CredentialGuide:
+    guide = _CREDENTIAL_GUIDES.get(provider)
+    if guide is None:
+        raise ConfigurationError()
+    return guide
+
+
+def _format_credential_fields(provider: ProviderName) -> str:
+    fields = credential_field_specs(provider)
+    return ", ".join(
+        f"{field.name} ({'required' if field.required else 'optional'})" for field in fields
+    )
+
+
+def _credential_field_prompt(provider: ProviderName, name: str) -> str:
+    return _CREDENTIAL_FIELD_LABELS.get((provider, name), name)
+
+
+def _read_line(prompt: str) -> str | None:
+    try:
+        sys.stderr.write(prompt)
+        sys.stderr.flush()
+        return input().strip()
+    except EOFError:
+        return None
+
+
+def _credential_setup_state(provider: ProviderName, credentials: CredentialLookup) -> str:
+    if not credentials.has_provider(provider):
+        return "not configured"
+    present = frozenset(credentials.field_names(provider))
+    missing = tuple(
+        field.name
+        for field in credential_field_specs(provider)
+        if field.required and field.name not in present
+    )
+    if missing:
+        return "incomplete: missing " + ", ".join(missing)
+    optional_missing = tuple(
+        field.name
+        for field in credential_field_specs(provider)
+        if not field.required and field.name not in present
+    )
+    if optional_missing:
+        return "configured; optional missing: " + ", ".join(optional_missing)
+    return "configured"
+
+
+def _choose_credential_provider() -> ProviderName | None:
+    providers = configurable_credential_providers()
+    credentials = load_credentials(home=None)
+    sys.stderr.write(
+        "SciRetriever Provider credential manager\n"
+        "Secrets are entered without echo and stored in "
+        "~/.sciretriever/credentials.toml (mode 0600).\n"
+        "This configures credentials only; Provider enablement remains in config.toml.\n\n"
+    )
+    for index, provider in enumerate(providers, start=1):
+        guide = _credential_guide(provider)
+        state = _credential_setup_state(provider, credentials)
+        sys.stderr.write(
+            f"  {index}. {guide.display_name} [{provider.value}] — {state}\n"
+            f"     {guide.purpose}\n"
+            f"     Fields: {_format_credential_fields(provider)}\n"
         )
-        return 0
+    sys.stderr.write("\n")
+    while True:
+        answer = _read_line("Choose a Provider number or key (q to quit): ")
+        if answer is None or answer.casefold() in {"q", "quit"}:
+            return None
+        if answer.isdecimal():
+            index = int(answer)
+            if 1 <= index <= len(providers):
+                return providers[index - 1]
+        try:
+            provider = ProviderName(answer.casefold())
+        except ValueError:
+            provider = None
+        if provider in providers:
+            return provider
+        sys.stderr.write("Invalid Provider selection. Choose a listed number/key, or q.\n")
+
+
+def _choose_credential_action(
+    provider: ProviderName,
+) -> Literal["set", "remove", "back", "quit"]:
+    guide = _credential_guide(provider)
+    sys.stderr.write(
+        f"\nManage {guide.display_name} [{provider.value}]\n\n"
+        "  1. Set or update credentials\n"
+        "  2. Remove credentials\n"
+        "  b. Back\n"
+        "  q. Quit\n\n"
+    )
+    while True:
+        answer = _read_line("Choose an action: ")
+        if answer is None or answer.casefold() in {"q", "quit"}:
+            return "quit"
+        if answer.casefold() in {"b", "back"}:
+            return "back"
+        if answer.casefold() in {"1", "set", "update"}:
+            return "set"
+        if answer.casefold() in {"2", "remove", "delete"}:
+            return "remove"
+        sys.stderr.write("Invalid action. Choose 1, 2, b, or q.\n")
+
+
+def _render_credential_setup_intro(provider: ProviderName) -> None:
+    guide = _credential_guide(provider)
+    sys.stderr.write(
+        f"\nConfigure {guide.display_name} [{provider.value}]\n"
+        f"  Purpose: {guide.purpose}\n"
+        f"  Credential: {guide.credential_help}\n"
+        f"  Get or manage it: {guide.application_url}\n"
+        f"  Fields: {_format_credential_fields(provider)}\n"
+        "  Input is hidden. Press Ctrl+C to cancel without writing.\n\n"
+    )
+
+
+def _render_credential_setup_next_steps(provider: ProviderName) -> None:
+    guide = _credential_guide(provider)
+    lines = [
+        "Next steps:",
+        f"  1. {guide.enablement_hint}",
+        "  2. Run: sciretriever config status",
+    ]
+    if guide.probe_available:
+        lines.append(f"  3. Optional live check: sciretriever config test {provider.value}")
+    else:
+        lines.append("  3. No standalone live credential probe is available for this Provider.")
+    lines.append(
+        "     A local configured status does not prove external authentication or article access."
+    )
+    sys.stderr.write("\n".join(lines) + "\n")
+
+
+def _read_credential_value(
+    provider: ProviderName,
+    *,
+    name: str,
+    required: bool,
+) -> str | None:
+    suffix = "required" if required else "optional; blank to omit"
+    label = _credential_field_prompt(provider, name)
+    while True:
+        try:
+            value = getpass.getpass(f"{label} [{name}] ({suffix}): ").strip()
+        except EOFError:
+            return None
+        if value or not required:
+            return value
+        sys.stderr.write("This credential is required; enter a value or press Ctrl+C to cancel.\n")
+
+
+def _configure_provider_credentials(selected: ProviderName) -> None:
+    provider = selected.value
+    specs = credential_field_specs(selected)
+    if not specs:
+        sys.stderr.write(
+            f"{provider} has no configurable secret credential fields. "
+            "Use config.toml for non-secret settings and run "
+            "sciretriever config status.\n"
+        )
+        return
+    existed = credential_section_exists(selected, home=None)
+    _render_credential_setup_intro(selected)
+    if existed and not _confirm(f"Replace credentials for {provider}? [y/N] "):
+        sys.stderr.write("No credentials were changed.\n")
+        return
     values: dict[str, str] = {}
     for spec in specs:
-        suffix = "required" if spec.required else "optional; blank to omit"
-        value = getpass.getpass(f"{arguments.provider} {spec.name} ({suffix}): ").strip()
+        value = _read_credential_value(
+            selected,
+            name=spec.name,
+            required=spec.required,
+        )
+        if value is None:
+            sys.stderr.write("Credential input ended; no credentials were changed.\n")
+            return
         if not value:
-            if spec.required:
-                sys.stderr.write("required credential field was empty.\n")
-                return 2
             continue
         values[spec.name] = value
-    set_credentials(arguments.provider, values, home=None)
-    _write_result(
-        {
-            "provider": arguments.provider,
-            "status": "replaced" if existed else "created",
-        },
-        as_json=arguments.json,
+    if not values:
+        sys.stderr.write("No credential value was entered; no credentials were changed.\n")
+        return
+    set_credentials(provider, values, home=None)
+    guide = _credential_guide(selected)
+    status = "updated" if existed else "saved"
+    sys.stderr.write(f"Credentials for {guide.display_name} [{provider}] were {status}.\n")
+    _render_credential_setup_next_steps(selected)
+
+
+def _remove_provider_credentials(selected: ProviderName) -> None:
+    provider = selected.value
+    guide = _credential_guide(selected)
+    if not credential_section_exists(selected, home=None):
+        sys.stderr.write(f"{guide.display_name} [{provider}] is not configured; nothing changed.\n")
+        return
+    if not _confirm(f"Remove credentials for {provider}? [y/N] "):
+        sys.stderr.write("No credentials were changed.\n")
+        return
+    remove_credentials(selected, home=None)
+    sys.stderr.write(f"Credentials for {guide.display_name} [{provider}] were removed.\n")
+
+
+def _run_config_manager() -> int:
+    theme = getattr(_CONFIG_MANAGER_CONTEXT, "theme", ConfigTheme.AUTO.value)
+    if interactive_terminal():
+        return _run_rich_config_manager(theme)
+    return _run_plain_config_manager()
+
+
+def _run_plain_config_manager() -> int:  # noqa: C901
+    """Deterministic fallback for pipes, redirected input, and basic terminals."""
+
+    while True:
+        sys.stderr.write(
+            "SciRetriever configuration center\n\n"
+            "  L. LLM Analysis\n"
+            "  M. MinerU Parser\n"
+            "  P. Literature Provider credentials\n"
+            "  Q. Quit\n\n"
+        )
+        answer = _read_line("Choose L, M, P, or Q: ")
+        if answer is None or answer.casefold() in {"q", "quit"}:
+            return 0
+        selected = answer.casefold()
+        if selected in {"l", "llm"}:
+            _manage_llm_plain(ConfigConsole(ConfigTheme.MONO))
+            continue
+        if selected in {"m", "mineru"}:
+            _manage_mineru_plain(ConfigConsole(ConfigTheme.MONO))
+            continue
+        if selected not in {"p", "providers"}:
+            sys.stderr.write("Invalid selection. Choose L, M, P, or Q.\n")
+            continue
+        while True:
+            provider = _choose_credential_provider()
+            if provider is None:
+                break
+            action = _choose_credential_action(provider)
+            if action == "quit":
+                return 0
+            if action == "back":
+                continue
+            if action == "set":
+                _configure_provider_credentials(provider)
+            else:
+                _remove_provider_credentials(provider)
+            sys.stderr.write("\n")
+
+
+@dataclass(slots=True)
+class _ConfigManagerContext:
+    theme: str = ConfigTheme.AUTO.value
+
+
+_CONFIG_MANAGER_CONTEXT = _ConfigManagerContext()
+
+
+def _configuration_summary() -> tuple[Configuration, ConfigurationRuntimeStatus]:
+    path = select_configuration_edit_path()
+    configuration = load_editable_configuration(path)
+    credentials = load_credentials(home=None)
+    return configuration, configuration_runtime_status(
+        configuration,
+        credentials=credentials,
     )
-    return 0
 
 
-def _run_config_remove(arguments: argparse.Namespace) -> int:
-    existed = credential_section_exists(arguments.provider, home=None)
-    if existed:
-        remove_credentials(arguments.provider, home=None)
-    _write_result(
-        {
-            "provider": arguments.provider,
-            "status": "removed" if existed else "not-configured",
-        },
-        as_json=arguments.json,
+def _provider_home_rows() -> list[tuple[str, str, str]]:
+    credentials = load_credentials(home=None)
+    return [
+        (
+            _credential_guide(provider).display_name,
+            _credential_guide(provider).purpose,
+            _credential_setup_state(provider, credentials),
+        )
+        for provider in configurable_credential_providers()
+    ]
+
+
+def _run_rich_config_manager(theme: str) -> int:
+    active_theme = theme
+    while True:
+        console = ConfigConsole(active_theme)
+        configuration, runtime = _configuration_summary()
+        config_path = select_configuration_edit_path()
+        console.header(
+            config_path=os.fspath(config_path),
+            credentials_path=os.fspath(credential_path()),
+        )
+        analysis = configuration.analysis
+        parser = configuration.parsing
+        llm_ready = runtime.analysis.reference_configuration_complete and (
+            not runtime.analysis.api_key_required
+            or (
+                runtime.analysis.api_key_configured is True
+                and runtime.analysis.credential_origin_matches is True
+            )
+        )
+        parser_ready = runtime.parsing.configuration_complete and (
+            not runtime.parsing.bearer_token_required
+            or (
+                runtime.parsing.bearer_token_configured is True
+                and runtime.parsing.credential_origin_matches is True
+            )
+        )
+        console.home(
+            llm_state="Ready" if llm_ready else "Incomplete",
+            llm_detail=(
+                "Not configured"
+                if analysis.protocol is None
+                else f"{analysis.protocol.value} · {analysis.model or 'model missing'}"
+            ),
+            mineru_state="Ready" if parser_ready else "Incomplete",
+            mineru_detail=(
+                "MinerU 3.4.4 · protocol 2 · vlm-engine"
+                if parser.base_url is not None
+                else "Not configured"
+            ),
+            providers=_provider_home_rows(),
+        )
+        options: list[tuple[object, str]] = [
+            ("llm", "LLM Analysis"),
+            ("mineru", "MinerU Parser"),
+            ("theme", "Change theme"),
+        ]
+        options.extend(
+            (provider, f"Provider · {_credential_guide(provider).display_name}")
+            for provider in configurable_credential_providers()
+        )
+        options.append(("quit", "Quit"))
+        selected = TerminalChoice[object](
+            message="Open a configuration area",
+            options=options,
+            theme=active_theme,
+            shortcuts={"l": "llm", "m": "mineru", "t": "theme", "q": "quit"},
+        ).prompt()
+        if selected == "quit":
+            return 0
+        if selected == "theme":
+            active_theme = _choose_theme(active_theme)
+        elif selected == "llm":
+            _manage_llm_rich(console)
+        elif selected == "mineru":
+            _manage_mineru_rich(console)
+        elif isinstance(selected, ProviderName):
+            _manage_provider_rich(selected, active_theme)
+
+
+def _choose_theme(current: str) -> str:
+    return TerminalChoice[str](
+        message="Choose a terminal theme",
+        options=[
+            (ConfigTheme.AUTO.value, "Auto"),
+            (ConfigTheme.DARK.value, "Dark"),
+            (ConfigTheme.LIGHT.value, "Light"),
+            (ConfigTheme.MONO.value, "Monochrome"),
+        ],
+        default=current,
+        theme=current,
+    ).prompt()
+
+
+def _manage_provider_rich(provider: ProviderName, theme: str) -> None:
+    while True:
+        action = TerminalChoice[str](
+            message=f"Manage {_credential_guide(provider).display_name}",
+            options=[
+                ("set", "Set or update credentials"),
+                ("remove", "Remove credentials"),
+                ("back", "Back"),
+            ],
+            theme=theme,
+        ).prompt()
+        if action == "back":
+            return
+        if action == "set":
+            _configure_provider_credentials(provider)
+        else:
+            _remove_provider_credentials(provider)
+
+
+def _configuration_action(service: Literal["LLM", "MinerU"]) -> str | None:
+    sys.stderr.write(
+        f"\nManage {service}\n\n"
+        "  1. Set up or edit\n"
+        "  2. Test configuration\n"
+        "  3. Reset configuration and credential\n"
+        "  b. Back\n\n"
     )
-    return 0
+    answer = _read_line("Choose an action: ")
+    if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
+        return None
+    return {
+        "1": "edit",
+        "edit": "edit",
+        "set": "edit",
+        "2": "test",
+        "test": "test",
+        "3": "reset",
+        "reset": "reset",
+        "remove": "reset",
+    }.get(answer.casefold(), "invalid")
 
 
-def _status_payload(value: object) -> object:
-    if hasattr(value, "model_dump"):
-        payload = value.model_dump(mode="json")  # type: ignore[attr-defined]
+def _run_core_test(service: Literal["llm", "mineru"]) -> None:
+    if service == "llm" and not _confirm(
+        "The LLM probe sends one minimal request and may consume a small amount of quota. "
+        "Continue? [y/N] "
+    ):
+        sys.stderr.write("LLM probe cancelled.\n")
+        return
+    configuration = load_selected_configuration(None)
+    session = build_production_configuration_probe_session(configuration)
+    result = session.run_llm() if service == "llm" else session.run_mineru()
+    sys.stderr.write(f"{service.upper()} configuration test: {result.outcome.value}.\n")
+    failure = result.failure_code
+    if failure is not None:
+        sys.stderr.write(f"  Failure: {failure}\n")
+
+
+def _reset_core_configuration(service: Literal["llm", "mineru"], console: ConfigConsole) -> None:
+    label = "LLM Analysis" if service == "llm" else "MinerU Parser"
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    ordinary_configured = (
+        before.analysis != AnalysisConfig()
+        if service == "llm"
+        else before.parsing != ParsingConfig()
+    )
+    secret_configured = core_credential_section_exists(service)
+    if not ordinary_configured and not secret_configured:
+        console.message(f"{label} is not configured; nothing changed.", kind="muted")
+        return
+    if not _confirm(f"Reset {label} settings and remove its credential? [y/N] "):
+        console.message("No configuration was changed.", kind="muted")
+        return
+    if service == "llm":
+        update_core_service_configuration(
+            path,
+            "llm",
+            analysis=AnalysisConfig(),
+            secret=None,
+            origin=None,
+        )
     else:
-        payload = value
-    if isinstance(payload, dict):
-        return {key: item for key, item in payload.items() if key != "configuration_fingerprint"}
+        update_core_service_configuration(
+            path,
+            "mineru",
+            parsing=ParsingConfig(),
+            secret=None,
+            origin=None,
+        )
+    console.message(f"{label} configuration was reset.", kind="success")
+
+
+def _manage_llm_plain(console: ConfigConsole) -> None:
+    while True:
+        action = _configuration_action("LLM")
+        if action is None:
+            return
+        if action == "edit":
+            _configure_llm(console)
+        elif action == "test":
+            _run_core_test("llm")
+        elif action == "reset":
+            _reset_core_configuration("llm", console)
+        else:
+            console.message("Invalid action. Choose 1, 2, 3, or b.", kind="warning")
+
+
+def _manage_mineru_plain(console: ConfigConsole) -> None:
+    while True:
+        action = _configuration_action("MinerU")
+        if action is None:
+            return
+        if action == "edit":
+            _configure_mineru(console)
+        elif action == "test":
+            _run_core_test("mineru")
+        elif action == "reset":
+            _reset_core_configuration("mineru", console)
+        else:
+            console.message("Invalid action. Choose 1, 2, 3, or b.", kind="warning")
+
+
+def _manage_llm_rich(console: ConfigConsole) -> None:
+    action = TerminalChoice[str](
+        message="Manage LLM Analysis",
+        options=[
+            ("edit", "Set up or edit"),
+            ("test", "Test configuration"),
+            ("reset", "Reset settings and credential"),
+            ("back", "Back"),
+        ],
+        theme=console.palette.name,
+    ).prompt()
+    if action == "edit":
+        _configure_llm(console)
+    elif action == "test":
+        _run_core_test("llm")
+    elif action == "reset":
+        _reset_core_configuration("llm", console)
+
+
+def _manage_mineru_rich(console: ConfigConsole) -> None:
+    action = TerminalChoice[str](
+        message="Manage MinerU Parser",
+        options=[
+            ("edit", "Set up or edit"),
+            ("test", "Test configuration"),
+            ("reset", "Reset settings and credential"),
+            ("back", "Back"),
+        ],
+        theme=console.palette.name,
+    ).prompt()
+    if action == "edit":
+        _configure_mineru(console)
+    elif action == "test":
+        _run_core_test("mineru")
+    elif action == "reset":
+        _reset_core_configuration("mineru", console)
+
+
+def _select_value(
+    prompt: str,
+    values: list[tuple[str, str]],
+    *,
+    console: ConfigConsole,
+) -> str | None:
+    if interactive_terminal():
+        return TerminalChoice[str | None](
+            message=prompt,
+            options=[*values, (None, "Cancel")],
+            theme=console.palette.name,
+        ).prompt()
+    console.message(prompt, kind="muted")
+    for index, (_value, label) in enumerate(values, start=1):
+        sys.stderr.write(f"  {index}. {label}\n")
+    answer = _read_line("Choose a number (b to cancel): ")
+    if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
+        return None
+    if answer.isdecimal() and 1 <= int(answer) <= len(values):
+        return values[int(answer) - 1][0]
+    console.message("Invalid selection; no configuration was changed.", kind="warning")
+    return None
+
+
+def _ask_text(label: str, *, default: str | None = None) -> str | None:
+    suffix = f" [{default}]" if default else ""
+    value = _read_line(f"{label}{suffix}: ")
+    if value is None:
+        return None
+    return default if not value and default is not None else value
+
+
+def _ask_positive_integer(label: str, *, default: int | None = None) -> int | None:
+    while True:
+        raw = _ask_text(label, default=None if default is None else str(default))
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return value
+        sys.stderr.write("Enter a positive integer, or press Ctrl+C to cancel.\n")
+
+
+def _confirm_changes(
+    console: ConfigConsole,
+    before: Configuration,
+    after: Configuration,
+    *,
+    section: Literal["analysis", "parsing"],
+) -> bool:
+    changes = configuration_diff(before, after, sections=(section,))
+    if not changes:
+        console.message("No ordinary configuration changes are needed.", kind="muted")
+        return True
+    console.changes(changes)
+    return _confirm("Save these ordinary configuration changes? [y/N] ")
+
+
+def _analysis_candidate(
+    *,
+    provider: AnalysisProvider,
+    service_name: str | None,
+    protocol: AnalysisProtocol,
+    base_url: str,
+    model: str,
+    context_window_tokens: int,
+    authentication: AnalysisAuthentication,
+    budgets: dict[str, int],
+) -> AnalysisConfig:
+    return AnalysisConfig(
+        provider=provider,
+        service_name=service_name,
+        protocol=protocol,
+        base_url=base_url,
+        model=model,
+        context_window_tokens=context_window_tokens,
+        authentication=authentication,
+        **budgets,
+    )
+
+
+def _custom_analysis_budgets(console: ConfigConsole) -> dict[str, int] | None:
+    values: dict[str, int] = {}
+    labels = {
+        "metadata_max_output_tokens": "Metadata output reserve (tokens)",
+        "content_max_output_tokens": "Content output reserve (tokens)",
+        "reference_max_output_tokens": "Reference output reserve (tokens)",
+        "max_input_bytes": "Maximum Analysis input (bytes)",
+        "max_chunk_bytes": "Maximum content chunk (bytes)",
+        "max_chunk_count": "Maximum content chunks",
+        "max_total_llm_requests": "Maximum LLM requests per operation",
+        "max_total_output_tokens": "Maximum total output tokens per operation",
+    }
+    for name, default in _DEFAULT_ANALYSIS_BUDGETS.items():
+        value = _ask_positive_integer(labels[name], default=default)
+        if value is None:
+            console.message("Budget entry was cancelled; no configuration was changed.")
+            return None
+        values[name] = value
+    return values
+
+
+def _choose_analysis_budgets(console: ConfigConsole) -> dict[str, int] | None:
+    preset = _select_value(
+        "Choose an Analysis budget profile",
+        [
+            ("conservative", "Conservative · smaller requests and output reserves"),
+            ("balanced", "Balanced · recommended default"),
+            ("large", "Large context · larger chunks and request budget"),
+            ("custom", "Custom · enter every limit"),
+        ],
+        console=console,
+    )
+    if preset is None:
+        return None
+    if preset == "custom":
+        return _custom_analysis_budgets(console)
+    return dict(_ANALYSIS_BUDGET_PRESETS[preset])
+
+
+def _configure_llm(console: ConfigConsole) -> None:  # noqa: C901, PLR0915
+    console.section(
+        "LLM Analysis",
+        "Explicit protocol, verified context window, and origin-bound credentials.",
+    )
+    preset = _select_value(
+        "Choose a service preset",
+        [
+            ("openai", "OpenAI official · Responses API"),
+            ("anthropic", "Anthropic official · Messages API"),
+            ("custom", "Custom / compatible service"),
+        ],
+        console=console,
+    )
+    if preset is None:
+        return
+    if preset == "openai":
+        provider = AnalysisProvider.OPENAI
+        service_name = None
+        protocol = AnalysisProtocol.OPENAI_RESPONSES
+        base_url = "https://api.openai.com/v1"
+        authentication = AnalysisAuthentication.API_KEY
+    elif preset == "anthropic":
+        provider = AnalysisProvider.ANTHROPIC
+        service_name = None
+        protocol = AnalysisProtocol.ANTHROPIC_MESSAGES
+        base_url = "https://api.anthropic.com/v1"
+        authentication = AnalysisAuthentication.API_KEY
+    else:
+        provider = AnalysisProvider.CUSTOM
+        service_name = _ask_text("Safe service identity (letters/numbers/dash)")
+        protocol_value = _select_value(
+            "Choose the exact compatible protocol",
+            [
+                (AnalysisProtocol.OPENAI_RESPONSES.value, "OpenAI Responses"),
+                (
+                    AnalysisProtocol.OPENAI_CHAT_COMPLETIONS.value,
+                    "OpenAI Chat Completions",
+                ),
+                (AnalysisProtocol.ANTHROPIC_MESSAGES.value, "Anthropic Messages"),
+            ],
+            console=console,
+        )
+        base_url = _ask_text("Service Base URL")
+        if service_name is None or protocol_value is None or base_url is None:
+            return
+        protocol = AnalysisProtocol(protocol_value)
+        authentication_value = _select_value(
+            "Choose authentication",
+            [
+                (AnalysisAuthentication.API_KEY.value, "API key"),
+                (
+                    AnalysisAuthentication.NONE.value,
+                    "No authentication · custom HTTP loopback only",
+                ),
+            ],
+            console=console,
+        )
+        if authentication_value is None:
+            return
+        authentication = AnalysisAuthentication(authentication_value)
+    model = _ask_text("Model / deployment name")
+    context = _ask_positive_integer("Verified context window (tokens)", default=1_000_000)
+    budgets = _choose_analysis_budgets(console)
+    if model is None or context is None or budgets is None:
+        return
+    try:
+        candidate = _analysis_candidate(
+            provider=provider,
+            service_name=service_name,
+            protocol=protocol,
+            base_url=base_url,
+            model=model,
+            context_window_tokens=context,
+            authentication=authentication,
+            budgets=budgets,
+        )
+    except (ValidationError, ValueError, TypeError):
+        console.message(
+            "The LLM settings are invalid or conflict with their budgets.", kind="warning"
+        )
+        return
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    after = before.model_copy(update={"analysis": candidate})
+    if not _confirm_changes(console, before, after, section="analysis"):
+        console.message("No configuration was changed.", kind="muted")
+        return
+    origin = (
+        configuration_service_origin(base_url)
+        if authentication is AnalysisAuthentication.API_KEY
+        else None
+    )
+    secret: str | None = None
+    if authentication is AnalysisAuthentication.API_KEY:
+        try:
+            secret = getpass.getpass("API key (input hidden): ").strip()
+        except EOFError:
+            return
+        if not secret:
+            console.message("An API key is required; no configuration was changed.", kind="warning")
+            return
+    update_core_service_configuration(
+        path,
+        "llm",
+        analysis=candidate,
+        secret=secret,
+        origin=origin,
+    )
+    console.message("LLM Analysis configuration was saved.", kind="success")
+
+
+def _configure_mineru(console: ConfigConsole) -> None:  # noqa: C901
+    console.section(
+        "MinerU Parser",
+        "MinerU 3.4.4 · protocol 2 · vlm-engine · archive backend vlm · parse auto",
+    )
+    mode_value = _select_value(
+        "Choose a connection mode",
+        [("loopback", "Loopback · PDF stays on this machine"), ("remote", "Remote service")],
+        console=console,
+    )
+    if mode_value is None:
+        return
+    mode = ParserConnectionMode(mode_value)
+    default_url = "http://127.0.0.1:8000" if mode is ParserConnectionMode.LOOPBACK else None
+    base_url = _ask_text("MinerU service Base URL", default=default_url)
+    model_identity = _ask_text("Model / deployment identity", default="mineru-3.4.4-vlm")
+    if base_url is None or model_identity is None:
+        return
+    authorized = False
+    token: str | None = None
+    origin: str | None = None
+    if mode is ParserConnectionMode.REMOTE:
+        console.message(
+            "Remote mode uploads source PDFs outside this machine. Confirm only for an "
+            "operator-approved service.",
+            kind="warning",
+        )
+        authorized = _confirm("Authorize remote PDF upload to this exact service? [y/N] ")
+        if not authorized:
+            console.message(
+                "Remote upload was not authorized; no configuration was changed.", kind="warning"
+            )
+            return
+    try:
+        candidate = ParsingConfig(
+            base_url=base_url,
+            connection_mode=mode,
+            model_identity=model_identity,
+            remote_upload_authorized=authorized,
+        )
+    except (ValidationError, ValueError, TypeError):
+        console.message("The MinerU endpoint and connection mode are inconsistent.", kind="warning")
+        return
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    after = before.model_copy(update={"parsing": candidate})
+    if not _confirm_changes(console, before, after, section="parsing"):
+        console.message("No configuration was changed.", kind="muted")
+        return
+    if mode is ParserConnectionMode.REMOTE:
+        try:
+            token = getpass.getpass("MinerU bearer token (input hidden): ").strip()
+        except EOFError:
+            return
+        if not token:
+            console.message(
+                "A remote bearer token is required; no configuration was changed.", kind="warning"
+            )
+            return
+        origin = configuration_service_origin(base_url)
+    update_core_service_configuration(
+        path,
+        "mineru",
+        parsing=candidate,
+        secret=token,
+        origin=origin,
+    )
+    console.message("MinerU Parser configuration was saved.", kind="success")
+
+
+def _ordinary_provider_settings(configuration: Configuration, provider: str) -> dict[str, object]:
+    if provider == "web-of-science":
+        settings = configuration.sources.metadata.web_of_science
+        return (
+            {}
+            if settings is None
+            else {
+                "product": settings.product.value,
+                "database": settings.database,
+                "edition": settings.edition,
+            }
+        )
+    if provider == "crossref":
+        settings = configuration.sources.metadata.crossref
+        return {} if settings is None else {"mode": settings.mode.value, "mailto": settings.mailto}
+    if provider == "unpaywall":
+        settings = configuration.sources.acquisition.unpaywall
+        return {} if settings is None else {"contact_email": settings.contact_email}
+    return {}
+
+
+def _missing_ordinary_fields(
+    configuration: Configuration,
+    status: ConfigurationCapabilityStatus,
+) -> tuple[str, ...]:
+    if status.ordinary_parameters_ready:
+        return ()
+    if status.provider.value == "web-of-science":
+        return ("product", "database")
+    if status.provider.value == "crossref":
+        return ("mode",)
+    if status.provider.value == "unpaywall":
+        return ("contact_email",)
+    del configuration
+    return ("provider-specific settings",)
+
+
+def _provider_payload(
+    configuration: Configuration,
+    status: ConfigurationCapabilityStatus,
+) -> dict[str, object]:
+    return {
+        "provider": status.provider.value,
+        "enabled": status.enabled,
+        "production_available": status.production_available,
+        "local_ready": status.local_ready,
+        "failure_code": status.failure_code,
+        "ordinary_settings": _ordinary_provider_settings(
+            configuration,
+            status.provider.value,
+        ),
+        "missing_ordinary_fields": _missing_ordinary_fields(configuration, status),
+        "credentials": {
+            "status": status.credential.status.value,
+            "fields": [
+                {
+                    "name": field.name,
+                    "required": field.required,
+                    "configured": field.present,
+                }
+                for field in status.credential.fields
+            ],
+        },
+        "access_policy_ready": status.access_policy_ready,
+        "probe_available": status.probe_available,
+    }
+
+
+def _acquisition_payload(
+    configuration: Configuration,
+    status: ConfigurationCapabilityStatus,
+) -> dict[str, object]:
+    payload = _provider_payload(configuration, status)
+    provider = status.provider.value
+    public_service = _PUBLIC_ACQUISITION_SERVICES.get(provider)
+    public_service_payload: dict[str, object] | None = None
+    if public_service is not None:
+        kind, label = public_service
+        missing = cast(tuple[str, ...], payload["missing_ordinary_fields"])
+        if provider == "sci-hub":
+            local_ready = status.failure_code != "missing-configured-resolver"
+            failure_code = None if local_ready else "operator-resolver-required"
+        else:
+            local_ready = not missing
+            failure_code = None if local_ready else "missing-ordinary-parameter"
+        public_service_payload = {
+            "kind": kind,
+            "label": label,
+            "production_available": True,
+            "local_ready": local_ready,
+            "failure_code": failure_code,
+            "ordinary_settings": payload["ordinary_settings"],
+            "missing_ordinary_fields": missing,
+        }
+    payload["public_source"] = {
+        # The global direct Source consumes already-saved AssetHints regardless
+        # of which Provider originally observed them.  Do not mislabel that
+        # shared mechanism as twelve independent Provider services.
+        "saved_asset_hints_supported": True,
+        "provider_service": public_service_payload,
+    }
+    payload["authorized_api"] = {
+        "available": provider in AUTHORIZED_PDF_API_PROVIDER_KEYS,
+        "unsupported": provider in UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS,
+        "detail": _UNSUPPORTED_AUTHORIZED_API_DETAILS.get(provider),
+        "credentials": payload["credentials"],
+    }
     return payload
+
+
+def _config_status_payload(
+    configuration: Configuration,
+    capabilities: tuple[ConfigurationCapabilityStatus, ...],
+    runtime: ConfigurationRuntimeStatus,
+) -> dict[str, object]:
+    parser = configuration.parsing
+    analysis = configuration.analysis
+    parser_secret_ready = not runtime.parsing.bearer_token_required or (
+        runtime.parsing.bearer_token_configured is True
+        and runtime.parsing.credential_origin_matches is True
+    )
+    parser_ready = runtime.parsing.configuration_complete and parser_secret_ready
+    analysis_key_ready = not runtime.analysis.api_key_required or (
+        runtime.analysis.api_key_configured is True
+        and runtime.analysis.credential_origin_matches is True
+    )
+    return {
+        "storage": {
+            "configuration_complete": runtime.storage_configuration_complete,
+            "catalog_path": configuration.paths.catalog_path,
+            "artifact_root": configuration.paths.artifact_root,
+            "missing_fields": runtime.storage_missing_fields,
+        },
+        "providers": {
+            "credentials_file": "~/.sciretriever/credentials.toml",
+            "metadata_scan_limit": configuration.discovery.metadata_scan_limit,
+            "metadata": [
+                _provider_payload(configuration, item)
+                for item in capabilities
+                if item.capability is ProviderCapability.METADATA
+            ],
+            "acquisition": [
+                _acquisition_payload(configuration, item)
+                for item in capabilities
+                if item.capability is ProviderCapability.ACQUISITION
+            ],
+            "controlled_browser": {
+                "available": False,
+                "configured_site_rules": [],
+                "operator_profile_configured": False,
+            },
+        },
+        "parsing": {
+            "locally_ready": parser_ready,
+            "configuration_complete": runtime.parsing.configuration_complete,
+            "base_url": parser.base_url,
+            "connection_mode": (
+                None if parser.connection_mode is None else parser.connection_mode.value
+            ),
+            "model_identity": parser.model_identity,
+            "remote_upload_authorized": parser.remote_upload_authorized,
+            "implementation": {
+                "release": "3.4.4",
+                "api_protocol": 2,
+                "profile": "vlm-engine",
+                "archive_backend": "vlm",
+                "parse_method": "auto",
+            },
+            "missing_fields": runtime.parsing.missing_fields,
+            "bearer_token": {
+                "source": "credentials.toml" if runtime.parsing.bearer_token_required else None,
+                "required": runtime.parsing.bearer_token_required,
+                "configured": runtime.parsing.bearer_token_configured,
+                "origin_matches": runtime.parsing.credential_origin_matches,
+            },
+        },
+        "analysis": {
+            "reference_locally_ready": (
+                runtime.analysis.reference_configuration_complete and analysis_key_ready
+            ),
+            "content_locally_ready": (
+                runtime.analysis.content_configuration_complete and analysis_key_ready
+            ),
+            "provider": None if analysis.provider is None else analysis.provider.value,
+            "service_name": analysis.service_name,
+            "protocol": None if analysis.protocol is None else analysis.protocol.value,
+            "base_url": analysis.base_url,
+            "model": analysis.model,
+            "context_window_tokens": analysis.context_window_tokens,
+            "authentication": (
+                None if analysis.authentication is None else analysis.authentication.value
+            ),
+            "api_key": {
+                "source": "credentials.toml" if runtime.analysis.api_key_required else None,
+                "required": runtime.analysis.api_key_required,
+                "configured": runtime.analysis.api_key_configured,
+                "origin_matches": runtime.analysis.credential_origin_matches,
+            },
+            "reference_configuration_complete": (runtime.analysis.reference_configuration_complete),
+            "content_configuration_complete": runtime.analysis.content_configuration_complete,
+            "reference_missing_fields": runtime.analysis.reference_missing_fields,
+            "content_missing_fields": runtime.analysis.content_missing_fields,
+            "limits": {
+                "metadata_max_output_tokens": analysis.metadata_max_output_tokens,
+                "content_max_output_tokens": analysis.content_max_output_tokens,
+                "reference_max_output_tokens": analysis.reference_max_output_tokens,
+                "max_input_bytes": analysis.max_input_bytes,
+                "max_chunk_bytes": analysis.max_chunk_bytes,
+                "max_chunk_count": analysis.max_chunk_count,
+                "max_total_llm_requests": analysis.max_total_llm_requests,
+                "max_total_output_tokens": analysis.max_total_output_tokens,
+            },
+        },
+        "execution": {"max_concurrency": configuration.execution.max_concurrency},
+        "library": {"max_input_bytes": configuration.library.max_input_bytes},
+    }
 
 
 def _run_config_status(arguments: argparse.Namespace) -> int:
     configuration = load_selected_configuration(None)
-    result = configuration_status(configuration, credentials_home=None)
-    _write_result(_status_payload(result), as_json=arguments.json)
+    credentials = load_credentials(home=None)
+    result = configuration_status(configuration, credentials=credentials)
+    runtime = configuration_runtime_status(configuration, credentials=credentials)
+    payload = _config_status_payload(configuration, result.capabilities, runtime)
+    if arguments.json:
+        _write_result(payload, as_json=True)
+    else:
+        ConfigStatusPresenter(arguments.theme).status(payload)
     return 0
 
 
 def _run_config_test(arguments: argparse.Namespace) -> int:
     configuration = load_selected_configuration(None)
     session = build_production_configuration_probe_session(configuration)
-    result = session.run(
-        provider=arguments.provider,
-        test_all=arguments.test_all,
-    )
-    _write_result(result, as_json=arguments.json)
-    return 0 if result.passed else 3
+    if arguments.provider == "llm":
+        if not arguments.json and not _confirm(
+            "The LLM probe sends one minimal external request and may consume a small amount "
+            "of quota. Continue? [y/N] "
+        ):
+            sys.stderr.write("LLM probe cancelled.\n")
+            return 0
+        result: object = session.run_llm()
+        passed = result.outcome is ProbeOutcome.PASSED
+    elif arguments.provider == "mineru":
+        result = session.run_mineru()
+        passed = result.outcome is ProbeOutcome.PASSED
+    elif arguments.test_all:
+        if not arguments.json and not _confirm(
+            "This runs enabled Provider probes, one minimal LLM request that may consume a "
+            "small amount of quota, and a MinerU health check that uploads no PDF. "
+            "Continue? [y/N] "
+        ):
+            sys.stderr.write("Configuration probes cancelled.\n")
+            return 0
+        provider_result = session.run(test_all=True)
+        llm_result = session.run_llm()
+        mineru_result = session.run_mineru()
+        result = {
+            "providers": provider_result.model_dump(mode="json"),
+            "llm": llm_result.model_dump(mode="json"),
+            "mineru": mineru_result.model_dump(mode="json"),
+        }
+        passed = provider_result.passed and all(
+            item.outcome is ProbeOutcome.PASSED for item in (llm_result, mineru_result)
+        )
+    else:
+        result = session.run(provider=arguments.provider)
+        passed = result.passed
+    if arguments.json:
+        _write_result(result, as_json=True)
+    else:
+        if isinstance(result, (ConfigurationProbeSummary, CoreConfigurationProbeResult)):
+            payload = result.model_dump(mode="json")
+        else:
+            payload = cast(dict[str, object], result)
+        ConfigStatusPresenter(arguments.theme).probes(payload)
+    return 0 if passed else 3
 
 
 def _run_config(arguments: argparse.Namespace) -> int:
-    if arguments.action == "set":
-        return _run_config_set(arguments)
-    if arguments.action == "remove":
-        return _run_config_remove(arguments)
+    configure_logging(level=logging.DEBUG if arguments.debug else logging.INFO)
+    if arguments.action is None:
+        _CONFIG_MANAGER_CONTEXT.theme = arguments.theme
+        return _run_config_manager()
     if arguments.action == "status":
         return _run_config_status(arguments)
     return _run_config_test(arguments)
@@ -748,7 +2047,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return error.code if isinstance(error.code, int) else 2
     try:
         return _dispatch(arguments)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         sys.stderr.write("operation interrupted.\n")
         return _INTERRUPTED
     except BootstrapError as error:

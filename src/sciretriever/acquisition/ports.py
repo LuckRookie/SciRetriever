@@ -26,7 +26,7 @@ from sciretriever.model.acquisition import (
     LiteratureAsset,
     PdfCandidate,
 )
-from sciretriever.model.literature import Literature
+from sciretriever.model.literature import Identifier, Literature
 from sciretriever.model.metadata import MetadataObservation
 from sciretriever.model.primitives import (
     AssetId,
@@ -91,6 +91,17 @@ class AcquisitionFailure(RuntimeError):
             raise TypeError("failure must be a StableFailure")
         super().__init__(self._MESSAGE)
         self.failure = failure
+
+
+class AcquisitionSourceFailure(AcquisitionFailure):
+    """One isolated Source path failed while independent paths may still run.
+
+    This classification is intentionally independent of ``retryable``.  A
+    non-retryable denial for one Provider can still be isolated from another
+    public or authorized Source.  Acquisition must retain the failure and
+    raise it if no later path succeeds; it must never turn this failure into
+    automatic exhaustion.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +338,13 @@ class CancellationEvent(Protocol):
 
 
 @runtime_checkable
+class DoiLandingOriginResolver(Protocol):
+    """Resolve one canonical DOI to a safe final origin or a normal miss."""
+
+    def resolve(self, doi: Identifier | None) -> str | None: ...
+
+
+@runtime_checkable
 class PdfValidationStage(Protocol):
     """One path-free owner-only stage used only for bounded PDF validation."""
 
@@ -549,7 +567,9 @@ __all__ = (
     "AcquisitionExhaustionClearPort",
     "AcquisitionExhaustionPublicationPort",
     "AcquisitionFailure",
+    "AcquisitionSourceFailure",
     "CancellationEvent",
+    "DoiLandingOriginResolver",
     "CandidateKeyTracker",
     "PdfSource",
     "PdfSourceBinding",

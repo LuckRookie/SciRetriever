@@ -8,6 +8,7 @@ creating a project-wide LLM infrastructure module.
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -29,7 +30,13 @@ from sciretriever.network.admission import (
     AccessScope,
 )
 from sciretriever.network.http import HttpClient
-from sciretriever.network.policy import Origin
+from sciretriever.network.policy import (
+    AddressClass,
+    DestinationPolicy,
+    Origin,
+    PolicyError,
+    normalize_url_with_configured_port,
+)
 
 OPENAI_ACCESS_SCOPE = AccessScope(
     provider_name="openai",
@@ -96,6 +103,12 @@ _FAILURES: dict[str, tuple[str, str, str, bool]] = {
         "analysis-llm-token-budget",
         "The requested output token count exceeded its configured upper bound.",
         "Reduce the requested output token count before retrying.",
+        False,
+    ),
+    "context-budget": (
+        "analysis-llm-context-budget",
+        "The complete Analysis request exceeded the configured context window.",
+        "Reduce the input or output reserve, or configure the verified model context window.",
         False,
     ),
     "access": (
@@ -190,6 +203,7 @@ class ProviderHttpAdapterBase:
         "_access_scope",
         "_api_key",
         "_credential_origin",
+        "_destination_policy",
         "_endpoint",
         "_http_client",
         "_limits",
@@ -201,12 +215,13 @@ class ProviderHttpAdapterBase:
         self,
         *,
         http_client: HttpClient,
-        api_key: str,
+        api_key: str | None,
         limits: LLMProviderLimits,
         access_policy: AccessPolicy | None,
         provider_name: str,
         endpoint: str,
-        credential_origin: Origin,
+        credential_origin: Origin | None,
+        destination_policy: DestinationPolicy,
         access_scope: AccessScope,
         baseline_policy: AccessPolicy,
         protocol_revision: str,
@@ -218,7 +233,14 @@ class ProviderHttpAdapterBase:
         if access_policy is not None and not isinstance(access_policy, AccessPolicy):
             raise TypeError("access_policy must be an AccessPolicy or None")
         self._http_client = http_client
-        self._api_key = _private_api_key(api_key)
+        if api_key is None:
+            if credential_origin is not None:
+                raise provider_failure("credentials")
+            self._api_key = None
+        else:
+            if credential_origin is None:
+                raise provider_failure("credentials")
+            self._api_key = _private_api_key(api_key)
         self._limits = limits
         self._access_policy = (
             baseline_policy
@@ -228,11 +250,12 @@ class ProviderHttpAdapterBase:
         self._provider_name = provider_name
         self._endpoint = endpoint
         self._credential_origin = credential_origin
+        self._destination_policy = destination_policy
         self._access_scope = access_scope
         self._protocol_revision = protocol_revision
 
     def __repr__(self) -> str:
-        return f"<{type(self).__name__} credentialed=True>"
+        return f"<{type(self).__name__} credentialed={self._api_key is not None}>"
 
     @property
     def provider_name(self) -> str:
@@ -281,8 +304,11 @@ class ProviderHttpAdapterBase:
             method="POST",
             headers=self._safe_headers(),
             credential_headers=self._credential_headers(),
-            credential_allowed_origins=(self._credential_origin,),
+            credential_allowed_origins=(
+                () if self._credential_origin is None else (self._credential_origin,)
+            ),
             body=body,
+            destination_policy=self._destination_policy,
             connect_timeout_seconds=self._limits.connect_timeout_seconds,
             read_timeout_seconds=self._limits.read_timeout_seconds,
             overall_timeout_seconds=self._limits.overall_timeout_seconds,
@@ -314,6 +340,13 @@ class ProviderHttpAdapterBase:
                 raise provider_failure(failure_kind)
         if call.request.max_output_tokens > self._limits.max_output_tokens:
             raise provider_failure("token-budget")
+        request_tokens = _conservative_token_estimate(
+            utf8_size(call.prompt)
+            + utf8_size(call.structured_input)
+            + utf8_size(call.response_schema)
+        )
+        if request_tokens + call.request.max_output_tokens > self._limits.context_window_tokens:
+            raise provider_failure("context-budget")
 
     def _parameter_bytes(self, call: AnalysisLLMCall) -> bytes:
         effective_schema = canonical_json_bytes(parse_strict_json_object(call.response_schema))
@@ -328,6 +361,8 @@ class ProviderHttpAdapterBase:
                 "response_schema_sha256": str(sha256_digest(effective_schema)),
                 "max_output_tokens": call.request.max_output_tokens,
                 "provider_parameters": self._provider_parameters(),
+                "endpoint_sha256": str(sha256_digest(self._endpoint.encode("utf-8"))),
+                "context_window_tokens": self._limits.context_window_tokens,
             }
         )
 
@@ -365,6 +400,71 @@ def _private_api_key(value: object) -> str:
     ):
         raise provider_failure("credentials")
     return value
+
+
+def _conservative_token_estimate(byte_count: int) -> int:
+    if type(byte_count) is not int or byte_count < 0:
+        raise TypeError("byte_count must be a non-negative integer")
+    return (byte_count + 2) // 3
+
+
+def analysis_http_connection(
+    *,
+    base_url: str,
+    endpoint_suffix: str,
+    api_key: str | None,
+) -> tuple[str, Origin | None, DestinationPolicy]:
+    """Build one exact LLM endpoint and its fail-closed destination policy."""
+
+    if type(endpoint_suffix) is not str or not endpoint_suffix.startswith("/"):
+        raise provider_failure("protocol")
+    try:
+        base = normalize_url_with_configured_port(
+            base_url,
+            allowed_schemes=("http", "https"),
+        )
+    except (PolicyError, TypeError, ValueError):
+        raise provider_failure("protocol") from None
+    if base.query:
+        raise provider_failure("protocol")
+    endpoint_text = base.url.rstrip("/") + endpoint_suffix
+    try:
+        endpoint = normalize_url_with_configured_port(
+            endpoint_text,
+            allowed_schemes=(base.scheme,),
+        )
+    except (PolicyError, TypeError, ValueError):
+        raise provider_failure("protocol") from None
+    if endpoint.origin != base.origin or endpoint.query:
+        raise provider_failure("protocol")
+    try:
+        address = ipaddress.ip_address(base.hostname)
+    except ValueError:
+        address = None
+    loopback = base.hostname == "localhost" or bool(address is not None and address.is_loopback)
+    if base.scheme == "http":
+        if not loopback or api_key is not None:
+            raise provider_failure("credentials")
+        allowed_addresses = (
+            frozenset({"127.0.0.1", "::1"})
+            if base.hostname == "localhost"
+            else frozenset({str(address)})
+        )
+        policy = DestinationPolicy(
+            allowed_schemes=frozenset({"http"}),
+            allowed_classes=frozenset({AddressClass.LOOPBACK}),
+            allowed_addresses=allowed_addresses,
+            allowed_ports=frozenset({("http", base.port)}),
+        )
+        return endpoint.url, None, policy
+    if loopback or address is not None or api_key is None:
+        raise provider_failure("credentials")
+    policy = DestinationPolicy(
+        allowed_schemes=frozenset({"https"}),
+        allowed_classes=frozenset({AddressClass.PUBLIC}),
+        allowed_ports=frozenset({("https", base.port)}),
+    )
+    return endpoint.url, base.origin, policy
 
 
 def _response_feedback(response: TransportResponse) -> AccessFeedback | None:

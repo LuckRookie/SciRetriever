@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, NoReturn, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, unquote_to_bytes, urlencode, urlsplit
 
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import (
     AccessFailure,
     Header,
@@ -76,6 +77,7 @@ _CREDENTIAL_NAMES = frozenset(
         "x-els-apikey",
         "x-insttoken",
         "x-els-insttoken",
+        "wiley-tdm-client-token",
     }
 )
 _QUERY_CREDENTIAL_NAMES = frozenset({"api_key", "email"})
@@ -107,6 +109,7 @@ _NETWORK_OWNED_HEADER_NAMES = frozenset(
 )
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _T = TypeVar("_T")
+_LOGGER = get_logger(__name__)
 
 
 class _Transport(Protocol):
@@ -641,6 +644,7 @@ class _PreparedRequest:
     budget: ResourceBudget
     current: ResolvedDestination
     redirect_target_guard: RedirectTargetGuard | None
+    allow_guarded_redirect_encoded_path_separators: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -748,6 +752,7 @@ class HttpClient:
         cancel_event: threading.Event | None = None,
         response_feedback: ResponseFeedbackInterpreter | None = None,
         redirect_target_guard: RedirectTargetGuard | None = None,
+        allow_guarded_redirect_encoded_path_separators: bool = False,
     ) -> TransportResponse | AccessFailure:
         """Run one bounded request and return only a neutral access result.
 
@@ -763,6 +768,9 @@ class HttpClient:
         permit.  An optional redirect target guard receives each absolute
         redirect target before target DNS resolution or transport and can fail
         closed without exposing its exception or target through the result.
+        A caller may separately opt a guarded Provider-issued opaque redirect
+        into encoded path separators.  That narrow mode requires a target
+        guard; ordinary and unguarded redirect URLs remain strict.
         """
 
         if self._closed:
@@ -799,11 +807,21 @@ class HttpClient:
                 cancel_event=cancel_event,
                 deadline=deadline,
                 redirect_target_guard=redirect_target_guard,
+                allow_guarded_redirect_encoded_path_separators=(
+                    allow_guarded_redirect_encoded_path_separators
+                ),
             )
         except _RequestAbort as error:
             return _failure(error.code)
         except (PolicyError, TypeError, ValueError):
             return _failure("policy")
+
+        diagnostics_enabled = not prepared.private_headers and prepared.credential_query is None
+        _log_network_request_started(
+            scope,
+            prepared,
+            enabled=diagnostics_enabled,
+        )
 
         scope_permit = self._acquire_scope_permit(
             scope,
@@ -812,7 +830,11 @@ class HttpClient:
             deadline=deadline,
         )
         if isinstance(scope_permit, AccessFailure):
-            return scope_permit
+            return _logged_access_result(
+                scope,
+                scope_permit,
+                enabled=diagnostics_enabled,
+            )
         feedback: AccessFeedback | None = None
         try:
             result = self._run_hops(
@@ -825,7 +847,11 @@ class HttpClient:
                 feedback = response_feedback(result)
                 if feedback is not None and not isinstance(feedback, AccessFeedback):
                     raise TypeError("response_feedback must return AccessFeedback or None")
-            return result
+            return _logged_access_result(
+                scope,
+                result,
+                enabled=diagnostics_enabled,
+            )
         finally:
             try:
                 scope_permit.release(feedback)
@@ -893,6 +919,9 @@ class HttpClient:
                 deadline=deadline,
                 redirects=redirects,
                 redirect_target_guard=prepared.redirect_target_guard,
+                allow_guarded_redirect_encoded_path_separators=(
+                    prepared.allow_guarded_redirect_encoded_path_separators
+                ),
             )
             if hop.next_destination is None:
                 return hop.response
@@ -926,9 +955,16 @@ class HttpClient:
         cancel_event: threading.Event | None,
         deadline: float,
         redirect_target_guard: RedirectTargetGuard | None,
+        allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _PreparedRequest:
         if cancel_event is not None and not hasattr(cancel_event, "is_set"):
             raise TypeError("cancel_event must expose is_set()")
+        if type(allow_guarded_redirect_encoded_path_separators) is not bool:
+            raise TypeError("allow_guarded_redirect_encoded_path_separators must be a bool")
+        if allow_guarded_redirect_encoded_path_separators and redirect_target_guard is None:
+            raise ValueError(
+                "allow_guarded_redirect_encoded_path_separators requires redirect_target_guard"
+            )
         self._check_request_state(cancel_event, deadline)
         private_query = _normalise_private_query(credential_query)
         private_headers = _normalise_private_headers(credential_headers)
@@ -1008,6 +1044,9 @@ class HttpClient:
             budget=effective_budget,
             current=current,
             redirect_target_guard=redirect_target_guard,
+            allow_guarded_redirect_encoded_path_separators=(
+                allow_guarded_redirect_encoded_path_separators
+            ),
         )
 
     def _request_hop(
@@ -1029,6 +1068,7 @@ class HttpClient:
         deadline: float,
         redirects: int,
         redirect_target_guard: RedirectTargetGuard | None,
+        allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _HopResult:
         try:
             self._check_request_state(cancel_event, deadline)
@@ -1080,6 +1120,9 @@ class HttpClient:
                 redirects=redirects,
                 credential_alias_guard=credential_alias_guard,
                 redirect_target_guard=redirect_target_guard,
+                allow_guarded_redirect_encoded_path_separators=(
+                    allow_guarded_redirect_encoded_path_separators
+                ),
             )
         except _RequestAbort as error:
             return _HopResult(_failure(error.code), usage)
@@ -1108,6 +1151,7 @@ class HttpClient:
         redirects: int,
         credential_alias_guard: _CredentialAliasGuard,
         redirect_target_guard: RedirectTargetGuard | None,
+        allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _HopResult:
         response, elapsed = self._materialize_response(
             raw_response,
@@ -1137,6 +1181,9 @@ class HttpClient:
             redirects=redirects,
             credential_alias_guard=credential_alias_guard,
             redirect_target_guard=redirect_target_guard,
+            allow_guarded_redirect_encoded_path_separators=(
+                allow_guarded_redirect_encoded_path_separators
+            ),
         )
 
     def _redirect_result(
@@ -1150,6 +1197,7 @@ class HttpClient:
         redirects: int,
         credential_alias_guard: _CredentialAliasGuard,
         redirect_target_guard: RedirectTargetGuard | None,
+        allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _HopResult:
         if response.status not in _REDIRECT_STATUSES:
             return _HopResult(response, usage)
@@ -1167,6 +1215,7 @@ class HttpClient:
                 credential_alias_guard=credential_alias_guard,
                 caller_guard=redirect_target_guard,
             ),
+            allow_guarded_encoded_path_separators=(allow_guarded_redirect_encoded_path_separators),
         )
         return _HopResult(
             response,
@@ -1834,6 +1883,68 @@ def _close_resource(value: object | None) -> None:
             close()
         except Exception:
             pass
+
+
+def _logged_access_result(
+    scope: object,
+    result: TransportResponse | AccessFailure,
+    *,
+    enabled: bool,
+) -> TransportResponse | AccessFailure:
+    """Emit only scope-level, secret-free diagnostics for one final request result."""
+
+    if not enabled:
+        return result
+    if isinstance(scope, AccessScope):
+        provider_name = scope.provider_name
+        channel = scope.channel
+        service_name = scope.service_name or "-"
+    else:
+        provider_name = "invalid"
+        channel = "invalid"
+        service_name = "-"
+    if isinstance(result, AccessFailure):
+        _LOGGER.warning(
+            "event=network-request-failed provider=%s channel=%s service=%s "
+            "code=%s retryable=%s reason=%s action=%s",
+            provider_name,
+            channel,
+            service_name,
+            result.code,
+            str(result.retryable).lower(),
+            result.reason,
+            result.action,
+        )
+        return result
+    _LOGGER.debug(
+        "event=network-request-finished provider=%s channel=%s service=%s "
+        "status=%d response_bytes=%d",
+        provider_name,
+        channel,
+        service_name,
+        result.status,
+        len(result.body),
+    )
+    return result
+
+
+def _log_network_request_started(
+    scope: AccessScope,
+    prepared: _PreparedRequest,
+    *,
+    enabled: bool,
+) -> None:
+    """Record a secret-free request step when the request carries no credentials."""
+
+    if not enabled:
+        return
+    _LOGGER.debug(
+        "event=network-request-started provider=%s channel=%s service=%s method=%s",
+        scope.provider_name,
+        scope.channel,
+        scope.service_name or "-",
+        prepared.method,
+    )
 
 
 def _failure(code: str) -> AccessFailure:

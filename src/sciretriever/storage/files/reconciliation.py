@@ -109,22 +109,13 @@ def _checkpoint(callback: Checkpoint | None, name: str) -> None:
         raise _failure() from error
 
 
-def _directory_metadata(metadata: os.stat_result, root: StorageRoot) -> None:
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != root.owner
-        or stat.S_IMODE(metadata.st_mode) != 0o700
-    ):
+def _directory_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
         raise _integrity_failure()
 
 
-def _entry_metadata(metadata: os.stat_result, root: StorageRoot) -> None:
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != root.owner
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-        or metadata.st_nlink != 1
-    ):
+def _entry_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise _integrity_failure()
 
 
@@ -170,7 +161,7 @@ def _scan_descriptor(
 ) -> _FileIdentity:
     try:
         initial = os.fstat(descriptor)
-        _entry_metadata(initial, root)
+        _entry_metadata(initial)
         if initial.st_size != expected_size or initial.st_size > max_artifact_bytes:
             raise _integrity_failure()
         os.lseek(descriptor, 0, os.SEEK_SET)
@@ -185,7 +176,7 @@ def _scan_descriptor(
                 raise _integrity_failure()
             digest.update(chunk)
         final = os.fstat(descriptor)
-        _entry_metadata(final, root)
+        _entry_metadata(final)
         if (
             _identity(initial) != _identity(final)
             or total != expected_size
@@ -211,7 +202,7 @@ def _objects_directory_exists(root: StorageRoot) -> bool:
                 )
             except FileNotFoundError:
                 return False
-            _directory_metadata(metadata, root)
+            _directory_metadata(metadata)
             return True
     except ArtifactReconciliationError:
         raise
@@ -241,7 +232,7 @@ def _scan_formal_entry(
     descriptor = -1
     try:
         entry = os.stat(name, dir_fd=prefix_directory, follow_symlinks=False)
-        _entry_metadata(entry, root)
+        _entry_metadata(entry)
         descriptor = os.open(name, _READ_FLAGS, dir_fd=prefix_directory)
         identity = _scan_descriptor(
             descriptor,
@@ -285,7 +276,7 @@ def _scan_formal_prefix(
             dir_fd=objects_directory,
             follow_symlinks=False,
         )
-        _directory_metadata(prefix_metadata, root)
+        _directory_metadata(prefix_metadata)
         prefix_path = RelativeArtifactPath(f"{_OBJECTS_DIRECTORY}/{prefix}")
         with root.open_directory(prefix_path) as prefix_directory:
             if _identity(os.fstat(prefix_directory)) != _identity(prefix_metadata):
@@ -369,7 +360,7 @@ def _verify_candidate(
     try:
         with root.open_directory(parent_path) as parent:
             entry = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            _entry_metadata(entry, root)
+            _entry_metadata(entry)
             descriptor = os.open(name, _READ_FLAGS, dir_fd=parent)
             try:
                 current = _scan_descriptor(
@@ -407,7 +398,7 @@ def _verify_and_unlink(
         with root.open_directory(parent_path) as parent:
             try:
                 entry = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                _entry_metadata(entry, root)
+                _entry_metadata(entry)
                 descriptor = os.open(name, _READ_FLAGS, dir_fd=parent)
             except OSError as error:
                 raise _failure() from error
@@ -423,7 +414,7 @@ def _verify_and_unlink(
                     raise _integrity_failure()
 
                 def validate_moved(metadata: os.stat_result) -> None:
-                    _entry_metadata(metadata, root)
+                    _entry_metadata(metadata)
                     moved = _scan_descriptor(
                         descriptor,
                         root=root,

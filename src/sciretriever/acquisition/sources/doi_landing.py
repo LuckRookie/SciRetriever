@@ -6,7 +6,7 @@ import threading
 from typing import Final
 from urllib.parse import urlsplit
 
-from sciretriever.acquisition.ports import AcquisitionFailure
+from sciretriever.acquisition.ports import AcquisitionFailure, AcquisitionSourceFailure
 from sciretriever.model.access import AccessFailure, TransportResponse
 from sciretriever.model.literature import Identifier
 from sciretriever.model.report import StableFailure
@@ -74,20 +74,20 @@ def _final_origin(value: str) -> str:
         hostname = parsed.hostname
         port = parsed.port
     except (TypeError, ValueError):
-        raise AcquisitionFailure(_network_failure(retryable=False)) from None
+        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
     if (
         hostname is None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
     ):
-        raise AcquisitionFailure(_network_failure(retryable=False))
+        raise AcquisitionSourceFailure(_network_failure(retryable=False))
     host = f"[{hostname}]" if ":" in hostname else hostname
     authority = host if port is None else f"{host}:{port}"
     try:
         return normalize_url(f"{parsed.scheme}://{authority}").origin.text
     except (PolicyError, TypeError, ValueError):
-        raise AcquisitionFailure(_network_failure(retryable=False)) from None
+        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
 
 
 class DoiLandingResolver:
@@ -137,16 +137,19 @@ class DoiLandingResolver:
                 cancel_event=self._cancel_event,
             )
         except Exception:
-            raise AcquisitionFailure(_network_failure()) from None
+            raise AcquisitionSourceFailure(_network_failure()) from None
         if isinstance(result, AccessFailure):
-            raise AcquisitionFailure(_access_failure(result))
+            failure = _access_failure(result)
+            if result.code == "cancelled":
+                raise AcquisitionFailure(failure)
+            raise AcquisitionSourceFailure(failure)
         if not isinstance(result, TransportResponse):
-            raise AcquisitionFailure(_network_failure())
+            raise AcquisitionSourceFailure(_network_failure())
         if result.status in {204, 404, 410}:
             return None
         if not 200 <= result.status < 300:
             retryable = result.status in {408, 425, 429} or result.status >= 500
-            raise AcquisitionFailure(_status_failure(retryable=retryable))
+            raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
 
         origin = _final_origin(result.final_url)
         return None if origin in _DOI_RESOLVER_ORIGINS else origin

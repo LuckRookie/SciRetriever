@@ -71,8 +71,6 @@ class CatalogLockStateError(CatalogLockError):
 class _Identity:
     device: int
     inode: int
-    mode: int
-    owner: int
     links: int
 
 
@@ -80,19 +78,10 @@ def _failure(error_type: type[CatalogLockError] = CatalogLockError) -> CatalogLo
     return error_type()
 
 
-def _owner() -> int:
-    try:
-        return os.geteuid()
-    except AttributeError:  # pragma: no cover - Windows has no geteuid.
-        return os.getuid()
-
-
 def _identity(metadata: os.stat_result) -> _Identity:
     return _Identity(
         device=metadata.st_dev,
         inode=metadata.st_ino,
-        mode=metadata.st_mode,
-        owner=metadata.st_uid,
         links=metadata.st_nlink,
     )
 
@@ -110,31 +99,18 @@ def _canonical(value: str | os.PathLike[str]) -> Path:
 
 
 def _validate_directory(metadata: os.stat_result) -> None:
-    owner = _owner()
     if not stat.S_ISDIR(metadata.st_mode):
-        raise _failure(CatalogLockSecurityError)
-    mode = stat.S_IMODE(metadata.st_mode)
-    if mode & 0o022 and not (mode & stat.S_ISVTX and metadata.st_uid in {0, owner}):
         raise _failure(CatalogLockSecurityError)
 
 
 def _validate_lock_directory(metadata: os.stat_result) -> _Identity:
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != _LOCK_DIRECTORY_MODE
-    ):
+    if not stat.S_ISDIR(metadata.st_mode):
         raise _failure(CatalogLockSecurityError)
     return _identity(metadata)
 
 
 def _validate_lock_file(metadata: os.stat_result) -> _Identity:
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != _LOCK_FILE_MODE
-        or metadata.st_nlink != 1
-    ):
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise _failure(CatalogLockSecurityError)
     return _identity(metadata)
 
@@ -186,17 +162,7 @@ def _close(descriptor: int) -> None:
 def _assert_parent_binding(path: Path, expected: _Identity) -> None:
     descriptor, actual = _open_parent_directory(path)
     try:
-        if (
-            actual.device,
-            actual.inode,
-            actual.mode,
-            actual.owner,
-        ) != (
-            expected.device,
-            expected.inode,
-            expected.mode,
-            expected.owner,
-        ):
+        if (actual.device, actual.inode) != (expected.device, expected.inode):
             raise _failure(CatalogLockSecurityError)
     finally:
         _close(descriptor)
@@ -213,12 +179,7 @@ def _catalog_identity(path: Path) -> _Identity | None:
 
 
 def _validate_catalog_metadata(metadata: os.stat_result) -> _Identity:
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-        or metadata.st_nlink != 1
-    ):
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise _failure(CatalogLockSecurityError)
     return _identity(metadata)
 

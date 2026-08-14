@@ -75,13 +75,6 @@ class CatalogConnectionError(CatalogError):
 Checkpoint: TypeAlias = Callable[[str], None]
 
 
-def _owner() -> int:
-    try:
-        return os.geteuid()
-    except AttributeError:  # pragma: no cover - Windows fallback.
-        return os.getuid()
-
-
 def _validate_busy_timeout(value: int) -> int:
     if type(value) is not int or not 1 <= value <= MAX_BUSY_TIMEOUT_MS:
         raise ValueError("busy_timeout_ms must be a bounded positive integer")
@@ -105,9 +98,8 @@ def _path_from_input(value: str | os.PathLike[str]) -> Path:
 
 
 def _validate_directory_chain(path: Path) -> None:
-    """Reject symlink/replacement-prone path components before binding."""
+    """Reject symlink and non-directory path components before binding."""
 
-    owner = _owner()
     parts = path.parts
     if not parts or parts[0] != os.sep:
         raise CatalogPathError()
@@ -119,9 +111,6 @@ def _validate_directory_chain(path: Path) -> None:
         except OSError as error:
             raise CatalogPathError() from error
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise CatalogPathError()
-        mode = stat.S_IMODE(metadata.st_mode)
-        if mode & 0o022 and not (mode & stat.S_ISVTX and metadata.st_uid in {0, owner}):
             raise CatalogPathError()
 
 
@@ -135,8 +124,6 @@ def _validate_existing_entry(path: Path) -> None:
     if (
         stat.S_ISLNK(metadata.st_mode)
         or not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
         or metadata.st_nlink != 1
     ):
         raise CatalogPathError()
@@ -146,9 +133,8 @@ def canonical_catalog_path(path: str | os.PathLike[str]) -> Path:
     """Return the safe lexical canonical catalog path.
 
     The final file is not followed when checking safety.  Existing symlinks,
-    hardlinks, non-regular files, non-owner files, and non-owner-only modes
-    fail before SQLite is opened.  Parent components are likewise required to
-    be real directories; a sticky temporary parent is allowed.
+    hardlinks and non-regular files fail before SQLite is opened. Parent
+    components are likewise required to be real directories.
     """
 
     candidate = _path_from_input(path)
@@ -411,8 +397,8 @@ def _publish_temporary(path: Path, temporary: Path, checkpoint: Checkpoint | Non
         raise CatalogBootstrapError() from error
 
     # Drop the temporary hardlink immediately.  This leaves the published
-    # catalog owner-only with one link before another creator can validate it,
-    # while the same-directory link still provides create-if-absent semantics.
+    # catalog with one link before another creator can validate it, while the
+    # same-directory link still provides create-if-absent semantics.
     try:
         temporary.unlink()
     except OSError as error:

@@ -1,4 +1,4 @@
-"""Owner-only, descriptor-relative staging files.
+"""Descriptor-relative staging files.
 
 Staging objects are deliberately anonymous with respect to the domain.  Their
 names contain only a random token, and their lifetime is independent of any
@@ -63,14 +63,9 @@ def _identity(descriptor: int) -> StagingIdentity:
 
 
 def _validate_stage_metadata(
-    metadata: os.stat_result, owner: int, expected: StagingIdentity | None = None
+    metadata: os.stat_result, expected: StagingIdentity | None = None
 ) -> None:
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != owner
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-        or metadata.st_nlink != 1
-    ):
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise _staging_failure()
     if expected is not None and (
         metadata.st_dev != expected.device or metadata.st_ino != expected.inode
@@ -79,7 +74,7 @@ def _validate_stage_metadata(
 
 
 class StagingFile:
-    """A single owner-only temporary file inside the private staging area."""
+    """A single temporary file inside the storage staging area."""
 
     __slots__ = (
         "_root",
@@ -122,7 +117,7 @@ class StagingFile:
                         raise _staging_failure() from error
                     metadata = os.fstat(descriptor)
                     try:
-                        _validate_stage_metadata(metadata, root.owner)
+                        _validate_stage_metadata(metadata)
                     except StagingError:
                         os.close(descriptor)
                         try:
@@ -161,7 +156,7 @@ class StagingFile:
             metadata = os.fstat(self._descriptor)
         except OSError as error:
             raise _staging_failure() from error
-        _validate_stage_metadata(metadata, self._root.owner, self._initial)
+        _validate_stage_metadata(metadata, self._initial)
         return StagingIdentity(
             device=metadata.st_dev,
             inode=metadata.st_ino,
@@ -257,12 +252,12 @@ class StagingFile:
             raise _staging_failure() from error
         try:
             metadata = os.fstat(descriptor)
-            _validate_stage_metadata(metadata, self._root.owner, self._initial)
+            _validate_stage_metadata(metadata, self._initial)
             _quarantine_unlink(
                 self._directory_fd,
                 self._name,
                 descriptor,
-                lambda moved: _validate_stage_metadata(moved, self._root.owner, self._initial),
+                lambda moved: _validate_stage_metadata(moved, self._initial),
             )
         except StagingError:
             raise
@@ -305,16 +300,12 @@ class StagingFile:
                 descriptor = os.open(self._name, _READ_FLAGS, dir_fd=directory)
                 try:
                     metadata = os.fstat(descriptor)
-                    _validate_stage_metadata(metadata, self._root.owner, self._initial)
+                    _validate_stage_metadata(metadata, self._initial)
                     _quarantine_unlink(
                         directory,
                         self._name,
                         descriptor,
-                        lambda moved: _validate_stage_metadata(
-                            moved,
-                            self._root.owner,
-                            self._initial,
-                        ),
+                        lambda moved: _validate_stage_metadata(moved, self._initial),
                     )
                 finally:
                     try:
@@ -366,7 +357,7 @@ atexit.register(_cleanup_at_exit)
 
 
 def create_staging(root: StorageRoot | str | os.PathLike[str]) -> StagingFile:
-    """Create one random owner-only stage below a bound storage root."""
+    """Create one random stage below a bound storage root."""
 
     bound = root if isinstance(root, StorageRoot) else StorageRoot(root)
     return StagingFile(bound)

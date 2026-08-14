@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     TemporaryPdf,
 )
@@ -110,27 +111,34 @@ class ArxivPdfSource:
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
         _validate_acquire_inputs(request, evidence, candidate_keys)
+        first_failure: AcquisitionSourceFailure | None = None
         for requested in _lookup_tasks(evidence):
-            lookup_key = f"arxiv/public/lookup/{requested.source_record_id}"
-            if not candidate_keys.claim(lookup_key):
-                continue
-            response = self._lookup(requested)
-            if response is None:
-                continue
-            discovered = _parse_lookup_response(response.body, requested=requested)
-            if discovered is None:
-                continue
-            record, locator = discovered
-            deliveries = self._locator_fetcher.acquire(
-                locator=locator,
-                candidate_key=f"arxiv/public/{record.source_record_id}",
-                source_name=self.source_name,
-                source_record_id=record.source_record_id,
-                declared_media_type="application/pdf",
-                candidate_keys=candidate_keys,
-                allow_static_landing_discovery=False,
-            )
-            yield from _yield_and_close(deliveries)
+            try:
+                lookup_key = f"arxiv/public/lookup/{requested.source_record_id}"
+                if not candidate_keys.claim(lookup_key):
+                    continue
+                response = self._lookup(requested)
+                if response is None:
+                    continue
+                discovered = _parse_lookup_response(response.body, requested=requested)
+                if discovered is None:
+                    continue
+                record, locator = discovered
+                deliveries = self._locator_fetcher.acquire(
+                    locator=locator,
+                    candidate_key=f"arxiv/public/{record.source_record_id}",
+                    source_name=self.source_name,
+                    source_record_id=record.source_record_id,
+                    declared_media_type="application/pdf",
+                    candidate_keys=candidate_keys,
+                    allow_static_landing_discovery=False,
+                )
+                yield from _yield_and_close(deliveries)
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
+        if first_failure is not None:
+            raise first_failure
 
     def _lookup(self, requested: _ArxivRecord) -> TransportResponse | None:
         query = urlencode(
@@ -424,15 +432,16 @@ def _failure(
     reason: str,
     action: str,
     retryable: bool,
+    isolated: bool = False,
 ) -> AcquisitionFailure:
-    return AcquisitionFailure(
-        StableFailure(
-            code=code,
-            reason=reason,
-            action=action,
-            retryable=retryable,
-        )
+    failure = StableFailure(
+        code=code,
+        reason=reason,
+        action=action,
+        retryable=retryable,
     )
+    failure_type = AcquisitionSourceFailure if isolated else AcquisitionFailure
+    return failure_type(failure)
 
 
 def _access_failure(value: AccessFailure) -> AcquisitionFailure:
@@ -448,6 +457,7 @@ def _access_failure(value: AccessFailure) -> AcquisitionFailure:
         reason="The arXiv API could not be reached through the safe access boundary.",
         action="Retry the acquisition request or review arXiv readiness.",
         retryable=value.retryable,
+        isolated=True,
     )
 
 
@@ -457,6 +467,7 @@ def _http_status_failure(status: int) -> AcquisitionFailure:
         reason="The arXiv API returned an unsuccessful HTTP status.",
         action="Retry the acquisition request or review arXiv readiness.",
         retryable=status == 429 or status >= 500,
+        isolated=True,
     )
 
 
@@ -466,6 +477,7 @@ def _protocol_failure() -> AcquisitionFailure:
         reason="The arXiv API returned an unsafe or inconsistent response.",
         action="Update the arXiv acquisition Source before retrying.",
         retryable=False,
+        isolated=True,
     )
 
 
@@ -484,6 +496,7 @@ def _unsafe_xml_failure() -> AcquisitionFailure:
         reason="The arXiv API returned unsupported XML declarations.",
         action="Update the arXiv acquisition Source before retrying.",
         retryable=False,
+        isolated=True,
     )
 
 

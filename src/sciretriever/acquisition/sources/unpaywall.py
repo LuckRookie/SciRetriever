@@ -13,6 +13,7 @@ from typing import NoReturn, Protocol, cast
 
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     TemporaryPdf,
 )
@@ -120,26 +121,39 @@ class UnpaywallPdfSource:
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
         _validate_acquire_inputs(request, evidence, candidate_keys)
+        first_failure: AcquisitionSourceFailure | None = None
         for doi in _doi_tasks(evidence):
-            lookup_key = f"unpaywall/public/lookup/{doi}"
-            if not candidate_keys.claim(lookup_key):
+            try:
+                lookup_key = f"unpaywall/public/lookup/{doi}"
+                if not candidate_keys.claim(lookup_key):
+                    continue
+                response = self._lookup(doi)
+                if response is None:
+                    continue
+                tasks = _locator_tasks(response.body, expected_doi=doi)
+            except AcquisitionSourceFailure as error:
+                if first_failure is None:
+                    first_failure = error
                 continue
-            response = self._lookup(doi)
-            if response is None:
-                continue
-            for task in _locator_tasks(response.body, expected_doi=doi):
+            for task in tasks:
                 digest = hashlib.sha256(task.locator.encode("utf-8")).hexdigest()
                 kind = "pdf" if task.declared_media_type is not None else "landing"
-                deliveries = self._locator_fetcher.acquire(
-                    locator=task.locator,
-                    candidate_key=f"unpaywall/public/{kind}/{digest}",
-                    source_name=self.source_name,
-                    source_record_id=doi,
-                    declared_media_type=task.declared_media_type,
-                    candidate_keys=candidate_keys,
-                    allow_static_landing_discovery=task.allow_static_landing_discovery,
-                )
-                yield from _yield_and_close(deliveries)
+                try:
+                    deliveries = self._locator_fetcher.acquire(
+                        locator=task.locator,
+                        candidate_key=f"unpaywall/public/{kind}/{digest}",
+                        source_name=self.source_name,
+                        source_record_id=doi,
+                        declared_media_type=task.declared_media_type,
+                        candidate_keys=candidate_keys,
+                        allow_static_landing_discovery=task.allow_static_landing_discovery,
+                    )
+                    yield from _yield_and_close(deliveries)
+                except AcquisitionSourceFailure as error:
+                    if first_failure is None:
+                        first_failure = error
+        if first_failure is not None:
+            raise first_failure
 
     def _lookup(self, doi: str) -> TransportResponse | None:
         result = self._http_client.request(
@@ -450,15 +464,16 @@ def _failure(
     reason: str,
     action: str,
     retryable: bool,
+    isolated: bool = False,
 ) -> AcquisitionFailure:
-    return AcquisitionFailure(
-        StableFailure(
-            code=code,
-            reason=reason,
-            action=action,
-            retryable=retryable,
-        )
+    failure = StableFailure(
+        code=code,
+        reason=reason,
+        action=action,
+        retryable=retryable,
     )
+    failure_type = AcquisitionSourceFailure if isolated else AcquisitionFailure
+    return failure_type(failure)
 
 
 def _access_failure(value: AccessFailure) -> AcquisitionFailure:
@@ -474,6 +489,7 @@ def _access_failure(value: AccessFailure) -> AcquisitionFailure:
         reason="The Unpaywall API could not be reached through the safe access boundary.",
         action="Retry the acquisition request or review Unpaywall readiness.",
         retryable=value.retryable,
+        isolated=True,
     )
 
 
@@ -483,6 +499,7 @@ def _http_status_failure(status: int) -> AcquisitionFailure:
         reason="The Unpaywall API returned an unsuccessful HTTP status.",
         action="Retry the acquisition request or review Unpaywall readiness.",
         retryable=status == 429 or status >= 500,
+        isolated=True,
     )
 
 
@@ -492,6 +509,7 @@ def _protocol_failure() -> AcquisitionFailure:
         reason="The Unpaywall API returned an unsafe or inconsistent response.",
         action="Update the Unpaywall acquisition Source before retrying.",
         retryable=False,
+        isolated=True,
     )
 
 

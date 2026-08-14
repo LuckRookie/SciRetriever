@@ -38,6 +38,7 @@ from sciretriever.entry.ports import (
     WriteAdmissionFailure,
     WriteAdmissionPort,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.execution import BatchRequest
 from sciretriever.model.report import (
     DatabaseCompletionReport,
@@ -47,6 +48,8 @@ from sciretriever.model.report import (
     GoalReachedTarget,
     InterruptedCompletionTarget,
     InterruptedReportEnd,
+    LiteratureCompletionTarget,
+    MetaLiteratureCompletionTarget,
     NeedsManualPdfTarget,
     NotStartedCompletionTarget,
     StableFailure,
@@ -54,6 +57,7 @@ from sciretriever.model.report import (
 
 _T = TypeVar("_T")
 _TargetOrchestrator = CompletionTargetOrchestrator | AssetCompletionTargetOrchestrator
+_LOGGER = get_logger(__name__)
 
 
 class _SerialCommitExecutor:
@@ -193,6 +197,14 @@ class _CompletionScheduler:
         execution = self._targets[index]
         if self._cancel_event.is_set():
             return NotStartedCompletionTarget(target=execution.target)
+        target_kind, target_id = _completion_target_identity(execution.target)
+        _LOGGER.debug(
+            "event=completion-target-started progress=%d/%d target_kind=%s target_id=%s",
+            index + 1,
+            len(self._targets),
+            target_kind,
+            target_id,
+        )
         return self._orchestrator.run(execution, self._request.goal)
 
     def _wait_for_done(
@@ -237,6 +249,7 @@ class _CompletionScheduler:
             if index is not None:
                 result = self._future_result(future, index)
                 self._results[index] = result
+                _log_completion_target_result(index, len(self._targets), result)
                 if isinstance(result, NotStartedCompletionTarget) or isinstance(
                     result.outcome, InterruptedCompletionTarget
                 ):
@@ -252,6 +265,13 @@ class _CompletionScheduler:
         except KeyboardInterrupt:
             self._interrupt_operation()
             return _interrupted_target(self._targets[index])
+        except Exception:
+            _LOGGER.error(
+                "event=completion-target-crashed progress=%d/%d code=completion-target-unexpected",
+                index + 1,
+                len(self._targets),
+            )
+            raise
 
     def _interrupt_operation(self) -> None:
         self._interrupted = True
@@ -395,6 +415,12 @@ class DatabaseCompletionOperation:
             nonlocal frozen
             snapshot = self._selector_reader.read_selector(request.selector)
             frozen = freeze_execution(request, snapshot)
+            _LOGGER.info(
+                "event=completion-started goal=%s target_count=%d max_concurrency=%d",
+                request.goal,
+                len(frozen),
+                self._max_concurrency,
+            )
             return frozen
 
         def execute(targets: tuple[TransientExecution, ...]) -> _RunResult:
@@ -415,25 +441,33 @@ class DatabaseCompletionOperation:
             )
         except KeyboardInterrupt:
             operation_cancel_event.set()
-            return _report(
-                request,
-                tuple(NotStartedCompletionTarget(target=execution.target) for execution in frozen),
-                interrupted=True,
+            return _logged_completion_report(
+                _report(
+                    request,
+                    tuple(
+                        NotStartedCompletionTarget(target=execution.target) for execution in frozen
+                    ),
+                    interrupted=True,
+                )
             )
         except ExecutionSnapshotError:
-            return _operation_failed_report(request, frozen)
+            return _logged_completion_report(_operation_failed_report(request, frozen))
         except WriteAdmissionFailure as error:
             if run is None:
-                return _write_admission_failed_report(request, frozen, error.failure)
-            return _report(
-                request,
-                run.results,
-                interrupted=run.interrupted,
-                failure=error.failure,
+                return _logged_completion_report(
+                    _write_admission_failed_report(request, frozen, error.failure)
+                )
+            return _logged_completion_report(
+                _report(
+                    request,
+                    run.results,
+                    interrupted=run.interrupted,
+                    failure=error.failure,
+                )
             )
         if run is None:
             raise AssertionError("completion execution returned no run result")
-        return _report(request, run.results, interrupted=run.interrupted)
+        return _logged_completion_report(_report(request, run.results, interrupted=run.interrupted))
 
     def _run_frozen(
         self,
@@ -566,6 +600,84 @@ def _interrupted_target(execution: TransientExecution) -> TargetOrchestrationRes
     )
 
 
+def _completion_target_identity(target: object) -> tuple[str, str]:
+    if isinstance(target, LiteratureCompletionTarget):
+        return target.kind, str(target.literature_id)
+    if isinstance(target, MetaLiteratureCompletionTarget):
+        return target.kind, str(target.meta_literature_id)
+    return "invalid", "-"
+
+
+def _log_completion_target_result(
+    index: int,
+    total: int,
+    result: TargetOrchestrationResult | NotStartedCompletionTarget,
+) -> None:
+    if isinstance(result, NotStartedCompletionTarget):
+        target_kind, target_id = _completion_target_identity(result.target)
+        _LOGGER.warning(
+            "event=completion-target-finished progress=%d/%d outcome=not-started "
+            "target_kind=%s target_id=%s",
+            index + 1,
+            total,
+            target_kind,
+            target_id,
+        )
+        return
+
+    outcome = result.outcome
+    target_kind, target_id = _completion_target_identity(outcome.target)
+    if isinstance(outcome, GoalReachedTarget):
+        _LOGGER.info(
+            "event=completion-target-finished progress=%d/%d outcome=goal-reached "
+            "target_kind=%s target_id=%s literature_id=%s",
+            index + 1,
+            total,
+            target_kind,
+            target_id,
+            outcome.literature_id,
+        )
+        return
+    if isinstance(outcome, NeedsManualPdfTarget):
+        _LOGGER.info(
+            "event=completion-target-finished progress=%d/%d outcome=needs-manual-pdf "
+            "target_kind=%s target_id=%s literature_ids=%s",
+            index + 1,
+            total,
+            target_kind,
+            target_id,
+            ",".join(str(value) for value in outcome.literature_ids),
+        )
+        return
+    if isinstance(outcome, FailedCompletionTarget):
+        failure = outcome.failure
+        _LOGGER.warning(
+            "event=completion-target-failed progress=%d/%d target_kind=%s target_id=%s "
+            "literature_id=%s stage=%s code=%s retryable=%s reason=%s action=%s",
+            index + 1,
+            total,
+            target_kind,
+            target_id,
+            outcome.literature_id or "-",
+            outcome.stage,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+        return
+    if isinstance(outcome, InterruptedCompletionTarget):
+        _LOGGER.warning(
+            "event=completion-target-finished progress=%d/%d outcome=interrupted "
+            "target_kind=%s target_id=%s literature_id=%s",
+            index + 1,
+            total,
+            target_kind,
+            target_id,
+            outcome.literature_id or "-",
+        )
+
+
 def _first_literature_id(execution: TransientExecution):  # noqa: ANN202
     if isinstance(execution, TransientLiteratureExecution):
         return execution.candidate.literature_id
@@ -660,6 +772,39 @@ def _write_admission_failed_report(
 ) -> DatabaseCompletionReport:
     report = _operation_failed_report(request, frozen)
     return report.model_copy(update={"end": FailedReportEnd(kind="failed", failure=failure)})
+
+
+def _logged_completion_report(report: DatabaseCompletionReport) -> DatabaseCompletionReport:
+    if isinstance(report.end, FailedReportEnd):
+        failure = report.end.failure
+        _LOGGER.error(
+            "event=completion-failed goal=%s code=%s retryable=%s reason=%s action=%s",
+            report.goal,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+        return report
+    message = (
+        "event=completion-interrupted"
+        if isinstance(report.end, InterruptedReportEnd)
+        else "event=completion-finished"
+    )
+    log = _LOGGER.warning if isinstance(report.end, InterruptedReportEnd) else _LOGGER.info
+    log(
+        "%s goal=%s goal_reached=%d needs_manual_pdf=%d failed=%d interrupted=%d "
+        "not_started=%d no_usable_content=%d",
+        message,
+        report.goal,
+        len(report.goal_reached),
+        len(report.needs_manual_pdf),
+        len(report.failed),
+        len(report.interrupted),
+        len(report.not_started),
+        len(report.no_usable_content_literature_ids),
+    )
+    return report
 
 
 __all__ = ("DatabaseCompletionOperation",)

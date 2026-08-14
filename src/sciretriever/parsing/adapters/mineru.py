@@ -556,6 +556,19 @@ class MinerUProtocol2ServiceClient:
             _protocol2_fail("protocol-invalid")
         return MinerUHealth(status=status, release=release, api_protocol=protocol)
 
+    def probe_health(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+        cancel_event: threading.Event | None = None,
+    ) -> MinerUHealth:
+        """Run the bounded health-only contract used by ``config test mineru``."""
+
+        return self.health(
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+        )
+
     def submit(
         self,
         pdf: bytes,

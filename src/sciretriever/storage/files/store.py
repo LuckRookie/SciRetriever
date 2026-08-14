@@ -164,12 +164,7 @@ def _normalise_expected(
 def _scan_descriptor(descriptor: int, max_artifact_bytes: int) -> _VerifiedIdentity:
     try:
         initial = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(initial.st_mode)
-            or initial.st_uid != os.geteuid()
-            or stat.S_IMODE(initial.st_mode) != 0o600
-            or initial.st_nlink != 1
-        ):
+        if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
             raise _conflict_failure()
         os.lseek(descriptor, 0, os.SEEK_SET)
         digest = hashlib.sha256()
@@ -186,8 +181,6 @@ def _scan_descriptor(descriptor: int, max_artifact_bytes: int) -> _VerifiedIdent
         if (
             (initial.st_dev, initial.st_ino, initial.st_nlink, initial.st_size)
             != (final.st_dev, final.st_ino, final.st_nlink, final.st_size)
-            or final.st_uid != os.geteuid()
-            or stat.S_IMODE(final.st_mode) != 0o600
             or final.st_nlink != 1
             or size != final.st_size
         ):
@@ -313,8 +306,6 @@ def _validate_linked_stage_metadata(
 ) -> None:
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
         or (metadata.st_dev, metadata.st_ino) != (stage_identity.device, stage_identity.inode)
         or metadata.st_nlink != 2
     ):

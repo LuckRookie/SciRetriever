@@ -210,6 +210,7 @@ class ResolvedDestination:
     url: NormalizedURL
     addresses: tuple[str, ...]
     classes: tuple[AddressClass, ...]
+    guarded_opaque_path: bool = False
 
     @property
     def origin(self) -> Origin:
@@ -470,6 +471,22 @@ def _normalise_path(path: str, *, allow_encoded_separator: bool = False) -> str:
     return path
 
 
+def _normalise_guarded_opaque_path(path: str) -> str:
+    """Validate wire safety without interpreting a guarded Provider locator."""
+
+    path = path or "/"
+    _validate_percent_escapes(path)
+    if "\\" in path or "//" in path:
+        _fail()
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        _fail()
+    # One decode proves that the wire value does not hide invalid UTF-8 or a
+    # control character.  Further percent layers remain Provider-owned opaque
+    # data and are not interpreted as local path semantics.
+    _decoded(path)
+    return path
+
+
 def _validate_opaque_path_parameter_semantics(value: str) -> None:
     if (
         not value
@@ -579,15 +596,16 @@ def _validate_port_text(netloc: str, port: int) -> None:
         _fail()
 
 
-def normalize_url(
+def _normalize_url(
     value: str,
     *,
     allowed_schemes: Iterable[str] | None = None,
     allowed_ports: Iterable[tuple[str, int]] | None = None,
+    guarded_opaque_path: bool = False,
 ) -> NormalizedURL:
-    """Parse and canonically render one safe URL without resolving DNS."""
-
     if type(value) is not str or not value or _unsafe_text(value) or "\\" in value:
+        _fail()
+    if type(guarded_opaque_path) is not bool:
         _fail()
     schemes = _normalise_schemes(allowed_schemes)
     ports = _normalise_ports(allowed_ports, allowed_schemes=schemes)
@@ -610,7 +628,11 @@ def normalize_url(
         port = expected_port
     if (parsed.scheme.casefold(), port) not in ports:
         _fail()
-    path = _normalise_path(parsed.path)
+    path = (
+        _normalise_guarded_opaque_path(parsed.path)
+        if guarded_opaque_path
+        else _normalise_path(parsed.path)
+    )
     query = _normalise_query(parsed.query)
     authority = _render_authority(parsed.scheme.casefold(), canonical_host, port)
     normalized = urlunsplit(
@@ -623,6 +645,21 @@ def normalize_url(
         )
     )
     return NormalizedURL(normalized, parsed.scheme.casefold(), canonical_host, port, path, query)
+
+
+def normalize_url(
+    value: str,
+    *,
+    allowed_schemes: Iterable[str] | None = None,
+    allowed_ports: Iterable[tuple[str, int]] | None = None,
+) -> NormalizedURL:
+    """Parse and canonically render one ordinary safe URL without resolving DNS."""
+
+    return _normalize_url(
+        value,
+        allowed_schemes=allowed_schemes,
+        allowed_ports=allowed_ports,
+    )
 
 
 def normalize_url_with_configured_port(
@@ -662,6 +699,7 @@ def _validated_normalized_url(
     *,
     allowed_schemes: frozenset[str],
     allowed_ports: frozenset[tuple[str, int]],
+    guarded_opaque_path: bool = False,
 ) -> NormalizedURL:
     """Recheck a structured URL, including Network-owned opaque path values."""
 
@@ -680,7 +718,13 @@ def _validated_normalized_url(
     canonical_host, _literal = _canonical_hostname(value.hostname)
     if canonical_host != value.hostname:
         _fail()
-    path = _normalise_path(value.path, allow_encoded_separator=True)
+    if type(guarded_opaque_path) is not bool:
+        _fail()
+    path = (
+        _normalise_guarded_opaque_path(value.path)
+        if guarded_opaque_path
+        else _normalise_path(value.path, allow_encoded_separator=True)
+    )
     query = _normalise_query(value.query)
     authority = _render_authority(value.scheme, value.hostname, value.port)
     expected = urlunsplit((value.scheme, authority, path, query, ""))
@@ -745,29 +789,34 @@ def _resolver_values(resolver: ResolverLike, hostname: str) -> tuple[str, ...]:
     return tuple(sorted(set(result)))
 
 
-def resolve_destination(
+def _resolve_destination(
     value: str | NormalizedURL,
     resolver: ResolverLike,
     *,
     policy: DestinationPolicy | None = None,
     previous: ResolvedDestination | None = None,
+    guarded_opaque_path: bool = False,
 ) -> ResolvedDestination:
     """Resolve and classify every address, optionally rebinding-rechecking it."""
 
     destination_policy = DestinationPolicy() if policy is None else policy
     if not isinstance(destination_policy, DestinationPolicy):
         _fail()
+    if type(guarded_opaque_path) is not bool:
+        _fail()
     url = (
         _validated_normalized_url(
             value,
             allowed_schemes=destination_policy.allowed_schemes,
             allowed_ports=destination_policy.allowed_ports,
+            guarded_opaque_path=guarded_opaque_path,
         )
         if isinstance(value, NormalizedURL)
-        else normalize_url(
+        else _normalize_url(
             value,
             allowed_schemes=destination_policy.allowed_schemes,
             allowed_ports=destination_policy.allowed_ports,
+            guarded_opaque_path=guarded_opaque_path,
         )
     )
     literal = _canonical_ip_literal(url.hostname)
@@ -784,13 +833,42 @@ def resolve_destination(
         address_class not in destination_policy.allowed_classes for address_class in classes
     ):
         _fail("network destination is not allowed")
-    result = ResolvedDestination(url, addresses, classes)
+    result = ResolvedDestination(
+        url,
+        addresses,
+        classes,
+        guarded_opaque_path=guarded_opaque_path,
+    )
     if previous is not None:
         if not isinstance(previous, ResolvedDestination):
             _fail()
         if previous.url.hostname == result.url.hostname and previous.addresses != result.addresses:
             _fail("network destination changed during recheck")
     return result
+
+
+def resolve_destination(
+    value: str | NormalizedURL,
+    resolver: ResolverLike,
+    *,
+    policy: DestinationPolicy | None = None,
+    previous: ResolvedDestination | None = None,
+) -> ResolvedDestination:
+    """Resolve an ordinary destination or recheck a policy-issued opaque target."""
+
+    guarded_opaque_path = bool(
+        previous is not None
+        and isinstance(value, NormalizedURL)
+        and previous.url == value
+        and previous.guarded_opaque_path
+    )
+    return _resolve_destination(
+        value,
+        resolver,
+        policy=policy,
+        previous=previous,
+        guarded_opaque_path=guarded_opaque_path,
+    )
 
 
 def _as_destination(
@@ -803,6 +881,15 @@ def _as_destination(
     return resolve_destination(value, resolver, policy=policy)
 
 
+def _guarded_encoded_path_separator_mode(
+    value: bool,
+    target_guard: Callable[[str], None] | None,
+) -> bool:
+    if type(value) is not bool or (value and target_guard is None):
+        _fail()
+    return value
+
+
 def evaluate_redirect(
     current: str | NormalizedURL | ResolvedDestination,
     location: str,
@@ -810,6 +897,7 @@ def evaluate_redirect(
     *,
     policy: DestinationPolicy | None = None,
     target_guard: Callable[[str], None] | None = None,
+    allow_guarded_encoded_path_separators: bool = False,
 ) -> RedirectDecision:
     """Evaluate one redirect, optionally guarding its absolute text before DNS.
 
@@ -824,6 +912,10 @@ def evaluate_redirect(
         _fail()
     if target_guard is not None and not callable(target_guard):
         _fail()
+    encoded_separator_mode = _guarded_encoded_path_separator_mode(
+        allow_guarded_encoded_path_separators,
+        target_guard,
+    )
     source_url = current.url if isinstance(current, ResolvedDestination) else current
     if isinstance(source_url, NormalizedURL):
         source_url = _validated_normalized_url(
@@ -852,7 +944,18 @@ def evaluate_redirect(
         except Exception:
             _fail()
     source = _as_destination(current, resolver, destination_policy)
-    target = resolve_destination(target_text, resolver, policy=destination_policy)
+    target_url = _normalize_url(
+        target_text,
+        allowed_schemes=destination_policy.allowed_schemes,
+        allowed_ports=destination_policy.allowed_ports,
+        guarded_opaque_path=encoded_separator_mode,
+    )
+    target = _resolve_destination(
+        target_url,
+        resolver,
+        policy=destination_policy,
+        guarded_opaque_path=encoded_separator_mode,
+    )
     if source.hostname == target.hostname and source.addresses != target.addresses:
         _fail("network destination changed during recheck")
     same_origin = source.origin == target.origin

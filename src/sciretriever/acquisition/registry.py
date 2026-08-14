@@ -9,9 +9,9 @@ resolver, storage, or user-data operation.
 The matrix deliberately distinguishes Provider capability mappings from
 runtime Sources.  One non-Provider ``direct`` Source is shared by ordered views
 that consume every accepted AssetHint: a global direct-file prefix, configured
-Provider landing slots, then an unconfigured-history fallback.  Unsupported
-authorized and Browser paths remain explicit mapping facts without being
-registered as executable production Sources.
+Provider landing slots, then an unconfigured-history fallback.  Verified
+authorized Sources follow the complete public prefix.  Unsupported authorized
+and Browser paths remain explicit mapping facts without being registered.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from typing import Final
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
+    AuthorizedPdfSource,
+    authorized_source_readiness,
 )
 from sciretriever.acquisition.ports import (
     CandidateKeyTracker,
@@ -34,6 +36,7 @@ from sciretriever.acquisition.ports import (
     SourceReadiness,
     TemporaryPdf,
 )
+from sciretriever.acquisition.providers import CoreAuthorizedPdfClient, WileyAuthorizedPdfClient
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
     AcquisitionRequest,
@@ -72,6 +75,7 @@ from sciretriever.acquisition.sources.unpaywall import (
 from sciretriever.acquisition.sources.unpaywall import (
     BASELINE_ACCESS_POLICY as UNPAYWALL_ACCESS_POLICY,
 )
+from sciretriever.configuration import CredentialLookup
 from sciretriever.model.acquisition import (
     AcquisitionPath,
     AssetHint,
@@ -144,7 +148,7 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
             "www.nature.com",
         ),
     ),
-    ("wiley", ("onlinelibrary.wiley.com",)),
+    ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
     ("core", ("api.core.ac.uk", "core.ac.uk")),
 )
 
@@ -153,9 +157,7 @@ _PRODUCTION_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     cooldown_after_completion=30.0,
 )
 
-_AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset(
-    {"elsevier", "springer", "wiley", "core"}
-)
+_AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset({"elsevier", "springer"})
 
 
 class AcquisitionRegistryError(RuntimeError):
@@ -310,6 +312,7 @@ class AcquisitionAssemblyDependencies:
     web_access_profile_resolver: WebAccessProfileResolver = field(repr=False)
     provenance_id_factory: Callable[[], ProvenanceId] = field(repr=False)
     clock: Callable[[], UtcTimestamp] = field(repr=False)
+    credentials: CredentialLookup | None = field(default=None, repr=False)
     cancel_event: threading.Event | None = field(default=None, repr=False)
     configured_sci_hub_resolver: ConfiguredLocatorResolver | None = field(
         default=None,
@@ -326,6 +329,8 @@ class AcquisitionAssemblyDependencies:
             raise TypeError("web_access_profile_resolver must be a WebAccessProfileResolver")
         if not callable(self.provenance_id_factory) or not callable(self.clock):
             raise TypeError("acquisition assembly factories must be callable")
+        if self.credentials is not None and not isinstance(self.credentials, CredentialLookup):
+            raise TypeError("credentials must implement CredentialLookup or be None")
         if self.cancel_event is not None and not isinstance(
             self.cancel_event,
             threading.Event,
@@ -415,6 +420,15 @@ def _authorized_unsupported(provider_name: str) -> AcquisitionProviderMapping:
     )
 
 
+def _authorized_supported(provider_name: str) -> AcquisitionProviderMapping:
+    return _mapping(
+        AcquisitionCapability.AUTHORIZED_PROVIDER_API,
+        provider_name,
+        AcquisitionPath.AUTHORIZED_PROVIDER_API,
+        AuthorizedPdfSource,
+    )
+
+
 def _browser_unavailable() -> AcquisitionProviderMapping:
     return _mapping(
         AcquisitionCapability.CONTROLLED_BROWSER,
@@ -466,13 +480,13 @@ _FIXED_MAPPINGS: Final[dict[str, tuple[AcquisitionProviderMapping, ...]]] = {
         _browser_unavailable(),
     ),
     "wiley": (
-        _authorized_unsupported("wiley"),
+        _authorized_supported("wiley"),
         _browser_unavailable(),
     ),
     "datacite": (_generic_mapping(),),
     "core": (
         _generic_mapping(),
-        _authorized_unsupported("core"),
+        _authorized_supported("core"),
     ),
     "sci-hub": (
         _mapping(
@@ -562,7 +576,7 @@ def production_web_access_profile_resolver() -> WebAccessProfileResolver:
 
 
 def _validate_external_catalogs() -> None:
-    if dict(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG):
+    if set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG) != {"core", "wiley"}:
         raise AcquisitionRegistryError("authorized-catalog-mismatch")
     if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
@@ -855,6 +869,72 @@ def _public_protocol_source(
     raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
 
 
+def _authorized_source(
+    provider_name: str,
+    dependencies: AcquisitionAssemblyDependencies,
+) -> tuple[AuthorizedPdfSource, SourceReadiness]:
+    contract = PRODUCTION_AUTHORIZED_PROVIDER_CATALOG.get(provider_name)
+    credentials = dependencies.credentials
+    present_fields = (
+        frozenset() if credentials is None else frozenset(credentials.field_names(provider_name))
+    )
+    readiness = authorized_source_readiness(
+        contract,
+        product_ready=contract is not None,
+        access_policy_ready=provider_name in {ProviderName.CORE.value, ProviderName.WILEY.value},
+        present_credential_fields=present_fields,
+    )
+    if not readiness.is_ready:
+        failure = readiness.failure
+        raise AcquisitionRegistryError(
+            "authorized-readiness-failed" if failure is None else failure.code,
+            provider_name,
+        )
+    if credentials is None or contract is None:
+        raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
+    if provider_name == ProviderName.CORE.value:
+        api_key = credentials.get(provider_name, "api_key")
+        if api_key is None:
+            raise AcquisitionRegistryError(
+                "acquisition-authorized-credential-missing",
+                provider_name,
+            )
+        client = CoreAuthorizedPdfClient(
+            http_client=dependencies.http_client,
+            api_key=api_key,
+            cancel_event=dependencies.cancel_event,
+        )
+    elif provider_name == ProviderName.WILEY.value:
+        tdm_api_token = credentials.get(provider_name, "tdm_api_token")
+        if tdm_api_token is None:
+            raise AcquisitionRegistryError(
+                "acquisition-authorized-credential-missing",
+                provider_name,
+            )
+        try:
+            client = WileyAuthorizedPdfClient(
+                http_client=dependencies.http_client,
+                tdm_api_token=tdm_api_token,
+                cancel_event=dependencies.cancel_event,
+            )
+        except (TypeError, ValueError):
+            raise AcquisitionRegistryError(
+                "acquisition-authorized-credential-invalid",
+                provider_name,
+            ) from None
+    else:
+        raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
+    return (
+        AuthorizedPdfSource(
+            contract=contract,
+            client=client,
+            provenance_id_factory=dependencies.provenance_id_factory,
+            clock=dependencies.clock,
+        ),
+        readiness,
+    )
+
+
 def _validate_source(
     source: PdfSource,
     provider_name: str,
@@ -1018,8 +1098,26 @@ def build_acquisition_registry(
         )
     )
 
+    for provider_name in selected:
+        if provider_name not in PRODUCTION_AUTHORIZED_PROVIDER_CATALOG:
+            continue
+        source, readiness = _authorized_source(provider_name, dependencies)
+        registrations.append(
+            AcquisitionSourceRegistration(
+                provider_names=(provider_name,),
+                binding=_binding(source, readiness=readiness),
+            )
+        )
+
     source_bindings = tuple(registration.binding for registration in registrations)
-    if any(binding.acquisition_path is not AcquisitionPath.PUBLIC for binding in source_bindings):
+    stage_order = {
+        AcquisitionPath.PUBLIC: 0,
+        AcquisitionPath.AUTHORIZED_PROVIDER_API: 1,
+        AcquisitionPath.CONTROLLED_BROWSER: 2,
+    }
+    if tuple(stage_order[item.acquisition_path] for item in source_bindings) != tuple(
+        sorted(stage_order[item.acquisition_path] for item in source_bindings)
+    ):
         raise AcquisitionRegistryError("production-stage-mismatch")
     doi_landing_resolver = DoiLandingResolver(
         http_client=dependencies.http_client,
@@ -1030,10 +1128,7 @@ def build_acquisition_registry(
         registrations=tuple(registrations),
         source_bindings=source_bindings,
         doi_landing_resolver=doi_landing_resolver,
-        # A7 has no production contract and A8 has no production rule/per-hop
-        # admission hook.  Block 7 therefore has no reason to resolve DOI
-        # landing origins for the current object graph.
-        requires_doi_landing_origin=False,
+        requires_doi_landing_origin=ProviderName.WILEY.value in selected,
     )
 
 

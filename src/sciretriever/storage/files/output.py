@@ -104,8 +104,7 @@ class OutputResult:
 class _FileIdentity:
     device: int
     inode: int
-    mode: int
-    owner: int
+    file_type: int
     links: int
 
 
@@ -262,13 +261,6 @@ def _failure(error_type: type[AtomicOutputError] = AtomicOutputError) -> AtomicO
     return error_type()
 
 
-def _owner() -> int:
-    try:
-        return os.geteuid()
-    except AttributeError:  # pragma: no cover - Windows has no geteuid.
-        return os.getuid()
-
-
 def _checkpoint(callback: Checkpoint | None, name: str) -> None:
     if callback is None:
         return
@@ -318,11 +310,7 @@ def _normalise_target(value: str | os.PathLike[str]) -> Path:
 
 
 def _validate_directory(metadata: os.stat_result) -> None:
-    owner = _owner()
     if not stat.S_ISDIR(metadata.st_mode):
-        raise _failure(OutputSecurityError)
-    mode = stat.S_IMODE(metadata.st_mode)
-    if mode & 0o022 and not (mode & stat.S_ISVTX and metadata.st_uid in {0, owner}):
         raise _failure(OutputSecurityError)
 
 
@@ -375,8 +363,7 @@ def _file_identity(metadata: os.stat_result) -> _FileIdentity:
     return _FileIdentity(
         device=metadata.st_dev,
         inode=metadata.st_ino,
-        mode=metadata.st_mode,
-        owner=metadata.st_uid,
+        file_type=stat.S_IFMT(metadata.st_mode),
         links=metadata.st_nlink,
     )
 
@@ -385,9 +372,7 @@ def _validate_existing_metadata(metadata: os.stat_result) -> _FileIdentity:
     identity = _file_identity(metadata)
     if not stat.S_ISREG(metadata.st_mode):
         raise _failure(OutputConflictError)
-    if metadata.st_uid != _owner() or metadata.st_nlink != 1:
-        raise _failure(OutputConflictError)
-    if stat.S_IMODE(metadata.st_mode) & 0o022:
+    if metadata.st_nlink != 1:
         raise _failure(OutputConflictError)
     return identity
 
@@ -412,13 +397,9 @@ def _same_inode(actual: _FileIdentity | None, expected: _FileIdentity | None) ->
     return (
         actual.device,
         actual.inode,
-        actual.mode,
-        actual.owner,
     ) == (
         expected.device,
         expected.inode,
-        expected.mode,
-        expected.owner,
     )
 
 
@@ -441,22 +422,17 @@ def _read_name_identity(parent: int, name: str) -> _FileIdentity | None:
     return _file_identity(metadata)
 
 
-def _read_owned_identity(parent: int, name: str) -> _FileIdentity | None:
-    """Read a safe regular-file identity without requiring nlink == 1.
+def _read_regular_identity(parent: int, name: str) -> _FileIdentity | None:
+    """Read a regular-file identity without requiring nlink == 1.
 
     Internal overwrite backup links temporarily have more than one link.  A
-    separate helper is therefore needed instead of ``_read_target``; it still
-    rejects symlinks, non-regular files, foreign owners and writable modes.
+    separate helper is therefore needed instead of ``_read_target``.
     """
 
     identity = _read_name_identity(parent, name)
     if identity is None:
         return None
-    if (
-        not stat.S_ISREG(identity.mode)
-        or identity.owner != _owner()
-        or stat.S_IMODE(identity.mode) & 0o022
-    ):
+    if identity.file_type != stat.S_IFREG:
         raise _failure(OutputConflictError)
     return identity
 
@@ -497,7 +473,7 @@ def _renameat2_exchange(parent: int, left: str, right: str) -> None:
 def _unlink_owned_name(parent: int, name: str | None, expected: _FileIdentity | None) -> None:
     if name is None or expected is None:
         return
-    actual = _read_owned_identity(parent, name)
+    actual = _read_regular_identity(parent, name)
     if actual is None:
         return
     if not _same_inode(actual, expected):
@@ -533,8 +509,8 @@ def _prepare_overwrite(publication: _OverwritePublication) -> None:
             raise _failure(OutputConflictError) from error
         publication.backup_name = name
         try:
-            current = _read_owned_identity(publication.parent, publication.target_name)
-            backup = _read_owned_identity(publication.parent, name)
+            current = _read_regular_identity(publication.parent, publication.target_name)
+            backup = _read_regular_identity(publication.parent, name)
             if (
                 not _same_inode(current, publication.original)
                 or not _same_inode(backup, publication.original)
@@ -551,8 +527,8 @@ def _prepare_overwrite(publication: _OverwritePublication) -> None:
             # race removed or replaced the target, retain the backup so the
             # outer rollback can restore the originally authorized object.
             try:
-                current = _read_owned_identity(publication.parent, publication.target_name)
-                backup = _read_owned_identity(publication.parent, name)
+                current = _read_regular_identity(publication.parent, publication.target_name)
+                backup = _read_regular_identity(publication.parent, name)
                 if _same_inode(current, publication.original) and _same_inode(
                     backup,
                     publication.original,
@@ -571,7 +547,7 @@ def _rollback_overwrite(publication: _OverwritePublication) -> None:  # noqa: C9
     if not publication.exchanged:
         if publication.backup_name is None:
             return
-        target = _read_owned_identity(publication.parent, publication.target_name)
+        target = _read_regular_identity(publication.parent, publication.target_name)
         backup = _read_name_identity(publication.parent, publication.backup_name)
         if backup is None:
             if _same_inode(target, publication.original):
@@ -615,7 +591,7 @@ def _rollback_overwrite(publication: _OverwritePublication) -> None:  # noqa: C9
             os.fsync(publication.parent)
         return
 
-    target = _read_owned_identity(publication.parent, publication.target_name)
+    target = _read_regular_identity(publication.parent, publication.target_name)
     stage = _read_name_identity(publication.parent, publication.stage_name)
     backup = (
         None
@@ -673,11 +649,11 @@ def _commit_overwrite(publication: _OverwritePublication) -> None:
 
     if not publication.exchanged:
         return
-    target = _read_owned_identity(publication.parent, publication.target_name)
-    stage = _read_owned_identity(publication.parent, publication.stage_name)
+    target = _read_regular_identity(publication.parent, publication.target_name)
+    stage = _read_regular_identity(publication.parent, publication.stage_name)
     if publication.backup_name is None:
         raise _failure(OutputConflictError)
-    backup = _read_owned_identity(publication.parent, publication.backup_name)
+    backup = _read_regular_identity(publication.parent, publication.backup_name)
     if (
         not _same_stage_identity(target, publication.stage)
         or not _same_inode(stage, publication.original)
@@ -711,12 +687,7 @@ def _create_stage(parent: int) -> tuple[int, str, _StageIdentity]:
         try:
             os.fchmod(descriptor, 0o600)
             metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != _owner()
-                or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_nlink != 1
-            ):
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise _failure(OutputSecurityError)
             return descriptor, name, _StageIdentity(metadata.st_dev, metadata.st_ino)
         except BaseException:
@@ -736,8 +707,6 @@ def _stage_identity(descriptor: int, expected: _StageIdentity) -> None:
         raise _failure(OutputIntegrityError) from error
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
         or metadata.st_nlink != 1
         or (metadata.st_dev, metadata.st_ino) != (expected.device, expected.inode)
     ):
@@ -900,8 +869,6 @@ def _verify_stage_name(parent: int, name: str, expected: _StageIdentity) -> None
         raise _failure(OutputIntegrityError) from error
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
         or metadata.st_nlink != 1
         or (metadata.st_dev, metadata.st_ino) != (expected.device, expected.inode)
     ):
@@ -945,11 +912,9 @@ def _cleanup_stage(parent: int, name: str | None, expected: _StageIdentity | Non
         return
     except OSError:
         return
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != _owner()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-        or (metadata.st_dev, metadata.st_ino) != (expected.device, expected.inode)
+    if not stat.S_ISREG(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != (
+        expected.device,
+        expected.inode,
     ):
         return
     try:

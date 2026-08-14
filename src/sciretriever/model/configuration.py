@@ -8,8 +8,12 @@ compute provider readiness, or retain a secret value.
 
 from __future__ import annotations
 
+import ipaddress
+import re
+import unicodedata
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import unquote_to_bytes, urlsplit
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
@@ -100,6 +104,28 @@ def _analysis_provider(value: object) -> "AnalysisProvider":
         raise ValueError("analysis provider is unsupported") from error
 
 
+def _analysis_protocol(value: object) -> "AnalysisProtocol":
+    if isinstance(value, AnalysisProtocol):
+        return value
+    if type(value) is not str:
+        raise ValueError("analysis protocol must be a string")
+    try:
+        return AnalysisProtocol(value)
+    except ValueError as error:
+        raise ValueError("analysis protocol is unsupported") from error
+
+
+def _analysis_authentication(value: object) -> "AnalysisAuthentication":
+    if isinstance(value, AnalysisAuthentication):
+        return value
+    if type(value) is not str:
+        raise ValueError("analysis authentication must be a string")
+    try:
+        return AnalysisAuthentication(value)
+    except ValueError as error:
+        raise ValueError("analysis authentication is unsupported") from error
+
+
 def _probe_outcome(value: object) -> "ProbeOutcome":
     if isinstance(value, ProbeOutcome):
         return value
@@ -118,6 +144,141 @@ def _ordinary_parameter(value: object) -> str:
     ):
         raise ValueError("ordinary provider parameter is invalid")
     return candidate
+
+
+def _service_identity(value: object) -> str:
+    candidate = _ordinary_parameter(value)
+    if (
+        not all(
+            character.isascii() and (character.isalnum() or character in {"-", "_", "."})
+            for character in candidate
+        )
+        or not candidate[0].isalnum()
+    ):
+        raise ValueError("service identity is invalid")
+    return candidate.casefold()
+
+
+_SERVICE_DNS_LABEL = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?",
+    re.ASCII,
+)
+_SERVICE_LEGACY_IPV4 = re.compile(r"[0-9A-Fa-fxX.]+", re.ASCII)
+_SERVICE_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _service_hostname(
+    value: str,
+) -> tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address | None]:
+    if not value or value.endswith(".") or "%" in value:
+        raise ValueError("service Base URL is invalid")
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        if _SERVICE_LEGACY_IPV4.fullmatch(value) is not None:
+            raise ValueError("service Base URL is invalid") from None
+        try:
+            hostname = value.encode("idna").decode("ascii").casefold()
+            labels = hostname.split(".")
+            if (
+                len(hostname) > 253
+                or any(_SERVICE_DNS_LABEL.fullmatch(label) is None for label in labels)
+                or any(
+                    label.encode("ascii").decode("idna").encode("idna").decode("ascii").casefold()
+                    != label
+                    for label in labels
+                )
+            ):
+                raise ValueError
+        except (UnicodeError, ValueError):
+            raise ValueError("service Base URL is invalid") from None
+        return hostname, None
+    canonical = str(address)
+    if canonical.casefold() != value.casefold():
+        raise ValueError("service Base URL is invalid")
+    return canonical, address
+
+
+def _validate_service_port_text(netloc: str, port: int | None) -> None:
+    if port is None:
+        return
+    if netloc.startswith("["):
+        closing = netloc.find("]")
+        if closing < 0:
+            raise ValueError("service Base URL is invalid")
+        suffix = netloc[closing + 1 :]
+        if suffix and (not suffix.startswith(":") or suffix[1:] != str(port)):
+            raise ValueError("service Base URL is invalid")
+        return
+    if ":" in netloc and netloc.rsplit(":", 1)[1] != str(port):
+        raise ValueError("service Base URL is invalid")
+
+
+def _validate_service_path(path: str) -> None:
+    candidate = path or "/"
+    index = 0
+    while index < len(candidate):
+        if candidate[index] != "%":
+            index += 1
+            continue
+        if (
+            index + 2 >= len(candidate)
+            or candidate[index + 1] not in _SERVICE_HEX
+            or candidate[index + 2] not in _SERVICE_HEX
+        ):
+            raise ValueError("service Base URL is invalid")
+        index += 3
+    if re.search(r"%(?:2f|5c)", candidate, re.IGNORECASE):
+        raise ValueError("service Base URL is invalid")
+    try:
+        decoded = unquote_to_bytes(candidate).decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise ValueError("service Base URL is invalid") from None
+    normalized = decoded.replace("\\", "/")
+    if (
+        "\\" in candidate
+        or "//" in normalized
+        or any(segment in {".", ".."} for segment in normalized.split("/"))
+    ):
+        raise ValueError("service Base URL is invalid")
+
+
+def _service_url(value: str) -> tuple[str, str, int, str, bool]:
+    """Validate a secret-free service URL and classify its host locally.
+
+    Network adapters perform the canonical URL and destination-policy check
+    again before any request.  The Model check exists so invalid ordinary
+    configuration cannot be reported as locally complete.
+    """
+
+    if "\\" in value or any(
+        character.isspace() or unicodedata.category(character) in {"Cc", "Cf"}
+        for character in value
+    ):
+        raise ValueError("service Base URL is invalid")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        raise ValueError("service Base URL is invalid") from None
+    scheme = parsed.scheme.casefold()
+    if (
+        scheme not in {"http", "https"}
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("service Base URL is invalid")
+    _validate_service_port_text(parsed.netloc, port)
+    hostname, address = _service_hostname(hostname.casefold())
+    _validate_service_path(parsed.path)
+    loopback = hostname == "localhost" or bool(address is not None and address.is_loopback)
+    if scheme == "http" and not loopback:
+        raise ValueError("remote service Base URL must use HTTPS")
+    return scheme, hostname, port or (443 if scheme == "https" else 80), parsed.path, loopback
 
 
 def _contact_email(value: object) -> str:
@@ -238,6 +399,29 @@ class AnalysisProvider(str, Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    CUSTOM = "custom"
+
+
+class AnalysisProtocol(str, Enum):
+    """The three explicit structured-output wire protocols."""
+
+    OPENAI_RESPONSES = "openai-responses"
+    OPENAI_CHAT_COMPLETIONS = "openai-chat-completions"
+    ANTHROPIC_MESSAGES = "anthropic-messages"
+
+
+class AnalysisAuthentication(str, Enum):
+    """Explicit authentication choice for the selected LLM service."""
+
+    API_KEY = "api-key"
+    NONE = "none"
+
+
+class CoreCredentialService(str, Enum):
+    """The two non-Provider secret sections in credentials.toml."""
+
+    LLM = "llm"
+    MINERU = "mineru"
 
 
 class ProbeOutcome(str, Enum):
@@ -332,6 +516,14 @@ AnalysisProviderValue = Annotated[
     AnalysisProvider,
     BeforeValidator(_analysis_provider),
 ]
+AnalysisProtocolValue = Annotated[
+    AnalysisProtocol,
+    BeforeValidator(_analysis_protocol),
+]
+AnalysisAuthenticationValue = Annotated[
+    AnalysisAuthentication,
+    BeforeValidator(_analysis_authentication),
+]
 ProbeOutcomeValue = Annotated[ProbeOutcome, BeforeValidator(_probe_outcome)]
 ConfigurationFingerprint = Annotated[
     str,
@@ -349,6 +541,11 @@ StableFailureCode = Annotated[
 OrdinaryProviderParameter = Annotated[
     str,
     BeforeValidator(_ordinary_parameter),
+    Field(strict=True, min_length=1, max_length=128),
+]
+ServiceIdentity = Annotated[
+    str,
+    BeforeValidator(_service_identity),
     Field(strict=True, min_length=1, max_length=128),
 ]
 ContactEmail = Annotated[
@@ -447,16 +644,161 @@ class ParsingConfig(_FrozenModel):
 
     @model_validator(mode="after")
     def _validate_upload_boundary(self) -> "ParsingConfig":
-        if self.connection_mode is ParserConnectionMode.LOOPBACK and self.remote_upload_authorized:
-            raise ValueError("loopback parsing forbids remote upload authorization")
+        if (
+            self.connection_mode is not ParserConnectionMode.REMOTE
+            and self.remote_upload_authorized
+        ):
+            raise ValueError("only remote parsing accepts upload authorization")
+        if self.base_url is not None:
+            scheme, hostname, _port, _path, loopback = _service_url(self.base_url)
+            try:
+                address = ipaddress.ip_address(hostname)
+            except ValueError:
+                address = None
+            if self.connection_mode is ParserConnectionMode.LOOPBACK and (
+                not loopback or scheme != "http"
+            ):
+                raise ValueError("loopback parsing requires an HTTP loopback Base URL")
+            if self.connection_mode is ParserConnectionMode.REMOTE and (
+                loopback or address is not None or scheme != "https"
+            ):
+                raise ValueError("remote parsing requires a hostname-based HTTPS Base URL")
         return self
 
 
+def _validate_analysis_protocol_choice(
+    provider: AnalysisProvider | None,
+    protocol: AnalysisProtocol | None,
+) -> None:
+    if provider is AnalysisProvider.OPENAI and protocol not in {
+        None,
+        AnalysisProtocol.OPENAI_RESPONSES,
+        AnalysisProtocol.OPENAI_CHAT_COMPLETIONS,
+    }:
+        raise ValueError("OpenAI provider requires an OpenAI protocol")
+    if provider is AnalysisProvider.ANTHROPIC and protocol not in {
+        None,
+        AnalysisProtocol.ANTHROPIC_MESSAGES,
+    }:
+        raise ValueError("Anthropic provider requires the Anthropic protocol")
+
+
+def _validate_official_analysis_url(
+    provider: AnalysisProvider | None,
+    *,
+    scheme: str,
+    hostname: str,
+    port: int,
+    path: str,
+) -> None:
+    if provider is AnalysisProvider.OPENAI:
+        official = "api.openai.com"
+    elif provider is AnalysisProvider.ANTHROPIC:
+        official = "api.anthropic.com"
+    else:
+        return
+    if scheme != "https" or hostname != official or port != 443 or path.rstrip("/") != "/v1":
+        label = "OpenAI" if provider is AnalysisProvider.OPENAI else "Anthropic"
+        raise ValueError(f"{label} provider requires the official Base URL")
+
+
+def _validate_analysis_service_choice(
+    *,
+    provider: AnalysisProvider | None,
+    service_name: str | None,
+    protocol: AnalysisProtocol | None,
+    base_url: str | None,
+    model: str | None,
+    context_window_tokens: int | None,
+    authentication: AnalysisAuthentication | None,
+) -> None:
+    custom_values = (protocol, base_url, model, context_window_tokens, authentication)
+    if (
+        provider is AnalysisProvider.CUSTOM
+        and service_name is None
+        and any(value is not None for value in custom_values)
+    ):
+        raise ValueError("custom Analysis service requires a service name")
+    if provider is not AnalysisProvider.CUSTOM and service_name is not None:
+        raise ValueError("official Analysis providers do not accept a custom service name")
+    if base_url is None:
+        return
+    scheme, hostname, port, path, loopback = _service_url(base_url)
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if loopback and scheme != "http":
+        raise ValueError("loopback Analysis requires an HTTP Base URL")
+    if not loopback and address is not None:
+        raise ValueError("remote Analysis requires a hostname-based HTTPS Base URL")
+    _validate_official_analysis_url(
+        provider,
+        scheme=scheme,
+        hostname=hostname,
+        port=port,
+        path=path,
+    )
+    if authentication is AnalysisAuthentication.NONE and (
+        provider is not AnalysisProvider.CUSTOM or not loopback
+    ):
+        raise ValueError("unauthenticated Analysis is limited to a custom loopback service")
+    if loopback and authentication is AnalysisAuthentication.API_KEY:
+        raise ValueError("loopback Analysis does not send API-key credentials")
+
+
+def _validate_analysis_budget_choice(
+    *,
+    context_window_tokens: int | None,
+    max_input_bytes: int | None,
+    max_chunk_bytes: int | None,
+    max_total_llm_requests: int | None,
+    max_total_output_tokens: int | None,
+    output_tokens: tuple[int | None, ...],
+) -> None:
+    if (
+        max_input_bytes is not None
+        and max_chunk_bytes is not None
+        and max_chunk_bytes > max_input_bytes
+    ):
+        raise ValueError("Analysis chunk budget must fit the input budget")
+    if max_total_llm_requests is not None and max_total_llm_requests < 2:
+        raise ValueError("Analysis request budget must cover the two-stage content workflow")
+    configured_outputs = tuple(value for value in output_tokens if value is not None)
+    if max_total_output_tokens is not None:
+        if any(value > max_total_output_tokens for value in configured_outputs):
+            raise ValueError("Analysis stage output must fit the total output budget")
+        metadata_output, content_output, _reference_output = output_tokens
+        if (
+            metadata_output is not None
+            and content_output is not None
+            and metadata_output + content_output > max_total_output_tokens
+        ):
+            raise ValueError("Analysis content stages must fit the total output budget")
+    if context_window_tokens is None:
+        return
+    if any(value >= context_window_tokens for value in configured_outputs):
+        raise ValueError("Analysis output budget must fit the context window")
+    if max_chunk_bytes is not None:
+        # Until a provider tokenizer is introduced, three UTF-8 bytes per
+        # token is the deliberately conservative planning estimate.  The
+        # adapter repeats the check against the actual serialized request.
+        input_tokens = (max_chunk_bytes + 2) // 3
+        reserve = max(configured_outputs, default=0)
+        if input_tokens + reserve > context_window_tokens:
+            raise ValueError("Analysis chunk budget must fit the context window")
+
+
 class AnalysisConfig(_FrozenModel):
-    """Non-secret fixed-provider Analysis construction parameters."""
+    """Non-secret Analysis service, protocol, model, and budget selection."""
 
     provider: AnalysisProviderValue | None = None
+    service_name: ServiceIdentity | None = None
+    protocol: AnalysisProtocolValue | None = None
+    base_url: NonBlankText | None = None
     model: NonBlankText | None = None
+    context_window_tokens: Annotated[int, Field(strict=True, ge=1_024)] | None = None
+    authentication: AnalysisAuthenticationValue | None = None
     metadata_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
     content_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
     reference_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
@@ -465,6 +807,37 @@ class AnalysisConfig(_FrozenModel):
     max_chunk_count: Annotated[int, Field(strict=True, ge=1)] | None = None
     max_total_llm_requests: Annotated[int, Field(strict=True, ge=1)] | None = None
     max_total_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
+
+    @model_validator(mode="after")
+    def _validate_protocol_and_budgets(self) -> "AnalysisConfig":
+        _validate_analysis_protocol_choice(self.provider, self.protocol)
+        _validate_analysis_service_choice(
+            provider=self.provider,
+            service_name=self.service_name,
+            protocol=self.protocol,
+            base_url=self.base_url,
+            model=self.model,
+            context_window_tokens=self.context_window_tokens,
+            authentication=self.authentication,
+        )
+        if (
+            self.provider in {AnalysisProvider.OPENAI, AnalysisProvider.ANTHROPIC}
+            and self.authentication is AnalysisAuthentication.NONE
+        ):
+            raise ValueError("official Analysis providers require API-key authentication")
+        _validate_analysis_budget_choice(
+            context_window_tokens=self.context_window_tokens,
+            max_input_bytes=self.max_input_bytes,
+            max_chunk_bytes=self.max_chunk_bytes,
+            max_total_llm_requests=self.max_total_llm_requests,
+            max_total_output_tokens=self.max_total_output_tokens,
+            output_tokens=(
+                self.metadata_max_output_tokens,
+                self.content_max_output_tokens,
+                self.reference_max_output_tokens,
+            ),
+        )
+        return self
 
 
 class ExecutionConfig(_FrozenModel):
@@ -575,6 +948,67 @@ class ConfigurationStatus(_FrozenModel):
         return self
 
 
+class ParsingConfigurationStatus(_FrozenModel):
+    """Local completeness of the selected MinerU configuration."""
+
+    configuration_complete: bool
+    bearer_token_required: bool
+    bearer_token_configured: bool | None = None
+    credential_origin_matches: bool | None = None
+    missing_fields: tuple[NonBlankText, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_secret_state(self) -> "ParsingConfigurationStatus":
+        if self.bearer_token_required != (self.bearer_token_configured is not None):
+            raise ValueError("parser secret status is inconsistent")
+        if self.bearer_token_required != (self.credential_origin_matches is not None):
+            raise ValueError("parser credential origin status is inconsistent")
+        if self.configuration_complete == bool(self.missing_fields):
+            raise ValueError("parser configuration completeness is inconsistent")
+        return self
+
+
+class AnalysisConfigurationStatus(_FrozenModel):
+    """Local completeness of reference and full-content LLM configuration."""
+
+    api_key_required: bool
+    api_key_configured: bool | None = None
+    credential_origin_matches: bool | None = None
+    reference_configuration_complete: bool
+    content_configuration_complete: bool
+    reference_missing_fields: tuple[NonBlankText, ...] = ()
+    content_missing_fields: tuple[NonBlankText, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_analysis_state(self) -> "AnalysisConfigurationStatus":
+        if self.api_key_required != (self.api_key_configured is not None):
+            raise ValueError("analysis secret status is inconsistent")
+        if self.api_key_required != (self.credential_origin_matches is not None):
+            raise ValueError("analysis credential origin status is inconsistent")
+        if self.reference_configuration_complete == bool(self.reference_missing_fields):
+            raise ValueError("reference analysis completeness is inconsistent")
+        if self.content_configuration_complete == bool(self.content_missing_fields):
+            raise ValueError("content analysis completeness is inconsistent")
+        if self.content_configuration_complete and not self.reference_configuration_complete:
+            raise ValueError("analysis completeness is inconsistent")
+        return self
+
+
+class ConfigurationRuntimeStatus(_FrozenModel):
+    """Secret-free local readiness outside the Provider capability matrix."""
+
+    storage_configuration_complete: bool
+    storage_missing_fields: tuple[NonBlankText, ...] = ()
+    parsing: ParsingConfigurationStatus
+    analysis: AnalysisConfigurationStatus
+
+    @model_validator(mode="after")
+    def _validate_storage_state(self) -> "ConfigurationRuntimeStatus":
+        if self.storage_configuration_complete == bool(self.storage_missing_fields):
+            raise ValueError("storage configuration completeness is inconsistent")
+        return self
+
+
 class ConfigurationProbeResult(_FrozenModel):
     """One explicit probe result without response, URL, time, or exception data."""
 
@@ -637,12 +1071,87 @@ class ConfigurationProbeSummary(_FrozenModel):
         return all(result.outcome is ProbeOutcome.PASSED for result in self.results)
 
 
+class LLMConfigurationProbeDetails(_FrozenModel):
+    """Stable disclosure of the minimal LLM probe's bounded side effects."""
+
+    request_kind: Literal["minimal-schema"] = "minimal-schema"
+    sends_user_literature: Literal[False] = False
+    may_consume_quota: Literal[True] = True
+    strict_response_parseable: bool | None = None
+    model: NonBlankText | None = None
+    protocol: AnalysisProtocolValue | None = None
+
+
+class MinerUConfigurationProbeDetails(_FrozenModel):
+    """Stable disclosure of the health-only MinerU probe contract."""
+
+    request_kind: Literal["health-only"] = "health-only"
+    uploaded_pdf: Literal[False] = False
+    health: NonBlankText | None = None
+    release: NonBlankText | None = None
+    api_protocol: Annotated[int, Field(strict=True, ge=1)] | None = None
+    profile: Literal["vlm-engine"] = "vlm-engine"
+
+
+class CoreConfigurationProbeResult(_FrozenModel):
+    """One non-persistent LLM or MinerU probe with explicit side effects."""
+
+    service: CoreCredentialService
+    outcome: ProbeOutcomeValue
+    local_ready: bool
+    failure_code: StableFailureCode | None = None
+    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails
+    persisted: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _validate_core_probe_shape(self) -> "CoreConfigurationProbeResult":
+        _validate_core_probe_details(self.service, self.details)
+        if self.outcome is ProbeOutcome.SKIPPED:
+            if self.local_ready or self.failure_code is None:
+                raise ValueError("skipped core probe result is inconsistent")
+            return self
+        if not self.local_ready:
+            raise ValueError("executed core probe result is inconsistent")
+        if self.outcome is ProbeOutcome.PASSED:
+            if self.failure_code is not None:
+                raise ValueError("passed core probe result is inconsistent")
+            _validate_passed_core_probe_details(self.details)
+            return self
+        if self.failure_code is None:
+            raise ValueError("failed core probe result requires a failure code")
+        return self
+
+
+def _validate_core_probe_details(
+    service: CoreCredentialService,
+    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+) -> None:
+    if service is CoreCredentialService.LLM:
+        if not isinstance(details, LLMConfigurationProbeDetails):
+            raise ValueError("core probe details do not match the service")
+    elif not isinstance(details, MinerUConfigurationProbeDetails):
+        raise ValueError("core probe details do not match the service")
+
+
+def _validate_passed_core_probe_details(
+    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+) -> None:
+    if isinstance(details, LLMConfigurationProbeDetails):
+        if details.strict_response_parseable is not True:
+            raise ValueError("passed LLM probe result is inconsistent")
+        return
+    if details.health != "healthy" or details.release != "3.4.4" or details.api_protocol != 2:
+        raise ValueError("passed MinerU probe result is inconsistent")
+
+
 __all__ = (
     "AccessConfig",
     "AcquisitionProviderTuple",
     "AcquisitionSourcesConfig",
     "AnalysisConfig",
+    "AnalysisAuthentication",
     "AnalysisProvider",
+    "AnalysisProtocol",
     "AssetsConfig",
     "Configuration",
     "ConfigurationCapabilityStatus",
@@ -650,8 +1159,11 @@ __all__ = (
     "ConfigurationFingerprint",
     "ConfigurationProbeResult",
     "ConfigurationProbeSummary",
+    "CoreConfigurationProbeResult",
+    "ConfigurationRuntimeStatus",
     "ConfigurationStatus",
     "ContactEmail",
+    "CoreCredentialService",
     "CrossrefAccessMode",
     "CrossrefMetadataConfig",
     "CredentialFieldSpec",
@@ -660,15 +1172,19 @@ __all__ = (
     "DiscoveryConfig",
     "ExecutionConfig",
     "LibraryConfig",
+    "LLMConfigurationProbeDetails",
     "MetadataProviderTuple",
     "MetadataSourcesConfig",
+    "MinerUConfigurationProbeDetails",
     "OrdinaryProviderParameter",
     "ParsingConfig",
+    "ParsingConfigurationStatus",
     "ParserConnectionMode",
     "PathsConfig",
     "ProviderCapability",
     "ProviderCredentialStatus",
     "ProviderName",
+    "AnalysisConfigurationStatus",
     "ProbeOutcome",
     "SourcesConfig",
     "StableFailureCode",

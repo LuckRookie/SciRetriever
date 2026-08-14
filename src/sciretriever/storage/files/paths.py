@@ -27,9 +27,8 @@ from sciretriever.model.primitives import RelativeArtifactPath, Sha256
 _DEFAULT_ERROR = "storage path rejected"
 _MISSING_ERROR = "storage path is missing or unsafe"
 _REFERENCE_ERROR = "storage reference is invalid or unsafe"
-_OWNER_ERROR = "storage object is not owner-only"
-_DIRECTORY_ERROR = "storage object is not a private directory"
-_FILE_ERROR = "storage object is not a private regular file"
+_DIRECTORY_ERROR = "storage object is not a directory"
+_FILE_ERROR = "storage object is not a regular file"
 _IDENTITY_ERROR = "storage object identity changed"
 _QUARANTINE_PREFIX = ".sciretriever-quarantine-"
 _MAX_QUARANTINE_ATTEMPTS: Final[int] = 32
@@ -57,7 +56,6 @@ class StoragePathError(ValueError):
             _DEFAULT_ERROR,
             _MISSING_ERROR,
             _REFERENCE_ERROR,
-            _OWNER_ERROR,
             _DIRECTORY_ERROR,
             _FILE_ERROR,
             _IDENTITY_ERROR,
@@ -72,13 +70,6 @@ class StoragePathError(ValueError):
 class _NodeIdentity:
     device: int
     inode: int
-
-
-def _owner() -> int:
-    try:
-        return os.geteuid()
-    except AttributeError:  # pragma: no cover - Windows has no geteuid.
-        return os.getuid()
 
 
 def _fail(message: str = _DEFAULT_ERROR) -> NoReturn:
@@ -192,24 +183,9 @@ def _quarantine_unlink(
                 pass
 
 
-def _validate_ancestor(metadata: os.stat_result, owner: int) -> None:
+def _validate_directory(metadata: os.stat_result) -> None:
     if not stat.S_ISDIR(metadata.st_mode):
         _fail(_DIRECTORY_ERROR)
-    mode = stat.S_IMODE(metadata.st_mode)
-    # A non-sticky writable ancestor lets another principal replace a path
-    # component.  A sticky temporary directory is safe as a parent only when
-    # the child storage root is itself an owner-only anchor.
-    if mode & 0o022 and not (mode & stat.S_ISVTX and metadata.st_uid in {0, owner}):
-        _fail(_OWNER_ERROR)
-
-
-def _validate_private_directory(
-    metadata: os.stat_result, owner: int, *, root: bool = False
-) -> None:
-    if not stat.S_ISDIR(metadata.st_mode):
-        _fail(_DIRECTORY_ERROR)
-    if metadata.st_uid != owner or stat.S_IMODE(metadata.st_mode) != 0o700:
-        _fail(_OWNER_ERROR if not root else _DIRECTORY_ERROR)
 
 
 def _close_all(descriptors: list[int]) -> None:
@@ -276,37 +252,27 @@ def _kind(value: str) -> ReferenceKind:
     return value  # type: ignore[return-value]
 
 
-def _validate_object(  # noqa: C901
-    metadata: os.stat_result, owner: int, expected: ReferenceKind
-) -> None:
+def _validate_object(metadata: os.stat_result, expected: ReferenceKind) -> None:
     is_directory = stat.S_ISDIR(metadata.st_mode)
     is_regular = stat.S_ISREG(metadata.st_mode)
     if expected == "directory":
         if not is_directory:
             _fail(_DIRECTORY_ERROR)
-        _validate_private_directory(metadata, owner)
         return
     if expected == "file":
         if not is_regular:
-            _fail(_FILE_ERROR)
-        if metadata.st_uid != owner or stat.S_IMODE(metadata.st_mode) != 0o600:
             _fail(_FILE_ERROR)
         if metadata.st_nlink != 1:
             _fail(_IDENTITY_ERROR)
         return
     if not (is_directory or is_regular):
         _fail(_REFERENCE_ERROR)
-    if is_directory:
-        _validate_private_directory(metadata, owner)
-    else:
-        if metadata.st_uid != owner or stat.S_IMODE(metadata.st_mode) != 0o600:
-            _fail(_FILE_ERROR)
-        if metadata.st_nlink != 1:
-            _fail(_IDENTITY_ERROR)
+    if is_regular and metadata.st_nlink != 1:
+        _fail(_IDENTITY_ERROR)
 
 
 class StorageRoot:
-    """A bound owner-only storage root with descriptor-relative operations.
+    """A bound storage root with descriptor-relative operations.
 
     Construction validates and, when necessary, securely creates the final
     path components.  The configured path is retained for the storage layer's
@@ -314,14 +280,12 @@ class StorageRoot:
     values or descriptors with business code.
     """
 
-    __slots__ = ("_canonical_path", "_owner", "_chain")
+    __slots__ = ("_canonical_path", "_chain")
 
     def __init__(self, configured_root: str | os.PathLike[str]) -> None:
         canonical_path = _coerce_configured_path(configured_root)
-        owner = _owner()
-        chain = self._bind(canonical_path, owner)
+        chain = self._bind(canonical_path)
         self._canonical_path = canonical_path
-        self._owner = owner
         self._chain = chain
 
     @property
@@ -330,15 +294,11 @@ class StorageRoot:
 
         return self._canonical_path
 
-    @property
-    def owner(self) -> int:
-        return self._owner
-
     def __repr__(self) -> str:
-        return "StorageRoot(<bound owner-only root>)"
+        return "StorageRoot(<bound root>)"
 
     @staticmethod
-    def _bind(path: Path, owner: int) -> tuple[_NodeIdentity, ...]:  # noqa: C901
+    def _bind(path: Path) -> tuple[_NodeIdentity, ...]:  # noqa: C901
         components = _parts(path)
         if not components:
             _fail(_DIRECTORY_ERROR)
@@ -350,8 +310,7 @@ class StorageRoot:
                 raise StoragePathError(_MISSING_ERROR) from error
             descriptors.append(current)
             identities = [_identity(os.fstat(current))]
-            for index, component in enumerate(components):
-                is_root = index == len(components) - 1
+            for component in components:
                 try:
                     child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
                 except FileNotFoundError:
@@ -367,10 +326,7 @@ class StorageRoot:
                     raise StoragePathError(_MISSING_ERROR) from error
                 descriptors.append(child)
                 metadata = os.fstat(child)
-                if is_root:
-                    _validate_private_directory(metadata, owner, root=True)
-                else:
-                    _validate_ancestor(metadata, owner)
+                _validate_directory(metadata)
                 identities.append(_identity(metadata))
                 current = child
             return tuple(identities)
@@ -401,10 +357,7 @@ class StorageRoot:
                 metadata = os.fstat(child)
                 if _identity(metadata) != self._chain[index + 1]:
                     _fail(_IDENTITY_ERROR)
-                if index == len(components) - 1:
-                    _validate_private_directory(metadata, self._owner, root=True)
-                else:
-                    _validate_ancestor(metadata, self._owner)
+                _validate_directory(metadata)
                 current = child
             return descriptors
         except StoragePathError:
@@ -457,7 +410,7 @@ class StorageRoot:
                     raise StoragePathError(_MISSING_ERROR) from error
                 metadata = os.fstat(child)
                 try:
-                    _validate_private_directory(metadata, self._owner)
+                    _validate_directory(metadata)
                 except StoragePathError:
                     os.close(child)
                     raise
@@ -470,7 +423,7 @@ class StorageRoot:
     def ensure_directory(
         self, reference: str | os.PathLike[str] | RelativeArtifactPath
     ) -> RelativeArtifactPath:
-        """Create and validate a private owner-only directory below the root."""
+        """Create and validate a directory below the root."""
 
         normalized = _relative_reference(reference)
         components = normalized.root.split("/")
@@ -491,7 +444,7 @@ class StorageRoot:
                     raise StoragePathError(_MISSING_ERROR) from error
                 metadata = os.fstat(child)
                 try:
-                    _validate_private_directory(metadata, self._owner)
+                    _validate_directory(metadata)
                 except StoragePathError:
                     os.close(child)
                     raise
@@ -522,11 +475,11 @@ class StorageRoot:
                 raise StoragePathError(_MISSING_ERROR) from error
             try:
                 initial = os.fstat(descriptor)
-                _validate_object(initial, self._owner, expected)
+                _validate_object(initial, expected)
                 final = os.fstat(descriptor)
                 if _identity(initial) != _identity(final):
                     _fail(_IDENTITY_ERROR)
-                _validate_object(final, self._owner, expected)
+                _validate_object(final, expected)
                 yield descriptor
             except StoragePathError:
                 raise
@@ -558,7 +511,7 @@ class StorageRoot:
                     return normalized
                 except OSError as error:
                     raise StoragePathError(_MISSING_ERROR) from error
-                _validate_object(metadata, self._owner, expected)
+                _validate_object(metadata, expected)
                 return normalized
         with self.open_relative(normalized, kind=expected):
             pass
@@ -572,7 +525,7 @@ class StorageRoot:
             yield descriptor
 
     def unlink_relative(self, reference: str | os.PathLike[str] | RelativeArtifactPath) -> None:
-        """Unlink an owner-only regular file after descriptor-relative checks.
+        """Unlink a regular file after descriptor-relative checks.
 
         This narrow helper is intended for a caller that owns a temporary
         reference.  Staging cleanup uses its own directory descriptor and does
@@ -588,12 +541,12 @@ class StorageRoot:
                 raise StoragePathError(_MISSING_ERROR) from error
             try:
                 metadata = os.fstat(descriptor)
-                _validate_object(metadata, self._owner, "file")
+                _validate_object(metadata, "file")
                 _quarantine_unlink(
                     parent,
                     name,
                     descriptor,
-                    lambda moved: _validate_object(moved, self._owner, "file"),
+                    lambda moved: _validate_object(moved, "file"),
                 )
             except StoragePathError:
                 raise

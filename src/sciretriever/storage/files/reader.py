@@ -1,8 +1,8 @@
 """Verified, context-managed reads from the private artifact store.
 
 The reader is deliberately a small filesystem helper.  It accepts a relative
-reference and the identity expected by its caller, verifies the owner-only
-regular file before handing out a descriptor, and verifies the named object
+reference and the identity expected by its caller, verifies the regular file
+before handing out a descriptor, and verifies the named object
 again when the read context closes.  It does not infer a media type from the
 bytes and it never exposes the configured absolute root.
 """
@@ -85,19 +85,13 @@ def _normalize_media_type(value: object) -> str:
 def _scan_descriptor(
     descriptor: int,
     *,
-    owner: int,
     max_artifact_bytes: int,
 ) -> _ReaderIdentity:
     """Hash a descriptor while checking that its inode remains stable."""
 
     try:
         initial = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(initial.st_mode)
-            or initial.st_uid != owner
-            or stat.S_IMODE(initial.st_mode) != 0o600
-            or initial.st_nlink != 1
-        ):
+        if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
             raise _failure()
         os.lseek(descriptor, 0, os.SEEK_SET)
         digest = hashlib.sha256()
@@ -114,8 +108,6 @@ def _scan_descriptor(
         if (
             (initial.st_dev, initial.st_ino, initial.st_nlink, initial.st_size)
             != (final.st_dev, final.st_ino, final.st_nlink, final.st_size)
-            or final.st_uid != owner
-            or stat.S_IMODE(final.st_mode) != 0o600
             or final.st_nlink != 1
             or size != final.st_size
         ):
@@ -165,8 +157,6 @@ def _same_named_object(left: _ReaderIdentity, right: _ReaderIdentity) -> bool:
 
 def _scan_metadata(
     descriptor: int,
-    *,
-    owner: int,
 ) -> _ReaderIdentity:
     """Read only file metadata for a short commit-time identity check.
 
@@ -178,21 +168,15 @@ def _scan_metadata(
 
     try:
         initial = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(initial.st_mode)
-            or initial.st_uid != owner
-            or stat.S_IMODE(initial.st_mode) != 0o600
-            or initial.st_nlink != 1
-        ):
+        if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
             raise _failure()
         final = os.fstat(descriptor)
-        if (
-            (initial.st_dev, initial.st_ino, initial.st_nlink, initial.st_size)
-            != (final.st_dev, final.st_ino, final.st_nlink, final.st_size)
-            or final.st_uid != owner
-            or stat.S_IMODE(final.st_mode) != 0o600
-            or final.st_nlink != 1
-        ):
+        if (initial.st_dev, initial.st_ino, initial.st_nlink, initial.st_size) != (
+            final.st_dev,
+            final.st_ino,
+            final.st_nlink,
+            final.st_size,
+        ) or final.st_nlink != 1:
             raise _failure()
         return _ReaderIdentity(
             device=final.st_dev,
@@ -334,7 +318,6 @@ class VerifiedArtifactLease(AbstractContextManager["VerifiedArtifactLease"]):
             with self._reader._root.open_relative(self._path, kind="file") as descriptor:
                 current = _scan_descriptor(
                     descriptor,
-                    owner=self._reader._root.owner,
                     max_artifact_bytes=self._reader.max_artifact_bytes,
                 )
         except VerifiedReaderError:
@@ -360,14 +343,8 @@ class VerifiedArtifactLease(AbstractContextManager["VerifiedArtifactLease"]):
         self._ensure_open()
         try:
             with self._reader._root.open_relative(self._path, kind="file") as descriptor:
-                current = _scan_metadata(
-                    descriptor,
-                    owner=self._reader._root.owner,
-                )
-            held_metadata = _scan_metadata(
-                self._descriptor,
-                owner=self._reader._root.owner,
-            )
+                current = _scan_metadata(descriptor)
+            held_metadata = _scan_metadata(self._descriptor)
         except VerifiedReaderError:
             raise
         except (OSError, StoragePathError, TypeError, ValueError) as error:
@@ -573,7 +550,6 @@ class VerifiedReader:
             with self._root.open_relative(path, kind="file") as descriptor:
                 initial = _scan_descriptor(
                     descriptor,
-                    owner=self._root.owner,
                     max_artifact_bytes=self._max_artifact_bytes,
                 )
                 if not _matches(initial, expected_sha256, expected_size):
@@ -627,7 +603,6 @@ class VerifiedReader:
             with self._root.open_relative(reference.path, kind="file") as descriptor:
                 initial = _scan_descriptor(
                     descriptor,
-                    owner=self._root.owner,
                     max_artifact_bytes=self._max_artifact_bytes,
                 )
                 if not _matches(initial, reference.sha256, reference.byte_size):
@@ -673,7 +648,6 @@ class VerifiedReader:
             with self._root.open_relative(path, kind="file") as descriptor:
                 current = _scan_descriptor(
                     descriptor,
-                    owner=self._root.owner,
                     max_artifact_bytes=self._max_artifact_bytes,
                 )
         except VerifiedReaderError:

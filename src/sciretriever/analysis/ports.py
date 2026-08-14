@@ -190,6 +190,7 @@ class LLMProviderLimits:
     max_response_bytes: int = 10_000_000
     max_result_bytes: int = 8_388_608
     max_output_tokens: int = 131_072
+    context_window_tokens: int = 1_000_000
     connect_timeout_seconds: float = 10.0
     read_timeout_seconds: float = 120.0
     overall_timeout_seconds: float = 180.0
@@ -205,6 +206,7 @@ class LLMProviderLimits:
             "max_response_bytes",
             "max_result_bytes",
             "max_output_tokens",
+            "context_window_tokens",
         ):
             value = getattr(self, field_name)
             if type(value) is not int or value < 1:

@@ -22,6 +22,7 @@ from sciretriever.entry.ports import (
     WriteAdmissionPort,
 )
 from sciretriever.literature.api import ObservationAcceptanceResult
+from sciretriever.logging.api import get_logger
 from sciretriever.metadata.api import (
     CancellationEvent,
     MetadataApi,
@@ -49,6 +50,7 @@ from sciretriever.model.report import (
 )
 
 DiscoveryRunIdFactory: TypeAlias = Callable[[], DiscoveryRunId]
+_LOGGER = get_logger(__name__)
 
 
 class _ControlledInterruption(BaseException):
@@ -139,8 +141,10 @@ class TopicDiscoveryOperation:
             return self._report(state)
         except WriteAdmissionFailure as error:
             if state is None:
-                return _admission_failed_report(request, self._run_id_factory(), error.failure)
-            return _failed_after_admission_exit(state, error.failure)
+                return _logged_discovery_report(
+                    _admission_failed_report(request, self._run_id_factory(), error.failure)
+                )
+            return _logged_discovery_report(_failed_after_admission_exit(state, error.failure))
         except _TopicDiscoveryContractError:
             if state is None:
                 raise
@@ -163,6 +167,11 @@ class TopicDiscoveryOperation:
             started_at=started_at,
         )
         self._repository.create(run)
+        _LOGGER.info(
+            "event=discovery-started discovery_run_id=%s provider_count=%d",
+            run_id,
+            len(request.providers),
+        )
         return _RunState(run)
 
     def _execute(self, state: "_RunState") -> "_RunState":
@@ -241,6 +250,13 @@ class TopicDiscoveryOperation:
         if not isinstance(accepted, ObservationAcceptanceResult):
             raise _TopicDiscoveryContractError()
         if accepted.decision == "rejected":
+            _LOGGER.debug(
+                "event=discovery-observation-rejected discovery_run_id=%s provider=%s "
+                "observation_id=%s",
+                state.run.discovery_run_id,
+                state.started_provider_name or "-",
+                observation.observation_id,
+            )
             return
         literature = accepted.literature
         meta = accepted.meta_literature
@@ -272,9 +288,22 @@ class TopicDiscoveryOperation:
             state.new_literature_count += 1
         if _accepted_meta_was_created(accepted):
             state.new_meta_count += 1
+        _LOGGER.debug(
+            "event=discovery-observation-accepted discovery_run_id=%s provider=%s "
+            "observation_id=%s literature_id=%s meta_literature_id=%s decision=%s "
+            "deduplicated=%s",
+            state.run.discovery_run_id,
+            state.started_provider_name or "-",
+            accepted_observation.observation_id,
+            literature.literature_id,
+            meta.meta_literature_id,
+            accepted.decision,
+            str(accepted.deduplicated).lower(),
+        )
 
     def _publish_relation(self, relation: ProviderRelationObservation) -> None:
         self._metadata_publication.publish_relation_observation(relation)
+        _LOGGER.debug("event=discovery-relation-published")
 
     def _interrupt(self, state: "_RunState") -> None:
         _append_unfinished_provider_reports(state)
@@ -294,16 +323,18 @@ class TopicDiscoveryOperation:
     def _report(self, state: "_RunState") -> DiscoveryReport:
         if state.end is None:
             raise _TopicDiscoveryContractError()
-        return DiscoveryReport(
-            kind="discovery",
-            end=state.end,
-            discovery_run_id=state.run.discovery_run_id,
-            run_status=state.run_status,
-            providers=tuple(state.providers),
-            discovery_result_count=len(state.result_ids),
-            new_meta_literature_count=state.new_meta_count,
-            new_literature_count=state.new_literature_count,
-            new_metadata_observation_count=state.new_observation_count,
+        return _logged_discovery_report(
+            DiscoveryReport(
+                kind="discovery",
+                end=state.end,
+                discovery_run_id=state.run.discovery_run_id,
+                run_status=state.run_status,
+                providers=tuple(state.providers),
+                discovery_result_count=len(state.result_ids),
+                new_meta_literature_count=state.new_meta_count,
+                new_literature_count=state.new_literature_count,
+                new_metadata_observation_count=state.new_observation_count,
+            )
         )
 
     def _raise_if_cancelled(self) -> None:
@@ -498,6 +529,39 @@ def _failed_after_admission_exit(state: _RunState, failure: StableFailure) -> Di
         new_literature_count=state.new_literature_count,
         new_metadata_observation_count=state.new_observation_count,
     )
+
+
+def _logged_discovery_report(report: DiscoveryReport) -> DiscoveryReport:
+    if isinstance(report.end, FailedReportEnd):
+        failure = report.end.failure
+        _LOGGER.error(
+            "event=discovery-failed discovery_run_id=%s status=%s code=%s "
+            "retryable=%s reason=%s action=%s",
+            report.discovery_run_id,
+            report.run_status,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
+        )
+    elif isinstance(report.end, InterruptedReportEnd):
+        _LOGGER.warning(
+            "event=discovery-interrupted discovery_run_id=%s result_count=%d",
+            report.discovery_run_id,
+            report.discovery_result_count,
+        )
+    else:
+        _LOGGER.info(
+            "event=discovery-finished discovery_run_id=%s status=%s provider_count=%d "
+            "result_count=%d new_literature_count=%d new_observation_count=%d",
+            report.discovery_run_id,
+            report.run_status,
+            len(report.providers),
+            report.discovery_result_count,
+            report.new_literature_count,
+            report.new_metadata_observation_count,
+        )
+    return report
 
 
 __all__ = ("TopicDiscoveryOperation",)

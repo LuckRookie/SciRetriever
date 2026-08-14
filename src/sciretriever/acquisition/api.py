@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Final
+
+from sciretriever.acquisition.authorized import (
+    PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
+    UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
+)
 from sciretriever.acquisition.manual import ManualPdfInputError
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
@@ -15,6 +21,13 @@ from sciretriever.acquisition.rules import (
 )
 from sciretriever.acquisition.service import AcquisitionService
 from sciretriever.model.acquisition import AcquisitionResult
+
+AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
+    PRODUCTION_AUTHORIZED_PROVIDER_CATALOG
+)
+UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = (
+    UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS
+)
 
 
 class PreparedAcquisition:
@@ -74,6 +87,7 @@ class AcquisitionApi:
 
 
 __all__ = (
+    "AUTHORIZED_PDF_API_PROVIDER_KEYS",
     "AcquisitionApi",
     "AcquisitionExpectedFacts",
     "AcquisitionFailure",
@@ -83,4 +97,5 @@ __all__ = (
     "PdfValidationCancelled",
     "PreparedAcquisition",
     "ReadablePdfSource",
+    "UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS",
 )

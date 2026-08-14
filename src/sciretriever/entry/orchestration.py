@@ -50,6 +50,7 @@ from sciretriever.literature.api import (
     StalePreconditionError,
     derive_status,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
     AcquisitionResult,
@@ -80,6 +81,7 @@ from sciretriever.parsing.api import ParsingFailure, PreparedParsing
 CompletionStage: TypeAlias = Literal["acquisition", "parsing", "analysis", "literature"]
 _T = TypeVar("_T")
 _PreparedT = TypeVar("_PreparedT")
+_LOGGER = get_logger(__name__)
 
 
 class CommitNotStarted(RuntimeError):
@@ -403,6 +405,12 @@ class _CompletionTargetOrchestratorCore:
         no_usable: list[LiteratureId] = []
         stable_missing: list[LiteratureId] = []
         current_literature_id: LiteratureId | None = None
+        _LOGGER.debug(
+            "event=completion-orchestration-started goal=%s candidate_count=%d explicit_retry=%s",
+            goal,
+            len(candidates),
+            str(explicit_retry).lower(),
+        )
         try:
             for candidate in candidates:
                 current_literature_id = candidate.literature_id
@@ -475,11 +483,21 @@ class _CompletionTargetOrchestratorCore:
     ) -> _CandidateOutcome:
         literature_id = candidate.literature_id
         state = _CandidateRunState(set())
+        _LOGGER.debug(
+            "event=completion-candidate-started literature_id=%s goal=%s",
+            literature_id,
+            goal,
+        )
 
         while True:
             self._check_cancel(literature_id)
             current = self._read_current(literature_id, expected_meta_id=expected_meta_id)
             if _reaches_goal(current, goal):
+                _LOGGER.debug(
+                    "event=completion-stage-skipped literature_id=%s stage=all "
+                    "reason=goal-already-reached",
+                    literature_id,
+                )
                 return _CandidateGoal(literature_id)
             primary_result = self._ensure_primary_pdf(
                 literature_id,
@@ -489,10 +507,19 @@ class _CompletionTargetOrchestratorCore:
                 state=state,
             )
             if isinstance(primary_result, _CandidateMissing):
+                _LOGGER.debug(
+                    "event=completion-stage-finished literature_id=%s stage=acquisition "
+                    "outcome=no-primary-pdf",
+                    literature_id,
+                )
                 return primary_result
             current = primary_result
 
             if goal == "ASSET_READY":
+                _LOGGER.debug(
+                    "event=completion-candidate-finished literature_id=%s outcome=goal-reached",
+                    literature_id,
+                )
                 return _CandidateGoal(literature_id)
 
             current = self._ensure_parser_result(
@@ -529,8 +556,18 @@ class _CompletionTargetOrchestratorCore:
         state: _CandidateRunState,
     ) -> ExecutionCurrentFacts | _CandidateMissing:
         if _current_primary(current) is not None:
+            _LOGGER.debug(
+                "event=completion-stage-skipped literature_id=%s stage=acquisition "
+                "reason=primary-pdf-present",
+                literature_id,
+            )
             return current
         if current.automatic_pdf_exhaustion is not None:
+            _LOGGER.debug(
+                "event=completion-exhaustion-found literature_id=%s explicit_retry=%s",
+                literature_id,
+                str(explicit_retry).lower(),
+            )
             exhaustion_result = self._handle_existing_exhaustion(
                 literature_id,
                 current,
@@ -569,6 +606,10 @@ class _CompletionTargetOrchestratorCore:
             "acquisition",
             lambda: self._acquisition.clear_exhaustion_for_explicit_retry(expected),
         )
+        _LOGGER.debug(
+            "event=completion-exhaustion-cleared literature_id=%s",
+            literature_id,
+        )
         state.explicit_exhaustion_cleared = True
         refreshed = self._read_current(
             literature_id,
@@ -588,6 +629,10 @@ class _CompletionTargetOrchestratorCore:
         expected_meta_id: MetaLiteratureId | None,
         state: _CandidateRunState,
     ) -> ExecutionCurrentFacts | _CandidateMissing:
+        _LOGGER.debug(
+            "event=completion-stage-started literature_id=%s stage=acquisition",
+            literature_id,
+        )
         request = self._build_acquisition_request(
             literature_id,
             current,
@@ -617,6 +662,11 @@ class _CompletionTargetOrchestratorCore:
             )
         if not isinstance(result, AcquiredPrimaryPdf):
             self._fail(literature_id, "acquisition", contract=True)
+        _LOGGER.debug(
+            "event=completion-stage-finished literature_id=%s stage=acquisition "
+            "outcome=primary-pdf-acquired",
+            literature_id,
+        )
         return self._record_acquired_primary(
             literature_id,
             result,
@@ -671,6 +721,10 @@ class _CompletionTargetOrchestratorCore:
         literature_id: LiteratureId,
         current: ExecutionCurrentFacts,
     ) -> NoUsableContent | LiteratureContentProposal:
+        _LOGGER.debug(
+            "event=completion-stage-started literature_id=%s stage=analysis",
+            literature_id,
+        )
         analysis_input = self._build_analysis_input(literature_id, current)
         result = self._external(
             literature_id,
@@ -682,6 +736,11 @@ class _CompletionTargetOrchestratorCore:
         )
         if not isinstance(result, (NoUsableContent, LiteratureContentProposal)):
             self._fail(literature_id, "analysis", contract=True)
+        _LOGGER.debug(
+            "event=completion-stage-finished literature_id=%s stage=analysis outcome=%s",
+            literature_id,
+            "no-usable-content" if isinstance(result, NoUsableContent) else "content-proposed",
+        )
         return result
 
     def _handle_no_usable_content(
@@ -705,6 +764,10 @@ class _CompletionTargetOrchestratorCore:
         )
         if literature_id not in no_usable:
             no_usable.append(literature_id)
+        _LOGGER.debug(
+            "event=completion-content-cleaned literature_id=%s reason=no-usable-content",
+            literature_id,
+        )
         return None
 
     def _accept_content(
@@ -714,6 +777,10 @@ class _CompletionTargetOrchestratorCore:
         *,
         expected_meta_id: MetaLiteratureId | None,
     ) -> _CandidateGoal:
+        _LOGGER.debug(
+            "event=completion-stage-started literature_id=%s stage=literature",
+            literature_id,
+        )
         acceptance = self._commit(
             literature_id,
             "literature",
@@ -735,6 +802,11 @@ class _CompletionTargetOrchestratorCore:
         if not _reaches_goal(committed, "CONTENT_READY"):
             self._fail(literature_id, "literature", contract=True)
         self._check_cancel(literature_id)
+        _LOGGER.debug(
+            "event=completion-stage-finished literature_id=%s stage=literature "
+            "outcome=content-accepted",
+            literature_id,
+        )
         return _CandidateGoal(literature_id)
 
     def _ensure_parser_result(
@@ -750,8 +822,17 @@ class _CompletionTargetOrchestratorCore:
             self._fail(literature_id, "parsing", contract=True)
         parser_result = facts.current_parser_result
         if parser_result is not None:
+            _LOGGER.debug(
+                "event=completion-stage-skipped literature_id=%s stage=parsing "
+                "reason=parser-result-present",
+                literature_id,
+            )
             return current
 
+        _LOGGER.debug(
+            "event=completion-stage-started literature_id=%s stage=parsing",
+            literature_id,
+        )
         request = self._build_parser_request(literature_id, current)
         prepared = self._prepare_receipt(
             literature_id=literature_id,
@@ -785,6 +866,11 @@ class _CompletionTargetOrchestratorCore:
         if refreshed.current.current_parser_result != parsed:
             self._fail(literature_id, "parsing", contract=True)
         self._check_cancel(literature_id)
+        _LOGGER.debug(
+            "event=completion-stage-finished literature_id=%s stage=parsing "
+            "outcome=parser-result-committed",
+            literature_id,
+        )
         return refreshed
 
     def _cleanup_no_usable_content(
@@ -875,6 +961,10 @@ class _CompletionTargetOrchestratorCore:
         expected_meta_id: MetaLiteratureId | None,
         allow_cancelled: bool = False,
     ) -> ExecutionCurrentFacts:
+        _LOGGER.debug(
+            "event=completion-current-facts-read literature_id=%s",
+            literature_id,
+        )
         snapshot = self._read_exact_snapshot(literature_id, allow_cancelled=allow_cancelled)
         current = snapshot.current_facts[0]
         self._validate_current_alignment(

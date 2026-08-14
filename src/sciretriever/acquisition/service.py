@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 from typing import TYPE_CHECKING, Literal
 from weakref import WeakKeyDictionary
@@ -14,8 +15,10 @@ from sciretriever.acquisition.ports import (
     AcquisitionExhaustionPublicationPort,
     AcquisitionExpectedFacts,
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CancellationEvent,
     CandidateKeyTracker,
+    DoiLandingOriginResolver,
     PdfSource,
     PdfSourceBinding,
     PrimaryPdfPreparation,
@@ -27,6 +30,7 @@ from sciretriever.acquisition.routing import (
     AcquisitionRequest,
     build_acquisition_evidence,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
     AcquisitionPath,
@@ -46,6 +50,7 @@ _STAGE_ORDER = (
     AcquisitionPath.AUTHORIZED_PROVIDER_API,
     AcquisitionPath.CONTROLLED_BROWSER,
 )
+_LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -77,6 +82,8 @@ class AcquisitionService:
         publication_port: PrimaryPdfPreparationPort,
         exhaustion_port: AcquisitionExhaustionPublicationPort,
         exhaustion_clear_port: AcquisitionExhaustionClearPort,
+        doi_landing_resolver: DoiLandingOriginResolver | None = None,
+        requires_doi_landing_origin: bool = False,
     ) -> None:
         try:
             bindings = tuple(source_bindings)
@@ -90,10 +97,21 @@ class AcquisitionService:
             raise TypeError("exhaustion_port must implement AcquisitionExhaustionPublicationPort")
         if not isinstance(exhaustion_clear_port, AcquisitionExhaustionClearPort):
             raise TypeError("exhaustion_clear_port must implement AcquisitionExhaustionClearPort")
+        if doi_landing_resolver is not None and not isinstance(
+            doi_landing_resolver,
+            DoiLandingOriginResolver,
+        ):
+            raise TypeError("doi_landing_resolver must implement DoiLandingOriginResolver")
+        if type(requires_doi_landing_origin) is not bool:
+            raise TypeError("requires_doi_landing_origin must be a bool")
+        if requires_doi_landing_origin and doi_landing_resolver is None:
+            raise ValueError("DOI landing resolution requires a resolver")
         self._source_bindings = bindings
         self._publication_port = publication_port
         self._exhaustion_port = exhaustion_port
         self._exhaustion_clear_port = exhaustion_clear_port
+        self._doi_landing_resolver = doi_landing_resolver
+        self._requires_doi_landing_origin = requires_doi_landing_origin
         self._receipt_lock = Lock()
         self._receipts: WeakKeyDictionary[PreparedAcquisition, _ReceiptState] = WeakKeyDictionary()
 
@@ -133,36 +151,73 @@ class AcquisitionService:
             )
 
         self._check_cancel(cancel_event)
+        literature_id = request.literature.literature_id
+        _LOGGER.debug(
+            "event=acquisition-started literature_id=%s observation_count=%d "
+            "excluded_candidate_count=%d",
+            literature_id,
+            len(request.observations),
+            len(request.excluded_candidate_keys),
+        )
         # All enabled capabilities are checked before Source applicability or
         # I/O.  A broken enabled capability is a configuration/system failure,
         # even when an earlier stage might otherwise have found a candidate.
-        sources = self._preflight_enabled_sources(cancel_event=cancel_event)
+        sources = self._preflight_for_request(
+            literature_id,
+            cancel_event=cancel_event,
+        )
         self._check_cancel(cancel_event)
-        evidence = build_acquisition_evidence(request)
+        active_request = request
+        evidence = build_acquisition_evidence(active_request)
         candidate_keys = CandidateKeyTracker(request.excluded_candidate_keys)
         delivered_candidate_keys = set(request.excluded_candidate_keys)
+        source_failures: list[AcquisitionSourceFailure] = []
 
         for stage in _STAGE_ORDER:
             self._check_cancel(cancel_event)
-            for binding, source in sources:
-                if binding.acquisition_path is not stage:
-                    continue
-                self._check_cancel(cancel_event)
-                if not self._is_applicable(source, evidence, cancel_event=cancel_event):
-                    continue
-                prepared_candidate = self._run_source(
-                    binding=binding,
-                    source=source,
-                    request=request,
-                    evidence=evidence,
-                    candidate_keys=candidate_keys,
-                    delivered_candidate_keys=delivered_candidate_keys,
-                    cancel_event=cancel_event,
-                )
-                if prepared_candidate is not None:
-                    return self._issue_receipt(prepared_candidate)
+            _LOGGER.debug(
+                "event=acquisition-stage-started literature_id=%s stage=%s",
+                literature_id,
+                stage.value,
+            )
+            active_request, evidence = self._prepare_stage_context(
+                stage=stage,
+                request=active_request,
+                evidence=evidence,
+                source_failures=source_failures,
+                cancel_event=cancel_event,
+            )
+            prepared_candidate = self._prepare_from_stage(
+                stage=stage,
+                sources=sources,
+                request=active_request,
+                evidence=evidence,
+                candidate_keys=candidate_keys,
+                delivered_candidate_keys=delivered_candidate_keys,
+                source_failures=source_failures,
+                cancel_event=cancel_event,
+            )
+            if prepared_candidate is not None:
+                return self._issue_receipt(prepared_candidate)
 
         self._check_cancel(cancel_event)
+        if source_failures:
+            selected_failure = _select_source_failure(source_failures)
+            _LOGGER.warning(
+                "event=acquisition-failed-after-fallbacks literature_id=%s "
+                "source_failure_count=%d code=%s retryable=%s reason=%s action=%s",
+                literature_id,
+                len(source_failures),
+                selected_failure.failure.code,
+                str(selected_failure.failure.retryable).lower(),
+                selected_failure.failure.reason,
+                selected_failure.failure.action,
+            )
+            raise selected_failure
+        _LOGGER.info(
+            "event=acquisition-exhausted literature_id=%s",
+            literature_id,
+        )
         return self._issue_receipt(
             _ExhaustionPreparation(
                 command=AcquisitionExhaustionPublicationCommand(
@@ -172,6 +227,148 @@ class AcquisitionService:
                 literature_id=request.literature.literature_id,
             )
         )
+
+    def _prepare_stage_context(
+        self,
+        *,
+        stage: AcquisitionPath,
+        request: AcquisitionRequest,
+        evidence: AcquisitionEvidence,
+        source_failures: list[AcquisitionSourceFailure],
+        cancel_event: CancellationEvent | None,
+    ) -> tuple[AcquisitionRequest, AcquisitionEvidence]:
+        if stage is not AcquisitionPath.AUTHORIZED_PROVIDER_API:
+            return request, evidence
+        try:
+            return self._resolve_doi_landing_origin(
+                request,
+                evidence,
+                cancel_event=cancel_event,
+            )
+        except AcquisitionSourceFailure as error:
+            source_failures.append(error)
+            return request, evidence
+
+    def _prepare_from_stage(
+        self,
+        *,
+        stage: AcquisitionPath,
+        sources: tuple[tuple[PdfSourceBinding, PdfSource], ...],
+        request: AcquisitionRequest,
+        evidence: AcquisitionEvidence,
+        candidate_keys: CandidateKeyTracker,
+        delivered_candidate_keys: set[str],
+        source_failures: list[AcquisitionSourceFailure],
+        cancel_event: CancellationEvent | None,
+    ) -> _CandidatePreparation | None:
+        literature_id = request.literature.literature_id
+        for binding, source in sources:
+            if binding.acquisition_path is not stage:
+                continue
+            self._check_cancel(cancel_event)
+            applicable = self._applicable_for_request(
+                binding=binding,
+                source=source,
+                evidence=evidence,
+                literature_id=literature_id,
+                cancel_event=cancel_event,
+            )
+            _LOGGER.debug(
+                "event=acquisition-source-applicability literature_id=%s stage=%s "
+                "source=%s applicable=%s",
+                literature_id,
+                stage.value,
+                binding.source_name,
+                str(applicable).lower(),
+            )
+            if not applicable:
+                continue
+            try:
+                prepared_candidate = self._run_source(
+                    binding=binding,
+                    source=source,
+                    request=request,
+                    evidence=evidence,
+                    candidate_keys=candidate_keys,
+                    delivered_candidate_keys=delivered_candidate_keys,
+                    cancel_event=cancel_event,
+                )
+            except AcquisitionSourceFailure as error:
+                source_failures.append(error)
+                continue
+            if prepared_candidate is None:
+                continue
+            _LOGGER.debug(
+                "event=acquisition-candidate-prepared literature_id=%s stage=%s "
+                "source=%s candidate_id=%s",
+                literature_id,
+                stage.value,
+                binding.source_name,
+                _diagnostic_candidate_id(prepared_candidate.candidate_key),
+            )
+            return prepared_candidate
+        return None
+
+    def _resolve_doi_landing_origin(
+        self,
+        request: AcquisitionRequest,
+        evidence: AcquisitionEvidence,
+        *,
+        cancel_event: CancellationEvent | None,
+    ) -> tuple[AcquisitionRequest, AcquisitionEvidence]:
+        if not self._requires_doi_landing_origin or request.resolved_landing_origin is not None:
+            return request, evidence
+        dois = tuple(
+            identifier
+            for identifier in request.literature.metadata.identifiers
+            if identifier.namespace == "doi"
+        )
+        # One origin must never be applied to a different DOI.  Ambiguous
+        # legacy records therefore remain inapplicable instead of guessing.
+        if len(dois) != 1:
+            _LOGGER.debug(
+                "event=acquisition-doi-origin-skipped literature_id=%s reason=doi-count "
+                "doi_count=%d",
+                request.literature.literature_id,
+                len(dois),
+            )
+            return request, evidence
+        resolver = self._doi_landing_resolver
+        if resolver is None:
+            raise AcquisitionFailure(_contract_failure())
+        self._check_cancel(cancel_event)
+        _LOGGER.debug(
+            "event=acquisition-doi-origin-started literature_id=%s",
+            request.literature.literature_id,
+        )
+        try:
+            resolved_origin = resolver.resolve(dois[0])
+        except AcquisitionFailure as error:
+            _log_acquisition_failure(
+                literature_id=request.literature.literature_id,
+                stage=AcquisitionPath.AUTHORIZED_PROVIDER_API.value,
+                source_name="doi-landing",
+                failure=error.failure,
+            )
+            raise
+        except Exception:
+            raise AcquisitionFailure(_source_failure()) from None
+        self._check_cancel(cancel_event)
+        if resolved_origin is None:
+            _LOGGER.debug(
+                "event=acquisition-doi-origin-finished literature_id=%s outcome=miss",
+                request.literature.literature_id,
+            )
+            return request, evidence
+        _LOGGER.debug(
+            "event=acquisition-doi-origin-finished literature_id=%s outcome=resolved",
+            request.literature.literature_id,
+        )
+        try:
+            enriched = replace(request, resolved_landing_origin=resolved_origin)
+            return enriched, build_acquisition_evidence(enriched)
+        except (TypeError, ValueError):
+            raise AcquisitionFailure(_source_failure()) from None
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
         """Consume one service-issued receipt; every attempted commit is terminal."""
@@ -197,6 +394,11 @@ class AcquisitionService:
                 or result.relation.literature_id != payload.literature_id
             ):
                 raise AcquisitionFailure(_contract_failure())
+            _LOGGER.info(
+                "event=acquisition-pdf-committed literature_id=%s candidate_id=%s",
+                payload.literature_id,
+                _diagnostic_candidate_id(payload.candidate_key),
+            )
             return result
 
         try:
@@ -210,6 +412,10 @@ class AcquisitionService:
             or exhaustion.literature_id != payload.literature_id
         ):
             raise AcquisitionFailure(_contract_failure())
+        _LOGGER.debug(
+            "event=acquisition-exhaustion-committed literature_id=%s",
+            payload.literature_id,
+        )
         return NoPrimaryPdf()
 
     def discard_prepared(self, prepared: PreparedAcquisition) -> None:
@@ -272,6 +478,19 @@ class AcquisitionService:
         prepared: list[tuple[PdfSourceBinding, PdfSource]] = []
         for binding in self._source_bindings:
             self._check_cancel(cancel_event)
+            _LOGGER.debug(
+                "event=acquisition-source-preflight source=%s stage=%s enabled=%s "
+                "production=%s ready=%s",
+                binding.source_name,
+                binding.acquisition_path.value,
+                str(binding.enabled).lower(),
+                str(binding.production).lower(),
+                (
+                    "unknown"
+                    if binding.readiness is None
+                    else str(binding.readiness.is_ready).lower()
+                ),
+            )
             if not binding.enabled:
                 continue
             if not binding.production:
@@ -327,6 +546,43 @@ class AcquisitionService:
             prepared.append((binding, source))
         return tuple(prepared)
 
+    def _preflight_for_request(
+        self,
+        literature_id: LiteratureId,
+        *,
+        cancel_event: CancellationEvent | None,
+    ) -> tuple[tuple[PdfSourceBinding, PdfSource], ...]:
+        try:
+            return self._preflight_enabled_sources(cancel_event=cancel_event)
+        except AcquisitionFailure as error:
+            _log_acquisition_failure(
+                literature_id=literature_id,
+                stage="preflight",
+                source_name="-",
+                failure=error.failure,
+            )
+            raise
+
+    def _applicable_for_request(
+        self,
+        *,
+        binding: PdfSourceBinding,
+        source: PdfSource,
+        evidence: AcquisitionEvidence,
+        literature_id: LiteratureId,
+        cancel_event: CancellationEvent | None,
+    ) -> bool:
+        try:
+            return self._is_applicable(source, evidence, cancel_event=cancel_event)
+        except AcquisitionFailure as error:
+            _log_acquisition_failure(
+                literature_id=literature_id,
+                stage=binding.acquisition_path.value,
+                source_name=binding.source_name,
+                failure=error.failure,
+            )
+            raise
+
     def _is_applicable(
         self,
         source: PdfSource,
@@ -368,9 +624,24 @@ class AcquisitionService:
                 try:
                     temporary_pdf = next(iterator)
                 except StopIteration:
+                    _LOGGER.debug(
+                        "event=acquisition-source-finished literature_id=%s stage=%s "
+                        "source=%s outcome=miss",
+                        request.literature.literature_id,
+                        binding.acquisition_path.value,
+                        binding.source_name,
+                    )
                     return None
                 if not isinstance(temporary_pdf, TemporaryPdf):
                     raise AcquisitionFailure(_contract_failure())
+                _LOGGER.debug(
+                    "event=acquisition-candidate-delivered literature_id=%s stage=%s "
+                    "source=%s candidate_id=%s",
+                    request.literature.literature_id,
+                    binding.acquisition_path.value,
+                    binding.source_name,
+                    _diagnostic_candidate_id(temporary_pdf.candidate.candidate_key),
+                )
                 try:
                     self._check_cancel(cancel_event)
                 except BaseException:
@@ -391,7 +662,21 @@ class AcquisitionService:
                         literature_id=request.literature.literature_id,
                     )
                     break
-        except AcquisitionFailure:
+                _LOGGER.debug(
+                    "event=acquisition-candidate-rejected literature_id=%s stage=%s "
+                    "source=%s candidate_id=%s",
+                    request.literature.literature_id,
+                    binding.acquisition_path.value,
+                    binding.source_name,
+                    _diagnostic_candidate_id(temporary_pdf.candidate.candidate_key),
+                )
+        except AcquisitionFailure as error:
+            _log_acquisition_failure(
+                literature_id=request.literature.literature_id,
+                stage=binding.acquisition_path.value,
+                source_name=binding.source_name,
+                failure=error.failure,
+            )
             raise
         except Exception:
             raise AcquisitionFailure(_source_failure()) from None
@@ -532,6 +817,43 @@ class AcquisitionService:
                     retryable=True,
                 )
             ) from None
+
+
+def _diagnostic_candidate_id(candidate_key: str) -> str:
+    """Return a stable diagnostic identifier without exposing locator-derived keys."""
+
+    return hashlib.sha256(candidate_key.encode("utf-8", "strict")).hexdigest()[:16]
+
+
+def _select_source_failure(
+    failures: list[AcquisitionSourceFailure],
+) -> AcquisitionSourceFailure:
+    """Choose one stable result while every isolated failure remains logged."""
+
+    for failure in failures:
+        if failure.failure.retryable:
+            return failure
+    return failures[0]
+
+
+def _log_acquisition_failure(
+    *,
+    literature_id: LiteratureId,
+    stage: str,
+    source_name: str,
+    failure: StableFailure,
+) -> None:
+    _LOGGER.warning(
+        "event=acquisition-source-failed literature_id=%s stage=%s source=%s "
+        "code=%s retryable=%s reason=%s action=%s",
+        literature_id,
+        stage,
+        source_name,
+        failure.code,
+        str(failure.retryable).lower(),
+        failure.reason,
+        failure.action,
+    )
 
 
 def _failure(
