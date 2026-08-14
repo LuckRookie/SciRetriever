@@ -206,6 +206,16 @@ Provider 专属 origin、selector、有限动作、正文/补充材料判别和�
 规则外目标必须在 DNS 或 transport 前 fail closed；未知 Provider 不获得 generic Browser
 fallback。
 
+截至当前实现，`browser.py` 已提供中性的 `BrowserDestinationGuard`：Controlled Browser
+Source 对每篇文章注入一项只含当前规则 origin 与精确 resolver 起点的 guard。Network 在初始
+导航、显式导航、redirect/页面请求、popup、response capture 和 download capture 分别标记
+用途，并在 DNS、route continuation 或读取响应/下载字节前调用该 guard；传给 guard 的 locator
+已经去除 query，规则外异常统一转换为 `policy` 失败。Response 的实际 transport 已由更早的
+request guard、DNS binding 和 live host lease 准入，response hook 再在读取 body 前复核同一
+lease。通用 URL/DNS/地址类别/host permit/资源预算仍独立执行，guard 只能收紧不能放宽。
+生产 Controlled Browser 仍保持 disabled：risk-group executor、session broker、完整状态机、
+捕获矩阵以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
+
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、not found、PDF captured 和 runtime
 failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit；它不形成 Literature 状态，

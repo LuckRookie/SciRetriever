@@ -442,9 +442,11 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 
 截至本段对应实现，生产对象图仍以 Browser disabled 且 execution unconfirmed 组装；因此
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
-真实 Browser 流量。Provider session broker、risk-group Browser executor 与用户确认 UX 完成
-前，不得从配置或 CLI 打开生产 Browser。当前 cohort 内部保留的 Browser 执行分支也只是
-保守串行兜底，不代表第 4.1 节的组间并行会话能力已经 production-ready。
+真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 的规则注入
+已经实现并通过离线 direct/安装后测试；Provider session broker、risk-group Browser executor、
+状态/捕获矩阵与用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。当前 cohort 内部
+保留的 Browser 执行分支也只是保守串行兜底，不代表第 4.1 节的组间并行会话能力已经
+production-ready。
 
 ### 4.1 Browser admission、会话与调度
 
