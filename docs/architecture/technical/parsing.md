@@ -53,6 +53,12 @@ ParserPort.parse(ParserRequest) -> staged parser output
 
 Operator-managed MinerU 的 submit、poll、resume task 和归档下载仍属于 MinerU Adapter 内部。外部 task ID 只服务当前尝试的有界恢复和诊断，不进入 `ParserRequest`、`ParserResult` 或 Catalog。
 
+当前 production adapter 锁定 MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive
+backend `vlm` 与 parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 connection mode、
+Base URL、model identity 与 remote upload consent；remote bearer token 从统一凭据文件读取并
+与规范 origin 精确绑定，loopback 不读取 token。`config test mineru` 复用同一 production
+client 但只执行 health/release/protocol/profile 检查，不提交 task 或上传 PDF。
+
 ## 3. Adapter 转换
 
 不同 Parser 使用自己的转换路径：

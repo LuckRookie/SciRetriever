@@ -5,7 +5,7 @@
 ## 常用入口
 
 - [代码与文档同步映射](documentation-map.md)：代码变化需要同步核对哪些当前文档。
-- [Provider 接入开发手册](provider-integration.md)：新增或实质修改 metadata、citation 或 asset source client/adapter 时的安全与验收检查。
+- [Provider 接入开发手册](provider-integration.md)：新增或实质修改 Metadata Provider 或 Acquisition Provider client/adapter 时的安全与验收检查。
 - [整体架构](../architecture/README.md)：修改领域边界、数据所有权、持久化或依赖方向前的设计真相源。
 
 ## 验证
@@ -15,8 +15,8 @@ uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
 ```
 
-Quick 只运行 Ruff lint、format check 和 compileall，适合重构开发循环。Full 另外运行
-Pyright strict、全部 unittest、wheel 构建与内容核对，只在集成里程碑、PR、主分支和发布边界要求。
-普通重构工作包优先运行相关测试，不要求每次都执行 Full；精确规则见根目录 `HARNESS.md`。
+Quick 只运行 Ruff lint、format check 和 compileall，适合代码开发循环和普通工作分支的
+快速反馈。Full 另外运行 Pyright strict、全部 unittest、wheel 构建与内容核对；代码交付、
+PR、master、发布和安装包级验收默认必须通过 Full。精确规则见根目录 `HARNESS.md`。
 
 测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。

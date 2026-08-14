@@ -66,13 +66,29 @@ sciretriever export metadata
 sciretriever export pdf
 sciretriever export content
 
-sciretriever config set
-sciretriever config remove
+sciretriever config
 sciretriever config status
 sciretriever config test
 ```
 
-每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。稳定进程退出码如下：
+每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。日志有两个运行模式：
+
+- 默认正常模式记录操作与 Provider 的开始/结束、目标进度、成功或失败概况；失败始终包含稳定错误代码、原因、建议动作和是否可重试。
+- `--debug` 在正常日志之外记录逐步骤轨迹，包括 Metadata 原始条目转换、Network 请求结果、Completion 阶段、PDF Source、候选匿名 ID、授权 API lookup/download 和发布边界。Debug 仍不输出密钥、Cookie、完整 URL、响应正文、文献正文、prompt 或机器路径。
+
+`--debug` 是全局选项，也可以放在具体命令末尾。需要保存一次运行的报告和日志时，分别重定向 stdout 与 stderr：
+
+```bash
+mkdir -p run/logs run/reports
+sciretriever complete pdf --all-pending --json \
+  > run/reports/completion.json \
+  2> run/logs/completion.log
+sciretriever --debug complete pdf --all-pending --json \
+  > run/reports/completion-debug.json \
+  2> run/logs/completion-debug.log
+```
+
+日志是本次运行的非权威诊断，不写入 Catalog，也不用于决定重试、耗尽或文献状态。稳定进程退出码如下：
 
 | 退出码 | 含义 |
 | ---: | --- |
@@ -146,14 +162,32 @@ access
 
 CLI 不提供 `--config` 覆盖参数，也不创建隐式默认配置。完整字段和路径限制见[配置手册](docs/guides/configuration.md)。仓库根目录的个人 `config.toml` 不是公开模板，不应提交。
 
-Provider 凭据与普通配置分离，固定保存在 `~/.sciretriever/credentials.toml`。其目录必须是当前用户拥有、权限为 `0700` 的普通非符号链接目录；文件必须是当前用户拥有、权限为 `0600` 的普通非符号链接文件。
+Provider、LLM 与远程 MinerU 的 secret 与普通配置分离，统一固定保存在
+`~/.sciretriever/credentials.toml`。其目录必须是当前用户拥有、权限为 `0700` 的普通
+非符号链接目录；文件必须是当前用户拥有、权限为 `0600` 的普通非符号链接文件。
 
-- `config set` 通过不回显的交互输入写入单个 Provider 凭据，不接受命令位置参数或 option 中的 secret。
-- `config remove` 只删除指定 Provider section。
-- `config status` 只做本地状态检查，不联网，也不显示 secret、mask、长度、hash 或 fingerprint。
-- `config test` 是用户显式触发的最小只读 Provider probe；它经过共享 Network/Access Coordinator，不创建 Catalog、DiscoveryRun、Literature、Report 或测试历史。
+- 裸运行 `config` 打开统一交互中心：首页分为 LLM Analysis、MinerU Parser 和 Literature Providers。LLM 向导配置协议、Base URL、模型、context window、认证与预算；MinerU 向导配置 loopback/remote endpoint、部署标识和远程上传确认；Provider 区继续提供凭据申请提示、设置、更新与移除。secret 只通过隐藏输入收集，不接受 argv/option 传值。
+- TTY 界面使用 Rich 与 prompt-toolkit，支持方向键、Enter 和 `L/M/T/Q` 快捷键；`--theme auto|dark|light|mono` 可选主题，`NO_COLOR` 强制单色。重定向输入时自动使用确定性的编号菜单。全部交互提示写 stderr，stdout 保持为空。
+- `config status` 是纯本地检查，不联网；默认用紧凑表格显示 LLM/MinerU 普通配置、凭据 presence 与 readiness，按 Metadata/Acquisition 列出 Provider 字段，并明确展示 PDF 的“公开路径 → 授权 API → 受控浏览器”顺序。它绝不显示 secret、mask、长度、hash 或 fingerprint；`--json` 提供无 ANSI 的稳定分组结果。
+- `config test llm` 发送一条不含用户文献内容的最小严格 schema 请求，可能消耗少量额度；`config test mineru` 只执行 health 检查，不上传 PDF；Provider probe 继续使用官方最小只读请求。`config test --all` 汇总已启用 Provider、LLM 和 MinerU，一个失败不阻断其它结果。所有 probe 都不创建 Catalog、DiscoveryRun、Literature、Report 或测试历史。
 
-Parser 和 Analysis 的运行 secret 使用固定环境变量边界：`SCIRETRIEVER_MINERU_BEARER_TOKEN`、`SCIRETRIEVER_OPENAI_API_KEY` 和 `SCIRETRIEVER_ANTHROPIC_API_KEY`。
+LLM 当前支持 `openai-responses`、`openai-chat-completions` 和
+`anthropic-messages` 三种明确协议。官方 OpenAI/Anthropic 使用固定 HTTPS Base URL 和
+与规范 origin 精确绑定的 API key；自定义远程服务必须使用 hostname-based HTTPS 与
+API key；自定义 HTTP loopback 可以显式选择无认证。MinerU 只暴露当前真实实现
+`3.4.4 / protocol 2 / vlm-engine / archive vlm / parse auto`：loopback 不需要 token，
+remote 必须是 hostname-based HTTPS、配置 origin-bound bearer token，并明确确认 PDF
+会离开本机。项目不读取 LLM/MinerU secret 环境变量，也不提供旧合同回退或自动迁移。
+
+自动 PDF 获取固定按“公开来源 → 授权 Provider API → 受控浏览器”串行短路。当前公开
+阶段包含已保存 direct/landing hints、arXiv、Europe PMC、Unpaywall 等；授权阶段当前
+已接入 CORE API v3 与 Wiley Online Library TDM API 的 PDF download endpoint。启用
+`core` 时要求通过
+`sciretriever config` 交互管理器配置 `api_key`，且只对具有 CORE `work:<id>` 或
+`output:<id>` 强记录身份的文献适用；启用 `wiley` 时要求通过
+同一管理器配置 `tdm_api_token`，且只对 DOI 安全解析后实际落地到
+Wiley Online Library 的文献适用。Elsevier/Springer 当前全文产品不是主 PDF API，不会
+冒充授权 PDF Source。生产 Browser 站点规则仍为空。
 
 外部命令只有在 adapter、普通参数、凭据、AccessPolicy 和所需外部服务全部就绪时才会发起调用。缺少任一条件时，生产 Bootstrap 会在创建 Storage 之前稳定 fail closed，例如返回 `metadata-not-ready`、`acquisition-not-ready`、`parser-not-ready` 或 `analysis-not-ready`；这类结果表示当前运行环境尚未就绪，不表示控制流会静默降级。
 
@@ -163,9 +197,9 @@ Parser 和 Analysis 的运行 secret 使用固定环境变量边界：`SCIRETRIE
 
 ### A. 安装 wheel、真实 console 与生产 Bootstrap
 
-已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、`config set/status/remove`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
+已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、交互式 `config` 凭据设置/移除及 `config status`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
 
-同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
+同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、DOI landing origin 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
 
 这层证明安装产物、生产对象图和已实现 adapter 的离线接线，不等于真实 Provider、Parser 或 LLM 服务已经在线成功。
 
@@ -200,7 +234,7 @@ uv run --frozen python scripts/harness.py quick
 uv run --frozen python scripts/harness.py full
 ```
 
-Quick 执行 Ruff lint、Ruff format check 和 compileall，适合开发循环；Full 还执行 Pyright strict、全部 `unittest`、wheel 构建和 wheel 内容核对，用于集成里程碑、PR、主分支和发布边界。精确合同见 [`HARNESS.md`](HARNESS.md)。
+Quick 执行 Ruff lint、Ruff format check 和 compileall，适合代码开发循环和普通工作分支的快速反馈；Full 还执行 Pyright strict、全部 `unittest`、wheel 构建和 wheel 内容核对，代码交付、PR、master、发布和安装包级验收默认必须通过。精确合同见 [`HARNESS.md`](HARNESS.md)。
 
 ## 项目文档
 

@@ -5,6 +5,7 @@
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Entry 技术文档](../technical/entry.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Storage 技术文档](../technical/storage.md)
 
 ## 背景
@@ -80,7 +81,7 @@ BatchSelector =
 
 它们分别表达全库当前仍可自动推进的对象、某次 DiscoveryRun 已接纳的对象、调用方从一次书目导入 Report 明确重新提交的对象、类型化本地查询、明确 MetaLiterature 和明确 Literature。`ImportReportSelector` 只携带 `ImportReport` 返回的有序 MetaLiterature ID，不引用或建立 ImportRun；同一进程可以直接传递，跨进程只有用户自行保留 Report 并再次提交这些 ID 时才成立。Entry 每次仍重新读取 current facts，旧 Report 不是目标状态。
 
-Selector 是用户发起本次操作的输入，不保存到 Catalog，也不携带 Provider、并发、Parser、LLM、`force`、重试、cursor 或自由 `details`。Entry 从当前数据库展开 selector、排除已经满足目标或当前不能自动推进的对象，并在当前进程内冻结不可变目标 tuple；运行期间新增文献或后来符合查询的对象不加入本次操作。不同目标可以在资源预算内有界并行，每个目标按自身第一个缺失步骤端到端推进。
+Selector 是用户发起本次操作的输入，不保存到 Catalog，也不携带 Provider、并发、Parser、LLM、`force`、重试、cursor 或自由 `details`。Entry 从当前数据库展开 selector、排除已经满足目标或当前不能自动推进的对象，并在当前进程内冻结不可变目标 tuple；运行期间新增文献或后来符合查询的对象不加入本次操作。不同目标可以在资源预算内有界并行，每个目标从自身第一个缺失步骤继续。按 [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)，缺 PDF 的当前具体 Literature 组成有界 cohort，先完成 Public pass，再让未解决目标完成 API pass，最后只让最小剩余集合进入 Browser admission；较早提交 PDF 的目标可以继续后续步骤。该协调不改变冻结范围，也不建立持久化 BatchRun 或队列。
 
 本设计不建立持久化 `BatchRun`、`BatchTarget`、批次状态机、目标结果表、版本候选快照或批次计数。再次执行相同请求时重新展开 selector 并读取最新 current facts，不恢复上一轮目标、队列或执行现场。
 

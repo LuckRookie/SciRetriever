@@ -3,6 +3,7 @@
 - 总技术入口：[技术文档索引](../technical.md)
 - 设计责任：[设计文档 5.4](../design.md#54-logging)
 - 运行报告边界：[ADR 0013](../decisions/0013-decoupled-discovery-and-database-maintenance.md)
+- PDF 分层运行边界：[ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)
 
 本文定义目标 `src/sciretriever/logging/` 公用基础模块。Logging 统一项目 logger 获取、生产进程配置、stderr 输出和最终脱敏防线；它不形成业务结果、Report、事件系统或持久化记录。
 
@@ -48,7 +49,7 @@ logger = get_logger(__name__)
 
 ### 2.2 `configure_logging`
 
-`configure_logging` 只供生产 Bootstrap 在 CLI 启动时调用。它必须：
+`configure_logging` 只供生产 Bootstrap 或不构建文献对象图的 CLI `config` 边界在启动时调用。CLI 默认传入 `logging.INFO`；用户显式提供全局 `--debug` 时传入 `logging.DEBUG`。它必须：
 
 - 验证并设置 `sciretriever` logger 的标准库 level；
 - 安装一个由本模块拥有、写入 `sys.stderr` 的 `StreamHandler`；
@@ -68,7 +69,38 @@ Logging 只写实时运行信息：
 
 Logging 不得安装 stdout Handler。日志 message、level、时间、formatter 输出和可选上下文不是稳定公共 API；测试只固定标准流、安全边界和不影响业务的行为，不绑定完整自然语言文案。
 
-适用时 LogRecord 可以携带安全的 `stage`、`provider_name`、`meta_literature_id` 或 `literature_id`。这些只是可选诊断上下文，不形成统一事件 schema、operation ID、目标状态或 Pydantic Model。
+适用时 LogRecord 可以携带安全的 `stage`、`tier`、`provider_name`、`route_key`、`browser_rate_limit_group`、`plan_revision`、`action`、`meta_literature_id` 或 `literature_id`。这些只是可选诊断上下文，不形成统一事件 schema、operation ID、目标状态或 Pydantic Model；route/group 值必须来自静态无 secret identity，不能从完整 URL、账号、Cookie、DOI 或随机任务派生。
+
+### 3.1 正常与 Debug 模式
+
+生产 CLI 只有两个日志模式，不增加独立 verbose 等级或配置文件开关：
+
+| 模式 | level | 必须呈现的内容 |
+| --- | --- | --- |
+| 正常 | `INFO` | 操作、PDF tier 与 Provider group 开始/结束，目标/组进度，限速等待、暂停、成功、正常 miss/耗尽和中断概况；所有失败的稳定 code、reason、action 与 retryable |
+| Debug | `DEBUG` | 正常模式全部内容，加上每个安全语义步骤的开始、跳过、命中、正常 miss、状态迁移、资源清理和失败 |
+
+Debug 的“逐步骤”按责任边界记录，而不是给每个函数做调用追踪。当前至少覆盖：
+
+- Network 的无凭据请求开始、最终 HTTP status/响应字节数、API quota feedback、risk-group permit/circuit 状态，或 `policy`、`timeout`、`TLS`、`transport`、`admission`、`budget` 等中性失败分类；
+- Metadata 的 Provider session、逐 raw item 转换与 observations/relations 累计；
+- Topic/Citation Discovery 的深度、observation 接纳/拒绝、关系和结果发布；
+- Database Completion 的冻结目标、有界 PDF cohort、tier barrier、并发目标进度、current facts、Acquisition、Parsing、Analysis 和 Literature 接纳阶段；
+- Acquisition 的 plan revision、resolution evidence kind、route readiness/applicability、route key、public/API route hint 类别、候选匿名 ID、授权 lookup/download、Browser admission/group/state transition、PDF 验证/准备、资源清理、提交与正常耗尽。
+
+携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 profile/risk-group identity 和状态类别，不能记录完整导航目标、selector、页面文本、Cookie、profile 内容或签名 locator。
+
+正常和 Debug 都只写 stderr。SciRetriever 不接管日志文件路径和轮转；用户需要保留文件时，用 shell、进程管理器或宿主应用把 stderr 定向到本次运行目录。例如：
+
+```bash
+sciretriever complete pdf --all-pending --json \
+  > reports/completion.json \
+  2> logs/completion.log
+
+sciretriever --debug complete pdf --all-pending --json \
+  > reports/completion-debug.json \
+  2> logs/completion-debug.log
+```
 
 ## 4. Report 边界
 
@@ -77,6 +109,7 @@ Logging 与 Entry Report 正交：
 - 各业务模块先返回 typed result 或稳定、脱敏的 failure；
 - Entry 只根据这些结果累计 `DiscoveryReport`、`DatabaseCompletionReport`、`ManualPdfReport`、`ImportReport` 或 `ExportReport`；
 - Entry 可以把相同安全信息作为实时日志，但不能解析、回放或统计 LogRecord 形成 Report；
+- 当前操作的 tier/group 升级摘要、等待与 action-required 可以同时用于实时 UX 和 typed failure，但不能通过日志反推、补写或扩张 Report；
 - 日志被过滤、丢失、重定向或输出失败不能改变 Report、退出结果、数据库提交、版本回退或下一次 selector；
 - Logging 不能替代 DiscoverySourceResult、自动 PDF 获取耗尽或其它必须持久化的业务事实。
 
@@ -101,6 +134,10 @@ Logging 不定义业务事件类型、运行状态或成功/失败语义，也�
 - 原始 HTTP/SDK response、response body 和外部异常对象；
 - prompt、文献正文和 Parser 私有输出；
 - 用户文件绝对路径和机器相关内部路径。
+
+Publisher resolution 只记录证据类别和 confirmed/unresolved/conflicting，不记录完整 DOI landing
+URL；route hint 只记录类别和是否产生，不记录 locator；Browser 只记录稳定状态迁移和安全
+group/session identity，不记录 Cookie 名称、profile 文件、selector、页面标题/正文或截图。
 
 已知外部失败转换为稳定 failure 后记录，不能无条件使用可能重新暴露原始 cause 的 `logger.exception`。意外内部编程错误的 traceback 由顶层错误边界按安全政策处理，不把外部不可信对象重新拼入用户日志。
 
@@ -132,6 +169,7 @@ network -----------/
 storage -----------/
 
 bootstrap ---------> logging.api.configure_logging
+entry.cli(config) --> logging.api.configure_logging
 model -X-----------> logging
 logging -X---------> SciRetriever 其它模块
 ```
@@ -145,10 +183,15 @@ logging -X---------> SciRetriever 其它模块
 - `get_logger` 只接受 `sciretriever` 命名空间，保持完整模块名且不产生配置副作用；
 - package import、模块 import 和普通 adapter 构造不安装 Handler、不调用 `basicConfig()`；
 - `configure_logging` 只配置 `sciretriever` logger，不修改 root logger，并且只有一个写入 stderr 的模块 Handler；
+- 默认 INFO 模式保留进度与稳定错误原因但过滤逐步骤 DEBUG；`--debug` 使生产对象图使用 DEBUG level 并保留两类记录；
 - 重复配置不叠加 Handler，stdout 不被日志污染；
 - formatter、Filter 或输出故障不改变被记录操作的业务结果；
 - 最终 Filter 对已知敏感字段使用安全替代文本，但测试仍证明每个外部 adapter 在进入 Logging 前完成自身边界脱敏；
 - 原始异常、response、URL、header、Cookie、credential、prompt、正文和绝对路径不进入 LogRecord 或用户输出；
+- 携带凭据的 Network 调用在 Network logger 上保持静默，而对应 Provider/route adapter 只记录安全步骤与稳定失败；
+- 正常模式能解释 Public/API/Browser tier、Provider group、等待/暂停、稳定失败原因和下一动作；Debug 额外覆盖 plan revision、resolution evidence kind、route/hint、quota feedback、Browser 状态迁移和资源清理；
+- 不同 Browser group 的日志可按安全 group identity 区分，同一 group 的 retry/popup/备用入口不会伪装为并行新流程；
+- Cookie、profile 内容、完整 URL、selector、页面文本、短期 locator 和 Browser vendor object 在 INFO/DEBUG 两种模式都不进入 LogRecord；
 - Report 在关闭、过滤或故障 Logging 时保持相同内容；日志不能生成 Report 或持久事实；
 - 目标生产模块不绕过 `logging.api` 配置或取得项目 logger，Model 不依赖 Logging；
 - 不创建日志文件、数据库表、Artifact、Observer、EventBus、LogEvent Model 或 repository。

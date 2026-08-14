@@ -5,6 +5,7 @@
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Metadata 技术文档](../technical/metadata.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
@@ -22,11 +23,11 @@ SciRetriever 需要尽可能完整地接入已经确认可用的外部文献服�
 1. **Metadata Provider**：按领域搜索或按稳定标识符查询文献元数据，并可选提供引用关系、参考文献原文和资产线索；
 2. **Acquisition Provider**：为具体 Literature 发现或取得主 PDF 候选，可以使用公开 locator、已授权内容 API 或受控浏览器。
 
-引用查询是 Metadata Provider 的可选能力，不建立第三类 Citation Provider。一个外部机构可以同时具有两个独立 adapter，也可以只实现其中一个；不能把两类输出和失败语义塞入一个具有大量可选方法的通用 Provider 接口。`direct` 和用户手动 PDF 不是 Provider：前者是对已有安全 locator 的通用公开 Source，后者是独立用户接纳操作。
+引用查询是 Metadata Provider 的可选能力，不建立第三类 Citation Provider。一个外部机构可以同时具有两个独立 adapter，也可以只实现其中一个；不能把两类输出和失败语义塞入一个具有大量可选方法的通用 Provider 接口。`direct` 和用户手动 PDF 不是 Provider：前者是对已有安全 locator 的通用公开 route，后者是独立用户接纳操作。
 
 当前目标对已经确认具备领域检索能力的 Web of Science、Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、Elsevier/Scopus、Springer Nature、DataCite 和 CORE 提供生产 Metadata adapter。OpenCitations Meta 只按当前官方能力提供稳定标识符精确 lookup，并与其引用能力一起归 Metadata；在没有官方领域关键词搜索合同前不参加主题 DiscoveryRun。
 
-当前目标对能够提供 PDF 字节、PDF locator、落地页或受控内容路径的 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite 和 CORE 提供对应 Acquisition 能力；operator 明确配置且获准使用的 Sci-Hub locator 继续遵守既有安全边界。Web of Science 和 OpenCitations 当前不作为原文来源。某个 metadata adapter 已经产生可用 `AssetHint` 时，可以由通用公开 Source 消费，不要求为了名称对称再复制一套只转发同一 URL 的 adapter。
+当前目标对能够提供 PDF 字节、PDF locator、落地页或受控内容路径的 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite 和 CORE 提供对应 Acquisition 能力；operator 明确配置且获准使用的 Sci-Hub locator 继续遵守既有安全边界。Web of Science 和 OpenCitations 当前不作为原文来源。某个 metadata adapter 已经产生可用 `AssetHint` 时，可以由通用公开 route 消费，不要求为了名称对称再复制一套只转发同一 URL 的 adapter。
 
 外部能力与政策会变化。新增、替换或撤下 Provider 只要仍落在这两个能力集合、使用相同中性合同并更新 Provider Notes，就不需要新增产品模块；不能因为目标矩阵存在就把尚未实现的 adapter 写成当前能力。
 
@@ -38,47 +39,54 @@ SciRetriever 需要尽可能完整地接入已经确认可用的外部文献服�
 
 发现一篇 Literature 后仍不自动对它执行 `N × Provider` 逐篇精确补查，也不自动进入 Acquisition。Provider 的全面接入扩大可选择的来源，不改变 ADR 0013 的发现边界。
 
-### 3. Acquisition 按证据路由，不按 publisher 字符串硬编码
+### 3. Acquisition 按证据识别访问方并规划，不按 publisher 字符串硬编码
 
-Acquisition 对具体 Literature 读取已经接纳的稳定标识符、全部 MetadataObservation、Provider record identity 和 AssetHint，在当前进程形成不持久化的适用 Source 集合。路由证据按以下顺序使用：
+Acquisition 对具体 Literature 读取已经接纳的稳定标识符、全部 MetadataObservation、Provider record identity 和 AssetHint，在当前进程形成不持久化的 `PublisherAccessResolution` 与 `AcquisitionPlan`。原文访问方、Metadata Provider 和页面平台分别表达；ACS、IEEE、RSC 等纯访问画像不需要伪装成 Metadata Provider 或创建不需要的 API 凭据 section。
 
-1. 来源明确给出的 direct-file 或 landing-page `AssetHint`；
-2. arXiv ID、PMCID、Elsevier PII 等稳定且来源明确的 Provider 专属定位；
-3. MetadataObservation provenance 中的 Provider record identity；
-4. DOI 经过 Network 安全解析后的实际 landing origin；
-5. publisher 名称或 DOI 前缀只能作为产生候选的弱提示，不能单独证明归属、授权或最终适用性。
+Planner 优先使用调用前已有的 direct-file/landing-page `AssetHint`、arXiv ID/PMCID/PII 等稳定定位和 Provider record identity；已有明确公开路径时不为了识别出版社增加 DOI 请求。需要确认访问方且强证据不足时，由公开层安全解析一次 DOI landing。全部证据可用时的确认强度为：实际 landing origin、访问方自有 AssetHint origin、来源明确的稳定文章 ID、Provider record identity；publisher 名称或 DOI prefix 只能产生待核实弱候选，不能单独证明归属、授权、API 或 Browser 适用性。
 
-MetadataObservation 来自 Scopus 不表示文献由 Elsevier 出版；Crossref 返回的文献也可以由 Elsevier、Wiley 或其它适用 Acquisition Source 获取。每个 Source 必须先根据调用方已经提供的中性证据做无网络的适用性判断，只有适用、启用且 readiness 通过时才进行真实访问；DOI landing origin 尚未知时，由公开阶段的通用安全解析动作先经过 Network 取得，并只作为当前进程的路由证据。用户拥有密钥、认证成功和具体文献全文 entitlement 是三个不同事实。
+MetadataObservation 来自 Scopus 不表示文献由 Elsevier 出版；Crossref 返回的文献也可以由 Elsevier、Wiley 或其它访问方获取。`PublisherAccessProfile` 统一描述访问方识别、公开路径、官方 API capability、Browser rule、风险组和会话组，具体 HTTP/API/Browser adapter 仍保持独立。Resolution、Plan 和 API/landing 产生的脱敏 route hint 只服务当前运行，不进入数据库或长期 provenance。用户拥有密钥、认证成功和具体文献全文 entitlement 是三个不同事实。
 
-适用 Source 仍严格按公开来源、已授权 Provider API、受控浏览器三个阶段串行短路。缺少凭据或 readiness 失败不能形成 `NoPrimaryPdf` 或自动获取耗尽；未启用且不属于本次当前能力的 Source 不在耗尽集合中。
+适用 routes 仍严格按公开来源、已授权 Provider API、受控浏览器三个风险层级短路；批量补全先让本次有界 cohort 完成公开层，再完成未解决目标的 API 层，最后只把允许升级的最小剩余集合交给按 Provider 风险组调度的 Browser。Planner 可以省略确定不适用的路线，不能自动提前 Browser。
+
+Readiness 按本次实际 plan 区分项目支持、用户启用、静态配置就绪、当前 Literature 适用和当前 route 实际需要。缺少凭据或 readiness 失败不能形成 `NoPrimaryPdf` 或自动获取耗尽；支持但未配置的低风险 route 是否允许进入 Browser 必须由显式 Browser policy 决定并清楚报告。临时网络/API 错误、`429`、`Retry-After` 和 quota exhausted 不得通过自动切换 Browser 绕过。未启用且不属于本次当前能力的 route 不在耗尽集合中。
 
 ### 4. 唯一本地凭据文件
 
-生产默认只从用户主目录下的固定文件读取 Provider 密钥：
+生产只从用户主目录下的固定文件读取 Provider、LLM 与远程 MinerU 密钥：
 
 ```text
 ~/.sciretriever/credentials.toml
 ```
 
-目录必须为当前用户所有并限制为 `0700`，文件必须为当前用户所有的普通文件并限制为 `0600`。文件以稳定 Provider key 为 section，每个 Provider 当前只保存一套凭据；字段由已经实现的 adapter 依据官方合同声明。它只保存 API key、token、API metric 等认证材料，不保存启用状态、来源顺序、产品选择、database/edition、scan limit、endpoint、访问政策、浏览器 profile、测试结果或时间。联系邮箱等非密钥设置继续属于普通配置。
+目录必须为当前用户所有并限制为 `0700`，文件必须为当前用户所有的普通文件并限制为 `0600`。文件以稳定 Provider key 及固定 `[llm]`、`[mineru]` 为 section，每类当前只保存一套凭据；字段由已经实现的 adapter 依据官方合同声明。Provider section 只保存 API key、token、API metric 等认证材料；LLM/MinerU section 还保存用于防止错发的规范 origin。文件不保存启用状态、来源顺序、产品选择、database/edition、scan limit、普通 Base URL、访问政策、浏览器 profile、测试结果或时间。联系邮箱等非密钥设置继续属于普通配置。
 
-用户可以直接编辑同一文件，也可以通过 CLI 原子修改。CLI 写入前完整解析和验证现有 TOML，拒绝未知 Provider、未知字段、空值、不安全所有权或权限；写入使用同目录 owner-only staging 和原子替换，不生成包含旧密钥的备份。手工编辑和 CLI 不形成两套凭据来源。真实 secret 不进入可序列化 Model configuration；根级 configuration/bootstrap 边界只在当前进程解析并注入具体 adapter。
+用户可以直接编辑同一文件，也可以通过 CLI 安全修改。CLI 写入前完整解析和验证现有 TOML，拒绝未知 section、未知字段、空值、不安全所有权或权限；写入使用同目录 owner-only staging 和原子替换，不生成包含旧密钥的备份。核心服务同时改变普通 Base URL 与 secret 时，先验证两份 staging，再通过可恢复的过渡凭据顺序发布，保证进程中断前后的旧或新配置至少一套仍可运行。真实 secret 不进入可序列化 Model configuration；根级 configuration/bootstrap 边界只在当前进程解析并注入具体 adapter。
+
+LLM/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secret 不会被发送到新 origin，Network 跨 origin redirect 也不得携带认证。自定义 HTTP loopback LLM 与 loopback MinerU 不需要凭据。旧的 LLM/MinerU secret 环境变量不再是产品合同，不读取、不回退，也不自动迁移。
 
 ### 5. CLI 配置、状态与连通性测试
 
 目标 CLI 增加第六个一级命令 `config`：
 
 ```text
-sciretriever config set <provider>
-sciretriever config remove <provider>
+sciretriever config
 sciretriever config status
-sciretriever config test <provider>
+sciretriever config test <provider|llm|mineru>
 sciretriever config test --all
 ```
 
-`set` 使用不回显的交互输入收集 adapter 声明的全部必需和可选凭据；真实密钥不得作为普通命令参数。`remove` 只删除相应 section。`status` 是纯本地检查，只显示凭据不需要、已配置、部分配置、缺失、可选缺失或 adapter 尚不支持等安全状态以及各字段是否存在，绝不显示、掩码显示或导出密钥值。
+裸 `config` 打开统一交互配置中心，首页分为 LLM Analysis、MinerU Parser 与 Literature
+Providers。核心服务向导同时管理普通配置、origin-bound secret、test 与 reset；Provider
+区域继续提供设置/更新、移除、返回和退出动作。设置动作使用不回显的交互输入收集当前可执行
+adapter 声明的必需和可选凭据；真实密钥不得作为普通命令参数。`config` 公开子命令只保留
+`status` 和 `test`，旧 `set/remove` 路径必须拒绝。TTY 界面支持主题与键盘导航，非 TTY
+保留确定性纯文本流程，`NO_COLOR` 强制单色。
+`status` 是纯本地检查，只显示凭据不需要、
+已配置、部分配置、缺失、可选缺失或 adapter 尚不支持等安全状态以及各字段是否存在，绝不
+显示、掩码显示或导出密钥值。
 
-`test` 是用户明确发起的最小只读网络操作。它先执行本地状态与 readiness 检查，再通过 ADR 0012 的 Network 准入调用 Provider 官方允许的最小 endpoint，分别报告网络可达、认证接受、API 产品可用和最小响应可解析等当前结果。`--all` 只测试已启用、生产 adapter 存在且本地凭据满足要求的能力；缺少必需凭据的能力明确跳过。测试不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，不下载并接纳 PDF，也不保存最后结果或时间。
+`test` 是用户明确发起的最小只读网络操作。Provider probe 通过 ADR 0012 的 Network 准入调用官方允许的最小 endpoint；LLM probe 只发送固定的极小严格 schema 内容，不发送用户文献；MinerU probe 只检查 health/release/protocol/profile，不上传 PDF。`--all` 汇总已启用 Provider、LLM 与 MinerU，一个失败不阻断其它结果。测试不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，不下载并接纳 PDF，也不保存最后结果或时间。
 
 全文测试最多证明凭据和内容服务的当前最小 readiness，不能证明任意文献 entitlement。测试错误在输出前稳定化和脱敏；请求仍受供应商限速、额度、`Retry-After`、安全 URL 和响应预算约束。测试、状态和凭据管理不读取或写入文献数据库。
 

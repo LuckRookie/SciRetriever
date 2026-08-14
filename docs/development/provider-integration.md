@@ -1,8 +1,8 @@
 # Provider 接入开发手册
 
-新增或实质修改 Metadata Provider 或 Acquisition Provider client/adapter 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
+新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
 
-本手册统一使用目标身份 `MetaLiterature`/`Literature`。当前迁移前源码中的 `Work`/`WorkVersion` 分别是二者的旧名称；这项对应关系只用于阅读现有代码，不表示目标术语仍可混用。
+本手册统一使用当前身份 `MetaLiterature`/`Literature`。`Work`/`WorkVersion` 是已删除旧架构中的历史名称，不得在当前实现或文档中与现行术语混用。
 
 记录不得包含凭据值、完整签名 URL、Cookie、Token、用户身份、响应正文或内部工单内容。未知信息写“待核对”，不得猜测。
 
@@ -12,7 +12,7 @@
 |---|---|
 | provider / adapter ID |  |
 | Provider 能力 | Metadata / Acquisition；两者可以分别实现，引用不能作为第三类 Provider |
-| 具体能力 | Metadata search / identifier lookup / optional reference query / Acquisition Source |
+| 具体能力 | Metadata search / identifier lookup / optional reference query / Acquisition route / PublisherAccessProfile / Browser route |
 | Acquisition path | 不适用 / public / authorized-provider-api / controlled-browser；由 Acquisition 归类，不由响应决定 |
 | 产品阶段 | current implementation / approved target / unapproved proposal |
 | 运行状态 | proposed / active / degraded / retiring / retired；仅适用于 current implementation |
@@ -35,12 +35,13 @@
 | 匿名能力 |  |
 | 凭据字段 | `credentials.toml` 中已经由官方合同确认的字段名、必需性和适用 capability；不得记录值 |
 | 授权范围与已知限制 |  |
-| 本地 readiness | 生产 adapter、普通参数、凭据字段和 AccessPolicy 的要求 |
-| Acquisition 适用性证据 | AssetHint / 来源稳定定位 / Provider record identity / DOI landing origin / 不适用 |
+| 本地 readiness | 生产 adapter/Profile、普通参数、凭据字段、官方 policy、origin guard 和 session profile 的要求 |
+| Acquisition 适用性证据 | AssetHint origin / 来源稳定定位 / Provider record identity / DOI landing origin / 弱提示 / 不适用 |
+| 访问身份 | Metadata Provider / Publication-Access Provider / Access Platform-CDN；不能用展示名称混为一个调度 key |
 
 元数据供应商的引用关系查询能力不是一种独立供应商类型。供应商明确返回稳定两端定位时，adapter 为每条有向边分别产生 `ProviderRelationObservation`，统一表达为 `citing -> cited`。一次响应的多条 observation 可以共享调用 Provenance，但各有独立 `observation_id`。相关目标只有供应商 ID 时直接进入 `ProviderLiteratureKey.record_id`，不立即为响应中的全部目标补查元数据，也不得成为 SciRetriever `LiteratureId` 或 `Reference` 目标。响应实际内联提供的目标元数据可以并列转换为独立 `MetadataObservation`，但不嵌入 relation observation。供应商只返回原始参考文献文本时，文本进入来源 `MetadataObservation.reference_texts`，后续由临时 `ReferenceLookup` 尝试搜索，不伪装成已经确认的关系。
 
-领域 search adapter 只有在普通配置已启用、生产实现存在且 readiness 通过时才参加本次 DiscoveryRun；Entry 不按 publisher 预选 Metadata Provider。Acquisition Source 必须先以调用方提供的中性证据执行无 I/O 的本地适用性判断；MetadataObservation 来自某机构、publisher 字符串或单独 DOI 前缀不能直接证明其内容 API 适用。DOI landing origin 只能由公开阶段的通用安全解析动作经过 Network 取得，并作为当前进程证据使用。
+领域 search adapter 只有在普通配置已启用、生产实现存在且 readiness 通过时才参加本次 DiscoveryRun；Entry 不按 publisher 预选 Metadata Provider。Acquisition Planner 必须先根据调用方提供的中性证据形成无副作用 Resolution/Plan；MetadataObservation 来自某机构、publisher 字符串或单独 DOI prefix 不能直接证明其内容 API/Browser 适用。DOI landing origin 只能在强证据不足且本次计划需要时，由公开层的通用安全解析动作经过 Network 取得，并只作为当前进程证据使用。API 或页面产生的 locator/稳定 ID 只能形成脱敏 `AccessRouteHint`，不能持久化 vendor object、签名 URL 或 Cookie。
 
 结构化关系和原文只按“目标是否已经由供应商稳定明确”区分，不按主动查询、默认返回或 endpoint 类型区分。目标 Literature 接纳后，前者形成 `ProviderRelationSupport`，后者形成 `MetadataReferenceTextSupport`；精确边界见 [ADR 0007](../architecture/decisions/0007-reference-resolution-and-authoritative-relations.md)。
 
@@ -62,9 +63,10 @@
 | DNS / redirect 规则 |  |
 | AccessScope | 稳定 provider name、api/web channel、必要的独立 API service；不含凭据、文献或 URL |
 | quota 共享范围 | 哪些 metadata/reference/asset 调用共享 key、账户、官方额度或响应头 |
-| 官方政策与核对日期 | 链接到对应 Provider Notes；未知不能猜测 |
-| 最大并发、最小间隔与窗口额度 | adapter 声明，Network 在当前进程共享执行；普通配置只能收紧 |
-| 网页流程与冷却 | 同一 provider web 在当前进程并发 1，流程结束后至少 30 秒；更严格规则从其规定 |
+| 官方政策与核对日期 | 链接到对应 Provider Notes；未知不能猜测或冒充官方规则 |
+| API quota policy | quota identity、最大并发、最小间隔、burst/window、周期/日额度、reset、反馈头；Network 共享执行，普通配置只能收紧 |
+| Browser policy | `browser_rate_limit_group`、`browser_session_key`、`max_concurrency=1`、文章 interval/window/cooldown、circuit；不同独立组可并行 |
+| Browser origin/action guard | 每次 navigation/popup/viewer/response/download 前的封闭 allowlist、有限动作、正文/补充材料规则与 revision |
 | metadata fan-out 与 completion-order-independent merge |  |
 | connect/read/operation timeout |  |
 | 最大响应大小 |  |
@@ -76,6 +78,11 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 
 公开来源也必须声明访问政策。公开 `AssetHint` 指向出版社网页或站内 PDF 时仍使用该出版社的 `web` scope；不同来源 redirect 到同一最终 host 时共享 host budget。授权 API 使用独立 `api` scope，是否与 metadata/reference query 共享由真实 quota 范围决定。
 
+Browser 不使用所有供应商统一的固定间隔。独立 risk group 可以并行，同一 group 只有一个
+文章流程，并按 Profile/Notes 中已核实的政策串行。全局 Browser cap 只保护本机资源；重试、
+popup、多个标签页或备用入口不能拆出新的 group。未知 Provider 不获得 generic Browser
+fallback。Operator-managed Browser session profile/Cookie 不进入普通配置内容或 `credentials.toml`。
+
 ## 4. 敏感信息边界
 
 - 哪些 URL、header、cookie、referrer 或 auth context 只能存在于运行时：
@@ -83,6 +90,7 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 - 日志、failure、catalog 和报告的脱敏断言：
 - `~/.sciretriever/credentials.toml` 中允许的字段、必需性、owner/权限和 adapter 注入边界：
 - `config status` 的纯本地状态与 `config test` 的最小只读 probe（均不得包含 secret 特征或持久结果）：
+- Browser session profile identity、人工可见登录、Cookie/profile 内容、session readiness 与 action-required 的边界：
 - 禁用该能力后的回退：
 
 ## 5. 验证与资产接受
@@ -96,9 +104,11 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 - metadata provider 如何在有界并发和独立 timeout 下运行，并按 configured precedence/fill-missing 得到与完成顺序无关的 canonical 结果：
 - provider record 如何只形成 observation，而不按来源膨胀 `Literature`：
 - asset candidate 如何通过 URL policy、有限 timeout 和 redirect 检查：
-- asset source 如何被唯一归入 public、authorized-provider-api 或 controlled-browser，且同一 Literature 不跨阶段竞速：
-- asset source 如何只填补指定 `Literature` 的资产缺口：
-- asset source 如何根据 AssetHint、来源稳定定位、Provider record identity 或 DOI landing origin 本地判断适用，且不会按 publisher/metadata 来源硬编码：
+- route 如何被唯一归入 public、authorized-provider-api 或 controlled-browser，且同一 Literature 不跨层竞速：
+- route 如何只填补指定 `Literature` 的资产缺口：
+- Resolution/Plan 如何根据 AssetHint、来源稳定定位、Provider record identity 或必要时 DOI landing origin 判断适用，且不会按 publisher/metadata 来源硬编码：
+- API capability、quota identity、官方 policy 和 route hint 如何表达，临时/额度错误为何不能自动升级 Browser：
+- Browser 如何证明 per-hop guard、不同 risk group 并行、同组串行、persistent session、状态机、正文捕获和 supplement 排除：
 - primary PDF 与 supplemental XML/HTML 的角色验证；XML/HTML 不得提升为 PDF 或独立满足内容分析：
 - 基本检查如何只确认非空 PDF、可读取文件结构、可打开页面结构和候选具有文献来源依据，而不进行固定大小/页数阈值、正文完整性或标题/作者/DOI 身份比对：
 - 何时允许进入不可变资产接纳：
@@ -106,9 +116,9 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 
 ## 6. 失败与动作映射
 
-- 所有来源耗尽时如何收敛为无字段 `NoPrimaryPdf`：
+- 所有适用 routes 正常耗尽且无 deferred/action-required/未解决 failure 时如何收敛为无字段 `NoPrimaryPdf`：
 - 缺少生产 adapter、必需普通参数/凭据/AccessPolicy 或认证/权限错误如何在耗尽之外形成稳定失败：
-- 临时来源诊断如何限制在当前边界且不持久化 candidate/source failure：
+- 临时来源诊断如何限制在当前边界且不持久化 candidate/route failure：
 - permit 等待、网页冷却和 `blocked_until` 如何保持为 Network 进程内内存状态而不是 Literature/Acquisition 失败：
 
 | 场景 | 边界内脱敏 reason | retryable | 用户动作 | 最小复现证据 |
@@ -121,7 +131,7 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 | timeout 或 transport failure |  |  |  |  |
 | 非 PDF、空响应或 PDF 结构不可读 |  |  |  |  |
 
-本表只要求 adapter 在当次调用边界内给出可测试、已脱敏的动作转换。Acquisition 公开结果仍只是 `AcquiredPrimaryPdf | NoPrimaryPdf`；候选、Source 和其失败 reason 不进入长期持久化。
+本表只要求 adapter 在当次调用边界内给出可测试、已脱敏的动作转换。Acquisition 公开结果仍只是 `AcquiredPrimaryPdf | NoPrimaryPdf`；候选、Plan、route、Browser session/circuit 和其失败 reason 不进入长期持久化。
 
 ## 7. 离线 fixture 与验收
 
@@ -139,12 +149,14 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 - 同一 `Literature` 的多 provider records 收敛为 observations，不按 provider 数量创建 Literature；
 - 零、单个和多个候选；
 - 首候选失败后其它候选成功；
-- 公开来源耗尽后才启动授权 Provider API，授权 API 耗尽后才启动受控浏览器；同一 Literature 不跨阶段或 Source 竞速；
+- 一个有界 cohort 全部完成 Public 后才启动未解决目标的 Authorized API，API 层结束并通过 admission 后才启动最小 Browser 集合；同一 Literature 不跨层竞速；
+- 两个独立 Browser risk group 实际并行，同一 group 最大并发为 1 且精确满足自身 interval/window/cooldown；
+- navigation、redirect、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network policy；persistent session、状态机、circuit 和 supplement exclusion 使用离线 fixture；
 - 重复候选收敛；
 - 429、timeout、redirect、截断、超限和无效内容；
 - 敏感 query/header/cookie 不进入 durable state 或输出；
 - 临时 owner-only `credentials.toml` fixture 覆盖 configured/partial/missing/optional-missing/unsupported，`config status` 不联网且 `config test` 只使用 fake Network、不创建数据库事实；
-- 同一 provider 网页普通 HTTP 与 browser 在当前进程跨模块、批次和文献目标独占，并在完整结束后至少冷却 30 秒，同时其 API 和其它 provider 可以推进；
+- 普通 HTTP/API 按实际 provider/host/quota scope 推进；Browser 不同 risk group 可并行、同组按 Profile policy 串行，同时独立 API 和其它 provider 可以推进；
 - 当前进程内 `Retry-After`、quota、取消和 timeout 不会泄漏 permit、丢失有效阻塞或产生 late acceptance；新进程不恢复旧限速状态；
 - provenance、Literature asset link 和 catalog 对账；
 - 只有当前主 PDF 可以驱动 Parsing 与 Analysis，只有 XML/HTML 时必须阻断；PDF 与补充资产冲突时，由 PDF 控制结果并保留 PDF locator；
@@ -170,16 +182,18 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 - [ ] 凭据 spec 只声明已核实字段并从固定 owner-only `credentials.toml` 注入；status/test 不泄漏或持久化值/结果，真实 probe 不进入 Harness/CI/离线验收。
 - [ ] metadata provider 使用有界并发、独立 timeout 和 completion-order-independent merge；provider precedence/fill-missing 有确定性配置语义。
 - [ ] adapter 已声明不含 secret 的 AccessScope、真实 quota 共享范围、当前政策依据和复核日期；缺失 policy 时不是 production-ready。
-- [ ] 同一 provider 网页普通 HTTP 与 browser 在当前进程并发 1 且完成后至少冷却 30 秒；API 使用独立真实规则；公开/direct URL 没有绕过 provider/host scope。
+- [ ] API 声明并执行真实 quota identity、并发、interval、window/周期额度、reset 和反馈头；普通配置只能收紧，公开/direct URL 没有绕过 provider/host scope。
+- [ ] Browser Profile 声明 risk/session group、文章 policy 与证据日期；不同独立 group 实际并行，同组 `concurrency=1` 且精确满足 interval/window/cooldown，全局 cap 只保护本机资源。
+- [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Profile guard 与 Network policy；persistent session、登录/MFA/challenge、circuit、多路正文捕获和 supplement 排除有离线 fixture，Cookie/profile 不泄露。
 - [ ] Metadata、reference query 和 asset API 共享真实 quota 时使用同一 scope；adapter/SDK 没有自建局部 limiter 或绕过受控 transport。
 - [ ] 只有供应商明确声明的同文献版本目标进入 `MetadataObservation.version_links`；未解析目标不触发自动补查、占位 Literature 或通用关系。
 - [ ] 当前文献 identifier、Provider record identity 和相关版本 identifier 已按字段语义分流；Provider record ID 没有进入 `LiteratureMetadata.identifiers`，正式记录的相关 arXiv ID 没有冒充当前正式 Literature 的 ID。
 - [ ] adapter 复用公共 Identifier canonicalization；DOI/arXiv/PMID/PMCID 与实际支持的其它 namespace 有官方格式 fixture，未知 namespace 没有私有 lowercase、去标点或模糊修复。
 - [ ] 结构化关系和参考文献原文只按目标是否稳定明确分类；主动查询、默认返回和 endpoint 形式不改变中性语义。
 - [ ] 结构化引用响应逐边形成 `ProviderRelationObservation`；未进入当前扩展范围的 observation 不导致目标元数据补查、Literature 物化或递归。
-- [ ] provider record 只形成 observation；asset source 只填补 `Literature` asset gap。
-- [ ] Acquisition Source 适用性基于强证据，未把 publisher、DOI 前缀或 MetadataObservation 来源当成全文归属；readiness/权限失败不形成正常耗尽。
-- [ ] provider 选择、public/authorized API/browser 三阶段顺序和失败隔离与责任文档一致；同一 Literature 没有跨阶段竞速。
+- [ ] provider record 只形成 observation；Acquisition route 只填补 `Literature` asset gap。
+- [ ] PublisherAccessResolution/Plan 基于强证据，未把 publisher、DOI prefix 或 MetadataObservation 来源当成全文归属；readiness/权限失败不形成正常耗尽。
+- [ ] Public/Authorized API/Browser cohort 顺序和失败隔离与责任文档一致；同一 Literature 没有跨层竞速，临时/额度错误没有触发 Browser 绕行。
 - [ ] primary PDF 是 Parsing 与 Analysis 的必需权威基准；XML/HTML 只补充且不能覆盖 PDF。
 - [ ] HTTPS、DNS、redirect、有限 timeout、响应上限和失败映射完整。
 - [ ] fake clock、受控多进程和 fake transport 证明并发、间隔、冷却、quota、`Retry-After`、取消与崩溃恢复语义；没有 live provider 测试进入 CI。

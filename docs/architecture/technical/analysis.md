@@ -25,6 +25,7 @@ analysis/
   providers/
     __init__.py
     openai.py
+    openai_chat.py
     anthropic.py
 ```
 
@@ -317,6 +318,17 @@ ReferenceLookup
 ## 11. LLM Port、Network 与失败
 
 LLM Port 使用 `model/llm.py` 中的中性请求与响应，明确区分元数据确定、内容总结和 ReferenceLookup 三种请求语义；前两种属于同一个文献内容分析用例的有序内部阶段。Provider adapter 负责 provider/model 映射、凭据附着、timeout、quota、协议重试、响应解析以及本次逻辑分析形成 provenance 所需的 provider/model identity。单次请求信息只用于当前调用与诊断，不作为 LiteratureContent 的两项持久化 provenance。所有外部访问都经过 Network 的 URL、TLS、redirect、预算和脱敏政策；vendor SDK 不能绕过这一边界。
+
+Bootstrap 当前可以把同一中性 Port 组装为 OpenAI Responses、OpenAI Chat Completions 或
+Anthropic Messages。Base URL、模型、已核实 context window、认证和预算来自严格普通配置；
+API key 来自统一凭据文件并与规范 origin 精确绑定。官方服务固定使用官方 HTTPS origin；
+custom remote 必须使用 hostname-based HTTPS 与 API key；custom HTTP loopback 可以无认证。
+Adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
+跨 origin redirect 不携带认证。
+
+`config test llm` 复用这里的生产 adapter，但只发送固定的极小 strict-schema probe，不发送
+用户 Literature 或 PDF 内容、不构造 Storage、不持久化结果。它可能消耗少量额度，因而
+人类 CLI 在执行前确认；详情通过中性 `CoreConfigurationProbeResult` 返回。
 
 Timeout、认证失败、限流、拒答、截断、未知结构、Markdown 不合格、artifact/hash 校验失败或输入 stale 时：
 

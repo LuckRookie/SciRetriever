@@ -28,7 +28,7 @@
 
 外部 API 存在不等于 SciRetriever 已接入；配置 key 被接受不等于有 concrete client；fake、Protocol、lazy factory 和目标 Model 也不等于用户可运行工作流。Provider 返回 observation/locator 仍不等于 Literature 或资产已被业务规则接纳。
 
-截至 2026-08-07，已调研的十四家外部服务均没有仓库内供应商专用生产 client。当前 Infrastructure 只有调用方注入的通用 `MetadataClient`、`CitationClient`、`ResolverClient` 和 transport port/依赖；这里的 `CitationClient` 是迁移前实现名称，不代表目标架构建立第三类 Citation Provider。仓库当前没有统一安全 HTTP、供应商级 Access Coordinator 或受控浏览器的生产实现。`build_object_graph` 只有收到 `ProviderDependencies` 才建立 lazy registry，且 registry 尚未连接当前 Collection/Assets Service。项目也没有受支持的终端用户 CLI 或 `config` 命令。
+截至 2026-08-13，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。当前受控 Browser 组件已有离线与 Chromium QA，但生产站点规则目录为空；不能把组件存在写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
 ## 3. 已接受的目标能力矩阵
 
@@ -51,52 +51,42 @@
 | Wiley | 不参加 Metadata 领域搜索 | 适用且已授权的 Wiley 内容能力 |
 | Configured Sci-Hub | 不参加 Metadata 能力 | operator 明确配置且获准的 locator |
 
-领域 DiscoveryRun 只调用本次普通配置已启用、生产 search adapter 已实现且 readiness 通过的目标 Metadata 能力，不按 publisher 预先分流。Acquisition 还要针对具体 Literature 依据 AssetHint、稳定来源定位、Provider record identity 和 DOI 安全解析后的 landing origin 判断 Source 适用性。上表描述已接受目标，不表示当前 schema v2 已有选择键、当前代码已经实现 adapter，或每次运行会无条件调用所有服务。
+领域 DiscoveryRun 只调用本次普通配置已启用、生产 search adapter 已实现且 readiness 通过的 Metadata 能力，不按 publisher 预先分流。Acquisition 还要针对具体 Literature 依据 AssetHint、稳定来源定位、Provider record identity 和 DOI 安全解析后的 landing origin 判断 Source 适用性。配置 key 被接受不等于每种外部路径都有生产 adapter；具体边界见下节。
 
-## 4. 当前 schema v2 与外部事实总览
+## 4. 当前实现总览
 
-表中的“选择能力”只表示迁移前 schema v2 当前允许的键；其中 `citation` 是现有实现类别，不是 ADR 0014 的第三类目标 Provider。“外部能力摘要”是官方/现场观察，不代表当前生产接入。
+当前 Metadata 选择键为 `web-of-science`、`crossref`、`semantic-scholar`、`arxiv`、
+`openalex`、`europe-pmc`、`elsevier`、`springer`、`datacite`、`core` 和
+`opencitations`；引用查询是 Metadata adapter 的可选能力，不再有第三类 citation
+Provider。当前 Acquisition 选择键为 `arxiv`、`crossref`、`semantic-scholar`、
+`openalex`、`europe-pmc`、`unpaywall`、`elsevier`、`springer`、`wiley`、`datacite`、
+`core` 和 `sci-hub`。
 
-| Provider | 选择能力 | 外部能力摘要 | 认证与当前证据 | 详细 Notes |
-|---|---|---|---|---|
-| arXiv | metadata + asset | Atom metadata search；记录含 PDF link；无引用 API | 匿名；官方要求所有调用机器合计最多每 3 秒一次且一个连接；2026-08-07 匿名只读 200 | [arXiv](arxiv.md) |
-| Crossref | metadata + asset | REST Works metadata、登记 reference/link；link 只是资产候选 | 匿名 public/polite；当前官方 public 5 req/s、polite 10 req/s；2026-08-07 匿名只读 200 | [Crossref](crossref.md) |
-| Europe PMC | metadata + asset | search、references、citations、OA fullTextXML/PDF locator | 匿名；当前固定公开限流数值未找到；2026-08-07 四类最小请求 200 | [Europe PMC](europe-pmc.md) |
-| OpenAlex | metadata + citation + asset | Works metadata、结构化引用图、OA/location 与计费 content download | 规模化使用 key/预算；匿名只有小额试用预算；2026-08-07 无 key 单条/cursor 200 | [OpenAlex](openalex.md) |
-| Semantic Scholar | metadata + citation + asset | Academic Graph search/details、references/citations、`openAccessPdf` | key 可选但推荐；匿名共享池；2026-08-07 四类匿名只读 200 | [Semantic Scholar](semantic-scholar.md) |
-| Unpaywall | asset | DOI/title OA lookup、多个 publisher/repository locator | 请求 email 必需，建议每日不超 100,000；2026-08-07 DOI lookup 200、title search 500 | [Unpaywall](unpaywall.md) |
-| Elsevier | metadata + asset | Scopus/Abstract metadata；Article XML/JSON 与 objects；PDF 当前公开依据不足 | API key 必需，内容订阅另计；本轮未带 key；2026-07-21 历史最小请求 200 | [Elsevier](elsevier.md) |
-| Wiley | asset | 获准环境中的 TDM 主文 PDF | 官方 TDM 页面本轮 403；endpoint/header/限流待核对；保留 2026-07-21 两篇历史成功记录 | [Wiley](wiley.md) |
-| Springer Nature | metadata + asset | Meta/Metadata；OA 与 agreement Full Text JATS/XML；metadata 可含 PDF locator | API key，Full Text 另需 agreement/metric；官方文档可读，本轮未带 key 实测 | [Springer Nature](springer-nature.md) |
-| Configured Sci-Hub | asset | 仅 operator 私有、获准 resolver 的通用 locator 输出；无稳定公开 API 合同 | 不记录/测试 endpoint、镜像、session 或绕过方式；本轮无网络请求 | [Configured Sci-Hub](configured-sci-hub.md) |
+Acquisition 当前生产映射如下：
 
-准确的当前选择键：
+| 机制 | 当前实现 |
+|---|---|
+| 通用公开 hints | 已实现；消费所有已保存且重新通过安全检查的 direct-file/landing-page AssetHint，不把 `direct` 当作 Provider |
+| 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 只接受 operator 注入的获准 locator resolver |
+| 授权主 PDF API | CORE API v3 Work/Output download 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity 或 DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
+| Elsevier/Springer 授权 API | 未注册生产主 PDF Source；当前核实产品是 XML/JSON/object 或 JATS/XML |
+| 受控 Browser | 组件与 QA 已完成，生产站点规则目录为空，因此当前不可执行 |
 
-```text
-metadata: arxiv, crossref, europe-pmc, openalex, semantic-scholar, elsevier, springer
-citation: openalex, semantic-scholar
-asset: direct, arxiv, crossref, unpaywall, europe-pmc, openalex,
-       semantic-scholar, elsevier, wiley, springer, sci-hub
-```
+外部服务仍有各自的重要边界：DataCite 收录对象不只文献，CORE Work 是外部聚合身份，
+OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是不同许可产品；
+这些划分不能绕过 SciRetriever 的身份收敛、事实所有权和中性 Model。各家的认证、
+分页、限流、字段与已核实日期见下列详细 Notes：
 
-`springer` 与 `sci-hub` 是配置合同中的实际键，不用供应商展示名称代替。
-
-### 4.1 已进入目标、但尚未进入当前 schema v2 的服务
-
-下列四家已经由 ADR 0014 纳入目标能力矩阵，但仍不属于上表十家当前 provider，也不属于 schema v2 的任何 allowlist。它们没有当前配置选择键、Protocol 注册、adapter 或 registry wiring；目标 Metadata adapter 只能在后续实现、直接测试和 Bootstrap 接线完成后写成当前能力。OpenCitations 的目标范围仅为精确 lookup/引用，不包含主题搜索。
-
-| 外部服务 | 外部能力摘要 | 认证与当前证据 | 详细 Notes |
-|---|---|---|---|
-| Web of Science | Starter 基础 metadata/Times Cited；Expanded Full Record、cited references、citing items | `X-ApiKey` 必需，机构 subscription/产品 entitlement 决定深度；2026-08-07 两产品匿名请求均 401，公开 Swagger 可读 | [Web of Science](web-of-science.md) |
-| DataCite | 通用 DOI metadata、显式关联标识符、引用/版本关系摘要与 locator | public GET 匿名可用；2026-08-07 单 DOI 与单页搜索均 200 | [DataCite](datacite.md) |
-| OpenCitations | Index v2 开放逐边引用/计数；Meta v1 基础书目 metadata | token 非强制但官方鼓励；180 req/min/IP；2026-08-07 Index/Meta 匿名最小请求均 200 | [OpenCitations](opencitations.md) |
-| CORE | 去重增强 Works、来源级 Outputs、metadata、参考文献与全文 locator | 匿名可用但低 token 额度且不提供全文；2026-08-07 匿名单条 Work search 200 | [CORE](core.md) |
-
-其中 DataCite 收录的不只文献，CORE Work 是外部聚合身份，OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是不同许可产品；这些外部划分都不能绕过 SciRetriever 的领域边界、身份收敛、事实所有权与中性 Model，也不能因为目标已接受就伪造当前 schema/adapter/readiness。
+- [arXiv](arxiv.md)、[Crossref](crossref.md)、[Semantic Scholar](semantic-scholar.md)、
+  [OpenAlex](openalex.md)、[Europe PMC](europe-pmc.md)、[DataCite](datacite.md)；
+- [Web of Science](web-of-science.md)、[Elsevier](elsevier.md)、
+  [Springer Nature](springer-nature.md)、[Wiley](wiley.md)；
+- [CORE](core.md)、[OpenCitations](opencitations.md)、[Unpaywall](unpaywall.md)、
+  [Configured Sci-Hub](configured-sci-hub.md)。
 
 ## 5. `direct` 不是供应商
 
-`direct` 表示对当前 Literature/迁移前记录中已有安全 HTTPS locator 的通用直接获取入口，不对应单一外部机构，也没有供应商认证、schema 或逐机构文档，因此不创建 `direct.md`。
+`direct` 表示对当前 Literature 已有安全 HTTPS locator 的通用直接获取入口，不对应单一外部机构，也没有供应商认证、schema 或逐机构文档，因此不创建 `direct.md`。
 
 它仍必须经过 Network policy、有限 timeout/大小预算、redirect 与 origin 检查、media type/PDF bytes 验证、hash、lineage 和 immutable publish。已有 URL 不等于已授权、可访问或内容正确。
 
@@ -104,7 +94,7 @@ asset: direct, arxiv, crossref, unpaywall, europe-pmc, openalex,
 
 新增或更新文档时，适用项至少覆盖：
 
-1. 最后核对日期、schema v2 选择键、外部角色和当前仓库接入状态。
+1. 最后核对日期、当前选择键、外部角色和当前仓库接入状态。
 2. 官方入口与每项重要事实的 evidence 等级。
 3. 认证位置、匿名能力、凭据/授权边界、限流/配额和错误语义。
 4. endpoint、查询语义、分页/游标、响应顶层及嵌套字段。
@@ -117,7 +107,7 @@ asset: direct, arxiv, crossref, unpaywall, europe-pmc, openalex,
 
 ## 7. 通用安全与数据边界
 
-- Provider 凭据只从当前用户拥有的 `~/.sciretriever/credentials.toml` 私有解析并由 Bootstrap 注入 adapter；目录必须为普通非符号链接目录且权限为 `0700`，文件必须为普通非符号链接文件且权限为 `0600`。不得写入 URL、日志、异常、trace、provenance、fixture 或 Notes；状态诊断不显示值、掩码、长度、hash 或 fingerprint。
+- Provider 凭据与 LLM/MinerU secret 共用当前用户拥有的 `~/.sciretriever/credentials.toml`，由 Bootstrap 私有注入对应 adapter；目录必须为普通非符号链接目录且权限为 `0700`，文件必须为普通非符号链接文件且权限为 `0600`。不得写入 URL、日志、异常、trace、provenance、生产 fixture 或 Notes；状态诊断不显示值、掩码、长度、hash 或 fingerprint。
 - 外部 URL 必须经过共享 Network policy：HTTPS、URL/DNS/redirect/origin 复核、受限 headers、timeout、响应大小、请求总数与并发预算。
 - 每个 production adapter 必须声明稳定 provider/channel/service AccessScope、真实 quota 共享范围和经过核对的访问政策；缺少 policy 不得退化为无限制访问。Adapter 解释 provider 规则，Network 在当前进程的 Metadata、Acquisition 和其它调用方之间共享执行。
 - 同一 provider 网页普通 HTTP 与受控浏览器在当前进程最多一个活动流程，完整结束后至少冷却 30 秒；更严格的供应商规则优先。API 使用独立 scope 并按真实政策运行，公开/OA/direct 声明不能绕过实际 provider/host scope。
@@ -133,7 +123,7 @@ asset: direct, arxiv, crossref, unpaywall, europe-pmc, openalex,
 
 ## 8. 通用排障顺序
 
-1. 先区分当前迁移前 schema v2 allowlist 与 ADR 0014 目标矩阵；目标实现按 Metadata/Acquisition capability、用户启用、生产 adapter 与 readiness 选择，不把迁移前 `citation` 类别延续成第三类 Provider。
+1. 先区分配置 allowlist、当前生产 adapter 与 ADR 0014 目标矩阵；运行按 Metadata/Acquisition capability、用户启用、生产 adapter 与 readiness 选择，不建立第三类 Citation Provider。
 2. 确认 concrete client 已由调用方注入；lazy registry 构造失败不能误报为“无结果”。
 3. 在不打印值的前提下确认认证材料存在，并核对该 key/token 的具体 API 产品与内容 entitlement。
 4. 使用供应商文档中的稳定标识做最小只读健康检查；允许匿名时再做匿名对照。
@@ -144,7 +134,7 @@ asset: direct, arxiv, crossref, unpaywall, europe-pmc, openalex,
 
 ## 9. 更新检查清单
 
-- [ ] 核对 provider 展示名、当前 schema v2 真实配置 key和目标 Metadata/Acquisition capability，未把目标矩阵写成当前接入。
+- [ ] 核对 provider 展示名、当前真实配置 key 和目标 Metadata/Acquisition capability，未把目标矩阵写成当前接入。
 - [ ] 官方 URL 可访问；不可访问、需 key/JS 或 403 的部分已明确记录。
 - [ ] 认证、内容 entitlement、配额和限流没有混为一项。
 - [ ] AccessScope、quota 共享范围、网页/API 通道和官方限速证据明确；网页至少 30 秒冷却，普通配置只能收紧。

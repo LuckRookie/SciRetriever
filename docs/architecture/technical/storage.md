@@ -157,7 +157,7 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 以下内容不进入 SQLite、ArtifactStore 或 Storage 拥有的其它状态文件：
 
 - Network permit、等待队列、冷却、窗口计数、`Retry-After`、`next_allowed_at` 和 `blocked_until`；
-- Provider 凭据、凭据字段状态、readiness、`config test` 结果/时间和服务健康状态；Provider secret 只由 Configuration 管理在唯一用户级凭据文件中，不属于逻辑文献数据库；
+- Provider/LLM/MinerU 凭据、凭据字段状态、readiness、`config test` 结果/时间和服务健康状态；secret 只由 Configuration 管理在唯一用户级凭据文件中，不属于逻辑文献数据库；
 - HTTP/浏览器现场、Provider cursor、request/response 和 vendor SDK object；
 - 搜索候选、相关度、原始扫描/接纳/拒绝计数、分页中间状态和未接纳结果；
 - `PdfCandidate`、candidate key/tried set、下载 attempt、逐候选失败、无效 PDF 及其信息；
@@ -184,6 +184,8 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 文件使用内容寻址和 create-if-absent 发布。已接受对象不得原地覆盖；相同目标存在相同字节时复用，存在不同字节时保留冲突证据并拒绝发布。
 
 Storage 不根据文件内容自行决定它是否属于某篇文献。消费模块先形成经过规则确认的发布请求，Storage 再执行物理保存。
+
+Catalog、ArtifactStore、写锁和面向用户的输出属于普通本地数据，不以 Unix owner、mode 或 sticky bit 作为准入条件。已有目录或文件只要当前进程能实际访问即可；组可写或全局可写祖先、Catalog、资产对象和输出目标不会仅因权限位被拒绝。新建目录和文件可以使用 `0700`、`0600` 作为保守默认值，但再次打开时不要求保持这些权限。Storage 仍以 descriptor-relative、nofollow、对象类型、单硬链接、inode 身份、hash、size 和原子发布检查防止路径逃逸、对象错配与半成品。凭据文件不属于 Storage，继续由 Configuration 的独立 secret 权限合同管理。
 
 Storage 还实现 Literature 拥有的 artifact read Port。输入只接受已经从查询投影取得的 `Asset`、`ParserArtifactRef` 或 `ArtifactRef`；实现必须在配置的 ArtifactStore 根下解析规范路径或内容地址，拒绝绝对路径、父目录跳转、符号链接逃逸和非普通文件，并在返回 context-managed 只读 binary stream 前复核 byte size、SHA-256 与 Catalog 中的 media type。读取不改变访问时间以外的文件系统实现细节，不建立数据库事实，也不把解析后的绝对路径返回调用方。
 
@@ -284,7 +286,7 @@ ParserResult 替换提交后，旧正式对象在确认没有其它引用时才�
 - SearchItem/SearchPage、LiteratureAssetView、LiteratureDetail、LiteratureReferencePage 和 ReferenceDetail 只从同一 read-only snapshot 临时组装，没有对应持久化表、ID、provenance、revision 或写入 API；搜索以具体 Literature 为结果单位，不按 MetaLiterature 折叠；
 - LiteratureDetail 中 metadata revision/hash、status、missing step、人工 PDF 标记、唯一 primary PDF、当前 ParserResult/Content 和其它版本相互一致；本地 Reference 正反向数量来自具有有效 support 的权威边，不与 Provider count observation 合并；
 - references/cited-by 页面从同一 `literature_references` 表正反向读取，在一个 snapshot 中组装相关 Literature、support count、固定排序、total 和 cursor；ReferenceDetail 返回同一关系两端与全部有效 support，不保存 cited-by 副本或关系 DTO；
-- Artifact reader 只接受既有 Asset/ArtifactRef，在 ArtifactStore 根内拒绝路径逃逸、符号链接逃逸和非普通文件，并在交出 context-managed stream 前验证 size、hash 和 media type；调用方不能取得内部绝对路径；
+- Artifact reader 只接受既有 Asset/ArtifactRef，在 ArtifactStore 根内拒绝路径逃逸、符号链接逃逸和非普通文件，并在交出 context-managed stream 前验证 size、hash 和 media type；调用方不能取得内部绝对路径；普通数据路径的 owner、mode 与 sticky bit 不构成准入条件；
 - 面向用户文件的 artifact 导出使用同目录 staging、flush、`fsync`、校验和原子发布，默认拒绝已有目标，失败保持旧目标不变；目标路径、副本和结果不进入数据库或处理 Report；
 - Topic/Citation DiscoveryRun 使用互斥类型化输入；每个 Provider 保存整个 Run 的独立 scan limit 和三值 source outcome，已接纳结果与直接 cause 可查询，cursor/request/response/score/过程计数/完整 path/未接纳候选不能入库；
 - DiscoveryRun 本体没有 finished_at、CREATED 或 NO_TARGET；零结果正常完成，用户中断保留已确认 source/result/cause，未完成 Provider 不生成 source result；

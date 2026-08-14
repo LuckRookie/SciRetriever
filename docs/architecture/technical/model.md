@@ -698,9 +698,9 @@ stream、用户目标路径和 context manager 是运行时 I/O 对象，不能�
 Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`、`export()` 等业务
 方法；调用方从 Detail 取得引用，再交给 Entry/Literature 的独立 artifact 操作。
 
-### 2.6 Provider 配置数据边界
+### 2.6 配置数据边界
 
-`model/configuration.py` 只接收已经由根级 configuration 边界解析完成的普通配置和安全诊断。它可以表达稳定 Provider key、`metadata`/`acquisition` capability、启用状态、非 secret 产品选择、AccessPolicy、凭据字段名称/必需性/存在性，以及以下本地状态：
+`model/configuration.py` 只接收已经由根级 configuration 边界解析完成的普通配置和安全诊断。它可以表达稳定 Provider key、`metadata`/`acquisition` capability、启用状态、非 secret 产品选择、AccessPolicy、凭据字段名称/必需性/存在性，也可以表达 LLM provider/protocol/Base URL/model/context/authentication/预算与 MinerU connection mode/Base URL/model identity/upload consent。服务 URL 和预算 validator 只执行结构与安全组合检查，不读取文件、secret 或 Network。Provider 凭据使用以下本地状态：
 
 ```text
 not-required
@@ -713,7 +713,7 @@ unsupported
 
 真实 API key、token、metric、Cookie、浏览器 session、凭据文件原文和任何可以辨识 secret 的值、掩码、长度、hash、前后缀或 fingerprint 都不能进入 Pydantic。Model 也不承担读取 `~/.sciretriever/credentials.toml`、检查 owner/权限、隐藏交互、原子写入或调用 Provider；这些都是 configuration/CLI/adapter 边界行为。
 
-若 `config status` 或 `config test` 提供 JSON，结构化结果只组合稳定 Provider key、capability、安全状态、通过/失败/跳过结果和可选 `StableFailure`。它不包含 secret 特征、原始网络异常、endpoint/完整 URL、响应正文、测试时间、Literature 身份、DiscoveryRun 或 Report；结果只是本次非持久化配置诊断，不成为 Entry 处理 Report 或数据库 Model。认证接受与具体文献全文 entitlement 必须分别表达，不能由 Model 字段合并成一个“可下载”布尔值。
+若 `config status` 或 `config test` 提供 JSON，结构化结果只组合非 secret 普通配置、稳定 Provider key、capability、安全状态、统一凭据 presence/origin-match、通过/失败/跳过结果和稳定 failure code。`ConfigurationRuntimeStatus` 分组表达 Storage、MinerU 与 Analysis 本地完整性；`CoreConfigurationProbeResult` 以中性 typed details 明确 LLM 是 minimal-schema、MinerU 是 health-only，并固定 `persisted = false`。它们不包含 secret 值或其可辨识特征、原始网络异常、响应正文、测试时间、Literature 身份、DiscoveryRun 或 Report；结果只是本次非持久化配置诊断，不成为 Entry 处理 Report 或数据库 Model。认证接受与具体文献全文 entitlement 必须分别表达，不能由 Model 字段合并成一个“可下载”布尔值。
 
 ## 3. Pydantic 约束
 
@@ -741,13 +741,15 @@ Model 不得使用 validator、自定义 serializer、自定义 `__init__`、`mo
 
 `MetaLiterature`、`Literature`、`VersionRole` 和 `LiteratureStatus` 的精确合同由 [Literature 技术文档](literature.md#2-metaliterature-与-literature) 定义。`VersionRole` 使用 `published`、`accepted-manuscript`、`preprint` 和 `other`，不保留旧名称 `formal`；`LiteratureStatus` 只承载 Literature 模块已经推导的当前结果，Model validator 不计算状态。
 
-`MetadataObservation` 的精确合同由 [Literature 技术文档](literature.md#42-metadataobservation-来源输入) 定义。它是独立、不可变且长期保存的来源对象，不是 `Literature` 属性；一个 Literature 与多个 observations 的归属由 Storage 关系表达，不把 `literature_id` 放入 observation。Provider observation 与书目导入 observation 复用同一结构，只通过受约束的 Provenance 区分；`record.py` 不得复制 `LiteratureMetadata` 字段建立 `ImportedMetadata`。`version_links` 只保存供应商明确声明为同一文献其它版本的目标 key，用于可审计身份收敛，不进入 `LiteratureMetadata` 或形成独立权威关系；`reference_texts` 只保存供应商实际返回的原文，不声明完整，也不表示已经形成引用关系。`MetadataObservation.declared_keywords` 保存供应商声明关键词；书目导入的 keywords 进入该 observation 的 `metadata.keywords` 并可参与统一初始投影；完整 Analysis 后，当前 `LiteratureMetadata.keywords` 保存 Literature 已验收的全文关键词。`LiteratureMetadata.pages` 同时承载传统页码范围和供应商返回的电子文章定位号，不再建立 `article_number`。`AssetHint` 的精确合同由 [Acquisition 技术文档](acquisition.md#31-assethint-合同) 定义；其中 URL、媒体类型、资产角色、版本角色、访问状态和许可证都描述具体来源线索，不属于 `LiteratureMetadata`，也不代表已接纳资产。`AssetHint` 不增加获取阶段、授权要求或浏览器要求，运行访问上下文由 Acquisition Source 决定。`PdfCandidate`、`Asset`、`LiteratureAsset` 和 `AcquisitionResult` 的精确合同分别见 [Acquisition 3.2](acquisition.md#32-候选与-source-边界)、[3.3](acquisition.md#33-asset-与-literatureasset)和[第 2 节](acquisition.md#2-输入与公开结果)：候选与 candidate key 只存在于当前运行；候选只保存 source、公开/授权 API/浏览器 path 和声明媒体类型，不要求 URL，也不携带 Source 私有动作；Asset 只描述不可变文件；唯一 `primary-pdf` 关系表达当前主 PDF；自动业务结果只有已获得或未获得，系统提交错误不属于该联合。`NoPrimaryPdf` 只有在全部当前自动路径正常结束且最小耗尽事实已提交后成立；运行错误不能伪装成该结果。手动接纳成功使用独立 `AcceptedManualPdf`，只组合已经提交的 `Asset` 与 `LiteratureAsset`；无效本地文件是输入验证错误，不进入自动联合，用户绝对路径不进入 Model。这些来源信息不能通过通用 `extra_metadata`、裸字典或 vendor model 扩展 `LiteratureMetadata`。非空标题或 DOI 至少存在一个是 Literature 的入库规则，不由 Model validator 决定。
+`MetadataObservation` 的精确合同由 [Literature 技术文档](literature.md#42-metadataobservation-来源输入) 定义。它是独立、不可变且长期保存的来源对象，不是 `Literature` 属性；一个 Literature 与多个 observations 的归属由 Storage 关系表达，不把 `literature_id` 放入 observation。Provider observation 与书目导入 observation 复用同一结构，只通过受约束的 Provenance 区分；`record.py` 不得复制 `LiteratureMetadata` 字段建立 `ImportedMetadata`。`version_links` 只保存供应商明确声明为同一文献其它版本的目标 key，用于可审计身份收敛，不进入 `LiteratureMetadata` 或形成独立权威关系；`reference_texts` 只保存供应商实际返回的原文，不声明完整，也不表示已经形成引用关系。`MetadataObservation.declared_keywords` 保存供应商声明关键词；书目导入的 keywords 进入该 observation 的 `metadata.keywords` 并可参与统一初始投影；完整 Analysis 后，当前 `LiteratureMetadata.keywords` 保存 Literature 已验收的全文关键词。`LiteratureMetadata.pages` 同时承载传统页码范围和供应商返回的电子文章定位号，不再建立 `article_number`。`AssetHint` 的精确合同由 [Acquisition 技术文档](acquisition.md#33-assethint-合同) 定义；其中 URL、媒体类型、资产角色、版本角色、访问状态和许可证都描述具体来源线索，不属于 `LiteratureMetadata`，也不代表已接纳资产。`AssetHint` 不增加获取层级、授权要求或 Browser 要求，运行访问上下文由 Acquisition Resolution/Plan 决定。`PdfCandidate`、`Asset`、`LiteratureAsset` 和 `AcquisitionResult` 的精确合同分别见 [Acquisition 3.4](acquisition.md#34-route-hint候选与-adapter-边界)、[3.5](acquisition.md#35-asset-与-literatureasset)和[第 2 节](acquisition.md#2-输入与公开结果)：候选与 candidate key 只存在于当前运行；候选只保存 route adapter 的稳定 source identity、Public/Authorized API/Browser path 和声明媒体类型，不要求 URL，也不携带 adapter 私有动作；Asset 只描述不可变文件；唯一 `primary-pdf` 关系表达当前主 PDF；自动业务结果只有已获得或未获得，系统提交错误不属于该联合。`NoPrimaryPdf` 只有在全部适用 routes 正常结束、没有 deferred/action-required/未解决 failure 且最小耗尽事实已提交后成立；运行错误不能伪装成该结果。手动接纳成功使用独立 `AcceptedManualPdf`，只组合已经提交的 `Asset` 与 `LiteratureAsset`；无效本地文件是输入验证错误，不进入自动联合，用户绝对路径不进入 Model。这些来源信息不能通过通用 `extra_metadata`、裸字典或 vendor model 扩展 `LiteratureMetadata`。非空标题或 DOI 至少存在一个是 Literature 的入库规则，不由 Model validator 决定。
 
 `DiscoveryRun` 与运行时数据库补全输入的精确合同见 [2.3 节](#23-discoveryrun-与运行时数据库补全)。目标 Model 不保留 `CollectionRun`、Collection、membership、`CollectionSelector`、`BatchRun`、`BatchTarget`、候选 snapshot、target result、counts、`requested_advance_to`、`selected_version_ids`、`include_all_versions` 或通用 execution `details`。DiscoveryRun input/source outcome/cause 和 BatchSelector 使用各自封闭判别联合；补全目标、候选和 Report 只服务当前进程。
 
 `LiteratureMetadata` 是单一当前值，不是来源 observation 或 revision 历史对象。`metadata_revision` 不进入 `LiteratureMetadata` schema；它是持久化关系上的单调并发令牌，和 `metadata_sha256` 一起绑定当前内容输入。Catalog 不暴露旧统一元数据 revision 集合，LLM 最终提案也不转换为 `MetadataObservation`。
 
 ADR 0012 的 `AccessScope`、访问政策、permit、`next_allowed_at` 和 `blocked_until` 是 Network 内部技术数据；其中动态状态只存在于当前进程内存。它们不属于模块间业务 Model，也不进入 `model/access.py`、Catalog、ArtifactStore、provenance 或独立协调文件，且不能携带 DOI、Literature ID、候选、完整 URL、凭据或响应正文。
+
+ADR 0015 的静态 `PublisherAccessProfile` catalog，以及当前操作的 `PublisherAccessResolution`、`AcquisitionPlan`、`AccessRouteHint`、Browser queue/session health/circuit，都是 Acquisition/Network 模块私有技术对象，不进入共享业务 Model 或持久化 schema。运行对象可以使用模块私有不可变类型在 Entry/Acquisition 边界内协作，但不能被序列化为 Literature、Report 自由 details、Catalog 或 Artifact；Cookie、Browser session profile 内容、签名 locator 和页面对象始终留在适配边界。
 
 `ProviderLiteratureKey` 是供应商文献记录的中性定位，只包含可选 `record_id` 和稳定 `Identifier[]`，且至少具有其中一种定位。`MetadataObservation.version_links` 用它定位同文献其它版本；当前端点由父 observation 表达。`ProviderRelationObservation` 用两个 key 表达一条规范化 `citing -> cited` 有向引用边。两种用法都不接受本地 Literature ID、目标 MetadataObservation 或状态字段；Model validator 只检查封闭结构、至少一个定位值和非空格式，不决定版本归属、目标接纳或 Reference 建立。精确合同见 [Literature 技术文档](literature.md#42-metadataobservation-来源输入)与 [Metadata 技术文档](metadata.md#52-providerrelationobservation)。
 
@@ -917,7 +919,7 @@ Model 不能导入或暴露：
 - `MetadataObservation.version_links` 只接受至少具有一种稳定定位的 `ProviderLiteratureKey`，不接受关系类型、本地 ID、目标 metadata 或状态，也不产生 `LiteratureRelationObservation` 或 `LiteratureRelation`；
 - `Reference` 和三种 `ReferenceSupportSource` 拒绝未知字段、错误判别值、负索引和额外混合字段，且 support 不产生第二份 provenance 或原文；
 - `ProviderRelationObservation` 一条只接受一条 citing/cited 边，两个 key 至少有一种稳定定位且不能相同，不接受 query direction、本地 ID、目标 metadata 或扩展状态；
-- `PdfCandidate`、`Asset` 和 `LiteratureAsset` 拒绝边界外字段；候选只接受 candidate key、source name、三值 acquisition path 和可选声明媒体类型且不持久化，不接受 URL、header、Cookie、凭据、API object、页面 action 或失败原因；Asset 不混入文献归属，LiteratureAsset 不复制版本角色或 `is_current`；
+- `PdfCandidate`、`Asset` 和 `LiteratureAsset` 拒绝边界外字段；候选只接受 candidate key、route adapter 的稳定 source identity、三值 acquisition path 和可选声明媒体类型且不持久化，不接受 URL、header、Cookie、凭据、API object、页面 action 或失败原因；Asset 不混入文献归属，LiteratureAsset 不复制版本角色或 `is_current`；
 - 自动 `AcquisitionResult` 只允许完整提交的 `AcquiredPrimaryPdf` 和无字段 `NoPrimaryPdf`，不能用原因枚举或第三个结果承载系统错误；`AcceptedManualPdf` 是独立成功类型且不接收 path，输入验证错误不进入该联合；
 
 架构检查和人工语义审查共同验证 Model 没有形成第二套业务规则。

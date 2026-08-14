@@ -43,7 +43,9 @@ SQLite 与文件系统组成一个逻辑文献数据库，但拥有不同物理�
 
 网络、浏览器、Parser、LLM 和 vendor 调用在事务外发生，并以开始时读取的 ID/hash 绑定输入；提交前重新检查 current facts，过期结果拒绝写入。重启后重新读取当前数据库并重新选择实际目标，不恢复旧 HTTP 请求、浏览器页面、Parser/LLM task、线程、队列或内存现场。具体长期约束见 [ADR 0011](decisions/0011-literature-database-centered-incremental-maintenance.md)。
 
-Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider 密钥只从 `~/.sciretriever/credentials.toml` 注入，凭据状态与连接测试都不是文献数据库事实。
+Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider、LLM 与远程 MinerU 密钥只从 `~/.sciretriever/credentials.toml` 注入，核心服务 secret 与规范 origin 精确绑定，凭据状态与连接测试都不是文献数据库事实。
+
+[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 Public → Authorized API → Browser admission；API 按官方 quota policy，Browser 按 `browser_rate_limit_group` 不同组并行、同组限速串行。Resolution、Plan、route hint、Browser queue/session/circuit 只属于当前操作，不进入文献数据库。
 
 ### 2.1 目标代码结构
 
@@ -85,15 +87,15 @@ src/sciretriever/
 
 | 模块 | 技术文档 | 实现细节归属 |
 |---|---|---|
-| 入口与流程编排 | [Entry](technical/entry.md) | DiscoveryRun、运行时 BatchSelector、内存目标与版本候选、非持久化 Report、手动 PDF、本地 Library 查询/详情/引用呈现、Artifact 打开与用户文件导出、书目 codec、固定导入 provenance，以及 `discover/complete/literature/import/export/config` 目标 CLI |
-| 启动配置与 Provider 凭据 | [Configuration](technical/configuration.md) | 普通配置、固定 `credentials.toml`、安全 CLI 修改、能力 readiness、纯本地状态与显式连通性测试；secret 和测试结果不进入 Model 或文献数据库 |
+| 入口与流程编排 | [Entry](technical/entry.md) | DiscoveryRun、运行时 BatchSelector、内存目标与版本候选、缺 PDF 目标的有界 tier cohort、非持久化 Report、手动 PDF、本地 Library 查询/详情/引用呈现、Artifact 打开与用户文件导出、书目 codec、固定导入 provenance，以及 `discover/complete/literature/import/export/config` 目标 CLI |
+| 启动配置与凭据 | [Configuration](technical/configuration.md) | 普通配置、统一固定 `credentials.toml`、核心服务 origin 绑定与可恢复发布、交互配置中心、能力 readiness、纯本地状态与显式 Provider/LLM/MinerU probe；secret 和测试结果不进入 Model 或文献数据库 |
 | 元数据供应商 | [Metadata](technical/metadata.md) | 领域搜索与稳定标识符 lookup、可选 version_links/引用关系/参考文献原文能力、逐边 ProviderRelationObservation、Author 中性转换、目标 Provider adapters、资产线索和部分失败 |
 | 文献管理 | [Literature](technical/literature.md) | MetaLiterature/Literature、version_links 身份证据、单一版本成员归属、Provider/用户导入 observations、导入优先的 LiteratureMetadata 与作者统一、单一当前 LiteratureContent 接纳、Reference/ReferenceSupport、状态、LibraryQuery/Search/Detail/Reference 读取语义、Artifact read Port 和交换规则 |
-| Acquisition | [Acquisition](technical/acquisition.md) | 公开来源、已授权 Provider API、受控浏览器三阶段 PdfSource，基于 AssetHint、稳定定位与 DOI landing origin 的 Source 适用性路由，独立手动 PDF 接纳，运行时 PdfCandidate、二值自动 AcquisitionResult、实际 PDF 字节/reader/页面树检查、唯一主资产关系和自动获取耗尽事实 |
+| Acquisition | [Acquisition](technical/acquisition.md) | PublisherAccessProfile/Resolution、确定性 AcquisitionPlan 与 AccessRouteHint、Public/API/Browser route 执行、route-scoped readiness、独立手动 PDF 接纳、运行时 PdfCandidate、二值自动 AcquisitionResult、实际 PDF 字节/reader/页面树检查、唯一主资产关系和自动获取耗尽事实 |
 | Parsing | [Parsing](technical/parsing.md) | Parser Port、规范化 Markdown ParserResult、实际引用资源、当前结果替换和资产 lineage |
 | LLM 分析与总结 | [Analysis](technical/analysis.md) | Analysis 内部 LLM Port、先元数据后正文的两阶段内容分析、导入非空值保留边界、明确 NoUsableContent、Markdown-string LiteratureSection、统一“未提供”、有序文本参考文献和临时 ReferenceLookup |
 | Model | [Model](technical/model.md) | Pydantic 数据合同、LibraryQuery/SearchPage/LiteratureDetail/ReferencePage/ReferenceDetail 等非持久化读取合同、结构解析和外部类型隔离；binary stream 和目标路径不进入 Model |
-| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、内存限速状态、URL/DNS/redirect policy、安全 HTTP、受控浏览器和脱敏 |
+| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、官方 API quota policy、Browser risk-group 调度与 persistent session、per-hop Profile guard、内存限速/circuit 状态、URL/DNS/redirect policy、安全 HTTP 和脱敏 |
 | 存储 | [Storage](technical/storage.md) | DiscoveryRun、Provider/用户导入共用的 MetadataObservation、文献当前事实与自动 PDF 获取耗尽的关系 schema、SQLite、不可变文件、一致 read snapshot、临时 Search/Detail/Reference 投影、verified artifact reader、原子用户文件输出、事务、对账、锁和崩溃边界；不保存查询结果、导入过程、批量运行或 Report |
 | Logging | [Logging](technical/logging.md) | 命名 logger 公开入口、生产进程一次性配置、stderr handler、formatter、最终脱敏 Filter 和 best-effort 故障隔离 |
 
@@ -133,7 +135,7 @@ logging -------------------> Python standard library only
 
 ```text
 metadata.providers --------> metadata.ports + network
-acquisition.sources -------> acquisition.ports + network
+acquisition.routes --------> acquisition.ports + network
 parsing.mineru ------------> parsing.ports + network
 analysis.providers --------> analysis.ports + network
 entry.codecs --------------> entry.ports + model
@@ -167,7 +169,7 @@ Port 由消费能力的模块所有：
 | `entry` | DiscoveryRun repository、selector/current-facts read、write admission、clock、literature metadata codec、原子用户文件输出；目标、候选和 Report 只在内存形成 |
 | `metadata` | metadata search、metadata reference query、observation publication |
 | `literature` | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication |
-| `acquisition` | asset source、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear |
+| `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成 |
 | `parsing` | parser |
 | `analysis` | LLM provider access；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication |
 
@@ -177,8 +179,8 @@ Port 由消费能力的模块所有：
 
 - raw `sqlite3` repository 与 publisher；
 - 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
-- metadata search、metadata reference query 和 asset source；
-- 当前进程共享的 Access Coordinator、secure HTTP 与受控浏览器；
+- metadata search、metadata reference query 和 Acquisition route adapters；
+- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、Browser scheduler/session broker 与受控浏览器；
 - MinerU parser；
 - LLM adapter；
 - BibTeX、RIS 和 CSL JSON codec；
@@ -188,7 +190,7 @@ Port 由消费能力的模块所有：
 
 模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `bootstrap.py` 构造。
 
-根级 `configuration.py` 是唯一普通 TOML、环境变量和 Provider 凭据文件解析入口。未知 section、key、枚举或组合必须 fail closed；普通配置转换为 `model/configuration.py` 中不含 secret 的中性配置数据，再执行跨字段和运行环境规则。Provider secret 只从 `~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap，精确文件、权限、readiness 和 CLI 合同见 [Configuration 技术文档](technical/configuration.md)。
+根级 `configuration.py` 是唯一普通 TOML、非 secret 环境选择和统一凭据文件解析入口。未知 section、key、枚举或组合必须 fail closed；普通配置转换为 `model/configuration.py` 中不含 secret 的中性配置数据，再执行跨字段和运行环境规则。Provider、LLM 与远程 MinerU secret 只从 `~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret 环境变量回退。精确文件、权限、origin、readiness 和 CLI 合同见 [Configuration 技术文档](technical/configuration.md)。
 
 普通配置按以下九个责任组组织：
 
@@ -219,16 +221,16 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 ## 6. 跨模块运行约束
 
 - 每项操作由用户请求和一致的当前数据库 snapshot 共同决定；查询和只读导出直接读取该 snapshot，会改变数据库的操作据此形成实际目标，新结果只有经过业务所有者验证并提交到同一逻辑数据库后才成为后续步骤的输入。
-- 目标 CLI 只使用 `discover`、`complete`、`literature`、`import`、`export`、`config` 六个一级名称；`literature` 保持只读，元数据文件和手动 PDF 分别通过 `import metadata/pdf` 接纳，书目元数据、当前主 PDF 和当前轻结构化 Markdown 分别通过 `export metadata/pdf/content` 导出。`config` 只提供 `set/remove/status/test`，不形成处理 Report 或文献数据库事实；内部模块名和通用 artifact 不形成一级命令。
+- 目标 CLI 只使用 `discover`、`complete`、`literature`、`import`、`export`、`config` 六个一级名称；`literature` 保持只读，元数据文件和手动 PDF 分别通过 `import metadata/pdf` 接纳，书目元数据、当前主 PDF 和当前轻结构化 Markdown 分别通过 `export metadata/pdf/content` 导出。裸 `config` 打开交互式凭据管理器，公开子命令只保留 `status/test`，且不形成处理 Report 或文献数据库事实；内部模块名和通用 artifact 不形成一级命令。
 - `LibraryQuery` 只查询本地数据库并以具体 Literature 为结果单位；SearchItem/SearchPage、LiteratureAssetView、LiteratureDetail、LiteratureReferencePage 和 ReferenceDetail 是同一 snapshot 临时组装的不可变 read model，不建立持久化表、第二份 metadata/status、反向引用边或写入生命周期。大型 artifact 字节和可能无界增长的关系边使用独立读取。
 - `LiteratureDetail` 只携带既有 Asset/ArtifactRef，不能执行 I/O。Literature 的 artifact reader 在 Storage 根内复核普通文件、size、hash 和 media type 后返回 context-managed 只读 stream；Entry 向用户目标导出时默认拒绝已有文件，并通过同目录 staging 原子发布。两者不访问 Provider、不修改数据库或形成处理 Report。
 - 外部领域搜索和引用扩展各自形成 DiscoveryRun；本地只读查询不形成运行记录。DiscoveryRun 完成后不创建 Collection、不启动主 PDF/Parsing/Analysis，也不对每条发现结果执行全部 Provider 的逐篇精确补查。
 - DiscoveryRun 本体只保存 ID、类型化输入、五态 status 和开始时间。每个 Provider 在整个 Run 内按过滤和去重前原始 item 执行 scan limit，只持久化自然耗尽、达到上限或失败；扫描/接纳/拒绝计数、cursor、完整路径和完成时间不进入合同。
 - Metadata 只应用标题或 DOI 的最低入库条件，不通过 LLM、搜索分数、关键词、摘要分类或低收益启发式判断领域相关性；偏题但有实际内容的 Literature 不属于 `NoUsableContent`。
 - 领域 DiscoveryRun 调用本次全部已启用、生产 adapter 已实现且 readiness 通过的 Metadata search 能力，不按 publisher 预先筛选；明确启用但缺少 adapter、必需普通参数、Provider 凭据或 AccessPolicy 时在开始前返回配置错误。引用查询只是 Metadata Provider 的可选能力，不建立 Citation Provider。
-- 数据库补全以运行时 `BatchSelector + BatchGoal` 为输入，在当前进程内冻结实际目标；selector、目标、候选与 Report 不持久化。运行期间新增文献或查询结果变化不动态加入。不同目标可以有界并行，每个目标从自己的第一个缺失步骤端到端推进。
+- 数据库补全以运行时 `BatchSelector + BatchGoal` 为输入，在当前进程内冻结实际目标；selector、目标、候选与 Report 不持久化。运行期间新增文献或查询结果变化不动态加入。不同目标可以有界并行，每个目标从自己的第一个缺失步骤继续；缺 PDF 目标组成有界 cohort，已有 PDF 目标可以直接进入后续步骤。
 - 普通范围按 MetaLiterature 去重并冻结有序 Literature 候选；先按 `CONTENT_READY`、已有 ParserResult、已有主 PDF 的完成度排序，同等完成度再按 `published`、`accepted-manuscript`、`preprint`、`other` 排序。只有稳定缺失才尝试下一版本，系统、Parser、LLM、取消或无法判断的失败不得触发回退。
-- Provider 私有响应、下载候选、HTTP/浏览器现场、Parser task、LLM 草稿、内存队列、冻结目标、运行报告和缓存不是文献事实，不得形成第二真相源；只有适用 ADR 明确接纳的中性结果进入 Catalog 或 ArtifactStore。
+- Provider 私有响应、PublisherAccessResolution、AcquisitionPlan、AccessRouteHint、下载候选、HTTP/Browser 现场、session health/circuit、Parser task、LLM 草稿、内存队列、冻结目标、运行报告和缓存不是文献事实，不得形成第二真相源；只有适用 ADR 明确接纳的中性结果进入 Catalog 或 ArtifactStore。
 - 一个 Literature 可以关联多个长期保存的不可变 MetadataObservation，但只拥有一份当前 LiteratureMetadata；新增 observation 不覆盖来源事实，当前 metadata revision 只作为单调并发与内容对齐令牌，不形成旧统一元数据历史。LLM 最终提案只在完整内容接纳时替换当前元数据，不成为 MetadataObservation。
 - 重跑和崩溃恢复重新读取 current facts 并从缺失或明确失效的步骤继续；不恢复或持久化上一轮 selector、目标、候选、队列或 Report。
 - 文献版本状态只从已提交的权威事实推导，不维护第二个可修改状态；具体规则见 [Literature](technical/literature.md)。
@@ -236,11 +238,13 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - Acquisition 正常业务结果只有已经完整提交主 PDF 和本次没有获得主 PDF；候选问题不形成长期原因，文件或数据库提交问题按系统错误传播。唯一 `primary-pdf` 关系就是当前主 PDF，不建立平行 `is_current`。
 - 只有 Acquisition 正常遍历具体 Literature 的全部当前自动路径时才建立最小 `AutomaticPdfAcquisitionExhaustion`，提交成功后才返回 `NoPrimaryPdf`；该事实只保存 LiteratureId，不改变三级状态。`AllPendingSelector` 排除需要 PDF 且已有该事实的对象；新 MetadataObservation、成功主 PDF 或用户明确重试会清除它。中断、Network/API/权限/配置错误和 Storage 错误不得形成耗尽事实。
 - Acquisition 只按实际字节、标准 PDF reader、可读且至少一页的页面树和来源依据执行最低文件检查，不信任后缀、文件名或 HTTP 类型，也不判断学术内容；Analysis 只在有明确证据时返回 `NoUsableContent`，无法判断、解析异常或模型失败必须保留 PDF。
-- Acquisition 对同一 Literature 按公开来源、已授权 Provider API、受控浏览器三个阶段串行短路；不同阶段和 Source 不参加同一候选竞速。
-- Acquisition 先依据明确 AssetHint、arXiv ID/PMCID/PII 等来源稳定定位、Provider record identity 和 DOI 安全解析后的实际 landing origin 形成当前适用 Source 集合；publisher 字符串和 DOI 前缀只能作为弱提示。MetadataObservation 来自某机构不等于该机构拥有全文，凭据存在、认证成功和具体文献 entitlement 也必须分别表达。
+- Acquisition 先形成访问方 Resolution 和按 Public、Authorized Provider API、Controlled Browser 分组的确定性 Plan；Planner 可以省略不适用 route，但不能自动提前 Browser。一个 cohort 的全部目标完成 Public 后，未解决目标完成 API，最后只有 admission 允许的最小集合进入 Browser；同一 Literature 不跨层竞速，较早提交 PDF 的目标可以继续后续步骤。
+- Resolution 依据明确 AssetHint origin、arXiv ID/PMCID/PII 等来源稳定定位、Provider record identity 和必要时 DOI 安全解析后的实际 landing origin；publisher 字符串和 DOI prefix 只能作为弱提示。Metadata Provider、Publication/Access Provider 与 Access Platform 分开表达，凭据存在、认证成功和具体文献 entitlement 也必须分别判断。
+- DOI/API/页面产生的 canonical landing、稳定文章 ID 或 locator 只形成当前运行的安全 `AccessRouteHint`；Cookie、token、签名 URL、vendor/page object 不进入 hint、日志、Report 或数据库。
 - 手动 PDF 接纳要求 Entry 明确指定具体 Literature，复制而不移动用户文件，复用相同基本检查和唯一主资产 publication；它不进入 `AcquisitionPath`，无效输入不成为第三种自动 AcquisitionResult，已有主 PDF 时默认拒绝。
-- 所有外部访问先经过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 的进程内共享 Access Coordinator。Adapter 声明 provider/channel/service scope 并解释供应商政策，Network 在当前进程的模块、用户操作和文献目标之间执行并发、间隔、quota、网页独占、至少 30 秒网页冷却和 `Retry-After`；等待 permit 不形成业务状态。
-- `config status` 只检查本地 Provider 字段与静态 readiness，不调用 Network；用户显式执行的 `config test` 仍经过同一 Access Coordinator、安全 HTTP、限速、redirect 与脱敏边界，只形成当次 CLI 结果，不创建 DiscoveryRun、Report 或任何数据库事实，也不保存最后结果和时间。
+- 所有外部访问先经过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 的进程内共享 Access Coordinator。公开协议和 API 按 adapter 声明的官方 quota identity、并发、间隔、window/周期额度、reset boundary 和 `Retry-After` 执行；普通配置只能收紧。Browser 按 `browser_rate_limit_group` 不同组并行、同组 `concurrency=1` 且按 Profile 的文章间隔/window/cooldown 串行；全局 Browser cap 只保护本机资源。等待 permit、session health 和 circuit 不形成 Literature 状态。
+- Timeout、临时服务错误、`429`、有效 `Retry-After`、quota exhausted 或 Browser 登录/MFA/challenge 不能通过自动切换 Browser、重试、新 Literature、popup 或备用入口绕过；只有全部适用 routes 正常结束且没有 deferred/action-required/未解决 failure 时才能提交自动耗尽。
+- `config status` 只检查本地 Provider/LLM/MinerU 普通字段、凭据 presence/origin 与静态 readiness，不调用 Network；用户显式执行的 `config test` 仍经过同一 Access Coordinator、安全 HTTP、限速、redirect 与脱敏边界。LLM probe 不发送用户文献，MinerU probe 不上传 PDF；结果只属于当次 CLI，不创建 DiscoveryRun、Report 或任何数据库事实，也不保存最后结果和时间。
 - 当前不建立公共 LLM 模块；文献总结与临时 ReferenceLookup 共用 Analysis 内部 Port/adapter，adapter 通过 Network。
 - LiteratureSection 只结构化 H1/H2，章节正文继续保存 Markdown 字符串；固定内容缺失统一渲染“未提供”，参考文献空 tuple 的缺失标记不成为一条引用。
 - 每个 Literature 只保留一个当前 LiteratureContent；内容 hash、UTF-8 Markdown 字节 hash 和单一 Analysis provenance 分别表达结构化内容、发布字节和形成依据。成功重分析完整接纳后原子替换，失败保留旧结果。
@@ -272,9 +276,9 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 
 - 收集、导入、处理、查询和导出使用同一逻辑文献数据库，实际目标由用户请求与当前事实共同决定，且没有平行结果集合或处理完成状态；
 - 本地 LibraryQuery 不访问外部 Provider，也不修改数据库，搜索以具体 Literature 为单位；SearchPage 和 LiteratureDetail 从同一 read-only snapshot 临时组装，metadata/status/缺失步骤/资产/ParserResult/Content/引用数量一致，且没有查询结果持久化表或无界嵌套 artifact/关系图；
-- 安装后的 CLI 命令树严格使用 `discover topic/citations`、`complete`、`literature search/show/references/cited-by`、`import metadata/pdf`、`export metadata/pdf/content` 和 `config set/remove/status/test`；命令只负责边界解析和呈现，不包含业务规则，未实现前不进入 README 或用户指南；
+- 安装后的 CLI 命令树严格使用 `discover topic/citations`、`complete`、`literature search/show/references/cited-by`、`import metadata/pdf`、`export metadata/pdf/content`、裸 `config` 交互管理器和 `config status/test`；`config set/remove` 必须拒绝。命令只负责边界解析和呈现，不包含业务规则，未实现前不进入 README 或用户指南；
 - Metadata Provider 与 Acquisition Provider 使用独立中性合同，引用能力只作为 Metadata 可选能力；目标 Adapter 矩阵、用户启用状态、生产实现和 readiness 分开表达，未实现目标不得伪装成当前集成；
-- `credentials.toml` 的 owner、普通文件、非符号链接、目录 `0700`、文件 `0600`、字段 allowlist 和原子写入均 fail closed；Provider secret 不进入 Model、CLI 参数/输出、数据库、Report、日志或测试 fixture；`config status` 不联网且不显示任何 secret 特征，`config test` 只用 fake Network 做离线验收；
+- `credentials.toml` 的 owner、普通文件、非符号链接、目录 `0700`、文件 `0600`、字段 allowlist、核心服务 origin 绑定和可恢复发布均 fail closed；secret 不进入 Model、CLI 参数/输出、数据库、Report、日志或生产 fixture；`config status` 不联网且不显示任何 secret 特征，`config test` 只用 fake Network 做离线验收；
 - references/cited-by 页面从同一 Reference 正反向读取相关 Literature 与 support count，ReferenceDetail 才返回两端和全部当前 support；页面/详情不持久化、不形成 cited-by 副本，也不混入 Provider citation count；
 - Artifact reader 只接受 Detail 中已有 Asset/ArtifactRef，验证相对引用、普通文件、size/hash/media type 后返回 context-managed stream；用户文件导出默认拒绝覆盖并原子发布，内部绝对路径、目标路径、副本和导出结果不进入数据库或处理 Report；
 - 持久化 DiscoveryRun 只表达有边界外部发现，数据库补全只在当前进程内冻结范围；当前合同不存在 Collection，领域发现不会自动触发 PDF、Parsing、Analysis 或逐篇全 Provider 补查；
@@ -287,15 +291,18 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - 手动 PDF 只接纳到明确具体 Literature，复制且不伤害用户原文件，不保存绝对输入路径，不进入自动三阶段或二值 AcquisitionResult；
 - 中断和崩溃后的新运行重新读取当前事实，不依赖恢复旧外部调用、线程、队列或内存现场；
 - `network` 和 `storage` 不形成文献身份、业务验收、状态或导出资格决定；
-- Metadata、Acquisition、Parsing 和 Analysis 的外部请求在当前进程共享 provider/channel/host 准入；同一供应商网页跨模块、用户操作和文献目标独占且结束后至少冷却 30 秒，API 使用独立 scope 并遵守 adapter 声明的真实规则；
-- Acquisition 的适用 Source 由 AssetHint、稳定定位、Provider record identity 和安全解析后的 DOI landing origin 决定；不能按 publisher 字符串、单独 DOI 前缀或 MetadataObservation 来源硬编码内容 API，readiness/权限错误也不能形成 `NoPrimaryPdf` 或自动获取耗尽；
+- Metadata、Acquisition、Parsing 和 Analysis 的外部请求在当前进程共享 provider/channel/host 准入；API 精确遵守官方 quota scope 与反馈，同一 Browser risk group 最大并发为 1 且满足自身文章政策，两个独立 group 在本机资源允许时实际并行；
+- Acquisition 的 Resolution/Plan 由 AssetHint、稳定定位、Provider record identity 和必要时安全解析后的 DOI landing origin 决定；不能按 publisher 字符串、单独 DOI prefix 或 MetadataObservation 来源硬编码内容 API/Browser，readiness/权限错误也不能形成 `NoPrimaryPdf` 或自动获取耗尽；
+- 缺 PDF 目标按有界 cohort 完成 Public → API → Browser admission，单篇不能提前跨层；timeout、临时错误、`429`/quota 和 Browser action-required 不触发自动 Browser 绕行；
+- 每次 Browser navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network policy；重试、多标签页和备用入口不能绕过组内串行、interval、cooldown 或 circuit；
+- operator-managed persistent session 可以按安全 session key 复用，但 Cookie、profile 内容、完整 URL、selector 和页面对象不进入配置内容、日志、Report、provenance 或数据库；
 - 等待队列、permit、窗口计数、`next_allowed_at` 和 `blocked_until` 只存在于当前进程内存，不包含 DOI、Literature、候选、URL、凭据或响应正文，也不进入 Catalog、ArtifactStore、provenance 或协调文件；
 - 外部调用不在 SQLite 事务中执行；
 - 功能模块不直接创建或覆盖最终文件；
 - 间接调用、别名或动态值不能绕过模块责任；
 - 目标架构、当前实现和迁移计划没有被混写。
 
-离线产品验收覆盖 R1–R8：独立领域/引用 DiscoveryRun、逐 Provider 原始 scan limit、无元数据阶段语义过滤、目标 Metadata Provider 全启用且就绪搜索、Provider 配置/readiness 与 `credentials.toml` 安全边界、纯本地 `config status` 和 fake Network `config test`、最小 source result、按 MetaLiterature 去重的 DiscoveryResult 与直接 cause、无 Collection 的运行时 selector 与内存目标冻结、非持久化运行 Report、MetaLiterature 版本候选与稳定缺失回退、同文献 `version_links` 身份证据与单一 MetaLiterature 成员归属、文献内有序 Author/ORCID/署名单位、元数据供应商结构化关系和参考文献原文两种引用扩展、逐边独立且可延后物化的 `ProviderRelationObservation`、临时 `ReferenceLookup`、本地精确命中或目标元数据接纳、Literature 级 Reference 及三种 ReferenceSupport、多来源部分失败、身份收敛和版本分离、PDF 公开来源/授权 API/浏览器三阶段短路、证据驱动 Source 适用性、独立手动 PDF 接纳、provider/channel/host 进程内共享准入、实际 PDF 字节/reader/页面树基本检查、二值自动 AcquisitionResult、自动获取耗尽与 `needs_manual_pdf`、Asset 与唯一 `primary-pdf` LiteratureAsset、Parser-neutral Markdown `ParserResult`、实际引用资源与 hash、单一当前结果替换、明确内容判断与失败保留 PDF、LLM 一次逻辑分析按先元数据后正文的两次有序核心请求形成最终 metadata/keywords、内容 Markdown 草稿、Markdown-string LiteratureSection、有序文本参考文献、统一“未提供”、单一 Analysis provenance、Literature 整体接纳与规范 Markdown、当前内容原子替换和旧 content support 清理、书目导入复用 MetadataObservation、导入非空值优先、完全重复 matched 不复制 observation、书目导出、本地 LibraryQuery、具体 Literature SearchPage、一致 snapshot LiteratureDetail、Reference 正反向页面与详情、verified artifact 打开/原子导出、局部失败、中断和重复执行。未解析 `version_links` 不得创建占位 Literature 或通用关系；供应商响应携带多少引用关系也不得自动创建同等数量的 Literature 或触发无边界递归。Harness、单元测试、构建和安装后离线验收不得读取真实用户凭据、执行 `config test` 的真实网络路径、连接真实供应商、生产数据库或用户语料。
+离线产品验收覆盖 R1–R8：独立领域/引用 DiscoveryRun、逐 Provider 原始 scan limit、无元数据阶段语义过滤、目标 Metadata Provider 全启用且就绪搜索、Provider 配置/readiness 与 `credentials.toml` 安全边界、纯本地 `config status` 和 fake Network `config test`、最小 source result、按 MetaLiterature 去重的 DiscoveryResult 与直接 cause、无 Collection 的运行时 selector 与内存目标冻结、非持久化运行 Report、MetaLiterature 版本候选与稳定缺失回退、同文献 `version_links` 身份证据与单一 MetaLiterature 成员归属、文献内有序 Author/ORCID/署名单位、元数据供应商结构化关系和参考文献原文两种引用扩展、逐边独立且可延后物化的 `ProviderRelationObservation`、临时 `ReferenceLookup`、本地精确命中或目标元数据接纳、Literature 级 Reference 及三种 ReferenceSupport、多来源部分失败、身份收敛和版本分离、Publisher access resolution/plan、PDF Public/API/Browser cohort 严格升级、官方 API quota policy、Browser 组间并行/组内限速串行与 per-hop guard、独立手动 PDF 接纳、provider/channel/host 进程内共享准入、实际 PDF 字节/reader/页面树基本检查、二值自动 AcquisitionResult、自动获取耗尽与 `needs_manual_pdf`、Asset 与唯一 `primary-pdf` LiteratureAsset、Parser-neutral Markdown `ParserResult`、实际引用资源与 hash、单一当前结果替换、明确内容判断与失败保留 PDF、LLM 一次逻辑分析按先元数据后正文的两次有序核心请求形成最终 metadata/keywords、内容 Markdown 草稿、Markdown-string LiteratureSection、有序文本参考文献、统一“未提供”、单一 Analysis provenance、Literature 整体接纳与规范 Markdown、当前内容原子替换和旧 content support 清理、书目导入复用 MetadataObservation、导入非空值优先、完全重复 matched 不复制 observation、书目导出、本地 LibraryQuery、具体 Literature SearchPage、一致 snapshot LiteratureDetail、Reference 正反向页面与详情、verified artifact 打开/原子导出、局部失败、中断和重复执行。未解析 `version_links` 不得创建占位 Literature 或通用关系；供应商响应携带多少引用关系也不得自动创建同等数量的 Literature 或触发无边界递归。Harness、单元测试、构建和安装后离线验收不得读取真实用户凭据、Browser profile/Cookie、执行 `config test` 的真实网络路径、连接真实供应商、生产数据库或用户语料。
 
 ## 8. 需求追踪
 
@@ -303,12 +310,12 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 |---|---|
 | R1 发起文献收集 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[Entry](technical/entry.md)、[Metadata](technical/metadata.md)、[Literature](technical/literature.md) |
 | R2 多来源元数据搜索 | [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[Configuration](technical/configuration.md)、[Metadata](technical/metadata.md)、[Literature](technical/literature.md)、[Network](technical/network.md) |
-| R3 文献资产获取 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[Configuration](technical/configuration.md)、[Metadata](technical/metadata.md)、[Acquisition](technical/acquisition.md)、[Network](technical/network.md)、[Storage](technical/storage.md) |
+| R3 文献资产获取 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Configuration](technical/configuration.md)、[Metadata](technical/metadata.md)、[Acquisition](technical/acquisition.md)、[Network](technical/network.md)、[Storage](technical/storage.md) |
 | R4 文献解析 | [Parsing](technical/parsing.md) |
 | R5 语言模型内容判断与总结 | [Analysis](technical/analysis.md)、[Literature](technical/literature.md)、[Storage](technical/storage.md) |
 | R6 文献数据库 | [ADR 0011](decisions/0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[Literature](technical/literature.md)、[Storage](technical/storage.md)、[Entry](technical/entry.md) |
 | R7 书目信息导入与导出 | [Entry](technical/entry.md)、[Literature](technical/literature.md) |
-| R8 大批量处理 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[Entry](technical/entry.md)、[Storage](technical/storage.md)、[Logging](technical/logging.md) |
+| R8 大批量处理 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Entry](technical/entry.md)、[Network](technical/network.md)、[Storage](technical/storage.md)、[Logging](technical/logging.md) |
 
 ## 9. 明确不采用的机制
 

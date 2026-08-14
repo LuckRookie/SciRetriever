@@ -56,7 +56,9 @@ SciRetriever 围绕统一文献数据库设计。用户通过领域条件或种�
   │    -> 运行时 BatchSelector 从当前数据库展开范围
   │    -> 在当前进程内冻结实际 MetaLiterature/Literature 目标
   │    -> 按当前事实选择具体版本和第一个缺失步骤
-  │    -> Acquisition -> Parsing -> Analysis -> Literature 接纳
+  │    -> 缺 PDF 目标形成有界 cohort
+  │         -> Public pass -> 未解决目标 API pass -> 最小 Browser admission
+  │    -> 已有或新提交 PDF 的目标继续 Parsing -> Analysis -> Literature 接纳
   │    -> 各阶段确认事实写回数据库
   │    -> 返回本次运行报告，不保存批次历史
   │
@@ -99,10 +101,10 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 
 | 类别 | 模块 | 主要责任 |
 |---|---|---|
-| 核心功能 | 入口与流程编排 | 接收用户操作，分别组织 DiscoveryRun、运行时 selector 与内存目标冻结、逐目标补全、运行报告、手动 PDF、查询和书目交换 |
+| 核心功能 | 入口与流程编排 | 接收用户操作，分别组织 DiscoveryRun、运行时 selector 与内存目标冻结、缺 PDF 目标的有界风险 cohort、逐目标后续补全、运行报告、手动 PDF、查询和书目交换 |
 | 核心功能 | 元数据供应商 | 执行元数据搜索和引用查询，把供应商结果转换为统一内部数据 |
 | 核心功能 | 文献管理 | 管理文献身份、版本、来源元数据、统一元数据、引用和当前状态 |
-| 核心功能 | Acquisition | 根据元数据按三阶段自动获取主 PDF，或接纳用户明确绑定的本地 PDF，并执行相同基本文件检查 |
+| 核心功能 | Acquisition | 根据访问方 Profile/Resolution 形成 Public/API/Browser Plan 并执行当前层 route，或接纳用户明确绑定的本地 PDF；所有路径执行相同基本文件检查 |
 | 核心功能 | Parsing | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果 |
 | 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索 |
 | 公用基础 | Model | 定义除 Logging 外各模块交换的领域中立数据合同 |
@@ -157,11 +159,13 @@ sciretriever/
 
 ### 2.4 Provider 能力与启动配置
 
-外部文献服务只按两类不互斥能力接入：Metadata Provider 负责领域搜索、稳定标识符 lookup 及可选引用关系/资产线索；Acquisition Provider 负责为具体 Literature 发现或取得主 PDF。引用查询属于 Metadata 的可选能力，不形成第三类 Provider；同一机构可以分别实现 metadata 和 acquisition adapter，也可以只实现其中之一。`direct` 是对已有 locator 的通用公开 Source，用户手动 PDF 是独立接纳操作，二者都不是 Provider。
+外部文献能力仍按两类不互斥产品能力接入：Metadata Provider 负责领域搜索、稳定标识符 lookup 及可选引用关系/资产线索；Acquisition route 负责为具体 Literature 发现或取得主 PDF。引用查询属于 Metadata 的可选能力，不形成第三类 Provider；同一机构可以分别实现 metadata 和 acquisition adapter，也可以只实现其中之一。`direct` 是对已有 locator 的通用公开 route，用户手动 PDF 是独立接纳操作，二者都不是 Provider。
 
-目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的全部 Provider 能力，但“目标 adapter”“用户启用”“普通参数/凭据/AccessPolicy 就绪”和“当前 Literature 适用”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 还要按具体 Literature 的证据形成适用 Source 集合。全面接入不会把每次运行变成对全部服务的无条件调用。
+原文访问还必须区分三种不能互相替代的身份：Metadata Provider 表示“谁提供了元数据”，Publication/Access Provider 表示“谁控制原文访问”，Access Platform/CDN 表示“实际页面或文件运行在哪里”。Scopus 找到 Wiley 文献不表示 Elsevier 拥有其原文；纯页面访问方可以拥有 Acquisition 的 `PublisherAccessProfile`，而无需加入 Metadata Provider 枚举或创建无用的 API 凭据 section。
 
-普通配置由根级 `configuration.py` 解析；Provider 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界原子修改。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
+目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的 Provider 能力，并由 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 约束原文访问计划。“能力已实现”“用户启用”“普通参数/凭据/政策就绪”“当前 Literature 适用”和“当前 route 实际需要”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 先形成访问方 Resolution 和分层 Plan，只执行其中适用且需要的 route。全面接入不会把每次运行变成对全部服务的无条件调用。
+
+普通配置由根级 `configuration.py` 解析；Provider、LLM 与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
 
 ## 3. 核心数据流
 
@@ -227,24 +231,31 @@ Metadata 可以并行组织多个供应商，但每个真实请求都先经过�
 
 ### 3.3 PDF 获取与状态记录
 
-文献管理向 Acquisition 提供具体 `Literature` 和当前 `LiteratureMetadata`。Acquisition 对同一 Literature 按三个阶段串行寻找和获取候选：公开来源全部耗尽后才启动已授权 Provider API，授权 API 全部耗尽后才启动受控浏览器；任一候选成功后立即停止后续来源。不同阶段不能并发竞速。
+文献管理向 Acquisition 提供具体 `Literature`、当前 `LiteratureMetadata`、稳定标识符、来源明确的 Provider record identity 和 `AssetHint`。Acquisition 先使用无 secret 的 `PublisherAccessProfile` catalog 形成当前运行的 `PublisherAccessResolution` 与 `AcquisitionPlan`，再执行 route；识别访问方本身不会打开 Browser。
+
+Resolution 优先使用安全解析后的实际 DOI landing origin、访问方自有 AssetHint origin、来源明确的稳定文章 ID 和 Provider record identity。Publisher 自由文本、Metadata Provider 名称或单独 DOI prefix 只能形成待确认提示，不能独自启用出版社 API 或 Browser；多个强证据冲突时保持 unresolved 或失败。DOI safe resolve 只在确有规划需要且现有强证据不足时作为 Public 层受控动作执行，同一 work item 不重复解析。
+
+默认自动风险顺序固定为：
 
 ```text
-公开来源
-  -> 已授权 Provider API
-  -> 受控浏览器
-  -> 全部耗尽时没有获得主 PDF
+PUBLIC cohort
+  -> 未解决目标重新规划
+AUTHORIZED_PROVIDER_API cohort
+  -> 未解决目标重新规划并执行 Browser admission
+CONTROLLED_BROWSER，只有允许升级的最小剩余集合
 ```
 
-公开来源内部先使用 Metadata 已保存的直接主 PDF 线索，再使用公开全文服务、OA locator 和普通 HTTP landing-page discovery。一个外部机构可以分别提供 metadata adapter、授权 API PdfSource 和浏览器 PdfSource；Provider 只实现自己的能力，阶段归类与顺序由 Acquisition 统一决定。`AssetHint` 不保存阶段或授权决定，同一个公开线索实际访问出版社网站时仍服从该供应商网页 scope。
+Planner 可以删除确定不适用的 route，但不能把 Browser 自动提前到仍可能成功的公开或官方 API route 之前。一个有界 cohort 的全部缺 PDF 目标先完成 Public pass，再让未解决目标完成 API pass，最后才按访问风险组调度 Browser；大型范围可以拆成多个 cohort。某个 Literature 较早提交主 PDF 后可以继续 Parsing/Analysis，层级屏障只约束仍未解决目标的风险升级。
 
-Acquisition 不把 metadata 来源机构等同于原文提供方，也不依据 `LiteratureMetadata.publisher` 自由文本建立硬编码路由。它在当前进程根据明确 AssetHint、arXiv ID/PMCID/PII 等来源稳定定位、Provider record identity，或 DOI 经 Network 安全解析后的实际 landing origin，选择启用、就绪且适用的 Source。publisher 名称或单独 DOI 前缀最多产生待核实候选，不能证明归属、凭据或 entitlement。Scopus 返回 Wiley 文献时不能因此调用 Elsevier 内容 API；Crossref 返回的 Elsevier 文献仍可以在实际落地到 Elsevier 后使用其适用内容能力。
+Public 层先消费明确的直接主 PDF 线索、公开仓储、OA locator 和受控普通 HTTP discovery。官方 API route 根据真实 capability 区分 search、locator/resolution、entitlement、structured full text、direct PDF 与 multi-step PDF object retrieval；XML/JATS、canonical landing、稳定 object ID 或 entitlement 不是 PDF。DOI/API/页面获得的中性 canonical landing、稳定文章 ID 或安全 locator 可以作为当前运行的 `AccessRouteHint` 交给重规划，但 Cookie、token、签名 URL、vendor/page object 不进入 hint 或数据库。
 
-项目目标覆盖 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite、CORE 和 operator 明确配置的 Sci-Hub locator 所能提供的 PDF 字节、locator 或受控内容路径。Metadata adapter 已经产生中性 `AssetHint` 时由通用公开 Source 消费，不为名称对称复制同一 URL。未启用 Source 不属于本次当前能力；已启用但凭据/readiness 缺失或运行时发生 Network/API/权限错误时不能伪装成完整耗尽。
+公开协议和 API 按各自官方 quota identity、并发、间隔、window、周期/日额度、reset boundary 与 `Retry-After` 执行；共享额度池的 Metadata 与 Acquisition 调用共享当前进程 scope。Timeout、临时服务错误、`429`、有效 `Retry-After` 或 quota exhausted 形成延期或失败，不能通过自动切 Browser 制造替代流量。未配置但当前 plan 需要的 route 必须明确报告；是否仍允许 Browser 只由显式 admission policy 决定。
 
-候选通过基本检查后立即成为当前主 PDF，存储保存 PDF、hash、来源和与 `Literature` 的关系。文献状态由这些已经提交的事实推导为“已有文献资产”，而不是由下载任务单独维护。内容有效性留给后续 Analysis；下载阶段不提前建立严格正文验收。
+Browser 按 `browser_rate_limit_group` 调度：不同独立风险组可以并行，同一组固定 `concurrency = 1` 并按该 Profile 的文章间隔、window 和 cooldown 限速串行。它复用 operator-managed persistent session，但 permit 覆盖一篇文章从 canonical landing、授权标记、有限页面动作、popup/viewer、response/download 到临时资源清理的完整流程。登录、MFA、challenge、无 entitlement、rate limit、IP block 或账号警告只暂停/熔断对应组；自动流程不登录、不处理 MFA/CAPTCHA、不执行任意 JavaScript 或反检测动作。每次 navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network 通用安全准入。
 
-只有三个阶段在当前元数据和已配置自动能力下都正常遍历完毕、且该具体 Literature 的最小自动获取耗尽事实已经安全保存后，Acquisition 才返回 `NoPrimaryPdf`；查询据此投影 `needs_manual_pdf = true`。该事实不保存候选或失败原因，也不改变 Literature 的三级状态；全库自动补全默认跳过它。用户中断、Network/API/权限/配置错误或 Storage 提交错误只是本次运行失败，不能形成耗尽事实。新的 MetadataObservation、成功接纳主 PDF 或用户明确重试会清除该事实。
+所有 HTTP、API 与 Browser 路径只把实际字节交付为统一 `TemporaryPdf`。候选通过实际字节、PDF reader、页面树和目标归属基本检查后才成为当前主 PDF；Storage 保存不可变 PDF、hash、来源和与 `Literature` 的唯一 `primary-pdf` 关系。文献状态由这些已经提交的事实推导为“已有文献资产”，而不是由下载任务或 Browser 状态单独维护。内容有效性留给后续 Analysis；下载阶段不提前建立严格正文验收，补充材料也不能成为主 PDF。
+
+只有三层全部适用 routes 正常结束、不存在 deferred、action-required、未解决 route failure 或配置/Port/清理/发布/stale 错误，且该具体 Literature 的最小自动获取耗尽事实已经安全保存后，Acquisition 才返回 `NoPrimaryPdf`；查询据此投影 `needs_manual_pdf = true`。该事实不保存 route、候选、失败、计划或会话，也不改变 Literature 的三级状态；全库自动补全默认跳过它。新的 MetadataObservation、成功接纳主 PDF 或用户明确重试会清除该事实。
 
 用户也可以通过独立入口为一个明确的具体 `Literature` 提供本地 PDF。Entry 把该文件交给 Acquisition；Acquisition 复制字节到自己的临时边界，执行与自动获取相同的非空 PDF、reader 和页面树检查，再通过 Storage 正常发布 `Asset` 和唯一 `primary-pdf` 关系，并清除已有自动获取耗尽事实。手动接纳使用 user provenance，不保存用户文件的绝对路径，不加入三阶段 `AcquisitionPath`，也不产生 `NoPrimaryPdf`。无效文件是输入错误；已有主 PDF 时默认拒绝，不能静默替换。
 
@@ -273,7 +284,7 @@ Parser 负责中间解析，Analysis 负责按先元数据、后正文的顺序�
 
 ### 3.5 局部失败与继续处理
 
-每篇文献独立推进。某个来源、PDF、解析或 LLM 调用失败时，同次操作的其它文献继续处理，已经提交的有效结果保持可用。后续运行重新读取数据库中的当前权威事实，从第一个缺失或明确失效的步骤继续；运行报告只说明本轮发生了什么，不持久化、不决定 Literature 当前状态，也不要求恢复旧线程、队列、HTTP 请求、浏览器页面、Parser 或 LLM 调用现场。
+每篇文献的事实与失败相互隔离；PDF 风险升级可以按有界 cohort 协同调度，但不会把多篇文献合并为一个业务结果。某个 route、PDF、解析或 LLM 调用失败时，同次操作的其它文献和其它独立 Browser risk group 继续处理，已经提交的有效结果保持可用。后续运行重新读取数据库中的当前权威事实，从第一个缺失或明确失效的步骤继续；运行报告只说明本轮发生了什么，不持久化、不决定 Literature 当前状态，也不要求恢复旧 plan、queue、session health、线程、HTTP 请求、浏览器页面、Parser 或 LLM 调用现场。
 
 语言模型明确判断 PDF 没有属于当前目标 Literature 的实际内容时，删除该 PDF 和对应解析结果并继续其它候选。这个候选、来源、无效决定和候选级失败不形成长期记录；同次运行只在内存中保留已尝试集合，避免立即重新选择，后续新运行仍可重新发现。ParserResult 乱码、截断、只剩资源引用或不足以判断，以及 Parser 或 LLM 调用失败，都不等同于内容无效，不能据此删除 PDF。
 
@@ -292,6 +303,8 @@ Parser 负责中间解析，Analysis 负责按先元数据、后正文的顺序�
 - 接收手动 PDF、查询、引用正反向浏览、Artifact 读取/导出、书目信息导入导出和明确的数据库补全请求；
 - 根据全库、DiscoveryRun、导入、查询或明确 ID 的运行时 selector，从当前数据库展开范围并在内存中冻结实际目标；
 - 普通范围按 MetaLiterature 去重，在内存中冻结有序 Literature 候选并从选中版本第一个缺失步骤开始推进；
+- 把当前缺 PDF 的具体 Literature 组成有界 cohort，组织完整 Public pass、未解决目标的 API pass 和最小剩余集合的 Browser admission；
+- 允许已经提交主 PDF 的目标继续后续处理，同时阻止其它未解决目标提前跨越 PDF 风险层级；
 - 只在稳定缺失时尝试下一版本，系统、Parser、LLM 或无法判断的失败不触发跨版本回退；
 - 在 LLM 明确判断内容不可用时，协调删除当前 PDF 和解析结果并继续其它候选；
 - 协调建立或清除自动 PDF 获取耗尽事实，使全库操作不会无限重试已经正常耗尽的 Literature；
@@ -315,10 +328,10 @@ complete  -> 类型化范围 + pdf/content 目标
 literature -> search | show | references | cited-by
 import    -> metadata | pdf
 export    -> metadata | pdf | content
-config    -> set | remove | status | test
+config    -> 裸命令交互管理 | status | test
 ```
 
-`literature` 只读取本地数据库；手动 PDF 属于 `import pdf`，不是 Literature 查询动作；PDF 与轻结构化文档分别通过 `export pdf` 和 `export content` 导出。`config set/remove/status/test` 只管理同一用户级 Provider 凭据文件、呈现安全本地状态或执行显式最小只读连通性测试，不访问文献数据库。CLI 不建立 `exchange`、`bibliography`、`artifact` 或内部 Metadata/Acquisition/Parsing/Analysis 模块一级命令。具体参数只能把外部输入映射到已经确定的中性合同，不能改变模块业务含义。
+`literature` 只读取本地数据库；手动 PDF 属于 `import pdf`，不是 Literature 查询动作；PDF 与轻结构化文档分别通过 `export pdf` 和 `export content` 导出。裸 `config` 交互中心统一管理 LLM/MinerU 普通配置以及同一用户级文件中的 Provider、LLM、MinerU 凭据；`config status/test` 呈现安全本地状态或执行显式最小只读 Provider/LLM/MinerU 诊断，不访问文献数据库。CLI 不建立 `config set/remove`、`exchange`、`bibliography`、`artifact` 或内部 Metadata/Acquisition/Parsing/Analysis 模块一级命令。具体参数只能把外部输入映射到已经确定的中性合同，不能改变模块业务含义。
 
 入口未来可以增加 GUI 或其它形式，但不会改变这些用户操作的业务边界。当前公开入口和已经实现的命令仍只由 README 与用户指南说明；目标命令在安装入口与离线测试完成前不能写成已发布行为。
 
@@ -379,18 +392,20 @@ Metadata 不为每条已发现 Literature 自动发起全供应商逐篇补查�
 
 Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文献 PDF，或者接纳用户明确提供给该 Literature 的本地 PDF，并把成功结果交给存储。
 
-获取对象保持四层语义：`AssetHint` 是来源 observation 中的线索，`PdfCandidate` 是单次运行中的候选，`Asset` 是不可变文件事实，`LiteratureAsset` 是具体 Literature 与资产之间的角色和来源关系。线索和候选都不是已经获得的资产。
+获取对象保持四层持久语义：`AssetHint` 是来源 observation 中的线索，`PdfCandidate` 是单次运行中的候选，`Asset` 是不可变文件事实，`LiteratureAsset` 是具体 Literature 与资产之间的角色和来源关系。线索和候选都不是已经获得的资产。`PublisherAccessResolution`、`AcquisitionPlan` 与 `AccessRouteHint` 是独立的当前运行规划对象，也不是资产或持久事实。
 
 它负责：
 
-- 从稳定标识符、供应商记录或已配置资产来源发现 PDF 候选；
-- 先根据 AssetHint、来源稳定定位、Provider record identity 或 DOI 安全解析后的实际 landing origin 判断 Source 对当前 Literature 是否适用，不把 metadata 来源机构或 publisher 自由文本当作原文归属；
-- 把已配置 PdfSource 归入公开来源、已授权 Provider API 和受控浏览器三个阶段；
-- 在公开阶段优先尝试供应商明确返回的直接主 PDF 线索，再尝试公开全文服务、OA locator 和普通 HTTP landing page；
-- 对同一 Literature 严格按三个阶段及阶段内 Source 顺序串行短路，不跨阶段竞速；
+- 维护无 secret、版本化且具有 origin/policy 证据的 Publisher access profile catalog；
+- 根据 AssetHint、来源稳定定位、Provider record identity 或必要时 DOI 安全解析后的实际 landing origin 形成访问方 Resolution，不把 metadata 来源机构、publisher 自由文本或单独 DOI prefix 当作原文归属；
+- 形成按公开来源、官方授权 API 和受控 Browser 分组的确定性 Plan，省略确定不适用 route 但不提前 Browser；
+- 在公开层优先尝试供应商明确返回的直接主 PDF 线索，再尝试公开全文服务、OA locator 和普通 HTTP landing page；
+- 接受 Entry 的 cohort 层级调用，为 API/DOI/页面产生的安全 route hint 重新规划，并保证同一 Literature 不跨层竞速；
+- 把 API capability 明确区分为 metadata/search、locator/resolution、entitlement、structured full text、direct PDF 和 multi-step PDF object retrieval，只有实际 PDF 字节形成临时候选；
+- 为 Browser route 声明封闭页面规则、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 与政策证据；
 - 对每个候选执行统一基本检查；
 - 对手动提供的文件复制内部副本并执行同一基本检查，不移动、修改或删除用户原文件；
-- 一个候选正常未命中或未通过基本检查时继续其它候选；Network/API/权限/配置错误和取消不能被解释为正常耗尽；
+- 一个候选正常未命中或未通过基本检查时继续其它候选；timeout、临时服务错误、`429`/quota、Browser action-required、Network/API/权限/配置错误和取消不能被解释为正常耗尽或无条件升级；
 - 为通过检查的 PDF 形成 hash、来源和 Literature 关系；
 - 保证同一 `Literature` 只有一个当前主 PDF 驱动后续处理；
 - 在内容被明确判定无效时撤销当前关系并删除对应资产和中间结果，使 Entry 能继续其它候选。
@@ -407,9 +422,9 @@ Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文
 
 一个 `Literature` 可以发现多个候选来源，但只有一个当前主 PDF。同次运行只以临时已尝试集合避免立即重复候选，不长期保存无效候选及其失败信息。已经形成有效 `LiteratureContent` 后，不因发现其它候选自动替换当前主 PDF。补充材料和其它相关资产可以保存为补充资产，但不驱动 Parsing、Analysis 或核心状态。
 
-阶段表示 Acquisition 选择的访问上下文，不等于网络限速范围。公开 `AssetHint` 指向出版社网页时，普通 HTTP 和后续浏览器流程都使用该出版社的网页 scope；授权 API 使用独立 API scope。Acquisition 不计算等待间隔，也不把网页繁忙解释为来源失败，所有真实请求在当前进程共享的 Network permit 下执行。用户配置了密钥只表示 adapter 可以尝试认证；认证成功仍不能代替对当前 Literature 的内容 entitlement 判断。
+层级表示 Acquisition 选择的风险上下文，不等于网络限速范围。公开 `AssetHint` 指向出版社网页时，普通 HTTP 使用该访问方的网页与 host scope；官方 API 使用按真实 quota identity 形成的独立 API scope；Browser 额外使用 Profile 的 risk group 和 session key。Acquisition 不以固定 sleep 计算等待，也不把网页繁忙解释为来源正常未命中，所有真实请求在当前进程共享的 Network permit 下执行。用户配置了密钥只表示 adapter 可以尝试认证；认证成功仍不能代替对当前 Literature 的内容 entitlement 判断。
 
-Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获得当前主 PDF”。单个候选未通过文件检查时删除临时文件，不创建 `Asset`/`LiteratureAsset`、不保存候选级原因并继续下一候选；没有候选、正常未命中、浏览器流程正常结束但没有下载、非 PDF 或损坏 PDF，在全部当前自动路径都正常结束后归入无字段的 `NoPrimaryPdf`，并只保存该具体 Literature 已自动耗尽这一最小事实。Network/API/权限/配置错误、用户中断、数据库、文件系统或关系提交错误直接形成本次失败，不能虚构“没有获得”或需要人工 PDF。唯一的 `primary-pdf` 关系就是该 Literature 的当前主 PDF，不再维护平行 `is_current` 状态。
+Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获得当前主 PDF”。单个候选未通过文件检查时删除临时文件，不创建 `Asset`/`LiteratureAsset`、不保存候选级原因并继续下一候选；没有候选、正常未命中、Browser 流程正常结束但没有下载、非 PDF 或损坏 PDF，在全部适用 routes 都正常结束且没有 deferred/action-required/未解决 failure 后归入无字段的 `NoPrimaryPdf`，并只保存该具体 Literature 已自动耗尽这一最小事实。临时网络/API 错误、`Retry-After`/quota、Browser 登录/MFA/challenge、权限/配置错误、用户中断、数据库、文件系统或关系提交错误直接形成本次失败，不能虚构“没有获得”或需要人工 PDF。唯一的 `primary-pdf` 关系就是该 Literature 的当前主 PDF，不再维护平行 `is_current` 状态。
 
 上述二值结果只属于自动获取。手动 PDF 是单独操作：有效文件发布后返回已经接纳的 Asset 与 LiteratureAsset，无效文件形成输入验证错误；它既不产生 `NoPrimaryPdf`，也不增加自动获取的第三种结果或第四种 `AcquisitionPath`。
 
@@ -557,14 +572,16 @@ Vendor、HTTP、浏览器、SQL、MinerU 私有响应和 LLM 私有响应必须�
 - DNS 结果和公网、私网、loopback 判断；
 - redirect 逐跳复检、origin 和凭据转发控制；
 - 按 provider、`api`/`web` 通道、必要的 API service 和实际 host 执行当前进程共享的访问准入；
-- 在 adapter 声明的规则基础上执行并发、最小间隔、窗口额度、`Retry-After`、`next_allowed_at` 和 `blocked_until`；
-- 对同一供应商网页执行进程内独占，并在页面或浏览器流程完整结束后执行至少 30 秒冷却；
+- 在 adapter/Profile 声明的规则基础上执行并发、最小间隔、窗口/周期额度、reset boundary、`Retry-After`、`next_allowed_at` 和 `blocked_until`；
+- 对 API 按真实 quota identity 执行官方政策，并在共享额度池的当前进程调用方之间共享反馈；
+- 对 Browser 按 `browser_rate_limit_group` 执行不同组并行、同组 `concurrency = 1` 且按 Provider 文章政策限速串行；全局 Browser 上限只保护本机资源；
 - HTTPS、TLS、timeout、连接复用和有界响应读取；
-- 浏览器隔离上下文、页面导航、下载捕获和资源清理；
+- operator-managed persistent Browser context、文章级 page 隔离、多路 PDF 捕获和资源清理；
+- 在每次 Browser navigation、popup、viewer、response 和 download 实际访问前，同时执行 Profile guard 与通用安全准入；
 - URL、header、query、错误和凭据脱敏；
 - 响应大小、导航次数和访问预算。
 
-网络基础设施不理解 Crossref、arXiv、出版商、MinerU 或某个 LLM 的业务协议，也不判断记录身份、PDF 归属或文献状态。供应商分页、配额含义和页面步骤属于相应 adapter；adapter 负责声明政策，Network 负责在当前进程的全部调用方之间执行。等待队列、permit、窗口计数和截止时间只存在于当前进程内存，不属于由 Catalog 与 ArtifactStore 组成的文献数据库，也不携带 DOI、Literature、候选、URL 或凭据。Network 不持久化动态限速状态，不提供跨进程或跨重启的访问协调。
+网络基础设施不理解 Crossref、arXiv、出版商、MinerU 或某个 LLM 的业务协议，也不判断记录身份、PDF 归属、正文/补充材料或文献状态。供应商分页、配额含义、页面步骤和 Browser 状态 marker 属于相应 adapter/Profile；adapter 负责解释和声明政策，Network 负责在当前进程的全部调用方之间执行。等待队列、permit、窗口计数、session health、circuit 和截止时间只存在于当前进程内存，不属于由 Catalog 与 ArtifactStore 组成的文献数据库，也不携带 DOI、Literature、候选、完整 URL、Cookie 或凭据。Network 不持久化动态限速状态，不提供跨进程或跨重启的访问协调。
 
 ### 5.3 存储
 
@@ -872,6 +889,8 @@ Selector 本身不保存，不混入目标、Provider、并发、Parser、LLM、
 | `ASSET_READY` | 为尚无可用版本主 PDF 的 MetaLiterature，或用户明确指定的具体 Literature，执行 PDF 获取和基本检查 |
 | `CONTENT_READY` | 从所选版本第一个缺失步骤继续，必要时补充主 PDF，再经 Parsing、Analysis 和 Literature 接纳形成最终内容；这是默认端到端目标 |
 
+冻结目标后，已有 PDF 的 Literature 可以从自己的后续缺失步骤继续；缺 PDF 的当前具体 Literature 形成有界 acquisition cohort。每个 cohort 先让全部目标完成 Public 层，再让未解决目标完成 Authorized API 层，最后只把允许升级的最小剩余集合交给按风险组调度的 Browser。该层级屏障不改变冻结范围、不建立 BatchRun，也不要求较早获得并已提交 PDF 的目标等待 Browser 层结束后才能继续 Parsing/Analysis。
+
 ### 8.2 MetaLiterature 版本候选
 
 普通全库、DiscoveryRun、导入和查询范围先按 `MetaLiterature` 去重。一个 MetaLiterature 只要已有任一成员达到所选目标，就不进入实际目标；系统不默认补齐全部版本。用户明确选择具体 Literature 时只处理该版本，不创建跨版本候选。
@@ -894,7 +913,7 @@ published
   > other
 ```
 
-每个候选按自己的缺失步骤端到端推进。只有 Acquisition 正常遍历全部当前自动路径并形成耗尽事实，或者 Analysis 明确 `NoUsableContent` 且该版本其它 PDF 候选已经耗尽时，才继续下一 Literature。Network/Storage 系统错误、Parser 失败、LLM 失败、取消或无法判断只进入本次报告，不触发跨版本回退。成功的 PDF、ParserResult 和 LiteratureContent 始终归实际成功的具体 Literature；MetaLiterature 只通过成员 current facts 推导是否已有可用版本，不保存状态。
+每个候选从自己的第一个缺失步骤继续；其中缺 PDF 的候选参加当前有界 cohort 的层级获取，已有 PDF 的候选直接进入后续步骤。只有 Acquisition 的全部适用 routes 正常结束、不存在 deferred/action-required/未解决 failure 并形成耗尽事实，或者 Analysis 明确 `NoUsableContent` 且该版本其它 PDF 候选已经耗尽时，才继续下一 Literature。Network/Storage 系统错误、Parser 失败、LLM 失败、Browser action-required、取消或无法判断只进入本次报告，不触发跨版本回退。成功的 PDF、ParserResult 和 LiteratureContent 始终归实际成功的具体 Literature；MetaLiterature 只通过成员 current facts 推导是否已有可用版本，不保存状态。
 
 `AllPendingSelector` 默认排除需要 PDF 且已经具有自动获取耗尽事实的具体 Literature；当一个 MetaLiterature 的所有可用版本都已耗尽时，整个 MetaLiterature 不进入自动补全目标，而由 `needs_manual_pdf` 查询交给用户处理。用户以 `LiteratureSelector` 明确选择这个具体 Literature 并发起需要 PDF 的目标时构成明确重试，开始前清除耗尽事实；宽范围 selector 不自动清除。
 
@@ -910,14 +929,16 @@ Report 不设置 ReportId、时间、持续时间、通用任务 status、自由
 
 ### 8.4 局部失败、中断与重跑
 
-- 不同内存目标可以在资源预算内有界并行，每个目标按缺失步骤端到端推进；
+- 不同内存目标可以在资源预算内有界并行；已有 PDF 的目标从后续缺失步骤推进，缺 PDF 目标按有界 cohort 的 Public → API → Browser admission 层级屏障推进；
+- API 并发服从真实官方 quota scope；Browser 不同 risk group 可以并行，同一 group 固定串行并服从自己的文章间隔/window/cooldown；
+- 一个目标提交主 PDF 后可以继续 Parsing/Analysis，不撤销其它未解决目标的层级屏障；
 - 每个确认事实立即独立提交，局部失败不回滚其它目标或本目标已经确认的前序事实；
 - 正常结束、普通失败或用户受控中断时，报告汇总截至当时已经完成和未处理的情况；
 - `kill -9`、断电等硬崩溃可能没有最终报告，但已经提交的数据库事实继续有效；
 - 重跑重新读取 current facts，不恢复旧 selector 展开结果、网络、候选、Parser、LLM、线程或队列现场；
 - 数据库不可用、全部目标共同依赖的能力不可用或无法安全保存结果属于本次操作失败，不产生批次状态记录。
 
-同一时间只允许一个会修改核心文献事实的补全操作。查询和书目导出可以读取已经完整提交的结果。目标并发不改变同一 Literature 的 PDF Source 串行短路，也不能绕过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 的进程内共享访问准入。
+同一时间只允许一个会修改核心文献事实的补全操作。查询和书目导出可以读取已经完整提交的结果。目标与风险组并发不能让同一 Literature 跨层竞速，不能让单篇提前打开 Browser，也不能绕过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 与 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 的进程内共享访问准入和 Browser group policy。
 
 ## 9. 需求对应
 
@@ -925,12 +946,12 @@ Report 不设置 ReportId、时间、持续时间、通用任务 status、自由
 |---|---|
 | R1 发起文献收集 | 入口与流程编排把领域搜索和引用扩展分别保存为有边界 DiscoveryRun；它不创建 Collection 或自动启动内容处理，供应商关系只有当前范围选中的目标接纳后才建立本地引用 |
 | R2 多来源元数据搜索 | 领域 DiscoveryRun 对本次全部 Provider 按过滤前原始 item 分别执行 scan limit；文献管理保留满足标题或 DOI 最低条件的 observation、收敛身份并形成统一元数据，不对每条结果自动执行逐篇全源补查或元数据阶段语义过滤 |
-| R3 文献资产获取 | Acquisition 根据明确资产线索、稳定定位和实际 landing origin 选择适用 Source，不按 publisher 或 metadata 来源硬编码；自动三阶段和手动接纳都按实际字节、标准 PDF reader 和可读页面树执行最低文件检查；手动操作复制并保护用户原文件；全部自动路径正常耗尽时保存最小 `needs_manual_pdf` 当前事实，临时错误不冒充耗尽 |
+| R3 文献资产获取 | Acquisition 先根据明确资产线索、稳定定位和实际 landing origin 形成访问方 Resolution/Plan，不按 publisher 或 metadata 来源硬编码；Public/API/Browser 严格升级和手动接纳都按实际字节、标准 PDF reader 和可读页面树执行最低文件检查；手动操作复制并保护用户原文件；全部适用 routes 正常耗尽时保存最小 `needs_manual_pdf` 当前事实，临时错误或 Browser action-required 不冒充耗尽 |
 | R4 文献解析 | Parsing 通过可替换 Parser 生成规范化 Markdown `ParserResult`，保留实际引用资源、输入/结果 hash 与 parser provenance，并只维护一个当前结果 |
 | R5 语言模型内容判断与总结 | Analysis 用一次有序两阶段逻辑分析先判断属于当前 Literature 的实际内容并确定最终元数据与关键词，再以该元数据为上下文生成和解析 Markdown 字符串章节与有序参考文献；Literature 整体接纳单一当前内容并以统一“未提供”缺失值确定性渲染规范 Markdown |
 | R6 文献数据库 | 所有操作从当前逻辑文献数据库出发并把确认结果提交回同一数据库；DiscoveryRun 保存发现 provenance，数据库补全只保存确认的文献事实和自动获取耗尽，Catalog + ArtifactStore 提供稳定引用、逐阶段保存和一致查询 |
 | R7 书目信息导入与导出 | 入口、文献管理和存储共同提供三类书目格式的逐条导入导出；导入复用 MetadataObservation、用户非空值优先且不保存过程历史，导出不要求全文完成 |
-| R8 大批量处理 | 入口与流程编排从运行时 selector 在内存冻结目标、按 MetaLiterature 选择具体版本并只在稳定缺失时回退，负责逐目标隔离、当前运行报告、受控中断和基于当前事实的重跑；不保存批次运行历史 |
+| R8 大批量处理 | 入口与流程编排从运行时 selector 在内存冻结目标、按 MetaLiterature 选择具体版本并只在稳定缺失时回退；缺 PDF 目标按有界 cohort 先 Public、再 API、最后最小 Browser 集合，不同 Browser group 并行而同组串行；逐目标事实与失败仍隔离，报告、中断和重跑不保存批次运行历史 |
 
 ## 10. 文档责任
 

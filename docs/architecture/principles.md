@@ -85,9 +85,9 @@ SciRetriever 只拥有通用文献信息：
 
 手动 PDF 接纳与自动获取使用相同的基本检查、不可变发布和唯一主资产关系，但它是用户明确选择具体 Literature 的独立操作，不是第四种自动 AcquisitionPath。SciRetriever 只复制用户文件并管理内部副本，不移动、修改或删除用户原文件；机器绝对路径不进入 Catalog。已有主 PDF 时默认拒绝，不能静默替换。
 
-Acquisition 对单次主 PDF 获取只形成“获得”或“没有获得”两个业务结果；正常未命中和候选内容无效不形成长期原因分类。Network/API/权限/配置错误、用户中断以及无法安全发布文件、提交关系或耗尽事实都属于本次操作失败，不能降级成“没有获得”。
+Acquisition 对单次主 PDF 获取只形成“获得”或“没有获得”两个业务结果；正常未命中和候选内容无效不形成长期原因分类。Deferred、Browser action-required、Network/API/权限/配置错误、用户中断以及无法安全发布文件、提交关系或耗尽事实都属于本次操作失败，不能降级成“没有获得”。
 
-只有 Acquisition 正常遍历某个具体 Literature 的全部当前自动路径仍未获得 PDF，才保存最小的自动获取耗尽事实并在查询中投影为需要人工 PDF。该事实不增加 Literature 状态，也不保存原因或尝试历史；新 MetadataObservation、成功主 PDF 或用户明确重试会清除它。中断、Network/API/权限/配置错误和 Storage 错误不能形成该事实。
+只有 Acquisition 正常遍历某个具体 Literature 的全部适用 routes、没有 deferred/action-required/未解决 failure 且仍未获得 PDF，才保存最小的自动获取耗尽事实并在查询中投影为需要人工 PDF。该事实不增加 Literature 状态，也不保存原因或尝试历史；新 MetadataObservation、成功主 PDF 或用户明确重试会清除它。中断、Network/API/权限/配置错误和 Storage 错误不能形成该事实。
 
 Acquisition 的验收只回答字节是否为可用 PDF 文件：按实际字节而不是后缀、HTTP 类型、文件名或下载事件判断，要求非空、标准 reader 可打开、页面树可读取且至少一页，并拒绝没有可用密码而无法读取的加密 PDF。轻微不规范但可正常读取的 PDF 可以接纳；固定最小字节数、页数、字符数以及正文或学术内容判断都不属于这一道门。Analysis 才根据 ParserResult 判断是否存在属于当前目标 Literature 的实际内容；无法判断、解析异常或模型失败必须保留 PDF，不能冒充内容无效。
 
@@ -111,17 +111,17 @@ Acquisition 的验收只回答字节是否为可用 PDF 文件：按实际字节
 
 批量 selector、冻结目标、候选顺序、尝试、普通失败和运行报告只用于当前操作的调度与反馈，不进入数据库，也不能成为文献身份或结果可用程度的第二真相源。
 
-补全操作开始时在内存中冻结实际目标；运行期间数据库新增文献或查询结果变化不动态加入本次操作。每个目标从自己的第一个缺失步骤端到端推进，不要求全部文献按同一阶段齐步运行。
+补全操作开始时在内存中冻结实际目标；运行期间数据库新增文献或查询结果变化不动态加入本次操作。每个目标从自己的第一个缺失步骤继续，已经确认的前序事实不重做或回滚。缺 PDF 目标可以组成有界 cohort，按 Public、Authorized API、Browser admission 的风险层级协调；较早提交 PDF 的目标可以继续后续步骤，不要求整批所有处理阶段齐步运行。
 
 ## 9. 外部访问必须在进程内共享受控
 
 Provider 只分为 Metadata 与 Acquisition 两类不互斥能力；领域搜索、稳定标识符 lookup 和可选引用查询都属于 Metadata，不建立第三类 Citation Provider。领域发现调用本次全部已启用、生产 adapter 已实现且 readiness 通过的 Metadata search 能力，不按 publisher 预分流，也不因目标 Provider 范围完整就对每篇结果盲目执行逐来源补查。
 
-Acquisition 选择内容 Source 时优先解释明确 AssetHint、来源稳定定位、Provider record identity 和 DOI 安全解析后的 landing origin；MetadataObservation 来自哪个聚合服务、publisher 自由文本或单独 DOI 前缀都不能证明全文归属。Source 只有在生产实现、用户启用、凭据/AccessPolicy readiness 和当前 Literature 适用性都满足后才调用；配置、认证、权限和系统错误不能伪装成正常 PDF 耗尽。精确目标与路由见 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)。
+Acquisition 优先解释明确 AssetHint、来源稳定定位、Provider record identity 和 DOI 安全解析后的 landing origin，形成当前运行的访问方 Resolution 与分层 Plan；MetadataObservation 来自哪个聚合服务、publisher 自由文本或单独 DOI 前缀都不能证明全文归属。Route 只有在生产实现、用户启用、policy/readiness 和当前 Literature 适用性都满足后才调用；配置、认证、权限和系统错误不能伪装成正常 PDF 耗尽。精确目标与路由见 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)和 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)。
 
 所有外部 HTTP、redirect 和浏览器操作都必须经过当前 SciRetriever 进程中由 Network 提供的共享访问准入。Provider adapter 负责声明和解释供应商政策，Network 按 provider、访问通道、必要的 API service 和实际 host，在当前进程的全部模块、用户操作和文献目标之间执行并发、间隔、周期额度、冷却和 `Retry-After`。功能模块、vendor SDK 和页面流程不得各自建立互不知情的限速器或直接绕过准入。
 
-Acquisition 对同一 Literature 按公开来源、已授权 Provider API、受控浏览器三个阶段串行短路。网页访问无论由公开线索的普通 HTTP 还是浏览器触发，都使用对应供应商的网页 scope；同一进程内一个供应商网页最多一个活动流程，结束后至少冷却 30 秒。API 使用独立通道并遵守供应商真实规则，公开来源也不获得无限请求豁免。具体易变数值由 Provider Notes 维护，长期边界见 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md)。
+自动 PDF 获取严格按 Public、Authorized Provider API、Controlled Browser 升级；Planner 可以删除不适用 route，但不能自动提前 Browser。公开协议和 API 按对应官方 quota scope、并发、间隔、window、周期额度与 `Retry-After` 执行。Browser 按 `browser_rate_limit_group` 调度，不同独立风险组可以并行，同一组固定一个活动文章流程并按 Provider policy 限速串行；不再用统一固定数字冒充所有供应商政策。普通 HTTP、API 和 Browser 都经过当前进程共享的 Network 准入，具体易变数值由 Provider Notes 维护，长期边界见 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)。
 
 等待队列、permit、窗口计数、`next_allowed_at`、`blocked_until` 和当次 `Retry-After` 是当前进程的内存运行状态，不是文献事实，不保存到 Catalog、ArtifactStore、provenance 或独立协调文件，也不参与状态推导。进程结束后这些动态状态自然清空；静态访问政策和 operator 收紧值仍由配置表达。
 

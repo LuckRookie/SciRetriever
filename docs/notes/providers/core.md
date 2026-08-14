@@ -1,9 +1,9 @@
 # CORE
 
-- 最后核对：2026-08-07
-- 当前配置选择键：无；ADR 0014 已接受为目标 Metadata/Acquisition 能力，当前尚未实现
+- 最后核对：2026-08-13
+- 当前配置选择键：`core`；支持 Metadata 与 Acquisition
 - 外部角色：聚合开放获取 repository/journal 的 metadata、全文 locator、文本与解析参考文献
-- 当前仓库接入状态：完全未接入；无选择键、无 Protocol 注册、无 adapter、无 registry wiring
+- 当前仓库接入状态：Metadata Works/Outputs search/lookup/reference/AssetHint adapter 已接入；Acquisition 先消费公开 locator，再可使用注册用户 Work/Output PDF download endpoint
 
 ## 1. 官方入口与证据
 
@@ -11,7 +11,7 @@
 - [CORE API v3 OpenAPI](https://api.core.ac.uk/swagger/v3.json)：机器可读 endpoints、参数与 schema。
 - [CORE API service](https://core.ac.uk/services/api)：API key 申请与服务入口。
 
-均为 `official`，2026-08-07 核对。当天对 `search/works` 做了一次匿名 `limit=1` DOI 查询，返回 HTTP 200、`application/json`；顶层、字段名与 rate-limit headers 属于 `verified`。没有调用 download endpoint，也没有保存/展示 full text。
+均为 `official`，download endpoint 与认证合同于 2026-08-13 重新核对。2026-08-07 曾对 `search/works` 做一次匿名 `limit=1` DOI 查询，返回 HTTP 200、`application/json`；顶层、字段名与 rate-limit headers 属于 `verified`。本次实现没有使用真实 key，也没有调用真实 download endpoint、保存或展示 full text；download 行为的当前证据为官方 OpenAPI 与离线合同测试。
 
 ## 2. Works、Outputs 与 SciRetriever 身份边界
 
@@ -31,7 +31,7 @@ CORE v3 当前术语不是笼统的 “works/search/outputs” 同义词：
 Authorization: Bearer API_KEY
 ```
 
-文档还允许 `api_key=` query fallback，但生产实现不应使用会进入 URL/日志的形式。目标实现只从 `~/.sciretriever/credentials.toml` 私有读取 key 并由 Bootstrap 注入 adapter，不能写入普通配置样例、provenance、fixture 或 Notes。
+文档还允许 `api_key=` query fallback，但生产实现不使用会进入 URL/日志的形式。当前实现只从 `~/.sciretriever/credentials.toml` 私有读取 key，由 Bootstrap 注入 adapter，并作为绑定到 `https://api.core.ac.uk` 的 `Authorization: Bearer` 私有 header 交给 Network；不写入普通配置、候选、provenance、fixture 或 Notes。Metadata 可以匿名运行，启用 CORE Acquisition 的授权 PDF Source 时 `api_key` 必需。
 
 当前 token 预算为：
 
@@ -206,13 +206,30 @@ cites
 
 ## 12. 已知限制与待核对
 
-- 当前 OpenAPI 与 live camelCase shape 有命名差异；实现前需要针对 Work、Output、search、错误响应分别建立小型 fixtures。
+- 当前 OpenAPI 与 live camelCase shape 有命名差异；Metadata adapter 以小型 Work/Output/search fixture 固定当前已接纳字段，后续字段扩展仍需继续核对。
 - 当前公开分页只确认 offset/limit；深分页/scroll 的现行合同未找到公开依据。
 - Work 作者去重/顺序、publishedDate 最早值选择与类型机器学习均是聚合决定，不能抹去来源差异。
 - `references[].cites` 的方向和标识 grammar 缺少足够公开 schema，不用于关系。
 - anonymous full-text policy 与响应保留 `fullText` key 不能混写；是否返回空值/提示文本应在 adapter 测试中只判断可用语义，不记录正文。
-- 本轮没有注册 key、没有请求 raw/fullText/download、没有下载 PDF 或用户语料。
+- 本轮没有注册或使用真实 key，没有请求 raw/fullText/download，没有下载真实 PDF 或用户语料。
 
 ## 13. 当前实现边界
 
-CORE 已进入目标 Metadata 领域搜索与 Acquisition locator 能力，但不属于当前 schema v2 的 metadata/citation/asset allowlist。仓库没有 CORE 选择键、API key/token-budget 配置、Works/Outputs parser、query/offset pagination、reference/locator 转换、Protocol 注册、adapter 或 registry wiring；当前 Collection/Assets Service 不会调用 CORE。目标已接受不表示匿名试用、全文字段或 locator 已通过生产 readiness。
+当前 `core` 同时属于 Metadata 与 Acquisition allowlist。Metadata adapter 支持 Work search、
+Work/Output 精确 lookup、outgoing references 和公开 AssetHint 转换；公开 `downloadUrl`、来源
+全文 URL 与 landing link 由通用公开 Source 消费。
+
+Acquisition 的 CORE 授权 Source 只在普通配置启用 `core`、固定凭据文件含 `api_key`，且
+当前 Literature 的 MetadataObservation 带 CORE 自己生成的 `work:<id>` 或 `output:<id>`
+record identity 时注册并适用。它在全部公开 Source 之后调用官方
+`/v3/works/{id}/download` 或 `/v3/outputs/{id}/download`，不接受任意 DOI 或 publisher
+字符串路由；204/404/410 是正常未命中，401、403、429、5xx 与 Network failure 分别作为
+认证、entitlement、quota、service 与 access failure，不形成自动获取耗尽。200 仍必须
+经过媒体类型、实际 PDF 字节、reader、页面树和 Storage 不可变发布检查。
+
+Metadata 与 Acquisition 共用 `core/api` AccessScope 和相同保守本地 policy。当前实现对
+429/服务失败施加共享保守退避，但 Acquisition client 尚未利用 CORE 自定义 rate-limit
+header 的精确数值；这不影响 fail closed，不过后续可在不让 Acquisition 依赖 Metadata
+模块的前提下抽取中性反馈解释器。受控 Browser 仍没有 CORE 生产站点规则。上述生产
+接线只由离线 fixture/transport 与对象图测试验证，不表示真实账户或具体文献 entitlement
+已经在线成功。

@@ -1,185 +1,235 @@
-# 配置与 Provider 凭据技术设计
+# 配置中心与凭据技术设计
 
 - 总技术入口：[技术文档索引](../technical.md)
-- 产品依据：[R2 多来源元数据搜索](../requirements.md#r2-多来源元数据搜索)、[R3 文献资产获取](../requirements.md#r3-文献资产获取)
+- 产品依据：[产品需求](../requirements.md)
 - 架构决策：[ADR 0014](../decisions/0014-capability-scoped-providers-and-local-credentials.md)
 - 访问安全：[ADR 0012](../decisions/0012-process-local-provider-access-scheduling.md)、[Network 技术文档](network.md)
-- 易变外部事实：[Provider Notes](../../notes/providers/README.md)
+- PDF 访问画像：[ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Acquisition 技术文档](acquisition.md)
+- 当前用户合同：[配置手册](../../guides/configuration.md)
 
-本文定义根级 `configuration.py`、`bootstrap.py` 与 `entry/cli/config.py` 的目标配置协作。它只描述目标行为；当前已经支持的配置、命令和 Provider 仍以 README、用户指南、源码和测试为准。
+本文定义根级 `configuration.py`、`bootstrap.py`、`model/configuration.py` 与
+`entry/cli/` 的配置协作。统一配置中心、安全发布、状态和诊断的当前用户行为仍以配置手册、
+源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界，在实现与安装后
+验收完成前不得把该部分写成已发布能力。Provider 的易变外部字段仍以
+[Provider Notes](../../notes/providers/README.md) 为依据。
 
-## 1. 文件与责任
+## 1. 责任与依赖
 
 ```text
 src/sciretriever/
-  configuration.py              # 普通配置与 credentials.toml 边界解析
-  bootstrap.py                  # 凭据解析后的生产 adapter 组装
-  model/configuration.py        # 不含 secret 的中性配置和诊断结果
-  entry/cli/config.py           # config set/remove/status/test 边界与呈现
+  configuration.py              # 两类 TOML 的唯一解析、校验和发布边界
+  bootstrap.py                  # 按 scope 组装 adapter 与非持久化 probe session
+  model/configuration.py        # 不含 secret 的普通配置/readiness/probe Model
+  entry/cli/main.py             # 命令路由与交互用例
+  entry/cli/config_ui.py        # Rich/prompt-toolkit 呈现与导航
 ```
 
-`configuration.py` 是生产代码读取 TOML 和 Provider 凭据文件的唯一位置。它负责路径解析、所有权/权限检查、TOML 解析、Provider/字段 allowlist、非空值检查和原子写入；不访问 Provider、不决定文献业务结果。`bootstrap.py` 只把短生命周期 secret 注入对应生产 adapter，并构造供 CLI 使用的能力与 readiness 注册表；不显示、序列化或保存 secret。`entry/cli/config.py` 只解析用户动作、执行安全交互并呈现稳定结果，不拥有 Provider 协议。
+`configuration.py` 负责普通配置选择、严格 TOML 解析、凭据文件 owner/权限检查、服务 URL
+规范化、origin 绑定、round-trip 编辑、安全 staging 与发布；它不访问外部服务、不形成文献
+业务决定。`bootstrap.py` 只把短生命周期 secret 注入当前需要的具体 adapter，并组装共享
+Network/Access Coordinator；它不显示、序列化或保存 secret。
 
-Model configuration 只保存普通设置、稳定 Provider key、能力选择和必要的非 secret 参数。真实 API key、token、metric、Cookie、浏览器 session 和凭据文件原文不能进入 Pydantic Model。
+Model 只保存普通参数、安全状态和中性 probe 结果。真实 API key、bearer token、Cookie、
+凭据原文、binary stream、HTTP/vendor 响应和可辨识 secret 的 mask、长度、hash、前后缀或
+fingerprint 都不能进入 Pydantic。CLI 只负责用户交互、确认和安全呈现，不拥有 Provider、
+LLM 或 MinerU wire protocol。
 
-## 2. 普通配置与凭据文件分离
+## 2. 两类配置文件
 
-普通配置继续表达：
+普通配置是用户选择的 `config.toml`，只保存九个非 secret 责任组：
 
-- Metadata/Acquisition Provider 是否启用及确定顺序；
-- Web of Science Starter/Expanded、database/edition 等产品选择；
-- 每个 DiscoveryRun 的 Provider scan limit；
-- Provider 公开政策之上的 operator 收紧值；
-- parser、LLM、路径、资源和其它非 secret 设置。
+```text
+paths / discovery / sources / assets / parsing / analysis / execution / library / access
+```
 
-Provider secret 只保存在：
+Python 调用的显式路径、`SCIRETRIEVER_CONFIG`、当前目录已有 `config.toml` 依次决定读取
+目标。交互中心需要写入时也按相同优先级选择目标；若当前目录没有文件，可以创建新的
+`config.toml`。普通配置严格拒绝未知 section、字段、重复 key、错误枚举和不一致组合。
+
+Provider、LLM 与远程 MinerU secret 只有一个生产来源：
 
 ```text
 ~/.sciretriever/credentials.toml
 ```
 
-这个文件不得保存启用状态、顺序、产品、database/edition、scan limit、endpoint、timeout、访问政策、联系邮箱、浏览器 profile、测试结果、测试时间、文献 ID 或任何数据库事实。普通配置和凭据文件缺一不可时由 readiness 组合判断，不能把密钥存在解释成 Provider 已启用或任意内容已获授权。
+目录必须为当前用户拥有的真实非符号链接目录且精确 `0700`；文件必须为当前用户拥有、
+单硬链接、非符号链接的普通文件且精确 `0600`。两类文件都使用有界 descriptor 读取并复核
+文件身份，替换、过大、非法 UTF-8/TOML 或权限不安全都 fail closed。测试通过显式 `home`
+依赖注入使用系统临时目录，Harness 不读取真实用户文件。
 
-生产路径固定为当前用户主目录下的 `.sciretriever/credentials.toml`。内部测试通过依赖注入使用系统临时目录中的受控文件，不读取开发者真实凭据；不提供把任意不可信路径作为普通业务参数传入 Provider 的能力。
+## 3. 普通配置合同
 
-## 3. `credentials.toml` 合同
+Provider 启用顺序、产品选择、contact identity、访问池、Storage 路径和运行预算属于普通
+配置。`[analysis]` 明确保存：
 
-目录必须由当前用户拥有、是普通非符号链接目录且权限为 `0700`；凭据文件必须由当前用户拥有、是普通非符号链接文件且权限为 `0600`。符号链接、非普通文件、错误 owner、错误权限或无法安全读取都必须 fail closed，并给出不含路径外敏感内容的修复建议。
+```text
+provider / service_name / protocol / base_url / model
+context_window_tokens / authentication / eight budget values
+```
 
-每个稳定 Provider key 最多一个 section，每个字段值都是去除边界空白后仍非空的 secret 字符串。当前个人使用边界不建立多账户 profile、credential alias、继承、include、动态 endpoint、自由 `extra` 或文件级 schema/version 字段。示例：
+支持的 wire protocol 是 OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages。
+官方 OpenAI/Anthropic 只能使用各自官方 hostname、默认 HTTPS 443 和 `/v1`；自定义远程
+服务必须使用 hostname-based HTTPS 与 API-key authentication；自定义 HTTP loopback 可以
+显式无认证。URL 统一拒绝 userinfo、query、fragment、remote IP literal、dot segments、
+编码分隔符和非规范端口文本。
+
+context window 参与真实预算校验：chunk 不得超过总输入，单阶段输出和 metadata+content
+输出必须适配总输出预算，内容工作流至少允许两次请求，保守的 UTF-8 字节/token 估算加
+输出预留必须小于等于 context。交互层的三个 preset 只展开为明确数值，不进入 schema。
+
+`[parsing]` 只保存 connection mode、Base URL、model identity 与 remote upload consent。
+MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive backend `vlm`、parse method `auto`
+是只读实现事实，不是 backend 选择。loopback 只接受 HTTP loopback 且不需要 token；remote
+只接受 hostname-based HTTPS，必须明确确认 PDF 离开本机并配置 bearer token。
+
+### 3.1 Browser access/profile 配置边界
+
+ADR 0015 的目标普通配置只表达 Browser 总启用选择、无 secret 的 operator-managed Browser
+session profile identity、本机 Browser 资源上限，以及对已核实 Provider policy 的收紧值。普通配置不能：
+
+- 改写 `browser_rate_limit_group`、`browser_session_key`、允许 origin 或 Profile rule revision；
+- 把同一风险组按 DOI、Literature、入口 URL 或随机任务拆开；
+- 提高官方并发/额度、缩短 interval/cooldown、忽略 window/reset/`Retry-After` 或自动提速；
+- 为未知站点启用 generic Browser fallback、任意 JavaScript、自动登录或 challenge 绕过。
+
+Browser session profile 位于固定用户级专用目录，由 Configuration 以安全的 opaque identity 解析；
+不接受未校验的任意绝对路径。目录与文件按敏感会话材料检查 owner、普通文件/目录和符号链接
+边界。Cookie、local storage、账号、机构身份、profile 内容或其 fingerprint 不写入
+`config.toml`、`credentials.toml`、Model、Catalog、Report 或日志。纯 Browser 访问方不因为
+拥有 `PublisherAccessProfile` 就需要 Provider credential section；API token 与 Browser session
+始终是两种不同 readiness。
+
+Browser session profile presence 只表示本地安全会话容器存在，不表示当前已经登录，更不表示任意 Literature
+具有 entitlement。登录、MFA、challenge、session health、cooldown 和 circuit 是当前 Browser
+运行状态，不持久化回普通配置或凭据文件。
+
+## 4. 统一 credentials schema 与 origin 绑定
+
+Provider section 按当前 adapter allowlist 保存字段；固定核心 section 为：
 
 ```toml
-[web-of-science]
+[llm]
 api_key = "<secret>"
+origin = "https://api.openai.com"
 
-[semantic-scholar]
-api_key = "<secret>"
-
-[openalex]
-api_key = "<secret>"
-
-[elsevier]
-api_key = "<secret>"
-institution_token = "<secret>"
-
-[springer]
-api_key = "<secret>"
-api_metric = "<secret>"
-
-[core]
-api_key = "<secret>"
-
-[opencitations]
-access_token = "<secret>"
+[mineru]
+bearer_token = "<secret>"
+origin = "https://mineru.example.invalid"
 ```
 
-示例只表达文件形状，不提供真实 secret。每个 adapter 的字段名、必需性和适用能力必须来自当前官方合同与 Provider Notes：
+未知 section、未知字段、空 section、空值、控制字符、非法 origin 和不完整过渡字段组合
+全部拒绝。Provider section 的具体字段与必需性见配置手册及 Provider Notes。
 
-- Web of Science `api_key` 为 metadata 必需；具体产品/database 属于普通配置；
-- Semantic Scholar、OpenAlex、CORE 和 OpenCitations 的凭据可以按当前政策为可选或规模化使用推荐，匿名能力仍必须有明确 AccessPolicy；
-- Elsevier metadata 与 acquisition 可以共享 `api_key`，但 `institution_token` 和具体内容 entitlement 分别判断；
-- Springer Nature 的 metadata key 与 Full Text 产品 metric 分别判断；
-- Wiley 的当前官方凭据字段尚未核实，生产 adapter 未形成精确合同前状态为 `unsupported`，不能提前接受猜测字段；
-- Crossref polite identity、Unpaywall contact email等非 secret 运行身份不进入此文件。
+核心 secret 与保存时的规范 origin 精确绑定。Bootstrap 只能通过
+`core_secret_for_origin(service, origin)` 取得当前普通配置精确引用的值；改变 Base URL 后
+旧 secret 不会被发送到新服务。Network 在每次 redirect 重新执行 origin/credential alias
+检查，跨 origin 不携带认证。loopback 服务和当前 scope 不需要的核心服务不会触发凭据读取。
 
-Provider 官方认证合同变化时先更新对应 Notes、adapter credential spec 和直接安全测试，再调整 allowlist。未知 Provider、未知字段、重复 section、空值、非字符串值或无 adapter 支持的猜测字段必须拒绝，不能静默保存后永远不使用。
+旧 LLM/MinerU secret 环境变量已经退出产品合同：不读取、不回退、不自动迁移。保留的
+环境控制只有普通配置选择 `SCIRETRIEVER_CONFIG` 和显示控制 `NO_COLOR` 等非 secret 边界。
 
-## 4. Provider 能力与 readiness
+## 5. 安全发布
 
-Bootstrap 分别构造 Metadata 和 Acquisition 能力注册表；同一个 Provider key 可以同时出现，但两个 adapter、协议和失败语义保持独立。每项能力依次经过：
+普通 `[analysis]`/`[parsing]` 编辑使用 `tomlkit` round-trip：只更新目标 section，保留其它
+section、注释和排版。发布流程为同目录 staging、`0600`、完整写入、flush/fsync、重读、
+TOML/Pydantic 复验、原子 replace；任一步失败保留原文件并清理 staging。确认前只显示
+普通字段 diff，不显示或推导 secret。
+
+单一凭据 section 修改沿用相同 owner-only staging 和原子发布。核心服务经常同时改变位于
+不同目录的普通配置和凭据；文件系统没有跨文件 rename 事务，因此实现使用可恢复顺序：
 
 ```text
-production adapter 已实现
-  -> 普通配置已启用
-  -> 必需普通参数、凭据和 AccessPolicy 就绪
-  -> Acquisition 对当前 Literature 适用
-  -> 才允许真实调用
+1. 在各自目录落盘全部 staging，chmod 0600，fsync，并完整复验
+2. 发布同时服务旧/new origin 的过渡凭据
+3. 发布引用 new origin 的普通配置
+4. 清理过渡凭据，只保留最终 origin
 ```
 
-领域 DiscoveryRun 不需要 Literature 适用性判断：它调用本次全部已启用且就绪的 Metadata search adapter。Acquisition 还必须根据 AssetHint、稳定标识符、Provider 专属记录身份或 DOI 安全解析后的 landing origin 判断当前 Source 是否适用；publisher 自由文本和单独 DOI 前缀不能直接通过 readiness。
+内部 `next_api_key` / `next_bearer_token` / `next_origin` 必须形成完整过渡组、与主 origin
+不同，且不通过 status、field names 或 repr 暴露。第一次发布前中断时两份旧文件均不变；
+步骤 2 后中断时旧普通配置仍可取旧 secret；步骤 3 后中断时新普通配置可取 new secret；
+正常结束后清理过渡字段。reset 也通过同一函数同时清空普通 section 与凭据。
 
-用户明确启用但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，操作开始前返回稳定配置错误。未启用能力不参加本次调用和 Acquisition 耗尽集合。凭据存在但真实调用返回 401/403、quota 或服务错误时是本次 Provider 失败；Metadata 保留其它来源成功，Acquisition 不能因此建立自动获取耗尽事实。
+## 6. 交互配置中心
 
-## 5. CLI 命令树
-
-目标 CLI 的配置组固定为：
+命令树固定为：
 
 ```text
-sciretriever config set <provider>
-sciretriever config remove <provider>
-sciretriever config status
-sciretriever config test <provider>
-sciretriever config test --all
+sciretriever config [--theme auto|dark|light|mono]
+sciretriever config status [--json] [--theme auto|dark|light|mono]
+sciretriever config test <provider|llm|mineru> [--json]
+sciretriever config test --all [--json]
 ```
 
-配置命令不创建 Entry 处理 Report。稳定文本或 `--json` 结果走 stdout，安全提示和诊断走 stderr；真实 secret 在两者中都禁止出现。
+裸 `config` 首页固定区分 `CORE SERVICES` 和 `LITERATURE PROVIDERS`。TTY 使用 Rich 与
+prompt-toolkit 的非全屏界面，支持方向键、Enter、`L/M/T/Q` 快捷键和隐藏输入；非 TTY
+降级为确定性文本菜单。主题支持 auto/dark/light/mono，`NO_COLOR` 强制 mono；状态不能
+只靠颜色表达。所有交互、确认和 setup 结果写 stderr，stdout 为空；Ctrl+C/EOF 取消不产生
+写入。旧 `config set/remove` 保持无效。
 
-### 5.1 `config set`
+LLM setup 覆盖官方 OpenAI、官方 Anthropic 与 custom/compatible 服务，以及协议、URL、
+模型、context、认证和预算。MinerU setup 不制造 backend 选项，remote 模式在 token 输入前
+明确确认 PDF 上传边界。Provider 区继续从 adapter credential spec 生成字段，显示用途、
+官方申请入口和普通配置启用提示；unsupported capability 字段不能冒充当前必需项。
 
-`set` 根据 adapter credential spec 以不回显的交互输入依次收集必需和可选字段。真实值不得通过普通 CLI option、位置参数、URL 或环境回显传入。已有 section 时明确询问是否替换；用户取消不修改文件。
+Browser access 管理的目标入口属于 `LITERATURE PROVIDERS` 的独立 access 区，而不是 API key
+字段：它显示 API route 与 Browser route 各自 readiness，允许选择或初始化安全 profile
+identity，并只在用户明确选择时打开可见 Browser 完成人工登录或清除本地会话。自动
+Completion 不填写账号、不选择机构、不处理 MFA/CAPTCHA。交互取消不得修改 profile；任何
+界面都不能显示、复制或导出 Cookie。该入口只有在对应实现和离线/安装后验收完成后才进入
+当前 CLI 手册。
 
-写入流程必须：
+## 7. status 与 probe
 
-1. 安全打开并完整验证现有文件；
-2. 在内存中只替换目标 Provider section；
-3. 在同目录创建 owner-only staging；
-4. flush、`fsync` 并重新解析待发布 TOML；
-5. 原子替换正式文件并确保 `0600`；
-6. 失败时清理 staging 且保留原文件。
+`config status` 是纯本地操作：读取两类配置，组装 capability/readiness 和 secret-opaque
+presence view，不构造 Storage、Catalog、ArtifactStore 或 Network。人类输出用紧凑表格
+展示：
 
-不创建含旧值或新值的备份、日志、Report、临时仓库文件或数据库副本。CLI 规范化重写可以调整 TOML 排版和注释；注释与原始字段顺序不是凭据合同。
+- LLM provider/protocol/endpoint/model/context、credential presence/origin match 与 readiness；
+- MinerU mode/endpoint/固定实现身份、credential presence/origin match 与 readiness；
+- Metadata/Acquisition Provider 的 enabled、用途、字段 configured/missing/optional；
+- PDF acquisition 固定顺序：Public → Authorized API → Controlled browser；
+- 每个 Publisher Browser route 的 implementation/profile/policy readiness、无 secret 的 risk-group 展示名和所需下一动作；
+- Storage 和执行参数概要。
 
-### 5.2 `config remove`
+本地 presence 不能描述为认证成功。JSON 使用稳定分组 schema、无 ANSI，也不能包含 secret
+特征或 configuration fingerprint。
 
-`remove` 只删除指定 Provider section并按相同原子写入规则发布。Provider 不存在时返回稳定的未配置结果，不修改普通配置、其它凭据或文献数据库。删除凭据不会删除已经接纳的 MetadataObservation、Asset 或其它文献事实；下一次操作按新的 readiness 判断是否可调用。
+Browser 的纯本地状态只能说明 Profile 已支持、已选择且通过本地安全检查，或
+missing/action-required；不能根据 Cookie 文件存在声称 authenticated，也不能声称具体文献
+entitled。动态 login/session/circuit/cooldown 不保存为“上次状态”。`config status` 不启动
+Browser、不访问 Provider，也不枚举 Cookie、origin history、selector 或 profile 内部文件。
 
-### 5.3 `config status`
+`config test` 构造独立的 `ProductionConfigurationProbeSession`，复用生产 adapter 和共享
+Network，但不构造 Storage。Provider probe 使用官方最小只读请求；LLM probe 固定发送：
 
-`status` 只执行本地文件、字段和生产 adapter/readiness 静态检查，不访问网络。它按 Provider 和 `metadata`/`acquisition` 能力显示以下状态：
+```json
+{"probe":"sciretriever-configuration"}
+```
 
-| 状态 | 精确含义 |
-|---|---|
-| `not-required` | 当前生产 capability 的官方合同与普通配置允许无凭据使用，不需要凭据字段 |
-| `configured` | 当前 capability 声明的全部必需和可选凭据字段都存在且非空 |
-| `partial` | Provider section 已存在，但当前 capability 的至少一个必需字段缺失 |
-| `missing` | 当前 capability 需要凭据，但没有任何可满足其必需合同的字段 |
-| `optional-missing` | 全部必需字段已经存在，但至少一个已声明可选字段未提供 |
-| `unsupported` | 当前没有可执行的生产 adapter 或已经核实的 credential spec，不能接受猜测字段 |
+并要求严格响应 `{"ok":true}`。它不发送用户 Literature 内容，但可能消耗少量额度。
+MinerU probe 只调用 `GET health`，验证 healthy、release 3.4.4、protocol 2 和 profile；不
+submit、poll、fetch archive 或上传 PDF。`--all` 汇总已启用 Provider、LLM、MinerU；一个
+失败不阻断其它结果，failed/skipped 使退出码为 3。人类模式在 LLM/`--all` 前确认副作用；
+JSON 模式视为脚本显式授权。
 
-多字段 Provider 还可以显示字段名称、是否必需和是否存在，但绝不显示原值、掩码值、长度、前后缀、hash 或可用于辨识 secret 的 fingerprint。输出同时说明固定凭据文件位置以及权限/TOML错误。`status` 不把本地字段存在描述为认证成功。
+普通 Provider API probe 不隐式启动 Browser。将来接入的 Browser session probe 必须由用户
+显式选择具体 Publisher Profile 和一个经过批准的最小离线/现场目标，使用可见 Browser、同一
+Profile guard 与 risk-group scheduler；存在 profile、页面可打开和具体文章 entitlement 仍是
+三个不同结果。真实 Provider probe 不进入 Harness，精确现场范围需要用户另行授权。
 
-### 5.4 `config test`
+核心 probe 返回 `CoreConfigurationProbeResult`，details 分别为
+`LLMConfigurationProbeDetails` 和 `MinerUConfigurationProbeDetails`，共同固定
+`persisted = false`。任何 probe 都不创建 DiscoveryRun、Literature、MetadataObservation、
+Asset、Catalog、Report 或测试历史，也不把认证通过解释成具体文献全文 entitlement。
 
-`test <provider>` 是对明确指定 Provider 的显式诊断，因此不要求该 Provider 已在普通运行配置中启用；它只对已有生产 adapter 的能力执行本地检查，并对其中 readiness 通过的能力发起 probe。`test --all` 只枚举普通配置已启用且生产 adapter 已存在的能力，其中本地 readiness 不通过的能力明确 `skipped`，只有就绪能力实际访问 Network。缺少必需凭据或普通参数时不匿名回退；明确允许匿名且配置选择匿名策略的能力可以执行无凭据测试。
+## 8. 离线验证要求
 
-每项测试只使用 Provider 官方允许的最小只读请求，并依次验证本地 readiness、Network/DNS/TLS 可达、凭据接受、所选 API 产品可用和最小响应可由当前 adapter 解析。测试必须经过共享 Access Coordinator、timeout、响应大小、redirect、origin、quota、`429`/`Retry-After` 和脱敏边界。一个 Provider 失败不阻止 `--all` 汇总其它结果；请求集合中的任一失败使 CLI 返回非零退出结果。
-
-测试不创建 DiscoveryRun、Literature、MetadataObservation、ProviderRelationObservation、Asset、自动获取耗尽、Catalog/ArtifactStore 行、Entry Report 或持久日志。它不保存最后结果和时间。Acquisition 测试只表达服务 readiness：即使认证和内容 endpoint 可用，也必须显示具体文献 entitlement 未被证明，不能下载测试 PDF 后接纳为资产。
-
-## 6. Secret 生命周期与脱敏
-
-真实 secret 只在 `configuration.py` 的私有解析结果和具体 adapter 的当前进程内存中存在。它不得进入：
-
-- Pydantic Model configuration、CLI JSON 或业务 Model；
-- AccessScope、permit、限速窗口或缓存 key；
-- SQLite、ArtifactStore、provenance、Report 或处理状态；
-- URL、相对路径、文件名、异常正文、LogRecord 或调试表示；
-- Provider Notes、fixture、测试快照或安装产物。
-
-Adapter 声明允许附着凭据的 origin；Network 逐跳复检 redirect 并默认剥离跨 origin 凭据。配置和测试错误只报告 Provider、字段名称、安全状态与修复动作，不包含读取到的值。CLI 进程结束后不建立凭据 daemon、缓存文件或跨进程 secret service。
-
-## 7. 测试与验收
-
-离线直接测试至少覆盖：
-
-- CLI 与手工准备的同一 `credentials.toml` 得到相同 readiness；测试使用临时主目录/显式注入路径，不读取真实用户文件；
-- 目录 `0700`、文件 `0600`、当前 owner、普通文件和非符号链接边界；权限过宽、错误 owner、非法 TOML、未知 section/字段、空值和非字符串 fail closed；
-- `set` 隐藏输入、创建/替换、多字段 partial、用户取消、原子失败保留旧文件且不产生备份；
-- `remove` 只删除目标 section，重复删除稳定且不影响普通配置或数据库；
-- `status` 对 required、optional 和无需凭据的 Provider 正确分类，文本与 JSON 都不包含 secret、长度、mask 或 fingerprint，且不触发 Network；
-- `test` 只通过 fake provider/Network 执行最小只读 probe，单项与 `--all` 正确汇总 passed/failed/skipped，不创建 DiscoveryRun、Report 或数据库事实；
-- 认证成功与 acquisition entitlement 未证明分开表达，401/403/429/timeout/非法响应稳定化且脱敏；
-- 启用但缺少必需凭据在普通 Discovery/Acquisition 开始前失败，运行时 Provider 失败保留 Metadata 其它来源结果且不形成 PDF 获取耗尽；
-- README、用户指南和 `project.scripts` 只在目标 CLI 和凭据功能实际实现并通过安装后离线测试后更新。
-
-Harness、CI 和单元测试不得执行 `config test` 的真实网络路径，不读取 `~/.sciretriever/credentials.toml`，也不得依赖开发者具有任何 API key。
+直接测试覆盖严格 schema、URL/预算组合、origin 错配、权限/符号链接、round-trip、staging
+失败、跨文件每个中断点、三种 LLM protocol、认证 redirect、MinerU health-only、Browser
+profile identity/owner/symlink、只允许收紧的 policy、API/Browser readiness 分离、四主题、
+窄终端、快捷键、取消和 secret/Cookie 不泄漏。安装 wheel 旅程使用临时 HOME、测试自有
+`credentials.toml` 与 fake transport 验证真实 console、生产 Bootstrap、status、LLM/MinerU
+probe 和 `--all`；Browser 使用临时 profile 与本地页面 fixture。不得使用旧 secret 环境变量、
+真实凭据/Cookie、真实网络、生产 Catalog 或用户语料。Full Harness 还必须通过 Pyright
+strict、全量 unittest、wheel 构建和内容核对。

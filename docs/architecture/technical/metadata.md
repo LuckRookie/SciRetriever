@@ -175,7 +175,10 @@ ProviderLiteratureKey
 - 一个供应商失败不撤销其它供应商成功结果；
 - 已完成转换的 observation 可以先交给 Entry 和 Literature 接纳，不必等待同一供应商的后续页面；
 - 不完整 observation 可以交给 Literature；只有 Literature 按“非空标题或 DOI 至少存在一个”的规则接纳后，才能形成已入库的文献和来源事实；
+- 单条原始 item 在 vendor-to-neutral 转换时形成稳定 `MetadataProviderFailure`，该 item 仍消耗 `scan_limit`；Service 只记录序号和脱敏稳定失败字段，保留此前事实并继续同一 Provider 的后续 item，不记录原始 item、cursor 或响应；
+- 同一 Provider 正常耗尽或达到扫描上限时，只要本次扫描存在上述拒绝记录，最终终止结果仍为 `FAILED` 并携带首个记录级稳定失败；拒绝记录前后已经成功转换的 observations 和 relations 全部保留，不能把部分损坏伪装为完整成功；
 - 同一供应商分页失败时保留此前已确认页面，并返回该供应商的部分失败；
+- 后续页面、Network 或其它 Provider 级稳定失败优先作为最终失败；取消仍形成 `INTERRUPTED`，Port 合同或编程错误仍向上传播而不能按坏记录隔离；
 - 失败不能伪装成“零结果”。
 
 领域 DiscoveryRun 由 Entry 调用本次全部已启用且 readiness 通过的 Metadata Search Provider。明确启用但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过、匿名回退或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
