@@ -696,8 +696,9 @@ class PublicLocatorFetcher:
                 raise TypeError("invalid web access profile")
             effective_policy = AccessPolicy.strictest(self._web_policy, profile_policy)
 
-            def guard_redirect_target(target_url: str) -> None:
-                target = _canonical_locator(target_url)
+            def resolve_redirect_access_profile(
+                target: NormalizedURL,
+            ) -> tuple[AccessScope, AccessPolicy]:
                 target_scope, target_profile_policy = self._web_access_profile_resolver.resolve(
                     target
                 )
@@ -705,10 +706,7 @@ class PublicLocatorFetcher:
                     self._web_policy,
                     target_profile_policy,
                 )
-                if target_scope != scope:
-                    raise ValueError("redirect target uses another web access scope")
-                if AccessPolicy.strictest(effective_policy, target_policy) != effective_policy:
-                    raise ValueError("redirect target requires a stricter web access policy")
+                return target_scope, target_policy
 
             result = self._http_client.request(
                 scope,
@@ -721,7 +719,7 @@ class PublicLocatorFetcher:
                 max_response_bytes=self._max_pdf_response_bytes,
                 cancel_event=self._cancel_event,
                 response_feedback=_throttling_feedback,
-                redirect_target_guard=guard_redirect_target,
+                redirect_access_profile=resolve_redirect_access_profile,
             )
         except Exception:
             _LOGGER.warning(

@@ -1152,6 +1152,7 @@ def build_acquisition_registry(
         raise AcquisitionRegistryError("production-stage-mismatch")
     doi_landing_resolver = DoiLandingResolver(
         http_client=dependencies.http_client,
+        web_access_profile_resolver=dependencies.web_access_profile_resolver,
         cancel_event=dependencies.cancel_event,
     )
     route_registry = AcquisitionRouteRegistry(

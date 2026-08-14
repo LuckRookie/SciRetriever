@@ -9,12 +9,13 @@ from urllib.parse import urlsplit
 
 from sciretriever.acquisition.planning import DoiLandingResolution
 from sciretriever.acquisition.ports import AcquisitionFailure, AcquisitionSourceFailure
+from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
 from sciretriever.model.access import AccessFailure, TransportResponse
 from sciretriever.model.literature import Identifier
 from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
-from sciretriever.network.policy import PolicyError, normalize_url
+from sciretriever.network.policy import NormalizedURL, PolicyError, normalize_url
 from sciretriever.network.response_feedback import FeedbackHeaderError, retry_after_feedback
 
 _DOI_RESOLVER_BASE: Final[str] = "https://doi.org"
@@ -128,22 +129,40 @@ def _resolution_from_response(result: TransportResponse) -> DoiLandingResolution
 class DoiLandingResolver:
     """Resolve one canonical DOI to its final safe origin without creating a candidate."""
 
-    __slots__ = ("_http_client", "_access_policy", "_cancel_event")
+    __slots__ = (
+        "_http_client",
+        "_web_access_profile_resolver",
+        "_access_policy",
+        "_cancel_event",
+    )
 
     def __init__(
         self,
         *,
         http_client: HttpClient,
+        web_access_profile_resolver: WebAccessProfileResolver | None = None,
         access_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None = None,
     ) -> None:
         if not isinstance(http_client, HttpClient):
             raise TypeError("http_client must be an HttpClient")
+        if web_access_profile_resolver is not None and not isinstance(
+            web_access_profile_resolver,
+            WebAccessProfileResolver,
+        ):
+            raise TypeError(
+                "web_access_profile_resolver must be a WebAccessProfileResolver or None"
+            )
         if access_policy is not None and not isinstance(access_policy, AccessPolicy):
             raise TypeError("access_policy must be an AccessPolicy or None")
         if cancel_event is not None and not isinstance(cancel_event, threading.Event):
             raise TypeError("cancel_event must be a threading.Event or None")
         self._http_client = http_client
+        self._web_access_profile_resolver = (
+            WebAccessProfileResolver()
+            if web_access_profile_resolver is None
+            else web_access_profile_resolver
+        )
         self._access_policy = (
             _BASELINE_WEB_POLICY
             if access_policy is None
@@ -159,6 +178,17 @@ class DoiLandingResolver:
         if doi.namespace != "doi":
             return None
 
+        def resolve_redirect_access_profile(
+            target: NormalizedURL,
+        ) -> tuple[AccessScope, AccessPolicy]:
+            if target.origin.text in _DOI_RESOLVER_ORIGINS:
+                return _DOI_SCOPE, self._access_policy
+            target_scope, target_policy = self._web_access_profile_resolver.resolve(target)
+            return target_scope, AccessPolicy.strictest(
+                self._access_policy,
+                target_policy,
+            )
+
         try:
             result = self._http_client.request(
                 _DOI_SCOPE,
@@ -169,6 +199,7 @@ class DoiLandingResolver:
                 max_response_bytes=_MAX_RESOLVER_RESPONSE_BYTES,
                 cancel_event=self._cancel_event,
                 response_feedback=_throttling_feedback,
+                redirect_access_profile=resolve_redirect_access_profile,
             )
         except Exception:
             raise AcquisitionSourceFailure(_network_failure()) from None

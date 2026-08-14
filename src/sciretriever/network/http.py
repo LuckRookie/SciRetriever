@@ -48,6 +48,7 @@ from .admission import (
 from .policy import (
     BudgetUsage,
     DestinationPolicy,
+    NormalizedURL,
     Origin,
     PolicyError,
     ResolvedDestination,
@@ -65,6 +66,10 @@ HeaderInput = Mapping[str, str] | Sequence[Header | tuple[str, str]]
 CredentialQueryInput = Mapping[str, str] | Sequence[tuple[str, str]]
 ResponseFeedbackInterpreter = Callable[[TransportResponse], AccessFeedback | None]
 RedirectTargetGuard = Callable[[str], None]
+RedirectAccessProfileResolver = Callable[
+    [NormalizedURL],
+    tuple[AccessScope, AccessPolicy],
+]
 
 _IDEMPOTENT_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PUT", "TRACE"})
 _CREDENTIAL_NAMES = frozenset(
@@ -644,6 +649,7 @@ class _PreparedRequest:
     budget: ResourceBudget
     current: ResolvedDestination
     redirect_target_guard: RedirectTargetGuard | None
+    redirect_access_profile: RedirectAccessProfileResolver | None
     allow_guarded_redirect_encoded_path_separators: bool
 
 
@@ -654,6 +660,15 @@ class _HopResult:
     next_destination: ResolvedDestination | None = None
     forward_credentials: bool = False
     same_origin: bool = False
+
+
+@dataclass(slots=True, repr=False)
+class _ScopeLease:
+    """The currently admitted provider scope for one redirecting request."""
+
+    scope: AccessScope
+    policy: AccessPolicy
+    permit: AccessPermit | None
 
 
 class _RequestAbort(Exception):
@@ -752,6 +767,7 @@ class HttpClient:
         cancel_event: threading.Event | None = None,
         response_feedback: ResponseFeedbackInterpreter | None = None,
         redirect_target_guard: RedirectTargetGuard | None = None,
+        redirect_access_profile: RedirectAccessProfileResolver | None = None,
         allow_guarded_redirect_encoded_path_separators: bool = False,
     ) -> TransportResponse | AccessFailure:
         """Run one bounded request and return only a neutral access result.
@@ -770,7 +786,12 @@ class HttpClient:
         closed without exposing its exception or target through the result.
         A caller may separately opt a guarded Provider-issued opaque redirect
         into encoded path separators.  That narrow mode requires a target
-        guard; ordinary and unguarded redirect URLs remain strict.
+        guard; ordinary and unguarded redirect URLs remain strict.  A
+        request-local redirect access-profile resolver may assign each safely
+        normalized redirect target to a provider scope and policy.  A target
+        in the same scope tightens that scope in place; a target in another
+        scope releases the previous complete-flow permit and obtains the new
+        one before the next transport hop.
         """
 
         if self._closed:
@@ -778,6 +799,8 @@ class HttpClient:
         if response_feedback is not None and not callable(response_feedback):
             return _failure("policy")
         if redirect_target_guard is not None and not callable(redirect_target_guard):
+            return _failure("policy")
+        if redirect_access_profile is not None and not callable(redirect_access_profile):
             return _failure("policy")
         try:
             settings = self._request_settings(
@@ -807,6 +830,7 @@ class HttpClient:
                 cancel_event=cancel_event,
                 deadline=deadline,
                 redirect_target_guard=redirect_target_guard,
+                redirect_access_profile=redirect_access_profile,
                 allow_guarded_redirect_encoded_path_separators=(
                     allow_guarded_redirect_encoded_path_separators
                 ),
@@ -835,10 +859,11 @@ class HttpClient:
                 scope_permit,
                 enabled=diagnostics_enabled,
             )
+        lease = _ScopeLease(scope=scope, policy=policy, permit=scope_permit)
         feedback: AccessFeedback | None = None
         try:
             result = self._run_hops(
-                scope_permit,
+                lease,
                 prepared,
                 cancel_event=cancel_event,
                 deadline=deadline,
@@ -848,15 +873,12 @@ class HttpClient:
                 if feedback is not None and not isinstance(feedback, AccessFeedback):
                     raise TypeError("response_feedback must return AccessFeedback or None")
             return _logged_access_result(
-                scope,
+                lease.scope,
                 result,
                 enabled=diagnostics_enabled,
             )
         finally:
-            try:
-                scope_permit.release(feedback)
-            except Exception:
-                pass
+            self._release_scope_lease(lease, feedback)
 
     def _acquire_scope_permit(
         self,
@@ -886,7 +908,7 @@ class HttpClient:
 
     def _run_hops(
         self,
-        scope_permit: AccessPermit,
+        lease: _ScopeLease,
         prepared: _PreparedRequest,
         *,
         cancel_event: threading.Event | None,
@@ -898,6 +920,9 @@ class HttpClient:
         forwarded_credentials = prepared.private_headers
         forwarded_query = prepared.credential_query
         while True:
+            scope_permit = lease.permit
+            if scope_permit is None:
+                return _failure("admission")
             try:
                 prepared.credential_alias_guard.reject_url(current.url.url)
             except (TypeError, ValueError):
@@ -929,6 +954,15 @@ class HttpClient:
                 prepared.credential_alias_guard.reject_url(hop.next_destination.url.url)
             except (TypeError, ValueError):
                 return _failure("policy")
+            profile_failure = self._readmit_redirect_scope(
+                lease,
+                hop.next_destination,
+                prepared.redirect_access_profile,
+                cancel_event=cancel_event,
+                deadline=deadline,
+            )
+            if profile_failure is not None:
+                return profile_failure
             usage = hop.usage
             current = hop.next_destination
             forwarded_credentials = forwarded_credentials if hop.forward_credentials else ()
@@ -955,6 +989,7 @@ class HttpClient:
         cancel_event: threading.Event | None,
         deadline: float,
         redirect_target_guard: RedirectTargetGuard | None,
+        redirect_access_profile: RedirectAccessProfileResolver | None,
         allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _PreparedRequest:
         if cancel_event is not None and not hasattr(cancel_event, "is_set"):
@@ -1044,10 +1079,73 @@ class HttpClient:
             budget=effective_budget,
             current=current,
             redirect_target_guard=redirect_target_guard,
+            redirect_access_profile=redirect_access_profile,
             allow_guarded_redirect_encoded_path_separators=(
                 allow_guarded_redirect_encoded_path_separators
             ),
         )
+
+    def _readmit_redirect_scope(
+        self,
+        lease: _ScopeLease,
+        target: ResolvedDestination,
+        resolver: RedirectAccessProfileResolver | None,
+        *,
+        cancel_event: threading.Event | None,
+        deadline: float,
+    ) -> AccessFailure | None:
+        if resolver is None:
+            return None
+        try:
+            profile = resolver(target.url)
+            if type(profile) is not tuple or len(profile) != 2:
+                raise TypeError("redirect access profile must be a scope-policy tuple")
+            target_scope, target_policy = profile
+            if not isinstance(target_scope, AccessScope) or not isinstance(
+                target_policy,
+                AccessPolicy,
+            ):
+                raise TypeError("redirect access profile contains invalid values")
+            if target_scope == lease.scope:
+                lease.policy = self._coordinator.register(target_scope, target_policy)
+                return None
+        except (PolicyError, TypeError, ValueError):
+            return _failure("policy")
+        except Exception:
+            return _failure("policy")
+
+        self._release_scope_lease(lease)
+        lease.scope = target_scope
+        lease.policy = target_policy
+        target_permit = self._acquire_scope_permit(
+            target_scope,
+            target_policy,
+            cancel_event=cancel_event,
+            deadline=deadline,
+        )
+        if isinstance(target_permit, AccessFailure):
+            return target_permit
+        lease.permit = target_permit
+        try:
+            lease.policy = self._coordinator.policy_for(target_scope)
+        except Exception:
+            self._release_scope_lease(lease)
+            return _failure("admission")
+        return None
+
+    @staticmethod
+    def _release_scope_lease(
+        lease: _ScopeLease,
+        feedback: AccessFeedback | None = None,
+    ) -> None:
+        permit = lease.permit
+        lease.permit = None
+        if permit is None:
+            return
+        try:
+            permit.release(feedback)
+        except Exception:
+            pass
 
     def _request_hop(
         self,
@@ -1973,6 +2071,7 @@ def _failure(code: str) -> AccessFailure:
 
 __all__ = (
     "HttpClient",
+    "RedirectAccessProfileResolver",
     "RedirectTargetGuard",
     "ResponseFeedbackInterpreter",
     "SecureHttpTransport",
