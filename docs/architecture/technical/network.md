@@ -183,12 +183,25 @@ redirect-target guard 并显式启用 guarded opaque-path 模式；guard 在目�
 
 ## 9. 浏览器实现
 
-`browser_sessions.py` 按 `browser_session_key` 管理 operator-owned persistent context，按
-`browser_rate_limit_group` 管理文章级队列、session health 和 circuit。Browser session
-profile 目录属于用户级敏感会话材料；Network 只接收 Configuration 已经安全解析的 opaque profile identity，不
-读取 `credentials.toml`，也不导出 Cookie、local storage、账号或机构身份。相同 session key
-可以复用合法登录状态，但每篇文章仍使用独立 page、临时目录、预算和文章级 permit；context
-不能作为裸全局对象暴露给 Acquisition adapter。
+`browser_sessions.py` 提供进程内 `BrowserSessionBroker`，按稳定的
+`browser_session_key` 持有 operator-owned persistent process/context。同一 key 的 lease
+严格串行，不同 key 使用独立 session；每个 lease 只覆盖一篇文章。首次创建时 process 与
+context 必须分别按对象身份确认 Network 提供的连接绑定，之后每篇文章还必须通过
+`begin_article(downloads_path, connection_binding)`/`end_article()` 协议切换独立下载目录、
+确认绑定并排空晚到事件。Broker 只安装一次封闭 route/event dispatcher；文章 lease 结束后
+晚到 route 会被终止，晚到 page/download 会被关闭或删除，不能落入下一篇文章的 handler。
+
+`BrowserClient` 可以注入 broker，并要求每次 `run` 同时提供经过 Network 校验的 session key；
+没有 broker 的临时 session 仍用于通用 Network 离线 fixture。持久模式复用 process/context，
+但仍为每篇文章建立独立 `_FlowState`、page、临时目录、预算、DNS/host lease 和中性结果。
+页面、下载、请求 lease 和文章临时目录全部清理且 runtime 确认排空后，才释放 session lease；
+runtime、timeout、cancel 或文章清理异常会淘汰并确定性关闭对应 session，下一篇重新创建。
+Broker 关闭会等待活动 lease，再关闭全部 context/process 和 owner-only session 临时目录。
+
+Browser session profile 目录属于用户级敏感会话材料；Network 只接收 Configuration 已经安全
+解析的 opaque profile identity，不读取 `credentials.toml`，也不导出 Cookie、local storage、
+账号或机构身份。相同 session key 可以复用合法登录状态，但 page/context/process、profile、
+Cookie 和 vendor event 对象都不能越过 Network/Acquisition Port。
 
 `browser.py` 对每个文章流程负责：
 
@@ -220,8 +233,9 @@ lease。通用 URL/DNS/地址类别/host permit/资源预算仍独立执行，gu
 同一进程同一 group 只能注册一份完全一致的 policy revision，避免通过别名或新 operation
 重建限速状态。
 
-生产 Controlled Browser 仍保持 disabled：session broker、完整状态机、捕获矩阵、配置/确认
-入口以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
+生产 Controlled Browser 仍保持 disabled：session broker foundation 已完成，但 operator-managed
+profile 解析、完整状态机、捕获矩阵、配置/确认入口以及至少一个 Provider 的端到端 Profile
+尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、not found、PDF captured 和 runtime

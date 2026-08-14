@@ -486,7 +486,14 @@ Scheduler callback 覆盖整个 route adapter 调用，因此 Network Browser �
 或异常均按失败完成处理并保留适用冷却。不同 group 使用独立 worker 实际重叠，同 group 保持
 冻结输入顺序。缺少 scheduler 的 admitted route 会稳定失败，不再退回隐藏的全局串行执行。
 
-`browser_session_key` 管理 operator-owned persistent context/profile，使同一访问方的多篇论文复用用户已经合法建立的登录状态。Profile 路径由 Configuration 安全解析，Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenance、Report 或日志。自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；这些情况形成 action-required 并暂停对应 group。
+Network 已提供按 `browser_session_key` 串行 lease 的 process-local session broker：同一访问方的
+多篇论文可以复用一个合法 persistent context，同时每篇文章仍拥有独立 page、下载临时目录、
+预算、连接绑定和结果；runtime/清理失败会淘汰该 session。这个 foundation 不等于 production
+Browser 已启用；Acquisition 仍需在后续 Provider Profile 与生产对象图中把已确认的 session key、
+operator profile readiness 和对应 route 精确绑定。Profile 路径由 Configuration 安全解析，
+Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenance、Report 或日志。
+自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；
+这些情况形成 action-required 并暂停对应 group。
 
 运行状态至少区分：
 
