@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final
 
+from sciretriever.acquisition.browser_admission import (
+    BrowserAdmissionCandidate,
+    BrowserAdmissionController,
+    BrowserAdmissionDisposition,
+    BrowserAdmissionResult,
+)
 from sciretriever.acquisition.outcomes import RouteExecutionResult, RouteOutcome
 from sciretriever.acquisition.planning import (
     AccessRouteHint,
@@ -74,6 +81,7 @@ class AcquisitionWorkItem:
     publication_receipt: object | None = field(default=None, init=False, repr=False)
     candidate_keys: CandidateKeyTracker = field(init=False, repr=False)
     delivered_candidate_keys: set[str] = field(default_factory=set, init=False, repr=False)
+    plan_revisions: list[str] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.work_key = _work_key(self.work_key)
@@ -94,6 +102,7 @@ class AcquisitionWorkItem:
         excluded = () if self.request is None else self.request.excluded_candidate_keys
         self.candidate_keys = CandidateKeyTracker(excluded)
         self.delivered_candidate_keys.update(excluded)
+        self.plan_revisions.append(self.plan.revision)
 
     @property
     def exhausted(self) -> bool:
@@ -147,6 +156,7 @@ class AcquisitionWorkItemResult:
 @dataclass(frozen=True, slots=True)
 class CohortExecutionResult:
     items: tuple[AcquisitionWorkItemResult, ...]
+    browser_admission: BrowserAdmissionResult
 
     def __post_init__(self) -> None:
         if not isinstance(self.items, tuple) or any(
@@ -156,6 +166,11 @@ class CohortExecutionResult:
         keys = tuple(item.work_key for item in self.items)
         if len(keys) != len(set(keys)):
             raise ValueError("cohort result work keys must be unique")
+        if not isinstance(self.browser_admission, BrowserAdmissionResult):
+            raise TypeError("browser_admission must be BrowserAdmissionResult")
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("CohortExecutionResult cannot be serialized")
 
 
 RouteExecutor = Callable[[AcquisitionWorkItem, RouteSpec], RouteExecutionResult]
@@ -165,6 +180,26 @@ PlanRefresher = Callable[[AcquisitionWorkItem], AcquisitionPlan]
 class TieredCohortExecutor:
     """Finish every active work item in one tier before opening the next."""
 
+    __slots__ = ("_browser_admission", "_max_concurrency")
+
+    def __init__(
+        self,
+        *,
+        max_concurrency: int = 4,
+        browser_admission: BrowserAdmissionController | None = None,
+    ) -> None:
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            raise TypeError("max_concurrency must be an integer")
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
+        if browser_admission is not None and not isinstance(
+            browser_admission,
+            BrowserAdmissionController,
+        ):
+            raise TypeError("browser_admission must be BrowserAdmissionController or None")
+        self._max_concurrency = max_concurrency
+        self._browser_admission = browser_admission or BrowserAdmissionController()
+
     def execute(
         self,
         items: tuple[AcquisitionWorkItem, ...],
@@ -173,17 +208,24 @@ class TieredCohortExecutor:
         refresh_plan: PlanRefresher | None = None,
     ) -> CohortExecutionResult:
         self._validate_inputs(items, execute_route, refresh_plan)
-        for tier in _TIER_ORDER:
-            for item in items:
-                if item.disposition is WorkItemDisposition.PENDING:
-                    self._execute_tier(item, tier, execute_route)
-            if refresh_plan is not None:
-                self._refresh_pending(items, refresh_plan)
+        for tier in _TIER_ORDER[:2]:
+            self._execute_tier_with_replanning(
+                items,
+                tier,
+                execute_route,
+                refresh_plan,
+            )
+        browser_admission = self._admit_browser(items)
+        self._apply_browser_admission(items, browser_admission)
+        self._execute_browser_tier(items, browser_admission, execute_route)
         for item in items:
             if item.disposition is WorkItemDisposition.PENDING:
                 item.disposition = WorkItemDisposition.EXHAUSTED
                 item.current_tier = None
-        return CohortExecutionResult(tuple(_freeze_result(item) for item in items))
+        return CohortExecutionResult(
+            tuple(_freeze_result(item) for item in items),
+            browser_admission=browser_admission,
+        )
 
     def _validate_inputs(
         self,
@@ -224,18 +266,154 @@ class TieredCohortExecutor:
                 raise TypeError("execute_route must return RouteExecutionResult")
             _apply_route_result(item, result)
 
+    def _execute_parallel_tier(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        tier: AcquisitionPath,
+        execute_route: RouteExecutor,
+    ) -> None:
+        active = tuple(item for item in items if item.disposition is WorkItemDisposition.PENDING)
+        self._run_parallel(
+            tuple(
+                lambda item=item: self._execute_tier(item, tier, execute_route) for item in active
+            )
+        )
+
+    def _execute_tier_with_replanning(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        tier: AcquisitionPath,
+        execute_route: RouteExecutor,
+        refresh_plan: PlanRefresher | None,
+    ) -> None:
+        while True:
+            self._execute_parallel_tier(items, tier, execute_route)
+            if refresh_plan is None:
+                return
+            self._refresh_pending(items, refresh_plan)
+            if not any(
+                item.disposition is WorkItemDisposition.PENDING
+                and any(
+                    route.route_key not in item.attempted_route_keys
+                    for route in item.plan.routes_for(tier)
+                )
+                for item in items
+            ):
+                return
+
     def _refresh_pending(
         self,
         items: tuple[AcquisitionWorkItem, ...],
         refresh_plan: PlanRefresher,
     ) -> None:
-        for item in items:
-            if item.disposition is not WorkItemDisposition.PENDING:
-                continue
+        active = tuple(item for item in items if item.disposition is WorkItemDisposition.PENDING)
+
+        def refresh(item: AcquisitionWorkItem) -> None:
+            previous_revision = item.plan.revision
             plan = refresh_plan(item)
             if not isinstance(plan, AcquisitionPlan):
                 raise TypeError("refresh_plan must return AcquisitionPlan")
+            if plan.revision != previous_revision:
+                if plan.revision in item.plan_revisions:
+                    item.disposition = WorkItemDisposition.FAILED
+                    item.failure = _plan_cycle_failure()
+                    item.current_tier = None
+                    return
+                item.plan_revisions.append(plan.revision)
             item.plan = plan
+
+        self._run_parallel(tuple(lambda item=item: refresh(item) for item in active))
+
+    def _admit_browser(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+    ) -> BrowserAdmissionResult:
+        candidates = []
+        for item in items:
+            if item.disposition is not WorkItemDisposition.PENDING:
+                continue
+            routes = tuple(
+                route
+                for route in item.plan.routes_for(AcquisitionPath.CONTROLLED_BROWSER)
+                if route.route_key not in item.attempted_route_keys
+            )
+            if not routes:
+                continue
+            if len(routes) != 1:
+                item.disposition = WorkItemDisposition.FAILED
+                item.failure = _browser_plan_failure()
+                item.current_tier = None
+                continue
+            route = routes[0]
+            if route.risk_group is None:
+                item.disposition = WorkItemDisposition.FAILED
+                item.failure = _browser_plan_failure()
+                item.current_tier = None
+                continue
+            candidates.append(
+                BrowserAdmissionCandidate(
+                    work_key=item.work_key,
+                    route_key=route.route_key,
+                    rate_limit_group=route.risk_group,
+                    readiness=route.readiness,
+                    resolution_confirmed=item.plan.resolution.is_strong,
+                )
+            )
+        return self._browser_admission.evaluate(tuple(candidates))
+
+    @staticmethod
+    def _apply_browser_admission(
+        items: tuple[AcquisitionWorkItem, ...],
+        result: BrowserAdmissionResult,
+    ) -> None:
+        by_key = {item.work_key: item for item in items}
+        for decision in result.decisions:
+            item = by_key[decision.work_key]
+            if decision.disposition is BrowserAdmissionDisposition.DEFERRED:
+                item.disposition = WorkItemDisposition.DEFERRED
+                item.failure = decision.failure
+                item.current_tier = None
+            elif decision.disposition is BrowserAdmissionDisposition.ACTION_REQUIRED:
+                item.disposition = WorkItemDisposition.ACTION_REQUIRED
+                item.failure = decision.failure
+                item.current_tier = None
+
+    def _execute_browser_tier(
+        self,
+        items: tuple[AcquisitionWorkItem, ...],
+        admission: BrowserAdmissionResult,
+        execute_route: RouteExecutor,
+    ) -> None:
+        allowed = {
+            decision.work_key
+            for decision in admission.decisions
+            if decision.disposition is BrowserAdmissionDisposition.ALLOWED
+        }
+        # Browser groups remain deliberately conservative until the controlled
+        # Browser scheduler owns session state and per-group start intervals.
+        for item in items:
+            if item.work_key in allowed and item.disposition is WorkItemDisposition.PENDING:
+                self._execute_tier(
+                    item,
+                    AcquisitionPath.CONTROLLED_BROWSER,
+                    execute_route,
+                )
+
+    def _run_parallel(self, callbacks: tuple[Callable[[], None], ...]) -> None:
+        if not callbacks:
+            return
+        if len(callbacks) == 1:
+            callbacks[0]()
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(self._max_concurrency, len(callbacks)),
+            thread_name_prefix="sciretriever-acquisition-cohort",
+        ) as executor:
+            futures: tuple[Future[None], ...] = tuple(
+                executor.submit(callback) for callback in callbacks
+            )
+            for future in futures:
+                future.result()
 
 
 def _readiness_outcome(route: RouteSpec) -> RouteExecutionResult | None:
@@ -261,6 +439,24 @@ def _readiness_outcome(route: RouteSpec) -> RouteExecutionResult | None:
             action="Retry after the route becomes available.",
             retryable=True,
         )
+    )
+
+
+def _browser_plan_failure() -> StableFailure:
+    return StableFailure(
+        code="acquisition-browser-plan-contract",
+        reason="The acquisition plan contains an invalid Browser route set.",
+        action="Refresh the installation and retry the acquisition operation.",
+        retryable=False,
+    )
+
+
+def _plan_cycle_failure() -> StableFailure:
+    return StableFailure(
+        code="acquisition-plan-cycle",
+        reason="The acquisition plan returned to an earlier revision.",
+        action="Review route planning configuration before retrying acquisition.",
+        retryable=False,
     )
 
 

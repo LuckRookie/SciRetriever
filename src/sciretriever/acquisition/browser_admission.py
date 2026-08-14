@@ -48,6 +48,18 @@ def _finite_nonnegative(value: object, *, field_name: str) -> float:
     return candidate
 
 
+def _rate_limit_group(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("rate_limit_group must be a string")
+    try:
+        return BrowserGroupPolicy(
+            rate_limit_group=str(value),
+            minimum_start_interval=0.0,
+        ).rate_limit_group
+    except ValueError:
+        raise ValueError("rate_limit_group must be a stable non-sensitive identity") from None
+
+
 @unique
 class BrowserAdmissionDisposition(str, Enum):
     """The only side-effect-free outcomes before Browser execution."""
@@ -143,14 +155,11 @@ class BrowserAdmissionCandidate:
     def __post_init__(self) -> None:
         object.__setattr__(self, "work_key", _work_key(self.work_key))
         object.__setattr__(self, "route_key", _route_key(self.route_key))
-        try:
-            group = BrowserGroupPolicy(
-                rate_limit_group=self.rate_limit_group,
-                minimum_start_interval=0.0,
-            ).rate_limit_group
-        except (TypeError, ValueError):
-            raise ValueError("rate_limit_group must be a stable non-sensitive identity") from None
-        object.__setattr__(self, "rate_limit_group", group)
+        object.__setattr__(
+            self,
+            "rate_limit_group",
+            _rate_limit_group(self.rate_limit_group),
+        )
         if not isinstance(self.readiness, RouteReadiness):
             raise TypeError("readiness must be RouteReadiness")
         if type(self.resolution_confirmed) is not bool:
@@ -168,11 +177,11 @@ class BrowserAdmissionDecision:
     def __post_init__(self) -> None:
         object.__setattr__(self, "work_key", _work_key(self.work_key))
         object.__setattr__(self, "route_key", _route_key(self.route_key))
-        group = BrowserGroupPolicy(
-            rate_limit_group=self.rate_limit_group,
-            minimum_start_interval=0.0,
-        ).rate_limit_group
-        object.__setattr__(self, "rate_limit_group", group)
+        object.__setattr__(
+            self,
+            "rate_limit_group",
+            _rate_limit_group(self.rate_limit_group),
+        )
         if not isinstance(self.disposition, BrowserAdmissionDisposition):
             raise TypeError("disposition must be BrowserAdmissionDisposition")
         if self.failure is not None and not isinstance(self.failure, StableFailure):
@@ -203,11 +212,11 @@ class BrowserEscalationGroupSummary:
     required_actions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        group = BrowserGroupPolicy(
-            rate_limit_group=self.rate_limit_group,
-            minimum_start_interval=0.0,
-        ).rate_limit_group
-        object.__setattr__(self, "rate_limit_group", group)
+        object.__setattr__(
+            self,
+            "rate_limit_group",
+            _rate_limit_group(self.rate_limit_group),
+        )
         counts = (
             self.paper_count,
             self.eligible_count,

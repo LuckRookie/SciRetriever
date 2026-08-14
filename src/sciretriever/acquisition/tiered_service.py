@@ -8,6 +8,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Literal
 from weakref import WeakKeyDictionary
 
+from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
 from sciretriever.acquisition.cohort import (
     AcquisitionWorkItem,
     TieredCohortExecutor,
@@ -111,6 +112,7 @@ class PreparedAcquisitionCohort:
     """Opaque process-local preparation result in frozen request order."""
 
     items: tuple[CohortPreparationItem, ...]
+    browser_escalation: BrowserEscalationSummary
 
     def __post_init__(self) -> None:
         if not isinstance(self.items, tuple) or any(
@@ -120,6 +122,8 @@ class PreparedAcquisitionCohort:
         identities = tuple(item.literature_id for item in self.items)
         if len(identities) != len(set(identities)):
             raise ValueError("cohort Literature identities must be unique")
+        if not isinstance(self.browser_escalation, BrowserEscalationSummary):
+            raise TypeError("browser_escalation must be BrowserEscalationSummary")
 
     def __reduce__(self) -> str | tuple[object, ...]:
         raise TypeError("PreparedAcquisitionCohort cannot be serialized")
@@ -214,7 +218,10 @@ class TieredAcquisitionService:
                 self._prepare_cohort_item(item, frozen)
                 for item, frozen in zip(work_items, result.items, strict=True)
             )
-            return PreparedAcquisitionCohort(prepared_items)
+            return PreparedAcquisitionCohort(
+                prepared_items,
+                browser_escalation=result.browser_admission.summary,
+            )
         except BaseException:
             self._discard_work_preparations(work_items)
             raise
