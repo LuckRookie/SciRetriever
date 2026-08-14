@@ -387,7 +387,8 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
 
         self.assertEqual(scope, AccessScope("unknown.test", "web"))
         self.assertEqual(policy.max_concurrency, 1)
-        self.assertGreaterEqual(policy.cooldown_after_completion, 30.0)
+        self.assertGreaterEqual(policy.min_start_interval, 1.0)
+        self.assertEqual(policy.cooldown_after_completion, 0.0)
 
     def test_known_hosts_share_provider_web_scope_and_all_policies_only_tighten(self) -> None:
         provider_scope = AccessScope("fixture-publisher", "web")
@@ -447,7 +448,7 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 2)
         self.assertEqual([scope for scope, _policy in coordinator.scopes], [provider_scope] * 2)
         expected_policy = AccessPolicy.strictest(
-            AccessPolicy(max_concurrency=1, cooldown_after_completion=30.0),
+            AccessPolicy(max_concurrency=1, min_start_interval=1.0),
             injected_profile_policy,
             operator_policy,
         )
@@ -593,7 +594,8 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                 and scope.channel == "web"
                 and policy is not None
                 and policy.max_concurrency == 1
-                and policy.cooldown_after_completion >= 30.0
+                and policy.min_start_interval >= 1.0
+                and policy.cooldown_after_completion == 0.0
                 for scope, policy in coordinator.scopes
             )
         )

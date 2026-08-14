@@ -164,6 +164,7 @@ def _environment(
             ElsevierScopusAdapter(
                 **common,
                 institution_token=private_institution_token,
+                monotonic_clock=environment.monotonic_clock,
             )
             if provider == "elsevier"
             else SpringerMetaV2Adapter(**common)
@@ -427,6 +428,7 @@ def _environment_ports(
         ElsevierScopusAdapter(
             **common,
             institution_token=_institution_token(environment),
+            monotonic_clock=environment.monotonic_clock,
         )
         if provider == "elsevier"
         else SpringerMetaV2Adapter(**common)
@@ -863,7 +865,7 @@ class ElsevierScopusAdapterTests(ProviderContractCase, unittest.TestCase):
                 )
                 self.assertEqual(len(environment.transport.calls), 1)
 
-    def test_elsevier_ambiguous_reset_never_becomes_a_deadline(self) -> None:
+    def test_elsevier_official_quota_headers_form_a_shared_monotonic_deadline(self) -> None:
         environment = self._elsevier(id_start=15_000)
         ambiguous_reset = int(environment.wall_clock().timestamp()) + 86_400
         environment.queue_http_response(
@@ -884,11 +886,26 @@ class ElsevierScopusAdapterTests(ProviderContractCase, unittest.TestCase):
         )
         self.assertEqual(
             environment.coordinator.feedback_records,
-            [(environment.scope, AccessFeedback(throttled=True))],
+            [
+                (
+                    environment.scope,
+                    AccessFeedback(
+                        quota_remaining=0,
+                        quota_limit=10_000,
+                        quota_reset_at=86_500.0,
+                        throttled=True,
+                    ),
+                )
+            ],
         )
         with self.assertRaises(AdmissionTimeout):
             environment.coordinator.acquire_scope(environment.scope, timeout=0.001)
-        environment.monotonic_clock.advance(1.0)
+        environment.monotonic_clock.advance(86_399.9)
+        environment.coordinator.wake()
+        with self.assertRaises(AdmissionTimeout):
+            environment.coordinator.acquire_scope(environment.scope, timeout=0.001)
+        environment.monotonic_clock.advance(0.1)
+        environment.coordinator.wake()
         permit = environment.coordinator.acquire_scope(environment.scope, timeout=0.01)
         permit.release()
 
@@ -1352,7 +1369,7 @@ class M8AdapterBoundaryTests(unittest.TestCase):
                 window_seconds=86_400.0,
             ),
         )
-        self.assertEqual(ELSEVIER_ADAPTER_REVISION, "scopus-json-2026-08-07")
+        self.assertEqual(ELSEVIER_ADAPTER_REVISION, "scopus-json-2026-08-15")
         self.assertEqual(SPRINGER_ADAPTER_REVISION, "meta-v2-json-2026-08-07")
 
         providers: tuple[_Provider, ...] = ("elsevier", "springer")

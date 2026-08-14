@@ -441,12 +441,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(api_scope, AccessScope("springer", "web"))
             self.assertEqual(content_scope, api_scope)
             self.assertEqual(api_policy, content_policy)
-            self.assertGreaterEqual(content_policy.cooldown_after_completion, 30.0)
+            self.assertGreaterEqual(content_policy.min_start_interval, 1.0)
+            self.assertEqual(content_policy.cooldown_after_completion, 0.0)
             self.assertEqual(
                 unknown_scope,
                 AccessScope("repository.example.invalid", "web"),
             )
-            self.assertGreaterEqual(unknown_policy.cooldown_after_completion, 30.0)
+            self.assertGreaterEqual(unknown_policy.min_start_interval, 1.0)
+            self.assertEqual(unknown_policy.cooldown_after_completion, 0.0)
 
     def test_local_library_scope_uses_only_paths_and_no_external_assembly(self) -> None:
         import sciretriever.bootstrap as bootstrap

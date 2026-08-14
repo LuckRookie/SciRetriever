@@ -640,7 +640,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         assert isinstance(policy, AccessPolicy)
         self.assertEqual(policy.max_concurrency, 1)
         self.assertEqual(policy.min_start_interval, 7.0)
-        self.assertGreaterEqual(policy.cooldown_after_completion, 30.0)
+        self.assertEqual(policy.cooldown_after_completion, 2.0)
 
 
 class ControlledBrowserAcquisitionTests(unittest.TestCase):
@@ -911,7 +911,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(policy, AccessPolicy)
         self.assertEqual(policy.max_concurrency, 1)
         self.assertEqual(policy.min_start_interval, 5.0)
-        self.assertGreaterEqual(policy.cooldown_after_completion, 30.0)
+        self.assertEqual(policy.cooldown_after_completion, 1.0)
 
     def test_final_download_origin_is_fail_closed_but_only_after_runner_access(self) -> None:
         request = _request(observations=(_observation(56, (_landing_hint(),)),))

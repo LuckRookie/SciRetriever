@@ -19,7 +19,7 @@ from sciretriever.acquisition.providers.wiley import (
     WileyAuthorizedPdfClient,
 )
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
-from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.admission import AccessCoordinator, AccessFeedback
 from sciretriever.network.http import HttpClient
 
 _SECRET = "synthetic-wiley-tdm-token"
@@ -62,14 +62,17 @@ def _response(
     *,
     body: bytes = b"",
     media_type: str | None = None,
+    headers: tuple[Header, ...] = (),
 ) -> TransportResponse:
-    headers = () if media_type is None else (Header(name="Content-Type", value=media_type),)
+    response_headers = headers + (
+        () if media_type is None else (Header(name="Content-Type", value=media_type),)
+    )
     return TransportResponse(
         status=status,
         final_url=(
             "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1002%2F%28SICI%291234-5678"
         ),
-        headers=headers,
+        headers=response_headers,
         body=body,
     )
 
@@ -141,6 +144,20 @@ class WileyAuthorizedPdfClientTests(unittest.TestCase):
         self.assertEqual(WILEY_ACCESS_POLICY.max_concurrency, 3)
         self.assertEqual(WILEY_ACCESS_POLICY.burst_limit, 60)
         self.assertEqual(WILEY_ACCESS_POLICY.window_seconds, 600.0)
+        feedback = kwargs["response_feedback"]
+        self.assertEqual(
+            feedback(
+                _response(
+                    429,
+                    headers=(Header(name="Retry-After", value="7"),),
+                )
+            ),
+            AccessFeedback(retry_after=7.0, throttled=True),
+        )
+        self.assertEqual(
+            feedback(_response(503)),
+            AccessFeedback(throttled=True),
+        )
         result.content.discard()  # type: ignore[union-attr]
 
     def test_statuses_keep_miss_auth_entitlement_quota_and_service_distinct(self) -> None:

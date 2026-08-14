@@ -16,7 +16,7 @@ from sciretriever.acquisition.authorized import (
 )
 from sciretriever.acquisition.providers.core import CoreAuthorizedPdfClient
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
-from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.admission import AccessCoordinator, AccessFeedback
 from sciretriever.network.http import HttpClient
 
 _SECRET = "synthetic-core-secret"
@@ -59,12 +59,15 @@ def _response(
     *,
     body: bytes = b"",
     media_type: str | None = None,
+    headers: tuple[Header, ...] = (),
 ) -> TransportResponse:
-    headers = () if media_type is None else (Header(name="Content-Type", value=media_type),)
+    response_headers = headers + (
+        () if media_type is None else (Header(name="Content-Type", value=media_type),)
+    )
     return TransportResponse(
         status=status,
         final_url="https://api.core.ac.uk/v3/works/143262545/download",
-        headers=headers,
+        headers=response_headers,
         body=body,
     )
 
@@ -107,6 +110,33 @@ class CoreAuthorizedPdfClientTests(unittest.TestCase):
         self.assertEqual(kwargs["path_parameter_suffix"], "download")
         self.assertEqual(kwargs["credential_headers"], (("Authorization", f"Bearer {_SECRET}"),))
         self.assertEqual(kwargs["max_redirects"], 0)
+        feedback = kwargs["response_feedback"]
+        self.assertEqual(
+            feedback(
+                _response(
+                    429,
+                    headers=(
+                        Header(name="Retry-After", value="5"),
+                        Header(name="X-RateLimit-Retry-After", value="8"),
+                        Header(name="X-RateLimit-Remaining", value="0"),
+                        Header(name="X-RateLimit-Limit", value="100"),
+                    ),
+                )
+            ),
+            AccessFeedback(retry_after=8.0, throttled=True),
+        )
+        self.assertEqual(
+            feedback(
+                _response(
+                    429,
+                    headers=(
+                        Header(name="X-RateLimit-Remaining", value="0"),
+                        Header(name="x-ratelimit-remaining", value="1"),
+                    ),
+                )
+            ),
+            AccessFeedback(throttled=True),
+        )
         result.content.discard()  # type: ignore[union-attr]
 
     def test_download_statuses_keep_miss_auth_entitlement_quota_and_service_distinct(self) -> None:

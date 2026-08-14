@@ -44,7 +44,7 @@ from sciretriever.metadata.providers.arxiv import ACCESS_SCOPE as METADATA_ARXIV
 from sciretriever.metadata.providers.europe_pmc import (
     ACCESS_SCOPE as METADATA_EUROPE_PMC_SCOPE,
 )
-from sciretriever.model.access import AccessFailure, TransportResponse
+from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
     AcquisitionPath,
@@ -90,8 +90,9 @@ def _response(
     *,
     status: int = 200,
     final_url: str = "https://api.example.test/result",
+    headers: tuple[Header, ...] = (),
 ) -> TransportResponse:
-    return TransportResponse(status=status, final_url=final_url, headers=(), body=body)
+    return TransportResponse(status=status, final_url=final_url, headers=headers, body=body)
 
 
 def _access_failure(*, retryable: bool = True) -> AccessFailure:
@@ -1062,7 +1063,8 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             identifiers=(Identifier(namespace="arxiv", value="2106.14834"),)
         )
         for status in (429, 500):
-            http = _HttpFake((_response(status=status),))
+            headers = (Header(name="Retry-After", value="9"),) if status == 429 else ()
+            http = _HttpFake((_response(status=status, headers=headers),))
             with self.assertRaises(AcquisitionFailure):
                 list(
                     _arxiv(http, _LocatorFake())._deliveries(
@@ -1074,6 +1076,7 @@ class PublicProtocolSourceContractTests(unittest.TestCase):
             feedback = cast(AccessFeedback, http.feedback[0])
             self.assertIsNotNone(feedback)
             self.assertTrue(feedback.throttled)
+            self.assertEqual(feedback.retry_after, 9.0 if status == 429 else None)
 
     def test_short_circuit_close_does_not_prepare_later_locators_and_closes_current(self) -> None:
         request, evidence = _request(

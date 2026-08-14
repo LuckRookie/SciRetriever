@@ -16,6 +16,7 @@ from sciretriever.network.admission import (
     AdmissionError,
     AdmissionTimeout,
     HostPermit,
+    PeriodicQuota,
     PolicyRequired,
 )
 
@@ -124,6 +125,33 @@ class NetworkAdmissionTests(unittest.TestCase):
         self.assertEqual(effective.window_seconds, 60.0)
         self.assertNotIn("secret", repr(scope).lower())
 
+    def test_periodic_quota_contract_and_strict_merge_are_fail_closed(self) -> None:
+        minute = PeriodicQuota(limit=10, period_seconds=60.0)
+        day = PeriodicQuota(limit=1_000, period_seconds=86_400.0)
+        stricter_minute = PeriodicQuota(limit=5, period_seconds=60.0)
+
+        effective = AccessPolicy.strictest(
+            AccessPolicy(max_concurrency=4, periodic_quotas=(minute, day)),
+            AccessPolicy(max_concurrency=8, periodic_quotas=(stricter_minute,)),
+        )
+
+        self.assertEqual(effective.max_concurrency, 4)
+        self.assertEqual(
+            effective.periodic_quotas,
+            (stricter_minute, day),
+        )
+        with self.assertRaisesRegex(ValueError, "unique reset boundaries"):
+            AccessPolicy(
+                max_concurrency=1,
+                periodic_quotas=(minute, stricter_minute),
+            )
+        with self.assertRaisesRegex(ValueError, "less than period_seconds"):
+            PeriodicQuota(
+                limit=1,
+                period_seconds=60.0,
+                reset_offset_seconds=60.0,
+            )
+
     def test_missing_policy_is_rejected_and_api_does_not_get_web_cooldown(self) -> None:
         clock = _FakeClock()
         coordinator = AccessCoordinator(clock=clock)
@@ -143,6 +171,7 @@ class NetworkAdmissionTests(unittest.TestCase):
         web_host = web.acquire_host("shared.example.test")
         web_host.release()
         web.release()
+        self.assertEqual(coordinator.policy_for(web_scope), policy)
 
         api_again = coordinator.acquire_scope(api_scope)
         api_again_host = api_again.acquire_host("shared.example.test", timeout=0.1)
@@ -276,7 +305,7 @@ class NetworkAdmissionTests(unittest.TestCase):
     def test_web_scope_covers_multiple_redirect_hosts_and_cools_after_full_flow(self) -> None:
         clock = _FakeClock()
         coordinator = AccessCoordinator(clock=clock)
-        policy = AccessPolicy(max_concurrency=8)
+        policy = AccessPolicy(max_concurrency=1, cooldown_after_completion=30.0)
         web_scope = AccessScope("fixture-provider", "web")
 
         flow = coordinator.acquire_scope(web_scope, policy)
@@ -404,6 +433,183 @@ class NetworkAdmissionTests(unittest.TestCase):
         feedback_release.set()
         feedback_worker.join(1.0)
         self.assertFalse(feedback_worker.is_alive())
+
+    def test_fixed_boundary_quotas_are_atomically_shared_and_reset_together(self) -> None:
+        clock = _FakeClock()
+        clock.advance(2.0)
+        coordinator = AccessCoordinator(clock=clock, quota_clock=clock)
+        scope = AccessScope("fixture-provider", "api")
+        policy = AccessPolicy(
+            max_concurrency=8,
+            periodic_quotas=(
+                PeriodicQuota(limit=2, period_seconds=10.0, reset_offset_seconds=2.0),
+                PeriodicQuota(limit=3, period_seconds=100.0, reset_offset_seconds=2.0),
+            ),
+        )
+
+        for _ in range(2):
+            permit = coordinator.acquire_scope(scope, policy)
+            permit.release()
+
+        minute_reset = threading.Event()
+        minute_release = threading.Event()
+        errors: list[BaseException] = []
+
+        def wait_for_minute_reset() -> None:
+            try:
+                permit = coordinator.acquire_scope(scope)
+                minute_reset.set()
+                minute_release.wait(1.0)
+                permit.release()
+            except BaseException as error:
+                errors.append(error)
+
+        minute_worker = threading.Thread(target=wait_for_minute_reset)
+        minute_worker.start()
+        self.assertFalse(minute_reset.wait(0.05))
+        clock.advance(9.9)
+        coordinator.wake()
+        self.assertFalse(minute_reset.wait(0.05))
+        clock.advance(0.1)
+        coordinator.wake()
+        _wait_for(minute_reset)
+        minute_release.set()
+        minute_worker.join(1.0)
+
+        daily_reset = threading.Event()
+        daily_release = threading.Event()
+
+        def wait_for_daily_reset() -> None:
+            try:
+                permit = coordinator.acquire_scope(scope)
+                daily_reset.set()
+                daily_release.wait(1.0)
+                permit.release()
+            except BaseException as error:
+                errors.append(error)
+
+        daily_worker = threading.Thread(target=wait_for_daily_reset)
+        daily_worker.start()
+        self.assertFalse(daily_reset.wait(0.05))
+        clock.advance(10.0)
+        coordinator.wake()
+        self.assertFalse(daily_reset.wait(0.05))
+        clock.advance(79.9)
+        coordinator.wake()
+        self.assertFalse(daily_reset.wait(0.05))
+        clock.advance(0.1)
+        coordinator.wake()
+        _wait_for(daily_reset)
+        daily_release.set()
+        daily_worker.join(1.0)
+
+        self.assertFalse(minute_worker.is_alive())
+        self.assertFalse(daily_worker.is_alive())
+        self.assertEqual(errors, [])
+
+    def test_periodic_quota_never_overadmits_concurrent_callers(self) -> None:
+        clock = _FakeClock()
+        coordinator = AccessCoordinator(clock=clock, quota_clock=clock)
+        scope = AccessScope("fixture-provider", "api")
+        policy = AccessPolicy(
+            max_concurrency=10,
+            periodic_quotas=(PeriodicQuota(limit=3, period_seconds=60.0),),
+        )
+        cancel_event = threading.Event()
+        acquired = threading.Barrier(4)
+        release = threading.Event()
+        successes: list[AccessPermit] = []
+        cancelled: list[AccessCancelled] = []
+        errors: list[BaseException] = []
+        lock = threading.Lock()
+
+        def contend() -> None:
+            try:
+                permit = coordinator.acquire_scope(
+                    scope,
+                    policy,
+                    cancel_event=cancel_event,
+                )
+                with lock:
+                    successes.append(permit)
+                acquired.wait(1.0)
+                release.wait(1.0)
+                permit.release()
+            except AccessCancelled as error:
+                with lock:
+                    cancelled.append(error)
+            except BaseException as error:
+                with lock:
+                    errors.append(error)
+
+        workers = [threading.Thread(target=contend) for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        acquired.wait(1.0)
+        self.assertEqual(len(successes), 3)
+        cancel_event.set()
+        coordinator.wake()
+        release.set()
+        for worker in workers:
+            worker.join(1.0)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(len(successes), 3)
+        self.assertEqual(len(cancelled), 5)
+        self.assertEqual(errors, [])
+
+    def test_quota_feedback_can_only_reduce_remaining_or_extend_reset(self) -> None:
+        clock = _FakeClock()
+        coordinator = AccessCoordinator(clock=clock, quota_clock=clock)
+        scope = AccessScope("fixture-provider", "api")
+        policy = AccessPolicy(max_concurrency=1)
+
+        first = coordinator.acquire_scope(scope, policy)
+        first.release(
+            AccessFeedback(
+                quota_remaining=2,
+                quota_limit=10,
+                quota_reset_at=20.0,
+            )
+        )
+        second = coordinator.acquire_scope(scope)
+        second.release(
+            AccessFeedback(
+                quota_remaining=5,
+                quota_limit=20,
+                quota_reset_at=15.0,
+            )
+        )
+        third = coordinator.acquire_scope(scope)
+        third.release()
+
+        acquired = threading.Event()
+
+        def wait_for_tightened_reset() -> None:
+            permit = coordinator.acquire_scope(scope)
+            acquired.set()
+            permit.release()
+
+        worker = threading.Thread(target=wait_for_tightened_reset)
+        worker.start()
+        self.assertFalse(acquired.wait(0.05))
+        clock.advance(19.9)
+        coordinator.wake()
+        self.assertFalse(acquired.wait(0.05))
+        clock.advance(0.1)
+        coordinator.wake()
+        _wait_for(acquired)
+        worker.join(1.0)
+
+        self.assertFalse(worker.is_alive())
+        with self.assertRaisesRegex(ValueError, "requires quota_reset_at"):
+            AccessFeedback(quota_remaining=1)
+        with self.assertRaisesRegex(ValueError, "must not exceed quota_limit"):
+            AccessFeedback(
+                quota_remaining=2,
+                quota_limit=1,
+                quota_reset_at=30.0,
+            )
 
     def test_scope_release_with_feedback_failure_releases_scope_and_host(self) -> None:
         coordinator = _FeedbackFailureCoordinator()

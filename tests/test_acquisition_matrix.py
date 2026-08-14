@@ -373,7 +373,8 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             self.assertEqual(second_scope, first_scope)
             self.assertEqual(first_policy, second_policy)
             self.assertEqual(first_policy.max_concurrency, 1)
-            self.assertGreaterEqual(first_policy.cooldown_after_completion, 30.0)
+            self.assertGreaterEqual(first_policy.min_start_interval, 1.0)
+            self.assertEqual(first_policy.cooldown_after_completion, 0.0)
 
         springer_scope, _ = resolver.resolve(
             normalize_url("https://www.nature.com/articles/example.pdf")
@@ -391,7 +392,8 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             AccessScope("repository.example.invalid", "web"),
         )
         self.assertEqual(unknown_policy.max_concurrency, 1)
-        self.assertGreaterEqual(unknown_policy.cooldown_after_completion, 30.0)
+        self.assertGreaterEqual(unknown_policy.min_start_interval, 1.0)
+        self.assertEqual(unknown_policy.cooldown_after_completion, 0.0)
 
     def test_fixed_matrix_has_exact_provider_and_multi_path_mappings(self) -> None:
         configuration = _configuration(
