@@ -442,11 +442,11 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 
 截至本段对应实现，生产对象图仍以 Browser disabled 且 execution unconfirmed 组装；因此
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
-真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 的规则注入
-已经实现并通过离线 direct/安装后测试；Provider session broker、risk-group Browser executor、
-状态/捕获矩阵与用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。当前 cohort 内部
-保留的 Browser 执行分支也只是保守串行兜底，不代表第 4.1 节的组间并行会话能力已经
-production-ready。
+真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
+已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
+Provider session broker、状态/捕获矩阵、完整安装后验收与用户确认 UX 完成前，仍不得从配置
+或 CLI 打开生产 Browser。组间并行和组内串行已经是当前 cohort 行为，但没有会话 broker 与
+完整 Provider Profile 时仍不构成 production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
 
@@ -470,7 +470,21 @@ Springer group:  S1 --provider interval-- S2 --provider interval-- S3
 
 组内 `max_concurrency = 1`。全局 Browser concurrency 只限制本机 Browser process/context 资源，不能作为所有 Provider 共用的业务锁。共享平台、账号、quota 或风控的多个品牌进入同一 risk group；不同展示名称不能自动获得独立并发。
 
+当前 `PublisherAccessProfile.browser_policy` 与 Profile 的 `browser_rate_limit_group`、
+`policy_revision` 精确绑定；Browser route 缺少 policy 或二者不一致时构造即失败。Policy 显式
+保存固定并发 1、文章启动间隔、可选滑动窗口、完成冷却和失败冷却，production-ready Profile
+必须至少声明一种非零 pacing。`tightened_by()` 只取更长间隔/冷却或更小额度与更长窗口，不能
+改变 group/revision，也不能放宽声明值。具体数字和证据仍由 Provider Notes/Profile 给出，
+不是全局默认值。
+
 一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
+
+当前 `TieredCohortExecutor` 只把 Browser admission 明确允许的最小剩余 item 转为
+`BrowserArticleAttempt`，并从同一 admission group snapshot 取得 policy 与稳定 session key。
+Scheduler callback 覆盖整个 route adapter 调用，因此 Network Browser 的 page/download/临时
+目录清理已经完成后才会释放组内文章 permit；route 的 deferred、action-required、失败、取消
+或异常均按失败完成处理并保留适用冷却。不同 group 使用独立 worker 实际重叠，同 group 保持
+冻结输入顺序。缺少 scheduler 的 admitted route 会稳定失败，不再退回隐藏的全局串行执行。
 
 `browser_session_key` 管理 operator-owned persistent context/profile，使同一访问方的多篇论文复用用户已经合法建立的登录状态。Profile 路径由 Configuration 安全解析，Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenance、Report 或日志。自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；这些情况形成 action-required 并暂停对应 group。
 
