@@ -56,6 +56,7 @@ from sciretriever.model.acquisition import (
 )
 from sciretriever.model.primitives import LiteratureId
 from sciretriever.model.report import StableFailure
+from sciretriever.network.browser_scheduler import BrowserSchedulingCancelled
 
 _LOGGER = get_logger(__name__)
 
@@ -178,6 +179,7 @@ class TieredAcquisitionService:
                         on_prepared,
                     )
                 ),
+                cancel_event=cancel_event,
             )
             if on_prepared is None:
                 prepared_items = self._prepare_complete_cohort_items(
@@ -194,6 +196,9 @@ class TieredAcquisitionService:
                 prepared_items,
                 browser_escalation=result.browser_admission.summary,
             )
+        except BrowserSchedulingCancelled:
+            self._discard_work_preparations(work_items)
+            raise AcquisitionFailure(_interruption_failure()) from None
         except BaseException:
             self._discard_work_preparations(work_items)
             raise

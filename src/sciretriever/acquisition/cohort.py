@@ -30,6 +30,13 @@ from sciretriever.acquisition.ports import (
 )
 from sciretriever.model.acquisition import AcquisitionPath
 from sciretriever.model.report import StableFailure
+from sciretriever.network.browser_scheduler import (
+    BrowserArticleAttempt,
+    BrowserAttemptCompletion,
+    BrowserAttemptDisposition,
+    BrowserGroupScheduler,
+    BrowserSchedulerCancellation,
+)
 
 _WORK_KEY: Final[re.Pattern[str]] = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
@@ -184,13 +191,14 @@ TierCompletionObserver: TypeAlias = Callable[
 class TieredCohortExecutor:
     """Finish every active work item in one tier before opening the next."""
 
-    __slots__ = ("_browser_admission", "_max_concurrency")
+    __slots__ = ("_browser_admission", "_browser_scheduler", "_max_concurrency")
 
     def __init__(
         self,
         *,
         max_concurrency: int = 4,
         browser_admission: BrowserAdmissionController | None = None,
+        browser_scheduler: BrowserGroupScheduler | None = None,
     ) -> None:
         if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
             raise TypeError("max_concurrency must be an integer")
@@ -201,8 +209,14 @@ class TieredCohortExecutor:
             BrowserAdmissionController,
         ):
             raise TypeError("browser_admission must be BrowserAdmissionController or None")
+        if browser_scheduler is not None and not isinstance(
+            browser_scheduler,
+            BrowserGroupScheduler,
+        ):
+            raise TypeError("browser_scheduler must be BrowserGroupScheduler or None")
         self._max_concurrency = max_concurrency
         self._browser_admission = browser_admission or BrowserAdmissionController()
+        self._browser_scheduler = browser_scheduler
 
     def execute(
         self,
@@ -211,12 +225,14 @@ class TieredCohortExecutor:
         *,
         refresh_plan: PlanRefresher | None = None,
         on_tier_completed: TierCompletionObserver | None = None,
+        cancel_event: BrowserSchedulerCancellation | None = None,
     ) -> CohortExecutionResult:
         self._validate_inputs(
             items,
             execute_route,
             refresh_plan,
             on_tier_completed,
+            cancel_event,
         )
         for tier in _TIER_ORDER[:2]:
             self._execute_tier_with_replanning(
@@ -228,7 +244,12 @@ class TieredCohortExecutor:
             self._notify_tier_completed(items, tier, on_tier_completed)
         browser_admission = self._admit_browser(items)
         self._apply_browser_admission(items, browser_admission)
-        self._execute_browser_tier(items, browser_admission, execute_route)
+        self._execute_browser_tier(
+            items,
+            browser_admission,
+            execute_route,
+            cancel_event=cancel_event,
+        )
         for item in items:
             if item.disposition is WorkItemDisposition.PENDING:
                 item.disposition = WorkItemDisposition.EXHAUSTED
@@ -249,6 +270,7 @@ class TieredCohortExecutor:
         execute_route: RouteExecutor,
         refresh_plan: PlanRefresher | None,
         on_tier_completed: TierCompletionObserver | None,
+        cancel_event: BrowserSchedulerCancellation | None,
     ) -> None:
         if not isinstance(items, tuple) or any(
             not isinstance(item, AcquisitionWorkItem) for item in items
@@ -263,6 +285,11 @@ class TieredCohortExecutor:
             raise TypeError("refresh_plan must be callable or None")
         if on_tier_completed is not None and not callable(on_tier_completed):
             raise TypeError("on_tier_completed must be callable or None")
+        if cancel_event is not None and not isinstance(
+            cancel_event,
+            BrowserSchedulerCancellation,
+        ):
+            raise TypeError("cancel_event must expose is_set() or be None")
         if any(item.disposition is not WorkItemDisposition.PENDING for item in items):
             raise ValueError("cohort work items must be fresh")
 
@@ -412,21 +439,83 @@ class TieredCohortExecutor:
         items: tuple[AcquisitionWorkItem, ...],
         admission: BrowserAdmissionResult,
         execute_route: RouteExecutor,
+        *,
+        cancel_event: BrowserSchedulerCancellation | None,
     ) -> None:
         allowed = {
             decision.work_key
             for decision in admission.decisions
             if decision.disposition is BrowserAdmissionDisposition.ALLOWED
         }
-        # Browser groups remain deliberately conservative until the controlled
-        # Browser scheduler owns session state and per-group start intervals.
-        for item in items:
-            if item.work_key in allowed and item.disposition is WorkItemDisposition.PENDING:
-                self._execute_tier(
-                    item,
-                    AcquisitionPath.CONTROLLED_BROWSER,
-                    execute_route,
+        active = tuple(
+            item
+            for item in items
+            if item.work_key in allowed and item.disposition is WorkItemDisposition.PENDING
+        )
+        if not active:
+            return
+        scheduler = self._browser_scheduler
+        if scheduler is None:
+            for item in active:
+                item.disposition = WorkItemDisposition.FAILED
+                item.failure = _browser_scheduler_failure()
+                item.current_tier = None
+            return
+        attempts = []
+        items_by_key = {item.work_key: item for item in active}
+        for item in active:
+            route = self._pending_browser_route(item)
+            if route is None or route.risk_group is None:
+                item.disposition = WorkItemDisposition.FAILED
+                item.failure = _browser_plan_failure()
+                item.current_tier = None
+                continue
+            group = self._browser_admission.group_state_for(route.risk_group)
+            if group is None:
+                item.disposition = WorkItemDisposition.FAILED
+                item.failure = _browser_scheduler_failure()
+                item.current_tier = None
+                continue
+            attempts.append(
+                BrowserArticleAttempt(
+                    attempt_key=item.work_key,
+                    rate_limit_group=group.rate_limit_group,
+                    session_key=str(group.session_key),
+                    policy=group.policy,
                 )
+            )
+
+        def run(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[None]:
+            item = items_by_key[attempt.attempt_key]
+            self._execute_tier(
+                item,
+                AcquisitionPath.CONTROLLED_BROWSER,
+                execute_route,
+            )
+            failed = item.disposition in {
+                WorkItemDisposition.DEFERRED,
+                WorkItemDisposition.ACTION_REQUIRED,
+                WorkItemDisposition.FAILED,
+            }
+            return BrowserAttemptCompletion(
+                None,
+                (
+                    BrowserAttemptDisposition.FAILED
+                    if failed
+                    else BrowserAttemptDisposition.COMPLETED
+                ),
+            )
+
+        scheduler.execute(tuple(attempts), run, cancel_event=cancel_event)
+
+    @staticmethod
+    def _pending_browser_route(item: AcquisitionWorkItem) -> RouteSpec | None:
+        routes = tuple(
+            route
+            for route in item.plan.routes_for(AcquisitionPath.CONTROLLED_BROWSER)
+            if route.route_key not in item.attempted_route_keys
+        )
+        return routes[0] if len(routes) == 1 else None
 
     def _run_parallel(self, callbacks: tuple[Callable[[], None], ...]) -> None:
         if not callbacks:
@@ -476,6 +565,15 @@ def _browser_plan_failure() -> StableFailure:
         code="acquisition-browser-plan-contract",
         reason="The acquisition plan contains an invalid Browser route set.",
         action="Refresh the installation and retry the acquisition operation.",
+        retryable=False,
+    )
+
+
+def _browser_scheduler_failure() -> StableFailure:
+    return StableFailure(
+        code="acquisition-browser-scheduler-unavailable",
+        reason="The admitted Browser route has no matching in-process scheduler policy.",
+        action="Correct Browser scheduler assembly before retrying acquisition.",
         retryable=False,
     )
 

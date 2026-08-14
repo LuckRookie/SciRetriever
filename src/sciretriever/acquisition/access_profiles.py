@@ -17,6 +17,8 @@ from enum import Enum, unique
 from typing import ClassVar, Final
 from urllib.parse import urlsplit
 
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+
 _CONTROL_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
 _STABLE_IDENTITY: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
@@ -264,6 +266,7 @@ class PublisherAccessProfile:
     policy_revision: str
     notes_reference: str
     production_status: ProfileProductionStatus
+    browser_policy: BrowserGroupPolicy | None = None
     browser_rules: BrowserRuleSet = BrowserRuleSet()
 
     def __post_init__(self) -> None:
@@ -350,6 +353,11 @@ class PublisherAccessProfile:
             raise TypeError("production_status must be ProfileProductionStatus")
         if not isinstance(self.browser_rules, BrowserRuleSet):
             raise TypeError("browser_rules must be BrowserRuleSet")
+        if self.browser_policy is not None and not isinstance(
+            self.browser_policy,
+            BrowserGroupPolicy,
+        ):
+            raise TypeError("browser_policy must be BrowserGroupPolicy or None")
         object.__setattr__(
             self,
             "policy_revision",
@@ -370,6 +378,7 @@ class PublisherAccessProfile:
                 self.browser_allowed_origins,
                 self.browser_rate_limit_group is not None,
                 self.browser_session_key is not None,
+                self.browser_policy is not None,
                 self.browser_rules != BrowserRuleSet(),
             )
         )
@@ -379,11 +388,26 @@ class PublisherAccessProfile:
             not self.browser_allowed_origins
             or self.browser_rate_limit_group is None
             or self.browser_session_key is None
+            or self.browser_policy is None
         ):
-            raise ValueError("Browser routes require origins, a rate group, and a session key")
+            raise ValueError(
+                "Browser routes require origins, a rate group, a session key, and a policy"
+            )
+        if self.browser_policy is not None and (
+            self.browser_policy.rate_limit_group != self.browser_rate_limit_group
+            or self.browser_policy.policy_revision != self.policy_revision
+        ):
+            raise ValueError("Browser policy must match the profile group and revision")
         if self.production_status is ProfileProductionStatus.PRODUCTION_READY and (
             self.policy_evidence is PolicyEvidence.UNVERIFIED
-            or (self.browser_route_key is not None and not self.browser_rules.can_initiate_download)
+            or (
+                self.browser_route_key is not None
+                and (
+                    not self.browser_rules.can_initiate_download
+                    or self.browser_policy is None
+                    or not self.browser_policy.has_pacing
+                )
+            )
         ):
             raise ValueError("a production-ready Browser profile needs verified executable rules")
         if self.production_status is ProfileProductionStatus.PUBLIC_API_ONLY and (
@@ -409,6 +433,18 @@ class PublisherAccessProfile:
                 self.browser_allowed_origins,
                 self.browser_rate_limit_group,
                 self.browser_session_key,
+                None
+                if self.browser_policy is None
+                else (
+                    self.browser_policy.rate_limit_group,
+                    self.browser_policy.policy_revision,
+                    self.browser_policy.minimum_start_interval,
+                    self.browser_policy.max_concurrency,
+                    self.browser_policy.maximum_starts_per_window,
+                    self.browser_policy.window_seconds,
+                    self.browser_policy.cooldown_after_completion,
+                    self.browser_policy.failure_cooldown,
+                ),
                 self.policy_evidence.value,
                 self.policy_revision,
                 self.notes_reference,

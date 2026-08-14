@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Final
 
+from sciretriever.acquisition.access_profiles import BrowserSessionKey
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.model.report import StableFailure
 from sciretriever.network.browser_scheduler import BrowserGroupPolicy
@@ -54,6 +55,7 @@ def _rate_limit_group(value: object) -> str:
     try:
         return BrowserGroupPolicy(
             rate_limit_group=str(value),
+            policy_revision="identity-validation",
             minimum_start_interval=0.0,
         ).rate_limit_group
     except ValueError:
@@ -90,12 +92,14 @@ class BrowserGroupAdmissionState:
     """One current risk-group snapshot without session contents or URLs."""
 
     policy: BrowserGroupPolicy
+    session_key: str
     readiness: BrowserGroupReadiness
     earliest_start_in_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy, BrowserGroupPolicy):
             raise TypeError("policy must be a BrowserGroupPolicy")
+        object.__setattr__(self, "session_key", BrowserSessionKey(self.session_key))
         if not isinstance(self.readiness, BrowserGroupReadiness):
             raise TypeError("readiness must be BrowserGroupReadiness")
         object.__setattr__(
@@ -370,6 +374,11 @@ class BrowserAdmissionController:
             decisions=decisions,
             summary=self._summarize(candidates, decisions),
         )
+
+    def group_state_for(self, rate_limit_group: str) -> BrowserGroupAdmissionState | None:
+        """Return one secret-free immutable snapshot for the in-process executor."""
+
+        return self._groups.get(_rate_limit_group(rate_limit_group))
 
     def _decide(self, candidate: BrowserAdmissionCandidate) -> BrowserAdmissionDecision:
         disposition: BrowserAdmissionDisposition

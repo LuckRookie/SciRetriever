@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import re
 import threading
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol, TypeVar, cast, runtime_checkable
+from enum import Enum, unique
+from typing import Generic, Protocol, TypeVar, cast, runtime_checkable
 
 _ATTEMPT_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$", re.ASCII)
 _GROUP_KEY = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", re.ASCII)
+_POLICY_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$", re.ASCII)
 _SENSITIVE_MARKERS = frozenset({"cookie", "credential", "password", "secret", "signature", "token"})
 _ResultT = TypeVar("_ResultT")
 
@@ -68,12 +71,48 @@ def _finite_nonnegative(value: object, *, field_name: str) -> float:
     return candidate
 
 
+def _positive_integer_or_none(value: object, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise TypeError(f"{field_name} must be an integer or None")
+    if value < 1:
+        raise ValueError(f"{field_name} must be positive")
+    return value
+
+
+def _positive_number_or_none(value: object, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    candidate = _finite_nonnegative(value, field_name=field_name)
+    if candidate == 0.0:
+        raise ValueError(f"{field_name} must be positive")
+    return candidate
+
+
+def _policy_revision(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("policy_revision must be a string")
+    candidate = value.strip()
+    if _POLICY_REVISION.fullmatch(candidate) is None or any(
+        marker in candidate.casefold().split("-") for marker in _SENSITIVE_MARKERS
+    ):
+        raise ValueError("policy_revision must be a stable non-sensitive identity")
+    return candidate
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserGroupPolicy:
     """One conservative article-start policy for a shared Browser risk group."""
 
     rate_limit_group: str
+    policy_revision: str
     minimum_start_interval: float
+    max_concurrency: int = 1
+    maximum_starts_per_window: int | None = None
+    window_seconds: float | None = None
+    cooldown_after_completion: float = 0.0
+    failure_cooldown: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -83,12 +122,127 @@ class BrowserGroupPolicy:
         )
         object.__setattr__(
             self,
+            "policy_revision",
+            _policy_revision(self.policy_revision),
+        )
+        object.__setattr__(
+            self,
             "minimum_start_interval",
             _finite_nonnegative(
                 self.minimum_start_interval,
                 field_name="minimum_start_interval",
             ),
         )
+        if type(self.max_concurrency) is not int:
+            raise TypeError("max_concurrency must be an integer")
+        if self.max_concurrency != 1:
+            raise ValueError("Browser risk-group concurrency is fixed at one")
+        object.__setattr__(
+            self,
+            "maximum_starts_per_window",
+            _positive_integer_or_none(
+                self.maximum_starts_per_window,
+                field_name="maximum_starts_per_window",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "window_seconds",
+            _positive_number_or_none(
+                self.window_seconds,
+                field_name="window_seconds",
+            ),
+        )
+        if (self.maximum_starts_per_window is None) != (self.window_seconds is None):
+            raise ValueError("Browser start-window count and duration must be configured together")
+        for field_name in ("cooldown_after_completion", "failure_cooldown"):
+            object.__setattr__(
+                self,
+                field_name,
+                _finite_nonnegative(getattr(self, field_name), field_name=field_name),
+            )
+
+    @property
+    def has_pacing(self) -> bool:
+        return any(
+            (
+                self.minimum_start_interval > 0.0,
+                self.maximum_starts_per_window is not None,
+                self.cooldown_after_completion > 0.0,
+                self.failure_cooldown > 0.0,
+            )
+        )
+
+    def tightened_by(self, operator: BrowserGroupPolicy) -> BrowserGroupPolicy:
+        """Combine one operator policy without allowing any declared limit to relax."""
+
+        if not isinstance(operator, BrowserGroupPolicy):
+            raise TypeError("operator must be a BrowserGroupPolicy")
+        if (
+            operator.rate_limit_group != self.rate_limit_group
+            or operator.policy_revision != self.policy_revision
+        ):
+            raise ValueError("Browser policy tightening must preserve group and revision")
+        window_count, window_seconds = self._strictest_window(operator)
+        return BrowserGroupPolicy(
+            rate_limit_group=self.rate_limit_group,
+            policy_revision=self.policy_revision,
+            minimum_start_interval=max(
+                self.minimum_start_interval,
+                operator.minimum_start_interval,
+            ),
+            max_concurrency=1,
+            maximum_starts_per_window=window_count,
+            window_seconds=window_seconds,
+            cooldown_after_completion=max(
+                self.cooldown_after_completion,
+                operator.cooldown_after_completion,
+            ),
+            failure_cooldown=max(
+                self.failure_cooldown,
+                operator.failure_cooldown,
+            ),
+        )
+
+    def _strictest_window(
+        self,
+        operator: BrowserGroupPolicy,
+    ) -> tuple[int | None, float | None]:
+        if self.maximum_starts_per_window is None:
+            return operator.maximum_starts_per_window, operator.window_seconds
+        if operator.maximum_starts_per_window is None:
+            return self.maximum_starts_per_window, self.window_seconds
+        if (
+            operator.maximum_starts_per_window > self.maximum_starts_per_window
+            or operator.window_seconds is None
+            or self.window_seconds is None
+            or operator.window_seconds < self.window_seconds
+        ):
+            raise ValueError("operator Browser window cannot relax the declared policy")
+        return operator.maximum_starts_per_window, operator.window_seconds
+
+
+@unique
+class BrowserAttemptDisposition(str, Enum):
+    """The scheduler-level completion class used only for conservative cooldown."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserAttemptCompletion(Generic[_ResultT]):
+    """One callback value plus whether provider failure cooldown must apply."""
+
+    value: _ResultT
+    disposition: BrowserAttemptDisposition
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.disposition, BrowserAttemptDisposition):
+            raise TypeError("disposition must be a BrowserAttemptDisposition")
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("BrowserAttemptCompletion cannot be serialized")
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,12 +295,14 @@ class BrowserGroupScheduler:
         self._global_permits = threading.BoundedSemaphore(max_concurrency)
         self._state_lock = threading.Lock()
         self._group_locks: dict[str, threading.Lock] = {}
+        self._policies: dict[str, BrowserGroupPolicy] = {}
         self._next_allowed_at: dict[str, float] = {}
+        self._start_history: dict[str, deque[float]] = {}
 
     def execute(
         self,
         attempts: tuple[BrowserArticleAttempt, ...],
-        callback: Callable[[BrowserArticleAttempt], _ResultT],
+        callback: Callable[[BrowserArticleAttempt], BrowserAttemptCompletion[_ResultT]],
         *,
         cancel_event: BrowserSchedulerCancellation | None = None,
     ) -> tuple[_ResultT, ...]:
@@ -180,7 +336,7 @@ class BrowserGroupScheduler:
     def _validate_execution(
         self,
         attempts: tuple[BrowserArticleAttempt, ...],
-        callback: Callable[[BrowserArticleAttempt], _ResultT],
+        callback: Callable[[BrowserArticleAttempt], BrowserAttemptCompletion[_ResultT]],
         cancel_event: BrowserSchedulerCancellation | None,
     ) -> dict[str, tuple[tuple[int, BrowserArticleAttempt], ...]]:
         if not isinstance(attempts, tuple) or any(
@@ -204,12 +360,13 @@ class BrowserGroupScheduler:
             if prior != attempt.policy:
                 raise ValueError("one rate-limit group must use one policy snapshot")
             grouped.setdefault(attempt.rate_limit_group, []).append((index, attempt))
+        self._register_policies(tuple(policies.values()))
         return {key: tuple(values) for key, values in grouped.items()}
 
     def _run_attempt(
         self,
         attempt: BrowserArticleAttempt,
-        callback: Callable[[BrowserArticleAttempt], _ResultT],
+        callback: Callable[[BrowserArticleAttempt], BrowserAttemptCompletion[_ResultT]],
         *,
         cancel_event: BrowserSchedulerCancellation | None,
     ) -> _ResultT:
@@ -217,23 +374,43 @@ class BrowserGroupScheduler:
         self._acquire(group_lock, cancel_event)
         try:
             self._check_cancel(cancel_event)
-            deadline = self._deadline(attempt.rate_limit_group)
+            deadline = self._deadline(attempt.policy)
             if self._clock.now() < deadline:
                 self._clock.wait_until(deadline, cancel_event)
             self._check_cancel(cancel_event)
-            started_at = self._clock.now()
-            self._remember_next_start(
-                attempt.rate_limit_group,
-                started_at + attempt.policy.minimum_start_interval,
-            )
             self._acquire(self._global_permits, cancel_event)
+            failed = True
+            started = False
             try:
                 self._check_cancel(cancel_event)
-                return callback(attempt)
+                started_at = self._clock.now()
+                self._remember_start(attempt.policy, started_at)
+                started = True
+                completion = callback(attempt)
+                if not isinstance(completion, BrowserAttemptCompletion):
+                    raise TypeError("Browser callback must return BrowserAttemptCompletion")
+                failed = completion.disposition is BrowserAttemptDisposition.FAILED
+                return completion.value
             finally:
-                self._global_permits.release()
+                try:
+                    if started:
+                        self._remember_completion(
+                            attempt.policy,
+                            self._clock.now(),
+                            failed=failed,
+                        )
+                finally:
+                    self._global_permits.release()
         finally:
             group_lock.release()
+
+    def _register_policies(self, policies: tuple[BrowserGroupPolicy, ...]) -> None:
+        with self._state_lock:
+            for policy in policies:
+                existing = self._policies.get(policy.rate_limit_group)
+                if existing is not None and existing != policy:
+                    raise ValueError("one scheduler risk group must retain one policy revision")
+            self._policies.update({policy.rate_limit_group: policy for policy in policies})
 
     def _group_lock(self, group: str) -> threading.Lock:
         with self._state_lock:
@@ -243,15 +420,46 @@ class BrowserGroupScheduler:
                 self._group_locks[group] = lock
             return lock
 
-    def _deadline(self, group: str) -> float:
+    def _deadline(self, policy: BrowserGroupPolicy) -> float:
+        now = self._clock.now()
         with self._state_lock:
-            return self._next_allowed_at.get(group, 0.0)
+            deadline = self._next_allowed_at.get(policy.rate_limit_group, 0.0)
+            count = policy.maximum_starts_per_window
+            window = policy.window_seconds
+            if count is None or window is None:
+                return deadline
+            history = self._start_history.setdefault(policy.rate_limit_group, deque())
+            while history and history[0] + window <= now:
+                history.popleft()
+            if len(history) >= count:
+                deadline = max(deadline, history[-count] + window)
+            return deadline
 
-    def _remember_next_start(self, group: str, deadline: float) -> None:
+    def _remember_start(self, policy: BrowserGroupPolicy, started_at: float) -> None:
         with self._state_lock:
+            group = policy.rate_limit_group
             self._next_allowed_at[group] = max(
                 self._next_allowed_at.get(group, 0.0),
-                deadline,
+                started_at + policy.minimum_start_interval,
+            )
+            if policy.maximum_starts_per_window is not None:
+                self._start_history.setdefault(group, deque()).append(started_at)
+
+    def _remember_completion(
+        self,
+        policy: BrowserGroupPolicy,
+        completed_at: float,
+        *,
+        failed: bool,
+    ) -> None:
+        delay = policy.cooldown_after_completion
+        if failed:
+            delay = max(delay, policy.failure_cooldown)
+        with self._state_lock:
+            group = policy.rate_limit_group
+            self._next_allowed_at[group] = max(
+                self._next_allowed_at.get(group, 0.0),
+                completed_at + delay,
             )
 
     @staticmethod
@@ -283,6 +491,8 @@ class BrowserGroupScheduler:
 
 
 __all__ = (
+    "BrowserAttemptCompletion",
+    "BrowserAttemptDisposition",
     "BrowserArticleAttempt",
     "BrowserGroupPolicy",
     "BrowserGroupScheduler",
