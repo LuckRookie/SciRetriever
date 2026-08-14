@@ -5,14 +5,12 @@ read bounded marker text and perform one explicit click.  It never receives a
 page, context, process, profile, Cookie, download object, or vendor lifecycle
 handle, and it never fills login/MFA forms or attempts to solve challenges.
 
-The current Network Browser checks every real destination against its general
-URL/DNS/admission policy, but its flow handle does not expose a provider-rule
-origin hook.  Consequently this Source can precheck the exact starting origin
-and fail closed after observing the final download locator, but that final
-check is post-access and cannot prove that an out-of-rule public origin had no
-side effect.  The production rule catalog and readiness therefore remain
-empty/false until Network (or a compatible runner) supplies pre-navigation,
-popup, and download rule admission.
+The Network Browser checks every real destination against both its general
+URL/DNS/admission policy and the closed site-rule guard supplied here.  The
+guard receives only a normalized, query-free locator and an operation kind;
+it cannot weaken Network policy or access Browser vendor objects.  Production
+readiness remains disabled until provider rules, sessions and end-to-end
+fixtures are verified.
 """
 
 from __future__ import annotations
@@ -70,7 +68,11 @@ from sciretriever.model.primitives import ProvenanceId, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessPolicy, AccessScope
-from sciretriever.network.browser import BrowserBudget
+from sciretriever.network.browser import (
+    BrowserBudget,
+    BrowserDestinationGuard,
+    BrowserDestinationKind,
+)
 from sciretriever.network.policy import (
     NormalizedURL,
     PolicyError,
@@ -221,8 +223,8 @@ def _contract_failure() -> StableFailure:
 
 _PRODUCTION_FAILURE: Final[StableFailure] = _stable_failure(
     code="acquisition-browser-production-unavailable",
-    reason="No production Browser rule and per-hop rule admission are verified.",
-    action="Keep controlled Browser acquisition disabled until both are verified.",
+    reason="No complete production Browser provider profile is verified.",
+    action="Keep controlled Browser acquisition disabled until one is verified.",
     retryable=False,
 )
 CONTROLLED_BROWSER_PRODUCTION_STATUS: Final[RouteInstallationStatus] = RouteInstallationStatus(
@@ -256,6 +258,7 @@ class BrowserRunner(Protocol):
         policy: AccessPolicy,
         *,
         flow: Callable[[BrowserFlowSession], object] | None = None,
+        destination_guard: BrowserDestinationGuard | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -268,6 +271,43 @@ class _BrowserAction:
     start_url: str
     evidence_kind: str
     identity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _RuleDestinationGuard:
+    """Allow only one exact resolver start plus the rule's reviewed origins."""
+
+    rule: BrowserSiteRule
+    exact_start_url: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rule, BrowserSiteRule):
+            raise TypeError("rule must be a BrowserSiteRule")
+        try:
+            normalized = normalize_url_with_configured_port(self.exact_start_url)
+        except (PolicyError, TypeError, ValueError):
+            raise ValueError("exact_start_url must be a safe Browser URL") from None
+        object.__setattr__(self, "exact_start_url", normalized.url)
+
+    def check(self, url: str, kind: BrowserDestinationKind) -> None:
+        if not isinstance(kind, BrowserDestinationKind):
+            raise TypeError("kind must be a BrowserDestinationKind")
+        try:
+            normalized = normalize_url_with_configured_port(url)
+        except (PolicyError, TypeError, ValueError):
+            raise ValueError("Browser destination is not a safe URL") from None
+        if self.rule.allows_url(normalized.url):
+            return
+        if (
+            kind
+            in {
+                BrowserDestinationKind.INITIAL_NAVIGATION,
+                BrowserDestinationKind.NAVIGATION,
+            }
+            and normalized.url == self.exact_start_url
+        ):
+            return
+        raise ValueError("Browser destination is outside the closed site rule")
 
 
 class _BrowserTemporaryPdfContent:
@@ -546,8 +586,8 @@ class ControlledBrowserPdfSource:
         except AcquisitionFailure as error:
             raise AcquisitionSourceFailure(error.failure) from None
         if not action.rule.allows_url(final_url.url):
-            # This is intentionally a post-access fail-closed check.  It
-            # prevents publication but is not a pre-navigation allowlist.
+            # Defence in depth: a compatible runner must already have
+            # rejected this locator through the per-hop guard before access.
             raise AcquisitionSourceFailure(_browser_failure("policy"))
         content = _BrowserTemporaryPdfContent(result.chunks)
         try:
@@ -586,6 +626,7 @@ class ControlledBrowserPdfSource:
                 ),
                 effective_policy,
                 flow=flow,
+                destination_guard=_RuleDestinationGuard(action.rule, action.start_url),
                 budget=_CONSERVATIVE_BROWSER_BUDGET,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,

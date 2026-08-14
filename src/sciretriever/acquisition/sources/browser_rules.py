@@ -6,11 +6,10 @@ They are not a remote rule language: there is no loader, JavaScript surface,
 login form description, Cookie/profile data, selector guessing, or fallback
 action sequence.
 
-The production catalog is intentionally empty.  A real provider rule must be
-verified together with a Browser runner that can enforce the rule's exact
-origin set before every navigation, popup, and download.  The current Network
-Browser boundary performs general destination safety checks but does not yet
-provide that provider-rule admission hook.
+The production catalog is intentionally empty.  Network now accepts a closed
+destination guard and enforces it before every external Browser request;
+provider rules remain disabled until their page states, sessions, scheduling,
+capture paths and offline fixtures are verified end to end.
 """
 
 from __future__ import annotations
@@ -159,9 +158,9 @@ class BrowserSiteRule:
 
     ``allowed_origins`` is an explicit provider-rule allowlist, not a
     ``DestinationPolicy.allowed_origins`` value.  The latter only controls
-    credential forwarding.  A future production runner must apply this tuple
-    before every navigation, popup, and download; the current Source can only
-    precheck the start and postcheck the neutral final download locator.
+    credential forwarding.  ``ControlledBrowserPdfSource`` supplies this
+    tuple to Network's per-hop destination guard while Network independently
+    retains URL, DNS, address and host-admission policy.
     """
 
     rule_id: str

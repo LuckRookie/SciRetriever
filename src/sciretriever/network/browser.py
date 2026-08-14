@@ -18,8 +18,9 @@ import time
 import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from enum import Enum, unique
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias, cast
+from typing import Final, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
 
 from sciretriever.model.access import (
@@ -73,6 +74,30 @@ _CHALLENGE_MARKERS = (
 
 class BrowserError(RuntimeError):
     """Stable error for invalid Browser runtime construction."""
+
+
+@unique
+class BrowserDestinationKind(str, Enum):
+    """One Browser destination use checked by an injected closed rule."""
+
+    INITIAL_NAVIGATION = "initial-navigation"
+    NAVIGATION = "navigation"
+    REQUEST = "request"
+    POPUP = "popup"
+    RESPONSE = "response"
+    DOWNLOAD = "download"
+
+
+@runtime_checkable
+class BrowserDestinationGuard(Protocol):
+    """Secret-free guard evaluated before one Browser destination performs I/O.
+
+    Network owns generic URL, DNS, address, host-admission and resource policy.
+    This additional hook can only reject a normalized, query-free locator; it
+    cannot weaken any Network decision or receive a Browser vendor object.
+    """
+
+    def check(self, url: str, kind: BrowserDestinationKind) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +320,7 @@ class _FlowState:
         "scope_permit",
         "resolver",
         "destination_policy",
+        "destination_guard",
         "budget",
         "clock",
         "started_at",
@@ -320,6 +346,7 @@ class _FlowState:
         scope_permit: AccessPermit,
         resolver: ResolverLike,
         destination_policy: DestinationPolicy,
+        destination_guard: BrowserDestinationGuard | None,
         budget: BrowserBudget,
         clock: Clock,
         deadline: float,
@@ -329,6 +356,7 @@ class _FlowState:
         self.scope_permit = scope_permit
         self.resolver = resolver
         self.destination_policy = destination_policy
+        self.destination_guard = destination_guard
         self.budget = budget
         self.clock = clock
         self.started_at = clock()
@@ -402,11 +430,17 @@ class _FlowState:
             if self.usage.total_bytes > self.budget.max_total_bytes:
                 raise _Abort("oversize")
 
-    def resolve(self, value: str) -> ResolvedDestination:
+    def resolve(
+        self,
+        value: str,
+        *,
+        kind: BrowserDestinationKind,
+    ) -> ResolvedDestination:
         if type(value) is not str or _is_internal_url(value):
             raise _Abort("policy")
         try:
             policy_value = _policy_url(value)
+            self.guard(policy_value, kind)
             normalized = normalize_url(
                 policy_value,
                 allowed_schemes=self.destination_policy.allowed_schemes,
@@ -425,12 +459,33 @@ class _FlowState:
         self.destinations[destination.hostname] = destination
         return destination
 
-    def resolve_request(self, value: str) -> ResolvedDestination | None:
+    def resolve_request(
+        self,
+        value: str,
+        *,
+        navigation: bool,
+    ) -> ResolvedDestination | None:
         if type(value) is not str:
             raise _Abort("policy")
         if _is_internal_url(value):
             return None
-        return self.resolve(value)
+        return self.resolve(
+            value,
+            kind=(
+                BrowserDestinationKind.NAVIGATION if navigation else BrowserDestinationKind.REQUEST
+            ),
+        )
+
+    def guard(self, value: str, kind: BrowserDestinationKind) -> None:
+        guard = self.destination_guard
+        if guard is None:
+            return
+        if not isinstance(kind, BrowserDestinationKind):
+            raise _Abort("policy")
+        try:
+            guard.check(value, kind)
+        except Exception as error:
+            raise _Abort("policy") from error
 
     def acquire_host(self, destination: ResolvedDestination) -> HostPermit:
         self.check()
@@ -750,6 +805,7 @@ class BrowserClient:
         policy: AccessPolicy,
         *,
         flow: Callable[[_BrowserSession], object] | None = None,
+        destination_guard: BrowserDestinationGuard | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -775,6 +831,11 @@ class BrowserClient:
             effective_budget = self._effective_budget(budget, request_max_bytes)
             if cancel_event is not None and not hasattr(cancel_event, "is_set"):
                 raise _Abort("policy")
+            if destination_guard is not None and not isinstance(
+                destination_guard,
+                BrowserDestinationGuard,
+            ):
+                raise _Abort("policy")
         except _Abort as error:
             return _failure(error.code)
         except Exception:
@@ -785,7 +846,7 @@ class BrowserClient:
         try:
             # Validate the initial destination before acquiring a permit, but
             # do not invoke the factory or navigate until scope admission is held.
-            initial = self._resolve_initial(raw_url)
+            initial = self._resolve_initial(raw_url, destination_guard)
         except _Abort as error:
             return _failure(error.code)
 
@@ -817,6 +878,7 @@ class BrowserClient:
                 scope_permit,
                 self._resolver,
                 self._destination_policy,
+                destination_guard,
                 effective_budget,
                 self._clock,
                 deadline,
@@ -1051,10 +1113,23 @@ class BrowserClient:
             raise _Abort("runtime")
         return outcome[0]
 
-    def _resolve_initial(self, url: str) -> ResolvedDestination:
+    def _resolve_initial(
+        self,
+        url: str,
+        destination_guard: BrowserDestinationGuard | None,
+    ) -> ResolvedDestination:
         if type(url) is not str:
             raise _Abort("policy")
         try:
+            policy_url = _policy_url(url)
+            if destination_guard is not None:
+                try:
+                    destination_guard.check(
+                        policy_url,
+                        BrowserDestinationKind.INITIAL_NAVIGATION,
+                    )
+                except Exception as error:
+                    raise _Abort("policy") from error
             normalized = normalize_url(
                 url,
                 allowed_schemes=self._destination_policy.allowed_schemes,
@@ -1076,6 +1151,7 @@ class BrowserClient:
         route("**/*", lambda value: self._handle_route(state, value))
         on("page", lambda value: self._handle_popup(state, value))
         on("download", lambda value: self._handle_download(state, value))
+        on("response", lambda value: self._handle_response(state, value))
         # Playwright-like runtimes emit these only after the response body is
         # complete or the request has failed.  They are deliberately distinct
         # from ``response``: a response header event is not request completion.
@@ -1091,12 +1167,12 @@ class BrowserClient:
             if url is None:
                 raise _Abort("policy")
             state.consume(requests=1)
-            destination = state.resolve_request(url)
+            page = _attribute(request, "page")
+            navigation = self._is_navigation_request(request)
+            destination = state.resolve_request(url, navigation=navigation)
             if destination is None:
                 self._continue_route(route)
                 return
-            page = _attribute(request, "page")
-            navigation = self._is_navigation_request(request)
             self._admit_route(
                 state,
                 route,
@@ -1164,6 +1240,32 @@ class BrowserClient:
         except Exception:
             state.fail("cleanup")
 
+    def _handle_response(self, state: _FlowState, response: object) -> None:
+        """Guard a response locator before any future body/capture operation."""
+
+        try:
+            url = _text_attribute(response, "url")
+            request = _attribute(response, "request")
+            if url is None or request is None:
+                raise _Abort("runtime")
+            destination = state.resolve(url, kind=BrowserDestinationKind.RESPONSE)
+            with state.lock:
+                lease = state.request_leases.get(id(request))
+            if (
+                lease is None
+                or lease.request is not request
+                or lease.destination.url.url != destination.url.url
+            ):
+                # Response access was admitted only if its still-live route
+                # lease proves that guard, DNS binding and host admission ran
+                # before transport.  A future response-body capture reuses
+                # this same condition rather than admitting after the fact.
+                raise _Abort("runtime")
+        except _Abort as error:
+            state.fail(error.code)
+        except Exception:
+            state.fail("runtime")
+
     @staticmethod
     def _is_navigation_request(request: object) -> bool:
         value = _attribute(request, "is_navigation_request")
@@ -1211,7 +1313,7 @@ class BrowserClient:
             url = _text_attribute(download, "url")
             if url is None:
                 raise _Abort("policy")
-            destination = state.resolve(url)
+            destination = state.resolve(url, kind=BrowserDestinationKind.DOWNLOAD)
             request_candidate = _attribute(download, "request")
             request = (
                 request_candidate
@@ -1292,7 +1394,7 @@ class BrowserClient:
     def _client_navigate(self, state: _FlowState, page: object, url: str) -> None:
         try:
             state.check()
-            destination = state.resolve(url)
+            destination = state.resolve(url, kind=BrowserDestinationKind.NAVIGATION)
             state.consume(navigations=1)
             initial_host = state.acquire_host(destination)
             navigation = _Navigation(page, destination, initial_host)
@@ -1315,7 +1417,10 @@ class BrowserClient:
                 state.check()
                 final_url = _text_attribute(page, "url") or _text_attribute(response, "url")
                 if final_url is not None and not _is_internal_url(final_url):
-                    final_destination = state.resolve(final_url)
+                    final_destination = state.resolve(
+                        final_url,
+                        kind=BrowserDestinationKind.NAVIGATION,
+                    )
                     if final_destination.hostname != navigation.destination.hostname:
                         final_host = state.acquire_host(final_destination)
                         try:
@@ -1339,7 +1444,7 @@ class BrowserClient:
     def _client_open_popup(self, state: _FlowState, opener: object, url: str) -> None:
         try:
             state.check()
-            destination = state.resolve(url)
+            destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
             opener_method = getattr(opener, "open_popup", None)
             if not callable(opener_method):
                 raise _Abort("runtime")
@@ -1497,5 +1602,7 @@ class BrowserClient:
 __all__ = (
     "BrowserBudget",
     "BrowserClient",
+    "BrowserDestinationGuard",
+    "BrowserDestinationKind",
     "BrowserError",
 )
