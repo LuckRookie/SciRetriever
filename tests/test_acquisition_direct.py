@@ -1292,12 +1292,13 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
         self.assertTrue(second.closed)
         deliveries[0].content.discard()
 
-    def test_cross_provider_redirect_is_rejected_before_target_dns_and_releases_web_permit(
+    def test_cross_provider_redirect_releases_and_readmits_each_web_scope(
         self,
     ) -> None:
         first = _raw(302, location="https://other.test/final?opaque=private-target-sentinel")
+        second = _raw(body=b"candidate")
         client, transport, resolver, coordinator = _http_environment(
-            [first, _raw(body=b"must-not-be-sent")],
+            [first, second],
             {"start.test": (_PUBLIC_IP,), "other.test": (_PUBLIC_IP,)},
         )
         start_scope = AccessScope("provider-a", "web")
@@ -1309,8 +1310,8 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaises(AcquisitionFailure) as raised:
-            list(
+        with self.assertLogs("sciretriever", level="DEBUG") as captured:
+            deliveries = list(
                 _fetcher(client, web_access_profile_resolver=profiles).acquire(
                     locator="https://start.test/redirect",
                     candidate_key="fixture:cross-provider-redirect",
@@ -1323,27 +1324,30 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            raised.exception.failure.code,
-            "acquisition-public-locator-network-failed",
+            [scope for scope, _policy in coordinator.scopes],
+            [start_scope, target_scope],
         )
-        self.assertEqual([scope for scope, _policy in coordinator.scopes], [start_scope])
-        self.assertEqual(coordinator.hosts, ["start.test"])
-        self.assertNotIn("other.test", resolver.calls)
-        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(coordinator.hosts, ["start.test", "other.test"])
+        self.assertIn("other.test", resolver.calls)
+        self.assertEqual(len(transport.calls), 2)
         self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
         self.assertEqual(coordinator._active_scope_permits, {})
         self.assertEqual(coordinator._active_host_permits, {})
-        self.assertGreater(
-            coordinator._scope_states[start_scope].next_allowed_at,
-            coordinator.test_clock.value,
+        self.assertEqual(
+            deliveries[0].safe_source_url,
+            "https://other.test/final?opaque=private-target-sentinel",
         )
-        rendered = f"{raised.exception!s} {raised.exception!r}"
-        self.assertNotIn("private-target-sentinel", rendered)
+        self.assertNotIn("private-target-sentinel", "\n".join(captured.output))
+        deliveries[0].content.discard()
 
-    def test_same_scope_redirect_fails_closed_when_target_profile_is_stricter(self) -> None:
+    def test_same_scope_redirect_tightens_target_profile_without_second_scope_permit(
+        self,
+    ) -> None:
         first = _raw(302, location="https://strict.test/final")
+        second = _raw(body=b"candidate")
         client, transport, resolver, coordinator = _http_environment(
-            [first, _raw(body=b"must-not-be-sent")],
+            [first, second],
             {"start.test": (_PUBLIC_IP,), "strict.test": (_PUBLIC_IP,)},
         )
         provider_scope = AccessScope("fixture-publisher", "web")
@@ -1357,24 +1361,29 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaises(AcquisitionFailure):
-            list(
-                _fetcher(client, web_access_profile_resolver=profiles).acquire(
-                    locator="https://start.test/redirect",
-                    candidate_key="fixture:stricter-profile-redirect",
-                    source_name="fixture-source",
-                    source_record_id=None,
-                    declared_media_type=None,
-                    candidate_keys=CandidateKeyTracker(),
-                    allow_static_landing_discovery=False,
-                )
+        deliveries = list(
+            _fetcher(client, web_access_profile_resolver=profiles).acquire(
+                locator="https://start.test/redirect",
+                candidate_key="fixture:stricter-profile-redirect",
+                source_name="fixture-source",
+                source_record_id=None,
+                declared_media_type=None,
+                candidate_keys=CandidateKeyTracker(),
+                allow_static_landing_discovery=False,
             )
+        )
 
         self.assertEqual([scope for scope, _policy in coordinator.scopes], [provider_scope])
-        self.assertEqual(coordinator.hosts, ["start.test"])
-        self.assertNotIn("strict.test", resolver.calls)
-        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(coordinator.hosts, ["start.test", "strict.test"])
+        self.assertIn("strict.test", resolver.calls)
+        self.assertEqual(len(transport.calls), 2)
         self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+        self.assertEqual(
+            coordinator.policy_for(provider_scope).min_start_interval,
+            45.0,
+        )
+        deliveries[0].content.discard()
 
     def test_iterator_close_discards_undelivered_temporary_lifetime(self) -> None:
         client, _transport, _resolver, _coordinator = _http_environment(
@@ -1491,6 +1500,13 @@ class DoiLandingResolverTests(unittest.TestCase):
             "https://publisher.test/articles/file.pdf?download=1",
         )
         self.assertEqual(coordinator.hosts, ["doi.org", "publisher.test"])
+        self.assertEqual(
+            [scope for scope, _policy in coordinator.scopes],
+            [
+                AccessScope("doi.org", "web"),
+                AccessScope("publisher.test", "web"),
+            ],
+        )
         self.assertTrue(
             all(
                 isinstance(call["request"], TransportRequest)

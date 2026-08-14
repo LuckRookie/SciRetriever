@@ -118,6 +118,7 @@ class _RecordingCoordinator(AccessCoordinator):
     def __init__(self, *, clock: _AdvancingClock | None = None) -> None:
         super().__init__(clock=clock)
         self.scope_acquires = 0
+        self.scopes: list[AccessScope] = []
         self.host_acquires = 0
 
     def acquire_scope(
@@ -130,6 +131,7 @@ class _RecordingCoordinator(AccessCoordinator):
         timeout: float | None = None,
     ) -> AccessPermit:
         self.scope_acquires += 1
+        self.scopes.append(scope)
         return super().acquire_scope(
             scope,
             policy,
@@ -1096,6 +1098,91 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertEqual(resolver.calls.count("example.test"), 3)
         self.assertEqual(resolver.calls.count("other.test"), 3)
 
+    def test_redirect_access_profile_releases_and_readmits_cross_scope(self) -> None:
+        clock = _AdvancingClock()
+        resolver = _Resolver(
+            {
+                "example.test": ("93.184.216.34",),
+                "other.test": ("1.1.1.1",),
+            }
+        )
+        transport = _FakeTransport(
+            [_response(302, location="https://other.test/next"), _response(429)]
+        )
+        coordinator = _RecordingCoordinator(clock=clock)
+        client = self._client(transport, resolver, coordinator=coordinator, clock=clock)
+        initial_scope = AccessScope("provider-a", "web")
+        target_scope = AccessScope("provider-b", "web")
+        policy = AccessPolicy(max_concurrency=1)
+        resolved_targets: list[str] = []
+
+        def redirect_access_profile(target: object) -> tuple[AccessScope, AccessPolicy]:
+            hostname = getattr(target, "hostname", None)
+            resolved_targets.append(str(hostname))
+            if hostname != "other.test":
+                raise ValueError("unexpected redirect host")
+            return target_scope, policy
+
+        result = _response_value(
+            client.request(
+                initial_scope,
+                "https://example.test/start",
+                policy,
+                redirect_access_profile=redirect_access_profile,
+                response_feedback=lambda _response: AccessFeedback(
+                    retry_after=5.0,
+                    throttled=True,
+                ),
+            )
+        )
+
+        self.assertEqual(result.status, 429)
+        self.assertEqual(resolved_targets, ["other.test"])
+        self.assertEqual(coordinator.scopes, [initial_scope, target_scope])
+        self.assertEqual(coordinator.scope_acquires, 2)
+        self.assertEqual(coordinator.host_acquires, 2)
+        self.assertEqual(coordinator._active_scope_permits, {})
+        self.assertEqual(coordinator._active_host_permits, {})
+        self.assertEqual(coordinator._scope_states[initial_scope].blocked_until, 0.0)
+        self.assertEqual(coordinator._scope_states[target_scope].blocked_until, 5.0)
+
+    def test_redirect_access_profile_failure_is_neutral_and_releases_permits(self) -> None:
+        target_secret = "redirect-profile-sentinel"
+        first = _response(
+            302,
+            location=f"https://other.test/next?opaque={target_secret}",
+        )
+        resolver = _Resolver(
+            {
+                "example.test": ("93.184.216.34",),
+                "other.test": ("1.1.1.1",),
+            }
+        )
+        transport = _FakeTransport([first, _response(body=b"must-not-be-sent")])
+        coordinator = _RecordingCoordinator()
+
+        def reject_profile(_target: object) -> tuple[AccessScope, AccessPolicy]:
+            raise RuntimeError(f"private profile decision {target_secret}")
+
+        result = _failure_value(
+            self._client(transport, resolver, coordinator=coordinator).request(
+                AccessScope("provider-a", "web"),
+                "https://example.test/start",
+                AccessPolicy(max_concurrency=1),
+                redirect_access_profile=reject_profile,
+            )
+        )
+
+        self.assertEqual(result.code, "policy")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertTrue(first.closed)
+        self.assertEqual(coordinator.scope_acquires, 1)
+        self.assertEqual(coordinator.host_acquires, 1)
+        self.assertEqual(coordinator._active_scope_permits, {})
+        self.assertEqual(coordinator._active_host_permits, {})
+        self.assertNotIn(target_secret, repr(result))
+        self.assertNotIn(target_secret, result.model_dump_json())
+
     def test_redirect_target_guard_rejects_before_target_dns_or_transport_and_releases_permits(
         self,
     ) -> None:
@@ -1199,7 +1286,7 @@ class NetworkHttpTests(unittest.TestCase):
         coordinator = _RecordingCoordinator(clock=clock)
         client = self._client(transport, resolver, coordinator=coordinator, clock=clock)
         scope = AccessScope("fixture-provider", "web")
-        policy = AccessPolicy(max_concurrency=8)
+        policy = AccessPolicy(max_concurrency=1, cooldown_after_completion=30.0)
 
         first = _response_value(client.request(scope, "https://example.test/start", policy))
         self.assertEqual(first.body, b"done")
