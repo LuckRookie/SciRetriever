@@ -60,7 +60,9 @@ from sciretriever.acquisition.sources.browser_rules import (
 from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
 from sciretriever.model.access import (
     AccessFailure,
-    BoundedByteStream,
+    BrowserCapture,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
     BrowserRequest,
     BrowserResult,
 )
@@ -77,6 +79,7 @@ from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessPolicy, AccessScope
 from sciretriever.network.browser import (
     BrowserBudget,
+    BrowserCaptureGuard,
     BrowserDestinationGuard,
     BrowserDestinationKind,
     BrowserPageObservation,
@@ -98,8 +101,9 @@ _BASELINE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
 _CONSERVATIVE_BROWSER_BUDGET: Final[BrowserBudget] = BrowserBudget(
     max_navigations=2,
     max_requests=64,
-    max_popups=1,
-    max_downloads=1,
+    max_popups=2,
+    max_downloads=4,
+    max_captures=4,
     max_bytes_per_download=_MAX_DOWNLOAD_BYTES,
     max_total_bytes=_MAX_DOWNLOAD_BYTES,
     max_total_seconds=_TIMEOUT_SECONDS,
@@ -307,6 +311,7 @@ class BrowserRunner(Protocol):
         *,
         flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
+        capture_guard: BrowserCaptureGuard | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -364,6 +369,25 @@ class _RuleDestinationGuard:
         ):
             return
         raise ValueError("Browser destination is outside the closed site rule")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _RuleCaptureGuard:
+    """Capture only reviewed main-PDF locator prefixes in the current rule."""
+
+    rule: BrowserSiteRule
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rule, BrowserSiteRule):
+            raise TypeError("rule must be a BrowserSiteRule")
+
+    def allows(
+        self,
+        url: str,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> bool:
+        return self.rule.allows_capture(url, kind, media_type)
 
 
 class _BrowserTemporaryPdfContent:
@@ -426,12 +450,27 @@ def _candidate_key(action: _BrowserAction) -> str:
     return f"controlled-browser:{digest}"
 
 
+def _capture_candidate_key(action: _BrowserAction, capture: BrowserCapture) -> str:
+    stream = capture.stream
+    body_digest = hashlib.sha256(b"".join(stream.chunks)).hexdigest()
+    identity = "\x00".join(
+        (
+            _candidate_key(action),
+            capture.kind.value,
+            stream.final_locator,
+            body_digest,
+        )
+    )
+    digest = hashlib.sha256(identity.encode("utf-8", "strict")).hexdigest()
+    return f"controlled-browser:{digest}"
+
+
 def _eligible_landing_role(role: AssetRole | None) -> bool:
     return role is None or role is AssetRole.PRIMARY_PDF
 
 
 def _state_for_browser_result(result: BrowserResult) -> BrowserRunState:
-    if isinstance(result, BoundedByteStream):
+    if isinstance(result, BrowserCaptureBatch):
         return BrowserRunState.PDF_CAPTURED
     if not isinstance(result, AccessFailure):
         return BrowserRunState.RUNTIME_FAILED
@@ -680,20 +719,34 @@ class ControlledBrowserPdfSource:
                     raise AcquisitionSourceFailure(page_failure)
                 if _state_ends_without_pdf(state_machine):
                     continue
-                temporary_pdf = self._temporary_from_result(action, key, result)
-                if temporary_pdf is None:
-                    continue
-                try:
-                    yield temporary_pdf
-                except BaseException:
-                    temporary_pdf.content.discard()
-                    raise
+                yield from self._capture_deliveries(action, result, candidate_keys)
             except AcquisitionSourceFailure as error:
                 if first_failure is None:
                     first_failure = error
                 continue
         if first_failure is not None:
             raise first_failure
+
+    def _capture_deliveries(
+        self,
+        action: _BrowserAction,
+        result: BrowserResult,
+        candidate_keys: CandidateKeyTracker,
+    ) -> Iterator[TemporaryPdf]:
+        for capture in self._captures_from_result(result):
+            capture_key = _capture_candidate_key(action, capture)
+            if not self._claim_candidate(candidate_keys, capture_key):
+                continue
+            temporary_pdf = self._temporary_from_capture(
+                action,
+                capture_key,
+                capture,
+            )
+            try:
+                yield temporary_pdf
+            except BaseException:
+                temporary_pdf.content.discard()
+                raise
 
     @staticmethod
     def _claim_candidate(candidate_keys: CandidateKeyTracker, key: str) -> bool:
@@ -702,28 +755,40 @@ class ControlledBrowserPdfSource:
         except Exception:
             raise AcquisitionFailure(_contract_failure()) from None
 
-    def _temporary_from_result(
-        self,
-        action: _BrowserAction,
-        key: str,
-        result: BrowserResult,
-    ) -> TemporaryPdf | None:
+    @staticmethod
+    def _captures_from_result(result: BrowserResult) -> tuple[BrowserCapture, ...]:
         if isinstance(result, AccessFailure):
             if result.code == "no-download":
-                return None
+                return ()
             failure = _browser_failure(result.code)
             if result.code in {"cancelled", "cleanup"}:
                 raise AcquisitionFailure(failure)
             raise AcquisitionSourceFailure(failure)
-        if not isinstance(result, BoundedByteStream):
+        if not isinstance(result, BrowserCaptureBatch):
             raise AcquisitionFailure(_contract_failure())
+        return result.captures
+
+    def _temporary_from_capture(
+        self,
+        action: _BrowserAction,
+        key: str,
+        capture: BrowserCapture,
+    ) -> TemporaryPdf:
+        if not isinstance(capture, BrowserCapture):
+            raise AcquisitionFailure(_contract_failure())
+        result = capture.stream
         try:
             final_url = _normalized_url(result.final_locator)
         except AcquisitionFailure as error:
             raise AcquisitionSourceFailure(error.failure) from None
-        if not action.rule.allows_url(final_url.url):
+        if not action.rule.allows_capture(
+            final_url.url,
+            capture.kind,
+            result.media_type,
+        ):
             # Defence in depth: a compatible runner must already have
-            # rejected this locator through the per-hop guard before access.
+            # rejected this locator and media type through the pre-body
+            # capture guard before access.
             raise AcquisitionSourceFailure(_browser_failure("policy"))
         content = _BrowserTemporaryPdfContent(result.chunks)
         try:
@@ -765,6 +830,7 @@ class ControlledBrowserPdfSource:
                 effective_policy,
                 flow=flow,
                 destination_guard=_RuleDestinationGuard(action.rule, action.start_url),
+                capture_guard=_RuleCaptureGuard(action.rule),
                 budget=_CONSERVATIVE_BROWSER_BUDGET,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,

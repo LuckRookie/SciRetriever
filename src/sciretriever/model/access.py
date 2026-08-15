@@ -9,7 +9,9 @@ credential, or any retry/quota state.
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
+from enum import Enum, unique
 from typing import TypeAlias
 from urllib.parse import parse_qsl, urlsplit
 
@@ -245,6 +247,44 @@ class BoundedByteStream(_AccessModel):
         return self
 
 
+@unique
+class BrowserCaptureKind(str, Enum):
+    """The closed Browser mechanism that produced one bounded byte stream."""
+
+    DOWNLOAD = "download"
+    RESPONSE = "response"
+    POPUP = "popup"
+    VIEWER = "viewer"
+    VERIFIED_LOCATOR = "verified-locator"
+
+
+class BrowserCapture(_AccessModel):
+    """One neutral Browser capture without a page, response, or download object."""
+
+    kind: BrowserCaptureKind
+    stream: BoundedByteStream = Field(repr=False)
+
+
+class BrowserCaptureBatch(_AccessModel):
+    """A non-empty, bounded and byte-deduplicated Browser capture batch."""
+
+    captures: tuple[BrowserCapture, ...] = Field(repr=False, min_length=1, max_length=16)
+
+    @field_validator("captures", mode="before")
+    @classmethod
+    def normalize_captures(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def validate_unique_bytes(self) -> "BrowserCaptureBatch":
+        digests = tuple(
+            hashlib.sha256(b"".join(capture.stream.chunks)).digest() for capture in self.captures
+        )
+        if len(digests) != len(set(digests)):
+            raise _AccessValidationError("Browser captures must contain unique bytes")
+        return self
+
+
 class TransportRequest(_AccessModel):
     """A safe request envelope understood by an injected transport."""
 
@@ -369,7 +409,7 @@ def _looks_like_private_access_detail(value: str) -> bool:
 
 AccessResponse: TypeAlias = TransportResponse | BoundedByteStream
 AccessResult: TypeAlias = AccessResponse | AccessFailure
-BrowserResult: TypeAlias = BoundedByteStream | AccessFailure
+BrowserResult: TypeAlias = BrowserCaptureBatch | AccessFailure
 HttpResult: TypeAlias = TransportResponse | AccessFailure
 
 
@@ -378,6 +418,9 @@ __all__ = (
     "AccessResponse",
     "AccessResult",
     "BoundedByteStream",
+    "BrowserCapture",
+    "BrowserCaptureBatch",
+    "BrowserCaptureKind",
     "BrowserRequest",
     "BrowserResult",
     "Header",

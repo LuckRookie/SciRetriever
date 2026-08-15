@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final
 
+from sciretriever.model.access import BrowserCaptureKind
 from sciretriever.model.primitives import Sha256
 from sciretriever.network.browser import BrowserPageObservation
 from sciretriever.network.policy import (
@@ -277,6 +278,7 @@ class BrowserSiteRule:
     action: BrowserRuleAction
     click_selector: str | None = None
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
+    capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rule_id", _stable_token(self.rule_id, field_name="rule_id"))
@@ -303,6 +305,12 @@ class BrowserSiteRule:
             "click_selector",
             _rule_selector(self.action, self.click_selector),
         )
+        object.__setattr__(self, "capture_url_prefixes", _url_prefixes(self.capture_url_prefixes))
+        if any(
+            _normalized_url(prefix).origin.text not in self.allowed_origins
+            for prefix in self.capture_url_prefixes
+        ):
+            raise ValueError("capture URL prefixes must use allowed rule origins")
         self._validate_page_markers()
 
     def _validate_page_markers(self) -> None:
@@ -353,6 +361,7 @@ class BrowserSiteRule:
             self.web_scope_provider_name,
             self.action.value,
             self.click_selector or "",
+            *self.capture_url_prefixes,
             *(field for marker in self.page_markers for field in marker.fingerprint_fields),
         )
         return Sha256(hashlib.sha256("\x00".join(fields).encode("utf-8", "strict")).hexdigest())
@@ -374,6 +383,32 @@ class BrowserSiteRule:
         except (TypeError, ValueError):
             return False
         return candidate.origin.text in self.allowed_origins
+
+    def allows_capture(
+        self,
+        value: str,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> bool:
+        """Match one already-admitted body to a reviewed PDF locator prefix."""
+
+        if not isinstance(kind, BrowserCaptureKind) or not isinstance(media_type, str):
+            return False
+        normalized_media_type = media_type.split(";", 1)[0].strip().casefold()
+        if normalized_media_type not in {"application/pdf", "application/octet-stream"}:
+            return False
+        try:
+            candidate = _normalized_url(value)
+        except (TypeError, ValueError):
+            return False
+        for prefix_value in self.capture_url_prefixes:
+            prefix = _normalized_url(prefix_value)
+            if candidate.origin != prefix.origin:
+                continue
+            prefix_path = prefix.path.rstrip("/")
+            if candidate.path == prefix_path or candidate.path.startswith(f"{prefix_path}/"):
+                return True
+        return False
 
 
 @dataclass(frozen=True, slots=True)

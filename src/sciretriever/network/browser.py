@@ -10,6 +10,7 @@ callback result crosses this module's neutral result boundary.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import tempfile
@@ -26,6 +27,9 @@ from urllib.parse import urlsplit, urlunsplit
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
+    BrowserCapture,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
     BrowserRequest,
     BrowserResult,
 )
@@ -65,6 +69,7 @@ _DEFAULT_MAX_NAVIGATIONS: Final[int] = 16
 _DEFAULT_MAX_REQUESTS: Final[int] = 256
 _DEFAULT_MAX_POPUPS: Final[int] = 8
 _DEFAULT_MAX_DOWNLOADS: Final[int] = 4
+_DEFAULT_MAX_CAPTURES: Final[int] = 4
 _DEFAULT_MAX_BYTES_PER_DOWNLOAD: Final[int] = 64 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_SECONDS: Final[float] = 60.0
@@ -106,6 +111,18 @@ class BrowserDestinationGuard(Protocol):
     """
 
     def check(self, url: str, kind: BrowserDestinationKind) -> None: ...
+
+
+@runtime_checkable
+class BrowserCaptureGuard(Protocol):
+    """Provider rule deciding whether an already-admitted body may be captured."""
+
+    def allows(
+        self,
+        url: str,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -150,6 +167,7 @@ class BrowserBudget:
     max_requests: int = _DEFAULT_MAX_REQUESTS
     max_popups: int = _DEFAULT_MAX_POPUPS
     max_downloads: int = _DEFAULT_MAX_DOWNLOADS
+    max_captures: int = _DEFAULT_MAX_CAPTURES
     max_bytes_per_download: int = _DEFAULT_MAX_BYTES_PER_DOWNLOAD
     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES
     max_total_seconds: float = _DEFAULT_MAX_TOTAL_SECONDS
@@ -160,6 +178,7 @@ class BrowserBudget:
             "max_requests",
             "max_popups",
             "max_downloads",
+            "max_captures",
             "max_bytes_per_download",
             "max_total_bytes",
         ):
@@ -182,6 +201,7 @@ class _Usage:
     requests: int = 0
     popups: int = 0
     downloads: int = 0
+    captures: int = 0
     total_bytes: int = 0
 
 
@@ -363,6 +383,7 @@ class _FlowState:
         "resolver",
         "destination_policy",
         "destination_guard",
+        "capture_guard",
         "budget",
         "clock",
         "started_at",
@@ -380,7 +401,10 @@ class _FlowState:
         "pages",
         "popups",
         "downloads",
-        "download_result",
+        "viewer_locators",
+        "verified_locators",
+        "captures",
+        "capture_digests",
         "error",
     )
 
@@ -390,6 +414,7 @@ class _FlowState:
         resolver: ResolverLike,
         destination_policy: DestinationPolicy,
         destination_guard: BrowserDestinationGuard | None,
+        capture_guard: BrowserCaptureGuard | None,
         budget: BrowserBudget,
         clock: Clock,
         deadline: float,
@@ -400,6 +425,7 @@ class _FlowState:
         self.resolver = resolver
         self.destination_policy = destination_policy
         self.destination_guard = destination_guard
+        self.capture_guard = capture_guard
         self.budget = budget
         self.clock = clock
         self.started_at = clock()
@@ -417,7 +443,10 @@ class _FlowState:
         self.pages: list[object] = []
         self.popups: list[object] = []
         self.downloads: list[object] = []
-        self.download_result: BoundedByteStream | None = None
+        self.viewer_locators: set[str] = set()
+        self.verified_locators: set[str] = set()
+        self.captures: list[BrowserCapture] = []
+        self.capture_digests: set[bytes] = set()
         self.error: _Abort | None = None
 
     def check(self) -> None:
@@ -454,6 +483,7 @@ class _FlowState:
         requests: int = 0,
         popups: int = 0,
         downloads: int = 0,
+        captures: int = 0,
         total_bytes: int = 0,
     ) -> None:
         self.check()
@@ -462,6 +492,7 @@ class _FlowState:
             self.usage.requests += requests
             self.usage.popups += popups
             self.usage.downloads += downloads
+            self.usage.captures += captures
             self.usage.total_bytes += total_bytes
             if self.usage.navigations > self.budget.max_navigations:
                 raise _Abort("budget")
@@ -471,8 +502,53 @@ class _FlowState:
                 raise _Abort("budget")
             if self.usage.downloads > self.budget.max_downloads:
                 raise _Abort("budget")
+            if self.usage.captures > self.budget.max_captures:
+                raise _Abort("budget")
             if self.usage.total_bytes > self.budget.max_total_bytes:
                 raise _Abort("oversize")
+
+    def allows_capture(
+        self,
+        locator: str,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> bool:
+        guard = self.capture_guard
+        if guard is None:
+            return kind is BrowserCaptureKind.DOWNLOAD
+        try:
+            return guard.allows(locator, kind, media_type) is True
+        except Exception as error:
+            raise _Abort("policy") from error
+
+    def add_capture(
+        self,
+        *,
+        kind: BrowserCaptureKind,
+        body: bytes,
+        media_type: str,
+        locator: str,
+    ) -> None:
+        if not isinstance(kind, BrowserCaptureKind):
+            raise _Abort("runtime")
+        if not isinstance(body, bytes) or not isinstance(media_type, str):
+            raise _Abort("runtime")
+        self.consume(total_bytes=len(body))
+        digest = hashlib.sha256(body).digest()
+        if digest in self.capture_digests:
+            return
+        self.consume(captures=1)
+        capture = BrowserCapture(
+            kind=kind,
+            stream=BoundedByteStream(
+                chunks=(body,),
+                media_type=media_type,
+                final_locator=locator,
+                size=len(body),
+            ),
+        )
+        self.capture_digests.add(digest)
+        self.captures.append(capture)
 
     def resolve(
         self,
@@ -749,6 +825,8 @@ class _BrowserSession:
     __slots__ = (
         "_navigate_operation",
         "_popup_operation",
+        "_viewer_operation",
+        "_verified_locator_operation",
         "_click_operation",
         "_fill_operation",
         "_text_operation",
@@ -758,6 +836,10 @@ class _BrowserSession:
     def __init__(self, client: BrowserClient, state: _FlowState, page: object) -> None:
         self._navigate_operation = lambda url: client._client_navigate(state, page, url)
         self._popup_operation = lambda url: client._client_open_popup(state, page, url)
+        self._viewer_operation = lambda url: client._client_open_viewer(state, page, url)
+        self._verified_locator_operation = lambda url: client._client_open_verified_locator(
+            state, page, url
+        )
         self._click_operation = lambda selector: client._client_click(state, page, selector)
         self._fill_operation = lambda selector, value: client._client_fill(
             state, page, selector, value
@@ -770,6 +852,12 @@ class _BrowserSession:
 
     def open_popup(self, url: str) -> None:
         self._popup_operation(url)
+
+    def open_viewer(self, url: str) -> None:
+        self._viewer_operation(url)
+
+    def open_verified_locator(self, url: str) -> None:
+        self._verified_locator_operation(url)
 
     def click(self, selector: str) -> None:
         self._click_operation(selector)
@@ -861,6 +949,7 @@ class BrowserClient:
         *,
         flow: Callable[[_BrowserSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
+        capture_guard: BrowserCaptureGuard | None = None,
         session_key: str | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
@@ -890,6 +979,11 @@ class BrowserClient:
             if destination_guard is not None and not isinstance(
                 destination_guard,
                 BrowserDestinationGuard,
+            ):
+                raise _Abort("policy")
+            if capture_guard is not None and not isinstance(
+                capture_guard,
+                BrowserCaptureGuard,
             ):
                 raise _Abort("policy")
             if (self._session_broker is None) != (session_key is None):
@@ -943,6 +1037,7 @@ class BrowserClient:
                 self._resolver,
                 self._destination_policy,
                 destination_guard,
+                capture_guard,
                 effective_budget,
                 self._clock,
                 deadline,
@@ -1022,9 +1117,9 @@ class BrowserClient:
             state.check_challenge(page)
             if state.error is not None:
                 raise state.error
-            if state.download_result is None:
+            if not state.captures:
                 raise _Abort("no-download")
-            result = state.download_result
+            result = BrowserCaptureBatch(captures=tuple(state.captures))
         except _Abort as error:
             result = _failure(error.code)
         except BrowserSessionCancelled:
@@ -1114,6 +1209,7 @@ class BrowserClient:
             max_requests=selected.max_requests,
             max_popups=selected.max_popups,
             max_downloads=selected.max_downloads,
+            max_captures=selected.max_captures,
             max_bytes_per_download=min(selected.max_bytes_per_download, request_max_bytes),
             max_total_bytes=selected.max_total_bytes,
             max_total_seconds=selected.max_total_seconds,
@@ -1389,6 +1485,32 @@ class BrowserClient:
                 # before transport.  A future response-body capture reuses
                 # this same condition rather than admitting after the fact.
                 raise _Abort("runtime")
+            status = _attribute(response, "status")
+            if type(status) is not int or not 200 <= status <= 299:
+                return
+            media_type = self._response_media_type(response)
+            kind = self._response_capture_kind(
+                state,
+                lease.page,
+                destination.url.url,
+            )
+            if not state.allows_capture(destination.url.url, kind, media_type):
+                return
+            body = cast(
+                bytes,
+                self._run_cancellable(
+                    state,
+                    lambda: self._response_bytes(state, response),
+                    abort=lambda: self._abort_runtime(lease.page, None, state.runtime),
+                ),
+            )
+            state.check()
+            state.add_capture(
+                kind=kind,
+                body=body,
+                media_type=media_type,
+                locator=destination.url.url,
+            )
         except _Abort as error:
             state.fail(error.code)
         except Exception:
@@ -1401,6 +1523,20 @@ class BrowserClient:
             return value
         resource_type = _text_attribute(request, "resource_type")
         return resource_type in {"document", "main_frame"}
+
+    def _response_capture_kind(
+        self,
+        state: _FlowState,
+        page: object | None,
+        locator: str,
+    ) -> BrowserCaptureKind:
+        if locator in state.verified_locators:
+            return BrowserCaptureKind.VERIFIED_LOCATOR
+        if locator in state.viewer_locators:
+            return BrowserCaptureKind.VIEWER
+        if page is not None and page in state.popups:
+            return BrowserCaptureKind.POPUP
+        return BrowserCaptureKind.RESPONSE
 
     @staticmethod
     def _continue_route(route: _Route) -> None:
@@ -1455,6 +1591,13 @@ class BrowserClient:
                 # cannot prove that host admission preceded the connection.
                 # Acquiring a permit here would be too late, so fail closed.
                 raise _Abort("runtime")
+            # ``destination`` was resolved from a query-free policy URL.  It
+            # is therefore safe to expose as the locator even when the
+            # private Browser download object carried a signed query.
+            locator = destination.url.url
+            media_type = self._download_media_type(download)
+            if not state.allows_capture(locator, BrowserCaptureKind.DOWNLOAD, media_type):
+                return
             body = cast(
                 bytes,
                 self._run_cancellable(
@@ -1464,17 +1607,11 @@ class BrowserClient:
                 ),
             )
             state.check()
-            state.consume(total_bytes=len(body))
-            # ``destination`` was resolved from a query-free policy URL.  It
-            # is therefore safe to expose as the locator even when the
-            # private Browser download object carried a signed query.
-            locator = destination.url.url
-            media_type = self._download_media_type(download)
-            state.download_result = BoundedByteStream(
-                chunks=(body,),
+            state.add_capture(
+                kind=BrowserCaptureKind.DOWNLOAD,
+                body=body,
                 media_type=media_type,
-                final_locator=locator,
-                size=len(body),
+                locator=locator,
             )
         except _Abort as error:
             state.fail(error.code)
@@ -1498,6 +1635,65 @@ class BrowserClient:
                 if candidate and all(ord(character) >= 32 for character in candidate):
                     return candidate
         return "application/octet-stream"
+
+    @staticmethod
+    def _response_media_type(response: object) -> str:
+        for name in ("media_type", "content_type"):
+            value = _text_attribute(response, name)
+            if value:
+                candidate = value.split(";", 1)[0].strip().casefold()
+                if candidate and all(ord(character) >= 32 for character in candidate):
+                    return candidate
+        candidate = BrowserClient._media_type_from_headers(_attribute(response, "headers"))
+        return "application/octet-stream" if candidate is None else candidate
+
+    @staticmethod
+    def _media_type_from_headers(headers: object) -> str | None:
+        if isinstance(headers, dict):
+            for name, value in headers.items():
+                if (
+                    isinstance(name, str)
+                    and name.casefold() == "content-type"
+                    and isinstance(value, str)
+                ):
+                    candidate = value.split(";", 1)[0].strip().casefold()
+                    if candidate:
+                        return candidate
+        if isinstance(headers, (tuple, list)):
+            for item in headers:
+                if (
+                    isinstance(item, (tuple, list))
+                    and len(item) == 2
+                    and isinstance(item[0], str)
+                    and item[0].casefold() == "content-type"
+                    and isinstance(item[1], str)
+                ):
+                    candidate = item[1].split(";", 1)[0].strip().casefold()
+                    if candidate:
+                        return candidate
+        return None
+
+    @staticmethod
+    def _response_bytes(state: _FlowState, response: object) -> bytes:
+        declared = _attribute(response, "size")
+        if isinstance(declared, int) and declared > state.max_bytes_per_download:
+            raise _Abort("oversize")
+        reader = getattr(response, "body", None)
+        if not callable(reader):
+            reader = getattr(response, "content", None)
+        if not callable(reader):
+            reader = getattr(response, "read", None)
+        if not callable(reader):
+            raise _Abort("runtime")
+        try:
+            value = reader()
+        except TypeError:
+            value = reader(state.max_bytes_per_download + 1)
+        if not isinstance(value, bytes):
+            raise _Abort("runtime")
+        if len(value) > state.max_bytes_per_download:
+            raise _Abort("oversize")
+        return value
 
     @staticmethod
     def _download_bytes(state: _FlowState, download: object) -> bytes:
@@ -1596,6 +1792,28 @@ class BrowserClient:
             if state.error is not None:
                 raise state.error
             raise _Abort("runtime") from error
+
+    def _client_open_verified_locator(
+        self,
+        state: _FlowState,
+        opener: object,
+        url: str,
+    ) -> None:
+        destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
+        with state.lock:
+            state.verified_locators.add(destination.url.url)
+        self._client_open_popup(state, opener, destination.url.url)
+
+    def _client_open_viewer(
+        self,
+        state: _FlowState,
+        opener: object,
+        url: str,
+    ) -> None:
+        destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
+        with state.lock:
+            state.viewer_locators.add(destination.url.url)
+        self._client_open_popup(state, opener, destination.url.url)
 
     @staticmethod
     def _selector(value: str) -> str:
@@ -1765,6 +1983,7 @@ class BrowserClient:
 
 __all__ = (
     "BrowserBudget",
+    "BrowserCaptureGuard",
     "BrowserClient",
     "BrowserDestinationGuard",
     "BrowserDestinationKind",
