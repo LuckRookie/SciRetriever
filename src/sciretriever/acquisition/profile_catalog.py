@@ -112,6 +112,59 @@ ACM_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+AIP_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="aip-publishing",
+    platform_key="aip-publishing",
+    landing_origins=("https://pubs.aip.org",),
+    asset_origins=("https://pubs.aip.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1063",),
+    weak_publisher_names=(
+        "aip publishing",
+        "american institute of physics",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="aip-terms-of-use-2023-04-20",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="AIP Publishing",
+        product_name="AIP Publishing journals platform",
+        official_references=(
+            "https://pubs.aip.org/",
+            "https://publishing.aip.org/terms-of-use/",
+            "https://publishing.aip.org/resources/librarians/licensing/access/",
+            "https://publishing.aip.org/resources/librarians/licensing/licenses/",
+            (
+                "https://publishing.aip.org/resources/researchers/"
+                "rights-and-permissions/permissions/"
+            ),
+            ("https://publishing.aip.org/resources/researchers/open-science/public-access/"),
+            "https://pubs.aip.org/robots.txt",
+        ),
+        access_terms_references=(
+            "https://publishing.aip.org/terms-of-use/",
+            "https://publishing.aip.org/resources/librarians/licensing/access/",
+        ),
+        rate_limit_references=(
+            "https://publishing.aip.org/terms-of-use/",
+            "https://pubs.aip.org/robots.txt",
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="aip-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/aip.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/aip-publishing.json",
+    ),
+)
+
 CORE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="core-open-access",
     platform_key="core-api",
@@ -463,6 +516,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
             (
                 ACM_ACCESS_PROFILE,
                 ACS_ACCESS_PROFILE,
+                AIP_ACCESS_PROFILE,
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
                 IEEE_ACCESS_PROFILE,
@@ -484,6 +538,7 @@ PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG: Final[PublisherAccessProfileCatalog
 __all__ = (
     "ACM_ACCESS_PROFILE",
     "ACS_ACCESS_PROFILE",
+    "AIP_ACCESS_PROFILE",
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
     "IEEE_ACCESS_PROFILE",
