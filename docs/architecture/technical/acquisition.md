@@ -444,9 +444,10 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
 真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
-Provider session broker、状态/捕获矩阵、完整安装后验收与用户确认 UX 完成前，仍不得从配置
-或 CLI 打开生产 Browser。组间并行和组内串行已经是当前 cohort 行为，但没有会话 broker 与
-完整 Provider Profile 时仍不构成 production-ready Browser 能力。
+Provider session broker 与 operator-managed profile 存储边界也已完成。状态/页面分类与捕获
+矩阵、完整 Provider Profile、安装后验收和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产
+Browser。组间并行、组内串行和会话复用已经是当前 foundation 行为，但尚不构成
+production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
 
@@ -495,23 +496,32 @@ Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenanc
 自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；
 这些情况形成 action-required 并暂停对应 group。
 
-运行状态至少区分：
+每篇文章流程使用 Acquisition 私有的纯内存 `BrowserRunStateMachine`。状态与决定的封闭映射为：
 
-```text
-OPEN
-AUTHENTICATED
-LOGIN_REQUIRED
-MFA_REQUIRED
-CHALLENGE_REQUIRED
-NOT_ENTITLED
-RATE_LIMITED
-IP_BLOCKED
-NOT_FOUND
-PDF_CAPTURED
-RUNTIME_FAILED
-```
+| 状态 | 当前 route 处置 | risk-group 信号 |
+|---|---|---|
+| `OPEN` | 继续当前页面流程 | 无 |
+| `AUTHENTICATED` | 继续当前文章授权与 PDF 动作 | 无 |
+| `LOGIN_REQUIRED` | `action-required`，不自动登录 | 暂停 |
+| `MFA_REQUIRED` | `action-required`，不自动处理 MFA | 暂停 |
+| `CHALLENGE_REQUIRED` | `action-required`，不绕过 challenge | 打开 circuit |
+| `NOT_ENTITLED` | 正常未命中，允许当前 plan 中其它 route | 无 |
+| `RATE_LIMITED` | `deferred`，不换入口制造替代流量 | 暂停 |
+| `IP_BLOCKED` | `action-required` | 打开 circuit |
+| `NOT_FOUND` | 正常未命中，允许当前 plan 中其它 route | 无 |
+| `PDF_CAPTURED` | 交付临时 PDF，随后仍经过统一字节检查 | 无 |
+| `RUNTIME_FAILED` | 稳定 route failure | 记录一次 runtime failure |
 
-Rate-limit、challenge、可疑 403、账号警告、IP block 或连续 runtime failure 更新该 group 的 `blocked_until`/circuit；其它 group 继续。自动策略只能减速或暂停，不能根据连续成功自动提速。
+状态机只允许 `OPEN -> AUTHENTICATED -> 终态` 或从活动状态直接进入终态；重复报告同一状态
+幂等，终态不能重新打开。文章资源清理或 runtime failure 可以把包括 `PDF_CAPTURED` 在内的
+已有状态提升为 `RUNTIME_FAILED`，因为完整文章事务关闭前不能把捕获字节视为安全交付。
+状态 history 只包含上述枚举，不接受 URL、selector、HTML、Cookie 或 Browser vendor object。
+
+状态、决定和 history 只存在于当前进程内存，可以转换为安全日志和本次操作的稳定
+`normal-miss`、`deferred`、`action-required` 或 failure；它们不进入 Literature Model、Catalog、
+数据库表、Artifact、provenance 或跨运行失败历史。risk-group 信号在 Provider cooldown/circuit
+策略中才真正更新 `blocked_until` 与 circuit；其它 group 始终继续。自动策略只能减速或暂停，
+不能根据连续成功自动提速。
 
 Provider Profile 的封闭 guard 必须在每次 navigation、popup、viewer、response 和 download 实际访问前执行，并叠加 Network 的通用 URL、DNS、redirect、origin、credential forwarding 和 host admission。Browser 可以从受控 download、PDF response、允许的 popup/viewer 或已核实官方 locator 形成 `TemporaryPdf`；正文归属和 supplementary exclusion 在 adapter/Profile 边界判断，最终字节仍执行第 5 节统一检查。未知 Provider 不使用 generic arbitrary-site Browser fallback。
 
