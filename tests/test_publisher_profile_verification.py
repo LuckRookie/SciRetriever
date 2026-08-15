@@ -17,6 +17,7 @@ from sciretriever.acquisition.access_profiles import (
 from sciretriever.acquisition.profile_catalog import (
     ACM_ACCESS_PROFILE,
     ACS_ACCESS_PROFILE,
+    AIP_ACCESS_PROFILE,
     IEEE_ACCESS_PROFILE,
     IOP_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
@@ -321,6 +322,41 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         )
         self.assertIn(
             {"case_id": "related-artifact-or-supplement", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_aip_terms_keep_automated_site_access_out_of_production(self) -> None:
+        profile = AIP_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1063",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertNotEqual(profile.platform_key, IOP_ACCESS_PROFILE.platform_key)
+        self.assertTrue(set(profile.landing_origins).isdisjoint(IOP_ACCESS_PROFILE.landing_origins))
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(
+            authorized_api["payload"],
+            "no-reviewed-machine-access-api",
+        )
+        self.assertIn(
+            "official-terms-prohibit-automated-site-access",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplementary-material-or-file", "expected": "supplement"},
             ownership,
         )
 
