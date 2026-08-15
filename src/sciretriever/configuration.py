@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -38,6 +39,8 @@ from sciretriever.model.configuration import (
     AnalysisConfig,
     AnalysisConfigurationStatus,
     AssetsConfig,
+    BrowserProfilePresence,
+    BrowserProfileStatus,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationDiagnostic,
@@ -70,8 +73,30 @@ _MAX_CREDENTIALS_BYTES: Final[int] = 1_048_576
 _CONFIGURATION_ENVIRONMENT: Final[str] = "SCIRETRIEVER_CONFIG"
 _CREDENTIALS_DIRECTORY_NAME: Final[str] = ".sciretriever"
 _CREDENTIALS_FILE_NAME: Final[str] = "credentials.toml"
+_BROWSER_PROFILE_DIRECTORY_NAME: Final[str] = "browser-profiles"
 _DIRECTORY_MODE: Final[int] = 0o700
 _FILE_MODE: Final[int] = 0o600
+_BROWSER_PROFILE_IDENTITY: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    re.ASCII,
+)
+_UUID_PROFILE_IDENTITY: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.ASCII,
+)
+_SENSITIVE_IDENTITY_MARKERS: Final[frozenset[str]] = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "credential",
+        "password",
+        "private",
+        "secret",
+        "signature",
+        "token",
+    }
+)
+_BROWSER_PROFILE_HANDLE_TOKEN: Final[object] = object()
 
 
 class _CoreCredentialSpec:
@@ -242,6 +267,13 @@ class RuntimeSecretLookup(Protocol):
     def analysis_api_key(self) -> str | None: ...
 
 
+@runtime_checkable
+class BrowserProfileCancellation(Protocol):
+    """Minimal cancellation seam for local Browser profile initialization."""
+
+    def is_set(self) -> bool: ...
+
+
 _SAFE_MESSAGES: frozenset[str] = frozenset(
     {
         "configuration operation failed",
@@ -277,6 +309,14 @@ _SAFE_MESSAGES: frozenset[str] = frozenset(
         "credentials directory has unsafe ownership or permissions",
         "credentials publication failed",
         "credentials publication was interrupted",
+        "browser profile identity is invalid",
+        "browser profile is unavailable",
+        "browser profile storage is unavailable",
+        "browser profile has unsafe ownership or permissions",
+        "browser profile contains an unsafe filesystem entry",
+        "browser profile changed during validation",
+        "browser profile operation was cancelled",
+        "browser profile cleanup failed",
         "provider is unsupported",
         "capability is unsupported",
     }
@@ -525,6 +565,473 @@ def credential_path(*, home: str | Path | None = None) -> Path:
 
     base = Path.home() if home is None else _safe_path(home)
     return base / _CREDENTIALS_DIRECTORY_NAME / _CREDENTIALS_FILE_NAME
+
+
+def _browser_profile_identity(value: object) -> str:
+    if type(value) is not str:
+        _fail("browser profile identity is invalid")
+    candidate = value.strip().casefold()
+    if (
+        len(candidate) > 96
+        or _BROWSER_PROFILE_IDENTITY.fullmatch(candidate) is None
+        or _UUID_PROFILE_IDENTITY.fullmatch(candidate) is not None
+        or any(marker in candidate.split("-") for marker in _SENSITIVE_IDENTITY_MARKERS)
+    ):
+        _fail("browser profile identity is invalid")
+    return candidate
+
+
+def _browser_profile_home(home: str | Path | None) -> Path:
+    return Path.home() if home is None else _safe_path(home)
+
+
+def browser_profile_path(
+    profile_identity: str,
+    *,
+    home: str | Path | None = None,
+) -> Path:
+    """Return one fixed-suffix Browser profile path from an opaque identity."""
+
+    identity = _browser_profile_identity(profile_identity)
+    return (
+        _browser_profile_home(home)
+        / _CREDENTIALS_DIRECTORY_NAME
+        / _BROWSER_PROFILE_DIRECTORY_NAME
+        / identity
+    )
+
+
+def _profile_lstat(path: Path, *, missing_ok: bool) -> os.stat_result | None:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        _fail("browser profile is unavailable")
+    except OSError:
+        _fail("browser profile storage is unavailable")
+    if stat.S_ISLNK(metadata.st_mode):
+        _fail("browser profile contains an unsafe filesystem entry")
+    return metadata
+
+
+def _validate_profile_directory_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
+        _fail("browser profile contains an unsafe filesystem entry")
+    if metadata.st_uid != _current_uid() or _mode(metadata) != _DIRECTORY_MODE:
+        _fail("browser profile has unsafe ownership or permissions")
+
+
+def _validate_profile_file_metadata(metadata: os.stat_result) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        _fail("browser profile contains an unsafe filesystem entry")
+    if metadata.st_uid != _current_uid() or _mode(metadata) != _FILE_MODE or metadata.st_nlink != 1:
+        _fail("browser profile has unsafe ownership or permissions")
+
+
+def _profile_directory_flags() -> int:
+    flags = os.O_RDONLY
+    for name in ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_BINARY"):
+        value = getattr(os, name, 0)
+        if isinstance(value, int):
+            flags |= value
+    return flags
+
+
+def _profile_file_flags() -> int:
+    flags = os.O_RDONLY
+    for name in ("O_CLOEXEC", "O_NOFOLLOW", "O_BINARY"):
+        value = getattr(os, name, 0)
+        if isinstance(value, int):
+            flags |= value
+    return flags
+
+
+def _open_profile_directory(path: Path) -> tuple[int, os.stat_result]:
+    named = _profile_lstat(path, missing_ok=False)
+    if named is None:  # pragma: no cover - guarded by ``missing_ok``.
+        _fail("browser profile is unavailable")
+    _validate_profile_directory_metadata(named)
+    try:
+        descriptor = os.open(path, _profile_directory_flags())
+    except OSError:
+        _fail("browser profile storage is unavailable")
+    try:
+        opened = os.fstat(descriptor)
+        _validate_profile_directory_metadata(opened)
+        named_after = _profile_lstat(path, missing_ok=False)
+        if named_after is None or not _same_identity(named_after, opened):
+            _fail("browser profile changed during validation")
+        return descriptor, opened
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_profile_child(
+    parent_descriptor: int,
+    name: str,
+    expected: os.stat_result,
+    *,
+    directory: bool,
+) -> tuple[int, os.stat_result]:
+    flags = _profile_directory_flags() if directory else _profile_file_flags()
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except OSError:
+        _fail("browser profile changed during validation")
+    try:
+        opened = os.fstat(descriptor)
+        if directory:
+            _validate_profile_directory_metadata(opened)
+        else:
+            _validate_profile_file_metadata(opened)
+        if not _same_identity(expected, opened):
+            _fail("browser profile changed during validation")
+        return descriptor, opened
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _validate_profile_directory_tree(
+    descriptor: int,
+    expected: os.stat_result,
+) -> None:
+    try:
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except OSError:
+                    _fail("browser profile changed during validation")
+                if stat.S_ISLNK(metadata.st_mode):
+                    _fail("browser profile contains an unsafe filesystem entry")
+                if stat.S_ISDIR(metadata.st_mode):
+                    child, child_metadata = _open_profile_child(
+                        descriptor,
+                        entry.name,
+                        metadata,
+                        directory=True,
+                    )
+                    try:
+                        _validate_profile_directory_tree(child, child_metadata)
+                    finally:
+                        os.close(child)
+                    continue
+                if stat.S_ISREG(metadata.st_mode):
+                    child, child_metadata = _open_profile_child(
+                        descriptor,
+                        entry.name,
+                        metadata,
+                        directory=False,
+                    )
+                    try:
+                        after = os.fstat(child)
+                        _validate_profile_file_metadata(after)
+                        if not _same_metadata(child_metadata, after):
+                            _fail("browser profile changed during validation")
+                    finally:
+                        os.close(child)
+                    continue
+                _fail("browser profile contains an unsafe filesystem entry")
+        after = os.fstat(descriptor)
+    except ConfigurationError:
+        raise
+    except (OSError, RecursionError):
+        _fail("browser profile changed during validation")
+    _validate_profile_directory_metadata(after)
+    if not _same_metadata(expected, after):
+        _fail("browser profile changed during validation")
+
+
+def _validate_profile_tree(path: Path) -> os.stat_result:
+    descriptor, metadata = _open_profile_directory(path)
+    try:
+        _validate_profile_directory_tree(descriptor, metadata)
+        final = os.fstat(descriptor)
+        named = _profile_lstat(path, missing_ok=False)
+        if named is None or not _same_identity(named, final):
+            _fail("browser profile changed during validation")
+        return final
+    finally:
+        os.close(descriptor)
+
+
+def _validate_or_create_profile_directory(path: Path, *, create: bool) -> bool:
+    metadata = _profile_lstat(path, missing_ok=True)
+    created = False
+    if metadata is None:
+        if not create:
+            return False
+        try:
+            path.mkdir(mode=_DIRECTORY_MODE, parents=False, exist_ok=False)
+            created = True
+        except FileExistsError:
+            pass
+        except OSError:
+            _fail("browser profile storage is unavailable")
+    descriptor, _metadata = _open_profile_directory(path)
+    try:
+        if created:
+            try:
+                os.fchmod(descriptor, _DIRECTORY_MODE)
+            except OSError:
+                _fail("browser profile storage is unavailable")
+        current = os.fstat(descriptor)
+        _validate_profile_directory_metadata(current)
+    finally:
+        os.close(descriptor)
+    return True
+
+
+def _browser_profile_storage(
+    home: Path,
+    *,
+    create: bool,
+) -> Path | None:
+    private_directory = home / _CREDENTIALS_DIRECTORY_NAME
+    if not _validate_or_create_profile_directory(private_directory, create=create):
+        return None
+    profile_storage = private_directory / _BROWSER_PROFILE_DIRECTORY_NAME
+    if not _validate_or_create_profile_directory(profile_storage, create=create):
+        return None
+    return profile_storage
+
+
+def _check_browser_profile_cancel(
+    cancel_event: BrowserProfileCancellation | None,
+) -> None:
+    if cancel_event is None:
+        return
+    try:
+        cancelled = cancel_event.is_set()
+    except Exception:
+        _fail("browser profile operation was cancelled")
+    if type(cancelled) is not bool or cancelled:
+        _fail("browser profile operation was cancelled")
+
+
+def _profile_child_metadata(
+    storage_descriptor: int,
+    identity: str,
+) -> os.stat_result | None:
+    try:
+        return os.stat(identity, dir_fd=storage_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        _fail("browser profile storage is unavailable")
+
+
+def _remove_created_profile_directory(
+    storage_descriptor: int,
+    identity: str,
+    expected: os.stat_result,
+) -> None:
+    try:
+        current = os.stat(identity, dir_fd=storage_descriptor, follow_symlinks=False)
+        if not _same_identity(expected, current):
+            _fail("browser profile cleanup failed")
+        os.rmdir(identity, dir_fd=storage_descriptor)
+    except ConfigurationError:
+        raise
+    except OSError:
+        _fail("browser profile cleanup failed")
+
+
+def _create_profile_child(
+    storage_descriptor: int,
+    identity: str,
+) -> tuple[int, os.stat_result] | None:
+    created_metadata: os.stat_result | None = None
+    descriptor: int | None = None
+    try:
+        try:
+            os.mkdir(identity, _DIRECTORY_MODE, dir_fd=storage_descriptor)
+            created_metadata = os.stat(
+                identity,
+                dir_fd=storage_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            return None
+        except OSError:
+            _fail("browser profile storage is unavailable")
+        try:
+            descriptor = os.open(
+                identity,
+                _profile_directory_flags(),
+                dir_fd=storage_descriptor,
+            )
+            os.fchmod(descriptor, _DIRECTORY_MODE)
+            opened = os.fstat(descriptor)
+            _validate_profile_directory_metadata(opened)
+            if created_metadata is None or not _same_identity(created_metadata, opened):
+                _fail("browser profile changed during validation")
+            return descriptor, opened
+        except OSError:
+            _fail("browser profile storage is unavailable")
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created_metadata is not None:
+            _remove_created_profile_directory(
+                storage_descriptor,
+                identity,
+                created_metadata,
+            )
+        raise
+
+
+def _create_browser_profile_directory(
+    storage: Path,
+    identity: str,
+    cancel_event: BrowserProfileCancellation | None,
+) -> None:
+    storage_descriptor, _storage_metadata = _open_profile_directory(storage)
+    profile_descriptor: int | None = None
+    created_metadata: os.stat_result | None = None
+    try:
+        if _profile_child_metadata(storage_descriptor, identity) is not None:
+            _check_browser_profile_cancel(cancel_event)
+            return
+        _check_browser_profile_cancel(cancel_event)
+        created = _create_profile_child(storage_descriptor, identity)
+        if created is None:
+            _check_browser_profile_cancel(cancel_event)
+            return
+        profile_descriptor, created_metadata = created
+        try:
+            _check_browser_profile_cancel(cancel_event)
+        except BaseException:
+            os.close(profile_descriptor)
+            profile_descriptor = None
+            _remove_created_profile_directory(
+                storage_descriptor,
+                identity,
+                created_metadata,
+            )
+            raise
+    finally:
+        if profile_descriptor is not None:
+            os.close(profile_descriptor)
+        os.close(storage_descriptor)
+
+
+class BrowserProfileHandle:
+    """Opaque, revalidated selection for one sensitive Browser profile."""
+
+    __slots__ = ("_device", "_home", "_identity", "_inode")
+
+    def __init__(
+        self,
+        identity: str,
+        home: Path,
+        metadata: os.stat_result,
+        *,
+        _token: object,
+    ) -> None:
+        if _token is not _BROWSER_PROFILE_HANDLE_TOKEN:
+            raise TypeError("BrowserProfileHandle must be created by configuration")
+        self._identity = identity
+        self._home = home
+        self._device = metadata.st_dev
+        self._inode = metadata.st_ino
+
+    @property
+    def profile_identity(self) -> str:
+        return self._identity
+
+    def runtime_directory(self) -> Path:
+        """Revalidate the selected profile immediately before runtime launch."""
+
+        path, metadata = _resolve_browser_profile_metadata(self._identity, self._home)
+        if metadata.st_dev != self._device or metadata.st_ino != self._inode:
+            _fail("browser profile changed during validation")
+        return path
+
+    def __repr__(self) -> str:
+        return f"BrowserProfileHandle(presence={BrowserProfilePresence.CONFIGURED.value!r})"
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("Browser profile handle is not serializable")
+
+
+def _resolve_browser_profile_metadata(
+    identity: str,
+    home: Path,
+) -> tuple[Path, os.stat_result]:
+    storage = _browser_profile_storage(home, create=False)
+    if storage is None:
+        _fail("browser profile is unavailable")
+    path = storage / identity
+    if _profile_lstat(path, missing_ok=True) is None:
+        _fail("browser profile is unavailable")
+    return path, _validate_profile_tree(path)
+
+
+def resolve_browser_profile(
+    profile_identity: str,
+    *,
+    home: str | Path | None = None,
+) -> BrowserProfileHandle:
+    """Resolve one fixed local profile without reading any of its file bytes."""
+
+    identity = _browser_profile_identity(profile_identity)
+    selected_home = _browser_profile_home(home)
+    _path, metadata = _resolve_browser_profile_metadata(identity, selected_home)
+    return BrowserProfileHandle(
+        identity,
+        selected_home,
+        metadata,
+        _token=_BROWSER_PROFILE_HANDLE_TOKEN,
+    )
+
+
+def initialize_browser_profile(
+    profile_identity: str,
+    *,
+    home: str | Path | None = None,
+    cancel_event: BrowserProfileCancellation | None = None,
+) -> BrowserProfileHandle:
+    """Create or select an empty owner-only profile through the fixed boundary."""
+
+    identity = _browser_profile_identity(profile_identity)
+    if cancel_event is not None and not isinstance(cancel_event, BrowserProfileCancellation):
+        _fail("configuration value is invalid")
+    _check_browser_profile_cancel(cancel_event)
+    selected_home = _browser_profile_home(home)
+    storage = _browser_profile_storage(selected_home, create=True)
+    if storage is None:  # pragma: no cover - ``create=True`` either returns or raises.
+        _fail("browser profile storage is unavailable")
+    _check_browser_profile_cancel(cancel_event)
+    _create_browser_profile_directory(storage, identity, cancel_event)
+    return resolve_browser_profile(identity, home=selected_home)
+
+
+def browser_profile_status(
+    profile_identity: str | None,
+    *,
+    home: str | Path | None = None,
+) -> BrowserProfileStatus:
+    """Return only configured/missing/attention for one local profile selection."""
+
+    if profile_identity is None:
+        return BrowserProfileStatus(presence=BrowserProfilePresence.MISSING)
+    try:
+        identity = _browser_profile_identity(profile_identity)
+        selected_home = _browser_profile_home(home)
+        storage = _browser_profile_storage(selected_home, create=False)
+        if storage is None:
+            return BrowserProfileStatus(presence=BrowserProfilePresence.MISSING)
+        path = storage / identity
+        if _profile_lstat(path, missing_ok=True) is None:
+            return BrowserProfileStatus(presence=BrowserProfilePresence.MISSING)
+        _validate_profile_tree(path)
+    except (ConfigurationError, OSError, RecursionError):
+        return BrowserProfileStatus(presence=BrowserProfilePresence.ATTENTION)
+    return BrowserProfileStatus(presence=BrowserProfilePresence.CONFIGURED)
 
 
 def _empty_configuration() -> Configuration:
@@ -2606,6 +3113,10 @@ def update_core_service_configuration(
 
 __all__ = (
     "AcquisitionSourcesConfig",
+    "BrowserProfileCancellation",
+    "BrowserProfileHandle",
+    "BrowserProfilePresence",
+    "BrowserProfileStatus",
     "Configuration",
     "ConfigurationDiagnostic",
     "ConfigurationError",
@@ -2620,6 +3131,8 @@ __all__ = (
     "ProviderName",
     "UnpaywallAcquisitionConfig",
     "configurable_credential_providers",
+    "browser_profile_path",
+    "browser_profile_status",
     "configuration_diff",
     "configuration_service_origin",
     "core_credential_section_exists",
@@ -2635,9 +3148,11 @@ __all__ = (
     "load_credentials",
     "load_runtime_secrets",
     "load_selected_configuration",
+    "initialize_browser_profile",
     "parse_configuration",
     "remove_credentials",
     "remove_core_credentials",
+    "resolve_browser_profile",
     "run_configuration_probes",
     "RuntimeSecretLookup",
     "select_configuration_path",

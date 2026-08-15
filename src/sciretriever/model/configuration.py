@@ -373,6 +373,14 @@ class CredentialStatus(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class BrowserProfilePresence(str, Enum):
+    """The only local disclosures allowed for a sensitive Browser profile."""
+
+    CONFIGURED = "configured"
+    MISSING = "missing"
+    ATTENTION = "attention"
+
+
 class WebOfScienceProduct(str, Enum):
     """The two accepted Web of Science Metadata products."""
 
@@ -948,6 +956,12 @@ class ConfigurationStatus(_FrozenModel):
         return self
 
 
+class BrowserProfileStatus(_FrozenModel):
+    """Secret-free local presence of one selected operator-managed profile."""
+
+    presence: BrowserProfilePresence
+
+
 class ParsingConfigurationStatus(_FrozenModel):
     """Local completeness of the selected MinerU configuration."""
 
@@ -1153,6 +1167,8 @@ __all__ = (
     "AnalysisProvider",
     "AnalysisProtocol",
     "AssetsConfig",
+    "BrowserProfilePresence",
+    "BrowserProfileStatus",
     "Configuration",
     "ConfigurationCapabilityStatus",
     "ConfigurationDiagnostic",
