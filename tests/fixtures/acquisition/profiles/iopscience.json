@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "access_key": "iopscience",
+  "display_name": "IOPscience",
+  "product_name": "IOPscience journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "iopscience-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/iop.md",
+  "official_references": [
+    "https://ioppublishing.org/legal/textanddataminingpolicy/",
+    "https://ioppublishing.org/terms-conditions/",
+    "https://ioppublishing.org/librarians/licencing/",
+    "https://ioppublishing.org/news/iop-publishing-collaborates-with-openathens-and-seamlessaccess-to-improve-user-experience/",
+    "https://iopscience.iop.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://ioppublishing.org/legal/textanddataminingpolicy/",
+    "https://ioppublishing.org/terms-conditions/"
+  ],
+  "rate_limit_references": [
+    "https://ioppublishing.org/legal/textanddataminingpolicy/",
+    "https://iopscience.iop.org/robots.txt"
+  ],
+  "landing_origins": ["https://iopscience.iop.org"],
+  "asset_origins": ["https://iopscience.iop.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1088-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "reviewed-sftp-or-agreed-delivery-is-not-a-public-api",
+      "known_contract": "contact-content-support-for-reviewed-xml-or-pdf-delivery"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-terms-prohibit-systematic-downloading",
+        "official-tdm-policy-requires-prior-contact-and-agreed-delivery",
+        "general-robots-policy-disallows-all",
+        "anonymous-article-platform-requests-return-bot-challenge",
+        "no-published-browser-article-rate-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplementary-data-rule",
+        "institution-specific-upstream-sso-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-primary-pdf-from-agreed-delivery-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-data-or-file", "expected": "supplement"},
+    {"case_id": "metadata-only-xml-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "operator-specific-written-agreement-not-a-product-default",
+    "sftp-or-agreed-delivery-not-implemented",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "live-entitlement-not-asserted"
+  ]
+}
