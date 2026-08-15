@@ -16,6 +16,7 @@ from sciretriever.acquisition.access_profiles import (
 )
 from sciretriever.acquisition.profile_catalog import (
     ACS_ACCESS_PROFILE,
+    IEEE_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
@@ -303,6 +304,28 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertIn(
             {"case_id": "electronic-supplementary-information", "expected": "supplement"},
             ownership,
+        )
+
+    def test_ieee_arnumber_does_not_imply_a_ready_pdf_route(self) -> None:
+        profile = IEEE_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.stable_locator_namespaces, ("ieee-arnumber",))
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1109",))
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        self.assertEqual(
+            authorized_api["payload"],
+            "licensed-full-text-shape-not-publicly-specified",
+        )
+        self.assertIn(
+            "institution-specific-upstream-sso-is-not-production-evidence",
+            _strings(browser["blockers"]),
         )
 
     def test_browser_fixture_executes_primary_supplement_and_wrong_article_cases(self) -> None:

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "access_key": "ieee-xplore",
+  "display_name": "IEEE Xplore",
+  "product_name": "IEEE Xplore article and Full-Text Access platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "ieee-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/ieee.md",
+  "official_references": [
+    "https://ieeexplore.ieee.org/",
+    "https://developer.ieee.org/docs",
+    "https://developer.ieee.org/Chargeable_Full_Text_Requests"
+  ],
+  "access_terms_references": ["https://developer.ieee.org/API_Terms_of_Use2"],
+  "rate_limit_references": ["https://developer.ieee.org/API_Terms_of_Use2"],
+  "landing_origins": ["https://ieeexplore.ieee.org"],
+  "asset_origins": ["https://ieeexplore.ieee.org"],
+  "stable_identity": {
+    "locator_namespaces": ["ieee-arnumber"],
+    "provider_record_names": [],
+    "examples": ["ieee-arnumber:12345678"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-pdf-or-landing-locator-still-requires-byte-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "licensed-full-text-shape-not-publicly-specified",
+      "known_contract": "authorization-key-to-token-to-article-request"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-api-terms-direct-automated-content-access-to-api",
+        "registered-rate-limits-not-publicly-enumerated",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "institution-specific-upstream-sso-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "full-text-pdf-after-explicit-contract-and-validation", "expected": "primary"},
+    {"case_id": "supplementary-multimedia-or-file", "expected": "supplement"},
+    {"case_id": "metadata-or-unknown-full-text-format", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "full-text-endpoint-and-media-type-not-publicly-specified",
+    "registered-rate-limit-not-known",
+    "browser-route-not-registered",
+    "live-entitlement-not-asserted"
+  ]
+}
