@@ -57,6 +57,51 @@ CORE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+ELSEVIER_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="elsevier-sciencedirect",
+    platform_key="sciencedirect",
+    landing_origins=(
+        "https://www.sciencedirect.com",
+        "https://linkinghub.elsevier.com",
+    ),
+    asset_origins=(
+        "https://api.elsevier.com",
+        "https://www.sciencedirect.com",
+        "https://linkinghub.elsevier.com",
+        "https://pdf.sciencedirectassets.com",
+    ),
+    stable_locator_namespaces=("pii", "elsevier-article-eid"),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1016",),
+    weak_publisher_names=("elsevier", "science direct", "sciencedirect"),
+    public_route_keys=(),
+    api_route_keys=("api:elsevier-article-object",),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="elsevier-article-object-2026-08-15",
+    production_status=ProfileProductionStatus.PRODUCTION_READY,
+    evidence=PublisherAccessEvidence(
+        display_name="Elsevier / ScienceDirect",
+        product_name="Article Retrieval and Object Retrieval APIs",
+        official_references=(
+            "https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl",
+            "https://dev.elsevier.com/documentation/ObjectRetrievalAPI.wadl",
+            "https://dev.elsevier.com/api_docs.html",
+        ),
+        access_terms_references=("https://dev.elsevier.com/policy.html",),
+        rate_limit_references=("https://dev.elsevier.com/api_key_settings.html",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="elsevier-article-object-2026-08-15",
+        notes_reference="docs/notes/providers/elsevier.md",
+        fixture_reference=("tests/fixtures/acquisition/profiles/elsevier-sciencedirect.json"),
+    ),
+)
+
 WILEY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="wiley-online-library",
     platform_key="wiley-online-library",
@@ -101,7 +146,9 @@ WILEY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
 
 PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] = (
     PublisherAccessVerificationMatrix(
-        profiles=PublisherAccessProfileCatalog((CORE_ACCESS_PROFILE, WILEY_ACCESS_PROFILE)),
+        profiles=PublisherAccessProfileCatalog(
+            (CORE_ACCESS_PROFILE, ELSEVIER_ACCESS_PROFILE, WILEY_ACCESS_PROFILE)
+        ),
         browser_rules=PRODUCTION_BROWSER_RULE_CATALOG,
     )
 )
@@ -112,6 +159,7 @@ PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG: Final[PublisherAccessProfileCatalog
 
 __all__ = (
     "CORE_ACCESS_PROFILE",
+    "ELSEVIER_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
     "WILEY_ACCESS_PROFILE",

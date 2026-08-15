@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from sciretriever.acquisition.outcomes import RouteExecutionResult
-from sciretriever.acquisition.planning import RouteReadiness
+from sciretriever.acquisition.planning import AccessRouteHint, RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
@@ -37,7 +37,6 @@ from sciretriever.acquisition.ports import (
 from sciretriever.acquisition.routes import (
     RouteExecutionContext,
     RouteInstallationStatus,
-    delivery_results,
 )
 from sciretriever.acquisition.routing import (
     AcquisitionEvidence,
@@ -203,6 +202,15 @@ def _normal_miss_set(value: object) -> frozenset[AuthorizedNormalMiss]:
     return value
 
 
+def _validate_route_hints(value: object) -> None:
+    if not isinstance(value, tuple):
+        raise TypeError("hints must be a tuple")
+    if any(not isinstance(hint, AccessRouteHint) for hint in value):
+        raise TypeError("hints must contain AccessRouteHint values")
+    if len(value) != len(set(value)):
+        raise ValueError("hints must be unique")
+
+
 def _stable_failure(
     *,
     code: str,
@@ -355,6 +363,7 @@ class AuthorizedProviderContract:
     download_locator_namespaces: tuple[str, ...]
     normal_miss_reasons: frozenset[AuthorizedNormalMiss]
     download_proves_entitlement: bool = False
+    route_hint_profile_access_key: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -414,6 +423,15 @@ class AuthorizedProviderContract:
         )
         if type(self.download_proves_entitlement) is not bool:
             raise TypeError("download_proves_entitlement must be a bool")
+        if self.route_hint_profile_access_key is not None:
+            object.__setattr__(
+                self,
+                "route_hint_profile_access_key",
+                _stable_key(
+                    self.route_hint_profile_access_key,
+                    field_name="route_hint_profile_access_key",
+                ),
+            )
         if not (
             self.stable_locator_namespaces
             or self.provider_record_identity_rules
@@ -509,12 +527,14 @@ class AuthorizedLookupMiss:
 
     target: AuthorizedLookupTarget
     reason: AuthorizedNormalMiss
+    hints: tuple[AccessRouteHint, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, AuthorizedLookupTarget):
             raise TypeError("target must be an AuthorizedLookupTarget")
         if not isinstance(self.reason, AuthorizedNormalMiss):
             raise TypeError("reason must be an AuthorizedNormalMiss")
+        _validate_route_hints(self.hints)
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +544,7 @@ class AuthorizedLookupDownloads:
     target: AuthorizedLookupTarget
     entitlement: AuthorizedEntitlement
     downloads: tuple[AuthorizedDownloadLocator, ...]
+    hints: tuple[AccessRouteHint, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.target, AuthorizedLookupTarget):
@@ -538,6 +559,7 @@ class AuthorizedLookupDownloads:
             raise TypeError("downloads must contain AuthorizedDownloadLocator values")
         if len(self.downloads) != len(set(self.downloads)):
             raise ValueError("downloads must be unique")
+        _validate_route_hints(self.hints)
 
 
 AuthorizedLookupResult: TypeAlias = AuthorizedLookupMiss | AuthorizedLookupDownloads
@@ -705,7 +727,11 @@ class AuthorizedPdfSource:
 
     @property
     def route_key(self) -> str:
-        return "api:wiley-tdm-v1" if self.source_name == "wiley" else f"api:{self.source_name}"
+        route_keys = {
+            "elsevier": "api:elsevier-article-object",
+            "wiley": "api:wiley-tdm-v1",
+        }
+        return route_keys.get(self.source_name, f"api:{self.source_name}")
 
     def __repr__(self) -> str:
         return f"<AuthorizedPdfSource source_name={self.source_name!r}>"
@@ -713,15 +739,40 @@ class AuthorizedPdfSource:
     def execute(self, context: RouteExecutionContext) -> Iterator[RouteExecutionResult]:
         if not isinstance(context, RouteExecutionContext):
             raise TypeError("context must be RouteExecutionContext")
-        yield from delivery_results(
-            self._deliveries(context.request, context.evidence, context.candidate_keys)
+        hints: list[AccessRouteHint] = []
+        delivered = False
+        deliveries = self._deliveries(
+            context.request,
+            context.evidence,
+            context.candidate_keys,
+            route_hint_sink=hints,
         )
+        try:
+            for temporary_pdf in deliveries:
+                delivered = True
+                yield RouteExecutionResult.delivered(
+                    temporary_pdf,
+                    hints=tuple(hints),
+                )
+            if not delivered:
+                if hints:
+                    yield RouteExecutionResult.hints_only(*hints)
+                else:
+                    yield RouteExecutionResult.normal_miss()
+        finally:
+            close = getattr(deliveries, "close", None)
+            if close is not None:
+                if not callable(close):
+                    raise TypeError("delivery iterator close attribute must be callable")
+                close()
 
     def _deliveries(
         self,
         request: AcquisitionRequest,
         evidence: AcquisitionEvidence,
         candidate_keys: CandidateKeyTracker,
+        *,
+        route_hint_sink: list[AccessRouteHint] | None = None,
     ) -> Iterator[TemporaryPdf]:
         _validate_acquire_inputs(request, evidence, candidate_keys)
         targets = _lookup_targets(self._contract, evidence)
@@ -739,6 +790,7 @@ class AuthorizedPdfSource:
                     target_index=target_index,
                     target_count=len(targets),
                     candidate_keys=candidate_keys,
+                    route_hint_sink=route_hint_sink,
                 )
             except AcquisitionSourceFailure as error:
                 if first_failure is None:
@@ -753,6 +805,7 @@ class AuthorizedPdfSource:
         target_index: int,
         target_count: int,
         candidate_keys: CandidateKeyTracker,
+        route_hint_sink: list[AccessRouteHint] | None,
     ) -> Iterator[TemporaryPdf]:
         lookup_key = _lookup_candidate_key(self._contract, target)
         if not _claim(candidate_keys, lookup_key):
@@ -773,6 +826,7 @@ class AuthorizedPdfSource:
         try:
             lookup = self._lookup(target)
             self._require_lookup_binding(lookup, target)
+            self._accept_lookup_hints(lookup.hints, route_hint_sink)
             if isinstance(lookup, AuthorizedLookupMiss):
                 self._accept_normal_miss(lookup.reason)
                 _LOGGER.debug(
@@ -824,6 +878,23 @@ class AuthorizedPdfSource:
                     first_failure = error
         if first_failure is not None:
             raise first_failure
+
+    def _accept_lookup_hints(
+        self,
+        hints: tuple[AccessRouteHint, ...],
+        sink: list[AccessRouteHint] | None,
+    ) -> None:
+        expected_profile = self._contract.route_hint_profile_access_key
+        if hints and expected_profile is None:
+            raise _response_schema_failure()
+        for hint in hints:
+            if (
+                hint.source_route_key != self.route_key
+                or hint.profile_access_key != expected_profile
+            ):
+                raise _response_schema_failure()
+            if sink is not None and hint not in sink:
+                sink.append(hint)
 
     def _acquire_download(
         self,
@@ -1358,16 +1429,36 @@ WILEY_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProvide
     download_proves_entitlement=True,
 )
 
-# Elsevier Article Retrieval and Springer Full Text are verified XML/JATS or
-# object products rather than primary-PDF APIs, so neither is registered as an
-# authorized PDF Source.
-UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
-    {"elsevier", "springer"}
+ELSEVIER_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProviderContract(
+    source_name="elsevier",
+    product_name="Elsevier Article Retrieval and Object Retrieval PDF",
+    contract_revision="elsevier-article-object-2026-08-15",
+    required_credential_fields=("api_key",),
+    stable_locator_namespaces=("pii", "elsevier-article-eid"),
+    provider_record_identity_rules=(),
+    doi_landing_origins=(
+        "https://www.sciencedirect.com",
+        "https://linkinghub.elsevier.com",
+    ),
+    download_locator_namespaces=("elsevier-main-pdf-object",),
+    normal_miss_reasons=frozenset(
+        {
+            AuthorizedNormalMiss.HTTP_404,
+            AuthorizedNormalMiss.NO_PRIMARY,
+        }
+    ),
+    download_proves_entitlement=True,
+    route_hint_profile_access_key="elsevier-sciencedirect",
 )
+
+# Springer Full Text remains a structured JATS/XML product rather than a
+# verified primary-PDF API, so it is not registered as an authorized Source.
+UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset({"springer"})
 PRODUCTION_AUTHORIZED_PROVIDER_CATALOG: Final[Mapping[str, AuthorizedProviderContract]] = (
     MappingProxyType(
         {
             "core": CORE_AUTHORIZED_CONTRACT,
+            "elsevier": ELSEVIER_AUTHORIZED_CONTRACT,
             "wiley": WILEY_AUTHORIZED_CONTRACT,
         }
     )
@@ -1394,6 +1485,7 @@ __all__ = (
     "AuthorizedRecordIdentityRule",
     "CORE_AUTHORIZED_CONTRACT",
     "Clock",
+    "ELSEVIER_AUTHORIZED_CONTRACT",
     "PRODUCTION_AUTHORIZED_PROVIDER_CATALOG",
     "ProvenanceIdFactory",
     "UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS",

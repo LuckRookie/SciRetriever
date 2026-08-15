@@ -168,7 +168,6 @@ _PUBLIC_ACQUISITION_SERVICES: dict[str, tuple[str, str]] = {
 }
 
 _UNSUPPORTED_AUTHORIZED_API_DETAILS: dict[str, str] = {
-    "elsevier": "no verified primary-PDF API contract",
     "springer": "Full Text product returns JATS/XML, not primary PDF",
 }
 

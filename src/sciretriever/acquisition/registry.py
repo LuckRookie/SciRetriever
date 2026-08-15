@@ -27,6 +27,7 @@ from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
     AuthorizedPdfSource,
+    AuthorizedProviderClient,
     authorized_route_status,
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult
@@ -41,7 +42,11 @@ from sciretriever.acquisition.planning import (
 from sciretriever.acquisition.profile_catalog import (
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
 )
-from sciretriever.acquisition.providers import CoreAuthorizedPdfClient, WileyAuthorizedPdfClient
+from sciretriever.acquisition.providers import (
+    CoreAuthorizedPdfClient,
+    ElsevierAuthorizedPdfClient,
+    WileyAuthorizedPdfClient,
+)
 from sciretriever.acquisition.routes import (
     AcquisitionRouteRegistry,
     PdfRouteAdapter,
@@ -148,7 +153,15 @@ ACQUISITION_PROVIDER_ORDER: Final[tuple[str, ...]] = (
 PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("arxiv", ("arxiv.org", "export.arxiv.org")),
     ("europe-pmc", ("europepmc.org", "www.ebi.ac.uk")),
-    ("elsevier", ("api.elsevier.com",)),
+    (
+        "elsevier",
+        (
+            "api.elsevier.com",
+            "www.sciencedirect.com",
+            "linkinghub.elsevier.com",
+            "pdf.sciencedirectassets.com",
+        ),
+    ),
     (
         "springer",
         (
@@ -166,7 +179,7 @@ _PRODUCTION_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     min_start_interval=1.0,
 )
 
-_AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset({"elsevier", "springer"})
+_AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset({"springer"})
 
 
 class AcquisitionRegistryError(RuntimeError):
@@ -437,7 +450,7 @@ _FIXED_MAPPINGS: Final[dict[str, tuple[AcquisitionProviderMapping, ...]]] = {
     ),
     "elsevier": (
         _generic_mapping(),
-        _authorized_unsupported("elsevier"),
+        _authorized_supported("elsevier"),
         _browser_unavailable(),
     ),
     "springer": (
@@ -542,7 +555,7 @@ def production_web_access_profile_resolver() -> WebAccessProfileResolver:
 
 
 def _validate_external_catalogs() -> None:
-    if set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG) != {"core", "wiley"}:
+    if set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG) != {"core", "elsevier", "wiley"}:
         raise AcquisitionRegistryError("authorized-catalog-mismatch")
     if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
@@ -806,6 +819,67 @@ def _public_protocol_source(
     raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
 
 
+def _required_authorized_credential(
+    credentials: CredentialLookup,
+    provider_name: str,
+    field_name: str,
+) -> str:
+    value = credentials.get(provider_name, field_name)
+    if value is None:
+        raise AcquisitionRegistryError(
+            "acquisition-authorized-credential-missing",
+            provider_name,
+        )
+    return value
+
+
+def _authorized_client(
+    provider_name: str,
+    credentials: CredentialLookup,
+    dependencies: AcquisitionAssemblyDependencies,
+) -> AuthorizedProviderClient:
+    try:
+        if provider_name == ProviderName.CORE.value:
+            return CoreAuthorizedPdfClient(
+                http_client=dependencies.http_client,
+                api_key=_required_authorized_credential(
+                    credentials,
+                    provider_name,
+                    "api_key",
+                ),
+                cancel_event=dependencies.cancel_event,
+            )
+        if provider_name == ProviderName.ELSEVIER.value:
+            return ElsevierAuthorizedPdfClient(
+                http_client=dependencies.http_client,
+                api_key=_required_authorized_credential(
+                    credentials,
+                    provider_name,
+                    "api_key",
+                ),
+                institution_token=credentials.get(provider_name, "institution_token"),
+                cancel_event=dependencies.cancel_event,
+            )
+        if provider_name == ProviderName.WILEY.value:
+            return WileyAuthorizedPdfClient(
+                http_client=dependencies.http_client,
+                tdm_api_token=_required_authorized_credential(
+                    credentials,
+                    provider_name,
+                    "tdm_api_token",
+                ),
+                cancel_event=dependencies.cancel_event,
+            )
+    except AcquisitionRegistryError:
+        raise
+    except (TypeError, ValueError):
+        raise AcquisitionRegistryError(
+            "acquisition-authorized-credential-invalid",
+            provider_name,
+        ) from None
+    raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
+
+
 def _authorized_source(
     provider_name: str,
     dependencies: AcquisitionAssemblyDependencies,
@@ -818,7 +892,12 @@ def _authorized_source(
     status = authorized_route_status(
         contract,
         product_ready=contract is not None,
-        access_policy_ready=provider_name in {ProviderName.CORE.value, ProviderName.WILEY.value},
+        access_policy_ready=provider_name
+        in {
+            ProviderName.CORE.value,
+            ProviderName.ELSEVIER.value,
+            ProviderName.WILEY.value,
+        },
         present_credential_fields=present_fields,
     )
     if status.readiness is not RouteReadiness.READY:
@@ -829,38 +908,7 @@ def _authorized_source(
         )
     if credentials is None or contract is None:
         raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
-    if provider_name == ProviderName.CORE.value:
-        api_key = credentials.get(provider_name, "api_key")
-        if api_key is None:
-            raise AcquisitionRegistryError(
-                "acquisition-authorized-credential-missing",
-                provider_name,
-            )
-        client = CoreAuthorizedPdfClient(
-            http_client=dependencies.http_client,
-            api_key=api_key,
-            cancel_event=dependencies.cancel_event,
-        )
-    elif provider_name == ProviderName.WILEY.value:
-        tdm_api_token = credentials.get(provider_name, "tdm_api_token")
-        if tdm_api_token is None:
-            raise AcquisitionRegistryError(
-                "acquisition-authorized-credential-missing",
-                provider_name,
-            )
-        try:
-            client = WileyAuthorizedPdfClient(
-                http_client=dependencies.http_client,
-                tdm_api_token=tdm_api_token,
-                cancel_event=dependencies.cancel_event,
-            )
-        except (TypeError, ValueError):
-            raise AcquisitionRegistryError(
-                "acquisition-authorized-credential-invalid",
-                provider_name,
-            ) from None
-    else:
-        raise AcquisitionRegistryError("source-assembly-unsupported", provider_name)
+    client = _authorized_client(provider_name, credentials, dependencies)
     return AuthorizedPdfSource(
         contract=contract,
         client=client,
@@ -933,6 +981,8 @@ def _route_requirements(
         return (), (), True
     if source_name == ProviderName.CORE.value:
         return (), ("core",), False
+    if source_name == ProviderName.ELSEVIER.value:
+        return ("doi", "pii", "elsevier-article-eid"), (), False
     if source_name == ProviderName.WILEY.value:
         return ("doi",), (), False
     return (), (), False
@@ -946,11 +996,20 @@ def _route_spec_for_source(source: PdfRouteAdapter) -> RouteSpec:
     identifiers, providers, any_identifier = _route_requirements(source_name)
     profile_access_key = {
         ProviderName.CORE.value: "core-open-access",
+        ProviderName.ELSEVIER.value: "elsevier-sciencedirect",
         ProviderName.WILEY.value: "wiley-online-library",
     }.get(source_name)
     if acquisition_path is AcquisitionPath.AUTHORIZED_PROVIDER_API:
-        capability = RouteCapability.DIRECT_PDF
-        quota_group = "core-api" if source_name == "core" else "wiley-tdm"
+        capability = (
+            RouteCapability.MULTI_STEP_PDF_OBJECT
+            if source_name == ProviderName.ELSEVIER.value
+            else RouteCapability.DIRECT_PDF
+        )
+        quota_group = {
+            ProviderName.CORE.value: "core-api",
+            ProviderName.ELSEVIER.value: "elsevier-article-object",
+            ProviderName.WILEY.value: "wiley-tdm",
+        }.get(source_name)
     elif source_name == "direct":
         capability = RouteCapability.DIRECT_PDF
         quota_group = None
@@ -973,14 +1032,26 @@ def _route_spec_for_source(source: PdfRouteAdapter) -> RouteSpec:
 def _pending_route_spec(provider_name: str, *, authorized: bool) -> RouteSpec:
     identifiers, providers, any_identifier = _route_requirements(provider_name)
     if authorized:
-        route_key = "api:wiley-tdm-v1" if provider_name == "wiley" else f"api:{provider_name}"
+        route_key = {
+            "elsevier": "api:elsevier-article-object",
+            "wiley": "api:wiley-tdm-v1",
+        }.get(provider_name, f"api:{provider_name}")
         tier = AcquisitionPath.AUTHORIZED_PROVIDER_API
-        capability = RouteCapability.DIRECT_PDF
+        capability = (
+            RouteCapability.MULTI_STEP_PDF_OBJECT
+            if provider_name == ProviderName.ELSEVIER.value
+            else RouteCapability.DIRECT_PDF
+        )
         profile_access_key = {
             "core": "core-open-access",
+            "elsevier": "elsevier-sciencedirect",
             "wiley": "wiley-online-library",
         }.get(provider_name)
-        quota_group = "core-api" if provider_name == "core" else "wiley-tdm"
+        quota_group = {
+            "core": "core-api",
+            "elsevier": "elsevier-article-object",
+            "wiley": "wiley-tdm",
+        }.get(provider_name)
     else:
         route_key = f"public:{provider_name}"
         tier = AcquisitionPath.PUBLIC
