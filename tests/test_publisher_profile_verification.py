@@ -19,6 +19,7 @@ from sciretriever.acquisition.profile_catalog import (
     NATURE_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
+    RSC_ACCESS_PROFILE,
     SPRINGERLINK_ACCESS_PROFILE,
 )
 from sciretriever.acquisition.profile_verification import (
@@ -281,6 +282,27 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertIn(
             "upstream-browser-success-is-not-production-evidence",
             _strings(browser["blockers"]),
+        )
+
+    def test_rsc_esi_is_never_promoted_by_an_unsupported_profile(self) -> None:
+        profile = RSC_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1039",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertIn(
+            "official-terms-prohibit-automated-download",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "electronic-supplementary-information", "expected": "supplement"},
+            ownership,
         )
 
     def test_browser_fixture_executes_primary_supplement_and_wrong_article_cases(self) -> None:
