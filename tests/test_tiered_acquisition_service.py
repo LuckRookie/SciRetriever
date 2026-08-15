@@ -22,7 +22,12 @@ from sciretriever.acquisition.browser_admission import (
     BrowserGroupAdmissionState,
     BrowserGroupReadiness,
 )
-from sciretriever.acquisition.cohort import AcquisitionWorkItem, TieredCohortExecutor
+from sciretriever.acquisition.cohort import (
+    AcquisitionProgressPhase,
+    AcquisitionProgressSnapshot,
+    AcquisitionWorkItem,
+    TieredCohortExecutor,
+)
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -539,6 +544,90 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
             tuple(prepared.discard_count for prepared in publication.prepared_values),
             (1, 1),
         )
+
+    def test_progress_and_escalation_observers_run_before_browser_adapter(self) -> None:
+        trace: list[str] = []
+        exhaustion = _ExhaustionPort()
+        service = _failure_matrix_service(
+            StableFailure(
+                code="acquisition-authorized-entitlement",
+                reason="The fixture API does not grant this article entitlement.",
+                action="Continue only through explicitly enabled institutional access.",
+                retryable=False,
+            ),
+            trace,
+            exhaustion,
+        )
+        progress: list[AcquisitionProgressSnapshot] = []
+
+        def observe_progress(snapshot: AcquisitionProgressSnapshot) -> None:
+            progress.append(snapshot)
+            trace.append(f"progress:{snapshot.tier.value}:{snapshot.phase.value}")
+
+        def observe_escalation(summary: object) -> None:
+            trace.append("browser-summary")
+            self.assertNotIn("browser:fixture", trace)
+            self.assertEqual(len(getattr(summary, "groups")), 1)
+
+        cohort = service.prepare_primary_pdf_cohort(
+            (_request(resolved_landing_origin="https://publisher.test"),),
+            on_progress=observe_progress,
+            on_browser_escalation=observe_escalation,
+        )
+
+        self.assertEqual(
+            trace,
+            [
+                "progress:public:started",
+                "public:fixture",
+                "progress:public:finished",
+                "progress:authorized-provider-api:started",
+                "api:fixture",
+                "progress:authorized-provider-api:finished",
+                "browser-summary",
+                "progress:controlled-browser:started",
+                "browser:fixture",
+                "progress:controlled-browser:finished",
+            ],
+        )
+        self.assertEqual(
+            tuple(snapshot.phase for snapshot in progress),
+            (
+                AcquisitionProgressPhase.STARTED,
+                AcquisitionProgressPhase.FINISHED,
+            )
+            * 3,
+        )
+        receipt = cohort.items[0].prepared
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        self.assertIsInstance(service.commit_primary_pdf(receipt), NoPrimaryPdf)
+
+    def test_escalation_observer_failure_prevents_browser_adapter_io(self) -> None:
+        trace: list[str] = []
+        service = _failure_matrix_service(
+            StableFailure(
+                code="acquisition-authorized-entitlement",
+                reason="The fixture API does not grant this article entitlement.",
+                action="Continue only through explicitly enabled institutional access.",
+                retryable=False,
+            ),
+            trace,
+            _ExhaustionPort(),
+        )
+        observer_error = RuntimeError("fixture Browser summary observer failed")
+
+        def reject(_summary: object) -> None:
+            raise observer_error
+
+        with self.assertRaises(RuntimeError) as raised:
+            service.prepare_primary_pdf_cohort(
+                (_request(resolved_landing_origin="https://publisher.test"),),
+                on_browser_escalation=reject,
+            )
+
+        self.assertIs(raised.exception, observer_error)
+        self.assertEqual(trace, ["public:fixture", "api:fixture"])
 
     def test_cohort_observer_cleanup_error_wins_after_all_receipts_are_attempted(
         self,

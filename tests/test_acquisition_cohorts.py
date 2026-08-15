@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import pickle
 import threading
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
 from io import BytesIO
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 from sciretriever.acquisition.browser_admission import (
     BrowserAdmissionConfiguration,
@@ -16,7 +17,11 @@ from sciretriever.acquisition.browser_admission import (
     BrowserGroupReadiness,
 )
 from sciretriever.acquisition.cohort import (
+    AcquisitionProgressObserver,
+    AcquisitionProgressPhase,
+    AcquisitionProgressSnapshot,
     AcquisitionWorkItem,
+    BrowserEscalationObserver,
     TieredCohortExecutor,
     WorkItemDisposition,
 )
@@ -580,6 +585,150 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             tuple(AcquisitionPath),
         )
 
+    def test_progress_snapshots_partition_every_tier_and_group(self) -> None:
+        items = tuple(
+            AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
+            for key, group in (
+                ("delivered", "publisher-b"),
+                ("deferred", "publisher-a"),
+                ("action", "publisher-b"),
+                ("failed", "publisher-a"),
+                ("exhausted", "publisher-c"),
+            )
+        )
+        progress: list[AcquisitionProgressSnapshot] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if item.work_key == "delivered" and route.tier is AcquisitionPath.PUBLIC:
+                return RouteExecutionResult.delivered(_temporary(71, AcquisitionPath.PUBLIC))
+            if route.tier is AcquisitionPath.AUTHORIZED_PROVIDER_API:
+                failure = StableFailure(
+                    code=f"acquisition-fixture-{item.work_key}",
+                    reason="The fixture route reached a stable terminal state.",
+                    action="Follow the fixture action before retrying.",
+                    retryable=item.work_key == "deferred",
+                )
+                if item.work_key == "deferred":
+                    return RouteExecutionResult.deferred(failure)
+                if item.work_key == "action":
+                    return RouteExecutionResult.action_required(failure)
+                if item.work_key == "failed":
+                    return RouteExecutionResult.failed(failure)
+            return RouteExecutionResult.normal_miss()
+
+        result = _executor(
+            "publisher-a",
+            "publisher-b",
+            "publisher-c",
+        ).execute(items, execute, on_progress=progress.append)
+
+        self.assertEqual(
+            tuple((snapshot.tier, snapshot.phase) for snapshot in progress),
+            tuple(
+                (tier, phase)
+                for tier in AcquisitionPath
+                for phase in (
+                    AcquisitionProgressPhase.STARTED,
+                    AcquisitionProgressPhase.FINISHED,
+                )
+            ),
+        )
+        for snapshot in progress:
+            self.assertEqual(
+                snapshot.selected,
+                sum(
+                    (
+                        snapshot.resolved,
+                        snapshot.pending,
+                        snapshot.deferred,
+                        snapshot.action_required,
+                        snapshot.failed,
+                        snapshot.exhausted,
+                    )
+                ),
+            )
+            self.assertEqual(
+                snapshot.selected,
+                sum(group.selected for group in snapshot.groups),
+            )
+            self.assertEqual(
+                tuple(group.provider_group for group in snapshot.groups),
+                tuple(sorted(group.provider_group for group in snapshot.groups)),
+            )
+        self.assertEqual(
+            (
+                progress[1].selected,
+                progress[1].resolved,
+                progress[1].pending,
+                progress[1].deferred,
+                progress[1].action_required,
+                progress[1].failed,
+                progress[1].exhausted,
+            ),
+            (5, 1, 4, 0, 0, 0, 0),
+        )
+        self.assertEqual(
+            (
+                progress[3].selected,
+                progress[3].resolved,
+                progress[3].pending,
+                progress[3].deferred,
+                progress[3].action_required,
+                progress[3].failed,
+                progress[3].exhausted,
+            ),
+            (5, 1, 1, 1, 1, 1, 0),
+        )
+        self.assertEqual(
+            (
+                progress[-1].selected,
+                progress[-1].resolved,
+                progress[-1].pending,
+                progress[-1].deferred,
+                progress[-1].action_required,
+                progress[-1].failed,
+                progress[-1].exhausted,
+            ),
+            (5, 1, 0, 1, 1, 1, 1),
+        )
+        self.assertEqual(
+            tuple(group.provider_group for group in progress[-1].groups),
+            ("publisher-a", "publisher-b", "publisher-c"),
+        )
+        for value in (progress[-1], progress[-1].groups[0]):
+            with self.assertRaisesRegex(TypeError, "cannot be serialized"):
+                pickle.dumps(value)
+        delivered = result.items[0].temporary_pdf
+        self.assertIsNotNone(delivered)
+        assert delivered is not None
+        delivered.content.discard()
+
+    def test_invalid_progress_observers_are_rejected_before_route_io(self) -> None:
+        route_calls: list[str] = []
+
+        def execute(item: AcquisitionWorkItem, _route: RouteSpec) -> RouteExecutionResult:
+            route_calls.append(item.work_key)
+            return RouteExecutionResult.normal_miss()
+
+        invalid_progress = cast(AcquisitionProgressObserver, object())
+        with self.assertRaisesRegex(TypeError, "on_progress must be callable"):
+            TieredCohortExecutor().execute(
+                (AcquisitionWorkItem(work_key="progress", plan=_plan("progress")),),
+                execute,
+                on_progress=invalid_progress,
+            )
+        invalid_escalation = cast(BrowserEscalationObserver, object())
+        with self.assertRaisesRegex(TypeError, "on_browser_escalation must be callable"):
+            TieredCohortExecutor().execute(
+                (AcquisitionWorkItem(work_key="browser", plan=_plan("browser")),),
+                execute,
+                on_browser_escalation=invalid_escalation,
+            )
+        self.assertEqual(route_calls, [])
+
     def test_default_admission_never_starts_hidden_browser_traffic(self) -> None:
         item = AcquisitionWorkItem(work_key="a", plan=_plan("a"))
         browser_work: list[str] = []
@@ -747,6 +896,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             self.assertIn(f"event=acquisition-tier-finished tier={tier.value}", output)
         self.assertIn("event=acquisition-route-missed", output)
         self.assertIn("event=acquisition-route-delivered", output)
+        self.assertIn("event=acquisition-tier-group-progress", output)
         self.assertIn("provider_group=publisher-b", output)
         self.assertIn("code=acquisition-authorized-quota", output)
         self.assertIn(quota_failure.reason, output)

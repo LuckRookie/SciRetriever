@@ -12,12 +12,20 @@ from types import TracebackType
 from unittest.mock import patch
 
 from sciretriever.acquisition.api import (
+    AcquisitionGroupProgress,
+    AcquisitionProgressObserver,
+    AcquisitionProgressPhase,
+    AcquisitionProgressSnapshot,
+    BrowserEscalationObserver,
     CohortPreparationItem,
     CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
 )
-from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
+from sciretriever.acquisition.browser_admission import (
+    BrowserEscalationGroupSummary,
+    BrowserEscalationSummary,
+)
 from sciretriever.acquisition.cohort import WorkItemDisposition
 from sciretriever.acquisition.ports import AcquisitionExpectedFacts, AcquisitionFailure
 from sciretriever.acquisition.routing import AcquisitionRequest
@@ -54,6 +62,7 @@ from sciretriever.literature.state import (
 )
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
+    AcquisitionPath,
     Asset,
     AssetRole,
     AutomaticPdfAcquisitionExhaustion,
@@ -536,6 +545,9 @@ class _World:
         self.acquisition_cohort_final_only_ids: set[LiteratureId] = set()
         self.acquisition_cohort_early_published: threading.Event | None = None
         self.acquisition_cohort_release: threading.Event | None = None
+        self.acquisition_progress_snapshots: tuple[AcquisitionProgressSnapshot, ...] = ()
+        self.browser_escalation_summary = BrowserEscalationSummary()
+        self.acquisition_observer_events: list[str] = []
         self.parser_discard_failures: dict[LiteratureId, BaseException] = {}
         self.current_read_failures: dict[LiteratureId, BaseException] = {}
 
@@ -638,6 +650,8 @@ class _World:
         *,
         cancel_event: threading.Event | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         self.acquisition_cohort_calls.append(
             tuple(request.literature.literature_id for request in requests)
@@ -700,6 +714,12 @@ class _World:
                 )
             )
         prepared_items = tuple(items)
+        browser_escalation = self.browser_escalation_summary
+        self._publish_fake_acquisition_ux(
+            prepared_items,
+            on_progress=on_progress,
+            on_browser_escalation=on_browser_escalation,
+        )
         self._publish_fake_cohort_items(prepared_items, on_prepared)
         final_items = tuple(
             dataclasses.replace(
@@ -713,8 +733,43 @@ class _World:
         )
         return PreparedAcquisitionCohort(
             items=final_items,
-            browser_escalation=BrowserEscalationSummary(),
+            browser_escalation=browser_escalation,
         )
+
+    def _publish_fake_acquisition_ux(
+        self,
+        prepared_items: tuple[CohortPreparationItem, ...],
+        *,
+        on_progress: AcquisitionProgressObserver | None,
+        on_browser_escalation: BrowserEscalationObserver | None,
+    ) -> None:
+        try:
+            self._publish_fake_progress(on_progress, browser=False)
+            if on_browser_escalation is not None:
+                self.acquisition_observer_events.append("browser-summary")
+                on_browser_escalation(self.browser_escalation_summary)
+            self._publish_fake_progress(on_progress, browser=True)
+        except BaseException:
+            for item in prepared_items:
+                if item.prepared is not None:
+                    self.discard_prepared(item.prepared)
+            raise
+
+    def _publish_fake_progress(
+        self,
+        observer: AcquisitionProgressObserver | None,
+        *,
+        browser: bool,
+    ) -> None:
+        if observer is None:
+            return
+        for snapshot in self.acquisition_progress_snapshots:
+            if (snapshot.tier is AcquisitionPath.CONTROLLED_BROWSER) is not browser:
+                continue
+            self.acquisition_observer_events.append(
+                f"progress:{snapshot.tier.value}:{snapshot.phase.value}"
+            )
+            observer(snapshot)
 
     def _publish_fake_cohort_items(
         self,
@@ -2046,6 +2101,105 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertEqual(len(rerun.goal_reached), 1)
         self.assertEqual(len(rerun.failed), 0)
         self.assertEqual(len(world.acquisition_calls), previous_calls + 1)
+
+    def test_acquisition_ux_is_live_only_and_stable_failure_remains_in_report(self) -> None:
+        successful_id = _literature_id(1)
+        action_required_id = _literature_id(2)
+        world = _World((_current(1, 1), _current(2, 2)))
+        world.acquisition_plans[successful_id] = ["publisher-success"]
+        stable_failure = StableFailure(
+            code="acquisition-browser-login-required",
+            reason="The Publisher Browser session requires a fresh login.",
+            action="Open the visible Browser login flow and retry Completion.",
+            retryable=False,
+        )
+        world.acquisition_plans[action_required_id] = [AcquisitionFailure(stable_failure)]
+        world.browser_escalation_summary = BrowserEscalationSummary(
+            groups=(
+                BrowserEscalationGroupSummary(
+                    rate_limit_group="fixture-publisher",
+                    paper_count=1,
+                    eligible_count=1,
+                    allowed_count=0,
+                    deferred_count=0,
+                    action_required_count=1,
+                    rejected_count=0,
+                    readiness="login-required",
+                    minimum_start_interval=15.0,
+                    earliest_start_in_seconds=30.0,
+                    conservative_minimum_duration_seconds=30.0,
+                    required_actions=("Complete provider login outside automation.",),
+                ),
+            )
+        )
+        world.acquisition_progress_snapshots = (
+            AcquisitionProgressSnapshot(
+                tier=AcquisitionPath.CONTROLLED_BROWSER,
+                phase=AcquisitionProgressPhase.FINISHED,
+                selected=2,
+                resolved=1,
+                pending=0,
+                deferred=0,
+                action_required=1,
+                failed=0,
+                exhausted=0,
+                groups=(
+                    AcquisitionGroupProgress(
+                        provider_group="fixture-publisher",
+                        selected=2,
+                        resolved=1,
+                        pending=0,
+                        deferred=0,
+                        action_required=1,
+                        failed=0,
+                        exhausted=0,
+                    ),
+                ),
+            ),
+        )
+
+        with self.assertLogs("sciretriever.entry.completion", level="INFO") as captured:
+            report = _operation(world, max_concurrency=2)(
+                _request((successful_id, action_required_id), goal="ASSET_READY")
+            )
+
+        self.assertEqual(report.end.kind, "finished")
+        self.assertEqual(len(report.goal_reached), 1)
+        self.assertEqual(len(report.failed), 1)
+        self.assertEqual(report.failed[0].literature_id, action_required_id)
+        self.assertEqual(report.failed[0].stage, "acquisition")
+        self.assertEqual(report.failed[0].failure, stable_failure)
+        self.assertEqual(report.needs_manual_pdf, ())
+        self.assertEqual(report.interrupted, ())
+        self.assertEqual(report.not_started, ())
+        self.assertEqual(
+            world.acquisition_observer_events,
+            ["browser-summary", "progress:controlled-browser:finished"],
+        )
+        payload = report.model_dump(mode="json")
+        self.assertTrue(
+            {"progress", "browser_escalation", "selected", "action_required"}.isdisjoint(payload)
+        )
+        output = "\n".join(captured.output)
+        summary_position = output.index("event=completion-browser-escalation-ready")
+        progress_position = output.index("event=completion-acquisition-progress")
+        self.assertLess(summary_position, progress_position)
+        self.assertIn("selected=1 parallel_group_count=0", output)
+        self.assertIn("provider_group=fixture-publisher", output)
+        self.assertIn("minimum_start_interval=15.0", output)
+        self.assertIn("next_allowed_in_seconds=30.0", output)
+        self.assertIn("minimum_duration_seconds=30", output)
+        self.assertIn("action=Complete provider login outside automation.", output)
+        self.assertIn("resolved=1 pending=0", output)
+        self.assertIn("action_required=1 failed=0 exhausted=0", output)
+        for forbidden in (
+            "https://private.invalid",
+            "Cookie",
+            "selector=",
+            "profile_path=",
+            "secret-token",
+        ):
+            self.assertNotIn(forbidden, output)
 
     def test_parser_and_llm_partial_failures_are_isolated_and_rerun_from_current_facts(
         self,

@@ -72,9 +72,17 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.report import (
     BibliographyFormat,
+    DatabaseCompletionReport,
+    FailedCompletionTarget,
     FailedReportEnd,
+    FinishedReportEnd,
+    GoalReachedTarget,
     ImportReport,
+    InterruptedCompletionTarget,
     InterruptedReportEnd,
+    LiteratureCompletionTarget,
+    NeedsManualPdfTarget,
+    NotStartedCompletionTarget,
     StableFailure,
 )
 
@@ -187,6 +195,7 @@ class _RecordingEntryApi:
         self.artifact_exports: list[tuple[object, object, bool]] = []
         self.artifact_opens: list[object] = []
         self.detail_result: object = {"operation": "show"}
+        self.completion_result: object = {"operation": "complete"}
         self.artifact_payload = b"artifact-bytes"
 
     def discover_topic(self, request: TopicDiscoveryInput) -> dict[str, str]:
@@ -197,9 +206,9 @@ class _RecordingEntryApi:
         self.citation_requests.append(request)
         return {"operation": "citations"}
 
-    def complete_database(self, request: BatchRequest) -> dict[str, str]:
+    def complete_database(self, request: BatchRequest) -> object:
         self.batch_requests.append(request)
-        return {"operation": "complete"}
+        return self.completion_result
 
     def search_literature(self, request: LibrarySearchRequest) -> LibrarySearchPage:
         self.search_requests.append(request)
@@ -2152,6 +2161,88 @@ class CliResultAndFailureBoundaryTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertEqual(stdout.count("\n"), 1)
             self.assertIsInstance(json.loads(stdout), dict)
+
+    def test_completion_human_and_json_views_preserve_the_same_five_partitions(self) -> None:
+        module = _cli_module()
+        literature_ids = tuple(
+            LiteratureId(f"00000000-0000-0000-0000-{index:012d}") for index in range(1, 6)
+        )
+        targets = tuple(
+            LiteratureCompletionTarget(kind="literature", literature_id=literature_id)
+            for literature_id in literature_ids
+        )
+        stable_failure = StableFailure(
+            code="acquisition-browser-login-required",
+            reason="The Publisher Browser session requires a fresh login.",
+            action="Open the visible Browser login flow and retry Completion.",
+            retryable=False,
+        )
+        report = DatabaseCompletionReport(
+            kind="database-completion",
+            end=FinishedReportEnd(kind="finished"),
+            goal="ASSET_READY",
+            goal_reached=(GoalReachedTarget(target=targets[0], literature_id=literature_ids[0]),),
+            needs_manual_pdf=(
+                NeedsManualPdfTarget(
+                    target=targets[1],
+                    literature_ids=(literature_ids[1],),
+                ),
+            ),
+            failed=(
+                FailedCompletionTarget(
+                    target=targets[2],
+                    literature_id=literature_ids[2],
+                    stage="acquisition",
+                    failure=stable_failure,
+                ),
+            ),
+            interrupted=(
+                InterruptedCompletionTarget(
+                    target=targets[3],
+                    literature_id=literature_ids[3],
+                ),
+            ),
+            not_started=(NotStartedCompletionTarget(target=targets[4]),),
+            no_usable_content_literature_ids=(),
+        )
+        entry_api = _RecordingEntryApi()
+        entry_api.completion_result = report
+        graph = _RoutingObjectGraph(entry_api)
+
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(module, "build_production_object_graph", return_value=graph),
+        ):
+            human = _invoke("complete", "pdf", "--all-pending")
+            machine = _invoke("complete", "pdf", "--all-pending", "--json")
+
+        self.assertEqual((human[0], human[2]), (0, ""))
+        self.assertEqual((machine[0], machine[2]), (0, ""))
+        machine_payload = json.loads(machine[1])
+        self.assertEqual(machine_payload, report.model_dump(mode="json"))
+        self.assertIn("Database completion", human[1])
+        self.assertIn("  Goal: ASSET_READY", human[1])
+        self.assertIn("  Outcome: finished", human[1])
+        for partition in (
+            "goal_reached",
+            "needs_manual_pdf",
+            "failed",
+            "interrupted",
+            "not_started",
+        ):
+            self.assertIn(
+                f"  {partition}: {len(machine_payload[partition])}",
+                human[1],
+            )
+            self.assertIn(f"{partition} ({len(machine_payload[partition])})", human[1])
+        for literature_id in literature_ids:
+            self.assertIn(str(literature_id), human[1])
+        self.assertIn("stage=acquisition", human[1])
+        self.assertIn(f"code: {stable_failure.code}", human[1])
+        self.assertIn(f"retryable: {str(stable_failure.retryable).lower()}", human[1])
+        self.assertIn(f"reason: {stable_failure.reason}", human[1])
+        self.assertIn(f"action: {stable_failure.action}", human[1])
+        self.assertNotIn("{'", human[1])
 
     def test_configuration_bootstrap_and_io_errors_are_redacted(self) -> None:
         module = _cli_module()

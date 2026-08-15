@@ -25,6 +25,8 @@ import sciretriever.entry.execution as execution_module
 import sciretriever.entry.orchestration as orchestration_module
 import sciretriever.model.execution as execution_model_module
 from sciretriever.acquisition.api import (
+    AcquisitionProgressObserver,
+    BrowserEscalationObserver,
     CohortPreparationItem,
     CohortPreparationObserver,
     PreparedAcquisition,
@@ -562,7 +564,10 @@ class _World:
         *,
         cancel_event: threading.Event | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
+        del on_progress
         items = []
         for request in requests:
             literature_id = request.literature.literature_id
@@ -593,11 +598,14 @@ class _World:
                 )
             )
         prepared_items = tuple(items)
+        browser_escalation = BrowserEscalationSummary()
+        if on_browser_escalation is not None:
+            on_browser_escalation(browser_escalation)
         if on_prepared is not None:
             on_prepared(prepared_items)
         return PreparedAcquisitionCohort(
             items=prepared_items,
-            browser_escalation=BrowserEscalationSummary(),
+            browser_escalation=browser_escalation,
         )
 
     def commit_primary_pdf(
