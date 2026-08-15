@@ -38,13 +38,28 @@ def _status_payload() -> dict[str, object]:
                 {
                     "provider": "web-of-science",
                     "enabled": True,
+                    "production_available": True,
+                    "local_ready": True,
+                    "failure_code": None,
+                    "ordinary_settings": {
+                        "product": "starter",
+                        "database": "WOS",
+                    },
+                    "missing_ordinary_fields": [],
                     "credentials": credentials,
+                    "access_policy_ready": True,
+                    "probe_available": True,
                 }
             ],
             "acquisition": [
                 {
                     "provider": "wiley",
                     "enabled": True,
+                    "production_available": True,
+                    "local_ready": False,
+                    "failure_code": "missing-required-credential",
+                    "ordinary_settings": {},
+                    "missing_ordinary_fields": [],
                     "credentials": {
                         "status": "missing",
                         "fields": [
@@ -55,13 +70,47 @@ def _status_payload() -> dict[str, object]:
                             }
                         ],
                     },
+                    "access_policy_ready": True,
+                    "probe_available": False,
                     "public_source": {
                         "provider_service": {"service": "wiley-public"},
                     },
                     "authorized_api": {"available": True, "unsupported": False},
                 }
             ],
-            "controlled_browser": {"available": False},
+            "controlled_browser": {
+                "enabled": True,
+                "local_max_concurrency": 2,
+                "runtime": {
+                    "framework_available": True,
+                    "python_dependency_available": True,
+                    "launch_assessed": False,
+                },
+                "profile": {
+                    "selected": "institutional-access",
+                    "presence": "configured",
+                },
+                "session": {
+                    "assessment": "not-assessed",
+                    "authenticated": None,
+                    "article_entitlement": "not-proven",
+                },
+                "automatic_acquisition_available": False,
+                "production_route_count": 0,
+                "routes": [],
+                "probe": {
+                    "available": False,
+                    "requires_explicit_target": True,
+                    "supported_access_keys": [],
+                },
+                "action_required": [
+                    {
+                        "code": "browser-production-route-unavailable",
+                        "reason": "No production route.",
+                        "action": "Use Public and authorized APIs.",
+                    }
+                ],
+            },
         },
         "parsing": {
             "locally_ready": True,
@@ -179,10 +228,14 @@ class ConfigPresentationTests(unittest.TestCase):
             "Core services",
             "LLM Analysis",
             "MinerU Parser",
-            "Literature Provider credentials",
+            "Metadata APIs",
+            "Authorized primary-PDF APIs",
             "PDF acquisition routes",
-            "Controlled browser",
-            "not implemented",
+            "Controlled Browser",
+            "Session / login",
+            "not assessed",
+            "Article entitlement",
+            "not-proven",
         ):
             self.assertIn(text, rendered)
         self.assertNotIn("\x1b[", rendered)
@@ -275,6 +328,67 @@ class ConfigPresentationTests(unittest.TestCase):
             )
         self.assertNotIn("\x1b[", no_color.getvalue())
         self.assertIn("CORE", no_color.getvalue())
+
+    def test_status_browser_layers_remain_distinct_in_every_theme(self) -> None:
+        for theme in ConfigTheme:
+            with self.subTest(theme=theme.value):
+                output = io.StringIO()
+                with patch.dict(os.environ, {}, clear=True):
+                    ConfigStatusPresenter(
+                        theme,
+                        file=output,
+                        force_terminal=True,
+                        width=46,
+                    ).status(_status_payload())
+                rendered = output.getvalue()
+                for value in (
+                    "Metadata APIs",
+                    "Authorized primary-PDF APIs",
+                    "Controlled Browser",
+                    "Profile",
+                    "configured",
+                    "Session / login",
+                    "not assessed",
+                    "Article entitlement",
+                    "not-proven",
+                    "Policy evidence",
+                    "Next action",
+                ):
+                    self.assertIn(value, rendered)
+                self.assertNotIn(_SECRET, rendered)
+                self.assertNotIn("browser-profiles/", rendered)
+                if theme is ConfigTheme.MONO:
+                    self.assertNotIn("\x1b[", rendered)
+
+    def test_browser_probe_presentation_is_stable_and_secret_free(self) -> None:
+        output = io.StringIO()
+        ConfigStatusPresenter(
+            "mono",
+            file=output,
+            force_terminal=False,
+            width=120,
+        ).probes(
+            {
+                "access_key": "wiley-online-library",
+                "outcome": "skipped",
+                "local_ready": False,
+                "browser_launched": None,
+                "minimal_target_reached": None,
+                "authentication_accepted": None,
+                "article_entitlement": "not-proven",
+                "navigation_count": 0,
+                "failure_code": "browser-production-route-unavailable",
+                "persisted": False,
+            }
+        )
+        rendered = output.getvalue()
+        self.assertIn("Browser · wiley-online-library", rendered)
+        self.assertIn("one approved minimal target", rendered)
+        self.assertIn("entitlement", rendered)
+        self.assertIn("not proven", rendered)
+        self.assertIn("browser-production-route", rendered)
+        self.assertNotIn(_SECRET, rendered)
+        self.assertNotIn("\x1b[", rendered)
 
 
 class TerminalChoiceTests(unittest.TestCase):

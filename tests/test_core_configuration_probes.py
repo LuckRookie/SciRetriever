@@ -10,6 +10,7 @@ from typing import Any, Iterable, cast
 
 from sciretriever.bootstrap import ProductionConfigurationProbeSession
 from sciretriever.configuration import (
+    browser_access_status,
     configuration_status,
     load_credentials,
     parse_configuration,
@@ -32,6 +33,14 @@ class _EmptyProbeRegistry:
     def probe(self, provider: object, capability: object) -> object:
         del provider, capability
         raise AssertionError("core probes must not call a Provider probe")
+
+
+class _EmptyBrowserProbePort:
+    supported_access_keys = frozenset()
+
+    def probe(self, access_key: str) -> object:
+        del access_key
+        raise AssertionError("core probes must not call a Browser probe")
 
 
 class _Resolver:
@@ -156,6 +165,12 @@ def _session(
         probe_port=cast(Any, _EmptyProbeRegistry()),
         access_coordinator=coordinator,
         http_client=http_client,
+        browser_status=browser_access_status(
+            configuration,
+            home=home,
+            python_dependency_available=True,
+        ),
+        browser_probe_port=cast(Any, _EmptyBrowserProbePort()),
     )
 
 

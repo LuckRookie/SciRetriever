@@ -21,6 +21,7 @@ from sciretriever.model.configuration import (
     AnalysisConfig,
     AnalysisConfigurationStatus,
     AnalysisProtocol,
+    BrowserConfigurationProbeResult,
     BrowserProfilePresence,
     Configuration,
     ConfigurationCapabilityStatus,
@@ -1238,7 +1239,11 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("api_key=configured", stdout)
         self.assertIn("elsevier, core, wiley · known unavailable: springer", stdout)
         self.assertIn("Controlled browser", stdout)
-        self.assertIn("not implemented", stdout)
+        self.assertIn("0 production routes", stdout)
+        self.assertIn("Session / login", stdout)
+        self.assertIn("not assessed", stdout)
+        self.assertIn("Article entitlement", stdout)
+        self.assertIn("not-proven", stdout)
         self.assertNotIn("status-secret-sentinel", stdout)
 
     def test_config_manager_sets_updates_and_removes_without_secret_output_or_storage(
@@ -1501,6 +1506,16 @@ class CliConfigurationTests(unittest.TestCase):
                 "build_production_object_graph",
                 side_effect=AssertionError("config status must not build Storage"),
             ),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                side_effect=AssertionError("config status must not build a probe session"),
+            ),
+            patch.object(
+                module,
+                "open_visible_browser_login",
+                side_effect=AssertionError("config status must not launch Browser"),
+            ),
         ):
             code, stdout, stderr = _invoke("config", "status", "--json")
 
@@ -1515,6 +1530,20 @@ class CliConfigurationTests(unittest.TestCase):
             ["mode"],
         )
         self.assertEqual(payload["analysis"]["provider"], None)
+        browser = payload["providers"]["controlled_browser"]
+        self.assertEqual(browser["production_route_count"], 0)
+        self.assertFalse(browser["automatic_acquisition_available"])
+        self.assertFalse(browser["runtime"]["launch_assessed"])
+        self.assertEqual(browser["profile"]["presence"], "missing")
+        self.assertEqual(browser["session"]["assessment"], "not-assessed")
+        self.assertIsNone(browser["session"]["authenticated"])
+        self.assertEqual(browser["session"]["article_entitlement"], "not-proven")
+        self.assertFalse(browser["probe"]["available"])
+        self.assertTrue(browser["probe"]["requires_explicit_target"])
+        self.assertEqual(
+            browser["action_required"][0]["code"],
+            "browser-production-route-unavailable",
+        )
         self.assertNotIn("fingerprint", stdout)
         load_configuration.assert_called_once_with(None)
         configuration_status.assert_called_once_with(
@@ -1574,11 +1603,14 @@ class CliConfigurationTests(unittest.TestCase):
             "Core services",
             "LLM Analysis",
             "MinerU Parser",
-            "Literature Provider credentials",
+            "Metadata APIs",
+            "Authorized primary-PDF APIs",
             "PDF acquisition routes",
             "Public",
             "Authorized API",
-            "Controlled browser",
+            "Controlled Browser",
+            "Session / login",
+            "Article entitlement",
             "Storage",
         ):
             self.assertIn(heading, stdout)
@@ -1955,18 +1987,94 @@ class CliConfigurationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(build_probe.call_count, 2)
+        session.run_browser.assert_not_called()
 
     def test_config_test_named_provider_and_all_are_parser_exclusive(self) -> None:
         module = _cli_module()
-        with patch.object(
-            module,
-            "build_production_configuration_probe_session",
-            side_effect=AssertionError("invalid selection must not build probes"),
+        cases = (
+            ("crossref", "--all"),
+            ("crossref", "--browser", "wiley-online-library"),
+            ("--all", "--browser", "wiley-online-library"),
+        )
+        for selection in cases:
+            with self.subTest(selection=selection):
+                with patch.object(
+                    module,
+                    "build_production_configuration_probe_session",
+                    side_effect=AssertionError("invalid selection must not build probes"),
+                ):
+                    code, stdout, stderr = _invoke("config", "test", *selection, "--json")
+                self.assertEqual(code, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("usage:", stderr)
+
+    def test_config_test_browser_is_explicit_single_target_and_reports_safe_skip(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        session.run_browser.return_value = BrowserConfigurationProbeResult(
+            access_key="wiley-online-library",
+            outcome=ProbeOutcome.SKIPPED,
+            local_ready=False,
+            failure_code="browser-production-route-unavailable",
+        )
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+            patch.object(
+                module,
+                "build_production_object_graph",
+                side_effect=AssertionError("Browser config probe must not build Storage"),
+            ),
         ):
-            code, stdout, stderr = _invoke("config", "test", "crossref", "--all", "--json")
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("usage:", stderr)
+            code, stdout, stderr = _invoke(
+                "config",
+                "test",
+                "--browser",
+                "wiley-online-library",
+                "--json",
+            )
+
+        self.assertEqual((code, stderr), (3, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["access_key"], "wiley-online-library")
+        self.assertEqual(payload["outcome"], "skipped")
+        self.assertEqual(payload["failure_code"], "browser-production-route-unavailable")
+        self.assertEqual(payload["navigation_count"], 0)
+        self.assertEqual(payload["article_entitlement"], "not-proven")
+        self.assertFalse(payload["persisted"])
+        session.run_browser.assert_called_once_with("wiley-online-library")
+        session.run.assert_not_called()
+        session.run_llm.assert_not_called()
+        session.run_mineru.assert_not_called()
+
+    def test_human_browser_probe_requires_confirmation_before_execution(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+            patch("builtins.input", return_value="n"),
+        ):
+            code, stdout, stderr = _invoke(
+                "config",
+                "test",
+                "--browser",
+                "wiley-online-library",
+            )
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("exactly one approved minimal Publisher target", stderr)
+        self.assertIn("never proves arbitrary article entitlement", stderr)
+        self.assertIn("cancelled", stderr)
+        session.run_browser.assert_not_called()
 
 
 class CliResultAndFailureBoundaryTests(unittest.TestCase):

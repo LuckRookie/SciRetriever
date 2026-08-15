@@ -1471,6 +1471,15 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 session.access_coordinator,
             )
             self.assertIs(session.http_client._coordinator, session.access_coordinator)
+            self.assertEqual(session.browser_status.production_route_count, 0)
+            self.assertFalse(session.browser_status.automatic_acquisition_available)
+            self.assertFalse(session.browser_status.runtime.launch_assessed)
+            self.assertIsNone(session.browser_status.session.authenticated)
+            self.assertEqual(
+                session.browser_status.session.article_entitlement,
+                "not-proven",
+            )
+            self.assertEqual(session.browser_probe_port.supported_access_keys, frozenset())
             self.assertEqual(
                 session.probe_port.supported_capabilities,
                 frozenset(
@@ -1511,7 +1520,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 ) as run_probe,
             ):
                 summary = session.run(provider=ProviderName.CROSSREF)
+                browser = session.run_browser("wiley-online-library")
             self.assertTrue(summary.passed)
+            self.assertIs(browser.outcome, ProbeOutcome.SKIPPED)
+            self.assertEqual(
+                browser.failure_code,
+                "browser-production-route-unavailable",
+            )
+            self.assertEqual(browser.navigation_count, 0)
             run_probe.assert_called_once_with(
                 ProviderName.CROSSREF,
                 ProviderCapability.METADATA,
