@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import stat
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -98,11 +99,18 @@ BibliographyExportScope = (
 )
 
 if TYPE_CHECKING:
+    from sciretriever.acquisition.browser_admission import BrowserAdmissionController
+    from sciretriever.acquisition.cohort import TieredCohortExecutor
     from sciretriever.entry.api import EntryApi
     from sciretriever.entry.library import LibraryOperations
     from sciretriever.literature.api import LiteratureApi, LiteratureArtifactReference
     from sciretriever.metadata.api import MetadataApi
     from sciretriever.metadata.registry import MetadataProbeRegistry, MetadataRegistry
+    from sciretriever.network.browser_scheduler import (
+        BrowserGroupScheduler,
+        BrowserSchedulerCancellation,
+    )
+    from sciretriever.network.browser_sessions import BrowserSessionBroker
     from sciretriever.storage.files.output import AtomicOutput
     from sciretriever.storage.files.paths import StorageRoot
     from sciretriever.storage.files.reader import VerifiedReader
@@ -212,6 +220,7 @@ class ApplicationObjectGraph:
     browser_client: object | None
     metadata_registry: object
     acquisition_registry: object
+    acquisition_runtime: _AcquisitionExecutionRuntime
     topic_provider_limits: tuple[ProviderDiscoveryLimit, ...]
     citation_provider_limits: tuple[ProviderDiscoveryLimit, ...]
     metadata_api: object
@@ -220,6 +229,19 @@ class ApplicationObjectGraph:
     parsing_api: object
     analysis_api: object
     entry_api: EntryApi
+
+
+@dataclass(frozen=True, slots=True)
+class _AcquisitionExecutionRuntime:
+    """Process-local execution objects shared by every Acquisition work item."""
+
+    browser_session_broker: BrowserSessionBroker = field(repr=False)
+    browser_scheduler: BrowserGroupScheduler = field(repr=False)
+    browser_admission: BrowserAdmissionController = field(repr=False)
+    cohort_executor: TieredCohortExecutor = field(repr=False)
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("Acquisition execution runtime cannot be serialized")
 
 
 class TopicDiscoveryEntry(Protocol):
@@ -316,6 +338,12 @@ class CitationDiscoveryObjectGraph:
 @dataclass(frozen=True, slots=True)
 class DatabaseCompletionObjectGraph:
     configuration: Configuration
+    access_coordinator: AccessCoordinator = field(repr=False)
+    http_client: HttpClient = field(repr=False)
+    browser_client: object | None = field(repr=False)
+    acquisition_registry: object = field(repr=False)
+    acquisition_runtime: _AcquisitionExecutionRuntime = field(repr=False)
+    acquisition_api: object = field(repr=False)
     entry_api: DatabaseCompletionEntry
 
 
@@ -587,6 +615,32 @@ class _UtcClock:
 
     def now(self) -> UtcTimestamp:
         return UtcTimestamp.model_validate(datetime.now(timezone.utc))
+
+
+class _SystemBrowserSchedulerClock:
+    """Monotonic production clock with cancellation-aware local waits."""
+
+    __slots__ = ()
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def wait_until(
+        self,
+        deadline: float,
+        cancel_event: BrowserSchedulerCancellation | None,
+    ) -> None:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return
+            waiter = None if cancel_event is None else getattr(cancel_event, "wait", None)
+            if callable(waiter):
+                waiter(remaining)
+            else:
+                time.sleep(remaining if cancel_event is None else min(remaining, 0.1))
 
 
 class _TopicDiscoveryEntry:
@@ -1159,6 +1213,7 @@ def build_object_graph(  # noqa: C901, PLR0915
     )
     browser_client = None
     clock = _UtcClock()
+    acquisition_runtime = _new_acquisition_execution_runtime(configuration)
 
     # Every ordinary setting, credential, Provider registry and injected
     # Parser/LLM dependency is validated before either persistent root is
@@ -1189,6 +1244,7 @@ def build_object_graph(  # noqa: C901, PLR0915
             web_access_profile_resolver=production_web_access_profile_resolver(),
             provenance_id_factory=_new_provenance_id,
             clock=clock.now,
+            browser_session_broker=acquisition_runtime.browser_session_broker,
             credentials=credential_snapshot,
             configured_sci_hub_resolver=external_dependencies.configured_sci_hub_resolver,  # type: ignore[arg-type]
             browser_client=browser_client,
@@ -1267,6 +1323,7 @@ def build_object_graph(  # noqa: C901, PLR0915
                 publication_port=primary_pdf_publisher,
                 exhaustion_port=acquisition_publication,
                 exhaustion_clear_port=acquisition_publication,
+                cohort_executor=acquisition_runtime.cohort_executor,
             )
         )
         manual_admission = ManualPdfAdmissionService(
@@ -1406,6 +1463,7 @@ def build_object_graph(  # noqa: C901, PLR0915
             browser_client=browser_client,
             metadata_registry=metadata_registry,
             acquisition_registry=acquisition_registry,
+            acquisition_runtime=acquisition_runtime,
             topic_provider_limits=metadata_registry.topic_limits,
             citation_provider_limits=metadata_registry.citation_limits,
             metadata_api=metadata_api,
@@ -1604,6 +1662,45 @@ def _new_shared_network() -> tuple[AccessCoordinator, HttpClient]:
         resolver=SystemResolver(),
         transport=SecureHttpTransport(),
         coordinator=coordinator,
+    )
+
+
+def _new_acquisition_execution_runtime(
+    configuration: Configuration,
+) -> _AcquisitionExecutionRuntime:
+    """Construct one side-effect-free Acquisition runtime for this object graph."""
+
+    from sciretriever.acquisition.browser_admission import (
+        BrowserAdmissionConfiguration,
+        BrowserAdmissionController,
+    )
+    from sciretriever.acquisition.cohort import TieredCohortExecutor
+    from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+    from sciretriever.network.browser_sessions import BrowserSessionBroker
+
+    if not isinstance(configuration, Configuration):
+        raise TypeError("configuration must be a Configuration")
+    session_broker = BrowserSessionBroker()
+    scheduler = BrowserGroupScheduler(
+        clock=_SystemBrowserSchedulerClock(),
+        max_concurrency=configuration.access.browser_max_concurrency,
+    )
+    admission = BrowserAdmissionController(
+        BrowserAdmissionConfiguration(
+            explicitly_enabled=configuration.access.browser_enabled,
+            execution_confirmed=False,
+            runtime_ready=False,
+        )
+    )
+    return _AcquisitionExecutionRuntime(
+        browser_session_broker=session_broker,
+        browser_scheduler=scheduler,
+        browser_admission=admission,
+        cohort_executor=TieredCohortExecutor(
+            max_concurrency=configuration.execution.max_concurrency,
+            browser_admission=admission,
+            browser_scheduler=scheduler,
+        ),
     )
 
 
@@ -2028,8 +2125,12 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
     )
     clock = _UtcClock()
     acquisition_registry: AcquisitionRegistry | None = None
+    acquisition_runtime = (
+        _new_acquisition_execution_runtime(configuration) if needs_acquisition else None
+    )
     if needs_acquisition:
         assert coordinator is not None and http_client is not None
+        assert acquisition_runtime is not None
         acquisition_registry = build_acquisition_registry(
             configuration,
             AcquisitionAssemblyDependencies(
@@ -2038,6 +2139,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 web_access_profile_resolver=production_web_access_profile_resolver(),
                 provenance_id_factory=_new_provenance_id,
                 clock=clock.now,
+                browser_session_broker=acquisition_runtime.browser_session_broker,
                 credentials=credentials,
             ),
         )
@@ -2149,6 +2251,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         else:
             assert coordinator is not None and http_client is not None
             assert acquisition_registry is not None
+            assert acquisition_runtime is not None
             acquisition_publication = SqliteAcquisitionPublication(
                 engine,
                 storage.foundation.artifact_store,
@@ -2165,6 +2268,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                     ),
                     exhaustion_port=acquisition_publication,
                     exhaustion_clear_port=acquisition_publication,
+                    cohort_executor=acquisition_runtime.cohort_executor,
                 )
             )
             inputs = CompletionInputBuilder(engine, storage.foundation.verified_reader)
@@ -2235,6 +2339,12 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 )
             graph = DatabaseCompletionObjectGraph(
                 configuration=configuration,
+                access_coordinator=coordinator,
+                http_client=http_client,
+                browser_client=None,
+                acquisition_registry=acquisition_registry,
+                acquisition_runtime=acquisition_runtime,
+                acquisition_api=acquisition_api,
                 entry_api=_DatabaseCompletionEntry(completion),
             )
     except BaseException:

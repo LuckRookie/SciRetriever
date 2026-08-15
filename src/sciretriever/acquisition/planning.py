@@ -251,6 +251,12 @@ class PublisherAccessResolver:
             raise TypeError("catalog must be a PublisherAccessProfileCatalog")
         self._catalog = catalog
 
+    @property
+    def profile_catalog(self) -> PublisherAccessProfileCatalog:
+        """Return the exact process-local catalog used for resolution."""
+
+        return self._catalog
+
     def resolve(
         self,
         evidence: tuple[ResolutionEvidence, ...],
@@ -534,6 +540,12 @@ class AcquisitionPlanBuilder:
             raise TypeError("catalog must be a PublisherAccessProfileCatalog")
         self._catalog = catalog
 
+    @property
+    def profile_catalog(self) -> PublisherAccessProfileCatalog:
+        """Return the exact process-local catalog used to build plans."""
+
+        return self._catalog
+
     def build(
         self,
         *,
@@ -656,6 +668,8 @@ class ProgressiveAcquisitionPlanner:
             raise TypeError("resolver must be PublisherAccessResolver")
         if not isinstance(builder, AcquisitionPlanBuilder):
             raise TypeError("builder must be AcquisitionPlanBuilder")
+        if resolver.profile_catalog is not builder.profile_catalog:
+            raise ValueError("resolver and builder must share one profile catalog")
         if not isinstance(route_specs, tuple) or any(
             not isinstance(route, RouteSpec) for route in route_specs
         ):
@@ -669,6 +683,12 @@ class ProgressiveAcquisitionPlanner:
         self._builder = builder
         self._route_specs = route_specs
         self._doi_landing = doi_landing_resolver
+
+    @property
+    def profile_catalog(self) -> PublisherAccessProfileCatalog:
+        """Return the catalog shared by this Planner's resolver and builder."""
+
+        return self._resolver.profile_catalog
 
     def start(
         self,

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Final
 
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
@@ -106,6 +107,7 @@ from sciretriever.network.admission import (
     AccessScope,
 )
 from sciretriever.network.browser import BrowserClient
+from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import PolicyError, normalize_url
 
@@ -316,6 +318,7 @@ class AcquisitionAssemblyDependencies:
     web_access_profile_resolver: WebAccessProfileResolver = field(repr=False)
     provenance_id_factory: Callable[[], ProvenanceId] = field(repr=False)
     clock: Callable[[], UtcTimestamp] = field(repr=False)
+    browser_session_broker: BrowserSessionBroker = field(repr=False)
     credentials: CredentialLookup | None = field(default=None, repr=False)
     cancel_event: threading.Event | None = field(default=None, repr=False)
     configured_sci_hub_resolver: ConfiguredLocatorResolver | None = field(
@@ -333,6 +336,8 @@ class AcquisitionAssemblyDependencies:
             raise TypeError("web_access_profile_resolver must be a WebAccessProfileResolver")
         if not callable(self.provenance_id_factory) or not callable(self.clock):
             raise TypeError("acquisition assembly factories must be callable")
+        if not isinstance(self.browser_session_broker, BrowserSessionBroker):
+            raise TypeError("browser_session_broker must be a BrowserSessionBroker")
         if self.credentials is not None and not isinstance(self.credentials, CredentialLookup):
             raise TypeError("credentials must implement CredentialLookup or be None")
         if self.cancel_event is not None and not isinstance(
@@ -364,7 +369,15 @@ class AcquisitionRegistry:
             raise TypeError("route_registry must be an AcquisitionRouteRegistry")
         if not isinstance(self.planner, ProgressiveAcquisitionPlanner):
             raise TypeError("planner must be a ProgressiveAcquisitionPlanner")
+        if self.planner.profile_catalog is not self.route_registry.profile_catalog:
+            raise ValueError("registry and Planner must share one profile catalog")
         validate_acquisition_provider_matrix(self.statuses)
+
+    @property
+    def profile_catalog(self) -> PublisherAccessProfileCatalog:
+        """Return the exact catalog shared by route selection and planning."""
+
+        return self.route_registry.profile_catalog
 
     def __repr__(self) -> str:
         routes = tuple(binding.spec.route_key for binding in self.route_registry.bindings)
@@ -1001,6 +1014,10 @@ def _validate_dependencies(dependencies: AcquisitionAssemblyDependencies) -> Non
     browser = dependencies.browser_client
     if browser is not None and (
         getattr(browser, "_coordinator", None) is not dependencies.access_coordinator
+    ):
+        raise AcquisitionRegistryError("network-bypass", "controlled-browser")
+    if browser is not None and (
+        getattr(browser, "_session_broker", None) is not dependencies.browser_session_broker
     ):
         raise AcquisitionRegistryError("network-bypass", "controlled-browser")
 
