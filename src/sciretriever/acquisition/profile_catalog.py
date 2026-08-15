@@ -468,6 +468,47 @@ OXFORD_ACADEMIC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessP
     ),
 )
 
+PNAS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="pnas",
+    platform_key="pnas",
+    landing_origins=("https://www.pnas.org",),
+    asset_origins=("https://www.pnas.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1073",),
+    weak_publisher_names=(
+        "pnas",
+        "proceedings of the national academy of sciences",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="pnas-robots-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="PNAS",
+        product_name="PNAS journals platform",
+        official_references=(
+            "https://www.pnas.org/",
+            "https://www.pnas.org/about/terms-of-use",
+            "https://www.pnas.org/about/open-access",
+            "https://www.pnas.org/robots.txt",
+        ),
+        access_terms_references=("https://www.pnas.org/about/terms-of-use",),
+        rate_limit_references=("https://www.pnas.org/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="pnas-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/pnas.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/pnas.json",
+    ),
+)
+
 RSC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="rsc-publishing",
     platform_key="rsc-publishing",
@@ -518,6 +559,52 @@ RSC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
         evidence_revision="rsc-browser-unsupported-2026-08-15",
         notes_reference="docs/notes/providers/rsc.md",
         fixture_reference="tests/fixtures/acquisition/profiles/rsc-publishing.json",
+    ),
+)
+
+SCIENCE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="science-aaas",
+    platform_key="science-aaas",
+    landing_origins=("https://www.science.org",),
+    asset_origins=("https://www.science.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1126",),
+    weak_publisher_names=(
+        "aaas",
+        "american association for the advancement of science",
+        "science journals",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="science-aaas-robots-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Science / AAAS",
+        product_name="Science journals platform",
+        official_references=(
+            "https://www.science.org/",
+            "https://www.aaas.org/terms",
+            "https://www.science.org/content/page/terms-use",
+            "https://www.science.org/content/page/open-access-aaas",
+            "https://www.science.org/robots.txt",
+        ),
+        access_terms_references=(
+            "https://www.aaas.org/terms",
+            "https://www.science.org/content/page/terms-use",
+        ),
+        rate_limit_references=("https://www.science.org/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="science-aaas-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/science-aaas.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/science-aaas.json",
     ),
 )
 
@@ -616,7 +703,9 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 IOP_ACCESS_PROFILE,
                 NATURE_ACCESS_PROFILE,
                 OXFORD_ACADEMIC_ACCESS_PROFILE,
+                PNAS_ACCESS_PROFILE,
                 RSC_ACCESS_PROFILE,
+                SCIENCE_ACCESS_PROFILE,
                 SPRINGERLINK_ACCESS_PROFILE,
                 WILEY_ACCESS_PROFILE,
             )
@@ -640,9 +729,11 @@ __all__ = (
     "IOP_ACCESS_PROFILE",
     "NATURE_ACCESS_PROFILE",
     "OXFORD_ACADEMIC_ACCESS_PROFILE",
+    "PNAS_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
     "RSC_ACCESS_PROFILE",
+    "SCIENCE_ACCESS_PROFILE",
     "SPRINGERLINK_ACCESS_PROFILE",
     "WILEY_ACCESS_PROFILE",
 )
