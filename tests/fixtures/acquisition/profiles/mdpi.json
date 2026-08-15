@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "access_key": "mdpi",
+  "display_name": "MDPI",
+  "product_name": "MDPI journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "mdpi-public-route-unregistered-2026-08-15",
+  "notes_reference": "docs/notes/providers/mdpi.md",
+  "official_references": [
+    "https://www.mdpi.com/",
+    "https://www.mdpi.com/about/openaccess",
+    "https://www.mdpi.com/about/terms-and-conditions",
+    "https://www.mdpi.com/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.mdpi.com/about/terms-and-conditions"
+  ],
+  "rate_limit_references": [
+    "https://www.mdpi.com/robots.txt"
+  ],
+  "landing_origins": [
+    "https://www.mdpi.com",
+    "https://mdpi.com"
+  ],
+  "asset_origins": [
+    "https://www.mdpi.com",
+    "https://mdpi.com"
+  ],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.3390-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "availability": "official-open-access-policy-unavailable-to-anonymous-review",
+      "contract": "explicit-pdf-or-landing-locator-still-requires-byte-and-licence-validation",
+      "profile_route_blockers": [
+        "official-open-access-terms-and-robots-unavailable-to-anonymous-review",
+        "no-reviewed-official-per-article-pdf-http-contract",
+        "no-reviewed-numeric-public-download-policy",
+        "upstream-derived-pdf-template-is-not-production-evidence"
+      ]
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "open-access-claim-does-not-require-browser",
+        "official-policy-and-robots-unavailable-to-anonymous-review",
+        "no-published-browser-article-risk-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-mdpi-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "html-xml-book-chapter-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "official-policy-not-anonymously-reviewed",
+    "authorized-pdf-api-not-demonstrated",
+    "browser-route-not-registered",
+    "live-pdf-availability-not-asserted"
+  ]
+}

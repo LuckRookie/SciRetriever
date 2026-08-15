@@ -21,10 +21,14 @@ from sciretriever.acquisition.profile_catalog import (
     AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE,
     ANNUAL_REVIEWS_ACCESS_PROFILE,
     APS_ACCESS_PROFILE,
+    COPERNICUS_ACCESS_PROFILE,
+    FRONTIERS_ACCESS_PROFILE,
     IEEE_ACCESS_PROFILE,
     IOP_ACCESS_PROFILE,
+    MDPI_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
     OXFORD_ACADEMIC_ACCESS_PROFILE,
+    PLOS_ACCESS_PROFILE,
     PNAS_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
@@ -515,6 +519,130 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         )
         self.assertIn(
             {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_copernicus_xml_harvesting_does_not_become_a_pdf_route(self) -> None:
+        profile = COPERNICUS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.5194",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(
+            authorized_api["payload"],
+            "oai-pmh-provides-metadata-and-full-text-xml-not-pdf",
+        )
+        self.assertIn(
+            "journal-specific-subdomains-are-not-wildcard-allowlisted",
+            _strings(public["profile_route_blockers"]),
+        )
+        self.assertIn(
+            "open-access-content-does-not-require-browser",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplement-or-preprint-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_frontiers_open_access_does_not_authorize_a_guessed_pdf_template(
+        self,
+    ) -> None:
+        profile = FRONTIERS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.3389",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        browser = _mapping(route_verification["browser"])
+        self.assertEqual(
+            public["availability"],
+            "all-frontiers-articles-immediately-and-permanently-open-access-cc-by",
+        )
+        self.assertIn(
+            "upstream-derived-pdf-template-is-not-production-evidence",
+            _strings(public["profile_route_blockers"]),
+        )
+        self.assertIn(
+            "open-access-content-does-not-require-institutional-browser",
+            _strings(browser["blockers"]),
+        )
+
+    def test_mdpi_anonymous_policy_challenge_keeps_templates_out_of_production(
+        self,
+    ) -> None:
+        profile = MDPI_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.policy_evidence, PolicyEvidence.UNVERIFIED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.3390",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        browser = _mapping(route_verification["browser"])
+        self.assertIn(
+            "official-open-access-terms-and-robots-unavailable-to-anonymous-review",
+            _strings(public["profile_route_blockers"]),
+        )
+        self.assertIn(
+            "upstream-derived-pdf-template-is-not-production-evidence",
+            _strings(public["profile_route_blockers"]),
+        )
+        self.assertIn(
+            "open-access-claim-does-not-require-browser",
+            _strings(browser["blockers"]),
+        )
+
+    def test_plos_bulk_pdf_discouragement_keeps_only_explicit_hints_enabled(
+        self,
+    ) -> None:
+        profile = PLOS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1371",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(public["generic_crawler_delay_seconds"], 30)
+        self.assertEqual(
+            public["availability"],
+            "official-individual-printable-pdf-documented",
+        )
+        self.assertIn(
+            "official-bulk-article-pdf-download-is-discouraged",
+            _strings(public["profile_route_blockers"]),
+        )
+        self.assertEqual(
+            authorized_api["payload"],
+            "solr-and-jats-xml-are-not-a-direct-pdf-api",
+        )
+        self.assertIn(
+            "public-pdf-does-not-require-browser",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supporting-information-file", "expected": "supplement"},
             ownership,
         )
 

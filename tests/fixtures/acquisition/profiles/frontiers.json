@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "access_key": "frontiers",
+  "display_name": "Frontiers",
+  "product_name": "Frontiers journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "frontiers-public-route-unregistered-2026-08-15",
+  "notes_reference": "docs/notes/providers/frontiers.md",
+  "official_references": [
+    "https://www.frontiersin.org/",
+    "https://www.frontiersin.org/about/open-access",
+    "https://www.frontiersin.org/legal/terms-and-conditions",
+    "https://www.frontiersin.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.frontiersin.org/legal/terms-and-conditions"
+  ],
+  "rate_limit_references": [
+    "https://www.frontiersin.org/robots.txt"
+  ],
+  "landing_origins": ["https://www.frontiersin.org"],
+  "asset_origins": ["https://www.frontiersin.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.3389-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "availability": "all-frontiers-articles-immediately-and-permanently-open-access-cc-by",
+      "contract": "explicit-pdf-or-landing-locator-still-requires-byte-and-licence-validation",
+      "profile_route_blockers": [
+        "no-reviewed-official-per-article-pdf-http-contract",
+        "no-published-numeric-public-download-policy",
+        "upstream-derived-pdf-template-is-not-production-evidence"
+      ]
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "open-access-content-does-not-require-institutional-browser",
+        "terms-body-not-available-in-anonymous-static-response",
+        "no-published-browser-article-risk-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-frontiers-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "ebook-topic-page-html-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "numeric-public-download-policy-not-published",
+    "authorized-pdf-api-not-demonstrated",
+    "browser-route-not-registered",
+    "live-pdf-availability-not-asserted"
+  ]
+}

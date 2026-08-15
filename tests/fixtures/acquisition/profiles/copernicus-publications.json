@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "access_key": "copernicus-publications",
+  "display_name": "Copernicus Publications",
+  "product_name": "Copernicus Publications open-access journals",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "copernicus-public-route-unregistered-2026-08-15",
+  "notes_reference": "docs/notes/providers/copernicus.md",
+  "official_references": [
+    "https://publications.copernicus.org/",
+    "https://publications.copernicus.org/services/open-access_publishing.html",
+    "https://publications.copernicus.org/for_authors/licence_and_copyright.html",
+    "https://publications.copernicus.org/services/xml_harvesting_and_oai-pmh.html",
+    "https://publications.copernicus.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://publications.copernicus.org/for_authors/licence_and_copyright.html",
+    "https://publications.copernicus.org/for_authors/general_terms.html"
+  ],
+  "rate_limit_references": [
+    "https://publications.copernicus.org/robots.txt"
+  ],
+  "landing_origins": [
+    "https://publications.copernicus.org",
+    "https://www.copernicus.org"
+  ],
+  "asset_origins": [
+    "https://publications.copernicus.org",
+    "https://www.copernicus.org"
+  ],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.5194-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "availability": "journal-content-is-cc-by-but-journal-pdf-service-reported-temporarily-restricted",
+      "contract": "explicit-pdf-or-landing-locator-still-requires-byte-and-licence-validation",
+      "profile_route_blockers": [
+        "oai-pmh-full-text-is-xml-not-pdf",
+        "journal-pdf-service-reported-temporarily-restricted",
+        "journal-specific-subdomains-are-not-wildcard-allowlisted",
+        "upstream-derived-pdf-template-is-not-production-evidence"
+      ]
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "oai-pmh-provides-metadata-and-full-text-xml-not-pdf"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "open-access-content-does-not-require-browser",
+        "no-reviewed-browser-article-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "upstream-browser-fallback-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-journal-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplement-or-preprint-file", "expected": "supplement"},
+    {"case_id": "html-xml-metadata-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "journal-host-catalog-not-reviewed",
+    "authorized-pdf-api-not-demonstrated",
+    "browser-route-not-registered",
+    "live-pdf-availability-not-asserted"
+  ]
+}
