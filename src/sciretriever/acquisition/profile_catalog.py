@@ -165,6 +165,93 @@ AIP_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE: Final[PublisherAccessProfile] = (
+    PublisherAccessProfile(
+        access_key="american-mathematical-society",
+        platform_key="american-mathematical-society",
+        landing_origins=("https://www.ams.org",),
+        asset_origins=("https://www.ams.org",),
+        stable_locator_namespaces=(),
+        provider_record_names=(),
+        weak_doi_prefixes=("10.1090",),
+        weak_publisher_names=(
+            "american mathematical society",
+            "ams mathematics",
+        ),
+        public_route_keys=(),
+        api_route_keys=(),
+        browser_route_key=None,
+        browser_allowed_origins=(),
+        browser_rate_limit_group=None,
+        browser_session_key=None,
+        browser_rule_id=None,
+        browser_rule_revision=None,
+        policy_evidence=PolicyEvidence.OFFICIAL,
+        policy_revision="ams-managed-robots-2026-08-15",
+        production_status=ProfileProductionStatus.UNSUPPORTED,
+        evidence=PublisherAccessEvidence(
+            display_name="American Mathematical Society",
+            product_name="AMS journals platform",
+            official_references=(
+                "https://www.ams.org/journals",
+                "https://www.ams.org/publications/journals/open-access",
+                "https://www.ams.org/publications/journals/subscriber-information",
+                "https://www.ams.org/about-us/governance/terms-of-use",
+                "https://www.ams.org/robots.txt",
+            ),
+            access_terms_references=(
+                "https://www.ams.org/about-us/governance/terms-of-use",
+                "https://www.ams.org/publications/journals/subscriber-information",
+            ),
+            rate_limit_references=("https://www.ams.org/robots.txt",),
+            verification_date=date(2026, 8, 15),
+            evidence_revision="ams-automated-access-unsupported-2026-08-15",
+            notes_reference="docs/notes/providers/american-mathematical-society.md",
+            fixture_reference=(
+                "tests/fixtures/acquisition/profiles/american-mathematical-society.json"
+            ),
+        ),
+    )
+)
+
+ANNUAL_REVIEWS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="annual-reviews",
+    platform_key="annual-reviews",
+    landing_origins=("https://www.annualreviews.org",),
+    asset_origins=("https://www.annualreviews.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1146",),
+    weak_publisher_names=("annual reviews",),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="annual-reviews-robots-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Annual Reviews",
+        product_name="Annual Reviews journals platform",
+        official_references=(
+            "https://www.annualreviews.org/",
+            "https://www.annualreviews.org/page/about/terms",
+            "https://www.annualreviews.org/page/librarians/subscribe-to-open",
+            "https://www.annualreviews.org/robots.txt",
+        ),
+        access_terms_references=("https://www.annualreviews.org/page/about/terms",),
+        rate_limit_references=("https://www.annualreviews.org/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="annual-reviews-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/annual-reviews.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/annual-reviews.json",
+    ),
+)
+
 APS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="aps-journals",
     platform_key="aps-journals",
@@ -562,6 +649,47 @@ RSC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+ROYAL_SOCIETY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="royal-society-publishing",
+    platform_key="royal-society-publishing",
+    landing_origins=("https://royalsocietypublishing.org",),
+    asset_origins=("https://royalsocietypublishing.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1098",),
+    weak_publisher_names=(
+        "royal society publishing",
+        "the royal society journals",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="royal-society-public-policy-unreviewed-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Royal Society Publishing",
+        product_name="Royal Society Publishing journals platform",
+        official_references=(
+            "https://royalsocietypublishing.org/",
+            "https://royalsocietypublishing.org/terms",
+            "https://royalsociety.org/journals/open-access/",
+            "https://royalsocietypublishing.org/robots.txt",
+        ),
+        access_terms_references=("https://royalsocietypublishing.org/terms",),
+        rate_limit_references=("https://royalsocietypublishing.org/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="royal-society-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/royal-society-publishing.md",
+        fixture_reference=("tests/fixtures/acquisition/profiles/royal-society-publishing.json"),
+    ),
+)
+
 SCIENCE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="science-aaas",
     platform_key="science-aaas",
@@ -689,6 +817,43 @@ WILEY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+WORLD_SCIENTIFIC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="world-scientific",
+    platform_key="world-scientific",
+    landing_origins=("https://www.worldscientific.com",),
+    asset_origins=("https://www.worldscientific.com",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1142",),
+    weak_publisher_names=("world scientific",),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="world-scientific-robots-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="World Scientific",
+        product_name="World Scientific journals platform",
+        official_references=(
+            "https://www.worldscientific.com/",
+            "https://www.worldscientific.com/page/terms-and-conditions",
+            "https://www.worldscientific.com/robots.txt",
+        ),
+        access_terms_references=("https://www.worldscientific.com/page/terms-and-conditions",),
+        rate_limit_references=("https://www.worldscientific.com/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="world-scientific-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/world-scientific.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/world-scientific.json",
+    ),
+)
+
 PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] = (
     PublisherAccessVerificationMatrix(
         profiles=PublisherAccessProfileCatalog(
@@ -696,6 +861,8 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 ACM_ACCESS_PROFILE,
                 ACS_ACCESS_PROFILE,
                 AIP_ACCESS_PROFILE,
+                AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE,
+                ANNUAL_REVIEWS_ACCESS_PROFILE,
                 APS_ACCESS_PROFILE,
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
@@ -704,10 +871,12 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 NATURE_ACCESS_PROFILE,
                 OXFORD_ACADEMIC_ACCESS_PROFILE,
                 PNAS_ACCESS_PROFILE,
+                ROYAL_SOCIETY_ACCESS_PROFILE,
                 RSC_ACCESS_PROFILE,
                 SCIENCE_ACCESS_PROFILE,
                 SPRINGERLINK_ACCESS_PROFILE,
                 WILEY_ACCESS_PROFILE,
+                WORLD_SCIENTIFIC_ACCESS_PROFILE,
             )
         ),
         browser_rules=PRODUCTION_BROWSER_RULE_CATALOG,
@@ -722,6 +891,8 @@ __all__ = (
     "ACM_ACCESS_PROFILE",
     "ACS_ACCESS_PROFILE",
     "AIP_ACCESS_PROFILE",
+    "AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE",
+    "ANNUAL_REVIEWS_ACCESS_PROFILE",
     "APS_ACCESS_PROFILE",
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
@@ -733,7 +904,9 @@ __all__ = (
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
     "RSC_ACCESS_PROFILE",
+    "ROYAL_SOCIETY_ACCESS_PROFILE",
     "SCIENCE_ACCESS_PROFILE",
     "SPRINGERLINK_ACCESS_PROFILE",
     "WILEY_ACCESS_PROFILE",
+    "WORLD_SCIENTIFIC_ACCESS_PROFILE",
 )
