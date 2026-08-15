@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "access_key": "nature-portfolio",
+  "display_name": "Nature Portfolio",
+  "product_name": "Nature.com article platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "nature-browser-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/springer-nature.md",
+  "official_references": [
+    "https://www.nature.com/",
+    "https://www.nature.com/info/terms-and-conditions",
+    "https://www.springernature.com/gp/researchers/text-and-data-mining"
+  ],
+  "access_terms_references": [
+    "https://www.nature.com/info/terms-and-conditions"
+  ],
+  "rate_limit_references": [
+    "https://www.springernature.com/gp/researchers/text-and-data-mining"
+  ],
+  "landing_origins": ["https://www.nature.com"],
+  "asset_origins": ["https://www.nature.com"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1038-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "nature-pdf-or-landing-locator-still-requires-byte-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "jats-xml-not-pdf"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "site-terms-do-not-authorize-database-population",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-page-rule",
+        "no-evidence-for-shared-rate-or-session-group"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-nature-pdf-locator-after-byte-validation", "expected": "primary"},
+    {"case_id": "extended-data-or-supplementary-information", "expected": "supplement"},
+    {"case_id": "jats-xml-response", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "browser-route-not-registered",
+    "authorized-pdf-api-not-demonstrated",
+    "live-entitlement-not-asserted"
+  ]
+}

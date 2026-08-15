@@ -15,8 +15,10 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfileCatalog,
 )
 from sciretriever.acquisition.profile_catalog import (
+    NATURE_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
+    SPRINGERLINK_ACCESS_PROFILE,
 )
 from sciretriever.acquisition.profile_verification import (
     PublisherAccessVerificationMatrix,
@@ -152,12 +154,12 @@ def _browser_rule() -> BrowserSiteRule:
 
 
 class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
-    def test_every_production_profile_has_one_matching_evidence_fixture(self) -> None:
+    def test_every_matrix_profile_has_one_matching_evidence_fixture(self) -> None:
         self.assertEqual(
             PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_profiles.profiles,
             PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.profiles,
         )
-        for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
+        for profile in PUBLISHER_ACCESS_VERIFICATION_MATRIX.profiles:
             with self.subTest(profile=profile.access_key):
                 fixture = _load_fixture(profile.evidence.fixture_reference)
                 capabilities = _mapping(fixture["capabilities"])
@@ -219,6 +221,46 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
                     {item["expected"] for item in ownership_cases} & {"supplement", "excluded"}
                 )
                 self.assertTrue(_strings(fixture["evidence_gaps"]))
+
+    def test_springerlink_and_nature_are_separate_unsupported_profiles(self) -> None:
+        profiles = (SPRINGERLINK_ACCESS_PROFILE, NATURE_ACCESS_PROFILE)
+        self.assertEqual(
+            {profile.access_key for profile in profiles},
+            {"springerlink", "nature-portfolio"},
+        )
+        self.assertEqual(len({profile.platform_key for profile in profiles}), 2)
+        self.assertTrue(
+            set(SPRINGERLINK_ACCESS_PROFILE.landing_origins).isdisjoint(
+                NATURE_ACCESS_PROFILE.landing_origins
+            )
+        )
+        for profile in profiles:
+            with self.subTest(profile=profile.access_key):
+                self.assertIs(
+                    profile.production_status,
+                    ProfileProductionStatus.UNSUPPORTED,
+                )
+                self.assertEqual(profile.provider_record_names, ())
+                self.assertEqual(profile.public_route_keys, ())
+                self.assertEqual(profile.api_route_keys, ())
+                self.assertIsNone(profile.browser_route_key)
+                self.assertIsNone(profile.browser_rate_limit_group)
+                self.assertIsNone(profile.browser_session_key)
+                self.assertIsNone(
+                    PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key)
+                )
+
+    def test_springer_fixtures_keep_jats_and_browser_out_of_pdf_routes(self) -> None:
+        for profile in (SPRINGERLINK_ACCESS_PROFILE, NATURE_ACCESS_PROFILE):
+            with self.subTest(profile=profile.access_key):
+                fixture = _load_fixture(profile.evidence.fixture_reference)
+                route_verification = _mapping(fixture["route_verification"])
+                authorized_api = _mapping(route_verification["authorized_api"])
+                browser = _mapping(route_verification["browser"])
+                self.assertEqual(authorized_api["state"], "unsupported")
+                self.assertEqual(authorized_api["payload"], "jats-xml-not-pdf")
+                self.assertEqual(browser["state"], "unsupported")
+                self.assertTrue(_strings(browser["blockers"]))
 
     def test_browser_fixture_executes_primary_supplement_and_wrong_article_cases(self) -> None:
         profile = _browser_profile()

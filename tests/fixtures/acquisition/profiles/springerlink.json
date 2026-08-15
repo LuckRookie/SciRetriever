@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "access_key": "springerlink",
+  "display_name": "Springer Nature Link",
+  "product_name": "Springer Nature Link article platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "springerlink-browser-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/springer-nature.md",
+  "official_references": [
+    "https://link.springer.com/",
+    "https://link.springer.com/termsandconditions",
+    "https://www.springernature.com/gp/researchers/text-and-data-mining"
+  ],
+  "access_terms_references": [
+    "https://link.springer.com/termsandconditions"
+  ],
+  "rate_limit_references": [
+    "https://www.springernature.com/gp/researchers/text-and-data-mining"
+  ],
+  "landing_origins": ["https://link.springer.com"],
+  "asset_origins": ["https://link.springer.com"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1007-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "metadata-pdf-or-landing-locator-still-requires-byte-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "jats-xml-not-pdf"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "terms-prohibit-systematic-download-and-web-crawling",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-page-rule",
+        "no-evidence-for-shared-rate-or-session-group"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "metadata-pdf-locator-after-byte-validation", "expected": "primary"},
+    {"case_id": "electronic-supplement-or-book-sample", "expected": "supplement"},
+    {"case_id": "jats-xml-response", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "browser-route-not-registered",
+    "authorized-pdf-api-not-demonstrated",
+    "live-entitlement-not-asserted"
+  ]
+}
