@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "access_key": "acm-digital-library",
+  "display_name": "ACM Digital Library",
+  "product_name": "ACM Digital Library Basic and Premium",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "acm-dl-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/acm.md",
+  "official_references": [
+    "https://www.acm.org/publications/openaccess",
+    "https://libraries.acm.org/digital-library/platform-and-features",
+    "https://libraries.acm.org/digital-library/policies",
+    "https://libraries.acm.org/subscriptions-access/authentication",
+    "https://dl.acm.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://libraries.acm.org/digital-library/policies"
+  ],
+  "rate_limit_references": [
+    "https://libraries.acm.org/digital-library/policies",
+    "https://dl.acm.org/robots.txt"
+  ],
+  "landing_origins": ["https://dl.acm.org"],
+  "asset_origins": ["https://dl.acm.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1145-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "availability": "all-acm-published-articles-open-access-since-2026-01-01",
+      "contract": "explicit-pdf-or-landing-locator-still-requires-byte-validation",
+      "profile_route_blockers": [
+        "digital-library-basic-has-no-bulk-downloads",
+        "no-reviewed-official-per-article-http-contract"
+      ]
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "premium-bulk-download-feature-without-public-api-contract"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-usage-policy-prohibits-scripted-article-download",
+        "basic-open-access-pdf-does-not-require-institutional-browser-entitlement",
+        "robots-crawl-delay-is-not-automation-permission",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-related-artifact-rule",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-acm-published-article-pdf-after-byte-validation", "expected": "primary"},
+    {"case_id": "related-artifact-or-supplement", "expected": "supplement"},
+    {"case_id": "acm-guide-third-party-record-or-metadata", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "scripted-download-contract-not-demonstrated",
+    "premium-bulk-download-api-not-documented",
+    "browser-route-not-registered",
+    "live-basic-or-premium-session-not-asserted"
+  ]
+}

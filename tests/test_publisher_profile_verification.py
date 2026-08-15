@@ -15,6 +15,7 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfileCatalog,
 )
 from sciretriever.acquisition.profile_catalog import (
+    ACM_ACCESS_PROFILE,
     ACS_ACCESS_PROFILE,
     IEEE_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
@@ -283,6 +284,43 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertIn(
             "upstream-browser-success-is-not-production-evidence",
             _strings(browser["blockers"]),
+        )
+
+    def test_acm_open_access_does_not_authorize_a_scripted_profile_route(self) -> None:
+        profile = ACM_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1145",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(
+            public["availability"],
+            "all-acm-published-articles-open-access-since-2026-01-01",
+        )
+        self.assertEqual(public["state"], "generic-asset-hint-only")
+        self.assertEqual(
+            authorized_api["payload"],
+            "premium-bulk-download-feature-without-public-api-contract",
+        )
+        self.assertIn(
+            "official-usage-policy-prohibits-scripted-article-download",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "related-artifact-or-supplement", "expected": "supplement"},
+            ownership,
         )
 
     def test_rsc_esi_is_never_promoted_by_an_unsupported_profile(self) -> None:
