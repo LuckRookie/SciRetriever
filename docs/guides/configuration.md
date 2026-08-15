@@ -359,6 +359,7 @@ Catalog、ArtifactStore、provenance、Report、日志、URL、异常或 CLI 输
 sciretriever config [--theme auto|dark|light|mono]
 sciretriever config status [--json] [--theme auto|dark|light|mono]
 sciretriever config test <provider|llm|mineru> [--json]
+sciretriever config test --browser <publisher-access-key> [--json]
 sciretriever config test --all [--json]
 ```
 
@@ -428,21 +429,26 @@ session 操作不会启用自动 Completion；Access 区会明确显示 `Unavail
 ### `config status`
 
 `status` 读取普通配置和统一凭据文件，只做本地静态检查；不构造 Catalog、ArtifactStore
-或 Network，也不发请求。默认用紧凑 Panel/Table 显示 Core services、Literature Provider
-credentials、PDF acquisition routes 与 Storage/execution；`--json` 使用稳定分组结构供
+或 Network，也不发请求。默认用紧凑 Panel/Table 分开显示 Core services、Metadata APIs、
+authorized primary-PDF APIs、PDF acquisition routes、Controlled Browser 与
+Storage/execution；`--json` 使用稳定分组结构供
 脚本消费且永不包含 ANSI。PDF Acquisition 依次展示：
 
 - `Public sources`：共享的已保存 direct/landing hints，以及 arXiv、Europe PMC、
   Unpaywall、operator locator 等独立公开服务的本地就绪状态；
 - `Authorized Provider APIs`：逐 Provider 显示是否已有可执行主 PDF API、当前限制和
   所需凭据字段；
-- `Controlled browser`：显示生产能力、operator profile 和站点规则状态。
+- `Controlled browser`：显示本地 runtime 依赖、production routes、开关、operator profile
+  presence、session/login、article entitlement、policy evidence、显式 probe 和下一动作。
 
-当前输出只提供这一层的本地概要，并报告 production Browser route 为 0；它尚不把 profile
-presence、未评估的 login/session、policy evidence 和 action-required 逐项展开。裸 `config`
-中存在 Access 管理入口不改变这一事实。
+Metadata 人类表格只逐项展开已经启用或已有凭据的 Provider，其余禁用能力以数量摘要收起；
+完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，固定单列 CORE、
+Elsevier、Wiley 和当前不支持直接主 PDF 的 Springer。当前 production Browser route 为 0，
+因此 Browser 分区显示 automatic acquisition 和显式 probe 均不可用，下一动作代码是
+`browser-production-route-unavailable`。这不是 profile 缺失的同义词：即使本地 profile 已经
+存在，未获 production 验证的站点也不会成为自动路线。
 
-Provider 分区先显示启用顺序，再为每个已接受 Provider 报告以下层：
+JSON 的 Provider 分区保留完整矩阵，并为每个已接受 Provider 报告以下层：
 
 - `production_available`：该 capability 是否有当前可执行生产实现；
 - `enabled`：是否列在普通配置对应 `providers` 数组中；
@@ -458,6 +464,21 @@ Provider 分区先显示启用顺序，再为每个已接受 Provider 报告以�
 fingerprint。`enabled = false` 不会改写其它 readiness 层：status 是完整矩阵，而实际
 运行只注册已启用且就绪的能力。`configured` 只说明本地必需/可选字段存在，不表示
 认证已成功；Acquisition 的 `local_ready` 也不表示当前具体 Literature 有全文授权。
+
+Browser JSON 位于 `providers.controlled_browser`，稳定区分：
+
+- `runtime`：框架与 Playwright Python package 是否存在；`launch_assessed` 始终为 `false`，
+  因为 status 不启动 Browser，也不检查 binary；
+- `profile`：所选 opaque identity 与 `configured/missing/attention` presence；不包含实际路径；
+- `session`：`assessment = not-assessed`、`authenticated = null`，明确没有检查当前登录；
+- `article_entitlement = not-proven`：即使 profile 存在或另一次登录成功，也不证明任意文章授权；
+- `routes`：只有通过 production verification 的 Browser route 及其 risk group、官方/项目
+  保守 policy revision、验证日期、Notes 引用和有效限速；不含 origin、selector 或页面规则；
+- `probe` 与 `action_required`：可显式探测的精确 access key，以及稳定 code/reason/action。
+
+`status` 只检查 profile tree 的 owner/type/mode/symlink 元数据，不读取任何文件字节，不枚举
+Cookie、local storage、origin history 或文件名。JSON 和人类输出都不包含 ANSI 以外的隐藏
+控制数据、profile path、secret 掩码/hash/fingerprint 或原始异常。
 
 Storage 分区显示 Catalog/ArtifactStore 是否配置及其当前非 secret 路径。MinerU 分区
 显示固定实现身份、`base_url`、连接模式、模型身份、远程上传授权、缺失普通字段，以及
@@ -482,6 +503,21 @@ Acquisition 没有独立于具体 Literature 的官方最小 probe，因此不�
 `test --all` 依次汇总已启用 Provider、LLM 和 MinerU；一个失败不阻断其它结果，任一
 failed/skipped 使整体退出码为 3。人类模式统一确认网络/额度副作用；JSON 模式是明确的
 脚本调用，不交互确认。
+
+Browser probe 必须单独、显式指定一个 Publisher access key：
+
+```text
+sciretriever config test --browser <publisher-access-key> [--json]
+```
+
+它与位置 Provider 和 `--all` 互斥，绝不会被 `--all` 隐式执行。人类模式在可能打开可见
+Browser 前再次确认：只访问一个经过 production 批准的最小目标，并使用自动获取相同的
+provider risk-group scheduler；一次 probe 最多导航一次。结果分开报告 Browser 是否启动、
+最小目标是否到达、当前 authentication 是否被接受，同时始终保留
+`article_entitlement = not-proven` 与 `persisted = false`。当前 production Browser route
+count 为 0，所以例如 `config test --browser wiley-online-library --json` 会以退出码 3 返回
+`skipped` / `browser-production-route-unavailable`，不会启动 Browser、猜测目标 URL 或访问
+Wiley。只有将来通过独立 production 验证的 access key 才能执行真实最小探测。
 
 这些是唯一会主动发起网络请求的配置命令。请求经过共享 DNS/TLS/redirect/origin/限速、
 响应预算与脱敏边界。

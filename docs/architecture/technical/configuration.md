@@ -11,8 +11,8 @@
 `entry/cli/` 的配置协作。统一配置中心、安全发布、状态和诊断的当前用户行为仍以配置手册、
 源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界。普通 `[access]`
 配置、安全 profile 存储边界和裸 `sciretriever config` 的 Access 管理已经实现；
-`config status/test` 的完整 Browser 状态与探测合同、生产 Browser 对象图仍须在各自实现和
-安装后验收完成后才能写成已发布能力。Provider 的易变外部字段仍以
+`config status/test` 已实现完整的 Browser 本地状态与显式单目标 probe 合同；生产 Browser
+对象图仍须在完成组装和安装后验收后才能写成已发布自动获取能力。Provider 的易变外部字段仍以
 [Provider Notes](../../notes/providers/README.md) 为依据。
 
 ## 1. 责任与依赖
@@ -225,6 +225,7 @@ TOML/Pydantic 复验、原子 replace；任一步失败保留原文件并清理 
 sciretriever config [--theme auto|dark|light|mono]
 sciretriever config status [--json] [--theme auto|dark|light|mono]
 sciretriever config test <provider|llm|mineru> [--json]
+sciretriever config test --browser <publisher-access-key> [--json]
 sciretriever config test --all [--json]
 ```
 
@@ -255,8 +256,8 @@ profile 被保留，不声称已经登录，也不声称任意文章具有 entit
 复制或导出 Cookie。
 
 该管理入口如实显示当前 production Browser route count 为 0，并说明本地 profile 不会启用
-自动 Completion。`config status/test` 的完整 Browser route/profile/session/policy/action-required
-呈现与最小显式探测仍是独立能力，不能由这个交互入口的存在推断为已经完成。
+自动 Completion。它不把 profile presence 描述成登录，也不把人工登录描述成任意文章授权；
+完整 route/profile/session/policy/action-required 状态和最小显式探测由下节独立命令提供。
 
 ## 7. status 与 probe
 
@@ -266,15 +267,19 @@ presence view，不构造 Storage、Catalog、ArtifactStore 或 Network。人类
 
 - LLM provider/protocol/endpoint/model/context、credential presence/origin match 与 readiness；
 - MinerU mode/endpoint/固定实现身份、credential presence/origin match 与 readiness；
-- Metadata/Acquisition Provider 的 enabled、用途、字段 configured/missing/optional；
+- Metadata API 与 authorized primary-PDF API 的独立 enabled、字段
+  configured/missing/optional、policy readiness 和下一动作；
 - PDF acquisition 固定顺序：Public → Authorized API → Controlled browser；
-- 每个 Publisher Browser route 的 implementation/profile/policy readiness、无 secret 的 risk-group 展示名和所需下一动作；
+- Controlled Browser 的 framework/Playwright package、production route、普通开关、profile
+  presence、未评估的 session/login、未证明的 article entitlement、显式 probe、policy
+  evidence 与所需下一动作；
 - Storage 和执行参数概要。
 
-当前实现已经显示固定三层顺序和 production Browser route 为 0 的概要，但尚未把 Browser
-route、profile presence、未评估的 session/login、policy evidence 与 action-required 分组完整
-展开；上面 Browser-specific 的逐项呈现是这一命令仍待闭合的合同，不得从裸 `config` 的
-Access 管理入口推断为已经实现。
+人类输出只逐项展开已启用或已有凭据的 Metadata API，其余禁用项用数量摘要收起；授权主
+PDF API 单独列出 CORE、Elsevier、Wiley 和已知不支持直接 PDF 的 Springer，避免把 Metadata
+凭据与全文访问能力混成一项。当前 production Browser route count 为 0，因此 Browser 分区
+如实显示 automatic acquisition 与显式 probe 均不可用，并给出
+`browser-production-route-unavailable`，不会因为 profile 已选择或存在而改变结论。
 
 本地 presence 不能描述为认证成功。JSON 使用稳定分组 schema、无 ANSI，也不能包含 secret
 特征或 configuration fingerprint。
@@ -283,6 +288,23 @@ Browser 的纯本地状态只能说明 Profile 已支持、已选择且通过本
 missing/action-required；不能根据 Cookie 文件存在声称 authenticated，也不能声称具体文献
 entitled。动态 login/session/circuit/cooldown 不保存为“上次状态”。`config status` 不启动
 Browser、不访问 Provider，也不枚举 Cookie、origin history、selector 或 profile 内部文件。
+Playwright Python package 可发现也只表示依赖存在；`launch_assessed` 固定为 `false`，status
+不检查 Browser binary 或启动能力。JSON 保持原有顶层分组，并在
+`providers.controlled_browser` 下稳定区分：
+
+```text
+enabled / local_max_concurrency
+runtime.framework_available / python_dependency_available / launch_assessed
+profile.selected / presence
+session.assessment / authenticated / article_entitlement
+automatic_acquisition_available / production_route_count / routes
+probe.available / requires_explicit_target / supported_access_keys
+action_required[{code, reason, action}]
+```
+
+JSON 不含 ANSI、profile path、configuration fingerprint、Cookie 特征、selector、原始异常或
+secret 特征。`profile.presence = configured` 仍与
+`session.authenticated = null`、`article_entitlement = not-proven` 同时成立。
 
 `config test` 构造独立的 `ProductionConfigurationProbeSession`，复用生产 adapter 和共享
 Network，但不构造 Storage。Provider probe 使用官方最小只读请求；LLM probe 固定发送：
@@ -297,10 +319,22 @@ submit、poll、fetch archive 或上传 PDF。`--all` 汇总已启用 Provider�
 失败不阻断其它结果，failed/skipped 使退出码为 3。人类模式在 LLM/`--all` 前确认副作用；
 JSON 模式视为脚本显式授权。
 
-普通 Provider API probe 不隐式启动 Browser。将来接入的 Browser session probe 必须由用户
-显式选择具体 Publisher Profile 和一个经过批准的最小离线/现场目标，使用可见 Browser、同一
-Profile guard 与 risk-group scheduler；存在 profile、页面可打开和具体文章 entitlement 仍是
-三个不同结果。真实 Provider probe 不进入 Harness，精确现场范围需要用户另行授权。
+普通 Provider API probe 不隐式启动 Browser。Browser session probe 必须由用户
+显式选择具体 Publisher access key：
+
+```text
+sciretriever config test --browser <publisher-access-key> [--json]
+```
+
+该选择与位置 Provider、`--all` 互斥，一次只允许一个 production-approved 最小目标；人类
+模式再次确认可能打开可见 Browser，JSON 调用本身视为显式授权。probe 使用与自动获取相同的
+risk-group scheduler seam，最多一次导航，结果只包含 launch/target/authentication 的顺序检查，
+固定 `article_entitlement = not-proven` 与 `persisted = false`。`--all` 永远不隐式加入 Browser。
+当前 production target 集合为空，所以任何规范 access key 都稳定 `skipped` 并返回
+`browser-production-route-unavailable`，不启动 runtime、不导航、不猜 URL。未来接入的真实
+target 仍须使用可见 Browser、同一 Profile guard 与共享 scheduler；存在 profile、页面可打开、
+当前登录和具体文章 entitlement 始终是不同结果。真实 Provider probe 不进入 Harness，精确
+现场范围需要用户另行授权。
 
 核心 probe 返回 `CoreConfigurationProbeResult`，details 分别为
 `LLMConfigurationProbeDetails` 和 `MinerUConfigurationProbeDetails`，共同固定
