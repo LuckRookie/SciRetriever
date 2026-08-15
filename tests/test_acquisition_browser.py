@@ -1919,20 +1919,35 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
 
     def test_runtime_exception_and_unexpected_result_are_stable_contract_failures(self) -> None:
         request = _request(observations=(_observation(57, (_landing_hint(),)),))
-        exception_source = _source(_FakeRunner([RuntimeError("private sentinel")]))
-        with self.assertRaises(AcquisitionFailure) as exception_caught:
-            list(
-                exception_source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
+        exception_secret = "token=PRIVATE-EXCEPTION-SENTINEL"
+        exception_url = "https://publisher.test/article?signature=PRIVATE-SIGNATURE"
+        exception_source = _source(
+            _FakeRunner([RuntimeError(f"{exception_secret} {exception_url}")])
+        )
+        with self.assertLogs(
+            "sciretriever.acquisition.sources.browser",
+            level="DEBUG",
+        ) as captured:
+            with self.assertRaises(AcquisitionFailure) as exception_caught:
+                list(
+                    exception_source._deliveries(
+                        request,
+                        _evidence(request),
+                        CandidateKeyTracker(),
+                    )
                 )
-            )
         self.assertEqual(
             exception_caught.exception.failure.code,
             "acquisition-browser-runtime-failed",
         )
-        self.assertNotIn("sentinel", repr(exception_caught.exception.failure))
+        output = "\n".join(captured.output)
+        self.assertIn("state=runtime-failed", output)
+        self.assertIn("code=acquisition-browser-runtime-failed", output)
+        self.assertNotIn(exception_secret, output)
+        self.assertNotIn(exception_url, output)
+        self.assertNotIn("PRIVATE-EXCEPTION-SENTINEL", output)
+        self.assertNotIn("PRIVATE-SIGNATURE", output)
+        self.assertNotIn("sentinel", repr(exception_caught.exception.failure).casefold())
 
         contract_source = _source(_FakeRunner([object()]))
         with self.assertRaises(AcquisitionFailure) as contract_caught:
@@ -1944,6 +1959,47 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 )
             )
         self.assertEqual(contract_caught.exception.failure.code, "acquisition-browser-contract")
+
+    def test_debug_logging_records_browser_states_without_page_or_rule_secrets(self) -> None:
+        markers, observation = _access_page_states()["authenticated-and-entitled"]
+        runner = _FakeRunner(
+            [_download(b"PRIVATE-PDF-BYTES")],
+            marker_states=(markers,),
+            page_observations=(observation,),
+        )
+        rule = _rule(page_markers=_access_page_markers())
+        source = _source(runner, rule=rule)
+        request = _request(observations=(_observation(571, (_landing_hint(),)),))
+
+        with self.assertLogs(
+            "sciretriever.acquisition.sources.browser",
+            level="DEBUG",
+        ) as captured:
+            deliveries = list(
+                source._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            )
+
+        output = "\n".join(captured.output)
+        self.assertEqual(len(deliveries), 1)
+        self.assertIn("event=browser-state-transition", output)
+        self.assertIn("state=open", output)
+        self.assertIn("state=authenticated", output)
+        self.assertIn("state=pdf-captured", output)
+        self.assertIn("event=browser-rule-action browser_rule_action=click", output)
+        self.assertIn("event=browser-capture-classified", output)
+        for forbidden in (
+            "a[data-action='pdf']",
+            "#authenticated",
+            "#article-entitled",
+            "https://publisher.test/article",
+            "PRIVATE-PDF-BYTES",
+        ):
+            self.assertNotIn(forbidden, output)
+        deliveries[0].content.discard()
 
     def test_generator_close_and_explicit_discard_release_temporary_bytes(self) -> None:
         runner = _FakeRunner([_download(b"temporary")])

@@ -111,8 +111,11 @@ class CoreAuthorizedPdfClientTests(unittest.TestCase):
         self.assertEqual(kwargs["credential_headers"], (("Authorization", f"Bearer {_SECRET}"),))
         self.assertEqual(kwargs["max_redirects"], 0)
         feedback = kwargs["response_feedback"]
-        self.assertEqual(
-            feedback(
+        with self.assertLogs(
+            "sciretriever.acquisition.providers.core",
+            level="DEBUG",
+        ) as captured:
+            retry_feedback = feedback(
                 _response(
                     429,
                     headers=(
@@ -122,11 +125,8 @@ class CoreAuthorizedPdfClientTests(unittest.TestCase):
                         Header(name="X-RateLimit-Limit", value="100"),
                     ),
                 )
-            ),
-            AccessFeedback(retry_after=8.0, throttled=True),
-        )
-        self.assertEqual(
-            feedback(
+            )
+            conflicting_feedback = feedback(
                 _response(
                     429,
                     headers=(
@@ -134,9 +134,22 @@ class CoreAuthorizedPdfClientTests(unittest.TestCase):
                         Header(name="x-ratelimit-remaining", value="1"),
                     ),
                 )
-            ),
+            )
+        self.assertEqual(
+            retry_feedback,
+            AccessFeedback(retry_after=8.0, throttled=True),
+        )
+        self.assertEqual(
+            conflicting_feedback,
             AccessFeedback(throttled=True),
         )
+        log_output = "\n".join(captured.output)
+        self.assertIn("event=authorized-quota-feedback", log_output)
+        self.assertIn("provider_group=core", log_output)
+        self.assertIn("route_key=api:core", log_output)
+        self.assertIn("retry_after_seconds=8.0", log_output)
+        self.assertNotIn(_SECRET, log_output)
+        self.assertNotIn("Authorization", log_output)
         result.content.discard()  # type: ignore[union-attr]
 
     def test_download_statuses_keep_miss_auth_entitlement_quota_and_service_distinct(self) -> None:

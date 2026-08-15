@@ -494,6 +494,50 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
             0,
         )
 
+    def test_logging_explains_group_wait_pause_feedback_and_cleanup(self) -> None:
+        from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+
+        clock = _AdvancingClock()
+        scheduler = BrowserGroupScheduler(clock=clock, max_concurrency=1)
+
+        def run(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[str]:
+            feedback = (
+                BrowserGroupFeedback.RATE_LIMITED
+                if attempt.attempt_key == "w2"
+                else BrowserGroupFeedback.SUCCESS
+            )
+            return BrowserAttemptCompletion(
+                attempt.attempt_key,
+                (
+                    BrowserAttemptDisposition.FAILED
+                    if feedback is BrowserGroupFeedback.RATE_LIMITED
+                    else BrowserAttemptDisposition.COMPLETED
+                ),
+                feedback,
+            )
+
+        with self.assertLogs("sciretriever.network.browser_scheduler", level="DEBUG") as captured:
+            result = scheduler.execute(
+                (
+                    self._attempt("w1", "wiley", interval=5.0),
+                    self._attempt("w2", "wiley", interval=5.0),
+                    self._attempt("w3", "wiley", interval=5.0),
+                ),
+                run,
+            )
+
+        output = "\n".join(captured.output)
+        self.assertIs(result[2].disposition, BrowserScheduledDisposition.DEFERRED)
+        self.assertIn("event=browser-provider-group-waiting", output)
+        self.assertIn("wait_seconds=5", output)
+        self.assertIn("event=browser-provider-group-feedback", output)
+        self.assertIn("feedback=rate-limited", output)
+        self.assertIn("event=browser-provider-group-paused", output)
+        self.assertIn("action=review-group-state-before-retry", output)
+        self.assertIn("resource=global-permit outcome=released", output)
+        self.assertIn("resource=group-permit outcome=released", output)
+        self.assertIn("provider_group=wiley", output)
+
     def test_runtime_state_and_scheduler_refuse_serialization(self) -> None:
         from sciretriever.network.browser_scheduler import BrowserGroupScheduler
 

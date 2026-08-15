@@ -679,13 +679,14 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         refreshed = _plan("refreshed", tiers=(), extra_routes=(seed, derived))
         item = AcquisitionWorkItem(work_key="a", plan=initial)
 
-        result = TieredCohortExecutor().execute(
-            (item,),
-            lambda _item, _route: RouteExecutionResult.normal_miss(),
-            refresh_plan=lambda current: (
-                refreshed if current.plan.revision == initial.revision else initial
-            ),
-        )
+        with self.assertLogs("sciretriever.acquisition.cohort", level="INFO") as captured:
+            result = TieredCohortExecutor().execute(
+                (item,),
+                lambda _item, _route: RouteExecutionResult.normal_miss(),
+                refresh_plan=lambda current: (
+                    refreshed if current.plan.revision == initial.revision else initial
+                ),
+            )
 
         self.assertIs(result.items[0].disposition, WorkItemDisposition.FAILED)
         failure = result.items[0].failure
@@ -693,6 +694,84 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         if failure is None:
             self.fail("plan cycle did not retain its stable failure")
         self.assertEqual(failure.code, "acquisition-plan-cycle")
+        output = "\n".join(captured.output)
+        self.assertIn("event=acquisition-plan-failed", output)
+        self.assertIn("tier=public", output)
+
+    def test_info_logging_explains_tiers_groups_misses_and_stable_failures(self) -> None:
+        items = (
+            AcquisitionWorkItem(work_key="deferred", plan=_plan("deferred")),
+            AcquisitionWorkItem(
+                work_key="exhausted",
+                plan=_plan("exhausted", group="publisher-b"),
+            ),
+            AcquisitionWorkItem(
+                work_key="delivered",
+                plan=_plan("delivered", group="publisher-b"),
+            ),
+        )
+        quota_failure = StableFailure(
+            code="acquisition-authorized-quota",
+            reason="The fixture API quota is temporarily exhausted.",
+            action="Retry after the shared fixture quota resets.",
+            retryable=True,
+        )
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if (
+                item.work_key == "deferred"
+                and route.tier is AcquisitionPath.AUTHORIZED_PROVIDER_API
+            ):
+                return RouteExecutionResult.deferred(quota_failure)
+            if item.work_key == "delivered" and route.tier is AcquisitionPath.PUBLIC:
+                return RouteExecutionResult.delivered(_temporary(99, AcquisitionPath.PUBLIC))
+            return RouteExecutionResult.normal_miss()
+
+        with self.assertLogs("sciretriever.acquisition.cohort", level="INFO") as captured:
+            result = _executor("publisher-a", "publisher-b").execute(items, execute)
+
+        output = "\n".join(captured.output)
+        self.assertEqual(
+            tuple(item.disposition for item in result.items),
+            (
+                WorkItemDisposition.DEFERRED,
+                WorkItemDisposition.EXHAUSTED,
+                WorkItemDisposition.DELIVERED,
+            ),
+        )
+        for tier in AcquisitionPath:
+            self.assertIn(f"event=acquisition-tier-started tier={tier.value}", output)
+            self.assertIn(f"event=acquisition-tier-finished tier={tier.value}", output)
+        self.assertIn("event=acquisition-route-missed", output)
+        self.assertIn("event=acquisition-route-delivered", output)
+        self.assertIn("provider_group=publisher-b", output)
+        self.assertIn("code=acquisition-authorized-quota", output)
+        self.assertIn(quota_failure.reason, output)
+        self.assertIn(quota_failure.action, output)
+        self.assertNotIn("plan_revision=", output)
+        delivered = result.items[2].temporary_pdf
+        self.assertIsNotNone(delivered)
+        assert delivered is not None
+        delivered.content.discard()
+
+    def test_debug_logging_uses_only_safe_plan_and_route_identities(self) -> None:
+        item = AcquisitionWorkItem(work_key="debug-target", plan=_plan("debug-target"))
+
+        with self.assertLogs("sciretriever.acquisition.cohort", level="DEBUG") as captured:
+            _executor("publisher-a").execute(
+                (item,),
+                lambda _item, _route: RouteExecutionResult.normal_miss(),
+            )
+
+        output = "\n".join(captured.output)
+        self.assertIn(f"plan_revision={item.plan.revision}", output)
+        self.assertIn("resolution_evidence_kind=landing-origin", output)
+        self.assertIn("route_key=public:debug-target", output)
+        self.assertIn("provider_group=publisher-a", output)
+        self.assertNotIn("https://publisher-a.test", output)
 
 
 if __name__ == "__main__":

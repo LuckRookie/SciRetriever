@@ -563,8 +563,11 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                 _stable_target()
             )
         feedback = request.call_args.kwargs["response_feedback"]
-        self.assertEqual(
-            feedback(
+        with self.assertLogs(
+            "sciretriever.acquisition.providers.elsevier",
+            level="DEBUG",
+        ) as captured:
+            retry_feedback = feedback(
                 _response(
                     429,
                     headers=(
@@ -573,18 +576,30 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                         Header(name="X-RateLimit-Limit", value="50000"),
                     ),
                 )
-            ),
-            AccessFeedback(retry_after=7.0, throttled=True),
-        )
-        quota = feedback(
-            _response(
-                200,
-                headers=(
-                    Header(name="X-RateLimit-Remaining", value="49999"),
-                    Header(name="X-RateLimit-Limit", value="50000"),
-                    Header(name="X-RateLimit-Reset", value="4102444800"),
-                ),
             )
+            quota = feedback(
+                _response(
+                    200,
+                    headers=(
+                        Header(name="X-RateLimit-Remaining", value="49999"),
+                        Header(name="X-RateLimit-Limit", value="50000"),
+                        Header(name="X-RateLimit-Reset", value="4102444800"),
+                    ),
+                )
+            )
+            conflicting_feedback = feedback(
+                _response(
+                    200,
+                    headers=(
+                        Header(name="X-RateLimit-Remaining", value="1"),
+                        Header(name="x-ratelimit-remaining", value="2"),
+                    ),
+                )
+            )
+            service_feedback = feedback(_response(503))
+        self.assertEqual(
+            retry_feedback,
+            AccessFeedback(retry_after=7.0, throttled=True),
         )
         self.assertIsNotNone(quota)
         assert quota is not None
@@ -593,18 +608,18 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
         self.assertIsNotNone(quota.quota_reset_at)
         self.assertFalse(quota.throttled)
         self.assertEqual(
-            feedback(
-                _response(
-                    200,
-                    headers=(
-                        Header(name="X-RateLimit-Remaining", value="1"),
-                        Header(name="x-ratelimit-remaining", value="2"),
-                    ),
-                )
-            ),
+            conflicting_feedback,
             AccessFeedback(throttled=True),
         )
-        self.assertEqual(feedback(_response(503)), AccessFeedback(throttled=True))
+        self.assertEqual(service_feedback, AccessFeedback(throttled=True))
+        log_output = "\n".join(captured.output)
+        self.assertIn("event=authorized-quota-feedback", log_output)
+        self.assertIn("provider_group=elsevier", log_output)
+        self.assertIn("route_key=api:elsevier-article-object", log_output)
+        self.assertIn("quota_remaining=49999", log_output)
+        self.assertIn("quota_limit=50000", log_output)
+        self.assertNotIn(_API_KEY, log_output)
+        self.assertNotIn(_INSTITUTION_TOKEN, log_output)
 
     def test_network_and_credential_failures_are_closed_and_secret_free(self) -> None:
         http_client = _http_client()

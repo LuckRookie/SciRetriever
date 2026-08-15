@@ -195,19 +195,32 @@ class WileyAuthorizedPdfClientTests(unittest.TestCase):
         self.assertEqual(WILEY_ACCESS_POLICY.burst_limit, 60)
         self.assertEqual(WILEY_ACCESS_POLICY.window_seconds, 600.0)
         feedback = kwargs["response_feedback"]
-        self.assertEqual(
-            feedback(
+        with self.assertLogs(
+            "sciretriever.acquisition.providers.wiley",
+            level="DEBUG",
+        ) as captured:
+            retry_feedback = feedback(
                 _response(
                     429,
                     headers=(Header(name="Retry-After", value="7"),),
                 )
-            ),
+            )
+            service_feedback = feedback(_response(503))
+        self.assertEqual(
+            retry_feedback,
             AccessFeedback(retry_after=7.0, throttled=True),
         )
         self.assertEqual(
-            feedback(_response(503)),
+            service_feedback,
             AccessFeedback(throttled=True),
         )
+        log_output = "\n".join(captured.output)
+        self.assertIn("event=authorized-quota-feedback", log_output)
+        self.assertIn("provider_group=wiley", log_output)
+        self.assertIn("route_key=api:wiley-tdm-v1", log_output)
+        self.assertIn("retry_after_seconds=7.0", log_output)
+        self.assertNotIn(_SECRET, log_output)
+        self.assertNotIn("Wiley-TDM-Client-Token", log_output)
         result.content.discard()  # type: ignore[union-attr]
 
     def test_statuses_keep_miss_auth_entitlement_quota_and_service_distinct(self) -> None:

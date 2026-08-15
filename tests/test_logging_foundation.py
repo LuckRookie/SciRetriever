@@ -198,6 +198,10 @@ assert before == after
         logger = get_logger("sciretriever.network.test")
         secret = "SECRET_SENTINEL"
         exception_secret = "EXCEPTION_SENTINEL"
+        exception_repr = RuntimeError(
+            "token=EXCEPTION-REPR-SENTINEL#EXCEPTION-TOKEN-TAIL "
+            "https://provider.test/article?signature=EXCEPTION-SIGNATURE"
+        )
         with redirect_stdout(stdout), redirect_stderr(stderr):
             self._configured_handler()
             logger.error(
@@ -208,6 +212,7 @@ assert before == after
                 "https://example.test/download?token=" + secret + "&page=1",
                 {"access_token": secret, "page": "1"},
             )
+            logger.error("external provider failure=%r", exception_repr)
             try:
                 raise RuntimeError(exception_secret)
             except RuntimeError:
@@ -216,6 +221,10 @@ assert before == after
         output = stdout.getvalue() + stderr.getvalue()
         self.assertNotIn(secret, output)
         self.assertNotIn(exception_secret, output)
+        self.assertNotIn("EXCEPTION-REPR-SENTINEL", output)
+        self.assertNotIn("EXCEPTION-TOKEN-TAIL", output)
+        self.assertNotIn("EXCEPTION-SIGNATURE", output)
+        self.assertNotIn(repr(exception_repr), output)
         self.assertNotIn("Traceback", output)
         self.assertIn("provider request failed", output)
 

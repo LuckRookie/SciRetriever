@@ -694,6 +694,67 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
         self.assertEqual(publication.prepared_values[0].discard_count, 1)
         self.assertEqual(exhaustion.commands, [])
 
+    def test_debug_logging_covers_validation_publication_and_resource_cleanup(self) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        service = _service(
+            _RouteAdapter((accepted,)),
+            publication,
+            _ExhaustionPort(),
+        )
+
+        with self.assertLogs(
+            "sciretriever.acquisition.tiered_service",
+            level="DEBUG",
+        ) as captured:
+            receipt = service.prepare_primary_pdf(_request())
+            service.commit_primary_pdf(receipt)
+
+        output = "\n".join(captured.output)
+        self.assertIn("event=acquisition-pdf-validation-started", output)
+        self.assertIn("event=acquisition-pdf-validation-finished", output)
+        self.assertIn("resource=temporary-pdf", output)
+        self.assertIn("resource=route-iterator", output)
+        self.assertIn("resource=prepared-pdf", output)
+        self.assertIn("outcome=primary-pdf-committed", output)
+        self.assertIn("candidate_id=sha256:", output)
+        self.assertNotIn("fixture:accepted", output)
+        self.assertNotIn("%PDF-tiered-fixture", output)
+        self.assertNotIn("https://fixture.invalid", output)
+
+    def test_external_exception_repr_never_enters_acquisition_logs(self) -> None:
+        secret = "token=PRIVATE-ROUTE-EXCEPTION"
+        private_url = "https://private.test/article?signature=PRIVATE-SIGNATURE"
+        adapter = _RouteAdapter(())
+        service = _service(adapter, _PublicationPort(None), _ExhaustionPort())
+
+        with (
+            patch.object(
+                adapter,
+                "execute",
+                side_effect=RuntimeError(f"{secret} {private_url}"),
+            ),
+            self.assertLogs("sciretriever.acquisition", level="DEBUG") as captured,
+        ):
+            cohort = service.prepare_primary_pdf_cohort((_request(),))
+
+        item = cohort.items[0]
+        self.assertIsNotNone(item.failure)
+        assert item.failure is not None
+        self.assertEqual(item.failure.code, "acquisition-route-contract")
+        output = "\n".join(captured.output)
+        self.assertIn("code=acquisition-route-contract", output)
+        self.assertIn(item.failure.reason, output)
+        self.assertIn(item.failure.action, output)
+        for forbidden in (
+            secret,
+            private_url,
+            "PRIVATE-ROUTE-EXCEPTION",
+            "PRIVATE-SIGNATURE",
+            "RuntimeError(",
+        ):
+            self.assertNotIn(forbidden, output)
+
     def test_authorized_failure_matrix_controls_browser_admission_and_exhaustion(self) -> None:
         from sciretriever.acquisition.cohort import WorkItemDisposition
 
