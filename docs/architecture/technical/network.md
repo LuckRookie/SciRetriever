@@ -229,6 +229,16 @@ prefix 的 query-free HTTPS locator。等待动作由文章 deadline、取消信
 约束，不使用 Provider 固定 sleep。该 Port 不暴露任意 navigate/open-popup/fill/evaluate、page、
 context 或 vendor event。
 
+正文归属规则同样是本地封闭合同。每条有捕获能力的规则必须声明至少一种文章身份检查：捕获
+locator 与 canonical landing 完全一致、捕获 path 含 landing 的精确文件 stem，或捕获 path
+包含指定 namespace 的稳定 `Identifier`（例如 DOI、PII、article ID）。规则另外声明已知
+supplement URL prefix、supplement selector、supplement filename marker，以及 issue front
+matter、广告等 excluded prefix/filename marker；这些字段和正文捕获优先级都进入 fingerprint。
+Known supplement selector 不能同时成为 click action。Network 的 capture guard 在读取 body
+前只准入同时满足正文 prefix、媒体线索和当前文章身份的 locator；supplement、excluded 和
+wrong-article locator 不读取正文。Source 在形成候选前重复同一分类，防止不合规 runner 把
+补充材料或错文注入主候选。只有 supplement 或排除项时形成正常 `no-download`，不会误发布。
+
 截至当前实现，`browser.py` 已提供中性的 `BrowserDestinationGuard`：Controlled Browser
 Source 对每篇文章注入一项只含当前规则 origin 与精确 resolver 起点的 guard。Network 在初始
 导航、显式导航、redirect/页面请求、popup、response capture 和 download capture 分别标记
@@ -259,8 +269,8 @@ challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 重建限速状态。
 
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
-运行状态机、封闭页面 marker 分类、多路正文捕获和封闭 action contract 已经完成，但
-supplement/错文排除、Provider circuit、配置/确认入口以及至少一个 Provider 的端到端 Profile
+运行状态机、封闭页面 marker 分类、多路正文捕获、封闭 action contract 和 supplement/错文
+排除已经完成，但 Provider circuit、配置/确认入口以及至少一个 Provider 的端到端 Profile
 尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、

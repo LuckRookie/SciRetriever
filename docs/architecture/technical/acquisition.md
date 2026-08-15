@@ -445,9 +445,9 @@ Browser admission 可以报告最小剩余集合、readiness、待处理动作�
 真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
 Provider session broker、operator-managed profile 存储边界、状态/页面分类、多路正文捕获和
-封闭 action contract 也已完成。supplement/错文排除、Provider circuit、完整 Provider Profile
-和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、会话复用
-和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
+封闭 action contract 以及 supplement/错文排除也已完成。Provider circuit、完整 Provider
+Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、
+会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
 production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
@@ -497,6 +497,23 @@ locator/media 检查。只有 `application/pdf` 或经核实 locator 返回的
 `application/octet-stream` 可以通过当前规则；`.pdf` 后缀、媒体声明和 Browser 事件本身都
 不证明字节有效。每项不同捕获分别形成 `TemporaryPdf` 和稳定 candidate key，随后仍依次经过
 统一 PDF reader、页面树、hash 和不可变发布；任何捕获都不能从 Browser 直接写成主资产。
+
+Provider rule 在这一步还必须给出正文归属和排除合同。`article_identity_kinds` 至少选择一项：
+与 canonical landing 的 origin/path 完全一致、捕获 path 含 landing 的精确 stem，或捕获 path
+含指定 `article_id_namespaces` 的中性稳定标识符；后一种可覆盖 DOI、PII 和 Provider article
+ID，但只有 Profile 显式列出的 namespace 参与。自由 publisher 文本、相似标题和语义猜测不
+参与下载阶段身份判断。捕获 locator 在读 body 前和形成候选前各分类一次：
+
+```text
+PRIMARY | SUPPLEMENT | EXCLUDED | WRONG_ARTICLE | REJECTED
+```
+
+`supplement_url_prefixes`、`supplement_selectors` 和 `supplement_filename_markers` 表达 supporting
+information；`excluded_url_prefixes` 与 `excluded_filename_markers` 表达 issue front matter、
+广告等已知非正文。Supplement selector 不能出现在 action click 序列。Supplement、excluded
+和 wrong-article 不形成 candidate key 或 `TemporaryPdf`；只有这些捕获时是正常未命中。
+多个正文候选按 Profile 的完整 `capture_priority` 稳定排序，同一优先级保留事件顺序，再依次
+进入统一 PDF reader；媒体类型和文件名 marker 都不能越过最终字节验证。
 
 当前 `TieredCohortExecutor` 只把 Browser admission 明确允许的最小剩余 item 转为
 `BrowserArticleAttempt`，并从同一 admission group snapshot 取得 policy 与稳定 session key。
