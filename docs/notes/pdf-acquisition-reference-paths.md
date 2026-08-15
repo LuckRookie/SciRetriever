@@ -1,10 +1,12 @@
 # PDF 获取路径参考实现调研
 
-- 最后核对：2026-08-07
+- 最后核对：2026-08-15
 - 文档性质：外部工具与参考实现 Notes
 - 相关目标设计：[Acquisition 技术设计](../architecture/technical/acquisition.md)、[Network 技术设计](../architecture/technical/network.md)
 
 本文记录两个本地参考项目和 Zotero 官方实现如何发现、下载并验证文献 PDF，重点回答不同访问路径之间是否存在稳定优先级。本文只提供后续讨论的事实依据，不批准新的 provider、浏览器、代理、凭据、配置或产品能力，也不把参考工具的状态、验证阈值和失败模型写成 SciRetriever 合同。
+
+ScanSci PDF 的许可证、逐文件 provenance、`_core` proprietary 例外和禁止迁移能力另见 [ScanSci PDF 迁移许可与证据审计](scansci-migration-audit.md)。本文列出的上游路径只用于解释参考实现行为，不能直接作为生产 Profile 证据。
 
 本轮只读源码、文档和测试，没有连接 Zotero、真实供应商、机构登录或浏览器会话，没有下载 PDF，也没有读取本地浏览器 profile、Cookie、缓存、测试语料或凭据。两个本地快照均位于仓库外：
 
@@ -378,6 +380,7 @@ Zotero 和两个本地参考都使用 provider/domain 特定 Translator、select
 
 - Zotero Full-Text Downloader 结论只适用于 2026-08-03 本地快照；该目录没有可用于说明上游版本的 Git commit，本轮以实际源码为准。
 - ScanSci PDF 结论只适用于本地 checkout `5e4a6f2`；公开发行包可能包含当前源码树没有的构建产物。
+- ScanSci checkout 根源码采用 Apache-2.0，但 `_core` 预编译扩展存在 proprietary Cython 源例外；任何实质移植必须按[迁移审计](scansci-migration-audit.md)逐项登记，当前上游 verification matrix 不能直接证明 SciRetriever production-ready。
 - Zotero 结论以官方 `9.0.6` 和 Connector `5.0.211` 标签为准；主分支后续行为需重新核对。
 - 本文没有测量真实成功率、覆盖率、下载速度、授权范围或站点稳定性。
 - 本地参考项目的 README、技能说明和源码存在差异时，本文以当前源码行为为事实，并把文档声明只作为辅助证据。

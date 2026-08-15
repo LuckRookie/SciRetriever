@@ -1,0 +1,28 @@
+SciRetriever third-party notices
+================================
+
+This file records third-party attribution and redistribution obligations.  It
+does not define the license of SciRetriever itself.
+
+ScanSci PDF
+-----------
+
+Repository: https://github.com/Rimagination/scansci-pdf
+Audited revision: 5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5
+Upstream license: Apache License 2.0
+Copyright: Copyright 2024-2026 scansci-pdf contributors
+
+At the audited SciRetriever revision, ScanSci PDF is a design reference only:
+SciRetriever does not bundle or redistribute its source code, data catalogs,
+selectors, URL templates, binaries, or other implementation material.  The
+upstream checkout contains no separate NOTICE file.
+
+Before any future substantive source, constant table, selector, URL template,
+or data catalog is copied or adapted from ScanSci PDF, the change must retain
+the applicable Apache-2.0 license and copyright notices, identify modified
+files, and be registered in this notice and in
+docs/notes/scansci-migration-audit.md with exact provenance.
+
+The upstream exception for precompiled src/scansci_pdf/_core extensions states
+that their Cython sources are proprietary and are not included.  SciRetriever
+does not copy, link, redistribute, or claim provenance from those extensions.
