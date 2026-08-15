@@ -450,6 +450,115 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertGreaterEqual(unknown_policy.min_start_interval, 1.0)
             self.assertEqual(unknown_policy.cooldown_after_completion, 0.0)
 
+    def test_full_and_scoped_completion_own_one_shared_acquisition_runtime(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.acquisition.browser_admission import BrowserAdmissionController
+        from sciretriever.acquisition.cohort import TieredCohortExecutor
+        from sciretriever.acquisition.registry import AcquisitionRegistry
+        from sciretriever.acquisition.tiered_service import TieredAcquisitionService
+        from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+        from sciretriever.network.browser_sessions import BrowserSessionBroker
+
+        forbidden = AssertionError("object graph construction performed external I/O")
+        with tempfile.TemporaryDirectory(prefix="sciretriever-p76-graph-") as temporary:
+            root = Path(temporary)
+            full_root = root / "full"
+            scoped_root = root / "scoped"
+            full_root.mkdir(mode=0o700)
+            scoped_root.mkdir(mode=0o700)
+            scoped_configuration = parse_configuration(
+                f"""
+                [paths]
+                catalog_path = {str(scoped_root / "catalog.sqlite3")!r}
+                artifact_root = {str(scoped_root / "artifacts")!r}
+
+                [execution]
+                max_concurrency = 5
+
+                [access]
+                browser_enabled = true
+                browser_profile = "research"
+                browser_max_concurrency = 3
+                """
+            )
+            with (
+                mock.patch(
+                    "sciretriever.network.http.SystemResolver.resolve",
+                    side_effect=forbidden,
+                ),
+                mock.patch(
+                    "sciretriever.network.http.SecureHttpTransport.send",
+                    side_effect=forbidden,
+                ),
+                mock.patch.object(BrowserSessionBroker, "acquire", side_effect=forbidden),
+                mock.patch.object(BrowserGroupScheduler, "execute", side_effect=forbidden),
+            ):
+                full = bootstrap.build_object_graph(
+                    Configuration(),
+                    catalog_path=full_root / "catalog.sqlite3",
+                    artifact_root=full_root / "artifacts",
+                    external_dependencies=self._dependencies(),
+                    credentials_home=root / "home",
+                )
+                scoped = cast(
+                    bootstrap.DatabaseCompletionObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        scoped_configuration,
+                        scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                        credentials_home=root / "home",
+                        configure_process_logging=False,
+                    ),
+                )
+
+            for graph in (full, scoped):
+                registry = cast(AcquisitionRegistry, graph.acquisition_registry)
+                runtime = graph.acquisition_runtime
+                service = cast(TieredAcquisitionService, cast(Any, graph.acquisition_api)._service)
+                self.assertIs(registry.profile_catalog, registry.route_registry.profile_catalog)
+                self.assertIs(registry.planner.profile_catalog, registry.profile_catalog)
+                self.assertIs(service._route_registry, registry.route_registry)
+                self.assertIs(service._planner, registry.planner)
+                self.assertIs(service._cohort_executor, runtime.cohort_executor)
+                self.assertIsInstance(runtime.cohort_executor, TieredCohortExecutor)
+                self.assertIsInstance(runtime.browser_admission, BrowserAdmissionController)
+                self.assertIsInstance(runtime.browser_scheduler, BrowserGroupScheduler)
+                self.assertIsInstance(runtime.browser_session_broker, BrowserSessionBroker)
+                self.assertIs(
+                    runtime.cohort_executor._browser_admission,
+                    runtime.browser_admission,
+                )
+                self.assertIs(
+                    runtime.cohort_executor._browser_scheduler,
+                    runtime.browser_scheduler,
+                )
+                self.assertIs(cast(Any, graph.http_client)._coordinator, graph.access_coordinator)
+                self.assertIsNone(graph.browser_client)
+                self.assertEqual(runtime.browser_session_broker._entries, {})
+                self.assertEqual(runtime.browser_scheduler._policies, {})
+                self.assertEqual(
+                    tuple(
+                        binding.spec.route_key
+                        for binding in registry.route_registry.bindings
+                        if binding.spec.tier.value == "controlled-browser"
+                    ),
+                    (),
+                )
+                self.assertFalse(runtime.browser_admission._configuration.execution_confirmed)
+                self.assertFalse(runtime.browser_admission._configuration.runtime_ready)
+
+            self.assertEqual(full.acquisition_runtime.cohort_executor._max_concurrency, 4)
+            self.assertEqual(full.acquisition_runtime.browser_scheduler._max_concurrency, 2)
+            self.assertFalse(
+                full.acquisition_runtime.browser_admission._configuration.explicitly_enabled
+            )
+            self.assertEqual(scoped.acquisition_runtime.cohort_executor._max_concurrency, 5)
+            self.assertEqual(scoped.acquisition_runtime.browser_scheduler._max_concurrency, 3)
+            self.assertTrue(
+                scoped.acquisition_runtime.browser_admission._configuration.explicitly_enabled
+            )
+            full.acquisition_runtime.browser_session_broker.close()
+            scoped.acquisition_runtime.browser_session_broker.close()
+
     def test_local_library_scope_uses_only_paths_and_no_external_assembly(self) -> None:
         import sciretriever.bootstrap as bootstrap
 

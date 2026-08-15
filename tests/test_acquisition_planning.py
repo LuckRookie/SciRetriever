@@ -277,6 +277,15 @@ class ProgressivePlanningTests(unittest.TestCase):
             ),
         )
 
+    def test_planner_requires_one_catalog_instance_for_resolution_and_building(self) -> None:
+        with self.assertRaisesRegex(ValueError, "share one profile catalog"):
+            ProgressiveAcquisitionPlanner(
+                resolver=PublisherAccessResolver(_catalog()),
+                builder=AcquisitionPlanBuilder(_catalog()),
+                route_specs=self._route_specs(),
+                doi_landing_resolver=None,
+            )
+
     def test_doi_resolution_is_explicit_once_and_replans_all_later_tiers(self) -> None:
         catalog = _catalog()
         doi = _DoiResolver(

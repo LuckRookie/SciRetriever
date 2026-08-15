@@ -79,6 +79,7 @@ from sciretriever.model.primitives import (
 from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessCoordinator, AccessScope
 from sciretriever.network.browser import BrowserClient
+from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import normalize_url
 
@@ -161,6 +162,7 @@ def _dependencies(
     credentials: CredentialLookup | None = None,
 ) -> tuple[AcquisitionAssemblyDependencies, HttpClient]:
     shared = coordinator or AccessCoordinator(clock=lambda: 100.0)
+    browser_session_broker = BrowserSessionBroker(clock=lambda: 100.0)
     client = HttpClient(
         resolver=_NeverResolver(),
         transport=cast(Any, _NeverTransport()),
@@ -175,6 +177,7 @@ def _dependencies(
         web_access_profile_resolver=WebAccessProfileResolver(),
         provenance_id_factory=lambda: ProvenanceId(_id(900)),
         clock=lambda: _TIME,
+        browser_session_broker=browser_session_broker,
         credentials=credentials,
         cancel_event=cancel_event,
         configured_sci_hub_resolver=configured_resolver,
@@ -1048,6 +1051,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             factory=lambda: object(),
             resolver=_NeverResolver(),
             coordinator=dependencies.access_coordinator,
+            session_broker=dependencies.browser_session_broker,
             clock=lambda: 100.0,
         )
         registry = build_acquisition_registry(
@@ -1058,6 +1062,20 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
             ("public:direct", "public:landing-crossref", "public:landing-fallback"),
         )
+
+        private_broker_browser = BrowserClient(
+            factory=lambda: object(),
+            resolver=_NeverResolver(),
+            coordinator=dependencies.access_coordinator,
+            session_broker=BrowserSessionBroker(clock=lambda: 100.0),
+            clock=lambda: 100.0,
+        )
+        with self.assertRaises(AcquisitionRegistryError) as caught:
+            build_acquisition_registry(
+                _configuration(("crossref",)),
+                replace(dependencies, browser_client=private_broker_browser),
+            )
+        self.assertEqual(caught.exception.code, "network-bypass")
 
     def test_two_registries_share_the_process_http_client_and_coordinator(self) -> None:
         dependencies, client = _dependencies()

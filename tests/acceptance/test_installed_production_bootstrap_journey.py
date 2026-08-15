@@ -32,6 +32,97 @@ class InstalledProductionBootstrapJourneyTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.fixture.__exit__(None, None, None)
 
+    def test_installed_asset_completion_uses_the_shared_acquisition_runtime(self) -> None:
+        assert self.install.root is not None
+        root = self.install.root / "production-acquisition-graph"
+        root.mkdir(mode=0o700)
+        script = """
+import json
+import os
+from pathlib import Path
+from unittest import mock
+
+from sciretriever.bootstrap import (
+    DatabaseCompletionObjectGraph,
+    ProductionEntryScope,
+    build_production_object_graph,
+)
+from sciretriever.configuration import parse_configuration
+from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+from sciretriever.network.browser_sessions import BrowserSessionBroker
+from sciretriever.network.http import SecureHttpTransport, SystemResolver
+
+root = Path(os.environ["SCIRETRIEVER_P76_ROOT"])
+configuration = parse_configuration(
+    "[paths]\\n"
+    + f"catalog_path = {str(root / 'catalog.sqlite3')!r}\\n"
+    + f"artifact_root = {str(root / 'artifacts')!r}\\n"
+    + "[execution]\\nmax_concurrency = 5\\n"
+    + "[access]\\nbrowser_enabled = true\\n"
+    + 'browser_profile = "research"\\n'
+    + "browser_max_concurrency = 3\\n"
+)
+forbidden = AssertionError("installed production assembly performed external I/O")
+with (
+    mock.patch.object(SystemResolver, "resolve", side_effect=forbidden),
+    mock.patch.object(SecureHttpTransport, "send", side_effect=forbidden),
+    mock.patch.object(BrowserSessionBroker, "acquire", side_effect=forbidden),
+    mock.patch.object(BrowserGroupScheduler, "execute", side_effect=forbidden),
+):
+    graph = build_production_object_graph(
+        configuration,
+        scope=ProductionEntryScope.ASSET_COMPLETION,
+        credentials_home=root / "home",
+        configure_process_logging=False,
+    )
+
+runtime = graph.acquisition_runtime
+registry = graph.acquisition_registry
+service = graph.acquisition_api._service
+evidence = {
+    "graph_type": isinstance(graph, DatabaseCompletionObjectGraph),
+    "coordinator": graph.http_client._coordinator is graph.access_coordinator,
+    "catalog": registry.profile_catalog is registry.route_registry.profile_catalog,
+    "planner_catalog": registry.planner.profile_catalog is registry.profile_catalog,
+    "service_registry": service._route_registry is registry.route_registry,
+    "service_planner": service._planner is registry.planner,
+    "service_executor": service._cohort_executor is runtime.cohort_executor,
+    "executor_admission": (
+        runtime.cohort_executor._browser_admission is runtime.browser_admission
+    ),
+    "executor_scheduler": (
+        runtime.cohort_executor._browser_scheduler is runtime.browser_scheduler
+    ),
+    "cohort_concurrency": runtime.cohort_executor._max_concurrency == 5,
+    "browser_concurrency": runtime.browser_scheduler._max_concurrency == 3,
+    "broker_unused": runtime.browser_session_broker._entries == {},
+    "scheduler_unused": runtime.browser_scheduler._policies == {},
+    "browser_unavailable": graph.browser_client is None,
+    "browser_switch": runtime.browser_admission._configuration.explicitly_enabled,
+    "browser_unconfirmed": (
+        not runtime.browser_admission._configuration.execution_confirmed
+        and not runtime.browser_admission._configuration.runtime_ready
+    ),
+    "browser_routes": not any(
+        binding.spec.tier.value == "controlled-browser"
+        for binding in registry.route_registry.bindings
+    ),
+}
+runtime.browser_session_broker.close()
+print(json.dumps(evidence, sort_keys=True))
+"""
+        result = self.install.run_python(
+            ("-I", "-c", script),
+            environment={"SCIRETRIEVER_P76_ROOT": os.fspath(root)},
+            cwd=root,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr_text)
+        self.assertEqual(result.stderr, b"")
+        evidence = json.loads(result.stdout)
+        self.assertTrue(all(evidence.values()), evidence)
+        self.assertFalse((root / "production-wire.ndjson").exists())
+
     def test_real_console_uses_production_bootstrap_for_discovery_and_completion(self) -> None:
         assert self.install.root is not None
         root = self.install.root / "production-bootstrap"
