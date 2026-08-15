@@ -24,18 +24,23 @@ from uuid import uuid4
 from sciretriever.acquisition.sources.configured_sci_hub import ConfiguredLocatorResolver
 from sciretriever.analysis.ports import AnalysisLLMPort
 from sciretriever.configuration import (
+    BrowserConfigurationProbePort,
     ConfigurationError,
     CredentialLookup,
     RuntimeSecretLookup,
+    browser_access_status,
     configuration_runtime_status,
     configuration_status,
     load_credentials,
     load_runtime_secrets,
+    run_browser_configuration_probe,
     run_configuration_probes,
 )
 from sciretriever.model.configuration import (
     AnalysisAuthentication,
     AnalysisProvider,
+    BrowserAccessStatus,
+    BrowserConfigurationProbeResult,
     Configuration,
     ConfigurationProbeSummary,
     ConfigurationStatus,
@@ -327,6 +332,19 @@ class BibliographyExchangeObjectGraph:
 
 
 @dataclass(frozen=True, slots=True)
+class _UnavailableBrowserConfigurationProbePort:
+    """Production-safe port while no Publisher Browser route is approved."""
+
+    @property
+    def supported_access_keys(self) -> frozenset[str]:
+        return frozenset()
+
+    def probe(self, access_key: str) -> BrowserConfigurationProbeResult:
+        del access_key
+        raise AssertionError("an unavailable Browser probe cannot execute")
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionConfigurationProbeSession:
     """A no-Storage configuration-test session from one credential snapshot."""
 
@@ -336,6 +354,8 @@ class ProductionConfigurationProbeSession:
     probe_port: MetadataProbeRegistry = field(repr=False)
     access_coordinator: AccessCoordinator = field(repr=False)
     http_client: HttpClient = field(repr=False)
+    browser_status: BrowserAccessStatus
+    browser_probe_port: BrowserConfigurationProbePort = field(repr=False)
 
     def run(
         self,
@@ -349,6 +369,15 @@ class ProductionConfigurationProbeSession:
             provider=provider,
             test_all=test_all,
             status_snapshot=self.status,
+        )
+
+    def run_browser(self, access_key: str) -> BrowserConfigurationProbeResult:
+        """Run one explicitly selected production-approved Browser target."""
+
+        return run_browser_configuration_probe(
+            access_key,
+            self.browser_probe_port,
+            status_snapshot=self.browser_status,
         )
 
     def run_llm(self) -> CoreConfigurationProbeResult:
@@ -1596,6 +1625,7 @@ def build_production_configuration_probe_session(
         raise BootstrapError("configuration-invalid")
     coordinator, http_client = _new_shared_network()
     clock = _UtcClock()
+    browser_probe_port = _UnavailableBrowserConfigurationProbePort()
     try:
         credentials = load_credentials(home=credentials_home)
         status = configuration_status(
@@ -1614,6 +1644,11 @@ def build_production_configuration_probe_session(
                 clock=clock.now,
             ),
         )
+        browser_status = browser_access_status(
+            configuration,
+            home=credentials_home,
+            probe_supported_access_keys=browser_probe_port.supported_access_keys,
+        )
     except ConfigurationError:
         raise BootstrapError("configuration-invalid") from None
     except MetadataRegistryError:
@@ -1625,6 +1660,8 @@ def build_production_configuration_probe_session(
         probe_port=probe_port,
         access_coordinator=coordinator,
         http_client=http_client,
+        browser_status=browser_status,
+        browser_probe_port=browser_probe_port,
     )
 
 

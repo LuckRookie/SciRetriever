@@ -297,8 +297,10 @@ class ConfigStatusPresenter:
             )
         )
         self.console.print(self._core_services(payload))
-        self.console.print(self._provider_credentials(payload))
+        self.console.print(self._metadata_apis(payload))
+        self.console.print(self._acquisition_apis(payload))
         self.console.print(self._pdf_routes(payload))
+        self.console.print(self._controlled_browser(payload))
         self.console.print(self._local_runtime(payload))
 
     def probes(self, payload: Mapping[str, object]) -> None:
@@ -323,7 +325,9 @@ class ConfigStatusPresenter:
         self.console.print(
             Text(
                 "LLM: minimal strict schema request; may consume quota; no Literature content. "
-                "MinerU: GET health only; no PDF upload. Results are not persisted.",
+                "MinerU: GET health only; no PDF upload. Browser: one explicitly selected "
+                "approved minimal target; article entitlement remains not proven. Results are "
+                "not persisted.",
                 style=self.palette.muted,
             )
         )
@@ -340,11 +344,8 @@ class ConfigStatusPresenter:
             border_style=self.palette.border,
             expand=True,
         )
-        table.add_column("Service", style=self.palette.accent, no_wrap=True)
-        table.add_column("Endpoint / protocol", overflow="fold")
-        table.add_column("Model / identity", overflow="fold")
-        table.add_column("Credential", overflow="fold")
-        table.add_column("Readiness", no_wrap=True)
+        table.add_column("Service / readiness", width=20, no_wrap=True)
+        table.add_column("Configured values", overflow="fold")
         llm_identity = (
             " · ".join(
                 value
@@ -358,14 +359,15 @@ class ConfigStatusPresenter:
             or "not set"
         )
         table.add_row(
-            "LLM Analysis",
-            f"{_shown(analysis.get('protocol'))}\n{_shown(analysis.get('base_url'))}",
-            llm_identity,
-            _core_credential_state(analysis_secret),
-            _state_text(
+            _layer_state(
+                "LLM Analysis",
                 "ready" if analysis.get("reference_locally_ready") is True else "needs setup",
                 self.palette,
             ),
+            f"protocol: {_shown(analysis.get('protocol'))}\n"
+            f"endpoint: {_shown(analysis.get('base_url'))}\n"
+            f"model: {llm_identity}\n"
+            f"credential: {_core_credential_state(analysis_secret)}",
         )
         parser_identity = (
             f"MinerU {implementation.get('release')} · protocol "
@@ -375,69 +377,70 @@ class ConfigStatusPresenter:
             f"{_shown(parsing.get('model_identity'))}"
         )
         table.add_row(
-            "MinerU Parser",
-            f"{_shown(parsing.get('connection_mode'))}\n{_shown(parsing.get('base_url'))}",
-            parser_identity,
-            _core_credential_state(parser_secret),
-            _state_text(
+            _layer_state(
+                "MinerU Parser",
                 "ready" if parsing.get("locally_ready") is True else "needs setup",
                 self.palette,
             ),
+            f"mode: {_shown(parsing.get('connection_mode'))}\n"
+            f"endpoint: {_shown(parsing.get('base_url'))}\n"
+            f"identity: {parser_identity}\n"
+            f"credential: {_core_credential_state(parser_secret)}",
         )
         return table
 
-    def _provider_credentials(self, payload: Mapping[str, object]) -> Table:
+    def _metadata_apis(self, payload: Mapping[str, object]) -> Table:
         providers = _mapping(payload["providers"])
-        combined: dict[str, dict[str, object]] = {}
-        for capability in ("metadata", "acquisition"):
-            for item in _mapping_sequence(providers[capability]):
-                provider = str(item["provider"])
-                aggregate = combined.setdefault(
-                    provider,
-                    {
-                        "purposes": [],
-                        "enabled": False,
-                        "credentials": item["credentials"],
-                    },
-                )
-                cast(list[str], aggregate["purposes"]).append(capability)
-                aggregate["enabled"] = bool(aggregate["enabled"] or item["enabled"])
-                current = _mapping(aggregate["credentials"])
-                candidate = _mapping(item["credentials"])
-                if _credential_priority(str(candidate["status"])) > _credential_priority(
-                    str(current["status"])
-                ):
-                    aggregate["credentials"] = candidate
         table = Table(
-            title=f"Literature Provider credentials · {providers['credentials_file']}",
+            title=f"Metadata APIs · secrets in {providers['credentials_file']}",
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
         )
-        table.add_column("Provider", style=self.palette.accent, no_wrap=True)
-        table.add_column("Purpose", overflow="fold")
-        table.add_column("Enabled", no_wrap=True)
+        table.add_column("Provider / readiness", width=18, no_wrap=True)
         table.add_column("Credential fields", overflow="fold")
-        for provider in sorted(combined):
-            item = combined[provider]
-            credentials = _mapping(item["credentials"])
-            fields = _mapping_sequence(credentials["fields"])
-            if not fields and credentials["status"] == "not-required":
-                credential = "not required"
-            elif not fields:
-                credential = str(credentials["status"])
-            else:
-                credential = ", ".join(
-                    f"{field['name']}="
-                    f"{'configured' if field['configured'] else 'missing'}"
-                    f"{' (optional)' if not field['required'] else ''}"
-                    for field in fields
-                )
+        table.add_column("Next action", overflow="fold")
+        metadata = _mapping_sequence(providers["metadata"])
+        visible = tuple(item for item in metadata if _provider_is_relevant(item))
+        if not visible:
+            table.add_row("None enabled", "—", "Open sciretriever config to select a Provider.")
+        for item in visible:
             table.add_row(
-                provider,
-                " / ".join(cast(list[str], item["purposes"])),
-                "yes" if item["enabled"] else "no",
-                credential,
+                _provider_identity_state(item, self.palette),
+                _credential_summary(_mapping(item["credentials"])),
+                _provider_next_action(item),
+            )
+        hidden = len(metadata) - len(visible)
+        if hidden:
+            table.caption = f"{hidden} additional Metadata APIs are disabled and omitted."
+            table.caption_style = self.palette.muted
+        return table
+
+    def _acquisition_apis(self, payload: Mapping[str, object]) -> Table:
+        providers = _mapping(payload["providers"])
+        table = Table(
+            title=f"Authorized primary-PDF APIs · secrets in {providers['credentials_file']}",
+            box=box.ROUNDED,
+            border_style=self.palette.border,
+            expand=True,
+        )
+        table.add_column("Provider / readiness", width=18, no_wrap=True)
+        table.add_column("Credential fields", overflow="fold")
+        table.add_column("Next action", overflow="fold")
+        for item in _mapping_sequence(providers["acquisition"]):
+            authorized = _mapping(item["authorized_api"])
+            if (
+                authorized.get("available") is not True
+                and authorized.get("unsupported") is not True
+            ):
+                continue
+            unsupported = authorized.get("unsupported") is True
+            table.add_row(
+                _provider_identity_state(item, self.palette, unsupported=unsupported),
+                _credential_summary(_mapping(item["credentials"])),
+                str(authorized.get("detail"))
+                if unsupported and authorized.get("detail")
+                else _provider_next_action(item),
             )
         return table
 
@@ -478,7 +481,116 @@ class ConfigStatusPresenter:
         table.add_row("2 · Authorized API", detail)
         table.add_row(
             "3 · Controlled browser",
-            "available" if browser["available"] is True else "not implemented",
+            (
+                "available"
+                if browser.get("automatic_acquisition_available") is True
+                else f"unavailable · {browser.get('production_route_count', 0)} production routes"
+            ),
+        )
+        return table
+
+    def _controlled_browser(self, payload: Mapping[str, object]) -> Table:
+        providers = _mapping(payload["providers"])
+        browser = _mapping(providers["controlled_browser"])
+        runtime = _mapping(browser["runtime"])
+        profile = _mapping(browser["profile"])
+        session = _mapping(browser["session"])
+        probe = _mapping(browser["probe"])
+        routes = _mapping_sequence(browser["routes"])
+        actions = _mapping_sequence(browser["action_required"])
+        table = Table(
+            title="Controlled Browser · local status only",
+            box=box.ROUNDED,
+            border_style=self.palette.border,
+            expand=True,
+        )
+        table.add_column("Layer / state", width=20, no_wrap=True)
+        table.add_column("Evidence / meaning", ratio=2, overflow="fold")
+        runtime_ready = (
+            runtime.get("framework_available") is True
+            and runtime.get("python_dependency_available") is True
+        )
+        table.add_row(
+            _layer_state(
+                "Runtime",
+                "available" if runtime_ready else "unavailable",
+                self.palette,
+            ),
+            "framework={} · Playwright Python={} · launch not assessed".format(
+                "present" if runtime.get("framework_available") is True else "missing",
+                "present" if runtime.get("python_dependency_available") is True else "missing",
+            ),
+        )
+        route_names = ", ".join(
+            f"{route.get('display_name')} [{route.get('rate_limit_group')}]" for route in routes
+        )
+        table.add_row(
+            _layer_state(
+                "Production routes",
+                "available" if routes else "unavailable",
+                self.palette,
+            ),
+            route_names or "none; fixture-only and unsupported profiles are not executable",
+        )
+        table.add_row(
+            _layer_state(
+                "Browser switch",
+                "enabled" if browser.get("enabled") is True else "disabled",
+                self.palette,
+            ),
+            f"local cross-group concurrency cap {browser.get('local_max_concurrency')}",
+        )
+        selected = profile.get("selected")
+        presence = str(profile.get("presence", "missing"))
+        table.add_row(
+            _layer_state("Profile", presence, self.palette),
+            f"selected identity: {_shown(selected)} · presence only; contents were not read",
+        )
+        table.add_row(
+            _layer_state("Session / login", "not assessed", self.palette),
+            "authenticated: unknown · status never opens the Browser",
+        )
+        table.add_row(
+            _layer_state("Article entitlement", "not proven", self.palette),
+            str(session.get("article_entitlement", "not-proven")),
+        )
+        supported = ", ".join(
+            str(value) for value in cast(Sequence[object], probe.get("supported_access_keys", ()))
+        )
+        table.add_row(
+            _layer_state(
+                "Explicit probe",
+                "available" if probe.get("available") is True else "unavailable",
+                self.palette,
+            ),
+            (supported or "no approved target") + " · never included in --all",
+        )
+        policy_lines = []
+        for route in routes:
+            policy = _mapping(route.get("policy"))
+            policy_lines.append(
+                f"{route.get('access_key')}: {policy.get('evidence')} · "
+                f"{policy.get('policy_revision')} · verified {policy.get('verification_date')} · "
+                f"group concurrency {policy.get('max_concurrency')} · "
+                f"minimum start interval {policy.get('minimum_start_interval')}s · "
+                f"{policy.get('notes_reference')}"
+            )
+        table.add_row(
+            _layer_state(
+                "Policy evidence",
+                "ready" if policy_lines else "unavailable",
+                self.palette,
+            ),
+            "\n".join(policy_lines) or "none because no production Browser route is admitted",
+        )
+        table.add_row(
+            _layer_state(
+                "Next action",
+                "ready" if not actions else "action required",
+                self.palette,
+            ),
+            "\n".join(f"{action.get('code')}: {action.get('action')}" for action in actions)
+            or "no local action",
         )
         return table
 
@@ -505,10 +617,24 @@ class ConfigStatusPresenter:
 
 def _state_text(state: str, palette: ThemePalette) -> Text:
     normalized = state.casefold()
-    successful = normalized in {"ready", "configured", "optional", "passed"}
+    successful = normalized in {
+        "available",
+        "configured",
+        "enabled",
+        "optional",
+        "passed",
+        "ready",
+    }
     style = palette.ready if successful else palette.warning
     symbol = "●" if successful else "○"
     return Text(f"{symbol} {state}", style=style)
+
+
+def _layer_state(label: str, state: str, palette: ThemePalette) -> Text:
+    result = Text(label, style=palette.accent)
+    result.append("\n")
+    result.append_text(_state_text(state, palette))
+    return result
 
 
 def _plain_value(value: object) -> str:
@@ -549,15 +675,81 @@ def _core_credential_state(value: Mapping[str, object]) -> str:
     return "configured · origin matched"
 
 
-def _credential_priority(value: str) -> int:
-    return {
-        "unsupported": 0,
-        "not-required": 1,
-        "optional-missing": 2,
-        "configured": 3,
-        "missing": 4,
-        "partial": 5,
-    }.get(value, 6)
+def _provider_state_text(
+    item: Mapping[str, object],
+    palette: ThemePalette,
+    *,
+    unsupported: bool = False,
+) -> Text:
+    readiness = (
+        "unsupported"
+        if unsupported
+        else ("ready" if item.get("local_ready") is True else "needs setup")
+    )
+    result = _state_text(readiness, palette)
+    enabled = "enabled" if item.get("enabled") is True else "disabled"
+    policy = "verified" if item.get("access_policy_ready") is True else "needs setup"
+    result.append(f"\n{enabled} · policy {policy}", style=palette.muted)
+    return result
+
+
+def _provider_identity_state(
+    item: Mapping[str, object],
+    palette: ThemePalette,
+    *,
+    unsupported: bool = False,
+) -> Text:
+    result = Text(str(item.get("provider", "provider")), style=palette.accent)
+    result.append("\n")
+    result.append_text(_provider_state_text(item, palette, unsupported=unsupported))
+    return result
+
+
+def _provider_is_relevant(item: Mapping[str, object]) -> bool:
+    if item.get("enabled") is True:
+        return True
+    credentials = _mapping(item.get("credentials"))
+    return any(
+        field.get("configured") is True for field in _mapping_sequence(credentials.get("fields"))
+    )
+
+
+def _credential_summary(credentials: Mapping[str, object]) -> str:
+    fields = _mapping_sequence(credentials.get("fields"))
+    status = str(credentials.get("status", "unknown"))
+    if not fields:
+        return "not required" if status == "not-required" else status
+    return ", ".join(
+        f"{field.get('name')}="
+        f"{'configured' if field.get('configured') is True else 'missing'}"
+        f"{' (optional)' if field.get('required') is not True else ''}"
+        for field in fields
+    )
+
+
+def _provider_next_action(item: Mapping[str, object]) -> str:
+    if item.get("production_available") is not True:
+        return "This capability is not supported."
+    if item.get("enabled") is not True:
+        return "Enable in config.toml if you intend to use it."
+    missing = tuple(
+        str(value) for value in cast(Sequence[object], item.get("missing_ordinary_fields", ()))
+    )
+    if missing:
+        return "Configure ordinary fields: " + ", ".join(missing) + "."
+    credentials = _mapping(item.get("credentials"))
+    if credentials.get("status") in {"missing", "partial"}:
+        required = [
+            str(field.get("name"))
+            for field in _mapping_sequence(credentials.get("fields"))
+            if field.get("required") is True and field.get("configured") is not True
+        ]
+        return "Configure credential fields: " + (", ".join(required) or "required fields") + "."
+    if item.get("access_policy_ready") is not True:
+        return "Complete the Provider access-policy settings."
+    if item.get("local_ready") is True:
+        return "No local action."
+    return f"Resolve local readiness: {item.get('failure_code') or 'not-ready'}."
 
 
 def _provider_probe_rows(payload: Mapping[str, object]) -> list[tuple[str, str, str, str]]:
@@ -585,6 +777,15 @@ def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
     )
 
 
+def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
+    return (
+        f"Browser · {payload.get('access_key', 'publisher')}",
+        str(payload.get("outcome", "failed")),
+        "one approved minimal target; at most one navigation; entitlement not proven",
+        str(payload.get("failure_code") or ""),
+    )
+
+
 def _probe_rows(payload: Mapping[str, object]) -> tuple[tuple[str, str, str, str], ...]:
     if "providers" in payload:
         rows = _provider_probe_rows(_mapping(payload["providers"]))
@@ -593,6 +794,8 @@ def _probe_rows(payload: Mapping[str, object]) -> tuple[tuple[str, str, str, str
         return tuple(rows)
     if "results" in payload:
         return tuple(_provider_probe_rows(payload))
+    if "access_key" in payload:
+        return (_browser_probe_row(payload),)
     return (_core_probe_row(payload),)
 
 

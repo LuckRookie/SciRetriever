@@ -36,6 +36,7 @@ from sciretriever.configuration import (
     BrowserProfileHandle,
     ConfigurationError,
     CredentialLookup,
+    browser_access_status,
     browser_profile_path,
     browser_profile_status,
     configurable_credential_providers,
@@ -79,6 +80,8 @@ from sciretriever.model.configuration import (
     AnalysisConfig,
     AnalysisProtocol,
     AnalysisProvider,
+    BrowserAccessStatus,
+    BrowserConfigurationProbeResult,
     BrowserProfilePresence,
     Configuration,
     ConfigurationCapabilityStatus,
@@ -519,6 +522,12 @@ def _build_parser() -> argparse.ArgumentParser:
     selection = test_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("provider", nargs="?")
     selection.add_argument("--all", action="store_true", dest="test_all")
+    selection.add_argument(
+        "--browser",
+        dest="browser_access_key",
+        metavar="ACCESS_KEY",
+        help="Probe one approved Publisher Browser target explicitly.",
+    )
     return parser
 
 
@@ -2248,6 +2257,7 @@ def _config_status_payload(
     configuration: Configuration,
     capabilities: tuple[ConfigurationCapabilityStatus, ...],
     runtime: ConfigurationRuntimeStatus,
+    browser: BrowserAccessStatus,
 ) -> dict[str, object]:
     parser = configuration.parsing
     analysis = configuration.analysis
@@ -2280,11 +2290,7 @@ def _config_status_payload(
                 for item in capabilities
                 if item.capability is ProviderCapability.ACQUISITION
             ],
-            "controlled_browser": {
-                "available": False,
-                "configured_site_rules": [],
-                "operator_profile_configured": False,
-            },
+            "controlled_browser": browser.model_dump(mode="json"),
         },
         "parsing": {
             "locally_ready": parser_ready,
@@ -2357,7 +2363,8 @@ def _run_config_status(arguments: argparse.Namespace) -> int:
     credentials = load_credentials(home=None)
     result = configuration_status(configuration, credentials=credentials)
     runtime = configuration_runtime_status(configuration, credentials=credentials)
-    payload = _config_status_payload(configuration, result.capabilities, runtime)
+    browser = browser_access_status(configuration)
+    payload = _config_status_payload(configuration, result.capabilities, runtime, browser)
     if arguments.json:
         _write_result(payload, as_json=True)
     else:
@@ -2368,7 +2375,17 @@ def _run_config_status(arguments: argparse.Namespace) -> int:
 def _run_config_test(arguments: argparse.Namespace) -> int:
     configuration = load_selected_configuration(None)
     session = build_production_configuration_probe_session(configuration)
-    if arguments.provider == "llm":
+    if arguments.browser_access_key is not None:
+        if not arguments.json and not _confirm(
+            "This may open one visible Browser and visit exactly one approved minimal "
+            "Publisher target under the shared provider scheduler. It checks current login "
+            "only and never proves arbitrary article entitlement. Continue? [y/N] "
+        ):
+            sys.stderr.write("Browser probe cancelled.\n")
+            return 0
+        result = session.run_browser(arguments.browser_access_key)
+        passed = result.outcome is ProbeOutcome.PASSED
+    elif arguments.provider == "llm":
         if not arguments.json and not _confirm(
             "The LLM probe sends one minimal external request and may consume a small amount "
             "of quota. Continue? [y/N] "
@@ -2405,7 +2422,14 @@ def _run_config_test(arguments: argparse.Namespace) -> int:
     if arguments.json:
         _write_result(result, as_json=True)
     else:
-        if isinstance(result, (ConfigurationProbeSummary, CoreConfigurationProbeResult)):
+        if isinstance(
+            result,
+            (
+                ConfigurationProbeSummary,
+                CoreConfigurationProbeResult,
+                BrowserConfigurationProbeResult,
+            ),
+        ):
             payload = result.model_dump(mode="json")
         else:
             payload = cast(dict[str, object], result)

@@ -13,6 +13,7 @@ probes, provider adapters, or an arbitrary credentials-file option.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import secrets
@@ -39,10 +40,19 @@ from sciretriever.model.configuration import (
     AnalysisConfig,
     AnalysisConfigurationStatus,
     AssetsConfig,
+    BrowserAccessStatus,
+    BrowserConfigurationProbeResult,
     BrowserPolicyOverrideConfig,
+    BrowserPolicyStatus,
+    BrowserProbeAvailabilityStatus,
     BrowserProfilePresence,
+    BrowserProfileSelectionStatus,
     BrowserProfileStatus,
+    BrowserRouteStatus,
+    BrowserRuntimeStatus,
+    BrowserSessionStatus,
     Configuration,
+    ConfigurationActionRequired,
     ConfigurationCapabilityStatus,
     ConfigurationDiagnostic,
     ConfigurationProbeResult,
@@ -66,6 +76,7 @@ from sciretriever.model.configuration import (
     ProviderName,
     SourcesConfig,
     UnpaywallAcquisitionConfig,
+    normalize_browser_access_key,
     normalize_browser_profile_identity,
 )
 from sciretriever.network.browser_scheduler import BrowserGroupPolicy
@@ -1334,6 +1345,205 @@ def configured_browser_group_policies(
     """Return production Browser group policies after operator tightening."""
 
     return tightened_browser_group_policies(access, _production_browser_group_policies())
+
+
+def _playwright_python_dependency_available() -> bool:
+    """Check only Python package discovery; never import or launch Playwright."""
+
+    try:
+        return importlib.util.find_spec("playwright") is not None
+    except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def _browser_action(
+    code: str,
+    reason: str,
+    action: str,
+) -> tuple[ConfigurationActionRequired, ...]:
+    return (ConfigurationActionRequired(code=code, reason=reason, action=action),)
+
+
+def _production_browser_route_statuses(access: AccessConfig) -> tuple[BrowserRouteStatus, ...]:
+    from sciretriever.acquisition.access_profiles import PolicyEvidence
+    from sciretriever.acquisition.profile_catalog import (
+        PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+    )
+
+    effective_policies = configured_browser_group_policies(access)
+    routes: list[BrowserRouteStatus] = []
+    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
+        if profile.browser_route_key is None:
+            continue
+        group = profile.browser_rate_limit_group
+        if group is None:
+            _fail("configuration value is invalid")
+        policy = effective_policies.get(group)
+        if policy is None or profile.policy_evidence is PolicyEvidence.UNVERIFIED:
+            _fail("configuration value is invalid")
+        routes.append(
+            BrowserRouteStatus(
+                access_key=profile.access_key,
+                display_name=profile.evidence.display_name,
+                route_key=profile.browser_route_key,
+                rate_limit_group=group,
+                policy=BrowserPolicyStatus(
+                    evidence=profile.policy_evidence.value,
+                    policy_revision=policy.policy_revision,
+                    verification_date=profile.evidence.verification_date,
+                    notes_reference=profile.evidence.notes_reference,
+                    max_concurrency=policy.max_concurrency,
+                    minimum_start_interval=policy.minimum_start_interval,
+                    maximum_starts_per_window=policy.maximum_starts_per_window,
+                    window_seconds=policy.window_seconds,
+                    cooldown_after_completion=policy.cooldown_after_completion,
+                    rate_limit_cooldown=policy.rate_limit_cooldown,
+                    failure_cooldown=policy.failure_cooldown,
+                    runtime_failure_threshold=policy.runtime_failure_threshold,
+                ),
+            )
+        )
+    return tuple(routes)
+
+
+def _normalized_browser_probe_keys(
+    values: frozenset[str],
+    route_keys: frozenset[str],
+) -> frozenset[str]:
+    try:
+        normalized = frozenset(normalize_browser_access_key(key) for key in values)
+    except (TypeError, ValueError):
+        _fail("configuration value is invalid")
+    if normalized - route_keys:
+        _fail("configuration value is invalid")
+    return normalized
+
+
+def _browser_required_action(
+    *,
+    routes_available: bool,
+    dependency_available: bool,
+    access: AccessConfig,
+    selected_profile: str | None,
+    presence: BrowserProfilePresence,
+) -> tuple[ConfigurationActionRequired, ...]:
+    if not routes_available:
+        return _browser_action(
+            "browser-production-route-unavailable",
+            "No Publisher Browser route has completed production verification.",
+            "Use Public and authorized API routes; Browser access remains unavailable.",
+        )
+    if not dependency_available:
+        return _browser_action(
+            "browser-runtime-unavailable",
+            "The Playwright Python dependency is not available in this installation.",
+            "Repair the SciRetriever installation before attempting Browser access.",
+        )
+    if not access.browser_enabled:
+        return _browser_action(
+            "browser-disabled",
+            "Controlled Browser access is disabled in ordinary configuration.",
+            "Enable Browser access explicitly in the interactive configuration center.",
+        )
+    if selected_profile is None:
+        return _browser_action(
+            "browser-profile-not-selected",
+            "No operator-managed Browser profile identity is selected.",
+            "Select or initialize a dedicated profile in the configuration center.",
+        )
+    if presence is BrowserProfilePresence.MISSING:
+        return _browser_action(
+            "browser-profile-missing",
+            "The selected Browser profile container is not present on this machine.",
+            "Initialize the selected profile in the configuration center.",
+        )
+    if presence is BrowserProfilePresence.ATTENTION:
+        return _browser_action(
+            "browser-profile-attention",
+            "The selected Browser profile failed its local safety check.",
+            "Inspect or remove the selected local session through the configuration center.",
+        )
+    return _browser_action(
+        "browser-session-not-assessed",
+        "Status does not open the Browser, so current login is not assessed.",
+        "Run one explicit Browser probe for an approved Publisher target if needed.",
+    )
+
+
+def browser_access_status(
+    configuration: Configuration,
+    *,
+    home: str | Path | None = None,
+    python_dependency_available: bool | None = None,
+    probe_supported_access_keys: frozenset[str] = frozenset(),
+) -> BrowserAccessStatus:
+    """Report local Browser readiness without Network, launch, or profile reads.
+
+    The selected profile tree is checked only for safe presence and metadata;
+    no file content, Cookie, storage state, or account characteristic is read.
+    A dependency hit proves only that the Python package is import-discoverable,
+    never that a Browser binary can launch.
+    """
+
+    if not isinstance(configuration, Configuration):
+        _fail("configuration value is invalid")
+    if python_dependency_available is not None and type(python_dependency_available) is not bool:
+        _fail("configuration value is invalid")
+    if not isinstance(probe_supported_access_keys, frozenset) or any(
+        type(key) is not str for key in probe_supported_access_keys
+    ):
+        _fail("configuration value is invalid")
+
+    dependency_available = (
+        _playwright_python_dependency_available()
+        if python_dependency_available is None
+        else python_dependency_available
+    )
+    routes = _production_browser_route_statuses(configuration.access)
+    route_keys = frozenset(route.access_key for route in routes)
+    normalized_probe_keys = _normalized_browser_probe_keys(
+        probe_supported_access_keys,
+        route_keys,
+    )
+
+    selected_profile = configuration.access.browser_profile
+    presence = browser_profile_status(selected_profile, home=home).presence
+    profile = BrowserProfileSelectionStatus(
+        selected=selected_profile,
+        presence=presence,
+    )
+    locally_usable = (
+        bool(routes)
+        and configuration.access.browser_enabled
+        and dependency_available
+        and selected_profile is not None
+        and presence is BrowserProfilePresence.CONFIGURED
+    )
+    required = _browser_required_action(
+        routes_available=bool(routes),
+        dependency_available=dependency_available,
+        access=configuration.access,
+        selected_profile=selected_profile,
+        presence=presence,
+    )
+    return BrowserAccessStatus(
+        enabled=configuration.access.browser_enabled,
+        local_max_concurrency=configuration.access.browser_max_concurrency,
+        runtime=BrowserRuntimeStatus(
+            framework_available=True,
+            python_dependency_available=dependency_available,
+        ),
+        profile=profile,
+        session=BrowserSessionStatus(),
+        automatic_acquisition_available=locally_usable,
+        production_route_count=len(routes),
+        routes=tuple(routes),
+        probe=BrowserProbeAvailabilityStatus(
+            available=bool(normalized_probe_keys),
+            supported_access_keys=tuple(sorted(normalized_probe_keys)),
+        ),
+        action_required=required,
+    )
 
 
 def _empty_configuration() -> Configuration:
@@ -2900,6 +3110,125 @@ def run_configuration_probes(
     return ConfigurationProbeSummary(results=tuple(results))
 
 
+@runtime_checkable
+class BrowserConfigurationProbePort(Protocol):
+    """Explicit single-target Browser probe seam.
+
+    Implementations own the approved minimal target and must execute the
+    article flow through the process-shared Browser group scheduler.
+    """
+
+    @property
+    def supported_access_keys(self) -> frozenset[str]: ...
+
+    def probe(self, access_key: str) -> BrowserConfigurationProbeResult: ...
+
+
+def _skipped_browser_probe(
+    access_key: str,
+    failure_code: str,
+) -> BrowserConfigurationProbeResult:
+    return BrowserConfigurationProbeResult(
+        access_key=access_key,
+        outcome=ProbeOutcome.SKIPPED,
+        local_ready=False,
+        failure_code=failure_code,
+    )
+
+
+def _failed_browser_probe(access_key: str) -> BrowserConfigurationProbeResult:
+    return BrowserConfigurationProbeResult(
+        access_key=access_key,
+        outcome=ProbeOutcome.FAILED,
+        local_ready=True,
+        browser_launched=False,
+        failure_code="browser-probe-failed",
+    )
+
+
+def _validated_browser_access_snapshot(snapshot: BrowserAccessStatus) -> BrowserAccessStatus:
+    try:
+        return BrowserAccessStatus.model_validate(snapshot.model_dump(mode="python"))
+    except Exception:
+        _fail("configuration value is invalid")
+
+
+def _browser_probe_precondition(
+    access_key: str,
+    status: BrowserAccessStatus,
+) -> str | None:
+    if access_key not in {route.access_key for route in status.routes}:
+        return "browser-production-route-unavailable"
+    if not status.runtime.framework_available or not status.runtime.python_dependency_available:
+        return "browser-runtime-unavailable"
+    if not status.enabled:
+        return "browser-disabled"
+    if status.profile.selected is None:
+        return "browser-profile-not-selected"
+    if status.profile.presence is BrowserProfilePresence.MISSING:
+        return "browser-profile-missing"
+    if status.profile.presence is BrowserProfilePresence.ATTENTION:
+        return "browser-profile-attention"
+    if access_key not in status.probe.supported_access_keys:
+        return "browser-probe-unavailable"
+    return None
+
+
+def _checked_browser_probe_result(
+    access_key: str,
+    result: object,
+) -> BrowserConfigurationProbeResult:
+    if not isinstance(result, BrowserConfigurationProbeResult):
+        return _failed_browser_probe(access_key)
+    try:
+        checked = BrowserConfigurationProbeResult.model_validate(result.model_dump(mode="python"))
+    except Exception:
+        return _failed_browser_probe(access_key)
+    if (
+        checked.access_key != access_key
+        or not checked.local_ready
+        or checked.outcome is ProbeOutcome.SKIPPED
+    ):
+        return _failed_browser_probe(access_key)
+    return checked
+
+
+def run_browser_configuration_probe(
+    access_key: str,
+    probe_port: BrowserConfigurationProbePort,
+    *,
+    status_snapshot: BrowserAccessStatus,
+) -> BrowserConfigurationProbeResult:
+    """Run one explicitly named approved target without persisting its result."""
+
+    try:
+        normalized_key = normalize_browser_access_key(access_key)
+    except (TypeError, ValueError):
+        _fail("configuration value is invalid")
+    if not isinstance(probe_port, BrowserConfigurationProbePort):
+        raise TypeError("probe_port must implement BrowserConfigurationProbePort")
+    if not isinstance(status_snapshot, BrowserAccessStatus):
+        _fail("configuration value is invalid")
+    status = _validated_browser_access_snapshot(status_snapshot)
+    supported = probe_port.supported_access_keys
+    if not isinstance(supported, frozenset) or any(type(key) is not str for key in supported):
+        raise TypeError("probe_port supported_access_keys is invalid")
+    try:
+        checked_supported = frozenset(normalize_browser_access_key(key) for key in supported)
+    except (TypeError, ValueError):
+        raise TypeError("probe_port supported_access_keys is invalid") from None
+    if checked_supported != frozenset(status.probe.supported_access_keys):
+        _fail("configuration value is invalid")
+    failure_code = _browser_probe_precondition(normalized_key, status)
+    if failure_code is not None:
+        return _skipped_browser_probe(normalized_key, failure_code)
+    try:
+        raw = probe_port.probe(normalized_key)
+    except Exception:
+        return _failed_browser_probe(normalized_key)
+    return _checked_browser_probe_result(normalized_key, raw)
+
+
 def _toml_quote(value: str) -> str:
     # JSON's basic-string escaping is a subset of TOML's basic-string syntax.
     return json.dumps(value, ensure_ascii=False)
@@ -3487,6 +3816,9 @@ def update_core_service_configuration(
 
 __all__ = (
     "AcquisitionSourcesConfig",
+    "BrowserAccessStatus",
+    "BrowserConfigurationProbePort",
+    "BrowserConfigurationProbeResult",
     "BrowserProfileCancellation",
     "BrowserProfileHandle",
     "BrowserProfilePresence",
@@ -3505,6 +3837,7 @@ __all__ = (
     "ProviderName",
     "UnpaywallAcquisitionConfig",
     "configurable_credential_providers",
+    "browser_access_status",
     "browser_profile_path",
     "browser_profile_status",
     "configure_browser_access_profile",
@@ -3530,6 +3863,7 @@ __all__ = (
     "remove_credentials",
     "remove_core_credentials",
     "resolve_browser_profile",
+    "run_browser_configuration_probe",
     "run_configuration_probes",
     "RuntimeSecretLookup",
     "select_configuration_path",
