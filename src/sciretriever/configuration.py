@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
 import sys
 import tempfile
@@ -39,6 +38,7 @@ from sciretriever.model.configuration import (
     AnalysisConfig,
     AnalysisConfigurationStatus,
     AssetsConfig,
+    BrowserPolicyOverrideConfig,
     BrowserProfilePresence,
     BrowserProfileStatus,
     Configuration,
@@ -65,7 +65,9 @@ from sciretriever.model.configuration import (
     ProviderName,
     SourcesConfig,
     UnpaywallAcquisitionConfig,
+    normalize_browser_profile_identity,
 )
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 from sciretriever.network.policy import PolicyError, normalize_url_with_configured_port
 
 _MAX_CONFIGURATION_BYTES: Final[int] = 1_048_576
@@ -76,26 +78,6 @@ _CREDENTIALS_FILE_NAME: Final[str] = "credentials.toml"
 _BROWSER_PROFILE_DIRECTORY_NAME: Final[str] = "browser-profiles"
 _DIRECTORY_MODE: Final[int] = 0o700
 _FILE_MODE: Final[int] = 0o600
-_BROWSER_PROFILE_IDENTITY: Final[re.Pattern[str]] = re.compile(
-    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-    re.ASCII,
-)
-_UUID_PROFILE_IDENTITY: Final[re.Pattern[str]] = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-    re.ASCII,
-)
-_SENSITIVE_IDENTITY_MARKERS: Final[frozenset[str]] = frozenset(
-    {
-        "authorization",
-        "cookie",
-        "credential",
-        "password",
-        "private",
-        "secret",
-        "signature",
-        "token",
-    }
-)
 _BROWSER_PROFILE_HANDLE_TOKEN: Final[object] = object()
 
 
@@ -317,6 +299,8 @@ _SAFE_MESSAGES: frozenset[str] = frozenset(
         "browser profile changed during validation",
         "browser profile operation was cancelled",
         "browser profile cleanup failed",
+        "browser policy group is unknown",
+        "browser policy override would relax the baseline",
         "provider is unsupported",
         "capability is unsupported",
     }
@@ -568,17 +552,10 @@ def credential_path(*, home: str | Path | None = None) -> Path:
 
 
 def _browser_profile_identity(value: object) -> str:
-    if type(value) is not str:
+    try:
+        return normalize_browser_profile_identity(value)
+    except (TypeError, ValueError):
         _fail("browser profile identity is invalid")
-    candidate = value.strip().casefold()
-    if (
-        len(candidate) > 96
-        or _BROWSER_PROFILE_IDENTITY.fullmatch(candidate) is None
-        or _UUID_PROFILE_IDENTITY.fullmatch(candidate) is not None
-        or any(marker in candidate.split("-") for marker in _SENSITIVE_IDENTITY_MARKERS)
-    ):
-        _fail("browser profile identity is invalid")
-    return candidate
 
 
 def _browser_profile_home(home: str | Path | None) -> Path:
@@ -1034,6 +1011,140 @@ def browser_profile_status(
     return BrowserProfileStatus(presence=BrowserProfilePresence.CONFIGURED)
 
 
+def _operator_browser_policy(
+    baseline: BrowserGroupPolicy,
+    override: BrowserPolicyOverrideConfig,
+) -> BrowserGroupPolicy:
+    if override.max_concurrency is not None and override.max_concurrency > baseline.max_concurrency:
+        _fail("browser policy override would relax the baseline")
+    if (
+        override.minimum_start_interval is not None
+        and override.minimum_start_interval < baseline.minimum_start_interval
+    ):
+        _fail("browser policy override would relax the baseline")
+    if (
+        override.cooldown_after_completion is not None
+        and override.cooldown_after_completion < baseline.cooldown_after_completion
+    ):
+        _fail("browser policy override would relax the baseline")
+    if (
+        override.rate_limit_cooldown is not None
+        and override.rate_limit_cooldown < baseline.rate_limit_cooldown
+    ):
+        _fail("browser policy override would relax the baseline")
+    if (
+        override.failure_cooldown is not None
+        and override.failure_cooldown < baseline.failure_cooldown
+    ):
+        _fail("browser policy override would relax the baseline")
+    if (
+        override.runtime_failure_threshold is not None
+        and override.runtime_failure_threshold > baseline.runtime_failure_threshold
+    ):
+        _fail("browser policy override would relax the baseline")
+
+    window_limit = baseline.maximum_starts_per_window
+    window_seconds = baseline.window_seconds
+    if override.maximum_starts_per_window is not None:
+        assert override.window_seconds is not None
+        if window_limit is not None and (
+            override.maximum_starts_per_window > window_limit
+            or window_seconds is None
+            or override.window_seconds < window_seconds
+        ):
+            _fail("browser policy override would relax the baseline")
+        window_limit = override.maximum_starts_per_window
+        window_seconds = override.window_seconds
+
+    try:
+        return BrowserGroupPolicy(
+            rate_limit_group=baseline.rate_limit_group,
+            policy_revision=baseline.policy_revision,
+            minimum_start_interval=(
+                baseline.minimum_start_interval
+                if override.minimum_start_interval is None
+                else override.minimum_start_interval
+            ),
+            rate_limit_cooldown=(
+                baseline.rate_limit_cooldown
+                if override.rate_limit_cooldown is None
+                else override.rate_limit_cooldown
+            ),
+            runtime_failure_threshold=(
+                baseline.runtime_failure_threshold
+                if override.runtime_failure_threshold is None
+                else override.runtime_failure_threshold
+            ),
+            max_concurrency=(
+                baseline.max_concurrency
+                if override.max_concurrency is None
+                else override.max_concurrency
+            ),
+            maximum_starts_per_window=window_limit,
+            window_seconds=window_seconds,
+            cooldown_after_completion=(
+                baseline.cooldown_after_completion
+                if override.cooldown_after_completion is None
+                else override.cooldown_after_completion
+            ),
+            failure_cooldown=(
+                baseline.failure_cooldown
+                if override.failure_cooldown is None
+                else override.failure_cooldown
+            ),
+        )
+    except (TypeError, ValueError):
+        _fail("browser policy override would relax the baseline")
+
+
+def tightened_browser_group_policies(
+    access: AccessConfig,
+    baseline_policies: Mapping[str, BrowserGroupPolicy],
+) -> Mapping[str, BrowserGroupPolicy]:
+    """Apply operator Browser limits without permitting a baseline relaxation."""
+
+    if not isinstance(access, AccessConfig) or not isinstance(baseline_policies, Mapping):
+        _fail("configuration value is invalid")
+    checked: dict[str, BrowserGroupPolicy] = {}
+    for group, policy in baseline_policies.items():
+        if type(group) is not str or not isinstance(policy, BrowserGroupPolicy):
+            _fail("configuration value is invalid")
+        if group != policy.rate_limit_group or group in checked:
+            _fail("configuration value is invalid")
+        checked[group] = policy
+    for override in access.browser_policy_overrides:
+        baseline = checked.get(override.rate_limit_group)
+        if baseline is None:
+            _fail("browser policy group is unknown")
+        checked[override.rate_limit_group] = _operator_browser_policy(baseline, override)
+    return MappingProxyType(checked)
+
+
+def _production_browser_group_policies() -> Mapping[str, BrowserGroupPolicy]:
+    from sciretriever.acquisition.profile_catalog import (
+        PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+    )
+
+    policies: dict[str, BrowserGroupPolicy] = {}
+    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
+        policy = profile.browser_policy
+        if policy is None:
+            continue
+        existing = policies.get(policy.rate_limit_group)
+        if existing is not None and existing != policy:
+            _fail("configuration value is invalid")
+        policies[policy.rate_limit_group] = policy
+    return MappingProxyType(policies)
+
+
+def configured_browser_group_policies(
+    access: AccessConfig,
+) -> Mapping[str, BrowserGroupPolicy]:
+    """Return production Browser group policies after operator tightening."""
+
+    return tightened_browser_group_policies(access, _production_browser_group_policies())
+
+
 def _empty_configuration() -> Configuration:
     return Configuration(
         paths=PathsConfig(),
@@ -1087,6 +1198,8 @@ def _parse_configuration_payload(raw: bytes) -> Configuration:
         # not rendered, but use a stable boundary error nevertheless.
         del error
         _fail("configuration value is invalid")
+    if value.access.browser_policy_overrides:
+        configured_browser_group_policies(value.access)
     return value
 
 
@@ -1170,7 +1283,8 @@ def configuration_diff(
     if not isinstance(before, Configuration) or not isinstance(after, Configuration):
         _fail("configuration value is invalid")
     if not isinstance(sections, tuple) or any(
-        type(section) is not str or section not in {"analysis", "parsing"} for section in sections
+        type(section) is not str or section not in {"access", "analysis", "parsing"}
+        for section in sections
     ):
         _fail("configuration value is invalid")
     before_payload = before.model_dump(mode="json")
@@ -1426,21 +1540,25 @@ def update_configuration_sections(
     *,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
+    access: AccessConfig | None = None,
     failpoint: Callable[[str], None] | None = None,
 ) -> Configuration:
     """Round-trip and atomically publish selected ordinary config sections."""
 
     selected = _safe_path(path)
-    if analysis is None and parsing is None:
+    if analysis is None and parsing is None and access is None:
         _fail("configuration value is invalid")
     if analysis is not None and not isinstance(analysis, AnalysisConfig):
         _fail("configuration value is invalid")
     if parsing is not None and not isinstance(parsing, ParsingConfig):
         _fail("configuration value is invalid")
+    if access is not None and not isinstance(access, AccessConfig):
+        _fail("configuration value is invalid")
     payload, expected, configuration = _configuration_update_payload(
         selected,
         analysis=analysis,
         parsing=parsing,
+        access=access,
     )
     _publish_configuration(selected, payload, expected, failpoint)
     return configuration
@@ -1451,6 +1569,7 @@ def _configuration_update_payload(
     *,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
+    access: AccessConfig | None = None,
 ) -> tuple[bytes, os.stat_result | None, Configuration]:
     raw, expected = _read_editable_configuration(path)
     document = _configuration_document(raw)
@@ -1458,6 +1577,8 @@ def _configuration_update_payload(
         _replace_document_section(document, "analysis", analysis)
     if parsing is not None:
         _replace_document_section(document, "parsing", parsing)
+    if access is not None:
+        _replace_document_section(document, "access", access)
     try:
         payload = tomlkit.dumps(document).encode("utf-8")
     except (TOMLKitError, UnicodeEncodeError, ValueError, TypeError):
@@ -3133,6 +3254,7 @@ __all__ = (
     "configurable_credential_providers",
     "browser_profile_path",
     "browser_profile_status",
+    "configured_browser_group_policies",
     "configuration_diff",
     "configuration_service_origin",
     "core_credential_section_exists",
@@ -3159,6 +3281,7 @@ __all__ = (
     "select_configuration_edit_path",
     "set_credentials",
     "set_core_credentials",
+    "tightened_browser_group_policies",
     "update_configuration_sections",
     "update_core_service_configuration",
 )

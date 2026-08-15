@@ -9,13 +9,21 @@ compute provider readiness, or retain a secret value.
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 import unicodedata
 from enum import Enum
 from typing import Annotated, Literal
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 def _nonblank(value: object) -> str:
@@ -143,6 +151,68 @@ def _ordinary_parameter(value: object) -> str:
         ord(character) < 32 or ord(character) == 127 for character in candidate
     ):
         raise ValueError("ordinary provider parameter is invalid")
+    return candidate
+
+
+_BROWSER_IDENTITY = re.compile(
+    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    re.ASCII,
+)
+_BROWSER_UUID_IDENTITY = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.ASCII,
+)
+_BROWSER_SENSITIVE_IDENTITY_MARKERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "credential",
+        "password",
+        "private",
+        "secret",
+        "signature",
+        "token",
+    }
+)
+
+
+def _browser_identity(value: object, *, field_name: str) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{field_name} must be a string")
+    candidate = value.strip().casefold()
+    if (
+        len(candidate) > 96
+        or _BROWSER_IDENTITY.fullmatch(candidate) is None
+        or _BROWSER_UUID_IDENTITY.fullmatch(candidate) is not None
+        or any(marker in candidate.split("-") for marker in _BROWSER_SENSITIVE_IDENTITY_MARKERS)
+    ):
+        raise ValueError(f"{field_name} must be a stable non-sensitive identity")
+    return candidate
+
+
+def normalize_browser_profile_identity(value: object) -> str:
+    """Normalize one opaque profile identity without accepting a path."""
+
+    return _browser_identity(value, field_name="Browser profile identity")
+
+
+def _browser_rate_limit_group(value: object) -> str:
+    return _browser_identity(value, field_name="Browser rate-limit group")
+
+
+def _finite_nonnegative_number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Browser policy value must be a number")
+    candidate = float(value)
+    if not math.isfinite(candidate) or candidate < 0.0:
+        raise ValueError("Browser policy value must be finite and nonnegative")
+    return candidate
+
+
+def _finite_positive_number(value: object) -> float:
+    candidate = _finite_nonnegative_number(value)
+    if candidate == 0.0:
+        raise ValueError("Browser policy value must be positive")
     return candidate
 
 
@@ -569,6 +639,24 @@ AcquisitionProviderTuple = Annotated[
     tuple[ProviderName, ...],
     BeforeValidator(_acquisition_providers),
 ]
+BrowserProfileIdentity = Annotated[
+    str,
+    BeforeValidator(normalize_browser_profile_identity),
+    Field(strict=True, min_length=1, max_length=96),
+]
+BrowserRateLimitGroupValue = Annotated[
+    str,
+    BeforeValidator(_browser_rate_limit_group),
+    Field(strict=True, min_length=1, max_length=96),
+]
+FiniteNonnegativeBrowserPolicyValue = Annotated[
+    float,
+    BeforeValidator(_finite_nonnegative_number),
+]
+FinitePositiveBrowserPolicyValue = Annotated[
+    float,
+    BeforeValidator(_finite_positive_number),
+]
 
 
 class PathsConfig(_FrozenModel):
@@ -859,8 +947,60 @@ class LibraryConfig(_FrozenModel):
     ] = 67_108_864
 
 
+class BrowserPolicyOverrideConfig(_FrozenModel):
+    """Operator values that may only tighten one declared Browser group policy."""
+
+    rate_limit_group: BrowserRateLimitGroupValue
+    max_concurrency: Annotated[int, Field(strict=True, ge=1, le=1)] | None = None
+    minimum_start_interval: FiniteNonnegativeBrowserPolicyValue | None = None
+    maximum_starts_per_window: Annotated[int, Field(strict=True, ge=1)] | None = None
+    window_seconds: FinitePositiveBrowserPolicyValue | None = None
+    cooldown_after_completion: FiniteNonnegativeBrowserPolicyValue | None = None
+    rate_limit_cooldown: FinitePositiveBrowserPolicyValue | None = None
+    failure_cooldown: FiniteNonnegativeBrowserPolicyValue | None = None
+    runtime_failure_threshold: Annotated[int, Field(strict=True, ge=1)] | None = None
+
+    @model_validator(mode="after")
+    def _validate_override_shape(self) -> "BrowserPolicyOverrideConfig":
+        if (self.maximum_starts_per_window is None) != (self.window_seconds is None):
+            raise ValueError("Browser policy window count and duration must be configured together")
+        if all(
+            value is None
+            for value in (
+                self.max_concurrency,
+                self.minimum_start_interval,
+                self.maximum_starts_per_window,
+                self.cooldown_after_completion,
+                self.rate_limit_cooldown,
+                self.failure_cooldown,
+                self.runtime_failure_threshold,
+            )
+        ):
+            raise ValueError("Browser policy override must contain a limit")
+        return self
+
+
 class AccessConfig(_FrozenModel):
-    pass
+    """Secret-free Browser enablement, local cap, profile selection, and tightening."""
+
+    browser_enabled: bool = False
+    browser_profile: BrowserProfileIdentity | None = None
+    browser_max_concurrency: Annotated[int, Field(strict=True, ge=1)] = 2
+    browser_policy_overrides: tuple[BrowserPolicyOverrideConfig, ...] = ()
+
+    @field_validator("browser_policy_overrides", mode="before")
+    @classmethod
+    def _normalize_policy_overrides(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _validate_browser_selection(self) -> "AccessConfig":
+        if self.browser_enabled and self.browser_profile is None:
+            raise ValueError("enabled Browser access requires a selected profile")
+        groups = tuple(item.rate_limit_group for item in self.browser_policy_overrides)
+        if len(groups) != len(set(groups)):
+            raise ValueError("Browser policy overrides must have unique groups")
+        return self
 
 
 class Configuration(_FrozenModel):
@@ -1167,6 +1307,8 @@ __all__ = (
     "AnalysisProvider",
     "AnalysisProtocol",
     "AssetsConfig",
+    "BrowserPolicyOverrideConfig",
+    "BrowserProfileIdentity",
     "BrowserProfilePresence",
     "BrowserProfileStatus",
     "Configuration",
@@ -1207,4 +1349,5 @@ __all__ = (
     "UnpaywallAcquisitionConfig",
     "WebOfScienceMetadataConfig",
     "WebOfScienceProduct",
+    "normalize_browser_profile_identity",
 )
