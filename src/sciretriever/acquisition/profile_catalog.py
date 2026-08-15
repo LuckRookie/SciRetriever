@@ -191,6 +191,59 @@ NATURE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+RSC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="rsc-publishing",
+    platform_key="rsc-publishing",
+    landing_origins=("https://pubs.rsc.org",),
+    asset_origins=("https://pubs.rsc.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1039",),
+    weak_publisher_names=("royal society of chemistry", "rsc publishing"),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="rsc-machine-access-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="RSC Publishing",
+        product_name="Royal Society of Chemistry publishing platform",
+        official_references=(
+            "https://pubs.rsc.org/",
+            (
+                "https://www.rsc.org/publishing/product-information/"
+                "product-catalogue/text-and-data-mining"
+            ),
+            (
+                "https://www.rsc.org/publishing/product-information/"
+                "access-and-usage/terms-and-conditions"
+            ),
+        ),
+        access_terms_references=(
+            (
+                "https://www.rsc.org/publishing/product-information/"
+                "access-and-usage/terms-and-conditions"
+            ),
+        ),
+        rate_limit_references=(
+            (
+                "https://www.rsc.org/publishing/product-information/"
+                "product-catalogue/text-and-data-mining"
+            ),
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="rsc-browser-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/rsc.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/rsc-publishing.json",
+    ),
+)
+
 SPRINGERLINK_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="springerlink",
     platform_key="springerlink",
@@ -280,6 +333,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
                 NATURE_ACCESS_PROFILE,
+                RSC_ACCESS_PROFILE,
                 SPRINGERLINK_ACCESS_PROFILE,
                 WILEY_ACCESS_PROFILE,
             )
@@ -299,6 +353,7 @@ __all__ = (
     "NATURE_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
+    "RSC_ACCESS_PROFILE",
     "SPRINGERLINK_ACCESS_PROFILE",
     "WILEY_ACCESS_PROFILE",
 )
