@@ -15,6 +15,7 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfileCatalog,
 )
 from sciretriever.acquisition.profile_catalog import (
+    ACS_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
@@ -261,6 +262,26 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
                 self.assertEqual(authorized_api["payload"], "jats-xml-not-pdf")
                 self.assertEqual(browser["state"], "unsupported")
                 self.assertTrue(_strings(browser["blockers"]))
+
+    def test_acs_does_not_promote_tdm_xml_or_upstream_browser_verdict(self) -> None:
+        profile = ACS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1021",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        self.assertEqual(authorized_api["payload"], "licensed-jats-xml-not-pdf")
+        self.assertEqual(browser["state"], "unsupported")
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
 
     def test_browser_fixture_executes_primary_supplement_and_wrong_article_cases(self) -> None:
         profile = _browser_profile()
