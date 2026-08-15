@@ -54,6 +54,7 @@ from sciretriever.acquisition.routing import (
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
     BrowserActionKind,
+    BrowserCaptureDisposition,
     BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
@@ -314,6 +315,8 @@ class _BrowserAction:
     rule: BrowserSiteRule
     start_url: str
     evidence_kind: str
+    landing_url: str | None
+    identifiers: tuple[Identifier, ...] = field(repr=False)
     identity: str = field(repr=False)
 
 
@@ -366,11 +369,11 @@ class _RuleDestinationGuard:
 class _RuleCaptureGuard:
     """Capture only reviewed main-PDF locator prefixes in the current rule."""
 
-    rule: BrowserSiteRule
+    action: _BrowserAction
 
     def __post_init__(self) -> None:
-        if not isinstance(self.rule, BrowserSiteRule):
-            raise TypeError("rule must be a BrowserSiteRule")
+        if not isinstance(self.action, _BrowserAction):
+            raise TypeError("action must be a _BrowserAction")
 
     def allows(
         self,
@@ -378,7 +381,17 @@ class _RuleCaptureGuard:
         kind: BrowserCaptureKind,
         media_type: str,
     ) -> bool:
-        return self.rule.allows_capture(url, kind, media_type)
+        action = self.action
+        return (
+            action.rule.classify_capture(
+                url,
+                kind,
+                media_type,
+                landing_url=action.landing_url,
+                identifiers=action.identifiers,
+            )
+            is BrowserCaptureDisposition.PRIMARY
+        )
 
 
 class _BrowserTemporaryPdfContent:
@@ -646,6 +659,7 @@ class ControlledBrowserPdfSource:
     def _actions(self, evidence: AcquisitionEvidence) -> tuple[_BrowserAction, ...]:
         actions: list[_BrowserAction] = []
         seen: set[tuple[str, str, int]] = set()
+        doi = _canonical_doi(evidence)
         for observed in evidence.asset_hints:
             hint = observed.hint
             if hint.kind is not AssetHintKind.LANDING_PAGE or not _eligible_landing_role(
@@ -668,11 +682,12 @@ class ControlledBrowserPdfSource:
                     rule=rule,
                     start_url=landing.url,
                     evidence_kind="asset-hint",
+                    landing_url=landing.url,
+                    identifiers=evidence.identifiers,
                     identity=landing.url,
                 )
             )
 
-        doi = _canonical_doi(evidence)
         resolved_origin = evidence.resolved_landing_origin
         if doi is not None and resolved_origin is not None:
             rule = self._rule_catalog.match_origin(resolved_origin)
@@ -689,6 +704,8 @@ class ControlledBrowserPdfSource:
                             rule=rule,
                             start_url=start_url,
                             evidence_kind="doi-resolved-origin",
+                            landing_url=None,
+                            identifiers=evidence.identifiers,
                             identity=f"{doi.value}\x00{resolved_origin}",
                         )
                     )
@@ -724,7 +741,21 @@ class ControlledBrowserPdfSource:
         result: BrowserResult,
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
-        for capture in self._captures_from_result(result):
+        priority = {kind: index for index, kind in enumerate(action.rule.capture_priority)}
+        captures = sorted(
+            self._captures_from_result(result),
+            key=lambda capture: priority[capture.kind],
+        )
+        for capture in captures:
+            disposition = self._capture_disposition(action, capture)
+            if disposition in {
+                BrowserCaptureDisposition.SUPPLEMENT,
+                BrowserCaptureDisposition.EXCLUDED,
+                BrowserCaptureDisposition.WRONG_ARTICLE,
+            }:
+                continue
+            if disposition is not BrowserCaptureDisposition.PRIMARY:
+                raise AcquisitionSourceFailure(_browser_failure("policy"))
             capture_key = _capture_candidate_key(action, capture)
             if not self._claim_candidate(candidate_keys, capture_key):
                 continue
@@ -738,6 +769,20 @@ class ControlledBrowserPdfSource:
             except BaseException:
                 temporary_pdf.content.discard()
                 raise
+
+    @staticmethod
+    def _capture_disposition(
+        action: _BrowserAction,
+        capture: BrowserCapture,
+    ) -> BrowserCaptureDisposition:
+        stream = capture.stream
+        return action.rule.classify_capture(
+            stream.final_locator,
+            capture.kind,
+            stream.media_type,
+            landing_url=action.landing_url,
+            identifiers=action.identifiers,
+        )
 
     @staticmethod
     def _claim_candidate(candidate_keys: CandidateKeyTracker, key: str) -> bool:
@@ -772,11 +817,7 @@ class ControlledBrowserPdfSource:
             final_url = _normalized_url(result.final_locator)
         except AcquisitionFailure as error:
             raise AcquisitionSourceFailure(error.failure) from None
-        if not action.rule.allows_capture(
-            final_url.url,
-            capture.kind,
-            result.media_type,
-        ):
+        if self._capture_disposition(action, capture) is not BrowserCaptureDisposition.PRIMARY:
             # Defence in depth: a compatible runner must already have
             # rejected this locator and media type through the pre-body
             # capture guard before access.
@@ -821,7 +862,7 @@ class ControlledBrowserPdfSource:
                 effective_policy,
                 flow=flow,
                 destination_guard=_RuleDestinationGuard(action.rule, action.start_url),
-                capture_guard=_RuleCaptureGuard(action.rule),
+                capture_guard=_RuleCaptureGuard(action),
                 budget=_CONSERVATIVE_BROWSER_BUDGET,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,

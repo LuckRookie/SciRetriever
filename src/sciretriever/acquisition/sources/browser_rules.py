@@ -22,8 +22,10 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final
+from urllib.parse import unquote
 
 from sciretriever.model.access import BrowserCaptureKind
+from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import Sha256
 from sciretriever.network.browser import BrowserPageObservation
 from sciretriever.network.policy import (
@@ -54,6 +56,13 @@ _FORBIDDEN_SELECTOR_MARKERS: Final[tuple[str, ...]] = (
 _MAX_MARKERS: Final[int] = 8
 _MAX_PAGE_MARKERS: Final[int] = 32
 _MAX_ACTIONS: Final[int] = 8
+_DEFAULT_CAPTURE_PRIORITY: Final[tuple[BrowserCaptureKind, ...]] = (
+    BrowserCaptureKind.VERIFIED_LOCATOR,
+    BrowserCaptureKind.DOWNLOAD,
+    BrowserCaptureKind.RESPONSE,
+    BrowserCaptureKind.VIEWER,
+    BrowserCaptureKind.POPUP,
+)
 
 
 def _stable_token(value: object, *, field_name: str) -> str:
@@ -135,6 +144,27 @@ def _status_codes(value: object) -> tuple[int, ...]:
         raise ValueError("response_statuses must contain HTTP status codes")
     if len(set(value)) != len(value):
         raise ValueError("response_statuses must not contain duplicates")
+    return value
+
+
+def _stable_tokens(value: object, *, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{field_name} must be a tuple")
+    if len(value) > _MAX_MARKERS:
+        raise ValueError(f"{field_name} contains too many markers")
+    result = tuple(_stable_token(item, field_name=field_name) for item in value)
+    if len(set(result)) != len(result):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return result
+
+
+def _capture_priority(value: object) -> tuple[BrowserCaptureKind, ...]:
+    if not isinstance(value, tuple) or any(
+        not isinstance(kind, BrowserCaptureKind) for kind in value
+    ):
+        raise TypeError("capture_priority must contain BrowserCaptureKind values")
+    if len(value) != len(BrowserCaptureKind) or set(value) != set(BrowserCaptureKind):
+        raise ValueError("capture_priority must rank every Browser capture kind exactly once")
     return value
 
 
@@ -229,6 +259,26 @@ class BrowserRuleAction:
 
 
 @unique
+class BrowserArticleIdentityKind(str, Enum):
+    """Closed evidence comparisons that can bind a capture to one article."""
+
+    EXACT_LANDING = "exact-landing"
+    LANDING_PATH_STEM = "landing-path-stem"
+    IDENTIFIER_IN_PATH = "identifier-in-path"
+
+
+@unique
+class BrowserCaptureDisposition(str, Enum):
+    """Provider-rule decision for one safe Browser capture locator."""
+
+    PRIMARY = "primary"
+    SUPPLEMENT = "supplement"
+    EXCLUDED = "excluded"
+    WRONG_ARTICLE = "wrong-article"
+    REJECTED = "rejected"
+
+
+@unique
 class BrowserPageMarkerKind(str, Enum):
     """Closed page facts a reviewed Provider rule may recognize."""
 
@@ -302,6 +352,29 @@ class BrowserPageMarker:
         )
 
 
+def _matches_url_prefix(candidate: NormalizedURL, prefixes: tuple[str, ...]) -> bool:
+    for prefix_value in prefixes:
+        prefix = _normalized_url(prefix_value)
+        if candidate.origin != prefix.origin:
+            continue
+        prefix_path = prefix.path.rstrip("/")
+        if candidate.path == prefix_path or candidate.path.startswith(f"{prefix_path}/"):
+            return True
+    return False
+
+
+def _decoded_path(value: NormalizedURL) -> str:
+    return unquote(value.path, errors="strict").casefold()
+
+
+def _filename(value: NormalizedURL) -> str:
+    return _decoded_path(value).rstrip("/").rsplit("/", 1)[-1]
+
+
+def _path_stem(value: str) -> str:
+    return value[:-4] if value.endswith(".pdf") else value
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserSiteRule:
     """One local, revisioned rule for one exact landing origin.
@@ -322,6 +395,20 @@ class BrowserSiteRule:
     max_actions: int = _MAX_ACTIONS
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
     capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
+    article_identity_kinds: tuple[BrowserArticleIdentityKind, ...] = field(
+        default=(BrowserArticleIdentityKind.LANDING_PATH_STEM,),
+        repr=False,
+    )
+    article_id_namespaces: tuple[str, ...] = field(default=(), repr=False)
+    supplement_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
+    supplement_selectors: tuple[str, ...] = field(default=(), repr=False)
+    supplement_filename_markers: tuple[str, ...] = field(default=(), repr=False)
+    excluded_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
+    excluded_filename_markers: tuple[str, ...] = field(default=(), repr=False)
+    capture_priority: tuple[BrowserCaptureKind, ...] = field(
+        default=_DEFAULT_CAPTURE_PRIORITY,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rule_id", _stable_token(self.rule_id, field_name="rule_id"))
@@ -343,6 +430,12 @@ class BrowserSiteRule:
                 field_name="web_scope_provider_name",
             ),
         )
+        self._validate_actions()
+        self._normalize_document_rules()
+        self._validate_document_rules()
+        self._validate_page_markers()
+
+    def _validate_actions(self) -> None:
         if not isinstance(self.actions, tuple) or any(
             not isinstance(action, BrowserRuleAction) for action in self.actions
         ):
@@ -359,27 +452,90 @@ class BrowserSiteRule:
             for action in self.actions
         ):
             raise ValueError("action locators must use allowed rule origins")
+
+    def _normalize_document_rules(self) -> None:
         object.__setattr__(self, "capture_url_prefixes", _url_prefixes(self.capture_url_prefixes))
+        object.__setattr__(
+            self,
+            "supplement_url_prefixes",
+            _url_prefixes(self.supplement_url_prefixes),
+        )
+        object.__setattr__(
+            self,
+            "excluded_url_prefixes",
+            _url_prefixes(self.excluded_url_prefixes),
+        )
+        if not isinstance(self.article_identity_kinds, tuple) or any(
+            not isinstance(kind, BrowserArticleIdentityKind) for kind in self.article_identity_kinds
+        ):
+            raise TypeError("article_identity_kinds must contain closed identity kinds")
+        if len(set(self.article_identity_kinds)) != len(self.article_identity_kinds):
+            raise ValueError("article_identity_kinds must not contain duplicates")
+        if self.capture_url_prefixes and not self.article_identity_kinds:
+            raise ValueError("capture rules require an article identity rule")
+        object.__setattr__(
+            self,
+            "article_id_namespaces",
+            _stable_tokens(self.article_id_namespaces, field_name="article_id_namespaces"),
+        )
+        requires_identifiers = (
+            BrowserArticleIdentityKind.IDENTIFIER_IN_PATH in self.article_identity_kinds
+        )
+        if requires_identifiers != bool(self.article_id_namespaces):
+            raise ValueError(
+                "identifier-in-path identity and article_id_namespaces must be declared together"
+            )
+        object.__setattr__(
+            self,
+            "supplement_selectors",
+            _markers(self.supplement_selectors, field_name="supplement_selectors"),
+        )
+        object.__setattr__(
+            self,
+            "supplement_filename_markers",
+            _stable_tokens(
+                self.supplement_filename_markers,
+                field_name="supplement_filename_markers",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "excluded_filename_markers",
+            _stable_tokens(
+                self.excluded_filename_markers,
+                field_name="excluded_filename_markers",
+            ),
+        )
+        object.__setattr__(self, "capture_priority", _capture_priority(self.capture_priority))
+
+    def _validate_document_rules(self) -> None:
         if any(
             _normalized_url(prefix).origin.text not in self.allowed_origins
-            for prefix in self.capture_url_prefixes
+            for prefix in (
+                *self.capture_url_prefixes,
+                *self.supplement_url_prefixes,
+                *self.excluded_url_prefixes,
+            )
         ):
-            raise ValueError("capture URL prefixes must use allowed rule origins")
+            raise ValueError("document URL prefixes must use allowed rule origins")
+        if set(self.supplement_url_prefixes) & set(self.excluded_url_prefixes):
+            raise ValueError("supplement and excluded URL prefixes must be unambiguous")
+        if set(self.supplement_filename_markers) & set(self.excluded_filename_markers):
+            raise ValueError("supplement and excluded filename markers must be unambiguous")
+        if any(
+            action.kind is BrowserActionKind.CLICK and action.selector in self.supplement_selectors
+            for action in self.actions
+        ):
+            raise ValueError("Browser actions must not click known supplement selectors")
         if any(
             action.locator is not None
-            and not self.allows_capture(
-                action.locator,
-                (
-                    BrowserCaptureKind.VIEWER
-                    if action.kind is BrowserActionKind.OPEN_VIEWER
-                    else BrowserCaptureKind.VERIFIED_LOCATOR
-                ),
-                "application/pdf",
+            and not _matches_url_prefix(
+                _normalized_url(action.locator),
+                self.capture_url_prefixes,
             )
             for action in self.actions
         ):
             raise ValueError("open action locators must match a reviewed capture prefix")
-        self._validate_page_markers()
 
     def _validate_page_markers(self) -> None:
         if not isinstance(self.page_markers, tuple) or any(
@@ -430,7 +586,33 @@ class BrowserSiteRule:
             str(self.max_actions),
             str(len(self.actions)),
             *(field for action in self.actions for field in action.fingerprint_fields),
+            "article-identity",
+            str(len(self.article_identity_kinds)),
+            *(kind.value for kind in self.article_identity_kinds),
+            str(len(self.article_id_namespaces)),
+            *self.article_id_namespaces,
+            "capture-prefixes",
+            str(len(self.capture_url_prefixes)),
             *self.capture_url_prefixes,
+            "supplement-prefixes",
+            str(len(self.supplement_url_prefixes)),
+            *self.supplement_url_prefixes,
+            "supplement-selectors",
+            str(len(self.supplement_selectors)),
+            *self.supplement_selectors,
+            "supplement-filenames",
+            str(len(self.supplement_filename_markers)),
+            *self.supplement_filename_markers,
+            "excluded-prefixes",
+            str(len(self.excluded_url_prefixes)),
+            *self.excluded_url_prefixes,
+            "excluded-filenames",
+            str(len(self.excluded_filename_markers)),
+            *self.excluded_filename_markers,
+            "capture-priority",
+            *(kind.value for kind in self.capture_priority),
+            "page-markers",
+            str(len(self.page_markers)),
             *(field for marker in self.page_markers for field in marker.fingerprint_fields),
         )
         return Sha256(hashlib.sha256("\x00".join(fields).encode("utf-8", "strict")).hexdigest())
@@ -453,30 +635,76 @@ class BrowserSiteRule:
             return False
         return candidate.origin.text in self.allowed_origins
 
-    def allows_capture(
+    def classify_capture(
         self,
         value: str,
         kind: BrowserCaptureKind,
         media_type: str,
-    ) -> bool:
-        """Match one already-admitted body to a reviewed PDF locator prefix."""
+        *,
+        landing_url: str | None,
+        identifiers: tuple[Identifier, ...],
+    ) -> BrowserCaptureDisposition:
+        """Classify one safe locator before body access and again before delivery."""
 
         if not isinstance(kind, BrowserCaptureKind) or not isinstance(media_type, str):
-            return False
+            return BrowserCaptureDisposition.REJECTED
+        if not isinstance(identifiers, tuple) or any(
+            not isinstance(identifier, Identifier) for identifier in identifiers
+        ):
+            raise TypeError("identifiers must contain neutral Identifier values")
         normalized_media_type = media_type.split(";", 1)[0].strip().casefold()
         if normalized_media_type not in {"application/pdf", "application/octet-stream"}:
-            return False
+            return BrowserCaptureDisposition.REJECTED
         try:
             candidate = _normalized_url(value)
         except (TypeError, ValueError):
-            return False
-        for prefix_value in self.capture_url_prefixes:
-            prefix = _normalized_url(prefix_value)
-            if candidate.origin != prefix.origin:
-                continue
-            prefix_path = prefix.path.rstrip("/")
-            if candidate.path == prefix_path or candidate.path.startswith(f"{prefix_path}/"):
-                return True
+            return BrowserCaptureDisposition.REJECTED
+        filename = _filename(candidate)
+        if _matches_url_prefix(candidate, self.supplement_url_prefixes) or any(
+            marker in filename for marker in self.supplement_filename_markers
+        ):
+            return BrowserCaptureDisposition.SUPPLEMENT
+        if _matches_url_prefix(candidate, self.excluded_url_prefixes) or any(
+            marker in filename for marker in self.excluded_filename_markers
+        ):
+            return BrowserCaptureDisposition.EXCLUDED
+        if not _matches_url_prefix(candidate, self.capture_url_prefixes):
+            return BrowserCaptureDisposition.REJECTED
+        if not self._matches_article_identity(candidate, landing_url, identifiers):
+            return BrowserCaptureDisposition.WRONG_ARTICLE
+        return BrowserCaptureDisposition.PRIMARY
+
+    def _matches_article_identity(
+        self,
+        candidate: NormalizedURL,
+        landing_url: str | None,
+        identifiers: tuple[Identifier, ...],
+    ) -> bool:
+        landing: NormalizedURL | None = None
+        if landing_url is not None:
+            try:
+                landing = _normalized_url(landing_url)
+            except (TypeError, ValueError):
+                return False
+        for kind in self.article_identity_kinds:
+            if kind is BrowserArticleIdentityKind.EXACT_LANDING and landing is not None:
+                if candidate.origin == landing.origin and candidate.path == landing.path:
+                    return True
+            elif kind is BrowserArticleIdentityKind.LANDING_PATH_STEM and landing is not None:
+                landing_stem = _path_stem(_filename(landing))
+                candidate_parts = tuple(
+                    _path_stem(part) for part in _decoded_path(candidate).split("/") if part
+                )
+                if landing_stem and landing_stem in candidate_parts:
+                    return True
+            elif kind is BrowserArticleIdentityKind.IDENTIFIER_IN_PATH:
+                candidate_path = _decoded_path(candidate)
+                if any(
+                    identifier.namespace in self.article_id_namespaces
+                    and identifier.value.casefold() in candidate_path
+                    for identifier in identifiers
+                ):
+                    return True
         return False
 
 
@@ -525,6 +753,8 @@ PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog(
 
 __all__ = (
     "BrowserActionKind",
+    "BrowserArticleIdentityKind",
+    "BrowserCaptureDisposition",
     "BrowserPageMarker",
     "BrowserPageMarkerKind",
     "BrowserRuleAction",
