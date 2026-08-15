@@ -17,6 +17,8 @@ from unittest import mock
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
     TransportRequest,
     TransportResponse,
 )
@@ -401,6 +403,15 @@ def _stream(value: object) -> BoundedByteStream:
     return value
 
 
+def _browser_download(value: object) -> BoundedByteStream:
+    if not isinstance(value, BrowserCaptureBatch) or len(value.captures) != 1:
+        raise AssertionError(f"expected one Browser capture, got {type(value).__name__}")
+    capture = value.captures[0]
+    if capture.kind is not BrowserCaptureKind.DOWNLOAD:
+        raise AssertionError(f"expected Browser download, got {capture.kind.value}")
+    return capture.stream
+
+
 def _declared_port_classes(tree: ast.AST) -> tuple[str, ...]:
     return tuple(
         node.name
@@ -771,7 +782,7 @@ class MisownedAnalysisArtifactPort(Protocol):
                 cancel_event=cancel_event,
             )
             if label == "success":
-                self.assertEqual(_stream(result).chunks, (b"fixture",))
+                self.assertEqual(_browser_download(result).chunks, (b"fixture",))
             else:
                 self.assertEqual(_failure(result).code, expected_code)
             self.assertNotIn("runtime-secret", repr(result))

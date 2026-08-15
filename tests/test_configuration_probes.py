@@ -158,18 +158,27 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
                 self.assertFalse(item.probe_available)
                 self.assertIsNone(item.failure_code)
 
-        for provider in (ProviderName.ELSEVIER, ProviderName.SPRINGER):
-            with self.subTest(provider=provider.value):
-                item = acquisition[provider]
-                # The shared public AssetHint path is executable, so the
-                # Provider can still be locally ready.  Its distinct
-                # authorized primary-PDF API remains unsupported.
-                self.assertTrue(item.production_available)
-                self.assertTrue(item.local_ready)
-                self.assertTrue(item.access_policy_ready)
-                self.assertIs(item.credential.status, CredentialStatus.UNSUPPORTED)
-                self.assertFalse(item.probe_available)
-                self.assertIsNone(item.failure_code)
+        elsevier = acquisition[ProviderName.ELSEVIER]
+        self.assertTrue(elsevier.production_available)
+        self.assertFalse(elsevier.local_ready)
+        self.assertTrue(elsevier.access_policy_ready)
+        self.assertIs(elsevier.credential.status, CredentialStatus.MISSING)
+        self.assertEqual(
+            tuple(field.name for field in elsevier.credential.fields),
+            ("api_key", "institution_token"),
+        )
+        self.assertEqual(elsevier.failure_code, "missing-required-credential")
+
+        springer = acquisition[ProviderName.SPRINGER]
+        # The shared public AssetHint path is executable, so Springer can
+        # still be locally ready.  Its distinct authorized primary-PDF API
+        # remains unsupported.
+        self.assertTrue(springer.production_available)
+        self.assertTrue(springer.local_ready)
+        self.assertTrue(springer.access_policy_ready)
+        self.assertIs(springer.credential.status, CredentialStatus.UNSUPPORTED)
+        self.assertFalse(springer.probe_available)
+        self.assertIsNone(springer.failure_code)
 
         core = acquisition[ProviderName.CORE]
         self.assertTrue(core.production_available)
