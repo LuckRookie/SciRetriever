@@ -85,6 +85,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
   [Springer Nature](springer-nature.md)、[Wiley](wiley.md)；
 - [CORE](core.md)、[OpenCitations](opencitations.md)、[Unpaywall](unpaywall.md)、
   [Configured Sci-Hub](configured-sci-hub.md)；
+- [ACS Publications](acs.md)；
 - [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)。
 
 ## 5. `direct` 不是供应商
