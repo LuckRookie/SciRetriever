@@ -26,6 +26,11 @@ from typing import BinaryIO, Final, Protocol, runtime_checkable
 from urllib.parse import quote
 from uuid import uuid4
 
+from sciretriever.acquisition.browser_state import (
+    BrowserFlowDisposition,
+    BrowserRunState,
+    BrowserRunStateMachine,
+)
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
@@ -196,19 +201,48 @@ def _browser_failure(code: str) -> StableFailure:
     )
 
 
-def _authentication_failure(kind: str) -> StableFailure:
-    if kind == "mfa":
-        return _stable_failure(
-            code="acquisition-browser-mfa-required",
-            reason="The controlled Browser page requires explicit MFA.",
-            action="Complete MFA outside automated acquisition and use an approved source.",
-            retryable=False,
-        )
+def _browser_state_failure(state: BrowserRunState) -> StableFailure:
+    details: dict[BrowserRunState, tuple[str, str, str, bool]] = {
+        BrowserRunState.LOGIN_REQUIRED: (
+            "acquisition-browser-login-required",
+            "The controlled Browser page requires an explicit login.",
+            "Complete login outside automated acquisition and use an approved source.",
+            False,
+        ),
+        BrowserRunState.MFA_REQUIRED: (
+            "acquisition-browser-mfa-required",
+            "The controlled Browser page requires explicit MFA.",
+            "Complete MFA outside automated acquisition and use an approved source.",
+            False,
+        ),
+        BrowserRunState.CHALLENGE_REQUIRED: (
+            "acquisition-browser-challenge-required",
+            "The controlled Browser encountered an unsupported access challenge.",
+            "Review the provider session before retrying controlled Browser acquisition.",
+            False,
+        ),
+        BrowserRunState.RATE_LIMITED: (
+            "acquisition-browser-rate-limited",
+            "The controlled Browser provider is currently rate limited.",
+            "Retry after the provider risk group becomes available.",
+            True,
+        ),
+        BrowserRunState.IP_BLOCKED: (
+            "acquisition-browser-ip-blocked",
+            "The controlled Browser provider reported an IP access block.",
+            "Review provider access outside automation before retrying.",
+            False,
+        ),
+    }
+    try:
+        code, reason, action, retryable = details[state]
+    except KeyError:
+        raise AcquisitionFailure(_contract_failure()) from None
     return _stable_failure(
-        code="acquisition-browser-login-required",
-        reason="The controlled Browser page requires an explicit login.",
-        action="Complete login outside automated acquisition and use an approved source.",
-        retryable=False,
+        code=code,
+        reason=reason,
+        action=action,
+        retryable=retryable,
     )
 
 
@@ -372,6 +406,36 @@ def _candidate_key(action: _BrowserAction) -> str:
 
 def _eligible_landing_role(role: AssetRole | None) -> bool:
     return role is None or role is AssetRole.PRIMARY_PDF
+
+
+def _state_for_browser_result(result: BrowserResult) -> BrowserRunState:
+    if isinstance(result, BoundedByteStream):
+        return BrowserRunState.PDF_CAPTURED
+    if not isinstance(result, AccessFailure):
+        return BrowserRunState.RUNTIME_FAILED
+    return {
+        "no-download": BrowserRunState.NOT_FOUND,
+        "not-found": BrowserRunState.NOT_FOUND,
+        "not-entitled": BrowserRunState.NOT_ENTITLED,
+        "rate-limit": BrowserRunState.RATE_LIMITED,
+        "rate-limited": BrowserRunState.RATE_LIMITED,
+        "ip-blocked": BrowserRunState.IP_BLOCKED,
+        "challenge": BrowserRunState.CHALLENGE_REQUIRED,
+    }.get(result.code, BrowserRunState.RUNTIME_FAILED)
+
+
+def _state_ends_without_pdf(state_machine: BrowserRunStateMachine) -> bool:
+    decision = state_machine.decision
+    if decision is None or decision.continues_current_flow:
+        raise AcquisitionFailure(_contract_failure())
+    if decision.flow_disposition is BrowserFlowDisposition.NORMAL_MISS:
+        return True
+    if decision.flow_disposition in {
+        BrowserFlowDisposition.DEFERRED,
+        BrowserFlowDisposition.ACTION_REQUIRED,
+    }:
+        raise AcquisitionSourceFailure(_browser_state_failure(decision.state))
+    return False
 
 
 class ControlledBrowserPdfSource:
@@ -541,9 +605,9 @@ class ControlledBrowserPdfSource:
                 key = _candidate_key(action)
                 if not self._claim_candidate(candidate_keys, key):
                     continue
-                result, authentication = self._run_action(action)
-                if authentication is not None:
-                    raise AcquisitionSourceFailure(_authentication_failure(authentication))
+                result, state_machine = self._run_action(action)
+                if _state_ends_without_pdf(state_machine):
+                    continue
                 temporary_pdf = self._temporary_from_result(action, key, result)
                 if temporary_pdf is None:
                     continue
@@ -609,11 +673,12 @@ class ControlledBrowserPdfSource:
     def _run_action(
         self,
         action: _BrowserAction,
-    ) -> tuple[BrowserResult, str | None]:
-        marker: list[str] = []
+    ) -> tuple[BrowserResult, BrowserRunStateMachine]:
+        state_machine = BrowserRunStateMachine()
+        state_machine.transition(BrowserRunState.OPEN)
 
         def flow(session: BrowserFlowSession) -> None:
-            self._run_rule_flow(session, action.rule, marker)
+            self._run_rule_flow(session, action.rule, state_machine)
 
         try:
             scope, effective_policy = self._access_profile(action.rule)
@@ -634,20 +699,32 @@ class ControlledBrowserPdfSource:
         except AcquisitionFailure:
             raise
         except Exception:
+            state_machine.transition(BrowserRunState.RUNTIME_FAILED)
             raise AcquisitionSourceFailure(_browser_failure("runtime")) from None
-        return result, marker[0] if marker else None
+        result_state = _state_for_browser_result(result)
+        decision = state_machine.decision
+        if (
+            decision is None
+            or decision.continues_current_flow
+            or result_state is BrowserRunState.RUNTIME_FAILED
+        ):
+            state_machine.transition(result_state)
+        return result, state_machine
 
     @staticmethod
     def _run_rule_flow(
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
-        marker: list[str],
+        state_machine: BrowserRunStateMachine,
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
-        for kind, selectors in (("mfa", rule.mfa_markers), ("login", rule.login_markers)):
+        for state, selectors in (
+            (BrowserRunState.MFA_REQUIRED, rule.mfa_markers),
+            (BrowserRunState.LOGIN_REQUIRED, rule.login_markers),
+        ):
             if any(session.text(selector).strip() for selector in selectors):
-                marker.append(kind)
+                state_machine.transition(state)
                 return
         if rule.action is BrowserRuleAction.EXPLICIT_CLICK:
             selector = rule.click_selector

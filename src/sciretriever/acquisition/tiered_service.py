@@ -742,7 +742,17 @@ def _remember_safe_hints(
 def _source_failure_outcome(failure: StableFailure) -> RouteExecutionResult:
     if failure.code == "acquisition-authorized-entitlement":
         return RouteExecutionResult.normal_miss()
-    if any(marker in failure.code for marker in ("credential", "authentication", "login", "mfa")):
+    if any(
+        marker in failure.code
+        for marker in (
+            "credential",
+            "authentication",
+            "login",
+            "mfa",
+            "challenge",
+            "ip-blocked",
+        )
+    ):
         return RouteExecutionResult.action_required(failure)
     if failure.retryable and not any(
         marker in failure.code for marker in ("cleanup", "contract", "publication", "storage")
