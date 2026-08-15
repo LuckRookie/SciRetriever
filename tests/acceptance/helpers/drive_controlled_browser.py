@@ -28,6 +28,7 @@ from sciretriever.acquisition.sources.browser import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserActionKind,
     BrowserPageMarker,
     BrowserPageMarkerKind,
     BrowserRuleAction,
@@ -301,8 +302,13 @@ rule = BrowserSiteRule(
         "https://downloads.publisher.test",
     ),
     web_scope_provider_name="publisher.test",
-    action=BrowserRuleAction.EXPLICIT_CLICK,
-    click_selector="a[data-action='pdf']",
+    actions=(
+        BrowserRuleAction(
+            kind=BrowserActionKind.CLICK,
+            selector="a[data-action='pdf']",
+        ),
+    ),
+    max_actions=1,
     capture_url_prefixes=("https://downloads.publisher.test/article.pdf",),
     page_markers=(
         BrowserPageMarker(

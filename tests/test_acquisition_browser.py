@@ -30,6 +30,7 @@ from sciretriever.acquisition.sources.browser import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserActionKind,
     BrowserPageMarker,
     BrowserPageMarkerKind,
     BrowserRuleAction,
@@ -274,6 +275,9 @@ class _FakeSession:
         )
         self.text_calls: list[str] = []
         self.clicks: list[str] = []
+        self.viewer_opens: list[str] = []
+        self.verified_locator_opens: list[str] = []
+        self.capture_waits: list[BrowserCaptureKind] = []
         self.fill_calls: list[tuple[str, str]] = []
 
     def text(self, selector: str) -> str:
@@ -282,6 +286,15 @@ class _FakeSession:
 
     def click(self, selector: str) -> None:
         self.clicks.append(selector)
+
+    def open_viewer(self, locator: str) -> None:
+        self.viewer_opens.append(locator)
+
+    def open_verified_locator(self, locator: str) -> None:
+        self.verified_locator_opens.append(locator)
+
+    def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
+        self.capture_waits.append(kind)
 
     def observe(self) -> BrowserPageObservation:
         return self.observation
@@ -379,8 +392,8 @@ def _rule(
         "https://downloads.publisher.test",
     ),
     web_scope_provider_name: str = "publisher.test",
-    action: BrowserRuleAction = BrowserRuleAction.EXPLICIT_CLICK,
-    click_selector: str | None = "a[data-action='pdf']",
+    actions: tuple[BrowserRuleAction, ...] | None = None,
+    max_actions: int = 8,
     login_markers: tuple[str, ...] = ("#login-required",),
     mfa_markers: tuple[str, ...] = ("#mfa-required",),
     page_markers: tuple[BrowserPageMarker, ...] | None = None,
@@ -423,14 +436,24 @@ def _rule(
         if capture_url_prefixes is None
         else capture_url_prefixes
     )
+    selected_actions = (
+        (
+            BrowserRuleAction(
+                kind=BrowserActionKind.CLICK,
+                selector="a[data-action='pdf']",
+            ),
+        )
+        if actions is None
+        else actions
+    )
     return BrowserSiteRule(
         rule_id=rule_id,
         revision=revision,
         landing_origin=landing_origin,
         allowed_origins=allowed_origins,
         web_scope_provider_name=web_scope_provider_name,
-        action=action,
-        click_selector=click_selector,
+        actions=selected_actions,
+        max_actions=max_actions,
         page_markers=markers,
         capture_url_prefixes=prefixes,
     )
@@ -604,19 +627,11 @@ class BrowserRuleContractTests(unittest.TestCase):
         self.assertTrue(rule.allows_url("https://publisher.test:38443/article.pdf"))
         self.assertFalse(rule.allows_url("https://publisher.test/article.pdf"))
 
-    def test_rule_language_is_closed_to_observe_or_one_static_click(self) -> None:
-        observe = _rule(
-            action=BrowserRuleAction.OBSERVE_ONLY,
-            click_selector=None,
-        )
-        self.assertIs(observe.action, BrowserRuleAction.OBSERVE_ONLY)
+    def test_rule_language_is_a_bounded_static_action_sequence(self) -> None:
+        observe = _rule(actions=(), max_actions=0)
+        self.assertEqual(observe.actions, ())
+        self.assertEqual(observe.max_actions, 0)
 
-        with self.assertRaises(ValueError):
-            _rule(action=BrowserRuleAction.OBSERVE_ONLY, click_selector="#download")
-        with self.assertRaises(ValueError):
-            _rule(action=BrowserRuleAction.EXPLICIT_CLICK, click_selector=None)
-        with self.assertRaises(TypeError):
-            _rule(action=cast(BrowserRuleAction, "explicit-click"))
         for selector in (
             "javascript:download()",
             "xpath=//a",
@@ -626,7 +641,47 @@ class BrowserRuleContractTests(unittest.TestCase):
             "a{color:red}",
         ):
             with self.subTest(selector=selector), self.assertRaises(ValueError):
-                _rule(click_selector=selector)
+                BrowserRuleAction(kind=BrowserActionKind.CLICK, selector=selector)
+        with self.assertRaises(TypeError):
+            BrowserRuleAction(kind=cast(BrowserActionKind, "script"))
+        with self.assertRaises(ValueError):
+            BrowserRuleAction(kind=BrowserActionKind.CLICK)
+        with self.assertRaises(ValueError):
+            BrowserRuleAction(
+                kind=BrowserActionKind.CLICK,
+                selector="#download",
+                locator="https://publisher.test/article.pdf",
+            )
+        with self.assertRaises(ValueError):
+            BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_CAPTURE)
+        with self.assertRaises(ValueError):
+            BrowserRuleAction(
+                kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
+                locator="https://publisher.test/article.pdf?token=dynamic",
+            )
+
+        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#download")
+        with self.assertRaises(ValueError):
+            _rule(actions=(click,) * 9)
+        with self.assertRaises(ValueError):
+            _rule(actions=(click, click), max_actions=1)
+        with self.assertRaises(ValueError):
+            _rule(actions=(), max_actions=9)
+        with self.assertRaises(TypeError):
+            _rule(actions=cast(tuple[BrowserRuleAction, ...], (object(),)))
+
+        outside_locator = BrowserRuleAction(
+            kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
+            locator="https://outside.test/article.pdf",
+        )
+        with self.assertRaises(ValueError):
+            _rule(actions=(outside_locator,))
+        unreviewed_locator = BrowserRuleAction(
+            kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
+            locator="https://publisher.test/unreviewed.pdf",
+        )
+        with self.assertRaises(ValueError):
+            _rule(actions=(unreviewed_locator,))
         with self.assertRaises(ValueError):
             _rule(login_markers=("#same",), mfa_markers=("#same",))
 
@@ -711,6 +766,16 @@ class BrowserRuleContractTests(unittest.TestCase):
         revised = _rule(revision=2)
         self.assertEqual(first.fingerprint, same.fingerprint)
         self.assertNotEqual(first.fingerprint, revised.fingerprint)
+        wait = BrowserRuleAction(
+            kind=BrowserActionKind.WAIT_FOR_CAPTURE,
+            capture_kind=BrowserCaptureKind.DOWNLOAD,
+        )
+        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#download")
+        self.assertNotEqual(
+            _rule(actions=(click, wait)).fingerprint,
+            _rule(actions=(wait, click)).fingerprint,
+        )
+        self.assertNotIn("#download", repr(_rule(actions=(click, wait))))
         self.assertEqual(
             BrowserRuleCatalog((first,)).match_origin("https://publisher.test"),
             first,
@@ -738,10 +803,30 @@ class BrowserRuleContractTests(unittest.TestCase):
             for name, value in inspect.getmembers(BrowserFlowSession)
             if inspect.isfunction(value) and not name.startswith("_")
         }
-        self.assertEqual(session_methods, {"click", "observe", "text"})
+        self.assertEqual(
+            session_methods,
+            {
+                "click",
+                "observe",
+                "open_verified_locator",
+                "open_viewer",
+                "text",
+                "wait_for_capture",
+            },
+        )
         self.assertFalse(
             session_methods
-            & {"fill", "navigate", "open_popup", "page", "context", "profile", "cookie"}
+            & {
+                "fill",
+                "navigate",
+                "open_popup",
+                "page",
+                "context",
+                "profile",
+                "cookie",
+                "script",
+                "evaluate",
+            }
         )
 
 
@@ -1093,12 +1178,9 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(browser_request, BrowserRequest)
         self.assertEqual(browser_request.url, "https://publisher.test/article")
 
-    def test_observe_only_never_clicks_and_explicit_click_occurs_exactly_once(self) -> None:
+    def test_empty_and_ordered_actions_use_only_the_closed_session_capabilities(self) -> None:
         observe_runner = _FakeRunner([_failure("no-download")])
-        observe_rule = _rule(
-            action=BrowserRuleAction.OBSERVE_ONLY,
-            click_selector=None,
-        )
+        observe_rule = _rule(actions=(), max_actions=0)
         observe_source = _source(observe_runner, rule=observe_rule)
         request = _request(observations=(_observation(52, (_landing_hint(),)),))
         self.assertEqual(
@@ -1113,21 +1195,46 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         self.assertEqual(observe_runner.sessions[0].clicks, [])
 
-        click_runner = _FakeRunner([_download()])
-        click_source = _source(click_runner)
-        clicked = list(
-            click_source._deliveries(
+        actions = (
+            BrowserRuleAction(
+                kind=BrowserActionKind.CLICK,
+                selector="a[data-action='pdf']",
+            ),
+            BrowserRuleAction(
+                kind=BrowserActionKind.OPEN_VIEWER,
+                locator="https://downloads.publisher.test/file/viewer",
+            ),
+            BrowserRuleAction(
+                kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
+                locator="https://downloads.publisher.test/file/object",
+            ),
+            BrowserRuleAction(
+                kind=BrowserActionKind.WAIT_FOR_CAPTURE,
+                capture_kind=BrowserCaptureKind.VERIFIED_LOCATOR,
+            ),
+        )
+        action_runner = _FakeRunner([_download()])
+        action_source = _source(action_runner, rule=_rule(actions=actions, max_actions=4))
+        deliveries = list(
+            action_source._deliveries(
                 request,
                 _evidence(request),
                 CandidateKeyTracker(),
             )
         )
+        session = action_runner.sessions[0]
+        self.assertEqual(session.clicks, ["a[data-action='pdf']"])
         self.assertEqual(
-            click_runner.sessions[0].clicks,
-            ["a[data-action='pdf']"],
+            session.viewer_opens,
+            ["https://downloads.publisher.test/file/viewer"],
         )
-        self.assertEqual(click_runner.sessions[0].fill_calls, [])
-        clicked[0].content.discard()
+        self.assertEqual(
+            session.verified_locator_opens,
+            ["https://downloads.publisher.test/file/object"],
+        )
+        self.assertEqual(session.capture_waits, [BrowserCaptureKind.VERIFIED_LOCATOR])
+        self.assertEqual(session.fill_calls, [])
+        deliveries[0].content.discard()
 
     def test_doi_flow_starts_at_canonical_resolver_but_uses_landing_web_scope(self) -> None:
         runner = _FakeRunner([_failure("no-download")])

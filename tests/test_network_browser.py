@@ -770,9 +770,15 @@ class NetworkBrowserTests(unittest.TestCase):
         )
 
         def flow(session: object) -> None:
+            session.wait_for_capture(BrowserCaptureKind.RESPONSE)  # type: ignore[attr-defined]
             session.open_popup(popup_url)  # type: ignore[attr-defined]
+            session.wait_for_capture(BrowserCaptureKind.POPUP)  # type: ignore[attr-defined]
             session.open_viewer(viewer_url)  # type: ignore[attr-defined]
+            session.wait_for_capture(BrowserCaptureKind.VIEWER)  # type: ignore[attr-defined]
             session.open_verified_locator(verified_url)  # type: ignore[attr-defined]
+            session.wait_for_capture(  # type: ignore[attr-defined]
+                BrowserCaptureKind.VERIFIED_LOCATOR
+            )
 
         batch = _captures(
             client.run(
@@ -892,6 +898,34 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.assertNotIn("sentinel", repr(failure))
                 assert factory.process.context is not None
                 self.assertEqual(factory.process.context.responses[0].body_reads, 0)
+
+    def test_capture_wait_rejects_unknown_kinds_without_exposing_runtime_state(self) -> None:
+        factory = _FakeFactory(
+            configured_download=_FakeDownload(
+                "https://download.test/article.pdf",
+                b"%PDF-fixture",
+            )
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        def flow(session: object) -> None:
+            session.wait_for_capture("dynamic-kind")  # type: ignore[attr-defined]
+
+        failure = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+            )
+        )
+
+        self.assertEqual(failure.code, "policy")
 
     def test_response_capture_enforces_candidate_and_total_byte_budgets(self) -> None:
         response_url = "https://landing.test/start"

@@ -696,6 +696,7 @@ def run_acceptance() -> None:  # noqa: C901
     )
     from sciretriever.acquisition.sources.browser_rules import (
         PRODUCTION_BROWSER_RULE_CATALOG,
+        BrowserActionKind,
         BrowserRuleAction,
         BrowserRuleCatalog,
         BrowserSiteRule,
@@ -771,8 +772,13 @@ def run_acceptance() -> None:  # noqa: C901
             landing_origin=origin,
             allowed_origins=(origin,),
             web_scope_provider_name=_HOSTNAME,
-            action=BrowserRuleAction.EXPLICIT_CLICK,
-            click_selector="button[data-action='pdf']",
+            actions=(
+                BrowserRuleAction(
+                    kind=BrowserActionKind.CLICK,
+                    selector="button[data-action='pdf']",
+                ),
+            ),
+            max_actions=1,
             capture_url_prefixes=(f"{origin}/article.pdf",),
         )
         source = ControlledBrowserPdfSource(
