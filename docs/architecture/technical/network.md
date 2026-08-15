@@ -226,6 +226,12 @@ Source 对每篇文章注入一项只含当前规则 origin 与精确 resolver �
 已经去除 query，规则外异常统一转换为 `policy` 失败。Response 的实际 transport 已由更早的
 request guard、DNS binding 和 live host lease 准入，response hook 再在读取 body 前复核同一
 lease。通用 URL/DNS/地址类别/host permit/资源预算仍独立执行，guard 只能收紧不能放宽。
+完成主导航后，Network 可以向当前 flow 提供不可序列化的 `BrowserPageObservation`：其中只有
+再次通过 destination guard 的 query-free 规范 locator 和 `100..599` 范围内的主响应状态。
+完整 URL query、response/header/body、page、context 和 Cookie 不跨越该边界。Network 仍可对
+明确 runtime challenge flag 与通用 challenge 页面文本 fail closed，但不把所有 `401/403`
+自行猜成 challenge；同一状态在不同 Provider 可能表示登录、无文章 entitlement、paywall 或
+challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 `browser_scheduler.py` 已把每个静态 risk-group policy 固定为 `max_concurrency = 1`，并执行
 文章启动间隔、可选滑动窗口、完成冷却和失败冷却；同一 scheduler 中不同 group 受独立锁
 保护并在本机全局资源上限内并行。Scheduler callback 的边界是一篇完整文章流程，只有 callback
@@ -233,9 +239,9 @@ lease。通用 URL/DNS/地址类别/host permit/资源预算仍独立执行，gu
 同一进程同一 group 只能注册一份完全一致的 policy revision，避免通过别名或新 operation
 重建限速状态。
 
-生产 Controlled Browser 仍保持 disabled：session broker foundation 已完成，但 operator-managed
-profile 解析、完整状态机、捕获矩阵、配置/确认入口以及至少一个 Provider 的端到端 Profile
-尚未全部闭环。
+生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
+运行状态机和封闭页面 marker 分类已经完成，但捕获矩阵、配置/确认入口以及至少一个 Provider
+的端到端 Profile 尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、not found、PDF captured 和 runtime

@@ -523,6 +523,27 @@ Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenanc
 策略中才真正更新 `blocked_until` 与 circuit；其它 group 始终继续。自动策略只能减速或暂停，
 不能根据连续成功自动提速。
 
+页面分类只消费 Network 提供的 `BrowserPageObservation` 与有界 selector text。Observation 只含
+已经完成 Network 准入的 query-free 当前 locator 和主导航响应状态，不含 response、HTML、header、
+Cookie 或 vendor object。版本化 `BrowserPageMarker` 只能声明以下三类静态信号，任一类命中即表示
+该 marker 命中：
+
+- 经过静态语法限制的 CSS selector；
+- 位于当前 `BrowserSiteRule.allowed_origins` 内的 query-free HTTPS path prefix；
+- `100..599` 范围内的明确响应状态。
+
+每个 marker 使用封闭 kind：`authenticated`、`entitled`、`login-required`、`mfa-required`、
+`not-entitled`、`paywall`、`challenge-required`、`rate-limited`、`ip-blocked` 或 `not-found`。
+selector、URL prefix 和响应状态不能跨 marker 重复，marker 数量及每类 signal 数量均有硬上限；
+规则和稳定失败的 repr 不显示 selector 或 locator。
+
+`authenticated` 只证明当前 session 已认证，`entitled` 只证明当前文章的访问 marker；二者不是
+同一事实。已认证 session 仍可对具体文章得到 `NOT_ENTITLED`，匿名页面也可能对公开文章得到
+entitlement。`authenticated + login/MFA`、`entitled + not-entitled/paywall` 或同时命中多个不同
+终态均为规则冲突，当前流程 fail closed 为脱敏的 page-state contract failure，不点击 PDF 动作。
+自动 Completion 从不填写登录表单、选择机构、点击授权同意、处理 MFA/CAPTCHA 或猜测 marker；
+可见 Browser 的人工登录属于用户以后明确发起的独立配置操作。
+
 Provider Profile 的封闭 guard 必须在每次 navigation、popup、viewer、response 和 download 实际访问前执行，并叠加 Network 的通用 URL、DNS、redirect、origin、credential forwarding 和 host admission。Browser 可以从受控 download、PDF response、允许的 popup/viewer 或已核实官方 locator 形成 `TemporaryPdf`；正文归属和 supplementary exclusion 在 adapter/Profile 边界判断，最终字节仍执行第 5 节统一检查。未知 Provider 不使用 generic arbitrary-site Browser fallback。
 
 ### 4.2 手动接纳流程
