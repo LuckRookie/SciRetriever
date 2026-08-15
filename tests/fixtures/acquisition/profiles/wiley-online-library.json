@@ -28,9 +28,29 @@
     "authorized_api_routes": ["api:wiley-tdm-v1"],
     "browser_route": null
   },
+  "route_verification": {
+    "authorized_api": {
+      "state": "production-ready",
+      "contract": "wiley-tdm-v1",
+      "priority": "after-public-before-browser"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "no-independent-page-rule-evidence",
+        "no-reviewed-browser-rate-policy",
+        "no-verified-login-entitlement-paywall-challenge-markers",
+        "no-verified-primary-versus-supplement-browser-fixture"
+      ]
+    }
+  },
   "ownership_cases": [
     {"case_id": "tdm-primary-pdf", "expected": "primary"},
     {"case_id": "non-pdf-or-wrong-doi-is-not-promoted", "expected": "excluded"}
   ],
-  "evidence_gaps": ["browser-route-not-registered", "live-entitlement-not-asserted"]
+  "evidence_gaps": [
+    "browser-route-not-registered",
+    "browser-upstream-clues-not-independent-evidence",
+    "live-entitlement-not-asserted"
+  ]
 }

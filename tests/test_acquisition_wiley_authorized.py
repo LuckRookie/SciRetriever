@@ -14,11 +14,26 @@ from sciretriever.acquisition.authorized import (
     AuthorizedLookupDownloads,
     AuthorizedLookupTarget,
 )
+from sciretriever.acquisition.planning import (
+    AcquisitionPlanBuilder,
+    PublisherAccessResolver,
+    ResolutionEvidence,
+    ResolutionEvidenceKind,
+    RouteCapability,
+    RouteReadiness,
+    RouteSpec,
+)
+from sciretriever.acquisition.profile_catalog import (
+    PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+    WILEY_ACCESS_PROFILE,
+)
 from sciretriever.acquisition.providers.wiley import (
     WILEY_ACCESS_POLICY,
     WileyAuthorizedPdfClient,
 )
+from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
+from sciretriever.model.acquisition import AcquisitionPath
 from sciretriever.network.admission import AccessCoordinator, AccessFeedback
 from sciretriever.network.http import HttpClient
 
@@ -78,6 +93,41 @@ def _response(
 
 
 class WileyAuthorizedPdfClientTests(unittest.TestCase):
+    def test_profile_keeps_tdm_api_ready_and_browser_unregistered(self) -> None:
+        self.assertEqual(WILEY_ACCESS_PROFILE.api_route_keys, ("api:wiley-tdm-v1",))
+        self.assertIsNone(WILEY_ACCESS_PROFILE.browser_route_key)
+        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
+        resolution = PublisherAccessResolver(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG).resolve(
+            (
+                ResolutionEvidence(
+                    kind=ResolutionEvidenceKind.LANDING_ORIGIN,
+                    value="https://onlinelibrary.wiley.com",
+                    source="doi-landing",
+                ),
+            )
+        )
+        builder = AcquisitionPlanBuilder(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG)
+        api_route = RouteSpec(
+            route_key="api:wiley-tdm-v1",
+            tier=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            capability=RouteCapability.DIRECT_PDF,
+            readiness=RouteReadiness.READY,
+            profile_access_key="wiley-online-library",
+            quota_group="wiley-api",
+        )
+        plan = builder.build(resolution=resolution, route_specs=(api_route,))
+        self.assertEqual(plan.routes, (api_route,))
+        browser_route = RouteSpec(
+            route_key="browser:wiley-online-library",
+            tier=AcquisitionPath.CONTROLLED_BROWSER,
+            capability=RouteCapability.BROWSER_PDF,
+            readiness=RouteReadiness.READY,
+            profile_access_key="wiley-online-library",
+            risk_group="wiley-online-library",
+        )
+        with self.assertRaisesRegex(ValueError, "risk group"):
+            builder.build(resolution=resolution, route_specs=(browser_route,))
+
     def test_contract_requires_exact_resolved_wol_doi_evidence(self) -> None:
         self.assertEqual(
             WILEY_AUTHORIZED_CONTRACT.required_credential_fields,
