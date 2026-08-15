@@ -211,10 +211,19 @@ class _Evidence:
     download_events: int = 0
     download_request_was_live: bool = False
     download_deleted: bool = False
+    download_delete_count: int = 0
     page_closed: bool = False
+    page_close_count: int = 0
     context_closed: bool = False
+    context_create_count: int = 0
+    context_close_count: int = 0
     process_closed: bool = False
+    process_start_count: int = 0
+    process_close_count: int = 0
     downloads_path: str | None = None
+    article_download_paths: list[str] | None = None
+    article_begin_count: int = 0
+    article_end_count: int = 0
     events: list[str] | None = None
     javascript_result: str | None = None
     process_binding_acknowledged: bool = False
@@ -258,6 +267,7 @@ class _Engine:
         assert self.evidence.events is not None
         self.evidence.events.append("engine-start-requested")
         self.launch_downloads_path = downloads_path
+        self.evidence.process_start_count += 1
         self.thread.start()
         if not self.ready.wait(30):
             raise RuntimeError("Playwright engine did not start")
@@ -327,6 +337,7 @@ class _Engine:
         def create() -> None:
             assert self.evidence.events is not None
             self.evidence.events.append("context-create")
+            self.evidence.context_create_count += 1
             self.evidence.downloads_path = downloads_path
             self.context = cast(Any, self.browser).new_context(
                 accept_downloads=True,
@@ -529,6 +540,7 @@ class _Download:
     def delete(self) -> None:
         self.engine.call(lambda: cast(Any, self.raw).delete())
         self.engine.evidence.download_deleted = True
+        self.engine.evidence.download_delete_count += 1
 
 
 class _Page:
@@ -590,6 +602,7 @@ class _Page:
     def close(self) -> None:
         self.engine.call(lambda: cast(Any, self.raw).close())
         self.engine.evidence.page_closed = True
+        self.engine.evidence.page_close_count += 1
 
 
 class _Context:
@@ -599,6 +612,22 @@ class _Context:
     def bind_connection(self, binding: object) -> object:
         self.engine.evidence.context_binding_acknowledged = True
         return binding
+
+    def begin_article(self, *, downloads_path: str, connection_binding: object) -> object:
+        self.engine.call(lambda: None)
+        paths = self.engine.evidence.article_download_paths
+        if paths is None:
+            raise RuntimeError("article path evidence was not initialized")
+        paths.append(downloads_path)
+        self.engine.evidence.article_begin_count += 1
+        return connection_binding
+
+    def end_article(self) -> bool:
+        # This engine-thread barrier proves all callbacks queued by the article
+        # have completed before the broker switches the context to another one.
+        self.engine.call(lambda: None)
+        self.engine.evidence.article_end_count += 1
+        return True
 
     @property
     def pages(self) -> tuple[_Page, ...]:
@@ -627,6 +656,7 @@ class _Context:
     def close(self) -> None:
         self.engine.call(lambda: cast(Any, self.engine.context).close())
         self.engine.evidence.context_closed = True
+        self.engine.evidence.context_close_count += 1
 
 
 class _Process:
@@ -654,6 +684,7 @@ class _Process:
     def close(self) -> None:
         self.engine.stop()
         self.engine.evidence.process_closed = True
+        self.engine.evidence.process_close_count += 1
 
 
 class _Factory:
@@ -702,6 +733,7 @@ def run_acceptance() -> None:  # noqa: C901
         BrowserSiteRule,
     )
     from sciretriever.literature.content import metadata_sha256
+    from sciretriever.model.access import BrowserRequest, BrowserResult
     from sciretriever.model.acquisition import AssetHint, AssetHintKind, AssetRole
     from sciretriever.model.literature import Literature, LiteratureStatus, VersionRole
     from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
@@ -715,8 +747,15 @@ def run_acceptance() -> None:  # noqa: C901
         sha256_digest,
     )
     from sciretriever.model.provenance import Provenance
-    from sciretriever.network.admission import AccessCoordinator
-    from sciretriever.network.browser import BrowserClient
+    from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
+    from sciretriever.network.browser import (
+        BrowserBudget,
+        BrowserCaptureGuard,
+        BrowserClient,
+        BrowserDestinationGuard,
+        BrowserFlowSession,
+    )
+    from sciretriever.network.browser_sessions import BrowserSessionBroker
     from sciretriever.network.policy import AddressClass, DestinationPolicy
 
     pdf = _pdf()
@@ -741,8 +780,18 @@ def run_acceptance() -> None:  # noqa: C901
     state = _HttpsState(page, pdf)
     server: ThreadingHTTPServer | None = None
     server_thread: threading.Thread | None = None
-    evidence = _Evidence([], [], [], [], [], events=[], certificate_san_matches=[])
+    evidence = _Evidence(
+        [],
+        [],
+        [],
+        [],
+        [],
+        article_download_paths=[],
+        events=[],
+        certificate_san_matches=[],
+    )
     engine: _Engine | None = None
+    broker: BrowserSessionBroker | None = None
     payload: dict[str, object]
     try:
         certificate, key = _generate_certificate(temporary_root)
@@ -755,10 +804,12 @@ def run_acceptance() -> None:  # noqa: C901
         server_thread.start()
         engine = _Engine(evidence, certificate)
         resolver = _Resolver()
+        broker = BrowserSessionBroker()
         client = BrowserClient(
             factory=_Factory(engine),
             resolver=resolver,
             coordinator=AccessCoordinator(),
+            session_broker=broker,
             destination_policy=DestinationPolicy(
                 allowed_classes=frozenset({AddressClass.LOOPBACK}),
                 allowed_addresses=frozenset({"127.0.0.1"}),
@@ -781,8 +832,38 @@ def run_acceptance() -> None:  # noqa: C901
             max_actions=1,
             capture_url_prefixes=(f"{origin}/article.pdf",),
         )
+
+        class SessionBoundRunner:
+            """Acceptance-only binding of one reviewed rule to one session key."""
+
+            def run(
+                self,
+                scope: AccessScope,
+                request: BrowserRequest | str,
+                policy: AccessPolicy,
+                *,
+                flow: Callable[[BrowserFlowSession], object] | None = None,
+                destination_guard: BrowserDestinationGuard | None = None,
+                capture_guard: BrowserCaptureGuard | None = None,
+                budget: BrowserBudget | None = None,
+                timeout_seconds: float | None = None,
+                cancel_event: threading.Event | None = None,
+            ) -> BrowserResult:
+                return client.run(
+                    scope,
+                    request,
+                    policy,
+                    flow=flow,
+                    destination_guard=destination_guard,
+                    capture_guard=capture_guard,
+                    budget=budget,
+                    timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                    session_key="playwright-local",
+                )
+
         source = ControlledBrowserPdfSource(
-            runner=client,
+            runner=SessionBoundRunner(),
             rule_catalog=BrowserRuleCatalog((rule,)),
             provenance_id_factory=lambda: ProvenanceId("20000001-e89b-42d3-a456-426614174000"),
             clock=lambda: UtcTimestamp("2026-08-12T20:00:00Z"),
@@ -826,14 +907,28 @@ def run_acceptance() -> None:  # noqa: C901
             ),
             observations=(observation,),
         )
+        delivered_values: list[bytes] = []
+        delivery = None
         try:
-            deliveries = list(
-                source._deliveries(
-                    request,
-                    build_acquisition_evidence(request),
-                    CandidateKeyTracker(),
+            for _article in range(2):
+                deliveries = list(
+                    source._deliveries(
+                        request,
+                        build_acquisition_evidence(request),
+                        CandidateKeyTracker(),
+                    )
                 )
-            )
+                if len(deliveries) != 1:
+                    raise RuntimeError(
+                        "real Browser flow did not deliver one PDF: "
+                        f"count={len(deliveries)}; downloads={evidence.download_events}; "
+                        f"paths={state.paths!r}; events={evidence.events!r}; "
+                        f"engine_failure={engine.failure!r}"
+                    )
+                delivery = deliveries[0]
+                with delivery.content.open() as stream:
+                    delivered_values.append(stream.read())
+                delivery.content.discard()
         except Exception as error:
             failure = getattr(error, "failure", None)
             code = getattr(failure, "code", type(error).__name__)
@@ -843,17 +938,10 @@ def run_acceptance() -> None:  # noqa: C901
                 f"downloads={evidence.download_events}; paths={state.paths!r}; "
                 f"events={evidence.events!r}; engine_failure={engine.failure!r}"
             ) from error
-        if len(deliveries) != 1:
-            raise RuntimeError(
-                "real Browser flow did not deliver one PDF: "
-                f"count={len(deliveries)}; downloads={evidence.download_events}; "
-                f"paths={state.paths!r}; events={evidence.events!r}; "
-                f"engine_failure={engine.failure!r}"
-            )
-        delivery = deliveries[0]
-        with delivery.content.open() as stream:
-            delivered = stream.read()
-        delivery.content.discard()
+        if delivery is None:
+            raise RuntimeError("real Browser flow returned no delivery")
+        broker.close()
+        article_paths = tuple(evidence.article_download_paths or ())
         payload = {
             "product_module_files": product_module_files,
             "playwright_module_file": os.fspath(Path(cast(str, playwright_file)).resolve()),
@@ -881,13 +969,24 @@ def run_acceptance() -> None:  # noqa: C901
                     evidence.process_binding_acknowledged
                     and evidence.context_binding_acknowledged
                     and all(evidence.binding_acknowledged)
-                    and len(evidence.binding_acknowledged) == 2
+                    and len(evidence.binding_acknowledged) == 4
                 ),
                 "download_request_was_live": evidence.download_request_was_live,
             },
             "verification": {
                 "expected_pdf_sha256": hashlib.sha256(pdf).hexdigest(),
-                "delivered_pdf_sha256": hashlib.sha256(delivered).hexdigest(),
+                "delivered_pdf_sha256": [
+                    hashlib.sha256(value).hexdigest() for value in delivered_values
+                ],
+            },
+            "session": {
+                "article_count": len(delivered_values),
+                "process_start_count": evidence.process_start_count,
+                "context_create_count": evidence.context_create_count,
+                "article_begin_count": evidence.article_begin_count,
+                "article_end_count": evidence.article_end_count,
+                "article_paths_distinct": len(article_paths) == len(set(article_paths)),
+                "article_paths_cleaned": all(not Path(path).exists() for path in article_paths),
             },
             "candidate": {
                 "acquisition_path": delivery.candidate.acquisition_path.value,
@@ -900,6 +999,11 @@ def run_acceptance() -> None:  # noqa: C901
             },
         }
     finally:
+        if broker is not None:
+            try:
+                broker.close()
+            except Exception:
+                pass
         if engine is not None and engine.thread.is_alive():
             try:
                 engine.stop()
@@ -918,6 +1022,10 @@ def run_acceptance() -> None:  # noqa: C901
         "context_closed": evidence.context_closed,
         "process_closed": evidence.process_closed,
         "download_deleted": evidence.download_deleted,
+        "page_close_count": evidence.page_close_count,
+        "context_close_count": evidence.context_close_count,
+        "process_close_count": evidence.process_close_count,
+        "download_delete_count": evidence.download_delete_count,
         "browser_downloads_path_exists": bool(downloads_path and Path(downloads_path).exists()),
         "fixture_temporary_root_exists": temporary_root.exists(),
         "server_thread_alive": bool(server_thread and server_thread.is_alive()),

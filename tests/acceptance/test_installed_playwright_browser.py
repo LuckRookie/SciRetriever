@@ -76,31 +76,48 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         )
         self.assertFalse(executable_path.startswith(fresh_site_packages + os.sep))
         self.assertEqual(engine["javascript_result"], "javascript-ran")
-        self.assertEqual(engine["page_clicks"], ["button[data-action='pdf']"])
-        self.assertEqual(engine["download_events"], 1)
+        self.assertEqual(
+            engine["page_clicks"],
+            ["button[data-action='pdf']", "button[data-action='pdf']"],
+        )
+        self.assertEqual(engine["download_events"], 2)
 
         network = payload["network"]
         self.assertEqual(network["resolver_addresses"], ["127.0.0.1"])
-        self.assertEqual(network["connected_addresses"], ["127.0.0.1", "127.0.0.1"])
-        self.assertEqual(network["tls_server_names"], [network["hostname"], network["hostname"]])
-        self.assertEqual(network["authorities"], [network["authority"], network["authority"]])
-        self.assertEqual(network["paths"], ["/article", "/article.pdf"])
+        self.assertEqual(network["connected_addresses"], ["127.0.0.1"] * 4)
+        self.assertEqual(network["tls_server_names"], [network["hostname"]] * 4)
+        self.assertEqual(network["authorities"], [network["authority"]] * 4)
+        self.assertEqual(
+            network["paths"],
+            ["/article", "/article.pdf", "/article", "/article.pdf"],
+        )
         self.assertTrue(network["certificate_san_matches_hostname"])
         self.assertTrue(network["all_bindings_acknowledged_before_continue"])
         self.assertTrue(network["download_request_was_live"])
 
-        self.assertEqual(
-            payload["verification"]["delivered_pdf_sha256"],
-            payload["verification"]["expected_pdf_sha256"],
-        )
+        expected_sha256 = payload["verification"]["expected_pdf_sha256"]
+        self.assertEqual(payload["verification"]["delivered_pdf_sha256"], [expected_sha256] * 2)
         self.assertEqual(payload["candidate"]["acquisition_path"], "controlled-browser")
         self.assertEqual(payload["candidate"]["source_name"], "controlled-browser")
+
+        session = payload["session"]
+        self.assertEqual(session["article_count"], 2)
+        self.assertEqual(session["process_start_count"], 1)
+        self.assertEqual(session["context_create_count"], 1)
+        self.assertEqual(session["article_begin_count"], 2)
+        self.assertEqual(session["article_end_count"], 2)
+        self.assertTrue(session["article_paths_distinct"])
+        self.assertTrue(session["article_paths_cleaned"])
 
         cleanup = payload["cleanup"]
         self.assertTrue(cleanup["page_closed"])
         self.assertTrue(cleanup["context_closed"])
         self.assertTrue(cleanup["process_closed"])
         self.assertTrue(cleanup["download_deleted"])
+        self.assertEqual(cleanup["page_close_count"], 2)
+        self.assertEqual(cleanup["download_delete_count"], 2)
+        self.assertEqual(cleanup["context_close_count"], 1)
+        self.assertEqual(cleanup["process_close_count"], 1)
         self.assertFalse(cleanup["browser_downloads_path_exists"])
         self.assertFalse(cleanup["fixture_temporary_root_exists"])
         self.assertFalse(cleanup["server_thread_alive"])
