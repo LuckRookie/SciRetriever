@@ -1,0 +1,57 @@
+{
+  "open": {
+    "page_signal": "page-open",
+    "flow_disposition": "continue",
+    "group_effect": "none"
+  },
+  "authenticated": {
+    "page_signal": "authenticated-session",
+    "flow_disposition": "continue",
+    "group_effect": "none"
+  },
+  "login-required": {
+    "page_signal": "login-required",
+    "flow_disposition": "action-required",
+    "group_effect": "pause"
+  },
+  "mfa-required": {
+    "page_signal": "mfa-required",
+    "flow_disposition": "action-required",
+    "group_effect": "pause"
+  },
+  "challenge-required": {
+    "page_signal": "access-challenge",
+    "flow_disposition": "action-required",
+    "group_effect": "open-circuit"
+  },
+  "not-entitled": {
+    "page_signal": "article-not-entitled",
+    "flow_disposition": "normal-miss",
+    "group_effect": "none"
+  },
+  "rate-limited": {
+    "page_signal": "provider-rate-limit",
+    "flow_disposition": "deferred",
+    "group_effect": "pause"
+  },
+  "ip-blocked": {
+    "page_signal": "provider-ip-block",
+    "flow_disposition": "action-required",
+    "group_effect": "open-circuit"
+  },
+  "not-found": {
+    "page_signal": "article-not-found",
+    "flow_disposition": "normal-miss",
+    "group_effect": "none"
+  },
+  "pdf-captured": {
+    "page_signal": "primary-pdf-captured",
+    "flow_disposition": "pdf-delivered",
+    "group_effect": "none"
+  },
+  "runtime-failed": {
+    "page_signal": "browser-runtime-failure",
+    "flow_disposition": "failure",
+    "group_effect": "record-runtime-failure"
+  }
+}

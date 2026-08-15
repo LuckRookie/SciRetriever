@@ -877,8 +877,45 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                     )
                 self.assertEqual(
                     caught.exception.failure.code,
-                    f"acquisition-browser-{code}-failed",
+                    (
+                        "acquisition-browser-challenge-required"
+                        if code == "challenge"
+                        else f"acquisition-browser-{code}-failed"
+                    ),
                 )
+
+    def test_runtime_result_states_have_stable_route_escalation(self) -> None:
+        request = _request(observations=(_observation(531, (_landing_hint(),)),))
+        for code in ("not-found", "not-entitled"):
+            with self.subTest(code=code):
+                source = _source(_FakeRunner([_failure(code)]))
+                self.assertEqual(
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    ),
+                    [],
+                )
+
+        for code, expected_code in (
+            ("rate-limit", "acquisition-browser-rate-limited"),
+            ("rate-limited", "acquisition-browser-rate-limited"),
+            ("ip-blocked", "acquisition-browser-ip-blocked"),
+        ):
+            with self.subTest(code=code):
+                source = _source(_FakeRunner([_failure(code)]))
+                with self.assertRaises(AcquisitionFailure) as caught:
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
+                self.assertEqual(caught.exception.failure.code, expected_code)
 
     def test_login_and_mfa_markers_are_explicit_failures_without_fill_or_click(self) -> None:
         states = _page_states()
