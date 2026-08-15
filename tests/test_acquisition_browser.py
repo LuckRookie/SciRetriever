@@ -31,6 +31,8 @@ from sciretriever.acquisition.sources.browser import (
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
     BrowserActionKind,
+    BrowserArticleIdentityKind,
+    BrowserCaptureDisposition,
     BrowserPageMarker,
     BrowserPageMarkerKind,
     BrowserRuleAction,
@@ -398,6 +400,22 @@ def _rule(
     mfa_markers: tuple[str, ...] = ("#mfa-required",),
     page_markers: tuple[BrowserPageMarker, ...] | None = None,
     capture_url_prefixes: tuple[str, ...] | None = None,
+    article_identity_kinds: tuple[BrowserArticleIdentityKind, ...] = (
+        BrowserArticleIdentityKind.LANDING_PATH_STEM,
+    ),
+    article_id_namespaces: tuple[str, ...] = (),
+    supplement_url_prefixes: tuple[str, ...] = (),
+    supplement_selectors: tuple[str, ...] = (),
+    supplement_filename_markers: tuple[str, ...] = (),
+    excluded_url_prefixes: tuple[str, ...] = (),
+    excluded_filename_markers: tuple[str, ...] = (),
+    capture_priority: tuple[BrowserCaptureKind, ...] = (
+        BrowserCaptureKind.VERIFIED_LOCATOR,
+        BrowserCaptureKind.DOWNLOAD,
+        BrowserCaptureKind.RESPONSE,
+        BrowserCaptureKind.VIEWER,
+        BrowserCaptureKind.POPUP,
+    ),
 ) -> BrowserSiteRule:
     markers = (
         tuple(
@@ -456,6 +474,14 @@ def _rule(
         max_actions=max_actions,
         page_markers=markers,
         capture_url_prefixes=prefixes,
+        article_identity_kinds=article_identity_kinds,
+        article_id_namespaces=article_id_namespaces,
+        supplement_url_prefixes=supplement_url_prefixes,
+        supplement_selectors=supplement_selectors,
+        supplement_filename_markers=supplement_filename_markers,
+        excluded_url_prefixes=excluded_url_prefixes,
+        excluded_filename_markers=excluded_filename_markers,
+        capture_priority=capture_priority,
     )
 
 
@@ -684,6 +710,151 @@ class BrowserRuleContractTests(unittest.TestCase):
             _rule(actions=(unreviewed_locator,))
         with self.assertRaises(ValueError):
             _rule(login_markers=("#same",), mfa_markers=("#same",))
+
+    def test_document_rules_classify_primary_supplement_excluded_and_wrong_article(
+        self,
+    ) -> None:
+        rule = _rule(
+            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
+            supplement_url_prefixes=("https://downloads.publisher.test/pdf/supplements",),
+            supplement_filename_markers=("supporting-info",),
+            excluded_url_prefixes=("https://downloads.publisher.test/pdf/front-matter",),
+            excluded_filename_markers=("advertisement",),
+        )
+
+        def classify(locator: str) -> BrowserCaptureDisposition:
+            return rule.classify_capture(
+                locator,
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+                landing_url="https://publisher.test/article-123",
+                identifiers=(),
+            )
+
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/article-123.pdf"),
+            BrowserCaptureDisposition.PRIMARY,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf"),
+            BrowserCaptureDisposition.SUPPLEMENT,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/article-123-supporting-info.pdf"),
+            BrowserCaptureDisposition.SUPPLEMENT,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/front-matter/issue.pdf"),
+            BrowserCaptureDisposition.EXCLUDED,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/issue-advertisement.pdf"),
+            BrowserCaptureDisposition.EXCLUDED,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/pdf/article-999.pdf"),
+            BrowserCaptureDisposition.WRONG_ARTICLE,
+        )
+        self.assertIs(
+            classify("https://downloads.publisher.test/unreviewed/article-123.pdf"),
+            BrowserCaptureDisposition.REJECTED,
+        )
+
+    def test_article_identity_rules_use_canonical_paths_and_stable_identifiers(self) -> None:
+        exact_rule = _rule(
+            capture_url_prefixes=("https://publisher.test/article-123",),
+            article_identity_kinds=(BrowserArticleIdentityKind.EXACT_LANDING,),
+        )
+        self.assertIs(
+            exact_rule.classify_capture(
+                "https://publisher.test/article-123",
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+                landing_url="https://publisher.test/article-123",
+                identifiers=(),
+            ),
+            BrowserCaptureDisposition.PRIMARY,
+        )
+
+        identifier_rule = _rule(
+            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
+            article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
+            article_id_namespaces=("doi", "pii"),
+        )
+        identifiers = (
+            Identifier(namespace="doi", value="10.1234/alpha"),
+            Identifier(namespace="pii", value="S123456789"),
+        )
+        for locator in (
+            "https://downloads.publisher.test/pdf/10.1234/alpha.pdf",
+            "https://downloads.publisher.test/pdf/S123456789.pdf",
+        ):
+            with self.subTest(locator=locator):
+                self.assertIs(
+                    identifier_rule.classify_capture(
+                        locator,
+                        BrowserCaptureKind.DOWNLOAD,
+                        "application/pdf",
+                        landing_url=None,
+                        identifiers=identifiers,
+                    ),
+                    BrowserCaptureDisposition.PRIMARY,
+                )
+        self.assertIs(
+            identifier_rule.classify_capture(
+                "https://downloads.publisher.test/pdf/S000000000.pdf",
+                BrowserCaptureKind.DOWNLOAD,
+                "application/pdf",
+                landing_url=None,
+                identifiers=identifiers,
+            ),
+            BrowserCaptureDisposition.WRONG_ARTICLE,
+        )
+
+    def test_document_exclusion_contract_is_closed_and_unambiguous(self) -> None:
+        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#supplement")
+        with self.assertRaises(ValueError):
+            _rule(actions=(click,), supplement_selectors=("#supplement",))
+        with self.assertRaises(ValueError):
+            _rule(article_identity_kinds=())
+        with self.assertRaises(ValueError):
+            _rule(article_id_namespaces=("doi",))
+        with self.assertRaises(ValueError):
+            _rule(
+                article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
+            )
+        with self.assertRaises(TypeError):
+            _rule(
+                article_identity_kinds=cast(
+                    tuple[BrowserArticleIdentityKind, ...],
+                    ("dynamic",),
+                ),
+            )
+        for field in ("url", "filename"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                if field == "url":
+                    _rule(
+                        supplement_url_prefixes=("https://downloads.publisher.test/file/supp",),
+                        excluded_url_prefixes=("https://downloads.publisher.test/file/supp",),
+                    )
+                else:
+                    _rule(
+                        supplement_filename_markers=("supp",),
+                        excluded_filename_markers=("supp",),
+                    )
+        with self.assertRaises(ValueError):
+            _rule(
+                supplement_url_prefixes=("https://outside.test/supplement",),
+            )
+        with self.assertRaises(ValueError):
+            _rule(supplement_filename_markers=("supporting information",))
+        with self.assertRaises(ValueError):
+            _rule(
+                capture_priority=(
+                    BrowserCaptureKind.DOWNLOAD,
+                    BrowserCaptureKind.RESPONSE,
+                )
+            )
 
     def test_page_markers_are_bounded_static_and_rule_origin_scoped(self) -> None:
         marker = BrowserPageMarker(
@@ -1012,7 +1183,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             [
                 _download(
                     b"<html>not a PDF</html>",
-                    final_locator="https://downloads.publisher.test/file?view=full",
+                    final_locator="https://downloads.publisher.test/file/article.pdf?view=full",
                 )
             ],
             on_run=assert_claimed,
@@ -1046,7 +1217,8 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             self.assertNotIn(private_value, delivery.candidate.candidate_key)
         self.assertIn(delivery.candidate.candidate_key, tracker.tried_candidate_keys)
         self.assertEqual(
-            delivery.safe_source_url, "https://downloads.publisher.test/file?view=full"
+            delivery.safe_source_url,
+            "https://downloads.publisher.test/file/article.pdf?view=full",
         )
         self.assertEqual(delivery.provenance.source_record_id, "fixture-publisher@1")
         self.assertEqual(delivery.provenance.parameters_sha256, _rule().fingerprint)
@@ -1066,19 +1238,19 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                     (
                         b"%PDF-response",
                         BrowserCaptureKind.RESPONSE,
-                        "https://downloads.publisher.test/file",
+                        "https://downloads.publisher.test/file/article.pdf",
                         "application/pdf",
                     ),
                     (
                         b"%PDF-viewer",
                         BrowserCaptureKind.VIEWER,
-                        "https://downloads.publisher.test/file/viewer",
+                        "https://downloads.publisher.test/file/article/viewer",
                         "application/pdf",
                     ),
                     (
                         b"%PDF-official",
                         BrowserCaptureKind.VERIFIED_LOCATOR,
-                        "https://downloads.publisher.test/file/object",
+                        "https://downloads.publisher.test/file/article/object",
                         "application/octet-stream",
                     ),
                 )
@@ -1094,10 +1266,10 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(
             tuple(_payload(delivery) for delivery in deliveries),
             (
+                b"%PDF-official",
                 b"%PDF-download",
                 b"%PDF-response",
                 b"%PDF-viewer",
-                b"%PDF-official",
             ),
         )
         self.assertEqual(len({delivery.candidate.candidate_key for delivery in deliveries}), 4)
@@ -1107,7 +1279,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(capture_guard, BrowserCaptureGuard)
         self.assertTrue(
             capture_guard.allows(
-                "https://downloads.publisher.test/file/object",
+                "https://downloads.publisher.test/file/article/object",
                 BrowserCaptureKind.VERIFIED_LOCATOR,
                 "application/octet-stream",
             )
@@ -1121,13 +1293,136 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         self.assertFalse(
             capture_guard.allows(
-                "https://downloads.publisher.test/file",
+                "https://downloads.publisher.test/file/article.pdf",
                 BrowserCaptureKind.RESPONSE,
                 "text/html",
             )
         )
         for delivery in deliveries:
             delivery.content.discard()
+
+    def test_main_pdf_priority_excludes_supplements_front_matter_and_wrong_articles(
+        self,
+    ) -> None:
+        rule = _rule(
+            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
+            supplement_url_prefixes=("https://downloads.publisher.test/pdf/supplements",),
+            supplement_filename_markers=("supporting-info",),
+            excluded_url_prefixes=("https://downloads.publisher.test/pdf/front-matter",),
+            excluded_filename_markers=("advertisement",),
+        )
+        batch = _capture_batch(
+            (
+                b"%PDF-response-main",
+                BrowserCaptureKind.RESPONSE,
+                "https://downloads.publisher.test/pdf/article-123.pdf",
+                "application/pdf",
+            ),
+            (
+                b"%PDF-supplement",
+                BrowserCaptureKind.DOWNLOAD,
+                "https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf",
+                "application/pdf",
+            ),
+            (
+                b"%PDF-front-matter",
+                BrowserCaptureKind.POPUP,
+                "https://downloads.publisher.test/pdf/front-matter/issue.pdf",
+                "application/pdf",
+            ),
+            (
+                b"%PDF-wrong-article",
+                BrowserCaptureKind.VIEWER,
+                "https://downloads.publisher.test/pdf/article-999.pdf",
+                "application/pdf",
+            ),
+            (
+                b"%PDF-official-main",
+                BrowserCaptureKind.VERIFIED_LOCATOR,
+                "https://downloads.publisher.test/pdf/article-123/official",
+                "application/pdf",
+            ),
+        )
+        request = _request(
+            observations=(
+                _observation(
+                    502,
+                    (_landing_hint("https://publisher.test/article-123"),),
+                ),
+            )
+        )
+        tracker = CandidateKeyTracker()
+        runner = _FakeRunner([batch])
+        source = _source(runner, rule=rule)
+
+        deliveries = list(source._deliveries(request, _evidence(request), tracker))
+
+        self.assertEqual(
+            tuple(_payload(delivery) for delivery in deliveries),
+            (b"%PDF-official-main", b"%PDF-response-main"),
+        )
+        self.assertEqual(
+            tuple(delivery.safe_source_url for delivery in deliveries),
+            (
+                "https://downloads.publisher.test/pdf/article-123/official",
+                "https://downloads.publisher.test/pdf/article-123.pdf",
+            ),
+        )
+        self.assertEqual(len(tracker.tried_candidate_keys), 3)
+        capture_guard = runner.calls[0]["capture_guard"]
+        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
+        assert isinstance(capture_guard, BrowserCaptureGuard)
+        self.assertTrue(
+            capture_guard.allows(
+                "https://downloads.publisher.test/pdf/article-123.pdf",
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        self.assertFalse(
+            capture_guard.allows(
+                "https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf",
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        self.assertFalse(
+            capture_guard.allows(
+                "https://downloads.publisher.test/pdf/article-999.pdf",
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        for delivery in deliveries:
+            delivery.content.discard()
+
+        supplement_only_tracker = CandidateKeyTracker()
+        supplement_only = _source(
+            _FakeRunner(
+                [
+                    _capture_batch(
+                        (
+                            b"%PDF-only-supplement",
+                            BrowserCaptureKind.DOWNLOAD,
+                            "https://downloads.publisher.test/pdf/article-123-supporting-info.pdf",
+                            "application/pdf",
+                        )
+                    )
+                ]
+            ),
+            rule=rule,
+        )
+        self.assertEqual(
+            list(
+                supplement_only._deliveries(
+                    request,
+                    _evidence(request),
+                    supplement_only_tracker,
+                )
+            ),
+            [],
+        )
+        self.assertEqual(len(supplement_only_tracker.tried_candidate_keys), 1)
 
     def test_excluded_and_duplicate_actions_do_not_run_browser_twice(self) -> None:
         first_runner = _FakeRunner([_download()])
@@ -1202,11 +1497,11 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             ),
             BrowserRuleAction(
                 kind=BrowserActionKind.OPEN_VIEWER,
-                locator="https://downloads.publisher.test/file/viewer",
+                locator="https://downloads.publisher.test/file/article/viewer",
             ),
             BrowserRuleAction(
                 kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
-                locator="https://downloads.publisher.test/file/object",
+                locator="https://downloads.publisher.test/file/article/object",
             ),
             BrowserRuleAction(
                 kind=BrowserActionKind.WAIT_FOR_CAPTURE,
@@ -1226,11 +1521,11 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(session.clicks, ["a[data-action='pdf']"])
         self.assertEqual(
             session.viewer_opens,
-            ["https://downloads.publisher.test/file/viewer"],
+            ["https://downloads.publisher.test/file/article/viewer"],
         )
         self.assertEqual(
             session.verified_locator_opens,
-            ["https://downloads.publisher.test/file/object"],
+            ["https://downloads.publisher.test/file/article/object"],
         )
         self.assertEqual(session.capture_waits, [BrowserCaptureKind.VERIFIED_LOCATOR])
         self.assertEqual(session.fill_calls, [])
