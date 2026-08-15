@@ -526,10 +526,18 @@ Scheduler callback 覆盖整个 route adapter 调用，因此 Network Browser �
 Scheduler 同时拥有每个 group 的进程内 `blocked_until`、连续 runtime failure 计数和封闭 circuit
 reason。Cohort 把 Browser route 的稳定终态转换成封闭 `BrowserGroupFeedback`，只有完整 route
 callback 和资源清理结束后才原子更新 group。rate-limit 推进声明的 cooldown；登录、MFA、
-challenge、IP block、账号警告或达到阈值的 runtime failure 打开相应 circuit。每个排队任务在
+challenge、IP block、账号警告或达到阈值的 runtime failure 打开相应 circuit；cleanup failure
+不等待 runtime 阈值，立即打开当前组的 cleanup circuit。每个排队任务在
 Browser callback 前再次检查该状态，所以同一批中的后续 Literature、下一次 cohort、不同
 route key 和备用入口均不能绕过；独立 group 仍继续。被动态状态拦截的 item 分别形成稳定
 `deferred` 或 `action-required`，不会被写成 exhaustion。
+
+Browser route 的 process/context/page/popup/download/response stream、文章临时目录、Network
+permit 和 scheduler task 使用一次性所有权与粘性 cleanup 结果。取消或 timeout 后未在本机清理
+预算内确认停止的 runtime 不交付晚到候选；即使此前已经捕获 PDF，也转换为 cleanup 系统失败，
+淘汰 session 并阻断同组后续任务。这个本机预算不属于 Provider policy，不能用来缩短文章间隔。
+如果不可变资产与 catalog 关系已经成功提交，之后 receipt/staging cleanup 失败仍必须传播稳定
+系统失败，但不得删除、覆盖或回滚已经发布的资产和关系，也不得转而提交自动获取耗尽。
 
 Admission 在下一次评估时把同一 scheduler 的动态 snapshot 与静态 session/Profile readiness
 合并，摘要显示 `rate-limited` 或具体 action-required reason 以及剩余最早开始时间。rate-limit

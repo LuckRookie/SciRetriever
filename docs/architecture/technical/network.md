@@ -199,6 +199,10 @@ context 必须分别按对象身份确认 Network 提供的连接绑定，之后
 页面、下载、请求 lease 和文章临时目录全部清理且 runtime 确认排空后，才释放 session lease；
 runtime、timeout、cancel 或文章清理异常会淘汰并确定性关闭对应 session，下一篇重新创建。
 Broker 关闭会等待活动 lease，再关闭全部 context/process 和 owner-only session 临时目录。
+Session entry 的关闭结果具有粘性：首次关闭失败后，重复 `close`/lease release 只返回同一失败，
+不会再次调用 vendor close，也不会把失败改写成成功。文章 handler 已撤下后的 late route 必须 abort，
+late page/download 必须各关闭或删除一次；该动作失败会把 session 标记为 broken，下一次 acquire
+先淘汰它并传播 cleanup failure，不能复用、吞错或在 broken entry 上自旋。
 
 Browser session profile 目录属于用户级敏感会话材料；Network 只接收 Configuration 已经安全
 解析的 opaque profile identity，不读取 `credentials.toml`，也不导出 Cookie、local storage、
@@ -213,6 +217,22 @@ Cookie 和 vendor event 对象都不能越过 Network/Acquisition Port。
 - 在 Profile 允许的范围内捕获 download event、PDF response、合法 popup/viewer 或已核实 locator，并只交付统一 `TemporaryPdf`；
 - 对请求数、顶层导航数、popup、download、去重后捕获候选数、响应字节和文章流程总时长执行有界预算；
 - 在成功、正常未命中、失败、取消、timeout 或清理异常后关闭全部文章资源，释放 permit，并保留仍有效的 `next_allowed_at`、`blocked_until` 与 circuit。
+
+每个文章 `_FlowState` 的资源生命周期固定为 `active -> cleaning -> cleaned | cleanup-failed`。
+page、popup、download、可关闭 response stream、context、process、临时目录、host/scope permit 和
+runtime task 在进入清理时先转移一次所有权；每项释放最多调用一次，第一次失败作为粘性结果保留，
+同时继续尝试其它资源。普通 Playwright `response.body()` 返回完整 bytes 时不存在越过读取调用的
+独立 stream；私有 runtime 若返回 closable stream，Network 只做带上限的单次 `read(size)`，并在
+`finally` 中关闭，stream 不进入中性结果或 Provider 合同。
+
+Browser factory、process enter、context/page 创建、导航、页面动作和 body 读取都在可取消 runtime
+task 中运行。取消或文章 deadline 到达后先发送非占有式 `abort/cancel/stop`；task 必须在显式的
+本机 cleanup timeout 内确认停止。这个 timeout 只保护本机 thread/process/file descriptor 回收，
+不是 Provider 请求间隔、quota 或可配置的提速值。未及时确认时调用立即失效全部 late result，
+升级到 page/context/process close，继续清理其余资源并返回稳定 cleanup failure；daemon worker
+不能把晚到 response/download 重新变成候选。被拒绝的 route 只有在 runtime 确认 abort 后才能
+立即释放其 host permit；abort 未确认时必须把 permit 保留到 context/process teardown 完成，避免
+仍可能存活的 transport 脱离准入边界。
 
 Provider 专属 origin、selector、有限动作、正文/补充材料判别和页面 marker 位于 Acquisition
 的版本化 access profile/Browser route adapter，不进入 Network。规则只能表达经过静态验证
@@ -275,7 +295,9 @@ challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 operator 收紧时前者只能取更长值，后者只能取更小值。文章 callback 完整返回后，封闭的
 `BrowserGroupFeedback` 原子更新对应 group：rate-limit 把 `blocked_until` 至少推进到声明的
 cooldown，登录、MFA、challenge、IP block 和账号警告打开带封闭原因的 action-required
-circuit，连续 Browser runtime failure 达到声明阈值后打开 runtime circuit。正常成功只清除
+circuit；资源清理未确认或失败会立即打开 cleanup circuit，不能等待普通 runtime failure 阈值后
+让下一篇文章与未确认停止的旧流程重叠；连续 Browser runtime failure 达到声明阈值后打开
+runtime circuit。正常成功只清除
 连续 runtime failure 计数，不缩短 `next_allowed_at`、`blocked_until`，也不关闭 circuit。
 
 每篇文章在取得本机全局 Browser permit 和调用 callback 之前都重新读取该 group 状态。仍在
@@ -288,8 +310,8 @@ circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_c
 
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
 运行状态机、封闭页面 marker 分类、多路正文捕获、封闭 action contract 和 supplement/错文
-排除以及 Provider cooldown/circuit 已经完成，但配置/确认入口以及至少一个 Provider 的端到端
-Profile 尚未全部闭环。
+排除、Provider cooldown/circuit 以及确定性取消/资源清理已经完成，但 Browser foundation 的安装
+wheel 验收、配置/确认入口以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、账号警告、not found、PDF captured 和
@@ -345,6 +367,12 @@ Network 同时执行每 host 连接预算和协议无关资源上限。Provider 
 
 取消和 timeout 必须传播到实际网络或浏览器操作，不能只停止上层等待。取消 permit 等待不能占用并发名额；已取得 permit 后取消必须完整清理并更新适用冷却。Late response 不得在调用已结束后成为有效结果。
 
+Browser cleanup failure 属于系统失败，不能形成正常未命中或自动获取耗尽。它会淘汰 persistent
+session，并立即打开当前 `browser_rate_limit_group` 的 cleanup circuit；同组后续排队任务不再
+触网，独立 group 仍可继续。只有 runtime task 已停止、文章资源已逐项清理、host/scope permit
+已经释放或其释放失败已明确传播后，scheduler callback 才结束并更新组状态。cleanup circuit 与
+其它 action-required circuit 一样，只能用精确 group 和 policy revision 显式确认。
+
 ## 13. 验收
 
 直接安全测试至少覆盖：
@@ -365,9 +393,11 @@ Network 同时执行每 host 连接预算和协议无关资源上限。Provider 
 - `429`、`Retry-After`、窗口额度和 `blocked_until` 对共享 scope 的后续调用生效；
 - 缺少明确 AccessPolicy 的 production adapter readiness 失败，operator 配置不能放宽安全下限；
 - 当前进程内取消、timeout 和失败不会泄漏 permit，也不会绕过仍有效的冷却或 `blocked_until`；
+- cleanup failure 立即阻止同组下一篇触网，不会等待普通 runtime failure 阈值；独立 group 不受影响；
 - 等待队列、permit、时间截止和额度计数只存在于内存，不创建限速表、协调目录、状态文件、lease 或跨进程锁；
 - 新 Coordinator 不恢复旧进程状态，测试和文档不宣称跨进程或跨重启限速保证；
 - 同一 session key 可以复用 operator-managed persistent context，但每篇文章的 page、popup、download、response stream 和临时目录完整清理；profile/session key 不按 Literature 随机拆分；
+- 每个 cleanup failpoint 后资源释放至多调用一次，重复 session/broker cleanup 保留首次失败，且 cleanup failure 不形成耗尽；
 - 登录、MFA、challenge、无 entitlement、rate limit、IP block 和 runtime failure 形成稳定的当前运行状态；对应 group 正确暂停或熔断且不会持久化；
 - Browser 能在封闭规则内从 download、response、popup/viewer 和官方 locator 交付临时 PDF，且正文/补充材料区分、候选数量和全部资源预算均受控；
 - Provider 页面流程不能绕过 PDF 基本检查直接发布资产；
