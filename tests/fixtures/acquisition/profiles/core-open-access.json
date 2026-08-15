@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "access_key": "core-open-access",
+  "display_name": "CORE",
+  "product_name": "CORE API v3",
+  "verification_state": "production-ready",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "core-v3-2026-08-15",
+  "notes_reference": "docs/notes/providers/core.md",
+  "official_references": [
+    "https://api.core.ac.uk/docs/v3",
+    "https://api.core.ac.uk/swagger/v3.json",
+    "https://core.ac.uk/services/api"
+  ],
+  "access_terms_references": ["https://core.ac.uk/terms"],
+  "rate_limit_references": ["https://api.core.ac.uk/docs/v3"],
+  "landing_origins": ["https://core.ac.uk"],
+  "asset_origins": ["https://api.core.ac.uk", "https://core.ac.uk"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": ["core"],
+    "examples": ["work:fixture-work", "output:fixture-output"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": ["api:core"],
+    "browser_route": null
+  },
+  "ownership_cases": [
+    {"case_id": "authorized-primary-pdf", "expected": "primary"},
+    {"case_id": "non-primary-output-is-not-promoted", "expected": "excluded"}
+  ],
+  "evidence_gaps": ["browser-route-not-registered", "live-entitlement-not-asserted"]
+}

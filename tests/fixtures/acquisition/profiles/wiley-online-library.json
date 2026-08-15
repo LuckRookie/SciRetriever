@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "access_key": "wiley-online-library",
+  "display_name": "Wiley Online Library",
+  "product_name": "Wiley Online Library TDM API v1",
+  "verification_state": "production-ready",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "wiley-tdm-v1-client-1.2.0-2026-08-15",
+  "notes_reference": "docs/notes/providers/wiley.md",
+  "official_references": [
+    "https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining",
+    "https://github.com/WileyLabs/tdm-client",
+    "https://static.wiley.com/tdm/"
+  ],
+  "access_terms_references": [
+    "https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining"
+  ],
+  "rate_limit_references": ["https://github.com/WileyLabs/tdm-client"],
+  "landing_origins": ["https://onlinelibrary.wiley.com"],
+  "asset_origins": ["https://onlinelibrary.wiley.com", "https://alm.wiley.com"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": ["wiley"],
+    "examples": ["doi:10.1002/fixture"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": ["api:wiley-tdm-v1"],
+    "browser_route": null
+  },
+  "ownership_cases": [
+    {"case_id": "tdm-primary-pdf", "expected": "primary"},
+    {"case_id": "non-pdf-or-wrong-doi-is-not-promoted", "expected": "excluded"}
+  ],
+  "evidence_gaps": ["browser-route-not-registered", "live-entitlement-not-asserted"]
+}

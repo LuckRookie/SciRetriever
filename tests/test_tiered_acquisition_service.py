@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import date
 from io import BytesIO
 from typing import BinaryIO
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from sciretriever.acquisition.access_profiles import (
     PolicyEvidence,
     ProfileProductionStatus,
+    PublisherAccessEvidence,
     PublisherAccessProfile,
     PublisherAccessProfileCatalog,
 )
@@ -376,14 +378,26 @@ def _failure_matrix_service(
         browser_allowed_origins=("https://publisher.test",),
         browser_rate_limit_group="fixture-publisher",
         browser_session_key="fixture-publisher",
+        browser_rule_id="fixture-publisher",
+        browser_rule_revision=1,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
-        notes_reference="docs/notes/providers/wiley.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        evidence=PublisherAccessEvidence(
+            display_name="Fixture Publisher",
+            product_name="Fixture access platform",
+            official_references=("https://publisher.test/docs",),
+            access_terms_references=("https://publisher.test/terms",),
+            rate_limit_references=("https://publisher.test/rate-limits",),
+            verification_date=date(2026, 8, 15),
+            evidence_revision="fixture-publisher-v1",
+            notes_reference="docs/notes/providers/wiley.md",
+            fixture_reference="tests/fixtures/acquisition/profiles/fixture-publisher.json",
+        ),
         browser_policy=BrowserGroupPolicy(
             rate_limit_group="fixture-publisher",
             policy_revision="2026-08-15",
-            minimum_start_interval=0.0,
+            minimum_start_interval=1.0,
             rate_limit_cooldown=60.0,
             runtime_failure_threshold=3,
         ),

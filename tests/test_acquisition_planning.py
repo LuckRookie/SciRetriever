@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import pickle
 import unittest
+from datetime import date
 
 from sciretriever.acquisition.access_profiles import (
-    BrowserRuleSet,
     PolicyEvidence,
     ProfileProductionStatus,
+    PublisherAccessEvidence,
     PublisherAccessProfile,
     PublisherAccessProfileCatalog,
 )
@@ -80,10 +81,22 @@ def _profile(
         browser_allowed_origins=(origin,),
         browser_rate_limit_group=access_key,
         browser_session_key=access_key,
+        browser_rule_id=access_key,
+        browser_rule_revision=1,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
-        notes_reference=f"docs/notes/providers/{provider_name}.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        evidence=PublisherAccessEvidence(
+            display_name=provider_name.title(),
+            product_name=f"{provider_name.title()} fixture",
+            official_references=(f"{origin}/docs",),
+            access_terms_references=(f"{origin}/terms",),
+            rate_limit_references=(f"{origin}/rate-limits",),
+            verification_date=date(2026, 8, 15),
+            evidence_revision=f"{provider_name}-fixture-v1",
+            notes_reference=f"docs/notes/providers/{provider_name}.md",
+            fixture_reference=(f"tests/fixtures/acquisition/profiles/{access_key}.json"),
+        ),
         browser_policy=BrowserGroupPolicy(
             rate_limit_group=access_key,
             policy_revision="2026-08-15",
@@ -91,7 +104,6 @@ def _profile(
             rate_limit_cooldown=60.0,
             runtime_failure_threshold=3,
         ),
-        browser_rules=BrowserRuleSet(primary_pdf_url_markers=("/pdf/",)),
     )
 
 

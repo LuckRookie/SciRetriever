@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "access_key": "fixture-publisher",
+  "display_name": "Fixture Publisher",
+  "product_name": "Fixture Browser Platform",
+  "verification_state": "fixture-verified",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "fixture-publisher-v1",
+  "notes_reference": "docs/notes/providers/wiley.md",
+  "official_references": ["https://publisher.test/docs"],
+  "access_terms_references": ["https://publisher.test/terms"],
+  "rate_limit_references": ["https://publisher.test/rate-limits"],
+  "landing_origins": ["https://publisher.test"],
+  "asset_origins": ["https://publisher.test"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": ["fixture-publisher"],
+    "examples": ["landing-path-stem:article-1"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": "browser:fixture-publisher"
+  },
+  "browser": {
+    "rule_id": "fixture-publisher",
+    "rule_revision": 1,
+    "rate_limit_group": "fixture-publisher",
+    "session_group": "fixture-publisher",
+    "page_states": ["entitled", "login-required", "paywall", "challenge-required"],
+    "capture_cases": [
+      {
+        "case_id": "primary",
+        "locator": "https://publisher.test/pdf/article-1.pdf",
+        "landing_url": "https://publisher.test/article/article-1",
+        "expected": "primary"
+      },
+      {
+        "case_id": "supplement",
+        "locator": "https://publisher.test/supp/article-1-supp.pdf",
+        "landing_url": "https://publisher.test/article/article-1",
+        "expected": "supplement"
+      },
+      {
+        "case_id": "wrong-article",
+        "locator": "https://publisher.test/pdf/article-2.pdf",
+        "landing_url": "https://publisher.test/article/article-1",
+        "expected": "wrong-article"
+      },
+      {
+        "case_id": "excluded",
+        "locator": "https://publisher.test/legal/article-1.pdf",
+        "landing_url": "https://publisher.test/article/article-1",
+        "expected": "excluded"
+      }
+    ]
+  },
+  "ownership_cases": [
+    {"case_id": "primary", "expected": "primary"},
+    {"case_id": "supplement", "expected": "supplement"}
+  ],
+  "evidence_gaps": ["live-provider-session-not-verified"]
+}

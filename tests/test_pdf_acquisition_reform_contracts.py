@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pickle
 import unittest
+from datetime import date
 
 from sciretriever.acquisition.access_profiles import PublisherAccessProfile
 from sciretriever.acquisition.cohort import AcquisitionWorkItem, TieredCohortExecutor
@@ -35,6 +36,7 @@ def _profile() -> PublisherAccessProfile:
     from sciretriever.acquisition.access_profiles import (
         PolicyEvidence,
         ProfileProductionStatus,
+        PublisherAccessEvidence,
         PublisherAccessProfile,
     )
 
@@ -59,10 +61,22 @@ def _profile() -> PublisherAccessProfile:
         ),
         browser_rate_limit_group="wiley-online-library",
         browser_session_key="wiley-online-library",
+        browser_rule_id="wiley-online-library",
+        browser_rule_revision=1,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
-        notes_reference="docs/notes/providers/wiley.md",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
+        evidence=PublisherAccessEvidence(
+            display_name="Wiley Online Library",
+            product_name="Wiley fixture",
+            official_references=("https://onlinelibrary.wiley.com/about",),
+            access_terms_references=("https://onlinelibrary.wiley.com/terms",),
+            rate_limit_references=("https://onlinelibrary.wiley.com/rate-limits",),
+            verification_date=date(2026, 8, 15),
+            evidence_revision="wiley-fixture-v1",
+            notes_reference="docs/notes/providers/wiley.md",
+            fixture_reference=("tests/fixtures/acquisition/profiles/wiley-online-library.json"),
+        ),
         browser_policy=BrowserGroupPolicy(
             rate_limit_group="wiley-online-library",
             policy_revision="2026-08-15",

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import dataclasses
 import unittest
+from datetime import date
 
 from sciretriever.acquisition.access_profiles import (
     AccessPlatformKey,
     BrowserRateLimitGroup,
-    BrowserRuleSet,
     BrowserSessionKey,
     PolicyEvidence,
     ProfileProductionStatus,
+    PublisherAccessEvidence,
     PublisherAccessKey,
     PublisherAccessProfile,
     PublisherAccessProfileCatalog,
@@ -23,7 +24,7 @@ def _profile(
     access_key: str = "wiley-online-library",
     origin: str = "https://onlinelibrary.wiley.com",
     policy_revision: str = "2026-08-15",
-    rules: BrowserRuleSet | None = None,
+    rule_revision: int = 1,
     status: ProfileProductionStatus = ProfileProductionStatus.FIXTURE_VERIFIED,
     evidence: PolicyEvidence = PolicyEvidence.PROJECT_CONSERVATIVE,
 ) -> PublisherAccessProfile:
@@ -42,10 +43,22 @@ def _profile(
         browser_allowed_origins=(origin,),
         browser_rate_limit_group=access_key,
         browser_session_key=access_key,
+        browser_rule_id=access_key,
+        browser_rule_revision=rule_revision,
         policy_evidence=evidence,
         policy_revision=policy_revision,
-        notes_reference=f"docs/notes/providers/{access_key}.md",
         production_status=status,
+        evidence=PublisherAccessEvidence(
+            display_name=access_key.replace("-", " ").title(),
+            product_name=f"{access_key} fixture",
+            official_references=(f"{origin}/docs",),
+            access_terms_references=(f"{origin}/terms",),
+            rate_limit_references=(f"{origin}/rate-limits",),
+            verification_date=date(2026, 8, 15),
+            evidence_revision=f"{access_key}-fixture-v1",
+            notes_reference=f"docs/notes/providers/{access_key}.md",
+            fixture_reference=f"tests/fixtures/acquisition/profiles/{access_key}.json",
+        ),
         browser_policy=BrowserGroupPolicy(
             rate_limit_group=access_key,
             policy_revision=policy_revision,
@@ -57,7 +70,6 @@ def _profile(
             cooldown_after_completion=2.0,
             failure_cooldown=30.0,
         ),
-        browser_rules=BrowserRuleSet() if rules is None else rules,
     )
 
 
@@ -103,17 +115,9 @@ class AccessIdentityTests(unittest.TestCase):
 
 class PublisherAccessProfileTests(unittest.TestCase):
     def test_profile_is_frozen_hashable_deterministic_and_secret_free(self) -> None:
-        rules = BrowserRuleSet(
-            pdf_action_selectors=("a[data-action='download-pdf']",),
-            login_markers=("Sign in",),
-            primary_pdf_url_markers=("/doi/pdf/",),
-            supplementary_url_markers=("suppinfo",),
-        )
-        first = _profile(rules=rules)
-        second = _profile(rules=rules)
-        revised = _profile(
-            rules=dataclasses.replace(rules, pdf_action_selectors=("a.pdf-download",))
-        )
+        first = _profile()
+        second = _profile()
+        revised = _profile(rule_revision=2)
         first_policy = first.browser_policy
         self.assertIsNotNone(first_policy)
         assert first_policy is not None
@@ -130,7 +134,7 @@ class PublisherAccessProfileTests(unittest.TestCase):
         self.assertNotEqual(first.revision_hash, revised.revision_hash)
         self.assertNotEqual(first.revision_hash, revised_policy.revision_hash)
         self.assertEqual(len({first, second}), 1)
-        self.assertNotIn("download-pdf", repr(first))
+        self.assertNotIn("token", repr(first).casefold())
         with self.assertRaises(dataclasses.FrozenInstanceError):
             first.access_key = "changed"  # type: ignore[misc]
 
@@ -141,6 +145,10 @@ class PublisherAccessProfileTests(unittest.TestCase):
             dataclasses.replace(_profile(), browser_route_key=None)
         with self.assertRaises(ValueError):
             dataclasses.replace(_profile(), browser_policy=None)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(_profile(), browser_rule_id=None)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(_profile(), browser_rule_revision=0)
         with self.assertRaises(ValueError):
             dataclasses.replace(
                 _profile(),
@@ -157,16 +165,9 @@ class PublisherAccessProfileTests(unittest.TestCase):
                 status=ProfileProductionStatus.PRODUCTION_READY,
                 evidence=PolicyEvidence.UNVERIFIED,
             )
-        with self.assertRaises(ValueError):
-            _profile(
-                status=ProfileProductionStatus.PRODUCTION_READY,
-                evidence=PolicyEvidence.OFFICIAL,
-                rules=BrowserRuleSet(),
-            )
         production = _profile(
             status=ProfileProductionStatus.PRODUCTION_READY,
             evidence=PolicyEvidence.OFFICIAL,
-            rules=BrowserRuleSet(primary_pdf_url_markers=("/doi/pdf/",)),
         )
         self.assertEqual(production.production_status, ProfileProductionStatus.PRODUCTION_READY)
         with self.assertRaises(ValueError):
@@ -180,6 +181,28 @@ class PublisherAccessProfileTests(unittest.TestCase):
                     runtime_failure_threshold=3,
                 ),
             )
+        with self.assertRaises(ValueError):
+            _profile(status=ProfileProductionStatus.UNSUPPORTED)
+
+    def test_evidence_package_and_verification_states_are_closed(self) -> None:
+        self.assertEqual(
+            tuple(status.value for status in ProfileProductionStatus),
+            ("production-ready", "fixture-verified", "unsupported"),
+        )
+        profile = _profile()
+        self.assertEqual(profile.evidence.verification_date, date(2026, 8, 15))
+        self.assertTrue(profile.evidence.fixture_reference.endswith(".json"))
+        for replacement in (
+            {"official_references": ()},
+            {"access_terms_references": ()},
+            {"rate_limit_references": ()},
+            {"official_references": ("https://user:secret@example.test/docs",)},
+            {"fixture_reference": "../profile.json"},
+            {"notes_reference": "docs/architecture/design.md"},
+        ):
+            with self.subTest(replacement=replacement):
+                with self.assertRaises((TypeError, ValueError)):
+                    dataclasses.replace(profile.evidence, **replacement)
 
     def test_catalog_rejects_duplicate_access_identity_but_not_shared_platform_knowledge(
         self,
