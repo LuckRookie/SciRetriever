@@ -16,12 +16,15 @@ from sciretriever.configuration import (
     ConfigurationError,
     browser_profile_path,
     browser_profile_status,
+    configure_browser_access_profile,
     credential_path,
     initialize_browser_profile,
+    load_editable_configuration,
+    remove_browser_profile,
     resolve_browser_profile,
     set_credentials,
 )
-from sciretriever.model.configuration import BrowserProfilePresence
+from sciretriever.model.configuration import AccessConfig, BrowserProfilePresence
 
 _PROFILE_IDENTITY = "wiley-online-library"
 _CONTENT_SENTINEL = "BROWSER-COOKIE-CONTENT-SENTINEL"
@@ -276,6 +279,156 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ConfigurationError, "changed during validation"):
             handle.runtime_directory()
+
+    def test_profile_removal_deletes_only_the_selected_validated_session(self) -> None:
+        config_path = self.home / "config.toml"
+        config_path.write_text("[execution]\nmax_concurrency = 3\n", encoding="utf-8")
+        credentials = set_credentials(
+            "web-of-science",
+            {"api_key": "removal-secret-sentinel"},
+            home=self.home,
+        )
+        self.assertTrue(credentials.has_provider("web-of-science"))
+        credential_bytes = credential_path(home=self.home).read_bytes()
+        configuration_bytes = config_path.read_bytes()
+
+        profile_path = self._initialize().runtime_directory()
+        nested = profile_path / "Default" / "Storage"
+        nested.mkdir(parents=True, mode=0o700)
+        os.chmod(nested.parent, 0o700)
+        os.chmod(nested, 0o700)
+        session = nested / "session.db"
+        session.write_bytes(b"opaque-browser-session")
+        os.chmod(session, 0o600)
+
+        self.assertTrue(remove_browser_profile(_PROFILE_IDENTITY, home=self.home))
+        self.assertFalse(profile_path.exists())
+        self.assertEqual(
+            browser_profile_status(_PROFILE_IDENTITY, home=self.home).presence,
+            BrowserProfilePresence.MISSING,
+        )
+        self.assertFalse(remove_browser_profile(_PROFILE_IDENTITY, home=self.home))
+        self.assertEqual(credential_path(home=self.home).read_bytes(), credential_bytes)
+        self.assertEqual(config_path.read_bytes(), configuration_bytes)
+        storage = self.home / ".sciretriever" / "browser-profiles"
+        self.assertEqual(tuple(storage.iterdir()), ())
+
+    def test_profile_removal_fails_closed_for_an_unsafe_tree(self) -> None:
+        profile = self._initialize().runtime_directory()
+        outside = self.home / "outside-session"
+        outside.write_text("must-survive", encoding="utf-8")
+        (profile / "unsafe-link").symlink_to(outside)
+
+        with self.assertRaises(ConfigurationError):
+            remove_browser_profile(_PROFILE_IDENTITY, home=self.home)
+
+        self.assertTrue(profile.is_dir())
+        self.assertTrue((profile / "unsafe-link").is_symlink())
+        self.assertEqual(outside.read_text(encoding="utf-8"), "must-survive")
+        storage = self.home / ".sciretriever" / "browser-profiles"
+        self.assertFalse(any(item.name.startswith(".removing-") for item in storage.iterdir()))
+
+    def test_access_selection_initializes_profile_and_preserves_other_configuration(self) -> None:
+        config_path = self.home / "config.toml"
+        config_path.write_text(
+            "# keep this comment\n[execution]\nmax_concurrency = 7\n",
+            encoding="utf-8",
+        )
+        candidate = AccessConfig(
+            browser_enabled=True,
+            browser_profile="Institutional-Access",
+            browser_max_concurrency=1,
+        )
+
+        configured = configure_browser_access_profile(
+            config_path,
+            candidate,
+            home=self.home,
+        )
+
+        self.assertTrue(configured.access.browser_enabled)
+        self.assertEqual(configured.access.browser_profile, "institutional-access")
+        self.assertEqual(configured.execution.max_concurrency, 7)
+        self.assertIn("# keep this comment", config_path.read_text(encoding="utf-8"))
+        reloaded = load_editable_configuration(config_path)
+        self.assertEqual(reloaded, configured)
+        self.assertEqual(
+            browser_profile_status("institutional-access", home=self.home).presence,
+            BrowserProfilePresence.CONFIGURED,
+        )
+        self.assertFalse(credential_path(home=self.home).exists())
+
+    def test_cancelled_or_failed_access_selection_has_no_published_side_effect(self) -> None:
+        config_path = self.home / "config.toml"
+        original = b"# unchanged\n[execution]\nmax_concurrency = 5\n"
+        config_path.write_bytes(original)
+        candidate = AccessConfig(
+            browser_enabled=True,
+            browser_profile="institutional-access",
+        )
+        cancelled = threading.Event()
+        cancelled.set()
+
+        with self.assertRaisesRegex(ConfigurationError, "cancelled"):
+            configure_browser_access_profile(
+                config_path,
+                candidate,
+                home=self.home,
+                cancel_event=cancelled,
+            )
+        self.assertEqual(config_path.read_bytes(), original)
+        self.assertFalse((self.home / ".sciretriever").exists())
+
+        def fail_after_profile(stage: str) -> None:
+            if stage == "profile-initialized":
+                raise RuntimeError(stage)
+
+        with self.assertRaisesRegex(ConfigurationError, "interrupted"):
+            configure_browser_access_profile(
+                config_path,
+                candidate,
+                home=self.home,
+                failpoint=fail_after_profile,
+            )
+        self.assertEqual(config_path.read_bytes(), original)
+        self.assertEqual(
+            browser_profile_status("institutional-access", home=self.home).presence,
+            BrowserProfilePresence.MISSING,
+        )
+        self.assertFalse(credential_path(home=self.home).exists())
+
+    def test_failed_access_selection_never_removes_an_existing_profile(self) -> None:
+        config_path = self.home / "config.toml"
+        original = b"# unchanged\n[execution]\nmax_concurrency = 5\n"
+        config_path.write_bytes(original)
+        profile = self._initialize().runtime_directory()
+        existing_session = profile / "existing-session.db"
+        existing_session.write_bytes(b"opaque-existing-session")
+        os.chmod(existing_session, 0o600)
+        candidate = AccessConfig(
+            browser_enabled=True,
+            browser_profile=_PROFILE_IDENTITY,
+        )
+
+        def fail_after_profile(stage: str) -> None:
+            if stage == "profile-initialized":
+                raise RuntimeError(stage)
+
+        with self.assertRaisesRegex(ConfigurationError, "interrupted"):
+            configure_browser_access_profile(
+                config_path,
+                candidate,
+                home=self.home,
+                failpoint=fail_after_profile,
+            )
+
+        self.assertEqual(config_path.read_bytes(), original)
+        self.assertEqual(existing_session.read_bytes(), b"opaque-existing-session")
+        self.assertEqual(
+            browser_profile_status(_PROFILE_IDENTITY, home=self.home).presence,
+            BrowserProfilePresence.CONFIGURED,
+        )
+        self.assertFalse(credential_path(home=self.home).exists())
 
 
 if __name__ == "__main__":

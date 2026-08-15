@@ -11,15 +11,17 @@ import unittest
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import BinaryIO
+from typing import Any, BinaryIO
 from unittest.mock import Mock, call, patch
 
 from sciretriever.entry.ports import UserOutputConflictError
 from sciretriever.model.configuration import (
+    AccessConfig,
     AnalysisAuthentication,
     AnalysisConfig,
     AnalysisConfigurationStatus,
     AnalysisProtocol,
+    BrowserProfilePresence,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationProbeResult,
@@ -962,6 +964,20 @@ class CliExchangeRoutingTests(unittest.TestCase):
 
 
 class CliConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _provider_access_overview(module: Any) -> Any:
+        return module._ProviderAccessOverview(
+            api_routes=(
+                ("CORE", "Ready", "Locally ready."),
+                ("Elsevier / Scopus", "Action required", "Configure the API credential."),
+                ("Wiley Online Library", "Available", "Enable the Provider."),
+            ),
+            browser_state="Unavailable",
+            browser_detail=("Profile 'institutional-access' is missing; login is not assessed."),
+            browser_action="No production Browser route is registered.",
+            profile_presence=BrowserProfilePresence.MISSING,
+        )
+
     def test_plain_manager_configures_official_llm_and_never_renders_secret(self) -> None:
         module = _cli_module()
         secret = "llm-manager-secret-sentinel"
@@ -1568,6 +1584,295 @@ class CliConfigurationTests(unittest.TestCase):
             self.assertIn(heading, stdout)
         self.assertIn("api_key=configured", stdout)
         self.assertNotIn("secret-value", stdout)
+
+    def test_plain_access_manager_selects_profile_and_explains_current_browser_gap(
+        self,
+    ) -> None:
+        module = _cli_module()
+        before = Configuration()
+        overview = self._provider_access_overview(module)
+        with (
+            patch("builtins.input", side_effect=("a", "1", "", "y", "b", "q")),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=before),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(
+                module,
+                "browser_profile_status",
+                return_value=SimpleNamespace(presence=BrowserProfilePresence.MISSING),
+            ),
+            patch.object(
+                module,
+                "browser_profile_path",
+                return_value=Path("/fixed/browser-profiles/institutional-access"),
+            ),
+            patch.object(module, "configure_browser_access_profile") as configure,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        for expected in (
+            "Provider API and Browser Access",
+            "CORE",
+            "Elsevier / Scopus",
+            "Controlled Browser",
+            "/fixed/browser-profiles/institutional-access",
+            "login cookies and local storage",
+            "No production Browser route",
+        ):
+            self.assertIn(expected, stderr)
+        configure.assert_called_once()
+        call_args = configure.call_args
+        self.assertEqual(call_args.args[0], Path("config.toml"))
+        candidate = call_args.args[1]
+        self.assertIsInstance(candidate, AccessConfig)
+        self.assertTrue(candidate.browser_enabled)
+        self.assertEqual(candidate.browser_profile, "institutional-access")
+        self.assertEqual(call_args.kwargs, {"home": None})
+
+    def test_access_profile_selection_cancellation_has_no_write_or_browser_side_effect(
+        self,
+    ) -> None:
+        module = _cli_module()
+        overview = self._provider_access_overview(module)
+        with (
+            patch(
+                "builtins.input",
+                side_effect=("a", "1", "institutional-access", "n", "b", "q"),
+            ),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=Configuration()),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(
+                module,
+                "browser_profile_status",
+                return_value=SimpleNamespace(presence=BrowserProfilePresence.MISSING),
+            ),
+            patch.object(
+                module,
+                "browser_profile_path",
+                return_value=Path("/fixed/browser-profiles/institutional-access"),
+            ),
+            patch.object(module, "configure_browser_access_profile") as configure,
+            patch.object(module, "open_visible_browser_login") as open_browser,
+            patch.object(module, "remove_browser_profile") as remove_profile,
+            patch.object(module, "update_configuration_sections") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("No Browser access setting or profile was changed", stderr)
+        configure.assert_not_called()
+        open_browser.assert_not_called()
+        remove_profile.assert_not_called()
+        update.assert_not_called()
+
+    def test_access_manager_opens_only_explicit_visible_login_and_never_claims_authentication(
+        self,
+    ) -> None:
+        module = _cli_module()
+        configured = Configuration(
+            access=AccessConfig(
+                browser_enabled=True,
+                browser_profile="institutional-access",
+            )
+        )
+        overview = self._provider_access_overview(module)
+        handle = Mock()
+        with (
+            patch("builtins.input", side_effect=("a", "2", "y", "b", "q")),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=configured),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(
+                module,
+                "browser_profile_status",
+                return_value=SimpleNamespace(presence=BrowserProfilePresence.CONFIGURED),
+            ),
+            patch.object(
+                module,
+                "browser_profile_path",
+                return_value=Path("/fixed/browser-profiles/institutional-access"),
+            ),
+            patch.object(module, "resolve_browser_profile", return_value=handle) as resolve,
+            patch.object(module, "open_visible_browser_login") as open_browser,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        resolve.assert_called_once_with("institutional-access", home=None)
+        open_browser.assert_called_once_with(handle)
+        self.assertIn("will not fill credentials", stderr)
+        self.assertIn("MFA/CAPTCHA", stderr)
+        self.assertIn("login and article", stderr)
+        self.assertIn("entitlement were not assessed", stderr)
+        self.assertNotIn("authenticated", stderr.casefold())
+
+    def test_access_manager_removes_session_without_config_or_api_credential_mutation(
+        self,
+    ) -> None:
+        module = _cli_module()
+        configured = Configuration(
+            access=AccessConfig(
+                browser_enabled=True,
+                browser_profile="institutional-access",
+            )
+        )
+        overview = self._provider_access_overview(module)
+        with (
+            patch("builtins.input", side_effect=("a", "3", "y", "b", "q")),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=configured),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(
+                module,
+                "browser_profile_status",
+                return_value=SimpleNamespace(presence=BrowserProfilePresence.CONFIGURED),
+            ),
+            patch.object(
+                module,
+                "browser_profile_path",
+                return_value=Path("/fixed/browser-profiles/institutional-access"),
+            ),
+            patch.object(module, "remove_browser_profile", return_value=True) as remove_profile,
+            patch.object(module, "update_configuration_sections") as update,
+            patch.object(module, "remove_credentials") as remove_credentials,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        remove_profile.assert_called_once_with("institutional-access", home=None)
+        update.assert_not_called()
+        remove_credentials.assert_not_called()
+        self.assertIn("cannot be recovered", stderr)
+        self.assertIn("identity remains in config.toml", stderr)
+
+    def test_access_manager_disables_browser_but_retains_selected_session(self) -> None:
+        module = _cli_module()
+        configured = Configuration(
+            access=AccessConfig(
+                browser_enabled=True,
+                browser_profile="institutional-access",
+                browser_max_concurrency=1,
+            )
+        )
+        overview = self._provider_access_overview(module)
+        with (
+            patch("builtins.input", side_effect=("a", "4", "y", "b", "q")),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "load_editable_configuration", return_value=configured),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(module, "update_configuration_sections") as update,
+            patch.object(module, "remove_browser_profile") as remove_profile,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        update.assert_called_once()
+        self.assertEqual(update.call_args.args, (Path("config.toml"),))
+        candidate = update.call_args.kwargs["access"]
+        self.assertFalse(candidate.browser_enabled)
+        self.assertEqual(candidate.browser_profile, "institutional-access")
+        self.assertEqual(candidate.browser_max_concurrency, 1)
+        remove_profile.assert_not_called()
+        self.assertIn("local session was retained", stderr)
+
+    def test_tty_manager_exposes_access_area_and_returns_without_writing(self) -> None:
+        module = _cli_module()
+        configuration = Configuration()
+        runtime = SimpleNamespace(
+            analysis=SimpleNamespace(
+                reference_configuration_complete=False,
+                api_key_required=False,
+                api_key_configured=None,
+                credential_origin_matches=None,
+            ),
+            parsing=SimpleNamespace(
+                configuration_complete=False,
+                bearer_token_required=False,
+                bearer_token_configured=None,
+                credential_origin_matches=None,
+            ),
+        )
+        overview = self._provider_access_overview(module)
+        with (
+            patch.object(module, "interactive_terminal", return_value=True),
+            patch.object(module, "_configuration_summary", return_value=(configuration, runtime)),
+            patch.object(module, "_provider_home_rows", return_value=[]),
+            patch.object(module, "_provider_access_overview", return_value=overview),
+            patch.object(
+                module,
+                "select_configuration_edit_path",
+                return_value=Path("config.toml"),
+            ),
+            patch.object(module, "credential_path", return_value=Path("credentials.toml")),
+            patch.object(module, "load_editable_configuration", return_value=configuration),
+            patch.object(module, "load_credentials", return_value=Mock()),
+            patch.object(
+                module.TerminalChoice,
+                "prompt",
+                autospec=True,
+                side_effect=("access", "back", "quit"),
+            ) as prompt,
+            patch.object(module, "configure_browser_access_profile") as configure,
+            patch.object(module, "remove_browser_profile") as remove_profile,
+        ):
+            code, stdout, stderr = _invoke("config", "--theme", "mono")
+
+        self.assertEqual((code, stdout), (0, ""))
+        first_choice = prompt.call_args_list[0].args[0]
+        self.assertIn(("access", "Provider APIs and Browser Access"), first_choice.options)
+        self.assertIn("Provider Access", stderr)
+        self.assertIn("Literature Provider access", stderr)
+        self.assertNotIn("\x1b[", stderr)
+        configure.assert_not_called()
+        remove_profile.assert_not_called()
+
+    def test_access_overview_uses_three_authorized_apis_and_zero_production_browser_routes(
+        self,
+    ) -> None:
+        import sciretriever.configuration as configuration_boundary
+
+        module = _cli_module()
+        with tempfile.TemporaryDirectory(prefix="sciretriever-access-overview-") as temporary:
+            credentials = configuration_boundary.load_credentials(home=Path(temporary))
+            overview = module._provider_access_overview(
+                Configuration(),
+                credentials=credentials,
+            )
+
+        self.assertEqual(
+            tuple(name for name, _state, _action in overview.api_routes),
+            ("CORE", "Elsevier / Scopus", "Wiley Online Library"),
+        )
+        self.assertEqual(overview.browser_state, "Unavailable")
+        self.assertIn("No production Browser route", overview.browser_action)
+        self.assertIs(overview.profile_presence, BrowserProfilePresence.MISSING)
 
     def test_config_test_routes_named_and_all_to_probe_session_and_uses_result_exit_code(
         self,

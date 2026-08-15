@@ -145,11 +145,19 @@ class ConfigPresentationTests(unittest.TestCase):
                 mineru_detail="Not configured",
                 providers=(("Wiley", "Authorized PDF", "Configured"),),
             )
+            console.access(
+                api_routes=(("Wiley", "Ready", "No local action"),),
+                browser_state="Unavailable",
+                browser_detail="Profile is missing; no production route is registered.",
+                browser_action="Initialize only for future supported routes.",
+            )
             console.changes((("analysis.model", "old", "new"),))
         self.assertEqual(stdout.getvalue(), "")
         rendered = stderr.getvalue()
         self.assertIn("SciRetriever · Configuration", rendered)
         self.assertIn("CORE SERVICES", rendered)
+        self.assertIn("Provider Access", rendered)
+        self.assertIn("Controlled Browser", rendered)
         self.assertIn("Proposed ordinary configuration", rendered)
         self.assertIn("changes", rendered)
         self.assertNotIn("\x1b[", rendered)
@@ -217,19 +225,70 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertNotIn("\x1b[", rendered)
         self.assertNotIn(_SECRET, rendered)
 
+    def test_access_view_supports_all_themes_no_color_and_narrow_terminals(self) -> None:
+        for theme in ConfigTheme:
+            with self.subTest(theme=theme.value):
+                stderr = io.StringIO()
+                with (
+                    redirect_stderr(stderr),
+                    patch.dict(os.environ, {}, clear=True),
+                    patch(
+                        "sciretriever.entry.cli.config_ui.interactive_terminal",
+                        return_value=True,
+                    ),
+                ):
+                    console = ConfigConsole(theme, width=44)
+                    console.access(
+                        api_routes=(
+                            ("Elsevier", "Action required", "Configure the API credential."),
+                            ("Wiley", "Ready", "No local action."),
+                        ),
+                        browser_state="Unavailable",
+                        browser_detail=(
+                            "Profile 'institutional-access' is configured; login is not assessed."
+                        ),
+                        browser_action="No production Browser route is registered.",
+                    )
+                rendered = stderr.getvalue()
+                self.assertIn("Elsevier", rendered)
+                self.assertIn("Wiley", rendered)
+                self.assertIn("Controlled", rendered)
+                self.assertIn("Browser", rendered)
+                self.assertNotIn(_SECRET, rendered)
+                if theme is ConfigTheme.MONO:
+                    self.assertNotIn("\x1b[", rendered)
+
+        no_color = io.StringIO()
+        with (
+            redirect_stderr(no_color),
+            patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True),
+            patch(
+                "sciretriever.entry.cli.config_ui.interactive_terminal",
+                return_value=True,
+            ),
+        ):
+            ConfigConsole("dark", width=40).access(
+                api_routes=(("CORE", "Ready", "No local action."),),
+                browser_state="Unavailable",
+                browser_detail="Profile presence only.",
+                browser_action="No production route.",
+            )
+        self.assertNotIn("\x1b[", no_color.getvalue())
+        self.assertIn("CORE", no_color.getvalue())
+
 
 class TerminalChoiceTests(unittest.TestCase):
     def test_shortcut_uses_public_prompt_session_and_returns_mapped_value(self) -> None:
         with create_pipe_input() as pipe:
-            pipe.send_text("l")
+            pipe.send_text("a")
             result = TerminalChoice[str](
                 message="Open a configuration area",
-                options=(("llm", "LLM Analysis"), ("quit", "Quit")),
-                shortcuts={"l": "llm", "q": "quit"},
+                options=(("access", "Provider Access"), ("quit", "Quit")),
+                shortcuts={"a": "access", "q": "quit"},
                 input_factory=lambda: pipe,
                 output_factory=DummyOutput,
             ).prompt()
-        self.assertEqual(result, "llm")
+        self.assertEqual(result, "access")
 
     def test_direction_key_and_enter_select_an_option(self) -> None:
         with create_pipe_input() as pipe:
