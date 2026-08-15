@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "access_key": "science-aaas",
+  "display_name": "Science / AAAS",
+  "product_name": "Science journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "science-aaas-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/science-aaas.md",
+  "official_references": [
+    "https://www.science.org/",
+    "https://www.aaas.org/terms",
+    "https://www.science.org/content/page/terms-use",
+    "https://www.science.org/content/page/open-access-aaas",
+    "https://www.science.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.aaas.org/terms",
+    "https://www.science.org/content/page/terms-use"
+  ],
+  "rate_limit_references": [
+    "https://www.science.org/robots.txt"
+  ],
+  "landing_origins": ["https://www.science.org"],
+  "asset_origins": ["https://www.science.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1126-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "robots_allowances": [
+        "action-show-xml",
+        "action-download-supplement"
+      ],
+      "contract": "xml-and-supplement-allowances-do-not-create-a-primary-pdf-route"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-terms-and-open-access-pages-unavailable-to-anonymous-review",
+        "robots-allow-xml-and-supplement-actions-not-primary-pdf-automation",
+        "no-published-browser-article-rate-policy",
+        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "shared-cdn-or-platform-template-is-not-shared-risk-or-session-evidence",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "downloaded-supplement", "expected": "supplement"},
+    {"case_id": "xml-media-loading-page-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "live-entitlement-not-asserted"
+  ]
+}

@@ -23,9 +23,11 @@ from sciretriever.acquisition.profile_catalog import (
     IOP_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
     OXFORD_ACADEMIC_ACCESS_PROFILE,
+    PNAS_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
     RSC_ACCESS_PROFILE,
+    SCIENCE_ACCESS_PROFILE,
     SPRINGERLINK_ACCESS_PROFILE,
 )
 from sciretriever.acquisition.profile_verification import (
@@ -431,6 +433,76 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         )
         self.assertIn(
             "shared-platform-template-is-not-shared-risk-or-session-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_science_supplement_crawler_allowance_is_not_a_primary_pdf_route(
+        self,
+    ) -> None:
+        profile = SCIENCE_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1126",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertNotEqual(profile.platform_key, PNAS_ACCESS_PROFILE.platform_key)
+        self.assertTrue(
+            set(profile.landing_origins).isdisjoint(PNAS_ACCESS_PROFILE.landing_origins)
+        )
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertIn(
+            "action-download-supplement",
+            _strings(public["robots_allowances"]),
+        )
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "downloaded-supplement", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_pnas_epdf_disallow_keeps_the_upstream_template_out_of_production(
+        self,
+    ) -> None:
+        profile = PNAS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1073",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(
+            authorized_api["payload"],
+            "no-reviewed-machine-access-pdf-api",
+        )
+        self.assertIn(
+            "official-robots-explicitly-disallow-doi-epdf",
             _strings(browser["blockers"]),
         )
         self.assertIn(

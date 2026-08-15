@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "access_key": "pnas",
+  "display_name": "PNAS",
+  "product_name": "PNAS journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "pnas-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/pnas.md",
+  "official_references": [
+    "https://www.pnas.org/",
+    "https://www.pnas.org/about/terms-of-use",
+    "https://www.pnas.org/about/open-access",
+    "https://www.pnas.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.pnas.org/about/terms-of-use"
+  ],
+  "rate_limit_references": [
+    "https://www.pnas.org/robots.txt"
+  ],
+  "landing_origins": ["https://www.pnas.org"],
+  "asset_origins": ["https://www.pnas.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1073-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-terms-and-open-access-pages-unavailable-to-anonymous-review",
+        "official-robots-explicitly-disallow-doi-epdf",
+        "robots-allow-show-xml-not-primary-pdf-automation",
+        "no-published-browser-article-rate-policy",
+        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "shared-cdn-or-platform-template-is-not-shared-risk-or-session-evidence",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "reader-metrics-xml-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "live-entitlement-not-asserted"
+  ]
+}
