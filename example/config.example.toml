@@ -1,0 +1,85 @@
+# SciRetriever 当前普通运行配置示例。
+#
+# 本文件只保存非敏感运行参数。Provider、LLM 和远程 MinerU secret
+# 都通过裸 `sciretriever config` 交互中心写入固定的
+# ~/.sciretriever/credentials.toml；不要把 secret 写在本文件中。
+#
+# 默认保持纯本地模式：可以进行书目导入导出、本地查询和手动 PDF 接纳，
+# 不会访问任何外部 Provider。需要外部能力时，按下方注释示例显式启用。
+
+[paths]
+catalog_path = "/absolute/private/path/catalog.sqlite3"
+artifact_root = "/absolute/private/path/artifacts"
+
+[discovery]
+# 启用 Metadata Provider 后，该值限制每个 Provider 在一次 DiscoveryRun
+# 中扫描的原始 item 数量，不是最终接纳结果数量。
+metadata_scan_limit = 100
+
+[sources.metadata]
+providers = []
+# 无凭据的基础示例：
+# providers = ["crossref", "arxiv"]
+
+# 当上方启用 crossref 时，必须显式选择访问池：
+# [sources.metadata.crossref]
+# mode = "anonymous"
+# polite 模式还需要非敏感联系邮箱：
+# mode = "polite"
+# mailto = "operator@example.org"
+
+[sources.acquisition]
+providers = []
+# 公开 PDF 路径示例：
+# providers = ["arxiv", "europe-pmc", "unpaywall"]
+# 公开路径之后再尝试 CORE/Elsevier/Wiley 授权主 PDF API：
+# providers = ["arxiv", "europe-pmc", "unpaywall", "core", "elsevier", "wiley"]
+# CORE 与 Elsevier 还要求在 `sciretriever config` 的 Provider 区配置
+# api_key；Wiley 要求在同一区域配置 tdm_api_token。Elsevier 可选
+# institution_token。secret 都不能写在本文件中。Springer 当前全文产品
+# 是 JATS/XML，不是主 PDF API；Wiley 仅对 DOI 安全落地到 Wiley Online
+# Library 的文献适用。
+# 受控 Browser 生产站点规则仍为空。
+
+# 当上方启用 unpaywall 时，必须提供非敏感联系邮箱：
+# [sources.acquisition.unpaywall]
+# contact_email = "operator@example.org"
+
+[assets]
+
+[parsing]
+# `complete content` 需要 operator 管理的 MinerU protocol-2 服务，例如：
+# base_url = "http://127.0.0.1:8000"
+# connection_mode = "loopback"
+# model_identity = "mineru-3.4.4-vlm"
+# remote_upload_authorized = false
+
+[analysis]
+# `complete content` 还需要选择 Analysis adapter、模型和全部预算参数。
+# 推荐直接运行 `sciretriever config` 使用 Guided setup。下面是 OpenAI
+# Responses 的普通配置形状；API key 进入 credentials.toml，不写在这里。
+# provider = "openai"
+# protocol = "openai-responses"
+# base_url = "https://api.openai.com/v1"
+# model = "operator-selected-model"
+# context_window_tokens = 128000
+# authentication = "api-key"
+# metadata_max_output_tokens = 1024
+# content_max_output_tokens = 4096
+# reference_max_output_tokens = 1024
+# max_input_bytes = 1048576
+# max_chunk_bytes = 262144
+# max_chunk_count = 4
+# max_total_llm_requests = 6
+# max_total_output_tokens = 12288
+
+[execution]
+max_concurrency = 4
+
+[library]
+max_input_bytes = 67108864
+
+[access]
+browser_enabled = false
+browser_max_concurrency = 2
+browser_policy_overrides = []
