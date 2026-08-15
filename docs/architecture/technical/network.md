@@ -219,6 +219,16 @@ Provider 专属 origin、selector、有限动作、正文/补充材料判别和�
 规则外目标必须在 DNS 或 transport 前 fail closed；未知 Provider 不获得 generic Browser
 fallback。
 
+当前封闭 action contract 把页面观察/marker 分类作为每个动作前后的固定步骤；规则本身只保存
+有序 `BrowserRuleAction`，kind 限于静态 selector click、打开已核实 viewer、打开已核实官方
+locator 和等待一个明确 `BrowserCaptureKind`。每条规则显式保存不超过全局上限 8 的
+`max_actions`，动作数量、顺序、静态参数、rule revision、origin、marker 与 capture prefix
+全部进入稳定 fingerprint。空动作序列表示只观察；selector 不能包含脚本、XPath/text/role
+表达式、远程 URL 或动态模板，open action 只能使用本 rule allowlist 中且命中已审查 capture
+prefix 的 query-free HTTPS locator。等待动作由文章 deadline、取消信号与 capture condition
+约束，不使用 Provider 固定 sleep。该 Port 不暴露任意 navigate/open-popup/fill/evaluate、page、
+context 或 vendor event。
+
 截至当前实现，`browser.py` 已提供中性的 `BrowserDestinationGuard`：Controlled Browser
 Source 对每篇文章注入一项只含当前规则 origin 与精确 resolver 起点的 guard。Network 在初始
 导航、显式导航、redirect/页面请求、popup、response capture 和 download capture 分别标记
@@ -249,7 +259,7 @@ challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 重建限速状态。
 
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
-运行状态机、封闭页面 marker 分类和多路正文捕获已经完成，但完整封闭 action contract、
+运行状态机、封闭页面 marker 分类、多路正文捕获和封闭 action contract 已经完成，但
 supplement/错文排除、Provider circuit、配置/确认入口以及至少一个 Provider 的端到端 Profile
 尚未全部闭环。
 

@@ -444,10 +444,10 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
 真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
-Provider session broker、operator-managed profile 存储边界、状态/页面分类和多路正文捕获
-也已完成。完整封闭 action contract、supplement/错文排除、Provider circuit、完整 Provider
-Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、
-会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
+Provider session broker、operator-managed profile 存储边界、状态/页面分类、多路正文捕获和
+封闭 action contract 也已完成。supplement/错文排除、Provider circuit、完整 Provider Profile
+和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、会话复用
+和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
 production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
@@ -480,6 +480,14 @@ Springer group:  S1 --provider interval-- S2 --provider interval-- S3
 不是全局默认值。
 
 一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
+
+每个 `BrowserSiteRule` 的页面动作是本地、不可变且有序的封闭序列，不再使用一个可选
+`click_selector` 字段，也没有旧单动作兼容分支。可执行 kind 只有 `CLICK`、`OPEN_VIEWER`、
+`OPEN_VERIFIED_LOCATOR` 和 `WAIT_FOR_CAPTURE`；空序列表示完成访问状态观察后不执行页面
+动作。每条规则的 `revision`、`max_actions`、动作顺序和全部静态参数都进入 fingerprint，最多
+8 步。Click 只接受受限 CSS selector；open 只接受该规则允许 origin 和 capture prefix 内的
+query-free HTTPS locator；wait 只接受封闭捕获枚举并服从文章总 deadline。规则不包含脚本、
+任意表达式、远程 rule、selector guessing、通用导航、登录填写或无限 fallback sequence。
 
 当前 Browser route 的捕获结果是一个非空、按实际字节 hash 去重且有最大候选数的中性批次。
 捕获机制封闭为 download event、普通 PDF response、合法 popup、明确 viewer 和已核实官方
