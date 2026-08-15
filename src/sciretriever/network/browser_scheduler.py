@@ -282,6 +282,7 @@ class BrowserGroupFeedback(str, Enum):
     CHALLENGE_REQUIRED = "challenge-required"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
+    CLEANUP_FAILURE = "cleanup-failure"
     RUNTIME_FAILURE = "runtime-failure"
 
 
@@ -294,6 +295,7 @@ class BrowserCircuitReason(str, Enum):
     CHALLENGE_REQUIRED = "challenge-required"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
+    CLEANUP_FAILURE = "cleanup-failure"
     RUNTIME_FAILURE = "runtime-failure"
 
 
@@ -712,6 +714,7 @@ class BrowserGroupScheduler:
             BrowserGroupFeedback.CHALLENGE_REQUIRED: BrowserCircuitReason.CHALLENGE_REQUIRED,
             BrowserGroupFeedback.IP_BLOCKED: BrowserCircuitReason.IP_BLOCKED,
             BrowserGroupFeedback.ACCOUNT_WARNING: BrowserCircuitReason.ACCOUNT_WARNING,
+            BrowserGroupFeedback.CLEANUP_FAILURE: BrowserCircuitReason.CLEANUP_FAILURE,
         }
         with self._state_lock:
             state = self._runtime_states.setdefault(

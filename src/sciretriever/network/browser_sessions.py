@@ -117,6 +117,19 @@ def _close_object(value: object | None) -> bool:
     return True
 
 
+def _delete_object(value: object | None) -> bool:
+    if value is None:
+        return True
+    delete = getattr(value, "delete", None)
+    if not callable(delete):
+        return True
+    try:
+        delete()
+    except Exception:
+        return False
+    return True
+
+
 class _SessionEntry:
     __slots__ = (
         "session_key",
@@ -133,6 +146,7 @@ class _SessionEntry:
         "active_event_handlers",
         "broken",
         "closed",
+        "cleanup_failed",
     )
 
     def __init__(self, session_key: str) -> None:
@@ -150,6 +164,7 @@ class _SessionEntry:
         self.active_event_handlers: dict[str, EventHandler] = {}
         self.broken = False
         self.closed = False
+        self.cleanup_failed = False
 
     def acquire(
         self,
@@ -307,7 +322,7 @@ class _SessionEntry:
             try:
                 abort()
             except Exception:
-                pass
+                self._mark_cleanup_failure()
         return None
 
     def _dispatch_event(self, event: str, value: object) -> object | None:
@@ -315,28 +330,41 @@ class _SessionEntry:
             handler = self.active_event_handlers.get(event)
         if handler is not None:
             return handler(value)
+        cleaned = True
         if event == "page":
-            _close_object(value)
+            cleaned = _close_object(value)
         elif event == "download":
-            delete = getattr(value, "delete", None)
-            if callable(delete):
-                try:
-                    delete()
-                except Exception:
-                    pass
+            cleaned = _delete_object(value)
+        if not cleaned:
+            self._mark_cleanup_failure()
         return None
+
+    def _mark_cleanup_failure(self) -> None:
+        with self.handler_lock:
+            self.broken = True
+            self.cleanup_failed = True
 
     def close(self) -> bool:
         if self.closed:
-            return True
+            return not self.cleanup_failed
         self.closed = True
         self._clear_handlers()
-        failed = False
-        if not _close_object(self.context):
-            failed = True
+        failed = self.cleanup_failed
+        context = self.context
         manager = self.process_manager
         runtime = self.process_runtime
-        if manager is not None and self.entered_process:
+        entered_process = self.entered_process
+        temporary = self.session_directory
+        # Transfer ownership before invoking vendor cleanup.  A repeated close
+        # observes the sticky result without touching any resource twice.
+        self.context = None
+        self.process_runtime = None
+        self.process_manager = None
+        self.entered_process = False
+        self.session_directory = None
+        if not _close_object(context):
+            failed = True
+        if manager is not None and entered_process:
             exit_method = getattr(manager, "__exit__", None)
             if callable(exit_method):
                 try:
@@ -347,29 +375,35 @@ class _SessionEntry:
                 failed = True
         elif not _close_object(runtime or manager):
             failed = True
-        temporary = self.session_directory
         if temporary is not None:
             try:
                 temporary.cleanup()
             except Exception:
                 failed = True
-        self.context = None
-        self.process_runtime = None
-        self.process_manager = None
-        self.session_directory = None
+        self.cleanup_failed = failed
         return not failed
 
 
 class BrowserSessionLease:
     """Private one-article lease consumed only by ``BrowserClient``."""
 
-    __slots__ = ("_broker", "_entry", "_drain_attempted", "_released", "_invalidate")
+    __slots__ = (
+        "_broker",
+        "_entry",
+        "_drain_attempted",
+        "_drain_failed",
+        "_released",
+        "_release_failed",
+        "_invalidate",
+    )
 
     def __init__(self, broker: BrowserSessionBroker, entry: _SessionEntry) -> None:
         self._broker = broker
         self._entry = entry
         self._drain_attempted = False
+        self._drain_failed = False
         self._released = False
+        self._release_failed = False
         self._invalidate = False
 
     @property
@@ -395,23 +429,33 @@ class BrowserSessionLease:
         if self._released:
             raise BrowserSessionError("Browser session lease is already released")
         if self._drain_attempted:
+            if self._drain_failed:
+                raise BrowserSessionError("Browser article session could not be drained")
             return
         self._drain_attempted = True
         try:
             self._entry.end_article()
         except BrowserSessionError:
             self._invalidate = True
+            self._drain_failed = True
             raise
 
     def release(self) -> None:
         if self._released:
+            if self._release_failed:
+                raise BrowserSessionError("Browser session cleanup failed")
             return
-        self._released = True
-        self._broker._release(
-            self._entry,
-            invalidate=self._invalidate,
-            article_drain_attempted=self._drain_attempted,
-        )
+        try:
+            self._broker._release(
+                self._entry,
+                invalidate=self._invalidate,
+                article_drain_attempted=self._drain_attempted,
+            )
+        except BrowserSessionError:
+            self._release_failed = True
+            raise
+        finally:
+            self._released = True
 
     def __enter__(self) -> BrowserSessionLease:
         return self
@@ -430,7 +474,7 @@ class BrowserSessionLease:
 class BrowserSessionBroker:
     """Own persistent Browser contexts without persisting dynamic health state."""
 
-    __slots__ = ("_clock", "_state_lock", "_entries", "_closed")
+    __slots__ = ("_clock", "_state_lock", "_entries", "_closed", "_cleanup_failed")
 
     def __init__(self, *, clock: Clock = time.monotonic) -> None:
         if not callable(clock):
@@ -439,6 +483,7 @@ class BrowserSessionBroker:
         self._state_lock = threading.Lock()
         self._entries: dict[str, _SessionEntry] = {}
         self._closed = False
+        self._cleanup_failed = False
 
     @staticmethod
     def validate_session_key(session_key: object) -> str:
@@ -459,17 +504,13 @@ class BrowserSessionBroker:
         cancel_event: BrowserSessionCancellation | None = None,
         timeout: float,
     ) -> BrowserSessionLease:
-        key = _session_key(session_key)
-        if not callable(factory):
-            raise TypeError("factory must be callable")
-        if type(downloads_path) is not str or not downloads_path:
-            raise ValueError("downloads_path must be a nonblank string")
-        if cancel_event is not None and not isinstance(
-            cancel_event,
-            BrowserSessionCancellation,
-        ):
-            raise TypeError("cancel_event must expose is_set() or be None")
-        deadline = self._clock() + _positive_timeout(timeout)
+        key, deadline = self._acquire_inputs(
+            session_key,
+            factory=factory,
+            downloads_path=downloads_path,
+            cancel_event=cancel_event,
+            timeout=timeout,
+        )
         while True:
             entry = self._entry(key)
             entry.acquire(deadline=deadline, clock=self._clock, cancel_event=cancel_event)
@@ -477,10 +518,12 @@ class BrowserSessionBroker:
                 current = self._entries.get(key)
                 closed = self._closed
             if closed:
-                entry.lease_lock.release()
+                if not self._discard_locked_entry(entry):
+                    raise BrowserSessionError("Browser session cleanup failed")
                 raise BrowserSessionError("Browser session broker is closed")
             if current is not entry or entry.broken or entry.closed:
-                entry.lease_lock.release()
+                if not self._discard_locked_entry(entry):
+                    raise BrowserSessionError("Browser session cleanup failed")
                 continue
             try:
                 entry.ensure_started(
@@ -496,10 +539,41 @@ class BrowserSessionBroker:
                 )
                 return BrowserSessionLease(self, entry)
             except Exception:
-                entry.close()
-                self._retire(entry)
-                entry.lease_lock.release()
+                if not self._discard_locked_entry(entry):
+                    raise BrowserSessionError("Browser session cleanup failed") from None
                 raise BrowserSessionError("Browser session acquisition failed") from None
+
+    def _acquire_inputs(
+        self,
+        session_key: str,
+        *,
+        factory: BrowserFactory,
+        downloads_path: str,
+        cancel_event: BrowserSessionCancellation | None,
+        timeout: float,
+    ) -> tuple[str, float]:
+        key = _session_key(session_key)
+        if not callable(factory):
+            raise TypeError("factory must be callable")
+        if type(downloads_path) is not str or not downloads_path:
+            raise ValueError("downloads_path must be a nonblank string")
+        if cancel_event is not None and not isinstance(
+            cancel_event,
+            BrowserSessionCancellation,
+        ):
+            raise TypeError("cancel_event must expose is_set() or be None")
+        return key, self._clock() + _positive_timeout(timeout)
+
+    def _discard_locked_entry(self, entry: _SessionEntry) -> bool:
+        cleaned = False
+        try:
+            cleaned = entry.close()
+            self._retire(entry)
+        finally:
+            entry.lease_lock.release()
+        if not cleaned:
+            self._cleanup_failed = True
+        return cleaned
 
     def _entry(self, key: str) -> _SessionEntry:
         with self._state_lock:
@@ -519,19 +593,22 @@ class BrowserSessionBroker:
         article_drain_attempted: bool,
     ) -> None:
         failed = False
-        if not article_drain_attempted:
-            try:
-                entry.end_article()
-            except BrowserSessionError:
-                failed = True
-                invalidate = True
-        if invalidate:
-            entry.broken = True
-            if not entry.close():
-                failed = True
-            self._retire(entry)
-        entry.lease_lock.release()
+        try:
+            if not article_drain_attempted:
+                try:
+                    entry.end_article()
+                except BrowserSessionError:
+                    failed = True
+                    invalidate = True
+            if invalidate:
+                entry.broken = True
+                if not entry.close():
+                    failed = True
+                self._retire(entry)
+        finally:
+            entry.lease_lock.release()
         if failed:
+            self._cleanup_failed = True
             raise BrowserSessionError("Browser session cleanup failed")
 
     def _retire(self, entry: _SessionEntry) -> None:
@@ -549,20 +626,24 @@ class BrowserSessionBroker:
             return
         entry.lease_lock.acquire()
         try:
-            if not entry.close():
-                raise BrowserSessionError("Browser session cleanup failed")
+            cleanup_failed = not entry.close()
             self._retire(entry)
         finally:
             entry.lease_lock.release()
+        if cleanup_failed:
+            self._cleanup_failed = True
+            raise BrowserSessionError("Browser session cleanup failed")
 
     def close(self) -> None:
         with self._state_lock:
             if self._closed:
+                if self._cleanup_failed:
+                    raise BrowserSessionError("Browser session broker cleanup failed")
                 return
             self._closed = True
             entries = tuple(self._entries.values())
             self._entries.clear()
-        failed = False
+        failed = self._cleanup_failed
         for entry in entries:
             entry.lease_lock.acquire()
             try:
@@ -572,6 +653,7 @@ class BrowserSessionBroker:
             finally:
                 entry.lease_lock.release()
         if failed:
+            self._cleanup_failed = True
             raise BrowserSessionError("Browser session broker cleanup failed")
 
     def __enter__(self) -> BrowserSessionBroker:

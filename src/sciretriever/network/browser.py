@@ -17,11 +17,11 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias, cast, runtime_checkable
+from typing import Final, NoReturn, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
 
 from sciretriever.model.access import (
@@ -73,6 +73,7 @@ _DEFAULT_MAX_CAPTURES: Final[int] = 4
 _DEFAULT_MAX_BYTES_PER_DOWNLOAD: Final[int] = 64 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_SECONDS: Final[float] = 60.0
+_DEFAULT_CLEANUP_TIMEOUT_SECONDS: Final[float] = 5.0
 _INTERNAL_SCHEMES = frozenset({"about"})
 _CHALLENGE_MARKERS = (
     "captcha",
@@ -240,8 +241,6 @@ class _Route(Protocol):
 
 
 class _PageContext(Protocol):
-    pages: Iterable[object]
-
     def bind_connection(self, binding: object) -> object: ...
 
     def route(self, pattern: str, handler: Callable[[object], object]) -> object: ...
@@ -307,6 +306,44 @@ class _Navigation:
     saw_request: bool = False
 
 
+@dataclass(slots=True)
+class _RuntimeTask:
+    """One vendor call whose lifetime remains owned until it acknowledges stop."""
+
+    finished: threading.Event = field(default_factory=threading.Event)
+    outcome: list[object] = field(default_factory=list)
+    failure: list[BaseException] = field(default_factory=list)
+    late_cleanup: Callable[[object], None] | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    abandoned: bool = False
+    late_cleanup_failed: bool = False
+
+    def invoke(self, operation: Callable[[], object]) -> None:
+        try:
+            value = operation()
+        except BaseException as error:  # converted at the Network boundary
+            self.failure.append(error)
+        else:
+            with self.lock:
+                abandoned = self.abandoned
+                if not abandoned:
+                    self.outcome.append(value)
+            if abandoned and self.late_cleanup is not None:
+                try:
+                    self.late_cleanup(value)
+                except BaseException:
+                    self.late_cleanup_failed = True
+        finally:
+            self.finished.set()
+
+    def abandon(self) -> tuple[object, ...]:
+        with self.lock:
+            self.abandoned = True
+            values = tuple(self.outcome)
+            self.outcome.clear()
+            return values
+
+
 def _failure(code: str) -> AccessFailure:
     messages = {
         "policy": ("browser destination was rejected", "check the configured web policy", False),
@@ -326,6 +363,15 @@ def _failure(code: str) -> AccessFailure:
     }
     reason, action, retryable = messages.get(code, messages["runtime"])
     return AccessFailure(code=code, reason=reason, action=action, retryable=retryable)
+
+
+def _positive_seconds(value: object, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{field_name} must be a number")
+    candidate = float(value)
+    if candidate <= 0 or candidate != candidate or candidate == float("inf"):
+        raise ValueError(f"{field_name} must be finite and positive")
+    return candidate
 
 
 def _attribute(value: object, name: str) -> object | None:
@@ -407,6 +453,7 @@ class _FlowState:
         "deadline",
         "cancel_event",
         "max_bytes_per_download",
+        "cleanup_timeout_seconds",
         "usage",
         "destinations",
         "navigations",
@@ -416,9 +463,15 @@ class _FlowState:
         "lock",
         "condition",
         "closed",
+        "cleanup_started",
+        "cleanup_finished",
+        "cleanup_failed",
+        "cleanup_claims",
+        "active_tasks",
         "pages",
         "popups",
         "downloads",
+        "streams",
         "viewer_locators",
         "verified_locators",
         "captures",
@@ -438,6 +491,7 @@ class _FlowState:
         deadline: float,
         cancel_event: threading.Event | None,
         max_bytes_per_download: int,
+        cleanup_timeout_seconds: float,
     ) -> None:
         self.scope_permit = scope_permit
         self.resolver = resolver
@@ -450,6 +504,7 @@ class _FlowState:
         self.deadline = deadline
         self.cancel_event = cancel_event
         self.max_bytes_per_download = max_bytes_per_download
+        self.cleanup_timeout_seconds = cleanup_timeout_seconds
         self.usage = _Usage()
         self.destinations: dict[str, ResolvedDestination] = {}
         self.navigations: dict[int, _Navigation] = {}
@@ -459,9 +514,15 @@ class _FlowState:
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.closed = False
+        self.cleanup_started = False
+        self.cleanup_finished = False
+        self.cleanup_failed = False
+        self.cleanup_claims: dict[int, object] = {}
+        self.active_tasks: dict[int, _RuntimeTask] = {}
         self.pages: list[object] = []
         self.popups: list[object] = []
         self.downloads: list[object] = []
+        self.streams: list[object] = []
         self.viewer_locators: set[str] = set()
         self.verified_locators: set[str] = set()
         self.captures: list[BrowserCapture] = []
@@ -490,12 +551,121 @@ class _FlowState:
                 self.error = _Abort(code)
             self.condition.notify_all()
 
+    def mark_cleanup_failure(self) -> None:
+        with self.condition:
+            self.cleanup_failed = True
+            self.condition.notify_all()
+
     def close_for_results(self) -> None:
         """Invalidate callbacks before runtime teardown starts."""
 
         with self.condition:
             self.closed = True
             self.condition.notify_all()
+
+    def own_page(self, page: object) -> bool:
+        with self.lock:
+            if self.closed:
+                return False
+            if all(candidate is not page for candidate in self.pages):
+                self.pages.append(page)
+            return True
+
+    def own_download(self, download: object) -> bool:
+        with self.lock:
+            if self.closed:
+                return False
+            if all(candidate is not download for candidate in self.downloads):
+                self.downloads.append(download)
+            return True
+
+    def own_stream(self, stream: object) -> bool:
+        with self.lock:
+            if self.closed:
+                return False
+            if all(candidate is not stream for candidate in self.streams):
+                self.streams.append(stream)
+            return True
+
+    def forget_stream(self, stream: object) -> None:
+        with self.lock:
+            self.streams = [candidate for candidate in self.streams if candidate is not stream]
+
+    def take_article_resources(
+        self,
+    ) -> tuple[tuple[object, ...], tuple[object, ...], tuple[object, ...]]:
+        with self.lock:
+            pages = tuple(self.pages)
+            downloads = tuple(self.downloads)
+            streams = tuple(self.streams)
+            self.pages.clear()
+            self.downloads.clear()
+            self.streams.clear()
+            return pages, downloads, streams
+
+    def claim_cleanup(self, value: object) -> bool:
+        with self.lock:
+            identity = id(value)
+            existing = self.cleanup_claims.get(identity)
+            if existing is value:
+                return False
+            self.cleanup_claims[identity] = value
+            return True
+
+    def register_task(self, task: _RuntimeTask) -> None:
+        with self.condition:
+            self.active_tasks[id(task)] = task
+            self.condition.notify_all()
+
+    def finish_task(self, task: _RuntimeTask) -> None:
+        with self.condition:
+            self.active_tasks.pop(id(task), None)
+            self.condition.notify_all()
+
+    def wait_for_tasks(self, deadline: float) -> bool:
+        """Wait within the local cleanup budget; never use Provider clocks."""
+
+        while True:
+            with self.condition:
+                finished = tuple(
+                    task for task in self.active_tasks.values() if task.finished.is_set()
+                )
+                for task in finished:
+                    self.active_tasks.pop(id(task), None)
+                    if task.late_cleanup_failed:
+                        self.cleanup_failed = True
+                if not self.active_tasks:
+                    return not self.cleanup_failed
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                self.mark_cleanup_failure()
+                return False
+            # A vendor task may not signal this condition directly, so poll a
+            # short bounded interval while retaining one total cleanup budget.
+            time.sleep(min(remaining, 0.01))
+
+    def begin_cleanup(self) -> bool:
+        with self.condition:
+            if self.cleanup_started:
+                return False
+            self.cleanup_started = True
+            return True
+
+    def finish_cleanup(self, *, failed: bool) -> None:
+        with self.condition:
+            self.cleanup_failed = self.cleanup_failed or failed
+            self.cleanup_finished = True
+            self.condition.notify_all()
+
+    def wait_for_cleanup(self, deadline: float) -> bool:
+        with self.condition:
+            while not self.cleanup_finished:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    self.cleanup_failed = True
+                    return False
+                self.condition.wait(timeout=min(remaining, 0.01))
+            return not self.cleanup_failed
 
     def consume(
         self,
@@ -664,6 +834,7 @@ class _FlowState:
         try:
             permit.release()
         except Exception as error:
+            self.mark_cleanup_failure()
             raise _Abort("cleanup") from error
 
     def bind_runtime(
@@ -819,7 +990,7 @@ class _FlowState:
             self.request_leases.clear()
             navigations = tuple(self.navigations.values())
             self.navigations.clear()
-        failed = False
+        failed = self.cleanup_failed
         for lease in leases:
             if lease.completed:
                 continue
@@ -828,6 +999,7 @@ class _FlowState:
                 lease.host_permit.release()
             except Exception:
                 failed = True
+                self.mark_cleanup_failure()
         for navigation in navigations:
             if navigation.initial_host is None:
                 continue
@@ -835,6 +1007,7 @@ class _FlowState:
                 navigation.initial_host.release()
             except Exception:
                 failed = True
+                self.mark_cleanup_failure()
             navigation.initial_host = None
         return failed
 
@@ -927,6 +1100,7 @@ class BrowserClient:
         "_session_broker",
         "_clock",
         "_timeout_seconds",
+        "_cleanup_timeout_seconds",
         "_budget",
     )
 
@@ -940,6 +1114,7 @@ class BrowserClient:
         operator_profile: object | None = None,
         session_broker: BrowserSessionBroker | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+        cleanup_timeout_seconds: float = _DEFAULT_CLEANUP_TIMEOUT_SECONDS,
         budget: BrowserBudget | None = None,
         clock: Clock | None = None,
     ) -> None:
@@ -949,10 +1124,11 @@ class BrowserClient:
             raise TypeError("coordinator must be an AccessCoordinator")
         if not isinstance(destination_policy, (DestinationPolicy, type(None))):
             raise TypeError("destination_policy must be a DestinationPolicy")
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
-            raise TypeError("timeout_seconds must be a number")
-        if float(timeout_seconds) <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        timeout = _positive_seconds(timeout_seconds, field_name="timeout_seconds")
+        cleanup_timeout = _positive_seconds(
+            cleanup_timeout_seconds,
+            field_name="cleanup_timeout_seconds",
+        )
         if budget is not None and not isinstance(budget, BrowserBudget):
             raise TypeError("budget must be a BrowserBudget")
         if session_broker is not None and not isinstance(
@@ -969,7 +1145,8 @@ class BrowserClient:
         self._operator_profile = operator_profile
         self._session_broker = session_broker
         self._clock = clock or time.monotonic
-        self._timeout_seconds = float(timeout_seconds)
+        self._timeout_seconds = timeout
+        self._cleanup_timeout_seconds = cleanup_timeout
         self._budget = budget or BrowserBudget()
 
     @property
@@ -1086,6 +1263,7 @@ class BrowserClient:
                 deadline,
                 cancel_event,
                 effective_budget.max_bytes_per_download,
+                self._cleanup_timeout_seconds,
             )
             state.destinations[initial.hostname] = initial
             initial_binding = self._binding(initial)
@@ -1095,49 +1273,84 @@ class BrowserClient:
             state.check()
 
             if self._session_broker is None:
-                process_manager = self._factory(
-                    profile=self._operator_profile,
-                    downloads_path=str(temporary_path),
-                    connection_binding=initial_binding,
+                process_manager = self._run_cancellable(
+                    state,
+                    lambda: self._factory(
+                        profile=self._operator_profile,
+                        downloads_path=str(temporary_path),
+                        connection_binding=initial_binding,
+                    ),
+                    abort=lambda: None,
+                    late_cleanup=lambda value: self._late_close(state, value),
                 )
                 process_runtime = process_manager
                 enter = getattr(process_manager, "__enter__", None)
                 if callable(enter):
-                    entered_value = enter()
+                    entered_value = self._run_cancellable(
+                        state,
+                        enter,
+                        abort=lambda: self._abort_runtime(None, None, process_manager),
+                        late_cleanup=lambda value: self._late_close(state, value),
+                    )
                     entered_process = True
                     if entered_value is not None:
                         process_runtime = entered_value
                 if process_runtime is None:
                     raise _Abort("runtime")
-                self._acknowledge_binding(process_runtime, initial_binding)
+                self._run_cancellable(
+                    state,
+                    lambda: self._acknowledge_binding(process_runtime, initial_binding),
+                    abort=lambda: self._abort_runtime(None, None, process_runtime),
+                )
                 state.runtime = process_runtime
                 launch = getattr(process_runtime, "new_context", None)
                 if not callable(launch):
                     raise _Abort("runtime")
                 context = cast(
                     _PageContext,
-                    launch(
-                        profile=self._operator_profile,
-                        downloads_path=str(temporary_path),
-                        accept_downloads=True,
-                        connection_binding=initial_binding,
+                    self._run_cancellable(
+                        state,
+                        lambda: launch(
+                            profile=self._operator_profile,
+                            downloads_path=str(temporary_path),
+                            accept_downloads=True,
+                            connection_binding=initial_binding,
+                        ),
+                        abort=lambda: self._abort_runtime(None, None, process_runtime),
+                        late_cleanup=lambda value: self._late_close(state, value),
                     ),
                 )
-                self._acknowledge_binding(context, initial_binding)
-                self._install_handlers(state, context)
+                self._run_cancellable(
+                    state,
+                    lambda: self._acknowledge_binding(context, initial_binding),
+                    abort=lambda: self._abort_runtime(None, context, process_runtime),
+                )
+                self._run_cancellable(
+                    state,
+                    lambda: self._install_handlers(state, context),
+                    abort=lambda: self._abort_runtime(None, context, process_runtime),
+                )
             else:
                 if normalized_session_key is None:
                     raise _Abort("policy")
-                session_lease = self._session_broker.acquire(
-                    normalized_session_key,
-                    factory=self._factory,
-                    profile=self._operator_profile,
-                    downloads_path=str(temporary_path),
-                    connection_binding=initial_binding,
-                    route_handler=self._route_handler(state),
-                    event_handlers=self._event_handlers(state),
-                    cancel_event=cancel_event,
-                    timeout=max(deadline - self._clock(), 0.001),
+                session_lease = cast(
+                    BrowserSessionLease,
+                    self._run_cancellable(
+                        state,
+                        lambda: self._session_broker.acquire(
+                            normalized_session_key,
+                            factory=self._factory,
+                            profile=self._operator_profile,
+                            downloads_path=str(temporary_path),
+                            connection_binding=initial_binding,
+                            route_handler=self._route_handler(state),
+                            event_handlers=self._event_handlers(state),
+                            cancel_event=cancel_event,
+                            timeout=max(deadline - self._clock(), 0.001),
+                        ),
+                        abort=lambda: None,
+                        late_cleanup=self._discard_late_session_lease,
+                    ),
                 )
                 process_runtime = session_lease.process_runtime
                 context = cast(_PageContext, session_lease.context)
@@ -1145,8 +1358,16 @@ class BrowserClient:
             new_page = getattr(context, "new_page", None)
             if not callable(new_page):
                 raise _Abort("runtime")
-            page = new_page()
-            state.pages.append(page)
+            page = self._run_cancellable(
+                state,
+                new_page,
+                abort=lambda: self._abort_runtime(None, context, process_runtime),
+                late_cleanup=lambda value: self._late_close(state, value),
+            )
+            if not state.own_page(page):
+                if state.claim_cleanup(page) and not self._close_object(page):
+                    state.mark_cleanup_failure()
+                raise _Abort("cleanup")
             self._client_navigate(state, page, initial.url.url)
             state.check()
             if flow is not None:
@@ -1180,6 +1401,7 @@ class BrowserClient:
                 state.error.code if state is not None and state.error is not None else "runtime"
             )
         finally:
+            final_cleanup_deadline = time.monotonic() + self._cleanup_timeout_seconds
             if state is not None:
                 cleanup_error = self._cleanup_state(
                     state,
@@ -1198,28 +1420,64 @@ class BrowserClient:
             if session_lease is not None:
                 if cleanup_error or self._result_requires_session_retirement(result):
                     session_lease.invalidate()
-                try:
-                    session_lease.drain_article()
-                except BrowserSessionError:
+                if state is None:
+                    try:
+                        session_lease.drain_article()
+                    except BrowserSessionError:
+                        cleanup_error = True
+                        session_lease.invalidate()
+                elif not self._cleanup_call(
+                    state,
+                    (session_lease, "drain"),
+                    session_lease.drain_article,
+                    final_cleanup_deadline,
+                ):
                     cleanup_error = True
                     session_lease.invalidate()
+                if state is None:
+                    try:
+                        session_lease.release()
+                    except BrowserSessionError:
+                        cleanup_error = True
+                elif not self._cleanup_call(
+                    state,
+                    (session_lease, "release"),
+                    session_lease.release,
+                    final_cleanup_deadline,
+                ):
+                    cleanup_error = True
                 if state is not None and state.finish_all_requests():
                     cleanup_error = True
-                    session_lease.invalidate()
-                try:
-                    session_lease.release()
-                except BrowserSessionError:
-                    cleanup_error = True
             if temporary is not None:
-                try:
-                    temporary.cleanup()
-                except Exception:
+                if state is None:
+                    try:
+                        temporary.cleanup()
+                    except Exception:
+                        cleanup_error = True
+                elif not self._cleanup_call(
+                    state,
+                    (temporary, "cleanup"),
+                    temporary.cleanup,
+                    final_cleanup_deadline,
+                ):
                     cleanup_error = True
             if scope_permit is not None:
-                try:
-                    scope_permit.release()
-                except Exception:
+                if state is None:
+                    try:
+                        scope_permit.release()
+                    except Exception:
+                        cleanup_error = True
+                elif not self._cleanup_call(
+                    state,
+                    (scope_permit, "release"),
+                    scope_permit.release,
+                    final_cleanup_deadline,
+                ):
                     cleanup_error = True
+            if state is not None and not state.wait_for_tasks(final_cleanup_deadline):
+                cleanup_error = True
+            if state is not None and state.cleanup_failed:
+                cleanup_error = True
         if cleanup_error:
             return _failure("cleanup")
         return result
@@ -1291,30 +1549,26 @@ class BrowserClient:
         context: object | None,
         process_runtime: object | None,
     ) -> None:
-        """Actively interrupt a blocking vendor operation.
+        """Signal a blocking vendor operation without consuming cleanup ownership.
 
-        A cancellation that only stops waiting in the caller would leave the
-        browser connected and allow a late page/download result to mutate the
-        flow.  Abort/stop/cancel are preferred; close is the fail-closed
-        fallback for minimal injected runtimes.
+        Page/context/process close belongs to the deterministic teardown phase
+        and must be attempted at most once.  This method therefore uses only a
+        non-owning interrupt surface; teardown escalates to close and waits for
+        every outstanding vendor task within the local cleanup budget.
         """
 
         for target in (page, context, process_runtime):
             if target is None:
                 continue
-            invoked = False
-            for name in ("abort", "cancel", "stop", "close"):
+            for name in ("abort", "cancel", "stop"):
                 method = getattr(target, name, None)
                 if not callable(method):
                     continue
                 try:
                     method()
                 except Exception:
-                    pass
-                invoked = True
+                    continue
                 break
-            if not invoked:
-                continue
 
     def _run_cancellable(
         self,
@@ -1322,6 +1576,7 @@ class BrowserClient:
         operation: Callable[[], object],
         *,
         abort: Callable[[], None],
+        late_cleanup: Callable[[object], None] | None = None,
     ) -> object:
         """Run a potentially blocking runtime operation with active abort.
 
@@ -1330,43 +1585,144 @@ class BrowserClient:
         invalidate a result that raced with cancellation/deadline.
         """
 
-        finished = threading.Event()
-        outcome: list[object] = []
-        failure: list[BaseException] = []
-
-        def invoke() -> None:
-            try:
-                outcome.append(operation())
-            except BaseException as error:  # boundary converts below
-                failure.append(error)
-            finally:
-                finished.set()
-
-        worker = threading.Thread(target=invoke, daemon=True)
-        worker.start()
-        aborted_code: str | None = None
-        while not finished.wait(0.01):
+        state.check()
+        task = self._start_runtime_task(state, operation, late_cleanup=late_cleanup)
+        while not task.finished.wait(0.01):
             try:
                 state.check()
             except _Abort as error:
-                aborted_code = error.code
-                abort()
-                break
-        if aborted_code is not None:
-            # Waiting here is intentional: cleanup and admission must not
-            # race a still-running page/navigation/download operation.
-            while not finished.wait(0.01):
-                abort()
-            raise _Abort(aborted_code)
-        if failure:
-            error = failure[0]
+                self._cancel_runtime_task(
+                    state,
+                    task,
+                    abort=abort,
+                    late_cleanup=late_cleanup,
+                    code=error.code,
+                )
+        state.finish_task(task)
+        if task.failure:
+            error = task.failure[0]
             if isinstance(error, _Abort):
                 raise error
             raise error
-        state.check()
-        if not outcome:
+        try:
+            state.check()
+        except _Abort as error:
+            # The vendor call may have completed in the narrow interval between
+            # the last polling check and ``finished``.  Its result has not yet
+            # crossed the Network boundary, so cancellation must transfer any
+            # resource result to the same bounded late-cleanup path used for a
+            # still-running operation.
+            self._cancel_runtime_task(
+                state,
+                task,
+                abort=abort,
+                late_cleanup=late_cleanup,
+                code=error.code,
+            )
+        if not task.outcome:
             raise _Abort("runtime")
-        return outcome[0]
+        return task.outcome[0]
+
+    @staticmethod
+    def _start_runtime_task(
+        state: _FlowState,
+        operation: Callable[[], object],
+        *,
+        late_cleanup: Callable[[object], None] | None = None,
+    ) -> _RuntimeTask:
+        task = _RuntimeTask(late_cleanup=late_cleanup)
+        state.register_task(task)
+        worker = threading.Thread(target=lambda: task.invoke(operation), daemon=True)
+        try:
+            worker.start()
+        except Exception as error:
+            state.finish_task(task)
+            state.mark_cleanup_failure()
+            raise _Abort("cleanup") from error
+        return task
+
+    def _cancel_runtime_task(
+        self,
+        state: _FlowState,
+        task: _RuntimeTask,
+        *,
+        abort: Callable[[], None],
+        late_cleanup: Callable[[object], None] | None,
+        code: str,
+    ) -> NoReturn:
+        late_values = task.abandon()
+        cleanup_tasks = self._start_late_cleanup_tasks(state, late_values, late_cleanup)
+        try:
+            abort_task = self._start_runtime_task(state, abort)
+        except _Abort:
+            state.close_for_results()
+            raise
+        deadline = time.monotonic() + state.cleanup_timeout_seconds
+        observed = (task, abort_task, *cleanup_tasks)
+        self._wait_runtime_tasks(observed, deadline)
+        cleanup_ok = self._finish_cancelled_tasks(state, task, cleanup_tasks, observed)
+        if not cleanup_ok:
+            # No result may cross the boundary after abort acknowledgement
+            # failed. Final teardown escalates to owned resource close and the
+            # scheduler opens the provider cleanup circuit.
+            state.close_for_results()
+            state.mark_cleanup_failure()
+            raise _Abort("cleanup")
+        raise _Abort(code)
+
+    def _start_late_cleanup_tasks(
+        self,
+        state: _FlowState,
+        values: tuple[object, ...],
+        cleanup: Callable[[object], None] | None,
+    ) -> tuple[_RuntimeTask, ...]:
+        if cleanup is None:
+            return ()
+        tasks = []
+        for value in values:
+            try:
+                tasks.append(
+                    self._start_runtime_task(
+                        state,
+                        lambda value=value: cleanup(value),
+                    )
+                )
+            except _Abort:
+                state.mark_cleanup_failure()
+        return tuple(tasks)
+
+    @staticmethod
+    def _wait_runtime_tasks(tasks: tuple[_RuntimeTask, ...], deadline: float) -> None:
+        while any(not task.finished.is_set() for task in tasks):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return
+            time.sleep(min(remaining, 0.01))
+
+    @staticmethod
+    def _finish_cancelled_tasks(
+        state: _FlowState,
+        operation_task: _RuntimeTask,
+        cleanup_tasks: tuple[_RuntimeTask, ...],
+        observed: tuple[_RuntimeTask, ...],
+    ) -> bool:
+        for current in observed:
+            if current.finished.is_set():
+                state.finish_task(current)
+        abort_task = observed[1]
+        cleanup_failed = (
+            operation_task.late_cleanup_failed
+            or bool(abort_task.failure)
+            or abort_task.late_cleanup_failed
+            or any(current.failure or current.late_cleanup_failed for current in cleanup_tasks)
+        )
+        if cleanup_failed:
+            state.mark_cleanup_failure()
+        return (
+            all(current.finished.is_set() for current in observed)
+            and not cleanup_failed
+            and not state.cleanup_failed
+        )
 
     def _resolve_initial(
         self,
@@ -1450,12 +1806,27 @@ class BrowserClient:
             )
         except _Abort as error:
             state.fail(error.code)
-            self._abort_route(route)
-            state.finish_request(request)
+            self._finish_rejected_route(state, route, request)
         except Exception:
             state.fail("runtime")
-            self._abort_route(route)
+            self._finish_rejected_route(state, route, request)
+
+    def _finish_rejected_route(
+        self,
+        state: _FlowState,
+        route: _Route,
+        request: object | None,
+    ) -> None:
+        if not self._abort_route(route):
+            # Without abort acknowledgement the transport may still be live.
+            # Retain any registered host lease until context/process teardown
+            # acknowledges stop; releasing it here would open an admission gap.
+            state.mark_cleanup_failure()
+            return
+        try:
             state.finish_request(request)
+        except _Abort:
+            state.mark_cleanup_failure()
 
     def _admit_route(
         self,
@@ -1492,7 +1863,7 @@ class BrowserClient:
             self._continue_route(route)
         finally:
             if host_permit is not None:
-                host_permit.release()
+                state.close_host(host_permit)
 
     @staticmethod
     def _request_from_event(value: object) -> object:
@@ -1591,31 +1962,36 @@ class BrowserClient:
         method()
 
     @staticmethod
-    def _abort_route(route: _Route) -> None:
+    def _abort_route(route: _Route) -> bool:
         method = getattr(route, "abort", None)
-        if callable(method):
-            try:
-                method()
-            except Exception:
-                pass
+        if not callable(method):
+            return False
+        try:
+            method()
+        except Exception:
+            return False
+        return True
 
     def _handle_popup(self, state: _FlowState, page: object) -> None:
         try:
             state.consume(popups=1)
             state.popups.append(page)
-            if page not in state.pages:
-                state.pages.append(page)
+            if not state.own_page(page):
+                raise _Abort("cleanup")
         except _Abort as error:
             state.fail(error.code)
-            self._close_object(page)
+            if state.claim_cleanup(page) and not self._close_object(page):
+                state.mark_cleanup_failure()
         except Exception:
             state.fail("runtime")
-            self._close_object(page)
+            if state.claim_cleanup(page) and not self._close_object(page):
+                state.mark_cleanup_failure()
 
     def _handle_download(self, state: _FlowState, download: object) -> None:
         request: object | None = None
         try:
-            state.downloads.append(download)
+            if not state.own_download(download):
+                raise _Abort("cleanup")
             state.consume(downloads=1)
             url = _text_attribute(download, "url")
             if url is None:
@@ -1658,16 +2034,22 @@ class BrowserClient:
             )
         except _Abort as error:
             state.fail(error.code)
-            self._delete_object(download)
+            self._discard_failed_download(state, download)
         except Exception:
             state.fail("runtime")
-            self._delete_object(download)
+            self._discard_failed_download(state, download)
         finally:
             if request is not None:
                 try:
                     state.finish_request(request)
                 except Exception:
                     state.fail("cleanup")
+                    state.mark_cleanup_failure()
+
+    @staticmethod
+    def _discard_failed_download(state: _FlowState, download: object) -> None:
+        if state.claim_cleanup(download) and not BrowserClient._delete_object(download):
+            state.mark_cleanup_failure()
 
     @staticmethod
     def _download_media_type(download: object) -> str:
@@ -1732,11 +2114,7 @@ class BrowserClient:
             value = reader()
         except TypeError:
             value = reader(state.max_bytes_per_download + 1)
-        if not isinstance(value, bytes):
-            raise _Abort("runtime")
-        if len(value) > state.max_bytes_per_download:
-            raise _Abort("oversize")
-        return value
+        return BrowserClient._bounded_body_value(state, value)
 
     @staticmethod
     def _download_bytes(state: _FlowState, download: object) -> bytes:
@@ -1752,11 +2130,54 @@ class BrowserClient:
             value = reader()
         except TypeError:
             value = reader(state.max_bytes_per_download + 1)
-        if not isinstance(value, bytes):
+        return BrowserClient._bounded_body_value(state, value)
+
+    @staticmethod
+    def _bounded_body_value(state: _FlowState, value: object) -> bytes:
+        """Consume bytes or one private closable stream without leaking it."""
+
+        if isinstance(value, bytes):
+            return BrowserClient._checked_body_bytes(state, value)
+        reader = getattr(value, "read", None)
+        close = getattr(value, "close", None)
+        if not callable(reader) or not callable(close):
             raise _Abort("runtime")
-        if len(value) > state.max_bytes_per_download:
+        return BrowserClient._read_private_stream(state, value, reader)
+
+    @staticmethod
+    def _read_private_stream(
+        state: _FlowState,
+        stream: object,
+        reader: Callable[..., object],
+    ) -> bytes:
+        if not state.own_stream(stream):
+            if state.claim_cleanup(stream) and not BrowserClient._close_object(stream):
+                state.mark_cleanup_failure()
+            raise _Abort("cleanup")
+        body: object = None
+        read_error: Exception | None = None
+        try:
+            body = reader(state.max_bytes_per_download + 1)
+        except Exception as error:
+            read_error = error
+        finally:
+            state.forget_stream(stream)
+            if state.claim_cleanup(stream) and not BrowserClient._close_object(stream):
+                state.mark_cleanup_failure()
+                raise _Abort("cleanup") from None
+        if read_error is not None:
+            if isinstance(read_error, _Abort):
+                raise read_error
+            raise _Abort("runtime") from read_error
+        if not isinstance(body, bytes):
+            raise _Abort("runtime")
+        return BrowserClient._checked_body_bytes(state, body)
+
+    @staticmethod
+    def _checked_body_bytes(state: _FlowState, body: bytes) -> bytes:
+        if len(body) > state.max_bytes_per_download:
             raise _Abort("oversize")
-        return value
+        return body
 
     def _client_navigate(self, state: _FlowState, page: object, url: str) -> None:
         try:
@@ -1944,27 +2365,26 @@ class BrowserClient:
         *,
         keep_session: bool = False,
     ) -> bool:
-        failed = False
+        cleanup_deadline = time.monotonic() + state.cleanup_timeout_seconds
+        if not state.begin_cleanup():
+            return not state.wait_for_cleanup(cleanup_deadline)
+        failed = state.cleanup_failed
         state.close_for_results()
-        pages: list[object] = list(state.pages)
+        owned_pages, owned_downloads, owned_streams = state.take_article_resources()
+        if not self._cleanup_objects(state, owned_pages, cleanup_deadline, delete=False):
+            failed = True
+        if not self._cleanup_objects(state, owned_downloads, cleanup_deadline, delete=True):
+            failed = True
+        if not self._cleanup_objects(state, owned_streams, cleanup_deadline, delete=False):
+            failed = True
         if context is not None and not keep_session:
-            try:
-                pages.extend(page for page in context.pages if page not in pages)
-            except Exception:
+            if not self._cleanup_call(
+                state,
+                context,
+                lambda: self._close_object_or_raise(context),
+                cleanup_deadline,
+            ):
                 failed = True
-        for page in reversed(pages):
-            if not self._close_object(page):
-                failed = True
-        for download in reversed(state.downloads):
-            if not self._delete_object(download):
-                failed = True
-        if context is not None and not keep_session and not self._close_object(context):
-            failed = True
-        # Context close is the runtime-level abort/completion acknowledgement
-        # for any subresource that did not emit requestfinished/requestfailed.
-        # Keep its host lease until after that close returns.
-        if not keep_session and state.finish_all_requests():
-            failed = True
         if (
             not keep_session
             and process_manager is not None
@@ -1972,34 +2392,135 @@ class BrowserClient:
                 process_manager,
                 process_runtime,
                 entered_process,
+                state=state,
+                deadline=cleanup_deadline,
             )
         ):
             failed = True
+        # Runtime calls must acknowledge completion after page/context/process
+        # shutdown and before host admission is released.  A non-acknowledging
+        # task is a cleanup failure, never a late candidate or exhaustion.
+        if not state.wait_for_tasks(cleanup_deadline):
+            failed = True
+        # Context close is the runtime-level abort/completion acknowledgement
+        # for any subresource that did not emit requestfinished/requestfailed.
+        # Keep its host lease until after that close returns.
+        if not keep_session and state.finish_all_requests():
+            failed = True
+        state.finish_cleanup(failed=failed)
         return failed
 
-    @staticmethod
+    def _cleanup_objects(
+        self,
+        state: _FlowState,
+        values: tuple[object, ...],
+        deadline: float,
+        *,
+        delete: bool,
+    ) -> bool:
+        cleaned = True
+        for value in reversed(values):
+            operation = (
+                (lambda value=value: self._delete_object_or_raise(value))
+                if delete
+                else (lambda value=value: self._close_object_or_raise(value))
+            )
+            if not self._cleanup_call(state, value, operation, deadline):
+                cleaned = False
+        return cleaned
+
     def _cleanup_process(
+        self,
         process_manager: object,
         process_runtime: object | None,
         entered_process: bool,
+        *,
+        state: _FlowState | None = None,
+        deadline: float | None = None,
     ) -> bool:
-        failed = False
+        target: object
         if entered_process:
             exit_method = getattr(process_manager, "__exit__", None)
             if callable(exit_method):
-                try:
-                    exit_method(None, None, None)
-                except Exception:
-                    failed = True
-            return not failed
-        target = process_runtime if process_runtime is not None else process_manager
-        close = getattr(target, "close", None)
-        if callable(close):
+                target = process_manager
+
+                def operation() -> object:
+                    return exit_method(None, None, None)
+
+            else:
+                target = process_runtime if process_runtime is not None else process_manager
+
+                def operation() -> object:
+                    return self._close_object_or_raise(target)
+
+        else:
+            target = process_runtime if process_runtime is not None else process_manager
+
+            def operation() -> object:
+                return self._close_object_or_raise(target)
+
+        if state is None:
             try:
-                close()
+                operation()
             except Exception:
-                failed = True
-        return not failed
+                return False
+            return True
+        if deadline is None:
+            raise TypeError("deadline is required for state-owned cleanup")
+        return self._cleanup_call(state, target, operation, deadline)
+
+    @staticmethod
+    def _cleanup_call(
+        state: _FlowState,
+        owner: object,
+        operation: Callable[[], object],
+        deadline: float,
+    ) -> bool:
+        if not state.claim_cleanup(owner):
+            return not state.cleanup_failed
+        task = _RuntimeTask()
+        state.register_task(task)
+        worker = threading.Thread(target=lambda: task.invoke(operation), daemon=True)
+        try:
+            worker.start()
+        except Exception:
+            state.finish_task(task)
+            state.mark_cleanup_failure()
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0 or not task.finished.wait(remaining):
+            state.mark_cleanup_failure()
+            return False
+        state.finish_task(task)
+        if task.failure:
+            state.mark_cleanup_failure()
+            return False
+        return True
+
+    @staticmethod
+    def _late_close(state: _FlowState, value: object) -> None:
+        if not state.claim_cleanup(value):
+            return
+        if not BrowserClient._close_object(value):
+            state.mark_cleanup_failure()
+            raise RuntimeError("late Browser resource cleanup failed")
+
+    @staticmethod
+    def _discard_late_session_lease(value: object) -> None:
+        if not isinstance(value, BrowserSessionLease):
+            raise RuntimeError("late Browser session result violated its contract")
+        value.invalidate()
+        value.release()
+
+    @staticmethod
+    def _close_object_or_raise(value: object) -> None:
+        if not BrowserClient._close_object(value):
+            raise RuntimeError("Browser object cleanup failed")
+
+    @staticmethod
+    def _delete_object_or_raise(value: object) -> None:
+        if not BrowserClient._delete_object(value):
+            raise RuntimeError("Browser download cleanup failed")
 
     @staticmethod
     def _close_object(value: object) -> bool:

@@ -613,7 +613,7 @@ def _browser_group_feedback(item: AcquisitionWorkItem) -> BrowserGroupFeedback:
         "acquisition-browser-account-warning": BrowserGroupFeedback.ACCOUNT_WARNING,
         "acquisition-browser-rate-limited": BrowserGroupFeedback.RATE_LIMITED,
         "acquisition-browser-runtime-failed": BrowserGroupFeedback.RUNTIME_FAILURE,
-        "acquisition-browser-cleanup-failed": BrowserGroupFeedback.RUNTIME_FAILURE,
+        "acquisition-browser-cleanup-failed": BrowserGroupFeedback.CLEANUP_FAILURE,
         "acquisition-browser-page-state-conflict": BrowserGroupFeedback.RUNTIME_FAILURE,
     }.get(failure.code, BrowserGroupFeedback.NONE)
 
@@ -636,6 +636,9 @@ def _browser_runtime_block_failure(
         ),
         BrowserCircuitReason.IP_BLOCKED: "Review the provider IP access block.",
         BrowserCircuitReason.ACCOUNT_WARNING: "Review the provider account warning.",
+        BrowserCircuitReason.CLEANUP_FAILURE: (
+            "Repair Browser resource cleanup and explicitly acknowledge the provider circuit."
+        ),
         BrowserCircuitReason.RUNTIME_FAILURE: (
             "Repair the Browser runtime and explicitly acknowledge the provider circuit."
         ),

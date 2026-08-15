@@ -621,6 +621,7 @@ def _runtime_readiness(
         BrowserCircuitReason.CHALLENGE_REQUIRED: BrowserGroupReadiness.CHALLENGE_REQUIRED,
         BrowserCircuitReason.IP_BLOCKED: BrowserGroupReadiness.IP_BLOCKED,
         BrowserCircuitReason.ACCOUNT_WARNING: BrowserGroupReadiness.ACCOUNT_WARNING,
+        BrowserCircuitReason.CLEANUP_FAILURE: BrowserGroupReadiness.RUNTIME_FAILED,
         BrowserCircuitReason.RUNTIME_FAILURE: BrowserGroupReadiness.RUNTIME_FAILED,
     }[state.circuit_reason]
 
