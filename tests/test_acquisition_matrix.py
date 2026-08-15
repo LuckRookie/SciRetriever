@@ -365,6 +365,7 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                 ),
                 ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
                 ("core", ("api.core.ac.uk", "core.ac.uk")),
+                ("plos", ("journals.plos.org",)),
             ),
         )
         resolver = production_web_access_profile_resolver()
@@ -393,6 +394,14 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             normalize_url("https://api.elsevier.com/content/article/example")
         )
         self.assertNotEqual(springer_scope, elsevier_scope)
+
+        plos_scope, plos_policy = resolver.resolve(
+            normalize_url("https://journals.plos.org/plosone/article")
+        )
+        self.assertEqual(plos_scope, AccessScope("plos", "web"))
+        self.assertEqual(plos_policy.max_concurrency, 1)
+        self.assertEqual(plos_policy.min_start_interval, 30.0)
+        self.assertEqual(plos_policy.cooldown_after_completion, 0.0)
 
         unknown_scope, unknown_policy = resolver.resolve(
             normalize_url("https://repository.example.invalid/paper.pdf")
