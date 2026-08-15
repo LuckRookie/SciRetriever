@@ -18,7 +18,8 @@ SciRetriever 支持 Python 3.10 及以上版本，开发基线为 Python 3.12。
 uv sync --locked
 ```
 
-最小本地配置只需要指定 Catalog 和 ArtifactStore 的绝对路径：
+仓库中的 [`example/config.example.toml`](example/config.example.toml) 是不含 secret 的公开示例。复制到自己的私有
+运行目录后，最小本地配置只需要把 Catalog 和 ArtifactStore 改成真实绝对路径：
 
 ```toml
 [paths]
@@ -160,7 +161,7 @@ access
 3. 当前目录中已经存在的 `config.toml`；
 4. 均不存在时失败。
 
-CLI 不提供 `--config` 覆盖参数，也不创建隐式默认配置。完整字段和路径限制见[配置手册](docs/guides/configuration.md)。仓库根目录的个人 `config.toml` 不是公开模板，不应提交。
+CLI 不提供 `--config` 覆盖参数，也不创建隐式默认配置。完整字段和路径限制见[配置手册](docs/guides/configuration.md)。仓库根目录的 `config.toml` 是本机个人运行配置并被 Git 忽略；需要新建配置时复制公开示例，真实路径、Provider 选择和个人运行参数不应提交。
 
 Provider、LLM 与远程 MinerU 的 secret 与普通配置分离，统一固定保存在
 `~/.sciretriever/credentials.toml`。其目录必须是当前用户拥有、权限为 `0700` 的普通
@@ -179,7 +180,7 @@ API key；自定义 HTTP loopback 可以显式选择无认证。MinerU 只暴露
 remote 必须是 hostname-based HTTPS、配置 origin-bound bearer token，并明确确认 PDF
 会离开本机。项目不读取 LLM/MinerU secret 环境变量，也不提供旧合同回退或自动迁移。
 
-自动 PDF 获取固定按“公开来源 → 授权 Provider API → 受控浏览器”串行短路。当前公开
+自动 PDF 获取固定按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。当前公开
 阶段包含已保存 direct/landing hints、arXiv、Europe PMC、Unpaywall 等；授权阶段当前
 已接入 CORE API v3、Elsevier Article/Object Retrieval 与 Wiley Online Library TDM API。启用
 `core` 时要求通过
@@ -191,6 +192,27 @@ Wiley Online Library 的文献适用。启用 `elsevier` 时要求配置 `api_ke
 ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MAIN web-pdf`
 attachment EID，再用 Object Retrieval 获取 PDF；普通 Scopus EID、任意 object、XML 和
 supplement 不会冒充主 PDF。Springer 当前全文产品不是主 PDF API。生产 Browser 站点规则仍为空。
+
+同一批目标会先完成 Public cohort，再只对剩余目标执行 Authorized API cohort；低风险路线
+发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时会延期或失败，不会借机切换
+Browser 绕过限制。将来存在经过生产核实的 Browser route 后，不同
+`browser_rate_limit_group` 可以并行，同一组固定 `concurrency = 1`，并按该 Provider 的文章
+启动间隔、窗口和 cooldown 串行；`browser_max_concurrency` 只是跨组的本机资源上限。
+
+Browser 升级前，正常日志会显示剩余篇数、并行组数、各组 `minimum_start_interval`、
+`next_allowed_in_seconds` 和保守 `minimum_duration_seconds`。跨组最低总时长取最慢组的下界，
+仍不包含无法预知的网络、页面渲染、人工登录或服务等待时间。登录、MFA、challenge、账号警告
+和 cleanup failure 会暂停或熔断对应组，并以稳定原因和建议动作进入本次报告；已提交的其它
+Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会重新读取数据库 current facts，只补仍缺失
+的步骤。
+
+`sciretriever config` 可以初始化 operator-managed profile，并由用户明确打开一个从空白页开始的
+可见 Browser 完成人工登录；SciRetriever 不自动填写登录、选择机构或处理 MFA/CAPTCHA。
+profile 已存在、当前 session 已认证、某篇文章具有 entitlement 是三个不同事实。当前
+production Browser route count 为 `0`，所以这些 profile 操作不会使自动 Completion 启动出版社
+Browser。支持矩阵、等待语义、状态检查和故障处理详见
+[PDF 获取指南](docs/guides/pdf-acquisition.md)。限速只能降低风险，不能保证账号不会被限制；
+用户仍须遵守自己的访问授权和站点规则。
 
 外部命令只有在 adapter、普通参数、凭据、AccessPolicy 和所需外部服务全部就绪时才会发起调用。缺少任一条件时，生产 Bootstrap 会在创建 Storage 之前稳定 fail closed，例如返回 `metadata-not-ready`、`acquisition-not-ready`、`parser-not-ready` 或 `analysis-not-ready`；这类结果表示当前运行环境尚未就绪，不表示控制流会静默降级。
 

@@ -4,6 +4,7 @@
 
 - [项目 README](../../README.md)：安装方式、固定命令树、最小本地旅程、发现与补全边界，以及生产 Bootstrap、离线外部 Port 注入和受控协议/安全 QA 三层验收证据。
 - [SciRetriever 配置手册](configuration.md)：九组普通配置、配置文件选择、固定凭据文件、Provider readiness 和显式只读 probe。
+- [PDF 获取指南](pdf-acquisition.md)：Public → Authorized API → Browser-last 的执行顺序、当前支持矩阵、Provider 分组限速、预计时间、人工登录、暂停和重跑。
 
 用户指南只把安装后可观察、且已有对应验收证据的行为写成当前能力。外部 Port 的受控 fake 验收、loopback 协议 QA 或 Chromium 安全 QA 不等于生产环境已经对真实 Provider、Parser、LLM 或出版社开放；具体证据边界以项目 README 的“当前验收边界”为准。
 

@@ -554,7 +554,9 @@ production capability 存在
 
 ## 7. 普通配置示意
 
-下面示例只展示一个纯本地 Library/书目交换基础和一组可选的外部能力参数。请把
+仓库中的 [`example/config.example.toml`](../../example/config.example.toml) 提供同一合同的
+可复制、默认不启用外部 Provider 的完整注释示例。下面片段展示一个纯本地
+Library/书目交换基础和一组可选的外部能力参数。请把
 Storage 路径、模型身份、Provider 选择与安全授权换成自己的实际设置；不要把 secret
 写入此文件。
 
