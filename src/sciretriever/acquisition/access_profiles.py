@@ -12,7 +12,8 @@ import hashlib
 import ipaddress
 import re
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import date
 from enum import Enum, unique
 from typing import ClassVar, Final
 from urllib.parse import urlsplit
@@ -33,6 +34,15 @@ _ROUTE_KEY: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)+$",
     re.ASCII,
 )
+_RULE_ID: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+    re.ASCII,
+)
+_EVIDENCE_REVISION: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
+    re.ASCII,
+)
+_PROFILE_FIXTURE_PREFIX: Final[str] = "tests/fixtures/acquisition/profiles/"
 _SENSITIVE_MARKERS: Final[frozenset[str]] = frozenset(
     {
         "api-key",
@@ -182,8 +192,64 @@ def _publisher_name(value: object) -> str:
     return _plain_text(value, field_name="publisher name", maximum=160).casefold()
 
 
-def _rule_marker(value: object) -> str:
-    return _plain_text(value, field_name="Browser rule marker", maximum=512)
+def _rule_id(value: object) -> str:
+    candidate = _plain_text(value, field_name="Browser rule id", maximum=128).casefold()
+    if _RULE_ID.fullmatch(candidate) is None:
+        raise ValueError("Browser rule id must be a stable token")
+    return candidate
+
+
+def _evidence_revision(value: object) -> str:
+    candidate = _plain_text(value, field_name="evidence revision", maximum=128).casefold()
+    if _EVIDENCE_REVISION.fullmatch(candidate) is None:
+        raise ValueError("evidence revision must be a stable token")
+    return candidate
+
+
+def _evidence_url(value: object) -> str:
+    candidate = _plain_text(value, field_name="official evidence URL", maximum=1024)
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        raise ValueError("official evidence URL must be a static public HTTPS URL") from None
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("official evidence URL must be a static public HTTPS URL")
+    hostname = _hostname(parsed.hostname)
+    path = parsed.path or "/"
+    return f"https://{hostname}{path}"
+
+
+def _notes_reference(value: object) -> str:
+    candidate = _plain_text(value, field_name="Notes reference", maximum=256)
+    if (
+        not candidate.startswith("docs/notes/providers/")
+        or not candidate.endswith(".md")
+        or "\\" in candidate
+        or any(part in {"", ".", ".."} for part in candidate.split("/"))
+    ):
+        raise ValueError("Notes reference must name one Provider Notes Markdown file")
+    return candidate
+
+
+def _fixture_reference(value: object) -> str:
+    candidate = _plain_text(value, field_name="profile fixture reference", maximum=256)
+    if (
+        not candidate.startswith(_PROFILE_FIXTURE_PREFIX)
+        or not candidate.endswith(".json")
+        or "\\" in candidate
+        or any(part in {"", ".", ".."} for part in candidate.split("/"))
+    ):
+        raise ValueError("profile fixture reference must name one acquisition profile JSON file")
+    return candidate
 
 
 @unique
@@ -197,51 +263,64 @@ class PolicyEvidence(str, Enum):
 
 @unique
 class ProfileProductionStatus(str, Enum):
-    """Whether a profile may be assembled into the production registry."""
+    """Independent verification state for one access profile."""
 
     PRODUCTION_READY = "production-ready"
     FIXTURE_VERIFIED = "fixture-verified"
-    PUBLIC_API_ONLY = "public-api-only"
     UNSUPPORTED = "unsupported"
 
 
 @dataclass(frozen=True, slots=True)
-class BrowserRuleSet:
-    """Closed page-state and PDF-ownership rules; never arbitrary script."""
+class PublisherAccessEvidence:
+    """Uniform, secret-free evidence package for one access profile."""
 
-    pdf_action_selectors: tuple[str, ...] = field(default=(), repr=False)
-    login_markers: tuple[str, ...] = field(default=(), repr=False)
-    entitlement_markers: tuple[str, ...] = field(default=(), repr=False)
-    paywall_markers: tuple[str, ...] = field(default=(), repr=False)
-    mfa_markers: tuple[str, ...] = field(default=(), repr=False)
-    challenge_markers: tuple[str, ...] = field(default=(), repr=False)
-    primary_pdf_url_markers: tuple[str, ...] = field(default=(), repr=False)
-    supplementary_url_markers: tuple[str, ...] = field(default=(), repr=False)
-    maximum_clicks: int = 1
+    display_name: str
+    product_name: str
+    official_references: tuple[str, ...]
+    access_terms_references: tuple[str, ...]
+    rate_limit_references: tuple[str, ...]
+    verification_date: date
+    evidence_revision: str
+    notes_reference: str
+    fixture_reference: str
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "display_name",
+            _plain_text(self.display_name, field_name="profile display name", maximum=160),
+        )
+        object.__setattr__(
+            self,
+            "product_name",
+            _plain_text(self.product_name, field_name="profile product name", maximum=200),
+        )
         for field_name in (
-            "pdf_action_selectors",
-            "login_markers",
-            "entitlement_markers",
-            "paywall_markers",
-            "mfa_markers",
-            "challenge_markers",
-            "primary_pdf_url_markers",
-            "supplementary_url_markers",
+            "official_references",
+            "access_terms_references",
+            "rate_limit_references",
         ):
-            normalized = _unique_tuple(
+            references = _unique_tuple(
                 getattr(self, field_name),
                 field_name=field_name,
-                normalize=_rule_marker,
+                normalize=_evidence_url,
             )
-            object.__setattr__(self, field_name, normalized)
-        if type(self.maximum_clicks) is not int or not 0 <= self.maximum_clicks <= 8:
-            raise ValueError("maximum_clicks must be an integer from zero through eight")
-
-    @property
-    def can_initiate_download(self) -> bool:
-        return bool(self.pdf_action_selectors or self.primary_pdf_url_markers)
+            if not references:
+                raise ValueError(f"{field_name} must contain at least one official reference")
+            object.__setattr__(self, field_name, references)
+        if not isinstance(self.verification_date, date):
+            raise TypeError("verification_date must be a date")
+        object.__setattr__(
+            self,
+            "evidence_revision",
+            _evidence_revision(self.evidence_revision),
+        )
+        object.__setattr__(self, "notes_reference", _notes_reference(self.notes_reference))
+        object.__setattr__(
+            self,
+            "fixture_reference",
+            _fixture_reference(self.fixture_reference),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,12 +341,13 @@ class PublisherAccessProfile:
     browser_allowed_origins: tuple[str, ...]
     browser_rate_limit_group: str | None
     browser_session_key: str | None
+    browser_rule_id: str | None
+    browser_rule_revision: int | None
     policy_evidence: PolicyEvidence
     policy_revision: str
-    notes_reference: str
     production_status: ProfileProductionStatus
+    evidence: PublisherAccessEvidence
     browser_policy: BrowserGroupPolicy | None = None
-    browser_rules: BrowserRuleSet = BrowserRuleSet()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "access_key", PublisherAccessKey(self.access_key))
@@ -345,14 +425,20 @@ class PublisherAccessProfile:
                 "browser_session_key",
                 BrowserSessionKey(self.browser_session_key),
             )
+        if self.browser_rule_id is not None:
+            object.__setattr__(self, "browser_rule_id", _rule_id(self.browser_rule_id))
+        if self.browser_rule_revision is not None and (
+            type(self.browser_rule_revision) is not int or self.browser_rule_revision < 1
+        ):
+            raise ValueError("browser_rule_revision must be a positive integer or None")
 
     def _validate_policy_fields(self) -> None:
         if not isinstance(self.policy_evidence, PolicyEvidence):
             raise TypeError("policy_evidence must be PolicyEvidence")
         if not isinstance(self.production_status, ProfileProductionStatus):
             raise TypeError("production_status must be ProfileProductionStatus")
-        if not isinstance(self.browser_rules, BrowserRuleSet):
-            raise TypeError("browser_rules must be BrowserRuleSet")
+        if not isinstance(self.evidence, PublisherAccessEvidence):
+            raise TypeError("evidence must be PublisherAccessEvidence")
         if self.browser_policy is not None and not isinstance(
             self.browser_policy,
             BrowserGroupPolicy,
@@ -363,14 +449,6 @@ class PublisherAccessProfile:
             "policy_revision",
             _plain_text(self.policy_revision, field_name="policy revision", maximum=64),
         )
-        notes = _plain_text(self.notes_reference, field_name="Notes reference", maximum=256)
-        if (
-            not notes.startswith("docs/notes/providers/")
-            or not notes.endswith(".md")
-            or ".." in notes.split("/")
-        ):
-            raise ValueError("Notes reference must name one Provider Notes Markdown file")
-        object.__setattr__(self, "notes_reference", notes)
 
     def _validate_browser_contract(self) -> None:
         browser_values_present = any(
@@ -378,8 +456,9 @@ class PublisherAccessProfile:
                 self.browser_allowed_origins,
                 self.browser_rate_limit_group is not None,
                 self.browser_session_key is not None,
+                self.browser_rule_id is not None,
+                self.browser_rule_revision is not None,
                 self.browser_policy is not None,
-                self.browser_rules != BrowserRuleSet(),
             )
         )
         if self.browser_route_key is None and browser_values_present:
@@ -388,10 +467,12 @@ class PublisherAccessProfile:
             not self.browser_allowed_origins
             or self.browser_rate_limit_group is None
             or self.browser_session_key is None
+            or self.browser_rule_id is None
+            or self.browser_rule_revision is None
             or self.browser_policy is None
         ):
             raise ValueError(
-                "Browser routes require origins, a rate group, a session key, and a policy"
+                "Browser routes require origins, a rate group, a session key, a rule, and a policy"
             )
         if self.browser_policy is not None and (
             self.browser_policy.rate_limit_group != self.browser_rate_limit_group
@@ -400,20 +481,22 @@ class PublisherAccessProfile:
             raise ValueError("Browser policy must match the profile group and revision")
         if self.production_status is ProfileProductionStatus.PRODUCTION_READY and (
             self.policy_evidence is PolicyEvidence.UNVERIFIED
-            or (
-                self.browser_route_key is not None
-                and (
-                    not self.browser_rules.can_initiate_download
-                    or self.browser_policy is None
-                    or not self.browser_policy.has_pacing
-                )
+        ):
+            raise ValueError("a production-ready profile needs verified policy evidence")
+        if self.production_status is not ProfileProductionStatus.UNSUPPORTED and not any(
+            (self.public_route_keys, self.api_route_keys, self.browser_route_key is not None)
+        ):
+            raise ValueError("a verified profile needs an executable route")
+        if self.browser_policy is not None and not self.browser_policy.has_pacing:
+            raise ValueError("a Browser profile needs a paced provider policy")
+        if self.production_status is ProfileProductionStatus.UNSUPPORTED and any(
+            (
+                self.public_route_keys,
+                self.api_route_keys,
+                self.browser_route_key is not None,
             )
         ):
-            raise ValueError("a production-ready Browser profile needs verified executable rules")
-        if self.production_status is ProfileProductionStatus.PUBLIC_API_ONLY and (
-            self.browser_route_key is not None
-        ):
-            raise ValueError("a public/API-only profile cannot declare a Browser route")
+            raise ValueError("an unsupported profile cannot declare executable routes")
 
     @property
     def revision_hash(self) -> str:
@@ -433,6 +516,8 @@ class PublisherAccessProfile:
                 self.browser_allowed_origins,
                 self.browser_rate_limit_group,
                 self.browser_session_key,
+                self.browser_rule_id,
+                self.browser_rule_revision,
                 None
                 if self.browser_policy is None
                 else (
@@ -449,18 +534,17 @@ class PublisherAccessProfile:
                 ),
                 self.policy_evidence.value,
                 self.policy_revision,
-                self.notes_reference,
                 self.production_status.value,
                 (
-                    self.browser_rules.pdf_action_selectors,
-                    self.browser_rules.login_markers,
-                    self.browser_rules.entitlement_markers,
-                    self.browser_rules.paywall_markers,
-                    self.browser_rules.mfa_markers,
-                    self.browser_rules.challenge_markers,
-                    self.browser_rules.primary_pdf_url_markers,
-                    self.browser_rules.supplementary_url_markers,
-                    self.browser_rules.maximum_clicks,
+                    self.evidence.display_name,
+                    self.evidence.product_name,
+                    self.evidence.official_references,
+                    self.evidence.access_terms_references,
+                    self.evidence.rate_limit_references,
+                    self.evidence.verification_date.isoformat(),
+                    self.evidence.evidence_revision,
+                    self.evidence.notes_reference,
+                    self.evidence.fixture_reference,
                 ),
             )
         ).encode("utf-8")
@@ -504,11 +588,11 @@ class PublisherAccessProfileCatalog:
 __all__ = (
     "AccessPlatformKey",
     "BrowserRateLimitGroup",
-    "BrowserRuleSet",
     "BrowserSessionKey",
     "PolicyEvidence",
     "ProfileProductionStatus",
     "PublisherAccessKey",
+    "PublisherAccessEvidence",
     "PublisherAccessProfile",
     "PublisherAccessProfileCatalog",
     "normalize_profile_origin",
