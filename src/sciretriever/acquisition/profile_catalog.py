@@ -102,6 +102,84 @@ ELSEVIER_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+NATURE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="nature-portfolio",
+    platform_key="nature",
+    landing_origins=("https://www.nature.com",),
+    asset_origins=("https://www.nature.com",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1038",),
+    weak_publisher_names=("nature portfolio", "nature publishing group"),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="springer-nature-tdm-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Nature Portfolio",
+        product_name="Nature.com article platform",
+        official_references=(
+            "https://www.nature.com/",
+            "https://www.nature.com/info/terms-and-conditions",
+            "https://www.springernature.com/gp/researchers/text-and-data-mining",
+        ),
+        access_terms_references=("https://www.nature.com/info/terms-and-conditions",),
+        rate_limit_references=(
+            "https://www.springernature.com/gp/researchers/text-and-data-mining",
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="nature-browser-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/springer-nature.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/nature-portfolio.json",
+    ),
+)
+
+SPRINGERLINK_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="springerlink",
+    platform_key="springerlink",
+    landing_origins=("https://link.springer.com",),
+    asset_origins=("https://link.springer.com",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1007",),
+    weak_publisher_names=("springer", "springerlink"),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="springer-nature-tdm-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Springer Nature Link",
+        product_name="Springer Nature Link article platform",
+        official_references=(
+            "https://link.springer.com/",
+            "https://link.springer.com/termsandconditions",
+            "https://www.springernature.com/gp/researchers/text-and-data-mining",
+        ),
+        access_terms_references=("https://link.springer.com/termsandconditions",),
+        rate_limit_references=(
+            "https://www.springernature.com/gp/researchers/text-and-data-mining",
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="springerlink-browser-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/springer-nature.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/springerlink.json",
+    ),
+)
+
 WILEY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="wiley-online-library",
     platform_key="wiley-online-library",
@@ -147,7 +225,13 @@ WILEY_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
 PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] = (
     PublisherAccessVerificationMatrix(
         profiles=PublisherAccessProfileCatalog(
-            (CORE_ACCESS_PROFILE, ELSEVIER_ACCESS_PROFILE, WILEY_ACCESS_PROFILE)
+            (
+                CORE_ACCESS_PROFILE,
+                ELSEVIER_ACCESS_PROFILE,
+                NATURE_ACCESS_PROFILE,
+                SPRINGERLINK_ACCESS_PROFILE,
+                WILEY_ACCESS_PROFILE,
+            )
         ),
         browser_rules=PRODUCTION_BROWSER_RULE_CATALOG,
     )
@@ -160,7 +244,9 @@ PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG: Final[PublisherAccessProfileCatalog
 __all__ = (
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
+    "NATURE_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
+    "SPRINGERLINK_ACCESS_PROFILE",
     "WILEY_ACCESS_PROFILE",
 )
