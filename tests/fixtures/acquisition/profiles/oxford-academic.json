@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "access_key": "oxford-academic",
+  "display_name": "Oxford Academic",
+  "product_name": "Oxford Academic journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "oxford-academic-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/oxford-academic.md",
+  "official_references": [
+    "https://academic.oup.com/",
+    "https://academic.oup.com/pages/open-research/text-and-data-mining",
+    "https://academic.oup.com/pages/standard-legal-terms-and-conditions",
+    "https://academic.oup.com/pages/open-research/open-access",
+    "https://academic.oup.com/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://academic.oup.com/pages/standard-legal-terms-and-conditions",
+    "https://academic.oup.com/pages/open-research/text-and-data-mining"
+  ],
+  "rate_limit_references": [
+    "https://academic.oup.com/robots.txt"
+  ],
+  "landing_origins": ["https://academic.oup.com"],
+  "asset_origins": ["https://academic.oup.com"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1093-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-terms-tdm-and-open-access-pages-unavailable-to-anonymous-review",
+        "robots-disallow-download-citation-auth-and-search-paths",
+        "no-published-browser-article-rate-policy",
+        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "shared-platform-template-is-not-shared-risk-or-session-evidence",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "chapter-metadata-loading-page-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "platform-risk-and-session-sharing-not-established",
+    "live-entitlement-not-asserted"
+  ]
+}
