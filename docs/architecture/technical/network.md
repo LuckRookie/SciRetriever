@@ -308,10 +308,14 @@ circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_c
 不清除仍有效的 cooldown。动态 snapshot 仅含稳定 group、revision、时钟截止、连续计数和封闭
 原因，并与 scheduler 一起拒绝序列化；不含 URL、selector、Cookie、Token 或文献标识。
 
-生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
-运行状态机、封闭页面 marker 分类、多路正文捕获、封闭 action contract 和 supplement/错文
-排除、Provider cooldown/circuit、确定性取消/资源清理以及安装 wheel 的离线 Browser foundation
-验收已经完成，但配置/确认入口以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
+生产 Controlled Browser 仍保持 fail closed：Bootstrap 已把共享 session broker、scheduler、
+admission controller 和 cohort executor 接入完整及 capability-scoped Completion 对象图，
+operator-managed profile 存储与交互入口、运行状态机、封闭页面 marker、多路正文捕获、封闭
+action contract、supplement/错文排除、Provider cooldown/circuit、确定性取消/资源清理和安装
+wheel 的离线 Browser foundation 也已验收。但当前 Browser client 为空、production Browser rule
+catalog 为 0，execution confirmation 与 runtime readiness 均为 false，所以不会产生真实 Provider
+Browser 流量。至少一个 Provider 仍须完成官方政策、页面规则、正文归属、fixture 和另行授权的
+现场核实门，才能把对应 route 标为 production-ready。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、账号警告、not found、PDF captured 和

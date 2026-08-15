@@ -2,7 +2,7 @@
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：metadata `arxiv`；asset `arxiv`
+- 当前选择键：Metadata `arxiv`；Acquisition `arxiv`
 - 供应商角色：预印本元数据与主文 PDF 线索
 - 当前仓库接入状态：专用 Metadata Atom adapter 与公开 PDF Source 均已进入生产 registry；两者共享 `arxiv/api` 准入范围
 

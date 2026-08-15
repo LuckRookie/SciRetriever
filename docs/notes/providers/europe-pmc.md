@@ -2,7 +2,7 @@
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：metadata `europe-pmc`；asset `europe-pmc`
+- 当前选择键：Metadata `europe-pmc`；Acquisition `europe-pmc`
 - 供应商角色：生命科学元数据、references/citations 与开放全文线索
 - 当前仓库接入状态：专用 Metadata REST adapter 与公开 PDF Source 均已进入生产 registry；两者共享 `europe-pmc/api` 准入范围
 

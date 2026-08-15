@@ -180,13 +180,15 @@ Port 由消费能力的模块所有：
 - raw `sqlite3` repository 与 publisher；
 - 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
 - metadata search、metadata reference query 和 Acquisition route adapters；
-- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、Browser scheduler/session broker 与受控浏览器；
+- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、tiered cohort orchestrator 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
 - MinerU parser；
 - LLM adapter；
 - BibTeX、RIS 和 CSL JSON codec；
 - 本机写锁、时钟和资源预算。
 
 此外，`bootstrap.py` 在生产 CLI 启动时一次性调用 `logging.api.configure_logging(...)`；logger level、formatter、最终脱敏 Filter 和 stderr handler 由 Logging 模块实现，不通过模块构造器注入，也不形成 Logging Port。
+
+完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 只有 CORE、Elsevier 与 Wiley 的授权 API capability，production Browser rule catalog 为 0；生产对象图因此不构造 Browser client，并把 execution confirmation 与 runtime readiness 保持为 false。普通 `browser_enabled` 只进入 admission 的显式总开关，不能单独产生 Browser 流量。共享 Browser foundation 已接线不等于任一出版社 Browser route 已 production-ready。
 
 模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `bootstrap.py` 构造。
 

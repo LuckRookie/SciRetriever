@@ -28,7 +28,7 @@
 
 外部 API 存在不等于 SciRetriever 已接入；配置 key 被接受不等于有 concrete client；fake、Protocol、lazy factory 和目标 Model 也不等于用户可运行工作流。Provider 返回 observation/locator 仍不等于 Literature 或资产已被业务规则接纳。
 
-截至 2026-08-13，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。当前受控 Browser 组件已有离线与 Chromium QA，但生产站点规则目录为空；不能把组件存在写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
+截至 2026-08-15，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。完整及 capability-scoped Completion 对象图还共享同一 Profile catalog/Planner、tiered cohort executor、Browser scheduler/session broker 和 admission controller。当前 Browser client 仍为空，production Browser rule catalog 为 0，execution confirmation 与 runtime readiness 均关闭；离线与 Chromium QA 只证明 Browser foundation，不能写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
 Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。
 
@@ -72,7 +72,7 @@ Acquisition 当前生产映射如下：
 | 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 只接受 operator 注入的获准 locator resolver |
 | 授权主 PDF API | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
 | Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
-| 受控 Browser | 组件与 QA 已完成，生产站点规则目录为空，因此当前不可执行 |
+| 受控 Browser | 共享 foundation、配置入口与离线/Chromium QA 已完成；生产站点规则目录为空、Browser client 与 execution/runtime readiness 关闭，因此当前不可执行 |
 
 PLOS 的显式 journals locator 仍走通用公开 hint，不是专属 route；精确 host
 `journals.plos.org` 共享 `plos/web` scope，按官方 robots 至少间隔 30 秒启动请求。Copernicus、
@@ -127,7 +127,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - Provider 凭据与 LLM/MinerU secret 共用当前用户拥有的 `~/.sciretriever/credentials.toml`，由 Bootstrap 私有注入对应 adapter；目录必须为普通非符号链接目录且权限为 `0700`，文件必须为普通非符号链接文件且权限为 `0600`。不得写入 URL、日志、异常、trace、provenance、生产 fixture 或 Notes；状态诊断不显示值、掩码、长度、hash 或 fingerprint。
 - 外部 URL 必须经过共享 Network policy：HTTPS、URL/DNS/redirect/origin 复核、受限 headers、timeout、响应大小、请求总数与并发预算。
 - 每个 production adapter 必须声明稳定 provider/channel/service AccessScope、真实 quota 共享范围和经过核对的访问政策；缺少 policy 不得退化为无限制访问。Adapter 解释 provider 规则，Network 在当前进程的 Metadata、Acquisition 和其它调用方之间共享执行。
-- 同一 provider 网页普通 HTTP 与受控浏览器在当前进程最多一个活动流程，完整结束后至少冷却 30 秒；更严格的供应商规则优先。API 使用独立 scope 并按真实政策运行，公开/OA/direct 声明不能绕过实际 provider/host scope。
+- 普通 HTTP 使用实际 provider `web` scope 与 host policy，不固定继承 Browser 的单并发或文章间隔。Browser 额外按 `browser_rate_limit_group` 调度：不同风险组可以并行，同一组固定 `concurrency=1` 并按该 Provider 的 interval/window/cooldown 限速串行；不存在所有 Provider 共用的 30 秒规则。API 使用真实 quota scope 和政策，公开/OA/direct 声明不能绕过实际 provider/host 准入。
 - `429`、`Retry-After` 和 quota 反馈必须作用于当前进程的共享 scope；局部 `sleep`、adapter 私有 semaphore、SDK 内建但不可见的重试不能替代进程内共享准入。
 - 重定向后重新做安全判断；不跨 origin 自动携带认证 headers、cookie 或 query secrets。
 - HTTP 200、`content-type` 名称、文件扩展名、OA 标志和 `pdf_url` 都不是接纳证据；读取必须有界并做 media type 规范化和 PDF/XML 基本检查。
@@ -154,7 +154,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - [ ] 核对 provider 展示名、当前真实配置 key 和目标 Metadata/Acquisition capability，未把目标矩阵写成当前接入。
 - [ ] 官方 URL 可访问；不可访问、需 key/JS 或 403 的部分已明确记录。
 - [ ] 认证、内容 entitlement、配额和限流没有混为一项。
-- [ ] AccessScope、quota 共享范围、网页/API 通道和官方限速证据明确；网页至少 30 秒冷却，普通配置只能收紧。
+- [ ] AccessScope、quota 共享范围、普通网页/API/Browser 通道和官方限速证据明确；Browser risk group 组间并行、同组按 Provider policy 串行，普通配置只能收紧且没有伪造统一固定间隔。
 - [ ] query/pagination/response 层级来自当前官方依据或带日期的最小验证。
 - [ ] 计数、引用边、参考文献原文和权威 Reference 边界清楚。
 - [ ] landing、PDF locator、XML/JATS、对象资源和最终主 PDF 已区分。

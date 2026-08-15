@@ -1,9 +1,10 @@
 # DataCite
 
-- 最后核对：2026-08-07
-- 当前配置选择键：无；ADR 0014 已接受为目标 Metadata/Acquisition 能力，当前尚未实现
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前选择键：Metadata `datacite`；Acquisition `datacite`；引用是 Metadata 的可选能力
 - 外部角色：通用 DOI 元数据、显式关联标识符、引用/版本关系摘要与资源 locator
-- 当前仓库接入状态：完全未接入；无选择键、无 Protocol 注册、无 adapter、无 registry wiring
+- 当前仓库接入状态：DataCite JSON:API 专用 Metadata search/lookup/reference adapter 已进入生产 registry；资源 locator 只形成可由通用 Public route 复核的 `AssetHint`
 
 ## 1. 官方入口与证据
 
@@ -107,7 +108,7 @@ meta {
 - `contentUrl` 也可能指数据文件、软件包或 HTML，不等于主 PDF；
 - 实际获取仍要走 Network policy、redirect/origin 复核、有界读取、PDF bytes 校验、hash、lineage 与 immutable publish。
 
-DataCite 没有被当前 Acquisition 注册为 asset provider；本 Notes 不授权直接下载任何内容。
+DataCite 没有专属 PDF protocol 或授权下载 API；当前 Acquisition 只通过通用 mapping 消费 Metadata observation 中明确保存的 locator，并重新执行 Network 与 PDF 验证。本 Notes 不授权从 DOI、resource type 或关系字段猜下载地址。
 
 ## 7. 代表性响应结构
 
@@ -190,11 +191,16 @@ DataCite 没有被当前 Acquisition 注册为 asset provider；本 Notes 不授
 ## 10. 已知限制与待核对
 
 - DataCite 是聚合/注册元数据，记录完整度、creator 姓名结构、relationship 覆盖与 locator 新鲜度依赖上游 deposit。
-- affiliation/publisher identifier 默认不展开；未来 adapter 必须为所需详情显式请求参数并为响应大小设预算。
+- affiliation/publisher identifier 默认不展开；当前 adapter 只请求合同所需详情并受响应大小预算约束，新增映射前仍须核对官方展开形状。
 - `relatedIdentifiers` 与 JSON:API relationships 可能重复；去重必须保留单条 observation 的来源支持，不能静默丢 provenance。
 - `subjects` 是否是提交者关键词取决于具体来源语义，通用判定规则尚无公开依据。
 - 本轮没有下载 `contentUrl` 或任何文件，没有测试 Member API，也没有认证请求。
 
 ## 11. 当前实现边界
 
-DataCite 已进入目标 Metadata 领域搜索与 Acquisition locator 能力，但不属于当前 schema v2 的 metadata/citation/asset allowlist。仓库没有 DataCite 选择键、认证配置、JSON:API parser、query/page/cursor、creator/relationship/locator 转换、Protocol 注册、adapter 或 registry wiring；当前 Collection/Assets Service 不会调用 DataCite。目标 Acquisition 可以消费明确 locator，不表示 DataCite 记录或 DOI 自动等于已接纳 PDF。
+当前 `DataCiteAdapter` 实现 JSON:API 领域搜索、DOI lookup 和按明确 relation type 分流的引用查询，
+解析分页、creator/ORCID/affiliation、标识符、版本/引用关系和资源 locator；生产 registry 注入共享
+`HttpClient`、Access Coordinator 与 `datacite/api` policy。DataCite 收录不限于 Literature，adapter
+仍在边界拒绝或保守处理不适用对象。当前 Acquisition 只通过通用 Public route 消费已保存 locator，
+DataCite DOI、`contentUrl` 或媒体声明都不等于已获得主 PDF。实现证据为离线 fake/fixture；本轮
+没有认证请求、Member API 调用或文件下载。

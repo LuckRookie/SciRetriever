@@ -1,9 +1,10 @@
 # Semantic Scholar
 
-- 最后核对：2026-08-07
-- schema v2 选择键：metadata `semantic-scholar`；citation `semantic-scholar`；asset `semantic-scholar`
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前选择键：Metadata `semantic-scholar`；Acquisition `semantic-scholar`；引用是 Metadata 的可选能力，不存在第三类 citation 选择键
 - 供应商角色：Academic Graph 元数据、结构化 references/citations 与开放 PDF locator
-- 当前仓库接入状态：只有选择键、通用 Protocol/adapter/registry；没有 Semantic Scholar 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：Semantic Scholar Graph 专用 Metadata search/lookup/reference adapter 已进入生产 registry；`openAccessPdf` 只形成可由通用 Public route 复核的 `AssetHint`
 
 ## 1. 官方入口与证据
 
@@ -196,7 +197,9 @@ Network/Acquisition 重新检查 redirect、媒体类型、字节、PDF 结构�
 
 ## 10. 当前实现边界
 
-当前三类配置均接受 `semantic-scholar`，但仓库没有 `x-api-key`、fields、search/token、
-references/citations、Paper/OpenAccessPdf 解析代码。通用 metadata record 不支持上述嵌套字段，通用
-citation fake 只产生一个 identifier，通用 resolver 只接调用方候选。2026-07-21 的旧 key 现场事件
-属于历史验证，不代表当前 client；当前对象图也不把 registry 接入业务 Service。
+当前 `SemanticScholarAdapter` 通过 Graph API 实现领域搜索、稳定 paper lookup、references 与
+citations，显式解析请求 fields、分页、Paper/author/externalIds、引用方向和 `openAccessPdf`；
+生产 registry 为它注入共享 `HttpClient`、Access Coordinator、`semantic-scholar/api` policy 与
+可选 API key。OA locator 进入 `AssetHint` 后仍由 Acquisition 通用 Public route 重新做 URL、
+redirect、媒体类型、实际 PDF 字节和归属验证。当前证据为离线 fake/fixture；2026-07-21 的旧 key
+事件不证明当前凭据、容量、单篇 locator 或 entitlement，本轮也没有访问 API/PDF。

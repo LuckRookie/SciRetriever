@@ -2,7 +2,7 @@
 
 - 官方资料与最小只读链路最后在线核对：2026-08-14
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：Acquisition `wiley`
+- 当前选择键：Acquisition `wiley`
 - 供应商角色：在 operator 已取得 Wiley TDM token、运行环境位于可授权公网 IP 范围且具体文章有 entitlement 时提供主文 PDF；不是 SciRetriever Metadata 或引用 Provider
 - 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；生产 Browser 站点规则仍为空
 

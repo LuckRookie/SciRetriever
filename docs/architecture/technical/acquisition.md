@@ -459,16 +459,16 @@ Entry 可以在 cohort 继续处理后续层时，通过单一串行提交边界
 Acquisition 失败或原始程序错误传播，不能只写日志。最终 cohort 合同不一致时，不回滚已经
 安全提交的局部成功，但必须清理尚未交付 receipt 并让未交付目标稳定失败。
 
-截至本段对应实现，生产对象图仍以 Browser disabled 且 execution unconfirmed 组装；因此
-Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
-真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
-已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
-Provider session broker、operator-managed profile 存储边界、状态/页面分类、多路正文捕获和
-封闭 action contract、supplement/错文排除以及 Provider cooldown/circuit 也已完成。完整
-Provider-specific Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。
-统一 Profile 准入门已经完成，但当前 production Browser rule catalog 仍为空。组间并行、
-组内串行、会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不
-构成 production-ready Browser 能力。
+当前完整生产对象图与 capability-scoped Completion 对象图都显式组装并共享同一
+Profile catalog/Planner、tiered cohort executor、Browser scheduler、session broker 和 admission
+controller。普通 `browser_enabled` 会进入 admission 的显式总开关，但当前 Browser client 仍为
+空，production Browser rule catalog 为 0，execution confirmation 与 runtime readiness 固定为
+false；因此 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，却不会
+产生真实 Browser 流量。Network per-hop `BrowserDestinationGuard`、risk-group executor、
+operator-managed profile 存储与交互入口、状态/页面分类、多路正文捕获、封闭 action contract、
+supplement/错文排除、Provider cooldown/circuit 和安装 wheel 后的本地 Chromium foundation 已由
+离线测试验收。它们证明共享基础设施和安全边界，不构成任何出版社 Browser route 的
+production-ready 证据。
 
 ### 4.1 Browser admission、会话与调度
 
@@ -574,9 +574,11 @@ locator。
 
 Network 已提供按 `browser_session_key` 串行 lease 的 process-local session broker：同一访问方的
 多篇论文可以复用一个合法 persistent context，同时每篇文章仍拥有独立 page、下载临时目录、
-预算、连接绑定和结果；runtime/清理失败会淘汰该 session。这个 foundation 不等于 production
-Browser 已启用；Acquisition 仍需在后续 Provider Profile 与生产对象图中把已确认的 session key、
-operator profile readiness 和对应 route 精确绑定。Profile 路径由 Configuration 安全解析，
+预算、连接绑定和结果；runtime/清理失败会淘汰该 session。Bootstrap 已把同一个 broker 与
+scheduler/admission/cohort executor 注入 Acquisition 运行对象图，但当前没有 production Browser
+rule 或 Browser client，execution confirmation 与 runtime readiness 也保持关闭。未来通过准入的
+Provider Profile 仍须把已确认的 session key、operator profile readiness 与具体 route 精确绑定，
+不能把 foundation 接线当作 Provider 可用性。Profile 路径由 Configuration 安全解析，
 Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenance、Report 或日志。
 自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；
 这些情况形成 action-required 并暂停对应 group。

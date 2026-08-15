@@ -1,9 +1,10 @@
 # Web of Science
 
-- 最后核对：2026-08-07
-- 当前配置选择键：无；ADR 0014 已接受为目标 Metadata Provider，当前尚未实现
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前配置选择键：Metadata `web-of-science`；普通配置显式选择 `starter` 或 `expanded` 产品及 database/edition
 - 外部角色：受许可的基础/完整书目元数据、Times Cited 计数、cited references 与 citing items
-- 当前仓库接入状态：完全未接入；无选择键、无 Protocol 注册、无 adapter、无 registry wiring
+- 当前仓库接入状态：Starter v2 与 Expanded 专用 Metadata adapter 均已进入生产 registry；Starter 提供领域搜索/lookup，Expanded 另提供 reference query；不属于 Acquisition 来源
 
 ## 1. 产品必须分开
 
@@ -35,7 +36,7 @@ Clarivate 当前至少有两个不可混写的 Web of Science API 产品：
 X-ApiKey: API_KEY
 ```
 
-所有生产请求均需 key。目标实现只从 `~/.sciretriever/credentials.toml` 私有读取 key 并由 Bootstrap 注入 adapter，不放 query、日志、异常、trace、provenance、fixture 或 Notes。HTTP 401 只表示 key 缺失/无效，不能区分机构订阅、具体 database edition、record depth 或 citation entitlement。
+所有生产请求均需 key。当前实现只从 `~/.sciretriever/credentials.toml` 私有读取 key 并由 Bootstrap 注入 adapter，不放 query、日志、异常、trace、provenance、fixture 或 Notes。HTTP 401 只表示 key 缺失/无效，不能区分机构订阅、具体 database edition、record depth 或 citation entitlement。
 
 ### 3.1 Starter plans
 
@@ -286,8 +287,8 @@ Starter 当前公开错误：400 query/request 语法；401 key 缺失/无效；
 
 - 本轮没有任何 key/机构环境，无法现场验证成功响应、实际 entitlement、quota headers 或不同 database shape；官方 OpenAPI example 不冒充 `verified`。
 - Advanced Search 帮助入口在本轮匿名抓取时重定向到 Web of Science Zendesk 并返回 403；本文支持的 field tags/query 参数来自当前 Starter/Expanded OpenAPI，未用受阻页面补全语法。
-- Starter v1/v2 同时公开；contributors 明确仅 v2。实施前应选定 v2 并确认兼容/退役政策，不自动 fallback 到 v1。
-- Expanded JSON 很深且 object/array 形态可能随 cardinality变化；需要按当前 OpenAPI 为每个边界建立真实授权环境的小型脱敏 fixture。
+- Starter v1/v2 同时公开；当前 Starter adapter 固定使用 v2，不自动 fallback 到 v1；后续退役/版本变化必须重新核对官方合同。
+- Expanded JSON 很深且 object/array 形态可能随 cardinality 变化；当前 parser 与离线 fixture 覆盖受支持形状，真实授权环境中的 edition/entitlement 差异仍需另行脱敏核实。
 - Starter publication year 对 early access search 的命中可能与返回 `publishYear` 不同，官方已明确提示；不能把 search predicate 当返回 metadata。
 - Expanded cited reference 的 `UID`/DOI 覆盖、引用原文缺失和 citing endpoint 的 edition 范围需在有授权环境中验证。
 - Lite 已被替代；本 Notes 不保留其旧 endpoint、分页或 model 作为 fallback。
@@ -295,4 +296,4 @@ Starter 当前公开错误：400 query/request 语法；401 key 缺失/无效；
 
 ## 12. 当前实现边界
 
-Web of Science 已进入目标 Metadata 领域搜索能力，但不属于当前 schema v2 的 metadata 或 citation allowlist，也不属于目标 Acquisition 来源。仓库没有 Web of Science 选择键、Starter/Expanded 产品选择、`X-ApiKey` 配置、institution entitlement、query/pagination parser、Full Record/references/citing adapter、Protocol 注册或 registry wiring；当前 Collection/Assets Service 不会调用 Clarivate。目标已接受不能替代这些实现与 readiness 证据。
+Web of Science 是当前 Metadata Provider。Configuration 解析产品、database/edition 与 owner-only `api_key`，生产 registry 按选择构造 Starter v2 或 Expanded adapter，并注入共享 `HttpClient`、Access Coordinator 和对应产品 policy。两种 adapter 都实现领域搜索与稳定 lookup；只有 Expanded 暴露 cited references/citing items 的 reference query。当前实现由离线 fake/fixture 验证，没有读取真实 key、调用 Clarivate 或证明机构 edition、record depth、quota 与具体引用 entitlement；它不提供 PDF/Acquisition route，也不从 Starter 自动 fallback 到 Expanded 或旧 Lite。

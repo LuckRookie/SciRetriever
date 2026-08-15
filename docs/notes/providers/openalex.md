@@ -1,9 +1,10 @@
 # OpenAlex
 
-- 最后核对：2026-08-07
-- schema v2 选择键：metadata `openalex`；citation `openalex`；asset `openalex`
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前选择键：Metadata `openalex`；Acquisition `openalex`；引用是 Metadata 的可选能力，不存在第三类 citation 选择键
 - 供应商角色：聚合元数据、结构化引用图与 OA/全文 locator
-- 当前仓库接入状态：只有选择键、通用 Protocol/adapter/registry；没有 OpenAlex 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：OpenAlex Works 专用 Metadata search/lookup/reference adapter 已进入生产 registry；locations/content 只形成可由通用 Public route 复核的 `AssetHint`
 
 ## 1. 官方入口与证据
 
@@ -186,14 +187,16 @@ OpenAlex `keywords[]`、`topics[]` 是自动推导内容，明确不候选映射
 
 - 无 key 请求本轮为 200，但官方只给其十分之一试用预算；不能依赖为生产匿名能力。
 - 聚合 metadata、OA/location 和机构匹配可能滞后或误配；候选 URL 必须实取验证。
-- `abstract_inverted_index` 重建必须处理重复 position、缺口和 Unicode；具体 adapter 需直接测试。
+- `abstract_inverted_index` 重建必须处理重复 position、缺口和 Unicode；当前 adapter 已有直接离线测试，未知或冲突形状仍须 fail closed。
 - Work schema 易变且字段很多；应使用显式解析并拒绝 vendor 私有类型穿透。
 - cited-by 的当前推荐 filter 拼写和弃用别名需在实现时以 Works schema/OpenAPI 再确认；不得硬编码旧 `cited_by_api_url`。
 - 本轮未调用 content download/PDF。
 
 ## 10. 当前实现边界
 
-`openalex` 是当前 metadata/citation/asset 三类允许键，但三类实现都是调用方必须注入的窄通用
-Protocol。仓库没有 API key 处理、filter/cursor、Work schema、abstract 重建、authorship/location 或
-referenced_works 转换。fake citation client 只返回 namespace/value，不能证明 OpenAlex 引用 API
-已接入；registry 也没有连接到当前业务 Service。
+当前 `OpenAlexAdapter` 实现 Works 领域搜索、稳定 ID/DOI lookup 和引用查询，处理 API key、
+filter/cursor、Work schema、abstract inverted index、authorship、locations 与
+`referenced_works`，并由生产 registry 注入共享 `HttpClient`、Access Coordinator 和
+`openalex/api` policy。来源 locator/content URL 只成为中性 `AssetHint`；当前 Acquisition 没有
+OpenAlex 专属下载 API，只由通用 Public route 重新验证实际 locator/PDF。实现验证使用离线
+fake/fixture；2026-08-07 的匿名请求不构成当前容量或数据正确性保证，本轮没有下载内容。

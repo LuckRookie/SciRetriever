@@ -2,7 +2,7 @@
 
 - 官方资料最后在线核对：2026-08-15
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：metadata `springer`；asset `springer`
+- 当前选择键：Metadata `springer`；Acquisition `springer`
 - 供应商角色：Springer Nature 元数据，以及 OA/协议授权的 JATS/XML 全文和资产 locator
 - 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；SpringerLink 与 Nature 已分别进入 Publisher 验证矩阵，但授权主 PDF 和 Browser route 均明确标记为 unsupported
 

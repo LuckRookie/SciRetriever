@@ -347,7 +347,7 @@ Zotero 和两个本地参考都使用 provider/domain 特定 Translator、select
 
 ### 6.6 进程内共享访问准入
 
-路径层级决定 Acquisition 使用哪类能力，ADR 0012 的访问 scope 决定当前进程中的真实请求何时允许执行。二者正交：公开 `AssetHint` 指向出版社网页时仍使用该出版社的 `web` scope；同一 provider 网页普通 HTTP 与浏览器在当前进程独占，并在完整结束后至少冷却 30 秒；授权 API 使用独立 scope 并按供应商真实规则运行。动态限速状态只存在于内存，不提供跨进程或跨重启保证。正式长期边界见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)。
+路径层级决定 Acquisition 使用哪类能力，ADR 0012 的访问 scope 决定当前进程中的真实请求何时允许执行。二者正交：公开 `AssetHint` 指向出版社网页时仍使用该出版社的 `web` scope 与实际 host policy；普通 HTTP 的并发、间隔和 window 由对应 provider 的官方规则或明确标注的审慎政策决定，不自动继承 Browser 的文章间隔。Browser 额外按 `browser_rate_limit_group` 调度，不同风险组可以并行，同一组固定单并发并按该 Provider 的 interval/window/cooldown 串行。授权 API 使用真实 quota scope 和供应商政策；不存在所有 Provider 共用的 30 秒规则。动态限速状态只存在于内存，不提供跨进程或跨重启保证。正式长期边界见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md) 和 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)。
 
 ### 6.7 不从参考项目复制的内容
 
@@ -370,7 +370,7 @@ Zotero 和两个本地参考都使用 provider/domain 特定 Translator、select
 - [ ] 同层候选去重不会错误删除需要不同授权上下文的同 URL；
 - [ ] 公开 landing page 的普通 HTTP/Translator 解析与真实浏览器访问边界清楚；
 - [ ] 所有阶段共用 Network URL/DNS/redirect/origin/预算和脱敏政策；
-- [ ] 所有 adapter 声明 provider/channel/service scope；Metadata 与 Acquisition 在当前进程共享真实 API quota，同一 provider 网页跨模块、批次和文献目标独占并至少冷却 30 秒；
+- [ ] 所有 adapter 声明 provider/channel/service scope；Metadata 与 Acquisition 在当前进程共享真实 API quota，普通网页服从实际 provider/host policy，Browser 不同 risk group 并行而同组按 Provider policy 限速串行；
 - [ ] 所有阶段共用 Acquisition PDF 基本检查和不可变发布；
 - [ ] 浏览器 profile、Cookie、header、短期签名 URL 和页面对象不进入业务 Model 或 durable state；
 - [ ] 授权 API 的 key 存在、API entitlement 和目标内容 entitlement 没有被混为一项；

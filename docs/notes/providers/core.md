@@ -175,7 +175,7 @@ cites
 }
 ```
 
-现场响应使用 camelCase。当前 OpenAPI 的部分 schema/required 名称仍写 `total_hits`、`search_id` 或 snake_case Work properties，而同一官方文档表和实际 API 使用 camelCase；未来 adapter 必须以真实 v3 JSON、官方示例和 contract fixtures 明确版本，不能直接把 OpenAPI property 名机械反序列化。
+现场响应使用 camelCase。当前 OpenAPI 的部分 schema/required 名称仍写 `total_hits`、`search_id` 或 snake_case Work properties，而同一官方文档表和实际 API 使用 camelCase；当前 adapter 以真实 v3 JSON、官方示例和 contract fixtures 固定受支持形状，不把 OpenAPI property 名机械反序列化。官方 schema 若收敛或改变时必须同步更新 parser 与 fixture。
 
 ## 10. 与 SciRetriever 中性数据的候选映射
 

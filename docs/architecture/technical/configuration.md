@@ -11,9 +11,11 @@
 `entry/cli/` 的配置协作。统一配置中心、安全发布、状态和诊断的当前用户行为仍以配置手册、
 源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界。普通 `[access]`
 配置、安全 profile 存储边界和裸 `sciretriever config` 的 Access 管理已经实现；
-`config status/test` 已实现完整的 Browser 本地状态与显式单目标 probe 合同；生产 Browser
-对象图仍须在完成组装和安装后验收后才能写成已发布自动获取能力。Provider 的易变外部字段仍以
-[Provider Notes](../../notes/providers/README.md) 为依据。
+`config status/test` 已实现完整的 Browser 本地状态与显式单目标 probe 合同；共享 Planner、
+Profile catalog、tiered cohort executor、Browser scheduler/session broker 的生产对象图及安装 wheel
+identity 也已验收。当前 Browser client 仍为空、production Browser route count 为 0，execution
+confirmation 与 runtime readiness 均关闭，所以这些基础设施不能写成已发布的自动 Browser 获取
+能力。Provider 的易变外部字段仍以 [Provider Notes](../../notes/providers/README.md) 为依据。
 
 ## 1. 责任与依赖
 

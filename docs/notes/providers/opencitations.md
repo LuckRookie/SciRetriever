@@ -1,9 +1,10 @@
 # OpenCitations
 
-- 最后核对：2026-08-07
-- 当前配置选择键：无；ADR 0014 已接受为目标 Metadata lookup/引用能力，当前尚未实现
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前选择键：Metadata `opencitations`；只提供 lookup/reference，不参加主题搜索
 - 外部角色：开放结构化引用边与基础书目元数据
-- 当前仓库接入状态：完全未接入；无选择键、无 Protocol 注册、无 adapter、无 registry wiring
+- 当前仓库接入状态：OpenCitations Meta lookup 与 Index reference-query 专用 adapter 已进入生产 registry；不属于 Acquisition 来源
 
 ## 1. 官方入口与证据
 
@@ -32,7 +33,7 @@ Index v2 与 Meta v1 当前均明确限制为每 IP 每分钟 180 次；大规�
 authorization: <OpenCitations access token>
 ```
 
-token 不得进入 URL、日志、异常、provenance、fixture 或 Notes。未来 adapter 只接收根级 configuration 从 `~/.sciretriever/credentials.toml` 私有读取并由 Bootstrap 注入的 token；不能自行申请、扫描或读取其它本机 token。
+token 不得进入 URL、日志、异常、provenance、fixture 或 Notes。当前 adapter 只接收根级 configuration 从 `~/.sciretriever/credentials.toml` 私有读取并由 Bootstrap 注入的 token；不能自行申请、扫描或读取其它本机 token。
 
 ## 3. Index API v2
 
@@ -49,7 +50,7 @@ token 不得进入 URL、日志、异常、provenance、fixture 或 Notes。未�
 
 当前文档给 citation/reference operations 列出的 bibliographic PID 包括 DOI、PMID、OMID；venue count 使用 ISSN。输入和响应中的 namespace 必须显式解析，不能仅按冒号或 URL 猜类型。
 
-Index 文档没有为这些 endpoints 声明 page/offset/cursor 参数；响应是匹配边数组。现场的高被引响应说明“一个 endpoint 一次返回全部边”会直接冲击响应大小和内存预算。生产接入前必须验证是否有新的分页合同；在没有公开依据时不能私造分页参数。规模化任务应路由到受控 dump 流程，但 dump 尚不属于当前产品能力。
+Index 文档没有为这些 endpoints 声明 page/offset/cursor 参数；响应是匹配边数组。现场的高被引响应说明“一个 endpoint 一次返回全部边”会直接冲击响应大小和内存预算。当前 adapter 不私造分页参数，只接受共享 Network 响应预算内的有界结果，超限稳定失败；规模化 dump 仍不属于当前产品能力。若官方新增分页合同，必须先更新本 Notes、policy 和 fixture。
 
 ### 3.2 引用边字段
 
@@ -171,7 +172,7 @@ OpenCitations 可以分别作为 citation source 和 metadata source 候选；�
 
 ## 7. 资产能力
 
-不适用。Index/Meta 当前公开字段不提供 OA/PDF locator、媒体类型或 license。OpenCitations 不能成为 asset provider，也不能从 DOI 拼 publisher PDF URL 或把 Web 页面当主 PDF。
+不适用。Index/Meta 当前公开字段不提供 OA/PDF locator、媒体类型或 license。OpenCitations 不能成为 Acquisition 来源，也不能从 DOI 拼 publisher PDF URL 或把 Web 页面当主 PDF。
 
 ## 8. 不进入业务 Model 的字段
 
@@ -193,4 +194,9 @@ OpenCitations 可以分别作为 citation source 和 metadata source 候选；�
 
 ## 10. 当前实现边界
 
-OpenCitations 已进入目标 Metadata 的稳定标识符 lookup 与可选引用能力，但不参加主题 DiscoveryRun，也不作为 Acquisition 来源；它仍不属于当前 schema v2 的 metadata 或 citation allowlist。仓库没有 OpenCitations 选择键、token 配置、PID/string parser、Index/Meta client、Protocol 注册、adapter、registry wiring 或 dump importer；当前业务流程不会调用 OpenCitations。迁移前 `citation` 名称不构成目标第三类 Citation Provider。
+当前 `OpenCitationsAdapter` 实现 Meta 的稳定 PID metadata lookup，以及 Index 的 references/citations
+查询与方向转换；它显式解析多 PID、可选 index 前缀、作者/venue 字符串和中性关系端点，并由生产
+registry 注入共享 `HttpClient`、Access Coordinator、`opencitations/api` policy 与可选 token。
+OpenCitations 不参加主题 DiscoveryRun、不作为 Acquisition 来源，也没有第三类 Citation Provider；
+当前没有 dump importer。实现证据为离线 fake/fixture，2026-08-07 的匿名小请求不证明高被引响应
+可在默认预算内完成，本轮没有读取 token、访问 API 或下载 dump。

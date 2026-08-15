@@ -2,23 +2,24 @@
 
 - 状态：生效
 - 记录日期：2026-07-22
+- 最后同步：2026-08-15
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
-本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Composition wiring、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
+本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Bootstrap 生产对象图、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
 
 ## 1. 核心立场
 
-**SciRetriever 的目标是在本地完成 metadata 检索、全文获取、通用分析和引用扩展，并形成统一文献库。`MetaLiterature` 和 `Literature` 是目标内部身份机制；当前迁移前源码仍使用 `Work` 和 `WorkVersion`。项目不按道德标签判断文献来源，也不替用户决定某个来源是否可使用。**
+**SciRetriever 的目标是在本地完成 metadata 检索、全文获取、通用分析和引用扩展，并形成统一文献库。`MetaLiterature` 和 `Literature` 是当前身份机制。项目不按道德标签判断文献来源，也不替用户决定某个来源是否可使用。**
 
 本声明只规定来源分类立场，不构成某项技术能力的批准、实现承诺或法律意见。用户对自身行为负责；项目仍执行明确的产品边界、工程安全、第三方接口契约和配置要求。
 
 ## 2. 工具与使用的分离
 
-技术能力的授权边界由产品需求和 Accepted ADR 确定，当前是否可用以项目 README、Composition wiring、源码和直接测试为准。活动提案和执行计划只能讨论或执行已经授权的范围，不能自行批准或扩展能力。SciRetriever 对据此授权并已实现的技术能力不附加基于来源道德分类的额外条件；归档材料中的能力不因本声明重新获得批准：
+技术能力的授权边界由产品需求和 Accepted ADR 确定，当前是否可用以项目 README、Bootstrap 生产对象图、源码和直接测试为准。活动提案和执行计划只能讨论或执行已经授权的范围，不能自行批准或扩展能力。SciRetriever 对据此授权并已实现的技术能力不附加基于来源道德分类的额外条件；归档材料中的能力不因本声明重新获得批准：
 
-- **文献来源接入**：当前具体 provider client 由调用方注入。未来接入公开 API、页面或用户配置端点时，项目对来源本身不做"合法/灰色/非法"的分类标签。
-- **资产获取**：配置接受 provider 选择键不代表对应 client 已接入，当前对象图也没有把 provider registry 连接到资产 Service。未来形成可运行流程后，工具不对特定 provider（如 Sci-Hub）施加超越工程安全的使用限制。
-- **网络与访问方式**：browser 和 profile-copy fallback 仅见于历史归档，尚未进入当前实现、schema v2 配置合同或 Composition 公开组装面；当前也不提供交互登录、CAPTCHA、通用代理轮换或机构登录编排。任何后续新增能力必须先由产品需求或 Accepted ADR 授权，活动提案和执行计划只能在该范围内讨论或实施，并须满足工程安全边界；是否已成为当前能力仍以实现证据为准。
+- **文献来源接入**：生产 Bootstrap 按配置、实现状态和 readiness 组装 Metadata 与 Acquisition registry；配置接受 Provider 选择键仍不表示每项 capability 都有 concrete adapter。项目不对来源本身添加“合法/灰色/非法”的分类标签。
+- **资产获取**：当前 Acquisition 已连接通用公开路径和经过准入的授权 Provider API，Configured Sci-Hub 只接受 operator 明确注入且经过统一安全边界的 locator resolver。是否存在 route、是否已配置、当前目标是否适用和是否实际取得有效 PDF 是不同事实；工具不因来源道德标签另加拒绝条件。
+- **网络与访问方式**：受控 Browser foundation、operator-managed profile 配置入口和用户明确发起的可见空白 Browser 会话已经实现，但 production Browser rule catalog 仍为 0，自动 Completion 不会产生出版社 Browser 流量。自动登录、机构选择、MFA/CAPTCHA 处理、任意脚本、profile-copy fallback、代理轮换和反检测仍不属于当前能力；是否已 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
 
 ## 3. 工程约束 vs 使用限制
 
@@ -27,7 +28,7 @@
 | 类型 | 定义 | 示例 |
 |---|---|---|
 | **工程约束** | 保证系统安全、稳定和数据完整性的技术底线 | 仅限 HTTPS、禁用 `verify=False`、不执行任意脚本、凭据不入日志 |
-| **使用限制** | 替用户判断"该不该用"的规则 | "不使用代理轮换"、"不绕过 Cloudflare"、"灰色来源不接受" |
+| **使用限制** | 只按来源标签替用户判断“该不该用”的规则 | “某类来源一律不可使用”、"灰色来源不接受" |
 
 SciRetriever 只施加工程约束，不施加使用限制。
 

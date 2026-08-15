@@ -167,6 +167,8 @@ sciretriever/
 
 普通配置由根级 `configuration.py` 解析；Provider、LLM 与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
 
+Publisher access Profile 使用 `production-ready`、`fixture-verified` 和 `unsupported` 三种准入状态，Public、授权 API 与 Browser capability 另行表达。一个只完成授权 API 的 Profile 可以是 production-ready，同时没有 Browser route；fixture-verified 只证明离线合同，不能进入生产 catalog；unsupported 不保留可执行 route。易变 endpoint、页面 selector、限速数字和证据日期由 [Provider Notes](../notes/providers/README.md)维护，不能写进长期设计或由相似平台猜测继承。
+
 ## 3. 核心数据流
 
 ### 3.1 DiscoveryRun 与两种发现输入

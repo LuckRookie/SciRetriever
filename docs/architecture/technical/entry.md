@@ -257,9 +257,12 @@ chunk 会让全部 participant 形成 `not_started` 而不调用 Acquisition；�
 必须 commit 或 discard，清理失败不能被中断结果掩盖。重复操作重新读取数据库当前事实，
 不依赖上一轮 chunk、generation、request、receipt 或 route hint。
 
-生产 Browser 当前仍默认关闭且没有用户确认入口；Entry 只记录 Acquisition 返回的脱敏
-Browser escalation summary，不把该 summary 误作已获得用户确认。真实 Browser 执行启用前
-还必须完成 session/scheduler 与“side effect 前展示并确认”的产品边界。
+生产 Completion 已共享同一 Planner/Profile catalog、tiered cohort executor、Browser scheduler
+和 session broker；配置中心也已提供 Browser 总开关、operator-managed profile 初始化以及用户
+明确发起的可见空白 Browser 会话。当前 production Browser rule catalog 仍为 0，Browser client
+为空，execution confirmation 与 runtime readiness 保持关闭，因此 Entry 只记录 Acquisition
+返回的脱敏 escalation summary，不会启动真实 Provider Browser。独立人工登录操作的确认不能
+替代某次 Completion 的 route 准入，也不能证明当前 session 已登录或具体文章有 entitlement。
 
 每个实际 `Literature` 的结果继续按下面的缺失步骤消费：
 

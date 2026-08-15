@@ -88,6 +88,10 @@ Debug 的“逐步骤”按责任边界记录，而不是给每个函数做调�
 - Database Completion 的冻结目标、有界 PDF cohort、tier barrier、并发目标进度、current facts、Acquisition、Parsing、Analysis 和 Literature 接纳阶段；
 - Acquisition 的 plan revision、resolution evidence kind、route readiness/applicability、route key、public/API route hint 类别、候选匿名 ID、授权 lookup/download、Browser admission/group/state transition、PDF 验证/准备、资源清理、提交与正常耗尽。
 
+这些 Browser 字段已经由离线 route、scheduler、Completion 和安装 wheel 测试验证；当前
+production Browser route count 为 0，生产对象图不会产生真实 Provider Browser 日志。测试覆盖
+表示日志合同和脱敏边界已实现，不表示某个出版社页面已经 production-ready。
+
 携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 profile/risk-group identity 和状态类别，不能记录完整导航目标、selector、页面文本、Cookie、profile 内容或签名 locator。
 
 正常和 Debug 都只写 stderr。SciRetriever 不接管日志文件路径和轮转；用户需要保留文件时，用 shell、进程管理器或宿主应用把 stderr 定向到本次运行目录。例如：

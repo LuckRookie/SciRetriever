@@ -2,7 +2,7 @@
 
 - 官方资料最后在线核对：2026-08-15
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：metadata `elsevier`；asset `elsevier`
+- 当前选择键：Metadata `elsevier`；Acquisition `elsevier`
 - 供应商角色：Scopus/Elsevier 元数据查询，以及受产品订阅和授权约束的文章全文/对象获取
 - 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter 已进入生产 registry；Article Retrieval FULL XML 到 Object Retrieval 主 PDF 的授权 route 已进入生产 registry；ScienceDirect Browser route 仍为 unsupported
 
@@ -59,7 +59,7 @@ Acquisition 的 Article Retrieval 与 Object Retrieval 使用第三个独立 sco
 10 req/s 上限。`X-RateLimit-*`、`Retry-After`、429 和 5xx 只反馈到这个内容 scope，
 不会借用 Scopus Search/Abstract 的额度，也不会因额度或临时错误切换 Browser 绕过。
 
-历史 `verified`，2026-07-21：当时配置的一枚 key 对官方 API 最小请求返回 HTTP 200；与此同时，旧分层 acquisition 路径在两个真实样本上均超过外层 90 秒限制。这只证明该时间点 key/API 可达，以及历史 client/transport 存在 timeout 问题；不证明当前凭据仍有效、内容已授权或 Composition 已接入。本轮没有读取或复用该 key。
+历史 `verified`，2026-07-21：当时配置的一枚 key 对官方 API 最小请求返回 HTTP 200；与此同时，旧分层 acquisition 路径在两个真实样本上均超过外层 90 秒限制。这只证明该时间点 key/API 可达，以及历史 client/transport 存在 timeout 问题；不证明当前凭据仍有效、内容已授权，也不作为当前生产对象图或 route 准入的实现证据。本轮没有读取或复用该 key。
 
 ## 3. 元数据接口
 
@@ -115,14 +115,14 @@ abstracts-retrieval-response {
 - `ref-authors`、`ref-sourcetitle`、`ref-publicationyear`、volume/pages；
 - 原始或半结构化 `ref-fulltext`。
 
-这些 references 属于获取该 metadata record 时返回的来源内容。显式目标 ID 是未来结构化关系观察的候选，原文是 `MetadataObservation.reference_texts` 候选；不能仅凭作者、标题和年份猜出权威 Reference。当前 schema v2 没有 `elsevier` citation 选择键，本文不把 bibliography 写成已接入的 citation expansion。
+这些 references 属于获取该 metadata record 时返回的来源内容。当前 adapter 保留来源 reference text 和明确可规范化的 cited identifier，但没有暴露独立 reference-query capability；不能仅凭作者、标题和年份猜出权威 Reference，也不能把 bibliography 写成一次无边界的引用扩展。
 
 ## 4. 引用能力边界
 
 - `citedby-count` 是来源计数，不是 citing-work 边列表，不能跨供应商相加或物化边。
 - Abstract Citation/Overview API 按年份返回计数与 summary，不提供足以逐边建立 `ProviderRelationObservation` 的 citing work 列表。
 - Abstract Retrieval bibliography 描述 outward references；只有显式且可规范化的 target ID 才能形成候选 observation，未匹配原文仍只保留为 reference text。
-- 当前项目的 citation provider 允许键只有 `openalex` 与 `semantic-scholar`；若以后要用 Elsevier 做独立引用扩展，必须先修改公开配置合同、责任文档和直接测试。
+- 引用查询是 Metadata Provider 的可选 capability，不存在第三类 Citation Provider；若以后让 Elsevier 暴露独立 reference query，必须同步修改 capability matrix、责任文档和直接测试。
 
 ## 5. 全文、对象与主 PDF 链
 

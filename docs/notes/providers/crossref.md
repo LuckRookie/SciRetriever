@@ -1,9 +1,10 @@
 # Crossref
 
-- 最后核对：2026-08-07
-- schema v2 选择键：metadata `crossref`；asset `crossref`
+- 官方资料最后在线核对：2026-08-07
+- 当前实现离线对照：2026-08-15
+- 当前选择键：Metadata `crossref`；Acquisition `crossref`
 - 供应商角色：DOI 注册元数据、来源参考文献、引用计数与 TDM 资产线索
-- 当前仓库接入状态：只有选择键、通用 Protocol/adapter 和 lazy registry；没有 Crossref 专用生产 client，registry 未连接到当前 Collection 或 Assets Service
+- 当前仓库接入状态：Crossref REST 专用 Metadata search/lookup adapter 已进入生产 registry；来源 `link`/`resource` 只形成可由通用 Public route 复核的 `AssetHint`
 
 ## 1. 官方入口与证据
 
@@ -202,8 +203,9 @@ Crossref 只传播成员登记的 link 与 license metadata：有 link 不证明
 
 ## 10. 当前实现边界
 
-当前配置接受 `crossref` metadata/asset 选择键，registry 只在调用方注入同名
-`MetadataClient` / `ResolverClient` 后构造通用 adapter。仓库没有 REST endpoint、query/filter、
-cursor、polite identity、JSON 嵌套字段、reference/link/license 转换的供应商代码；通用
-`VendorMetadataRecord` 也只含 title、作者字符串、年份、标识符和摘要，远未实现本文候选映射。
-测试使用 fake client，只证明通用 adapter 与 lazy failure，不证明 Crossref 生产接入。
+当前 `CrossrefAdapter` 实现领域搜索与 DOI exact lookup，按普通配置选择 public 或 polite
+scope/policy，并在 polite 模式使用已校验的 contact identity。它解析 query/filter/cursor、嵌套
+作者/日期/标识符、来源 reference text 与结构化 cited identifier，以及受控 `link`/`resource`/
+license 资产线索；生产 registry 注入共享 `HttpClient` 与 Access Coordinator。当前不把 Crossref
+计数变成引用边，也不提供独立 PDF downloader：Acquisition 只消费已经保存的中性 hint 并重新
+执行网络与 PDF 验证。实现证据为离线 fake/fixture；本轮没有访问 Crossref 或任何返回的 PDF。

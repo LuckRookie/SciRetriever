@@ -2,9 +2,9 @@
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
-- schema v2 选择键：asset `unpaywall`
+- 当前选择键：Acquisition `unpaywall`
 - 供应商角色：按 DOI 或标题查询开放获取状态与全文 locator；不是 SciRetriever 元数据或引用 provider
-- 当前仓库接入状态：专用 DOI lookup 与公开 PDF locator Source 已进入生产 Acquisition registry；不作为 Metadata 或 citation provider
+- 当前仓库接入状态：专用 DOI lookup 与公开 PDF locator Source 已进入生产 Acquisition registry；不作为 Metadata Provider，也没有引用能力
 
 ## 1. 官方入口与证据
 
@@ -93,7 +93,7 @@ raw_author_name
 raw_affiliation_strings[]
 ```
 
-这些字段能辅助检查候选是否明显错配，但 Unpaywall 在当前 schema v2 不是 metadata provider，asset adapter 不应借机写入统一元数据或创建全局作者身份。字段名前缀和数据质量也说明它不是稳定的 SciRetriever Author 合同。
+这些字段能辅助检查候选是否明显错配，但 Unpaywall 不是 Metadata Provider，Acquisition adapter 不应借机写入统一元数据或创建全局作者身份。字段名前缀和数据质量也说明它不是稳定的 SciRetriever Author 合同。
 
 ## 6. 代表性响应结构
 
@@ -142,7 +142,7 @@ raw_affiliation_strings[]
 | `license`、`host_type`、OA 字段 | 聚合访问观察 | 当前 adapter 的候选筛选输入或 provenance 输入 hash | 不进入 `PdfCandidate`，也不证明下载成功或合法授权 |
 | location/记录更新时间与调用时间 | 来源新鲜度 | `Provenance` 候选输入 | `observed_at` 取实际调用时间；`deprecated` 不解析为时间 |
 
-`title`、出版信息和 `z_authors` 可用于 adapter 内部一致性检查，但在当前能力声明下不写入 `LiteratureMetadata`。同理，OA location 的版本、许可证和访问状态也不能由纯 asset adapter 暗中持久化为 `MetadataObservation.asset_hints`。若未来要让 Unpaywall 成为 metadata provider，需先修改公开选择键、责任文档与测试。
+`title`、出版信息和 `z_authors` 可用于 adapter 内部一致性检查，但在当前能力声明下不写入 `LiteratureMetadata`。同理，OA location 的版本、许可证和访问状态也不能由纯 Acquisition adapter 暗中持久化为 `MetadataObservation.asset_hints`。若未来要让 Unpaywall 成为 Metadata Provider，需先修改公开选择键、责任文档与测试。
 
 ## 8. 不进入业务 Model 的字段
 
