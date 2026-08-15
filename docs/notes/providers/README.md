@@ -86,9 +86,12 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - [CORE](core.md)、[OpenCitations](opencitations.md)、[Unpaywall](unpaywall.md)、
   [Configured Sci-Hub](configured-sci-hub.md)；
 - [ACM Digital Library](acm.md)、[ACS Publications](acs.md)、[AIP Publishing](aip.md)、
-  [APS / Physical Review](aps.md)、[RSC Publishing](rsc.md)、[IEEE Xplore](ieee.md)、
-  [IOPscience](iop.md)、[Oxford Academic](oxford-academic.md)、
-  [Science / AAAS](science-aaas.md)、[PNAS](pnas.md)；
+  [American Mathematical Society](american-mathematical-society.md)、
+  [Annual Reviews](annual-reviews.md)、[APS / Physical Review](aps.md)、
+  [RSC Publishing](rsc.md)、[Royal Society Publishing](royal-society-publishing.md)、
+  [IEEE Xplore](ieee.md)、[IOPscience](iop.md)、[Oxford Academic](oxford-academic.md)、
+  [Science / AAAS](science-aaas.md)、[PNAS](pnas.md)、
+  [World Scientific](world-scientific.md)；
 - [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)。
 
 ## 5. `direct` 不是供应商
