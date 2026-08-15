@@ -242,14 +242,36 @@ hostname-based HTTPS 且使用 API key；自定义 loopback 必须是 HTTP，且
 
 ### `[access]`
 
-当前是严格空表：
+当前保存 Browser-last 能力的非 secret 本地选择：
 
 ```toml
 [access]
+browser_enabled = false
+# browser_profile = "institutional-access"
+browser_max_concurrency = 2
+browser_policy_overrides = []
 ```
 
-Network 的 URL、DNS、TLS、redirect、origin、请求/响应预算、限速、`Retry-After` 与
-脱敏策略来自固定 Provider 合同。普通配置不能添加字段来放宽这些政策。
+| 字段 | 类型 | 默认值 | 约束 |
+| --- | --- | --- | --- |
+| `browser_enabled` | 布尔值 | `false` | Browser 总开关；设为 `true` 时必须同时选择 `browser_profile`。 |
+| `browser_profile` | 字符串或省略 | 未选择 | 只接受小写规范化后的 opaque identity，例如 `institutional-access`；不是路径、URL、UUID、账号或 secret。实际目录固定解析到 `~/.sciretriever/browser-profiles/<identity>/`。 |
+| `browser_max_concurrency` | 整数 | `2` | 大于等于 1 的本机 Browser 资源 cap；不改变同一供应商风险组固定串行。 |
+| `browser_policy_overrides` | inline table 数组 | `[]` | 只能收紧已有 production `rate_limit_group`；未知、重复或放宽的 group 会拒绝。 |
+
+单项 policy override 可以收紧组内并发、文章启动间隔、窗口计数/时长、完成/失败/限速冷却和
+runtime failure threshold。并发、窗口计数和 failure threshold 只能减小；interval、window
+duration 和 cooldown 只能增大。窗口计数与时长必须成对出现，负数、零值非法位置、`inf`、
+`nan` 和空 override 都会拒绝。普通配置不能改写 Profile 的 group、session key、origin、
+selector、rule revision 或官方 `Retry-After` 语义。
+
+当前支持矩阵尚无 production Browser route，因此 `browser_policy_overrides` 必须为空；配置
+总开关或 profile identity 不会把 fixture-only/unsupported Profile 变为可执行能力。后续交互
+管理与生产对象图完成前，`config status` 中的 Controlled Browser 仍显示 disabled。
+
+Cookie、local storage、登录名、机构身份、profile 目录内容和 profile path 都不进入
+`config.toml` 或 `credentials.toml`。Network 的 URL、DNS、TLS、redirect、origin、请求/响应
+预算、限速、`Retry-After` 与脱敏策略仍来自固定 Provider/Profile 合同，普通配置只能收紧。
 
 ## 3. 统一凭据文件
 

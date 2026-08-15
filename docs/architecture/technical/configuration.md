@@ -9,8 +9,9 @@
 
 本文定义根级 `configuration.py`、`bootstrap.py`、`model/configuration.py` 与
 `entry/cli/` 的配置协作。统一配置中心、安全发布、状态和诊断的当前用户行为仍以配置手册、
-源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界，在实现与安装后
-验收完成前不得把该部分写成已发布能力。Provider 的易变外部字段仍以
+源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界。普通 `[access]`
+配置和安全 profile 存储边界已经实现，交互管理、状态呈现和生产 Browser 对象图仍须在各自
+实现与安装后验收完成后才能写成已发布能力。Provider 的易变外部字段仍以
 [Provider Notes](../../notes/providers/README.md) 为依据。
 
 ## 1. 责任与依赖
@@ -103,6 +104,44 @@ Browser session profile presence 只表示本地安全会话容器存在，不�
 具有 entitlement。登录、MFA、challenge、session health、cooldown 和 circuit 是当前 Browser
 运行状态，不持久化回普通配置或凭据文件。
 
+当前普通配置字段为：
+
+```toml
+[access]
+browser_enabled = false
+browser_profile = "institutional-access" # 未选择时省略
+browser_max_concurrency = 2
+browser_policy_overrides = []
+```
+
+`browser_enabled = true` 必须同时选择安全的 `browser_profile` identity；它不要求该目录已经
+存在，目录 presence 由独立本地 readiness 检查。`browser_max_concurrency` 是大于等于 1 的
+全局本机 process/context 资源 cap，不改变任何 risk group 固定的组内并发 1。默认值 2 允许
+两个独立 group 在本机资源许可时并行；operator 可以为资源受限机器进一步收紧为 1。
+
+`browser_policy_overrides` 是按 `rate_limit_group` 唯一标识的 inline-table 数组。每项只允许
+以下收紧字段：
+
+```text
+max_concurrency = 1
+minimum_start_interval
+maximum_starts_per_window + window_seconds
+cooldown_after_completion
+rate_limit_cooldown
+failure_cooldown
+runtime_failure_threshold
+```
+
+窗口计数和时长必须成对出现；时间必须是有限非负数，需要正值的窗口和 rate-limit cooldown
+不能为 0；阈值和计数必须为正整数。相对 Profile baseline，并发/窗口计数/运行失败阈值只能
+减小，interval/window duration/cooldown 只能增大。未知 group、重复 group、空 override、负数、
+`inf`/`nan` 或任何放宽都会在 Configuration 边界拒绝。配置不接受 policy revision、session key、
+origin、selector 或 Browser rule 字段，因此 operator 不能借 override 重定义供应商画像。
+
+当前 production matrix 没有 Browser route 或 Browser policy group，所以生产配置中的 override
+必须保持为空；任何自行猜测的 group 都会以 `browser policy group is unknown` fail closed。
+`browser_enabled` 和 profile 选择本身也不会把 fixture-only/unsupported Profile 变成生产能力。
+
 当前 Configuration foundation 已固定 profile 目录为：
 
 ```text
@@ -120,8 +159,9 @@ profile 内文件必须由当前用户拥有、为单硬链接普通文件且精
 no-follow descriptor 递归核对对象身份、类型与修改竞态，不读取或解析任何文件字节；任意层级的
 symlink、特殊文件、错误 owner/mode、硬链接或验证期间替换都会拒绝。纯本地
 `browser_profile_status()` 只有 `configured`、`missing`、`attention` 三种输出，模型不包含
-路径、内部文件名、Cookie 名/域/值/hash/fingerprint。普通 `[access]` 选择字段、交互管理和
-production Browser 对象图仍未接入，因此该 foundation 本身不改变当前 CLI 的 disabled 状态。
+路径、内部文件名、Cookie 名/域/值/hash/fingerprint。普通 `[access]` 选择字段已经接入严格
+TOML 与 round-trip 编辑边界；交互管理和 production Browser 对象图仍未接入，因此当前 CLI
+中的 Controlled Browser 仍保持 disabled。
 
 ## 4. 统一 credentials schema 与 origin 绑定
 
@@ -150,7 +190,7 @@ origin = "https://mineru.example.invalid"
 
 ## 5. 安全发布
 
-普通 `[analysis]`/`[parsing]` 编辑使用 `tomlkit` round-trip：只更新目标 section，保留其它
+普通 `[analysis]`/`[parsing]`/`[access]` 编辑使用 `tomlkit` round-trip：只更新目标 section，保留其它
 section、注释和排版。发布流程为同目录 staging、`0600`、完整写入、flush/fsync、重读、
 TOML/Pydantic 复验、原子 replace；任一步失败保留原文件并清理 staging。确认前只显示
 普通字段 diff，不显示或推导 secret。
