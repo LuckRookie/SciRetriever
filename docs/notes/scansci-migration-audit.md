@@ -101,7 +101,7 @@ Copyright 2024-2026 scansci-pdf contributors
 
 ## 5. 后续迁移登记流程
 
-P56-P70 每个 Provider 都应先完成统一证据包，再决定 public/API-only、Browser `fixture-verified` 或 `unsupported`。若实施者准备从上游实质移植材料，顺序固定为：
+P56-P70 每个 Provider 都应先完成统一证据包，再决定是 `production-ready` 的 public/API-only capability、Browser `fixture-verified`，还是 `unsupported`。若实施者准备从上游实质移植材料，顺序固定为：
 
 1. 固定上游 repository 与 commit，并定位精确文件、对象或行；
 2. 判断是理念清洁重写，还是源码/数据/常量的 `copy` 或 `adapt`；

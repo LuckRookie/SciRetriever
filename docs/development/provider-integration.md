@@ -1,6 +1,6 @@
 # Provider 接入开发手册
 
-新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
+新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Publisher/Access Provider 还必须进入统一的 [Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
 
 本手册统一使用当前身份 `MetaLiterature`/`Literature`。`Work`/`WorkVersion` 是已删除旧架构中的历史名称，不得在当前实现或文档中与现行术语混用。
 
@@ -135,6 +135,8 @@ fallback。Operator-managed Browser session profile/Cookie 不进入普通配置
 
 ## 7. 离线 fixture 与验收
 
+PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquisition/profiles/<access-key>.json`，并与源码 `PublisherAccessEvidence.fixture_reference` 一一对应。验证状态只允许 `production-ready`、`fixture-verified`、`unsupported`；public/API-only 是 capability 组合，不是第四个状态。Browser Profile 必须引用真正的 `BrowserSiteRule` id/revision，并由统一矩阵证明 origin、risk scope、policy、页面状态、正文/补充材料归属和 fixture 对齐；测试摘要 selector 不能替代执行规则。
+
 按能力覆盖适用场景，CI 不使用真实凭据、真实受限正文或 live provider：
 
 - metadata 缺字段、冲突字段和 provider precedence；
@@ -184,6 +186,7 @@ fallback。Operator-managed Browser session profile/Cookie 不进入普通配置
 - [ ] adapter 已声明不含 secret 的 AccessScope、真实 quota 共享范围、当前政策依据和复核日期；缺失 policy 时不是 production-ready。
 - [ ] API 声明并执行真实 quota identity、并发、interval、window/周期额度、reset 和反馈头；普通配置只能收紧，公开/direct URL 没有绕过 provider/host scope。
 - [ ] Browser Profile 声明 risk/session group、文章 policy 与证据日期；不同独立 group 实际并行，同组 `concurrency=1` 且精确满足 interval/window/cooldown，全局 cap 只保护本机资源。
+- [ ] Publisher Profile 具有唯一 evidence manifest 和三态结论；production catalog 只由 `production-ready` 派生，fixture-only/unsupported rule 未进入生产对象图。
 - [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Profile guard 与 Network policy；persistent session、登录/MFA/challenge、circuit、多路正文捕获和 supplement 排除有离线 fixture，Cookie/profile 不泄露。
 - [ ] Metadata、reference query 和 asset API 共享真实 quota 时使用同一 scope；adapter/SDK 没有自建局部 limiter 或绕过受控 transport。
 - [ ] 只有供应商明确声明的同文献版本目标进入 `MetadataObservation.version_links`；未解析目标不触发自动补查、占位 Literature 或通用关系。

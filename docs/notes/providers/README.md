@@ -30,6 +30,8 @@
 
 截至 2026-08-13，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。当前受控 Browser 组件已有离线与 Chromium QA，但生产站点规则目录为空；不能把组件存在写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
+Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 只有 CORE 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。
+
 ## 3. 已接受的目标能力矩阵
 
 目标架构只分 Metadata Provider 与 Acquisition Provider，两类能力不互斥。领域搜索、稳定标识符 lookup、引用关系和参考文献原文都属于 Metadata 的不同能力；引用不形成第三类顶级 Provider。`direct` 和用户手动 PDF 不在矩阵中，分别是通用公开 Source 和独立接纳操作。
@@ -82,7 +84,8 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - [Web of Science](web-of-science.md)、[Elsevier](elsevier.md)、
   [Springer Nature](springer-nature.md)、[Wiley](wiley.md)；
 - [CORE](core.md)、[OpenCitations](opencitations.md)、[Unpaywall](unpaywall.md)、
-  [Configured Sci-Hub](configured-sci-hub.md)。
+  [Configured Sci-Hub](configured-sci-hub.md)；
+- [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)。
 
 ## 5. `direct` 不是供应商
 

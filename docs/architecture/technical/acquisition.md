@@ -20,6 +20,7 @@ acquisition/
   planning.py
   access_profiles.py
   profile_catalog.py
+  profile_verification.py
   outcomes.py
   routes.py
   manual.py
@@ -35,8 +36,9 @@ acquisition/
 - `cohort.py` 保存无持久化副作用的 work item，并对一个有界请求集合执行层级屏障；
 - `browser_admission.py` 在 Browser route 前形成允许、延期、待处理或拒绝决定及脱敏汇总；
 - `planning.py` 根据当前 Literature 证据形成运行时访问方 Resolution、Plan 和 route hints；
-- `access_profiles.py` 保存无 secret、版本化的 Publisher access/profile catalog；
-- `profile_catalog.py` 组装当前已核实的生产访问画像；
+- `access_profiles.py` 定义无 secret、版本化的 Publisher access/profile 与统一证据包；
+- `profile_catalog.py` 声明当前验证矩阵并派生已核实的生产访问画像；
+- `profile_verification.py` 把 Profile、真实 Browser rule、policy、origin 与三态生产资格对齐；
 - `outcomes.py` 定义 route 的 PDF、hint、正常未命中、延期和待处理结果；
 - `routes.py` 把已安装的 route adapter 与 Planner 形成的稳定 route key 对齐；
 - `manual.py` 接纳用户明确绑定到具体 Literature 的本地 PDF 内部副本；
@@ -120,7 +122,6 @@ Acquisition 私有、无 secret 的静态画像至少表达：
 ```text
 PublisherAccessProfile
   access_key
-  display_name
   platform_key
   landing_origins
   asset_origins
@@ -128,17 +129,22 @@ PublisherAccessProfile
   weak_hints
   public_capabilities
   api_capabilities
-  browser_rule_revision
+  browser_rule_id / browser_rule_revision
   browser_rate_limit_group
   browser_session_key
   browser_policy
-  supplementary_exclusions
-  evidence_revision
+  policy_evidence / policy_revision
+  production_status
+  evidence
+    display_name / product_name
+    official / access-terms / rate-limit references
+    verification_date / evidence_revision
+    Provider Notes / offline fixture reference
 ```
 
 `Metadata Provider`、`Publication/Access Provider` 和 `Access Platform/CDN` 是三种身份。ACS、IEEE、RSC 等访问方可以拥有 Profile，而不加入 Metadata Provider 枚举或创建不需要的 API secret。`browser_rate_limit_group` 表示共享网页规则、账号、quota 或风控的调度范围；`browser_session_key` 表示会话复用范围，两者不能由 DOI、完整 URL、单篇任务或随机值组成。
 
-Profile 只包含经过核实、可静态验证的 origin、ID、capability、政策和封闭页面规则，不保存 Cookie、token、签名 URL、任意 JavaScript、远程规则或个人机构身份。易变 endpoint、selector、速率和证据日期由 Provider Notes 维护，并与 Profile revision 和直接测试对齐。没有完整 policy/origin/归属证据的 Profile 不进入 production catalog。
+Profile 只包含经过核实、可静态验证的 origin、ID、capability、政策和对真实 `BrowserSiteRule` 的 id/revision 引用，不保存第二套摘要 selector、Cookie、token、签名 URL、任意 JavaScript、远程规则或个人机构身份。易变 endpoint、selector、速率和证据日期由 Provider Notes 维护，并与 Profile evidence manifest、真实 rule revision 和直接测试对齐。统一状态只有 `production-ready`、`fixture-verified` 与 `unsupported`；public/API/Browser 是否存在由 route capability 单独表达。生产 catalog 只从统一验证矩阵派生 `production-ready` 项，没有完整 policy/origin/归属证据的 Profile 不会进入生产对象图。当前准入字段与矩阵见 [Publisher Access Profile 准入与验证矩阵](../../notes/providers/publisher-access-matrix.md)。
 
 ### 3.2 PublisherAccessResolution 与 AcquisitionPlan
 
@@ -446,7 +452,8 @@ Browser admission 可以报告最小剩余集合、readiness、待处理动作�
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
 Provider session broker、operator-managed profile 存储边界、状态/页面分类、多路正文捕获和
 封闭 action contract、supplement/错文排除以及 Provider cooldown/circuit 也已完成。完整
-Provider Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、
+Provider-specific Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。
+统一 Profile 准入门已经完成，但当前 production Browser rule catalog 仍为空。组间并行、
 组内串行、会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不
 构成 production-ready Browser 能力。
 
@@ -479,6 +486,12 @@ Springer group:  S1 --provider interval-- S2 --provider interval-- S3
 pacing。`tightened_by()` 只取更长间隔/冷却、更小 runtime failure 阈值，或更小额度与更长
 窗口，不能改变 group/revision，也不能放宽声明值。具体数字和证据仍由 Provider Notes/Profile
 给出，不是全局默认值。
+
+Profile 的 `browser_rule_id`/`browser_rule_revision` 必须由 `PublisherAccessVerificationMatrix`
+解析为真正执行的 `BrowserSiteRule`；landing/allowed/asset origins、web risk scope、稳定文章 ID、
+primary capture、supplement exclusion 和四类页面状态必须对齐。缺失、游离、重复引用或 revision
+漂移均在对象图组装时失败。`fixture-verified` rule 只参加离线测试，不会进入 production 派生
+catalog；`unsupported` Profile 不声明任何 executable route。
 
 一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
 

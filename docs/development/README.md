@@ -6,6 +6,7 @@
 
 - [代码与文档同步映射](documentation-map.md)：代码变化需要同步核对哪些当前文档。
 - [Provider 接入开发手册](provider-integration.md)：新增或实质修改 Metadata Provider 或 Acquisition Provider client/adapter 时的安全与验收检查。
+- [Publisher Access Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)：Publisher/Access Provider 的统一证据包、三态状态、Browser rule 对齐和当前生产矩阵。
 - [整体架构](../architecture/README.md)：修改领域边界、数据所有权、持久化或依赖方向前的设计真相源。
 
 ## 验证
