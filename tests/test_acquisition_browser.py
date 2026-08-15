@@ -41,6 +41,9 @@ from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
+    BrowserCapture,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
     BrowserRequest,
     BrowserResult,
 )
@@ -70,6 +73,7 @@ from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessPolicy, AccessScope
 from sciretriever.network.browser import (
     BrowserBudget,
+    BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationGuard,
     BrowserDestinationKind,
@@ -222,12 +226,38 @@ def _download(
     *,
     final_locator: str = "https://publisher.test/article.pdf",
     media_type: str = "application/pdf",
-) -> BoundedByteStream:
-    return BoundedByteStream(
-        chunks=(body,),
-        media_type=media_type,
-        final_locator=final_locator,
-        size=len(body),
+) -> BrowserCaptureBatch:
+    return BrowserCaptureBatch(
+        captures=(
+            BrowserCapture(
+                kind=BrowserCaptureKind.DOWNLOAD,
+                stream=BoundedByteStream(
+                    chunks=(body,),
+                    media_type=media_type,
+                    final_locator=final_locator,
+                    size=len(body),
+                ),
+            ),
+        )
+    )
+
+
+def _capture_batch(
+    *values: tuple[bytes, BrowserCaptureKind, str, str],
+) -> BrowserCaptureBatch:
+    return BrowserCaptureBatch(
+        captures=tuple(
+            BrowserCapture(
+                kind=kind,
+                stream=BoundedByteStream(
+                    chunks=(body,),
+                    media_type=media_type,
+                    final_locator=locator,
+                    size=len(body),
+                ),
+            )
+            for body, kind, locator, media_type in values
+        )
     )
 
 
@@ -290,6 +320,7 @@ class _FakeRunner:
         *,
         flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
+        capture_guard: BrowserCaptureGuard | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -304,6 +335,7 @@ class _FakeRunner:
                 "request": request,
                 "policy": policy,
                 "destination_guard": destination_guard,
+                "capture_guard": capture_guard,
                 "budget": budget,
                 "timeout_seconds": timeout_seconds,
                 "cancel_event": cancel_event,
@@ -352,6 +384,7 @@ def _rule(
     login_markers: tuple[str, ...] = ("#login-required",),
     mfa_markers: tuple[str, ...] = ("#mfa-required",),
     page_markers: tuple[BrowserPageMarker, ...] | None = None,
+    capture_url_prefixes: tuple[str, ...] | None = None,
 ) -> BrowserSiteRule:
     markers = (
         tuple(
@@ -381,6 +414,15 @@ def _rule(
         if page_markers is None
         else page_markers
     )
+    prefixes = (
+        tuple(
+            prefix
+            for origin in allowed_origins
+            for prefix in (f"{origin}/article.pdf", f"{origin}/file")
+        )
+        if capture_url_prefixes is None
+        else capture_url_prefixes
+    )
     return BrowserSiteRule(
         rule_id=rule_id,
         revision=revision,
@@ -390,6 +432,7 @@ def _rule(
         action=action,
         click_selector=click_selector,
         page_markers=markers,
+        capture_url_prefixes=prefixes,
     )
 
 
@@ -885,7 +928,6 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 _download(
                     b"<html>not a PDF</html>",
                     final_locator="https://downloads.publisher.test/file?view=full",
-                    media_type="text/html",
                 )
             ],
             on_run=assert_claimed,
@@ -905,7 +947,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(len(deliveries), 1)
         delivery = deliveries[0]
         self.assertEqual(_payload(delivery), b"<html>not a PDF</html>")
-        self.assertEqual(delivery.candidate.declared_media_type, "text/html")
+        self.assertEqual(delivery.candidate.declared_media_type, "application/pdf")
         self.assertIs(delivery.candidate.acquisition_path, AcquisitionPath.CONTROLLED_BROWSER)
         self.assertEqual(delivery.candidate.source_name, "controlled-browser")
         self.assertRegex(delivery.candidate.candidate_key, _CANDIDATE_KEY)
@@ -926,6 +968,82 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertIsNone(delivery.provenance.input_sha256)
         delivery.content.discard()
 
+    def test_multiple_capture_mechanisms_become_independent_temporary_candidates(self) -> None:
+        runner = _FakeRunner(
+            [
+                _capture_batch(
+                    (
+                        b"%PDF-download",
+                        BrowserCaptureKind.DOWNLOAD,
+                        "https://publisher.test/article.pdf",
+                        "application/pdf",
+                    ),
+                    (
+                        b"%PDF-response",
+                        BrowserCaptureKind.RESPONSE,
+                        "https://downloads.publisher.test/file",
+                        "application/pdf",
+                    ),
+                    (
+                        b"%PDF-viewer",
+                        BrowserCaptureKind.VIEWER,
+                        "https://downloads.publisher.test/file/viewer",
+                        "application/pdf",
+                    ),
+                    (
+                        b"%PDF-official",
+                        BrowserCaptureKind.VERIFIED_LOCATOR,
+                        "https://downloads.publisher.test/file/object",
+                        "application/octet-stream",
+                    ),
+                )
+            ]
+        )
+        source = _source(runner)
+        request = _request(observations=(_observation(501, (_landing_hint(),)),))
+        tracker = CandidateKeyTracker()
+
+        deliveries = list(source._deliveries(request, _evidence(request), tracker))
+
+        self.assertEqual(len(deliveries), 4)
+        self.assertEqual(
+            tuple(_payload(delivery) for delivery in deliveries),
+            (
+                b"%PDF-download",
+                b"%PDF-response",
+                b"%PDF-viewer",
+                b"%PDF-official",
+            ),
+        )
+        self.assertEqual(len({delivery.candidate.candidate_key for delivery in deliveries}), 4)
+        self.assertEqual(len(tracker.tried_candidate_keys), 5)
+        capture_guard = runner.calls[0]["capture_guard"]
+        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
+        assert isinstance(capture_guard, BrowserCaptureGuard)
+        self.assertTrue(
+            capture_guard.allows(
+                "https://downloads.publisher.test/file/object",
+                BrowserCaptureKind.VERIFIED_LOCATOR,
+                "application/octet-stream",
+            )
+        )
+        self.assertFalse(
+            capture_guard.allows(
+                "https://downloads.publisher.test/unreviewed.pdf",
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        self.assertFalse(
+            capture_guard.allows(
+                "https://downloads.publisher.test/file",
+                BrowserCaptureKind.RESPONSE,
+                "text/html",
+            )
+        )
+        for delivery in deliveries:
+            delivery.content.discard()
+
     def test_excluded_and_duplicate_actions_do_not_run_browser_twice(self) -> None:
         first_runner = _FakeRunner([_download()])
         first_source = _source(first_runner)
@@ -938,7 +1056,8 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         first = list(first_source._deliveries(request, _evidence(request), first_tracker))
         self.assertEqual(len(first), 1)
         self.assertEqual(len(first_runner.calls), 1)
-        key = first[0].candidate.candidate_key
+        tried_keys = first_tracker.tried_candidate_keys
+        self.assertEqual(len(tried_keys), 2)
         first[0].content.discard()
 
         excluded_runner = _FakeRunner([])
@@ -947,7 +1066,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             excluded_source._deliveries(
                 request,
                 _evidence(request),
-                CandidateKeyTracker((key,)),
+                CandidateKeyTracker(tried_keys),
             )
         )
         self.assertEqual(excluded, [])
@@ -1305,8 +1424,9 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         budget = call["budget"]
         self.assertEqual(budget, source.browser_budget)
         assert isinstance(budget, BrowserBudget)
-        self.assertEqual(budget.max_downloads, 1)
-        self.assertEqual(budget.max_popups, 1)
+        self.assertEqual(budget.max_downloads, 4)
+        self.assertEqual(budget.max_popups, 2)
+        self.assertEqual(budget.max_captures, 4)
         self.assertLessEqual(budget.max_requests, 64)
         self.assertEqual(call["cancel_event"], cancelled)
         policy = call["policy"]

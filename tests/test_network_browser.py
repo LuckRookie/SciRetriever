@@ -3,11 +3,17 @@ from __future__ import annotations
 import threading
 import time
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, cast
 from urllib.parse import urlsplit
 
-from sciretriever.model.access import AccessFailure, BoundedByteStream
+from sciretriever.model.access import (
+    AccessFailure,
+    BoundedByteStream,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
+)
 from sciretriever.network.admission import (
     AccessCoordinator,
     AccessPermit,
@@ -17,6 +23,7 @@ from sciretriever.network.admission import (
 )
 from sciretriever.network.browser import (
     BrowserBudget,
+    BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationKind,
     BrowserPageObservation,
@@ -65,6 +72,29 @@ class _OriginGuard:
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if origin not in self.origins:
             raise ValueError("fixture origin rejected")
+
+
+class _CaptureGuard:
+    def __init__(
+        self,
+        allowed: set[tuple[str, BrowserCaptureKind, str]],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        self.allowed = allowed
+        self.error = error
+        self.calls: list[tuple[str, BrowserCaptureKind, str]] = []
+
+    def allows(
+        self,
+        url: str,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> bool:
+        self.calls.append((url, kind, media_type))
+        if self.error is not None:
+            raise self.error
+        return (url, kind, media_type) in self.allowed
 
 
 class _RecordingCoordinator(AccessCoordinator):
@@ -118,11 +148,35 @@ class _FakeRoute:
         self.aborted = True
 
 
+@dataclass(frozen=True, slots=True)
+class _ResponseFixture:
+    body: bytes
+    media_type: str = "application/pdf"
+    status: int = 200
+
+
 class _FakeResponse:
-    def __init__(self, request: _FakeRequest, status: int = 200) -> None:
+    def __init__(
+        self,
+        request: _FakeRequest,
+        status: int = 200,
+        *,
+        body: bytes | None = None,
+        media_type: str = "text/html",
+    ) -> None:
         self.request = request
         self.url = request.url
         self.status = status
+        self.media_type = media_type
+        self._body = body
+        self.size = None if body is None else len(body)
+        self.body_reads = 0
+
+    def body(self) -> bytes:
+        self.body_reads += 1
+        if self._body is None:
+            raise RuntimeError("fixture response has no body")
+        return self._body
 
 
 class _FakeDownload:
@@ -216,6 +270,7 @@ class _FakeContext:
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
         navigation_status: int = 200,
+        response_fixtures: dict[str, _ResponseFixture] | None = None,
     ) -> None:
         self.events = events
         self.redirects = {} if redirects is None else redirects
@@ -226,6 +281,7 @@ class _FakeContext:
         self.subresources = subresources
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
+        self.response_fixtures = {} if response_fixtures is None else response_fixtures
         self.goto_started = threading.Event()
         self.first_subresource_continued = threading.Event()
         self.second_subresource_continued = threading.Event()
@@ -234,6 +290,7 @@ class _FakeContext:
         self.pages: list[_FakePage] = []
         self.route_handler: Callable[[_FakeRoute], object] | None = None
         self.handlers: dict[str, list[Callable[[object], object]]] = {}
+        self.responses: list[_FakeResponse] = []
         self.closed = False
         self.binding: object | None = None
         self.bindings: list[object] = []
@@ -281,7 +338,14 @@ class _FakeContext:
             raise AssertionError("route handler was not installed")
         self.route_handler(route)
         if route.continued:
-            response = _FakeResponse(route.request)
+            fixture = self.response_fixtures.get(url)
+            response = _FakeResponse(
+                route.request,
+                status=200 if fixture is None else fixture.status,
+                body=None if fixture is None else fixture.body,
+                media_type="text/html" if fixture is None else fixture.media_type,
+            )
+            self.responses.append(response)
             for handler in self.handlers.get("response", ()):
                 handler(response)
         if route.continued and navigation:
@@ -361,6 +425,7 @@ class _FakeProcess:
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
         navigation_status: int = 200,
+        response_fixtures: dict[str, _ResponseFixture] | None = None,
     ) -> None:
         self.events = events
         self.redirects = redirects
@@ -372,6 +437,7 @@ class _FakeProcess:
         self.subresources = subresources
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
+        self.response_fixtures = response_fixtures
         self.context: _FakeContext | None = None
         self.profile: object | None = None
         self.downloads_path: str | None = None
@@ -417,6 +483,7 @@ class _FakeProcess:
             subresources=self.subresources,
             blocking_goto=self.blocking_goto,
             navigation_status=self.navigation_status,
+            response_fixtures=self.response_fixtures,
         )
         self.context.bind_connection(connection_binding)
         return self.context
@@ -442,6 +509,7 @@ class _FakeFactory:
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
         navigation_status: int = 200,
+        response_fixtures: dict[str, _ResponseFixture] | None = None,
     ) -> None:
         self.events: list[str] = []
         self.profile: object | None = None
@@ -456,6 +524,7 @@ class _FakeFactory:
             subresources=subresources,
             blocking_goto=blocking_goto,
             navigation_status=navigation_status,
+            response_fixtures=response_fixtures,
         )
         self.context_close_error = context_close_error
         self.binding: object | None = None
@@ -511,8 +580,17 @@ def _failure(value: object) -> AccessFailure:
 
 
 def _download(value: object) -> BoundedByteStream:
-    if not isinstance(value, BoundedByteStream):
+    if not isinstance(value, BrowserCaptureBatch) or len(value.captures) != 1:
         raise AssertionError(f"expected download, got {type(value).__name__}")
+    capture = value.captures[0]
+    if capture.kind is not BrowserCaptureKind.DOWNLOAD:
+        raise AssertionError(f"expected download, got {capture.kind.value}")
+    return capture.stream
+
+
+def _captures(value: object) -> BrowserCaptureBatch:
+    if not isinstance(value, BrowserCaptureBatch):
+        raise AssertionError(f"expected captures, got {type(value).__name__}")
     return value
 
 
@@ -656,6 +734,192 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertIsNotNone(self.factory.downloads_path)
         assert self.factory.downloads_path is not None
         self.assertFalse(Path(self.factory.downloads_path).exists())
+
+    def test_response_popup_viewer_and_verified_locator_captures_are_distinct(self) -> None:
+        response_url = "https://landing.test/start"
+        popup_url = "https://popup.test/article.pdf"
+        viewer_url = "https://other.test/viewer.pdf"
+        verified_url = "https://download.test/official-object"
+        fixtures = {
+            response_url: _ResponseFixture(b"%PDF-response"),
+            popup_url: _ResponseFixture(b"%PDF-popup"),
+            viewer_url: _ResponseFixture(b"%PDF-viewer"),
+            verified_url: _ResponseFixture(
+                b"%PDF-verified",
+                media_type="application/octet-stream",
+            ),
+        }
+        guard = _CaptureGuard(
+            {
+                (response_url, BrowserCaptureKind.RESPONSE, "application/pdf"),
+                (popup_url, BrowserCaptureKind.POPUP, "application/pdf"),
+                (viewer_url, BrowserCaptureKind.VIEWER, "application/pdf"),
+                (
+                    verified_url,
+                    BrowserCaptureKind.VERIFIED_LOCATOR,
+                    "application/octet-stream",
+                ),
+            }
+        )
+        factory = _FakeFactory(response_fixtures=fixtures)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        def flow(session: object) -> None:
+            session.open_popup(popup_url)  # type: ignore[attr-defined]
+            session.open_viewer(viewer_url)  # type: ignore[attr-defined]
+            session.open_verified_locator(verified_url)  # type: ignore[attr-defined]
+
+        batch = _captures(
+            client.run(
+                self.scope,
+                response_url,
+                self.policy,
+                flow=flow,
+                capture_guard=guard,
+                budget=BrowserBudget(max_captures=4),
+            )
+        )
+
+        self.assertIsInstance(guard, BrowserCaptureGuard)
+        self.assertEqual(
+            tuple(capture.kind for capture in batch.captures),
+            (
+                BrowserCaptureKind.RESPONSE,
+                BrowserCaptureKind.POPUP,
+                BrowserCaptureKind.VIEWER,
+                BrowserCaptureKind.VERIFIED_LOCATOR,
+            ),
+        )
+        self.assertEqual(
+            tuple(b"".join(capture.stream.chunks) for capture in batch.captures),
+            tuple(fixture.body for fixture in fixtures.values()),
+        )
+        assert factory.process.context is not None
+        self.assertEqual(
+            [response.body_reads for response in factory.process.context.responses],
+            [1, 1, 1, 1],
+        )
+
+        limited_client = BrowserClient(
+            factory=_FakeFactory(response_fixtures=fixtures),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        self.assertEqual(
+            _failure(
+                limited_client.run(
+                    self.scope,
+                    response_url,
+                    self.policy,
+                    flow=flow,
+                    capture_guard=guard,
+                    budget=BrowserBudget(max_captures=3),
+                )
+            ).code,
+            "budget",
+        )
+
+    def test_response_and_download_duplicate_bytes_are_delivered_once(self) -> None:
+        download_url = "https://download.test/article.pdf"
+        body = b"%PDF-identical-event-body"
+        download = _FakeDownload(download_url, body)
+        guard = _CaptureGuard(
+            {
+                (download_url, BrowserCaptureKind.RESPONSE, "application/pdf"),
+                (download_url, BrowserCaptureKind.DOWNLOAD, "application/pdf"),
+            }
+        )
+        factory = _FakeFactory(
+            configured_download=download,
+            response_fixtures={download_url: _ResponseFixture(body)},
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        batch = _captures(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                capture_guard=guard,
+            )
+        )
+
+        self.assertEqual(len(batch.captures), 1)
+        self.assertIs(batch.captures[0].kind, BrowserCaptureKind.RESPONSE)
+        self.assertEqual(batch.captures[0].stream.chunks, (body,))
+        self.assertTrue(download.deleted)
+
+    def test_capture_guard_rejects_before_body_and_errors_fail_closed(self) -> None:
+        response_url = "https://landing.test/start"
+        fixture = _ResponseFixture(b"%PDF-must-not-be-read")
+        for guard, expected_code in (
+            (_CaptureGuard(set()), "no-download"),
+            (
+                _CaptureGuard(set(), error=RuntimeError("private policy sentinel")),
+                "policy",
+            ),
+        ):
+            with self.subTest(expected_code=expected_code):
+                factory = _FakeFactory(response_fixtures={response_url: fixture})
+                client = BrowserClient(
+                    factory=factory,
+                    resolver=self.resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+
+                failure = _failure(
+                    client.run(
+                        self.scope,
+                        response_url,
+                        self.policy,
+                        capture_guard=guard,
+                    )
+                )
+
+                self.assertEqual(failure.code, expected_code)
+                self.assertNotIn("sentinel", repr(failure))
+                assert factory.process.context is not None
+                self.assertEqual(factory.process.context.responses[0].body_reads, 0)
+
+    def test_response_capture_enforces_candidate_and_total_byte_budgets(self) -> None:
+        response_url = "https://landing.test/start"
+        fixture = _ResponseFixture(b"12345")
+        guard = _CaptureGuard({(response_url, BrowserCaptureKind.RESPONSE, "application/pdf")})
+        for budget in (
+            BrowserBudget(max_bytes_per_download=4),
+            BrowserBudget(max_total_bytes=4),
+        ):
+            with self.subTest(budget=budget):
+                client = BrowserClient(
+                    factory=_FakeFactory(response_fixtures={response_url: fixture}),
+                    resolver=self.resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+                self.assertEqual(
+                    _failure(
+                        client.run(
+                            self.scope,
+                            response_url,
+                            self.policy,
+                            capture_guard=guard,
+                            budget=budget,
+                        )
+                    ).code,
+                    "oversize",
+                )
 
     def test_initial_signed_query_is_rejected_but_runtime_download_is_redacted(self) -> None:
         initial = _failure(

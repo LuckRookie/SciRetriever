@@ -773,6 +773,7 @@ def run_acceptance() -> None:  # noqa: C901
             web_scope_provider_name=_HOSTNAME,
             action=BrowserRuleAction.EXPLICIT_CLICK,
             click_selector="button[data-action='pdf']",
+            capture_url_prefixes=(f"{origin}/article.pdf",),
         )
         source = ControlledBrowserPdfSource(
             runner=client,

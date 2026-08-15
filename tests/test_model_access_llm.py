@@ -7,6 +7,9 @@ from pydantic import BaseModel, ValidationError
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
+    BrowserCapture,
+    BrowserCaptureBatch,
+    BrowserCaptureKind,
     BrowserRequest,
     Header,
     TransportRequest,
@@ -72,6 +75,8 @@ class AccessModelTests(unittest.TestCase):
         for model in (
             Header,
             BoundedByteStream,
+            BrowserCapture,
+            BrowserCaptureBatch,
             TransportRequest,
             TransportResponse,
             BrowserRequest,
@@ -90,6 +95,55 @@ class AccessModelTests(unittest.TestCase):
         self.assertEqual(AccessFailure.model_validate_json(failure.model_dump_json()), failure)
         self.assertEqual(b"".join(stream.chunks), b"%PDF-fixture")
         self.assertEqual(stream.size, sum(map(len, stream.chunks)))
+
+    def test_browser_capture_batches_are_bounded_deduplicated_and_neutral(self) -> None:
+        def capture(index: int, kind: BrowserCaptureKind) -> BrowserCapture:
+            body = f"%PDF-fixture-{index}".encode()
+            return BrowserCapture(
+                kind=kind,
+                stream=BoundedByteStream(
+                    chunks=(body,),
+                    media_type="application/pdf",
+                    final_locator=f"https://example.invalid/pdf/{index}",
+                    size=len(body),
+                ),
+            )
+
+        captures = (
+            capture(1, BrowserCaptureKind.DOWNLOAD),
+            capture(2, BrowserCaptureKind.RESPONSE),
+            capture(3, BrowserCaptureKind.POPUP),
+            capture(4, BrowserCaptureKind.VIEWER),
+            capture(5, BrowserCaptureKind.VERIFIED_LOCATOR),
+        )
+        batch = BrowserCaptureBatch(captures=captures)
+
+        self.assertEqual(
+            BrowserCaptureBatch.model_validate_json(batch.model_dump_json()),
+            batch,
+        )
+        self.assertNotIn("example.invalid", repr(batch))
+        self.assertNotIn("%PDF", repr(batch))
+        with self.assertRaises(ValidationError):
+            BrowserCaptureBatch(captures=())
+        with self.assertRaises(ValidationError):
+            BrowserCaptureBatch(
+                captures=tuple(capture(index, BrowserCaptureKind.RESPONSE) for index in range(17))
+            )
+        with self.assertRaises(ValidationError):
+            BrowserCaptureBatch(
+                captures=(
+                    capture(1, BrowserCaptureKind.DOWNLOAD),
+                    capture(1, BrowserCaptureKind.RESPONSE),
+                )
+            )
+        with self.assertRaises(ValidationError):
+            BrowserCapture.model_validate(
+                {
+                    **capture(6, BrowserCaptureKind.RESPONSE).model_dump(),
+                    "page": object(),
+                }
+            )
 
     def test_access_contracts_reject_secrets_external_objects_paths_and_dynamic_state(self) -> None:
         secret = "ACCESS-SECRET-SENTINEL"

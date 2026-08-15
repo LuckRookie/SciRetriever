@@ -303,6 +303,7 @@ rule = BrowserSiteRule(
     web_scope_provider_name="publisher.test",
     action=BrowserRuleAction.EXPLICIT_CLICK,
     click_selector="a[data-action='pdf']",
+    capture_url_prefixes=("https://downloads.publisher.test/article.pdf",),
     page_markers=(
         BrowserPageMarker(
             marker_id="login-required",

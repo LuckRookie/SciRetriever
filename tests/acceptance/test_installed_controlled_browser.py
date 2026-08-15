@@ -46,16 +46,16 @@ class InstalledControlledBrowserTests(unittest.TestCase):
         evidence = payload["evidence"]
         self.assertTrue(evidence["applicable"])
         self.assertEqual(evidence["priority"], ["asset-hint", "provider-record-identity"])
-        self.assertEqual(len(evidence["tried_candidate_keys"]), 1)
+        self.assertEqual(len(evidence["tried_candidate_keys"]), 2)
 
         candidate = payload["candidate"]
         self.assertEqual(candidate["acquisition_path"], "controlled-browser")
         self.assertEqual(candidate["source_name"], "controlled-browser")
         self.assertEqual(candidate["declared_media_type"], "application/pdf")
         self.assertRegex(candidate["candidate_key"], _CANDIDATE_KEY)
-        self.assertEqual(
-            evidence["tried_candidate_keys"],
-            [candidate["candidate_key"]],
+        self.assertIn(candidate["candidate_key"], evidence["tried_candidate_keys"])
+        self.assertTrue(
+            all(_CANDIDATE_KEY.fullmatch(key) for key in evidence["tried_candidate_keys"])
         )
         self.assertEqual(
             candidate["safe_source_url"],
