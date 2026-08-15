@@ -310,8 +310,8 @@ circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_c
 
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
 运行状态机、封闭页面 marker 分类、多路正文捕获、封闭 action contract 和 supplement/错文
-排除、Provider cooldown/circuit 以及确定性取消/资源清理已经完成，但 Browser foundation 的安装
-wheel 验收、配置/确认入口以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
+排除、Provider cooldown/circuit、确定性取消/资源清理以及安装 wheel 的离线 Browser foundation
+验收已经完成，但配置/确认入口以及至少一个 Provider 的端到端 Profile 尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、账号警告、not found、PDF captured 和
@@ -397,6 +397,7 @@ session，并立即打开当前 `browser_rate_limit_group` 的 cleanup circuit�
 - 等待队列、permit、时间截止和额度计数只存在于内存，不创建限速表、协调目录、状态文件、lease 或跨进程锁；
 - 新 Coordinator 不恢复旧进程状态，测试和文档不宣称跨进程或跨重启限速保证；
 - 同一 session key 可以复用 operator-managed persistent context，但每篇文章的 page、popup、download、response stream 和临时目录完整清理；profile/session key 不按 Literature 随机拆分；
+- 安装 wheel 的本地 HTTPS/真实 Chromium fixture 连续执行两篇文章时只创建一个 process/context，每篇使用独立 page、download 和文章临时目录，并对每个 landing/PDF hop 重新执行 DNS、TLS authority、connection binding 与 host admission；
 - 每个 cleanup failpoint 后资源释放至多调用一次，重复 session/broker cleanup 保留首次失败，且 cleanup failure 不形成耗尽；
 - 登录、MFA、challenge、无 entitlement、rate limit、IP block 和 runtime failure 形成稳定的当前运行状态；对应 group 正确暂停或熔断且不会持久化；
 - Browser 能在封闭规则内从 download、response、popup/viewer 和官方 locator 交付临时 PDF，且正文/补充材料区分、候选数量和全部资源预算均受控；
