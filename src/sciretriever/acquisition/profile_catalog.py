@@ -231,6 +231,59 @@ IEEE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+IOP_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="iopscience",
+    platform_key="iopscience",
+    landing_origins=("https://iopscience.iop.org",),
+    asset_origins=("https://iopscience.iop.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1088",),
+    weak_publisher_names=(
+        "iop publishing",
+        "institute of physics publishing",
+        "iopscience",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="iop-tdm-policy-2026-07",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="IOPscience",
+        product_name="IOPscience journals platform",
+        official_references=(
+            "https://ioppublishing.org/legal/textanddataminingpolicy/",
+            "https://ioppublishing.org/terms-conditions/",
+            "https://ioppublishing.org/librarians/licencing/",
+            (
+                "https://ioppublishing.org/news/"
+                "iop-publishing-collaborates-with-openathens-and-seamlessaccess-"
+                "to-improve-user-experience/"
+            ),
+            "https://iopscience.iop.org/robots.txt",
+        ),
+        access_terms_references=(
+            "https://ioppublishing.org/legal/textanddataminingpolicy/",
+            "https://ioppublishing.org/terms-conditions/",
+        ),
+        rate_limit_references=(
+            "https://ioppublishing.org/legal/textanddataminingpolicy/",
+            "https://iopscience.iop.org/robots.txt",
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="iopscience-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/iop.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/iopscience.json",
+    ),
+)
+
 NATURE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="nature-portfolio",
     platform_key="nature",
@@ -413,6 +466,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
                 IEEE_ACCESS_PROFILE,
+                IOP_ACCESS_PROFILE,
                 NATURE_ACCESS_PROFILE,
                 RSC_ACCESS_PROFILE,
                 SPRINGERLINK_ACCESS_PROFILE,
@@ -433,6 +487,7 @@ __all__ = (
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
     "IEEE_ACCESS_PROFILE",
+    "IOP_ACCESS_PROFILE",
     "NATURE_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
