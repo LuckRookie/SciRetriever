@@ -10,8 +10,9 @@
 本文定义根级 `configuration.py`、`bootstrap.py`、`model/configuration.py` 与
 `entry/cli/` 的配置协作。统一配置中心、安全发布、状态和诊断的当前用户行为仍以配置手册、
 源码和测试为准；本文还规定 ADR 0015 的 Browser access/profile 目标边界。普通 `[access]`
-配置和安全 profile 存储边界已经实现，交互管理、状态呈现和生产 Browser 对象图仍须在各自
-实现与安装后验收完成后才能写成已发布能力。Provider 的易变外部字段仍以
+配置、安全 profile 存储边界和裸 `sciretriever config` 的 Access 管理已经实现；
+`config status/test` 的完整 Browser 状态与探测合同、生产 Browser 对象图仍须在各自实现和
+安装后验收完成后才能写成已发布能力。Provider 的易变外部字段仍以
 [Provider Notes](../../notes/providers/README.md) 为依据。
 
 ## 1. 责任与依赖
@@ -150,18 +151,24 @@ origin、selector 或 Browser rule 字段，因此 operator 不能借 override �
 
 调用方只能提供经过稳定、无 secret token 规则校验的 opaque identity，不能提供绝对路径、相对
 跳转、URL、UUID、Cookie/token 等敏感标记或任意目录。`initialize_browser_profile()` 只创建或
-选择该固定目录下的空 owner-only 容器；取消发生在发布前时会删除刚创建的空 profile，不创建或
-改写 `credentials.toml`。`resolve_browser_profile()` 返回不可序列化且 repr 不含 identity/path
-的 opaque handle；handle 在 runtime 使用前重新检查目录对象身份，目录被替换后 fail closed。
+选择该固定目录下的空 owner-only 容器；`configure_browser_access_profile()` 先校验普通配置
+候选，再初始化 profile 并原子发布 `[access]`。发布前失败只回滚本次新建的空 profile，绝不
+删除原本存在的 session，也不创建或改写 `credentials.toml`。`resolve_browser_profile()` 返回
+不可序列化且 repr 不含 identity/path 的 opaque handle；handle 在 runtime 使用前重新检查目录
+对象身份，目录被替换后 fail closed。
 
 `.sciretriever`、`browser-profiles`、profile 及其所有子目录必须由当前用户拥有且精确 `0700`；
 profile 内文件必须由当前用户拥有、为单硬链接普通文件且精确 `0600`。Configuration 使用
 no-follow descriptor 递归核对对象身份、类型与修改竞态，不读取或解析任何文件字节；任意层级的
 symlink、特殊文件、错误 owner/mode、硬链接或验证期间替换都会拒绝。纯本地
 `browser_profile_status()` 只有 `configured`、`missing`、`attention` 三种输出，模型不包含
-路径、内部文件名、Cookie 名/域/值/hash/fingerprint。普通 `[access]` 选择字段已经接入严格
-TOML 与 round-trip 编辑边界；交互管理和 production Browser 对象图仍未接入，因此当前 CLI
-中的 Controlled Browser 仍保持 disabled。
+路径、内部文件名、Cookie 名/域/值/hash/fingerprint。`remove_browser_profile()` 只删除用户
+明确选择且再次通过完整安全检查的固定 profile tree；symlink、特殊文件、错误权限或替换竞态
+均 fail closed。删除 session 不修改普通配置，也不删除 Provider API credential。
+
+普通 `[access]` 选择字段已经接入严格 TOML、round-trip 编辑和交互管理。当前 production
+Browser rule catalog 仍为空，route count 为 0；因此 profile 即使存在，自动 Completion 的
+Controlled Browser 仍是 unavailable，而不是 configured 或 authenticated。
 
 ## 4. 统一 credentials schema 与 origin 绑定
 
@@ -222,7 +229,7 @@ sciretriever config test --all [--json]
 ```
 
 裸 `config` 首页固定区分 `CORE SERVICES` 和 `LITERATURE PROVIDERS`。TTY 使用 Rich 与
-prompt-toolkit 的非全屏界面，支持方向键、Enter、`L/M/T/Q` 快捷键和隐藏输入；非 TTY
+prompt-toolkit 的非全屏界面，支持方向键、Enter、`A/L/M/T/Q` 快捷键和隐藏输入；非 TTY
 降级为确定性文本菜单。主题支持 auto/dark/light/mono，`NO_COLOR` 强制 mono；状态不能
 只靠颜色表达。所有交互、确认和 setup 结果写 stderr，stdout 为空；Ctrl+C/EOF 取消不产生
 写入。旧 `config set/remove` 保持无效。
@@ -232,12 +239,24 @@ LLM setup 覆盖官方 OpenAI、官方 Anthropic 与 custom/compatible 服务，
 明确确认 PDF 上传边界。Provider 区继续从 adapter credential spec 生成字段，显示用途、
 官方申请入口和普通配置启用提示；unsupported capability 字段不能冒充当前必需项。
 
-Browser access 管理的目标入口属于 `LITERATURE PROVIDERS` 的独立 access 区，而不是 API key
-字段：它显示 API route 与 Browser route 各自 readiness，允许选择或初始化安全 profile
-identity，并只在用户明确选择时打开可见 Browser 完成人工登录或清除本地会话。自动
-Completion 不填写账号、不选择机构、不处理 MFA/CAPTCHA。交互取消不得修改 profile；任何
-界面都不能显示、复制或导出 Cookie。该入口只有在对应实现和离线/安装后验收完成后才进入
-当前 CLI 手册。
+Browser access 管理位于 `LITERATURE PROVIDERS` 的独立 Access 区，而不是 API key 字段。
+Plain/TTY 两种界面都把三个已实现的 authorized primary-PDF API（CORE、Elsevier、Wiley）
+与 Browser session readiness 分开显示，并支持：
+
+- 选择或初始化安全 profile identity，同时原子保存启用后的 `[access]`；
+- 经第二次明确确认后打开一个以该 persistent profile 为基础的可见空白 Chromium；
+- 永久移除所选本地 session，但保留普通配置和全部 Provider API credential；
+- 禁用 Browser access，但保留所选 profile 和本地 session。
+
+人工登录 Browser 不接收目标 URL，不自动导航、填写账号、选择机构、处理 MFA/CAPTCHA、枚举
+Cookie/storage 或下载文件；所有站点访问和登录都由用户直接操作。关闭窗口后只说明本地
+profile 被保留，不声称已经登录，也不声称任意文章具有 entitlement。初始化、打开和删除都在
+产生副作用前确认，取消不写配置、不创建或删除 profile、不启动 Browser。任何界面都不能显示、
+复制或导出 Cookie。
+
+该管理入口如实显示当前 production Browser route count 为 0，并说明本地 profile 不会启用
+自动 Completion。`config status/test` 的完整 Browser route/profile/session/policy/action-required
+呈现与最小显式探测仍是独立能力，不能由这个交互入口的存在推断为已经完成。
 
 ## 7. status 与 probe
 
@@ -251,6 +270,11 @@ presence view，不构造 Storage、Catalog、ArtifactStore 或 Network。人类
 - PDF acquisition 固定顺序：Public → Authorized API → Controlled browser；
 - 每个 Publisher Browser route 的 implementation/profile/policy readiness、无 secret 的 risk-group 展示名和所需下一动作；
 - Storage 和执行参数概要。
+
+当前实现已经显示固定三层顺序和 production Browser route 为 0 的概要，但尚未把 Browser
+route、profile presence、未评估的 session/login、policy evidence 与 action-required 分组完整
+展开；上面 Browser-specific 的逐项呈现是这一命令仍待闭合的合同，不得从裸 `config` 的
+Access 管理入口推断为已经实现。
 
 本地 presence 不能描述为认证成功。JSON 使用稳定分组 schema、无 ANSI，也不能包含 secret
 特征或 configuration fingerprint。

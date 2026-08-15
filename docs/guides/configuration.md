@@ -266,8 +266,9 @@ duration 和 cooldown 只能增大。窗口计数与时长必须成对出现，�
 selector、rule revision 或官方 `Retry-After` 语义。
 
 当前支持矩阵尚无 production Browser route，因此 `browser_policy_overrides` 必须为空；配置
-总开关或 profile identity 不会把 fixture-only/unsupported Profile 变为可执行能力。后续交互
-管理与生产对象图完成前，`config status` 中的 Controlled Browser 仍显示 disabled。
+总开关或 profile identity 不会把 fixture-only/unsupported Profile 变为可执行能力。裸
+`sciretriever config` 已经可以管理本地 Browser profile，但当前 route count 仍为 0，自动
+Completion 的 Controlled Browser 因而保持 unavailable。
 
 Cookie、local storage、登录名、机构身份、profile 目录内容和 profile path 都不进入
 `config.toml` 或 `credentials.toml`。Network 的 URL、DNS、TLS、redirect、origin、请求/响应
@@ -294,7 +295,7 @@ Provider、LLM 与远程 MinerU secret 只有一个生产来源：
 | `[web-of-science]` | `api_key` | Metadata 必需。 |
 | `[semantic-scholar]` | `api_key` | Metadata 可选；Acquisition 当前公开路线不读取它。 |
 | `[openalex]` | `api_key` | Metadata 可选；Acquisition 当前公开路线不读取它。 |
-| `[elsevier]` | `api_key`、`institution_token` | Metadata 的 `api_key` 必需，`institution_token` 可选；Acquisition 当前公开路线不读取它。 |
+| `[elsevier]` | `api_key`、`institution_token` | Metadata 和 authorized primary-PDF object retrieval 使用 `api_key`；`institution_token` 可选。 |
 | `[springer]` | `api_key` | 当前生产 Metadata 使用；尚不受支持的 Acquisition Full Text `api_metric` 不由交互管理器收集，也不会使 authorized route 可执行。 |
 | `[core]` | `api_key` | Metadata 可选；启用 CORE Acquisition 的授权 PDF API 时必需。 |
 | `[opencitations]` | `access_token` | Metadata 可选。 |
@@ -365,8 +366,9 @@ sciretriever config test --all [--json]
 
 执行 `sciretriever config` 即进入统一配置中心，首页固定分为 `CORE SERVICES` 和
 `LITERATURE PROVIDERS`。LLM 与 MinerU 分别提供 setup/edit、test、reset 和返回；Provider
-提供设置/更新、移除和返回。TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、
-Enter、`L/M/T/Q` 快捷键与隐藏输入；重定向输入或基础终端使用确定性编号菜单。主题支持
+提供设置/更新、移除和返回；独立的 Provider Access 区管理 authorized primary-PDF API 与
+Browser session。TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、Enter、
+`A/L/M/T/Q` 快捷键与隐藏输入；重定向输入或基础终端使用确定性编号菜单。主题支持
 `auto/dark/light/mono`，`NO_COLOR` 始终强制单色。交互内容只写 stderr，stdout 为空；
 Ctrl+C/EOF 取消不会写文件。公开子命令只有 `status` 和 `test`，旧 `config set/remove`
 作为无效输入拒绝。
@@ -404,6 +406,25 @@ Wiley 是否接受 token、token 是否符合 Wiley 当前签发格式、当前�
 移除动作只删除所选 Provider section并原子发布，其它 section 保留；存在 section 时必须
 确认，未配置时明确提示且不写文件。它不修改普通配置，也不删除已经接纳的文献事实或资产。
 
+Provider Access 区把 CORE、Elsevier、Wiley 的 authorized primary-PDF API 本地 readiness 与
+Controlled Browser 分开显示。Browser 菜单提供四个动作：
+
+1. 选择或初始化 profile；
+2. 打开可见 Browser 由用户手工登录；
+3. 永久移除所选本地 Browser session；
+4. 禁用 Browser access，但保留本地 session。
+
+profile identity 只是一段安全的普通配置值；实际 session 始终位于固定的
+`~/.sciretriever/browser-profiles/<identity>/`。初始化前会显示实际目录并说明其中可能保存
+Cookie 与 local storage，确认取消不会创建 profile 或写入 `[access]`。删除 session 也需要
+单独确认，只删除经过安全检查的所选目录，不修改 `config.toml`，也不删除 Provider API key。
+
+人工登录只会打开一个使用所选 persistent profile 的可见空白 Chromium。SciRetriever 不提供
+目标 URL，不自动导航、填写账号、选择机构、处理 MFA/CAPTCHA、检查 Cookie 或下载文件；
+用户自行访问有权使用的站点并关闭窗口。窗口关闭只表示 profile 被保留，不表示登录成功，
+更不表示任意文章具有 entitlement。当前 production Browser route count 是 0，因此这些本地
+session 操作不会启用自动 Completion；Access 区会明确显示 `Unavailable`。
+
 ### `config status`
 
 `status` 读取普通配置和统一凭据文件，只做本地静态检查；不构造 Catalog、ArtifactStore
@@ -416,6 +437,10 @@ credentials、PDF acquisition routes 与 Storage/execution；`--json` 使用稳�
 - `Authorized Provider APIs`：逐 Provider 显示是否已有可执行主 PDF API、当前限制和
   所需凭据字段；
 - `Controlled browser`：显示生产能力、operator profile 和站点规则状态。
+
+当前输出只提供这一层的本地概要，并报告 production Browser route 为 0；它尚不把 profile
+presence、未评估的 login/session、policy evidence 和 action-required 逐项展开。裸 `config`
+中存在 Access 管理入口不改变这一事实。
 
 Provider 分区先显示启用顺序，再为每个已接受 Provider 报告以下层：
 
