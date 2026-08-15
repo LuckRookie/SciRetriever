@@ -16,6 +16,8 @@ from pydantic import ValidationError
 
 from sciretriever.acquisition.api import (
     AUTHORIZED_PDF_API_PROVIDER_KEYS,
+    CONTROLLED_BROWSER_PRODUCTION_AVAILABLE,
+    CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT,
     UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS,
 )
 from sciretriever.bootstrap import (
@@ -31,13 +33,17 @@ from sciretriever.bootstrap import (
     build_production_object_graph,
 )
 from sciretriever.configuration import (
+    BrowserProfileHandle,
     ConfigurationError,
     CredentialLookup,
+    browser_profile_path,
+    browser_profile_status,
     configurable_credential_providers,
     configuration_diff,
     configuration_runtime_status,
     configuration_service_origin,
     configuration_status,
+    configure_browser_access_profile,
     core_credential_section_exists,
     credential_field_specs,
     credential_path,
@@ -45,10 +51,17 @@ from sciretriever.configuration import (
     load_credentials,
     load_editable_configuration,
     load_selected_configuration,
+    remove_browser_profile,
     remove_credentials,
+    resolve_browser_profile,
     select_configuration_edit_path,
     set_credentials,
+    update_configuration_sections,
     update_core_service_configuration,
+)
+from sciretriever.entry.cli.browser_login import (
+    VisibleBrowserLoginError,
+    open_visible_browser_login,
 )
 from sciretriever.entry.cli.config_ui import (
     ConfigConsole,
@@ -61,15 +74,18 @@ from sciretriever.entry.ports import UserOutputConflictError
 from sciretriever.literature.api import LiteratureArtifactReference
 from sciretriever.logging.api import configure_logging
 from sciretriever.model.configuration import (
+    AccessConfig,
     AnalysisAuthentication,
     AnalysisConfig,
     AnalysisProtocol,
     AnalysisProvider,
+    BrowserProfilePresence,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationProbeSummary,
     ConfigurationRuntimeStatus,
     CoreConfigurationProbeResult,
+    CredentialStatus,
     ParserConnectionMode,
     ParsingConfig,
     ProbeOutcome,
@@ -214,7 +230,7 @@ _CREDENTIAL_GUIDES: dict[ProviderName, _CredentialGuide] = {
     ),
     ProviderName.ELSEVIER: _CredentialGuide(
         display_name="Elsevier / Scopus",
-        purpose="Scopus metadata; no verified primary-PDF API route yet",
+        purpose="Scopus metadata and authorized primary-PDF object retrieval",
         credential_help="Elsevier API key; institution token is optional",
         application_url="https://dev.elsevier.com/",
         enablement_hint='Add "elsevier" to [sources.metadata].providers.',
@@ -483,8 +499,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "config",
         help="Manage local services, Provider credentials, and readiness.",
         description=(
-            "Interactively configure LLM Analysis, MinerU Parser, and Literature Provider "
-            "credentials, or inspect readiness and run explicit probes."
+            "Interactively configure LLM Analysis, MinerU Parser, Literature Provider "
+            "credentials, and controlled Browser access, or inspect readiness and run "
+            "explicit probes."
         ),
     )
     _add_nested_debug(config)
@@ -1109,10 +1126,11 @@ def _run_plain_config_manager() -> int:  # noqa: C901
             "SciRetriever configuration center\n\n"
             "  L. LLM Analysis\n"
             "  M. MinerU Parser\n"
+            "  A. Provider API and Browser Access\n"
             "  P. Literature Provider credentials\n"
             "  Q. Quit\n\n"
         )
-        answer = _read_line("Choose L, M, P, or Q: ")
+        answer = _read_line("Choose L, M, A, P, or Q: ")
         if answer is None or answer.casefold() in {"q", "quit"}:
             return 0
         selected = answer.casefold()
@@ -1122,8 +1140,11 @@ def _run_plain_config_manager() -> int:  # noqa: C901
         if selected in {"m", "mineru"}:
             _manage_mineru_plain(ConfigConsole(ConfigTheme.MONO))
             continue
+        if selected in {"a", "access"}:
+            _manage_browser_access_plain(ConfigConsole(ConfigTheme.MONO))
+            continue
         if selected not in {"p", "providers"}:
-            sys.stderr.write("Invalid selection. Choose L, M, P, or Q.\n")
+            sys.stderr.write("Invalid selection. Choose L, M, A, P, or Q.\n")
             continue
         while True:
             provider = _choose_credential_provider()
@@ -1147,6 +1168,103 @@ class _ConfigManagerContext:
 
 
 _CONFIG_MANAGER_CONTEXT = _ConfigManagerContext()
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderAccessOverview:
+    api_routes: tuple[tuple[str, str, str], ...]
+    browser_state: str
+    browser_detail: str
+    browser_action: str
+    profile_presence: BrowserProfilePresence
+
+    @property
+    def home_state(self) -> str:
+        states = tuple(state for _name, state, _action in self.api_routes)
+        if "Action required" in states:
+            return "Action required"
+        if "Ready" in states:
+            return "Ready"
+        return "Review"
+
+    @property
+    def home_detail(self) -> str:
+        return (
+            f"{len(self.api_routes)} authorized APIs · "
+            f"{CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT} production Browser routes"
+        )
+
+
+def _authorized_api_route_state(
+    status: ConfigurationCapabilityStatus,
+) -> tuple[str, str]:
+    if not status.production_available:
+        return "Unavailable", "No verified primary-PDF API implementation is installed."
+    if not status.enabled:
+        return "Available", f'Enable "{status.provider.value}" in [sources.acquisition].'
+    if status.local_ready:
+        return "Ready", "Locally ready; article entitlement is checked only during acquisition."
+    if status.credential.status in {CredentialStatus.MISSING, CredentialStatus.PARTIAL}:
+        return "Action required", "Configure the required Provider API credential."
+    return "Action required", "Review the Provider ordinary settings and access policy."
+
+
+def _provider_access_overview(
+    configuration: Configuration,
+    *,
+    credentials: CredentialLookup | None = None,
+) -> _ProviderAccessOverview:
+    bundle = load_credentials(home=None) if credentials is None else credentials
+    status = configuration_status(configuration, credentials=bundle)
+    acquisition = {
+        item.provider: item
+        for item in status.capabilities
+        if item.capability is ProviderCapability.ACQUISITION
+    }
+    api_routes: list[tuple[str, str, str]] = []
+    for key in sorted(AUTHORIZED_PDF_API_PROVIDER_KEYS):
+        provider = ProviderName(key)
+        route_state, action = _authorized_api_route_state(acquisition[provider])
+        api_routes.append((_credential_guide(provider).display_name, route_state, action))
+
+    access = configuration.access
+    profile_status = browser_profile_status(access.browser_profile, home=None)
+    identity = access.browser_profile
+    selection = (
+        "No profile is selected."
+        if identity is None
+        else f"Profile {identity!r} is {profile_status.presence.value}."
+    )
+    if not CONTROLLED_BROWSER_PRODUCTION_AVAILABLE:
+        browser_state = "Unavailable"
+        browser_action = (
+            "No production Browser route is registered; local session setup does not enable "
+            "automatic Completion."
+        )
+    elif not access.browser_enabled:
+        browser_state = "Disabled"
+        browser_action = "Select and initialize a profile to enable Browser-last access."
+    elif profile_status.presence is BrowserProfilePresence.CONFIGURED:
+        browser_state = "Configured"
+        browser_action = "Use explicit visible login when the session needs operator attention."
+    else:
+        browser_state = "Action required"
+        browser_action = (
+            "Initialize the selected profile."
+            if profile_status.presence is BrowserProfilePresence.MISSING
+            else "Inspect the selected profile ownership and permissions."
+        )
+    browser_detail = (
+        f"{selection} Browser access is {'enabled' if access.browser_enabled else 'disabled'}; "
+        "profile presence does not prove login or article entitlement."
+    )
+    return _ProviderAccessOverview(
+        api_routes=tuple(api_routes),
+        browser_state=browser_state,
+        browser_detail=browser_detail,
+        browser_action=browser_action,
+        profile_presence=profile_status.presence,
+    )
 
 
 def _configuration_summary() -> tuple[Configuration, ConfigurationRuntimeStatus]:
@@ -1197,6 +1315,7 @@ def _run_rich_config_manager(theme: str) -> int:
                 and runtime.parsing.credential_origin_matches is True
             )
         )
+        access_overview = _provider_access_overview(configuration)
         console.home(
             llm_state="Ready" if llm_ready else "Incomplete",
             llm_detail=(
@@ -1211,10 +1330,13 @@ def _run_rich_config_manager(theme: str) -> int:
                 else "Not configured"
             ),
             providers=_provider_home_rows(),
+            access_state=access_overview.home_state,
+            access_detail=access_overview.home_detail,
         )
         options: list[tuple[object, str]] = [
             ("llm", "LLM Analysis"),
             ("mineru", "MinerU Parser"),
+            ("access", "Provider APIs and Browser Access"),
             ("theme", "Change theme"),
         ]
         options.extend(
@@ -1226,7 +1348,13 @@ def _run_rich_config_manager(theme: str) -> int:
             message="Open a configuration area",
             options=options,
             theme=active_theme,
-            shortcuts={"l": "llm", "m": "mineru", "t": "theme", "q": "quit"},
+            shortcuts={
+                "a": "access",
+                "l": "llm",
+                "m": "mineru",
+                "t": "theme",
+                "q": "quit",
+            },
         ).prompt()
         if selected == "quit":
             return 0
@@ -1236,6 +1364,8 @@ def _run_rich_config_manager(theme: str) -> int:
             _manage_llm_rich(console)
         elif selected == "mineru":
             _manage_mineru_rich(console)
+        elif selected == "access":
+            _manage_browser_access_rich(console)
         elif isinstance(selected, ProviderName):
             _manage_provider_rich(selected, active_theme)
 
@@ -1271,6 +1401,290 @@ def _manage_provider_rich(provider: ProviderName, theme: str) -> None:
             _configure_provider_credentials(provider)
         else:
             _remove_provider_credentials(provider)
+
+
+def _render_provider_access(
+    console: ConfigConsole,
+) -> tuple[Configuration, _ProviderAccessOverview]:
+    path = select_configuration_edit_path()
+    configuration = load_editable_configuration(path)
+    credentials = load_credentials(home=None)
+    overview = _provider_access_overview(configuration, credentials=credentials)
+    console.section(
+        "Provider API and Browser Access",
+        "API credentials and Browser sessions are independent readiness layers.",
+    )
+    console.access(
+        api_routes=overview.api_routes,
+        browser_state=overview.browser_state,
+        browser_detail=overview.browser_detail,
+        browser_action=overview.browser_action,
+    )
+    return configuration, overview
+
+
+def _plain_browser_access_action() -> str | None:
+    sys.stderr.write(
+        "\nManage Browser Access\n\n"
+        "  1. Select or initialize a Browser profile\n"
+        "  2. Open a visible Browser for manual login\n"
+        "  3. Remove the selected local Browser session\n"
+        "  4. Disable Browser access and keep the local session\n"
+        "  b. Back\n\n"
+    )
+    answer = _read_line("Choose an action: ")
+    if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
+        return None
+    return {
+        "1": "select",
+        "select": "select",
+        "initialize": "select",
+        "2": "login",
+        "login": "login",
+        "3": "remove",
+        "remove": "remove",
+        "delete": "remove",
+        "4": "disable",
+        "disable": "disable",
+    }.get(answer.casefold(), "invalid")
+
+
+def _select_browser_access_profile(console: ConfigConsole) -> None:
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    default = before.access.browser_profile or "institutional-access"
+    console.section(
+        "Select Browser profile",
+        "The identity is stored in config.toml; sensitive session data stays in a fixed "
+        "owner-only directory.",
+    )
+    answer = _read_line(f"Profile identity [{default}] (b to cancel): ")
+    if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
+        console.message("No Browser access setting was changed.", kind="muted")
+        return
+    identity = answer or default
+    try:
+        candidate = AccessConfig(
+            browser_enabled=True,
+            browser_profile=identity,
+            browser_max_concurrency=before.access.browser_max_concurrency,
+            browser_policy_overrides=before.access.browser_policy_overrides,
+        )
+    except (ValidationError, TypeError, ValueError):
+        console.message(
+            "Profile identity is invalid; use a short opaque name, not a path, URL, UUID, "
+            "account, token, or Cookie label.",
+            kind="warning",
+        )
+        return
+    assert candidate.browser_profile is not None
+    presence = browser_profile_status(candidate.browser_profile, home=None).presence
+    if presence is BrowserProfilePresence.ATTENTION:
+        console.message(
+            "The selected profile requires operator inspection; ownership, permissions, or "
+            "filesystem type is unsafe. Nothing was changed.",
+            kind="warning",
+        )
+        return
+    changes = configuration_diff(
+        before,
+        before.model_copy(update={"access": candidate}),
+        sections=("access",),
+    )
+    if changes:
+        console.changes(changes)
+    elif presence is BrowserProfilePresence.CONFIGURED:
+        console.message("This Browser profile is already selected and initialized.", kind="muted")
+        return
+    actual_path = browser_profile_path(candidate.browser_profile, home=None)
+    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
+    console.message(
+        "This directory may contain login cookies and local storage. Keep it private; a local "
+        "profile does not prove authentication or article entitlement.",
+        kind="warning",
+    )
+    if not CONTROLLED_BROWSER_PRODUCTION_AVAILABLE:
+        console.message(
+            "No production Browser route is currently registered. Preparing this profile will "
+            "not enable automatic Completion yet.",
+            kind="warning",
+        )
+    if not _confirm("Initialize this profile and save Browser access settings? [y/N] "):
+        console.message("No Browser access setting or profile was changed.", kind="muted")
+        return
+    configure_browser_access_profile(path, candidate, home=None)
+    console.message("Browser access settings and the local profile were saved.", kind="success")
+
+
+def _open_browser_access_login(console: ConfigConsole) -> None:
+    configuration = load_editable_configuration(select_configuration_edit_path())
+    identity = configuration.access.browser_profile
+    if identity is None:
+        console.message("Select and initialize a Browser profile first.", kind="warning")
+        return
+    presence = browser_profile_status(identity, home=None).presence
+    if presence is BrowserProfilePresence.MISSING:
+        console.message(
+            "The selected Browser profile is missing; initialize it first.", kind="warning"
+        )
+        return
+    if presence is BrowserProfilePresence.ATTENTION:
+        console.message(
+            "The selected Browser profile requires operator inspection; no Browser was opened.",
+            kind="warning",
+        )
+        return
+    actual_path = browser_profile_path(identity, home=None)
+    console.section(
+        "Visible Browser login",
+        "SciRetriever opens a blank visible Chromium window and leaves all navigation and "
+        "authentication to you.",
+    )
+    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
+    console.message(
+        "Sites opened in this dedicated profile may save sensitive session data. SciRetriever "
+        "will not fill credentials, choose an institution, handle MFA/CAPTCHA, inspect Cookie "
+        "data, or infer entitlement. Close every Browser window when finished.",
+        kind="warning",
+    )
+    if not CONTROLLED_BROWSER_PRODUCTION_AVAILABLE:
+        console.message(
+            "Automatic Controlled Browser acquisition remains unavailable because no production "
+            "Publisher Browser route is registered.",
+            kind="warning",
+        )
+    if not _confirm("Open the visible Browser now? [y/N] "):
+        console.message("Visible Browser login was cancelled; nothing was opened.", kind="muted")
+        return
+    handle: BrowserProfileHandle = resolve_browser_profile(identity, home=None)
+    console.message("Visible Browser opened. Complete only your authorized manual login.")
+    try:
+        open_visible_browser_login(handle)
+    except VisibleBrowserLoginError as error:
+        console.message(
+            f"Visible Browser could not complete ({error.code}); the profile was retained.",
+            kind="warning",
+        )
+        return
+    final_presence = browser_profile_status(identity, home=None).presence
+    if final_presence is BrowserProfilePresence.ATTENTION:
+        console.message(
+            "The Browser closed, but the local profile now requires ownership or permission "
+            "inspection. Authentication was not assessed.",
+            kind="warning",
+        )
+        return
+    console.message(
+        "Visible Browser closed. The local session was retained; login and article entitlement "
+        "were not assessed.",
+        kind="success",
+    )
+
+
+def _remove_browser_access_session(console: ConfigConsole) -> None:
+    configuration = load_editable_configuration(select_configuration_edit_path())
+    identity = configuration.access.browser_profile
+    if identity is None:
+        console.message("No Browser profile is selected; nothing was removed.", kind="muted")
+        return
+    presence = browser_profile_status(identity, home=None).presence
+    if presence is BrowserProfilePresence.MISSING:
+        console.message(
+            "The selected Browser session is already missing; nothing changed.", kind="muted"
+        )
+        return
+    if presence is BrowserProfilePresence.ATTENTION:
+        console.message(
+            "The selected profile requires manual filesystem inspection and was not removed.",
+            kind="warning",
+        )
+        return
+    actual_path = browser_profile_path(identity, home=None)
+    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
+    console.message(
+        "Removal permanently deletes this profile's local Browser session, including any login "
+        "state. It does not remove Provider API keys or change config.toml.",
+        kind="warning",
+    )
+    if not _confirm("Permanently remove this local Browser session? [y/N] "):
+        console.message("No local Browser session was removed.", kind="muted")
+        return
+    removed = remove_browser_profile(identity, home=None)
+    if not removed:
+        console.message("The selected Browser session was already missing.", kind="muted")
+        return
+    console.message(
+        "The local Browser session was removed and cannot be recovered. The selected profile "
+        "identity remains in config.toml and now requires initialization.",
+        kind="success",
+    )
+
+
+def _disable_browser_access(console: ConfigConsole) -> None:
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    if not before.access.browser_enabled:
+        console.message("Browser access is already disabled; nothing changed.", kind="muted")
+        return
+    candidate = AccessConfig(
+        browser_enabled=False,
+        browser_profile=before.access.browser_profile,
+        browser_max_concurrency=before.access.browser_max_concurrency,
+        browser_policy_overrides=before.access.browser_policy_overrides,
+    )
+    after = before.model_copy(update={"access": candidate})
+    console.changes(configuration_diff(before, after, sections=("access",)))
+    console.message(
+        "Disabling stops automatic Browser admission but keeps the private local session for a "
+        "later explicit re-enable.",
+        kind="warning",
+    )
+    if not _confirm("Disable Browser access and keep the local session? [y/N] "):
+        console.message("Browser access was not changed.", kind="muted")
+        return
+    update_configuration_sections(path, access=candidate)
+    console.message("Browser access was disabled; the local session was retained.", kind="success")
+
+
+def _perform_browser_access_action(action: str, console: ConfigConsole) -> None:
+    if action == "select":
+        _select_browser_access_profile(console)
+    elif action == "login":
+        _open_browser_access_login(console)
+    elif action == "remove":
+        _remove_browser_access_session(console)
+    elif action == "disable":
+        _disable_browser_access(console)
+    else:
+        console.message("Invalid action. Choose 1, 2, 3, 4, or b.", kind="warning")
+
+
+def _manage_browser_access_plain(console: ConfigConsole) -> None:
+    while True:
+        _render_provider_access(console)
+        action = _plain_browser_access_action()
+        if action is None:
+            return
+        _perform_browser_access_action(action, console)
+
+
+def _manage_browser_access_rich(console: ConfigConsole) -> None:
+    while True:
+        _render_provider_access(console)
+        action = TerminalChoice[str](
+            message="Manage Provider API and Browser Access",
+            options=[
+                ("select", "Select or initialize a Browser profile"),
+                ("login", "Open a visible Browser for manual login"),
+                ("remove", "Remove the selected local Browser session"),
+                ("disable", "Disable Browser access and keep the session"),
+                ("back", "Back"),
+            ],
+            theme=console.palette.name,
+        ).prompt()
+        if action == "back":
+            return
+        _perform_browser_access_action(action, console)
 
 
 def _configuration_action(service: Literal["LLM", "MinerU"]) -> str | None:

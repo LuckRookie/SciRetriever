@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import stat
 import sys
 import tempfile
@@ -1011,6 +1012,196 @@ def browser_profile_status(
     return BrowserProfileStatus(presence=BrowserProfilePresence.CONFIGURED)
 
 
+def _profile_removal_name(storage_descriptor: int) -> str:
+    for _attempt in range(8):
+        candidate = f".removing-{secrets.token_hex(12)}"
+        if _profile_child_metadata(storage_descriptor, candidate) is None:
+            return candidate
+    _fail("browser profile removal failed")
+
+
+def _profile_entry_metadata(entry: os.DirEntry[str]) -> os.stat_result:
+    try:
+        return entry.stat(follow_symlinks=False)
+    except OSError:
+        _fail("browser profile removal failed")
+
+
+def _named_profile_identity(
+    descriptor: int,
+    name: str,
+    *expected: os.stat_result,
+) -> os.stat_result:
+    try:
+        named = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError:
+        _fail("browser profile removal failed")
+    if any(not _same_identity(item, named) for item in expected):
+        _fail("browser profile changed during removal")
+    return named
+
+
+def _remove_profile_file(
+    descriptor: int,
+    name: str,
+    metadata: os.stat_result,
+) -> None:
+    child, opened = _open_profile_child(
+        descriptor,
+        name,
+        metadata,
+        directory=False,
+    )
+    try:
+        final = os.fstat(child)
+        _validate_profile_file_metadata(final)
+    except OSError:
+        _fail("browser profile removal failed")
+    finally:
+        os.close(child)
+    _named_profile_identity(descriptor, name, opened, final)
+    try:
+        os.unlink(name, dir_fd=descriptor)
+    except OSError:
+        _fail("browser profile removal failed")
+
+
+def _remove_profile_child_directory(
+    descriptor: int,
+    name: str,
+    metadata: os.stat_result,
+) -> None:
+    child, opened = _open_profile_child(
+        descriptor,
+        name,
+        metadata,
+        directory=True,
+    )
+    try:
+        _remove_profile_directory_contents(child)
+        final = os.fstat(child)
+        _validate_profile_directory_metadata(final)
+    except OSError:
+        _fail("browser profile removal failed")
+    finally:
+        os.close(child)
+    _named_profile_identity(descriptor, name, opened, final)
+    try:
+        os.rmdir(name, dir_fd=descriptor)
+    except OSError:
+        _fail("browser profile removal failed")
+
+
+def _remove_profile_directory_contents(descriptor: int) -> None:
+    try:
+        with os.scandir(descriptor) as entries:
+            children = tuple(entries)
+    except OSError:
+        _fail("browser profile removal failed")
+    for entry in children:
+        metadata = _profile_entry_metadata(entry)
+        if stat.S_ISDIR(metadata.st_mode):
+            _remove_profile_child_directory(descriptor, entry.name, metadata)
+        elif stat.S_ISREG(metadata.st_mode):
+            _remove_profile_file(descriptor, entry.name, metadata)
+        else:
+            _fail("browser profile contains an unsafe filesystem entry")
+    try:
+        _validate_profile_directory_metadata(os.fstat(descriptor))
+    except OSError:
+        _fail("browser profile removal failed")
+
+
+def _prepare_profile_removal(
+    storage_descriptor: int,
+    identity: str,
+) -> tuple[int, os.stat_result, str] | None:
+    metadata = _profile_child_metadata(storage_descriptor, identity)
+    if metadata is None:
+        return None
+    profile_descriptor, opened = _open_profile_child(
+        storage_descriptor,
+        identity,
+        metadata,
+        directory=True,
+    )
+    try:
+        _validate_profile_directory_tree(profile_descriptor, opened)
+        final = os.fstat(profile_descriptor)
+        removal_name = _profile_removal_name(storage_descriptor)
+        try:
+            os.rename(
+                identity,
+                removal_name,
+                src_dir_fd=storage_descriptor,
+                dst_dir_fd=storage_descriptor,
+            )
+        except OSError:
+            _fail("browser profile removal failed")
+        _named_profile_identity(storage_descriptor, removal_name, final)
+        return profile_descriptor, final, removal_name
+    except BaseException:
+        os.close(profile_descriptor)
+        raise
+
+
+def _finish_profile_removal(
+    storage_descriptor: int,
+    removal_name: str,
+    expected: os.stat_result,
+) -> None:
+    _named_profile_identity(storage_descriptor, removal_name, expected)
+    try:
+        os.rmdir(removal_name, dir_fd=storage_descriptor)
+    except OSError:
+        _fail("browser profile removal failed")
+    try:
+        os.fsync(storage_descriptor)
+    except OSError:
+        # The deletion is already visible.  A durability failure cannot
+        # restore the removed sensitive session or be reported as if it were
+        # still present.
+        pass
+
+
+def remove_browser_profile(
+    profile_identity: str,
+    *,
+    home: str | Path | None = None,
+) -> bool:
+    """Remove one explicitly selected local Browser session without reading it.
+
+    The selected tree is fully validated before it is renamed inside the fixed
+    owner-only profile directory.  Recursive removal then operates only on
+    no-follow descriptors, so a symlink or replacement cannot redirect the
+    operation outside that private directory.  Missing profiles are a safe
+    no-op; unsafe profiles fail closed and require operator inspection.
+    """
+
+    identity = _browser_profile_identity(profile_identity)
+    selected_home = _browser_profile_home(home)
+    storage = _browser_profile_storage(selected_home, create=False)
+    if storage is None:
+        return False
+    storage_descriptor, _storage_metadata = _open_profile_directory(storage)
+    try:
+        prepared = _prepare_profile_removal(storage_descriptor, identity)
+        if prepared is None:
+            return False
+        profile_descriptor, expected, removal_name = prepared
+        try:
+            _remove_profile_directory_contents(profile_descriptor)
+            final = os.fstat(profile_descriptor)
+            if not _same_identity(expected, final):
+                _fail("browser profile changed during removal")
+        finally:
+            os.close(profile_descriptor)
+        _finish_profile_removal(storage_descriptor, removal_name, final)
+        return True
+    finally:
+        os.close(storage_descriptor)
+
+
 def _operator_browser_policy(
     baseline: BrowserGroupPolicy,
     override: BrowserPolicyOverrideConfig,
@@ -1562,6 +1753,68 @@ def update_configuration_sections(
     )
     _publish_configuration(selected, payload, expected, failpoint)
     return configuration
+
+
+def configure_browser_access_profile(
+    path: str | Path,
+    access: AccessConfig,
+    *,
+    home: str | Path | None = None,
+    cancel_event: BrowserProfileCancellation | None = None,
+    failpoint: Callable[[str], None] | None = None,
+) -> Configuration:
+    """Atomically select an enabled profile after safely initializing it.
+
+    The ordinary configuration payload is prepared before any profile is
+    created.  A newly created empty profile is removed if publication cannot
+    reach its commit point; an existing profile is never removed during
+    rollback.  This function never opens a Browser or reads profile bytes.
+    """
+
+    selected = _safe_path(path)
+    if not isinstance(access, AccessConfig):
+        _fail("configuration value is invalid")
+    if not access.browser_enabled or access.browser_profile is None:
+        _fail("enabled Browser access requires a selected profile")
+    if cancel_event is not None and not isinstance(cancel_event, BrowserProfileCancellation):
+        _fail("configuration value is invalid")
+    _check_browser_profile_cancel(cancel_event)
+    payload, expected, configuration = _configuration_update_payload(
+        selected,
+        access=access,
+    )
+    presence = browser_profile_status(access.browser_profile, home=home).presence
+    if presence is BrowserProfilePresence.ATTENTION:
+        _fail("browser profile requires operator attention")
+    created = presence is BrowserProfilePresence.MISSING
+    staging: Path | None = None
+    profile_initialized = False
+    try:
+        initialize_browser_profile(
+            access.browser_profile,
+            home=home,
+            cancel_event=cancel_event,
+        )
+        profile_initialized = True
+        _call_configuration_failpoint(failpoint, "profile-initialized")
+        staging = _prepare_configuration_staging(selected, payload)
+        _call_configuration_failpoint(failpoint, "configuration-staged")
+        _commit_configuration_staging(staging, selected, expected)
+        staging = None
+        return configuration
+    except BaseException:
+        if created and profile_initialized:
+            try:
+                remove_browser_profile(access.browser_profile, home=home)
+            except ConfigurationError:
+                _fail("browser access configuration rollback failed")
+        raise
+    finally:
+        if staging is not None:
+            try:
+                staging.unlink()
+            except OSError:
+                pass
 
 
 def _configuration_update_payload(
@@ -3254,6 +3507,7 @@ __all__ = (
     "configurable_credential_providers",
     "browser_profile_path",
     "browser_profile_status",
+    "configure_browser_access_profile",
     "configured_browser_group_policies",
     "configuration_diff",
     "configuration_service_origin",
@@ -3272,6 +3526,7 @@ __all__ = (
     "load_selected_configuration",
     "initialize_browser_profile",
     "parse_configuration",
+    "remove_browser_profile",
     "remove_credentials",
     "remove_core_credentials",
     "resolve_browser_profile",

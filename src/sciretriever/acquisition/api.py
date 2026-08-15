@@ -13,6 +13,7 @@ from sciretriever.acquisition.authorized import (
 from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
 from sciretriever.acquisition.cohort import WorkItemDisposition
 from sciretriever.acquisition.manual import ManualPdfInputError
+from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
@@ -22,6 +23,10 @@ from sciretriever.acquisition.ports import (
 from sciretriever.acquisition.rules import (
     PdfValidationCancelled,
     ReadablePdfSource,
+)
+from sciretriever.acquisition.sources import (
+    CONTROLLED_BROWSER_PRODUCTION_STATUS,
+    PRODUCTION_BROWSER_RULE_CATALOG,
 )
 from sciretriever.model.acquisition import AcquisitionResult
 from sciretriever.model.primitives import LiteratureId
@@ -33,6 +38,10 @@ AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = frozenset(
 UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = (
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS
 )
+CONTROLLED_BROWSER_PRODUCTION_AVAILABLE: Final[bool] = (
+    CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY
+)
+CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT: Final[int] = len(PRODUCTION_BROWSER_RULE_CATALOG.rules)
 
 
 class PreparedAcquisition:
@@ -201,6 +210,8 @@ class AcquisitionApi:
 
 __all__ = (
     "AUTHORIZED_PDF_API_PROVIDER_KEYS",
+    "CONTROLLED_BROWSER_PRODUCTION_AVAILABLE",
+    "CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT",
     "AcquisitionApi",
     "AcquisitionExpectedFacts",
     "AcquisitionFailure",

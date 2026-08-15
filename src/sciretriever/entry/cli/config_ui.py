@@ -110,7 +110,12 @@ def interactive_terminal() -> bool:
 class ConfigConsole:
     """One stderr-only Rich console and its resolved accessible palette."""
 
-    def __init__(self, theme: str | ConfigTheme = ConfigTheme.AUTO) -> None:
+    def __init__(
+        self,
+        theme: str | ConfigTheme = ConfigTheme.AUTO,
+        *,
+        width: int | None = None,
+    ) -> None:
         resolved = resolve_theme(theme)
         self.palette = _PALETTES[resolved]
         self.console = Console(
@@ -122,6 +127,7 @@ class ConfigConsole:
             highlight=False,
             emoji=False,
             soft_wrap=False,
+            width=width,
         )
 
     def header(self, *, config_path: str, credentials_path: str) -> None:
@@ -149,11 +155,19 @@ class ConfigConsole:
         mineru_state: str,
         mineru_detail: str,
         providers: Sequence[tuple[str, str, str]],
+        access_state: str = "Unavailable",
+        access_detail: str = "Authorized APIs and controlled Browser",
     ) -> None:
         core = self._home_table()
         core.add_row("[L]", "LLM Analysis", llm_detail, _state_text(llm_state, self.palette))
         core.add_row("[M]", "MinerU Parser", mineru_detail, _state_text(mineru_state, self.palette))
         provider_table = self._home_table()
+        provider_table.add_row(
+            "[A]",
+            "Provider Access",
+            access_detail,
+            _state_text(access_state, self.palette),
+        )
         for index, (name, purpose, state) in enumerate(providers, start=1):
             provider_table.add_row(str(index), name, purpose, _state_text(state, self.palette))
         self.console.print(Text("CORE SERVICES", style=self.palette.heading))
@@ -161,9 +175,49 @@ class ConfigConsole:
         self.console.print(Text("LITERATURE PROVIDERS", style=self.palette.heading))
         self.console.print(provider_table)
         self.console.print(
-            "[dim]↑↓ Move · Enter Open · L LLM · M MinerU · T Theme · Q Quit[/dim]"
+            "[dim]↑↓ Move · Enter Open · A Access · L LLM · M MinerU · T Theme · Q Quit[/dim]"
             if not self.palette.no_color
-            else "Move: arrows  Open: Enter  Shortcuts: L/M/T/Q"
+            else "Move: arrows  Open: Enter  Shortcuts: A/L/M/T/Q"
+        )
+
+    def access(
+        self,
+        *,
+        api_routes: Sequence[tuple[str, str, str]],
+        browser_state: str,
+        browser_detail: str,
+        browser_action: str,
+    ) -> None:
+        table = Table(
+            title="Literature Provider access",
+            box=box.ROUNDED,
+            border_style=self.palette.border,
+            expand=True,
+        )
+        table.add_column("Route", style=self.palette.accent, no_wrap=True)
+        table.add_column("Local readiness", no_wrap=True)
+        table.add_column("What this means", overflow="fold")
+        table.add_column("Next action", overflow="fold")
+        for name, state, action in api_routes:
+            table.add_row(
+                f"API · {name}",
+                _state_text(state, self.palette),
+                "Official authorized primary-PDF API; separate from Browser session state.",
+                action,
+            )
+        table.add_row(
+            "Controlled Browser",
+            _state_text(browser_state, self.palette),
+            browser_detail,
+            browser_action,
+        )
+        self.console.print(table)
+        self.console.print(
+            Text(
+                "A local Browser profile only proves that its private container is present. "
+                "It never proves login, institutional authorization, or article entitlement.",
+                style=self.palette.muted,
+            )
         )
 
     def _home_table(self) -> Table:
