@@ -103,6 +103,26 @@ Browser session profile presence 只表示本地安全会话容器存在，不�
 具有 entitlement。登录、MFA、challenge、session health、cooldown 和 circuit 是当前 Browser
 运行状态，不持久化回普通配置或凭据文件。
 
+当前 Configuration foundation 已固定 profile 目录为：
+
+```text
+~/.sciretriever/browser-profiles/<opaque-profile-identity>/
+```
+
+调用方只能提供经过稳定、无 secret token 规则校验的 opaque identity，不能提供绝对路径、相对
+跳转、URL、UUID、Cookie/token 等敏感标记或任意目录。`initialize_browser_profile()` 只创建或
+选择该固定目录下的空 owner-only 容器；取消发生在发布前时会删除刚创建的空 profile，不创建或
+改写 `credentials.toml`。`resolve_browser_profile()` 返回不可序列化且 repr 不含 identity/path
+的 opaque handle；handle 在 runtime 使用前重新检查目录对象身份，目录被替换后 fail closed。
+
+`.sciretriever`、`browser-profiles`、profile 及其所有子目录必须由当前用户拥有且精确 `0700`；
+profile 内文件必须由当前用户拥有、为单硬链接普通文件且精确 `0600`。Configuration 使用
+no-follow descriptor 递归核对对象身份、类型与修改竞态，不读取或解析任何文件字节；任意层级的
+symlink、特殊文件、错误 owner/mode、硬链接或验证期间替换都会拒绝。纯本地
+`browser_profile_status()` 只有 `configured`、`missing`、`attention` 三种输出，模型不包含
+路径、内部文件名、Cookie 名/域/值/hash/fingerprint。普通 `[access]` 选择字段、交互管理和
+production Browser 对象图仍未接入，因此该 foundation 本身不改变当前 CLI 的 disabled 状态。
+
 ## 4. 统一 credentials schema 与 origin 绑定
 
 Provider section 按当前 adapter allowlist 保存字段；固定核心 section 为：
