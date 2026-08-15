@@ -209,7 +209,7 @@ Cookie 和 vendor event 对象都不能越过 Network/Acquisition Port。
 - 复用相应 persistent context，并管理 page、popup/viewer、response/download 与临时资源；
 - 在每次 navigation、redirect、popup、viewer、response 和 download 的目标实际访问前，先执行 Acquisition Profile 提供的封闭 Provider guard，再执行 Network 通用 URL、DNS、地址类别、origin、credential forwarding、host admission 和资源预算检查；
 - 在 Profile 允许的范围内捕获 download event、PDF response、合法 popup/viewer 或已核实 locator，并只交付统一 `TemporaryPdf`；
-- 对请求数、顶层导航数、popup、download、响应字节和文章流程总时长执行有界预算；
+- 对请求数、顶层导航数、popup、download、去重后捕获候选数、响应字节和文章流程总时长执行有界预算；
 - 在成功、正常未命中、失败、取消、timeout 或清理异常后关闭全部文章资源，释放 permit，并保留仍有效的 `next_allowed_at`、`blocked_until` 与 circuit。
 
 Provider 专属 origin、selector、有限动作、正文/补充材料判别和页面 marker 位于 Acquisition
@@ -226,6 +226,15 @@ Source 对每篇文章注入一项只含当前规则 origin 与精确 resolver �
 已经去除 query，规则外异常统一转换为 `policy` 失败。Response 的实际 transport 已由更早的
 request guard、DNS binding 和 live host lease 准入，response hook 再在读取 body 前复核同一
 lease。通用 URL/DNS/地址类别/host permit/资源预算仍独立执行，guard 只能收紧不能放宽。
+正文捕获另有不可序列化的 `BrowserCaptureGuard`：Network 在读取 response body 或 download
+bytes 前，把已经去除 query 的 locator、封闭 `BrowserCaptureKind` 和规范媒体类型交给当前
+Provider 规则；规则拒绝或异常时不会读取正文。成功结果是非空 `BrowserCaptureBatch`，其中
+每项只含 `DOWNLOAD`、`RESPONSE`、`POPUP`、`VIEWER` 或 `VERIFIED_LOCATOR`、一个
+`BoundedByteStream` 和安全 locator，不含 response/download/page 等 vendor object。一次文章
+流程最多捕获 `BrowserBudget.max_captures` 个不同字节候选；相同实际字节即使同时触发
+response 与 download 也只交付一次，但全部实际读取字节仍计入总字节预算。Acquisition 对每项
+捕获再次核对 Provider locator prefix 与媒体线索，并分别转换为 `TemporaryPdf`。
+
 完成主导航后，Network 可以向当前 flow 提供不可序列化的 `BrowserPageObservation`：其中只有
 再次通过 destination guard 的 query-free 规范 locator 和 `100..599` 范围内的主响应状态。
 完整 URL query、response/header/body、page、context 和 Cookie 不跨越该边界。Network 仍可对
@@ -240,8 +249,9 @@ challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 重建限速状态。
 
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
-运行状态机和封闭页面 marker 分类已经完成，但捕获矩阵、配置/确认入口以及至少一个 Provider
-的端到端 Profile 尚未全部闭环。
+运行状态机、封闭页面 marker 分类和多路正文捕获已经完成，但完整封闭 action contract、
+supplement/错文排除、Provider circuit、配置/确认入口以及至少一个 Provider 的端到端 Profile
+尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、not found、PDF captured 和 runtime
@@ -249,10 +259,12 @@ failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit�
 也不写入 Catalog、ArtifactStore 或配置文件。一个 group 的 action-required/circuit 不阻塞
 其它独立 group。
 
-Browser 捕获只产生 `TemporaryPdf`，不能直接发布当前主 PDF。下载事件、`.pdf` 后缀和
-`Content-Type` 不能替代 Acquisition 的统一字节/reader/页面树与归属检查；supplementary
-material 也不能成为主 PDF。Cookie、profile 内容、header、短期签名 URL、selector、页面
-对象和 Browser vendor exception 不进入 `PdfCandidate`、Report、SQLite、provenance 或日志。
+Browser 捕获只产生一个或多个有界 `TemporaryPdf`，不能直接发布当前主 PDF。每项捕获使用
+包含文章 flow identity、捕获机制、安全 locator 和实际字节 hash 的稳定 candidate key；同一
+flow 的多个不同字节可以依次进入统一验证。下载事件、`.pdf` 后缀和 `Content-Type` 不能替代
+Acquisition 的统一字节/reader/页面树与归属检查；supplementary material 也不能成为主 PDF。
+Cookie、profile 内容、header、短期签名 URL、selector、页面对象和 Browser vendor exception
+不进入 `PdfCandidate`、Report、SQLite、provenance 或日志。
 
 ## 10. 调用方向
 

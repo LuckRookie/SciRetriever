@@ -444,9 +444,10 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，但不会产生
 真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
-Provider session broker 与 operator-managed profile 存储边界也已完成。状态/页面分类与捕获
-矩阵、完整 Provider Profile、安装后验收和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产
-Browser。组间并行、组内串行和会话复用已经是当前 foundation 行为，但尚不构成
+Provider session broker、operator-managed profile 存储边界、状态/页面分类和多路正文捕获
+也已完成。完整封闭 action contract、supplement/错文排除、Provider circuit、完整 Provider
+Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、
+会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
 production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
@@ -479,6 +480,15 @@ Springer group:  S1 --provider interval-- S2 --provider interval-- S3
 不是全局默认值。
 
 一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
+
+当前 Browser route 的捕获结果是一个非空、按实际字节 hash 去重且有最大候选数的中性批次。
+捕获机制封闭为 download event、普通 PDF response、合法 popup、明确 viewer 和已核实官方
+locator。Provider rule 的 query-free HTTPS `capture_url_prefixes` 必须属于该 rule 的
+`allowed_origins`；Network 在读取 body 前执行该规则，Source 在形成候选前再次执行相同
+locator/media 检查。只有 `application/pdf` 或经核实 locator 返回的
+`application/octet-stream` 可以通过当前规则；`.pdf` 后缀、媒体声明和 Browser 事件本身都
+不证明字节有效。每项不同捕获分别形成 `TemporaryPdf` 和稳定 candidate key，随后仍依次经过
+统一 PDF reader、页面树、hash 和不可变发布；任何捕获都不能从 Browser 直接写成主资产。
 
 当前 `TieredCohortExecutor` 只把 Browser admission 明确允许的最小剩余 item 转为
 `BrowserArticleAttempt`，并从同一 admission group snapshot 取得 policy 与稳定 session key。
