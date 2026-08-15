@@ -74,6 +74,11 @@ Acquisition 当前生产映射如下：
 | Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
 | 受控 Browser | 组件与 QA 已完成，生产站点规则目录为空，因此当前不可执行 |
 
+PLOS 的显式 journals locator 仍走通用公开 hint，不是专属 route；精确 host
+`journals.plos.org` 共享 `plos/web` scope，按官方 robots 至少间隔 30 秒启动请求。Copernicus、
+Frontiers 与 MDPI 当前同样只消费可信 hint，不从 DOI/ISSN 猜 PDF URL，也不因为 OA 属性启动
+Browser。
+
 外部服务仍有各自的重要边界：DataCite 收录对象不只文献，CORE Work 是外部聚合身份，
 OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是不同许可产品；
 这些划分不能绕过 SciRetriever 的身份收敛、事实所有权和中性 Model。各家的认证、
@@ -88,6 +93,8 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - [ACM Digital Library](acm.md)、[ACS Publications](acs.md)、[AIP Publishing](aip.md)、
   [American Mathematical Society](american-mathematical-society.md)、
   [Annual Reviews](annual-reviews.md)、[APS / Physical Review](aps.md)、
+  [Copernicus Publications](copernicus.md)、[Frontiers](frontiers.md)、
+  [MDPI](mdpi.md)、[PLOS](plos.md)、
   [RSC Publishing](rsc.md)、[Royal Society Publishing](royal-society-publishing.md)、
   [IEEE Xplore](ieee.md)、[IOPscience](iop.md)、[Oxford Academic](oxford-academic.md)、
   [Science / AAAS](science-aaas.md)、[PNAS](pnas.md)、
