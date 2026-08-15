@@ -70,6 +70,48 @@ ACS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+ACM_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="acm-digital-library",
+    platform_key="acm-digital-library",
+    landing_origins=("https://dl.acm.org",),
+    asset_origins=("https://dl.acm.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1145",),
+    weak_publisher_names=("acm", "association for computing machinery"),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="acm-dl-open-access-and-usage-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="ACM Digital Library",
+        product_name="ACM Digital Library Basic and Premium",
+        official_references=(
+            "https://www.acm.org/publications/openaccess",
+            "https://libraries.acm.org/digital-library/platform-and-features",
+            "https://libraries.acm.org/digital-library/policies",
+            "https://libraries.acm.org/subscriptions-access/authentication",
+            "https://dl.acm.org/robots.txt",
+        ),
+        access_terms_references=("https://libraries.acm.org/digital-library/policies",),
+        rate_limit_references=(
+            "https://libraries.acm.org/digital-library/policies",
+            "https://dl.acm.org/robots.txt",
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="acm-dl-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/acm.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/acm-digital-library.json",
+    ),
+)
+
 CORE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="core-open-access",
     platform_key="core-api",
@@ -366,6 +408,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
     PublisherAccessVerificationMatrix(
         profiles=PublisherAccessProfileCatalog(
             (
+                ACM_ACCESS_PROFILE,
                 ACS_ACCESS_PROFILE,
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
@@ -385,6 +428,7 @@ PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG: Final[PublisherAccessProfileCatalog
 
 
 __all__ = (
+    "ACM_ACCESS_PROFILE",
     "ACS_ACCESS_PROFILE",
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
