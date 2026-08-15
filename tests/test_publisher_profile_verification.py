@@ -18,6 +18,7 @@ from sciretriever.acquisition.profile_catalog import (
     ACM_ACCESS_PROFILE,
     ACS_ACCESS_PROFILE,
     AIP_ACCESS_PROFILE,
+    APS_ACCESS_PROFILE,
     IEEE_ACCESS_PROFILE,
     IOP_ACCESS_PROFILE,
     NATURE_ACCESS_PROFILE,
@@ -357,6 +358,49 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         )
         self.assertIn(
             {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_aps_redirect_and_crawler_policy_do_not_create_a_pdf_route(self) -> None:
+        profile = APS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.provider_record_names, ())
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1103",))
+        self.assertEqual(
+            profile.landing_origins,
+            ("https://journals.aps.org", "https://link.aps.org"),
+        )
+        self.assertEqual(profile.asset_origins, ("https://journals.aps.org",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        public = _mapping(route_verification["public"])
+        authorized_api = _mapping(route_verification["authorized_api"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(
+            public["legacy_link_origin"],
+            "redirect-only-to-canonical-journals-origin",
+        )
+        self.assertEqual(
+            authorized_api["payload"],
+            "no-reviewed-public-full-text-api",
+        )
+        self.assertIn(
+            "robots-indexing-allowance-is-not-pdf-automation-permission",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "upstream-unsupported-verdict-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplementary-material", "expected": "supplement"},
             ownership,
         )
 

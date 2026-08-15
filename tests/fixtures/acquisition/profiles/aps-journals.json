@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "access_key": "aps-journals",
+  "display_name": "American Physical Society",
+  "product_name": "Physical Review journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "aps-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/aps.md",
+  "official_references": [
+    "https://journals.aps.org/",
+    "https://journals.aps.org/info/terms",
+    "https://journals.aps.org/robots.txt",
+    "https://link.aps.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://journals.aps.org/info/terms"
+  ],
+  "rate_limit_references": [
+    "https://journals.aps.org/robots.txt",
+    "https://link.aps.org/robots.txt"
+  ],
+  "landing_origins": [
+    "https://journals.aps.org",
+    "https://link.aps.org"
+  ],
+  "asset_origins": ["https://journals.aps.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1103-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "legacy_link_origin": "redirect-only-to-canonical-journals-origin",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-public-full-text-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-access-terms-unavailable-to-anonymous-review",
+        "robots-indexing-allowance-is-not-pdf-automation-permission",
+        "managed-content-signal-allows-reference-use-not-full-content-use",
+        "search-account-and-login-paths-disallowed",
+        "no-published-browser-article-rate-policy",
+        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "institution-specific-login-failure-is-not-production-evidence",
+        "upstream-unsupported-verdict-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material", "expected": "supplement"},
+    {"case_id": "accepted-navigation-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-full-text-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "access-terms-content-not-reviewed",
+    "live-entitlement-not-asserted"
+  ]
+}
