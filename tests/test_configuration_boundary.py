@@ -6,6 +6,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 from pydantic import ValidationError
@@ -25,18 +26,257 @@ from sciretriever.configuration import (
     remove_credentials,
     set_core_credentials,
     set_credentials,
+    tightened_browser_group_policies,
 )
 from sciretriever.model.configuration import (
+    AccessConfig,
+    BrowserPolicyOverrideConfig,
     Configuration,
     CoreCredentialService,
     CredentialStatus,
     ProviderCapability,
 )
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 SENTINEL = "CONFIGURATION-SECRET-SENTINEL"
 
 
 class ConfigurationModelBoundaryTests(unittest.TestCase):
+    def test_browser_access_requires_a_safe_opaque_profile_and_contains_no_session_material(
+        self,
+    ) -> None:
+        selected = parse_configuration(
+            """
+            [access]
+            browser_enabled = true
+            browser_profile = "  Institutional-Access  "
+            browser_max_concurrency = 3
+            """
+        )
+        self.assertTrue(selected.access.browser_enabled)
+        self.assertEqual(selected.access.browser_profile, "institutional-access")
+        self.assertEqual(selected.access.browser_max_concurrency, 3)
+        self.assertEqual(selected.access.browser_policy_overrides, ())
+        self.assertEqual(
+            set(AccessConfig.model_fields),
+            {
+                "browser_enabled",
+                "browser_profile",
+                "browser_max_concurrency",
+                "browser_policy_overrides",
+            },
+        )
+        rendered = selected.access.model_dump_json()
+        for forbidden in ("cookie", "local_storage", "profile_path", SENTINEL):
+            self.assertNotIn(forbidden.casefold(), rendered.casefold())
+
+        invalid = (
+            "[access]\nbrowser_enabled = true\n",
+            '[access]\nbrowser_profile = "/tmp/browser-profile"\n',
+            '[access]\nbrowser_profile = "../browser-profile"\n',
+            '[access]\nbrowser_profile = "https://publisher.example"\n',
+            '[access]\nbrowser_profile = "publisher-token"\n',
+            '[access]\nbrowser_profile = "a50e8400-e29b-41d4-a716-446655440000"\n',
+            "[access]\nbrowser_max_concurrency = 0\n",
+            f'[access]\ncookie = "{SENTINEL}"\n',
+            '[access]\nbrowser_profile_path = "/tmp/profile"\n',
+        )
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ConfigurationError) as caught:
+                    parse_configuration(payload)
+                self.assertNotIn(SENTINEL, str(caught.exception))
+
+    def test_browser_policy_override_shape_rejects_unknown_duplicate_and_unbounded_values(
+        self,
+    ) -> None:
+        unknown = (
+            "[access]\n"
+            "browser_policy_overrides = ["
+            '{ rate_limit_group = "unknown-group", minimum_start_interval = 30.0 }'
+            "]\n"
+        )
+        with self.assertRaises(ConfigurationError) as caught:
+            parse_configuration(unknown)
+        self.assertEqual(str(caught.exception), "browser policy group is unknown")
+
+        invalid = (
+            ('[access]\nbrowser_policy_overrides = [{ rate_limit_group = "fixture-group" }]\n'),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", minimum_start_interval = 10.0 }, '
+                '{ rate_limit_group = "fixture-group", failure_cooldown = 10.0 }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", max_concurrency = 2 }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", minimum_start_interval = -1.0 }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", window_seconds = 60.0 }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", maximum_starts_per_window = 1 }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", window_seconds = inf, '
+                "maximum_starts_per_window = 1 }"
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", rate_limit_cooldown = nan }'
+                "]\n"
+            ),
+            (
+                "[access]\n"
+                "browser_policy_overrides = ["
+                '{ rate_limit_group = "fixture-group", runtime_failure_threshold = 0 }'
+                "]\n"
+            ),
+        )
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(ConfigurationError):
+                parse_configuration(payload)
+
+    def test_browser_policy_overrides_can_only_tighten_every_baseline_dimension(self) -> None:
+        baseline = BrowserGroupPolicy(
+            rate_limit_group="fixture-publisher",
+            policy_revision="fixture-r1",
+            minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
+            maximum_starts_per_window=4,
+            window_seconds=120.0,
+            cooldown_after_completion=5.0,
+            failure_cooldown=30.0,
+        )
+        other = BrowserGroupPolicy(
+            rate_limit_group="other-publisher",
+            policy_revision="other-r1",
+            minimum_start_interval=15.0,
+            rate_limit_cooldown=90.0,
+            runtime_failure_threshold=2,
+        )
+        access = AccessConfig(
+            browser_policy_overrides=(
+                BrowserPolicyOverrideConfig(
+                    rate_limit_group="fixture-publisher",
+                    max_concurrency=1,
+                    minimum_start_interval=20.0,
+                    maximum_starts_per_window=2,
+                    window_seconds=240.0,
+                    cooldown_after_completion=10.0,
+                    rate_limit_cooldown=120.0,
+                    failure_cooldown=60.0,
+                    runtime_failure_threshold=2,
+                ),
+            )
+        )
+        policies = tightened_browser_group_policies(
+            access,
+            {
+                baseline.rate_limit_group: baseline,
+                other.rate_limit_group: other,
+            },
+        )
+        tightened = policies[baseline.rate_limit_group]
+        self.assertEqual(tightened.max_concurrency, 1)
+        self.assertEqual(tightened.minimum_start_interval, 20.0)
+        self.assertEqual(tightened.maximum_starts_per_window, 2)
+        self.assertEqual(tightened.window_seconds, 240.0)
+        self.assertEqual(tightened.cooldown_after_completion, 10.0)
+        self.assertEqual(tightened.rate_limit_cooldown, 120.0)
+        self.assertEqual(tightened.failure_cooldown, 60.0)
+        self.assertEqual(tightened.runtime_failure_threshold, 2)
+        self.assertIs(policies[other.rate_limit_group], other)
+        with self.assertRaises(TypeError):
+            cast(dict[str, BrowserGroupPolicy], policies)["replacement"] = baseline
+
+        relaxations = (
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                minimum_start_interval=9.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                maximum_starts_per_window=5,
+                window_seconds=120.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                maximum_starts_per_window=4,
+                window_seconds=60.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                cooldown_after_completion=4.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                rate_limit_cooldown=59.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                failure_cooldown=29.0,
+            ),
+            BrowserPolicyOverrideConfig(
+                rate_limit_group=baseline.rate_limit_group,
+                runtime_failure_threshold=4,
+            ),
+        )
+        for override in relaxations:
+            with self.subTest(override=override):
+                with self.assertRaises(ConfigurationError) as caught:
+                    tightened_browser_group_policies(
+                        AccessConfig(browser_policy_overrides=(override,)),
+                        {baseline.rate_limit_group: baseline},
+                    )
+                self.assertEqual(
+                    str(caught.exception),
+                    "browser policy override would relax the baseline",
+                )
+
+        no_window = BrowserGroupPolicy(
+            rate_limit_group="windowless-publisher",
+            policy_revision="windowless-r1",
+            minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
+        )
+        introduced = tightened_browser_group_policies(
+            AccessConfig(
+                browser_policy_overrides=(
+                    BrowserPolicyOverrideConfig(
+                        rate_limit_group=no_window.rate_limit_group,
+                        maximum_starts_per_window=2,
+                        window_seconds=300.0,
+                    ),
+                )
+            ),
+            {no_window.rate_limit_group: no_window},
+        )[no_window.rate_limit_group]
+        self.assertEqual(introduced.maximum_starts_per_window, 2)
+        self.assertEqual(introduced.window_seconds, 300.0)
+
     def test_private_secret_containers_explicitly_reject_pickle_without_leakage(self) -> None:
         selected = parse_configuration(
             """

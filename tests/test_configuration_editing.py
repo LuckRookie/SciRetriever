@@ -21,13 +21,16 @@ from sciretriever.configuration import (
     update_core_service_configuration,
 )
 from sciretriever.model.configuration import (
+    AccessConfig,
     AnalysisAuthentication,
     AnalysisConfig,
     AnalysisProtocol,
     AnalysisProvider,
+    BrowserPolicyOverrideConfig,
     CoreCredentialService,
     ParserConnectionMode,
 )
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 _SECRET = "CORE-CONFIGURATION-SECRET-SENTINEL"
 
@@ -67,6 +70,67 @@ def _custom_analysis(
 
 
 class OrdinaryConfigurationEditingTests(unittest.TestCase):
+    def test_browser_access_round_trip_preserves_comments_and_never_creates_credentials(
+        self,
+    ) -> None:
+        baseline = BrowserGroupPolicy(
+            rate_limit_group="fixture-publisher",
+            policy_revision="fixture-r1",
+            minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
+            maximum_starts_per_window=4,
+            window_seconds=120.0,
+        )
+        access = AccessConfig(
+            browser_enabled=True,
+            browser_profile="institutional-access",
+            browser_max_concurrency=3,
+            browser_policy_overrides=(
+                BrowserPolicyOverrideConfig(
+                    rate_limit_group=baseline.rate_limit_group,
+                    minimum_start_interval=20.0,
+                    maximum_starts_per_window=2,
+                    window_seconds=240.0,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "config.toml"
+            path.write_text(
+                "# operator heading\n"
+                "[paths]\n"
+                "# keep unrelated section comments\n"
+                'catalog_path = "catalog.sqlite3"\n\n'
+                "[access]\n"
+                "# keep Browser switch comment\n"
+                "browser_enabled = false\n"
+                "browser_max_concurrency = 1\n",
+                encoding="utf-8",
+            )
+
+            with patch(
+                "sciretriever.configuration._production_browser_group_policies",
+                return_value={baseline.rate_limit_group: baseline},
+            ):
+                updated = update_configuration_sections(path, access=access)
+                reloaded = load_configuration(path)
+
+            rendered = path.read_text(encoding="utf-8")
+            self.assertIn("# operator heading", rendered)
+            self.assertIn("# keep unrelated section comments", rendered)
+            self.assertIn("# keep Browser switch comment", rendered)
+            self.assertIn("browser_enabled = true", rendered)
+            self.assertIn('browser_profile = "institutional-access"', rendered)
+            self.assertIn("browser_max_concurrency = 3", rendered)
+            self.assertIn('rate_limit_group = "fixture-publisher"', rendered)
+            self.assertIn("minimum_start_interval = 20.0", rendered)
+            self.assertEqual(updated, reloaded)
+            self.assertEqual(updated.access, access)
+            self.assertFalse((root / ".sciretriever").exists())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_edit_path_selects_explicit_environment_or_cwd_without_requiring_a_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -146,6 +210,24 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             changes,
         )
         self.assertNotIn(_SECRET, repr(changes))
+
+        access = AccessConfig(
+            browser_enabled=True,
+            browser_profile="institutional-access",
+            browser_max_concurrency=3,
+        )
+        access_changes = configuration_diff(
+            before,
+            before.model_copy(update={"access": access}),
+            sections=("access",),
+        )
+        self.assertIn(("access.browser_enabled", False, True), access_changes)
+        self.assertIn(
+            ("access.browser_profile", None, "institutional-access"),
+            access_changes,
+        )
+        self.assertIn(("access.browser_max_concurrency", 2, 3), access_changes)
+        self.assertNotIn(_SECRET, repr(access_changes))
 
 
 class CoreServiceCredentialTests(unittest.TestCase):
