@@ -89,4 +89,4 @@ Matrix 只把 `production-ready` Profile 和其 rule 派生到生产 catalog。`
 - 用本地 Browser gate fixture 实际分类 primary、supplement、wrong-article 和 excluded capture；
 - 证明 `fixture-verified`/`unsupported` 不进入 production 派生 catalog。
 
-这些测试不连接真实 Provider、机构登录或 Browser profile，也不证明站点长期稳定、用户权限或下载成功率。真实只读核实只能由用户明确授权，结果必须脱敏并单独更新对应 Provider Notes、evidence revision 和状态。
+这些测试不连接真实 Provider、机构登录或 Browser profile，也不证明站点长期稳定、用户权限或下载成功率。真实只读核实只能按[受控 Browser 现场核实门](browser-live-verification/README.md)为一个明确 access key 建立核实单并取得用户另行授权；结果必须脱敏并单独更新对应 Provider Notes、evidence revision 和状态。

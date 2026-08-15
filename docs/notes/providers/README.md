@@ -30,7 +30,7 @@
 
 截至 2026-08-15，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。完整及 capability-scoped Completion 对象图还共享同一 Profile catalog/Planner、tiered cohort executor、Browser scheduler/session broker 和 admission controller。当前 Browser client 仍为空，production Browser rule catalog 为 0，execution confirmation 与 runtime readiness 均关闭；离线与 Chromium QA 只证明 Browser foundation，不能写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
-Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。
+Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。任何真实 Browser 核实还必须经过[受控现场核实门](browser-live-verification/README.md)，没有完整单项核实单和用户另行授权时不得执行。
 
 ## 3. 已接受的目标能力矩阵
 
@@ -99,7 +99,8 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
   [IEEE Xplore](ieee.md)、[IOPscience](iop.md)、[Oxford Academic](oxford-academic.md)、
   [Science / AAAS](science-aaas.md)、[PNAS](pnas.md)、
   [World Scientific](world-scientific.md)；
-- [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)。
+- [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)、
+  [受控 Browser 现场核实门](browser-live-verification/README.md)。
 
 ## 5. `direct` 不是供应商
 
