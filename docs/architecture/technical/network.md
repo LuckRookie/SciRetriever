@@ -124,6 +124,7 @@ next_allowed_at
 blocked_until
 窗口额度计数和重置时间
 当前 Retry-After 与有界退避
+Browser risk group 的连续 runtime failure 计数与 circuit reason
 ```
 
 这些值不得携带 DOI、Literature ID、candidate key、完整 URL、header、Cookie、secret reference/value、响应正文、底层异常或逐请求失败。它们不进入业务 Model、SQLite Catalog、ArtifactStore、provenance、日志合同或独立协调文件。Network 不创建限速表、协调数据库、协调目录、跨进程 advisory lock、lease marker 或可恢复的 rate-limit 现场。
@@ -141,6 +142,7 @@ Browser 再取得 Profile 的 `BrowserAccessScope`。同一 risk group 固定满
 ```text
 max_concurrency = 1
 provider-declared article interval/window/cooldown
+provider-declared rate-limit cooldown / runtime-failure threshold
 ```
 
 不同 risk group 可以并行运行各自一个文章流程；同一 group 内限速串行。全局 Browser concurrency 只保护本机 process/context 资源，不作为所有 Provider 共用的业务锁。Provider 的具体间隔、window、cooldown 与证据日期属于 Profile/Notes；没有可执行政策的 Profile 不进入 production，不再硬编码一个适用于所有 Provider 的固定 30 秒。
@@ -268,14 +270,30 @@ challenge，必须由 Acquisition 的版本化 Provider marker 决定。
 同一进程同一 group 只能注册一份完全一致的 policy revision，避免通过别名或新 operation
 重建限速状态。
 
+同一个 scheduler 现在也是 Browser risk group 动态状态的唯一进程内所有者。每个 Profile 必须
+显式声明正数 `rate_limit_cooldown` 与 `runtime_failure_threshold`，不能从全局隐藏默认值取得；
+operator 收紧时前者只能取更长值，后者只能取更小值。文章 callback 完整返回后，封闭的
+`BrowserGroupFeedback` 原子更新对应 group：rate-limit 把 `blocked_until` 至少推进到声明的
+cooldown，登录、MFA、challenge、IP block 和账号警告打开带封闭原因的 action-required
+circuit，连续 Browser runtime failure 达到声明阈值后打开 runtime circuit。正常成功只清除
+连续 runtime failure 计数，不缩短 `next_allowed_at`、`blocked_until`，也不关闭 circuit。
+
+每篇文章在取得本机全局 Browser permit 和调用 callback 之前都重新读取该 group 状态。仍在
+`blocked_until` 内的任务返回 `deferred`，open circuit 返回 `action-required`；这条路径不调用
+Browser adapter，因此同批排队任务、新 Literature、不同 route key 或备用入口都不能再次触网。
+其它 group 仍由独立 worker 继续。rate-limit 到期后按 monotonic clock 自动恢复；action-required
+circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_circuit()` 关闭，且该操作
+不清除仍有效的 cooldown。动态 snapshot 仅含稳定 group、revision、时钟截止、连续计数和封闭
+原因，并与 scheduler 一起拒绝序列化；不含 URL、selector、Cookie、Token 或文献标识。
+
 生产 Controlled Browser 仍保持 disabled：session broker、operator-managed profile 存储边界、
 运行状态机、封闭页面 marker 分类、多路正文捕获、封闭 action contract 和 supplement/错文
-排除已经完成，但 Provider circuit、配置/确认入口以及至少一个 Provider 的端到端 Profile
-尚未全部闭环。
+排除以及 Provider cooldown/circuit 已经完成，但配置/确认入口以及至少一个 Provider 的端到端
+Profile 尚未全部闭环。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
-无当前文献 entitlement、rate limited、IP blocked、not found、PDF captured 和 runtime
-failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit；它不形成 Literature 状态，
+无当前文献 entitlement、rate limited、IP blocked、账号警告、not found、PDF captured 和
+runtime failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit；它不形成 Literature 状态，
 也不写入 Catalog、ArtifactStore 或配置文件。一个 group 的 action-required/circuit 不阻塞
 其它独立 group。
 

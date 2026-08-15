@@ -445,10 +445,10 @@ Browser admission 可以报告最小剩余集合、readiness、待处理动作�
 真实 Browser 流量。Network per-hop `BrowserDestinationGuard` 与 Controlled Browser 规则注入
 已经通过离线 direct/安装后测试，risk-group Browser executor 已通过 direct 离线并发测试；
 Provider session broker、operator-managed profile 存储边界、状态/页面分类、多路正文捕获和
-封闭 action contract 以及 supplement/错文排除也已完成。Provider circuit、完整 Provider
-Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、组内串行、
-会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不构成
-production-ready Browser 能力。
+封闭 action contract、supplement/错文排除以及 Provider cooldown/circuit 也已完成。完整
+Provider Profile 和用户确认 UX 完成前，仍不得从配置或 CLI 打开生产 Browser。组间并行、
+组内串行、会话复用和安装 wheel 后的本地 Chromium 捕获已经是当前 foundation 行为，但尚不
+构成 production-ready Browser 能力。
 
 ### 4.1 Browser admission、会话与调度
 
@@ -475,9 +475,10 @@ Springer group:  S1 --provider interval-- S2 --provider interval-- S3
 当前 `PublisherAccessProfile.browser_policy` 与 Profile 的 `browser_rate_limit_group`、
 `policy_revision` 精确绑定；Browser route 缺少 policy 或二者不一致时构造即失败。Policy 显式
 保存固定并发 1、文章启动间隔、可选滑动窗口、完成冷却和失败冷却，production-ready Profile
-必须至少声明一种非零 pacing。`tightened_by()` 只取更长间隔/冷却或更小额度与更长窗口，不能
-改变 group/revision，也不能放宽声明值。具体数字和证据仍由 Provider Notes/Profile 给出，
-不是全局默认值。
+还必须显式保存正数 rate-limit cooldown 与连续 runtime failure 阈值，并至少声明一种非零
+pacing。`tightened_by()` 只取更长间隔/冷却、更小 runtime failure 阈值，或更小额度与更长
+窗口，不能改变 group/revision，也不能放宽声明值。具体数字和证据仍由 Provider Notes/Profile
+给出，不是全局默认值。
 
 一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
 
@@ -522,6 +523,21 @@ Scheduler callback 覆盖整个 route adapter 调用，因此 Network Browser �
 或异常均按失败完成处理并保留适用冷却。不同 group 使用独立 worker 实际重叠，同 group 保持
 冻结输入顺序。缺少 scheduler 的 admitted route 会稳定失败，不再退回隐藏的全局串行执行。
 
+Scheduler 同时拥有每个 group 的进程内 `blocked_until`、连续 runtime failure 计数和封闭 circuit
+reason。Cohort 把 Browser route 的稳定终态转换成封闭 `BrowserGroupFeedback`，只有完整 route
+callback 和资源清理结束后才原子更新 group。rate-limit 推进声明的 cooldown；登录、MFA、
+challenge、IP block、账号警告或达到阈值的 runtime failure 打开相应 circuit。每个排队任务在
+Browser callback 前再次检查该状态，所以同一批中的后续 Literature、下一次 cohort、不同
+route key 和备用入口均不能绕过；独立 group 仍继续。被动态状态拦截的 item 分别形成稳定
+`deferred` 或 `action-required`，不会被写成 exhaustion。
+
+Admission 在下一次评估时把同一 scheduler 的动态 snapshot 与静态 session/Profile readiness
+合并，摘要显示 `rate-limited` 或具体 action-required reason 以及剩余最早开始时间。rate-limit
+只在 monotonic `blocked_until` 到期后自动恢复；circuit 不因连续成功自动关闭，只能以精确
+group 和 policy revision 显式确认。确认不会清空仍有效的 cooldown。动态 snapshot、scheduler
+和有序执行结果均不可序列化，且不携带 URL、selector、Cookie、Token、Literature 或 route
+locator。
+
 Network 已提供按 `browser_session_key` 串行 lease 的 process-local session broker：同一访问方的
 多篇论文可以复用一个合法 persistent context，同时每篇文章仍拥有独立 page、下载临时目录、
 预算、连接绑定和结果；runtime/清理失败会淘汰该 session。这个 foundation 不等于 production
@@ -543,6 +559,7 @@ Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenanc
 | `NOT_ENTITLED` | 正常未命中，允许当前 plan 中其它 route | 无 |
 | `RATE_LIMITED` | `deferred`，不换入口制造替代流量 | 暂停 |
 | `IP_BLOCKED` | `action-required` | 打开 circuit |
+| `ACCOUNT_WARNING` | `action-required` | 打开 circuit |
 | `NOT_FOUND` | 正常未命中，允许当前 plan 中其它 route | 无 |
 | `PDF_CAPTURED` | 交付临时 PDF，随后仍经过统一字节检查 | 无 |
 | `RUNTIME_FAILED` | 稳定 route failure | 记录一次 runtime failure |
@@ -554,9 +571,9 @@ Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenanc
 
 状态、决定和 history 只存在于当前进程内存，可以转换为安全日志和本次操作的稳定
 `normal-miss`、`deferred`、`action-required` 或 failure；它们不进入 Literature Model、Catalog、
-数据库表、Artifact、provenance 或跨运行失败历史。risk-group 信号在 Provider cooldown/circuit
-策略中才真正更新 `blocked_until` 与 circuit；其它 group 始终继续。自动策略只能减速或暂停，
-不能根据连续成功自动提速。
+数据库表、Artifact、provenance 或跨运行失败历史。risk-group 信号由当前进程 scheduler 更新
+`blocked_until` 与 circuit；其它 group 始终继续。自动策略只能减速或暂停，不能根据连续成功
+自动提速或自动关闭 action-required circuit。
 
 页面分类只消费 Network 提供的 `BrowserPageObservation` 与有界 selector text。Observation 只含
 已经完成 Network 准入的 query-free 当前 locator 和主导航响应状态，不含 response、HTML、header、
@@ -568,7 +585,8 @@ Cookie 或 vendor object。版本化 `BrowserPageMarker` 只能声明以下三�
 - `100..599` 范围内的明确响应状态。
 
 每个 marker 使用封闭 kind：`authenticated`、`entitled`、`login-required`、`mfa-required`、
-`not-entitled`、`paywall`、`challenge-required`、`rate-limited`、`ip-blocked` 或 `not-found`。
+`not-entitled`、`paywall`、`challenge-required`、`rate-limited`、`ip-blocked`、`account-warning`
+或 `not-found`。
 selector、URL prefix 和响应状态不能跨 marker 重复，marker 数量及每类 signal 数量均有硬上限；
 规则和稳定失败的 repr 不显示 selector 或 locator。
 
