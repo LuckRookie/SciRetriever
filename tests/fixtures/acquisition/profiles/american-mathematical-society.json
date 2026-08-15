@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "access_key": "american-mathematical-society",
+  "display_name": "American Mathematical Society",
+  "product_name": "AMS journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "ams-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/american-mathematical-society.md",
+  "official_references": [
+    "https://www.ams.org/journals",
+    "https://www.ams.org/publications/journals/open-access",
+    "https://www.ams.org/publications/journals/subscriber-information",
+    "https://www.ams.org/about-us/governance/terms-of-use",
+    "https://www.ams.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.ams.org/about-us/governance/terms-of-use",
+    "https://www.ams.org/publications/journals/subscriber-information"
+  ],
+  "rate_limit_references": [
+    "https://www.ams.org/robots.txt"
+  ],
+  "landing_origins": ["https://www.ams.org"],
+  "asset_origins": ["https://www.ams.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": [
+      "doi-prefix:10.1090-is-weak-only",
+      "doi-prefix:10.1175-belongs-to-american-meteorological-society"
+    ]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-terms-open-access-and-subscriber-pages-unavailable-to-anonymous-review",
+        "managed-content-signal-allows-reference-use-not-full-content-use",
+        "no-published-browser-article-rate-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "shared-acronym-is-not-publisher-identity-evidence",
+        "upstream-ams-verdict-belongs-to-a-different-publisher"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-ams-mathematics-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "ametsoc-article-metadata-or-wrong-work", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "live-entitlement-not-asserted"
+  ]
+}

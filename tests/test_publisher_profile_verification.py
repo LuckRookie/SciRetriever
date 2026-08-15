@@ -18,6 +18,8 @@ from sciretriever.acquisition.profile_catalog import (
     ACM_ACCESS_PROFILE,
     ACS_ACCESS_PROFILE,
     AIP_ACCESS_PROFILE,
+    AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE,
+    ANNUAL_REVIEWS_ACCESS_PROFILE,
     APS_ACCESS_PROFILE,
     IEEE_ACCESS_PROFILE,
     IOP_ACCESS_PROFILE,
@@ -26,9 +28,11 @@ from sciretriever.acquisition.profile_catalog import (
     PNAS_ACCESS_PROFILE,
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     PUBLISHER_ACCESS_VERIFICATION_MATRIX,
+    ROYAL_SOCIETY_ACCESS_PROFILE,
     RSC_ACCESS_PROFILE,
     SCIENCE_ACCESS_PROFILE,
     SPRINGERLINK_ACCESS_PROFILE,
+    WORLD_SCIENTIFIC_ACCESS_PROFILE,
 )
 from sciretriever.acquisition.profile_verification import (
     PublisherAccessVerificationMatrix,
@@ -512,6 +516,107 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertIn(
             {"case_id": "supplementary-material-or-file", "expected": "supplement"},
             ownership,
+        )
+
+    def test_royal_society_profile_has_its_own_unsupported_conclusion(self) -> None:
+        profile = ROYAL_SOCIETY_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1098",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertIn(
+            "official-platform-policy-and-robots-unavailable-to-anonymous-review",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "upstream-browser-success-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_annual_reviews_crawler_delay_is_not_a_browser_article_policy(self) -> None:
+        profile = ANNUAL_REVIEWS_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1146",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        browser = _mapping(route_verification["browser"])
+        self.assertEqual(browser["generic_crawler_delay_seconds"], 2)
+        self.assertIn(
+            "crawler-delay-is-not-browser-automation-permission",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "institution-specific-sso-and-2fa-is-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+
+    def test_world_scientific_crawler_delay_does_not_authorize_the_pdf_viewer(
+        self,
+    ) -> None:
+        profile = WORLD_SCIENTIFIC_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1142",))
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        browser = _mapping(route_verification["browser"])
+        ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
+        self.assertEqual(browser["generic_crawler_delay_seconds"], 1)
+        self.assertIn(
+            "upstream-institution-chain-and-terms-click-are-not-production-evidence",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+            ownership,
+        )
+
+    def test_ams_means_american_mathematical_not_meteorological_society(self) -> None:
+        profile = AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE
+        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertEqual(profile.weak_doi_prefixes, ("10.1090",))
+        self.assertNotIn("10.1175", profile.weak_doi_prefixes)
+        self.assertEqual(profile.landing_origins, ("https://www.ams.org",))
+        self.assertNotIn("https://journals.ametsoc.org", profile.landing_origins)
+        self.assertEqual(profile.public_route_keys, ())
+        self.assertEqual(profile.api_route_keys, ())
+        self.assertIsNone(profile.browser_route_key)
+        self.assertIsNone(profile.browser_rate_limit_group)
+        self.assertIsNone(profile.browser_session_key)
+        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        fixture = _load_fixture(profile.evidence.fixture_reference)
+        route_verification = _mapping(fixture["route_verification"])
+        browser = _mapping(route_verification["browser"])
+        self.assertIn(
+            "upstream-ams-verdict-belongs-to-a-different-publisher",
+            _strings(browser["blockers"]),
+        )
+        self.assertIn(
+            "shared-acronym-is-not-publisher-identity-evidence",
+            _strings(browser["blockers"]),
         )
 
     def test_rsc_esi_is_never_promoted_by_an_unsupported_profile(self) -> None:

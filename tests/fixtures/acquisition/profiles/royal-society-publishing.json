@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "access_key": "royal-society-publishing",
+  "display_name": "Royal Society Publishing",
+  "product_name": "Royal Society Publishing journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "royal-society-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/royal-society-publishing.md",
+  "official_references": [
+    "https://royalsocietypublishing.org/",
+    "https://royalsocietypublishing.org/terms",
+    "https://royalsociety.org/journals/open-access/",
+    "https://royalsocietypublishing.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://royalsocietypublishing.org/terms"
+  ],
+  "rate_limit_references": [
+    "https://royalsocietypublishing.org/robots.txt"
+  ],
+  "landing_origins": ["https://royalsocietypublishing.org"],
+  "asset_origins": ["https://royalsocietypublishing.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1098-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "explicit-open-access-pdf-or-landing-locator-still-requires-byte-and-licence-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "official-platform-policy-and-robots-unavailable-to-anonymous-review",
+        "no-published-browser-article-rate-policy",
+        "anonymous-platform-and-policy-requests-return-access-challenge",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "shared-cdn-or-platform-template-is-not-shared-risk-or-session-evidence",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "media-loading-page-or-wrong-article", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "numeric-browser-pacing-not-published",
+    "live-entitlement-not-asserted"
+  ]
+}

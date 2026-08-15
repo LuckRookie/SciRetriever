@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "access_key": "annual-reviews",
+  "display_name": "Annual Reviews",
+  "product_name": "Annual Reviews journals platform",
+  "verification_state": "unsupported",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "annual-reviews-automated-access-unsupported-2026-08-15",
+  "notes_reference": "docs/notes/providers/annual-reviews.md",
+  "official_references": [
+    "https://www.annualreviews.org/",
+    "https://www.annualreviews.org/page/about/terms",
+    "https://www.annualreviews.org/page/librarians/subscribe-to-open",
+    "https://www.annualreviews.org/robots.txt"
+  ],
+  "access_terms_references": [
+    "https://www.annualreviews.org/page/about/terms"
+  ],
+  "rate_limit_references": [
+    "https://www.annualreviews.org/robots.txt"
+  ],
+  "landing_origins": ["https://www.annualreviews.org"],
+  "asset_origins": ["https://www.annualreviews.org"],
+  "stable_identity": {
+    "locator_namespaces": [],
+    "provider_record_names": [],
+    "examples": ["doi-prefix:10.1146-is-weak-only"]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": [],
+    "browser_route": null
+  },
+  "route_verification": {
+    "public": {
+      "state": "generic-asset-hint-only",
+      "contract": "subscribe-to-open-or-explicit-pdf-hint-still-requires-article-licence-and-byte-validation"
+    },
+    "authorized_api": {
+      "state": "unsupported",
+      "payload": "no-reviewed-machine-access-pdf-api"
+    },
+    "browser": {
+      "state": "unsupported",
+      "generic_crawler_delay_seconds": 2,
+      "blockers": [
+        "official-terms-and-subscribe-to-open-pages-unavailable-to-anonymous-review",
+        "crawler-delay-is-not-browser-automation-permission",
+        "robots-disallow-session-profile-search-and-delivery-administration-paths",
+        "no-published-browser-article-risk-policy",
+        "no-reviewed-login-entitlement-paywall-challenge-markers",
+        "no-reviewed-primary-versus-supplement-rule",
+        "institution-specific-sso-and-2fa-is-not-production-evidence",
+        "upstream-browser-success-is-not-production-evidence"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "explicit-review-article-pdf-after-validation", "expected": "primary"},
+    {"case_id": "supplementary-material-or-file", "expected": "supplement"},
+    {"case_id": "front-matter-metadata-or-wrong-review", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "profile-not-in-production-catalog",
+    "dedicated-public-locator-not-registered",
+    "subscribe-to-open-scope-not-reviewed",
+    "authorized-machine-access-api-not-demonstrated",
+    "browser-route-not-registered",
+    "live-entitlement-not-asserted"
+  ]
+}
