@@ -25,7 +25,9 @@ from typing import Literal, NoReturn, Protocol, TypeAlias, TypeVar, runtime_chec
 from sciretriever.acquisition.api import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
+    AcquisitionProgressObserver,
     AcquisitionRequest,
+    BrowserEscalationObserver,
     CohortPreparationObserver,
     PreparedAcquisition,
     PreparedAcquisitionCohort,
@@ -119,6 +121,8 @@ class AutomaticAcquisitionPort(Protocol):
         *,
         cancel_event: threading.Event | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...

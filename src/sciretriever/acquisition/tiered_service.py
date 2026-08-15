@@ -10,6 +10,8 @@ from typing import Literal
 from weakref import WeakKeyDictionary
 
 from sciretriever.acquisition.api import (
+    AcquisitionProgressObserver,
+    BrowserEscalationObserver,
     CohortPreparationItem,
     CohortPreparationObserver,
     PreparedAcquisition,
@@ -150,10 +152,16 @@ class TieredAcquisitionService:
         *,
         cancel_event: CancellationEvent | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         self._validate_requests(requests)
         if on_prepared is not None and not callable(on_prepared):
             raise TypeError("on_prepared must be callable or None")
+        if on_progress is not None and not callable(on_progress):
+            raise TypeError("on_progress must be callable or None")
+        if on_browser_escalation is not None and not callable(on_browser_escalation):
+            raise TypeError("on_browser_escalation must be callable or None")
         self._check_cancel(cancel_event)
         work_items = tuple(self._new_work_item(request) for request in requests)
         prepared_by_literature: dict[LiteratureId, CohortPreparationItem] = {}
@@ -185,6 +193,8 @@ class TieredAcquisitionService:
                         on_prepared,
                     )
                 ),
+                on_progress=on_progress,
+                on_browser_escalation=on_browser_escalation,
                 cancel_event=cancel_event,
             )
             if on_prepared is None:

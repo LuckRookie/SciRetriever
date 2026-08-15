@@ -11,7 +11,14 @@ from sciretriever.acquisition.authorized import (
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
 )
 from sciretriever.acquisition.browser_admission import BrowserEscalationSummary
-from sciretriever.acquisition.cohort import WorkItemDisposition
+from sciretriever.acquisition.cohort import (
+    AcquisitionGroupProgress,
+    AcquisitionProgressObserver,
+    AcquisitionProgressPhase,
+    AcquisitionProgressSnapshot,
+    BrowserEscalationObserver,
+    WorkItemDisposition,
+)
 from sciretriever.acquisition.manual import ManualPdfInputError
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import (
@@ -144,6 +151,8 @@ class AutomaticAcquisitionService(Protocol):
         *,
         cancel_event: CancellationEvent | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort: ...
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult: ...
@@ -180,6 +189,8 @@ class AcquisitionApi:
         *,
         cancel_event: CancellationEvent | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         """Prepare one cohort and optionally publish tier-terminal receipts early."""
 
@@ -187,6 +198,8 @@ class AcquisitionApi:
             requests,
             cancel_event=cancel_event,
             on_prepared=on_prepared,
+            on_progress=on_progress,
+            on_browser_escalation=on_browser_escalation,
         )
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
@@ -215,7 +228,13 @@ __all__ = (
     "AcquisitionApi",
     "AcquisitionExpectedFacts",
     "AcquisitionFailure",
+    "AcquisitionGroupProgress",
+    "AcquisitionProgressObserver",
+    "AcquisitionProgressPhase",
+    "AcquisitionProgressSnapshot",
     "AcquisitionRequest",
+    "BrowserEscalationObserver",
+    "BrowserEscalationSummary",
     "CancellationEvent",
     "CohortPreparationObserver",
     "CohortPreparationItem",

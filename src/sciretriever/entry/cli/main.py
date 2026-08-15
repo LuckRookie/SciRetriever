@@ -559,8 +559,112 @@ def _present_result(value: object, *, as_json: bool) -> int:
 
 def _human_result(payload: Any) -> str:
     if isinstance(payload, dict):
+        if payload.get("kind") == "database-completion":
+            return _human_database_completion(payload)
         return "\n".join(f"{key}: {value}" for key, value in payload.items())
     return str(payload)
+
+
+def _human_database_completion(payload: dict[str, Any]) -> str:
+    end = payload.get("end")
+    end_mapping = end if isinstance(end, dict) else {}
+    outcome = str(end_mapping.get("kind", "unknown"))
+    goal = str(payload.get("goal", "unknown"))
+    partition_names = (
+        "goal_reached",
+        "needs_manual_pdf",
+        "failed",
+        "interrupted",
+        "not_started",
+    )
+    partitions = {name: _completion_partition(payload.get(name)) for name in partition_names}
+    lines = [
+        "Database completion",
+        f"  Goal: {goal}",
+        f"  Outcome: {outcome}",
+        "",
+        "Summary",
+    ]
+    lines.extend(f"  {name}: {len(partitions[name])}" for name in partition_names)
+    for name in partition_names:
+        lines.extend(("", f"{name} ({len(partitions[name])})"))
+        items = partitions[name]
+        if not items:
+            lines.append("  (none)")
+            continue
+        for item in items:
+            lines.extend(_completion_partition_item(name, item))
+    no_usable = payload.get("no_usable_content_literature_ids")
+    no_usable_ids = tuple(str(value) for value in no_usable) if isinstance(no_usable, list) else ()
+    lines.extend(("", f"no_usable_content ({len(no_usable_ids)})"))
+    lines.extend(
+        ("  (none)",)
+        if not no_usable_ids
+        else tuple(f"  - literature:{value}" for value in no_usable_ids)
+    )
+    operation_failure = end_mapping.get("failure")
+    if isinstance(operation_failure, dict):
+        lines.extend(("", "operation_failure"))
+        lines.extend(_human_failure_lines(operation_failure, indent="  "))
+    return "\n".join(lines)
+
+
+def _completion_partition(value: object) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, dict))
+
+
+def _completion_target_text(item: dict[str, Any]) -> str:
+    target = item.get("target")
+    if not isinstance(target, dict):
+        return "unknown-target"
+    kind = str(target.get("kind", "unknown"))
+    identity = target.get("literature_id", target.get("meta_literature_id", "-"))
+    return f"{kind}:{identity}"
+
+
+def _completion_partition_item(
+    partition: str,
+    item: dict[str, Any],
+) -> tuple[str, ...]:
+    target = _completion_target_text(item)
+    if partition == "goal_reached":
+        return (f"  + {target} -> literature:{item.get('literature_id', '-')}",)
+    if partition == "needs_manual_pdf":
+        literature_ids = item.get("literature_ids")
+        values = (
+            ", ".join(f"literature:{value}" for value in literature_ids)
+            if isinstance(literature_ids, list)
+            else "-"
+        )
+        return (f"  ? {target} -> {values}",)
+    if partition == "failed":
+        lines = [
+            f"  ! {target} stage={item.get('stage', '-')} "
+            f"literature={item.get('literature_id') or '-'}"
+        ]
+        failure = item.get("failure")
+        if isinstance(failure, dict):
+            lines.extend(_human_failure_lines(failure, indent="    "))
+        return tuple(lines)
+    if partition == "interrupted":
+        return (f"  ~ {target} literature={item.get('literature_id') or '-'}",)
+    return (f"  - {target}",)
+
+
+def _human_failure_lines(
+    failure: dict[str, Any],
+    *,
+    indent: str,
+) -> tuple[str, ...]:
+    retryable = str(bool(failure.get("retryable", False))).lower()
+    return (
+        f"{indent}code: {failure.get('code', '-')}",
+        f"{indent}retryable: {retryable}",
+        f"{indent}reason: {failure.get('reason', '-')}",
+        f"{indent}action: {failure.get('action', '-')}",
+    )
 
 
 def _run_search(arguments: argparse.Namespace) -> int:

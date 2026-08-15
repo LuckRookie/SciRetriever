@@ -637,10 +637,12 @@ class BrowserGroupScheduler:
             if now < deadline:
                 _LOGGER.info(
                     "event=browser-provider-group-waiting attempt_key=%s provider_group=%s "
-                    "wait_seconds=%g reason=provider-policy "
+                    "wait_seconds=%g next_allowed_in_seconds=%g "
+                    "cooldown_reason=provider-policy "
                     "action=wait-before-next-article-flow",
                     attempt.attempt_key,
                     attempt.rate_limit_group,
+                    deadline - now,
                     deadline - now,
                 )
                 self._clock.wait_until(deadline, cancel_event)
@@ -733,13 +735,16 @@ class BrowserGroupScheduler:
         wait_seconds = max(state.blocked_until - state.observed_at, 0.0)
         _LOGGER.info(
             "event=browser-provider-group-paused attempt_key=%s provider_group=%s "
-            "outcome=%s reason=%s wait_seconds=%g "
+            "outcome=%s reason=%s wait_seconds=%g next_allowed_in_seconds=%g "
+            "cooldown_reason=%s "
             "action=review-group-state-before-retry",
             attempt.attempt_key,
             attempt.rate_limit_group,
             result.disposition.value,
             reason,
             wait_seconds,
+            wait_seconds,
+            reason,
         )
 
     def _register_policies(self, policies: tuple[BrowserGroupPolicy, ...]) -> None:

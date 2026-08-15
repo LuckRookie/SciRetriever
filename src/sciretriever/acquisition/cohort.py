@@ -14,6 +14,7 @@ from sciretriever.acquisition.browser_admission import (
     BrowserAdmissionController,
     BrowserAdmissionDisposition,
     BrowserAdmissionResult,
+    BrowserEscalationSummary,
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult, RouteOutcome
 from sciretriever.acquisition.planning import (
@@ -66,6 +67,135 @@ class WorkItemDisposition(str, Enum):
     FAILED = "failed"
 
 
+@unique
+class AcquisitionProgressPhase(str, Enum):
+    """One operation-local tier boundary exposed only to real-time UX."""
+
+    STARTED = "started"
+    FINISHED = "finished"
+
+
+def _validate_progress_counts(
+    *,
+    selected: int,
+    resolved: int,
+    pending: int,
+    deferred: int,
+    action_required: int,
+    failed: int,
+    exhausted: int,
+) -> None:
+    counts = (
+        selected,
+        resolved,
+        pending,
+        deferred,
+        action_required,
+        failed,
+        exhausted,
+    )
+    if any(type(value) is not int or value < 0 for value in counts):
+        raise ValueError("acquisition progress counts must be nonnegative integers")
+    if sum(counts[1:]) != selected:
+        raise ValueError("acquisition progress outcomes must partition selected targets")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionGroupProgress:
+    """One secret-free Publisher/risk-group view of current cohort state."""
+
+    provider_group: str
+    selected: int
+    resolved: int
+    pending: int
+    deferred: int
+    action_required: int
+    failed: int
+    exhausted: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_group",
+            _provider_group(self.provider_group),
+        )
+        _validate_progress_counts(
+            selected=self.selected,
+            resolved=self.resolved,
+            pending=self.pending,
+            deferred=self.deferred,
+            action_required=self.action_required,
+            failed=self.failed,
+            exhausted=self.exhausted,
+        )
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("AcquisitionGroupProgress cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionProgressSnapshot:
+    """A derived tier snapshot; never a Report, database fact, or retry input."""
+
+    tier: AcquisitionPath
+    phase: AcquisitionProgressPhase
+    selected: int
+    resolved: int
+    pending: int
+    deferred: int
+    action_required: int
+    failed: int
+    exhausted: int
+    groups: tuple[AcquisitionGroupProgress, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tier, AcquisitionPath):
+            raise TypeError("tier must be AcquisitionPath")
+        if not isinstance(self.phase, AcquisitionProgressPhase):
+            raise TypeError("phase must be AcquisitionProgressPhase")
+        _validate_progress_counts(
+            selected=self.selected,
+            resolved=self.resolved,
+            pending=self.pending,
+            deferred=self.deferred,
+            action_required=self.action_required,
+            failed=self.failed,
+            exhausted=self.exhausted,
+        )
+        if not isinstance(self.groups, tuple) or any(
+            not isinstance(group, AcquisitionGroupProgress) for group in self.groups
+        ):
+            raise TypeError("groups must contain AcquisitionGroupProgress values")
+        identities = tuple(group.provider_group for group in self.groups)
+        if identities != tuple(sorted(identities)) or len(identities) != len(set(identities)):
+            raise ValueError("acquisition progress groups must be unique and sorted")
+        group_totals = tuple(
+            sum(getattr(group, field_name) for group in self.groups)
+            for field_name in (
+                "selected",
+                "resolved",
+                "pending",
+                "deferred",
+                "action_required",
+                "failed",
+                "exhausted",
+            )
+        )
+        if group_totals != (
+            self.selected,
+            self.resolved,
+            self.pending,
+            self.deferred,
+            self.action_required,
+            self.failed,
+            self.exhausted,
+        ):
+            raise ValueError("acquisition progress groups must partition the cohort snapshot")
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("AcquisitionProgressSnapshot cannot be serialized")
+
+
 def _work_key(value: object) -> str:
     if type(value) is not str:
         raise TypeError("work_key must be a string")
@@ -73,6 +203,15 @@ def _work_key(value: object) -> str:
     if _WORK_KEY.fullmatch(candidate) is None:
         raise ValueError("work_key must be a stable operation-local identity")
     return candidate
+
+
+def _provider_group(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("provider_group must be a string")
+    candidate = value.strip()
+    if _WORK_KEY.fullmatch(candidate) is None:
+        raise ValueError("provider_group must be a stable operation-local identity")
+    return str(candidate)
 
 
 @dataclass(slots=True)
@@ -193,6 +332,8 @@ TierCompletionObserver: TypeAlias = Callable[
     [AcquisitionPath, tuple[AcquisitionWorkItemResult, ...]],
     None,
 ]
+AcquisitionProgressObserver: TypeAlias = Callable[[AcquisitionProgressSnapshot], None]
+BrowserEscalationObserver: TypeAlias = Callable[[BrowserEscalationSummary], None]
 
 
 class TieredCohortExecutor:
@@ -232,6 +373,8 @@ class TieredCohortExecutor:
         *,
         refresh_plan: PlanRefresher | None = None,
         on_tier_completed: TierCompletionObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
         cancel_event: BrowserSchedulerCancellation | None = None,
     ) -> CohortExecutionResult:
         self._validate_inputs(
@@ -239,6 +382,8 @@ class TieredCohortExecutor:
             execute_route,
             refresh_plan,
             on_tier_completed,
+            on_progress,
+            on_browser_escalation,
             cancel_event,
         )
         _LOGGER.info(
@@ -248,19 +393,36 @@ class TieredCohortExecutor:
         for item in items:
             _log_plan(item, event="acquisition-plan-ready")
         for tier in _TIER_ORDER[:2]:
-            _log_tier_started(items, tier)
+            self._notify_progress(
+                items,
+                tier,
+                AcquisitionProgressPhase.STARTED,
+                on_progress,
+            )
             self._execute_tier_with_replanning(
                 items,
                 tier,
                 execute_route,
                 refresh_plan,
             )
-            _log_tier_finished(items, tier)
+            self._notify_progress(
+                items,
+                tier,
+                AcquisitionProgressPhase.FINISHED,
+                on_progress,
+            )
             self._notify_tier_completed(items, tier, on_tier_completed)
         browser_admission = self._admit_browser(items)
         _log_browser_admission(browser_admission)
+        if on_browser_escalation is not None:
+            on_browser_escalation(browser_admission.summary)
         self._apply_browser_admission(items, browser_admission)
-        _log_tier_started(items, AcquisitionPath.CONTROLLED_BROWSER)
+        self._notify_progress(
+            items,
+            AcquisitionPath.CONTROLLED_BROWSER,
+            AcquisitionProgressPhase.STARTED,
+            on_progress,
+        )
         self._execute_browser_tier(
             items,
             browser_admission,
@@ -271,7 +433,12 @@ class TieredCohortExecutor:
             if item.disposition is WorkItemDisposition.PENDING:
                 item.disposition = WorkItemDisposition.EXHAUSTED
                 item.current_tier = None
-        _log_tier_finished(items, AcquisitionPath.CONTROLLED_BROWSER)
+        self._notify_progress(
+            items,
+            AcquisitionPath.CONTROLLED_BROWSER,
+            AcquisitionProgressPhase.FINISHED,
+            on_progress,
+        )
         self._notify_tier_completed(
             items,
             AcquisitionPath.CONTROLLED_BROWSER,
@@ -289,6 +456,8 @@ class TieredCohortExecutor:
         execute_route: RouteExecutor,
         refresh_plan: PlanRefresher | None,
         on_tier_completed: TierCompletionObserver | None,
+        on_progress: AcquisitionProgressObserver | None,
+        on_browser_escalation: BrowserEscalationObserver | None,
         cancel_event: BrowserSchedulerCancellation | None,
     ) -> None:
         if not isinstance(items, tuple) or any(
@@ -304,6 +473,10 @@ class TieredCohortExecutor:
             raise TypeError("refresh_plan must be callable or None")
         if on_tier_completed is not None and not callable(on_tier_completed):
             raise TypeError("on_tier_completed must be callable or None")
+        if on_progress is not None and not callable(on_progress):
+            raise TypeError("on_progress must be callable or None")
+        if on_browser_escalation is not None and not callable(on_browser_escalation):
+            raise TypeError("on_browser_escalation must be callable or None")
         if cancel_event is not None and not isinstance(
             cancel_event,
             BrowserSchedulerCancellation,
@@ -321,6 +494,18 @@ class TieredCohortExecutor:
         if observer is None:
             return
         observer(tier, tuple(_freeze_result(item) for item in items))
+
+    @staticmethod
+    def _notify_progress(
+        items: tuple[AcquisitionWorkItem, ...],
+        tier: AcquisitionPath,
+        phase: AcquisitionProgressPhase,
+        observer: AcquisitionProgressObserver | None,
+    ) -> None:
+        snapshot = _progress_snapshot(items, tier=tier, phase=phase)
+        _log_tier_progress(snapshot)
+        if observer is not None:
+            observer(snapshot)
 
     def _execute_tier(
         self,
@@ -811,43 +996,44 @@ def _log_plan(
     )
 
 
-def _log_tier_started(
-    items: tuple[AcquisitionWorkItem, ...],
+def _progress_group(
+    item: AcquisitionWorkItem,
     tier: AcquisitionPath,
-) -> None:
-    selected = sum(
-        item.disposition is WorkItemDisposition.PENDING and bool(item.plan.routes_for(tier))
-        for item in items
-    )
-    groups = {
-        _route_group(route)
-        for item in items
-        if item.disposition is WorkItemDisposition.PENDING
-        for route in item.plan.routes_for(tier)
-        if route.route_key not in item.attempted_route_keys
-    }
-    _LOGGER.info(
-        "event=acquisition-tier-started tier=%s selected=%d target_count=%d "
-        "provider_group_count=%d",
-        tier.value,
-        selected,
-        len(items),
-        len(groups),
-    )
+) -> str:
+    routes = item.plan.routes_for(tier)
+    if tier is AcquisitionPath.CONTROLLED_BROWSER:
+        risk_group = next(
+            (route.risk_group for route in routes if route.risk_group is not None),
+            None,
+        )
+        if risk_group is not None:
+            return risk_group
+    resolution = item.plan.resolution.access_key
+    if resolution is not None:
+        return resolution
+    for field_name in ("profile_access_key", "quota_group", "risk_group"):
+        value = next(
+            (
+                getattr(route, field_name)
+                for route in routes
+                if getattr(route, field_name) is not None
+            ),
+            None,
+        )
+        if isinstance(value, str):
+            return value
+    return "unresolved"
 
 
-def _log_tier_finished(
+def _progress_counts(
     items: tuple[AcquisitionWorkItem, ...],
-    tier: AcquisitionPath,
-) -> None:
+) -> tuple[int, int, int, int, int, int, int]:
     counts = {
         disposition: sum(item.disposition is disposition for item in items)
         for disposition in WorkItemDisposition
     }
-    _LOGGER.info(
-        "event=acquisition-tier-finished tier=%s delivered=%d pending=%d deferred=%d "
-        "action_required=%d failed=%d exhausted=%d",
-        tier.value,
+    return (
+        len(items),
         counts[WorkItemDisposition.DELIVERED],
         counts[WorkItemDisposition.PENDING],
         counts[WorkItemDisposition.DEFERRED],
@@ -855,6 +1041,85 @@ def _log_tier_finished(
         counts[WorkItemDisposition.FAILED],
         counts[WorkItemDisposition.EXHAUSTED],
     )
+
+
+def _progress_snapshot(
+    items: tuple[AcquisitionWorkItem, ...],
+    *,
+    tier: AcquisitionPath,
+    phase: AcquisitionProgressPhase,
+) -> AcquisitionProgressSnapshot:
+    grouped: dict[str, list[AcquisitionWorkItem]] = {}
+    for item in items:
+        grouped.setdefault(_progress_group(item, tier), []).append(item)
+    groups = tuple(
+        _group_progress(provider_group, tuple(group_items))
+        for provider_group, group_items in sorted(grouped.items())
+    )
+    counts = _progress_counts(items)
+    return AcquisitionProgressSnapshot(
+        tier=tier,
+        phase=phase,
+        selected=counts[0],
+        resolved=counts[1],
+        pending=counts[2],
+        deferred=counts[3],
+        action_required=counts[4],
+        failed=counts[5],
+        exhausted=counts[6],
+        groups=groups,
+    )
+
+
+def _group_progress(
+    provider_group: str,
+    items: tuple[AcquisitionWorkItem, ...],
+) -> AcquisitionGroupProgress:
+    counts = _progress_counts(items)
+    return AcquisitionGroupProgress(
+        provider_group=provider_group,
+        selected=counts[0],
+        resolved=counts[1],
+        pending=counts[2],
+        deferred=counts[3],
+        action_required=counts[4],
+        failed=counts[5],
+        exhausted=counts[6],
+    )
+
+
+def _log_tier_progress(snapshot: AcquisitionProgressSnapshot) -> None:
+    event = f"acquisition-tier-{snapshot.phase.value}"
+    _LOGGER.info(
+        "event=%s tier=%s selected=%d resolved=%d pending=%d deferred=%d "
+        "action_required=%d failed=%d exhausted=%d provider_group_count=%d",
+        event,
+        snapshot.tier.value,
+        snapshot.selected,
+        snapshot.resolved,
+        snapshot.pending,
+        snapshot.deferred,
+        snapshot.action_required,
+        snapshot.failed,
+        snapshot.exhausted,
+        len(snapshot.groups),
+    )
+    for group in snapshot.groups:
+        _LOGGER.info(
+            "event=acquisition-tier-group-progress phase=%s tier=%s provider_group=%s "
+            "selected=%d resolved=%d pending=%d deferred=%d action_required=%d "
+            "failed=%d exhausted=%d",
+            snapshot.phase.value,
+            snapshot.tier.value,
+            group.provider_group,
+            group.selected,
+            group.resolved,
+            group.pending,
+            group.deferred,
+            group.action_required,
+            group.failed,
+            group.exhausted,
+        )
 
 
 def _log_route_result(
@@ -922,12 +1187,31 @@ def _log_failure(
 
 
 def _log_browser_admission(result: BrowserAdmissionResult) -> None:
-    for group in result.summary.groups:
+    groups = result.summary.groups
+    durations = tuple(
+        group.conservative_minimum_duration_seconds
+        for group in groups
+        if group.conservative_minimum_duration_seconds is not None
+    )
+    _LOGGER.info(
+        "event=acquisition-browser-escalation-ready selected=%d parallel_group_count=%d "
+        "allowed=%d deferred=%d action_required=%d rejected=%d "
+        "minimum_duration_seconds=%s",
+        sum(group.paper_count for group in groups),
+        sum(group.allowed_count > 0 for group in groups),
+        sum(group.allowed_count for group in groups),
+        sum(group.deferred_count for group in groups),
+        sum(group.action_required_count for group in groups),
+        sum(group.rejected_count for group in groups),
+        "-" if not durations else f"{max(durations):g}",
+    )
+    for group in groups:
         _LOGGER.info(
             "event=acquisition-browser-group-admission provider_group=%s papers=%d "
             "eligible=%d allowed=%d deferred=%d action_required=%d rejected=%d "
             "readiness=%s minimum_start_interval=%s earliest_start_in_seconds=%s "
-            "minimum_duration_seconds=%s required_action_count=%d",
+            "next_allowed_in_seconds=%s minimum_duration_seconds=%s "
+            "required_action_count=%d",
             group.rate_limit_group,
             group.paper_count,
             group.eligible_count,
@@ -938,9 +1222,16 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
             group.readiness,
             group.minimum_start_interval,
             group.earliest_start_in_seconds,
+            group.earliest_start_in_seconds,
             group.conservative_minimum_duration_seconds,
             len(group.required_actions),
         )
+        for action in group.required_actions:
+            _LOGGER.info(
+                "event=acquisition-browser-group-action provider_group=%s action=%s",
+                group.rate_limit_group,
+                action,
+            )
     for decision in result.decisions:
         if decision.failure is not None:
             _log_failure(
@@ -1000,8 +1291,13 @@ def _freeze_result(item: AcquisitionWorkItem) -> AcquisitionWorkItemResult:
 
 
 __all__ = (
+    "AcquisitionGroupProgress",
+    "AcquisitionProgressObserver",
+    "AcquisitionProgressPhase",
+    "AcquisitionProgressSnapshot",
     "AcquisitionWorkItem",
     "AcquisitionWorkItemResult",
+    "BrowserEscalationObserver",
     "CohortExecutionResult",
     "TieredCohortExecutor",
     "WorkItemDisposition",

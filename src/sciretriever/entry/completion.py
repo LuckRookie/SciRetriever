@@ -13,7 +13,11 @@ from typing import Protocol, TypeVar
 from sciretriever.acquisition.api import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
+    AcquisitionProgressObserver,
+    AcquisitionProgressSnapshot,
     AcquisitionRequest,
+    BrowserEscalationObserver,
+    BrowserEscalationSummary,
     CohortPreparationItem,
     CohortPreparationObserver,
     PreparedAcquisition,
@@ -248,11 +252,15 @@ class _CohortAcquisitionPort:
         *,
         cancel_event: threading.Event | None = None,
         on_prepared: CohortPreparationObserver | None = None,
+        on_progress: AcquisitionProgressObserver | None = None,
+        on_browser_escalation: BrowserEscalationObserver | None = None,
     ) -> PreparedAcquisitionCohort:
         return self._acquisition.prepare_primary_pdf_cohort(
             requests,
             cancel_event=cancel_event,
             on_prepared=on_prepared,
+            on_progress=on_progress,
+            on_browser_escalation=on_browser_escalation,
         )
 
     def commit_primary_pdf(self, prepared: PreparedAcquisition) -> AcquisitionResult:
@@ -344,13 +352,14 @@ class _CohortAcquisitionPort:
                     requests,
                     cancel_event=self._cancel_event,
                     on_prepared=publish_prepared,
+                    on_progress=_log_acquisition_progress,
+                    on_browser_escalation=_log_browser_escalation,
                 )
                 outcomes = self._map_batch_outcomes(
                     indexed_requests,
                     prepared,
                     emitted,
                 )
-                _log_browser_escalation(prepared)
             except BaseException as error:
                 outcomes = tuple(
                     (key, _clone_cohort_error(error))
@@ -683,12 +692,65 @@ def _cohort_contract_failure() -> StableFailure:
     )
 
 
-def _log_browser_escalation(prepared: PreparedAcquisitionCohort) -> None:
-    for group in prepared.browser_escalation.groups:
+def _log_acquisition_progress(progress: AcquisitionProgressSnapshot) -> None:
+    _LOGGER.info(
+        "event=completion-acquisition-progress phase=%s tier=%s selected=%d "
+        "resolved=%d pending=%d deferred=%d action_required=%d failed=%d "
+        "exhausted=%d provider_group_count=%d",
+        progress.phase.value,
+        progress.tier.value,
+        progress.selected,
+        progress.resolved,
+        progress.pending,
+        progress.deferred,
+        progress.action_required,
+        progress.failed,
+        progress.exhausted,
+        len(progress.groups),
+    )
+    for group in progress.groups:
         _LOGGER.info(
-            "event=completion-browser-escalation group=%s papers=%d eligible=%d "
+            "event=completion-acquisition-group-progress phase=%s tier=%s "
+            "provider_group=%s selected=%d resolved=%d pending=%d deferred=%d "
+            "action_required=%d failed=%d exhausted=%d",
+            progress.phase.value,
+            progress.tier.value,
+            group.provider_group,
+            group.selected,
+            group.resolved,
+            group.pending,
+            group.deferred,
+            group.action_required,
+            group.failed,
+            group.exhausted,
+        )
+
+
+def _log_browser_escalation(summary: BrowserEscalationSummary) -> None:
+    groups = summary.groups
+    durations = tuple(
+        group.conservative_minimum_duration_seconds
+        for group in groups
+        if group.conservative_minimum_duration_seconds is not None
+    )
+    _LOGGER.info(
+        "event=completion-browser-escalation-ready selected=%d parallel_group_count=%d "
+        "allowed=%d deferred=%d action_required=%d rejected=%d "
+        "minimum_duration_seconds=%s",
+        sum(group.paper_count for group in groups),
+        sum(int(group.allowed_count > 0) for group in groups),
+        sum(group.allowed_count for group in groups),
+        sum(group.deferred_count for group in groups),
+        sum(group.action_required_count for group in groups),
+        sum(group.rejected_count for group in groups),
+        "-" if not durations else f"{max(durations):g}",
+    )
+    for group in groups:
+        _LOGGER.info(
+            "event=completion-browser-escalation-group provider_group=%s papers=%d eligible=%d "
             "allowed=%d deferred=%d action_required=%d rejected=%d readiness=%s "
-            "minimum_duration_seconds=%s",
+            "minimum_start_interval=%s next_allowed_in_seconds=%s "
+            "minimum_duration_seconds=%s required_action_count=%d",
             group.rate_limit_group,
             group.paper_count,
             group.eligible_count,
@@ -697,12 +759,21 @@ def _log_browser_escalation(prepared: PreparedAcquisitionCohort) -> None:
             group.action_required_count,
             group.rejected_count,
             group.readiness,
+            group.minimum_start_interval,
+            group.earliest_start_in_seconds,
             (
                 "-"
                 if group.conservative_minimum_duration_seconds is None
                 else f"{group.conservative_minimum_duration_seconds:g}"
             ),
+            len(group.required_actions),
         )
+        for action in group.required_actions:
+            _LOGGER.info(
+                "event=completion-browser-escalation-action provider_group=%s action=%s",
+                group.rate_limit_group,
+                action,
+            )
 
 
 class _SerialCommitExecutor:
