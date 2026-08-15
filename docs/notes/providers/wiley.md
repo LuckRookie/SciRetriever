@@ -161,7 +161,33 @@ entitlement 保持 `UNKNOWN`；具体 download 的 200 PDF 响应才把该篇 en
 body，以及从单次成功推导的长期授权/OA/版权结论。Wiley TDM PDF 不反向构造
 `LiteratureMetadata` 或引用关系；这些仍由 Metadata/Analysis/Literature 的中性合同负责。
 
-## 7. 当前实现与未闭合事项
+## 7. Browser 画像审查结论
+
+本轮按统一 Profile 门审查了 Wiley Online Library Browser 路径，结论是：Wiley TDM v1 API
+保持 `production-ready`，Wiley Browser capability 为 `unsupported`，不注册 executable rule。
+这里的 unsupported 只针对当前 Browser 自动化证据，不否定用户在普通浏览器中合法访问网页。
+
+当前能够独立确认的是 WOL canonical landing origin 为
+`https://onlinelibrary.wiley.com`，TDM API 的授权、PDF 和速率合同见前文。Wiley 官方资料没有
+给出供第三方自动化依赖的稳定 Browser selector、login/entitlement/paywall/challenge marker、
+正文与 supporting information 的页面归属规则，也没有给出可直接转为“每篇 Browser 流程”
+interval/window 的自动访问政策。官方 TDM 页面出现 Cloudflare challenge 时本项目不尝试绕过。
+
+ScanSci PDF revision `5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5` 提供了
+`/doi/pdfdirect/`、`/doi/pdf/`、`/doi/epdf/`、若干 supplement marker，以及一次转到
+`advanced.onlinelibrary.wiley.com` 的历史运行线索；但其 verification record 同时依赖
+CARSI Cookie、个人机构 Browser profile 和仓库中不存在的本地 source run。它不能证明这些
+origin、模板、marker 或成功结论在 SciRetriever 中仍成立，详见
+[ScanSci 迁移审计](../scansci-migration-audit.md)。本轮没有复制这些常量，也没有把
+`advanced.onlinelibrary.wiley.com` 加入 allowlist。
+
+因此当前不猜测 Atypon 共享风险域，不设置 Wiley Browser rate/session group，不构造通用
+PDF URL template，也不选择 selector。未来只有在获得官方/现场 origin 与访问政策、封闭四类
+页面状态、primary/supplement 归属 fixture 和明确授权的最小验证后，才可从 unsupported 提升为
+`fixture-verified` 或 `production-ready`。现场核实前，TDM API 的 404 是正常未命中；认证、
+entitlement、quota、service 或 network failure 仍按第二层失败合同处理，不能靠 Browser 绕行。
+
+## 8. 当前实现与未闭合事项
 
 当前生产实现已包含：Wiley 专用 client、精确 endpoint、单一安全非空 token、私有认证
 header、opaque DOI 编码、到 `alm.wiley.com` 的 guarded 单跳 redirect、跨 origin token
@@ -173,5 +199,6 @@ status 接线，以及离线 endpoint/凭据泄漏/跨 origin/阶段顺序/PDF �
 自动过期策略、专用 quota response header、ALM locator 的长期版本保证，以及非
 IP-based TDM API 支持。更新这些事实前应再次核对 Wiley 官方材料；真实 Provider 探测
 只能由用户明确发起，仓库测试继续使用离线 fake。2026-08-15 本轮没有读取 token、调用
-真实 Wiley API 或下载真实 PDF。生产 Browser 仍没有 Wiley 站点规则，因此 Wiley API
-正常 miss 后当前不会自动使用浏览器凭证模式。
+真实 Wiley API 或下载真实 PDF。生产 Browser 仍没有 Wiley 站点规则；production Planner
+只接纳 `api:wiley-tdm-v1`，即使错误注入一个 Wiley Browser route 也因 Profile 没有 risk group/
+route 声明而 fail closed。因此 Wiley API 正常 miss 后当前不会自动使用浏览器凭证模式。

@@ -16,7 +16,7 @@
 | `fixture-verified` | schema、安全、限速、页面状态和归属规则已由离线 fixture 证明，但仍缺真实平台、session、entitlement 或其它生产证据 | 不可以 |
 | `unsupported` | 已审查但不能满足当前安全、政策、归属或可执行门槛；不声明任何可执行 route | 不可以 |
 
-访问路径不是第四种状态。一个只支持公开或授权 API 的 Profile 可以是 `production-ready`，同时没有 Browser route；`public-api-only` 不再作为验证状态。尚未完成 P55 证据包的访问方不进入矩阵，不能为了表格覆盖把“未审查”写成 `unsupported`。
+访问路径不是第四种状态。一个只支持公开或授权 API 的 Profile 可以是 `production-ready`，同时没有 Browser route；`public-api-only` 不再作为验证状态。Capability 列可以把已审查但未满足门槛的 Browser 路径记为 `unsupported`，这表示该 route 不存在，不会把整个已有 API Profile 降成第二个 Profile。尚未完成 P55 证据包的访问方不进入矩阵，不能为了表格覆盖把“未审查”写成 `unsupported`。
 
 `production-ready` 也不表示所有账号或文章都能下载。凭据字段存在、Provider 接受凭据、当前运行环境有授权和具体 Literature 有 entitlement 始终是不同事实。
 
@@ -55,9 +55,9 @@ Matrix 只把 `production-ready` Profile 和其 rule 派生到生产 catalog。`
 | Access key | Platform / product | Public | Authorized API | Browser | Policy / session group | Evidence | 状态 | 当前缺口 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `core-open-access` | CORE API v3 | 通用已保存 locator 由独立 Public Source 消费；Profile 无专属 public route | `api:core` | 无 | `core/api` quota scope；无 Browser session | `core-v3-2026-08-15`；2026-08-15 | `production-ready` | Browser 未注册；不宣称真实 key 或单篇 entitlement |
-| `wiley-online-library` | Wiley Online Library TDM API v1 | 无专属 public route | `api:wiley-tdm-v1` | 无 | `wiley/api` quota scope；无 Browser session | `wiley-tdm-v1-client-1.2.0-2026-08-15`；2026-08-15 | `production-ready` | Browser 未注册；不把一次探测扩展为长期 entitlement |
+| `wiley-online-library` | Wiley Online Library TDM API v1 | 无专属 public route | `api:wiley-tdm-v1` | `unsupported`；无 executable rule | `wiley/api` quota scope；Browser group/session 未猜测 | `wiley-tdm-v1-client-1.2.0-2026-08-15`；2026-08-15 | API Profile `production-ready` | 缺独立页面规则、Browser 速率、状态 marker、正文/supplement fixture；不把 ScanSci/CARSI 历史运行或一次 API 探测扩展为 Browser/长期 entitlement |
 
-因此当前 production profile catalog 有 2 项，production Browser rule catalog 有 0 项。这个结果只说明 CORE/Wiley 已实现 route 的准入，不表示 P56-P69 的 Publisher Browser 画像已经完成。后续访问方只有在各自 Notes、manifest、rule/fixture 和状态结论闭环后才加入本表。
+因此当前 production profile catalog 有 2 项，production Browser rule catalog 有 0 项。这个结果只说明 CORE/Wiley 已实现 route 的准入；P56 对 Wiley Browser 已形成有证据的 unsupported 结论，不把“没有上线”伪装成尚未做审查。后续访问方只有在各自 Notes、manifest、rule/fixture 和状态结论闭环后才加入本表。
 
 ## 5. 离线验收边界
 
