@@ -19,6 +19,7 @@ from sciretriever.network.browser import (
     BrowserBudget,
     BrowserClient,
     BrowserDestinationKind,
+    BrowserPageObservation,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.policy import AddressClass, DestinationPolicy
@@ -118,10 +119,10 @@ class _FakeRoute:
 
 
 class _FakeResponse:
-    def __init__(self, request: _FakeRequest) -> None:
+    def __init__(self, request: _FakeRequest, status: int = 200) -> None:
         self.request = request
         self.url = request.url
-        self.status = 200
+        self.status = status
 
 
 class _FakeDownload:
@@ -148,7 +149,7 @@ class _FakePage:
         self.goto_error: BaseException | None = None
         self.abort_event = threading.Event()
 
-    def goto(self, url: str, *, timeout: int) -> None:
+    def goto(self, url: str, *, timeout: int) -> _FakeResponse:
         del timeout
         if self.goto_error is not None:
             raise self.goto_error
@@ -169,7 +170,7 @@ class _FakePage:
                     self.context.goto_started.set()
                     self.abort_event.wait()
                 self.context.emit_configured_download(self)
-                return
+                return _FakeResponse(route.request, self.context.navigation_status)
             current = redirect
 
     def open_popup(self, url: str) -> _FakePage:
@@ -214,6 +215,7 @@ class _FakeContext:
         challenge: bool = False,
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
+        navigation_status: int = 200,
     ) -> None:
         self.events = events
         self.redirects = {} if redirects is None else redirects
@@ -223,6 +225,7 @@ class _FakeContext:
         self.challenge = challenge
         self.subresources = subresources
         self.blocking_goto = blocking_goto
+        self.navigation_status = navigation_status
         self.goto_started = threading.Event()
         self.first_subresource_continued = threading.Event()
         self.second_subresource_continued = threading.Event()
@@ -357,6 +360,7 @@ class _FakeProcess:
         configured_download: _FakeDownload | None = None,
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
+        navigation_status: int = 200,
     ) -> None:
         self.events = events
         self.redirects = redirects
@@ -367,6 +371,7 @@ class _FakeProcess:
         self.challenge = False
         self.subresources = subresources
         self.blocking_goto = blocking_goto
+        self.navigation_status = navigation_status
         self.context: _FakeContext | None = None
         self.profile: object | None = None
         self.downloads_path: str | None = None
@@ -411,6 +416,7 @@ class _FakeProcess:
             challenge=self.challenge,
             subresources=self.subresources,
             blocking_goto=self.blocking_goto,
+            navigation_status=self.navigation_status,
         )
         self.context.bind_connection(connection_binding)
         return self.context
@@ -435,6 +441,7 @@ class _FakeFactory:
         configured_download: _FakeDownload | None = None,
         subresources: tuple[str, ...] = (),
         blocking_goto: bool = False,
+        navigation_status: int = 200,
     ) -> None:
         self.events: list[str] = []
         self.profile: object | None = None
@@ -448,6 +455,7 @@ class _FakeFactory:
             configured_download=configured_download,
             subresources=subresources,
             blocking_goto=blocking_goto,
+            navigation_status=navigation_status,
         )
         self.context_close_error = context_close_error
         self.binding: object | None = None
@@ -1084,6 +1092,11 @@ class NetworkBrowserTests(unittest.TestCase):
             self.assertIsNone(session.click("#download"))  # type: ignore[attr-defined]
             self.assertIsNone(session.fill("#query", "fixture"))  # type: ignore[attr-defined]
             self.assertEqual(session.text("#title"), "#title")  # type: ignore[attr-defined]
+            observation = cast(BrowserPageObservation, getattr(session, "observe")())
+            self.assertEqual(observation.locator, "https://landing.test/start")
+            self.assertEqual(observation.status_code, 200)
+            self.assertEqual(observation.origin, "https://landing.test")
+            self.assertEqual(observation.path, "/start")
 
         result = _download(
             client.run(self.scope, "https://landing.test/start", self.policy, flow=flow)
@@ -1091,6 +1104,50 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(result.chunks, (b"ok",))
         self.assertEqual(set(seen), {"page", "context", "process", "route", "popups", "downloads"})
         self.assertTrue(all(value == "hidden" for value in seen.values()))
+
+    def test_page_observation_rejects_query_and_invalid_status(self) -> None:
+        observation = BrowserPageObservation(
+            locator="https://landing.test/article",
+            status_code=403,
+        )
+        self.assertNotIn("landing.test", repr(observation))
+        with self.assertRaises(ValueError):
+            BrowserPageObservation(
+                locator="https://landing.test/article?session=private",
+                status_code=200,
+            )
+        for status in (True, 99, 600):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                BrowserPageObservation(
+                    locator="https://landing.test/article",
+                    status_code=cast(int, status),
+                )
+
+    def test_provider_rule_receives_403_instead_of_network_guessing_entitlement(self) -> None:
+        factory = _FakeFactory(navigation_status=403)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        observations: list[BrowserPageObservation] = []
+
+        def flow(session: object) -> None:
+            observations.append(cast(BrowserPageObservation, getattr(session, "observe")()))
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/article",
+                self.policy,
+                flow=flow,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].status_code, 403)
 
     def test_subresource_host_permit_is_held_until_request_finished(self) -> None:
         factory = _FakeFactory(

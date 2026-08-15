@@ -1,0 +1,100 @@
+{
+  "ordinary": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {}
+  },
+  "authenticated": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {
+      "#authenticated": "Signed in"
+    }
+  },
+  "entitled": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {
+      "#article-entitled": "Access provided by institution"
+    }
+  },
+  "authenticated-and-entitled": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {
+      "#authenticated": "Signed in",
+      "#article-entitled": "Access provided by institution"
+    }
+  },
+  "login-required": {
+    "locator": "https://publisher.test/account/login",
+    "status_code": 200,
+    "markers": {}
+  },
+  "mfa-required": {
+    "locator": "https://publisher.test/account/mfa",
+    "status_code": 200,
+    "markers": {}
+  },
+  "not-entitled": {
+    "locator": "https://publisher.test/article",
+    "status_code": 403,
+    "markers": {}
+  },
+  "paywall": {
+    "locator": "https://publisher.test/article",
+    "status_code": 402,
+    "markers": {}
+  },
+  "challenge-required": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {
+      "#access-challenge": "Security check"
+    }
+  },
+  "rate-limited": {
+    "locator": "https://publisher.test/article",
+    "status_code": 429,
+    "markers": {}
+  },
+  "ip-blocked": {
+    "locator": "https://publisher.test/article",
+    "status_code": 451,
+    "markers": {}
+  },
+  "not-found": {
+    "locator": "https://publisher.test/article",
+    "status_code": 404,
+    "markers": {}
+  },
+  "authenticated-but-not-entitled": {
+    "locator": "https://publisher.test/article",
+    "status_code": 403,
+    "markers": {
+      "#authenticated": "Signed in"
+    }
+  },
+  "login-and-mfa-conflict": {
+    "locator": "https://publisher.test/article",
+    "status_code": 200,
+    "markers": {
+      "#login-required": "Sign in",
+      "#mfa-required": "Verification code"
+    }
+  },
+  "authentication-conflict": {
+    "locator": "https://publisher.test/account/login",
+    "status_code": 200,
+    "markers": {
+      "#authenticated": "Signed in"
+    }
+  },
+  "entitlement-conflict": {
+    "locator": "https://publisher.test/article",
+    "status_code": 402,
+    "markers": {
+      "#article-entitled": "Access provided by institution"
+    }
+  }
+}

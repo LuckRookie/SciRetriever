@@ -28,6 +28,8 @@ from sciretriever.acquisition.sources.browser import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserPageMarker,
+    BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
     BrowserSiteRule,
@@ -301,8 +303,18 @@ rule = BrowserSiteRule(
     web_scope_provider_name="publisher.test",
     action=BrowserRuleAction.EXPLICIT_CLICK,
     click_selector="a[data-action='pdf']",
-    login_markers=("#login-required",),
-    mfa_markers=("#mfa-required",),
+    page_markers=(
+        BrowserPageMarker(
+            marker_id="login-required",
+            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            css_selectors=("#login-required",),
+        ),
+        BrowserPageMarker(
+            marker_id="mfa-required",
+            kind=BrowserPageMarkerKind.MFA_REQUIRED,
+            css_selectors=("#mfa-required",),
+        ),
+    ),
 )
 source = ControlledBrowserPdfSource(
     runner=client,

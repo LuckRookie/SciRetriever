@@ -30,6 +30,8 @@ from sciretriever.acquisition.sources.browser import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserPageMarker,
+    BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
     BrowserSiteRule,
@@ -71,6 +73,7 @@ from sciretriever.network.browser import (
     BrowserClient,
     BrowserDestinationGuard,
     BrowserDestinationKind,
+    BrowserPageObservation,
 )
 
 _TIME = UtcTimestamp("2026-08-11T12:00:00Z")
@@ -116,6 +119,95 @@ def _page_states() -> dict[str, dict[str, str]]:
     return result
 
 
+def _access_page_states() -> dict[str, tuple[dict[str, str], BrowserPageObservation]]:
+    with (_FIXTURES / "access-page-states.json").open(encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise AssertionError("Browser access fixture must contain an object")
+    result: dict[str, tuple[dict[str, str], BrowserPageObservation]] = {}
+    for state_name, raw_state in value.items():
+        if not isinstance(state_name, str) or not isinstance(raw_state, dict):
+            raise AssertionError("Browser access fixture state is invalid")
+        if set(raw_state) != {"locator", "status_code", "markers"}:
+            raise AssertionError("Browser access fixture state is incomplete")
+        locator = raw_state["locator"]
+        status_code = raw_state["status_code"]
+        raw_markers = raw_state["markers"]
+        if (
+            not isinstance(locator, str)
+            or type(status_code) is not int
+            or not isinstance(raw_markers, dict)
+        ):
+            raise AssertionError("Browser access fixture observation is invalid")
+        markers: dict[str, str] = {}
+        for selector, marker_text in raw_markers.items():
+            if not isinstance(selector, str) or not isinstance(marker_text, str):
+                raise AssertionError("Browser access fixture marker is invalid")
+            markers[selector] = marker_text
+        result[state_name] = (
+            markers,
+            BrowserPageObservation(locator=locator, status_code=status_code),
+        )
+    return result
+
+
+def _access_page_markers() -> tuple[BrowserPageMarker, ...]:
+    return (
+        BrowserPageMarker(
+            marker_id="authenticated",
+            kind=BrowserPageMarkerKind.AUTHENTICATED,
+            css_selectors=("#authenticated",),
+        ),
+        BrowserPageMarker(
+            marker_id="article-entitled",
+            kind=BrowserPageMarkerKind.ENTITLED,
+            css_selectors=("#article-entitled",),
+        ),
+        BrowserPageMarker(
+            marker_id="login-required",
+            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            css_selectors=("#login-required",),
+            url_prefixes=("https://publisher.test/account/login",),
+        ),
+        BrowserPageMarker(
+            marker_id="mfa-required",
+            kind=BrowserPageMarkerKind.MFA_REQUIRED,
+            css_selectors=("#mfa-required",),
+            url_prefixes=("https://publisher.test/account/mfa",),
+        ),
+        BrowserPageMarker(
+            marker_id="not-entitled",
+            kind=BrowserPageMarkerKind.NOT_ENTITLED,
+            response_statuses=(403,),
+        ),
+        BrowserPageMarker(
+            marker_id="paywall",
+            kind=BrowserPageMarkerKind.PAYWALL,
+            response_statuses=(402,),
+        ),
+        BrowserPageMarker(
+            marker_id="challenge-required",
+            kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            css_selectors=("#access-challenge",),
+        ),
+        BrowserPageMarker(
+            marker_id="rate-limited",
+            kind=BrowserPageMarkerKind.RATE_LIMITED,
+            response_statuses=(429,),
+        ),
+        BrowserPageMarker(
+            marker_id="ip-blocked",
+            kind=BrowserPageMarkerKind.IP_BLOCKED,
+            response_statuses=(451,),
+        ),
+        BrowserPageMarker(
+            marker_id="not-found",
+            kind=BrowserPageMarkerKind.NOT_FOUND,
+            response_statuses=(404,),
+        ),
+    )
+
+
 def _failure(code: str) -> AccessFailure:
     return AccessFailure(
         code=code,
@@ -140,8 +232,16 @@ def _download(
 
 
 class _FakeSession:
-    def __init__(self, marker_text: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        marker_text: dict[str, str] | None = None,
+        observation: BrowserPageObservation | None = None,
+    ) -> None:
         self.marker_text = {} if marker_text is None else marker_text
+        self.observation = observation or BrowserPageObservation(
+            locator="https://publisher.test/article",
+            status_code=200,
+        )
         self.text_calls: list[str] = []
         self.clicks: list[str] = []
         self.fill_calls: list[tuple[str, str]] = []
@@ -152,6 +252,9 @@ class _FakeSession:
 
     def click(self, selector: str) -> None:
         self.clicks.append(selector)
+
+    def observe(self) -> BrowserPageObservation:
+        return self.observation
 
     # This deliberately exists on the fake so tests can prove A8 never uses a
     # login-filling capability even when a vendor object happened to expose it.
@@ -168,10 +271,12 @@ class _FakeRunner:
         results: Iterable[BrowserResult | BaseException | object],
         *,
         marker_states: Iterable[dict[str, str]] = (),
+        page_observations: Iterable[BrowserPageObservation] = (),
         on_run: RunHook | None = None,
     ) -> None:
         self.results = list(results)
         self.marker_states = list(marker_states)
+        self.page_observations = list(page_observations)
         self.on_run = on_run
         self.calls: list[dict[str, object]] = []
         self.sessions: list[_FakeSession] = []
@@ -207,7 +312,15 @@ class _FakeRunner:
         if self.on_run is not None:
             self.on_run(scope, request, policy, budget)
         marker_state = self.marker_states.pop(0) if self.marker_states else {}
-        session = _FakeSession(marker_state)
+        observation = (
+            self.page_observations.pop(0)
+            if self.page_observations
+            else BrowserPageObservation(
+                locator="https://publisher.test/article",
+                status_code=200,
+            )
+        )
+        session = _FakeSession(marker_state, observation)
         self.sessions.append(session)
         try:
             if flow is not None:
@@ -238,7 +351,36 @@ def _rule(
     click_selector: str | None = "a[data-action='pdf']",
     login_markers: tuple[str, ...] = ("#login-required",),
     mfa_markers: tuple[str, ...] = ("#mfa-required",),
+    page_markers: tuple[BrowserPageMarker, ...] | None = None,
 ) -> BrowserSiteRule:
+    markers = (
+        tuple(
+            marker
+            for marker in (
+                (
+                    BrowserPageMarker(
+                        marker_id="login-required",
+                        kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                        css_selectors=login_markers,
+                    )
+                    if login_markers
+                    else None
+                ),
+                (
+                    BrowserPageMarker(
+                        marker_id="mfa-required",
+                        kind=BrowserPageMarkerKind.MFA_REQUIRED,
+                        css_selectors=mfa_markers,
+                    )
+                    if mfa_markers
+                    else None
+                ),
+            )
+            if marker is not None
+        )
+        if page_markers is None
+        else page_markers
+    )
     return BrowserSiteRule(
         rule_id=rule_id,
         revision=revision,
@@ -247,8 +389,7 @@ def _rule(
         web_scope_provider_name=web_scope_provider_name,
         action=action,
         click_selector=click_selector,
-        login_markers=login_markers,
-        mfa_markers=mfa_markers,
+        page_markers=markers,
     )
 
 
@@ -446,6 +587,81 @@ class BrowserRuleContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _rule(login_markers=("#same",), mfa_markers=("#same",))
 
+    def test_page_markers_are_bounded_static_and_rule_origin_scoped(self) -> None:
+        marker = BrowserPageMarker(
+            marker_id="login-required",
+            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            css_selectors=("form[data-login]",),
+            url_prefixes=("https://publisher.test/account/login",),
+            response_statuses=(401,),
+        )
+        rule = _rule(page_markers=(marker,))
+        self.assertEqual(rule.page_markers, (marker,))
+        self.assertNotIn("form[data-login]", repr(rule))
+
+        invalid_markers: tuple[Callable[[], BrowserPageMarker], ...] = (
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                css_selectors=("javascript:login()",),
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                url_prefixes=("http://publisher.test/account/login",),
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                url_prefixes=("https://publisher.test",),
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                url_prefixes=("https://publisher.test/account/login?next=article",),
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                response_statuses=(cast(int, True),),
+            ),
+            lambda: BrowserPageMarker(
+                marker_id="invalid-marker",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                response_statuses=(99,),
+            ),
+        )
+        for index, construct in enumerate(invalid_markers):
+            with self.subTest(index=index), self.assertRaises((TypeError, ValueError)):
+                construct()
+
+        outside = BrowserPageMarker(
+            marker_id="outside-origin",
+            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            url_prefixes=("https://outside.test/account/login",),
+        )
+        with self.assertRaises(ValueError):
+            _rule(page_markers=(outside,))
+
+        duplicate_status = (
+            BrowserPageMarker(
+                marker_id="first-status",
+                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+                response_statuses=(401,),
+            ),
+            BrowserPageMarker(
+                marker_id="second-status",
+                kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+                response_statuses=(401,),
+            ),
+        )
+        with self.assertRaises(ValueError):
+            _rule(page_markers=duplicate_status)
+
     def test_rule_fingerprint_and_catalog_identity_are_stable(self) -> None:
         first = _rule()
         same = _rule()
@@ -479,7 +695,7 @@ class BrowserRuleContractTests(unittest.TestCase):
             for name, value in inspect.getmembers(BrowserFlowSession)
             if inspect.isfunction(value) and not name.startswith("_")
         }
-        self.assertEqual(session_methods, {"click", "text"})
+        self.assertEqual(session_methods, {"click", "observe", "text"})
         self.assertFalse(
             session_methods
             & {"fill", "navigate", "open_popup", "page", "context", "profile", "cookie"}
@@ -923,7 +1139,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         for state_name, expected_code in (
             ("login", "acquisition-browser-login-required"),
             ("mfa", "acquisition-browser-mfa-required"),
-            ("login-and-mfa", "acquisition-browser-mfa-required"),
+            ("login-and-mfa", "acquisition-browser-page-state-conflict"),
         ):
             with self.subTest(state=state_name):
                 runner = _FakeRunner(
@@ -943,6 +1159,127 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 self.assertEqual(runner.sessions[0].clicks, [])
                 self.assertEqual(runner.sessions[0].fill_calls, [])
                 self.assertEqual(runner.completed, 1)
+
+    def test_page_marker_matrix_separates_authentication_and_article_entitlement(self) -> None:
+        states = _access_page_states()
+        request = _request(observations=(_observation(541, (_landing_hint(),)),))
+        rule = _rule(page_markers=_access_page_markers())
+
+        for state_name in (
+            "ordinary",
+            "authenticated",
+            "entitled",
+            "authenticated-and-entitled",
+        ):
+            with self.subTest(state=state_name):
+                markers, observation = states[state_name]
+                runner = _FakeRunner(
+                    [_download()],
+                    marker_states=(markers,),
+                    page_observations=(observation,),
+                )
+                source = _source(runner, rule=rule)
+                deliveries = list(
+                    source._deliveries(
+                        request,
+                        _evidence(request),
+                        CandidateKeyTracker(),
+                    )
+                )
+                self.assertEqual(len(deliveries), 1)
+                self.assertEqual(runner.sessions[0].clicks, ["a[data-action='pdf']"])
+                self.assertEqual(runner.sessions[0].fill_calls, [])
+
+        for state_name in (
+            "not-entitled",
+            "paywall",
+            "not-found",
+            "authenticated-but-not-entitled",
+        ):
+            with self.subTest(state=state_name):
+                markers, observation = states[state_name]
+                runner = _FakeRunner(
+                    [_download()],
+                    marker_states=(markers,),
+                    page_observations=(observation,),
+                )
+                source = _source(runner, rule=rule)
+                self.assertEqual(
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    ),
+                    [],
+                )
+                self.assertEqual(runner.sessions[0].clicks, [])
+
+    def test_page_marker_terminal_states_have_one_safe_escalation(self) -> None:
+        states = _access_page_states()
+        request = _request(observations=(_observation(542, (_landing_hint(),)),))
+        rule = _rule(page_markers=_access_page_markers())
+        expected = {
+            "login-required": "acquisition-browser-login-required",
+            "mfa-required": "acquisition-browser-mfa-required",
+            "challenge-required": "acquisition-browser-challenge-required",
+            "rate-limited": "acquisition-browser-rate-limited",
+            "ip-blocked": "acquisition-browser-ip-blocked",
+        }
+
+        for state_name, expected_code in expected.items():
+            with self.subTest(state=state_name):
+                markers, observation = states[state_name]
+                runner = _FakeRunner(
+                    [_download()],
+                    marker_states=(markers,),
+                    page_observations=(observation,),
+                )
+                source = _source(runner, rule=rule)
+                with self.assertRaises(AcquisitionFailure) as caught:
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
+                self.assertEqual(caught.exception.failure.code, expected_code)
+                self.assertEqual(runner.sessions[0].clicks, [])
+                self.assertEqual(runner.sessions[0].fill_calls, [])
+
+    def test_conflicting_page_markers_fail_closed_with_safe_diagnosis(self) -> None:
+        states = _access_page_states()
+        request = _request(observations=(_observation(543, (_landing_hint(),)),))
+        rule = _rule(page_markers=_access_page_markers())
+        for state_name in (
+            "login-and-mfa-conflict",
+            "authentication-conflict",
+            "entitlement-conflict",
+        ):
+            with self.subTest(state=state_name):
+                markers, observation = states[state_name]
+                runner = _FakeRunner(
+                    [_download()],
+                    marker_states=(markers,),
+                    page_observations=(observation,),
+                )
+                source = _source(runner, rule=rule)
+                with self.assertRaises(AcquisitionFailure) as caught:
+                    list(
+                        source._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
+                failure = caught.exception.failure
+                self.assertEqual(failure.code, "acquisition-browser-page-state-conflict")
+                self.assertNotIn("publisher.test", repr(failure))
+                self.assertNotIn("#", repr(failure))
+                self.assertEqual(runner.sessions[0].clicks, [])
+                self.assertEqual(runner.sessions[0].fill_calls, [])
 
     def test_budget_cancel_and_policy_are_always_conservative(self) -> None:
         cancelled = threading.Event()
