@@ -20,6 +20,56 @@ from sciretriever.acquisition.access_profiles import (
 from sciretriever.acquisition.profile_verification import PublisherAccessVerificationMatrix
 from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 
+ACS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="acs-publications",
+    platform_key="acs-publications",
+    landing_origins=("https://pubs.acs.org",),
+    asset_origins=("https://pubs.acs.org",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1021",),
+    weak_publisher_names=("acs publications", "american chemical society"),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="acs-publications-terms-2021-05",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="ACS Publications",
+        product_name="ACS Publications article platform",
+        official_references=(
+            "https://pubs.acs.org/",
+            "https://solutions.acs.org/solutions/text-and-data-mining/",
+            (
+                "https://solutions.acs.org/wp-content/uploads/2025/04/"
+                "ACS-Publications-Terms-and-Conditions-of-Use.pdf"
+            ),
+        ),
+        access_terms_references=(
+            (
+                "https://solutions.acs.org/wp-content/uploads/2025/04/"
+                "ACS-Publications-Terms-and-Conditions-of-Use.pdf"
+            ),
+        ),
+        rate_limit_references=(
+            (
+                "https://solutions.acs.org/wp-content/uploads/2025/04/"
+                "ACS-Publications-Terms-and-Conditions-of-Use.pdf"
+            ),
+        ),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="acs-browser-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/acs.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/acs-publications.json",
+    ),
+)
+
 CORE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="core-open-access",
     platform_key="core-api",
@@ -226,6 +276,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
     PublisherAccessVerificationMatrix(
         profiles=PublisherAccessProfileCatalog(
             (
+                ACS_ACCESS_PROFILE,
                 CORE_ACCESS_PROFILE,
                 ELSEVIER_ACCESS_PROFILE,
                 NATURE_ACCESS_PROFILE,
@@ -242,6 +293,7 @@ PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG: Final[PublisherAccessProfileCatalog
 
 
 __all__ = (
+    "ACS_ACCESS_PROFILE",
     "CORE_ACCESS_PROFILE",
     "ELSEVIER_ACCESS_PROFILE",
     "NATURE_ACCESS_PROFILE",
