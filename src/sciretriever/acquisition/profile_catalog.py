@@ -423,6 +423,51 @@ NATURE_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     ),
 )
 
+OXFORD_ACADEMIC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
+    access_key="oxford-academic",
+    platform_key="oxford-academic",
+    landing_origins=("https://academic.oup.com",),
+    asset_origins=("https://academic.oup.com",),
+    stable_locator_namespaces=(),
+    provider_record_names=(),
+    weak_doi_prefixes=("10.1093",),
+    weak_publisher_names=(
+        "oxford academic",
+        "oxford university press",
+    ),
+    public_route_keys=(),
+    api_route_keys=(),
+    browser_route_key=None,
+    browser_allowed_origins=(),
+    browser_rate_limit_group=None,
+    browser_session_key=None,
+    browser_rule_id=None,
+    browser_rule_revision=None,
+    policy_evidence=PolicyEvidence.OFFICIAL,
+    policy_revision="oxford-academic-robots-2026-08-15",
+    production_status=ProfileProductionStatus.UNSUPPORTED,
+    evidence=PublisherAccessEvidence(
+        display_name="Oxford Academic",
+        product_name="Oxford Academic journals platform",
+        official_references=(
+            "https://academic.oup.com/",
+            ("https://academic.oup.com/pages/open-research/text-and-data-mining"),
+            "https://academic.oup.com/pages/standard-legal-terms-and-conditions",
+            "https://academic.oup.com/pages/open-research/open-access",
+            "https://academic.oup.com/robots.txt",
+        ),
+        access_terms_references=(
+            "https://academic.oup.com/pages/standard-legal-terms-and-conditions",
+            ("https://academic.oup.com/pages/open-research/text-and-data-mining"),
+        ),
+        rate_limit_references=("https://academic.oup.com/robots.txt",),
+        verification_date=date(2026, 8, 15),
+        evidence_revision="oxford-academic-automated-access-unsupported-2026-08-15",
+        notes_reference="docs/notes/providers/oxford-academic.md",
+        fixture_reference="tests/fixtures/acquisition/profiles/oxford-academic.json",
+    ),
+)
+
 RSC_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="rsc-publishing",
     platform_key="rsc-publishing",
@@ -570,6 +615,7 @@ PUBLISHER_ACCESS_VERIFICATION_MATRIX: Final[PublisherAccessVerificationMatrix] =
                 IEEE_ACCESS_PROFILE,
                 IOP_ACCESS_PROFILE,
                 NATURE_ACCESS_PROFILE,
+                OXFORD_ACADEMIC_ACCESS_PROFILE,
                 RSC_ACCESS_PROFILE,
                 SPRINGERLINK_ACCESS_PROFILE,
                 WILEY_ACCESS_PROFILE,
@@ -593,6 +639,7 @@ __all__ = (
     "IEEE_ACCESS_PROFILE",
     "IOP_ACCESS_PROFILE",
     "NATURE_ACCESS_PROFILE",
+    "OXFORD_ACADEMIC_ACCESS_PROFILE",
     "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
     "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
     "RSC_ACCESS_PROFILE",
