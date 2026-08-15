@@ -142,8 +142,8 @@ Provider。
 
 当前自动 PDF 获取先消费所有已保存的 direct-file/landing-page `AssetHint`，再按配置顺序
 运行 arXiv、Europe PMC、Unpaywall 等独立公开协议；公开阶段全部耗尽后，才进入已配置的
-授权 Provider API。当前可执行的授权主 PDF API 是 CORE API v3 与 Wiley Online Library
-TDM API。CORE 只有 Metadata
+授权 Provider API。当前可执行的授权主 PDF API 是 CORE API v3、Elsevier
+Article/Object Retrieval 与 Wiley Online Library TDM API。CORE 只有 Metadata
 Observation 带 CORE 自己的 `work:<id>` 或 `output:<id>` 强记录身份时才适用，并要求
 `[core] api_key`。CORE Metadata 给出的公开 `downloadUrl` 仍在第一阶段先尝试，注册用户
 `/download` endpoint 属于第二阶段，不会替代公开 URL。
@@ -154,9 +154,13 @@ Wiley 要求 `[wiley] tdm_api_token`，并且当前 Literature 必须恰有一�
 MetadataObservation 来源都不能单独使 Wiley Source 适用。Token、调用公网 IP 是否在
 机构授权范围内，以及具体文章 entitlement 是三个不同事实。
 
-Elsevier Article Retrieval 当前是 XML/JSON/object 内容，Springer Full Text 是 JATS/XML，
-都不能冒充主 PDF API；两者的授权 API 状态为 `unsupported`，但已有通用 AssetHint
-路由的 Provider 仍可贡献公开线索。Sci-Hub 只有在 operator 通过
+Elsevier 要求 `[elsevier] api_key`，可选 `institution_token`。只有 PII、合法的
+`1-s2.0-*` Article EID，或 DOI 安全解析后实际落地到 ScienceDirect/linkinghub 的文献
+才适用；普通 Scopus `2-s2.0-*` 和 MetadataObservation 来源不能证明访问方。Adapter 先
+请求 Article FULL XML，只接受明确标记为 `MAIN web-pdf` 的 attachment EID，再通过
+Object Retrieval 获取 PDF；XML、任意 object、supplement 和有效 key 本身都不冒充主
+PDF 或文章 entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
+`unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 只有在 operator 通过
 Python 组装边界注入受支持的中性 locator resolver 时才 ready。受控 Browser 的组件已
 实现，但生产站点规则目录仍为空；普通 TOML 没有 endpoint、selector、session、profile
 或站点规则字段。

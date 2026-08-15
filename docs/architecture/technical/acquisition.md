@@ -347,6 +347,19 @@ Provider 专属路径，并在跨 origin 前移除 token。Wiley 本地 lookup �
 稳定失败并允许其它独立 route 继续，最终没有其它路径成功时仍作为整个操作失败。即使响应
 为 200，字节仍进入统一 PDF reader/页面树与不可变发布边界。
 
+Elsevier 内容获取使用独立的 `api:elsevier-article-object` 多步 route。只有 PII、合法的
+`1-s2.0-*` Article EID，或 DOI 已安全解析到 ScienceDirect/linkinghub origin 才构成
+强适用证据；Scopus metadata observation 与普通 `2-s2.0-*` EID 不构成内容身份。
+Adapter 以 `view=FULL` 和 `Accept: application/xml` 请求 Article Retrieval，只把同时
+声明 `web-pdf-purpose=MAIN`、`extension=pdf`、PDF filename 与合法 attachment EID 的
+条目转换成 `elsevier-main-pdf-object` locator，再以 `Accept: application/pdf` 请求
+Object Retrieval。Article/Object 共用 `elsevier/api/article-retrieval-object` scope；
+API key 与可选 institution token 只作为绑定到 `https://api.elsevier.com:443` 的私有
+header。无主 PDF 时可返回当次 canonical landing、PII 和 Article EID hint；hint 不进入
+数据库。对象响应仍经过统一 PDF reader/页面树与不可变发布。ScienceDirect Browser
+当前没有 production Profile rule、rate/session group，不能因 API miss、quota 或错误被
+自动启动。
+
 前一层全部当前适用 routes 均未成功并到达允许升级的终态后才能启动下一层；层级之间不并发竞速。未启用或对当前 Literature 不适用的 route 不属于本次耗尽集合。当前 plan 需要但缺少生产实现、必需参数、凭据或 policy 的 route 形成明确 unavailable/configuration 结果，不能被静默视为正常未命中；是否允许继续 Browser 由 Browser admission policy 决定。
 
 正常未命中、明确不适用、明确无 PDF capability，以及 API 对当前目标无 entitlement 但机构 Browser 可能具有独立权限，可以进入下一步判断。Timeout、临时传输/服务失败、`429`、`Retry-After`、quota exhausted 和未到 reset boundary 形成 deferred 或稳定 route failure，不得自动切换 Browser 制造替代流量。配置结构、Port、清理、发布、stale 和取消错误立即终止。任一后续候选完整提交后立即停止该 Literature 的全部后续 routes；若最终没有成功，任一 deferred、action-required 或未解决 route failure 都必须作为稳定结果/失败返回，不能伪装成本次耗尽。

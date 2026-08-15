@@ -30,7 +30,7 @@
 
 截至 2026-08-13，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。当前受控 Browser 组件已有离线与 Chromium QA，但生产站点规则目录为空；不能把组件存在写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
-Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 只有 CORE 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。
+Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。
 
 ## 3. 已接受的目标能力矩阵
 
@@ -70,8 +70,8 @@ Acquisition 当前生产映射如下：
 |---|---|
 | 通用公开 hints | 已实现；消费所有已保存且重新通过安全检查的 direct-file/landing-page AssetHint，不把 `direct` 当作 Provider |
 | 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 只接受 operator 注入的获准 locator resolver |
-| 授权主 PDF API | CORE API v3 Work/Output download 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity 或 DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
-| Elsevier/Springer 授权 API | 未注册生产主 PDF Source；当前核实产品是 XML/JSON/object 或 JATS/XML |
+| 授权主 PDF API | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
+| Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
 | 受控 Browser | 组件与 QA 已完成，生产站点规则目录为空，因此当前不可执行 |
 
 外部服务仍有各自的重要边界：DataCite 收录对象不只文献，CORE Work 是外部聚合身份，

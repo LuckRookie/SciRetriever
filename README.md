@@ -181,13 +181,16 @@ remote 必须是 hostname-based HTTPS、配置 origin-bound bearer token，并�
 
 自动 PDF 获取固定按“公开来源 → 授权 Provider API → 受控浏览器”串行短路。当前公开
 阶段包含已保存 direct/landing hints、arXiv、Europe PMC、Unpaywall 等；授权阶段当前
-已接入 CORE API v3 与 Wiley Online Library TDM API 的 PDF download endpoint。启用
+已接入 CORE API v3、Elsevier Article/Object Retrieval 与 Wiley Online Library TDM API。启用
 `core` 时要求通过
 `sciretriever config` 交互管理器配置 `api_key`，且只对具有 CORE `work:<id>` 或
 `output:<id>` 强记录身份的文献适用；启用 `wiley` 时要求通过
 同一管理器配置 `tdm_api_token`，且只对 DOI 安全解析后实际落地到
-Wiley Online Library 的文献适用。Elsevier/Springer 当前全文产品不是主 PDF API，不会
-冒充授权 PDF Source。生产 Browser 站点规则仍为空。
+Wiley Online Library 的文献适用。启用 `elsevier` 时要求配置 `api_key`，可选
+`institution_token`；只有 PII、合法 Elsevier Article EID 或 DOI 实际落地到
+ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MAIN web-pdf`
+attachment EID，再用 Object Retrieval 获取 PDF；普通 Scopus EID、任意 object、XML 和
+supplement 不会冒充主 PDF。Springer 当前全文产品不是主 PDF API。生产 Browser 站点规则仍为空。
 
 外部命令只有在 adapter、普通参数、凭据、AccessPolicy 和所需外部服务全部就绪时才会发起调用。缺少任一条件时，生产 Bootstrap 会在创建 Storage 之前稳定 fail closed，例如返回 `metadata-not-ready`、`acquisition-not-ready`、`parser-not-ready` 或 `analysis-not-ready`；这类结果表示当前运行环境尚未就绪，不表示控制流会静默降级。
 
@@ -199,7 +202,7 @@ Wiley Online Library 的文献适用。Elsevier/Springer 当前全文产品不�
 
 已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、交互式 `config` 凭据设置/移除及 `config status`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
 
-同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、DOI landing origin 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
+同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Elsevier/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、强访问身份、MAIN object/DOI landing 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
 
 这层证明安装产物、生产对象图和已实现 adapter 的离线接线，不等于真实 Provider、Parser 或 LLM 服务已经在线成功。
 

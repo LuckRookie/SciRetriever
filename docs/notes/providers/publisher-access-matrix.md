@@ -55,9 +55,10 @@ Matrix 只把 `production-ready` Profile 和其 rule 派生到生产 catalog。`
 | Access key | Platform / product | Public | Authorized API | Browser | Policy / session group | Evidence | 状态 | 当前缺口 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `core-open-access` | CORE API v3 | 通用已保存 locator 由独立 Public Source 消费；Profile 无专属 public route | `api:core` | 无 | `core/api` quota scope；无 Browser session | `core-v3-2026-08-15`；2026-08-15 | `production-ready` | Browser 未注册；不宣称真实 key 或单篇 entitlement |
+| `elsevier-sciencedirect` | Elsevier Article Retrieval + Object Retrieval / ScienceDirect | 无专属 public route；已有 landing/direct hint 仍由通用 Public Source 消费 | `api:elsevier-article-object`；FULL XML 的显式 `MAIN web-pdf` attachment EID 再取 Object PDF | `unsupported`；无 executable rule | `elsevier/api/article-retrieval-object` quota scope；Browser group/session 未猜测 | `elsevier-article-object-2026-08-15`；2026-08-15 | API Profile `production-ready` | ScienceDirect Browser 缺独立 selector、状态 marker、速率/session 与正文归属证据；ScanSci challenge 记录不作为成功；不宣称真实 key、机构订阅或单篇 entitlement |
 | `wiley-online-library` | Wiley Online Library TDM API v1 | 无专属 public route | `api:wiley-tdm-v1` | `unsupported`；无 executable rule | `wiley/api` quota scope；Browser group/session 未猜测 | `wiley-tdm-v1-client-1.2.0-2026-08-15`；2026-08-15 | API Profile `production-ready` | 缺独立页面规则、Browser 速率、状态 marker、正文/supplement fixture；不把 ScanSci/CARSI 历史运行或一次 API 探测扩展为 Browser/长期 entitlement |
 
-因此当前 production profile catalog 有 2 项，production Browser rule catalog 有 0 项。这个结果只说明 CORE/Wiley 已实现 route 的准入；P56 对 Wiley Browser 已形成有证据的 unsupported 结论，不把“没有上线”伪装成尚未做审查。后续访问方只有在各自 Notes、manifest、rule/fixture 和状态结论闭环后才加入本表。
+因此当前 production profile catalog 有 3 项，production Browser rule catalog 有 0 项。这个结果只说明 CORE、Elsevier 与 Wiley 已实现 API route 的准入；Wiley 与 ScienceDirect Browser 均已有明确的 unsupported 结论，不把“没有上线”伪装成成功或尚未审查。后续访问方只有在各自 Notes、manifest、rule/fixture 和状态结论闭环后才加入本表。
 
 ## 5. 离线验收边界
 
