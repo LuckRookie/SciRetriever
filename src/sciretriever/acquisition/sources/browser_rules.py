@@ -1,10 +1,12 @@
 """Local declarative rules for controlled Browser acquisition.
 
 Rules in this module are deliberately small, immutable, and executable only
-through the fixed operations understood by :mod:`acquisition.sources.browser`.
-They are not a remote rule language: there is no loader, JavaScript surface,
-login form description, Cookie/profile data, selector guessing, or fallback
-action sequence.
+through the fixed observations and operations understood by
+:mod:`acquisition.sources.browser`.  Page markers may use reviewed static CSS
+selectors, exact-origin URL path prefixes, and response statuses.  They are
+not a remote rule language: there is no loader, JavaScript surface, login form
+description, Cookie/profile data, selector guessing, or fallback action
+sequence.
 
 The production catalog is intentionally empty.  Network now accepts a closed
 destination guard and enforces it before every external Browser request;
@@ -17,11 +19,12 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final
 
 from sciretriever.model.primitives import Sha256
+from sciretriever.network.browser import BrowserPageObservation
 from sciretriever.network.policy import (
     NormalizedURL,
     PolicyError,
@@ -48,6 +51,7 @@ _FORBIDDEN_SELECTOR_MARKERS: Final[tuple[str, ...]] = (
     ";",
 )
 _MAX_MARKERS: Final[int] = 8
+_MAX_PAGE_MARKERS: Final[int] = 32
 
 
 def _stable_token(value: object, *, field_name: str) -> str:
@@ -104,6 +108,34 @@ def _markers(value: object, *, field_name: str) -> tuple[str, ...]:
     return result
 
 
+def _url_prefixes(value: object) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError("url_prefixes must be a tuple")
+    if len(value) > _MAX_MARKERS:
+        raise ValueError("url_prefixes contains too many markers")
+    result = []
+    for item in value:
+        normalized = _normalized_url(item)
+        if normalized.scheme != "https" or normalized.query or normalized.path == "/":
+            raise ValueError("url_prefixes must contain query-free HTTPS path prefixes")
+        result.append(normalized.url)
+    if len(set(result)) != len(result):
+        raise ValueError("url_prefixes must not contain duplicates")
+    return tuple(result)
+
+
+def _status_codes(value: object) -> tuple[int, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError("response_statuses must be a tuple")
+    if len(value) > _MAX_MARKERS:
+        raise ValueError("response_statuses contains too many markers")
+    if any(type(item) is not int or not 100 <= item <= 599 for item in value):
+        raise ValueError("response_statuses must contain HTTP status codes")
+    if len(set(value)) != len(value):
+        raise ValueError("response_statuses must not contain duplicates")
+    return value
+
+
 def _rule_origins(
     landing_value: object,
     allowed_value: object,
@@ -152,6 +184,80 @@ class BrowserRuleAction(str, Enum):
     EXPLICIT_CLICK = "explicit-click"
 
 
+@unique
+class BrowserPageMarkerKind(str, Enum):
+    """Closed page facts a reviewed Provider rule may recognize."""
+
+    AUTHENTICATED = "authenticated"
+    ENTITLED = "entitled"
+    LOGIN_REQUIRED = "login-required"
+    MFA_REQUIRED = "mfa-required"
+    NOT_ENTITLED = "not-entitled"
+    PAYWALL = "paywall"
+    CHALLENGE_REQUIRED = "challenge-required"
+    RATE_LIMITED = "rate-limited"
+    IP_BLOCKED = "ip-blocked"
+    NOT_FOUND = "not-found"
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserPageMarker:
+    """One reviewed page fact matched by bounded static observations."""
+
+    marker_id: str
+    kind: BrowserPageMarkerKind
+    css_selectors: tuple[str, ...] = field(default=(), repr=False)
+    url_prefixes: tuple[str, ...] = field(default=(), repr=False)
+    response_statuses: tuple[int, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "marker_id",
+            _stable_token(self.marker_id, field_name="marker_id"),
+        )
+        if not isinstance(self.kind, BrowserPageMarkerKind):
+            raise TypeError("kind must be a BrowserPageMarkerKind")
+        object.__setattr__(
+            self,
+            "css_selectors",
+            _markers(self.css_selectors, field_name="css_selectors"),
+        )
+        object.__setattr__(self, "url_prefixes", _url_prefixes(self.url_prefixes))
+        object.__setattr__(
+            self,
+            "response_statuses",
+            _status_codes(self.response_statuses),
+        )
+        if not (self.css_selectors or self.url_prefixes or self.response_statuses):
+            raise ValueError("a Browser page marker requires at least one bounded signal")
+
+    def matches_observation(self, observation: BrowserPageObservation) -> bool:
+        if not isinstance(observation, BrowserPageObservation):
+            raise TypeError("observation must be a BrowserPageObservation")
+        if observation.status_code in self.response_statuses:
+            return True
+        candidate = _normalized_url(observation.locator)
+        for prefix_value in self.url_prefixes:
+            prefix = _normalized_url(prefix_value)
+            if candidate.origin != prefix.origin:
+                continue
+            prefix_path = prefix.path.rstrip("/")
+            if candidate.path == prefix_path or candidate.path.startswith(f"{prefix_path}/"):
+                return True
+        return False
+
+    @property
+    def fingerprint_fields(self) -> tuple[str, ...]:
+        return (
+            self.marker_id,
+            self.kind.value,
+            *self.css_selectors,
+            *self.url_prefixes,
+            *(str(status) for status in self.response_statuses),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserSiteRule:
     """One local, revisioned rule for one exact landing origin.
@@ -170,8 +276,7 @@ class BrowserSiteRule:
     web_scope_provider_name: str
     action: BrowserRuleAction
     click_selector: str | None = None
-    login_markers: tuple[str, ...] = ()
-    mfa_markers: tuple[str, ...] = ()
+    page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rule_id", _stable_token(self.rule_id, field_name="rule_id"))
@@ -198,18 +303,37 @@ class BrowserSiteRule:
             "click_selector",
             _rule_selector(self.action, self.click_selector),
         )
-        object.__setattr__(
-            self,
-            "login_markers",
-            _markers(self.login_markers, field_name="login_markers"),
+        self._validate_page_markers()
+
+    def _validate_page_markers(self) -> None:
+        if not isinstance(self.page_markers, tuple) or any(
+            not isinstance(marker, BrowserPageMarker) for marker in self.page_markers
+        ):
+            raise TypeError("page_markers must contain BrowserPageMarker values")
+        if len(self.page_markers) > _MAX_PAGE_MARKERS:
+            raise ValueError("page_markers contains too many reviewed markers")
+        marker_ids = tuple(marker.marker_id for marker in self.page_markers)
+        selectors = tuple(
+            selector for marker in self.page_markers for selector in marker.css_selectors
         )
-        object.__setattr__(
-            self,
-            "mfa_markers",
-            _markers(self.mfa_markers, field_name="mfa_markers"),
+        prefixes = tuple(prefix for marker in self.page_markers for prefix in marker.url_prefixes)
+        statuses = tuple(
+            status for marker in self.page_markers for status in marker.response_statuses
         )
-        if set(self.login_markers) & set(self.mfa_markers):
-            raise ValueError("login and MFA markers must be distinct")
+        if len(marker_ids) != len(set(marker_ids)):
+            raise ValueError("page marker ids must be unique")
+        if len(selectors) != len(set(selectors)):
+            raise ValueError("page marker selectors must be unambiguous")
+        if len(prefixes) != len(set(prefixes)):
+            raise ValueError("page marker URL prefixes must be unambiguous")
+        if len(statuses) != len(set(statuses)):
+            raise ValueError("page marker response statuses must be unambiguous")
+        if any(
+            _normalized_url(prefix).origin.text not in self.allowed_origins
+            for marker in self.page_markers
+            for prefix in marker.url_prefixes
+        ):
+            raise ValueError("page marker URL prefixes must use allowed rule origins")
 
     @property
     def landing_hostname(self) -> str:
@@ -229,8 +353,7 @@ class BrowserSiteRule:
             self.web_scope_provider_name,
             self.action.value,
             self.click_selector or "",
-            *self.login_markers,
-            *self.mfa_markers,
+            *(field for marker in self.page_markers for field in marker.fingerprint_fields),
         )
         return Sha256(hashlib.sha256("\x00".join(fields).encode("utf-8", "strict")).hexdigest())
 
@@ -297,6 +420,8 @@ PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog(
 
 
 __all__ = (
+    "BrowserPageMarker",
+    "BrowserPageMarkerKind",
     "BrowserRuleAction",
     "BrowserRuleCatalog",
     "BrowserSiteRule",

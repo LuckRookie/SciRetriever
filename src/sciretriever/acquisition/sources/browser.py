@@ -1,9 +1,10 @@
 """Evidence-routed, declarative controlled-Browser PDF acquisition.
 
-This adapter exposes only two structural Browser capabilities to local rules:
-read bounded marker text and perform one explicit click.  It never receives a
-page, context, process, profile, Cookie, download object, or vendor lifecycle
-handle, and it never fills login/MFA forms or attempts to solve challenges.
+This adapter exposes only three structural Browser capabilities to local
+rules: observe a bounded query-free page snapshot, read bounded marker text,
+and perform one explicit click.  It never receives a page, context, process,
+profile, Cookie, download object, or vendor lifecycle handle, and it never
+fills login/MFA forms or attempts to solve challenges.
 
 The Network Browser checks every real destination against both its general
 URL/DNS/admission policy and the closed site-rule guard supplied here.  The
@@ -51,6 +52,7 @@ from sciretriever.acquisition.routing import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
     BrowserSiteRule,
@@ -77,6 +79,7 @@ from sciretriever.network.browser import (
     BrowserBudget,
     BrowserDestinationGuard,
     BrowserDestinationKind,
+    BrowserPageObservation,
 )
 from sciretriever.network.policy import (
     NormalizedURL,
@@ -255,6 +258,15 @@ def _contract_failure() -> StableFailure:
     )
 
 
+def _page_state_conflict_failure() -> StableFailure:
+    return _stable_failure(
+        code="acquisition-browser-page-state-conflict",
+        reason="The controlled Browser page matched conflicting access states.",
+        action="Review the local Provider page markers before retrying.",
+        retryable=False,
+    )
+
+
 _PRODUCTION_FAILURE: Final[StableFailure] = _stable_failure(
     code="acquisition-browser-production-unavailable",
     reason="No complete production Browser provider profile is verified.",
@@ -274,6 +286,8 @@ class BrowserFlowSession(Protocol):
     def click(self, selector: str) -> None: ...
 
     def text(self, selector: str) -> str: ...
+
+    def observe(self) -> BrowserPageObservation: ...
 
 
 @runtime_checkable
@@ -305,6 +319,14 @@ class _BrowserAction:
     start_url: str
     evidence_kind: str
     identity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _PageClassification:
+    state: BrowserRunState | None
+    authenticated: bool
+    entitled: bool
+    conflict: bool
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -436,6 +458,54 @@ def _state_ends_without_pdf(state_machine: BrowserRunStateMachine) -> bool:
     }:
         raise AcquisitionSourceFailure(_browser_state_failure(decision.state))
     return False
+
+
+_TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
+    BrowserPageMarkerKind.LOGIN_REQUIRED: BrowserRunState.LOGIN_REQUIRED,
+    BrowserPageMarkerKind.MFA_REQUIRED: BrowserRunState.MFA_REQUIRED,
+    BrowserPageMarkerKind.NOT_ENTITLED: BrowserRunState.NOT_ENTITLED,
+    BrowserPageMarkerKind.PAYWALL: BrowserRunState.NOT_ENTITLED,
+    BrowserPageMarkerKind.CHALLENGE_REQUIRED: BrowserRunState.CHALLENGE_REQUIRED,
+    BrowserPageMarkerKind.RATE_LIMITED: BrowserRunState.RATE_LIMITED,
+    BrowserPageMarkerKind.IP_BLOCKED: BrowserRunState.IP_BLOCKED,
+    BrowserPageMarkerKind.NOT_FOUND: BrowserRunState.NOT_FOUND,
+}
+
+
+def _classify_page(
+    session: BrowserFlowSession,
+    rule: BrowserSiteRule,
+) -> _PageClassification:
+    observation = session.observe()
+    matched: set[BrowserPageMarkerKind] = set()
+    for marker in rule.page_markers:
+        selector_match = any(session.text(selector).strip() for selector in marker.css_selectors)
+        if selector_match or marker.matches_observation(observation):
+            matched.add(marker.kind)
+
+    authenticated = BrowserPageMarkerKind.AUTHENTICATED in matched
+    entitled = BrowserPageMarkerKind.ENTITLED in matched
+    terminal_states = {state for kind, state in _TERMINAL_PAGE_STATES.items() if kind in matched}
+    login_conflict = authenticated and bool(
+        matched
+        & {
+            BrowserPageMarkerKind.LOGIN_REQUIRED,
+            BrowserPageMarkerKind.MFA_REQUIRED,
+        }
+    )
+    entitlement_conflict = entitled and BrowserRunState.NOT_ENTITLED in terminal_states
+    conflict = len(terminal_states) > 1 or login_conflict or entitlement_conflict
+    state = None if not terminal_states else next(iter(terminal_states))
+    if conflict:
+        state = BrowserRunState.RUNTIME_FAILED
+    elif state is None and authenticated:
+        state = BrowserRunState.AUTHENTICATED
+    return _PageClassification(
+        state=state,
+        authenticated=authenticated,
+        entitled=entitled,
+        conflict=conflict,
+    )
 
 
 class ControlledBrowserPdfSource:
@@ -605,7 +675,9 @@ class ControlledBrowserPdfSource:
                 key = _candidate_key(action)
                 if not self._claim_candidate(candidate_keys, key):
                     continue
-                result, state_machine = self._run_action(action)
+                result, state_machine, page_failure = self._run_action(action)
+                if page_failure is not None:
+                    raise AcquisitionSourceFailure(page_failure)
                 if _state_ends_without_pdf(state_machine):
                     continue
                 temporary_pdf = self._temporary_from_result(action, key, result)
@@ -673,12 +745,13 @@ class ControlledBrowserPdfSource:
     def _run_action(
         self,
         action: _BrowserAction,
-    ) -> tuple[BrowserResult, BrowserRunStateMachine]:
+    ) -> tuple[BrowserResult, BrowserRunStateMachine, StableFailure | None]:
         state_machine = BrowserRunStateMachine()
         state_machine.transition(BrowserRunState.OPEN)
+        page_failure: list[StableFailure] = []
 
         def flow(session: BrowserFlowSession) -> None:
-            self._run_rule_flow(session, action.rule, state_machine)
+            self._run_rule_flow(session, action.rule, state_machine, page_failure)
 
         try:
             scope, effective_policy = self._access_profile(action.rule)
@@ -709,22 +782,23 @@ class ControlledBrowserPdfSource:
             or result_state is BrowserRunState.RUNTIME_FAILED
         ):
             state_machine.transition(result_state)
-        return result, state_machine
+        return result, state_machine, page_failure[0] if page_failure else None
 
     @staticmethod
     def _run_rule_flow(
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
         state_machine: BrowserRunStateMachine,
+        page_failure: list[StableFailure],
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
-        for state, selectors in (
-            (BrowserRunState.MFA_REQUIRED, rule.mfa_markers),
-            (BrowserRunState.LOGIN_REQUIRED, rule.login_markers),
-        ):
-            if any(session.text(selector).strip() for selector in selectors):
-                state_machine.transition(state)
+        classification = _classify_page(session, rule)
+        if classification.conflict:
+            page_failure.append(_page_state_conflict_failure())
+        if classification.state is not None:
+            decision = state_machine.transition(classification.state)
+            if decision.is_terminal:
                 return
         if rule.action is BrowserRuleAction.EXPLICIT_CLICK:
             selector = rule.click_selector

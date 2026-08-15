@@ -14,6 +14,8 @@ from sciretriever.acquisition.sources.browser import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserPageMarker,
+    BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
     BrowserSiteRule,
@@ -35,6 +37,8 @@ from sciretriever.acquisition.sources.unpaywall import UnpaywallPdfSource
 __all__ = (
     "ArxivPdfSource",
     "BrowserFlowSession",
+    "BrowserPageMarker",
+    "BrowserPageMarkerKind",
     "BrowserRuleAction",
     "BrowserRuleCatalog",
     "BrowserRunner",

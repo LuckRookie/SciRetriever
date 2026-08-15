@@ -52,6 +52,7 @@ from .policy import (
     ResolvedDestination,
     ResolverLike,
     normalize_url,
+    normalize_url_with_configured_port,
     resolve_destination,
 )
 
@@ -105,6 +106,40 @@ class BrowserDestinationGuard(Protocol):
     """
 
     def check(self, url: str, kind: BrowserDestinationKind) -> None: ...
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserPageObservation:
+    """A bounded, query-free snapshot available to a provider page rule."""
+
+    locator: str = field(repr=False)
+    status_code: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.locator, str):
+            raise TypeError("locator must be a string")
+        try:
+            normalized = normalize_url_with_configured_port(self.locator)
+        except (PolicyError, TypeError, ValueError):
+            raise ValueError("locator must be a safe query-free HTTP(S) URL") from None
+        if normalized.query:
+            raise ValueError("locator must not contain a query")
+        object.__setattr__(self, "locator", normalized.url)
+        if self.status_code is not None and (
+            type(self.status_code) is not int or not 100 <= self.status_code <= 599
+        ):
+            raise ValueError("status_code must be an HTTP status or None")
+
+    @property
+    def origin(self) -> str:
+        return normalize_url_with_configured_port(self.locator).origin.text
+
+    @property
+    def path(self) -> str:
+        return normalize_url_with_configured_port(self.locator).path
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("BrowserPageObservation cannot be serialized")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +372,7 @@ class _FlowState:
         "usage",
         "destinations",
         "navigations",
+        "page_statuses",
         "request_leases",
         "runtime",
         "lock",
@@ -373,6 +409,7 @@ class _FlowState:
         self.usage = _Usage()
         self.destinations: dict[str, ResolvedDestination] = {}
         self.navigations: dict[int, _Navigation] = {}
+        self.page_statuses: dict[int, int | None] = {}
         self.request_leases: dict[int, _RequestLease] = {}
         self.runtime: object | None = None
         self.lock = threading.RLock()
@@ -688,11 +725,9 @@ class _FlowState:
         return failed
 
     def check_challenge(self, page: object, response: object | None = None) -> None:
+        del response
         challenge = _attribute(page, "challenge")
         if challenge is True:
-            raise _Abort("challenge")
-        status = _attribute(response, "status") if response is not None else None
-        if isinstance(status, int) and status in {401, 403}:
             raise _Abort("challenge")
         title = _text_attribute(page, "title") or ""
         content = _text_attribute(page, "content") or ""
@@ -717,6 +752,7 @@ class _BrowserSession:
         "_click_operation",
         "_fill_operation",
         "_text_operation",
+        "_observe_operation",
     )
 
     def __init__(self, client: BrowserClient, state: _FlowState, page: object) -> None:
@@ -727,6 +763,7 @@ class _BrowserSession:
             state, page, selector, value
         )
         self._text_operation = lambda selector: client._client_text(state, page, selector)
+        self._observe_operation = lambda: client._client_observe(state, page)
 
     def navigate(self, url: str) -> None:
         self._navigate_operation(url)
@@ -742,6 +779,9 @@ class _BrowserSession:
 
     def text(self, selector: str) -> str:
         return self._text_operation(selector)
+
+    def observe(self) -> BrowserPageObservation:
+        return self._observe_operation()
 
 
 class BrowserClient:
@@ -1516,6 +1556,10 @@ class BrowserClient:
                         finally:
                             state.close_host(final_host)
                     navigation.destination = final_destination
+                status = _attribute(response, "status") if response is not None else None
+                if status is not None and (type(status) is not int or not 100 <= status <= 599):
+                    raise _Abort("runtime")
+                state.page_statuses[id(page)] = cast(int | None, status)
                 state.check_challenge(page, response)
             finally:
                 if not operation_complete:
@@ -1602,6 +1646,32 @@ class BrowserClient:
         if type(value) is not str or len(value) > 1024 * 1024:
             raise _Abort("runtime")
         return value
+
+    def _client_observe(
+        self,
+        state: _FlowState,
+        page: object,
+    ) -> BrowserPageObservation:
+        state.check()
+        locator = _text_attribute(page, "url")
+        if locator is None or _is_internal_url(locator):
+            raise _Abort("runtime")
+        policy_locator = _policy_url(locator)
+        try:
+            normalized = normalize_url(
+                policy_locator,
+                allowed_schemes=self._destination_policy.allowed_schemes,
+                allowed_ports=self._destination_policy.allowed_ports,
+            )
+        except (PolicyError, TypeError, ValueError) as error:
+            raise _Abort("policy") from error
+        state.guard(normalized.url, BrowserDestinationKind.NAVIGATION)
+        if normalized.hostname not in state.destinations:
+            raise _Abort("runtime")
+        return BrowserPageObservation(
+            locator=normalized.url,
+            status_code=state.page_statuses.get(id(page)),
+        )
 
     def _cleanup_state(
         self,
@@ -1699,4 +1769,5 @@ __all__ = (
     "BrowserDestinationGuard",
     "BrowserDestinationKind",
     "BrowserError",
+    "BrowserPageObservation",
 )
