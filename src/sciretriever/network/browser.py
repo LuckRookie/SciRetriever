@@ -125,6 +125,23 @@ class BrowserCaptureGuard(Protocol):
     ) -> bool: ...
 
 
+@runtime_checkable
+class BrowserFlowSession(Protocol):
+    """Capability-only flow surface shared with reviewed Acquisition rules."""
+
+    def click(self, selector: str) -> None: ...
+
+    def open_viewer(self, locator: str) -> None: ...
+
+    def open_verified_locator(self, locator: str) -> None: ...
+
+    def wait_for_capture(self, kind: BrowserCaptureKind) -> None: ...
+
+    def text(self, selector: str) -> str: ...
+
+    def observe(self) -> BrowserPageObservation: ...
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class BrowserPageObservation:
     """A bounded, query-free snapshot available to a provider page rule."""
@@ -397,6 +414,7 @@ class _FlowState:
         "request_leases",
         "runtime",
         "lock",
+        "condition",
         "closed",
         "pages",
         "popups",
@@ -439,6 +457,7 @@ class _FlowState:
         self.request_leases: dict[int, _RequestLease] = {}
         self.runtime: object | None = None
         self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
         self.closed = False
         self.pages: list[object] = []
         self.popups: list[object] = []
@@ -466,15 +485,17 @@ class _FlowState:
         return max(1, int(remaining * 1000))
 
     def fail(self, code: str) -> None:
-        with self.lock:
+        with self.condition:
             if self.error is None:
                 self.error = _Abort(code)
+            self.condition.notify_all()
 
     def close_for_results(self) -> None:
         """Invalidate callbacks before runtime teardown starts."""
 
-        with self.lock:
+        with self.condition:
             self.closed = True
+            self.condition.notify_all()
 
     def consume(
         self,
@@ -535,9 +556,6 @@ class _FlowState:
             raise _Abort("runtime")
         self.consume(total_bytes=len(body))
         digest = hashlib.sha256(body).digest()
-        if digest in self.capture_digests:
-            return
-        self.consume(captures=1)
         capture = BrowserCapture(
             kind=kind,
             stream=BoundedByteStream(
@@ -547,8 +565,28 @@ class _FlowState:
                 size=len(body),
             ),
         )
-        self.capture_digests.add(digest)
-        self.captures.append(capture)
+        with self.condition:
+            if digest in self.capture_digests:
+                return
+            if self.usage.captures >= self.budget.max_captures:
+                raise _Abort("budget")
+            self.usage.captures += 1
+            self.capture_digests.add(digest)
+            self.captures.append(capture)
+            self.condition.notify_all()
+
+    def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
+        if not isinstance(kind, BrowserCaptureKind):
+            raise _Abort("policy")
+        with self.condition:
+            while not any(capture.kind is kind for capture in self.captures):
+                if self.error is not None:
+                    raise self.error
+                self.check()
+                remaining = self.deadline - self.clock()
+                if remaining <= 0:
+                    raise _Abort("timeout")
+                self.condition.wait(timeout=min(remaining, 0.25))
 
     def resolve(
         self,
@@ -831,6 +869,7 @@ class _BrowserSession:
         "_fill_operation",
         "_text_operation",
         "_observe_operation",
+        "_wait_for_capture_operation",
     )
 
     def __init__(self, client: BrowserClient, state: _FlowState, page: object) -> None:
@@ -846,6 +885,7 @@ class _BrowserSession:
         )
         self._text_operation = lambda selector: client._client_text(state, page, selector)
         self._observe_operation = lambda: client._client_observe(state, page)
+        self._wait_for_capture_operation = lambda kind: state.wait_for_capture(kind)
 
     def navigate(self, url: str) -> None:
         self._navigate_operation(url)
@@ -853,11 +893,11 @@ class _BrowserSession:
     def open_popup(self, url: str) -> None:
         self._popup_operation(url)
 
-    def open_viewer(self, url: str) -> None:
-        self._viewer_operation(url)
+    def open_viewer(self, locator: str) -> None:
+        self._viewer_operation(locator)
 
-    def open_verified_locator(self, url: str) -> None:
-        self._verified_locator_operation(url)
+    def open_verified_locator(self, locator: str) -> None:
+        self._verified_locator_operation(locator)
 
     def click(self, selector: str) -> None:
         self._click_operation(selector)
@@ -870,6 +910,9 @@ class _BrowserSession:
 
     def observe(self) -> BrowserPageObservation:
         return self._observe_operation()
+
+    def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
+        self._wait_for_capture_operation(kind)
 
 
 class BrowserClient:
@@ -947,7 +990,7 @@ class BrowserClient:
         request: BrowserRequest | str,
         policy: AccessPolicy,
         *,
-        flow: Callable[[_BrowserSession], object] | None = None,
+        flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         session_key: str | None = None,
@@ -1988,5 +2031,6 @@ __all__ = (
     "BrowserDestinationGuard",
     "BrowserDestinationKind",
     "BrowserError",
+    "BrowserFlowSession",
     "BrowserPageObservation",
 )

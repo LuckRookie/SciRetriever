@@ -53,6 +53,7 @@ _FORBIDDEN_SELECTOR_MARKERS: Final[tuple[str, ...]] = (
 )
 _MAX_MARKERS: Final[int] = 8
 _MAX_PAGE_MARKERS: Final[int] = 32
+_MAX_ACTIONS: Final[int] = 8
 
 
 def _stable_token(value: object, *, field_name: str) -> str:
@@ -156,18 +157,6 @@ def _rule_origins(
     return landing_origin, allowed_origins
 
 
-def _rule_selector(action: object, selector: object) -> str | None:
-    if not isinstance(action, BrowserRuleAction):
-        raise TypeError("action must be a BrowserRuleAction")
-    if action is BrowserRuleAction.OBSERVE_ONLY:
-        if selector is not None:
-            raise ValueError("observe-only rules must not contain a click selector")
-        return None
-    if selector is None:
-        raise ValueError("explicit-click rules require one click selector")
-    return _static_selector(selector, field_name="click_selector")
-
-
 def _normalized_url(value: object) -> NormalizedURL:
     if not isinstance(value, str):
         raise TypeError("URL must be a string")
@@ -178,11 +167,65 @@ def _normalized_url(value: object) -> NormalizedURL:
 
 
 @unique
-class BrowserRuleAction(str, Enum):
-    """The only two actions available to a controlled Browser rule."""
+class BrowserActionKind(str, Enum):
+    """Closed operations available to a reviewed Browser action sequence."""
 
-    OBSERVE_ONLY = "observe-only"
-    EXPLICIT_CLICK = "explicit-click"
+    CLICK = "click"
+    OPEN_VIEWER = "open-viewer"
+    OPEN_VERIFIED_LOCATOR = "open-verified-locator"
+    WAIT_FOR_CAPTURE = "wait-for-capture"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserRuleAction:
+    """One statically bounded operation without script or expression support."""
+
+    kind: BrowserActionKind
+    selector: str | None = None
+    locator: str | None = None
+    capture_kind: BrowserCaptureKind | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, BrowserActionKind):
+            raise TypeError("kind must be a BrowserActionKind")
+        selector = self.selector
+        locator = self.locator
+        capture_kind = self.capture_kind
+        if self.kind is BrowserActionKind.CLICK:
+            if selector is None or locator is not None or capture_kind is not None:
+                raise ValueError("click actions require only one static selector")
+            object.__setattr__(
+                self,
+                "selector",
+                _static_selector(selector, field_name="selector"),
+            )
+            return
+        if self.kind in {
+            BrowserActionKind.OPEN_VIEWER,
+            BrowserActionKind.OPEN_VERIFIED_LOCATOR,
+        }:
+            if selector is not None or locator is None or capture_kind is not None:
+                raise ValueError("open actions require only one static locator")
+            normalized = _normalized_url(locator)
+            if normalized.scheme != "https" or normalized.query or normalized.path == "/":
+                raise ValueError("action locators must be query-free HTTPS file locators")
+            object.__setattr__(self, "locator", normalized.url)
+            return
+        if (
+            selector is not None
+            or locator is not None
+            or not isinstance(capture_kind, BrowserCaptureKind)
+        ):
+            raise ValueError("wait actions require only one Browser capture kind")
+
+    @property
+    def fingerprint_fields(self) -> tuple[str, ...]:
+        return (
+            self.kind.value,
+            self.selector or "",
+            self.locator or "",
+            "" if self.capture_kind is None else self.capture_kind.value,
+        )
 
 
 @unique
@@ -275,8 +318,8 @@ class BrowserSiteRule:
     landing_origin: str
     allowed_origins: tuple[str, ...]
     web_scope_provider_name: str
-    action: BrowserRuleAction
-    click_selector: str | None = None
+    actions: tuple[BrowserRuleAction, ...] = field(default=(), repr=False)
+    max_actions: int = _MAX_ACTIONS
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
     capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
 
@@ -300,17 +343,42 @@ class BrowserSiteRule:
                 field_name="web_scope_provider_name",
             ),
         )
-        object.__setattr__(
-            self,
-            "click_selector",
-            _rule_selector(self.action, self.click_selector),
-        )
+        if not isinstance(self.actions, tuple) or any(
+            not isinstance(action, BrowserRuleAction) for action in self.actions
+        ):
+            raise TypeError("actions must contain BrowserRuleAction values")
+        if type(self.max_actions) is not int:
+            raise TypeError("max_actions must be an integer")
+        if not 0 <= self.max_actions <= _MAX_ACTIONS:
+            raise ValueError("max_actions exceeds the closed Browser action budget")
+        if len(self.actions) > self.max_actions:
+            raise ValueError("actions exceeds the rule's maximum action count")
+        if any(
+            action.locator is not None
+            and _normalized_url(action.locator).origin.text not in self.allowed_origins
+            for action in self.actions
+        ):
+            raise ValueError("action locators must use allowed rule origins")
         object.__setattr__(self, "capture_url_prefixes", _url_prefixes(self.capture_url_prefixes))
         if any(
             _normalized_url(prefix).origin.text not in self.allowed_origins
             for prefix in self.capture_url_prefixes
         ):
             raise ValueError("capture URL prefixes must use allowed rule origins")
+        if any(
+            action.locator is not None
+            and not self.allows_capture(
+                action.locator,
+                (
+                    BrowserCaptureKind.VIEWER
+                    if action.kind is BrowserActionKind.OPEN_VIEWER
+                    else BrowserCaptureKind.VERIFIED_LOCATOR
+                ),
+                "application/pdf",
+            )
+            for action in self.actions
+        ):
+            raise ValueError("open action locators must match a reviewed capture prefix")
         self._validate_page_markers()
 
     def _validate_page_markers(self) -> None:
@@ -359,8 +427,9 @@ class BrowserSiteRule:
             self.landing_origin,
             *self.allowed_origins,
             self.web_scope_provider_name,
-            self.action.value,
-            self.click_selector or "",
+            str(self.max_actions),
+            str(len(self.actions)),
+            *(field for action in self.actions for field in action.fingerprint_fields),
             *self.capture_url_prefixes,
             *(field for marker in self.page_markers for field in marker.fingerprint_fields),
         )
@@ -455,6 +524,7 @@ PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog(
 
 
 __all__ = (
+    "BrowserActionKind",
     "BrowserPageMarker",
     "BrowserPageMarkerKind",
     "BrowserRuleAction",

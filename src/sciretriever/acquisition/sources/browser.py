@@ -1,10 +1,11 @@
 """Evidence-routed, declarative controlled-Browser PDF acquisition.
 
-This adapter exposes only three structural Browser capabilities to local
+This adapter exposes only a closed structural Browser capability set to local
 rules: observe a bounded query-free page snapshot, read bounded marker text,
-and perform one explicit click.  It never receives a page, context, process,
-profile, Cookie, download object, or vendor lifecycle handle, and it never
-fills login/MFA forms or attempts to solve challenges.
+perform a static click, open one reviewed viewer/locator, or wait for one
+closed capture kind.  It never receives a page, context, process, profile,
+Cookie, download object, or vendor lifecycle handle, and it never fills
+login/MFA forms or attempts to solve challenges.
 
 The Network Browser checks every real destination against both its general
 URL/DNS/admission policy and the closed site-rule guard supplied here.  The
@@ -52,6 +53,7 @@ from sciretriever.acquisition.routing import (
 )
 from sciretriever.acquisition.sources.browser_rules import (
     PRODUCTION_BROWSER_RULE_CATALOG,
+    BrowserActionKind,
     BrowserPageMarkerKind,
     BrowserRuleAction,
     BrowserRuleCatalog,
@@ -82,7 +84,7 @@ from sciretriever.network.browser import (
     BrowserCaptureGuard,
     BrowserDestinationGuard,
     BrowserDestinationKind,
-    BrowserPageObservation,
+    BrowserFlowSession,
 )
 from sciretriever.network.policy import (
     NormalizedURL,
@@ -281,17 +283,6 @@ CONTROLLED_BROWSER_PRODUCTION_STATUS: Final[RouteInstallationStatus] = RouteInst
     readiness=RouteReadiness.UNSUPPORTED,
     failure=_PRODUCTION_FAILURE,
 )
-
-
-@runtime_checkable
-class BrowserFlowSession(Protocol):
-    """The complete Source-visible Browser capability surface."""
-
-    def click(self, selector: str) -> None: ...
-
-    def text(self, selector: str) -> str: ...
-
-    def observe(self) -> BrowserPageObservation: ...
 
 
 @runtime_checkable
@@ -859,18 +850,65 @@ class ControlledBrowserPdfSource:
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
-        classification = _classify_page(session, rule)
-        if classification.conflict:
-            page_failure.append(_page_state_conflict_failure())
-        if classification.state is not None:
-            decision = state_machine.transition(classification.state)
-            if decision.is_terminal:
+        if ControlledBrowserPdfSource._apply_page_state(
+            session,
+            rule,
+            state_machine,
+            page_failure,
+        ):
+            return
+        for action in rule.actions:
+            ControlledBrowserPdfSource._run_rule_action(session, action)
+            if ControlledBrowserPdfSource._apply_page_state(
+                session,
+                rule,
+                state_machine,
+                page_failure,
+            ):
                 return
-        if rule.action is BrowserRuleAction.EXPLICIT_CLICK:
-            selector = rule.click_selector
-            if selector is None:
-                raise TypeError("explicit-click rule lost its selector")
-            session.click(selector)
+
+    @staticmethod
+    def _apply_page_state(
+        session: BrowserFlowSession,
+        rule: BrowserSiteRule,
+        state_machine: BrowserRunStateMachine,
+        page_failure: list[StableFailure],
+    ) -> bool:
+        classification = _classify_page(session, rule)
+        if classification.conflict and not page_failure:
+            page_failure.append(_page_state_conflict_failure())
+        if classification.state is None:
+            return False
+        return state_machine.transition(classification.state).is_terminal
+
+    @staticmethod
+    def _run_rule_action(
+        session: BrowserFlowSession,
+        action: BrowserRuleAction,
+    ) -> None:
+        if not isinstance(action, BrowserRuleAction):
+            raise TypeError("Browser rule action violated its closed contract")
+        if action.kind is BrowserActionKind.CLICK:
+            if action.selector is None:
+                raise TypeError("click action lost its static selector")
+            session.click(action.selector)
+            return
+        if action.kind is BrowserActionKind.OPEN_VIEWER:
+            if action.locator is None:
+                raise TypeError("viewer action lost its static locator")
+            session.open_viewer(action.locator)
+            return
+        if action.kind is BrowserActionKind.OPEN_VERIFIED_LOCATOR:
+            if action.locator is None:
+                raise TypeError("verified-locator action lost its static locator")
+            session.open_verified_locator(action.locator)
+            return
+        if action.kind is BrowserActionKind.WAIT_FOR_CAPTURE:
+            if action.capture_kind is None:
+                raise TypeError("wait action lost its capture kind")
+            session.wait_for_capture(action.capture_kind)
+            return
+        raise TypeError("unknown Browser rule action")
 
     def _access_profile(self, rule: BrowserSiteRule) -> tuple[AccessScope, AccessPolicy]:
         profile_url = _normalized_url(rule.landing_origin)
