@@ -578,7 +578,25 @@ def _validate_external_catalogs() -> None:
         raise AcquisitionRegistryError("authorized-catalog-mismatch")
     if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
-    if PRODUCTION_BROWSER_RULE_CATALOG.rules:
+    expected_profile_routes = {
+        "core-open-access": ((), ("api:core",), None),
+        "elsevier-sciencedirect": ((), ("api:elsevier-article-object",), None),
+        "wiley-online-library": ((), ("api:wiley-tdm-v1",), None),
+    }
+    actual_profile_routes = {
+        profile.access_key: (
+            profile.public_route_keys,
+            profile.api_route_keys,
+            profile.browser_route_key,
+        )
+        for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
+    }
+    if actual_profile_routes != expected_profile_routes:
+        raise AcquisitionRegistryError("profile-catalog-mismatch")
+    if (
+        PRODUCTION_BROWSER_RULE_CATALOG.rules
+        != PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_browser_rules.rules
+    ):
         raise AcquisitionRegistryError("browser-catalog-mismatch")
     if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY:
         raise AcquisitionRegistryError("browser-readiness-mismatch")
