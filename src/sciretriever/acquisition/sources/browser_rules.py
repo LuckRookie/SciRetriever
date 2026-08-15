@@ -291,6 +291,7 @@ class BrowserPageMarkerKind(str, Enum):
     CHALLENGE_REQUIRED = "challenge-required"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
+    ACCOUNT_WARNING = "account-warning"
     NOT_FOUND = "not-found"
 
 

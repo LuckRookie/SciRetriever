@@ -34,7 +34,12 @@ from sciretriever.network.browser_scheduler import (
     BrowserArticleAttempt,
     BrowserAttemptCompletion,
     BrowserAttemptDisposition,
+    BrowserCircuitReason,
+    BrowserGroupFeedback,
+    BrowserGroupRuntimeSnapshot,
     BrowserGroupScheduler,
+    BrowserScheduledAttemptResult,
+    BrowserScheduledDisposition,
     BrowserSchedulerCancellation,
 )
 
@@ -415,7 +420,17 @@ class TieredCohortExecutor:
                     resolution_confirmed=item.plan.resolution.is_strong,
                 )
             )
-        return self._browser_admission.evaluate(tuple(candidates))
+        runtime_states: list[BrowserGroupRuntimeSnapshot] = []
+        scheduler = self._browser_scheduler
+        if scheduler is not None:
+            for group_key in sorted({candidate.rate_limit_group for candidate in candidates}):
+                group = self._browser_admission.group_state_for(group_key)
+                if group is not None:
+                    runtime_states.append(scheduler.runtime_snapshot(group.policy))
+        return self._browser_admission.evaluate(
+            tuple(candidates),
+            runtime_states=tuple(runtime_states),
+        )
 
     @staticmethod
     def _apply_browser_admission(
@@ -504,9 +519,11 @@ class TieredCohortExecutor:
                     if failed
                     else BrowserAttemptDisposition.COMPLETED
                 ),
+                _browser_group_feedback(item),
             )
 
-        scheduler.execute(tuple(attempts), run, cancel_event=cancel_event)
+        scheduled = scheduler.execute(tuple(attempts), run, cancel_event=cancel_event)
+        _apply_scheduled_browser_blocks(scheduled, items_by_key)
 
     @staticmethod
     def _pending_browser_route(item: AcquisitionWorkItem) -> RouteSpec | None:
@@ -576,6 +593,79 @@ def _browser_scheduler_failure() -> StableFailure:
         action="Correct Browser scheduler assembly before retrying acquisition.",
         retryable=False,
     )
+
+
+def _browser_group_feedback(item: AcquisitionWorkItem) -> BrowserGroupFeedback:
+    if item.disposition in {
+        WorkItemDisposition.PENDING,
+        WorkItemDisposition.DELIVERED,
+        WorkItemDisposition.EXHAUSTED,
+    }:
+        return BrowserGroupFeedback.SUCCESS
+    failure = item.failure
+    if failure is None:
+        return BrowserGroupFeedback.NONE
+    return {
+        "acquisition-browser-login-required": BrowserGroupFeedback.LOGIN_REQUIRED,
+        "acquisition-browser-mfa-required": BrowserGroupFeedback.MFA_REQUIRED,
+        "acquisition-browser-challenge-required": BrowserGroupFeedback.CHALLENGE_REQUIRED,
+        "acquisition-browser-ip-blocked": BrowserGroupFeedback.IP_BLOCKED,
+        "acquisition-browser-account-warning": BrowserGroupFeedback.ACCOUNT_WARNING,
+        "acquisition-browser-rate-limited": BrowserGroupFeedback.RATE_LIMITED,
+        "acquisition-browser-runtime-failed": BrowserGroupFeedback.RUNTIME_FAILURE,
+        "acquisition-browser-cleanup-failed": BrowserGroupFeedback.RUNTIME_FAILURE,
+        "acquisition-browser-page-state-conflict": BrowserGroupFeedback.RUNTIME_FAILURE,
+    }.get(failure.code, BrowserGroupFeedback.NONE)
+
+
+def _browser_runtime_block_failure(
+    state: BrowserGroupRuntimeSnapshot,
+) -> StableFailure:
+    if state.circuit_reason is None:
+        return StableFailure(
+            code="acquisition-browser-group-rate-limited",
+            reason="The Browser provider risk group is still rate limited.",
+            action="Retry after the declared provider cooldown has elapsed.",
+            retryable=True,
+        )
+    action_by_reason = {
+        BrowserCircuitReason.LOGIN_REQUIRED: "Complete provider login outside automation.",
+        BrowserCircuitReason.MFA_REQUIRED: "Complete provider MFA outside automation.",
+        BrowserCircuitReason.CHALLENGE_REQUIRED: (
+            "Review the provider challenge outside automation."
+        ),
+        BrowserCircuitReason.IP_BLOCKED: "Review the provider IP access block.",
+        BrowserCircuitReason.ACCOUNT_WARNING: "Review the provider account warning.",
+        BrowserCircuitReason.RUNTIME_FAILURE: (
+            "Repair the Browser runtime and explicitly acknowledge the provider circuit."
+        ),
+    }
+    return StableFailure(
+        code=f"acquisition-browser-group-{state.circuit_reason.value}",
+        reason="The Browser provider risk group requires operator attention.",
+        action=action_by_reason[state.circuit_reason],
+        retryable=False,
+    )
+
+
+def _apply_scheduled_browser_blocks(
+    scheduled: tuple[BrowserScheduledAttemptResult[None], ...],
+    items_by_key: dict[str, AcquisitionWorkItem],
+) -> None:
+    for result in scheduled:
+        if result.disposition is BrowserScheduledDisposition.EXECUTED:
+            continue
+        item = items_by_key[result.attempt_key]
+        runtime_state = result.runtime_state
+        if runtime_state is None:
+            raise RuntimeError("Browser scheduler omitted runtime state for a blocked attempt")
+        item.current_tier = None
+        item.failure = _browser_runtime_block_failure(runtime_state)
+        item.disposition = (
+            WorkItemDisposition.DEFERRED
+            if result.disposition is BrowserScheduledDisposition.DEFERRED
+            else WorkItemDisposition.ACTION_REQUIRED
+        )
 
 
 def _plan_cycle_failure() -> StableFailure:

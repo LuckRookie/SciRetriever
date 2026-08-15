@@ -439,6 +439,8 @@ class PublisherAccessProfile:
                     self.browser_policy.rate_limit_group,
                     self.browser_policy.policy_revision,
                     self.browser_policy.minimum_start_interval,
+                    self.browser_policy.rate_limit_cooldown,
+                    self.browser_policy.runtime_failure_threshold,
                     self.browser_policy.max_concurrency,
                     self.browser_policy.maximum_starts_per_window,
                     self.browser_policy.window_seconds,

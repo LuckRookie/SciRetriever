@@ -243,6 +243,12 @@ def _browser_state_failure(state: BrowserRunState) -> StableFailure:
             "Review provider access outside automation before retrying.",
             False,
         ),
+        BrowserRunState.ACCOUNT_WARNING: (
+            "acquisition-browser-account-warning",
+            "The controlled Browser provider reported an account safety warning.",
+            "Review the provider account outside automation before retrying.",
+            False,
+        ),
     }
     try:
         code, reason, action, retryable = details[state]
@@ -511,6 +517,7 @@ _TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
     BrowserPageMarkerKind.CHALLENGE_REQUIRED: BrowserRunState.CHALLENGE_REQUIRED,
     BrowserPageMarkerKind.RATE_LIMITED: BrowserRunState.RATE_LIMITED,
     BrowserPageMarkerKind.IP_BLOCKED: BrowserRunState.IP_BLOCKED,
+    BrowserPageMarkerKind.ACCOUNT_WARNING: BrowserRunState.ACCOUNT_WARNING,
     BrowserPageMarkerKind.NOT_FOUND: BrowserRunState.NOT_FOUND,
 }
 

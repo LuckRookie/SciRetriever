@@ -81,12 +81,26 @@ def _positive_integer_or_none(value: object, *, field_name: str) -> int | None:
     return value
 
 
+def _positive_integer(value: object, *, field_name: str) -> int:
+    candidate = _positive_integer_or_none(value, field_name=field_name)
+    if candidate is None:
+        raise TypeError(f"{field_name} must be an integer")
+    return candidate
+
+
 def _positive_number_or_none(value: object, *, field_name: str) -> float | None:
     if value is None:
         return None
     candidate = _finite_nonnegative(value, field_name=field_name)
     if candidate == 0.0:
         raise ValueError(f"{field_name} must be positive")
+    return candidate
+
+
+def _positive_number(value: object, *, field_name: str) -> float:
+    candidate = _positive_number_or_none(value, field_name=field_name)
+    if candidate is None:
+        raise TypeError(f"{field_name} must be a number")
     return candidate
 
 
@@ -108,6 +122,8 @@ class BrowserGroupPolicy:
     rate_limit_group: str
     policy_revision: str
     minimum_start_interval: float
+    rate_limit_cooldown: float
+    runtime_failure_threshold: int
     max_concurrency: int = 1
     maximum_starts_per_window: int | None = None
     window_seconds: float | None = None
@@ -131,6 +147,22 @@ class BrowserGroupPolicy:
             _finite_nonnegative(
                 self.minimum_start_interval,
                 field_name="minimum_start_interval",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "rate_limit_cooldown",
+            _positive_number(
+                self.rate_limit_cooldown,
+                field_name="rate_limit_cooldown",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "runtime_failure_threshold",
+            _positive_integer(
+                self.runtime_failure_threshold,
+                field_name="runtime_failure_threshold",
             ),
         )
         if type(self.max_concurrency) is not int:
@@ -191,6 +223,14 @@ class BrowserGroupPolicy:
                 self.minimum_start_interval,
                 operator.minimum_start_interval,
             ),
+            rate_limit_cooldown=max(
+                self.rate_limit_cooldown,
+                operator.rate_limit_cooldown,
+            ),
+            runtime_failure_threshold=min(
+                self.runtime_failure_threshold,
+                operator.runtime_failure_threshold,
+            ),
             max_concurrency=1,
             maximum_starts_per_window=window_count,
             window_seconds=window_seconds,
@@ -230,16 +270,148 @@ class BrowserAttemptDisposition(str, Enum):
     FAILED = "failed"
 
 
+@unique
+class BrowserGroupFeedback(str, Enum):
+    """One secret-free completion signal for the provider risk group."""
+
+    NONE = "none"
+    SUCCESS = "success"
+    RATE_LIMITED = "rate-limited"
+    LOGIN_REQUIRED = "login-required"
+    MFA_REQUIRED = "mfa-required"
+    CHALLENGE_REQUIRED = "challenge-required"
+    IP_BLOCKED = "ip-blocked"
+    ACCOUNT_WARNING = "account-warning"
+    RUNTIME_FAILURE = "runtime-failure"
+
+
+@unique
+class BrowserCircuitReason(str, Enum):
+    """An action-required circuit reason without provider response details."""
+
+    LOGIN_REQUIRED = "login-required"
+    MFA_REQUIRED = "mfa-required"
+    CHALLENGE_REQUIRED = "challenge-required"
+    IP_BLOCKED = "ip-blocked"
+    ACCOUNT_WARNING = "account-warning"
+    RUNTIME_FAILURE = "runtime-failure"
+
+
+@unique
+class BrowserScheduledDisposition(str, Enum):
+    """Whether a scheduled article callback ran or stopped before Browser I/O."""
+
+    EXECUTED = "executed"
+    DEFERRED = "deferred"
+    ACTION_REQUIRED = "action-required"
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserGroupRuntimeSnapshot:
+    """One immutable process-local cooldown/circuit snapshot."""
+
+    rate_limit_group: str
+    policy_revision: str
+    observed_at: float
+    blocked_until: float
+    consecutive_runtime_failures: int
+    circuit_reason: BrowserCircuitReason | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "rate_limit_group",
+            _group_key(self.rate_limit_group, field_name="rate_limit_group"),
+        )
+        object.__setattr__(self, "policy_revision", _policy_revision(self.policy_revision))
+        object.__setattr__(
+            self,
+            "observed_at",
+            _finite_nonnegative(self.observed_at, field_name="observed_at"),
+        )
+        object.__setattr__(
+            self,
+            "blocked_until",
+            _finite_nonnegative(self.blocked_until, field_name="blocked_until"),
+        )
+        if (
+            type(self.consecutive_runtime_failures) is not int
+            or self.consecutive_runtime_failures < 0
+        ):
+            raise ValueError("consecutive_runtime_failures must be a nonnegative integer")
+        if self.circuit_reason is not None and not isinstance(
+            self.circuit_reason,
+            BrowserCircuitReason,
+        ):
+            raise TypeError("circuit_reason must be BrowserCircuitReason or None")
+
+    @property
+    def blocked_for_seconds(self) -> float:
+        return max(0.0, self.blocked_until - self.observed_at)
+
+    @property
+    def is_rate_limited(self) -> bool:
+        return self.circuit_reason is None and self.blocked_for_seconds > 0.0
+
+    @property
+    def is_action_required(self) -> bool:
+        return self.circuit_reason is not None
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("BrowserGroupRuntimeSnapshot cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserScheduledAttemptResult(Generic[_ResultT]):
+    """One ordered scheduler result, including callbacks stopped before I/O."""
+
+    attempt_key: str
+    disposition: BrowserScheduledDisposition
+    value: _ResultT | None = None
+    runtime_state: BrowserGroupRuntimeSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attempt_key", _attempt_key(self.attempt_key))
+        if not isinstance(self.disposition, BrowserScheduledDisposition):
+            raise TypeError("disposition must be BrowserScheduledDisposition")
+        executed = self.disposition is BrowserScheduledDisposition.EXECUTED
+        if executed == (self.runtime_state is not None):
+            raise ValueError("only a non-executed Browser attempt carries runtime state")
+        if not executed and self.value is not None:
+            raise ValueError("a non-executed Browser attempt cannot carry a callback value")
+        if self.runtime_state is not None and not isinstance(
+            self.runtime_state,
+            BrowserGroupRuntimeSnapshot,
+        ):
+            raise TypeError("runtime_state must be BrowserGroupRuntimeSnapshot or None")
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("BrowserScheduledAttemptResult cannot be serialized")
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserAttemptCompletion(Generic[_ResultT]):
     """One callback value plus whether provider failure cooldown must apply."""
 
     value: _ResultT
     disposition: BrowserAttemptDisposition
+    group_feedback: BrowserGroupFeedback = BrowserGroupFeedback.NONE
 
     def __post_init__(self) -> None:
         if not isinstance(self.disposition, BrowserAttemptDisposition):
             raise TypeError("disposition must be a BrowserAttemptDisposition")
+        if not isinstance(self.group_feedback, BrowserGroupFeedback):
+            raise TypeError("group_feedback must be a BrowserGroupFeedback")
+        if self.disposition is BrowserAttemptDisposition.COMPLETED and self.group_feedback not in {
+            BrowserGroupFeedback.NONE,
+            BrowserGroupFeedback.SUCCESS,
+        }:
+            raise ValueError("a completed Browser attempt cannot report failure feedback")
+        if (
+            self.disposition is BrowserAttemptDisposition.FAILED
+            and self.group_feedback is BrowserGroupFeedback.SUCCESS
+        ):
+            raise ValueError("a failed Browser attempt cannot report success feedback")
 
     def __reduce__(self) -> str | tuple[object, ...]:
         raise TypeError("BrowserAttemptCompletion cannot be serialized")
@@ -275,6 +447,13 @@ class BrowserArticleAttempt:
         raise TypeError("BrowserArticleAttempt cannot be serialized")
 
 
+@dataclass(slots=True)
+class _BrowserGroupRuntimeState:
+    blocked_until: float = 0.0
+    consecutive_runtime_failures: int = 0
+    circuit_reason: BrowserCircuitReason | None = None
+
+
 class BrowserGroupScheduler:
     """Run independent groups concurrently and each group strictly serially."""
 
@@ -298,6 +477,7 @@ class BrowserGroupScheduler:
         self._policies: dict[str, BrowserGroupPolicy] = {}
         self._next_allowed_at: dict[str, float] = {}
         self._start_history: dict[str, deque[float]] = {}
+        self._runtime_states: dict[str, _BrowserGroupRuntimeState] = {}
 
     def execute(
         self,
@@ -305,8 +485,8 @@ class BrowserGroupScheduler:
         callback: Callable[[BrowserArticleAttempt], BrowserAttemptCompletion[_ResultT]],
         *,
         cancel_event: BrowserSchedulerCancellation | None = None,
-    ) -> tuple[_ResultT, ...]:
-        """Execute a finite snapshot and return results in its original order."""
+    ) -> tuple[BrowserScheduledAttemptResult[_ResultT], ...]:
+        """Execute a finite snapshot and return ordered pre-I/O-aware results."""
 
         groups = self._validate_execution(attempts, callback, cancel_event)
         if not attempts:
@@ -331,7 +511,41 @@ class BrowserGroupScheduler:
                 future.result()
         if any(result is missing for result in results):
             raise RuntimeError("Browser scheduler did not complete every attempt")
-        return cast(tuple[_ResultT, ...], tuple(results))
+        return cast(tuple[BrowserScheduledAttemptResult[_ResultT], ...], tuple(results))
+
+    def runtime_snapshot(
+        self,
+        policy: BrowserGroupPolicy,
+    ) -> BrowserGroupRuntimeSnapshot:
+        """Return current process-local state while pinning the policy revision."""
+
+        if not isinstance(policy, BrowserGroupPolicy):
+            raise TypeError("policy must be a BrowserGroupPolicy")
+        self._register_policies((policy,))
+        return self._runtime_snapshot(policy, self._clock.now())
+
+    def acknowledge_circuit(
+        self,
+        rate_limit_group: str,
+        policy_revision: str,
+    ) -> BrowserGroupRuntimeSnapshot:
+        """Explicitly close one action-required circuit without clearing cooldown."""
+
+        group = _group_key(rate_limit_group, field_name="rate_limit_group")
+        revision = _policy_revision(policy_revision)
+        with self._state_lock:
+            policy = self._policies.get(group)
+            if policy is None or policy.policy_revision != revision:
+                raise ValueError("Browser circuit acknowledgement requires its active policy")
+            state = self._runtime_states.setdefault(group, _BrowserGroupRuntimeState())
+            if state.circuit_reason is None:
+                raise ValueError("Browser risk group has no action-required circuit")
+            state.circuit_reason = None
+            state.consecutive_runtime_failures = 0
+        return self._runtime_snapshot(policy, self._clock.now())
+
+    def __reduce__(self) -> str | tuple[object, ...]:
+        raise TypeError("BrowserGroupScheduler cannot be serialized")
 
     def _validate_execution(
         self,
@@ -369,20 +583,30 @@ class BrowserGroupScheduler:
         callback: Callable[[BrowserArticleAttempt], BrowserAttemptCompletion[_ResultT]],
         *,
         cancel_event: BrowserSchedulerCancellation | None,
-    ) -> _ResultT:
+    ) -> BrowserScheduledAttemptResult[_ResultT]:
         group_lock = self._group_lock(attempt.rate_limit_group)
         self._acquire(group_lock, cancel_event)
         try:
             self._check_cancel(cancel_event)
+            blocked = self._runtime_block(attempt)
+            if blocked is not None:
+                return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
             deadline = self._deadline(attempt.policy)
             if self._clock.now() < deadline:
                 self._clock.wait_until(deadline, cancel_event)
             self._check_cancel(cancel_event)
+            blocked = self._runtime_block(attempt)
+            if blocked is not None:
+                return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
             self._acquire(self._global_permits, cancel_event)
             failed = True
             started = False
+            completion: BrowserAttemptCompletion[_ResultT] | None = None
             try:
                 self._check_cancel(cancel_event)
+                blocked = self._runtime_block(attempt)
+                if blocked is not None:
+                    return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
                 started_at = self._clock.now()
                 self._remember_start(attempt.policy, started_at)
                 started = True
@@ -390,14 +614,28 @@ class BrowserGroupScheduler:
                 if not isinstance(completion, BrowserAttemptCompletion):
                     raise TypeError("Browser callback must return BrowserAttemptCompletion")
                 failed = completion.disposition is BrowserAttemptDisposition.FAILED
-                return completion.value
+                return BrowserScheduledAttemptResult(
+                    attempt_key=attempt.attempt_key,
+                    disposition=BrowserScheduledDisposition.EXECUTED,
+                    value=completion.value,
+                )
             finally:
                 try:
                     if started:
+                        completed_at = self._clock.now()
                         self._remember_completion(
                             attempt.policy,
-                            self._clock.now(),
+                            completed_at,
                             failed=failed,
+                        )
+                        self._remember_feedback(
+                            attempt.policy,
+                            (
+                                BrowserGroupFeedback.RUNTIME_FAILURE
+                                if completion is None
+                                else completion.group_feedback
+                            ),
+                            completed_at,
                         )
                 finally:
                     self._global_permits.release()
@@ -462,6 +700,80 @@ class BrowserGroupScheduler:
                 completed_at + delay,
             )
 
+    def _remember_feedback(
+        self,
+        policy: BrowserGroupPolicy,
+        feedback: BrowserGroupFeedback,
+        completed_at: float,
+    ) -> None:
+        reason_by_feedback = {
+            BrowserGroupFeedback.LOGIN_REQUIRED: BrowserCircuitReason.LOGIN_REQUIRED,
+            BrowserGroupFeedback.MFA_REQUIRED: BrowserCircuitReason.MFA_REQUIRED,
+            BrowserGroupFeedback.CHALLENGE_REQUIRED: BrowserCircuitReason.CHALLENGE_REQUIRED,
+            BrowserGroupFeedback.IP_BLOCKED: BrowserCircuitReason.IP_BLOCKED,
+            BrowserGroupFeedback.ACCOUNT_WARNING: BrowserCircuitReason.ACCOUNT_WARNING,
+        }
+        with self._state_lock:
+            state = self._runtime_states.setdefault(
+                policy.rate_limit_group,
+                _BrowserGroupRuntimeState(),
+            )
+            if feedback is BrowserGroupFeedback.RUNTIME_FAILURE:
+                state.consecutive_runtime_failures += 1
+                if state.consecutive_runtime_failures >= policy.runtime_failure_threshold:
+                    state.circuit_reason = (
+                        state.circuit_reason or BrowserCircuitReason.RUNTIME_FAILURE
+                    )
+                return
+            state.consecutive_runtime_failures = 0
+            if feedback is BrowserGroupFeedback.RATE_LIMITED:
+                state.blocked_until = max(
+                    state.blocked_until,
+                    completed_at + policy.rate_limit_cooldown,
+                )
+                return
+            reason = reason_by_feedback.get(feedback)
+            if reason is not None:
+                state.circuit_reason = state.circuit_reason or reason
+
+    def _runtime_block(
+        self,
+        attempt: BrowserArticleAttempt,
+    ) -> BrowserScheduledAttemptResult[None] | None:
+        snapshot = self._runtime_snapshot(attempt.policy, self._clock.now())
+        if snapshot.is_action_required:
+            return BrowserScheduledAttemptResult(
+                attempt_key=attempt.attempt_key,
+                disposition=BrowserScheduledDisposition.ACTION_REQUIRED,
+                runtime_state=snapshot,
+            )
+        if snapshot.is_rate_limited:
+            return BrowserScheduledAttemptResult(
+                attempt_key=attempt.attempt_key,
+                disposition=BrowserScheduledDisposition.DEFERRED,
+                runtime_state=snapshot,
+            )
+        return None
+
+    def _runtime_snapshot(
+        self,
+        policy: BrowserGroupPolicy,
+        observed_at: float,
+    ) -> BrowserGroupRuntimeSnapshot:
+        with self._state_lock:
+            state = self._runtime_states.setdefault(
+                policy.rate_limit_group,
+                _BrowserGroupRuntimeState(),
+            )
+            return BrowserGroupRuntimeSnapshot(
+                rate_limit_group=policy.rate_limit_group,
+                policy_revision=policy.policy_revision,
+                observed_at=observed_at,
+                blocked_until=state.blocked_until,
+                consecutive_runtime_failures=state.consecutive_runtime_failures,
+                circuit_reason=state.circuit_reason,
+            )
+
     @staticmethod
     def _acquire(
         permit: threading.Lock | threading.BoundedSemaphore,
@@ -494,8 +806,13 @@ __all__ = (
     "BrowserAttemptCompletion",
     "BrowserAttemptDisposition",
     "BrowserArticleAttempt",
+    "BrowserCircuitReason",
+    "BrowserGroupFeedback",
     "BrowserGroupPolicy",
+    "BrowserGroupRuntimeSnapshot",
     "BrowserGroupScheduler",
+    "BrowserScheduledAttemptResult",
+    "BrowserScheduledDisposition",
     "BrowserSchedulerCancellation",
     "BrowserSchedulerClock",
     "BrowserSchedulingCancelled",

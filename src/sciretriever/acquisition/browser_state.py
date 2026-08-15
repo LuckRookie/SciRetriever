@@ -27,6 +27,7 @@ class BrowserRunState(str, Enum):
     NOT_ENTITLED = "not-entitled"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
+    ACCOUNT_WARNING = "account-warning"
     NOT_FOUND = "not-found"
     PDF_CAPTURED = "pdf-captured"
     RUNTIME_FAILED = "runtime-failed"
@@ -87,6 +88,10 @@ _STATE_POLICY: Final[
             BrowserGroupEffect.PAUSE,
         ),
         BrowserRunState.IP_BLOCKED: (
+            BrowserFlowDisposition.ACTION_REQUIRED,
+            BrowserGroupEffect.OPEN_CIRCUIT,
+        ),
+        BrowserRunState.ACCOUNT_WARNING: (
             BrowserFlowDisposition.ACTION_REQUIRED,
             BrowserGroupEffect.OPEN_CIRCUIT,
         ),

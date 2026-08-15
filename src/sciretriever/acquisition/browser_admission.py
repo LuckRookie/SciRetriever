@@ -10,7 +10,11 @@ from typing import Final
 from sciretriever.acquisition.access_profiles import BrowserSessionKey
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.model.report import StableFailure
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+from sciretriever.network.browser_scheduler import (
+    BrowserCircuitReason,
+    BrowserGroupPolicy,
+    BrowserGroupRuntimeSnapshot,
+)
 
 _WORK_KEY: Final[re.Pattern[str]] = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
@@ -57,6 +61,8 @@ def _rate_limit_group(value: object) -> str:
             rate_limit_group=str(value),
             policy_revision="identity-validation",
             minimum_start_interval=0.0,
+            rate_limit_cooldown=1.0,
+            runtime_failure_threshold=1,
         ).rate_limit_group
     except ValueError:
         raise ValueError("rate_limit_group must be a stable non-sensitive identity") from None
@@ -83,6 +89,7 @@ class BrowserGroupReadiness(str, Enum):
     CHALLENGE_REQUIRED = "challenge-required"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
+    ACCOUNT_WARNING = "account-warning"
     CIRCUIT_OPEN = "circuit-open"
     RUNTIME_FAILED = "runtime-failed"
 
@@ -361,6 +368,8 @@ class BrowserAdmissionController:
     def evaluate(
         self,
         candidates: tuple[BrowserAdmissionCandidate, ...],
+        *,
+        runtime_states: tuple[BrowserGroupRuntimeSnapshot, ...] = (),
     ) -> BrowserAdmissionResult:
         if not isinstance(candidates, tuple) or any(
             not isinstance(candidate, BrowserAdmissionCandidate) for candidate in candidates
@@ -369,10 +378,11 @@ class BrowserAdmissionController:
         keys = tuple(candidate.work_key for candidate in candidates)
         if len(keys) != len(set(keys)):
             raise ValueError("Browser admission candidates must have unique work keys")
-        decisions = tuple(self._decide(candidate) for candidate in candidates)
+        groups = self._effective_groups(runtime_states)
+        decisions = tuple(self._decide(candidate, groups) for candidate in candidates)
         return BrowserAdmissionResult(
             decisions=decisions,
-            summary=self._summarize(candidates, decisions),
+            summary=self._summarize(candidates, decisions, groups),
         )
 
     def group_state_for(self, rate_limit_group: str) -> BrowserGroupAdmissionState | None:
@@ -380,7 +390,11 @@ class BrowserAdmissionController:
 
         return self._groups.get(_rate_limit_group(rate_limit_group))
 
-    def _decide(self, candidate: BrowserAdmissionCandidate) -> BrowserAdmissionDecision:
+    def _decide(
+        self,
+        candidate: BrowserAdmissionCandidate,
+        groups: dict[str, BrowserGroupAdmissionState],
+    ) -> BrowserAdmissionDecision:
         disposition: BrowserAdmissionDisposition
         failure: StableFailure | None = None
         if not candidate.resolution_confirmed:
@@ -422,7 +436,7 @@ class BrowserAdmissionController:
                 retryable=False,
             )
         else:
-            group = self._groups.get(candidate.rate_limit_group)
+            group = groups.get(candidate.rate_limit_group)
             disposition, failure = _group_decision(group)
         return BrowserAdmissionDecision(
             work_key=candidate.work_key,
@@ -436,6 +450,7 @@ class BrowserAdmissionController:
         self,
         candidates: tuple[BrowserAdmissionCandidate, ...],
         decisions: tuple[BrowserAdmissionDecision, ...],
+        groups: dict[str, BrowserGroupAdmissionState],
     ) -> BrowserEscalationSummary:
         grouped: dict[str, list[BrowserAdmissionDecision]] = {}
         for decision in decisions:
@@ -443,7 +458,7 @@ class BrowserAdmissionController:
         summaries = []
         for group_key in sorted(grouped):
             group_decisions = tuple(grouped[group_key])
-            state = self._groups.get(group_key)
+            state = groups.get(group_key)
             allowed_count = _count_disposition(
                 group_decisions,
                 BrowserAdmissionDisposition.ALLOWED,
@@ -508,6 +523,38 @@ class BrowserAdmissionController:
             )
         return BrowserEscalationSummary(groups=tuple(summaries))
 
+    def _effective_groups(
+        self,
+        runtime_states: tuple[BrowserGroupRuntimeSnapshot, ...],
+    ) -> dict[str, BrowserGroupAdmissionState]:
+        if not isinstance(runtime_states, tuple) or any(
+            not isinstance(state, BrowserGroupRuntimeSnapshot) for state in runtime_states
+        ):
+            raise TypeError("runtime_states must contain BrowserGroupRuntimeSnapshot values")
+        keys = tuple(state.rate_limit_group for state in runtime_states)
+        if len(keys) != len(set(keys)):
+            raise ValueError("Browser runtime group snapshots must be unique")
+        groups = dict(self._groups)
+        for runtime in runtime_states:
+            configured = groups.get(runtime.rate_limit_group)
+            if configured is None:
+                raise ValueError("Browser runtime state must match a configured group")
+            if runtime.policy_revision != configured.policy.policy_revision:
+                raise ValueError("Browser runtime state must match the configured policy revision")
+            readiness = configured.readiness
+            if readiness is BrowserGroupReadiness.READY:
+                readiness = _runtime_readiness(runtime)
+            groups[runtime.rate_limit_group] = BrowserGroupAdmissionState(
+                policy=configured.policy,
+                session_key=str(configured.session_key),
+                readiness=readiness,
+                earliest_start_in_seconds=max(
+                    configured.earliest_start_in_seconds,
+                    runtime.blocked_for_seconds,
+                ),
+            )
+        return groups
+
     def _eligible_for_execution(
         self,
         candidate: BrowserAdmissionCandidate,
@@ -538,10 +585,7 @@ def _group_decision(
         )
     if group.readiness is BrowserGroupReadiness.READY:
         return BrowserAdmissionDisposition.ALLOWED, None
-    if group.readiness in {
-        BrowserGroupReadiness.RATE_LIMITED,
-        BrowserGroupReadiness.CIRCUIT_OPEN,
-    }:
+    if group.readiness is BrowserGroupReadiness.RATE_LIMITED:
         return (
             BrowserAdmissionDisposition.DEFERRED,
             _failure(
@@ -560,6 +604,25 @@ def _group_decision(
             retryable=False,
         ),
     )
+
+
+def _runtime_readiness(
+    state: BrowserGroupRuntimeSnapshot,
+) -> BrowserGroupReadiness:
+    if state.circuit_reason is None:
+        return (
+            BrowserGroupReadiness.RATE_LIMITED
+            if state.is_rate_limited
+            else BrowserGroupReadiness.READY
+        )
+    return {
+        BrowserCircuitReason.LOGIN_REQUIRED: BrowserGroupReadiness.LOGIN_REQUIRED,
+        BrowserCircuitReason.MFA_REQUIRED: BrowserGroupReadiness.MFA_REQUIRED,
+        BrowserCircuitReason.CHALLENGE_REQUIRED: BrowserGroupReadiness.CHALLENGE_REQUIRED,
+        BrowserCircuitReason.IP_BLOCKED: BrowserGroupReadiness.IP_BLOCKED,
+        BrowserCircuitReason.ACCOUNT_WARNING: BrowserGroupReadiness.ACCOUNT_WARNING,
+        BrowserCircuitReason.RUNTIME_FAILURE: BrowserGroupReadiness.RUNTIME_FAILED,
+    }[state.circuit_reason]
 
 
 def _count_disposition(
