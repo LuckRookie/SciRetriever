@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "access_key": "elsevier-sciencedirect",
+  "display_name": "Elsevier / ScienceDirect",
+  "product_name": "Article Retrieval and Object Retrieval APIs",
+  "verification_state": "production-ready",
+  "verification_date": "2026-08-15",
+  "evidence_revision": "elsevier-article-object-2026-08-15",
+  "notes_reference": "docs/notes/providers/elsevier.md",
+  "official_references": [
+    "https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl",
+    "https://dev.elsevier.com/documentation/ObjectRetrievalAPI.wadl",
+    "https://dev.elsevier.com/api_docs.html"
+  ],
+  "access_terms_references": ["https://dev.elsevier.com/policy.html"],
+  "rate_limit_references": ["https://dev.elsevier.com/api_key_settings.html"],
+  "landing_origins": [
+    "https://www.sciencedirect.com",
+    "https://linkinghub.elsevier.com"
+  ],
+  "asset_origins": [
+    "https://api.elsevier.com",
+    "https://www.sciencedirect.com",
+    "https://linkinghub.elsevier.com",
+    "https://pdf.sciencedirectassets.com"
+  ],
+  "stable_identity": {
+    "locator_namespaces": ["pii", "elsevier-article-eid"],
+    "provider_record_names": [],
+    "examples": [
+      "pii:S0014579301033130",
+      "elsevier-article-eid:1-s2.0-S0014579301033130"
+    ]
+  },
+  "capabilities": {
+    "public_routes": [],
+    "authorized_api_routes": ["api:elsevier-article-object"],
+    "browser_route": null
+  },
+  "route_verification": {
+    "authorized_api": {
+      "state": "production-ready",
+      "contract": "article-full-main-web-pdf-to-object-eid",
+      "priority": "after-public-before-browser"
+    },
+    "browser": {
+      "state": "unsupported",
+      "blockers": [
+        "no-independent-page-rule-evidence",
+        "latest-upstream-browser-record-stopped-at-challenge",
+        "no-reviewed-browser-rate-or-session-policy",
+        "no-verified-login-entitlement-paywall-challenge-markers"
+      ]
+    }
+  },
+  "ownership_cases": [
+    {"case_id": "main-web-pdf-object", "expected": "primary"},
+    {"case_id": "supplement-mmc-or-graphical-object", "expected": "supplement"},
+    {"case_id": "arbitrary-or-scopus-eid", "expected": "excluded"}
+  ],
+  "evidence_gaps": [
+    "browser-route-not-registered",
+    "browser-upstream-challenge-not-rewritten-as-success",
+    "live-key-acceptance-and-entitlement-not-asserted"
+  ]
+}

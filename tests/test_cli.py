@@ -1220,7 +1220,7 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("unpaywall", stdout)
         self.assertIn("core", stdout)
         self.assertIn("api_key=configured", stdout)
-        self.assertIn("known unavailable: elsevier, springer", stdout)
+        self.assertIn("elsevier, core, wiley · known unavailable: springer", stdout)
         self.assertIn("Controlled browser", stdout)
         self.assertIn("not implemented", stdout)
         self.assertNotIn("status-secret-sentinel", stdout)

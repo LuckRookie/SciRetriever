@@ -346,7 +346,15 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             (
                 ("arxiv", ("arxiv.org", "export.arxiv.org")),
                 ("europe-pmc", ("europepmc.org", "www.ebi.ac.uk")),
-                ("elsevier", ("api.elsevier.com",)),
+                (
+                    "elsevier",
+                    (
+                        "api.elsevier.com",
+                        "www.sciencedirect.com",
+                        "linkinghub.elsevier.com",
+                        "pdf.sciencedirectassets.com",
+                    ),
+                ),
                 (
                     "springer",
                     (
@@ -363,6 +371,8 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
         for first, second, provider_name in (
             ("arxiv.org", "export.arxiv.org", "arxiv"),
             ("europepmc.org", "www.ebi.ac.uk", "europe-pmc"),
+            ("api.elsevier.com", "www.sciencedirect.com", "elsevier"),
+            ("linkinghub.elsevier.com", "pdf.sciencedirectassets.com", "elsevier"),
             ("api.springernature.com", "link.springer.com", "springer"),
             ("onlinelibrary.wiley.com", "alm.wiley.com", "wiley"),
             ("api.core.ac.uk", "core.ac.uk", "core"),
@@ -439,10 +449,13 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                 "sci-hub": ("operator-locator",),
             },
         )
-        self.assertEqual(set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG), {"core", "wiley"})
+        self.assertEqual(
+            set(PRODUCTION_AUTHORIZED_PROVIDER_CATALOG),
+            {"core", "elsevier", "wiley"},
+        )
         self.assertEqual(
             UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
-            frozenset({"elsevier", "springer"}),
+            frozenset({"springer"}),
         )
         self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
         self.assertIsNot(
@@ -465,15 +478,22 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                 for mapping in by_name["wiley"].mappings
             )
         )
-        for provider in ("elsevier", "springer"):
-            self.assertTrue(by_name[provider].ready)
-            self.assertTrue(
-                any(
-                    mapping.capability is AcquisitionCapability.AUTHORIZED_PROVIDER_API
-                    and not mapping.production_available
-                    for mapping in by_name[provider].mappings
-                )
+        self.assertTrue(by_name["elsevier"].ready)
+        self.assertTrue(
+            any(
+                mapping.capability is AcquisitionCapability.AUTHORIZED_PROVIDER_API
+                and mapping.production_available
+                for mapping in by_name["elsevier"].mappings
             )
+        )
+        self.assertTrue(by_name["springer"].ready)
+        self.assertTrue(
+            any(
+                mapping.capability is AcquisitionCapability.AUTHORIZED_PROVIDER_API
+                and not mapping.production_available
+                for mapping in by_name["springer"].mappings
+            )
+        )
         self.assertTrue(by_name["core"].ready)
         core_authorized = next(
             mapping
@@ -571,6 +591,52 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             _request((), identifiers=(Identifier(namespace="doi", value="10.1002/example"),))
         )
         self.assertEqual(planning.doi_resolution_state.value, "eligible")
+
+    def test_elsevier_authorized_source_uses_article_object_profile_and_optional_token(
+        self,
+    ) -> None:
+        api_key = "synthetic-elsevier-api-key"
+        institution_token = "synthetic-elsevier-institution-token"
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_credentials(
+                ProviderName.ELSEVIER,
+                {
+                    "api_key": api_key,
+                    "institution_token": institution_token,
+                },
+                home=home,
+            )
+            dependencies, client = _dependencies(credentials=load_credentials(home=home))
+            registry = build_acquisition_registry(_configuration(("elsevier",)), dependencies)
+
+        binding = registry.route_registry.binding_for("api:elsevier-article-object")
+        self.assertEqual(binding.spec.tier, AcquisitionPath.AUTHORIZED_PROVIDER_API)
+        self.assertEqual(binding.spec.capability.value, "multi-step-pdf-object")
+        self.assertEqual(binding.spec.profile_access_key, "elsevier-sciencedirect")
+        self.assertEqual(binding.spec.quota_group, "elsevier-article-object")
+        self.assertEqual(
+            binding.spec.required_identifier_namespaces,
+            ("doi", "pii", "elsevier-article-eid"),
+        )
+        self.assertIsInstance(binding.adapter, AuthorizedPdfSource)
+        authorized = cast(AuthorizedPdfSource, binding.adapter)
+        elsevier_client = getattr(authorized, "_client")
+        self.assertIs(getattr(elsevier_client, "_http_client"), client)
+        self.assertNotIn(api_key, repr(registry))
+        self.assertNotIn(institution_token, repr(registry))
+        self.assertFalse(
+            any(
+                item.spec.tier is AcquisitionPath.CONTROLLED_BROWSER
+                for item in registry.route_registry.bindings
+            )
+        )
+
+        missing, _client = _dependencies()
+        unconfigured = build_acquisition_registry(_configuration(("elsevier",)), missing)
+        pending = unconfigured.route_registry.binding_for("api:elsevier-article-object")
+        self.assertEqual(pending.spec.readiness, RouteReadiness.UNCONFIGURED)
+        self.assertIsNone(pending.adapter)
 
     def test_direct_is_not_a_provider_and_consumes_all_saved_hints_when_none_enabled(
         self,

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<full-text-retrieval-response xmlns:xocs="http://www.elsevier.com/xml/xocs/dtd">
+  <coredata>
+    <pii>S0014579301033130</pii>
+    <eid>1-s2.0-S0014579301033130</eid>
+  </coredata>
+  <xocs:attachments>
+    <xocs:web-pdf>
+      <xocs:attachment-eid>1-s2.0-S0014579301033130-mmc1.pdf</xocs:attachment-eid>
+      <xocs:filename>mmc1.pdf</xocs:filename>
+      <xocs:extension>pdf</xocs:extension>
+      <xocs:web-pdf-purpose>SUPPLEMENT</xocs:web-pdf-purpose>
+    </xocs:web-pdf>
+  </xocs:attachments>
+</full-text-retrieval-response>

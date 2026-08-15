@@ -456,20 +456,24 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
     def test_production_catalog_contains_only_verified_primary_pdf_apis(self) -> None:
         self.assertEqual(
             set(authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG),
-            {"core", "wiley"},
+            {"core", "elsevier", "wiley"},
         )
         self.assertIs(
             authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG["core"],
             authorized.CORE_AUTHORIZED_CONTRACT,
         )
+        self.assertIs(
+            authorized.PRODUCTION_AUTHORIZED_PROVIDER_CATALOG["elsevier"],
+            authorized.ELSEVIER_AUTHORIZED_CONTRACT,
+        )
         self.assertEqual(
             authorized.UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
-            frozenset({"elsevier", "springer"}),
+            frozenset({"springer"}),
         )
         exported = set(authorized.__all__)
+        self.assertIn("ELSEVIER_AUTHORIZED_CONTRACT", exported)
         self.assertIn("WILEY_AUTHORIZED_CONTRACT", exported)
-        for provider in ("Elsevier", "Springer"):
-            self.assertFalse(any(provider in name for name in exported))
+        self.assertFalse(any("Springer" in name for name in exported))
 
     def test_secret_free_readiness_precedes_io_but_does_not_claim_entitlement(self) -> None:
         contract = _contract()
