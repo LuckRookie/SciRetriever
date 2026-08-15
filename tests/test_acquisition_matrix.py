@@ -535,6 +535,15 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             validate_acquisition_provider_matrix(
                 statuses[:1] + (cast(AcquisitionProviderStatus, damaged),) + statuses[2:]
             )
+        with mock.patch(
+            "sciretriever.acquisition.registry.PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
+            (),
+        ):
+            with self.assertRaisesRegex(
+                AcquisitionRegistryError,
+                "profile-catalog-mismatch",
+            ):
+                validate_acquisition_provider_matrix(statuses)
 
 
 class AcquisitionRegistryAssemblyTests(unittest.TestCase):

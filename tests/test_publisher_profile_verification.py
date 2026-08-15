@@ -172,6 +172,71 @@ def _browser_rule() -> BrowserSiteRule:
 
 
 class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
+    def test_final_capability_matrix_is_exact_and_documented(self) -> None:
+        profiles = PUBLISHER_ACCESS_VERIFICATION_MATRIX.profiles.profiles
+        self.assertEqual(
+            tuple(profile.access_key for profile in profiles),
+            (
+                "acm-digital-library",
+                "acs-publications",
+                "aip-publishing",
+                "american-mathematical-society",
+                "annual-reviews",
+                "aps-journals",
+                "copernicus-publications",
+                "core-open-access",
+                "elsevier-sciencedirect",
+                "frontiers",
+                "ieee-xplore",
+                "iopscience",
+                "mdpi",
+                "nature-portfolio",
+                "oxford-academic",
+                "pnas",
+                "plos",
+                "royal-society-publishing",
+                "rsc-publishing",
+                "science-aaas",
+                "springerlink",
+                "wiley-online-library",
+                "world-scientific",
+            ),
+        )
+        self.assertEqual(
+            {
+                profile.access_key: (
+                    profile.public_route_keys,
+                    profile.api_route_keys,
+                    profile.browser_route_key,
+                )
+                for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
+            },
+            {
+                "core-open-access": ((), ("api:core",), None),
+                "elsevier-sciencedirect": (
+                    (),
+                    ("api:elsevier-article-object",),
+                    None,
+                ),
+                "wiley-online-library": ((), ("api:wiley-tdm-v1",), None),
+            },
+        )
+        self.assertEqual(
+            PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_browser_rules.rules,
+            (),
+        )
+        matrix_document = Path("docs/notes/providers/publisher-access-matrix.md").read_text(
+            encoding="utf-8"
+        )
+        for profile in profiles:
+            self.assertEqual(matrix_document.count(f"| `{profile.access_key}` |"), 1)
+            self.assertTrue(Path(profile.evidence.notes_reference).is_file())
+        self.assertIn(
+            "当前验证矩阵有 23 项，production profile catalog 有 3 项，"
+            "production Browser rule catalog 有 0 项",
+            matrix_document,
+        )
+
     def test_every_matrix_profile_has_one_matching_evidence_fixture(self) -> None:
         self.assertEqual(
             PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_profiles.profiles,
