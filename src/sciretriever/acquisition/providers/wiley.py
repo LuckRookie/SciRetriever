@@ -24,6 +24,7 @@ from sciretriever.acquisition.authorized import (
     AuthorizedPdfDownload,
 )
 from sciretriever.acquisition.ports import TemporaryPdfContent
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
@@ -39,6 +40,8 @@ _ALM_DOWNLOAD_PREFIX: Final[tuple[str, ...]] = ("", "alm", "api", "v2", "downloa
 _MAX_PDF_BYTES: Final[int] = 64 * 1024 * 1024
 _MAX_TOKEN_CHARS: Final[int] = 8_192
 _MAX_ALM_LOCATOR_CHARS: Final[int] = 4_096
+_ROUTE_KEY: Final[str] = "api:wiley-tdm-v1"
+_LOGGER = get_logger(__name__)
 
 WILEY_ACCESS_SCOPE: Final[AccessScope] = AccessScope(provider_name="wiley", channel="api")
 WILEY_ACCESS_POLICY: Final[AccessPolicy] = AccessPolicy(
@@ -97,12 +100,27 @@ def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
             wall_now=datetime.now(timezone.utc),
         )
     except FeedbackHeaderError:
-        return AccessFeedback(throttled=True)
+        return _logged_feedback(AccessFeedback(throttled=True))
     if standard is not None:
-        return standard
+        return _logged_feedback(standard)
     if response.status >= 500:
-        return AccessFeedback(throttled=True)
+        return _logged_feedback(AccessFeedback(throttled=True))
     return None
+
+
+def _logged_feedback(feedback: AccessFeedback) -> AccessFeedback:
+    _LOGGER.debug(
+        "event=authorized-quota-feedback provider_group=%s route_key=%s throttled=%s "
+        "retry_after_seconds=%s quota_remaining=%s quota_limit=%s quota_reset=%s",
+        WILEY_ACCESS_SCOPE.provider_name,
+        _ROUTE_KEY,
+        str(feedback.throttled).lower(),
+        feedback.retry_after,
+        feedback.quota_remaining,
+        feedback.quota_limit,
+        str(feedback.quota_reset_at is not None).lower(),
+    )
+    return feedback
 
 
 def _guard_alm_download_redirect(target_url: str) -> None:

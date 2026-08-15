@@ -29,6 +29,7 @@ from sciretriever.acquisition.authorized import (
 )
 from sciretriever.acquisition.planning import AccessRouteHint, AccessRouteHintKind
 from sciretriever.acquisition.ports import TemporaryPdfContent
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
@@ -73,6 +74,7 @@ _SUPPLEMENT_MARKERS: Final[tuple[str, ...]] = (
     "supplement",
     "supplementary",
 )
+_LOGGER = get_logger(__name__)
 
 ELSEVIER_ARTICLE_ACCESS_SCOPE: Final[AccessScope] = AccessScope(
     provider_name="elsevier",
@@ -178,26 +180,45 @@ def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
             monotonic_now=time.monotonic(),
         )
     except FeedbackHeaderError:
-        return AccessFeedback(throttled=True)
+        return _logged_feedback(AccessFeedback(throttled=True))
     throttled = response.status == 429 or remaining == 0
     if remaining is not None and reset_at is not None:
         if limit is not None and remaining > limit:
-            return AccessFeedback(throttled=True)
-        return AccessFeedback(
-            retry_after=None if standard is None else standard.retry_after,
-            quota_reset_at=reset_at,
-            quota_remaining=remaining,
-            quota_limit=limit,
-            throttled=throttled,
+            return _logged_feedback(AccessFeedback(throttled=True))
+        return _logged_feedback(
+            AccessFeedback(
+                retry_after=None if standard is None else standard.retry_after,
+                quota_reset_at=reset_at,
+                quota_remaining=remaining,
+                quota_limit=limit,
+                throttled=throttled,
+            )
         )
     if standard is not None or throttled:
-        return AccessFeedback(
-            retry_after=None if standard is None else standard.retry_after,
-            throttled=throttled,
+        return _logged_feedback(
+            AccessFeedback(
+                retry_after=None if standard is None else standard.retry_after,
+                throttled=throttled,
+            )
         )
     if response.status >= 500:
-        return AccessFeedback(throttled=True)
+        return _logged_feedback(AccessFeedback(throttled=True))
     return None
+
+
+def _logged_feedback(feedback: AccessFeedback) -> AccessFeedback:
+    _LOGGER.debug(
+        "event=authorized-quota-feedback provider_group=%s route_key=%s throttled=%s "
+        "retry_after_seconds=%s quota_remaining=%s quota_limit=%s quota_reset=%s",
+        ELSEVIER_ARTICLE_ACCESS_SCOPE.provider_name,
+        _ROUTE_KEY,
+        str(feedback.throttled).lower(),
+        feedback.retry_after,
+        feedback.quota_remaining,
+        feedback.quota_limit,
+        str(feedback.quota_reset_at is not None).lower(),
+    )
+    return feedback
 
 
 def _elsevier_status(headers: tuple[Header, ...]) -> str | None:

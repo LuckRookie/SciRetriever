@@ -11,11 +11,14 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Generic, Protocol, TypeVar, cast, runtime_checkable
 
+from sciretriever.logging.api import get_logger
+
 _ATTEMPT_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$", re.ASCII)
 _GROUP_KEY = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", re.ASCII)
 _POLICY_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$", re.ASCII)
 _SENSITIVE_MARKERS = frozenset({"cookie", "credential", "password", "secret", "signature", "token"})
 _ResultT = TypeVar("_ResultT")
+_LOGGER = get_logger(__name__)
 
 
 @runtime_checkable
@@ -493,16 +496,32 @@ class BrowserGroupScheduler:
         groups = self._validate_execution(attempts, callback, cancel_event)
         if not attempts:
             return ()
+        _LOGGER.info(
+            "event=browser-scheduler-started provider_group_count=%d attempt_count=%d",
+            len(groups),
+            len(attempts),
+        )
         missing = object()
         results: list[object] = [missing] * len(attempts)
 
         def run_group(indexed: tuple[tuple[int, BrowserArticleAttempt], ...]) -> None:
+            group = indexed[0][1].rate_limit_group
+            _LOGGER.info(
+                "event=browser-provider-group-started provider_group=%s attempt_count=%d",
+                group,
+                len(indexed),
+            )
             for index, attempt in indexed:
                 results[index] = self._run_attempt(
                     attempt,
                     callback,
                     cancel_event=cancel_event,
                 )
+            _LOGGER.info(
+                "event=browser-provider-group-finished provider_group=%s attempt_count=%d",
+                group,
+                len(indexed),
+            )
 
         with ThreadPoolExecutor(
             max_workers=min(self._max_concurrency, len(groups)),
@@ -513,6 +532,11 @@ class BrowserGroupScheduler:
                 future.result()
         if any(result is missing for result in results):
             raise RuntimeError("Browser scheduler did not complete every attempt")
+        _LOGGER.info(
+            "event=browser-scheduler-finished provider_group_count=%d attempt_count=%d",
+            len(groups),
+            len(attempts),
+        )
         return cast(tuple[BrowserScheduledAttemptResult[_ResultT], ...], tuple(results))
 
     def runtime_snapshot(
@@ -544,6 +568,12 @@ class BrowserGroupScheduler:
                 raise ValueError("Browser risk group has no action-required circuit")
             state.circuit_reason = None
             state.consecutive_runtime_failures = 0
+        _LOGGER.info(
+            "event=browser-provider-group-circuit-acknowledged provider_group=%s "
+            "policy_revision=%s action=resume-after-current-cooldown",
+            group,
+            revision,
+        )
         return self._runtime_snapshot(policy, self._clock.now())
 
     def __reduce__(self) -> str | tuple[object, ...]:
@@ -586,19 +616,38 @@ class BrowserGroupScheduler:
         *,
         cancel_event: BrowserSchedulerCancellation | None,
     ) -> BrowserScheduledAttemptResult[_ResultT]:
+        _LOGGER.debug(
+            "event=browser-article-queued attempt_key=%s provider_group=%s "
+            "session_key=%s policy_revision=%s",
+            attempt.attempt_key,
+            attempt.rate_limit_group,
+            attempt.session_key,
+            attempt.policy.policy_revision,
+        )
         group_lock = self._group_lock(attempt.rate_limit_group)
         self._acquire(group_lock, cancel_event)
         try:
             self._check_cancel(cancel_event)
             blocked = self._runtime_block(attempt)
             if blocked is not None:
+                self._log_runtime_block(attempt, blocked)
                 return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
             deadline = self._deadline(attempt.policy)
-            if self._clock.now() < deadline:
+            now = self._clock.now()
+            if now < deadline:
+                _LOGGER.info(
+                    "event=browser-provider-group-waiting attempt_key=%s provider_group=%s "
+                    "wait_seconds=%g reason=provider-policy "
+                    "action=wait-before-next-article-flow",
+                    attempt.attempt_key,
+                    attempt.rate_limit_group,
+                    deadline - now,
+                )
                 self._clock.wait_until(deadline, cancel_event)
             self._check_cancel(cancel_event)
             blocked = self._runtime_block(attempt)
             if blocked is not None:
+                self._log_runtime_block(attempt, blocked)
                 return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
             self._acquire(self._global_permits, cancel_event)
             failed = True
@@ -608,14 +657,30 @@ class BrowserGroupScheduler:
                 self._check_cancel(cancel_event)
                 blocked = self._runtime_block(attempt)
                 if blocked is not None:
+                    self._log_runtime_block(attempt, blocked)
                     return cast(BrowserScheduledAttemptResult[_ResultT], blocked)
                 started_at = self._clock.now()
                 self._remember_start(attempt.policy, started_at)
                 started = True
+                _LOGGER.debug(
+                    "event=browser-article-started attempt_key=%s provider_group=%s "
+                    "policy_revision=%s",
+                    attempt.attempt_key,
+                    attempt.rate_limit_group,
+                    attempt.policy.policy_revision,
+                )
                 completion = callback(attempt)
                 if not isinstance(completion, BrowserAttemptCompletion):
                     raise TypeError("Browser callback must return BrowserAttemptCompletion")
                 failed = completion.disposition is BrowserAttemptDisposition.FAILED
+                _LOGGER.debug(
+                    "event=browser-article-finished attempt_key=%s provider_group=%s "
+                    "outcome=%s group_feedback=%s",
+                    attempt.attempt_key,
+                    attempt.rate_limit_group,
+                    completion.disposition.value,
+                    completion.group_feedback.value,
+                )
                 return BrowserScheduledAttemptResult(
                     attempt_key=attempt.attempt_key,
                     disposition=BrowserScheduledDisposition.EXECUTED,
@@ -640,9 +705,42 @@ class BrowserGroupScheduler:
                             completed_at,
                         )
                 finally:
+                    _LOGGER.debug(
+                        "event=browser-resource-cleanup attempt_key=%s provider_group=%s "
+                        "resource=global-permit outcome=released",
+                        attempt.attempt_key,
+                        attempt.rate_limit_group,
+                    )
                     self._global_permits.release()
         finally:
+            _LOGGER.debug(
+                "event=browser-resource-cleanup attempt_key=%s provider_group=%s "
+                "resource=group-permit outcome=released",
+                attempt.attempt_key,
+                attempt.rate_limit_group,
+            )
             group_lock.release()
+
+    @staticmethod
+    def _log_runtime_block(
+        attempt: BrowserArticleAttempt,
+        result: BrowserScheduledAttemptResult[None],
+    ) -> None:
+        state = result.runtime_state
+        if state is None:
+            return
+        reason = "rate-limit" if state.circuit_reason is None else state.circuit_reason.value
+        wait_seconds = max(state.blocked_until - state.observed_at, 0.0)
+        _LOGGER.info(
+            "event=browser-provider-group-paused attempt_key=%s provider_group=%s "
+            "outcome=%s reason=%s wait_seconds=%g "
+            "action=review-group-state-before-retry",
+            attempt.attempt_key,
+            attempt.rate_limit_group,
+            result.disposition.value,
+            reason,
+            wait_seconds,
+        )
 
     def _register_policies(self, policies: tuple[BrowserGroupPolicy, ...]) -> None:
         with self._state_lock:
@@ -708,6 +806,13 @@ class BrowserGroupScheduler:
         feedback: BrowserGroupFeedback,
         completed_at: float,
     ) -> None:
+        _LOGGER.debug(
+            "event=browser-provider-group-feedback provider_group=%s "
+            "policy_revision=%s feedback=%s",
+            policy.rate_limit_group,
+            policy.policy_revision,
+            feedback.value,
+        )
         reason_by_feedback = {
             BrowserGroupFeedback.LOGIN_REQUIRED: BrowserCircuitReason.LOGIN_REQUIRED,
             BrowserGroupFeedback.MFA_REQUIRED: BrowserCircuitReason.MFA_REQUIRED,

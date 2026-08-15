@@ -69,9 +69,9 @@ _SENSITIVE_KEY_NAMES = frozenset(
 _KEY_VALUE_RE = re.compile(
     r"(?P<prefix>['\"]?(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|"
     r"x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|"
-    r"client[-_]?secret|private[-_]?key|credential[s]?|password|secret|signature|sig|hmac)"
+    r"token|client[-_]?secret|private[-_]?key|credential[s]?|password|secret|signature|sig|hmac)"
     r"['\"]?\s*(?:=|:)\s*)"
-    r"(?P<value>(?:['\"][^'\"]*['\"]|[^,;\s}\]]+))",
+    r"(?P<value>(?:['\"][^'\"]*['\"]|[^,;\s}\]&]+))",
     re.IGNORECASE,
 )
 _AUTH_SCHEME_RE = re.compile(r"\b(?P<scheme>Bearer|Basic)\s+(?P<value>[^\s,;]+)", re.I)

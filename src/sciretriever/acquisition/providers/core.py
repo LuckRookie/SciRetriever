@@ -23,6 +23,7 @@ from sciretriever.acquisition.authorized import (
     AuthorizedPdfDownload,
 )
 from sciretriever.acquisition.ports import TemporaryPdfContent
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
@@ -39,6 +40,8 @@ _V3_ROOT: Final[str] = f"{_ORIGIN}/v3"
 _CREDENTIAL_ORIGIN: Final[Origin] = Origin("https", "api.core.ac.uk", 443)
 _MAX_PDF_BYTES: Final[int] = 64 * 1024 * 1024
 _IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+", re.ASCII)
+_ROUTE_KEY: Final[str] = "api:core"
+_LOGGER = get_logger(__name__)
 
 # CORE's token allowance is shared across metadata and PDF operations.  These
 # values intentionally match the anonymous safety floor used by its Metadata
@@ -139,7 +142,7 @@ def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
         )
         nonnegative_integer_header(response.headers, "X-RateLimit-Limit")
     except FeedbackHeaderError:
-        return AccessFeedback(throttled=True)
+        return _logged_feedback(AccessFeedback(throttled=True))
     delays = tuple(
         delay
         for delay in (
@@ -150,8 +153,23 @@ def _response_feedback(response: TransportResponse) -> AccessFeedback | None:
     )
     throttled = response.status == 429 or response.status >= 500 or remaining == 0
     if not delays:
-        return AccessFeedback(throttled=True) if throttled else None
-    return AccessFeedback(retry_after=max(delays), throttled=throttled)
+        return _logged_feedback(AccessFeedback(throttled=True)) if throttled else None
+    return _logged_feedback(AccessFeedback(retry_after=max(delays), throttled=throttled))
+
+
+def _logged_feedback(feedback: AccessFeedback) -> AccessFeedback:
+    _LOGGER.debug(
+        "event=authorized-quota-feedback provider_group=%s route_key=%s throttled=%s "
+        "retry_after_seconds=%s quota_remaining=%s quota_limit=%s quota_reset=%s",
+        CORE_ACCESS_SCOPE.provider_name,
+        _ROUTE_KEY,
+        str(feedback.throttled).lower(),
+        feedback.retry_after,
+        feedback.quota_remaining,
+        feedback.quota_limit,
+        str(feedback.quota_reset_at is not None).lower(),
+    )
+    return feedback
 
 
 def _successful_download(

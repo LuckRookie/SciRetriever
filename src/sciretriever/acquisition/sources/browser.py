@@ -32,6 +32,7 @@ from sciretriever.acquisition.browser_state import (
     BrowserFlowDisposition,
     BrowserRunState,
     BrowserRunStateMachine,
+    BrowserStateDecision,
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import RouteReadiness
@@ -61,6 +62,7 @@ from sciretriever.acquisition.sources.browser_rules import (
     BrowserSiteRule,
 )
 from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import (
     AccessFailure,
     BrowserCapture,
@@ -124,6 +126,7 @@ _KNOWN_BROWSER_FAILURES: Final[frozenset[str]] = frozenset(
         "runtime",
     }
 )
+_LOGGER = get_logger(__name__)
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
 Clock = Callable[[], UtcTimestamp]
@@ -509,6 +512,27 @@ def _state_ends_without_pdf(state_machine: BrowserRunStateMachine) -> bool:
     return False
 
 
+def _transition_browser_state(
+    state_machine: BrowserRunStateMachine,
+    state: BrowserRunState,
+    *,
+    rule_id: str,
+) -> BrowserStateDecision:
+    previous = state_machine.state
+    decision = state_machine.transition(state)
+    if previous is not state:
+        _LOGGER.debug(
+            "event=browser-state-transition route_key=browser:controlled "
+            "browser_rule_id=%s previous_state=%s state=%s disposition=%s group_effect=%s",
+            rule_id,
+            "none" if previous is None else previous.value,
+            state.value,
+            decision.flow_disposition.value,
+            decision.group_effect.value,
+        )
+    return decision
+
+
 _TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
     BrowserPageMarkerKind.LOGIN_REQUIRED: BrowserRunState.LOGIN_REQUIRED,
     BrowserPageMarkerKind.MFA_REQUIRED: BrowserRunState.MFA_REQUIRED,
@@ -728,7 +752,23 @@ class ControlledBrowserPdfSource:
             try:
                 key = _candidate_key(action)
                 if not self._claim_candidate(candidate_keys, key):
+                    _LOGGER.debug(
+                        "event=browser-candidate-skipped route_key=%s browser_rule_id=%s "
+                        "candidate_id=%s reason=already-tried",
+                        self.route_key,
+                        action.rule.rule_id,
+                        key,
+                    )
                     continue
+                _LOGGER.debug(
+                    "event=browser-candidate-started route_key=%s browser_rule_id=%s "
+                    "web_scope=%s evidence_kind=%s candidate_id=%s",
+                    self.route_key,
+                    action.rule.rule_id,
+                    action.rule.web_scope_provider_name,
+                    action.evidence_kind,
+                    key,
+                )
                 result, state_machine, page_failure = self._run_action(action)
                 if page_failure is not None:
                     raise AcquisitionSourceFailure(page_failure)
@@ -736,6 +776,16 @@ class ControlledBrowserPdfSource:
                     continue
                 yield from self._capture_deliveries(action, result, candidate_keys)
             except AcquisitionSourceFailure as error:
+                _LOGGER.debug(
+                    "event=browser-candidate-failed route_key=%s browser_rule_id=%s "
+                    "code=%s retryable=%s reason=%s action=%s",
+                    self.route_key,
+                    action.rule.rule_id,
+                    error.failure.code,
+                    str(error.failure.retryable).lower(),
+                    error.failure.reason,
+                    error.failure.action,
+                )
                 if first_failure is None:
                     first_failure = error
                 continue
@@ -755,6 +805,14 @@ class ControlledBrowserPdfSource:
         )
         for capture in captures:
             disposition = self._capture_disposition(action, capture)
+            _LOGGER.debug(
+                "event=browser-capture-classified route_key=%s browser_rule_id=%s "
+                "capture_kind=%s disposition=%s",
+                self.route_key,
+                action.rule.rule_id,
+                capture.kind.value,
+                disposition.value,
+            )
             if disposition in {
                 BrowserCaptureDisposition.SUPPLEMENT,
                 BrowserCaptureDisposition.EXCLUDED,
@@ -774,6 +832,13 @@ class ControlledBrowserPdfSource:
             try:
                 yield temporary_pdf
             except BaseException:
+                _LOGGER.debug(
+                    "event=browser-resource-cleanup route_key=%s browser_rule_id=%s "
+                    "candidate_id=%s resource=temporary-capture outcome=discarded",
+                    self.route_key,
+                    action.rule.rule_id,
+                    capture_key,
+                )
                 temporary_pdf.content.discard()
                 raise
 
@@ -851,7 +916,11 @@ class ControlledBrowserPdfSource:
         action: _BrowserAction,
     ) -> tuple[BrowserResult, BrowserRunStateMachine, StableFailure | None]:
         state_machine = BrowserRunStateMachine()
-        state_machine.transition(BrowserRunState.OPEN)
+        _transition_browser_state(
+            state_machine,
+            BrowserRunState.OPEN,
+            rule_id=action.rule.rule_id,
+        )
         page_failure: list[StableFailure] = []
 
         def flow(session: BrowserFlowSession) -> None:
@@ -877,7 +946,11 @@ class ControlledBrowserPdfSource:
         except AcquisitionFailure:
             raise
         except Exception:
-            state_machine.transition(BrowserRunState.RUNTIME_FAILED)
+            _transition_browser_state(
+                state_machine,
+                BrowserRunState.RUNTIME_FAILED,
+                rule_id=action.rule.rule_id,
+            )
             raise AcquisitionSourceFailure(_browser_failure("runtime")) from None
         result_state = _state_for_browser_result(result)
         decision = state_machine.decision
@@ -886,7 +959,11 @@ class ControlledBrowserPdfSource:
             or decision.continues_current_flow
             or result_state is BrowserRunState.RUNTIME_FAILED
         ):
-            state_machine.transition(result_state)
+            _transition_browser_state(
+                state_machine,
+                result_state,
+                rule_id=action.rule.rule_id,
+            )
         return result, state_machine, page_failure[0] if page_failure else None
 
     @staticmethod
@@ -927,7 +1004,11 @@ class ControlledBrowserPdfSource:
             page_failure.append(_page_state_conflict_failure())
         if classification.state is None:
             return False
-        return state_machine.transition(classification.state).is_terminal
+        return _transition_browser_state(
+            state_machine,
+            classification.state,
+            rule_id=rule.rule_id,
+        ).is_terminal
 
     @staticmethod
     def _run_rule_action(
@@ -936,6 +1017,10 @@ class ControlledBrowserPdfSource:
     ) -> None:
         if not isinstance(action, BrowserRuleAction):
             raise TypeError("Browser rule action violated its closed contract")
+        _LOGGER.debug(
+            "event=browser-rule-action browser_rule_action=%s",
+            action.kind.value,
+        )
         if action.kind is BrowserActionKind.CLICK:
             if action.selector is None:
                 raise TypeError("click action lost its static selector")

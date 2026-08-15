@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from threading import Lock
@@ -156,6 +157,11 @@ class TieredAcquisitionService:
         self._check_cancel(cancel_event)
         work_items = tuple(self._new_work_item(request) for request in requests)
         prepared_by_literature: dict[LiteratureId, CohortPreparationItem] = {}
+        _LOGGER.debug(
+            "event=acquisition-preparation-started target_count=%d observer=%s",
+            len(work_items),
+            str(on_prepared is not None).lower(),
+        )
 
         try:
             result = self._cohort_executor.execute(
@@ -192,14 +198,32 @@ class TieredAcquisitionService:
                 prepared_items = tuple(
                     prepared_by_literature[request.literature.literature_id] for request in requests
                 )
-            return PreparedAcquisitionCohort(
+            prepared_cohort = PreparedAcquisitionCohort(
                 prepared_items,
                 browser_escalation=result.browser_admission.summary,
             )
+            _LOGGER.debug(
+                "event=acquisition-preparation-finished target_count=%d receipt_count=%d",
+                len(work_items),
+                sum(item.prepared is not None for item in prepared_items),
+            )
+            return prepared_cohort
         except BrowserSchedulingCancelled:
+            _LOGGER.info(
+                "event=acquisition-preparation-interrupted code=%s retryable=true "
+                "reason=%s action=%s",
+                _interruption_failure().code,
+                _interruption_failure().reason,
+                _interruption_failure().action,
+            )
             self._discard_work_preparations(work_items)
             raise AcquisitionFailure(_interruption_failure()) from None
         except BaseException:
+            _LOGGER.debug(
+                "event=acquisition-preparation-aborted target_count=%d "
+                "cleanup=discard-work-preparations",
+                len(work_items),
+            )
             self._discard_work_preparations(work_items)
             raise
 
@@ -333,14 +357,34 @@ class TieredAcquisitionService:
             candidate_keys=item.candidate_keys,
             cancel_event=cancel_event,
         )
+        _LOGGER.debug(
+            "event=acquisition-route-adapter-started literature_id=%s tier=%s "
+            "route_key=%s source=%s plan_revision=%s hint_count=%d",
+            item.work_key,
+            route.tier.value,
+            route.route_key,
+            adapter.source_name,
+            item.plan.revision,
+            len(item.route_hints),
+        )
         try:
-            return self._consume_route_results(
+            result = self._consume_route_results(
                 item,
                 route,
                 adapter.execute(context),
                 source_name=adapter.source_name,
                 cancel_event=cancel_event,
             )
+            _LOGGER.debug(
+                "event=acquisition-route-adapter-finished literature_id=%s tier=%s "
+                "route_key=%s outcome=%s hint_count=%d",
+                item.work_key,
+                route.tier.value,
+                route.route_key,
+                result.outcome.value,
+                len(result.hints),
+            )
+            return result
         except AcquisitionSourceFailure as error:
             return _source_failure_outcome(error.failure)
         except AcquisitionFailure as error:
@@ -378,12 +422,24 @@ class TieredAcquisitionService:
                 if terminal is not None:
                     return terminal
         finally:
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-started literature_id=%s "
+                "route_key=%s resource=route-iterator",
+                item.work_key,
+                route.route_key,
+            )
             try:
                 _close_iterator(iterator)
             except BaseException:
                 if item.publication_receipt is not receipt_before_execution:
                     self._discard_item_preparation(item)
                 raise
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-finished literature_id=%s "
+                "route_key=%s resource=route-iterator",
+                item.work_key,
+                route.route_key,
+            )
         return (
             RouteExecutionResult.hints_only(*hints) if hints else RouteExecutionResult.normal_miss()
         )
@@ -399,6 +455,15 @@ class TieredAcquisitionService:
         cancel_event: CancellationEvent | None,
     ) -> RouteExecutionResult | None:
         if result.outcome in {RouteOutcome.NORMAL_MISS, RouteOutcome.HINTS}:
+            for hint in result.hints:
+                _LOGGER.debug(
+                    "event=acquisition-route-hint-received literature_id=%s route_key=%s "
+                    "hint_kind=%s source_route_key=%s",
+                    item.work_key,
+                    route.route_key,
+                    hint.kind.value,
+                    hint.source_route_key,
+                )
             return None
         if result.outcome is not RouteOutcome.PDF_DELIVERED:
             _remember_safe_hints(item, hints)
@@ -427,9 +492,24 @@ class TieredAcquisitionService:
         source_name: str,
         cancel_event: CancellationEvent | None,
     ) -> _CandidatePreparation | None:
+        candidate_id = _diagnostic_candidate_id(temporary_pdf.candidate.candidate_key)
         request = self._validate_candidate(item, route, temporary_pdf, source_name)
         if request is None:
+            _LOGGER.debug(
+                "event=acquisition-candidate-skipped literature_id=%s route_key=%s "
+                "candidate_id=%s reason=already-delivered",
+                item.work_key,
+                route.route_key,
+                candidate_id,
+            )
             return None
+        _LOGGER.debug(
+            "event=acquisition-candidate-preparation-started literature_id=%s "
+            "route_key=%s candidate_id=%s",
+            item.work_key,
+            route.route_key,
+            candidate_id,
+        )
         self._check_cancel(cancel_event)
         prepared = self._prepare_pdf_bytes(
             request,
@@ -437,6 +517,13 @@ class TieredAcquisitionService:
             cancel_event=cancel_event,
         )
         if prepared is None:
+            _LOGGER.debug(
+                "event=acquisition-candidate-preparation-finished literature_id=%s "
+                "route_key=%s candidate_id=%s outcome=normal-miss",
+                item.work_key,
+                route.route_key,
+                candidate_id,
+            )
             self._check_cancel(cancel_event)
             return None
         try:
@@ -444,11 +531,19 @@ class TieredAcquisitionService:
         except BaseException:
             _best_effort_discard(prepared)
             raise
-        return _CandidatePreparation(
+        candidate_preparation = _CandidatePreparation(
             prepared_pdf=prepared,
             candidate_key=temporary_pdf.candidate.candidate_key,
             literature_id=request.literature.literature_id,
         )
+        _LOGGER.debug(
+            "event=acquisition-candidate-preparation-finished literature_id=%s "
+            "route_key=%s candidate_id=%s outcome=prepared",
+            item.work_key,
+            route.route_key,
+            candidate_id,
+        )
+        return candidate_preparation
 
     def _validate_candidate(
         self,
@@ -481,6 +576,13 @@ class TieredAcquisitionService:
         cancel_event: CancellationEvent | None,
     ) -> PrimaryPdfPreparation | None:
         prepared: PrimaryPdfPreparation | None = None
+        literature_id = request.literature.literature_id
+        candidate_id = _diagnostic_candidate_id(temporary_pdf.candidate.candidate_key)
+        _LOGGER.debug(
+            "event=acquisition-pdf-validation-started literature_id=%s candidate_id=%s",
+            literature_id,
+            candidate_id,
+        )
         try:
             prepared = self._publication_port.prepare_primary_pdf(
                 request,
@@ -492,14 +594,32 @@ class TieredAcquisitionService:
         except Exception:
             raise AcquisitionFailure(_publication_failure()) from None
         finally:
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-started literature_id=%s "
+                "candidate_id=%s resource=temporary-pdf",
+                literature_id,
+                candidate_id,
+            )
             try:
                 _discard_temporary(temporary_pdf)
             except BaseException:
                 if prepared is not None:
                     _best_effort_discard(prepared)
                 raise
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-finished literature_id=%s "
+                "candidate_id=%s resource=temporary-pdf",
+                literature_id,
+                candidate_id,
+            )
         if prepared is not None and not isinstance(prepared, PrimaryPdfPreparation):
             raise AcquisitionFailure(_contract_failure())
+        _LOGGER.debug(
+            "event=acquisition-pdf-validation-finished literature_id=%s candidate_id=%s outcome=%s",
+            literature_id,
+            candidate_id,
+            "accepted" if prepared is not None else "normal-miss",
+        )
         return prepared
 
     def _refresh_plan(
@@ -520,9 +640,27 @@ class TieredAcquisitionService:
                 and item.current_tier.value == "public"
                 and session.doi_resolution_state is DoiResolutionState.ELIGIBLE
             ):
+                _LOGGER.debug(
+                    "event=acquisition-doi-resolution-started literature_id=%s "
+                    "plan_revision=%s evidence_kind=doi",
+                    item.work_key,
+                    session.plan.revision,
+                )
                 session = self._planner.resolve_doi_landing(session)
+                _LOGGER.debug(
+                    "event=acquisition-doi-resolution-finished literature_id=%s outcome=%s",
+                    item.work_key,
+                    session.doi_resolution_state.value,
+                )
             new_hints = tuple(hint for hint in item.route_hints if hint not in session.route_hints)
             if new_hints:
+                _LOGGER.debug(
+                    "event=acquisition-plan-hints-applied literature_id=%s hint_count=%d "
+                    "hint_kinds=%s",
+                    item.work_key,
+                    len(new_hints),
+                    ",".join(sorted({hint.kind.value for hint in new_hints})),
+                )
                 session = self._planner.refresh_with_hints(session, new_hints)
         except AcquisitionSourceFailure as error:
             outcome = _source_failure_outcome(error.failure)
@@ -586,6 +724,12 @@ class TieredAcquisitionService:
         return self._commit_exhaustion(payload)
 
     def _commit_candidate(self, payload: _CandidatePreparation) -> AcquiredPrimaryPdf:
+        _LOGGER.debug(
+            "event=acquisition-publication-started literature_id=%s candidate_id=%s "
+            "outcome=primary-pdf",
+            payload.literature_id,
+            _diagnostic_candidate_id(payload.candidate_key),
+        )
         try:
             result = self._publication_port.commit_primary_pdf(payload.prepared_pdf)
         except AcquisitionFailure:
@@ -593,18 +737,36 @@ class TieredAcquisitionService:
         except Exception:
             raise AcquisitionFailure(_publication_failure()) from None
         finally:
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-started literature_id=%s "
+                "candidate_id=%s resource=prepared-pdf",
+                payload.literature_id,
+                _diagnostic_candidate_id(payload.candidate_key),
+            )
             try:
                 payload.prepared_pdf.discard()
             except AcquisitionFailure:
                 raise
             except Exception:
                 raise AcquisitionFailure(_cleanup_failure()) from None
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-finished literature_id=%s "
+                "candidate_id=%s resource=prepared-pdf",
+                payload.literature_id,
+                _diagnostic_candidate_id(payload.candidate_key),
+            )
         if (
             not isinstance(result, AcquiredPrimaryPdf)
             or result.candidate_key != payload.candidate_key
             or result.relation.literature_id != payload.literature_id
         ):
             raise AcquisitionFailure(_contract_failure())
+        _LOGGER.info(
+            "event=acquisition-publication-finished literature_id=%s candidate_id=%s "
+            "outcome=primary-pdf-committed",
+            payload.literature_id,
+            _diagnostic_candidate_id(payload.candidate_key),
+        )
         return result
 
     def _commit_exhaustion(self, payload: _ExhaustionPreparation) -> NoPrimaryPdf:
@@ -619,6 +781,10 @@ class TieredAcquisitionService:
             or exhaustion.literature_id != payload.literature_id
         ):
             raise AcquisitionFailure(_contract_failure())
+        _LOGGER.info(
+            "event=acquisition-publication-finished literature_id=%s outcome=normally-exhausted",
+            payload.literature_id,
+        )
         return NoPrimaryPdf()
 
     def discard_prepared(self, prepared: PreparedAcquisition) -> None:
@@ -634,12 +800,24 @@ class TieredAcquisitionService:
             payload = state.payload
             state.payload = None
         if isinstance(payload, _CandidatePreparation):
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-started literature_id=%s "
+                "candidate_id=%s resource=prepared-receipt",
+                payload.literature_id,
+                _diagnostic_candidate_id(payload.candidate_key),
+            )
             try:
                 payload.prepared_pdf.discard()
             except AcquisitionFailure:
                 raise
             except Exception:
                 raise AcquisitionFailure(_cleanup_failure()) from None
+            _LOGGER.debug(
+                "event=acquisition-resource-cleanup-finished literature_id=%s "
+                "candidate_id=%s resource=prepared-receipt",
+                payload.literature_id,
+                _diagnostic_candidate_id(payload.candidate_key),
+            )
 
     def _issue_receipt(
         self,
@@ -668,7 +846,17 @@ class TieredAcquisitionService:
     def _discard_work_preparations(self, items: tuple[AcquisitionWorkItem, ...]) -> None:
         for item in items:
             try:
+                _LOGGER.debug(
+                    "event=acquisition-resource-cleanup-started literature_id=%s "
+                    "resource=work-preparation",
+                    item.work_key,
+                )
                 self._discard_item_preparation(item)
+                _LOGGER.debug(
+                    "event=acquisition-resource-cleanup-finished literature_id=%s "
+                    "resource=work-preparation",
+                    item.work_key,
+                )
             except AcquisitionFailure:
                 # Another failure is already escaping the cohort boundary.
                 # Cleanup remains best effort here, just as it was for the
@@ -728,6 +916,11 @@ def _best_effort_discard(prepared: PrimaryPdfPreparation) -> None:
         prepared.discard()
     except Exception:
         pass
+
+
+def _diagnostic_candidate_id(candidate_key: str) -> str:
+    digest = hashlib.sha256(candidate_key.encode("utf-8", "strict")).hexdigest()
+    return f"sha256:{digest}"
 
 
 def _remember_safe_hints(
