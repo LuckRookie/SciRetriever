@@ -41,6 +41,7 @@ from sciretriever.acquisition.planning import (
 )
 from sciretriever.acquisition.profile_catalog import (
     PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+    PUBLISHER_ACCESS_VERIFICATION_MATRIX,
 )
 from sciretriever.acquisition.providers import (
     CoreAuthorizedPdfClient,
@@ -172,12 +173,20 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
     ),
     ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
     ("core", ("api.core.ac.uk", "core.ac.uk")),
+    ("plos", ("journals.plos.org",)),
 )
 
 _PRODUCTION_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
     min_start_interval=1.0,
 )
+_PLOS_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
+    max_concurrency=1,
+    min_start_interval=30.0,
+)
+_PRODUCTION_WEB_POLICY_BY_PROVIDER: Final[dict[str, AccessPolicy]] = {
+    "plos": _PLOS_WEB_POLICY,
+}
 
 _AUTHORIZED_UNSUPPORTED: Final[frozenset[str]] = frozenset({"springer"})
 
@@ -537,17 +546,27 @@ def production_web_access_profile_resolver() -> WebAccessProfileResolver:
     """Build the closed production host-to-provider/web admission table."""
 
     profiles: dict[str, tuple[AccessScope, AccessPolicy]] = {}
+    publisher_access_keys = frozenset(
+        profile.access_key for profile in PUBLISHER_ACCESS_VERIFICATION_MATRIX.profiles
+    )
     for provider_name, hostnames in PRODUCTION_WEB_HOSTS_BY_PROVIDER:
-        if provider_name not in ACQUISITION_PROVIDER_ORDER:
+        if (
+            provider_name not in ACQUISITION_PROVIDER_ORDER
+            and provider_name not in publisher_access_keys
+        ):
             raise AcquisitionRegistryError("web-profile-provider-mismatch")
         scope = AccessScope(provider_name, "web")
+        policy = _PRODUCTION_WEB_POLICY_BY_PROVIDER.get(
+            provider_name,
+            _PRODUCTION_WEB_POLICY,
+        )
         for hostname in hostnames:
             if hostname in profiles:
                 raise AcquisitionRegistryError(
                     "web-profile-host-duplicate",
                     provider_name,
                 )
-            profiles[hostname] = (scope, _PRODUCTION_WEB_POLICY)
+            profiles[hostname] = (scope, policy)
     try:
         return WebAccessProfileResolver(profiles)
     except (TypeError, ValueError):
