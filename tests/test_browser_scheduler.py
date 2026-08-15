@@ -391,6 +391,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
             BrowserGroupFeedback.CHALLENGE_REQUIRED: BrowserCircuitReason.CHALLENGE_REQUIRED,
             BrowserGroupFeedback.IP_BLOCKED: BrowserCircuitReason.IP_BLOCKED,
             BrowserGroupFeedback.ACCOUNT_WARNING: BrowserCircuitReason.ACCOUNT_WARNING,
+            BrowserGroupFeedback.CLEANUP_FAILURE: BrowserCircuitReason.CLEANUP_FAILURE,
         }
         for feedback, reason in expected.items():
             with self.subTest(feedback=feedback.value):

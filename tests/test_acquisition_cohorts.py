@@ -496,6 +496,52 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             "acquisition-browser-group-challenge-required",
         )
 
+    def test_browser_cleanup_failure_stops_same_group_without_exhaustion(self) -> None:
+        executor = _executor("wiley", "elsevier", max_concurrency=2)
+        items = tuple(
+            AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
+            for key, group in (("w1", "wiley"), ("w2", "wiley"), ("e1", "elsevier"))
+        )
+        browser_calls: list[str] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if route.tier is not AcquisitionPath.CONTROLLED_BROWSER:
+                return RouteExecutionResult.normal_miss()
+            browser_calls.append(item.work_key)
+            if item.work_key == "w1":
+                return RouteExecutionResult.failed(
+                    StableFailure(
+                        code="acquisition-browser-cleanup-failed",
+                        reason="The fixture Browser cleanup failed.",
+                        action="Repair the fixture Browser runtime.",
+                        retryable=True,
+                    )
+                )
+            return RouteExecutionResult.normal_miss()
+
+        result = executor.execute(items, execute)
+
+        self.assertEqual(set(browser_calls), {"w1", "e1"})
+        self.assertEqual(
+            tuple(item.disposition for item in result.items),
+            (
+                WorkItemDisposition.FAILED,
+                WorkItemDisposition.ACTION_REQUIRED,
+                WorkItemDisposition.EXHAUSTED,
+            ),
+        )
+        self.assertNotIn("browser:w2", result.items[1].attempted_route_keys)
+        self.assertIsNotNone(result.items[1].failure)
+        if result.items[1].failure is None:
+            self.fail("queued cleanup circuit item did not retain a stable failure")
+        self.assertEqual(
+            result.items[1].failure.code,
+            "acquisition-browser-group-cleanup-failure",
+        )
+
     def test_tier_observer_exposes_public_terminal_items_before_browser_execution(
         self,
     ) -> None:

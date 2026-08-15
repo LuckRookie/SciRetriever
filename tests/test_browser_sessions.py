@@ -33,19 +33,29 @@ class _Route:
 
 
 class _Page:
-    def __init__(self) -> None:
+    def __init__(self, *, close_error: bool = False) -> None:
         self.closed = False
+        self.close_error = close_error
+        self.close_calls = 0
 
     def close(self) -> None:
+        self.close_calls += 1
         self.closed = True
+        if self.close_error:
+            raise RuntimeError("late page close sentinel")
 
 
 class _Download:
-    def __init__(self) -> None:
+    def __init__(self, *, delete_error: bool = False) -> None:
         self.deleted = False
+        self.delete_error = delete_error
+        self.delete_calls = 0
 
     def delete(self) -> None:
+        self.delete_calls += 1
         self.deleted = True
+        if self.delete_error:
+            raise RuntimeError("late download delete sentinel")
 
 
 class _Context:
@@ -446,6 +456,25 @@ class BrowserSessionBrokerTests(unittest.TestCase):
         self.assertTrue(late_download.deleted)
         self.assertEqual(events, [("page", page)])
 
+    def test_late_cleanup_failure_retires_session_without_acquire_spin(self) -> None:
+        lease = self._acquire()
+        context = self.factory.processes[0].context
+        self.assertIsNotNone(context)
+        assert context is not None
+        getattr(lease, "release")()
+        late_page = _Page(close_error=True)
+        late_download = _Download(delete_error=True)
+
+        context.handlers["page"](late_page)
+        context.handlers["download"](late_download)
+
+        with self.assertRaisesRegex(BrowserSessionError, "cleanup failed"):
+            self._acquire(timeout=0.2)
+        self.assertEqual(late_page.close_calls, 1)
+        self.assertEqual(late_download.delete_calls, 1)
+        self.assertTrue(context.closed)
+        self.assertTrue(self.factory.processes[0].closed)
+
     def test_close_waits_for_active_lease_and_is_idempotent(self) -> None:
         lease = self._acquire()
         closed = threading.Event()
@@ -498,6 +527,17 @@ class BrowserSessionBrokerTests(unittest.TestCase):
             getattr(lease, "release")()
         self.assertNotIn(marker, str(caught.exception))
         self.assertTrue(failing.processes[0].closed)
+        context = failing.processes[0].context
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertEqual(context.close_calls, 1)
+        self.assertEqual(failing.processes[0].close_calls, 1)
+        with self.assertRaisesRegex(BrowserSessionError, "cleanup failed"):
+            getattr(lease, "release")()
+        self.assertEqual(context.close_calls, 1)
+        self.assertEqual(failing.processes[0].close_calls, 1)
+        with self.assertRaisesRegex(BrowserSessionError, "cleanup failed"):
+            self.broker.close()
 
 
 if __name__ == "__main__":

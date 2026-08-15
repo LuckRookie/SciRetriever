@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, cast
+from unittest import mock
 from urllib.parse import urlsplit
 
 from sciretriever.model.access import (
@@ -119,6 +121,18 @@ class _RecordingCoordinator(AccessCoordinator):
         )
 
 
+class _ReleaseFailingCoordinator(AccessCoordinator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_failures = 0
+
+    def _release_scope(self, permit: AccessPermit) -> None:
+        super()._release_scope(permit)
+        if self.release_failures == 0:
+            self.release_failures += 1
+            raise RuntimeError("scope release sentinel")
+
+
 class _FakeRequest:
     def __init__(self, url: str, page: _FakePage, *, navigation: bool) -> None:
         self.url = url
@@ -150,7 +164,7 @@ class _FakeRoute:
 
 @dataclass(frozen=True, slots=True)
 class _ResponseFixture:
-    body: bytes
+    body: object
     media_type: str = "application/pdf"
     status: int = 200
 
@@ -161,7 +175,7 @@ class _FakeResponse:
         request: _FakeRequest,
         status: int = 200,
         *,
-        body: bytes | None = None,
+        body: object | None = None,
         media_type: str = "text/html",
     ) -> None:
         self.request = request
@@ -169,14 +183,31 @@ class _FakeResponse:
         self.status = status
         self.media_type = media_type
         self._body = body
-        self.size = None if body is None else len(body)
+        self.size = len(body) if isinstance(body, bytes) else None
         self.body_reads = 0
 
-    def body(self) -> bytes:
+    def body(self) -> object:
         self.body_reads += 1
         if self._body is None:
             raise RuntimeError("fixture response has no body")
         return self._body
+
+
+class _BodyStream:
+    def __init__(self, body: bytes, *, close_error: bool = False) -> None:
+        self.body = body
+        self.close_error = close_error
+        self.read_calls = 0
+        self.close_calls = 0
+
+    def read(self, size: int) -> bytes:
+        self.read_calls += 1
+        return self.body[:size]
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error:
+            raise RuntimeError("response stream close sentinel")
 
 
 class _FakeDownload:
@@ -185,12 +216,14 @@ class _FakeDownload:
         self.body = body
         self.media_type = media_type
         self.deleted = False
+        self.delete_calls = 0
         self.request: _FakeRequest | None = None
 
     def content(self) -> bytes:
         return self.body
 
     def delete(self) -> None:
+        self.delete_calls += 1
         self.deleted = True
 
 
@@ -200,6 +233,7 @@ class _FakePage:
         self.url = url
         self.challenge = False
         self.closed = False
+        self.close_calls = 0
         self.goto_error: BaseException | None = None
         self.abort_event = threading.Event()
 
@@ -240,11 +274,13 @@ class _FakePage:
         return ""
 
     def close(self) -> None:
+        self.close_calls += 1
         self.closed = True
         self.context.events.append("page-close")
 
     def abort(self) -> None:
-        self.abort_event.set()
+        if not self.context.ignore_page_abort:
+            self.abort_event.set()
 
     def click(self, selector: str, *, timeout: int) -> None:
         del selector, timeout
@@ -271,6 +307,8 @@ class _FakeContext:
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
+        ignore_page_abort: bool = False,
+        new_page_error: BaseException | None = None,
     ) -> None:
         self.events = events
         self.redirects = {} if redirects is None else redirects
@@ -282,6 +320,8 @@ class _FakeContext:
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
         self.response_fixtures = {} if response_fixtures is None else response_fixtures
+        self.ignore_page_abort = ignore_page_abort
+        self.new_page_error = new_page_error
         self.goto_started = threading.Event()
         self.first_subresource_continued = threading.Event()
         self.second_subresource_continued = threading.Event()
@@ -292,6 +332,7 @@ class _FakeContext:
         self.handlers: dict[str, list[Callable[[object], object]]] = {}
         self.responses: list[_FakeResponse] = []
         self.closed = False
+        self.close_calls = 0
         self.binding: object | None = None
         self.bindings: list[object] = []
         self.article_paths: list[str] = []
@@ -326,6 +367,8 @@ class _FakeContext:
         self.handlers.setdefault(event, []).append(handler)
 
     def new_page(self) -> _FakePage:
+        if self.new_page_error is not None:
+            raise self.new_page_error
         page = _FakePage(self)
         page.goto_error = self.goto_error
         page.challenge = self.challenge
@@ -406,8 +449,11 @@ class _FakeContext:
             handler(download)
 
     def close(self) -> None:
+        self.close_calls += 1
         self.events.append("context-close")
         self.closed = True
+        for page in self.pages:
+            page.abort_event.set()
         if self.close_error is not None:
             raise self.close_error
 
@@ -426,6 +472,10 @@ class _FakeProcess:
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
+        ignore_page_abort: bool = False,
+        enter_error: BaseException | None = None,
+        new_context_error: BaseException | None = None,
+        new_page_error: BaseException | None = None,
     ) -> None:
         self.events = events
         self.redirects = redirects
@@ -438,10 +488,15 @@ class _FakeProcess:
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
         self.response_fixtures = response_fixtures
+        self.ignore_page_abort = ignore_page_abort
+        self.enter_error = enter_error
+        self.new_context_error = new_context_error
+        self.new_page_error = new_page_error
         self.context: _FakeContext | None = None
         self.profile: object | None = None
         self.downloads_path: str | None = None
         self.closed = False
+        self.close_calls = 0
         self.binding: object | None = None
         self.bindings: list[object] = []
 
@@ -452,6 +507,8 @@ class _FakeProcess:
 
     def __enter__(self) -> _FakeProcess:
         self.events.append("process-enter")
+        if self.enter_error is not None:
+            raise self.enter_error
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
@@ -468,6 +525,8 @@ class _FakeProcess:
         accept_downloads: bool,
         connection_binding: object,
     ) -> _FakeContext:
+        if self.new_context_error is not None:
+            raise self.new_context_error
         if not accept_downloads:
             raise AssertionError("downloads must be explicitly enabled")
         self.profile = profile
@@ -484,6 +543,8 @@ class _FakeProcess:
             blocking_goto=self.blocking_goto,
             navigation_status=self.navigation_status,
             response_fixtures=self.response_fixtures,
+            ignore_page_abort=self.ignore_page_abort,
+            new_page_error=self.new_page_error,
         )
         self.context.bind_connection(connection_binding)
         return self.context
@@ -491,6 +552,7 @@ class _FakeProcess:
     def close(self) -> None:
         if self.closed:
             return
+        self.close_calls += 1
         self.closed = True
         self.events.append("process-close")
         if self.close_error is not None:
@@ -510,6 +572,10 @@ class _FakeFactory:
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
+        ignore_page_abort: bool = False,
+        enter_error: BaseException | None = None,
+        new_context_error: BaseException | None = None,
+        new_page_error: BaseException | None = None,
     ) -> None:
         self.events: list[str] = []
         self.profile: object | None = None
@@ -525,6 +591,10 @@ class _FakeFactory:
             blocking_goto=blocking_goto,
             navigation_status=navigation_status,
             response_fixtures=response_fixtures,
+            ignore_page_abort=ignore_page_abort,
+            enter_error=enter_error,
+            new_context_error=new_context_error,
+            new_page_error=new_page_error,
         )
         self.context_close_error = context_close_error
         self.binding: object | None = None
@@ -865,6 +935,42 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertIs(batch.captures[0].kind, BrowserCaptureKind.RESPONSE)
         self.assertEqual(batch.captures[0].stream.chunks, (body,))
         self.assertTrue(download.deleted)
+        self.assertEqual(download.delete_calls, 1)
+
+    def test_private_response_stream_is_bounded_and_closed_exactly_once(self) -> None:
+        response_url = "https://landing.test/start"
+        guard = _CaptureGuard({(response_url, BrowserCaptureKind.RESPONSE, "application/pdf")})
+        for close_error, expected_code in ((False, None), (True, "cleanup")):
+            with self.subTest(close_error=close_error):
+                stream = _BodyStream(b"%PDF-stream-body", close_error=close_error)
+                factory = _FakeFactory(response_fixtures={response_url: _ResponseFixture(stream)})
+                client = BrowserClient(
+                    factory=factory,
+                    resolver=self.resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+
+                result = client.run(
+                    self.scope,
+                    response_url,
+                    AccessPolicy(max_concurrency=1),
+                    capture_guard=guard,
+                )
+
+                if expected_code is None:
+                    batch = _captures(result)
+                    self.assertEqual(batch.captures[0].stream.chunks, (b"%PDF-stream-body",))
+                else:
+                    self.assertEqual(_failure(result).code, expected_code)
+                self.assertEqual(stream.read_calls, 1)
+                self.assertEqual(stream.close_calls, 1)
+                context = factory.process.context
+                self.assertIsNotNone(context)
+                assert context is not None
+                self.assertEqual(context.pages[0].close_calls, 1)
+                self.assertEqual(context.close_calls, 1)
+                self.assertEqual(factory.process.close_calls, 1)
 
     def test_capture_guard_rejects_before_body_and_errors_fail_closed(self) -> None:
         response_url = "https://landing.test/start"
@@ -1327,6 +1433,79 @@ class NetworkBrowserTests(unittest.TestCase):
         worker.join(1.0)
         self.assertFalse(worker.is_alive())
 
+    def test_scope_release_failure_is_cleanup_not_exhaustion_or_permit_leak(self) -> None:
+        coordinator = _ReleaseFailingCoordinator()
+        download = _FakeDownload("https://download.test/file", b"%PDF-fixture")
+        factory = _FakeFactory(configured_download=download)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                AccessPolicy(max_concurrency=1),
+            )
+        )
+
+        self.assertEqual(result.code, "cleanup")
+        self.assertEqual(download.delete_calls, 1)
+        self.assertEqual(coordinator.release_failures, 1)
+        permit = coordinator.acquire_scope(self.scope, timeout=0.1)
+        permit.release()
+
+    def test_article_temporary_directory_cleanup_failure_is_stable(self) -> None:
+        real_temporary_directory = tempfile.TemporaryDirectory
+
+        class FailingTemporaryDirectory:
+            def __init__(self, *, prefix: str) -> None:
+                self._delegate = real_temporary_directory(prefix=prefix)
+                self.name = self._delegate.name
+                self.cleanup_calls = 0
+                created.append(self)
+
+            def cleanup(self) -> None:
+                self.cleanup_calls += 1
+                self._delegate.cleanup()
+                raise RuntimeError("temporary cleanup sentinel")
+
+        created: list[FailingTemporaryDirectory] = []
+
+        factory = _FakeFactory(
+            configured_download=_FakeDownload(
+                "https://download.test/file",
+                b"%PDF-fixture",
+            )
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        with mock.patch(
+            "sciretriever.network.browser.tempfile.TemporaryDirectory",
+            FailingTemporaryDirectory,
+        ):
+            result = _failure(
+                client.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    AccessPolicy(max_concurrency=1),
+                )
+            )
+
+        self.assertEqual(result.code, "cleanup")
+        self.assertEqual(len(created), 1)
+        temporary = created[0]
+        self.assertEqual(temporary.cleanup_calls, 1)
+        self.assertFalse(Path(temporary.name).exists())
+
     def test_runtime_without_mandatory_connection_binding_fails_closed(self) -> None:
         factory = _FakeFactory()
         # Accept the injected keyword but deliberately provide no runtime
@@ -1341,6 +1520,37 @@ class NetworkBrowserTests(unittest.TestCase):
         result = _failure(client.run(self.scope, "https://landing.test/start", self.policy))
         self.assertEqual(result.code, "runtime")
         self.assertEqual(factory.events, ["process-enter", "process-close", "process-exit"])
+
+    def test_setup_failpoints_close_each_acquired_runtime_resource_once(self) -> None:
+        cases = (
+            _FakeFactory(enter_error=RuntimeError("enter sentinel")),
+            _FakeFactory(new_context_error=RuntimeError("context sentinel")),
+            _FakeFactory(new_page_error=RuntimeError("page sentinel")),
+        )
+        for factory in cases:
+            with self.subTest(events=factory.events):
+                client = BrowserClient(
+                    factory=factory,
+                    resolver=self.resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+
+                result = _failure(
+                    client.run(
+                        self.scope,
+                        "https://landing.test/start",
+                        AccessPolicy(max_concurrency=1),
+                    )
+                )
+
+                self.assertEqual(result.code, "runtime")
+                self.assertTrue(factory.process.closed)
+                self.assertEqual(factory.process.close_calls, 1)
+                context = factory.process.context
+                if context is not None:
+                    self.assertTrue(context.closed)
+                    self.assertEqual(context.close_calls, 1)
 
     def test_connection_binding_preserves_authority_tls_and_verified_endpoint(self) -> None:
         factory = _FakeFactory(
@@ -1527,6 +1737,133 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertTrue(factory.process.context.pages[0].abort_event.is_set())
         self.assertTrue(context.closed)
         self.assertTrue(factory.process.closed)
+
+    def test_cancel_after_factory_completion_closes_unpublished_result_once(self) -> None:
+        cancelled = threading.Event()
+        delegate = _FakeFactory()
+
+        def factory(
+            *,
+            profile: object | None,
+            downloads_path: str,
+            connection_binding: object,
+        ) -> object:
+            process = delegate(
+                profile=profile,
+                downloads_path=downloads_path,
+                connection_binding=connection_binding,
+            )
+            # The operation has produced a resource, but the cancellation is
+            # visible before _run_cancellable publishes that result.
+            cancelled.set()
+            return process
+
+        coordinator = AccessCoordinator()
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                AccessPolicy(max_concurrency=1),
+                cancel_event=cancelled,
+            )
+        )
+
+        self.assertEqual(result.code, "cancelled")
+        self.assertTrue(delegate.process.closed)
+        self.assertEqual(delegate.process.close_calls, 1)
+        permit = coordinator.acquire_scope(self.scope, timeout=0.1)
+        permit.release()
+
+    def test_unacknowledged_page_abort_escalates_to_bounded_cleanup(self) -> None:
+        factory = _FakeFactory(blocking_goto=True, ignore_page_abort=True)
+        coordinator = AccessCoordinator()
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+            cleanup_timeout_seconds=0.05,
+        )
+        cancelled = threading.Event()
+        result_holder: list[object] = []
+
+        worker = threading.Thread(
+            target=lambda: result_holder.append(
+                client.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    AccessPolicy(max_concurrency=1),
+                    cancel_event=cancelled,
+                )
+            )
+        )
+        worker.start()
+        for _ in range(100):
+            context = factory.process.context
+            if context is not None and context.goto_started.wait(0.01):
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("blocking navigation did not start")
+
+        cancelled.set()
+        worker.join(1.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(_failure(result_holder[0]).code, "cleanup")
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertTrue(context.closed)
+        self.assertEqual(context.close_calls, 1)
+        self.assertEqual(context.pages[0].close_calls, 1)
+        self.assertTrue(factory.process.closed)
+        self.assertEqual(factory.process.close_calls, 1)
+        permit = coordinator.acquire_scope(self.scope, timeout=0.1)
+        permit.release()
+
+    def test_route_abort_failure_retains_admission_until_cleanup(self) -> None:
+        coordinator = AccessCoordinator()
+        factory = _FakeFactory()
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        with (
+            mock.patch.object(
+                _FakeRoute,
+                "continue_",
+                side_effect=RuntimeError("route continuation sentinel"),
+            ),
+            mock.patch.object(
+                _FakeRoute,
+                "abort",
+                side_effect=RuntimeError("route abort sentinel"),
+            ),
+        ):
+            result = _failure(
+                client.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    AccessPolicy(max_concurrency=1),
+                )
+            )
+
+        self.assertEqual(result.code, "cleanup")
+        self.assertEqual(factory.process.context.close_calls, 1)  # type: ignore[union-attr]
+        self.assertEqual(factory.process.close_calls, 1)
+        permit = coordinator.acquire_scope(self.scope, timeout=0.1)
+        permit.release()
 
     def test_persistent_session_reuses_context_but_isolates_article_resources(self) -> None:
         factory = _FakeFactory(

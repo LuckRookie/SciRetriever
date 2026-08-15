@@ -183,6 +183,7 @@ class _PublicationPort:
         self.accepted_key = accepted_key
         self.prepared_values: list[_Prepared] = []
         self.seen_keys: list[str] = []
+        self.committed_values: list[_Prepared] = []
 
     def prepare_primary_pdf(
         self,
@@ -203,6 +204,7 @@ class _PublicationPort:
     def commit_primary_pdf(self, prepared: PrimaryPdfPreparation) -> AcquiredPrimaryPdf:
         if not isinstance(prepared, _Prepared):
             raise AssertionError("unexpected prepared value")
+        self.committed_values.append(prepared)
         request = prepared.request
         temporary_pdf = prepared.temporary_pdf
         asset = Asset(
@@ -659,6 +661,24 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
         with self.assertRaises(AcquisitionFailure) as raised:
             service.commit_primary_pdf(receipt)
         self.assertEqual(raised.exception.failure.code, "acquisition-port-contract")
+
+    def test_post_commit_receipt_cleanup_failure_never_publishes_exhaustion(self) -> None:
+        accepted = _temporary(1, "fixture:accepted")
+        publication = _PublicationPort("fixture:accepted")
+        exhaustion = _ExhaustionPort()
+        service = _service(_RouteAdapter((accepted,)), publication, exhaustion)
+        receipt = service.prepare_primary_pdf(_request())
+        publication.prepared_values[0].discard_error = RuntimeError(
+            "post-commit receipt cleanup sentinel"
+        )
+
+        with self.assertRaises(AcquisitionFailure) as raised:
+            service.commit_primary_pdf(receipt)
+
+        self.assertEqual(raised.exception.failure.code, "acquisition-temporary-cleanup-failed")
+        self.assertEqual(publication.committed_values, publication.prepared_values)
+        self.assertEqual(publication.prepared_values[0].discard_count, 1)
+        self.assertEqual(exhaustion.commands, [])
 
     def test_authorized_failure_matrix_controls_browser_admission_and_exhaustion(self) -> None:
         from sciretriever.acquisition.cohort import WorkItemDisposition

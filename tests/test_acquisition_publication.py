@@ -32,6 +32,7 @@ from sciretriever.acquisition.rules import (
     PdfValidationCode,
     PdfValidationError,
     PdfValidationStagingError,
+    ValidatedPdf,
     validate_pdf,
 )
 from sciretriever.literature.content import metadata_sha256
@@ -551,6 +552,42 @@ class AcquisitionPublicationTests(unittest.TestCase):
         self.assertEqual(
             published.relation.literature_id,
             self.environment.literatures[0].literature_id,
+        )
+
+    def test_post_commit_cleanup_failure_preserves_published_asset_and_relation(self) -> None:
+        payload = _pdf_bytes(width=731)
+        validated = validate_pdf(
+            io.BytesIO(payload),
+            staging=self.environment.pdf_validation_staging,
+            candidate_belongs_to_literature=True,
+            max_bytes=len(payload),
+        )
+        real_close = validated.close
+
+        def fail_close(_validated: ValidatedPdf) -> None:
+            raise RuntimeError("post-commit cleanup sentinel")
+
+        try:
+            with (
+                mock.patch.object(ValidatedPdf, "close", new=fail_close),
+                self.assertRaises(AcquisitionFailure) as raised,
+            ):
+                self._validated_publisher(id_index=73).publish_validated_primary_pdf(
+                    expected_facts=_expected(self.environment.literatures[0]),
+                    validated_pdf=validated,
+                    provenance=_asset_provenance(73),
+                    source_url="https://provider.test/articles/cleanup.pdf",
+                )
+        finally:
+            real_close()
+
+        self.assertEqual(raised.exception.failure.code, "acquisition-publication-failed")
+        self.assertEqual(len(self._table_rows(self.environment, "artifact_objects")), 1)
+        self.assertEqual(len(self._table_rows(self.environment, "assets")), 1)
+        self.assertEqual(len(self._table_rows(self.environment, "literature_assets")), 1)
+        self.assertEqual(
+            self._table_rows(self.environment, "automatic_pdf_acquisition_exhaustions"),
+            (),
         )
 
     def test_storage_commit_consumes_the_validated_content_port_exactly_once(self) -> None:
