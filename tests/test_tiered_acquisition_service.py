@@ -382,6 +382,8 @@ def _failure_matrix_service(
             rate_limit_group="fixture-publisher",
             policy_revision="2026-08-15",
             minimum_start_interval=0.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
         ),
     )
     catalog = PublisherAccessProfileCatalog((profile,))
@@ -462,6 +464,8 @@ def _failure_matrix_service(
                                 rate_limit_group="fixture-publisher",
                                 policy_revision="fixture-v1",
                                 minimum_start_interval=0.0,
+                                rate_limit_cooldown=60.0,
+                                runtime_failure_threshold=3,
                             ),
                             session_key="fixture-publisher",
                             readiness=BrowserGroupReadiness.READY,

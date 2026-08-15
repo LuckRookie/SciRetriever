@@ -88,6 +88,8 @@ def _profile(
             rate_limit_group=access_key,
             policy_revision="2026-08-15",
             minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
         ),
         browser_rules=BrowserRuleSet(primary_pdf_url_markers=("/pdf/",)),
     )

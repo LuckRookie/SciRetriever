@@ -45,7 +45,7 @@ class BrowserRuntimeStateTests(unittest.TestCase):
     def test_every_runtime_page_fixture_has_one_exact_decision(self) -> None:
         fixtures = _runtime_page_states()
         self.assertEqual(set(fixtures), {state.value for state in BrowserRunState})
-        self.assertEqual(len(fixtures), 11)
+        self.assertEqual(len(fixtures), 12)
 
         for state in BrowserRunState:
             with self.subTest(state=state.value):
@@ -66,7 +66,12 @@ class BrowserRuntimeStateTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     decision.opens_circuit,
-                    state in {BrowserRunState.CHALLENGE_REQUIRED, BrowserRunState.IP_BLOCKED},
+                    state
+                    in {
+                        BrowserRunState.CHALLENGE_REQUIRED,
+                        BrowserRunState.IP_BLOCKED,
+                        BrowserRunState.ACCOUNT_WARNING,
+                    },
                 )
                 self.assertEqual(decision.is_terminal, not decision.continues_current_flow)
 

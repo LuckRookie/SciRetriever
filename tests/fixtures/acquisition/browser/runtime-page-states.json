@@ -39,6 +39,11 @@
     "flow_disposition": "action-required",
     "group_effect": "open-circuit"
   },
+  "account-warning": {
+    "page_signal": "provider-account-warning",
+    "flow_disposition": "action-required",
+    "group_effect": "open-circuit"
+  },
   "not-found": {
     "page_signal": "article-not-found",
     "flow_disposition": "normal-miss",

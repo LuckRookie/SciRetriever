@@ -36,6 +36,7 @@ from sciretriever.acquisition.ports import TemporaryPdf
 from sciretriever.model.acquisition import AcquisitionPath, PdfCandidate
 from sciretriever.model.primitives import ProvenanceId, Sha256, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
+from sciretriever.model.report import StableFailure
 from sciretriever.network.browser_scheduler import (
     BrowserGroupPolicy,
     BrowserGroupScheduler,
@@ -150,6 +151,8 @@ def _executor(
                             rate_limit_group=group,
                             policy_revision="fixture-v1",
                             minimum_start_interval=10.0,
+                            rate_limit_cooldown=60.0,
+                            runtime_failure_threshold=3,
                         ),
                         session_key=group,
                         readiness=BrowserGroupReadiness.READY,
@@ -387,6 +390,111 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             ("e1", "e2"),
         )
         self.assertTrue(all(item.exhausted for item in result.items))
+
+    def test_browser_rate_limit_stops_queued_callback_and_next_cohort_at_admission(self) -> None:
+        executor = _executor("wiley", "elsevier", max_concurrency=2)
+        items = tuple(
+            AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
+            for key, group in (("w1", "wiley"), ("w2", "wiley"), ("e1", "elsevier"))
+        )
+        browser_calls: list[str] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if route.tier is not AcquisitionPath.CONTROLLED_BROWSER:
+                return RouteExecutionResult.normal_miss()
+            browser_calls.append(item.work_key)
+            if item.work_key == "w1":
+                return RouteExecutionResult.deferred(
+                    StableFailure(
+                        code="acquisition-browser-rate-limited",
+                        reason="The fixture provider is rate limited.",
+                        action="Retry after the fixture provider cooldown.",
+                        retryable=True,
+                    )
+                )
+            return RouteExecutionResult.normal_miss()
+
+        first = executor.execute(items, execute)
+
+        self.assertEqual(set(browser_calls), {"w1", "e1"})
+        self.assertEqual(
+            tuple(item.disposition for item in first.items),
+            (
+                WorkItemDisposition.DEFERRED,
+                WorkItemDisposition.DEFERRED,
+                WorkItemDisposition.EXHAUSTED,
+            ),
+        )
+        self.assertNotIn("browser:w2", first.items[1].attempted_route_keys)
+        self.assertIsNotNone(first.items[1].failure)
+        if first.items[1].failure is None:
+            self.fail("queued rate-limited item did not retain a stable failure")
+        self.assertEqual(
+            first.items[1].failure.code,
+            "acquisition-browser-group-rate-limited",
+        )
+
+        browser_calls.clear()
+        second = executor.execute(
+            (AcquisitionWorkItem(work_key="w3", plan=_plan("alternate", group="wiley")),),
+            execute,
+        )
+        self.assertEqual(browser_calls, [])
+        self.assertIs(second.items[0].disposition, WorkItemDisposition.DEFERRED)
+        self.assertIs(
+            second.browser_admission.decisions[0].disposition,
+            BrowserAdmissionDisposition.DEFERRED,
+        )
+        self.assertEqual(second.browser_admission.summary.groups[0].readiness, "rate-limited")
+
+    def test_browser_challenge_opens_only_its_group_circuit(self) -> None:
+        executor = _executor("wiley", "elsevier", max_concurrency=2)
+        items = tuple(
+            AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
+            for key, group in (("w1", "wiley"), ("w2", "wiley"), ("e1", "elsevier"))
+        )
+        browser_calls: list[str] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if route.tier is not AcquisitionPath.CONTROLLED_BROWSER:
+                return RouteExecutionResult.normal_miss()
+            browser_calls.append(item.work_key)
+            if item.work_key == "w1":
+                return RouteExecutionResult.action_required(
+                    StableFailure(
+                        code="acquisition-browser-challenge-required",
+                        reason="The fixture provider requires a challenge review.",
+                        action="Review the fixture provider outside automation.",
+                        retryable=False,
+                    )
+                )
+            return RouteExecutionResult.normal_miss()
+
+        result = executor.execute(items, execute)
+
+        self.assertEqual(set(browser_calls), {"w1", "e1"})
+        self.assertEqual(
+            tuple(item.disposition for item in result.items),
+            (
+                WorkItemDisposition.ACTION_REQUIRED,
+                WorkItemDisposition.ACTION_REQUIRED,
+                WorkItemDisposition.EXHAUSTED,
+            ),
+        )
+        self.assertNotIn("browser:w2", result.items[1].attempted_route_keys)
+        self.assertIsNotNone(result.items[1].failure)
+        if result.items[1].failure is None:
+            self.fail("queued circuit item did not retain a stable failure")
+        self.assertEqual(
+            result.items[1].failure.code,
+            "acquisition-browser-group-challenge-required",
+        )
 
     def test_tier_observer_exposes_public_terminal_items_before_browser_execution(
         self,

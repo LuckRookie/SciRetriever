@@ -208,6 +208,11 @@ def _access_page_markers() -> tuple[BrowserPageMarker, ...]:
             response_statuses=(451,),
         ),
         BrowserPageMarker(
+            marker_id="account-warning",
+            kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
+            css_selectors=("#account-warning",),
+        ),
+        BrowserPageMarker(
             marker_id="not-found",
             kind=BrowserPageMarkerKind.NOT_FOUND,
             response_statuses=(404,),
@@ -1747,6 +1752,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
             "challenge-required": "acquisition-browser-challenge-required",
             "rate-limited": "acquisition-browser-rate-limited",
             "ip-blocked": "acquisition-browser-ip-blocked",
+            "account-warning": "acquisition-browser-account-warning",
         }
 
         for state_name, expected_code in expected.items():
@@ -1769,6 +1775,42 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
                 self.assertEqual(caught.exception.failure.code, expected_code)
                 self.assertEqual(runner.sessions[0].clicks, [])
                 self.assertEqual(runner.sessions[0].fill_calls, [])
+
+    def test_provider_rule_can_classify_a_reviewed_403_as_account_warning(self) -> None:
+        request = _request(observations=(_observation(544, (_landing_hint(),)),))
+        rule = _rule(
+            page_markers=(
+                BrowserPageMarker(
+                    marker_id="provider-account-warning",
+                    kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
+                    response_statuses=(403,),
+                ),
+            )
+        )
+        runner = _FakeRunner(
+            [_download()],
+            page_observations=(
+                BrowserPageObservation(
+                    locator="https://publisher.test/article",
+                    status_code=403,
+                ),
+            ),
+        )
+
+        with self.assertRaises(AcquisitionFailure) as caught:
+            list(
+                _source(runner, rule=rule)._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            )
+
+        self.assertEqual(
+            caught.exception.failure.code,
+            "acquisition-browser-account-warning",
+        )
+        self.assertEqual(runner.sessions[0].clicks, [])
 
     def test_conflicting_page_markers_fail_closed_with_safe_diagnosis(self) -> None:
         states = _access_page_states()

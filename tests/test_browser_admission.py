@@ -13,7 +13,11 @@ from sciretriever.acquisition.browser_admission import (
     BrowserGroupReadiness,
 )
 from sciretriever.acquisition.planning import RouteReadiness
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
+from sciretriever.network.browser_scheduler import (
+    BrowserCircuitReason,
+    BrowserGroupPolicy,
+    BrowserGroupRuntimeSnapshot,
+)
 
 
 def _candidate(
@@ -44,6 +48,8 @@ def _group(
             rate_limit_group=group,
             policy_revision="fixture-v1",
             minimum_start_interval=interval,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
         ),
         session_key=group,
         readiness=readiness,
@@ -146,7 +152,6 @@ class BrowserAdmissionTests(unittest.TestCase):
     def test_group_state_maps_to_stable_admission_outcomes(self) -> None:
         deferred = {
             BrowserGroupReadiness.RATE_LIMITED,
-            BrowserGroupReadiness.CIRCUIT_OPEN,
         }
         action_required = set(BrowserGroupReadiness) - {
             BrowserGroupReadiness.READY,
@@ -182,6 +187,51 @@ class BrowserAdmissionTests(unittest.TestCase):
                         failure.code,
                         f"acquisition-browser-{readiness.value}",
                     )
+
+    def test_dynamic_cooldown_and_circuit_override_ready_group_in_summary(self) -> None:
+        controller = _controller(_group(earliest=3.0))
+        blocked = BrowserGroupRuntimeSnapshot(
+            rate_limit_group="wiley",
+            policy_revision="fixture-v1",
+            observed_at=10.0,
+            blocked_until=25.0,
+            consecutive_runtime_failures=0,
+        )
+
+        deferred = controller.evaluate((_candidate(),), runtime_states=(blocked,))
+
+        self.assertIs(
+            deferred.decisions[0].disposition,
+            BrowserAdmissionDisposition.DEFERRED,
+        )
+        self.assertEqual(deferred.summary.groups[0].readiness, "rate-limited")
+        self.assertEqual(deferred.summary.groups[0].earliest_start_in_seconds, 15.0)
+        self.assertEqual(deferred.summary.groups[0].deferred_count, 1)
+
+        circuit = BrowserGroupRuntimeSnapshot(
+            rate_limit_group="wiley",
+            policy_revision="fixture-v1",
+            observed_at=10.0,
+            blocked_until=25.0,
+            consecutive_runtime_failures=0,
+            circuit_reason=BrowserCircuitReason.CHALLENGE_REQUIRED,
+        )
+        action_required = controller.evaluate(
+            (_candidate(),),
+            runtime_states=(circuit,),
+        )
+
+        decision = action_required.decisions[0]
+        self.assertIs(
+            decision.disposition,
+            BrowserAdmissionDisposition.ACTION_REQUIRED,
+        )
+        self.assertEqual(action_required.summary.groups[0].readiness, "challenge-required")
+        self.assertEqual(action_required.summary.groups[0].action_required_count, 1)
+        self.assertIsNotNone(decision.failure)
+        if decision.failure is None:
+            self.fail("circuit outcome did not carry a stable failure")
+        self.assertEqual(decision.failure.code, "acquisition-browser-challenge-required")
 
     def test_missing_group_requires_configuration(self) -> None:
         decision = _controller().evaluate((_candidate(),)).decisions[0]

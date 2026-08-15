@@ -67,6 +67,8 @@ def _profile() -> PublisherAccessProfile:
             rate_limit_group="wiley-online-library",
             policy_revision="2026-08-15",
             minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
         ),
     )
 
@@ -283,6 +285,8 @@ class TieredCohortContractTests(unittest.TestCase):
                                 rate_limit_group="publisher-a",
                                 policy_revision="fixture-v1",
                                 minimum_start_interval=0.0,
+                                rate_limit_cooldown=60.0,
+                                runtime_failure_threshold=3,
                             ),
                             session_key="publisher-a",
                             readiness=BrowserGroupReadiness.READY,

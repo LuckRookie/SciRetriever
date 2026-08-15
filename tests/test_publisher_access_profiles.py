@@ -50,6 +50,8 @@ def _profile(
             rate_limit_group=access_key,
             policy_revision=policy_revision,
             minimum_start_interval=10.0,
+            rate_limit_cooldown=60.0,
+            runtime_failure_threshold=3,
             maximum_starts_per_window=4,
             window_seconds=120.0,
             cooldown_after_completion=2.0,
@@ -146,6 +148,8 @@ class PublisherAccessProfileTests(unittest.TestCase):
                     rate_limit_group="another-provider",
                     policy_revision="2026-08-15",
                     minimum_start_interval=10.0,
+                    rate_limit_cooldown=60.0,
+                    runtime_failure_threshold=3,
                 ),
             )
         with self.assertRaises(ValueError):
@@ -172,6 +176,8 @@ class PublisherAccessProfileTests(unittest.TestCase):
                     rate_limit_group="wiley-online-library",
                     policy_revision="2026-08-15",
                     minimum_start_interval=0.0,
+                    rate_limit_cooldown=60.0,
+                    runtime_failure_threshold=3,
                 ),
             )
 
