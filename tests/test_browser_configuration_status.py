@@ -86,6 +86,7 @@ def _approved_status() -> BrowserAccessStatus:
         runtime=BrowserRuntimeStatus(
             framework_available=True,
             python_dependency_available=True,
+            chromium_executable_available=True,
         ),
         profile=BrowserProfileSelectionStatus(
             selected=_PROFILE,
@@ -102,7 +103,7 @@ def _approved_status() -> BrowserAccessStatus:
 
 
 class _UnavailableBrowserProbe:
-    supported_access_keys = frozenset()
+    supported_access_keys = frozenset({"springerlink"})
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -166,17 +167,22 @@ class _ScheduledFixtureBrowserProbe:
 
 
 class BrowserConfigurationStatusTests(unittest.TestCase):
-    def test_production_status_has_zero_routes_and_never_claims_login_or_entitlement(self) -> None:
+    def test_production_status_has_springer_route_but_never_claims_login_or_entitlement(
+        self,
+    ) -> None:
         status = browser_access_status(
             Configuration(),
             python_dependency_available=True,
+            chromium_executable_available=True,
         )
 
         self.assertTrue(status.runtime.framework_available)
         self.assertTrue(status.runtime.python_dependency_available)
+        self.assertTrue(status.runtime.chromium_executable_available)
         self.assertFalse(status.runtime.launch_assessed)
-        self.assertEqual(status.production_route_count, 0)
-        self.assertEqual(status.routes, ())
+        self.assertEqual(status.production_route_count, 1)
+        self.assertEqual(status.routes[0].access_key, "springerlink")
+        self.assertEqual(status.routes[0].rate_limit_group, "springerlink")
         self.assertFalse(status.automatic_acquisition_available)
         self.assertIsNone(status.profile.selected)
         self.assertIs(status.profile.presence, BrowserProfilePresence.MISSING)
@@ -185,7 +191,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         self.assertEqual(status.session.article_entitlement, "not-proven")
         self.assertEqual(
             status.action_required[0].code,
-            "browser-production-route-unavailable",
+            "browser-disabled",
         )
 
     def test_profile_presence_reads_no_profile_bytes_and_discloses_no_path(self) -> None:
@@ -211,6 +217,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                     configuration,
                     home=home,
                     python_dependency_available=True,
+                    chromium_executable_available=True,
                 )
 
             rendered = status.model_dump_json()
@@ -227,6 +234,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
             browser_access_status(
                 Configuration(),
                 python_dependency_available=True,
+                chromium_executable_available=True,
                 probe_supported_access_keys=frozenset({_ACCESS_KEY}),
             )
 
@@ -243,24 +251,44 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                 navigation_count=1,
             )
 
+    def test_passed_browser_probe_allows_optional_personal_login_observation(self) -> None:
+        for personal_login in (False, None):
+            with self.subTest(personal_login=personal_login):
+                result = BrowserConfigurationProbeResult(
+                    access_key=_ACCESS_KEY,
+                    outcome=ProbeOutcome.PASSED,
+                    local_ready=True,
+                    browser_launched=True,
+                    minimal_target_reached=True,
+                    authentication_accepted=personal_login,
+                    navigation_count=1,
+                )
+
+                self.assertIs(result.outcome, ProbeOutcome.PASSED)
+                self.assertIs(result.authentication_accepted, personal_login)
+                self.assertEqual(result.article_entitlement, "not-proven")
+                self.assertIsNone(result.failure_code)
+
 
 class BrowserConfigurationProbeTests(unittest.TestCase):
-    def test_zero_route_production_probe_is_stably_skipped_without_browser_io(self) -> None:
+    def test_disabled_production_probe_is_stably_skipped_without_browser_io(self) -> None:
         port = _UnavailableBrowserProbe()
         status = browser_access_status(
             Configuration(),
             python_dependency_available=True,
+            chromium_executable_available=True,
+            probe_supported_access_keys=frozenset({"springerlink"}),
         )
 
         result = run_browser_configuration_probe(
-            "wiley-online-library",
+            "springerlink",
             port,
             status_snapshot=status,
         )
 
         self.assertIs(result.outcome, ProbeOutcome.SKIPPED)
         self.assertFalse(result.local_ready)
-        self.assertEqual(result.failure_code, "browser-production-route-unavailable")
+        self.assertEqual(result.failure_code, "browser-disabled")
         self.assertFalse(result.persisted)
         self.assertEqual(result.navigation_count, 0)
         self.assertEqual(port.calls, [])

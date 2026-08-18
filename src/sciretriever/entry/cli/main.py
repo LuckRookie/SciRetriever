@@ -21,6 +21,7 @@ from sciretriever.acquisition.api import (
     UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS,
 )
 from sciretriever.bootstrap import (
+    PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
     BibliographyExchangeObjectGraph,
     BootstrapError,
     CitationDiscoveryObjectGraph,
@@ -1540,7 +1541,7 @@ def _plain_browser_access_action() -> str | None:
     sys.stderr.write(
         "\nManage Browser Access\n\n"
         "  1. Select or initialize a Browser profile\n"
-        "  2. Open a visible Browser for manual login\n"
+        "  2. Open a visible Browser when a Provider requires manual login\n"
         "  3. Remove the selected local Browser session\n"
         "  4. Disable Browser access and keep the local session\n"
         "  b. Back\n\n"
@@ -1649,9 +1650,10 @@ def _open_browser_access_login(console: ConfigConsole) -> None:
         return
     actual_path = browser_profile_path(identity, home=None)
     console.section(
-        "Visible Browser login",
-        "SciRetriever opens a blank visible Chromium window and leaves all navigation and "
-        "authentication to you.",
+        "Optional visible Browser login",
+        "Normal article attempts use the current network, including institutional IP access, "
+        "without requiring a personal login. Open this window only after a Provider actually "
+        "requests login, institution selection, or MFA.",
     )
     console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
     console.message(
@@ -1667,10 +1669,13 @@ def _open_browser_access_login(console: ConfigConsole) -> None:
             kind="warning",
         )
     if not _confirm("Open the visible Browser now? [y/N] "):
-        console.message("Visible Browser login was cancelled; nothing was opened.", kind="muted")
+        console.message("Optional visible Browser was cancelled; nothing was opened.", kind="muted")
         return
     handle: BrowserProfileHandle = resolve_browser_profile(identity, home=None)
-    console.message("Visible Browser opened. Complete only your authorized manual login.")
+    console.message(
+        "Visible Browser opened. Complete only the Provider action that the article attempt "
+        "requested and that you are authorized to perform."
+    )
     try:
         open_visible_browser_login(handle)
     except VisibleBrowserLoginError as error:
@@ -1788,7 +1793,7 @@ def _manage_browser_access_rich(console: ConfigConsole) -> None:
             message="Manage Provider API and Browser Access",
             options=[
                 ("select", "Select or initialize a Browser profile"),
-                ("login", "Open a visible Browser for manual login"),
+                ("login", "Open a visible Browser when a Provider requires manual login"),
                 ("remove", "Remove the selected local Browser session"),
                 ("disable", "Disable Browser access and keep the session"),
                 ("back", "Back"),
@@ -2467,7 +2472,10 @@ def _run_config_status(arguments: argparse.Namespace) -> int:
     credentials = load_credentials(home=None)
     result = configuration_status(configuration, credentials=credentials)
     runtime = configuration_runtime_status(configuration, credentials=credentials)
-    browser = browser_access_status(configuration)
+    browser = browser_access_status(
+        configuration,
+        probe_supported_access_keys=PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
+    )
     payload = _config_status_payload(configuration, result.capabilities, runtime, browser)
     if arguments.json:
         _write_result(payload, as_json=True)
@@ -2481,9 +2489,10 @@ def _run_config_test(arguments: argparse.Namespace) -> int:
     session = build_production_configuration_probe_session(configuration)
     if arguments.browser_access_key is not None:
         if not arguments.json and not _confirm(
-            "This may open one visible Browser and visit exactly one approved minimal "
-            "Publisher target under the shared provider scheduler. It checks current login "
-            "only and never proves arbitrary article entitlement. Continue? [y/N] "
+            "This starts one controlled headless Browser session and visits exactly one "
+            "approved minimal Publisher target under the shared provider scheduler. It checks "
+            "runtime and target reachability, may observe personal login, and does not assess "
+            "IP-based or article-specific entitlement. Continue? [y/N] "
         ):
             sys.stderr.write("Browser probe cancelled.\n")
             return 0

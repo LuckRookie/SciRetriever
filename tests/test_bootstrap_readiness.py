@@ -12,6 +12,7 @@ from unittest import mock
 from sciretriever.analysis.ports import AnalysisLLMCall
 from sciretriever.configuration import (
     ConfigurationError,
+    initialize_browser_profile,
     load_credentials,
     load_runtime_secrets,
     parse_configuration,
@@ -439,7 +440,8 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 normalize_url("https://repository.example.invalid/paper.pdf")
             )
             self.assertEqual(api_scope, AccessScope("springer", "web"))
-            self.assertEqual(content_scope, api_scope)
+            self.assertEqual(content_scope, AccessScope("springerlink", "web"))
+            self.assertNotEqual(content_scope, api_scope)
             self.assertEqual(api_policy, content_policy)
             self.assertGreaterEqual(content_policy.min_start_interval, 1.0)
             self.assertEqual(content_policy.cooldown_after_completion, 0.0)
@@ -456,8 +458,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         from sciretriever.acquisition.cohort import TieredCohortExecutor
         from sciretriever.acquisition.registry import AcquisitionRegistry
         from sciretriever.acquisition.tiered_service import TieredAcquisitionService
+        from sciretriever.network.browser import BrowserClient
         from sciretriever.network.browser_scheduler import BrowserGroupScheduler
         from sciretriever.network.browser_sessions import BrowserSessionBroker
+        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
 
         forbidden = AssertionError("object graph construction performed external I/O")
         with tempfile.TemporaryDirectory(prefix="sciretriever-p76-graph-") as temporary:
@@ -466,6 +470,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             scoped_root = root / "scoped"
             full_root.mkdir(mode=0o700)
             scoped_root.mkdir(mode=0o700)
+            (root / "home").mkdir(mode=0o700)
             scoped_configuration = parse_configuration(
                 f"""
                 [paths]
@@ -481,6 +486,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 browser_max_concurrency = 3
                 """
             )
+            initialize_browser_profile("research", home=root / "home")
             with (
                 mock.patch(
                     "sciretriever.network.http.SystemResolver.resolve",
@@ -492,6 +498,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 ),
                 mock.patch.object(BrowserSessionBroker, "acquire", side_effect=forbidden),
                 mock.patch.object(BrowserGroupScheduler, "execute", side_effect=forbidden),
+                mock.patch(
+                    "sciretriever.network.playwright.playwright_runtime_availability",
+                    return_value=PlaywrightRuntimeAvailability(True, True),
+                ),
             ):
                 full = bootstrap.build_object_graph(
                     Configuration(),
@@ -532,7 +542,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     runtime.browser_scheduler,
                 )
                 self.assertIs(cast(Any, graph.http_client)._coordinator, graph.access_coordinator)
-                self.assertIsNone(graph.browser_client)
+                self.assertIs(runtime.browser_client, graph.browser_client)
                 self.assertEqual(runtime.browser_session_broker._entries, {})
                 self.assertEqual(runtime.browser_scheduler._policies, {})
                 self.assertEqual(
@@ -541,21 +551,41 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                         for binding in registry.route_registry.bindings
                         if binding.spec.tier.value == "controlled-browser"
                     ),
-                    (),
+                    ("browser:springerlink",),
                 )
-                self.assertFalse(runtime.browser_admission._configuration.execution_confirmed)
-                self.assertFalse(runtime.browser_admission._configuration.runtime_ready)
 
             self.assertEqual(full.acquisition_runtime.cohort_executor._max_concurrency, 4)
             self.assertEqual(full.acquisition_runtime.browser_scheduler._max_concurrency, 2)
             self.assertFalse(
                 full.acquisition_runtime.browser_admission._configuration.explicitly_enabled
             )
+            self.assertIsNone(full.browser_client)
+            self.assertFalse(
+                full.acquisition_runtime.browser_admission._configuration.execution_confirmed
+            )
+            self.assertFalse(
+                full.acquisition_runtime.browser_admission._configuration.runtime_ready
+            )
+            full_registry = cast(AcquisitionRegistry, full.acquisition_registry)
+            full_browser = full_registry.route_registry.binding_for("browser:springerlink")
+            self.assertEqual(full_browser.spec.readiness.value, "disabled")
+            self.assertIsNone(full_browser.adapter)
             self.assertEqual(scoped.acquisition_runtime.cohort_executor._max_concurrency, 5)
             self.assertEqual(scoped.acquisition_runtime.browser_scheduler._max_concurrency, 3)
             self.assertTrue(
                 scoped.acquisition_runtime.browser_admission._configuration.explicitly_enabled
             )
+            self.assertIsInstance(scoped.browser_client, BrowserClient)
+            self.assertTrue(
+                scoped.acquisition_runtime.browser_admission._configuration.execution_confirmed
+            )
+            self.assertTrue(
+                scoped.acquisition_runtime.browser_admission._configuration.runtime_ready
+            )
+            scoped_registry = cast(AcquisitionRegistry, scoped.acquisition_registry)
+            scoped_browser = scoped_registry.route_registry.binding_for("browser:springerlink")
+            self.assertEqual(scoped_browser.spec.readiness.value, "ready")
+            self.assertIsNotNone(scoped_browser.adapter)
             full.acquisition_runtime.browser_session_broker.close()
             scoped.acquisition_runtime.browser_session_broker.close()
 
@@ -1580,7 +1610,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 session.access_coordinator,
             )
             self.assertIs(session.http_client._coordinator, session.access_coordinator)
-            self.assertEqual(session.browser_status.production_route_count, 0)
+            self.assertEqual(session.browser_status.production_route_count, 1)
             self.assertFalse(session.browser_status.automatic_acquisition_available)
             self.assertFalse(session.browser_status.runtime.launch_assessed)
             self.assertIsNone(session.browser_status.session.authenticated)
@@ -1588,7 +1618,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 session.browser_status.session.article_entitlement,
                 "not-proven",
             )
-            self.assertEqual(session.browser_probe_port.supported_access_keys, frozenset())
+            self.assertEqual(
+                session.browser_probe_port.supported_access_keys,
+                frozenset({"springerlink"}),
+            )
             self.assertEqual(
                 session.probe_port.supported_capabilities,
                 frozenset(
@@ -1629,12 +1662,12 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 ) as run_probe,
             ):
                 summary = session.run(provider=ProviderName.CROSSREF)
-                browser = session.run_browser("wiley-online-library")
+                browser = session.run_browser("springerlink")
             self.assertTrue(summary.passed)
             self.assertIs(browser.outcome, ProbeOutcome.SKIPPED)
             self.assertEqual(
                 browser.failure_code,
-                "browser-production-route-unavailable",
+                "browser-disabled",
             )
             self.assertEqual(browser.navigation_count, 0)
             run_probe.assert_called_once_with(
@@ -1686,6 +1719,123 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     for result in summary.results
                 )
             )
+
+    def test_enabled_production_browser_probe_normalizes_the_profile_session_key(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import BrowserClient
+        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("springerlink-access", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "springerlink-access"
+                """
+            )
+            with mock.patch(
+                "sciretriever.network.playwright.playwright_runtime_availability",
+                return_value=PlaywrightRuntimeAvailability(True, True),
+            ):
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+            with mock.patch.object(
+                BrowserClient,
+                "run",
+                return_value=no_download,
+            ) as run_browser:
+                result = session.run_browser("springerlink")
+
+            self.assertIs(result.outcome, ProbeOutcome.FAILED)
+            self.assertEqual(result.failure_code, "browser-probe-target-unreachable")
+            self.assertEqual(run_browser.call_count, 1)
+            session_key = run_browser.call_args.kwargs["session_key"]
+            self.assertIs(type(session_key), str)
+            self.assertEqual(session_key, "springerlink")
+            self.assertIs(run_browser.call_args.kwargs["navigation_only"], True)
+
+    def test_springerlink_probe_accepts_reachable_idp_without_personal_login(
+        self,
+    ) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+        )
+        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("springerlink-access", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "springerlink-access"
+                """
+            )
+            with mock.patch(
+                "sciretriever.network.playwright.playwright_runtime_availability",
+                return_value=PlaywrightRuntimeAvailability(True, True),
+            ):
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+
+            def redirected_login(*_args: object, **kwargs: Any) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                destination_guard.check(
+                    "https://idp.springer.com/authorize",
+                    BrowserDestinationKind.NAVIGATION,
+                )
+                flow = cast(Any, kwargs["flow"])
+                flow_session = mock.Mock()
+                flow_session.observe.return_value = BrowserPageObservation(
+                    locator="https://idp.springer.com/authorize",
+                    status_code=200,
+                )
+                flow_session.text.side_effect = AssertionError(
+                    "the probe must not inspect account UI on the login target"
+                )
+                flow(flow_session)
+                return no_download
+
+            with mock.patch.object(
+                BrowserClient,
+                "run",
+                side_effect=redirected_login,
+            ):
+                result = session.run_browser("springerlink")
+
+            self.assertIs(result.outcome, ProbeOutcome.PASSED)
+            self.assertIsNone(result.failure_code)
+            self.assertTrue(result.browser_launched)
+            self.assertTrue(result.minimal_target_reached)
+            self.assertFalse(result.authentication_accepted)
+            self.assertEqual(result.article_entitlement, "not-proven")
+            self.assertEqual(result.navigation_count, 1)
 
 
 class _OfflineParser:

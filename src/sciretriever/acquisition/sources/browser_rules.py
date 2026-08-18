@@ -8,10 +8,8 @@ not a remote rule language: there is no loader, JavaScript surface, login form
 description, Cookie/profile data, selector guessing, or fallback action
 sequence.
 
-The production catalog is intentionally empty.  Network now accepts a closed
-destination guard and enforces it before every external Browser request;
-provider rules remain disabled until their page states, sessions, scheduling,
-capture paths and offline fixtures are verified end to end.
+The production catalog contains only rules whose page states, sessions,
+scheduling, capture paths and offline fixtures have been verified end to end.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlsplit
 
 from sciretriever.model.access import BrowserCaptureKind
 from sciretriever.model.literature import Identifier
@@ -376,6 +374,25 @@ def _path_stem(value: str) -> str:
     return value[:-4] if value.endswith(".pdf") else value
 
 
+def _doi_pdf_url_template(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("doi_pdf_url_template must be a string")
+    candidate = value.strip()
+    if (
+        candidate.count("{doi}") != 1
+        or "{" in candidate.replace("{doi}", "")
+        or "}" in candidate.replace("{doi}", "")
+        or _CONTROL_CHARACTER.search(candidate) is not None
+    ):
+        raise ValueError("doi_pdf_url_template must contain one DOI path placeholder")
+    sample = candidate.replace("{doi}", quote("10.1000/browser-fixture", safe="/"))
+    normalized = _normalized_url(sample)
+    parsed = urlsplit(sample)
+    if normalized.scheme != "https" or parsed.query or parsed.fragment:
+        raise ValueError("doi_pdf_url_template must be a query-free HTTPS locator")
+    return candidate
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserSiteRule:
     """One local, revisioned rule for one exact landing origin.
@@ -393,6 +410,8 @@ class BrowserSiteRule:
     allowed_origins: tuple[str, ...]
     web_scope_provider_name: str
     actions: tuple[BrowserRuleAction, ...] = field(default=(), repr=False)
+    actions_require_entitlement: bool = False
+    doi_pdf_url_template: str | None = field(default=None, repr=False)
     max_actions: int = _MAX_ACTIONS
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
     capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
@@ -453,8 +472,16 @@ class BrowserSiteRule:
             for action in self.actions
         ):
             raise ValueError("action locators must use allowed rule origins")
+        if type(self.actions_require_entitlement) is not bool:
+            raise TypeError("actions_require_entitlement must be a bool")
 
     def _normalize_document_rules(self) -> None:
+        if self.doi_pdf_url_template is not None:
+            object.__setattr__(
+                self,
+                "doi_pdf_url_template",
+                _doi_pdf_url_template(self.doi_pdf_url_template),
+            )
         object.__setattr__(self, "capture_url_prefixes", _url_prefixes(self.capture_url_prefixes))
         object.__setattr__(
             self,
@@ -537,6 +564,21 @@ class BrowserSiteRule:
             for action in self.actions
         ):
             raise ValueError("open action locators must match a reviewed capture prefix")
+        if self.doi_pdf_url_template is not None:
+            sample = self.doi_pdf_url_template.replace(
+                "{doi}",
+                quote("10.1000/browser-fixture", safe="/"),
+            )
+            normalized = _normalized_url(sample)
+            if normalized.origin.text not in self.allowed_origins:
+                raise ValueError("DOI PDF locators must use an allowed rule origin")
+            if not _matches_url_prefix(normalized, self.capture_url_prefixes):
+                raise ValueError("DOI PDF locators must match a reviewed capture prefix")
+            if (
+                BrowserArticleIdentityKind.IDENTIFIER_IN_PATH not in self.article_identity_kinds
+                or "doi" not in self.article_id_namespaces
+            ):
+                raise ValueError("DOI PDF locators require DOI path identity")
 
     def _validate_page_markers(self) -> None:
         if not isinstance(self.page_markers, tuple) or any(
@@ -567,6 +609,13 @@ class BrowserSiteRule:
             for prefix in marker.url_prefixes
         ):
             raise ValueError("page marker URL prefixes must use allowed rule origins")
+        if self.actions_require_entitlement and (
+            not self.actions
+            or not any(
+                marker.kind is BrowserPageMarkerKind.ENTITLED for marker in self.page_markers
+            )
+        ):
+            raise ValueError("entitlement-gated actions require actions and an entitlement marker")
 
     @property
     def landing_hostname(self) -> str:
@@ -586,7 +635,10 @@ class BrowserSiteRule:
             self.web_scope_provider_name,
             str(self.max_actions),
             str(len(self.actions)),
+            str(self.actions_require_entitlement).lower(),
             *(field for action in self.actions for field in action.fingerprint_fields),
+            "doi-pdf-url-template",
+            self.doi_pdf_url_template or "",
             "article-identity",
             str(len(self.article_identity_kinds)),
             *(kind.value for kind in self.article_identity_kinds),
@@ -635,6 +687,21 @@ class BrowserSiteRule:
         except (TypeError, ValueError):
             return False
         return candidate.origin.text in self.allowed_origins
+
+    def doi_pdf_locator(self, identifiers: tuple[Identifier, ...]) -> str | None:
+        """Build one reviewed direct-PDF Browser locator from one neutral DOI."""
+
+        if not isinstance(identifiers, tuple) or any(
+            not isinstance(identifier, Identifier) for identifier in identifiers
+        ):
+            raise TypeError("identifiers must contain neutral Identifier values")
+        template = self.doi_pdf_url_template
+        dois = tuple(
+            identifier.value for identifier in identifiers if identifier.namespace == "doi"
+        )
+        if template is None or len(dois) != 1:
+            return None
+        return _normalized_url(template.replace("{doi}", quote(dois[0], safe="/"))).url
 
     def classify_capture(
         self,
@@ -746,10 +813,100 @@ class BrowserRuleCatalog:
         return self.match_origin(normalized.origin.text)
 
 
-# No production selector or Browser factory has been verified.  Keeping this
-# value empty is a security/readiness decision, not an unfinished placeholder
-# that callers may silently treat as a supported provider matrix.
-PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog()
+SPRINGERLINK_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
+    rule_id="springerlink-pdf",
+    revision=4,
+    landing_origin="https://link.springer.com",
+    allowed_origins=(
+        "https://link.springer.com",
+        "https://static-content.springer.com",
+        "https://idp.springer.com",
+        "https://wayf.springernature.com",
+    ),
+    web_scope_provider_name="springerlink",
+    actions=(
+        BrowserRuleAction(
+            kind=BrowserActionKind.CLICK,
+            selector=(
+                "a[href*='/content/pdf/'], "
+                "a[data-track-action='download pdf'], "
+                "a.c-pdf-download__link"
+            ),
+        ),
+        BrowserRuleAction(
+            kind=BrowserActionKind.WAIT_FOR_CAPTURE,
+            capture_kind=BrowserCaptureKind.RESPONSE,
+        ),
+    ),
+    actions_require_entitlement=True,
+    doi_pdf_url_template="https://link.springer.com/content/pdf/{doi}.pdf",
+    max_actions=2,
+    page_markers=(
+        BrowserPageMarker(
+            marker_id="springerlink-entitled",
+            kind=BrowserPageMarkerKind.ENTITLED,
+            css_selectors=(
+                "a[href*='/content/pdf/']",
+                "a[data-track-action='download pdf']",
+                "a.c-pdf-download__link",
+            ),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-login-required",
+            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
+            url_prefixes=(
+                "https://link.springer.com/login",
+                "https://idp.springer.com/authorize",
+            ),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-paywall",
+            kind=BrowserPageMarkerKind.PAYWALL,
+            css_selectors=("[data-test='access-options']",),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-mfa-required",
+            kind=BrowserPageMarkerKind.MFA_REQUIRED,
+            url_prefixes=("https://wayf.springernature.com/mfa",),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-challenge",
+            kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            css_selectors=("#challenge-running",),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-rate-limited",
+            kind=BrowserPageMarkerKind.RATE_LIMITED,
+            response_statuses=(429,),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-ip-blocked",
+            kind=BrowserPageMarkerKind.IP_BLOCKED,
+            response_statuses=(403,),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-account-warning",
+            kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
+            css_selectors=("[data-test='account-warning']",),
+        ),
+        BrowserPageMarker(
+            marker_id="springerlink-not-found",
+            kind=BrowserPageMarkerKind.NOT_FOUND,
+            response_statuses=(404,),
+        ),
+    ),
+    capture_url_prefixes=("https://link.springer.com/content/pdf/",),
+    article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
+    article_id_namespaces=("doi",),
+    supplement_url_prefixes=("https://static-content.springer.com/esm/",),
+    supplement_filename_markers=("supplement", "mediaobjects"),
+    excluded_url_prefixes=("https://link.springer.com/content/pdf/book-cover/",),
+    excluded_filename_markers=("frontmatter", "sample"),
+)
+
+PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog(
+    (SPRINGERLINK_BROWSER_RULE,)
+)
 
 
 __all__ = (
@@ -762,4 +919,5 @@ __all__ = (
     "BrowserRuleCatalog",
     "BrowserSiteRule",
     "PRODUCTION_BROWSER_RULE_CATALOG",
+    "SPRINGERLINK_BROWSER_RULE",
 )

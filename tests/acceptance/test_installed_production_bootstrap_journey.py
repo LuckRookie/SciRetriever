@@ -47,12 +47,15 @@ from sciretriever.bootstrap import (
     ProductionEntryScope,
     build_production_object_graph,
 )
-from sciretriever.configuration import parse_configuration
+from sciretriever.configuration import initialize_browser_profile, parse_configuration
 from sciretriever.network.browser_scheduler import BrowserGroupScheduler
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import SecureHttpTransport, SystemResolver
 
 root = Path(os.environ["SCIRETRIEVER_P76_ROOT"])
+profile_home = root / "home"
+profile_home.mkdir(mode=0o700)
+initialize_browser_profile("research", home=profile_home)
 configuration = parse_configuration(
     "[paths]\\n"
     + f"catalog_path = {str(root / 'catalog.sqlite3')!r}\\n"
@@ -97,14 +100,16 @@ evidence = {
     "browser_concurrency": runtime.browser_scheduler._max_concurrency == 3,
     "broker_unused": runtime.browser_session_broker._entries == {},
     "scheduler_unused": runtime.browser_scheduler._policies == {},
-    "browser_unavailable": graph.browser_client is None,
+    "browser_client_ready": graph.browser_client is not None,
     "browser_switch": runtime.browser_admission._configuration.explicitly_enabled,
-    "browser_unconfirmed": (
-        not runtime.browser_admission._configuration.execution_confirmed
-        and not runtime.browser_admission._configuration.runtime_ready
+    "browser_confirmed": (
+        runtime.browser_admission._configuration.execution_confirmed
+        and runtime.browser_admission._configuration.runtime_ready
     ),
-    "browser_routes": not any(
+    "browser_route_ready": any(
         binding.spec.tier.value == "controlled-browser"
+        and binding.spec.readiness.value == "ready"
+        and binding.adapter is not None
         for binding in registry.route_registry.bindings
     ),
 }
@@ -113,7 +118,13 @@ print(json.dumps(evidence, sort_keys=True))
 """
         result = self.install.run_python(
             ("-I", "-c", script),
-            environment={"SCIRETRIEVER_P76_ROOT": os.fspath(root)},
+            environment={
+                "SCIRETRIEVER_P76_ROOT": os.fspath(root),
+                "PLAYWRIGHT_BROWSERS_PATH": os.environ.get(
+                    "PLAYWRIGHT_BROWSERS_PATH",
+                    os.fspath(Path.home() / ".cache" / "ms-playwright"),
+                ),
+            },
             cwd=root,
         )
 
@@ -323,10 +334,10 @@ print(json.dumps(evidence, sort_keys=True))
         )
 
         self.assertEqual(result.returncode, 3, result.stderr_text)
-        self.assertIn("event=completion-failed", result.stderr_text)
+        self.assertIn("[completion-failed]", result.stderr_text)
         self.assertIn("code=write-admission-failed", result.stderr_text)
-        self.assertIn("reason=", result.stderr_text)
-        self.assertIn("action=", result.stderr_text)
+        self.assertIn("    reason  ", result.stderr_text)
+        self.assertIn("    action  ", result.stderr_text)
         report = json.loads(result.stdout)
         self.assertEqual(report["kind"], "database-completion")
         self.assertEqual(report["end"]["kind"], "failed")
@@ -838,7 +849,7 @@ print(json.dumps(evidence, sort_keys=True))
         self.assertEqual(result.returncode, 0, result.stderr_text)
         diagnostics = result.stderr_text
         for event in expected_log_events:
-            self.assertIn(f"event={event}", diagnostics)
+            self.assertIn(f"[{event}]", diagnostics)
         for unsafe in (
             "Traceback",
             "Authorization",
@@ -849,7 +860,7 @@ print(json.dumps(evidence, sort_keys=True))
             self.assertNotIn(unsafe, diagnostics)
         if "--debug" not in arguments:
             self.assertNotIn(" DEBUG ", diagnostics)
-            self.assertNotIn("event=completion-current-facts-read", diagnostics)
+            self.assertNotIn("[completion-current-facts-read]", diagnostics)
         return json.loads(result.stdout)
 
 

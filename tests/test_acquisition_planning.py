@@ -335,6 +335,48 @@ class ProgressivePlanningTests(unittest.TestCase):
         self.assertEqual(public_only.doi_resolution_state, DoiResolutionState.NOT_NEEDED)
         self.assertEqual(doi.calls, [])
 
+    def test_disabled_or_unsupported_profile_routes_do_not_trigger_doi_io(self) -> None:
+        catalog = _catalog()
+        doi = _DoiResolver(None)
+        unavailable_routes = (
+            self._route_specs()[0],
+            RouteSpec(
+                route_key="browser:wiley",
+                tier=AcquisitionPath.CONTROLLED_BROWSER,
+                capability=RouteCapability.BROWSER_PDF,
+                readiness=RouteReadiness.DISABLED,
+                profile_access_key="wiley-online-library",
+                risk_group="wiley-online-library",
+            ),
+            RouteSpec(
+                route_key="api:wiley",
+                tier=AcquisitionPath.AUTHORIZED_PROVIDER_API,
+                capability=RouteCapability.DIRECT_PDF,
+                readiness=RouteReadiness.UNSUPPORTED,
+                profile_access_key="wiley-online-library",
+                quota_group="wiley-tdm",
+            ),
+        )
+        unavailable_routes = tuple(
+            sorted(
+                unavailable_routes,
+                key=lambda route: (
+                    AcquisitionPath.PUBLIC,
+                    AcquisitionPath.AUTHORIZED_PROVIDER_API,
+                    AcquisitionPath.CONTROLLED_BROWSER,
+                ).index(route.tier),
+            )
+        )
+        session = ProgressiveAcquisitionPlanner(
+            resolver=PublisherAccessResolver(catalog),
+            builder=AcquisitionPlanBuilder(catalog),
+            route_specs=unavailable_routes,
+            doi_landing_resolver=doi,
+        ).start(_request())
+
+        self.assertEqual(session.doi_resolution_state, DoiResolutionState.NOT_NEEDED)
+        self.assertEqual(doi.calls, [])
+
 
 class RuntimeOutcomeSafetyTests(unittest.TestCase):
     def test_hints_are_closed_redacted_and_not_serializable(self) -> None:

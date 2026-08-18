@@ -93,7 +93,14 @@ def _safe_runtime_url(value: object) -> str:
     return urlunsplit((scheme, authority, parsed.path or "/", parsed.query, ""))
 
 
-def _origin_from_url(value: str) -> str:
+def runtime_url_origin(value: str) -> str:
+    """Return one routing-only origin without interpreting an opaque path.
+
+    Metadata Provider asset locators may encode an article identifier's slash
+    inside the path.  Publisher resolution needs only the canonical origin;
+    accepting that path as routing evidence does not authorize navigating it.
+    """
+
     parsed = urlsplit(_safe_runtime_url(value))
     host = parsed.hostname or ""
     if ":" in host and not host.startswith("["):
@@ -395,7 +402,7 @@ class DoiLandingResolution:
     def __post_init__(self) -> None:
         canonical = _safe_runtime_url(self.canonical_landing_url)
         object.__setattr__(self, "canonical_landing_url", canonical)
-        derived_origin = _origin_from_url(canonical)
+        derived_origin = runtime_url_origin(canonical)
         if self.origin and normalize_profile_origin(self.origin) != derived_origin:
             raise ValueError("DOI landing origin must match its canonical URL")
         object.__setattr__(self, "origin", derived_origin)
@@ -800,7 +807,9 @@ class ProgressiveAcquisitionPlanner:
         resolution: PublisherAccessResolution,
     ) -> DoiResolutionState:
         needs_provider_resolution = any(
-            route.profile_access_key is not None for route in self._route_specs
+            route.profile_access_key is not None
+            and route.readiness not in {RouteReadiness.DISABLED, RouteReadiness.UNSUPPORTED}
+            for route in self._route_specs
         )
         if resolution.is_strong or not needs_provider_resolution or _single_doi(request) is None:
             return DoiResolutionState.NOT_NEEDED
@@ -907,7 +916,7 @@ def _strong_resolution_evidence(acquisition_evidence: object) -> list[Resolution
         result.append(
             ResolutionEvidence(
                 kind=ResolutionEvidenceKind.ASSET_ORIGIN,
-                value=_origin_from_url(observed.hint.url),
+                value=runtime_url_origin(observed.hint.url),
                 source="asset-hint",
             )
         )
@@ -942,7 +951,7 @@ def _append_route_hint_evidence(
                 0,
                 ResolutionEvidence(
                     kind=ResolutionEvidenceKind.LANDING_ORIGIN,
-                    value=_origin_from_url(hint.value),
+                    value=runtime_url_origin(hint.value),
                     source="route-hint",
                 ),
             )
@@ -1002,4 +1011,5 @@ __all__ = (
     "RouteReadiness",
     "RouteSpec",
     "build_resolution_evidence",
+    "runtime_url_origin",
 )

@@ -36,12 +36,9 @@ class InstalledControlledBrowserTests(unittest.TestCase):
             self.assertIn(os.sep + "site-packages" + os.sep, module_file)
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 0)
-        self.assertFalse(production["ready"])
-        self.assertEqual(
-            production["readiness_code"],
-            "acquisition-browser-production-unavailable",
-        )
+        self.assertEqual(production["catalog_rule_count"], 1)
+        self.assertTrue(production["ready"])
+        self.assertIsNone(production["readiness_code"])
 
         evidence = payload["evidence"]
         self.assertTrue(evidence["applicable"])

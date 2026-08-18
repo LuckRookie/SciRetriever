@@ -101,7 +101,10 @@ class WileyAuthorizedPdfClientTests(unittest.TestCase):
     def test_profile_keeps_tdm_api_ready_without_claiming_wiley_browser_support(self) -> None:
         self.assertEqual(WILEY_ACCESS_PROFILE.api_route_keys, ("api:wiley-tdm-v1",))
         self.assertIsNone(WILEY_ACCESS_PROFILE.browser_route_key)
-        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
+        self.assertEqual(
+            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
+            ("springerlink-pdf",),
+        )
         resolution = PublisherAccessResolver(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG).resolve(
             (
                 ResolutionEvidence(

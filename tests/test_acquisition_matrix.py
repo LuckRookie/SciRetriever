@@ -44,7 +44,6 @@ from sciretriever.acquisition.sources import (
     EuropePmcPdfSource,
     PublicLocatorFetcher,
     UnpaywallPdfSource,
-    WebAccessProfileResolver,
 )
 from sciretriever.configuration import (
     ConfigurationError,
@@ -137,6 +136,7 @@ def _configuration(
     providers: tuple[str, ...] = (),
     *,
     unpaywall_email: str | None = None,
+    browser_enabled: bool = False,
 ) -> Any:
     lines = (
         "[sources.acquisition]",
@@ -148,6 +148,14 @@ def _configuration(
             (
                 "[sources.acquisition.unpaywall]",
                 f'contact_email = "{unpaywall_email}"',
+            )
+        )
+    if browser_enabled:
+        payload.extend(
+            (
+                "[access]",
+                "browser_enabled = true",
+                'browser_profile = "research"',
             )
         )
     return parse_configuration("\n".join(payload) + "\n")
@@ -174,7 +182,7 @@ def _dependencies(
     dependencies = AcquisitionAssemblyDependencies(
         http_client=client,
         access_coordinator=shared,
-        web_access_profile_resolver=WebAccessProfileResolver(),
+        web_access_profile_resolver=production_web_access_profile_resolver(),
         provenance_id_factory=lambda: ProvenanceId(_id(900)),
         clock=lambda: _TIME,
         browser_session_broker=browser_session_broker,
@@ -360,12 +368,17 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                 ),
                 (
                     "springer",
+                    ("api.springernature.com",),
+                ),
+                (
+                    "springerlink",
                     (
-                        "api.springernature.com",
                         "link.springer.com",
-                        "www.nature.com",
+                        "static-content.springer.com",
+                        "wayf.springernature.com",
                     ),
                 ),
+                ("nature-portfolio", ("www.nature.com",)),
                 ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
                 ("core", ("api.core.ac.uk", "core.ac.uk")),
                 ("plos", ("journals.plos.org",)),
@@ -377,7 +390,7 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             ("europepmc.org", "www.ebi.ac.uk", "europe-pmc"),
             ("api.elsevier.com", "www.sciencedirect.com", "elsevier"),
             ("linkinghub.elsevier.com", "pdf.sciencedirectassets.com", "elsevier"),
-            ("api.springernature.com", "link.springer.com", "springer"),
+            ("link.springer.com", "static-content.springer.com", "springerlink"),
             ("onlinelibrary.wiley.com", "alm.wiley.com", "wiley"),
             ("api.core.ac.uk", "core.ac.uk", "core"),
         ):
@@ -390,13 +403,22 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             self.assertGreaterEqual(first_policy.min_start_interval, 1.0)
             self.assertEqual(first_policy.cooldown_after_completion, 0.0)
 
-        springer_scope, _ = resolver.resolve(
+        nature_scope, _ = resolver.resolve(
             normalize_url("https://www.nature.com/articles/example.pdf")
+        )
+        springer_api_scope, _ = resolver.resolve(
+            normalize_url("https://api.springernature.com/meta/v2/json")
+        )
+        springerlink_scope, _ = resolver.resolve(
+            normalize_url("https://link.springer.com/content/pdf/example.pdf")
         )
         elsevier_scope, _ = resolver.resolve(
             normalize_url("https://api.elsevier.com/content/article/example")
         )
-        self.assertNotEqual(springer_scope, elsevier_scope)
+        self.assertEqual(nature_scope, AccessScope("nature-portfolio", "web"))
+        self.assertEqual(springer_api_scope, AccessScope("springer", "web"))
+        self.assertEqual(springerlink_scope, AccessScope("springerlink", "web"))
+        self.assertNotEqual(springerlink_scope, elsevier_scope)
 
         plos_scope, plos_policy = resolver.resolve(
             normalize_url("https://journals.plos.org/plosone/article")
@@ -469,8 +491,9 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
             frozenset({"springer"}),
         )
-        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
-        self.assertIsNot(
+        self.assertEqual(len(PRODUCTION_BROWSER_RULE_CATALOG.rules), 1)
+        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules[0].rule_id, "springerlink-pdf")
+        self.assertIs(
             CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
             RouteReadiness.READY,
         )
@@ -567,10 +590,10 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 AcquisitionPath.PUBLIC,
                 AcquisitionPath.PUBLIC,
                 AcquisitionPath.AUTHORIZED_PROVIDER_API,
+                AcquisitionPath.CONTROLLED_BROWSER,
             ),
         )
-        self.assertEqual(registry.route_registry.bindings[-1].spec.route_key, "api:core")
-        authorized = registry.route_registry.bindings[-1].adapter
+        authorized = registry.route_registry.binding_for("api:core").adapter
         self.assertIsInstance(authorized, AuthorizedPdfSource)
         authorized = cast(AuthorizedPdfSource, authorized)
         core_client = getattr(authorized, "_client")
@@ -589,9 +612,12 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertTrue(
             all(
                 binding.spec.tier is AcquisitionPath.PUBLIC
-                for binding in disabled.route_registry.bindings
+                for binding in disabled.route_registry.bindings[:-1]
             )
         )
+        browser = disabled.route_registry.binding_for("browser:springerlink")
+        self.assertIs(browser.spec.readiness, RouteReadiness.DISABLED)
+        self.assertIsNone(browser.adapter)
 
     def test_wiley_authorized_source_requires_one_token_and_doi_resolution(self) -> None:
         token = "synthetic-wiley-tdm-token"
@@ -601,8 +627,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             dependencies, client = _dependencies(credentials=load_credentials(home=home))
             registry = build_acquisition_registry(_configuration(("wiley",)), dependencies)
 
-        self.assertEqual(registry.route_registry.bindings[-1].spec.route_key, "api:wiley-tdm-v1")
-        authorized = registry.route_registry.bindings[-1].adapter
+        authorized = registry.route_registry.binding_for("api:wiley-tdm-v1").adapter
         self.assertIsInstance(authorized, AuthorizedPdfSource)
         wiley_client = getattr(cast(AuthorizedPdfSource, authorized), "_client")
         self.assertIs(getattr(wiley_client, "_http_client"), client)
@@ -646,12 +671,9 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertIs(getattr(elsevier_client, "_http_client"), client)
         self.assertNotIn(api_key, repr(registry))
         self.assertNotIn(institution_token, repr(registry))
-        self.assertFalse(
-            any(
-                item.spec.tier is AcquisitionPath.CONTROLLED_BROWSER
-                for item in registry.route_registry.bindings
-            )
-        )
+        browser = registry.route_registry.binding_for("browser:springerlink")
+        self.assertIs(browser.spec.readiness, RouteReadiness.DISABLED)
+        self.assertIsNone(browser.adapter)
 
         missing, _client = _dependencies()
         unconfigured = build_acquisition_registry(_configuration(("elsevier",)), missing)
@@ -722,6 +744,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             all(
                 binding.adapter is not None and binding.adapter.source_name == "direct"
                 for binding in registry.route_registry.bindings
+                if binding.spec.tier is AcquisitionPath.PUBLIC
             )
         )
 
@@ -911,6 +934,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 "public:europe-pmc",
                 "public:landing-europe-pmc",
                 "public:landing-fallback",
+                "browser:springerlink",
             ),
         )
         sources = tuple(binding.adapter for binding in registry.route_registry.bindings)
@@ -1005,7 +1029,12 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
-            ("public:direct", "public:unpaywall", "public:landing-fallback"),
+            (
+                "public:direct",
+                "public:unpaywall",
+                "public:landing-fallback",
+                "browser:springerlink",
+            ),
         )
         for providers, route_key in (
             (("unpaywall",), "public:unpaywall"),
@@ -1031,7 +1060,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             build_acquisition_registry(_configuration(("crossref",)), dependencies)
         self.assertEqual(caught.exception.code, "network-bypass")
 
-    def test_browser_dependency_must_share_coordinator_but_is_not_registered_yet(self) -> None:
+    def test_browser_dependency_must_share_coordinator_and_register_ready_route(self) -> None:
         dependencies, _client = _dependencies()
         different = AccessCoordinator(clock=lambda: 100.0)
         browser = BrowserClient(
@@ -1055,12 +1084,37 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             clock=lambda: 100.0,
         )
         registry = build_acquisition_registry(
-            _configuration(("crossref",)),
+            _configuration(("crossref",), browser_enabled=True),
             replace(dependencies, browser_client=shared_browser),
         )
         self.assertEqual(
             tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
-            ("public:direct", "public:landing-crossref", "public:landing-fallback"),
+            (
+                "public:direct",
+                "public:landing-crossref",
+                "public:landing-fallback",
+                "browser:springerlink",
+            ),
+        )
+        browser_binding = registry.route_registry.binding_for("browser:springerlink")
+        self.assertIs(browser_binding.spec.readiness, RouteReadiness.READY)
+        self.assertIsNotNone(browser_binding.adapter)
+        doi = "10.1007/browser-direct-origin"
+        request = _request(
+            (
+                _observation(
+                    77,
+                    "crossref",
+                    f"https://link.springer.com/content/pdf/{doi}.pdf",
+                ),
+            ),
+            identifiers=(Identifier(namespace="doi", value=doi),),
+        )
+        planning = registry.planner.start(request)
+        self.assertEqual(planning.resolution.access_key, "springerlink")
+        self.assertIn(
+            "browser:springerlink",
+            tuple(route.route_key for route in planning.plan.routes),
         )
 
         private_broker_browser = BrowserClient(

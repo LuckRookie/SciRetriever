@@ -82,6 +82,7 @@ from sciretriever.network.browser import (
     BrowserDestinationKind,
     BrowserPageObservation,
 )
+from sciretriever.network.policy import normalize_url
 
 _TIME = UtcTimestamp("2026-08-11T12:00:00Z")
 _FIXTURES = Path(__file__).parent / "fixtures" / "acquisition" / "browser"
@@ -274,6 +275,7 @@ class _FakeSession:
         self,
         marker_text: dict[str, str] | None = None,
         observation: BrowserPageObservation | None = None,
+        available_captures: frozenset[BrowserCaptureKind] = frozenset(),
     ) -> None:
         self.marker_text = {} if marker_text is None else marker_text
         self.observation = observation or BrowserPageObservation(
@@ -285,11 +287,16 @@ class _FakeSession:
         self.viewer_opens: list[str] = []
         self.verified_locator_opens: list[str] = []
         self.capture_waits: list[BrowserCaptureKind] = []
+        self.available_captures = available_captures
         self.fill_calls: list[tuple[str, str]] = []
 
     def text(self, selector: str) -> str:
         self.text_calls.append(selector)
         return self.marker_text.get(selector, "")
+
+    def has_selector(self, selector: str) -> bool:
+        self.text_calls.append(selector)
+        return selector in self.marker_text
 
     def click(self, selector: str) -> None:
         self.clicks.append(selector)
@@ -299,6 +306,9 @@ class _FakeSession:
 
     def open_verified_locator(self, locator: str) -> None:
         self.verified_locator_opens.append(locator)
+
+    def capture_available(self, kind: BrowserCaptureKind) -> bool:
+        return kind in self.available_captures
 
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
         self.capture_waits.append(kind)
@@ -341,6 +351,7 @@ class _FakeRunner:
         flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
+        navigation_only: bool = False,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -356,6 +367,7 @@ class _FakeRunner:
                 "policy": policy,
                 "destination_guard": destination_guard,
                 "capture_guard": capture_guard,
+                "navigation_only": navigation_only,
                 "budget": budget,
                 "timeout_seconds": timeout_seconds,
                 "cancel_event": cancel_event,
@@ -372,7 +384,13 @@ class _FakeRunner:
                 status_code=200,
             )
         )
-        session = _FakeSession(marker_state, observation)
+        pending_result = self.results[0] if self.results else None
+        available_captures = (
+            frozenset(capture.kind for capture in pending_result.captures)
+            if isinstance(pending_result, BrowserCaptureBatch)
+            else frozenset()
+        )
+        session = _FakeSession(marker_state, observation, available_captures)
         self.sessions.append(session)
         try:
             if flow is not None:
@@ -400,6 +418,7 @@ def _rule(
     ),
     web_scope_provider_name: str = "publisher.test",
     actions: tuple[BrowserRuleAction, ...] | None = None,
+    actions_require_entitlement: bool = False,
     max_actions: int = 8,
     login_markers: tuple[str, ...] = ("#login-required",),
     mfa_markers: tuple[str, ...] = ("#mfa-required",),
@@ -476,6 +495,7 @@ def _rule(
         allowed_origins=allowed_origins,
         web_scope_provider_name=web_scope_provider_name,
         actions=selected_actions,
+        actions_require_entitlement=actions_require_entitlement,
         max_actions=max_actions,
         page_markers=markers,
         capture_url_prefixes=prefixes,
@@ -592,17 +612,32 @@ def _payload(temporary_pdf: TemporaryPdf) -> bytes:
 
 
 class BrowserRuleContractTests(unittest.TestCase):
-    def test_production_catalog_and_readiness_are_explicitly_empty(self) -> None:
-        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
+    def test_production_catalog_installs_one_closed_springerlink_rule(self) -> None:
+        self.assertEqual(len(PRODUCTION_BROWSER_RULE_CATALOG.rules), 1)
+        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+        self.assertEqual(rule.rule_id, "springerlink-pdf")
+        self.assertEqual(rule.revision, 4)
+        self.assertEqual(rule.max_actions, 2)
+        self.assertTrue(rule.actions_require_entitlement)
+        self.assertEqual(rule.landing_origin, "https://link.springer.com")
+        self.assertEqual(
+            rule.allowed_origins,
+            (
+                "https://link.springer.com",
+                "https://static-content.springer.com",
+                "https://idp.springer.com",
+                "https://wayf.springernature.com",
+            ),
+        )
+        self.assertEqual(rule.web_scope_provider_name, "springerlink")
         self.assertIs(
             CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
-            RouteReadiness.UNSUPPORTED,
+            RouteReadiness.READY,
         )
-        self.assertIsNotNone(CONTROLLED_BROWSER_PRODUCTION_STATUS.failure)
-        assert CONTROLLED_BROWSER_PRODUCTION_STATUS.failure is not None
+        self.assertIsNone(CONTROLLED_BROWSER_PRODUCTION_STATUS.failure)
         self.assertEqual(
-            CONTROLLED_BROWSER_PRODUCTION_STATUS.failure.code,
-            "acquisition-browser-production-unavailable",
+            rule.doi_pdf_locator((Identifier(namespace="doi", value="10.1007/example-article"),)),
+            "https://link.springer.com/content/pdf/10.1007/example-article.pdf",
         )
 
         runner = _FakeRunner([])
@@ -612,6 +647,34 @@ class BrowserRuleContractTests(unittest.TestCase):
         )
         self.assertEqual(source._actions(_evidence(request)), ())
         self.assertEqual(runner.calls, [])
+
+    def test_springerlink_rule_allows_only_the_reviewed_idp_login_target(self) -> None:
+        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+        self.assertTrue(rule.allows_url("https://idp.springer.com/authorize"))
+        self.assertFalse(rule.allows_url("https://idp.springer.com.evil.invalid/authorize"))
+        self.assertFalse(rule.allows_url("https://login.springer.com/authorize"))
+
+        login_marker = next(
+            marker
+            for marker in rule.page_markers
+            if marker.kind is BrowserPageMarkerKind.LOGIN_REQUIRED
+        )
+        self.assertTrue(
+            login_marker.matches_observation(
+                BrowserPageObservation(
+                    locator="https://idp.springer.com/authorize",
+                    status_code=200,
+                )
+            )
+        )
+        self.assertFalse(
+            login_marker.matches_observation(
+                BrowserPageObservation(
+                    locator="https://idp.springer.com.evil.invalid/authorize",
+                    status_code=200,
+                )
+            )
+        )
 
     def test_rule_uses_exact_https_dns_origins_and_canonical_tokens(self) -> None:
         rule = _rule(
@@ -951,6 +1014,30 @@ class BrowserRuleContractTests(unittest.TestCase):
             _rule(actions=(click, wait)).fingerprint,
             _rule(actions=(wait, click)).fingerprint,
         )
+        entitled_marker = BrowserPageMarker(
+            marker_id="article-entitled",
+            kind=BrowserPageMarkerKind.ENTITLED,
+            css_selectors=("#article-entitled",),
+        )
+        gated = _rule(
+            actions=(click, wait),
+            actions_require_entitlement=True,
+            page_markers=(entitled_marker,),
+        )
+        self.assertNotEqual(gated.fingerprint, _rule(actions=(click, wait)).fingerprint)
+        with self.assertRaisesRegex(ValueError, "entitlement-gated actions"):
+            _rule(
+                actions=(click, wait),
+                actions_require_entitlement=True,
+                page_markers=(),
+            )
+        with self.assertRaisesRegex(ValueError, "entitlement-gated actions"):
+            _rule(
+                actions=(),
+                max_actions=0,
+                actions_require_entitlement=True,
+                page_markers=(entitled_marker,),
+            )
         self.assertNotIn("#download", repr(_rule(actions=(click, wait))))
         self.assertEqual(
             BrowserRuleCatalog((first,)).match_origin("https://publisher.test"),
@@ -983,6 +1070,8 @@ class BrowserRuleContractTests(unittest.TestCase):
             session_methods,
             {
                 "click",
+                "capture_available",
+                "has_selector",
                 "observe",
                 "open_verified_locator",
                 "open_viewer",
@@ -1108,6 +1197,180 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         self.assertTrue(source._actions(_evidence(strong)))
         self.assertEqual(runner.calls, [])
 
+    def test_production_springerlink_uses_reviewed_doi_pdf_before_page_actions(
+        self,
+    ) -> None:
+        doi = "10.1007/browser-article"
+        landing = f"https://link.springer.com/article/{doi}"
+        pdf = f"https://link.springer.com/content/pdf/{doi}.pdf"
+        runner = _FakeRunner(
+            [
+                _capture_batch(
+                    (
+                        b"springer browser pdf",
+                        BrowserCaptureKind.RESPONSE,
+                        pdf,
+                        "application/pdf",
+                    )
+                )
+            ],
+            # Presence, not element text, proves this reviewed static link.
+            marker_states=({"a[href*='/content/pdf/']": ""},),
+        )
+        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        request = _request(
+            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
+            observations=(_observation(31, (_landing_hint(landing),)),),
+        )
+
+        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+
+        self.assertEqual(len(deliveries), 1)
+        call = runner.calls[0]
+        browser_request = call["request"]
+        self.assertIsInstance(browser_request, BrowserRequest)
+        assert isinstance(browser_request, BrowserRequest)
+        self.assertEqual(browser_request.url, pdf)
+        self.assertIs(call["navigation_only"], True)
+        session = runner.sessions[0]
+        self.assertEqual(session.clicks, [])
+        self.assertEqual(session.capture_waits, [])
+        deliveries[0].content.discard()
+
+    def test_springerlink_encoded_doi_asset_path_with_one_doi_forms_browser_action(
+        self,
+    ) -> None:
+        doi = "10.1007/browser-direct-asset"
+        encoded_doi = doi.replace("/", "%2F")
+        runner = _FakeRunner([_failure("no-download")])
+        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        request = _request(
+            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
+            observations=(
+                _observation(
+                    32,
+                    (
+                        _landing_hint(
+                            f"https://link.springer.com/content/pdf/{encoded_doi}.pdf",
+                            kind=AssetHintKind.DIRECT_FILE,
+                            role=AssetRole.PRIMARY_PDF,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
+            [],
+        )
+
+        self.assertEqual(len(runner.calls), 1)
+        browser_request = runner.calls[0]["request"]
+        self.assertIsInstance(browser_request, BrowserRequest)
+        assert isinstance(browser_request, BrowserRequest)
+        self.assertEqual(
+            browser_request.url,
+            "https://link.springer.com/content/pdf/10.1007/browser-direct-asset.pdf",
+        )
+        self.assertEqual(runner.sessions[0].clicks, [])
+        self.assertEqual(runner.sessions[0].capture_waits, [])
+
+    def test_springerlink_direct_asset_origin_requires_exact_origin_and_one_doi(self) -> None:
+        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+        source = _source(_FakeRunner([]), rule=rule)
+        valid_hint = _landing_hint(
+            "https://link.springer.com/content/pdf/10.1007/browser-evidence.pdf",
+            kind=AssetHintKind.DIRECT_FILE,
+            role=AssetRole.PRIMARY_PDF,
+        )
+        cases = (
+            (
+                "missing-doi",
+                _literature(),
+                (_observation(33, (valid_hint,)),),
+            ),
+            (
+                "multiple-dois",
+                _literature(
+                    identifiers=(
+                        Identifier(namespace="doi", value="10.1007/browser-first"),
+                        Identifier(namespace="doi", value="10.1007/browser-second"),
+                    )
+                ),
+                (_observation(34, (valid_hint,)),),
+            ),
+            (
+                "wrong-origin",
+                _literature(
+                    identifiers=(Identifier(namespace="doi", value="10.1007/browser-wrong"),)
+                ),
+                (
+                    _observation(
+                        35,
+                        (
+                            _landing_hint(
+                                "https://example.invalid/content/pdf/10.1007/browser-wrong.pdf",
+                                kind=AssetHintKind.DIRECT_FILE,
+                                role=AssetRole.PRIMARY_PDF,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "weak-only",
+                _literature(
+                    identifiers=(Identifier(namespace="doi", value="10.1007/browser-weak"),),
+                    publisher="Springer Nature",
+                ),
+                (_observation(36, provider_name="springerlink"),),
+            ),
+        )
+        for name, literature, observations in cases:
+            with self.subTest(case=name):
+                request = _request(literature=literature, observations=observations)
+                self.assertEqual(source._actions(_evidence(request)), ())
+
+    def test_springerlink_initial_pdf_capture_skips_entitlement_click_and_wait(self) -> None:
+        doi = "10.1007/browser-captured"
+        pdf = f"https://link.springer.com/content/pdf/{doi}.pdf"
+        runner = _FakeRunner(
+            [
+                _capture_batch(
+                    (
+                        b"springer direct pdf",
+                        BrowserCaptureKind.RESPONSE,
+                        pdf,
+                        "application/pdf",
+                    )
+                )
+            ]
+        )
+        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        request = _request(
+            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
+            observations=(
+                _observation(
+                    37,
+                    (
+                        _landing_hint(
+                            pdf,
+                            kind=AssetHintKind.DIRECT_FILE,
+                            role=AssetRole.PRIMARY_PDF,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(runner.sessions[0].clicks, [])
+        self.assertEqual(runner.sessions[0].capture_waits, [])
+        deliveries[0].content.discard()
+
     def test_evidence_from_another_request_fails_before_browser_io(self) -> None:
         runner = _FakeRunner([])
         source = _source(runner)
@@ -1128,8 +1391,17 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
 
     def test_scope_mapping_must_match_rule_and_reuses_a5_profile_seam(self) -> None:
         provider_rule = _rule(web_scope_provider_name="fixture-publisher")
+        default_source = _source(_FakeRunner([]), rule=provider_rule)
+        default_scope, _default_policy = default_source._web_access_profile_resolver.resolve(
+            normalize_url("https://publisher.test/article")
+        )
+        self.assertEqual(default_scope, AccessScope("fixture-publisher", "web"))
         with self.assertRaises(ValueError):
-            _source(_FakeRunner([]), rule=provider_rule)
+            _source(
+                _FakeRunner([]),
+                rule=provider_rule,
+                profile_resolver=WebAccessProfileResolver(),
+            )
 
         profile_policy = AccessPolicy(
             max_concurrency=8,
@@ -1872,6 +2144,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(budget.max_popups, 2)
         self.assertEqual(budget.max_captures, 4)
         self.assertLessEqual(budget.max_requests, 64)
+        self.assertIs(call["navigation_only"], True)
         self.assertEqual(call["cancel_event"], cancelled)
         policy = call["policy"]
         assert isinstance(policy, AccessPolicy)
@@ -1985,12 +2258,21 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
 
         output = "\n".join(captured.output)
         self.assertEqual(len(deliveries), 1)
+        self.assertIn("event=browser-source-started", output)
+        self.assertIn("action_count=1 eligible=true disposition=eligible", output)
+        self.assertIn("event=browser-candidate-started", output)
+        self.assertIn("attempted=true", output)
         self.assertIn("event=browser-state-transition", output)
         self.assertIn("state=open", output)
         self.assertIn("state=authenticated", output)
         self.assertIn("state=pdf-captured", output)
         self.assertIn("event=browser-rule-action browser_rule_action=click", output)
         self.assertIn("event=browser-capture-classified", output)
+        self.assertIn("event=browser-candidate-finished", output)
+        self.assertIn("disposition=delivered next=route-consumer delivered=1", output)
+        self.assertIn("event=browser-source-finished", output)
+        self.assertIn("action_count=1 attempted=1 delivered=1 failed=0 outcome=delivered", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
         for forbidden in (
             "a[data-action='pdf']",
             "#authenticated",
@@ -2005,14 +2287,22 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         runner = _FakeRunner([_download(b"temporary")])
         source = _source(runner)
         request = _request(observations=(_observation(58, (_landing_hint(),)),))
-        iterator = iter(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
-        delivery = next(iterator)
-        self.assertEqual(_payload(delivery), b"temporary")
+        with self.assertLogs(
+            "sciretriever.acquisition.sources.browser",
+            level="DEBUG",
+        ) as captured:
+            iterator = iter(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+            delivery = next(iterator)
+            self.assertEqual(_payload(delivery), b"temporary")
 
-        close = getattr(iterator, "close", None)
-        self.assertTrue(callable(close))
-        assert callable(close)
-        close()
+            close = getattr(iterator, "close", None)
+            self.assertTrue(callable(close))
+            assert callable(close)
+            close()
+
+        output = "\n".join(captured.output)
+        self.assertIn("resource=temporary-capture outcome=discarded", output)
+        self.assertIn("attempted=1 delivered=1 failed=0 outcome=delivered", output)
         with self.assertRaises(RuntimeError):
             delivery.content.open()
         delivery.content.discard()

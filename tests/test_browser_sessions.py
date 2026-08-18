@@ -330,6 +330,28 @@ class BrowserSessionBrokerTests(unittest.TestCase):
         self.assertTrue(context.closed)
         self.assertTrue(self.factory.processes[0].closed)
 
+    def test_debug_logging_explains_session_reuse_release_and_cleanup_safely(self) -> None:
+        with self.assertLogs("sciretriever.network.browser_sessions", level="DEBUG") as captured:
+            first = self._acquire()
+            getattr(first, "release")()
+            second = self._acquire()
+            getattr(second, "invalidate")()
+            getattr(second, "release")()
+            self.broker.close()
+
+        output = "\n".join(captured.output)
+        self.assertIn("event=browser-session-acquire-started", output)
+        self.assertIn("session_key=fixture-publisher", output)
+        self.assertIn("session_reused=false disposition=acquired", output)
+        self.assertIn("session_reused=true disposition=acquired", output)
+        self.assertIn("event=browser-session-released", output)
+        self.assertIn("invalidated=false outcome=reusable", output)
+        self.assertIn("event=browser-session-invalidated", output)
+        self.assertIn("invalidated=true outcome=retired", output)
+        self.assertIn("event=browser-session-broker-cleanup-finished", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
+        self.assertNotIn(self.temporary.name, output)
+
     def test_same_key_waits_for_the_active_article_lease(self) -> None:
         first = self._acquire()
         acquired = threading.Event()

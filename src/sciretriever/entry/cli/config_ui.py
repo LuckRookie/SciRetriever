@@ -479,14 +479,17 @@ class ConfigStatusPresenter:
         if unsupported:
             detail += f" · known unavailable: {', '.join(unsupported)}"
         table.add_row("2 · Authorized API", detail)
-        table.add_row(
-            "3 · Controlled browser",
-            (
-                "available"
-                if browser.get("automatic_acquisition_available") is True
-                else f"unavailable · {browser.get('production_route_count', 0)} production routes"
-            ),
-        )
+        route_count = browser.get("production_route_count", 0)
+        route_word = "route" if route_count == 1 else "routes"
+        if browser.get("automatic_acquisition_available") is True:
+            browser_support = f"ready · {route_count} production {route_word}"
+        elif route_count:
+            browser_support = (
+                f"installed · {route_count} production {route_word} · local Browser not ready"
+            )
+        else:
+            browser_support = "unavailable · no production routes"
+        table.add_row("3 · Controlled browser", browser_support)
         return table
 
     def _controlled_browser(self, payload: Mapping[str, object]) -> Table:
@@ -509,6 +512,7 @@ class ConfigStatusPresenter:
         runtime_ready = (
             runtime.get("framework_available") is True
             and runtime.get("python_dependency_available") is True
+            and runtime.get("chromium_executable_available") is True
         )
         table.add_row(
             _layer_state(
@@ -516,9 +520,10 @@ class ConfigStatusPresenter:
                 "available" if runtime_ready else "unavailable",
                 self.palette,
             ),
-            "framework={} · Playwright Python={} · launch not assessed".format(
+            "framework={} · Playwright Python={} · Chromium={} · launch not assessed".format(
                 "present" if runtime.get("framework_available") is True else "missing",
                 "present" if runtime.get("python_dependency_available") is True else "missing",
+                ("present" if runtime.get("chromium_executable_available") is True else "missing"),
             ),
         )
         route_names = ", ".join(
@@ -547,12 +552,13 @@ class ConfigStatusPresenter:
             f"selected identity: {_shown(selected)} · presence only; contents were not read",
         )
         table.add_row(
-            _layer_state("Session / login", "not assessed", self.palette),
-            "authenticated: unknown · status never opens the Browser",
+            _layer_state("Personal login", "not assessed", self.palette),
+            "optional observation · status never opens the Browser",
         )
         table.add_row(
-            _layer_state("Article entitlement", "not proven", self.palette),
-            str(session.get("article_entitlement", "not-proven")),
+            _layer_state("IP / article access", "not assessed", self.palette),
+            str(session.get("article_entitlement", "not-proven"))
+            + " · assessed only by a concrete article attempt",
         )
         supported = ", ".join(
             str(value) for value in cast(Sequence[object], probe.get("supported_access_keys", ()))
@@ -778,10 +784,27 @@ def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
 
 
 def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
+    launched = payload.get("browser_launched")
+    target_reached = payload.get("minimal_target_reached")
+    personal_login = payload.get("authentication_accepted")
+    if launched is True and target_reached is True:
+        runtime_detail = "runtime target reached"
+    elif launched is True and target_reached is False:
+        runtime_detail = "runtime launched; target not reached"
+    elif launched is False:
+        runtime_detail = "runtime not launched"
+    else:
+        runtime_detail = "runtime not assessed"
+    if personal_login is True:
+        login_detail = "personal login detected"
+    elif personal_login is False:
+        login_detail = "personal login not detected"
+    else:
+        login_detail = "personal login not assessed"
     return (
         f"Browser · {payload.get('access_key', 'publisher')}",
         str(payload.get("outcome", "failed")),
-        "one approved minimal target; at most one navigation; entitlement not proven",
+        f"{runtime_detail}; {login_detail}; IP/article entitlement not assessed",
         str(payload.get("failure_code") or ""),
     )
 

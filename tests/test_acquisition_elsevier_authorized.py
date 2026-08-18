@@ -244,7 +244,10 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
         )
         self.assertIsNone(ELSEVIER_ACCESS_PROFILE.browser_route_key)
         self.assertEqual(ELSEVIER_ACCESS_PROFILE.provider_record_names, ())
-        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
+        self.assertEqual(
+            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
+            ("springerlink-pdf",),
+        )
 
     def test_full_xml_lookup_uses_exact_doi_pii_and_article_eid_endpoints(self) -> None:
         cases = (

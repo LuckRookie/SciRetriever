@@ -149,6 +149,10 @@ class _Page:
     def content(self) -> str:
         return "<html><body><a data-action='pdf'>PDF</a></body></html>"
 
+    def has_selector(self, selector: str, *, timeout: int) -> bool:
+        del timeout
+        return selector == "a[data-action='pdf']"
+
     def text_content(self, selector: str, *, timeout: int) -> str:
         del selector, timeout
         return ""
@@ -204,7 +208,12 @@ class _Context:
             handler(request)
 
     def emit_download(self, page: _Page) -> None:
-        route = self.request(_DOWNLOAD, page, navigation=False)
+        # A user-initiated attachment download is exposed by Playwright as a
+        # top-level document navigation even though it also emits a download
+        # event.  Keep the component fixture faithful to that runtime contract
+        # so navigation-only mode rejects page subresources without rejecting
+        # the reviewed PDF action itself.
+        route = self.request(_DOWNLOAD, page, navigation=True)
         if route.aborted or not route.continued:
             raise RuntimeError("controlled download was not admitted")
         self.download.request = route.request

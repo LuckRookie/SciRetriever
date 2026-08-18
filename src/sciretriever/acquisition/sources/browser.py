@@ -11,15 +11,17 @@ The Network Browser checks every real destination against both its general
 URL/DNS/admission policy and the closed site-rule guard supplied here.  The
 guard receives only a normalized, query-free locator and an operation kind;
 it cannot weaken Network policy or access Browser vendor objects.  Production
-readiness remains disabled until provider rules, sessions and end-to-end
-fixtures are verified.
+readiness is installed only when the closed production rule catalog is
+nonempty; runtime/profile readiness remains a separate Bootstrap concern.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
-from collections.abc import Callable, Iterable, Iterator
+import time
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import AbstractContextManager, closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -35,7 +37,7 @@ from sciretriever.acquisition.browser_state import (
     BrowserStateDecision,
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult
-from sciretriever.acquisition.planning import RouteReadiness
+from sciretriever.acquisition.planning import RouteReadiness, runtime_url_origin
 from sciretriever.acquisition.ports import (
     AcquisitionFailure,
     AcquisitionSourceFailure,
@@ -96,6 +98,10 @@ from sciretriever.network.policy import (
 )
 
 _SOURCE_NAME: Final[str] = "controlled-browser"
+_ROUTE_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^browser:[a-z0-9][a-z0-9-]{0,119}$",
+    re.ASCII,
+)
 _DOI_RESOLVER_ORIGIN: Final[str] = "https://doi.org"
 _TIMEOUT_SECONDS: Final[float] = 60.0
 _MAX_DOWNLOAD_BYTES: Final[int] = 64 * 1024 * 1024
@@ -139,6 +145,10 @@ def _new_provenance_id() -> ProvenanceId:
 def _utc_now() -> UtcTimestamp:
     value = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return UtcTimestamp(value)
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 def _stable_failure(
@@ -289,9 +299,13 @@ _PRODUCTION_FAILURE: Final[StableFailure] = _stable_failure(
     action="Keep controlled Browser acquisition disabled until one is verified.",
     retryable=False,
 )
-CONTROLLED_BROWSER_PRODUCTION_STATUS: Final[RouteInstallationStatus] = RouteInstallationStatus(
-    readiness=RouteReadiness.UNSUPPORTED,
-    failure=_PRODUCTION_FAILURE,
+CONTROLLED_BROWSER_PRODUCTION_STATUS: Final[RouteInstallationStatus] = (
+    RouteInstallationStatus(readiness=RouteReadiness.READY)
+    if PRODUCTION_BROWSER_RULE_CATALOG.rules
+    else RouteInstallationStatus(
+        readiness=RouteReadiness.UNSUPPORTED,
+        failure=_PRODUCTION_FAILURE,
+    )
 )
 
 
@@ -313,6 +327,7 @@ class BrowserRunner(Protocol):
         flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
+        navigation_only: bool = False,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -335,6 +350,14 @@ class _PageClassification:
     authenticated: bool
     entitled: bool
     conflict: bool
+    matched: frozenset[BrowserPageMarkerKind]
+
+
+@dataclass(slots=True)
+class _BrowserSourceMetrics:
+    attempted: int = 0
+    delivered: int = 0
+    failed: int = 0
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -436,15 +459,22 @@ def _normalized_url(value: object) -> NormalizedURL:
 
 
 def _canonical_doi(evidence: AcquisitionEvidence) -> Identifier | None:
-    return next(
-        (identifier for identifier in evidence.identifiers if identifier.namespace == "doi"),
-        None,
-    )
+    dois = tuple(identifier for identifier in evidence.identifiers if identifier.namespace == "doi")
+    return dois[0] if len(dois) == 1 else None
 
 
 def _doi_resolver_url(doi: Identifier) -> str:
     encoded = quote(doi.value, safe="/")
     return _normalized_url(f"{_DOI_RESOLVER_ORIGIN}/{encoded}").url
+
+
+def _reviewed_doi_start_url(
+    rule: BrowserSiteRule,
+    doi: Identifier,
+    identifiers: tuple[Identifier, ...],
+) -> str:
+    locator = rule.doi_pdf_locator(identifiers)
+    return _doi_resolver_url(doi) if locator is None else locator
 
 
 def _candidate_key(action: _BrowserAction) -> str:
@@ -512,6 +542,11 @@ def _state_ends_without_pdf(state_machine: BrowserRunStateMachine) -> bool:
     return False
 
 
+def _browser_state_value(state_machine: BrowserRunStateMachine) -> str:
+    state = state_machine.state
+    return "none" if state is None else state.value
+
+
 def _transition_browser_state(
     state_machine: BrowserRunStateMachine,
     state: BrowserRunState,
@@ -550,12 +585,41 @@ def _classify_page(
     session: BrowserFlowSession,
     rule: BrowserSiteRule,
 ) -> _PageClassification:
+    observation_started_ns = time.monotonic_ns()
+    _LOGGER.debug(
+        "event=browser-page-observation-started browser_rule_id=%s",
+        rule.rule_id,
+    )
     observation = session.observe()
+    _LOGGER.debug(
+        "event=browser-page-observation-finished browser_rule_id=%s "
+        "outcome=observed status_code=%s elapsed_ms=%d",
+        rule.rule_id,
+        "missing" if observation.status_code is None else observation.status_code,
+        _elapsed_ms(observation_started_ns),
+    )
     matched: set[BrowserPageMarkerKind] = set()
     for marker in rule.page_markers:
-        selector_match = any(session.text(selector).strip() for selector in marker.css_selectors)
-        if selector_match or marker.matches_observation(observation):
+        marker_started_ns = time.monotonic_ns()
+        _LOGGER.debug(
+            "event=browser-page-marker-check-started browser_rule_id=%s "
+            "marker_id=%s selector_count=%d",
+            rule.rule_id,
+            marker.marker_id,
+            len(marker.css_selectors),
+        )
+        selector_match = any(session.has_selector(selector) for selector in marker.css_selectors)
+        marker_match = selector_match or marker.matches_observation(observation)
+        if marker_match:
             matched.add(marker.kind)
+        _LOGGER.debug(
+            "event=browser-page-marker-check-finished browser_rule_id=%s "
+            "marker_id=%s outcome=%s elapsed_ms=%d",
+            rule.rule_id,
+            marker.marker_id,
+            "matched" if marker_match else "miss",
+            _elapsed_ms(marker_started_ns),
+        )
 
     authenticated = BrowserPageMarkerKind.AUTHENTICATED in matched
     entitled = BrowserPageMarkerKind.ENTITLED in matched
@@ -579,7 +643,35 @@ def _classify_page(
         authenticated=authenticated,
         entitled=entitled,
         conflict=conflict,
+        matched=frozenset(matched),
     )
+
+
+def _browser_rule_resolver(
+    catalog: BrowserRuleCatalog,
+    resolver: WebAccessProfileResolver | None,
+) -> WebAccessProfileResolver:
+    if resolver is None:
+        profiles: dict[str, tuple[AccessScope, AccessPolicy]] = {}
+        for rule in catalog.rules:
+            profile = (
+                AccessScope(rule.web_scope_provider_name, "web"),
+                _BASELINE_WEB_POLICY,
+            )
+            for origin in rule.allowed_origins:
+                hostname = _normalized_url(origin).hostname
+                existing = profiles.get(hostname)
+                if existing is not None and existing != profile:
+                    raise ValueError("Browser rules assign one host to conflicting web scopes")
+                profiles[hostname] = profile
+        checked = WebAccessProfileResolver(profiles)
+    else:
+        checked = resolver
+    for rule in catalog.rules:
+        scope, _policy = checked.resolve(_normalized_url(rule.landing_origin))
+        if scope != AccessScope(rule.web_scope_provider_name, "web"):
+            raise ValueError("Browser rule web scope does not match the shared host profile")
+    return checked
 
 
 class ControlledBrowserPdfSource:
@@ -587,6 +679,7 @@ class ControlledBrowserPdfSource:
 
     __slots__ = (
         "_runner",
+        "_route_key",
         "_rule_catalog",
         "_web_access_profile_resolver",
         "_operator_policy",
@@ -599,6 +692,7 @@ class ControlledBrowserPdfSource:
         self,
         *,
         runner: BrowserRunner,
+        route_key: str = "browser:controlled",
         rule_catalog: BrowserRuleCatalog = PRODUCTION_BROWSER_RULE_CATALOG,
         web_access_profile_resolver: WebAccessProfileResolver | None = None,
         access_policy: AccessPolicy | None = None,
@@ -608,6 +702,8 @@ class ControlledBrowserPdfSource:
     ) -> None:
         if not isinstance(runner, BrowserRunner):
             raise TypeError("runner must implement BrowserRunner")
+        if type(route_key) is not str or _ROUTE_KEY.fullmatch(route_key) is None:
+            raise ValueError("route_key must be a stable Browser route key")
         if not isinstance(rule_catalog, BrowserRuleCatalog):
             raise TypeError("rule_catalog must be a BrowserRuleCatalog")
         if web_access_profile_resolver is not None and not isinstance(
@@ -625,16 +721,9 @@ class ControlledBrowserPdfSource:
             raise TypeError("provenance_id_factory must be callable")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        resolver = (
-            WebAccessProfileResolver()
-            if web_access_profile_resolver is None
-            else web_access_profile_resolver
-        )
-        for rule in rule_catalog.rules:
-            scope, _policy = resolver.resolve(_normalized_url(rule.landing_origin))
-            if scope != AccessScope(rule.web_scope_provider_name, "web"):
-                raise ValueError("Browser rule web scope does not match the shared host profile")
+        resolver = _browser_rule_resolver(rule_catalog, web_access_profile_resolver)
         self._runner = runner
+        self._route_key = route_key
         self._rule_catalog = rule_catalog
         self._web_access_profile_resolver = resolver
         self._operator_policy = access_policy or _BASELINE_WEB_POLICY
@@ -652,7 +741,7 @@ class ControlledBrowserPdfSource:
 
     @property
     def route_key(self) -> str:
-        return "browser:controlled"
+        return self._route_key
 
     @property
     def browser_budget(self) -> BrowserBudget:
@@ -685,12 +774,29 @@ class ControlledBrowserPdfSource:
             raise AcquisitionFailure(_contract_failure()) from None
         if evidence != expected_evidence:
             raise AcquisitionFailure(_contract_failure())
-        return self._acquire_actions(self._actions(evidence), candidate_keys)
+        actions = self._actions(evidence)
+        return self._acquire_actions(actions, candidate_keys)
 
     def _actions(self, evidence: AcquisitionEvidence) -> tuple[_BrowserAction, ...]:
+        doi = _canonical_doi(evidence)
+        actions = list(self._landing_actions(evidence, doi))
+        if doi is None:
+            return tuple(actions)
+        routed_rules = {(action.rule.rule_id, action.rule.revision) for action in actions}
+        actions.extend(self._asset_origin_doi_actions(evidence, doi, routed_rules))
+        routed_rules.update((action.rule.rule_id, action.rule.revision) for action in actions)
+        resolved = self._resolved_origin_doi_action(evidence, doi, routed_rules)
+        if resolved is not None:
+            actions.append(resolved)
+        return tuple(actions)
+
+    def _landing_actions(
+        self,
+        evidence: AcquisitionEvidence,
+        doi: Identifier | None,
+    ) -> tuple[_BrowserAction, ...]:
         actions: list[_BrowserAction] = []
         seen: set[tuple[str, str, int]] = set()
-        doi = _canonical_doi(evidence)
         for observed in evidence.asset_hints:
             hint = observed.hint
             if hint.kind is not AssetHintKind.LANDING_PAGE or not _eligible_landing_role(
@@ -708,96 +814,235 @@ class ControlledBrowserPdfSource:
             if identity_key in seen:
                 continue
             seen.add(identity_key)
+            reviewed_locator = None if doi is None else rule.doi_pdf_locator(evidence.identifiers)
             actions.append(
                 _BrowserAction(
                     rule=rule,
-                    start_url=landing.url,
-                    evidence_kind="asset-hint",
+                    start_url=landing.url if reviewed_locator is None else reviewed_locator,
+                    evidence_kind=(
+                        "asset-hint" if reviewed_locator is None else "asset-hint-doi-template"
+                    ),
                     landing_url=landing.url,
                     identifiers=evidence.identifiers,
                     identity=landing.url,
                 )
             )
-
-        resolved_origin = evidence.resolved_landing_origin
-        if doi is not None and resolved_origin is not None:
-            rule = self._rule_catalog.match_origin(resolved_origin)
-            rule_already_routed = rule is not None and any(
-                action.rule.rule_id == rule.rule_id and action.rule.revision == rule.revision
-                for action in actions
-            )
-            if rule is not None and not rule_already_routed:
-                start_url = _doi_resolver_url(doi)
-                identity_key = (start_url, rule.rule_id, rule.revision)
-                if identity_key not in seen:
-                    actions.append(
-                        _BrowserAction(
-                            rule=rule,
-                            start_url=start_url,
-                            evidence_kind="doi-resolved-origin",
-                            landing_url=None,
-                            identifiers=evidence.identifiers,
-                            identity=f"{doi.value}\x00{resolved_origin}",
-                        )
-                    )
         return tuple(actions)
+
+    def _asset_origin_doi_actions(
+        self,
+        evidence: AcquisitionEvidence,
+        doi: Identifier,
+        routed_rules: set[tuple[str, int]],
+    ) -> tuple[_BrowserAction, ...]:
+        actions: list[_BrowserAction] = []
+        for observed in evidence.asset_hints:
+            try:
+                asset_origin = runtime_url_origin(observed.hint.url)
+            except (TypeError, ValueError):
+                continue
+            rule = self._rule_catalog.match_origin(asset_origin)
+            if rule is None or (rule.rule_id, rule.revision) in routed_rules:
+                continue
+            routed_rules.add((rule.rule_id, rule.revision))
+            actions.append(
+                _BrowserAction(
+                    rule=rule,
+                    start_url=_reviewed_doi_start_url(rule, doi, evidence.identifiers),
+                    evidence_kind="asset-origin-doi",
+                    landing_url=None,
+                    identifiers=evidence.identifiers,
+                    identity=f"{doi.value}\x00{asset_origin}",
+                )
+            )
+        return tuple(actions)
+
+    def _resolved_origin_doi_action(
+        self,
+        evidence: AcquisitionEvidence,
+        doi: Identifier,
+        routed_rules: set[tuple[str, int]],
+    ) -> _BrowserAction | None:
+        resolved_origin = evidence.resolved_landing_origin
+        if resolved_origin is None:
+            return None
+        rule = self._rule_catalog.match_origin(resolved_origin)
+        if rule is None or (rule.rule_id, rule.revision) in routed_rules:
+            return None
+        return _BrowserAction(
+            rule=rule,
+            start_url=_reviewed_doi_start_url(rule, doi, evidence.identifiers),
+            evidence_kind="doi-resolved-origin",
+            landing_url=None,
+            identifiers=evidence.identifiers,
+            identity=f"{doi.value}\x00{resolved_origin}",
+        )
 
     def _acquire_actions(
         self,
         actions: tuple[_BrowserAction, ...],
         candidate_keys: CandidateKeyTracker,
     ) -> Iterator[TemporaryPdf]:
+        source_started_ns = time.monotonic_ns()
+        metrics = _BrowserSourceMetrics()
+        source_outcome = "empty" if not actions else "miss"
+        _LOGGER.debug(
+            "event=browser-source-started route_key=%s action_count=%d eligible=%s disposition=%s",
+            self.route_key,
+            len(actions),
+            str(bool(actions)).lower(),
+            "eligible" if actions else "empty",
+        )
         first_failure: AcquisitionSourceFailure | None = None
-        for action in actions:
+        try:
+            for action in actions:
+                action_failure = yield from self._acquire_action(
+                    action,
+                    candidate_keys,
+                    metrics,
+                )
+                if metrics.delivered:
+                    source_outcome = "delivered"
+                if action_failure is not None:
+                    if first_failure is None:
+                        first_failure = action_failure
+            if first_failure is not None:
+                source_outcome = "failure"
+                raise first_failure
+        except AcquisitionFailure:
+            source_outcome = "fatal"
+            raise
+        except GeneratorExit:
+            raise
+        except BaseException:
+            source_outcome = "aborted"
+            raise
+        finally:
+            if metrics.delivered and source_outcome in {"empty", "miss"}:
+                source_outcome = "delivered"
+            _LOGGER.debug(
+                "event=browser-source-finished route_key=%s action_count=%d attempted=%d "
+                "delivered=%d failed=%d outcome=%s elapsed_ms=%d",
+                self.route_key,
+                len(actions),
+                metrics.attempted,
+                metrics.delivered,
+                metrics.failed,
+                source_outcome,
+                _elapsed_ms(source_started_ns),
+            )
+
+    def _acquire_action(
+        self,
+        action: _BrowserAction,
+        candidate_keys: CandidateKeyTracker,
+        metrics: _BrowserSourceMetrics,
+    ) -> Generator[TemporaryPdf, None, AcquisitionSourceFailure | None]:
+        candidate_started_ns = time.monotonic_ns()
+        key = _candidate_key(action)
+        if not self._claim_candidate(candidate_keys, key):
+            _LOGGER.debug(
+                "event=browser-candidate-skipped route_key=%s browser_rule_id=%s "
+                "candidate_id=%s disposition=skipped next=next-candidate elapsed_ms=%d "
+                "reason=already-tried",
+                self.route_key,
+                action.rule.rule_id,
+                key,
+                _elapsed_ms(candidate_started_ns),
+            )
+            return None
+        metrics.attempted += 1
+        _LOGGER.debug(
+            "event=browser-candidate-started route_key=%s browser_rule_id=%s "
+            "provider_group=%s web_scope=%s evidence_kind=%s candidate_id=%s "
+            "attempted=true",
+            self.route_key,
+            action.rule.rule_id,
+            action.rule.web_scope_provider_name,
+            action.rule.web_scope_provider_name,
+            action.evidence_kind,
+            key,
+        )
+        candidate_delivered = 0
+        try:
+            result, state_machine, page_failure = self._run_action(action)
+            if page_failure is not None:
+                raise AcquisitionSourceFailure(page_failure)
+            if _state_ends_without_pdf(state_machine):
+                self._log_candidate_finished(
+                    action,
+                    key=key,
+                    delivered=0,
+                    state_machine=state_machine,
+                    started_ns=candidate_started_ns,
+                )
+                return None
+            captures = self._capture_deliveries(action, result, candidate_keys)
             try:
-                key = _candidate_key(action)
-                if not self._claim_candidate(candidate_keys, key):
-                    _LOGGER.debug(
-                        "event=browser-candidate-skipped route_key=%s browser_rule_id=%s "
-                        "candidate_id=%s reason=already-tried",
-                        self.route_key,
-                        action.rule.rule_id,
-                        key,
-                    )
-                    continue
-                _LOGGER.debug(
-                    "event=browser-candidate-started route_key=%s browser_rule_id=%s "
-                    "web_scope=%s evidence_kind=%s candidate_id=%s",
-                    self.route_key,
-                    action.rule.rule_id,
-                    action.rule.web_scope_provider_name,
-                    action.evidence_kind,
-                    key,
-                )
-                result, state_machine, page_failure = self._run_action(action)
-                if page_failure is not None:
-                    raise AcquisitionSourceFailure(page_failure)
-                if _state_ends_without_pdf(state_machine):
-                    continue
-                yield from self._capture_deliveries(action, result, candidate_keys)
-            except AcquisitionSourceFailure as error:
-                _LOGGER.debug(
-                    "event=browser-candidate-failed route_key=%s browser_rule_id=%s "
-                    "code=%s retryable=%s reason=%s action=%s",
-                    self.route_key,
-                    action.rule.rule_id,
-                    error.failure.code,
-                    str(error.failure.retryable).lower(),
-                    error.failure.reason,
-                    error.failure.action,
-                )
-                if first_failure is None:
-                    first_failure = error
-                continue
-        if first_failure is not None:
-            raise first_failure
+                for temporary_pdf in captures:
+                    candidate_delivered += 1
+                    metrics.delivered += 1
+                    yield temporary_pdf
+            finally:
+                captures.close()
+            self._log_candidate_finished(
+                action,
+                key=key,
+                delivered=candidate_delivered,
+                state_machine=state_machine,
+                started_ns=candidate_started_ns,
+            )
+            return None
+        except AcquisitionSourceFailure as error:
+            metrics.failed += 1
+            _LOGGER.debug(
+                "event=browser-candidate-failed route_key=%s browser_rule_id=%s "
+                "provider_group=%s candidate_id=%s disposition=failure "
+                "next=next-candidate delivered=%d elapsed_ms=%d "
+                "code=%s retryable=%s reason=%s action=%s",
+                self.route_key,
+                action.rule.rule_id,
+                action.rule.web_scope_provider_name,
+                key,
+                candidate_delivered,
+                _elapsed_ms(candidate_started_ns),
+                error.failure.code,
+                str(error.failure.retryable).lower(),
+                error.failure.reason,
+                error.failure.action,
+            )
+            return error
+
+    def _log_candidate_finished(
+        self,
+        action: _BrowserAction,
+        *,
+        key: str,
+        delivered: int,
+        state_machine: BrowserRunStateMachine,
+        started_ns: int,
+    ) -> None:
+        _LOGGER.debug(
+            "event=browser-candidate-finished route_key=%s browser_rule_id=%s "
+            "provider_group=%s candidate_id=%s disposition=%s next=%s delivered=%d "
+            "state=%s elapsed_ms=%d",
+            self.route_key,
+            action.rule.rule_id,
+            action.rule.web_scope_provider_name,
+            key,
+            "delivered" if delivered else "miss",
+            "route-consumer" if delivered else "next-candidate",
+            delivered,
+            _browser_state_value(state_machine),
+            _elapsed_ms(started_ns),
+        )
 
     def _capture_deliveries(
         self,
         action: _BrowserAction,
         result: BrowserResult,
         candidate_keys: CandidateKeyTracker,
-    ) -> Iterator[TemporaryPdf]:
+    ) -> Generator[TemporaryPdf, None, None]:
         priority = {kind: index for index, kind in enumerate(action.rule.capture_priority)}
         captures = sorted(
             self._captures_from_result(result),
@@ -939,6 +1184,7 @@ class ControlledBrowserPdfSource:
                 flow=flow,
                 destination_guard=_RuleDestinationGuard(action.rule, action.start_url),
                 capture_guard=_RuleCaptureGuard(action),
+                navigation_only=True,
                 budget=_CONSERVATIVE_BROWSER_BUDGET,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,
@@ -975,22 +1221,52 @@ class ControlledBrowserPdfSource:
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
-        if ControlledBrowserPdfSource._apply_page_state(
+        classification, terminal = ControlledBrowserPdfSource._apply_page_state(
             session,
             rule,
             state_machine,
             page_failure,
-        ):
+            checkpoint="initial",
+        )
+        if terminal:
             return
-        for action in rule.actions:
+        if ControlledBrowserPdfSource._expected_capture_available(session, rule):
+            _LOGGER.debug(
+                "event=browser-rule-actions-skipped browser_rule_id=%s "
+                "decision_reason=capture-already-available outcome=continue",
+                rule.rule_id,
+            )
+            return
+        if rule.actions_require_entitlement and not classification.entitled:
+            _LOGGER.debug(
+                "event=browser-rule-actions-skipped browser_rule_id=%s "
+                "decision_reason=entitlement-marker-absent outcome=normal-miss",
+                rule.rule_id,
+            )
+            return
+        for action_index, action in enumerate(rule.actions, start=1):
             ControlledBrowserPdfSource._run_rule_action(session, action)
-            if ControlledBrowserPdfSource._apply_page_state(
+            if ControlledBrowserPdfSource._expected_capture_available(session, rule):
+                return
+            _classification, terminal = ControlledBrowserPdfSource._apply_page_state(
                 session,
                 rule,
                 state_machine,
                 page_failure,
-            ):
+                checkpoint=f"post-action-{action_index}",
+            )
+            if terminal:
                 return
+
+    @staticmethod
+    def _expected_capture_available(
+        session: BrowserFlowSession,
+        rule: BrowserSiteRule,
+    ) -> bool:
+        return any(
+            action.capture_kind is not None and session.capture_available(action.capture_kind)
+            for action in rule.actions
+        )
 
     @staticmethod
     def _apply_page_state(
@@ -998,17 +1274,48 @@ class ControlledBrowserPdfSource:
         rule: BrowserSiteRule,
         state_machine: BrowserRunStateMachine,
         page_failure: list[StableFailure],
-    ) -> bool:
-        classification = _classify_page(session, rule)
+        *,
+        checkpoint: str,
+    ) -> tuple[_PageClassification, bool]:
+        started_ns = time.monotonic_ns()
+        _LOGGER.debug(
+            "event=browser-page-state-check-started browser_rule_id=%s checkpoint=%s",
+            rule.rule_id,
+            checkpoint,
+        )
+        try:
+            classification = _classify_page(session, rule)
+        except BaseException:
+            _LOGGER.debug(
+                "event=browser-page-state-check-finished browser_rule_id=%s "
+                "checkpoint=%s outcome=failure elapsed_ms=%d",
+                rule.rule_id,
+                checkpoint,
+                _elapsed_ms(started_ns),
+            )
+            raise
+        _LOGGER.debug(
+            "event=browser-page-state-check-finished browser_rule_id=%s "
+            "checkpoint=%s outcome=classified page_state=%s authenticated=%s "
+            "entitled=%s conflict=%s elapsed_ms=%d",
+            rule.rule_id,
+            checkpoint,
+            "none" if classification.state is None else classification.state.value,
+            str(classification.authenticated).lower(),
+            str(classification.entitled).lower(),
+            str(classification.conflict).lower(),
+            _elapsed_ms(started_ns),
+        )
         if classification.conflict and not page_failure:
             page_failure.append(_page_state_conflict_failure())
         if classification.state is None:
-            return False
-        return _transition_browser_state(
+            return classification, False
+        decision = _transition_browser_state(
             state_machine,
             classification.state,
             rule_id=rule.rule_id,
-        ).is_terminal
+        )
+        return classification, decision.is_terminal
 
     @staticmethod
     def _run_rule_action(

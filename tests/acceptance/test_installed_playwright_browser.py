@@ -68,12 +68,9 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         self.assertEqual(cleanup["playwright_threads_alive"], [])
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 0)
-        self.assertFalse(production["ready"])
-        self.assertEqual(
-            production["readiness_code"],
-            "acquisition-browser-production-unavailable",
-        )
+        self.assertEqual(production["catalog_rule_count"], 1)
+        self.assertTrue(production["ready"])
+        self.assertIsNone(production["readiness_code"])
 
 
 if __name__ == "__main__":

@@ -3,9 +3,9 @@
   "access_key": "springerlink",
   "display_name": "Springer Nature Link",
   "product_name": "Springer Nature Link article platform",
-  "verification_state": "unsupported",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "springerlink-browser-unsupported-2026-08-15",
+  "verification_state": "production-ready",
+  "verification_date": "2026-08-18",
+  "evidence_revision": "springerlink-browser-pdf-v4-2026-08-18",
   "notes_reference": "docs/notes/providers/springer-nature.md",
   "official_references": [
     "https://link.springer.com/",
@@ -19,16 +19,19 @@
     "https://www.springernature.com/gp/researchers/text-and-data-mining"
   ],
   "landing_origins": ["https://link.springer.com"],
-  "asset_origins": ["https://link.springer.com"],
+  "asset_origins": [
+    "https://link.springer.com",
+    "https://static-content.springer.com"
+  ],
   "stable_identity": {
-    "locator_namespaces": [],
+    "locator_namespaces": ["doi"],
     "provider_record_names": [],
     "examples": ["doi-prefix:10.1007-is-weak-only"]
   },
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_route": "browser:springerlink"
   },
   "route_verification": {
     "public": {
@@ -40,13 +43,21 @@
       "payload": "jats-xml-not-pdf"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "terms-prohibit-systematic-download-and-web-crawling",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-page-rule",
-        "no-evidence-for-shared-rate-or-session-group"
-      ]
+      "state": "production-ready",
+      "rule_id": "springerlink-pdf",
+      "rule_revision": 3,
+      "allowed_origins": [
+        "https://link.springer.com",
+        "https://static-content.springer.com",
+        "https://idp.springer.com",
+        "https://wayf.springernature.com"
+      ],
+      "rate_limit_group": "springerlink",
+      "session_group": "springerlink",
+      "article_start_interval_seconds": 10,
+      "primary_contract": "reviewed-article-page-entitlement-click-or-direct-pdf-response",
+      "supplement_contract": "static-content-esm-is-never-primary",
+      "authentication_contract": "operator-managed-profile-only"
     }
   },
   "ownership_cases": [
@@ -55,8 +66,6 @@
     {"case_id": "jats-xml-response", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "profile-not-in-production-catalog",
-    "browser-route-not-registered",
     "authorized-pdf-api-not-demonstrated",
     "live-entitlement-not-asserted"
   ]

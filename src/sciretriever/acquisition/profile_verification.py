@@ -99,6 +99,7 @@ def _validate_rule_alignment(
         raise PublisherProfileVerificationError("profile-browser-article-identity-mismatch")
     if not rule.capture_url_prefixes:
         raise PublisherProfileVerificationError("profile-browser-primary-capture-missing")
+    _validate_doi_locator_alignment(profile, rule)
     if not (
         rule.supplement_url_prefixes
         or rule.supplement_selectors
@@ -108,6 +109,14 @@ def _validate_rule_alignment(
     marker_kinds = frozenset(marker.kind for marker in rule.page_markers)
     if any(not marker_kinds.intersection(group) for group in _REQUIRED_BROWSER_MARKER_GROUPS):
         raise PublisherProfileVerificationError("profile-browser-page-state-marker-missing")
+
+
+def _validate_doi_locator_alignment(
+    profile: PublisherAccessProfile,
+    rule: BrowserSiteRule,
+) -> None:
+    if rule.doi_pdf_url_template is not None and "doi" not in profile.stable_locator_namespaces:
+        raise PublisherProfileVerificationError("profile-browser-doi-locator-mismatch")
 
 
 @dataclass(frozen=True, slots=True)

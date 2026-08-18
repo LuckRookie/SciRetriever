@@ -534,9 +534,22 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         self.assertIn("cooldown_reason=provider-policy", output)
         self.assertIn("event=browser-provider-group-feedback", output)
         self.assertIn("feedback=rate-limited", output)
+        self.assertIn("event=browser-article-started", output)
+        self.assertIn("session_key=wiley", output)
+        self.assertIn("attempted=true", output)
+        self.assertIn("queue_wait_ms=", output)
+        self.assertIn("event=browser-article-finished", output)
+        self.assertIn("disposition=failed group_feedback=rate-limited", output)
         self.assertIn("event=browser-provider-group-paused", output)
+        self.assertIn("attempted=false disposition=deferred next=retry-later", output)
         self.assertIn("cooldown_reason=rate-limit", output)
         self.assertIn("action=review-group-state-before-retry", output)
+        self.assertIn(
+            "attempt_count=3 attempted=2 deferred=1 action_required=0",
+            output,
+        )
+        self.assertIn("event=browser-scheduler-finished", output)
+        self.assertIn("elapsed_ms=", output)
         self.assertIn("resource=global-permit outcome=released", output)
         self.assertIn("resource=group-permit outcome=released", output)
         self.assertIn("provider_group=wiley", output)

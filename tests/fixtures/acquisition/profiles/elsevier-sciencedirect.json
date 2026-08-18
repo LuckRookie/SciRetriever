@@ -2,10 +2,10 @@
   "schema_version": 1,
   "access_key": "elsevier-sciencedirect",
   "display_name": "Elsevier / ScienceDirect",
-  "product_name": "Article Retrieval and Object Retrieval APIs",
+  "product_name": "Article Retrieval direct PDF and Object Retrieval APIs",
   "verification_state": "production-ready",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "elsevier-article-object-2026-08-15",
+  "verification_date": "2026-08-18",
+  "evidence_revision": "elsevier-article-direct-object-2026-08-18",
   "notes_reference": "docs/notes/providers/elsevier.md",
   "official_references": [
     "https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl",
@@ -40,7 +40,7 @@
   "route_verification": {
     "authorized_api": {
       "state": "production-ready",
-      "contract": "article-full-main-web-pdf-to-object-eid",
+      "contract": "article-full-main-object-or-direct-article-pdf",
       "priority": "after-public-before-browser"
     },
     "browser": {
@@ -55,6 +55,7 @@
   },
   "ownership_cases": [
     {"case_id": "main-web-pdf-object", "expected": "primary"},
+    {"case_id": "direct-article-pdf", "expected": "primary"},
     {"case_id": "supplement-mmc-or-graphical-object", "expected": "supplement"},
     {"case_id": "arbitrary-or-scopus-eid", "expected": "excluded"}
   ],

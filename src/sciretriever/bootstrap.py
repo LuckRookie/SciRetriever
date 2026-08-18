@@ -92,7 +92,10 @@ from sciretriever.model.report import (
 )
 from sciretriever.network.admission import AccessCoordinator
 from sciretriever.network.http import HttpClient
+from sciretriever.network.policy import ResolverLike
 from sciretriever.parsing.ports import ParserPort
+
+PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS = frozenset({"springerlink"})
 
 BibliographyExportScope = (
     DiscoveryRunSelector | QuerySelector | MetaLiteratureSelector | LiteratureSelector | None
@@ -101,12 +104,19 @@ BibliographyExportScope = (
 if TYPE_CHECKING:
     from sciretriever.acquisition.browser_admission import BrowserAdmissionController
     from sciretriever.acquisition.cohort import TieredCohortExecutor
+    from sciretriever.acquisition.sources.browser_rules import BrowserSiteRule
     from sciretriever.entry.api import EntryApi
     from sciretriever.entry.library import LibraryOperations
     from sciretriever.literature.api import LiteratureApi, LiteratureArtifactReference
     from sciretriever.metadata.api import MetadataApi
     from sciretriever.metadata.registry import MetadataProbeRegistry, MetadataRegistry
+    from sciretriever.network.browser import (
+        BrowserClient,
+        BrowserDestinationKind,
+        BrowserFlowSession,
+    )
     from sciretriever.network.browser_scheduler import (
+        BrowserGroupFeedback,
         BrowserGroupScheduler,
         BrowserSchedulerCancellation,
     )
@@ -235,6 +245,7 @@ class ApplicationObjectGraph:
 class _AcquisitionExecutionRuntime:
     """Process-local execution objects shared by every Acquisition work item."""
 
+    browser_client: BrowserClient | None = field(repr=False)
     browser_session_broker: BrowserSessionBroker = field(repr=False)
     browser_scheduler: BrowserGroupScheduler = field(repr=False)
     browser_admission: BrowserAdmissionController = field(repr=False)
@@ -359,17 +370,217 @@ class BibliographyExchangeObjectGraph:
     entry_api: BibliographyExchangeEntry
 
 
-@dataclass(frozen=True, slots=True)
-class _UnavailableBrowserConfigurationProbePort:
-    """Production-safe port while no Publisher Browser route is approved."""
+@dataclass(frozen=True, slots=True, repr=False)
+class _BrowserProbeDestinationGuard:
+    """Keep one configuration probe inside its reviewed Publisher origins."""
+
+    rule: BrowserSiteRule = field(repr=False)
+
+    def check(self, url: str, kind: BrowserDestinationKind) -> None:
+        from sciretriever.network.browser import BrowserDestinationKind
+
+        if not isinstance(kind, BrowserDestinationKind) or not self.rule.allows_url(url):
+            raise ValueError("Browser probe destination is outside the approved rule")
+
+
+class _SpringerLinkBrowserConfigurationProbePort:
+    """One scheduled, non-persistent SpringerLink runtime/reachability assessment."""
+
+    __slots__ = ("_client", "_policy", "_rule", "_scheduler", "_session_key")
+
+    _ACCESS_KEY = "springerlink"
+    _START_URL = "https://link.springer.com/"
+    _ACCOUNT_SELECTOR = "#identity-account-widget"
+    _LOGIN_ORIGIN = "https://idp.springer.com"
+    _LOGIN_PATH = "/authorize"
+
+    def __init__(
+        self,
+        client: BrowserClient | None,
+        scheduler: BrowserGroupScheduler,
+    ) -> None:
+        from sciretriever.acquisition.profile_catalog import (
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+        )
+        from sciretriever.acquisition.sources.browser_rules import (
+            PRODUCTION_BROWSER_RULE_CATALOG,
+        )
+        from sciretriever.network.browser import BrowserClient
+        from sciretriever.network.browser_scheduler import BrowserGroupScheduler
+
+        if client is not None and not isinstance(client, BrowserClient):
+            raise TypeError("client must be a BrowserClient or None")
+        if not isinstance(scheduler, BrowserGroupScheduler):
+            raise TypeError("scheduler must be a BrowserGroupScheduler")
+        profile = PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(self._ACCESS_KEY)
+        if (
+            profile is None
+            or profile.browser_policy is None
+            or profile.browser_session_key is None
+            or profile.browser_rule_id is None
+            or profile.browser_rule_revision is None
+        ):
+            raise BootstrapError("acquisition-not-ready")
+        rules = tuple(
+            rule
+            for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules
+            if rule.rule_id == profile.browser_rule_id
+            and rule.revision == profile.browser_rule_revision
+        )
+        if len(rules) != 1:
+            raise BootstrapError("acquisition-not-ready")
+        self._client = client
+        self._scheduler = scheduler
+        self._policy = profile.browser_policy
+        self._session_key = profile.browser_session_key
+        self._rule = rules[0]
 
     @property
     def supported_access_keys(self) -> frozenset[str]:
-        return frozenset()
+        return PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS
 
     def probe(self, access_key: str) -> BrowserConfigurationProbeResult:
-        del access_key
-        raise AssertionError("an unavailable Browser probe cannot execute")
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.admission import AccessPolicy, AccessScope
+        from sciretriever.network.browser_scheduler import (
+            BrowserArticleAttempt,
+            BrowserAttemptCompletion,
+            BrowserAttemptDisposition,
+            BrowserGroupFeedback,
+            BrowserScheduledDisposition,
+        )
+
+        if access_key != self._ACCESS_KEY or self._client is None:
+            raise AssertionError("Browser probe executed without a ready approved target")
+        attempt = BrowserArticleAttempt(
+            attempt_key="configuration-probe-springerlink",
+            rate_limit_group=self._policy.rate_limit_group,
+            session_key=str(self._session_key),
+            policy=self._policy,
+        )
+
+        def run(
+            _attempt: BrowserArticleAttempt,
+        ) -> BrowserAttemptCompletion[BrowserConfigurationProbeResult]:
+            del _attempt
+            launched = False
+            target_reached = False
+            authenticated: bool | None = None
+
+            def flow(session: BrowserFlowSession) -> None:
+                nonlocal launched, target_reached, authenticated
+                launched = True
+                observation = session.observe()
+                landing_reached = (
+                    observation.origin == self._rule.landing_origin
+                    and observation.status_code == 200
+                )
+                login_reached = (
+                    observation.origin == self._LOGIN_ORIGIN
+                    and observation.path == self._LOGIN_PATH
+                    and observation.status_code == 200
+                )
+                target_reached = landing_reached or login_reached
+                if login_reached:
+                    authenticated = False
+                    return
+                if not landing_reached:
+                    return
+                account_text = " ".join(session.text(self._ACCOUNT_SELECTOR).casefold().split())
+                authenticated = bool(account_text) and not any(
+                    marker in account_text for marker in ("log in", "login", "sign in")
+                )
+
+            result = self._client.run(
+                AccessScope(self._rule.web_scope_provider_name, "web"),
+                self._START_URL,
+                AccessPolicy(max_concurrency=1),
+                flow=flow,
+                destination_guard=_BrowserProbeDestinationGuard(self._rule),
+                navigation_only=True,
+                session_key=str(self._session_key),
+            )
+            expected_completion = isinstance(result, AccessFailure) and result.code == "no-download"
+            passed = expected_completion and target_reached
+            if passed:
+                probe_result = BrowserConfigurationProbeResult(
+                    access_key=access_key,
+                    outcome=ProbeOutcome.PASSED,
+                    local_ready=True,
+                    browser_launched=True,
+                    minimal_target_reached=True,
+                    authentication_accepted=authenticated,
+                    navigation_count=1,
+                )
+                return BrowserAttemptCompletion(
+                    probe_result,
+                    BrowserAttemptDisposition.COMPLETED,
+                    BrowserGroupFeedback.SUCCESS,
+                )
+
+            failure_code, feedback = self._probe_failure(result, target_reached)
+            probe_result = BrowserConfigurationProbeResult(
+                access_key=access_key,
+                outcome=ProbeOutcome.FAILED,
+                local_ready=True,
+                browser_launched=launched,
+                minimal_target_reached=target_reached if launched else None,
+                authentication_accepted=(
+                    authenticated if expected_completion and target_reached else None
+                ),
+                navigation_count=1 if launched else 0,
+                failure_code=failure_code,
+            )
+            return BrowserAttemptCompletion(
+                probe_result,
+                BrowserAttemptDisposition.FAILED,
+                feedback,
+            )
+
+        scheduled = self._scheduler.execute((attempt,), run)[0]
+        if (
+            scheduled.disposition is BrowserScheduledDisposition.EXECUTED
+            and scheduled.value is not None
+        ):
+            return scheduled.value
+        return BrowserConfigurationProbeResult(
+            access_key=access_key,
+            outcome=ProbeOutcome.FAILED,
+            local_ready=True,
+            browser_launched=False,
+            failure_code=(
+                "browser-probe-action-required"
+                if scheduled.disposition is BrowserScheduledDisposition.ACTION_REQUIRED
+                else "browser-probe-deferred"
+            ),
+        )
+
+    @staticmethod
+    def _probe_failure(
+        result: object,
+        target_reached: bool,
+    ) -> tuple[str, BrowserGroupFeedback]:
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser_scheduler import BrowserGroupFeedback
+
+        if not target_reached:
+            return "browser-probe-target-unreachable", BrowserGroupFeedback.RUNTIME_FAILURE
+        if not isinstance(result, AccessFailure):
+            return "browser-probe-unexpected-response", BrowserGroupFeedback.RUNTIME_FAILURE
+        return {
+            "challenge": (
+                "browser-probe-challenge-required",
+                BrowserGroupFeedback.CHALLENGE_REQUIRED,
+            ),
+            "timeout": ("browser-probe-timeout", BrowserGroupFeedback.RUNTIME_FAILURE),
+            "cleanup": ("browser-probe-cleanup-failed", BrowserGroupFeedback.CLEANUP_FAILURE),
+            "cancelled": ("browser-probe-cancelled", BrowserGroupFeedback.RUNTIME_FAILURE),
+            "admission": ("browser-probe-admission-failed", BrowserGroupFeedback.RUNTIME_FAILURE),
+            "policy": ("browser-probe-policy-failed", BrowserGroupFeedback.RUNTIME_FAILURE),
+        }.get(
+            result.code,
+            ("browser-probe-runtime-failed", BrowserGroupFeedback.RUNTIME_FAILURE),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1132,6 +1343,7 @@ def build_object_graph(  # noqa: C901, PLR0915
     external_dependencies: BootstrapExternalDependencies,
     credentials: CredentialLookup | None = None,
     credentials_home: str | Path | None = None,
+    browser_profile_home: str | Path | None = None,
     configure_process_logging: bool = False,
     logging_level: int = logging.INFO,
 ) -> ApplicationObjectGraph:
@@ -1206,14 +1418,22 @@ def build_object_graph(  # noqa: C901, PLR0915
     # One process-local coordinator and one HTTP client are shared by every
     # external adapter in this graph.
     coordinator = AccessCoordinator()
+    resolver = SystemResolver()
     http_client = HttpClient(
-        resolver=SystemResolver(),
+        resolver=resolver,
         transport=SecureHttpTransport(),
         coordinator=coordinator,
     )
-    browser_client = None
     clock = _UtcClock()
-    acquisition_runtime = _new_acquisition_execution_runtime(configuration)
+    acquisition_runtime = _new_acquisition_execution_runtime(
+        configuration,
+        access_coordinator=coordinator,
+        resolver=resolver,
+        browser_profile_home=(
+            credentials_home if browser_profile_home is None else browser_profile_home
+        ),
+    )
+    browser_client = acquisition_runtime.browser_client
 
     # Every ordinary setting, credential, Provider registry and injected
     # Parser/LLM dependency is validated before either persistent root is
@@ -1654,45 +1874,126 @@ def _production_dependencies(
     )
 
 
-def _new_shared_network() -> tuple[AccessCoordinator, HttpClient]:
+def _new_shared_network() -> tuple[AccessCoordinator, ResolverLike, HttpClient]:
     from sciretriever.network.http import SecureHttpTransport, SystemResolver
 
     coordinator = AccessCoordinator()
-    return coordinator, HttpClient(
-        resolver=SystemResolver(),
-        transport=SecureHttpTransport(),
-        coordinator=coordinator,
+    resolver = SystemResolver()
+    return (
+        coordinator,
+        resolver,
+        HttpClient(
+            resolver=resolver,
+            transport=SecureHttpTransport(),
+            coordinator=coordinator,
+        ),
     )
 
 
 def _new_acquisition_execution_runtime(
     configuration: Configuration,
+    *,
+    access_coordinator: AccessCoordinator,
+    resolver: ResolverLike,
+    browser_profile_home: str | Path | None = None,
 ) -> _AcquisitionExecutionRuntime:
-    """Construct one side-effect-free Acquisition runtime for this object graph."""
+    """Construct one no-Network Acquisition runtime for this object graph."""
 
     from sciretriever.acquisition.browser_admission import (
         BrowserAdmissionConfiguration,
         BrowserAdmissionController,
+        BrowserGroupAdmissionState,
+        BrowserGroupReadiness,
     )
     from sciretriever.acquisition.cohort import TieredCohortExecutor
+    from sciretriever.acquisition.profile_catalog import (
+        PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
+    )
+    from sciretriever.configuration import (
+        browser_profile_status,
+        configured_browser_group_policies,
+        resolve_browser_profile,
+    )
+    from sciretriever.model.configuration import BrowserProfilePresence
+    from sciretriever.network.browser import BrowserClient
     from sciretriever.network.browser_scheduler import BrowserGroupScheduler
     from sciretriever.network.browser_sessions import BrowserSessionBroker
+    from sciretriever.network.playwright import (
+        PlaywrightBrowserFactory,
+        playwright_runtime_availability,
+    )
 
     if not isinstance(configuration, Configuration):
         raise TypeError("configuration must be a Configuration")
+    if not isinstance(access_coordinator, AccessCoordinator):
+        raise TypeError("access_coordinator must be an AccessCoordinator")
+    if not callable(resolver) and not callable(getattr(resolver, "resolve", None)):
+        raise TypeError("resolver must implement the Network resolver contract")
     session_broker = BrowserSessionBroker()
     scheduler = BrowserGroupScheduler(
         clock=_SystemBrowserSchedulerClock(),
         max_concurrency=configuration.access.browser_max_concurrency,
     )
+    profiles = tuple(
+        profile
+        for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
+        if profile.browser_route_key is not None
+    )
+    selected_profile = configuration.access.browser_profile
+    profile_presence = browser_profile_status(
+        selected_profile,
+        home=browser_profile_home,
+    ).presence
+    runtime_availability = playwright_runtime_availability()
+    runtime_files_ready = (
+        runtime_availability.python_dependency_available
+        and runtime_availability.chromium_executable_available
+    )
+    profile_ready = (
+        selected_profile is not None and profile_presence is BrowserProfilePresence.CONFIGURED
+    )
+    browser_client: BrowserClient | None = None
+    if profiles and configuration.access.browser_enabled and profile_ready and runtime_files_ready:
+        assert selected_profile is not None
+        profile_handle = resolve_browser_profile(
+            selected_profile,
+            home=browser_profile_home,
+        )
+        browser_client = BrowserClient(
+            factory=PlaywrightBrowserFactory(),
+            resolver=resolver,
+            coordinator=access_coordinator,
+            operator_profile=profile_handle,
+            session_broker=session_broker,
+        )
+
+    effective_policies = configured_browser_group_policies(configuration.access)
+    if not profile_ready:
+        group_readiness = BrowserGroupReadiness.SESSION_MISSING
+    elif not runtime_files_ready:
+        group_readiness = BrowserGroupReadiness.RUNTIME_FAILED
+    else:
+        group_readiness = BrowserGroupReadiness.READY
+    groups = tuple(
+        BrowserGroupAdmissionState(
+            policy=effective_policies[profile.browser_rate_limit_group],
+            session_key=profile.browser_session_key,
+            readiness=group_readiness,
+        )
+        for profile in profiles
+        if profile.browser_rate_limit_group is not None and profile.browser_session_key is not None
+    )
+    execution_confirmed = configuration.access.browser_enabled and bool(profiles) and profile_ready
     admission = BrowserAdmissionController(
         BrowserAdmissionConfiguration(
             explicitly_enabled=configuration.access.browser_enabled,
-            execution_confirmed=False,
-            runtime_ready=False,
+            execution_confirmed=execution_confirmed,
+            runtime_ready=browser_client is not None,
+            groups=groups,
         )
     )
     return _AcquisitionExecutionRuntime(
+        browser_client=browser_client,
         browser_session_broker=session_broker,
         browser_scheduler=scheduler,
         browser_admission=admission,
@@ -1720,10 +2021,19 @@ def build_production_configuration_probe_session(
 
     if not isinstance(configuration, Configuration):
         raise BootstrapError("configuration-invalid")
-    coordinator, http_client = _new_shared_network()
+    coordinator, resolver, http_client = _new_shared_network()
     clock = _UtcClock()
-    browser_probe_port = _UnavailableBrowserConfigurationProbePort()
     try:
+        browser_runtime = _new_acquisition_execution_runtime(
+            configuration,
+            access_coordinator=coordinator,
+            resolver=resolver,
+            browser_profile_home=credentials_home,
+        )
+        browser_probe_port = _SpringerLinkBrowserConfigurationProbePort(
+            browser_runtime.browser_client,
+            browser_runtime.browser_scheduler,
+        )
         credentials = load_credentials(home=credentials_home)
         status = configuration_status(
             configuration,
@@ -2118,15 +2428,22 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         include_parser=needs_parser,
         include_analysis=needs_analysis,
     )
-    coordinator, http_client = (
+    coordinator, resolver, http_client = (
         _new_shared_network()
         if (needs_metadata or needs_acquisition or needs_parser or needs_analysis)
-        else (None, None)
+        else (None, None, None)
     )
     clock = _UtcClock()
     acquisition_registry: AcquisitionRegistry | None = None
     acquisition_runtime = (
-        _new_acquisition_execution_runtime(configuration) if needs_acquisition else None
+        _new_acquisition_execution_runtime(
+            configuration,
+            access_coordinator=coordinator,
+            resolver=resolver,
+            browser_profile_home=credentials_home,
+        )
+        if needs_acquisition and coordinator is not None and resolver is not None
+        else None
     )
     if needs_acquisition:
         assert coordinator is not None and http_client is not None
@@ -2141,6 +2458,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 clock=clock.now,
                 browser_session_broker=acquisition_runtime.browser_session_broker,
                 credentials=credentials,
+                browser_client=acquisition_runtime.browser_client,
             ),
         )
 
@@ -2341,7 +2659,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 configuration=configuration,
                 access_coordinator=coordinator,
                 http_client=http_client,
-                browser_client=None,
+                browser_client=acquisition_runtime.browser_client,
                 acquisition_registry=acquisition_registry,
                 acquisition_runtime=acquisition_runtime,
                 acquisition_api=acquisition_api,
@@ -2414,6 +2732,7 @@ def build_production_object_graph(  # noqa: C901
             artifact_root=configuration.paths.artifact_root or "",
             external_dependencies=dependencies,
             credentials=credentials,
+            browser_profile_home=credentials_home,
             configure_process_logging=configure_process_logging,
             logging_level=logging_level,
         )
@@ -2435,6 +2754,7 @@ __all__ = (
     "LocalLibraryObjectGraph",
     "ManualPdfObjectGraph",
     "ProductionConfigurationProbeSession",
+    "PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS",
     "ProductionEntryScope",
     "TopicDiscoveryObjectGraph",
     "build_object_graph",

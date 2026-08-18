@@ -23,7 +23,10 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Final
 
-from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
+from sciretriever.acquisition.access_profiles import (
+    PublisherAccessProfile,
+    PublisherAccessProfileCatalog,
+)
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
@@ -79,6 +82,10 @@ from sciretriever.acquisition.sources.arxiv import (
 from sciretriever.acquisition.sources.arxiv import (
     BASELINE_ACCESS_POLICY as ARXIV_ACCESS_POLICY,
 )
+from sciretriever.acquisition.sources.browser_rules import (
+    BrowserRuleCatalog,
+    BrowserSiteRule,
+)
 from sciretriever.acquisition.sources.europe_pmc import (
     ACCESS_SCOPE as EUROPE_PMC_ACCESS_SCOPE,
 )
@@ -92,6 +99,7 @@ from sciretriever.acquisition.sources.unpaywall import (
     BASELINE_ACCESS_POLICY as UNPAYWALL_ACCESS_POLICY,
 )
 from sciretriever.configuration import CredentialLookup
+from sciretriever.model.access import BrowserRequest, BrowserResult
 from sciretriever.model.acquisition import (
     AcquisitionPath,
     AssetHint,
@@ -106,7 +114,13 @@ from sciretriever.network.admission import (
     AccessPolicy,
     AccessScope,
 )
-from sciretriever.network.browser import BrowserClient
+from sciretriever.network.browser import (
+    BrowserBudget,
+    BrowserCaptureGuard,
+    BrowserClient,
+    BrowserDestinationGuard,
+    BrowserFlowSession,
+)
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import PolicyError, normalize_url
@@ -167,12 +181,17 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
     ),
     (
         "springer",
+        ("api.springernature.com",),
+    ),
+    (
+        "springerlink",
         (
-            "api.springernature.com",
             "link.springer.com",
-            "www.nature.com",
+            "static-content.springer.com",
+            "wayf.springernature.com",
         ),
     ),
+    ("nature-portfolio", ("www.nature.com",)),
     ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
     ("core", ("api.core.ac.uk", "core.ac.uk")),
     ("plos", ("journals.plos.org",)),
@@ -440,6 +459,15 @@ def _browser_unavailable() -> AcquisitionProviderMapping:
     )
 
 
+def _browser_supported() -> AcquisitionProviderMapping:
+    return _mapping(
+        AcquisitionCapability.CONTROLLED_BROWSER,
+        "controlled-browser",
+        AcquisitionPath.CONTROLLED_BROWSER,
+        ControlledBrowserPdfSource,
+    )
+
+
 _FIXED_MAPPINGS: Final[dict[str, tuple[AcquisitionProviderMapping, ...]]] = {
     "arxiv": (
         _generic_mapping(),
@@ -478,7 +506,7 @@ _FIXED_MAPPINGS: Final[dict[str, tuple[AcquisitionProviderMapping, ...]]] = {
     "springer": (
         _generic_mapping(),
         _authorized_unsupported("springer"),
-        _browser_unavailable(),
+        _browser_supported(),
     ),
     "wiley": (
         _authorized_supported("wiley"),
@@ -594,6 +622,7 @@ def _validate_external_catalogs() -> None:
     expected_profile_routes = {
         "core-open-access": ((), ("api:core",), None),
         "elsevier-sciencedirect": ((), ("api:elsevier-article-object",), None),
+        "springerlink": ((), (), "browser:springerlink"),
         "wiley-online-library": ((), ("api:wiley-tdm-v1",), None),
     }
     actual_profile_routes = {
@@ -611,7 +640,12 @@ def _validate_external_catalogs() -> None:
         != PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_browser_rules.rules
     ):
         raise AcquisitionRegistryError("browser-catalog-mismatch")
-    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY:
+    expected_browser_readiness = (
+        RouteReadiness.READY
+        if PRODUCTION_BROWSER_RULE_CATALOG.rules
+        else RouteReadiness.UNSUPPORTED
+    )
+    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not expected_browser_readiness:
         raise AcquisitionRegistryError("browser-readiness-mismatch")
 
 
@@ -817,6 +851,46 @@ class _OrderedDirectRoute:
         if self._slice is _DirectSlice.PROVIDER_LANDING:
             return normalized_source == self._provider_name
         return normalized_source not in self._excluded_provider_names
+
+
+class _SessionBoundBrowserRunner:
+    """Bind one reviewed Publisher profile to its opaque persistent session."""
+
+    __slots__ = ("_client", "_session_key")
+
+    def __init__(self, client: BrowserClient, session_key: str) -> None:
+        if not isinstance(client, BrowserClient):
+            raise TypeError("client must be a BrowserClient")
+        self._client = client
+        self._session_key = BrowserSessionBroker.validate_session_key(str(session_key))
+
+    def run(
+        self,
+        scope: AccessScope,
+        request: BrowserRequest | str,
+        policy: AccessPolicy,
+        *,
+        flow: Callable[[BrowserFlowSession], object] | None = None,
+        destination_guard: BrowserDestinationGuard | None = None,
+        capture_guard: BrowserCaptureGuard | None = None,
+        navigation_only: bool = False,
+        budget: BrowserBudget | None = None,
+        timeout_seconds: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> BrowserResult:
+        return self._client.run(
+            scope,
+            request,
+            policy,
+            flow=flow,
+            destination_guard=destination_guard,
+            capture_guard=capture_guard,
+            navigation_only=navigation_only,
+            session_key=self._session_key,
+            budget=budget,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+        )
 
 
 def _has_generic_mapping(provider_name: str) -> bool:
@@ -1155,6 +1229,90 @@ def _assemble_authorized_routes(
         )
 
 
+def _browser_rule_for_profile(profile: PublisherAccessProfile) -> BrowserSiteRule:
+    matches = tuple(
+        rule
+        for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules
+        if rule.rule_id == profile.browser_rule_id
+        and rule.revision == profile.browser_rule_revision
+    )
+    if len(matches) != 1:
+        raise AcquisitionRegistryError("browser-profile-rule-mismatch")
+    rule = matches[0]
+    if (
+        profile.browser_allowed_origins != rule.allowed_origins
+        or profile.browser_rate_limit_group != rule.web_scope_provider_name
+    ):
+        raise AcquisitionRegistryError("browser-profile-rule-mismatch")
+    return rule
+
+
+def _browser_route_readiness(
+    configuration: Configuration,
+    dependencies: AcquisitionAssemblyDependencies,
+) -> RouteReadiness:
+    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not RouteReadiness.READY:
+        return RouteReadiness.UNSUPPORTED
+    if not configuration.access.browser_enabled:
+        return RouteReadiness.DISABLED
+    if dependencies.browser_client is None:
+        return RouteReadiness.UNCONFIGURED
+    return RouteReadiness.READY
+
+
+def _browser_route_spec(
+    profile: PublisherAccessProfile,
+    readiness: RouteReadiness,
+) -> RouteSpec:
+    route_key = profile.browser_route_key
+    risk_group = profile.browser_rate_limit_group
+    if route_key is None or risk_group is None:
+        raise AcquisitionRegistryError("browser-profile-route-mismatch")
+    return RouteSpec(
+        route_key=route_key,
+        tier=AcquisitionPath.CONTROLLED_BROWSER,
+        capability=RouteCapability.BROWSER_PDF,
+        readiness=readiness,
+        profile_access_key=profile.access_key,
+        risk_group=risk_group,
+        required_identifier_namespaces=profile.stable_locator_namespaces,
+    )
+
+
+def _assemble_browser_routes(
+    configuration: Configuration,
+    dependencies: AcquisitionAssemblyDependencies,
+    route_bindings: list[RouteAdapterBinding],
+) -> None:
+    readiness = _browser_route_readiness(configuration, dependencies)
+    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
+        if profile.browser_route_key is None:
+            continue
+        rule = _browser_rule_for_profile(profile)
+        adapter: ControlledBrowserPdfSource | None = None
+        if readiness is RouteReadiness.READY:
+            client = dependencies.browser_client
+            session_key = profile.browser_session_key
+            if client is None or session_key is None:
+                raise AcquisitionRegistryError("browser-runtime-mismatch")
+            adapter = ControlledBrowserPdfSource(
+                runner=_SessionBoundBrowserRunner(client, session_key),
+                route_key=profile.browser_route_key,
+                rule_catalog=BrowserRuleCatalog((rule,)),
+                web_access_profile_resolver=dependencies.web_access_profile_resolver,
+                access_policy=AccessPolicy(max_concurrency=1),
+                cancel_event=dependencies.cancel_event,
+                provenance_id_factory=dependencies.provenance_id_factory,
+                clock=dependencies.clock,
+            )
+        route_bindings.append(
+            RouteAdapterBinding(
+                spec=_browser_route_spec(profile, readiness),
+                adapter=adapter,
+            )
+        )
+
+
 def build_acquisition_registry(
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
@@ -1262,6 +1420,11 @@ def build_acquisition_registry(
 
     _assemble_authorized_routes(
         selected,
+        dependencies,
+        route_bindings,
+    )
+    _assemble_browser_routes(
+        configuration,
         dependencies,
         route_bindings,
     )

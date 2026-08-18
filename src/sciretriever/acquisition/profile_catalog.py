@@ -19,6 +19,7 @@ from sciretriever.acquisition.access_profiles import (
 )
 from sciretriever.acquisition.profile_verification import PublisherAccessVerificationMatrix
 from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
+from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 ACS_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     access_key="acs-publications",
@@ -413,11 +414,11 @@ ELSEVIER_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
     browser_rule_id=None,
     browser_rule_revision=None,
     policy_evidence=PolicyEvidence.OFFICIAL,
-    policy_revision="elsevier-article-object-2026-08-15",
+    policy_revision="elsevier-article-direct-object-2026-08-18",
     production_status=ProfileProductionStatus.PRODUCTION_READY,
     evidence=PublisherAccessEvidence(
         display_name="Elsevier / ScienceDirect",
-        product_name="Article Retrieval and Object Retrieval APIs",
+        product_name="Article Retrieval direct PDF and Object Retrieval APIs",
         official_references=(
             "https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl",
             "https://dev.elsevier.com/documentation/ObjectRetrievalAPI.wadl",
@@ -425,8 +426,8 @@ ELSEVIER_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProfile(
         ),
         access_terms_references=("https://dev.elsevier.com/policy.html",),
         rate_limit_references=("https://dev.elsevier.com/api_key_settings.html",),
-        verification_date=date(2026, 8, 15),
-        evidence_revision="elsevier-article-object-2026-08-15",
+        verification_date=date(2026, 8, 18),
+        evidence_revision="elsevier-article-direct-object-2026-08-18",
         notes_reference="docs/notes/providers/elsevier.md",
         fixture_reference=("tests/fixtures/acquisition/profiles/elsevier-sciencedirect.json"),
     ),
@@ -921,22 +922,30 @@ SPRINGERLINK_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProf
     access_key="springerlink",
     platform_key="springerlink",
     landing_origins=("https://link.springer.com",),
-    asset_origins=("https://link.springer.com",),
-    stable_locator_namespaces=(),
+    asset_origins=(
+        "https://link.springer.com",
+        "https://static-content.springer.com",
+    ),
+    stable_locator_namespaces=("doi",),
     provider_record_names=(),
     weak_doi_prefixes=("10.1007",),
     weak_publisher_names=("springer", "springerlink"),
     public_route_keys=(),
     api_route_keys=(),
-    browser_route_key=None,
-    browser_allowed_origins=(),
-    browser_rate_limit_group=None,
-    browser_session_key=None,
-    browser_rule_id=None,
-    browser_rule_revision=None,
+    browser_route_key="browser:springerlink",
+    browser_allowed_origins=(
+        "https://link.springer.com",
+        "https://static-content.springer.com",
+        "https://idp.springer.com",
+        "https://wayf.springernature.com",
+    ),
+    browser_rate_limit_group="springerlink",
+    browser_session_key="springerlink",
+    browser_rule_id="springerlink-pdf",
+    browser_rule_revision=4,
     policy_evidence=PolicyEvidence.OFFICIAL,
-    policy_revision="springer-nature-tdm-2026-08-15",
-    production_status=ProfileProductionStatus.UNSUPPORTED,
+    policy_revision="springerlink-browser-tdm-v1",
+    production_status=ProfileProductionStatus.PRODUCTION_READY,
     evidence=PublisherAccessEvidence(
         display_name="Springer Nature Link",
         product_name="Springer Nature Link article platform",
@@ -949,10 +958,19 @@ SPRINGERLINK_ACCESS_PROFILE: Final[PublisherAccessProfile] = PublisherAccessProf
         rate_limit_references=(
             "https://www.springernature.com/gp/researchers/text-and-data-mining",
         ),
-        verification_date=date(2026, 8, 15),
-        evidence_revision="springerlink-browser-unsupported-2026-08-15",
+        verification_date=date(2026, 8, 18),
+        evidence_revision="springerlink-browser-pdf-v4-2026-08-18",
         notes_reference="docs/notes/providers/springer-nature.md",
         fixture_reference="tests/fixtures/acquisition/profiles/springerlink.json",
+    ),
+    browser_policy=BrowserGroupPolicy(
+        rate_limit_group="springerlink",
+        policy_revision="springerlink-browser-tdm-v1",
+        minimum_start_interval=10.0,
+        rate_limit_cooldown=300.0,
+        runtime_failure_threshold=2,
+        cooldown_after_completion=0.0,
+        failure_cooldown=60.0,
     ),
 )
 

@@ -405,19 +405,24 @@ reference_max_output_tokens = 64
         )
         browser = status_payload["providers"]["controlled_browser"]
         self.assertFalse(browser["automatic_acquisition_available"])
-        self.assertEqual(browser["production_route_count"], 0)
-        self.assertEqual(browser["routes"], [])
+        self.assertEqual(browser["production_route_count"], 1)
+        self.assertEqual(
+            [route["access_key"] for route in browser["routes"]],
+            ["springerlink"],
+        )
+        self.assertTrue(browser["runtime"]["python_dependency_available"])
+        self.assertFalse(browser["runtime"]["chromium_executable_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
         self.assertEqual(browser["profile"]["presence"], "missing")
         self.assertEqual(browser["session"]["assessment"], "not-assessed")
         self.assertIsNone(browser["session"]["authenticated"])
         self.assertEqual(browser["session"]["article_entitlement"], "not-proven")
-        self.assertFalse(browser["probe"]["available"])
+        self.assertTrue(browser["probe"]["available"])
         self.assertTrue(browser["probe"]["requires_explicit_target"])
-        self.assertEqual(browser["probe"]["supported_access_keys"], [])
+        self.assertEqual(browser["probe"]["supported_access_keys"], ["springerlink"])
         self.assertEqual(
             browser["action_required"][0]["code"],
-            "browser-production-route-unavailable",
+            "browser-chromium-unavailable",
         )
         self.assertFalse(status_payload["parsing"]["locally_ready"])
         self.assertFalse(status_payload["analysis"]["content_locally_ready"])
@@ -429,7 +434,7 @@ reference_max_output_tokens = 64
                 "config",
                 "test",
                 "--browser",
-                "wiley-online-library",
+                "springerlink",
                 "--json",
             ),
             environment=environment,
@@ -442,7 +447,7 @@ reference_max_output_tokens = 64
         self.assertEqual(browser_probe_payload["outcome"], "skipped")
         self.assertEqual(
             browser_probe_payload["failure_code"],
-            "browser-production-route-unavailable",
+            "browser-chromium-unavailable",
         )
         self.assertEqual(browser_probe_payload["navigation_count"], 0)
         self.assertEqual(browser_probe_payload["article_entitlement"], "not-proven")

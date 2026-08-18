@@ -982,9 +982,9 @@ class CliConfigurationTests(unittest.TestCase):
                 ("Elsevier / Scopus", "Action required", "Configure the API credential."),
                 ("Wiley Online Library", "Available", "Enable the Provider."),
             ),
-            browser_state="Unavailable",
+            browser_state="Disabled",
             browser_detail=("Profile 'institutional-access' is missing; login is not assessed."),
-            browser_action="No production Browser route is registered.",
+            browser_action="Select and initialize a profile to enable Browser-last access.",
             profile_presence=BrowserProfilePresence.MISSING,
         )
 
@@ -1248,10 +1248,11 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("api_key=configured", stdout)
         self.assertIn("elsevier, core, wiley · known unavailable: springer", stdout)
         self.assertIn("Controlled browser", stdout)
-        self.assertIn("0 production routes", stdout)
-        self.assertIn("Session / login", stdout)
+        self.assertIn("1 production route", stdout)
+        self.assertIn("local Browser not", stdout)
+        self.assertIn("Personal login", stdout)
         self.assertIn("not assessed", stdout)
-        self.assertIn("Article entitlement", stdout)
+        self.assertIn("IP / article access", stdout)
         self.assertIn("not-proven", stdout)
         self.assertNotIn("status-secret-sentinel", stdout)
 
@@ -1540,18 +1541,19 @@ class CliConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(payload["analysis"]["provider"], None)
         browser = payload["providers"]["controlled_browser"]
-        self.assertEqual(browser["production_route_count"], 0)
+        self.assertEqual(browser["production_route_count"], 1)
         self.assertFalse(browser["automatic_acquisition_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
         self.assertEqual(browser["profile"]["presence"], "missing")
         self.assertEqual(browser["session"]["assessment"], "not-assessed")
         self.assertIsNone(browser["session"]["authenticated"])
         self.assertEqual(browser["session"]["article_entitlement"], "not-proven")
-        self.assertFalse(browser["probe"]["available"])
+        self.assertTrue(browser["probe"]["available"])
         self.assertTrue(browser["probe"]["requires_explicit_target"])
+        self.assertEqual(browser["probe"]["supported_access_keys"], ["springerlink"])
         self.assertEqual(
             browser["action_required"][0]["code"],
-            "browser-production-route-unavailable",
+            "browser-disabled",
         )
         self.assertNotIn("fingerprint", stdout)
         load_configuration.assert_called_once_with(None)
@@ -1618,15 +1620,15 @@ class CliConfigurationTests(unittest.TestCase):
             "Public",
             "Authorized API",
             "Controlled Browser",
-            "Session / login",
-            "Article entitlement",
+            "Personal login",
+            "IP / article access",
             "Storage",
         ):
             self.assertIn(heading, stdout)
         self.assertIn("api_key=configured", stdout)
         self.assertNotIn("secret-value", stdout)
 
-    def test_plain_access_manager_selects_profile_and_explains_current_browser_gap(
+    def test_plain_access_manager_selects_profile_and_explains_browser_enablement(
         self,
     ) -> None:
         module = _cli_module()
@@ -1664,7 +1666,7 @@ class CliConfigurationTests(unittest.TestCase):
             "Controlled Browser",
             "/fixed/browser-profiles/institutional-access",
             "login cookies and local storage",
-            "No production Browser route",
+            "Browser-last",
         ):
             self.assertIn(expected, stderr)
         configure.assert_called_once()
@@ -1894,7 +1896,7 @@ class CliConfigurationTests(unittest.TestCase):
         configure.assert_not_called()
         remove_profile.assert_not_called()
 
-    def test_access_overview_uses_three_authorized_apis_and_zero_production_browser_routes(
+    def test_access_overview_uses_three_authorized_apis_and_one_disabled_browser_route(
         self,
     ) -> None:
         import sciretriever.configuration as configuration_boundary
@@ -1911,8 +1913,8 @@ class CliConfigurationTests(unittest.TestCase):
             tuple(name for name, _state, _action in overview.api_routes),
             ("CORE", "Elsevier / Scopus", "Wiley Online Library"),
         )
-        self.assertEqual(overview.browser_state, "Unavailable")
-        self.assertIn("No production Browser route", overview.browser_action)
+        self.assertEqual(overview.browser_state, "Disabled")
+        self.assertIn("enable Browser-last access", overview.browser_action)
         self.assertIs(overview.profile_presence, BrowserProfilePresence.MISSING)
 
     def test_config_test_routes_named_and_all_to_probe_session_and_uses_result_exit_code(
@@ -2002,8 +2004,8 @@ class CliConfigurationTests(unittest.TestCase):
         module = _cli_module()
         cases = (
             ("crossref", "--all"),
-            ("crossref", "--browser", "wiley-online-library"),
-            ("--all", "--browser", "wiley-online-library"),
+            ("crossref", "--browser", "springerlink"),
+            ("--all", "--browser", "springerlink"),
         )
         for selection in cases:
             with self.subTest(selection=selection):
@@ -2021,10 +2023,10 @@ class CliConfigurationTests(unittest.TestCase):
         module = _cli_module()
         session = Mock()
         session.run_browser.return_value = BrowserConfigurationProbeResult(
-            access_key="wiley-online-library",
+            access_key="springerlink",
             outcome=ProbeOutcome.SKIPPED,
             local_ready=False,
-            failure_code="browser-production-route-unavailable",
+            failure_code="browser-disabled",
         )
         with (
             patch.object(module, "load_selected_configuration", return_value=Configuration()),
@@ -2043,22 +2045,57 @@ class CliConfigurationTests(unittest.TestCase):
                 "config",
                 "test",
                 "--browser",
-                "wiley-online-library",
+                "springerlink",
                 "--json",
             )
 
         self.assertEqual((code, stderr), (3, ""))
         payload = json.loads(stdout)
-        self.assertEqual(payload["access_key"], "wiley-online-library")
+        self.assertEqual(payload["access_key"], "springerlink")
         self.assertEqual(payload["outcome"], "skipped")
-        self.assertEqual(payload["failure_code"], "browser-production-route-unavailable")
+        self.assertEqual(payload["failure_code"], "browser-disabled")
         self.assertEqual(payload["navigation_count"], 0)
         self.assertEqual(payload["article_entitlement"], "not-proven")
         self.assertFalse(payload["persisted"])
-        session.run_browser.assert_called_once_with("wiley-online-library")
+        session.run_browser.assert_called_once_with("springerlink")
         session.run.assert_not_called()
         session.run_llm.assert_not_called()
         session.run_mineru.assert_not_called()
+
+    def test_config_test_browser_passes_without_personal_login_or_entitlement_claim(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        session.run_browser.return_value = BrowserConfigurationProbeResult(
+            access_key="springerlink",
+            outcome=ProbeOutcome.PASSED,
+            local_ready=True,
+            browser_launched=True,
+            minimal_target_reached=True,
+            authentication_accepted=False,
+            navigation_count=1,
+        )
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+        ):
+            code, stdout, stderr = _invoke(
+                "config",
+                "test",
+                "--browser",
+                "springerlink",
+                "--json",
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["outcome"], "passed")
+        self.assertFalse(payload["authentication_accepted"])
+        self.assertEqual(payload["article_entitlement"], "not-proven")
+        self.assertIsNone(payload["failure_code"])
 
     def test_human_browser_probe_requires_confirmation_before_execution(self) -> None:
         module = _cli_module()
@@ -2076,12 +2113,14 @@ class CliConfigurationTests(unittest.TestCase):
                 "config",
                 "test",
                 "--browser",
-                "wiley-online-library",
+                "springerlink",
             )
 
         self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("controlled headless Browser session", stderr)
         self.assertIn("exactly one approved minimal Publisher target", stderr)
-        self.assertIn("never proves arbitrary article entitlement", stderr)
+        self.assertIn("runtime and target reachability", stderr)
+        self.assertIn("does not assess IP-based or article-specific entitlement", stderr)
         self.assertIn("cancelled", stderr)
         session.run_browser.assert_not_called()
 

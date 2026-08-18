@@ -84,6 +84,7 @@ def _status_payload() -> dict[str, object]:
                 "runtime": {
                     "framework_available": True,
                     "python_dependency_available": True,
+                    "chromium_executable_available": True,
                     "launch_assessed": False,
                 },
                 "profile": {
@@ -95,19 +96,41 @@ def _status_payload() -> dict[str, object]:
                     "authenticated": None,
                     "article_entitlement": "not-proven",
                 },
-                "automatic_acquisition_available": False,
-                "production_route_count": 0,
-                "routes": [],
+                "automatic_acquisition_available": True,
+                "production_route_count": 1,
+                "routes": [
+                    {
+                        "access_key": "springerlink",
+                        "display_name": "SpringerLink",
+                        "route_key": "browser:springerlink",
+                        "rate_limit_group": "springerlink",
+                        "production_available": True,
+                        "policy": {
+                            "evidence": "project-conservative",
+                            "policy_revision": "springerlink-browser-2026-08-16",
+                            "verification_date": "2026-08-16",
+                            "notes_reference": "docs/notes/providers/springer-nature.md",
+                            "max_concurrency": 1,
+                            "minimum_start_interval": 10.0,
+                            "maximum_starts_per_window": None,
+                            "window_seconds": None,
+                            "cooldown_after_completion": 0.0,
+                            "rate_limit_cooldown": 300.0,
+                            "failure_cooldown": 60.0,
+                            "runtime_failure_threshold": 3,
+                        },
+                    }
+                ],
                 "probe": {
-                    "available": False,
+                    "available": True,
                     "requires_explicit_target": True,
-                    "supported_access_keys": [],
+                    "supported_access_keys": ["springerlink"],
                 },
                 "action_required": [
                     {
-                        "code": "browser-production-route-unavailable",
-                        "reason": "No production route.",
-                        "action": "Use Public and authorized APIs.",
+                        "code": "browser-session-not-assessed",
+                        "reason": "Status does not launch the Browser.",
+                        "action": "Run the explicit SpringerLink Browser probe.",
                     }
                 ],
             },
@@ -232,9 +255,9 @@ class ConfigPresentationTests(unittest.TestCase):
             "Authorized primary-PDF APIs",
             "PDF acquisition routes",
             "Controlled Browser",
-            "Session / login",
+            "Personal login",
             "not assessed",
-            "Article entitlement",
+            "IP / article access",
             "not-proven",
         ):
             self.assertIn(text, rendered)
@@ -347,9 +370,9 @@ class ConfigPresentationTests(unittest.TestCase):
                     "Controlled Browser",
                     "Profile",
                     "configured",
-                    "Session / login",
+                    "Personal login",
                     "not assessed",
-                    "Article entitlement",
+                    "IP / article access",
                     "not-proven",
                     "Policy evidence",
                     "Next action",
@@ -369,24 +392,25 @@ class ConfigPresentationTests(unittest.TestCase):
             width=120,
         ).probes(
             {
-                "access_key": "wiley-online-library",
-                "outcome": "skipped",
-                "local_ready": False,
-                "browser_launched": None,
-                "minimal_target_reached": None,
-                "authentication_accepted": None,
+                "access_key": "springerlink",
+                "outcome": "passed",
+                "local_ready": True,
+                "browser_launched": True,
+                "minimal_target_reached": True,
+                "authentication_accepted": False,
                 "article_entitlement": "not-proven",
-                "navigation_count": 0,
-                "failure_code": "browser-production-route-unavailable",
+                "navigation_count": 1,
+                "failure_code": None,
                 "persisted": False,
             }
         )
         rendered = output.getvalue()
-        self.assertIn("Browser · wiley-online-library", rendered)
-        self.assertIn("one approved minimal target", rendered)
-        self.assertIn("entitlement", rendered)
-        self.assertIn("not proven", rendered)
-        self.assertIn("browser-production-route", rendered)
+        self.assertIn("Browser · springerlink", rendered)
+        self.assertIn("runtime target reached", rendered)
+        self.assertIn("personal login not detected", rendered)
+        self.assertIn("IP/article", rendered)
+        self.assertIn("entitlement not assessed", rendered)
+        self.assertNotIn("browser-session-not-authenticated", rendered)
         self.assertNotIn(_SECRET, rendered)
         self.assertNotIn("\x1b[", rendered)
 

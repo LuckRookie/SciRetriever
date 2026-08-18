@@ -18,6 +18,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
+from sciretriever.logging.api import get_logger
+
 _SESSION_KEY: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
     re.ASCII,
@@ -37,6 +39,11 @@ BrowserFactory = Callable[..., object]
 RouteHandler = Callable[[object], object]
 EventHandler = Callable[[object], object]
 Clock = Callable[[], float]
+_LOGGER = get_logger(__name__)
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 @runtime_checkable
@@ -422,6 +429,10 @@ class BrowserSessionLease:
 
     def invalidate(self) -> None:
         self._invalidate = True
+        _LOGGER.debug(
+            "event=browser-session-invalidated session_key=%s disposition=marked next=release",
+            self._entry.session_key,
+        )
 
     def drain_article(self) -> None:
         """Drain late runtime events while this article's handlers are active."""
@@ -432,13 +443,27 @@ class BrowserSessionLease:
             if self._drain_failed:
                 raise BrowserSessionError("Browser article session could not be drained")
             return
+        started_ns = time.monotonic_ns()
         self._drain_attempted = True
         try:
             self._entry.end_article()
         except BrowserSessionError:
             self._invalidate = True
             self._drain_failed = True
+            _LOGGER.debug(
+                "event=browser-session-article-drain-failed session_key=%s "
+                "outcome=failure elapsed_ms=%d code=browser-session-drain-failed "
+                "retryable=true reason=The Browser article session could not be drained. "
+                "action=Retire the session before the next article.",
+                self._entry.session_key,
+                _elapsed_ms(started_ns),
+            )
             raise
+        _LOGGER.debug(
+            "event=browser-session-article-drained session_key=%s outcome=success elapsed_ms=%d",
+            self._entry.session_key,
+            _elapsed_ms(started_ns),
+        )
 
     def release(self) -> None:
         if self._released:
@@ -511,6 +536,78 @@ class BrowserSessionBroker:
             cancel_event=cancel_event,
             timeout=timeout,
         )
+        started_ns = time.monotonic_ns()
+        _LOGGER.debug(
+            "event=browser-session-acquire-started session_key=%s disposition=eligible",
+            key,
+        )
+        try:
+            lease, reused = self._acquire_lease(
+                key,
+                deadline=deadline,
+                factory=factory,
+                profile=profile,
+                downloads_path=downloads_path,
+                connection_binding=connection_binding,
+                route_handler=route_handler,
+                event_handlers=event_handlers,
+                cancel_event=cancel_event,
+            )
+        except BrowserSessionCancelled:
+            self._log_acquire_failure(
+                key,
+                disposition="cancelled",
+                code="browser-session-acquire-cancelled",
+                retryable=True,
+                reason="The Browser session lease was cancelled before article start.",
+                action="Retry the completion operation when appropriate.",
+                started_ns=started_ns,
+            )
+            raise
+        except BrowserSessionTimeout:
+            self._log_acquire_failure(
+                key,
+                disposition="deferred",
+                code="browser-session-acquire-timeout",
+                retryable=True,
+                reason="The Browser session lease did not become available in time.",
+                action="Retry after the provider session becomes available.",
+                started_ns=started_ns,
+            )
+            raise
+        except BrowserSessionError:
+            self._log_acquire_failure(
+                key,
+                disposition="failure",
+                code="browser-session-acquire-failed",
+                retryable=True,
+                reason="The Browser session could not start an article flow.",
+                action="Review session cleanup diagnostics before retrying.",
+                started_ns=started_ns,
+            )
+            raise
+        _LOGGER.debug(
+            "event=browser-session-acquired session_key=%s session_reused=%s "
+            "disposition=acquired elapsed_ms=%d",
+            key,
+            str(reused).lower(),
+            _elapsed_ms(started_ns),
+        )
+        return lease
+
+    def _acquire_lease(
+        self,
+        key: str,
+        *,
+        deadline: float,
+        factory: BrowserFactory,
+        profile: object | None,
+        downloads_path: str,
+        connection_binding: object,
+        route_handler: RouteHandler,
+        event_handlers: Mapping[str, EventHandler],
+        cancel_event: BrowserSessionCancellation | None,
+    ) -> tuple[BrowserSessionLease, bool]:
         while True:
             entry = self._entry(key)
             entry.acquire(deadline=deadline, clock=self._clock, cancel_event=cancel_event)
@@ -525,6 +622,7 @@ class BrowserSessionBroker:
                 if not self._discard_locked_entry(entry):
                     raise BrowserSessionError("Browser session cleanup failed")
                 continue
+            reused = entry.context is not None
             try:
                 entry.ensure_started(
                     factory=factory,
@@ -537,11 +635,34 @@ class BrowserSessionBroker:
                     route_handler=route_handler,
                     event_handlers=event_handlers,
                 )
-                return BrowserSessionLease(self, entry)
             except Exception:
                 if not self._discard_locked_entry(entry):
                     raise BrowserSessionError("Browser session cleanup failed") from None
                 raise BrowserSessionError("Browser session acquisition failed") from None
+            return BrowserSessionLease(self, entry), reused
+
+    @staticmethod
+    def _log_acquire_failure(
+        session_key: str,
+        *,
+        disposition: str,
+        code: str,
+        retryable: bool,
+        reason: str,
+        action: str,
+        started_ns: int,
+    ) -> None:
+        _LOGGER.debug(
+            "event=browser-session-acquire-failed session_key=%s disposition=%s "
+            "elapsed_ms=%d code=%s retryable=%s reason=%s action=%s",
+            session_key,
+            disposition,
+            _elapsed_ms(started_ns),
+            code,
+            str(retryable).lower(),
+            reason,
+            action,
+        )
 
     def _acquire_inputs(
         self,
@@ -565,6 +686,7 @@ class BrowserSessionBroker:
         return key, self._clock() + _positive_timeout(timeout)
 
     def _discard_locked_entry(self, entry: _SessionEntry) -> bool:
+        started_ns = time.monotonic_ns()
         cleaned = False
         try:
             cleaned = entry.close()
@@ -573,6 +695,13 @@ class BrowserSessionBroker:
             entry.lease_lock.release()
         if not cleaned:
             self._cleanup_failed = True
+        _LOGGER.debug(
+            "event=browser-session-cleanup session_key=%s resource=session "
+            "outcome=%s elapsed_ms=%d",
+            entry.session_key,
+            "cleaned" if cleaned else "failed",
+            _elapsed_ms(started_ns),
+        )
         return cleaned
 
     def _entry(self, key: str) -> _SessionEntry:
@@ -592,6 +721,7 @@ class BrowserSessionBroker:
         invalidate: bool,
         article_drain_attempted: bool,
     ) -> None:
+        started_ns = time.monotonic_ns()
         failed = False
         try:
             if not article_drain_attempted:
@@ -607,6 +737,13 @@ class BrowserSessionBroker:
                 self._retire(entry)
         finally:
             entry.lease_lock.release()
+        _LOGGER.debug(
+            "event=browser-session-released session_key=%s invalidated=%s outcome=%s elapsed_ms=%d",
+            entry.session_key,
+            str(invalidate).lower(),
+            "failure" if failed else "retired" if invalidate else "reusable",
+            _elapsed_ms(started_ns),
+        )
         if failed:
             self._cleanup_failed = True
             raise BrowserSessionError("Browser session cleanup failed")
@@ -618,11 +755,18 @@ class BrowserSessionBroker:
 
     def invalidate(self, session_key: str) -> None:
         key = _session_key(session_key)
+        started_ns = time.monotonic_ns()
         with self._state_lock:
             entry = self._entries.get(key)
             if entry is not None:
                 entry.broken = True
         if entry is None:
+            _LOGGER.debug(
+                "event=browser-session-invalidate-finished session_key=%s "
+                "outcome=absent elapsed_ms=%d",
+                key,
+                _elapsed_ms(started_ns),
+            )
             return
         entry.lease_lock.acquire()
         try:
@@ -632,9 +776,24 @@ class BrowserSessionBroker:
             entry.lease_lock.release()
         if cleanup_failed:
             self._cleanup_failed = True
+            _LOGGER.debug(
+                "event=browser-session-invalidate-failed session_key=%s outcome=failure "
+                "elapsed_ms=%d code=browser-session-cleanup-failed retryable=true "
+                "reason=The invalidated Browser session could not be cleaned. "
+                "action=Restart the Browser runtime before retrying.",
+                key,
+                _elapsed_ms(started_ns),
+            )
             raise BrowserSessionError("Browser session cleanup failed")
+        _LOGGER.debug(
+            "event=browser-session-invalidate-finished session_key=%s outcome=retired "
+            "elapsed_ms=%d",
+            key,
+            _elapsed_ms(started_ns),
+        )
 
     def close(self) -> None:
+        started_ns = time.monotonic_ns()
         with self._state_lock:
             if self._closed:
                 if self._cleanup_failed:
@@ -654,7 +813,21 @@ class BrowserSessionBroker:
                 entry.lease_lock.release()
         if failed:
             self._cleanup_failed = True
+            _LOGGER.debug(
+                "event=browser-session-broker-cleanup-failed session_count=%d "
+                "outcome=failure elapsed_ms=%d code=browser-session-cleanup-failed "
+                "retryable=true reason=One or more Browser sessions could not be cleaned. "
+                "action=Restart the Browser runtime before retrying.",
+                len(entries),
+                _elapsed_ms(started_ns),
+            )
             raise BrowserSessionError("Browser session broker cleanup failed")
+        _LOGGER.debug(
+            "event=browser-session-broker-cleanup-finished session_count=%d "
+            "outcome=cleaned elapsed_ms=%d",
+            len(entries),
+            _elapsed_ms(started_ns),
+        )
 
     def __enter__(self) -> BrowserSessionBroker:
         return self

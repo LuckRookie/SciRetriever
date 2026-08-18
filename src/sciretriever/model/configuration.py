@@ -1125,13 +1125,20 @@ class ConfigurationActionRequired(_FrozenModel):
 class BrowserRuntimeStatus(_FrozenModel):
     """Purely local Browser implementation/dependency readiness.
 
-    A status operation never launches the runtime, so it deliberately cannot
-    claim that a Browser binary is installed or launchable.
+    A status operation may verify package and executable file presence but
+    never launches the runtime, so launchability remains explicitly unassessed.
     """
 
     framework_available: bool
     python_dependency_available: bool
+    chromium_executable_available: bool
     launch_assessed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _validate_runtime_files(self) -> "BrowserRuntimeStatus":
+        if self.chromium_executable_available and not self.python_dependency_available:
+            raise ValueError("Browser Chromium readiness requires the Python dependency")
+        return self
 
 
 class BrowserProfileSelectionStatus(_FrozenModel):
@@ -1233,6 +1240,7 @@ class BrowserAccessStatus(_FrozenModel):
             and self.enabled
             and self.runtime.framework_available
             and self.runtime.python_dependency_available
+            and self.runtime.chromium_executable_available
             and self.profile.selected is not None
             and self.profile.presence is BrowserProfilePresence.CONFIGURED
         )
@@ -1440,7 +1448,13 @@ def _validate_passed_browser_probe_shape(
     navigation_count: int,
     failure_code: str | None,
 ) -> None:
-    if checks != (True, True, True) or navigation_count != 1 or failure_code is not None:
+    launched, target_reached, _personal_login_detected = checks
+    if (
+        launched is not True
+        or target_reached is not True
+        or navigation_count != 1
+        or failure_code is not None
+    ):
         raise ValueError("passed Browser probe result is inconsistent")
 
 
@@ -1468,8 +1482,10 @@ class BrowserConfigurationProbeResult(_FrozenModel):
     """One explicit, single-target Browser readiness probe.
 
     The result intentionally contains no URL, selector, profile path, page
-    data, Cookie characteristic, or raw exception.  Even a successful login
-    check cannot prove entitlement for an arbitrary article.
+    data, Cookie characteristic, or raw exception.  Passing proves only that
+    the runtime launched and the reviewed target was reached.  Personal login
+    is an optional observation; neither it nor this probe proves IP-based or
+    article-specific entitlement.
     """
 
     access_key: BrowserAccessKeyValue

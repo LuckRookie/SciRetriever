@@ -13,7 +13,6 @@ probes, provider adapters, or an arbitrary credentials-file option.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import secrets
@@ -1347,15 +1346,6 @@ def configured_browser_group_policies(
     return tightened_browser_group_policies(access, _production_browser_group_policies())
 
 
-def _playwright_python_dependency_available() -> bool:
-    """Check only Python package discovery; never import or launch Playwright."""
-
-    try:
-        return importlib.util.find_spec("playwright") is not None
-    except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
-        return False
-
-
 def _browser_action(
     code: str,
     reason: str,
@@ -1383,10 +1373,10 @@ def _production_browser_route_statuses(access: AccessConfig) -> tuple[BrowserRou
             _fail("configuration value is invalid")
         routes.append(
             BrowserRouteStatus(
-                access_key=profile.access_key,
+                access_key=str(profile.access_key),
                 display_name=profile.evidence.display_name,
                 route_key=profile.browser_route_key,
-                rate_limit_group=group,
+                rate_limit_group=str(group),
                 policy=BrowserPolicyStatus(
                     evidence=profile.policy_evidence.value,
                     policy_revision=policy.policy_revision,
@@ -1423,6 +1413,7 @@ def _browser_required_action(
     *,
     routes_available: bool,
     dependency_available: bool,
+    chromium_executable_available: bool,
     access: AccessConfig,
     selected_profile: str | None,
     presence: BrowserProfilePresence,
@@ -1438,6 +1429,12 @@ def _browser_required_action(
             "browser-runtime-unavailable",
             "The Playwright Python dependency is not available in this installation.",
             "Repair the SciRetriever installation before attempting Browser access.",
+        )
+    if not chromium_executable_available:
+        return _browser_action(
+            "browser-chromium-unavailable",
+            "The Playwright Chromium executable is not installed for this runtime.",
+            "Run 'playwright install chromium' in the SciRetriever environment.",
         )
     if not access.browser_enabled:
         return _browser_action(
@@ -1475,30 +1472,46 @@ def browser_access_status(
     *,
     home: str | Path | None = None,
     python_dependency_available: bool | None = None,
+    chromium_executable_available: bool | None = None,
     probe_supported_access_keys: frozenset[str] = frozenset(),
 ) -> BrowserAccessStatus:
     """Report local Browser readiness without Network, launch, or profile reads.
 
     The selected profile tree is checked only for safe presence and metadata;
     no file content, Cookie, storage state, or account characteristic is read.
-    A dependency hit proves only that the Python package is import-discoverable,
-    never that a Browser binary can launch.
+    Package and Chromium executable presence are static file checks only; they
+    never prove that Chromium can launch or that the selected session is logged in.
     """
 
     if not isinstance(configuration, Configuration):
         _fail("configuration value is invalid")
     if python_dependency_available is not None and type(python_dependency_available) is not bool:
         _fail("configuration value is invalid")
+    if (
+        chromium_executable_available is not None
+        and type(chromium_executable_available) is not bool
+    ):
+        _fail("configuration value is invalid")
     if not isinstance(probe_supported_access_keys, frozenset) or any(
         type(key) is not str for key in probe_supported_access_keys
     ):
         _fail("configuration value is invalid")
 
+    from sciretriever.network.playwright import playwright_runtime_availability
+
+    runtime_availability = playwright_runtime_availability()
     dependency_available = (
-        _playwright_python_dependency_available()
+        runtime_availability.python_dependency_available
         if python_dependency_available is None
         else python_dependency_available
     )
+    executable_available = (
+        runtime_availability.chromium_executable_available
+        if chromium_executable_available is None
+        else chromium_executable_available
+    )
+    if executable_available and not dependency_available:
+        _fail("configuration value is invalid")
     routes = _production_browser_route_statuses(configuration.access)
     route_keys = frozenset(route.access_key for route in routes)
     normalized_probe_keys = _normalized_browser_probe_keys(
@@ -1516,12 +1529,14 @@ def browser_access_status(
         bool(routes)
         and configuration.access.browser_enabled
         and dependency_available
+        and executable_available
         and selected_profile is not None
         and presence is BrowserProfilePresence.CONFIGURED
     )
     required = _browser_required_action(
         routes_available=bool(routes),
         dependency_available=dependency_available,
+        chromium_executable_available=executable_available,
         access=configuration.access,
         selected_profile=selected_profile,
         presence=presence,
@@ -1532,6 +1547,7 @@ def browser_access_status(
         runtime=BrowserRuntimeStatus(
             framework_available=True,
             python_dependency_available=dependency_available,
+            chromium_executable_available=executable_available,
         ),
         profile=profile,
         session=BrowserSessionStatus(),
@@ -3161,6 +3177,8 @@ def _browser_probe_precondition(
         return "browser-production-route-unavailable"
     if not status.runtime.framework_available or not status.runtime.python_dependency_available:
         return "browser-runtime-unavailable"
+    if not status.runtime.chromium_executable_available:
+        return "browser-chromium-unavailable"
     if not status.enabled:
         return "browser-disabled"
     if status.profile.selected is None:
