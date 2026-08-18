@@ -18,6 +18,7 @@ network/
   http.py
   browser.py
   browser_sessions.py
+  playwright.py
 ```
 
 - `policy.py` 形成 URL、DNS、redirect、origin、credential forwarding、资源预算和脱敏决定；
@@ -25,6 +26,8 @@ network/
 - `http.py` 执行同时符合 policy 与 admission 的普通 HTTP 请求；
 - `browser.py` 执行符合相同边界、带 Provider rule guard 的隔离浏览器操作；
 - `browser_sessions.py` 按无 secret 的 session/risk-group identity 管理 operator-owned persistent context 和文章级调度。
+- `playwright.py` 在生产边界驱动真实 persistent Chromium，并把所有 HTTP(S) 请求交回
+  `BrowserClient` 已批准的精确连接执行。
 
 HTTP 与 Browser 是平级能力。Browser 不是 HTTP transport 的特殊模式；Acquisition 决定公开来源、授权 Provider API 和受控浏览器的业务阶段，Network 只决定真实访问何时可以安全执行。
 
@@ -175,6 +178,8 @@ Vendor SDK 只有能够注入受 Coordinator 约束的 transport 时才能使用
 
 HTTP 返回中性访问结果，不把 client response 类型暴露给消费模块。API pagination、provider quota 解释、MinerU polling、LLM retry 和候选业务重试不进入 HTTP 层。
 
+无 credential header/query 的请求在 Debug 中只记录安全 `AccessScope`、method、最终 status/response bytes 或中性失败，以及从请求开始到终态的单调时钟耗时；不记录 URL、host、query、header、response body 或原始异常。携带凭据的请求在 Network logger 上完全静默，由上层 adapter 记录不含 endpoint/credential/response 的 provider 语义步骤。日志关闭或失败不能改变 admission、transport 或返回值。
+
 普通 URL 和普通 redirect 始终拒绝 percent-encoded path separator。若已核实的 Provider
 API 返回把签名 locator 编码在单个 path segment 中，adapter 必须同时提供精确
 redirect-target guard 并显式启用 guarded opaque-path 模式；guard 在目标 DNS 和 transport
@@ -209,9 +214,14 @@ Browser session profile 目录属于用户级敏感会话材料；Network 只接
 账号或机构身份。相同 session key 可以复用合法登录状态，但 page/context/process、profile、
 Cookie 和 vendor event 对象都不能越过 Network/Acquisition Port。
 
+Broker 的 Debug 诊断只使用经过校验的安全 session key，明确 acquire 的 `session_reused=true|false`、article drain、release/invalidate/retire 和 broker cleanup outcome 与耗时；绝不记录 profile 路径或内容。外层 `BrowserGroupScheduler` 记录 provider group、匿名 attempt key、queue wait、Provider pacing wait、是否真正 attempted、article disposition/group feedback、耗时和 permit cleanup。不同 group 的这些记录可以交错，同一 group 的文章开始记录必须保持串行。
+
 `browser.py` 对每个文章流程负责：
 
-- 在 canonical landing 第一次导航前取得 provider `web`、实际 host 和 Browser risk-group permit；
+- 在 canonical landing 第一次导航前取得 provider `web` scope permit 和实际 host permit；
+  整篇文章的 Publisher risk-group 串行、文章启动间隔和 cooldown 由外层
+  `BrowserGroupScheduler` 拥有，页面内实际 host 请求另用只限并发的 host policy，
+  不会把文章间隔错误套到每个 CSS/JS/PDF 子请求上；
 - 复用相应 persistent context，并管理 page、popup/viewer、response/download 与临时资源；
 - 在每次 navigation、redirect、popup、viewer、response 和 download 的目标实际访问前，先执行 Acquisition Profile 提供的封闭 Provider guard，再执行 Network 通用 URL、DNS、地址类别、origin、credential forwarding、host admission 和资源预算检查；
 - 在 Profile 允许的范围内捕获 download event、PDF response、合法 popup/viewer 或已核实 locator，并只交付统一 `TemporaryPdf`；
@@ -311,11 +321,43 @@ circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_c
 生产 Controlled Browser 仍保持 fail closed：Bootstrap 已把共享 session broker、scheduler、
 admission controller 和 cohort executor 接入完整及 capability-scoped Completion 对象图，
 operator-managed profile 存储与交互入口、运行状态机、封闭页面 marker、多路正文捕获、封闭
-action contract、supplement/错文排除、Provider cooldown/circuit、确定性取消/资源清理和安装
-wheel 的离线 Browser foundation 也已验收。但当前 Browser client 为空、production Browser rule
-catalog 为 0，execution confirmation 与 runtime readiness 均为 false，所以不会产生真实 Provider
-Browser 流量。至少一个 Provider 仍须完成官方政策、页面规则、正文归属、fixture 和另行授权的
-现场核实门，才能把对应 route 标为 production-ready。
+action contract、supplement/错文排除、Provider cooldown/circuit 和确定性取消/资源清理都已验收。
+`network/playwright.py` 是正式 adapter：它在专用 engine thread 上驱动 persistent Chromium context，
+把每个 HTTP(S) request 拦截后绑定到 Network 已批准的精确 IP，同时保留 Host authority
+与 TLS SNI；任何未经审查的 Chromium 网络连接都不会直接放行。Playwright 是 wheel runtime
+dependency，Chromium executable 由 operator 另行安装。
+
+Playwright 的 route fulfillment 不能让 Chromium 自动跟随合成 `3xx`，且会把原 page 留在
+`chrome-error://`。正式 adapter 因此从已拦截响应中取得 `Location`，在同一 persistent context
+中新建隔离 page，再启动下一跳；最多跟随 16 跳。每一跳仍重新进入 `BrowserClient` 的 Provider
+destination guard、通用 URL/DNS/地址类别检查、精确 IP binding、Host authority、TLS SNI、host
+admission、请求字节预算与总时长预算，规则不能直接指定 redirect origin，也不能绕过连接边界。
+旧 page 在换页后确定性关闭，context 中的合法 operator session 仍保留。
+
+为避免 `page.goto()` 与被 route fulfillment 合成的主文档响应互相等待，adapter 只使用一条固定的
+顶层 `window.location.assign(url)` 原语发起导航。该脚本完全由 Network adapter 固定，参数只能是
+已经过 Provider 与 Network guard 的当前目标；它不是 Provider rule action，不允许站点、配置或
+调用方注入任意 JavaScript，也没有扩张前述封闭 action contract。页面 title、正文 challenge 文本
+与 selector marker 使用即时 DOM snapshot；selector marker 通过非等待式 locator presence 查询
+判断元素是否存在，不依赖元素文本，也不把 selector 或页面文本交付业务层或日志。challenge 文本
+最多保留在进程内读取 1 MiB。
+
+显式 Configuration Browser probe 和当前 SpringerLink 文章流都启用 `navigation_only`：只放行
+顶层主文档、受控认证 redirect，以及静态 PDF link 触发的顶层导航；stylesheet、script、image、
+font 等非导航子请求在连接前由 route 边界拒绝，且不会被误记成站点 policy/runtime failure。
+这样既保留机构网段、persistent Cookie、DOM marker、静态 PDF response capture 和 session reuse，
+又避免非关键子资源占满单一 Playwright 引擎线程。依赖脚本异步取 PDF 的页面不能被当前
+SpringerLink revision 4 规则当作已支持能力。
+
+当前 production Browser rule catalog 有 `springerlink-pdf@4`。Acquisition 只从 Provider
+AssetHint 提取精确 routing origin；Network 不导航其中可能含 encoded separator 的 opaque path。
+Source 改由唯一 DOI 和 rule-owned template 构造安全 Provider PDF locator，并先检查初始导航
+是否已经捕获受审查的 PDF；否则只有页面存在经审查的静态 PDF entitlement link 时才执行一次
+点击并等待 response capture。无 entitlement marker 是 `normal-miss`，不会无条件等待到文章 deadline。
+只有总开关、安全 profile、Playwright 和 Chromium 同时就绪时，Bootstrap 才创建 Browser client 并将 runtime readiness
+设为 true；否则 route 仍可在 Registry/status 中观测，但以 disabled/unconfigured fail closed。
+这个 production-ready 状态证明 adapter/Profile/rule/policy 的工程准入，不证明本地 session 登录
+或具体文章 entitlement。
 
 Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
 无当前文献 entitlement、rate limited、IP blocked、账号警告、not found、PDF captured 和

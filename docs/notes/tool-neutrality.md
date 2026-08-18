@@ -2,7 +2,7 @@
 
 - 状态：生效
 - 记录日期：2026-07-22
-- 最后同步：2026-08-15
+- 最后同步：2026-08-18
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
 本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Bootstrap 生产对象图、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
@@ -19,7 +19,7 @@
 
 - **文献来源接入**：生产 Bootstrap 按配置、实现状态和 readiness 组装 Metadata 与 Acquisition registry；配置接受 Provider 选择键仍不表示每项 capability 都有 concrete adapter。项目不对来源本身添加“合法/灰色/非法”的分类标签。
 - **资产获取**：当前 Acquisition 已连接通用公开路径和经过准入的授权 Provider API，Configured Sci-Hub 只接受 operator 明确注入且经过统一安全边界的 locator resolver。是否存在 route、是否已配置、当前目标是否适用和是否实际取得有效 PDF 是不同事实；工具不因来源道德标签另加拒绝条件。
-- **网络与访问方式**：受控 Browser foundation、operator-managed profile 配置入口和用户明确发起的可见空白 Browser 会话已经实现，但 production Browser rule catalog 仍为 0，自动 Completion 不会产生出版社 Browser 流量。自动登录、机构选择、MFA/CAPTCHA 处理、任意脚本、profile-copy fallback、代理轮换和反检测仍不属于当前能力；是否已 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
+- **网络与访问方式**：受控 Browser foundation、operator-managed profile 配置入口和用户明确发起的可见空白 Browser 会话已经实现；production Browser rule catalog 当前有且仅有 `springerlink-pdf@4`。只有在公开与授权 API 层完成、目标仍缺 PDF、强证据解析到 SpringerLink，且 Browser 开关、安全 profile、Playwright 与 Chromium 全部就绪时，自动 Completion 才会产生该 Publisher 的受控 Browser 流量。该规则从唯一 DOI 构造并打开经审查的 SpringerLink PDF locator，不导航 Metadata Provider 给出的 opaque asset path；已有 PDF capture 优先返回，未捕获时才检查封闭页面状态和 entitlement-gated static click。自动登录、机构选择、MFA/CAPTCHA 处理、任意规则脚本、profile-copy fallback、代理轮换和反检测仍不属于当前能力；是否已 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
 
 ## 3. 工程约束 vs 使用限制
 

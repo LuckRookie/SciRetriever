@@ -1,9 +1,9 @@
 # 受控 Browser 现场核实门
 
 - 建立日期：2026-08-15
-- 当前状态：门已建立；没有获准执行的 Provider 核实单
-- 当前拟 production Browser Profile：`0`
-- 当前 production Browser rule：`0`
+- 当前状态：门已建立；SpringerLink 已有 production route，四个脱敏文章样本已形成三个可解释 normal-miss 和一个机构网段 PDF 交付；其它账号/文章环境证据仍单独核实
+- 当前 production Browser Profile：`1`（`springerlink`）
+- 当前 production Browser rule：`1`（`springerlink-pdf@4`）
 - 文档性质：真实 Provider 访问前的人工作业门；不是自动测试、运行指南或访问授权
 
 本门只约束把一个已经完成离线证据包的 Publisher Browser route 带到真实 Provider 环境核实的
@@ -15,18 +15,33 @@
 
 | 类别 | 数量 | 当前结论 |
 | --- | ---: | --- |
-| production-ready Browser Profile | 0 | 无真实 Browser 流量 |
+| production-ready Browser Profile | 1 | SpringerLink 的 route/rule/policy/安装对象图已闭环；不证明当前 session 或文章 entitlement |
 | fixture-verified Browser Profile | 0 | 无待现场核实项 |
-| 已审查且 Browser unsupported | 23 个矩阵 Profile 中的全部 Browser capability | 不是现场核实候选；先补官方政策、规则和离线证据 |
+| 已审查且 Browser unsupported | 23 个矩阵 Profile 中除 SpringerLink 外的 22 项 Browser capability | 不是现场核实候选；先补官方政策、规则和离线证据 |
 | API-only production Profile | CORE、Elsevier、Wiley | 只证明已列出的授权 API capability；Browser 仍 unsupported |
-| 已获用户现场授权核实单 | 0 | 不执行真实请求、登录或下载 |
+| 已完成且可公开提交的现场核实摘要 | 1 | 2026-08-18 SpringerLink 四样本均为非超时终态：三个 normal miss、一个机构网段 primary PDF 交付；同进程双样本证明 session reuse；不推导任意文章 entitlement |
 
-因此本轮 P83 只建立门和模板，不读取真实凭据，不打开真实 Provider Browser，不使用个人
-profile，不请求论文，也不产生 Cookie、响应、PDF、截图或现场日志。将来只有某个 Profile 先
-形成独立的 `fixture-verified` Browser route，并满足下节的候选条件，才能复制
+原 P83 只建立门和模板，当时没有读取真实凭据、打开真实 Provider Browser 或请求论文。
+后续 SpringerLink 已完成官方证据、规则、生产 adapter 和离线 Chromium 准入；用户特定环境的
+登录/文章核实仍要复制
 [单项核实单模板](profile-template.md)创建
 `browser-live-verification/<access-key>.md`。每个 access key 必须使用自己的文件，不能用一张
 通用授权覆盖多个 Provider。
+
+当前唯一可公开的文章级摘要使用用户已授权的现有网段和 operator-managed profile。revision 3
+先把旧的无界页面等待收敛为顶层 navigation-only、capture-first 和 entitlement-gated static
+click；revision 4 又修复两处真实证据桥：带 `%2F` opaque DOI path 的 Provider AssetHint 只用于
+提取精确 origin，不作为 Browser 导航目标；精确 SpringerLink 强证据与唯一 DOI 改由 rule-owned
+模板构造官方 PDF locator，不再依赖 DOI resolver 回跳。
+
+四个原始 SpringerLink 样本在 revision 4 下都形成 `actions=1` 和非超时终态，单个 Browser Source
+耗时约 2.67–7.90 秒。三个样本返回可解释 normal miss；一个样本从初始 response 捕获并经主文
+归属/PDF 验证后交付 3,588,396 bytes 的 primary PDF，未要求个人登录。一个同进程双样本批次中，
+首个 session 以 reusable 释放，第二个记录 `session-reused=true`；文章开始相隔约 66.06 秒，超过
+10 秒下限且始终同组串行。四个样本均未出现 login、paywall、MFA、challenge 或 action-required。
+这些事实证明当前机器网段对其中一个明确样本可交付，并证明生产 session reuse；它们不证明
+任意文章 entitlement、个人登录、机构协议范围或长期下载成功率。完整 URL、DOI、selector、
+页面正文、响应正文、Cookie、profile 内容和 PDF 字节没有进入本目录。
 
 ## 2. 进入候选队列的必要条件
 
@@ -41,7 +56,8 @@ profile，不请求论文，也不产生 Cookie、响应、PDF、截图或现场
   challenge/rate/IP/account warning，以及 primary/supplement/excluded/wrong-article；
 - local HTTPS/Chromium 验收已证明 pre-navigation、redirect、popup、download、response、viewer、
   字节预算、PDF validation、publication 和清理边界；
-- Profile 在验证矩阵中是 `fixture-verified`，不是 `unsupported`；
+- Profile 在验证矩阵中是 `fixture-verified` 或已有待核实环境证据缺口的
+  `production-ready`，不是 `unsupported`；
 - 拟使用的账号、机构订阅、网络和文章样本由 operator 自行确认有权使用；项目文档不作法律或
   entitlement 判断。
 
@@ -55,7 +71,7 @@ profile，不请求论文，也不产生 Cookie、响应、PDF、截图或现场
 - 由用户提供并确认可用的精确文章样本；样本标识和正文只保存在获准的仓库外运行目录；
 - 最大文章数、文章流程数、顶层导航数、动作数、popup/download 数、总请求数、总字节和总时长；
 - 生效时间窗和授权到期时间；过期后不能沿用；
-- 精确 Browser policy、执行确认、可见/非 headless Browser 和同组串行边界；
+- 精确 Browser policy、执行确认、生产受控无头 Browser/独立人工可见登录的选择，以及同组串行边界；
 - operator-managed profile identity，以及 Catalog、ArtifactStore、temporary、report 和 log 的
   仓库外落点；核实单只写安全占位或位置类别，不写个人绝对路径；
 - 是否允许人工登录；SciRetriever 不填写凭据、不选择机构、不处理 MFA/CAPTCHA；
@@ -71,7 +87,8 @@ profile，不请求论文，也不产生 Cookie、响应、PDF、截图或现场
 也不并行多个 Provider，避免混淆账号风险、日志、限速反馈和归属证据。执行必须：
 
 1. 在副作用前再次显示 access key、样本数、policy、预算、落点和停止条件；
-2. 使用可见 Browser 和该 Provider 自己的 operator-managed profile；
+2. 自动 route/probe 使用生产受控无头 Browser 和该 Provider 自己的 operator-managed profile；
+   只有需要用户人工登录/机构/MFA 时才另行打开可见空白 Browser，自动流程不接管该操作；
 3. 同一 risk group 严格 `concurrency = 1`，所有重试重新排队并服从 interval/window/cooldown；
 4. Public/API 已正常耗尽且 Browser admission 明确允许后才执行文章流程；
 5. 所有成功只交付 `TemporaryPdf`，继续经过实际 PDF 字节、reader、页面树、归属和不可变发布；
@@ -118,11 +135,12 @@ profile、数据库或原始日志。若仅靠脱敏摘要无法审查，状态�
 单项核实通过后仍必须独立完成：
 
 1. 更新对应 Provider Notes 的 evidence 日期和脱敏事实；
-2. 更新 evidence manifest、Profile/rule revision 与 production status；
+2. 根据现场结果确认或更新 evidence manifest、Profile/rule revision 与 production status；
 3. 增加或更新离线 fixture、直接测试、对象图 identity 和安装 wheel acceptance；
 4. 复跑 P79–P85 对应检查和 Full Harness；
 5. 完成产品、架构、并发、Browser/secret 安全和数据完整性审查；
 6. 由维护者明确批准 production-ready 变更。
 
-未通过、授权撤回、证据过期或政策漂移时，Profile 保持或退回 `fixture-verified`/`unsupported`；
-已验证的 Browser foundation 和 API-only Profile 不因此失效。
+未通过、授权撤回、证据过期或政策漂移时，不得把现场失败隐藏为成功；应区分
+用户特定 session/entitlement 失败与 route 合同失效。只有后者需要把 Profile 退回
+`fixture-verified`/`unsupported`；已验证的 Browser foundation 和独立 API-only Profile 不因此失效。

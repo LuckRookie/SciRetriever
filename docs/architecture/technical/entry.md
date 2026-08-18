@@ -159,10 +159,13 @@ DiscoveryRun 的公开结果只说明发现：它不携带 `advance_to`、目标
   -> 每条结果转换为 MetadataObservation
   -> Literature 使用稳定标识符及已解析 version_links 接纳身份和统一元数据
   -> Storage 原子保存 observation、文献事实、DiscoveryRun 结果与 topic 发现原因
+  -> Provider relation 按返回顺序以最多 256 条的短事务批次保存
   -> 各 Provider 结果耗尽或达到自己的原始扫描上限后结束运行
 ```
 
 `scan_limit` 在最低身份准入和去重前统计 Provider 返回的每条原始 item；缺少标题/DOI、重复或最终未接纳仍计数。自然耗尽形成 `EXHAUSTED`，达到上限形成 `SCAN_LIMIT_REACHED`，分页中途失败形成 `FAILED` 并携带稳定脱敏 failure；source result 不保存 ordinal、扫描/接纳/拒绝计数或输入中已经存在的上限。单个 Provider 失败不撤销其它 Provider 已提交结果，失败前已接纳页面保留。
+
+Metadata 边界的 raw-item `accepted` 只表示该 item 已成功转换为中性 `MetadataObservation`，不等于 Literature 已接纳其身份和事实。Literature 仍可按最低身份准入或身份冲突合同拒绝 observation；这时不创建 DiscoveryResult，也不增加已接纳 observation 计数。Debug 日志保留 Literature 返回的稳定 `decision_reason`，但不记录 Provider 原始 item、标题、摘要或响应正文；该诊断不进入 Report、Catalog 或新的业务 schema。
 
 所有 Provider 正常到达边界时 Run 为 `COMPLETED`，正常与失败并存时为 `PARTIAL`，全部失败时为 `FAILED`。用户在边界前停止或恢复时发现遗留 `RUNNING` 才为 `INTERRUPTED`；停止后不发起新页，已接纳结果不回滚，未完成 Provider 不生成 source result，也不保存 cursor 原地续跑。零发现结果仍可正常 `COMPLETED`。
 
@@ -177,7 +180,7 @@ DiscoveryRun 的公开结果只说明发现：它不携带 `advance_to`、目标
   -> 创建 citation DiscoveryRun
   -> Literature 解析本地种子身份
   -> Metadata 查询供应商引用关系
-  -> 每条返回边形成 ProviderRelationObservation 并独立保存
+  -> 每条返回边形成独立 ProviderRelationObservation，并按顺序以最多 256 条的短事务批次保存
   -> Entry 只选择本次边界内的 observation
   -> 对选中关系的非本地端点：
        ├─ 本地精确命中：使用现有 LiteratureId
@@ -188,7 +191,7 @@ DiscoveryRun 的公开结果只说明发现：它不携带 `advance_to`、目标
   -> 逐层继续，直到达到用户边界或没有新文献
 ```
 
-`ProviderRelationObservation` 是供应商有向边的最小持久化单位，也是后续 DiscoveryRun 可以重新读取的单位。一次查询返回几十条边时可以保存几十条 observation，但不会因此立即创建几十个 Literature、Reference 或 support。未进入本次边界、元数据不足或接纳失败的 observation 独立保留；它没有 expanded/status 字段，也不自行构成数据库补全目标。
+`ProviderRelationObservation` 是供应商有向边的最小持久化单位，也是后续 DiscoveryRun 可以重新读取的单位。一次查询返回几十或上万条边时，每条仍形成独立 observation，但 Entry 只按供应商返回顺序组成最多 256 条的冻结 publication batch，避免逐边事务和无界长事务。批内失败整体回滚，正常取消在批次之间生效，先前批次已经提交的来源事实保留；这不会立即创建对应数量的 Literature、Reference 或 support。未进入本次边界、元数据不足或接纳失败的 observation 独立保留；它没有 expanded/status 字段，也不自行构成数据库补全目标。
 
 已经保存的参考文献原文也可以成为明确引用发现的输入：
 
@@ -259,10 +262,12 @@ chunk 会让全部 participant 形成 `not_started` 而不调用 Acquisition；�
 
 生产 Completion 已共享同一 Planner/Profile catalog、tiered cohort executor、Browser scheduler
 和 session broker；配置中心也已提供 Browser 总开关、operator-managed profile 初始化以及用户
-明确发起的可见空白 Browser 会话。当前 production Browser rule catalog 仍为 0，Browser client
-为空，execution confirmation 与 runtime readiness 保持关闭，因此 Entry 只记录 Acquisition
-返回的脱敏 escalation summary，不会启动真实 Provider Browser。独立人工登录操作的确认不能
-替代某次 Completion 的 route 准入，也不能证明当前 session 已登录或具体文章有 entitlement。
+明确发起的可见空白 Browser 会话。当前 production Browser rule catalog 有
+`springerlink-pdf@4`；总开关、安全 profile、Playwright 与 Chromium 同时就绪时，Bootstrap
+创建真实 Browser client 并将 execution confirmation/runtime readiness 传入 Admission。Entry 仍只消费
+Acquisition 返回的中性 receipt 或脱敏 escalation summary，不接触 page、Cookie、profile 或
+Playwright 对象。独立人工登录操作的确认不能替代某次 Completion 的 route 准入，也不能
+证明当前 session 已登录或具体文章有 entitlement。
 
 每个实际 `Literature` 的结果继续按下面的缺失步骤消费：
 
@@ -353,6 +358,8 @@ Report 不写入 Catalog 或 ArtifactStore，不产生 BatchRun、BatchTarget、
 ### 6.1 实时 Logging 与 Report 的关系
 
 Logging 是 Report 之外的 best-effort 实时反馈。Entry 选择用户可理解的操作开始、阶段推进、目标完成、局部失败和受控停止信息；各运行模块通过 `sciretriever.logging.api.get_logger(__name__)` 输出安全诊断。业务模块始终先返回 typed result 或稳定 failure，Entry 独立累计 Report；日志被过滤、丢失或输出失败不能改变 Report、数据库提交、退出结果或下一次选择，Report 也不能通过回放 LogRecord 构造。
+
+Entry 是正常模式下 PDF tier 与 Browser escalation 汇总的用户级 owner；Acquisition 内部的同一 tier/group 快照只在 Debug 保留，避免一次进度重复显示。Completion 为真正开始的目标记录诊断耗时，未开始目标明确显示 `elapsed_ms=-`；Discovery/Completion 的 finished、interrupted 或 failed 终态也显示本次操作耗时。这些值来自调用内单调时钟，不加入五类 Report 的 Model、JSON 或 Catalog，也不参与超时、排序或退出决定。
 
 CLI 标准流严格分工：
 

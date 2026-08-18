@@ -219,7 +219,9 @@ LiteratureContent 使用相同的“不可变字节、可替换当前关系”�
 以下逻辑更新分别需要在一个 SQLite 事务中整体成功：
 
 1. DiscoveryRun 创建时的 run、类型化输入、Provider 顺序与各自在整个 Run 内的 scan_limit；
-2. 单条已经完成中性转换的 `ProviderRelationObservation` 独立、幂等发布；
+2. 已完成中性转换的 `ProviderRelationObservation` 按最多 256 条的冻结批次发布；每条仍是独立、
+   幂等的不可变来源事实，一个批次在同一短事务内整体成功或回滚，先前已提交批次不被后续
+   失败撤销；
 3. 新的不可变 metadata observation、到 Literature 的归属、身份结果、当前统一初始元数据替换、DiscoveryResult 与直接 cause，以及对应 Literature 自动 PDF 获取耗尽事实的清除；既有 observation 不更新，旧统一元数据不插入历史；
 4. 单个 Discovery source result 或最终 run status；完成后输入和已确认结果不可修改，且不写入过程 counts；
 5. 来源和目标 Literature 都已接纳后的权威 Reference 与第一项 ReferenceSupport 整体幂等发布，以及既有 Reference 的后续 support 幂等追加；
@@ -305,7 +307,7 @@ ParserResult 替换提交后，旧正式对象在确认没有其它引用时才�
 - 三级状态 SQL view 与 `literature` 的纯规则共享同一 truth table；
 - DiscoveryRun、自动获取耗尽、普通 failure、attempt、Report、FTS 和孤立文件变化不改变文献状态；MetaLiterature 可用版本、当前主 PDF pointer 和 refcount 都由关系推导；
 - `ReferenceLookup`、供应商目标 ID 和未解析目标不能进入引用表；Reference 只有三个 ID 字段，source/target 都引用不同的具体 Literature，且相同 source/target 只有一条关系；
-- `ProviderRelationObservation` 可以在没有目标 Literature、Reference 或 support 时独立保存，一条只表达一条有向边且不携带扩展状态；
+- `ProviderRelationObservation` 可以在没有目标 Literature、Reference 或 support 时独立保存，一条只表达一条有向边且不携带扩展状态；大量 relation 以最多 256 条的有界短事务批次提交，批内失败完整回滚、批间保留已确认事实，重复批次保持幂等且 FK、端点 identifier 与 provenance 完整；
 - `MetadataObservation.version_links` 中每个目标 key 至少有非空供应商记录 ID 或稳定 Identifier；未解析目标只保留来源 observation，不形成占位 Literature、MetaLiterature 归属或独立关系行；
 - 正式记录的相关 arXiv ID 保存在 canonical version-link identifier 中，不同时复制为该正式 Literature 的 identifier；arXiv revision 不产生额外 Literature 或 revision 列；
 - 同一 Literature 可以关联多个不可变 MetadataObservation；新增观察不更新旧 observation，每个 Literature 只有一个当前 LiteratureMetadata，metadata revision 递增但不产生历史元数据行；

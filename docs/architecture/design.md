@@ -642,6 +642,8 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 
 Logging 是公用基础模块，拥有独立的 `sciretriever/logging/` 目录和 `api.py` 公开边界。它统一提供命名 logger，配置 `sciretriever` logger 层级、stderr handler、formatter 和最终脱敏 Filter，并承载当前进程中的操作开始、阶段推进、局部失败、限速等待、目标完成和受控停止信息，为用户提供实时反馈、为实现者提供安全诊断。
 
+正常模式只呈现操作、Provider、由 Entry 汇总的 tier/Browser escalation、目标与风险组进度、等待/暂停、交付/耗尽和稳定失败，不逐条重复 route/candidate miss、capture 或 cleanup。Debug 在同一人类可读布局上增加安全步骤；每个可能终止或继续获取链的 route 终态必须说明 `disposition` 与 `next`，关键操作、Provider、tier、route、target、API lookup/download 和 Browser article/session 步骤可以附带单调时钟诊断耗时。Metadata 的 raw item 在 Debug 中明确分为 accepted、empty 或 rejected。所有这些字段仍只是可丢失诊断，不形成统一业务事件合同。
+
 Logging 不拥有业务结果：各模块先形成 typed result 或稳定 failure，Entry 据此累计 Report，同时选择少量进度信息进入日志；日志缺失、过滤或输出失败不能改变数据库提交、Report、退出结果和后续选择。项目不建立全局可变 Observer、事件总线、LogEvent Model、Logging Port 或日志 repository。
 
 具有运行行为的模块通过 `logging.api.get_logger(__name__)` 获取 logger，不直接调用标准库配置函数。生产 Bootstrap 只通过 `logging.api.configure_logging(...)` 传入 level 并触发一次生产配置；formatter、最终脱敏 Filter 和 stderr handler 全部由 Logging 模块实现。模块 import、adapter 构造和每次操作不得私自安装 handler。Logging 不修改宿主应用的 root logger，纯声明的 Model 不依赖 Logging。

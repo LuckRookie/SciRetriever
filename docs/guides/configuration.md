@@ -158,8 +158,10 @@ Elsevier 要求 `[elsevier] api_key`，可选 `institution_token`。只有 PII�
 `1-s2.0-*` Article EID，或 DOI 安全解析后实际落地到 ScienceDirect/linkinghub 的文献
 才适用；普通 Scopus `2-s2.0-*` 和 MetadataObservation 来源不能证明访问方。Adapter 先
 请求 Article FULL XML，只接受明确标记为 `MAIN web-pdf` 的 attachment EID，再通过
-Object Retrieval 获取 PDF；XML、任意 object、supplement 和有效 key 本身都不冒充主
-PDF 或文章 entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
+Object Retrieval 获取 PDF；若 FULL XML 没有可用 MAIN object 或无法安全解释，才以同一
+强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota 或服务错误不会被
+fallback 绕过；XML、任意 object、supplement 和有效 key 本身都不冒充主 PDF 或文章
+entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
 `unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 只有在 operator 通过
 Python 组装边界注入受支持的中性 locator resolver 时才 ready。受控 Browser 的组件已
 实现，但生产站点规则目录仍为空；普通 TOML 没有 endpoint、selector、session、profile
@@ -265,10 +267,12 @@ duration 和 cooldown 只能增大。窗口计数与时长必须成对出现，�
 `nan` 和空 override 都会拒绝。普通配置不能改写 Profile 的 group、session key、origin、
 selector、rule revision 或官方 `Retry-After` 语义。
 
-当前支持矩阵尚无 production Browser route，因此 `browser_policy_overrides` 必须为空；配置
-总开关或 profile identity 不会把 fixture-only/unsupported Profile 变为可执行能力。裸
-`sciretriever config` 已经可以管理本地 Browser profile，但当前 route count 仍为 0，自动
-Completion 的 Controlled Browser 因而保持 unavailable。
+当前支持矩阵有且仅有 `springerlink` production Browser group；
+`browser_policy_overrides` 可以对该 group 收紧 10 秒的最小文章启动间隔、cooldown 或
+其它封闭策略，不能放宽。配置总开关或 profile identity 不会把其它
+fixture-only/unsupported Profile 变为可执行能力。裸 `sciretriever config` 可以管理本地
+Browser profile；自动 Completion 只在总开关、profile presence、Playwright 依赖与
+Chromium executable 同时就绪时使用该 route。
 
 Cookie、local storage、登录名、机构身份、profile 目录内容和 profile path 都不进入
 `config.toml` 或 `credentials.toml`。Network 的 URL、DNS、TLS、redirect、origin、请求/响应
@@ -411,7 +415,7 @@ Provider Access 区把 CORE、Elsevier、Wiley 的 authorized primary-PDF API �
 Controlled Browser 分开显示。Browser 菜单提供四个动作：
 
 1. 选择或初始化 profile；
-2. 打开可见 Browser 由用户手工登录；
+2. 在具体 Provider 要求登录、机构选择或 MFA 时，打开可见 Browser 处理该动作；
 3. 永久移除所选本地 Browser session；
 4. 禁用 Browser access，但保留本地 session。
 
@@ -420,11 +424,15 @@ profile identity 只是一段安全的普通配置值；实际 session 始终位
 Cookie 与 local storage，确认取消不会创建 profile 或写入 `[access]`。删除 session 也需要
 单独确认，只删除经过安全检查的所选目录，不修改 `config.toml`，也不删除 Provider API key。
 
-人工登录只会打开一个使用所选 persistent profile 的可见空白 Chromium。SciRetriever 不提供
+正常 Browser-last 文章尝试会先直接使用当前机器的网络出口；机构按 IP 放行时不需要个人登录。
+persistent profile 是隔离、复用 Browser 会话的容器，不是认证前置条件。人工登录动作只会打开
+一个使用所选 profile 的可见空白 Chromium，并应仅在具体文章实际返回 action-required 后使用。SciRetriever 不提供
 目标 URL，不自动导航、填写账号、选择机构、处理 MFA/CAPTCHA、检查 Cookie 或下载文件；
 用户自行访问有权使用的站点并关闭窗口。窗口关闭只表示 profile 被保留，不表示登录成功，
-更不表示任意文章具有 entitlement。当前 production Browser route count 是 0，因此这些本地
-session 操作不会启用自动 Completion；Access 区会明确显示 `Unavailable`。
+更不表示任意文章具有 entitlement。当前 production Browser route count 是 1；这些本地
+session 操作只能使 SpringerLink route 从 profile/session 维度就绪，不能证明登录或文章授权。
+Access 区会分别显示 route 已安装与本地 Browser 是否 ready，不再把两者混为一个
+`Unavailable`。
 
 ### `config status`
 
@@ -439,14 +447,15 @@ Storage/execution；`--json` 使用稳定分组结构供
 - `Authorized Provider APIs`：逐 Provider 显示是否已有可执行主 PDF API、当前限制和
   所需凭据字段；
 - `Controlled browser`：显示本地 runtime 依赖、production routes、开关、operator profile
-  presence、session/login、article entitlement、policy evidence、显式 probe 和下一动作。
+  presence、可选个人登录观察、IP/文章 entitlement、policy evidence、显式 probe 和下一动作。
 
 Metadata 人类表格只逐项展开已经启用或已有凭据的 Provider，其余禁用能力以数量摘要收起；
 完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，固定单列 CORE、
-Elsevier、Wiley 和当前不支持直接主 PDF 的 Springer。当前 production Browser route 为 0，
-因此 Browser 分区显示 automatic acquisition 和显式 probe 均不可用，下一动作代码是
-`browser-production-route-unavailable`。这不是 profile 缺失的同义词：即使本地 profile 已经
-存在，未获 production 验证的站点也不会成为自动路线。
+Elsevier、Wiley 和当前不支持直接主 PDF 的 Springer API。当前 production Browser
+route 为 `browser:springerlink`；Browser 分区始终显示该已安装 route，再根据总开关、profile、
+Playwright 与 Chromium 的实际静态状态分别给出 `browser-disabled`、profile/runtime 未就绪原因
+或 ready。`browser-production-route-unavailable` 只是将来 production catalog 真的变为空时的
+fail-closed 分支，不是当前默认状态。未获 production 验证的其它站点仍不会成为自动路线。
 
 JSON 的 Provider 分区保留完整矩阵，并为每个已接受 Provider 报告以下层：
 
@@ -467,8 +476,8 @@ fingerprint。`enabled = false` 不会改写其它 readiness 层：status 是完
 
 Browser JSON 位于 `providers.controlled_browser`，稳定区分：
 
-- `runtime`：框架与 Playwright Python package 是否存在；`launch_assessed` 始终为 `false`，
-  因为 status 不启动 Browser，也不检查 binary；
+- `runtime`：框架、Playwright Python package 与 Chromium executable 是否可发现；
+  `launch_assessed` 始终为 `false`，因为 status 只检查安装文件，不启动 Browser；
 - `profile`：所选 opaque identity 与 `configured/missing/attention` presence；不包含实际路径；
 - `session`：`assessment = not-assessed`、`authenticated = null`，明确没有检查当前登录；
 - `article_entitlement = not-proven`：即使 profile 存在或另一次登录成功，也不证明任意文章授权；
@@ -510,14 +519,20 @@ Browser probe 必须单独、显式指定一个 Publisher access key：
 sciretriever config test --browser <publisher-access-key> [--json]
 ```
 
-它与位置 Provider 和 `--all` 互斥，绝不会被 `--all` 隐式执行。人类模式在可能打开可见
-Browser 前再次确认：只访问一个经过 production 批准的最小目标，并使用自动获取相同的
+它与位置 Provider 和 `--all` 互斥，绝不会被 `--all` 隐式执行。人类模式在启动一次
+受控无头 Browser 前再次确认：只访问一个经过 production 批准的最小目标，并使用自动获取相同的
 provider risk-group scheduler；一次 probe 最多导航一次。结果分开报告 Browser 是否启动、
-最小目标是否到达、当前 authentication 是否被接受，同时始终保留
-`article_entitlement = not-proven` 与 `persisted = false`。当前 production Browser route
-count 为 0，所以例如 `config test --browser wiley-online-library --json` 会以退出码 3 返回
-`skipped` / `browser-production-route-unavailable`，不会启动 Browser、猜测目标 URL 或访问
-Wiley。只有将来通过独立 production 验证的 access key 才能执行真实最小探测。
+最小目标是否到达、是否观察到个人登录，同时始终保留
+`article_entitlement = not-proven` 与 `persisted = false`。当前唯一支持的目标是：
+
+```text
+sciretriever config test --browser springerlink
+```
+
+它只打开 `https://link.springer.com/`，检查 runtime 与目标可达性，并可选观察 account widget
+是否显示个人登录迹象；个人登录未检测到不会使 probe 失败。它不访问任意文章、不下载 PDF，
+也不评估当前机构 IP 或具体文章 entitlement，不持久化结果。未支持的 access key 不会导航或猜 URL。
+开关、profile、Playwright 或 Chromium 未就绪时以稳定原因 `skipped`；只有本地就绪时才会启动 probe。
 
 这些是唯一会主动发起网络请求的配置命令。请求经过共享 DNS/TLS/redirect/origin/限速、
 响应预算与脱敏边界。

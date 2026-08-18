@@ -111,7 +111,7 @@ closed
 - [ ] 我确认只核实本单一个 Provider/access key。
 - [ ] 我确认样本和访问环境在我的授权范围内。
 - [ ] 我确认可能触发真实请求、账号限速或站点风控。
-- [ ] 我确认使用可见 Browser，人工步骤不会被自动化。
+- [ ] 我确认自动 route/probe 使用受控无头 Browser；如需可见 Browser，仅用于我自行完成登录/机构/MFA，人工步骤不会被自动化。
 - [ ] 我确认所有停止条件和预算。
 - [ ] 我确认仓库外数据、日志、profile 的保留/清理选择。
 - [ ] 授权记录位置：`<conversation-or-change-record-reference>`；不复制敏感正文。
@@ -120,7 +120,7 @@ closed
 
 执行前：
 
-- [ ] 再次显示并核对 policy、预算、落点、生产 catalog 仍关闭和当前时间窗。
+- [ ] 再次显示并核对 policy、预算、落点、精确 production access key/rule revision 和当前时间窗。
 - [ ] Public/API 正常耗尽与 Browser admission 已由受控运行证明。
 - [ ] Browser/runtime/profile readiness 只在本次授权范围内确认。
 

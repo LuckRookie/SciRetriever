@@ -74,8 +74,19 @@ sciretriever config test
 
 每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。日志有两个运行模式：
 
-- 默认正常模式记录操作与 Provider 的开始/结束、目标进度、成功或失败概况；失败始终包含稳定错误代码、原因、建议动作和是否可重试。
-- `--debug` 在正常日志之外记录逐步骤轨迹，包括 Metadata 原始条目转换、Network 请求结果、Completion 阶段、PDF Source、候选匿名 ID、授权 API lookup/download 和发布边界。Debug 仍不输出密钥、Cookie、完整 URL、响应正文、文献正文、prompt 或机器路径。
+- 默认正常模式记录操作与 Provider 的开始/结束、由 Entry 汇总的 PDF tier/Browser escalation、目标与风险组进度、等待/暂停、交付/耗尽和稳定失败；不会用逐 route miss、candidate、capture 或 cleanup 重复刷屏。失败始终包含稳定错误代码、原因、建议动作和是否可重试。
+- `--debug` 在正常日志之外记录逐步骤轨迹，包括 Metadata raw item 的 accepted/empty/rejected、Network 请求结果与耗时、Completion target/tier、PDF route 的 `disposition/next`、授权 API target/lookup/download，以及 Browser 的 eligible/admitted/attempted/delivered、排队限速、session reuse、页面状态、捕获和清理。Debug 仍不输出密钥、Cookie、完整 URL、响应正文、文献正文、prompt、profile 路径或机器路径。
+
+日志按“时间、级别、组件、状态、动作、原始事件 ID、有序字段”呈现；失败原因和建议动作独立换行，避免挤成一段。例如：
+
+```text
+2026-08-18 09:20:31.245 INFO  metadata     ✓ provider finished [metadata-provider-finished] provider=datacite · outcome=SCAN_LIMIT_REACHED · raw=100 · accepted-items=51 · empty=49 · rejected=0 · elapsed=3.309s
+2026-08-18 09:20:41.506 WARN  acquisition  ✗ route failure [acquisition-route-failure] tier=public · route-key=public:landing-crossref · disposition=failure · next=next-route · code=acquisition-public-locator-network-failed
+    reason  A public PDF locator could not be accessed safely.
+    action  Check the source and shared Network policy before retrying.
+```
+
+连接终端时可以使用有限颜色；重定向、非 TTY、`TERM=dumb` 或设置 `NO_COLOR` 时自动输出无 ANSI 的普通文本。Debug 行额外带源码位置，原始 `event` ID 始终保留，方便用 `rg` 定位。
 
 `--debug` 是全局选项，也可以放在具体命令末尾。需要保存一次运行的报告和日志时，分别重定向 stdout 与 stderr：
 
@@ -190,12 +201,16 @@ remote 必须是 hostname-based HTTPS、配置 origin-bound bearer token，并�
 Wiley Online Library 的文献适用。启用 `elsevier` 时要求配置 `api_key`，可选
 `institution_token`；只有 PII、合法 Elsevier Article EID 或 DOI 实际落地到
 ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MAIN web-pdf`
-attachment EID，再用 Object Retrieval 获取 PDF；普通 Scopus EID、任意 object、XML 和
-supplement 不会冒充主 PDF。Springer 当前全文产品不是主 PDF API。生产 Browser 站点规则仍为空。
+attachment EID，再用 Object Retrieval 获取 PDF；FULL XML 没有可用 MAIN object 或无法
+安全解释时，才以同一强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota
+或服务错误不会被该 fallback 绕过；普通 Scopus EID、任意 object、XML 和 supplement 不会
+冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF
+API；SpringerLink 已接入第一条生产 Browser route `browser:springerlink`，仅在公开与
+授权 API 层完成后对仍缺 PDF、且访问方证据收敛到 SpringerLink 的文献适用。
 
 同一批目标会先完成 Public cohort，再只对剩余目标执行 Authorized API cohort；低风险路线
 发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时会延期或失败，不会借机切换
-Browser 绕过限制。将来存在经过生产核实的 Browser route 后，不同
+Browser 绕过限制。进入经过生产核实的 Browser route 时，不同
 `browser_rate_limit_group` 可以并行，同一组固定 `concurrency = 1`，并按该 Provider 的文章
 启动间隔、窗口和 cooldown 串行；`browser_max_concurrency` 只是跨组的本机资源上限。
 
@@ -206,11 +221,20 @@ Browser 升级前，正常日志会显示剩余篇数、并行组数、各组 `m
 Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会重新读取数据库 current facts，只补仍缺失
 的步骤。
 
-`sciretriever config` 可以初始化 operator-managed profile，并由用户明确打开一个从空白页开始的
-可见 Browser 完成人工登录；SciRetriever 不自动填写登录、选择机构或处理 MFA/CAPTCHA。
-profile 已存在、当前 session 已认证、某篇文章具有 entitlement 是三个不同事实。当前
-production Browser route count 为 `0`，所以这些 profile 操作不会使自动 Completion 启动出版社
-Browser。支持矩阵、等待语义、状态检查和故障处理详见
+`sciretriever config` 可以初始化 operator-managed profile；这个 persistent profile 是隔离且
+可复用的 Browser 会话容器，不是个人登录前置条件。正式文章流程会先让无头 Browser 直接使用
+当前机器的正常网络出口；如果出版社认可机构 IP，PDF 可以在没有个人账号登录的情况下自然
+放行。只有具体文章实际返回登录、机构选择、MFA 等 action-required 状态时，用户才需要明确
+打开一个从空白页开始的可见 Browser 处理该动作；SciRetriever 不自动填写登录、选择机构或
+处理 MFA/CAPTCHA。profile 已存在、个人登录被检测到、机构 IP 被接受、某篇文章具有
+entitlement 是四个不同事实。当前
+production Browser route count 为 `1`（SpringerLink）。只有在 `[access]` 显式启用 Browser、
+所选 operator profile 通过本地安全检查、Playwright Python 依赖与 Chromium executable
+都就绪时，生产 Bootstrap 才会创建 `BrowserClient`。`sciretriever config status` 只检查
+这些静态事实；`sciretriever config test --browser springerlink` 是用户明确发起的最小受控
+无头 Browser 探测，只检查 runtime 与首页目标可达性，并可选观察个人登录迹象；没有个人登录
+不会使该探测失败。它不打开具体文章，因此不评估机构 IP 或任意文章 entitlement。
+支持矩阵、等待语义、状态检查和故障处理详见
 [PDF 获取指南](docs/guides/pdf-acquisition.md)。限速只能降低风险，不能保证账号不会被限制；
 用户仍须遵守自己的访问授权和站点规则。
 
@@ -224,7 +248,7 @@ Browser。支持矩阵、等待语义、状态检查和故障处理详见
 
 已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、交互式 `config` 凭据设置/移除及 `config status`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
 
-同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Elsevier/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、强访问身份、MAIN object/DOI landing 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
+同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Elsevier/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、强访问身份、MAIN object、Article PDF 表示、DOI landing 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
 
 这层证明安装产物、生产对象图和已实现 adapter 的离线接线，不等于真实 Provider、Parser 或 LLM 服务已经在线成功。
 
@@ -238,7 +262,14 @@ Browser。支持矩阵、等待语义、状态检查和故障处理详见
 
 MinerU QA 使用安装 wheel 中的 production resolver、policy、transport、client、converter 和 adapter，连接当前测试进程内的受控 loopback HTTP service，验证 `health → submit → poll → archive`，并形成 parser-neutral Markdown、resource 和 provenance；私有 MinerU 中间文件不会泄漏。这不代表 operator 的真实 MinerU 部署已经在线验证。
 
-Browser 已完成受控组件 QA 和真实 Chromium/Playwright QA；真实 Chromium 场景覆盖 JavaScript、selector、click、fetch、Blob、download、TLS/DNS/binding 和清理。Playwright 只属于开发依赖，不进入 wheel runtime dependency。当前 production Browser rule catalog 仍为空，生产 readiness 明确返回 `acquisition-browser-production-unavailable`，因此尚未对出版社开放生产受控浏览器获取。
+Browser 已完成受控组件 QA 和真实 Chromium/Playwright QA；真实 Chromium 场景覆盖
+JavaScript `fetch`、普通 response/direct PDF、跨 origin `3xx`、navigation-only probe、双 Cookie、
+TLS/DNS/IP binding、persistent session reuse、取消/超时和无残留线程清理。Playwright 是 wheel 的正式 runtime dependency，但
+Chromium binary 仍需 operator 另行执行 `playwright install chromium` 安装。fresh-wheel 验收
+直接驱动生产 `PlaywrightBrowserFactory` / `BrowserClient` / `BrowserSessionBroker`，不使用
+测试自有平行 runtime。当前 production Browser rule catalog 有且仅有
+`springerlink-pdf@4`；这证明安装产物与生产对象图已接线，不等于真实 SpringerLink
+账号、机构协议或具体文章已在线授权。
 
 验收从未使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog；本项目也不据此宣称这些环境已被验证。
 

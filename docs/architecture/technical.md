@@ -188,7 +188,7 @@ Port 由消费能力的模块所有：
 
 此外，`bootstrap.py` 在生产 CLI 启动时一次性调用 `logging.api.configure_logging(...)`；logger level、formatter、最终脱敏 Filter 和 stderr handler 由 Logging 模块实现，不通过模块构造器注入，也不形成 Logging Port。
 
-完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 只有 CORE、Elsevier 与 Wiley 的授权 API capability，production Browser rule catalog 为 0；生产对象图因此不构造 Browser client，并把 execution confirmation 与 runtime readiness 保持为 false。普通 `browser_enabled` 只进入 admission 的显式总开关，不能单独产生 Browser 流量。共享 Browser foundation 已接线不等于任一出版社 Browser route 已 production-ready。
+完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 有 CORE、Elsevier 与 Wiley 的授权 API capability，以及 SpringerLink 的 `browser:springerlink` capability；production Browser rule catalog 有 `springerlink-pdf@4`。生产对象图只在普通 `browser_enabled`、安全 operator profile、Playwright Python package 与 Chromium executable 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness。SpringerLink 规则以唯一 DOI 和 rule-owned template 构造经审查的 Provider PDF locator，采用顶层 navigation-only、capture-first 和 entitlement-gated static click；Metadata Provider 的 opaque asset path 不被导航。总开关、route 存在、profile presence、当前登录和具体文章 entitlement 仍是分立事实。
 
 模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `bootstrap.py` 构造。
 
@@ -215,6 +215,8 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 除纯声明的 Model 外，具有运行行为的模块只使用 `logging.api.get_logger(__name__)` 获得命名 logger，不依赖 Bootstrap、全局 Observer、事件总线、Logging Port 或自定义 LogEvent Model。模块 import、adapter 构造和每次 Entry 操作都不得调用标准库 `basicConfig()`、修改 root logger 或安装 Handler。生产 CLI 启动时由 `bootstrap.py` 通过 Logging API 显式配置一次；程序内 API 不触发配置，也不修改宿主应用的 Logging 设置。精确目录、API 和测试合同见 [Logging 技术文档](technical/logging.md)。
 
 默认生产输出只需要一个 stderr handler。实时进度、等待和安全诊断进入 stderr；CLI 的稳定文本结果、完整 JSON Report 或其它可管道结果进入 stdout。即使未来 formatter 使用结构化文本，日志也不得写 stdout。当前目标不建立日志文件、轮转、SQLite sink、Artifact、跨进程日志协调或持久审计；用户自行重定向 stderr 不改变其非权威性质。
+
+当前 formatter 把合法 `event=... key=value` message 呈现为包含时间、level、component、状态符号、原始事件 ID 和固定顺序字段的人类可读主行；稳定 failure 的 reason/action 使用续行。正常模式保留操作与阶段汇总、等待、交付/耗尽和全部稳定失败，把 route/candidate miss、capture、cleanup 等逐步骤细节留给 Debug。Debug 终态使用 `disposition/next` 表明链路去向，并为关键 Provider/tier/route/target、API 与 Browser 步骤显示单调时钟耗时。TTY 可着色，非 TTY、重定向或 `NO_COLOR` 必须无 ANSI。
 
 日志是 best-effort 旁路：level 过滤、handler 故障或硬崩溃造成的缺失不得改变业务结果、事务、Report 或退出语义。Entry Report 只从 typed result 和 `StableFailure` 累计，不能读取 LogRecord；日志也不能替代必须持久化的 DiscoverySourceResult、自动 PDF 获取耗尽或其它业务事实。日志 message、时间、level 和可选上下文不是稳定公共 API，不建立 Pydantic schema；测试只固定标准流、安全字段和“不影响业务”的边界，不绑定完整文案。
 

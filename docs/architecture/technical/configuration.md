@@ -13,9 +13,11 @@
 配置、安全 profile 存储边界和裸 `sciretriever config` 的 Access 管理已经实现；
 `config status/test` 已实现完整的 Browser 本地状态与显式单目标 probe 合同；共享 Planner、
 Profile catalog、tiered cohort executor、Browser scheduler/session broker 的生产对象图及安装 wheel
-identity 也已验收。当前 Browser client 仍为空、production Browser route count 为 0，execution
-confirmation 与 runtime readiness 均关闭，所以这些基础设施不能写成已发布的自动 Browser 获取
-能力。Provider 的易变外部字段仍以 [Provider Notes](../../notes/providers/README.md) 为依据。
+identity 也已验收。当前 production Browser route count 为 1，唯一目标是 SpringerLink。
+Bootstrap 依据总开关、安全 profile presence、Playwright Python 依赖和 Chromium executable
+动态创建 `BrowserClient`；`execution confirmation` 表示本次运行已明确启用且 profile
+就绪，`runtime readiness` 只在 client 真正可构造时为 true。Provider 的易变外部字段仍以
+[Provider Notes](../../notes/providers/README.md) 为依据。
 
 ## 1. 责任与依赖
 
@@ -141,9 +143,10 @@ runtime_failure_threshold
 `inf`/`nan` 或任何放宽都会在 Configuration 边界拒绝。配置不接受 policy revision、session key、
 origin、selector 或 Browser rule 字段，因此 operator 不能借 override 重定义供应商画像。
 
-当前 production matrix 没有 Browser route 或 Browser policy group，所以生产配置中的 override
-必须保持为空；任何自行猜测的 group 都会以 `browser policy group is unknown` fail closed。
-`browser_enabled` 和 profile 选择本身也不会把 fixture-only/unsupported Profile 变成生产能力。
+当前 production matrix 有且仅有 `springerlink` Browser policy group；operator 可以对其基线
+进一步收紧，但不能改名、拆组或放宽。任何其它自行猜测的 group 都会以
+`browser policy group is unknown` fail closed。`browser_enabled` 和 profile 选择本身也不会把
+fixture-only/unsupported Profile 变成生产能力。
 
 当前 Configuration foundation 已固定 profile 目录为：
 
@@ -169,8 +172,9 @@ symlink、特殊文件、错误 owner/mode、硬链接或验证期间替换都�
 均 fail closed。删除 session 不修改普通配置，也不删除 Provider API credential。
 
 普通 `[access]` 选择字段已经接入严格 TOML、round-trip 编辑和交互管理。当前 production
-Browser rule catalog 仍为空，route count 为 0；因此 profile 即使存在，自动 Completion 的
-Controlled Browser 仍是 unavailable，而不是 configured 或 authenticated。
+Browser rule catalog 有 `springerlink-pdf@4`。profile 存在只会使 session presence 就绪；
+总开关、Playwright 和 Chromium 仍需独立就绪，而 configured 在任何情况下都不等于
+authenticated 或 article-entitled。
 
 ## 4. 统一 credentials schema 与 origin 绑定
 
@@ -257,8 +261,8 @@ profile 被保留，不声称已经登录，也不声称任意文章具有 entit
 产生副作用前确认，取消不写配置、不创建或删除 profile、不启动 Browser。任何界面都不能显示、
 复制或导出 Cookie。
 
-该管理入口如实显示当前 production Browser route count 为 0，并说明本地 profile 不会启用
-自动 Completion。它不把 profile presence 描述成登录，也不把人工登录描述成任意文章授权；
+该管理入口如实显示当前 production Browser route count 为 1，并分开呈现“route 已安装”
+与“本地 Browser 已就绪”。它不把 profile presence 描述成登录，也不把人工登录描述成任意文章授权；
 完整 route/profile/session/policy/action-required 状态和最小显式探测由下节独立命令提供。
 
 ## 7. status 与 probe
@@ -272,16 +276,17 @@ presence view，不构造 Storage、Catalog、ArtifactStore 或 Network。人类
 - Metadata API 与 authorized primary-PDF API 的独立 enabled、字段
   configured/missing/optional、policy readiness 和下一动作；
 - PDF acquisition 固定顺序：Public → Authorized API → Controlled browser；
-- Controlled Browser 的 framework/Playwright package、production route、普通开关、profile
+- Controlled Browser 的 framework/Playwright package/Chromium executable、production route、普通开关、profile
   presence、未评估的 session/login、未证明的 article entitlement、显式 probe、policy
   evidence 与所需下一动作；
 - Storage 和执行参数概要。
 
 人类输出只逐项展开已启用或已有凭据的 Metadata API，其余禁用项用数量摘要收起；授权主
 PDF API 单独列出 CORE、Elsevier、Wiley 和已知不支持直接 PDF 的 Springer，避免把 Metadata
-凭据与全文访问能力混成一项。当前 production Browser route count 为 0，因此 Browser 分区
-如实显示 automatic acquisition 与显式 probe 均不可用，并给出
-`browser-production-route-unavailable`，不会因为 profile 已选择或存在而改变结论。
+凭据与全文访问能力混成一项。当前 production Browser route count 为 1，Browser 分区
+如实显示 SpringerLink route 已安装，再根据开关、profile、Playwright 与 Chromium 给出
+automatic acquisition/probe 的本地就绪状态和稳定 action code。catalog 真为空时的
+`browser-production-route-unavailable` 分支仍保留，但不是当前默认状态。
 
 本地 presence 不能描述为认证成功。JSON 使用稳定分组 schema、无 ANSI，也不能包含 secret
 特征或 configuration fingerprint。
@@ -290,13 +295,14 @@ Browser 的纯本地状态只能说明 Profile 已支持、已选择且通过本
 missing/action-required；不能根据 Cookie 文件存在声称 authenticated，也不能声称具体文献
 entitled。动态 login/session/circuit/cooldown 不保存为“上次状态”。`config status` 不启动
 Browser、不访问 Provider，也不枚举 Cookie、origin history、selector 或 profile 内部文件。
-Playwright Python package 可发现也只表示依赖存在；`launch_assessed` 固定为 `false`，status
-不检查 Browser binary 或启动能力。JSON 保持原有顶层分组，并在
+Playwright Python package 可发现只表示依赖存在；status 还会检查预期 Chromium executable
+是否存在，但 `launch_assessed` 固定为 `false`，不启动 Browser 或证明启动成功。
+JSON 保持原有顶层分组，并在
 `providers.controlled_browser` 下稳定区分：
 
 ```text
 enabled / local_max_concurrency
-runtime.framework_available / python_dependency_available / launch_assessed
+runtime.framework_available / python_dependency_available / chromium_executable_available / launch_assessed
 profile.selected / presence
 session.assessment / authenticated / article_entitlement
 automatic_acquisition_available / production_route_count / routes
@@ -329,13 +335,24 @@ sciretriever config test --browser <publisher-access-key> [--json]
 ```
 
 该选择与位置 Provider、`--all` 互斥，一次只允许一个 production-approved 最小目标；人类
-模式再次确认可能打开可见 Browser，JSON 调用本身视为显式授权。probe 使用与自动获取相同的
-risk-group scheduler seam，最多一次导航，结果只包含 launch/target/authentication 的顺序检查，
-固定 `article_entitlement = not-proven` 与 `persisted = false`。`--all` 永远不隐式加入 Browser。
-当前 production target 集合为空，所以任何规范 access key 都稳定 `skipped` 并返回
-`browser-production-route-unavailable`，不启动 runtime、不导航、不猜 URL。未来接入的真实
-target 仍须使用可见 Browser、同一 Profile guard 与共享 scheduler；存在 profile、页面可打开、
-当前登录和具体文章 entitlement 始终是不同结果。真实 Provider probe 不进入 Harness，精确
+模式再次确认将启动受控无头 Browser，JSON 调用本身视为显式授权。probe 使用与自动获取相同的
+risk-group scheduler seam，最多一次导航。passed 只要求 runtime 已启动且最小目标已到达；
+personal authentication 只是 `true/false/null` 的可选观察值，不是通过门槛。结果固定
+`article_entitlement = not-proven` 与 `persisted = false`。`--all` 永远不隐式加入 Browser。
+当前 production target 集合为 `{"springerlink"}`。probe 只打开 Link 首页并可选检查 account
+widget；不打开具体文章、不下载 PDF、不评估机构 IP entitlement，也不持久化结果。开关、profile 或 runtime 未就绪时以
+精确 action code 稳定 `skipped`；未支持 access key 不启动 runtime、不导航、不猜 URL。
+存在 profile、页面可打开、个人登录、机构 IP entitlement 和具体文章 entitlement 始终是
+不同结果。生产文章 route 直接使用当前机器网络出口；只有具体文章响应才能分类 IP 放行、
+login/MFA/action-required、paywall 或其它授权结果。
+
+probe 使用 navigation-only Browser 模式：顶层主文档和经 production rule 精确允许的认证
+redirect 仍逐跳经过 destination/DNS/IP/host/TLS 边界，非必要 stylesheet、script、image、font
+等子资源在 route 边界安全终止。account/login marker 通过即时、有界 DOM snapshot 判断；selector
+不存在立即返回，不读取 Cookie、storage 或 profile 文件，不把页面正文、认证 query、header 或
+原始异常写入结果。该优化只限制 probe 的访问面，不改变普通文章 Browser flow。
+
+真实 Provider probe 不进入 Harness，精确
 现场范围需要用户另行授权。
 
 核心 probe 返回 `CoreConfigurationProbeResult`，details 分别为
@@ -350,6 +367,7 @@ Asset、Catalog、Report 或测试历史，也不把认证通过解释成具体�
 profile identity/owner/symlink、只允许收紧的 policy、API/Browser readiness 分离、四主题、
 窄终端、快捷键、取消和 secret/Cookie 不泄漏。安装 wheel 旅程使用临时 HOME、测试自有
 `credentials.toml` 与 fake transport 验证真实 console、生产 Bootstrap、status、LLM/MinerU
-probe 和 `--all`；Browser 使用临时 profile 与本地页面 fixture。不得使用旧 secret 环境变量、
+probe 和 `--all`；Browser 使用临时 profile 与本地 HTTPS 页面 fixture，并覆盖跨 origin `3xx`、
+navigation-only 子资源终止和 persistent session。不得使用旧 secret 环境变量、
 真实凭据/Cookie、真实网络、生产 Catalog 或用户语料。Full Harness 还必须通过 Pyright
 strict、全量 unittest、wheel 构建和内容核对。

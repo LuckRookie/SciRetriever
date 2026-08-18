@@ -44,6 +44,12 @@ DataCite REST API 遵循 JSON:API，base 为 `https://api.datacite.org`。公开
 
 DataCite 收录 dataset、software、text、collection、event 等通用研究资源，不等同于“学术文献库”。`types.resourceTypeGeneral` 和来源的具体类型必须先经过 SciRetriever 领域中立的文献适用性规则；title 或 DOI 的最低身份输入条件不等于所有 DOI 都应接纳为 Literature。
 
+当前 adapter 对 `resourceTypeGeneral` 未命中受支持文献类型白名单的合法 DOI 记录返回空的中性
+item，并使用稳定 Debug reason `datacite-resource-type-not-supported-as-literature`。它不是坏记录，
+不计入 rejected，也不会把实际资源类型、标题或 vendor body 写入日志；Provider 汇总仍满足
+`raw = accepted + empty + rejected`。字段类型错误、DOI 冲突或无法安全解析的记录才进入稳定
+rejected 路径。
+
 ### 3.2 分页
 
 - page-number 模式默认 `page[size]=25`，允许 0–1000；`page[number]` 从 1 开始，只能检索前 10,000 条。
@@ -201,6 +207,8 @@ DataCite 没有专属 PDF protocol 或授权下载 API；当前 Acquisition 只�
 当前 `DataCiteAdapter` 实现 JSON:API 领域搜索、DOI lookup 和按明确 relation type 分流的引用查询，
 解析分页、creator/ORCID/affiliation、标识符、版本/引用关系和资源 locator；生产 registry 注入共享
 `HttpClient`、Access Coordinator 与 `datacite/api` policy。DataCite 收录不限于 Literature，adapter
-仍在边界拒绝或保守处理不适用对象。当前 Acquisition 只通过通用 Public route 消费已保存 locator，
+仍在边界把不适用但合法的对象归为带稳定原因的中性 empty disposition，而不是静默丢弃或伪装
+为 rejected。100-item 离线回归固定了 51 accepted、49 empty、0 rejected 的守恒计数与日志脱敏。
+当前 Acquisition 只通过通用 Public route 消费已保存 locator，
 DataCite DOI、`contentUrl` 或媒体声明都不等于已获得主 PDF。实现证据为离线 fake/fixture；本轮
 没有认证请求、Member API 调用或文件下载。

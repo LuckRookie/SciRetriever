@@ -181,6 +181,24 @@ ProviderLiteratureKey
 - 后续页面、Network 或其它 Provider 级稳定失败优先作为最终失败；取消仍形成 `INTERRUPTED`，Port 合同或编程错误仍向上传播而不能按坏记录隔离；
 - 失败不能伪装成“零结果”。
 
+Debug 日志为每条原始 item 记录 `accepted`、`empty` 或 `rejected` disposition、
+observation/relation 增量和稳定 reason；Provider 结束汇总满足
+`raw = accepted + empty + rejected`。这些扫描计数与逐条 disposition 只用于诊断，
+不加入 `MetadataProviderInvocation`、Report、Catalog 或其它业务 Model。Adapter 对合法但明确
+不产生任何中性事实的 item 可以在 package-local `NeutralMetadataItem.empty_reason` 中给出受控的
+稳定代码；该值只能与空 observations/relations 同时出现，Service 只把它写入 Debug disposition，
+不会把 vendor 类型、原始字段或响应正文带出边界。未提供专用原因的通用空 item 继续使用
+`no-neutral-facts`。
+
+Provider 已完成中性转换的 relation 仍逐边形成独立、不可变的
+`ProviderRelationObservation`，但 publication Port 不再逐边打开 SQLite 事务。Entry 保持
+observation/result 的既有先后顺序，再按供应商返回顺序切成最多 256 条的冻结批次；Storage
+在一个短事务内原样保存一批。批内任一 relation 失败时整批回滚，已经成功提交的先前批次
+继续保留；正常取消只在批次之间生效。若 Provider invocation 已明确返回 `INTERRUPTED`，Entry
+仍保存它已经返回的全部 observation/relation，再结束运行且不发布 source result。批量只改变
+物理提交粒度，不合并 observation、端点、provenance 或后续待扩展单位，也不把整次 Provider
+的无界关系集合放入一个长事务。
+
 领域 DiscoveryRun 由 Entry 调用本次全部已启用且 readiness 通过的 Metadata Search Provider。明确启用但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过、匿名回退或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
 
 Metadata 不判断一条 Provider 结果是否与用户领域语义相关，不调用 LLM 或 embedding，也不按搜索分数、标题关键词、摘要、连续低收益或其它主题启发式过滤和提前停止。非空标题或 DOI 任一存在就是当前最低入库边界；有实际内容但偏题的 Literature 仍可正常进入后续处理，不属于 `NoUsableContent`。
@@ -196,6 +214,16 @@ Entry 在 Literature 接纳 observation 后保存其中的 `AssetHint`，并在�
 ## 6. Network 与配置边界
 
 供应商适配器通过 `network/http.py` 发起访问，遵守统一 URL、DNS、redirect、origin、timeout、响应大小、脱敏和 ADR 0012 的进程内共享准入。Provider 自身的分页、额度和响应语义留在适配器中；adapter 声明 scope 并解释反馈，Network 在当前进程的 Metadata、Acquisition、不同操作和文献目标之间执行并发、间隔、quota 与 `Retry-After`。Vendor SDK 无法注入受控 transport 时不能作为生产实现。
+
+HTTP 200 不能被统一解释为 Metadata 成功或空结果。例如 Elsevier 的 Scopus Search 与
+Abstract Retrieval 还可能返回 `service-error.status.statusCode` envelope；adapter 只读取
+有界、白名单化的 code，将其转换为认证、产品授权、限额、查询拒绝、可重试服务失败或精确
+lookup miss，不读取或记录 vendor `statusText`。未知 code、畸形 envelope 和未知顶层继续
+形成稳定的 unknown-shape failure，不能被伪装成零结果。
+Scopus Search 的 offset 与 cursor 是两种分页合同：cursor 响应必须提供 total、page count、
+当前/下一 cursor 与 entry，`opensearch:startIndex` 可以缺失；若供应商仍返回该 offset 字段，
+adapter 会将它与本地已接收计数严格核对。Debug 只记录受控 envelope、字段存在位、disposition
+和中性 failure kind，不记录字段值、cursor、query 或响应正文。
 
 普通配置向 `bootstrap.py` 提供稳定 Provider key、能力启用状态、产品/database/edition、scan limit、非 secret 运行身份和 AccessPolicy；Provider secret 只由根级 configuration 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
 

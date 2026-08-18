@@ -1,10 +1,10 @@
 # Wiley
 
 - 官方资料与最小只读链路最后在线核对：2026-08-14
-- 当前实现离线对照：2026-08-15
+- 当前实现离线对照：2026-08-18
 - 当前选择键：Acquisition `wiley`
 - 供应商角色：在 operator 已取得 Wiley TDM token、运行环境位于可授权公网 IP 范围且具体文章有 entitlement 时提供主文 PDF；不是 SciRetriever Metadata 或引用 Provider
-- 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；生产 Browser 站点规则仍为空
+- 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；Wiley 专属 Browser route/rule 未注册
 
 ## 1. 官方来源与证据等级
 
@@ -129,15 +129,18 @@ Wiley API 接受 DOI，但 DOI 本身、DOI prefix、publisher 字符串或 Meta
 
 1. 当前 Literature 恰有一个 canonical DOI；
 2. 全部公开 Source 已正常耗尽；
-3. 该 DOI 经过共享 Network 的安全 DOI resolver，最终 origin 精确为
-   `https://onlinelibrary.wiley.com`；
+3. 当前请求具有以下一项强证据：已接纳 AssetHint 的规范 origin 精确为
+   `https://onlinelibrary.wiley.com` / `https://alm.wiley.com`，或该 DOI 经共享 Network 的
+   安全 resolver 后最终 origin 精确为 `https://onlinelibrary.wiley.com`；
 4. `wiley` 已启用、`tdm_api_token` 已配置且本地 AccessPolicy ready。
 
 DOI resolver 不在 Acquisition 开始时提前调用；公开 direct/arXiv/Europe PMC/Unpaywall
-等路径先成功时不会产生多余 DOI 网络访问。解析得到其它出版社 origin、DOI resolver
-正常 `404/410` 或没有 DOI 时，Wiley 只是不适用；Network、取消、限流和服务错误会传播
-稳定失败，不能伪装成 `NoPrimaryPdf`。存在多个 DOI 的异常旧记录不会把一个解析 origin
-套到另一个 DOI 上，Wiley fail closed 为不适用。
+等路径先成功时不会产生多余 DOI 网络访问。现有 AssetHint 已精确确认 Wiley 时，Source
+只提取规范 origin 并与当前唯一 DOI 绑定，不复制原始 URL、query 或 Provider body，也不再
+为了同一身份额外解析 DOI。AssetHint 属于其它 origin、解析得到其它出版社 origin、DOI
+resolver 正常 `404/410` 或没有 DOI 时，Wiley 只是不适用；Network、取消、限流和服务错误
+会传播稳定失败，不能伪装成 `NoPrimaryPdf`。存在多个 DOI 的异常旧记录不会把一个 origin
+套到任一 DOI 上，Wiley fail closed 为不适用。
 
 Wiley 本地 lookup 不联网，只把 DOI 转成 namespace `wiley-tdm-pdf` 的私有下载 locator，
 entitlement 保持 `UNKNOWN`；具体 download 的 200 PDF 响应才把该篇 entitlement 证明为
@@ -151,7 +154,7 @@ entitlement 保持 `UNKNOWN`；具体 download 的 200 PDF 响应才把该篇 en
 
 | Wiley 外部事实 | SciRetriever 归属 | 约束 |
 |---|---|---|
-| canonical DOI + 已解析 WOL origin | 当前请求的强路由证据 | 只存在于本次 Acquisition；不持久化成出版社事实 |
+| canonical DOI + 已确认 WOL/ALM AssetHint origin，或已解析 WOL landing origin | 当前请求的强路由证据 | 只保存规范 origin 并存在于本次 Acquisition；不持久化成出版社事实 |
 | TDM API DOI locator | `AuthorizedDownloadLocator` | 非 URL、无 token；只在 Wiley client 边界解释 |
 | PDF response bytes | `TemporaryPdfContent` → 统一 PDF 验证 | 有界、可清理；通过后才成为不可变 Asset |
 | DOI | 下载 provenance 的 `source_record_id` | 来源为 `wiley`；不复制 header、账户或 entitlement payload |
@@ -191,8 +194,9 @@ entitlement、quota、service 或 network failure 仍按第二层失败合同处
 
 当前生产实现已包含：Wiley 专用 client、精确 endpoint、单一安全非空 token、私有认证
 header、opaque DOI 编码、到 `alm.wiley.com` 的 guarded 单跳 redirect、跨 origin token
-剥离、AccessPolicy、HTTP 状态映射、DOI landing-origin 路由、Registry/Bootstrap/config
-status 接线，以及离线 endpoint/凭据泄漏/跨 origin/阶段顺序/PDF 验证测试。没有新增
+剥离、AccessPolicy、HTTP 状态映射、单 DOI 与精确 landing/asset-origin target 绑定、
+Registry/Bootstrap/config status 接线，以及离线 endpoint/凭据泄漏/跨 origin/阶段顺序/PDF
+验证测试。没有新增
 `wiley-tdm` 依赖，直接复用共享 Network。
 
 仍未闭合的外部事实是：官方客户端未详细规定 `401/429` 及其它错误 body、token 有效期/

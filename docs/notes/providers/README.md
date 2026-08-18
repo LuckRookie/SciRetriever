@@ -28,9 +28,9 @@
 
 外部 API 存在不等于 SciRetriever 已接入；配置 key 被接受不等于有 concrete client；fake、Protocol、lazy factory 和目标 Model 也不等于用户可运行工作流。Provider 返回 observation/locator 仍不等于 Literature 或资产已被业务规则接纳。
 
-截至 2026-08-15，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。完整及 capability-scoped Completion 对象图还共享同一 Profile catalog/Planner、tiered cohort executor、Browser scheduler/session broker 和 admission controller。当前 Browser client 仍为空，production Browser rule catalog 为 0，execution confirmation 与 runtime readiness 均关闭；离线与 Chromium QA 只证明 Browser foundation，不能写成出版社 Browser 获取已经开放。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
+截至 2026-08-18，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。完整及 capability-scoped Completion 对象图共享同一 Profile catalog/Planner、tiered cohort executor、Browser scheduler/session broker 和 admission controller。当前 production Browser rule catalog 有 `springerlink-pdf@4`；总开关、安全 operator profile、Playwright Python package 和 Chromium executable 同时就绪时，Bootstrap 构造真实 Browser client 并动态打开 execution confirmation/runtime readiness。SpringerLink 文章流从唯一 DOI 构造经审查的官方 PDF locator，只加载顶层导航并以已有 capture 或封闭页面状态决定是否继续；离线与 Chromium QA 证明 production adapter 和安全边界，脱敏真实小样本另证明一个机构网段 PDF 交付和进程内 session reuse，但不证明个人登录、任意文章 entitlement 或长期成功率。各 Provider 的实时外部政策仍以对应 Notes 为准，生产实现状态以源码、测试、README 和配置手册为准。
 
-Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 已实现的授权 API 能力，production Browser rule 仍为 0。任何真实 Browser 核实还必须经过[受控现场核实门](browser-live-verification/README.md)，没有完整单项核实单和用户另行授权时不得执行。
+Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API/Browser capability 另列。当前 production Profile 包含 CORE、Elsevier/ScienceDirect 与 Wiley 的授权 API 能力，以及 SpringerLink Browser 能力；production Browser rule 为 1。任何真实 Browser 核实还必须经过[受控现场核实门](browser-live-verification/README.md)，没有完整单项核实单和用户另行授权时不得执行。
 
 ## 3. 已接受的目标能力矩阵
 
@@ -72,7 +72,7 @@ Acquisition 当前生产映射如下：
 | 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 只接受 operator 注入的获准 locator resolver |
 | 授权主 PDF API | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
 | Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
-| 受控 Browser | 共享 foundation、配置入口与离线/Chromium QA 已完成；生产站点规则目录为空、Browser client 与 execution/runtime readiness 关闭，因此当前不可执行 |
+| 受控 Browser | 共享 foundation、正式 Playwright adapter、配置入口与真实 Chromium 离线 QA 已完成；`browser:springerlink` / `springerlink-pdf@4` 已进入生产 registry；文章流采用 rule-owned DOI PDF locator、顶层 navigation-only、capture-first 与 entitlement-gated static click，本地 client/readiness 由开关、profile、Playwright 和 Chromium 动态决定 |
 
 PLOS 的显式 journals locator 仍走通用公开 hint，不是专属 route；精确 host
 `journals.plos.org` 共享 `plos/web` scope，按官方 robots 至少间隔 30 秒启动请求。Copernicus、

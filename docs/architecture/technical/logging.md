@@ -13,12 +13,14 @@
 logging/
   __init__.py
   api.py
+  presentation.py
   setup.py
   redaction.py
 ```
 
 - `api.py` 是其它模块和 Bootstrap 唯一允许导入的公开边界；
-- `setup.py` 配置 `sciretriever` logger 层级、level、formatter、stderr handler 和传播行为；
+- `presentation.py` best-effort 解析现有 `event=... key=value` message，负责人类可读布局、字段排序、状态符号和可选 TTY 颜色；
+- `setup.py` 配置 `sciretriever` logger 层级、level、故障隔离 stderr handler 和传播行为；
 - `redaction.py` 实现最终脱敏 Filter；
 - `__init__.py` 只标识 package，不复制公开 API 或产生 import-time 配置副作用。
 
@@ -69,7 +71,9 @@ Logging 只写实时运行信息：
 
 Logging 不得安装 stdout Handler。日志 message、level、时间、formatter 输出和可选上下文不是稳定公共 API；测试只固定标准流、安全边界和不影响业务的行为，不绑定完整自然语言文案。
 
-适用时 LogRecord 可以携带安全的 `stage`、`tier`、`provider_name`、`route_key`、`browser_rate_limit_group`、`plan_revision`、`action`、`meta_literature_id` 或 `literature_id`。这些只是可选诊断上下文，不形成统一事件 schema、operation ID、目标状态或 Pydantic Model；route/group 值必须来自静态无 secret identity，不能从完整 URL、账号、Cookie、DOI 或随机任务派生。
+适用时 LogRecord 可以携带安全的 `stage`、`tier`、`provider_name`、`route_key`、`browser_rate_limit_group`、`plan_revision`、`disposition`、`next`、`http_status`、`http_status_class`、`elapsed_ms`、`action`、`meta_literature_id` 或 `literature_id`。其中 HTTP 状态只允许使用 Network 已验证的三位数字和受控状态类别，不能携带 status text、header 或 body。这些只是可选诊断上下文，不形成统一事件 schema、operation ID、目标状态或 Pydantic Model；route/group 值必须来自静态无 secret identity，不能从完整 URL、账号、Cookie、DOI 或随机任务派生。诊断耗时来自单调时钟，只进入 LogRecord，不进入 Report、Catalog 或业务 Model。
+
+现有模块继续写标准库参数化 message。Formatter 只对以合法 `event=<稳定事件 ID>` 开头的 message 做 best-effort 展示；普通 message、未知事件或解析失败都安全回退。人类输出的主行固定包含时间、level、component、状态符号、动作、原始事件 ID 与排序后的安全字段；稳定失败的 `reason` 和 `action` 各占一条缩进续行。Debug 额外显示源码模块与行号。TTY 可以使用有限颜色；非 TTY、重定向、`TERM=dumb` 或设置 `NO_COLOR` 时必须是无 ANSI 的普通 UTF-8 文本。原始事件 ID 始终保留，便于 `rg`，但完整格式仍不是公共 API。
 
 ### 3.1 正常与 Debug 模式
 
@@ -77,20 +81,29 @@ Logging 不得安装 stdout Handler。日志 message、level、时间、formatte
 
 | 模式 | level | 必须呈现的内容 |
 | --- | --- | --- |
-| 正常 | `INFO` | 操作、PDF tier 与 Provider group 开始/结束，目标/组进度，限速等待、暂停、成功、正常 miss/耗尽和中断概况；所有失败的稳定 code、reason、action 与 retryable |
-| Debug | `DEBUG` | 正常模式全部内容，加上每个安全语义步骤的开始、跳过、命中、正常 miss、状态迁移、资源清理和失败 |
+| 正常 | `INFO` | 操作、Metadata Provider、由 Entry 汇总的 PDF tier/Browser escalation、目标与 Provider group 进度，限速等待/暂停、交付、耗尽、中断及稳定失败；失败保留 code、retryable、reason 与 action。route/candidate 级 miss、skip、capture 和 cleanup 不重复刷屏 |
+| Debug | `DEBUG` | 正常模式全部内容，加上每个安全语义步骤的开始、跳过、命中、正常 miss、状态迁移、资源清理和失败；可能结束或继续链路的终态包含 `disposition`、`next` 和诊断耗时 |
 
 Debug 的“逐步骤”按责任边界记录，而不是给每个函数做调用追踪。当前至少覆盖：
 
-- Network 的无凭据请求开始、最终 HTTP status/响应字节数、API quota feedback、risk-group permit/circuit 状态，或 `policy`、`timeout`、`TLS`、`transport`、`admission`、`budget` 等中性失败分类；
-- Metadata 的 Provider session、逐 raw item 转换与 observations/relations 累计；
-- Topic/Citation Discovery 的深度、observation 接纳/拒绝、关系和结果发布；
+- Network 的无凭据请求开始、最终 HTTP status/响应字节数/耗时、API quota feedback、risk-group permit/circuit 状态，或 `policy`、`timeout`、`TLS`、`transport`、`admission`、`budget` 等中性失败分类；
+- Metadata 的 Provider session 与耗时、逐 raw item 的 `accepted/empty/rejected` disposition、observation/relation 增量和稳定 reason；Provider 汇总满足 raw = accepted + empty + rejected；
+- Topic/Citation Discovery 的深度、observation 接纳/拒绝、关系和结果发布；Literature 拒绝 observation 时保留其拥有的稳定 `decision_reason`，但不记录 Provider 原始记录或正文；
 - Database Completion 的冻结目标、有界 PDF cohort、tier barrier、并发目标进度、current facts、Acquisition、Parsing、Analysis 和 Literature 接纳阶段；
-- Acquisition 的 plan revision、resolution evidence kind、route readiness/applicability、route key、public/API route hint 类别、候选匿名 ID、授权 lookup/download、Browser admission/group/state transition、PDF 验证/准备、资源清理、提交与正常耗尽。
+- Acquisition 的 plan revision、resolution evidence kind、route readiness/applicability、route key、public/API route hint 类别、候选匿名 ID、route 的 `disposition/next`、授权 target/lookup/download、Browser eligible/admitted/attempted/delivered、group queue/pacing、session reuse、页面 observation/marker 检查、state/capture/cleanup、PDF 验证/准备、提交与正常耗尽。Browser marker 事件只记录静态 rule/marker ID、selector 数量、matched/miss 和 `elapsed_ms`；不记录 selector 或页面文本。
+
+Elsevier Authorized lookup/download 的 response classification 在 Debug 中额外记录数值
+`http_status` 和受控 `http_status_class`，用于区分认证、授权、配额、not-found、服务错误与
+真正未知状态；即使 failure kind 为 response-schema，也不记录供应商 status text、header、
+response body、URL/query 或 credential。
 
 这些 Browser 字段已经由离线 route、scheduler、Completion 和安装 wheel 测试验证；当前
-production Browser route count 为 0，生产对象图不会产生真实 Provider Browser 日志。测试覆盖
-表示日志合同和脱敏边界已实现，不表示某个出版社页面已经 production-ready。
+production Browser route count 为 1，因此已就绪的 SpringerLink Completion 可以产生真实的脱敏
+Browser admission/group/state/capture/cleanup 日志。这些日志只证明实际执行步骤与结果分类，
+不能把 profile presence 、probe 成功或 route production-ready 写成任意文章 entitlement。
+SpringerLink revision 4 在初始 DOI PDF locator 没有形成 capture、且无经审查 entitlement marker 时还会记录
+`decision_reason=entitlement-marker-absent outcome=normal-miss`，用来区分正常页面未命中与
+Browser timeout；该诊断不能反推账号、机构或订阅状态。
 
 携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 profile/risk-group identity 和状态类别，不能记录完整导航目标、selector、页面文本、Cookie、profile 内容或签名 locator。
 
@@ -189,11 +202,12 @@ logging -X---------> SciRetriever 其它模块
 - `configure_logging` 只配置 `sciretriever` logger，不修改 root logger，并且只有一个写入 stderr 的模块 Handler；
 - 默认 INFO 模式保留进度与稳定错误原因但过滤逐步骤 DEBUG；`--debug` 使生产对象图使用 DEBUG level 并保留两类记录；
 - 重复配置不叠加 Handler，stdout 不被日志污染；
+- formatter 在并发 LogRecord 下保持整条输出，不交叉拼接；TTY 颜色、`NO_COLOR` 和重定向单色降级可直接验证；
 - formatter、Filter 或输出故障不改变被记录操作的业务结果；
 - 最终 Filter 对已知敏感字段使用安全替代文本，但测试仍证明每个外部 adapter 在进入 Logging 前完成自身边界脱敏；
 - 原始异常、response、URL、header、Cookie、credential、prompt、正文和绝对路径不进入 LogRecord 或用户输出；
 - 携带凭据的 Network 调用在 Network logger 上保持静默，而对应 Provider/route adapter 只记录安全步骤与稳定失败；
-- 正常模式能解释 Public/API/Browser tier、Provider group、等待/暂停、稳定失败原因和下一动作；Debug 额外覆盖 plan revision、resolution evidence kind、route/hint、quota feedback、Browser 状态迁移和资源清理；
+- 正常模式能解释 Public/API/Browser tier 汇总、Provider group、等待/暂停、交付/耗尽、稳定失败原因和下一动作，同时不重复输出 Entry/Cohort 的同一 tier/group 快照；Debug 额外覆盖 plan revision、resolution evidence kind、Metadata raw-item disposition、route `disposition/next`、API target、quota feedback、Browser queue/session/state/capture/cleanup 和关键 `elapsed_ms`；
 - 不同 Browser group 的日志可按安全 group identity 区分，同一 group 的 retry/popup/备用入口不会伪装为并行新流程；
 - Cookie、profile 内容、完整 URL、selector、页面文本、短期 locator 和 Browser vendor object 在 INFO/DEBUG 两种模式都不进入 LogRecord；
 - Report 在关闭、过滤或故障 Logging 时保持相同内容；日志不能生成 Report 或持久事实；

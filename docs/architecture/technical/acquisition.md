@@ -236,7 +236,7 @@ RouteExecutionOutcome =
   | RouteActionRequired
 ```
 
-Planner 已经决定当前 route 的适用证据；adapter 只验证 planned route 属于自己的封闭 capability，并在每个真实动作前检查 candidate/route key、Network admission 和取消。Adapter 不能自行根据 publisher 文本增加其它 Provider 路线，也不能把 API 429、临时错误或页面 challenge 转换成 Browser route。Route adapter 只产生临时运行结果，不能发布 Asset、建立 `primary-pdf` 关系或改变 Literature 状态。
+Planner 已经决定当前 route 的适用证据；adapter 只验证 planned route 属于自己的封闭 capability，并在每个真实动作前检查 candidate/route key、Network admission 和取消。DOI 型授权 API 只有在当前 Literature 恰有一个 canonical DOI，且合同列出的 landing origin 或 AssetHint origin 已精确确认访问方时才形成 lookup target；AssetHint 只贡献规范 origin，原始 URL 不进入 target。Adapter 不能自行根据 publisher 文本、DOI prefix 或 Metadata Provider 名称增加其它 Provider 路线，也不能把 API 429、临时错误或页面 challenge 转换成 Browser route。Route adapter 只产生临时运行结果，不能发布 Asset、建立 `primary-pdf` 关系或改变 Literature 状态。
 
 `RouteReadiness` 区分项目能力已实现、用户启用、静态参数/凭据/policy 就绪、当前 Literature 适用和当前 plan 实际需要。配置结构错误立即失败；未被当前 plan 使用的可选 capability 不阻止无关公开路径。当前 plan 需要但未就绪的 route 不能被计为正常耗尽，是否允许进入 Browser 由显式 Browser admission policy 决定并进入运行报告。
 
@@ -334,10 +334,12 @@ Metadata 与 Acquisition 使用相同 `core/api` AccessScope 和保守准入政�
 反馈作用于同一当前进程预算。API key 只作为绑定到官方 HTTPS origin 的私有
 `Authorization` header 传递，不进入 URL、候选、provenance 或输出。
 
-Wiley 同样只在公开路径全部耗尽后运行。若当前已有证据仍不足以确认 Wiley，Acquisition
-此时才通过共享 Network 安全解析当前唯一 DOI；只有最终 origin 精确为
-`https://onlinelibrary.wiley.com`，才把 DOI 作为
-opaque path parameter 交给 Wiley TDM endpoint。唯一的 TDM token 只作为绑定到
+Wiley 同样只在公开路径全部耗尽后运行。当前唯一 DOI 可以与已接纳 AssetHint 的
+`https://onlinelibrary.wiley.com` 或 `https://alm.wiley.com` 精确 origin 直接绑定；若现有
+证据仍不足以确认 Wiley，Acquisition 此时才通过共享 Network 安全解析该 DOI，且最终 origin
+必须精确为 `https://onlinelibrary.wiley.com`。两条路径都只形成 DOI 与 confirmed origin
+组成的中性 lookup target，再把 DOI 作为 opaque path parameter 交给 Wiley TDM endpoint。
+唯一的 TDM token 只作为绑定到
 `https://api.wiley.com:443` 的私有 `Wiley-TDM-Client-Token` header 传递；本地只验证
 安全的非空 header 值，不用推测的 token 语法替代 Wiley 的认证判断。API 可以单跳到精确
 `https://alm.wiley.com/alm/api/v2/download/<opaque-locator>`；共享 Network 逐跳复检该
@@ -353,16 +355,26 @@ Elsevier 内容获取使用独立的 `api:elsevier-article-object` 多步 route�
 Adapter 以 `view=FULL` 和 `Accept: application/xml` 请求 Article Retrieval，只把同时
 声明 `web-pdf-purpose=MAIN`、`extension=pdf`、PDF filename 与合法 attachment EID 的
 条目转换成 `elsevier-main-pdf-object` locator，再以 `Accept: application/pdf` 请求
-Object Retrieval。Article/Object 共用 `elsevier/api/article-retrieval-object` scope；
+Object Retrieval。若 FULL XML 没有 MAIN object，或该 XML 表示因媒体类型冲突、畸形、
+DTD/ENTITY 或未知 envelope 而不能安全解释，Adapter 不放宽 XML parser，而是用同一强 DOI、
+PII 或 Article EID 形成私有的 direct Article PDF locator，并向相同 Article Retrieval
+resource 协商 `application/pdf`。可解析的 `service-error` 必须先转换为 normal miss、认证、
+授权、quota、服务或请求失败，不能借 direct representation 绕过。Article/Object 共用
+`elsevier/api/article-retrieval-object` scope；
 API key 与可选 institution token 只作为绑定到 `https://api.elsevier.com:443` 的私有
-header。无主 PDF 时可返回当次 canonical landing、PII 和 Article EID hint；hint 不进入
-数据库。对象响应仍经过统一 PDF reader/页面树与不可变发布。ScienceDirect Browser
+header。Object 或 direct Article PDF 正常 miss 后可返回当次 canonical landing、PII 和
+Article EID hint；hint 不进入数据库。两种 PDF 响应都仍经过统一 PDF reader、页面树与
+不可变发布；XML/JSON/HTML、补充材料和标记为 PDF 但实际承载错误 envelope 的响应不会成为
+候选。Authorized adapter 的 Debug classification 对每个 lookup/download 只增加数值
+`http_status`、受控 `informational|success|redirection|client-error|server-error` 状态类别、
+representation、envelope、disposition 和中性 failure kind；response body、vendor status text、
+header、URL/query 与凭据都不进入 LogRecord。ScienceDirect Browser
 当前没有 production Profile rule、rate/session group，不能因 API miss、quota 或错误被
 自动启动。
 
 前一层全部当前适用 routes 均未成功并到达允许升级的终态后才能启动下一层；层级之间不并发竞速。未启用或对当前 Literature 不适用的 route 不属于本次耗尽集合。当前 plan 需要但缺少生产实现、必需参数、凭据或 policy 的 route 形成明确 unavailable/configuration 结果，不能被静默视为正常未命中；是否允许继续 Browser 由 Browser admission policy 决定。
 
-正常未命中、明确不适用、明确无 PDF capability，以及 API 对当前目标无 entitlement 但机构 Browser 可能具有独立权限，可以进入下一步判断。Timeout、临时传输/服务失败、`429`、`Retry-After`、quota exhausted 和未到 reset boundary 形成 deferred 或稳定 route failure，不得自动切换 Browser 制造替代流量。配置结构、Port、清理、发布、stale 和取消错误立即终止。任一后续候选完整提交后立即停止该 Literature 的全部后续 routes；若最终没有成功，任一 deferred、action-required 或未解决 route failure 都必须作为稳定结果/失败返回，不能伪装成本次耗尽。
+正常未命中、明确不适用、明确无 PDF capability，以及 API 对当前目标无 entitlement 但机构 Browser 可能具有独立权限，可以进入下一步判断。一个普通、非临时的 route-local `failure` 本身不授权风险升级，但也不能取消已经由强访问证据和显式 policy 独立规划的后续 route；它在当前 work item 中保留，允许同层 route、后续 API 或独立 Browser route 救回。Timeout、临时传输/服务失败、`429`、`Retry-After`、quota exhausted 和未到 reset boundary 必须形成 `deferred`，需要用户处理的状态必须形成 `action-required`，二者都在 Browser admission 前停止该目标，不能用 Browser 制造替代流量。Fatal、配置结构、Port、清理、发布、stale 和取消错误立即终止。任一后续候选完整提交后立即停止该 Literature 的全部后续 routes，并清除先前 route-local issue；若最终没有成功，任一 deferred、action-required 或未解决 route failure 都必须作为稳定结果/失败返回，不能伪装成本次耗尽。
 
 明确标记为补充材料、XML 或 HTML 的线索不能作为当前主 PDF 接纳。供应商声明的 `application/pdf` 可以提高同层候选顺序，但不能替代实际下载和基本检查。
 
@@ -411,7 +423,8 @@ LiteratureAsset
   -> AUTHORIZED_PROVIDER_API pass：只处理未解决目标
        ├─ PDF 成功：检查、发布并移出后续层级
        ├─ locator/identity/entitlement hint：重新规划
-       └─ deferred/quota/失败：不自动切 Browser
+       ├─ 普通 route-local failure：保留问题，继续独立 route
+       └─ deferred/action-required：在 Browser admission 前停止
   -> Browser admission：只选择低风险层允许升级的最小剩余集合
   -> CONTROLLED_BROWSER pass
        ├─ 不同 browser_rate_limit_group 并行
@@ -435,11 +448,13 @@ LiteratureAsset
        └─ Storage 错误：抛出，不转换为 NoPrimaryPdf
 ```
 
-一个候选正常未命中、没有 Browser 下载、格式错误或基本检查失败时清理临时结果并继续其它候选，不把详情带入下一个候选或数据库。一个 candidate、locator、target、DOI landing 解析或 adapter 的 Network/API/认证/授权/quota/service/schema 等外部失败，在不放宽 Network policy 的前提下转换为当前运行的脱敏状态；独立低风险路径仍可继续，但临时/额度失败不能成为 Browser admission 的“已耗尽”证据。这些状态只进入安全日志、内存聚合和本次非持久化 Report，不成为持久化候选历史。
+一个候选正常未命中、没有 Browser 下载、格式错误或基本检查失败时清理临时结果并继续其它候选，不把详情带入下一个候选或数据库。一个 candidate、locator、target、DOI landing 解析或 adapter 的 Network/API/认证/授权/quota/service/schema 等外部失败，在不放宽 Network policy 的前提下转换为当前运行的脱敏状态；普通 route-local failure 允许独立路径继续，临时/额度状态则必须阻断 Browser admission，不能成为“已耗尽”证据。前者只有在后续 route 完整交付时才被清除；Browser 也正常未命中时，聚合结果返回首个稳定 route failure，而不是提交自动耗尽。这些状态只进入安全日志、内存聚合和本次非持久化 Report，不成为持久化候选历史。
 
 后续 route 成功时正常短路；最终没有成功时选择稳定失败、deferred 或 action-required 结果，绝不能在尝试其它候选后伪装成完整耗尽。配置预检、取消、Port 合同、临时文件清理、发布和 stale 失败不属于可隔离的 route 失败，必须立即终止。不同候选可以有各自来源，但同一 `Literature` 只有一个主 PDF 驱动解析。候选通过基本检查并完整提交后立即形成 `ASSET_READY`，不等待正文内容判断。补充 PDF 或其它相关文件可以保存为补充资产，但不驱动 Parsing、Analysis 或 Literature 状态。
 
 单个 Literature 内同一层的 routes 与候选按 plan 确定顺序短路，不进行跨层竞速。Entry 可以有界并行处理 cohort 内不同 Literature；API 并发最终由官方 quota scope 门控，Browser 并发最终由 risk group 门控。等待 Network/Browser permit 不等于候选失败，不改变层级顺序，也不形成新的 Acquisition 业务结果。
+
+Debug 诊断为 cohort、tier、route、route adapter、授权 source/target/lookup/download 和 Browser source/candidate 记录单调时钟耗时。每个 route 终态显式使用 `disposition=delivered|miss|deferred|action-required|failure|fatal` 与 `next=next-route|next-tier|browser-admission|stop` 说明实际控制流；授权 API source 同时报告 strong-evidence target 数、attempted 与 delivered。正常模式不逐条显示 route miss、candidate、capture 或 cleanup，而保留交付、Browser 分组/等待、最终耗尽和带 code/retryable/reason/action 的稳定失败。日志不能改变 route 聚合、Browser admission 或耗尽判断。
 
 当前实现通过 `prepare_primary_pdf_cohort()` 一次接收按冻结顺序排列的请求，在 Public 与
 Authorized API pass 中对不同 Literature 使用有界 worker；每篇内部的 route 顺序保持
@@ -461,14 +476,21 @@ Acquisition 失败或原始程序错误传播，不能只写日志。最终 coho
 
 当前完整生产对象图与 capability-scoped Completion 对象图都显式组装并共享同一
 Profile catalog/Planner、tiered cohort executor、Browser scheduler、session broker 和 admission
-controller。普通 `browser_enabled` 会进入 admission 的显式总开关，但当前 Browser client 仍为
-空，production Browser rule catalog 为 0，execution confirmation 与 runtime readiness 固定为
-false；因此 Browser admission 可以报告最小剩余集合、readiness、待处理动作和保守时长，却不会
-产生真实 Browser 流量。Network per-hop `BrowserDestinationGuard`、risk-group executor、
-operator-managed profile 存储与交互入口、状态/页面分类、多路正文捕获、封闭 action contract、
+controller。当前 production Browser rule catalog 有 `springerlink-pdf@4`；普通 `browser_enabled`、
+安全 operator profile presence、Playwright Python package 和 Chromium executable 共同决定
+Bootstrap 是否创建真实 Browser client。execution confirmation 与 runtime readiness 由这些本地
+事实动态计算，Browser admission 据此报告最小剩余集合、readiness、待处理动作和保守
+时长，只为 admitted SpringerLink work 产生 Browser 流量。SpringerLink Source 从经审查的文章
+landing 或“精确 asset origin + 唯一 DOI”形成 action；opaque AssetHint path 只用于解析精确
+origin，不直接导航。若 rule 声明 DOI PDF template，Source 从唯一 DOI 构造经审查的 Provider
+locator 作为 Browser 起点；文章流采用顶层 navigation-only，先检查导航期间已经捕获的 PDF，
+再只在静态 entitlement link marker 存在时点击并等待 PDF response。marker 不存在时形成快速
+`normal-miss`，不执行无条件整篇预算等待。Network per-hop
+`BrowserDestinationGuard`、risk-group executor、operator-managed profile 存储与交互入口、
+状态/页面分类、多路正文捕获、封闭 action contract、
 supplement/错文排除、Provider cooldown/circuit 和安装 wheel 后的本地 Chromium foundation 已由
-离线测试验收。它们证明共享基础设施和安全边界，不构成任何出版社 Browser route 的
-production-ready 证据。
+离线测试验收。这些合同与 SpringerLink Profile/rule 的 production-ready 准入证据闭环，但不证明
+本地 session 已登录或任意 SpringerLink 文章有 entitlement。
 
 ### 4.1 Browser admission、会话与调度
 
@@ -482,14 +504,16 @@ Browser admission 在启动任何 Browser runtime 前检查：
 
 Admission 按 risk group 汇总剩余论文数、readiness、session/action 状态、组内政策、最早开始时间和保守最低时长。它只形成当前操作的允许、延期、action-required 或拒绝结果，不读取 Cookie 内容，也不把完整 URL、selector 或 profile 信息写入 Report。
 
+相同安全诊断在 Debug 中报告 eligible、admitted、attempted、delivered，以及每个 group/article 的 queue wait、pacing、session key/reuse、页面 observation/marker 检查耗时、state、capture 分类和 cleanup outcome。marker 诊断只使用静态 marker ID、selector 数量、matched/miss 和耗时，不记录 selector 本身。session key、rule ID 与匿名 candidate/attempt identity 都来自已验证的无 secret 值；完整 URL、DOI、selector、页面文本、profile 路径/内容和 PDF 字节不进入 LogRecord。
+
 每个 risk group 是独立串行队列，不同组可以并行：
 
 ```text
-Wiley group:     W1 --provider interval-- W2 --provider interval-- W3
-Elsevier group:  E1 --provider interval-- E2 --provider interval-- E3
-Springer group:  S1 --provider interval-- S2 --provider interval-- S3
+SpringerLink group:  S1 --at least 10s-- S2 --at least 10s-- S3
+Approved group B:    B1 --its own policy-- B2 --its own policy-- B3
 ```
 
+当前只有 SpringerLink 是 production Browser group，B 只表示将来通过独立准入的第二个组。
 组内 `max_concurrency = 1`。全局 Browser concurrency 只限制本机 Browser process/context 资源，不能作为所有 Provider 共用的业务锁。共享平台、账号、quota 或风控的多个品牌进入同一 risk group；不同展示名称不能自动获得独立并发。
 
 当前 `PublisherAccessProfile.browser_policy` 与 Profile 的 `browser_rate_limit_group`、
@@ -506,7 +530,7 @@ primary capture、supplement exclusion 和四类页面状态必须对齐。缺�
 漂移均在对象图组装时失败。`fixture-verified` rule 只参加离线测试，不会进入 production 派生
 catalog；`unsupported` Profile 不声明任何 executable route。
 
-一次 `ArticleBrowserAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
+一次 `BrowserArticleAttempt` 的 permit 从第一次 canonical landing 导航前开始，覆盖 marker 检查、有限动作、popup/viewer、response/download 捕获、TemporaryPdf 转换以及页面、下载和临时文件清理。下一篇和失败重试都必须等待当前组的 Provider policy；redirect、多个标签页、备用 URL 或 selector fallback 不能绕过 permit。页面的 CSS/JS/字体等子资源不逐个使用“文章间隔”，但继续受 Network host admission 和每流程请求、导航、popup、下载、字节与总时长预算。
 
 每个 `BrowserSiteRule` 的页面动作是本地、不可变且有序的封闭序列，不再使用一个可选
 `click_selector` 字段，也没有旧单动作兼容分支。可执行 kind 只有 `CLICK`、`OPEN_VIEWER`、
@@ -575,10 +599,10 @@ locator。
 Network 已提供按 `browser_session_key` 串行 lease 的 process-local session broker：同一访问方的
 多篇论文可以复用一个合法 persistent context，同时每篇文章仍拥有独立 page、下载临时目录、
 预算、连接绑定和结果；runtime/清理失败会淘汰该 session。Bootstrap 已把同一个 broker 与
-scheduler/admission/cohort executor 注入 Acquisition 运行对象图，但当前没有 production Browser
-rule 或 Browser client，execution confirmation 与 runtime readiness 也保持关闭。未来通过准入的
-Provider Profile 仍须把已确认的 session key、operator profile readiness 与具体 route 精确绑定，
-不能把 foundation 接线当作 Provider 可用性。Profile 路径由 Configuration 安全解析，
+scheduler/admission/cohort executor 注入 Acquisition 运行对象图。SpringerLink Profile 把审查过的
+`springerlink` session key/risk group、10 秒最小文章启动间隔、operator profile readiness 与
+`browser:springerlink` route 精确绑定；将来的 Provider 也必须通过同一准入门，不能从
+SpringerLink 继承 group/session 或把 foundation 接线当作 Provider 可用性。Profile 路径由 Configuration 安全解析，
 Cookie/profile 不进入 `credentials.toml`、业务 Model、Catalog、provenance、Report 或日志。
 自动流程不填写登录表单、选择机构、处理 MFA/CAPTCHA、执行任意 JavaScript 或绕过 challenge；
 这些情况形成 action-required 并暂停对应 group。

@@ -1,10 +1,10 @@
 # Elsevier
 
-- 官方资料最后在线核对：2026-08-15
-- 当前实现离线对照：2026-08-15
+- 官方资料最后在线核对：2026-08-18
+- 当前实现离线对照：2026-08-18
 - 当前选择键：Metadata `elsevier`；Acquisition `elsevier`
 - 供应商角色：Scopus/Elsevier 元数据查询，以及受产品订阅和授权约束的文章全文/对象获取
-- 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter 已进入生产 registry；Article Retrieval FULL XML 到 Object Retrieval 主 PDF 的授权 route 已进入生产 registry；ScienceDirect Browser route 仍为 unsupported
+- 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter 已进入生产 registry；Article Retrieval 的直接 PDF 表示及 FULL XML 到 Object Retrieval 主 PDF 的授权 route 已进入生产 registry；ScienceDirect Browser route 仍为 unsupported
 
 ## 1. 官方入口与证据
 
@@ -16,9 +16,10 @@
 - [Article Retrieval API WADL](https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl)：按 DOI、PII 或 Article EID 获取文章 FULL 表示及其媒体类型合同。
 - [Article Retrieval FULL XML example](https://dev.elsevier.com/payloads/retrieval/articleRetrievalResp.xml)：官方 FULL XML 中 `MAIN web-pdf` attachment EID 的静态响应样例。
 - [Object Retrieval API WADL](https://dev.elsevier.com/documentation/ObjectRetrievalAPI.wadl)：按 object EID 取回对象并协商 `application/pdf` 的合同。
+- [Authentication error example](https://dev.elsevier.com/payloads/authError.xml)、[quota error example](https://dev.elsevier.com/payloads/quotaExceeded.xml)、[resource-not-found example](https://dev.elsevier.com/payloads/resourceNotFound.xml) 与 [generic error example](https://dev.elsevier.com/payloads/genericError.xml)：官方 `service-error/status/statusCode` 错误 envelope。
 - [Abstract Citation API WADL](https://dev.elsevier.com/documentation/AbstractCitationAPI.wadl)：按年引用计数/overview。
 
-均为 `official`，2026-08-15 核对。公开 WADL、配额页和 payload example 可匿名读取；实际内容 API 要求 key，本轮只读取这些静态官方资料，没有读取本地凭据，也没有向内容 API 发送认证请求。
+均为 `official`，2026-08-18 核对。公开 WADL、配额页和 payload example 可匿名读取；实际内容 API 要求 key，本轮只读取这些静态官方资料，没有读取本地凭据，也没有向内容 API 发送认证请求。
 
 ## 2. 认证、授权、配额与 throttle
 
@@ -92,6 +93,21 @@ search-results {
 不同 `view`、记录类型和 entitlement 返回字段不同，adapter 不能依赖单一公开样例中的完整度。
 `dc:creator` 的单一字符串也不能替代有序结构化 authorship。
 
+`verified`，2026-08-18：一次由用户明确授权的最小只读 `config test elsevier` 使用 cursor
+和 `COMPLETE` view，受控结构遥测显示 HTTP 200 顶层为 `search-results`，total、page count、
+cursor 与 entry 均存在，但公开 offset 样例中的 `opensearch:startIndex` 缺失；Network、认证和
+Search product 均已通过，原 adapter 因把该 offset 字段误作 cursor 必填而返回
+`metadata-provider-unknown-shape`。此次探测没有保存或记录 response body、字段值、query、
+cursor、`statusText` 或凭据。当前 adapter 因而按两种分页语义处理：cursor 是进度真相源；
+`startIndex` 缺失时不猜 vendor offset，若可选出现则必须与本地已接收计数一致。
+
+Scopus/Abstract 正常 JSON 与错误 JSON 不能只靠 HTTP status 区分。官方错误样例的中性结构为
+`service-error.status.statusCode`；当前 adapter 只读取这个有界、白名单化的 code，不读取或记录
+`statusText`。HTTP 200 下的 `AUTHENTICATION_ERROR`、`AUTHORIZATION_ERROR`、
+`QUOTA_EXCEEDED`、`INVALID_INPUT` 和 `SYSTEM_ERROR` 分别转换成认证、产品授权、限额、查询拒绝
+和可重试服务失败；精确 lookup 的 `RESOURCE_NOT_FOUND` 是正常 miss。未识别 code、畸形错误
+envelope 与真正未知顶层仍保持 `metadata-provider-unknown-shape`，不会把未知响应伪装为空结果。
+
 ### 3.2 Abstract Retrieval
 
 Abstract Retrieval 可按 Scopus ID、DOI、PII、PubMed ID 等单条取回，公开 JSON 样例顶层为
@@ -138,7 +154,9 @@ Article Retrieval 接受 DOI、PII 和 Elsevier Article EID，内容可受 API k
 /content/article/eid/{eid}
 ```
 
-Article Retrieval 的 FULL XML 本身不是主 PDF，但官方静态 FULL XML 样例明确包含：
+Article Retrieval WADL 的 HTTP 200 representations 明确同时包括 `text/xml`、
+`application/json` 和 `application/pdf`。FULL XML 本身不是主 PDF，但官方静态 FULL XML 样例
+明确包含：
 
 ```xml
 <xocs:web-pdf>
@@ -149,14 +167,14 @@ Article Retrieval 的 FULL XML 本身不是主 PDF，但官方静态 FULL XML �
 </xocs:web-pdf>
 ```
 
-Object Retrieval WADL 同时定义
-`GET /content/object/eid/{eid}` 与 `Accept: application/pdf`。因此当前经过核实并实现的
-授权链是：
+Object Retrieval WADL 同时定义 `GET /content/object/eid/{eid}` 与
+`Accept: application/pdf`。因此当前经过核实并实现的授权链是：
 
 ```text
 Article Retrieval view=FULL + application/xml
   -> 只读取显式 MAIN web-pdf attachment EID
-  -> Object Retrieval application/pdf
+  -> 有 MAIN object：Object Retrieval application/pdf
+  -> XML 不可解释或无 MAIN object：相同 DOI/PII/Article EID 的 Article Retrieval application/pdf
   -> TemporaryPdf
   -> 统一 PDF reader、页面树和不可变发布边界
 ```
@@ -168,8 +186,14 @@ Article Retrieval view=FULL + application/xml
 - 根据普通 EID 或 PII 猜测 `-main.pdf`；
 - 把普通 Scopus EID `2-s2.0-*` 当作 Article/Object identity；
 - 接受任意 `<attachment>`、image、supplement 或 JSON `objects.object[]`；
-- 用 Article endpoint 的直接 PDF 协商作为未核实 fallback；
 - 用固定最小字节数、页数或正文阈值判断 preview/正文。
+
+直接 Article PDF 不是由 DOI 模板猜出的公开 URL，也不是 Browser fallback。它只由已经通过强证据
+准入的 DOI、PII 或 Article EID 形成当次私有 locator，并继续使用同一 Elsevier 内容 API scope、
+credential origin、额度反馈和 `Accept: application/pdf` 合同。FULL XML 的 MAIN object 优先；
+只有 XML 媒体类型冲突、畸形/不安全/未知 envelope 或没有 MAIN object 时才使用直接表示。可解析的
+`service-error` 会先转换成 authentication、entitlement、quota、service、request failure 或
+resource-not-found miss，不能以 direct PDF 绕过。
 
 公开样例 JSON 顶层仍可表示为：
 
@@ -186,14 +210,16 @@ full-text-retrieval-response {
 
 1. Scopus `@ref=full-text` 链接：API 或 landing 候选，不保证媒体类型；
 2. Article Retrieval XML/JSON：结构化全文或 locator 容器，不直接形成 `TemporaryPdf`；
-3. 显式 `MAIN web-pdf` attachment EID：当前唯一允许进入 Object Retrieval 的主 PDF locator；
-4. 其它 Object Retrieval 对象：图像、补充材料和未声明用途对象，不能升级成主文；
-5. publisher landing：只形成安全的当次 route hint，不能由页面名称证明 entitlement。
+3. 显式 `MAIN web-pdf` attachment EID：优先进入 Object Retrieval 的主 PDF locator；
+4. 相同强身份的 Article Retrieval `application/pdf`：XML/object locator 不可用时的官方表示；
+5. 其它 Object Retrieval 对象：图像、补充材料和未声明用途对象，不能升级成主文；
+6. publisher landing：只形成安全的当次 route hint，不能由页面名称证明 entitlement。
 
 配置存在 API key、Provider 接受 key、机构拥有 ScienceDirect 订阅和具体文章允许下载是四个
-不同事实。可选 `X-ELS-Insttoken` 只表达机构 token；最终 Object 请求成功返回
-`application/pdf` 才形成该对象的授权下载候选，实际字节仍必须通过统一 PDF 接纳。
-本轮没有调用 Article/Object API、验证真实账户 entitlement 或下载内容。
+不同事实。可选 `X-ELS-Insttoken` 只表达机构 token；最终 Object 或 Article PDF 请求成功返回
+`application/pdf` 才形成该对象或文章表示的授权下载候选，实际字节仍必须通过统一 PDF 接纳。
+2026-08-18 的合同复核只读取公开 WADL/静态样例；没有为本次修复调用带凭据的 Article/Object
+API、验证真实账户 entitlement 或读取响应正文。
 
 ## 6. 代表性响应结构
 
@@ -253,6 +279,7 @@ full-text-retrieval-response
 | `citedby-count` | 来源引用计数 | observation 计数字段候选 | 不生成边 |
 | full-text/link/object locator | 资产线索 | `AssetHint[]` | 区分 landing、XML、image 与 PDF；逐项验证 |
 | `MAIN web-pdf` attachment EID | 授权主 PDF object locator | 当次 `AuthorizedDownloadLocator` | 只在 Acquisition client 内使用，不进入 Literature 数据库 |
+| 强 DOI/PII/Article EID + Article `application/pdf` | 授权主 PDF representation locator | 当次 `AuthorizedDownloadLocator` | 仅在 FULL XML 无可用 MAIN object 时使用；不是公开 URL 猜测或 Browser fallback |
 
 ## 8. 不进入业务 Model 的字段
 
@@ -266,10 +293,10 @@ full-text-retrieval-response
 
 ## 9. 已知限制与待核对
 
-- 本轮没有可用 key 的只读现场验证；实际 view、字段完整度、entitlement 和错误体需实现时以受控账户再核对。
+- 最小只读 probe 验证了当前 key、Scopus Search product 和首个 cursor；后续隔离 Discovery 已连续读取 4 个 cursor 页并完成 100/100，确认真实 cursor 可以省略 offset-only `opensearch:startIndex`。这仍不验证 Abstract Retrieval 的全部字段变体或任意 Article/Object entitlement。
 - 官方默认配额和 throttle 会变化，且可能按 API key、机构协议或 TDM 合同覆盖；运行时以 headers 与账户设置为准，默认值变化时必须同步 policy revision、Notes 与直接测试。
 - `COMPLETE`/`STANDARD` 字段和每页上限不同；搜索翻页需直接测试 cursor 结束条件与 5,000 结果边界。
-- 当前只接纳官方 FULL XML 明确标记的 `MAIN web-pdf`；其它附件类型或 schema 变化必须重新核实，不能通过放宽 parser 猜测兼容。
+- 当前优先接纳官方 FULL XML 明确标记的 `MAIN web-pdf`，并只在 XML/object locator 不可用时使用同一强身份的官方 Article PDF representation；其它附件类型或 schema 变化不能通过放宽 parser 猜测兼容。
 - ScienceDirect Browser 的 selector、登录/entitlement/paywall/challenge marker、供应商页面速率和 session group 仍缺独立生产证据。
 - Citation Overview 不是引用边 API；不要把年度计数当逐条引用。
 
@@ -278,16 +305,25 @@ full-text-retrieval-response
 `src/sciretriever/metadata/providers/elsevier/adapter.py` 已实现显式 credential readiness、Scopus `COMPLETE` topic search/pagination、按 EID/Scopus ID/DOI/PII/PMID 的 Abstract Retrieval lookup、结构化作者/单位、关键词、bibliography 原文与显式 target ID、引用计数和安全 landing AssetHint 转换。
 
 `src/sciretriever/acquisition/providers/elsevier.py` 另实现 Article FULL XML → `MAIN web-pdf`
-attachment EID → Object PDF 的生产授权 route。API key 和可选 institution token 只作为绑定到
+attachment EID → Object PDF，并以 Article direct PDF 作为同一强身份的受控表示 fallback。API key 和可选 institution token 只作为绑定到
 `https://api.elsevier.com:443` 的私有 header 进入 Network；Article/Object 共享自己的
 内容 API scope，与 Scopus Search/Abstract scope 分离。PII、合法 Article EID、实际
 ScienceDirect/linkinghub DOI landing 可以构成强访问证据；普通 Scopus metadata
-observation 和 `2-s2.0-*` 不能。API 正常无主 PDF 时只保留当次 canonical landing、PII
-和 Article EID hints，不写入数据库。
+observation 和 `2-s2.0-*` 不能。FULL XML 没有 MAIN object 或无法安全解释时，先尝试同一
+强身份的官方 Article PDF representation；该表示正常 miss 后只保留当次 canonical landing、
+PII 和 Article EID hints，且不写入数据库。lookup/download 的 Debug 只记录数值 HTTP status、
+受控 `informational|success|redirection|client-error|server-error` 状态类别、representation、
+envelope、disposition 与中性 failure kind，不记录 vendor status text、header、正文、locator、
+URL/query 或 credential。
 
 `elsevier-sciencedirect` Profile 当前是 API-only `production-ready`。ScienceDirect
 Browser capability 为 `unsupported`，没有 production rule、rate-limit group 或 session
 group：ScanSci 最近的 challenge/timeout 记录没有被改写成成功，也不会猜 selector 或通过
-Browser 绕过 API quota、429、临时错误或 challenge。2026-08-15 本轮没有读取真实 key、
-调用真实 Elsevier API/Browser、验证账户 entitlement 或下载内容；全部实现证据来自官方
-静态 WADL/XML schema 与离线 fake/fixture。
+Browser 绕过 API quota、429、临时错误或 challenge。2026-08-18 用户授权的隔离 Completion
+已经让 27 个强证据目标进入真实 Article/Object route，其中 26 个交付 PDF，1 个在 lookup
+阶段形成 `http-status`/missing representation 的 response-schema failure。补齐 status-only
+telemetry 后，对该精确目标的另一次只读重试确认 lookup 返回 HTTP 400 / `client-error`；它不是
+401 authentication、403 entitlement、404 normal miss、429 quota 或 5xx service failure。
+在没有读取响应正文的边界内，当前只能保留为明确、非重试的 response-schema failure，不能猜测
+更具体的 vendor 原因或把 400 放宽成正常未命中。该诊断没有读取或记录 response body、vendor
+status text、header、URL/query、credential 或 PDF 字节。尚未调用 Elsevier Browser。
