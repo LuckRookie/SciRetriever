@@ -416,14 +416,18 @@ class AccessPermit:
         self,
         host: str,
         *,
+        host_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None = None,
         timeout: float | None = None,
     ) -> HostPermit:
         if self._released:
             raise AdmissionError("scope permit has been released")
+        if host_policy is not None and not isinstance(host_policy, AccessPolicy):
+            raise TypeError("host_policy must be an AccessPolicy or None")
         return self._coordinator._acquire_host(
             self,
             host,
+            host_policy=host_policy,
             cancel_event=cancel_event,
             timeout=timeout,
         )
@@ -609,6 +613,7 @@ class AccessCoordinator:
         owner: AccessPermit,
         host: str,
         *,
+        host_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None,
         timeout: float | None,
     ) -> HostPermit:
@@ -616,7 +621,9 @@ class AccessCoordinator:
             raise AdmissionError("scope permit has been released")
         normalized_host = _normalize_host(host)
         _validate_wait_inputs(cancel_event, timeout)
-        policy = self.policy_for(owner.scope)
+        if host_policy is not None and not isinstance(host_policy, AccessPolicy):
+            raise TypeError("host_policy must be an AccessPolicy or None")
+        policy = self.policy_for(owner.scope) if host_policy is None else host_policy
         with self._condition:
             if owner.released:
                 raise AdmissionError("scope permit has been released")

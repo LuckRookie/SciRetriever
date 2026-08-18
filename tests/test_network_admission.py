@@ -302,6 +302,30 @@ class NetworkAdmissionTests(unittest.TestCase):
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(errors, [])
 
+    def test_explicit_host_policy_does_not_consume_the_article_scope_interval(self) -> None:
+        clock = _FakeClock()
+        coordinator = AccessCoordinator(clock=clock)
+        scope = AccessScope("browser-publisher", "web")
+        article_policy = AccessPolicy(max_concurrency=1, min_start_interval=30.0)
+        request_policy = AccessPolicy(max_concurrency=8)
+
+        article = coordinator.acquire_scope(scope, article_policy)
+        first = article.acquire_host(
+            "publisher.example.test",
+            host_policy=request_policy,
+        )
+        first.release()
+        second = article.acquire_host(
+            "publisher.example.test",
+            host_policy=request_policy,
+            timeout=0.05,
+        )
+        second.release()
+        article.release()
+
+        with self.assertRaises(AdmissionTimeout):
+            coordinator.acquire_scope(scope, timeout=0.01)
+
     def test_web_scope_covers_multiple_redirect_hosts_and_cools_after_full_flow(self) -> None:
         clock = _FakeClock()
         coordinator = AccessCoordinator(clock=clock)

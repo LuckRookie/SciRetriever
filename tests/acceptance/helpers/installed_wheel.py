@@ -41,6 +41,7 @@ _CLEARED_ENVIRONMENT_NAMES = frozenset(
         "PIP_FIND_LINKS",
         "PIP_INDEX_URL",
         "PIP_TRUSTED_HOST",
+        "PLAYWRIGHT_BROWSERS_PATH",
         "PYTHONHOME",
         "PYTHONPATH",
         "REQUESTS_CA_BUNDLE",

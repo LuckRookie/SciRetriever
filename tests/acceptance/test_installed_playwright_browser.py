@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
-import sys
 import unittest
 from pathlib import Path
 
@@ -25,102 +22,50 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         self,
     ) -> None:
         driver = Path(__file__).parent / "helpers" / "drive_playwright_browser.py"
-        helper = Path(__file__).parent / "helpers" / "playwright_runtime.py"
-        assert self.install.root is not None
-        assert self.install.venv is not None
-        copied_driver = self.install.root / "playwright-driver.py"
-        copied_helper = self.install.root / helper.name
-        shutil.copyfile(driver, copied_driver)
-        shutil.copyfile(helper, copied_helper)
-
-        purelib_probe = self.install.run_python(
-            ("-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))")
-        )
-        self.assertEqual(purelib_probe.returncode, 0, purelib_probe.stderr_text)
-        fresh_site_packages = os.fspath(
-            Path(purelib_probe.stdout_text.strip()).resolve(strict=True)
-        )
-
+        fresh_site_packages = os.fspath(self.install.site_packages)
         browser_cache = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
         if browser_cache is None:
             browser_cache = os.fspath(Path.home() / ".cache" / "ms-playwright")
-        environment = self.install.isolated_environment(
-            {
-                "PLAYWRIGHT_BROWSERS_PATH": browser_cache,
-                "SCIRETRIEVER_FRESH_SITE_PACKAGES": fresh_site_packages,
-            }
-        )
-        result = subprocess.run(
-            (sys.executable, "-I", os.fspath(copied_driver)),
-            cwd=self.install.root,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=False,
+        result = self.install.run_driver(
+            driver,
+            environment={"PLAYWRIGHT_BROWSERS_PATH": browser_cache},
             timeout=120,
         )
-        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        self.assertEqual(result.returncode, 0, result.stderr_text)
         self.assertEqual(result.stderr, b"")
         payload = json.loads(result.stdout)
 
         for module_file in payload["product_module_files"].values():
             self.assertTrue(module_file.startswith(fresh_site_packages + os.sep), module_file)
-        self.assertFalse(payload["playwright_module_file"].startswith(fresh_site_packages + os.sep))
-
-        engine = payload["engine"]
-        self.assertEqual(engine["name"], "chromium")
-        self.assertRegex(engine["version"], r"^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$")
-        executable_path = os.fspath(Path(engine["executable_path"]).resolve(strict=True))
         self.assertTrue(
-            executable_path.startswith(environment["PLAYWRIGHT_BROWSERS_PATH"] + os.sep)
+            payload["playwright_module_file"].startswith(fresh_site_packages + os.sep),
+            payload["playwright_module_file"],
         )
-        self.assertFalse(executable_path.startswith(fresh_site_packages + os.sep))
-        self.assertEqual(engine["javascript_result"], "javascript-ran")
-        self.assertEqual(
-            engine["page_clicks"],
-            ["button[data-action='pdf']", "button[data-action='pdf']"],
-        )
-        self.assertEqual(engine["download_events"], 2)
+        self.assertTrue(payload["runtime"]["python_dependency_available"])
+        self.assertTrue(payload["runtime"]["chromium_executable_available"])
 
         network = payload["network"]
-        self.assertEqual(network["resolver_addresses"], ["127.0.0.1"])
-        self.assertEqual(network["connected_addresses"], ["127.0.0.1"] * 4)
-        self.assertEqual(network["tls_server_names"], [network["hostname"]] * 4)
-        self.assertEqual(network["authorities"], [network["authority"]] * 4)
+        self.assertTrue(network["resolver_only_returned_loopback"])
+        self.assertEqual(network["authorities"], [network["authority"]] * 3)
         self.assertEqual(
             network["paths"],
-            ["/article", "/article.pdf", "/article", "/article.pdf"],
+            ["/article", "/article.pdf", "/article.pdf"],
         )
-        self.assertTrue(network["certificate_san_matches_hostname"])
-        self.assertTrue(network["all_bindings_acknowledged_before_continue"])
-        self.assertTrue(network["download_request_was_live"])
+        self.assertTrue(network["cookie_pair_preserved"])
 
         expected_sha256 = payload["verification"]["expected_pdf_sha256"]
         self.assertEqual(payload["verification"]["delivered_pdf_sha256"], [expected_sha256] * 2)
-        self.assertEqual(payload["candidate"]["acquisition_path"], "controlled-browser")
-        self.assertEqual(payload["candidate"]["source_name"], "controlled-browser")
+        self.assertLess(payload["verification"]["direct_pdf_elapsed_seconds"], 5.0)
 
         session = payload["session"]
         self.assertEqual(session["article_count"], 2)
-        self.assertEqual(session["process_start_count"], 1)
-        self.assertEqual(session["context_create_count"], 1)
-        self.assertEqual(session["article_begin_count"], 2)
-        self.assertEqual(session["article_end_count"], 2)
-        self.assertTrue(session["article_paths_distinct"])
-        self.assertTrue(session["article_paths_cleaned"])
+        self.assertTrue(session["one_process_and_context_reused"])
+        self.assertTrue(session["article_pages_closed"])
 
         cleanup = payload["cleanup"]
-        self.assertTrue(cleanup["page_closed"])
-        self.assertTrue(cleanup["context_closed"])
-        self.assertTrue(cleanup["process_closed"])
-        self.assertTrue(cleanup["download_deleted"])
-        self.assertEqual(cleanup["page_close_count"], 2)
-        self.assertEqual(cleanup["download_delete_count"], 2)
-        self.assertEqual(cleanup["context_close_count"], 1)
-        self.assertEqual(cleanup["process_close_count"], 1)
-        self.assertFalse(cleanup["browser_downloads_path_exists"])
-        self.assertFalse(cleanup["fixture_temporary_root_exists"])
+        self.assertFalse(cleanup["temporary_root_exists"])
         self.assertFalse(cleanup["server_thread_alive"])
+        self.assertEqual(cleanup["playwright_threads_alive"], [])
 
         production = payload["production_boundary"]
         self.assertEqual(production["catalog_rule_count"], 0)

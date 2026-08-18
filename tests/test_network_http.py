@@ -145,6 +145,7 @@ class _RecordingCoordinator(AccessCoordinator):
         owner: AccessPermit,
         host: str,
         *,
+        host_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None,
         timeout: float | None,
     ) -> HostPermit:
@@ -152,6 +153,7 @@ class _RecordingCoordinator(AccessCoordinator):
         return super()._acquire_host(
             owner,
             host,
+            host_policy=host_policy,
             cancel_event=cancel_event,
             timeout=timeout,
         )
@@ -437,6 +439,68 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertEqual(call["tls_server_hostname"], "example.test")
         destination = cast(ResolvedDestination, call["destination"])
         self.assertEqual(destination.addresses, ("93.184.216.34",))
+
+    def test_request_logging_has_safe_terminal_elapsed_and_suppresses_credentials(self) -> None:
+        scope = AccessScope("fixture-provider", "api", "metadata")
+        policy = AccessPolicy(max_concurrency=1)
+        success_client = self._client(
+            _FakeTransport([_response(body=b"payload")]),
+            _Resolver({"example.test": ("93.184.216.34",)}),
+        )
+
+        with self.assertLogs("sciretriever.network.http", level="DEBUG") as captured:
+            success = _response_value(
+                success_client.request(
+                    scope,
+                    "https://example.test/private-path-must-not-log",
+                    policy,
+                )
+            )
+
+        self.assertEqual(success.body, b"payload")
+        output = "\n".join(captured.output)
+        self.assertIn("event=network-request-started", output)
+        self.assertIn("provider=fixture-provider channel=api service=metadata", output)
+        self.assertIn("event=network-request-finished", output)
+        self.assertIn("status=200 response_bytes=7", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
+        self.assertNotIn("private-path-must-not-log", output)
+
+        failed_client = self._client(
+            _FakeTransport([OSError("PRIVATE-TRANSPORT-SENTINEL")]),
+            _Resolver({"example.test": ("93.184.216.34",)}),
+        )
+        with self.assertLogs("sciretriever.network.http", level="DEBUG") as failed_logs:
+            failure = _failure_value(
+                failed_client.request(
+                    scope,
+                    "https://example.test/another-private-path",
+                    policy,
+                )
+            )
+        failure_output = "\n".join(failed_logs.output)
+        self.assertEqual(failure.code, "transport")
+        self.assertIn("event=network-request-failed", failure_output)
+        self.assertIn("code=transport retryable=true", failure_output)
+        self.assertRegex(failure_output, r"elapsed_ms=\d+")
+        self.assertNotIn("PRIVATE-TRANSPORT-SENTINEL", failure_output)
+        self.assertNotIn("another-private-path", failure_output)
+
+        credential_client = self._client(
+            _FakeTransport([_response(body=b"credentialed")]),
+            _Resolver({"example.test": ("93.184.216.34",)}),
+        )
+        with self.assertNoLogs("sciretriever.network.http", level="DEBUG"):
+            credentialed = _response_value(
+                credential_client.request(
+                    scope,
+                    "https://example.test/credentialed",
+                    policy,
+                    credential_headers={"Authorization": "Bearer PRIVATE-CREDENTIAL"},
+                    credential_allowed_origins=(_credential_origin(),),
+                )
+            )
+        self.assertEqual(credentialed.body, b"credentialed")
 
     def test_default_clients_reject_nondefault_ports_before_dns_or_transport(self) -> None:
         cases = (

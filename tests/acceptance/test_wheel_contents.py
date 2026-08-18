@@ -22,7 +22,6 @@ FORBIDDEN_RUNTIME_REQUIREMENTS = (
     "fake-useragent",
     "ipykernel",
     "openai",
-    "playwright",
     "requests",
     "sqlalchemy",
 )
@@ -72,6 +71,7 @@ class WheelContentsTests(unittest.TestCase):
         self.assertEqual(
             normalized,
             (
+                "playwright>=1.55.0",
                 "pydantic>=2.12.0",
                 "prompt-toolkit>=3.0.51",
                 "pypdf2>=3.0.1",

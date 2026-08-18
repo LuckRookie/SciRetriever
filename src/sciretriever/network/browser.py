@@ -74,6 +74,8 @@ _DEFAULT_MAX_BYTES_PER_DOWNLOAD: Final[int] = 64 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_SECONDS: Final[float] = 60.0
 _DEFAULT_CLEANUP_TIMEOUT_SECONDS: Final[float] = 5.0
+_MARKER_LOOKUP_TIMEOUT_MILLISECONDS: Final[int] = 250
+_DEFAULT_HOST_REQUEST_POLICY: Final[AccessPolicy] = AccessPolicy(max_concurrency=1)
 _INTERNAL_SCHEMES = frozenset({"about"})
 _CHALLENGE_MARKERS = (
     "captcha",
@@ -136,7 +138,11 @@ class BrowserFlowSession(Protocol):
 
     def open_verified_locator(self, locator: str) -> None: ...
 
+    def capture_available(self, kind: BrowserCaptureKind) -> bool: ...
+
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None: ...
+
+    def has_selector(self, selector: str) -> bool: ...
 
     def text(self, selector: str) -> str: ...
 
@@ -443,10 +449,12 @@ class _FlowState:
 
     __slots__ = (
         "scope_permit",
+        "host_policy",
         "resolver",
         "destination_policy",
         "destination_guard",
         "capture_guard",
+        "navigation_only",
         "budget",
         "clock",
         "started_at",
@@ -482,10 +490,12 @@ class _FlowState:
     def __init__(
         self,
         scope_permit: AccessPermit,
+        host_policy: AccessPolicy,
         resolver: ResolverLike,
         destination_policy: DestinationPolicy,
         destination_guard: BrowserDestinationGuard | None,
         capture_guard: BrowserCaptureGuard | None,
+        navigation_only: bool,
         budget: BrowserBudget,
         clock: Clock,
         deadline: float,
@@ -494,10 +504,12 @@ class _FlowState:
         cleanup_timeout_seconds: float,
     ) -> None:
         self.scope_permit = scope_permit
+        self.host_policy = host_policy
         self.resolver = resolver
         self.destination_policy = destination_policy
         self.destination_guard = destination_guard
         self.capture_guard = capture_guard
+        self.navigation_only = navigation_only
         self.budget = budget
         self.clock = clock
         self.started_at = clock()
@@ -758,6 +770,12 @@ class _FlowState:
                     raise _Abort("timeout")
                 self.condition.wait(timeout=min(remaining, 0.25))
 
+    def capture_available(self, kind: BrowserCaptureKind) -> bool:
+        if not isinstance(kind, BrowserCaptureKind):
+            raise _Abort("policy")
+        with self.condition:
+            return any(capture.kind is kind for capture in self.captures)
+
     def resolve(
         self,
         value: str,
@@ -820,6 +838,7 @@ class _FlowState:
         try:
             return self.scope_permit.acquire_host(
                 destination.hostname,
+                host_policy=self.host_policy,
                 cancel_event=self.cancel_event,
                 timeout=max(self.deadline - self.clock(), 0.001),
             )
@@ -1040,8 +1059,10 @@ class _BrowserSession:
         "_verified_locator_operation",
         "_click_operation",
         "_fill_operation",
+        "_has_selector_operation",
         "_text_operation",
         "_observe_operation",
+        "_capture_available_operation",
         "_wait_for_capture_operation",
     )
 
@@ -1056,8 +1077,12 @@ class _BrowserSession:
         self._fill_operation = lambda selector, value: client._client_fill(
             state, page, selector, value
         )
+        self._has_selector_operation = lambda selector: client._client_has_selector(
+            state, page, selector
+        )
         self._text_operation = lambda selector: client._client_text(state, page, selector)
         self._observe_operation = lambda: client._client_observe(state, page)
+        self._capture_available_operation = lambda kind: state.capture_available(kind)
         self._wait_for_capture_operation = lambda kind: state.wait_for_capture(kind)
 
     def navigate(self, url: str) -> None:
@@ -1078,11 +1103,17 @@ class _BrowserSession:
     def fill(self, selector: str, value: str) -> None:
         self._fill_operation(selector, value)
 
+    def has_selector(self, selector: str) -> bool:
+        return self._has_selector_operation(selector)
+
     def text(self, selector: str) -> str:
         return self._text_operation(selector)
 
     def observe(self) -> BrowserPageObservation:
         return self._observe_operation()
+
+    def capture_available(self, kind: BrowserCaptureKind) -> bool:
+        return self._capture_available_operation(kind)
 
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
         self._wait_for_capture_operation(kind)
@@ -1096,6 +1127,7 @@ class BrowserClient:
         "_resolver",
         "_coordinator",
         "_destination_policy",
+        "_host_policy",
         "_operator_profile",
         "_session_broker",
         "_clock",
@@ -1111,6 +1143,7 @@ class BrowserClient:
         resolver: ResolverLike,
         coordinator: AccessCoordinator,
         destination_policy: DestinationPolicy | None = None,
+        host_policy: AccessPolicy | None = None,
         operator_profile: object | None = None,
         session_broker: BrowserSessionBroker | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
@@ -1124,6 +1157,8 @@ class BrowserClient:
             raise TypeError("coordinator must be an AccessCoordinator")
         if not isinstance(destination_policy, (DestinationPolicy, type(None))):
             raise TypeError("destination_policy must be a DestinationPolicy")
+        if host_policy is not None and not isinstance(host_policy, AccessPolicy):
+            raise TypeError("host_policy must be an AccessPolicy or None")
         timeout = _positive_seconds(timeout_seconds, field_name="timeout_seconds")
         cleanup_timeout = _positive_seconds(
             cleanup_timeout_seconds,
@@ -1142,6 +1177,7 @@ class BrowserClient:
         self._resolver = resolver
         self._coordinator = coordinator
         self._destination_policy = destination_policy or DestinationPolicy()
+        self._host_policy = host_policy or _DEFAULT_HOST_REQUEST_POLICY
         self._operator_profile = operator_profile
         self._session_broker = session_broker
         self._clock = clock or time.monotonic
@@ -1170,6 +1206,7 @@ class BrowserClient:
         flow: Callable[[BrowserFlowSession], object] | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
+        navigation_only: bool = False,
         session_key: str | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
@@ -1205,6 +1242,8 @@ class BrowserClient:
                 capture_guard,
                 BrowserCaptureGuard,
             ):
+                raise _Abort("policy")
+            if type(navigation_only) is not bool:
                 raise _Abort("policy")
             if (self._session_broker is None) != (session_key is None):
                 raise _Abort("policy")
@@ -1254,10 +1293,12 @@ class BrowserClient:
 
             state = _FlowState(
                 scope_permit,
+                self._host_policy,
                 self._resolver,
                 self._destination_policy,
                 destination_guard,
                 capture_guard,
+                navigation_only,
                 effective_budget,
                 self._clock,
                 deadline,
@@ -1789,9 +1830,13 @@ class BrowserClient:
             url = _text_attribute(request, "url")
             if url is None:
                 raise _Abort("policy")
-            state.consume(requests=1)
             page = _attribute(request, "page")
             navigation = self._is_navigation_request(request)
+            if state.navigation_only and not navigation:
+                if not self._abort_route(route):
+                    state.mark_cleanup_failure()
+                return
+            state.consume(requests=1)
             destination = state.resolve_request(url, navigation=navigation)
             if destination is None:
                 self._continue_route(route)
@@ -2220,7 +2265,6 @@ class BrowserClient:
                 if status is not None and (type(status) is not int or not 100 <= status <= 599):
                     raise _Abort("runtime")
                 state.page_statuses[id(page)] = cast(int | None, status)
-                state.check_challenge(page, response)
             finally:
                 if not operation_complete:
                     state.finish_page_navigation(page)
@@ -2313,6 +2357,26 @@ class BrowserClient:
             abort=lambda: self._abort_runtime(page, None, state.runtime),
         )
 
+    def _client_has_selector(self, state: _FlowState, page: object, selector: str) -> bool:
+        selector = self._selector(selector)
+        has_selector = getattr(page, "has_selector", None)
+        if not callable(has_selector):
+            raise _Abort("runtime")
+        value = self._run_cancellable(
+            state,
+            lambda: has_selector(
+                selector,
+                timeout=min(
+                    state.remaining_milliseconds(),
+                    _MARKER_LOOKUP_TIMEOUT_MILLISECONDS,
+                ),
+            ),
+            abort=lambda: self._abort_runtime(page, None, state.runtime),
+        )
+        if type(value) is not bool:
+            raise _Abort("runtime")
+        return value
+
     def _client_text(self, state: _FlowState, page: object, selector: str) -> str:
         selector = self._selector(selector)
         text_content = getattr(page, "text_content", None)
@@ -2320,7 +2384,16 @@ class BrowserClient:
             raise _Abort("runtime")
         value = self._run_cancellable(
             state,
-            lambda: text_content(selector, timeout=state.remaining_milliseconds()),
+            # Marker probes must be non-blocking.  A direct-PDF navigation has
+            # no HTML DOM, and a missing selector must not consume the entire
+            # article timeout before an already captured response is returned.
+            lambda: text_content(
+                selector,
+                timeout=min(
+                    state.remaining_milliseconds(),
+                    _MARKER_LOOKUP_TIMEOUT_MILLISECONDS,
+                ),
+            ),
             abort=lambda: self._abort_runtime(page, None, state.runtime),
         )
         if value is None:

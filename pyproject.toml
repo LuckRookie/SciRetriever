@@ -5,6 +5,7 @@ description = "Scientific-literature database for metadata, assets, light-struct
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "playwright>=1.55.0",
     "pydantic>=2.12.0",
     "prompt-toolkit>=3.0.51",
     "pypdf2>=3.0.1",
@@ -19,7 +20,6 @@ sciretriever = "sciretriever.entry.cli.main:main"
 [dependency-groups]
 dev = [
     "build>=1.5.0",
-    "playwright>=1.55.0",
     "pyright>=1.1.407",
     "ruff>=0.12.0",
     "setuptools>=42",

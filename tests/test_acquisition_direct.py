@@ -209,6 +209,7 @@ class _RecordingCoordinator(AccessCoordinator):
         owner: AccessPermit,
         host: str,
         *,
+        host_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None,
         timeout: float | None,
     ) -> HostPermit:
@@ -216,6 +217,7 @@ class _RecordingCoordinator(AccessCoordinator):
         return super()._acquire_host(
             owner,
             host,
+            host_policy=host_policy,
             cancel_event=cancel_event,
             timeout=timeout,
         )

@@ -841,6 +841,7 @@ class HttpClient:
             return _failure("policy")
 
         diagnostics_enabled = not prepared.private_headers and prepared.credential_query is None
+        diagnostic_started_ns = time.monotonic_ns()
         _log_network_request_started(
             scope,
             prepared,
@@ -858,6 +859,7 @@ class HttpClient:
                 scope,
                 scope_permit,
                 enabled=diagnostics_enabled,
+                started_ns=diagnostic_started_ns,
             )
         lease = _ScopeLease(scope=scope, policy=policy, permit=scope_permit)
         feedback: AccessFeedback | None = None
@@ -876,6 +878,7 @@ class HttpClient:
                 lease.scope,
                 result,
                 enabled=diagnostics_enabled,
+                started_ns=diagnostic_started_ns,
             )
         finally:
             self._release_scope_lease(lease, feedback)
@@ -1988,6 +1991,7 @@ def _logged_access_result(
     result: TransportResponse | AccessFailure,
     *,
     enabled: bool,
+    started_ns: int,
 ) -> TransportResponse | AccessFailure:
     """Emit only scope-level, secret-free diagnostics for one final request result."""
 
@@ -2004,10 +2008,11 @@ def _logged_access_result(
     if isinstance(result, AccessFailure):
         _LOGGER.warning(
             "event=network-request-failed provider=%s channel=%s service=%s "
-            "code=%s retryable=%s reason=%s action=%s",
+            "elapsed_ms=%d code=%s retryable=%s reason=%s action=%s",
             provider_name,
             channel,
             service_name,
+            _elapsed_ms(started_ns),
             result.code,
             str(result.retryable).lower(),
             result.reason,
@@ -2016,12 +2021,13 @@ def _logged_access_result(
         return result
     _LOGGER.debug(
         "event=network-request-finished provider=%s channel=%s service=%s "
-        "status=%d response_bytes=%d",
+        "status=%d response_bytes=%d elapsed_ms=%d",
         provider_name,
         channel,
         service_name,
         result.status,
         len(result.body),
+        _elapsed_ms(started_ns),
     )
     return result
 
@@ -2043,6 +2049,10 @@ def _log_network_request_started(
         scope.service_name or "-",
         prepared.method,
     )
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 def _failure(code: str) -> AccessFailure:
