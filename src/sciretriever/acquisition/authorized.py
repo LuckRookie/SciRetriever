@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Iterator, Mapping
+import time
+from collections.abc import Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum, unique
@@ -187,11 +188,32 @@ def _record_identity_rules_tuple(
     return rules
 
 
-def _origins_tuple(value: object) -> tuple[str, ...]:
+def _origins_tuple(value: object, *, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, tuple):
-        raise TypeError("doi_landing_origins must be a tuple")
+        raise TypeError(f"{field_name} must be a tuple")
     origins = tuple(_origin(item) for item in value)
-    return _unique_tuple(origins, field_name="doi_landing_origins")
+    return _unique_tuple(origins, field_name=field_name)
+
+
+def _asset_url_origin(value: object) -> str:
+    candidate = _safe_text(value, field_name="asset hint URL")
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        raise ValueError("asset hint URL must have an absolute HTTPS origin") from None
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("asset hint URL must have an absolute HTTPS origin")
+    host = parsed.hostname.casefold()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    authority = host if port in {None, 443} else f"{host}:{port}"
+    return _origin(f"https://{authority}")
 
 
 def _normal_miss_set(value: object) -> frozenset[AuthorizedNormalMiss]:
@@ -251,6 +273,7 @@ class AuthorizedEvidenceKind(str, Enum):
     STABLE_PROVIDER_LOCATOR = "stable-provider-locator"
     PROVIDER_RECORD_IDENTITY = "provider-record-identity"
     DOI_LANDING_ORIGIN = "doi-landing-origin"
+    DOI_ASSET_ORIGIN = "doi-asset-origin"
 
 
 @unique
@@ -360,6 +383,7 @@ class AuthorizedProviderContract:
     stable_locator_namespaces: tuple[str, ...]
     provider_record_identity_rules: tuple[AuthorizedRecordIdentityRule, ...]
     doi_landing_origins: tuple[str, ...]
+    doi_asset_origins: tuple[str, ...]
     download_locator_namespaces: tuple[str, ...]
     normal_miss_reasons: frozenset[AuthorizedNormalMiss]
     download_proves_entitlement: bool = False
@@ -404,7 +428,18 @@ class AuthorizedProviderContract:
         object.__setattr__(
             self,
             "doi_landing_origins",
-            _origins_tuple(self.doi_landing_origins),
+            _origins_tuple(
+                self.doi_landing_origins,
+                field_name="doi_landing_origins",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "doi_asset_origins",
+            _origins_tuple(
+                self.doi_asset_origins,
+                field_name="doi_asset_origins",
+            ),
         )
         object.__setattr__(
             self,
@@ -436,6 +471,7 @@ class AuthorizedProviderContract:
             self.stable_locator_namespaces
             or self.provider_record_identity_rules
             or self.doi_landing_origins
+            or self.doi_asset_origins
         ):
             raise ValueError("an authorized contract must declare strong applicability evidence")
 
@@ -448,7 +484,7 @@ class AuthorizedLookupTarget:
     namespace: str
     value: str
     provider_record_source: str | None = None
-    resolved_landing_origin: str | None = None
+    confirmed_origin: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.evidence_kind, AuthorizedEvidenceKind):
@@ -472,23 +508,26 @@ class AuthorizedLookupTarget:
                     field_name="provider_record_source",
                 ),
             )
-        if self.resolved_landing_origin is not None:
+        if self.confirmed_origin is not None:
             object.__setattr__(
                 self,
-                "resolved_landing_origin",
-                _origin(self.resolved_landing_origin),
+                "confirmed_origin",
+                _origin(self.confirmed_origin),
             )
         if self.evidence_kind is AuthorizedEvidenceKind.PROVIDER_RECORD_IDENTITY:
-            if self.provider_record_source is None or self.resolved_landing_origin is not None:
+            if self.provider_record_source is None or self.confirmed_origin is not None:
                 raise ValueError("provider record targets require only their record source")
-        elif self.evidence_kind is AuthorizedEvidenceKind.DOI_LANDING_ORIGIN:
+        elif self.evidence_kind in {
+            AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
+            AuthorizedEvidenceKind.DOI_ASSET_ORIGIN,
+        }:
             if (
                 self.namespace != "doi"
                 or self.provider_record_source is not None
-                or self.resolved_landing_origin is None
+                or self.confirmed_origin is None
             ):
-                raise ValueError("DOI landing targets require a DOI and resolved origin")
-        elif self.provider_record_source is not None or self.resolved_landing_origin is not None:
+                raise ValueError("DOI origin targets require a DOI and confirmed origin")
+        elif self.provider_record_source is not None or self.confirmed_origin is not None:
             raise ValueError("stable locator targets must not carry other evidence")
 
 
@@ -775,28 +814,63 @@ class AuthorizedPdfSource:
         route_hint_sink: list[AccessRouteHint] | None = None,
     ) -> Iterator[TemporaryPdf]:
         _validate_acquire_inputs(request, evidence, candidate_keys)
+        started_ns = time.monotonic_ns()
         targets = _lookup_targets(self._contract, evidence)
         _LOGGER.debug(
-            "event=authorized-source-started source=%s literature_id=%s target_count=%d",
+            "event=authorized-source-started source=%s literature_id=%s target_count=%d "
+            "disposition=%s",
             self.source_name,
             request.literature.literature_id,
             len(targets),
+            "eligible" if targets else "empty",
         )
         first_failure: AcquisitionSourceFailure | None = None
-        for target_index, target in enumerate(targets, start=1):
-            try:
-                yield from self._acquire_target(
-                    target=target,
-                    target_index=target_index,
-                    target_count=len(targets),
-                    candidate_keys=candidate_keys,
-                    route_hint_sink=route_hint_sink,
-                )
-            except AcquisitionSourceFailure as error:
-                if first_failure is None:
-                    first_failure = error
-        if first_failure is not None:
-            raise first_failure
+        attempted_count = 0
+        delivered_count = 0
+        completed = False
+        try:
+            for target_index, target in enumerate(targets, start=1):
+                attempted_count += 1
+                try:
+                    target_deliveries = self._acquire_target(
+                        target=target,
+                        target_index=target_index,
+                        target_count=len(targets),
+                        candidate_keys=candidate_keys,
+                        route_hint_sink=route_hint_sink,
+                    )
+                    try:
+                        for temporary in target_deliveries:
+                            delivered_count += 1
+                            yield temporary
+                    finally:
+                        target_deliveries.close()
+                except AcquisitionSourceFailure as error:
+                    if first_failure is None:
+                        first_failure = error
+            if first_failure is not None:
+                raise first_failure
+            completed = True
+        finally:
+            outcome = (
+                "delivered"
+                if delivered_count
+                else "failed"
+                if first_failure is not None
+                else "miss"
+                if completed
+                else "aborted"
+            )
+            _LOGGER.debug(
+                "event=authorized-source-finished source=%s target_count=%d "
+                "attempted=%d delivered=%d outcome=%s elapsed_ms=%d",
+                self.source_name,
+                len(targets),
+                attempted_count,
+                delivered_count,
+                outcome,
+                _elapsed_ms(started_ns),
+            )
 
     def _acquire_target(
         self,
@@ -806,7 +880,7 @@ class AuthorizedPdfSource:
         target_count: int,
         candidate_keys: CandidateKeyTracker,
         route_hint_sink: list[AccessRouteHint] | None,
-    ) -> Iterator[TemporaryPdf]:
+    ) -> Generator[TemporaryPdf, None, None]:
         lookup_key = _lookup_candidate_key(self._contract, target)
         if not _claim(candidate_keys, lookup_key):
             _LOGGER.debug(
@@ -816,6 +890,7 @@ class AuthorizedPdfSource:
                 target_count,
             )
             return
+        started_ns = time.monotonic_ns()
         _LOGGER.debug(
             "event=authorized-lookup-started source=%s target=%d/%d candidate_id=%s",
             self.source_name,
@@ -831,11 +906,12 @@ class AuthorizedPdfSource:
                 self._accept_normal_miss(lookup.reason)
                 _LOGGER.debug(
                     "event=authorized-lookup-finished source=%s target=%d/%d "
-                    "outcome=miss reason=%s",
+                    "outcome=miss reason=%s elapsed_ms=%d",
                     self.source_name,
                     target_index,
                     target_count,
                     lookup.reason.value,
+                    _elapsed_ms(started_ns),
                 )
                 return
             self._require_lookup_entitlement(lookup.entitlement)
@@ -846,18 +922,21 @@ class AuthorizedPdfSource:
                 ordinal=target_index,
                 total=target_count,
                 error=error,
+                elapsed_ms=_elapsed_ms(started_ns),
             )
             raise
         _LOGGER.debug(
             "event=authorized-lookup-finished source=%s target=%d/%d "
-            "outcome=downloads download_count=%d",
+            "outcome=downloads download_count=%d elapsed_ms=%d",
             self.source_name,
             target_index,
             target_count,
             len(lookup.downloads),
+            _elapsed_ms(started_ns),
         )
         first_failure: AcquisitionSourceFailure | None = None
         for download_index, locator in enumerate(lookup.downloads, start=1):
+            download_started_ns = time.monotonic_ns()
             try:
                 yield from self._acquire_download(
                     target=target,
@@ -865,6 +944,7 @@ class AuthorizedPdfSource:
                     download_index=download_index,
                     download_count=len(lookup.downloads),
                     candidate_keys=candidate_keys,
+                    started_ns=download_started_ns,
                 )
             except AcquisitionSourceFailure as error:
                 _log_isolated_failure(
@@ -873,6 +953,7 @@ class AuthorizedPdfSource:
                     ordinal=download_index,
                     total=len(lookup.downloads),
                     error=error,
+                    elapsed_ms=_elapsed_ms(download_started_ns),
                 )
                 if first_failure is None:
                     first_failure = error
@@ -904,6 +985,7 @@ class AuthorizedPdfSource:
         download_index: int,
         download_count: int,
         candidate_keys: CandidateKeyTracker,
+        started_ns: int,
     ) -> Iterator[TemporaryPdf]:
         self._validate_download_locator(locator)
         download_key = _download_candidate_key(self._contract, locator)
@@ -928,11 +1010,12 @@ class AuthorizedPdfSource:
             self._accept_normal_miss(result.reason)
             _LOGGER.debug(
                 "event=authorized-download-finished source=%s download=%d/%d "
-                "outcome=miss reason=%s",
+                "outcome=miss reason=%s elapsed_ms=%d",
                 self.source_name,
                 download_index,
                 download_count,
                 result.reason.value,
+                _elapsed_ms(started_ns),
             )
             return
         try:
@@ -950,11 +1033,12 @@ class AuthorizedPdfSource:
         try:
             _LOGGER.debug(
                 "event=authorized-download-finished source=%s download=%d/%d "
-                "outcome=pdf candidate_id=%s",
+                "outcome=pdf candidate_id=%s elapsed_ms=%d",
                 self.source_name,
                 download_index,
                 download_count,
                 _diagnostic_key(download_key),
+                _elapsed_ms(started_ns),
             )
             yield temporary
         except BaseException:
@@ -1085,19 +1169,25 @@ def _log_isolated_failure(
     ordinal: int,
     total: int,
     error: AcquisitionSourceFailure,
+    elapsed_ms: int,
 ) -> None:
     failure = error.failure
     _LOGGER.warning(
-        "event=%s source=%s item=%d/%d code=%s retryable=%s reason=%s action=%s",
+        "event=%s source=%s item=%d/%d elapsed_ms=%d code=%s retryable=%s reason=%s action=%s",
         event,
         source_name,
         ordinal,
         total,
+        elapsed_ms,
         failure.code,
         str(failure.retryable).lower(),
         failure.reason,
         failure.action,
     )
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 def _validate_acquire_inputs(
@@ -1185,28 +1275,42 @@ def _doi_origin_targets(
     contract: AuthorizedProviderContract,
     evidence: AcquisitionEvidence,
 ) -> tuple[AuthorizedLookupTarget, ...]:
+    dois = tuple(identifier for identifier in evidence.identifiers if identifier.namespace == "doi")
+    if len(dois) != 1:
+        return ()
+    doi = dois[0]
     resolved_origin = evidence.resolved_landing_origin
-    if resolved_origin is None:
-        return ()
-    try:
-        normalized_origin = _origin(resolved_origin)
-    except (TypeError, ValueError):
-        return ()
-    if normalized_origin not in contract.doi_landing_origins:
-        return ()
-    result = tuple(
-        AuthorizedLookupTarget(
-            evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
-            namespace="doi",
-            value=identifier.value,
-            resolved_landing_origin=normalized_origin,
+    if resolved_origin is not None:
+        try:
+            normalized_origin = _origin(resolved_origin)
+        except (TypeError, ValueError):
+            return ()
+        if normalized_origin not in contract.doi_landing_origins:
+            return ()
+        return (
+            AuthorizedLookupTarget(
+                evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
+                namespace="doi",
+                value=doi.value,
+                confirmed_origin=normalized_origin,
+            ),
         )
-        for identifier in evidence.identifiers
-        if identifier.namespace == "doi"
-    )
-    if len(result) != len(set(result)):
-        return tuple(dict.fromkeys(result))
-    return tuple(result)
+    for observed in evidence.asset_hints:
+        try:
+            normalized_origin = _asset_url_origin(observed.hint.url)
+        except (TypeError, ValueError):
+            continue
+        if normalized_origin not in contract.doi_asset_origins:
+            continue
+        return (
+            AuthorizedLookupTarget(
+                evidence_kind=AuthorizedEvidenceKind.DOI_ASSET_ORIGIN,
+                namespace="doi",
+                value=doi.value,
+                confirmed_origin=normalized_origin,
+            ),
+        )
+    return ()
 
 
 def _claim(candidate_keys: CandidateKeyTracker, candidate_key: str) -> bool:
@@ -1239,7 +1343,7 @@ def _lookup_candidate_key(
             target.namespace,
             target.value,
             target.provider_record_source or "",
-            target.resolved_landing_origin or "",
+            target.confirmed_origin or "",
         )
     )
     return f"authorized:{contract.source_name}:lookup:{digest}"
@@ -1405,6 +1509,7 @@ CORE_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProvider
         ),
     ),
     doi_landing_origins=(),
+    doi_asset_origins=(),
     download_locator_namespaces=("core-work-pdf", "core-output-pdf"),
     normal_miss_reasons=frozenset(
         {
@@ -1424,6 +1529,10 @@ WILEY_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProvide
     stable_locator_namespaces=(),
     provider_record_identity_rules=(),
     doi_landing_origins=("https://onlinelibrary.wiley.com",),
+    doi_asset_origins=(
+        "https://onlinelibrary.wiley.com",
+        "https://alm.wiley.com",
+    ),
     download_locator_namespaces=("wiley-tdm-pdf",),
     normal_miss_reasons=frozenset({AuthorizedNormalMiss.HTTP_404}),
     download_proves_entitlement=True,
@@ -1431,8 +1540,8 @@ WILEY_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProvide
 
 ELSEVIER_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProviderContract(
     source_name="elsevier",
-    product_name="Elsevier Article Retrieval and Object Retrieval PDF",
-    contract_revision="elsevier-article-object-2026-08-15",
+    product_name="Elsevier Article Retrieval direct and Object Retrieval PDF",
+    contract_revision="elsevier-article-direct-object-2026-08-18",
     required_credential_fields=("api_key",),
     stable_locator_namespaces=("pii", "elsevier-article-eid"),
     provider_record_identity_rules=(),
@@ -1440,13 +1549,14 @@ ELSEVIER_AUTHORIZED_CONTRACT: Final[AuthorizedProviderContract] = AuthorizedProv
         "https://www.sciencedirect.com",
         "https://linkinghub.elsevier.com",
     ),
-    download_locator_namespaces=("elsevier-main-pdf-object",),
-    normal_miss_reasons=frozenset(
-        {
-            AuthorizedNormalMiss.HTTP_404,
-            AuthorizedNormalMiss.NO_PRIMARY,
-        }
+    doi_asset_origins=(),
+    download_locator_namespaces=(
+        "elsevier-main-pdf-object",
+        "elsevier-article-pdf-doi",
+        "elsevier-article-pdf-pii",
+        "elsevier-article-pdf-eid",
     ),
+    normal_miss_reasons=frozenset({AuthorizedNormalMiss.HTTP_404}),
     download_proves_entitlement=True,
     route_hint_profile_access_key="elsevier-sciencedirect",
 )

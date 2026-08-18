@@ -49,6 +49,11 @@ _ARTICLE_ROOTS: Final[dict[str, str]] = {
     "elsevier-article-eid": f"{_ORIGIN}/content/article/eid?view=FULL",
 }
 _OBJECT_EID_ROOT: Final[str] = f"{_ORIGIN}/content/object/eid"
+_DIRECT_PDF_NAMESPACES: Final[dict[str, str]] = {
+    "elsevier-article-pdf-doi": "doi",
+    "elsevier-article-pdf-pii": "pii",
+    "elsevier-article-pdf-eid": "elsevier-article-eid",
+}
 _CREDENTIAL_ORIGIN: Final[Origin] = Origin("https", "api.elsevier.com", 443)
 _SCIENCEDIRECT_ARTICLE_ROOT: Final[str] = "https://www.sciencedirect.com/science/article/pii"
 _ROUTE_KEY: Final[str] = "api:elsevier-article-object"
@@ -58,6 +63,10 @@ _MAX_PDF_BYTES: Final[int] = 64 * 1024 * 1024
 _MAX_CREDENTIAL_CHARS: Final[int] = 8_192
 _MAX_XML_ELEMENTS: Final[int] = 250_000
 _PII: Final[re.Pattern[str]] = re.compile(r"^S[0-9X]{15,24}$", re.ASCII)
+_DOI: Final[re.Pattern[str]] = re.compile(
+    r"^10\.[0-9]{4,9}/[^\s?#]{1,512}$",
+    re.ASCII | re.IGNORECASE,
+)
 _ARTICLE_EID: Final[re.Pattern[str]] = re.compile(
     r"^1-s2\.0-[A-Za-z0-9][A-Za-z0-9._-]{1,255}$",
     re.ASCII,
@@ -117,6 +126,27 @@ class _ArticleObjects:
     article_eid: str | None
     pii: str | None
     main_pdf_eids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ServiceErrorResponse:
+    outcome: AuthorizedNormalMiss | AuthorizedClientFailureKind
+
+
+class _ArticleShapeError(RuntimeError):
+    __slots__ = ("category",)
+
+    def __init__(self, category: str) -> None:
+        if category not in {
+            "conflicting-field",
+            "malformed-xml",
+            "response-too-complex",
+            "unexpected-envelope",
+            "unsafe-xml",
+        }:
+            raise ValueError("unsupported article response category")
+        self.category = category
+        super().__init__("Elsevier article response could not be interpreted")
 
 
 def _failure(kind: AuthorizedClientFailureKind) -> AuthorizedClientFailure:
@@ -256,7 +286,7 @@ def _status_failure(response: TransportResponse) -> AuthorizedClientFailure | No
 
 def _local_name(tag: object) -> str:
     if not isinstance(tag, str):
-        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        raise _ArticleShapeError("malformed-xml")
     return tag.rsplit("}", 1)[-1].split(":", 1)[-1].casefold()
 
 
@@ -271,7 +301,7 @@ def _single_child_text(node: ET.Element, name: str) -> str | None:
     if not values:
         return None
     if any(value != values[0] for value in values[1:]):
-        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        raise _ArticleShapeError("conflicting-field")
     return values[0]
 
 
@@ -318,19 +348,54 @@ def _main_pdf_eids(root: ET.Element) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _parse_article_objects(payload: bytes) -> _ArticleObjects:
+def _service_error_response(root: ET.Element) -> _ServiceErrorResponse:
+    statuses = tuple(child for child in root if _local_name(child.tag) == "status")
+    if len(statuses) != 1:
+        raise _ArticleShapeError("unexpected-envelope")
+    status_code = _single_child_text(statuses[0], "statuscode")
+    if status_code is None:
+        raise _ArticleShapeError("unexpected-envelope")
+    normalized = status_code.strip().upper().replace("-", "_").replace(" ", "_")
+    outcomes: Final[dict[str, AuthorizedNormalMiss | AuthorizedClientFailureKind]] = {
+        "RESOURCE_NOT_FOUND": AuthorizedNormalMiss.HTTP_404,
+        "AUTHENTICATION_ERROR": AuthorizedClientFailureKind.AUTHENTICATION,
+        "INVALID_API_KEY": AuthorizedClientFailureKind.AUTHENTICATION,
+        "INVALID_APIKEY": AuthorizedClientFailureKind.AUTHENTICATION,
+        "AUTHORIZATION_ERROR": AuthorizedClientFailureKind.ENTITLEMENT,
+        "ENTITLEMENT_ERROR": AuthorizedClientFailureKind.ENTITLEMENT,
+        "NOT_ENTITLED": AuthorizedClientFailureKind.ENTITLEMENT,
+        "QUOTA_EXCEEDED": AuthorizedClientFailureKind.QUOTA,
+        "RATE_LIMIT_EXCEEDED": AuthorizedClientFailureKind.QUOTA,
+        "SYSTEM_ERROR": AuthorizedClientFailureKind.SERVICE,
+        "SERVICE_UNAVAILABLE": AuthorizedClientFailureKind.SERVICE,
+        "INVALID_INPUT": AuthorizedClientFailureKind.RESPONSE_SCHEMA,
+        "INVALID_REQUEST": AuthorizedClientFailureKind.RESPONSE_SCHEMA,
+    }
+    return _ServiceErrorResponse(
+        outcome=outcomes.get(normalized, AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+    )
+
+
+def _parse_article_objects(
+    payload: bytes,
+) -> _ArticleObjects | _ServiceErrorResponse:
     if type(payload) is not bytes:
         raise TypeError("payload must be bytes")
     folded = payload.lower()
     if b"<!doctype" in folded or b"<!entity" in folded:
-        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        raise _ArticleShapeError("unsafe-xml")
     try:
         root = ET.fromstring(payload)
     except (ET.ParseError, ValueError):
-        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA) from None
+        raise _ArticleShapeError("malformed-xml") from None
     element_count = sum(1 for _node in root.iter())
     if element_count > _MAX_XML_ELEMENTS:
-        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        raise _ArticleShapeError("response-too-complex")
+    root_name = _local_name(root.tag)
+    if root_name == "service-error":
+        return _service_error_response(root)
+    if root_name != "full-text-retrieval-response":
+        raise _ArticleShapeError("unexpected-envelope")
     return _ArticleObjects(
         article_eid=_first_matching_text(root, ("eid",), _ARTICLE_EID),
         pii=_first_matching_text(root, ("pii-unformatted", "pii"), _PII),
@@ -340,7 +405,7 @@ def _parse_article_objects(payload: bytes) -> _ArticleObjects:
 
 def _lookup_request(target: AuthorizedLookupTarget) -> tuple[str, str]:
     if target.evidence_kind is AuthorizedEvidenceKind.DOI_LANDING_ORIGIN:
-        if target.namespace != "doi" or target.resolved_landing_origin not in {
+        if target.namespace != "doi" or target.confirmed_origin not in {
             "https://linkinghub.elsevier.com",
             "https://www.sciencedirect.com",
         }:
@@ -356,6 +421,137 @@ def _lookup_request(target: AuthorizedLookupTarget) -> tuple[str, str]:
     ):
         return _ARTICLE_ROOTS["elsevier-article-eid"], target.value
     raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+
+
+def _direct_pdf_locator(
+    target: AuthorizedLookupTarget,
+    objects: _ArticleObjects | None,
+) -> AuthorizedDownloadLocator:
+    _lookup_request(target)
+    namespaces = {
+        "doi": "elsevier-article-pdf-doi",
+        "pii": "elsevier-article-pdf-pii",
+        "elsevier-article-eid": "elsevier-article-pdf-eid",
+    }
+    namespace = namespaces.get(target.namespace)
+    if namespace is None:
+        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+    source_record_id = target.value
+    if objects is not None:
+        source_record_id = objects.article_eid or objects.pii or source_record_id
+    return AuthorizedDownloadLocator(
+        namespace=namespace,
+        value=target.value,
+        declared_media_type="application/pdf",
+        source_record_id=source_record_id,
+    )
+
+
+def _download_request(locator: AuthorizedDownloadLocator) -> tuple[str, str]:
+    if (
+        locator.namespace == "elsevier-main-pdf-object"
+        and _PDF_OBJECT_EID.fullmatch(locator.value) is not None
+    ):
+        return _OBJECT_EID_ROOT, locator.value
+    target_namespace = _DIRECT_PDF_NAMESPACES.get(locator.namespace)
+    if target_namespace is None:
+        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+    valid = (
+        _DOI.fullmatch(locator.value) is not None
+        if target_namespace == "doi"
+        else _PII.fullmatch(locator.value) is not None
+        if target_namespace == "pii"
+        else _ARTICLE_EID.fullmatch(locator.value) is not None
+    )
+    if not valid:
+        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+    return _ARTICLE_ROOTS[target_namespace], locator.value
+
+
+def _representation(media_type: str | None) -> str:
+    if media_type == "application/pdf":
+        return "pdf"
+    if media_type in {"application/xml", "text/xml"} or (
+        media_type is not None and media_type.endswith("+xml")
+    ):
+        return "xml"
+    if media_type == "application/json" or (
+        media_type is not None and media_type.endswith("+json")
+    ):
+        return "json"
+    if media_type in {"text/html", "application/xhtml+xml"}:
+        return "html"
+    if media_type is None:
+        return "missing"
+    return "other"
+
+
+def _http_status_class(status: int) -> str:
+    if 100 <= status < 200:
+        return "informational"
+    if status < 300:
+        return "success"
+    if status < 400:
+        return "redirection"
+    if status < 500:
+        return "client-error"
+    return "server-error"
+
+
+def _log_response_classification(
+    *,
+    stage: str,
+    http_status: int,
+    representation: str,
+    envelope: str,
+    disposition: str,
+    failure_kind: AuthorizedClientFailureKind | None = None,
+) -> None:
+    _LOGGER.debug(
+        "event=elsevier-authorized-response-classified provider_group=elsevier "
+        "route_key=%s stage=%s http_status=%d http_status_class=%s "
+        "representation=%s envelope=%s disposition=%s failure_kind=%s",
+        _ROUTE_KEY,
+        stage,
+        http_status,
+        _http_status_class(http_status),
+        representation,
+        envelope,
+        disposition,
+        "-" if failure_kind is None else failure_kind.value,
+    )
+
+
+def _service_error_outcome(
+    response: _ServiceErrorResponse,
+    *,
+    stage: str,
+    http_status: int,
+    representation: str,
+) -> AuthorizedNormalMiss:
+    outcome = response.outcome
+    if isinstance(outcome, AuthorizedNormalMiss):
+        _log_response_classification(
+            stage=stage,
+            http_status=http_status,
+            representation=representation,
+            envelope="service-error",
+            disposition="miss",
+        )
+        return outcome
+    _log_response_classification(
+        stage=stage,
+        http_status=http_status,
+        representation=representation,
+        envelope="service-error",
+        disposition="failure",
+        failure_kind=outcome,
+    )
+    raise _failure(outcome)
+
+
+def _body_starts_with_xml(payload: bytes) -> bool:
+    return payload[:1024].lstrip().startswith(b"<")
 
 
 def _route_hints(
@@ -396,6 +592,249 @@ def _route_hints(
             )
         )
     return tuple(result)
+
+
+def _direct_pdf_lookup(
+    target: AuthorizedLookupTarget,
+    *,
+    objects: _ArticleObjects | None,
+) -> AuthorizedLookupDownloads:
+    return AuthorizedLookupDownloads(
+        target=target,
+        entitlement=AuthorizedEntitlement.UNKNOWN,
+        downloads=(_direct_pdf_locator(target, objects),),
+        hints=() if objects is None else _route_hints(target, objects),
+    )
+
+
+def _interpret_lookup_response(
+    target: AuthorizedLookupTarget,
+    response: TransportResponse,
+) -> AuthorizedLookupResult:
+    if response.status == 404:
+        _log_response_classification(
+            stage="lookup",
+            http_status=response.status,
+            representation="missing",
+            envelope="http-not-found",
+            disposition="miss",
+        )
+        return AuthorizedLookupMiss(target=target, reason=AuthorizedNormalMiss.HTTP_404)
+    failure = _status_failure(response)
+    if failure is not None:
+        _log_response_classification(
+            stage="lookup",
+            http_status=response.status,
+            representation="missing",
+            envelope="http-status",
+            disposition="failure",
+            failure_kind=failure.kind,
+        )
+        raise failure
+    try:
+        media_type = _media_type(response.headers)
+    except AuthorizedClientFailure as error:
+        _log_response_classification(
+            stage="lookup",
+            http_status=response.status,
+            representation="missing",
+            envelope="conflicting-content-type",
+            disposition="fallback-direct-pdf",
+            failure_kind=error.kind,
+        )
+        return _direct_pdf_lookup(target, objects=None)
+    representation = _representation(media_type)
+    if representation != "xml":
+        _log_response_classification(
+            stage="lookup",
+            http_status=response.status,
+            representation=representation,
+            envelope="non-xml-representation",
+            disposition="fallback-direct-pdf",
+        )
+        return _direct_pdf_lookup(target, objects=None)
+    return _interpret_lookup_xml(
+        target,
+        response.body,
+        http_status=response.status,
+        representation=representation,
+    )
+
+
+def _interpret_lookup_xml(
+    target: AuthorizedLookupTarget,
+    payload: bytes,
+    *,
+    http_status: int,
+    representation: str,
+) -> AuthorizedLookupResult:
+    try:
+        parsed = _parse_article_objects(payload)
+    except _ArticleShapeError as error:
+        _log_response_classification(
+            stage="lookup",
+            http_status=http_status,
+            representation=representation,
+            envelope=error.category,
+            disposition="fallback-direct-pdf",
+        )
+        return _direct_pdf_lookup(target, objects=None)
+    if isinstance(parsed, _ServiceErrorResponse):
+        miss = _service_error_outcome(
+            parsed,
+            stage="lookup",
+            http_status=http_status,
+            representation=representation,
+        )
+        return AuthorizedLookupMiss(target=target, reason=miss)
+    objects = parsed
+    if not objects.main_pdf_eids:
+        _log_response_classification(
+            stage="lookup",
+            http_status=http_status,
+            representation=representation,
+            envelope="full-text-no-main-object",
+            disposition="fallback-direct-pdf",
+        )
+        return _direct_pdf_lookup(target, objects=objects)
+    _log_response_classification(
+        stage="lookup",
+        http_status=http_status,
+        representation=representation,
+        envelope="full-text-main-object",
+        disposition="object-locators",
+    )
+    source_record_id = objects.article_eid or objects.pii or target.value
+    return AuthorizedLookupDownloads(
+        target=target,
+        entitlement=AuthorizedEntitlement.UNKNOWN,
+        downloads=tuple(
+            AuthorizedDownloadLocator(
+                namespace="elsevier-main-pdf-object",
+                value=eid,
+                declared_media_type="application/pdf",
+                source_record_id=source_record_id,
+            )
+            for eid in objects.main_pdf_eids
+        ),
+        hints=_route_hints(target, objects),
+    )
+
+
+def _interpret_xml_download(
+    locator: AuthorizedDownloadLocator,
+    payload: bytes,
+    *,
+    http_status: int,
+    representation: str,
+) -> AuthorizedDownloadResult:
+    try:
+        parsed = _parse_article_objects(payload)
+    except _ArticleShapeError as error:
+        _log_response_classification(
+            stage="download",
+            http_status=http_status,
+            representation=representation,
+            envelope=error.category,
+            disposition="failure",
+            failure_kind=AuthorizedClientFailureKind.RESPONSE_SCHEMA,
+        )
+        raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA) from None
+    if isinstance(parsed, _ServiceErrorResponse):
+        miss = _service_error_outcome(
+            parsed,
+            stage="download",
+            http_status=http_status,
+            representation=representation,
+        )
+        return AuthorizedDownloadMiss(locator=locator, reason=miss)
+    _log_response_classification(
+        stage="download",
+        http_status=http_status,
+        representation=representation,
+        envelope="full-text-xml",
+        disposition="failure",
+        failure_kind=AuthorizedClientFailureKind.NON_PDF_PRODUCT,
+    )
+    raise _failure(AuthorizedClientFailureKind.NON_PDF_PRODUCT)
+
+
+def _interpret_download_response(
+    locator: AuthorizedDownloadLocator,
+    response: TransportResponse,
+) -> AuthorizedDownloadResult:
+    if response.status == 404:
+        _log_response_classification(
+            stage="download",
+            http_status=response.status,
+            representation="missing",
+            envelope="http-not-found",
+            disposition="miss",
+        )
+        return AuthorizedDownloadMiss(locator=locator, reason=AuthorizedNormalMiss.HTTP_404)
+    failure = _status_failure(response)
+    if failure is not None:
+        _log_response_classification(
+            stage="download",
+            http_status=response.status,
+            representation="missing",
+            envelope="http-status",
+            disposition="failure",
+            failure_kind=failure.kind,
+        )
+        raise failure
+    try:
+        media_type = _media_type(response.headers)
+    except AuthorizedClientFailure as error:
+        _log_response_classification(
+            stage="download",
+            http_status=response.status,
+            representation="missing",
+            envelope="conflicting-content-type",
+            disposition="failure",
+            failure_kind=error.kind,
+        )
+        raise
+    representation = _representation(media_type)
+    if representation == "xml" or (
+        representation == "pdf" and _body_starts_with_xml(response.body)
+    ):
+        return _interpret_xml_download(
+            locator,
+            response.body,
+            http_status=response.status,
+            representation=representation,
+        )
+    if representation != "pdf":
+        kind = (
+            AuthorizedClientFailureKind.NON_PDF_PRODUCT
+            if representation in {"html", "json"}
+            else AuthorizedClientFailureKind.AMBIGUOUS_PRIMARY_PDF
+        )
+        _log_response_classification(
+            stage="download",
+            http_status=response.status,
+            representation=representation,
+            envelope="non-pdf-representation",
+            disposition="failure",
+            failure_kind=kind,
+        )
+        raise _failure(kind)
+    _log_response_classification(
+        stage="download",
+        http_status=response.status,
+        representation=representation,
+        envelope="pdf",
+        disposition="candidate",
+    )
+    content: TemporaryPdfContent = _MemoryPdfContent(response.body)
+    return AuthorizedPdfDownload(
+        locator=locator,
+        content=content,
+        media_type=media_type,
+        safe_source_url=response.final_url,
+        entitlement=AuthorizedEntitlement.GRANTED,
+    )
 
 
 class ElsevierAuthorizedPdfClient:
@@ -459,54 +898,15 @@ class ElsevierAuthorizedPdfClient:
             raise _failure(kind)
         if not isinstance(result, TransportResponse):
             raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
-        if result.status == 404:
-            return AuthorizedLookupMiss(
-                target=target,
-                reason=AuthorizedNormalMiss.HTTP_404,
-            )
-        failure = _status_failure(result)
-        if failure is not None:
-            raise failure
-        media_type = _media_type(result.headers)
-        if media_type not in {"application/xml", "text/xml"} and (
-            media_type is None or not media_type.endswith("+xml")
-        ):
-            raise _failure(AuthorizedClientFailureKind.NON_PDF_PRODUCT)
-        objects = _parse_article_objects(result.body)
-        hints = _route_hints(target, objects)
-        if not objects.main_pdf_eids:
-            return AuthorizedLookupMiss(
-                target=target,
-                reason=AuthorizedNormalMiss.NO_PRIMARY,
-                hints=hints,
-            )
-        source_record_id = objects.article_eid or objects.pii or target.value
-        return AuthorizedLookupDownloads(
-            target=target,
-            entitlement=AuthorizedEntitlement.UNKNOWN,
-            downloads=tuple(
-                AuthorizedDownloadLocator(
-                    namespace="elsevier-main-pdf-object",
-                    value=eid,
-                    declared_media_type="application/pdf",
-                    source_record_id=source_record_id,
-                )
-                for eid in objects.main_pdf_eids
-            ),
-            hints=hints,
-        )
+        return _interpret_lookup_response(target, result)
 
     def download(self, locator: AuthorizedDownloadLocator) -> AuthorizedDownloadResult:
         if not isinstance(locator, AuthorizedDownloadLocator):
             raise TypeError("locator must be an AuthorizedDownloadLocator")
-        if (
-            locator.namespace != "elsevier-main-pdf-object"
-            or _PDF_OBJECT_EID.fullmatch(locator.value) is None
-        ):
-            raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        endpoint, path_parameter = _download_request(locator)
         result = self._http_client.request(
             ELSEVIER_ARTICLE_ACCESS_SCOPE,
-            _OBJECT_EID_ROOT,
+            endpoint,
             ELSEVIER_ARTICLE_ACCESS_POLICY,
             headers=(Header(name="Accept", value="application/pdf"),),
             credential_headers=_credential_headers(
@@ -514,7 +914,7 @@ class ElsevierAuthorizedPdfClient:
                 self._institution_token,
             ),
             credential_allowed_origins=(_CREDENTIAL_ORIGIN,),
-            path_parameter=locator.value,
+            path_parameter=path_parameter,
             max_response_bytes=_MAX_PDF_BYTES,
             max_redirects=0,
             cancel_event=self._cancel_event,
@@ -529,22 +929,7 @@ class ElsevierAuthorizedPdfClient:
             raise _failure(kind)
         if not isinstance(result, TransportResponse):
             raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
-        if result.status == 404:
-            return AuthorizedDownloadMiss(
-                locator=locator,
-                reason=AuthorizedNormalMiss.HTTP_404,
-            )
-        failure = _status_failure(result)
-        if failure is not None:
-            raise failure
-        content: TemporaryPdfContent = _MemoryPdfContent(result.body)
-        return AuthorizedPdfDownload(
-            locator=locator,
-            content=content,
-            media_type=_media_type(result.headers),
-            safe_source_url=result.final_url,
-            entitlement=AuthorizedEntitlement.GRANTED,
-        )
+        return _interpret_download_response(locator, result)
 
 
 __all__ = (

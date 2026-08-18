@@ -160,11 +160,15 @@ def _guard_alm_download_redirect(target_url: str) -> None:
 
 
 def _locator_for(target: AuthorizedLookupTarget) -> AuthorizedDownloadLocator:
-    if (
-        target.evidence_kind is not AuthorizedEvidenceKind.DOI_LANDING_ORIGIN
-        or target.namespace != "doi"
-        or target.resolved_landing_origin != _WOL_ORIGIN
-    ):
+    landing_evidence = (
+        target.evidence_kind is AuthorizedEvidenceKind.DOI_LANDING_ORIGIN
+        and target.confirmed_origin == _WOL_ORIGIN
+    )
+    asset_evidence = (
+        target.evidence_kind is AuthorizedEvidenceKind.DOI_ASSET_ORIGIN
+        and target.confirmed_origin in {_WOL_ORIGIN, "https://alm.wiley.com"}
+    )
+    if target.namespace != "doi" or not (landing_evidence or asset_evidence):
         raise _failure(AuthorizedClientFailureKind.RESPONSE_SCHEMA)
     return AuthorizedDownloadLocator(
         namespace="wiley-tdm-pdf",

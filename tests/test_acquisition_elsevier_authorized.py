@@ -134,7 +134,7 @@ def _doi_target() -> AuthorizedLookupTarget:
         evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
         namespace="doi",
         value="10.1016/S0014-5793(01)03313-0",
-        resolved_landing_origin="https://www.sciencedirect.com",
+        confirmed_origin="https://www.sciencedirect.com",
     )
 
 
@@ -145,6 +145,28 @@ def _locator(value: str = _MAIN_OBJECT_EID) -> AuthorizedDownloadLocator:
         declared_media_type="application/pdf",
         source_record_id=_ARTICLE_EID,
     )
+
+
+def _direct_locator(
+    *,
+    namespace: str = "elsevier-article-pdf-pii",
+    value: str = _PII,
+) -> AuthorizedDownloadLocator:
+    return AuthorizedDownloadLocator(
+        namespace=namespace,
+        value=value,
+        declared_media_type="application/pdf",
+        source_record_id=value,
+    )
+
+
+def _service_error_xml(status_code: str, private_message: str) -> bytes:
+    return (
+        "<service-error><status>"
+        f"<statusCode>{status_code}</statusCode>"
+        f"<statusText>{private_message}</statusText>"
+        "</status></service-error>"
+    ).encode()
 
 
 def _request(
@@ -204,7 +226,12 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
         self.assertEqual(ELSEVIER_AUTHORIZED_CONTRACT.provider_record_identity_rules, ())
         self.assertEqual(
             ELSEVIER_AUTHORIZED_CONTRACT.download_locator_namespaces,
-            ("elsevier-main-pdf-object",),
+            (
+                "elsevier-main-pdf-object",
+                "elsevier-article-pdf-doi",
+                "elsevier-article-pdf-pii",
+                "elsevier-article-pdf-eid",
+            ),
         )
         self.assertTrue(ELSEVIER_AUTHORIZED_CONTRACT.download_proves_entitlement)
         self.assertEqual(
@@ -328,11 +355,14 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
             ),
         ) as request:
             client = ElsevierAuthorizedPdfClient(http_client=http_client, api_key=_API_KEY)
-            result = cast(AuthorizedLookupMiss, client.lookup(_stable_target()))
+            result = cast(AuthorizedLookupDownloads, client.lookup(_stable_target()))
         self.assertEqual(
             request.call_args.kwargs["credential_headers"], (("X-ELS-APIKey", _API_KEY),)
         )
-        self.assertIs(result.reason, AuthorizedNormalMiss.NO_PRIMARY)
+        self.assertEqual(
+            tuple(locator.namespace for locator in result.downloads),
+            ("elsevier-article-pdf-pii",),
+        )
         self.assertEqual(len(result.hints), 3)
 
         invalid_targets = (
@@ -342,7 +372,7 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                 evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
                 namespace="doi",
                 value="10.1016/example",
-                resolved_landing_origin="https://example.org",
+                confirmed_origin="https://example.org",
             ),
         )
         client = ElsevierAuthorizedPdfClient(http_client=_http_client(), api_key=_API_KEY)
@@ -379,18 +409,18 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
             )
         )
 
-    def test_lookup_schema_media_and_xml_entity_failures_are_distinct_from_normal_miss(
+    def test_unusable_full_xml_uses_the_exact_article_pdf_representation_fallback(
         self,
     ) -> None:
         cases = (
-            (b"<broken", "application/xml", AuthorizedClientFailureKind.RESPONSE_SCHEMA),
+            (b"<broken", "application/xml", "malformed-xml"),
             (
                 b'<!DOCTYPE article [<!ENTITY secret "value">]><article>&secret;</article>',
                 "application/xml",
-                AuthorizedClientFailureKind.RESPONSE_SCHEMA,
+                "unsafe-xml",
             ),
-            (b"<html/>", "text/html", AuthorizedClientFailureKind.NON_PDF_PRODUCT),
-            (b"<article/>", None, AuthorizedClientFailureKind.NON_PDF_PRODUCT),
+            (b"<html/>", "text/html", "non-xml-representation"),
+            (b"<article/>", None, "non-xml-representation"),
             (
                 (
                     b"<article><web-pdf><web-pdf-purpose>MAIN</web-pdf-purpose>"
@@ -398,25 +428,93 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                     b"</web-pdf></article>"
                 ),
                 "application/xml",
-                AuthorizedClientFailureKind.RESPONSE_SCHEMA,
+                "unexpected-envelope",
             ),
         )
-        for payload, media_type, expected in cases:
+        for payload, media_type, expected_envelope in cases:
             http_client = _http_client()
             with (
-                self.subTest(expected=expected),
+                self.subTest(expected_envelope=expected_envelope),
                 mock.patch.object(
                     http_client,
                     "request",
                     return_value=_response(200, body=payload, media_type=media_type),
                 ),
-                self.assertRaises(AuthorizedClientFailure) as caught,
+                self.assertLogs(
+                    "sciretriever.acquisition.providers.elsevier",
+                    level="DEBUG",
+                ) as captured,
             ):
-                ElsevierAuthorizedPdfClient(
-                    http_client=http_client,
-                    api_key=_API_KEY,
-                ).lookup(_stable_target())
-            self.assertIs(caught.exception.kind, expected)
+                result = cast(
+                    AuthorizedLookupDownloads,
+                    ElsevierAuthorizedPdfClient(
+                        http_client=http_client,
+                        api_key=_API_KEY,
+                    ).lookup(_stable_target()),
+                )
+            self.assertEqual(
+                result.downloads,
+                (
+                    AuthorizedDownloadLocator(
+                        namespace="elsevier-article-pdf-pii",
+                        value=_PII,
+                        declared_media_type="application/pdf",
+                        source_record_id=_PII,
+                    ),
+                ),
+            )
+            rendered = "\n".join(captured.output)
+            self.assertIn("event=elsevier-authorized-response-classified", rendered)
+            self.assertIn("stage=lookup", rendered)
+            self.assertIn(f"envelope={expected_envelope}", rendered)
+            self.assertIn("disposition=fallback-direct-pdf", rendered)
+            self.assertNotIn(payload.decode(errors="ignore"), rendered)
+
+    def test_xml_service_error_envelopes_preserve_miss_and_failure_categories(self) -> None:
+        cases = (
+            ("RESOURCE_NOT_FOUND", None),
+            ("AUTHENTICATION_ERROR", AuthorizedClientFailureKind.AUTHENTICATION),
+            ("AUTHORIZATION_ERROR", AuthorizedClientFailureKind.ENTITLEMENT),
+            ("QUOTA_EXCEEDED", AuthorizedClientFailureKind.QUOTA),
+            ("SYSTEM_ERROR", AuthorizedClientFailureKind.SERVICE),
+            ("INVALID_INPUT", AuthorizedClientFailureKind.RESPONSE_SCHEMA),
+            ("PRIVATE_UNKNOWN", AuthorizedClientFailureKind.RESPONSE_SCHEMA),
+        )
+        for index, (status_code, expected) in enumerate(cases):
+            private_message = f"private-vendor-message-{index}"
+            http_client = _http_client()
+            client = ElsevierAuthorizedPdfClient(http_client=http_client, api_key=_API_KEY)
+            with (
+                self.subTest(status_code=status_code),
+                mock.patch.object(
+                    http_client,
+                    "request",
+                    return_value=_response(
+                        200,
+                        body=_service_error_xml(status_code, private_message),
+                        media_type="application/xml",
+                    ),
+                ) as request,
+                self.assertLogs(
+                    "sciretriever.acquisition.providers.elsevier",
+                    level="DEBUG",
+                ) as captured,
+            ):
+                if expected is None:
+                    result = client.lookup(_stable_target())
+                    self.assertIsInstance(result, AuthorizedLookupMiss)
+                    assert isinstance(result, AuthorizedLookupMiss)
+                    self.assertIs(result.reason, AuthorizedNormalMiss.HTTP_404)
+                else:
+                    with self.assertRaises(AuthorizedClientFailure) as caught:
+                        client.lookup(_stable_target())
+                    self.assertIs(caught.exception.kind, expected)
+            self.assertEqual(request.call_count, 1)
+            rendered = "\n".join(captured.output)
+            self.assertIn("envelope=service-error", rendered)
+            self.assertNotIn(status_code, rendered)
+            self.assertNotIn(private_message, rendered)
+            self.assertNotIn(_API_KEY, rendered)
 
     def test_lookup_and_download_statuses_preserve_miss_auth_entitlement_quota_and_service(
         self,
@@ -435,7 +533,28 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                 client = ElsevierAuthorizedPdfClient(http_client=http_client, api_key=_API_KEY)
                 with (
                     self.subTest(operation=operation, status=status),
-                    mock.patch.object(http_client, "request", return_value=_response(status)),
+                    mock.patch.object(
+                        http_client,
+                        "request",
+                        return_value=_response(
+                            status,
+                            body=b"private-status-body-sentinel",
+                            headers=(
+                                Header(
+                                    name="X-ELS-Status",
+                                    value=(
+                                        "QUOTA_EXCEEDED"
+                                        if status == 429
+                                        else "private-vendor-status-sentinel"
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    self.assertLogs(
+                        "sciretriever.acquisition.providers.elsevier",
+                        level="DEBUG",
+                    ) as captured,
                 ):
                     if expected is None:
                         result = (
@@ -448,13 +567,50 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
                         )
                         if isinstance(result, (AuthorizedLookupMiss, AuthorizedDownloadMiss)):
                             self.assertIs(result.reason, AuthorizedNormalMiss.HTTP_404)
-                        continue
-                    with self.assertRaises(AuthorizedClientFailure) as caught:
-                        if operation == "lookup":
-                            client.lookup(_stable_target())
-                        else:
-                            client.download(_locator())
-                    self.assertIs(caught.exception.kind, expected)
+                    else:
+                        with self.assertRaises(AuthorizedClientFailure) as caught:
+                            if operation == "lookup":
+                                client.lookup(_stable_target())
+                            else:
+                                client.download(_locator())
+                        self.assertIs(caught.exception.kind, expected)
+                rendered = "\n".join(captured.output)
+                self.assertIn(f"http_status={status}", rendered)
+                self.assertIn(
+                    "http_status_class=" + ("client-error" if status < 500 else "server-error"),
+                    rendered,
+                )
+                self.assertNotIn("private-status-body-sentinel", rendered)
+                self.assertNotIn("private-vendor-status-sentinel", rendered)
+                self.assertNotIn(_API_KEY, rendered)
+
+        http_client = _http_client()
+        with (
+            mock.patch.object(
+                http_client,
+                "request",
+                return_value=_response(
+                    307,
+                    body=b"private-redirection-body-sentinel",
+                    headers=(Header(name="X-ELS-Status", value="private-redirection-status"),),
+                ),
+            ),
+            self.assertLogs(
+                "sciretriever.acquisition.providers.elsevier",
+                level="DEBUG",
+            ) as captured,
+            self.assertRaises(AuthorizedClientFailure) as caught,
+        ):
+            ElsevierAuthorizedPdfClient(
+                http_client=http_client,
+                api_key=_API_KEY,
+            ).lookup(_stable_target())
+        self.assertIs(caught.exception.kind, AuthorizedClientFailureKind.RESPONSE_SCHEMA)
+        rendered = "\n".join(captured.output)
+        self.assertIn("http_status=307", rendered)
+        self.assertIn("http_status_class=redirection", rendered)
+        self.assertNotIn("private-redirection-body-sentinel", rendered)
+        self.assertNotIn("private-redirection-status", rendered)
 
         for status_text, expected in (
             ("QUOTA_EXCEEDED", AuthorizedClientFailureKind.QUOTA),
@@ -525,6 +681,122 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
             self.assertEqual(stream.read(), payload)
         result.content.discard()
 
+    def test_direct_article_pdf_download_uses_the_exact_verified_identity_endpoint(
+        self,
+    ) -> None:
+        cases = (
+            (
+                _direct_locator(
+                    namespace="elsevier-article-pdf-doi",
+                    value="10.1016/S0014-5793(01)03313-0",
+                ),
+                "https://api.elsevier.com/content/article/doi?view=FULL",
+                "10.1016/S0014-5793(01)03313-0",
+            ),
+            (
+                _direct_locator(),
+                "https://api.elsevier.com/content/article/pii?view=FULL",
+                _PII,
+            ),
+            (
+                _direct_locator(
+                    namespace="elsevier-article-pdf-eid",
+                    value=_ARTICLE_EID,
+                ),
+                "https://api.elsevier.com/content/article/eid?view=FULL",
+                _ARTICLE_EID,
+            ),
+        )
+        for locator, endpoint, path_parameter in cases:
+            http_client = _http_client()
+            payload = b"%PDF-1.7 synthetic candidate for unified validation"
+            with (
+                self.subTest(namespace=locator.namespace),
+                mock.patch.object(
+                    http_client,
+                    "request",
+                    return_value=_response(
+                        200,
+                        body=payload,
+                        media_type="application/pdf",
+                    ),
+                ) as request,
+            ):
+                result = cast(
+                    AuthorizedPdfDownload,
+                    ElsevierAuthorizedPdfClient(
+                        http_client=http_client,
+                        api_key=_API_KEY,
+                        institution_token=_INSTITUTION_TOKEN,
+                    ).download(locator),
+                )
+
+            args, kwargs = request.call_args
+            self.assertEqual(
+                args,
+                (
+                    ELSEVIER_ARTICLE_ACCESS_SCOPE,
+                    endpoint,
+                    ELSEVIER_ARTICLE_ACCESS_POLICY,
+                ),
+            )
+            self.assertEqual(kwargs["path_parameter"], path_parameter)
+            self.assertEqual(kwargs["headers"], (Header(name="Accept", value="application/pdf"),))
+            self.assertEqual(result.locator, locator)
+            self.assertEqual(result.media_type, "application/pdf")
+            with result.content.open() as stream:
+                self.assertEqual(stream.read(), payload)
+            result.content.discard()
+
+    def test_download_xml_service_error_is_classified_before_pdf_validation(self) -> None:
+        cases = (
+            ("RESOURCE_NOT_FOUND", None),
+            ("AUTHENTICATION_ERROR", AuthorizedClientFailureKind.AUTHENTICATION),
+            ("AUTHORIZATION_ERROR", AuthorizedClientFailureKind.ENTITLEMENT),
+            ("QUOTA_EXCEEDED", AuthorizedClientFailureKind.QUOTA),
+            ("SYSTEM_ERROR", AuthorizedClientFailureKind.SERVICE),
+            ("INVALID_INPUT", AuthorizedClientFailureKind.RESPONSE_SCHEMA),
+        )
+        for index, (status_code, expected) in enumerate(cases):
+            private_message = f"private-object-error-{index}"
+            http_client = _http_client()
+            with (
+                self.subTest(status_code=status_code),
+                mock.patch.object(
+                    http_client,
+                    "request",
+                    return_value=_response(
+                        200,
+                        body=_service_error_xml(status_code, private_message),
+                        media_type="application/xml",
+                    ),
+                ),
+                self.assertLogs(
+                    "sciretriever.acquisition.providers.elsevier",
+                    level="DEBUG",
+                ) as captured,
+            ):
+                client = ElsevierAuthorizedPdfClient(
+                    http_client=http_client,
+                    api_key=_API_KEY,
+                )
+                if expected is None:
+                    result = client.download(_direct_locator())
+                    self.assertIsInstance(result, AuthorizedDownloadMiss)
+                    assert isinstance(result, AuthorizedDownloadMiss)
+                    self.assertIs(result.reason, AuthorizedNormalMiss.HTTP_404)
+                else:
+                    with self.assertRaises(AuthorizedClientFailure) as caught:
+                        client.download(_direct_locator())
+                    self.assertIs(caught.exception.kind, expected)
+            rendered = "\n".join(captured.output)
+            self.assertIn("stage=download", rendered)
+            self.assertIn("envelope=service-error", rendered)
+            self.assertNotIn(status_code, rendered)
+            self.assertNotIn(private_message, rendered)
+            self.assertNotIn(_API_KEY, rendered)
+
+    def test_download_rejects_invalid_object_identity_or_namespace(self) -> None:
         client = ElsevierAuthorizedPdfClient(http_client=_http_client(), api_key=_API_KEY)
         for invalid in (
             AuthorizedDownloadLocator(
@@ -714,10 +986,13 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
         with mock.patch.object(
             http_client,
             "request",
-            return_value=_response(
-                200,
-                body=_fixture("article-no-primary.xml"),
-                media_type="application/xml",
+            side_effect=(
+                _response(
+                    200,
+                    body=_fixture("article-no-primary.xml"),
+                    media_type="application/xml",
+                ),
+                _response(404),
             ),
         ) as request:
             results = tuple(
@@ -729,13 +1004,64 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
                 ).execute(_context(_request()))
             )
 
-        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_count, 2)
         self.assertEqual(tuple(result.outcome for result in results), (RouteOutcome.HINTS,))
         self.assertEqual(len(results[0].hints), 3)
         self.assertTrue(
             all(hint.profile_access_key == "elsevier-sciencedirect" for hint in results[0].hints)
         )
         self.assertIsNone(ELSEVIER_ACCESS_PROFILE.browser_route_key)
+
+    def test_source_falls_back_from_unusable_xml_to_direct_article_pdf(self) -> None:
+        http_client = _http_client()
+        private_payload = b"<broken-private-article-response"
+        pdf_payload = b"%PDF-1.7 candidate for the unified validator"
+        with (
+            mock.patch.object(
+                http_client,
+                "request",
+                side_effect=(
+                    _response(
+                        200,
+                        body=private_payload,
+                        media_type="application/xml",
+                    ),
+                    _response(
+                        200,
+                        body=pdf_payload,
+                        media_type="application/pdf",
+                    ),
+                ),
+            ) as request,
+            self.assertLogs(
+                "sciretriever.acquisition.providers.elsevier",
+                level="DEBUG",
+            ) as captured,
+        ):
+            results = tuple(
+                _source(
+                    ElsevierAuthorizedPdfClient(
+                        http_client=http_client,
+                        api_key=_API_KEY,
+                    )
+                ).execute(_context(_request()))
+            )
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(tuple(result.outcome for result in results), (RouteOutcome.PDF_DELIVERED,))
+        temporary = results[0].temporary_pdf
+        self.assertIsNotNone(temporary)
+        assert temporary is not None
+        with temporary.content.open() as stream:
+            self.assertEqual(stream.read(), pdf_payload)
+        temporary.content.discard()
+        rendered = "\n".join(captured.output)
+        self.assertIn("envelope=malformed-xml", rendered)
+        self.assertIn("disposition=fallback-direct-pdf", rendered)
+        self.assertIn("stage=download", rendered)
+        self.assertIn("envelope=pdf", rendered)
+        self.assertNotIn(private_payload.decode(), rendered)
+        self.assertNotIn(_API_KEY, rendered)
 
     def test_generic_source_rejects_non_pdf_object_and_misbound_route_hints(self) -> None:
         http_client = _http_client()
@@ -763,9 +1089,7 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
                     )
                 ).execute(_context(_request()))
             )
-        self.assertEqual(
-            caught.exception.failure.code, "acquisition-authorized-primary-pdf-ambiguous"
-        )
+        self.assertEqual(caught.exception.failure.code, "acquisition-authorized-non-pdf-product")
 
         client = ElsevierAuthorizedPdfClient(http_client=_http_client(), api_key=_API_KEY)
         target = _stable_target()

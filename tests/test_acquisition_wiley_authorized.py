@@ -63,12 +63,17 @@ def _http_client() -> HttpClient:
     )
 
 
-def _target(doi: str = "10.1002/(SICI)1234-5678") -> AuthorizedLookupTarget:
+def _target(
+    doi: str = "10.1002/(SICI)1234-5678",
+    *,
+    evidence_kind: AuthorizedEvidenceKind = AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
+    confirmed_origin: str = "https://onlinelibrary.wiley.com",
+) -> AuthorizedLookupTarget:
     return AuthorizedLookupTarget(
-        evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
+        evidence_kind=evidence_kind,
         namespace="doi",
         value=doi,
-        resolved_landing_origin="https://onlinelibrary.wiley.com",
+        confirmed_origin=confirmed_origin,
     )
 
 
@@ -93,7 +98,7 @@ def _response(
 
 
 class WileyAuthorizedPdfClientTests(unittest.TestCase):
-    def test_profile_keeps_tdm_api_ready_and_browser_unregistered(self) -> None:
+    def test_profile_keeps_tdm_api_ready_without_claiming_wiley_browser_support(self) -> None:
         self.assertEqual(WILEY_ACCESS_PROFILE.api_route_keys, ("api:wiley-tdm-v1",))
         self.assertIsNone(WILEY_ACCESS_PROFILE.browser_route_key)
         self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules, ())
@@ -137,21 +142,43 @@ class WileyAuthorizedPdfClientTests(unittest.TestCase):
             WILEY_AUTHORIZED_CONTRACT.doi_landing_origins,
             ("https://onlinelibrary.wiley.com",),
         )
+        self.assertEqual(
+            WILEY_AUTHORIZED_CONTRACT.doi_asset_origins,
+            (
+                "https://onlinelibrary.wiley.com",
+                "https://alm.wiley.com",
+            ),
+        )
         self.assertTrue(WILEY_AUTHORIZED_CONTRACT.download_proves_entitlement)
 
         client = WileyAuthorizedPdfClient(http_client=_http_client(), tdm_api_token=_SECRET)
-        lookup = cast(AuthorizedLookupDownloads, client.lookup(_target()))
+        for target in (
+            _target(),
+            _target(
+                evidence_kind=AuthorizedEvidenceKind.DOI_ASSET_ORIGIN,
+                confirmed_origin="https://onlinelibrary.wiley.com",
+            ),
+            _target(
+                evidence_kind=AuthorizedEvidenceKind.DOI_ASSET_ORIGIN,
+                confirmed_origin="https://alm.wiley.com",
+            ),
+        ):
+            with self.subTest(target=target):
+                lookup = cast(AuthorizedLookupDownloads, client.lookup(target))
+                self.assertIs(lookup.entitlement, AuthorizedEntitlement.UNKNOWN)
+                self.assertEqual(lookup.downloads[0].namespace, "wiley-tdm-pdf")
+                self.assertEqual(
+                    lookup.downloads[0].source_record_id,
+                    "10.1002/(SICI)1234-5678",
+                )
 
-        self.assertIs(lookup.entitlement, AuthorizedEntitlement.UNKNOWN)
-        self.assertEqual(lookup.downloads[0].namespace, "wiley-tdm-pdf")
-        self.assertEqual(lookup.downloads[0].source_record_id, "10.1002/(SICI)1234-5678")
         self.assertNotIn(_SECRET, repr(client))
 
         wrong_origin = AuthorizedLookupTarget(
             evidence_kind=AuthorizedEvidenceKind.DOI_LANDING_ORIGIN,
             namespace="doi",
             value="10.1002/example",
-            resolved_landing_origin="https://example.org",
+            confirmed_origin="https://example.org",
         )
         with self.assertRaises(AuthorizedClientFailure):
             client.lookup(wrong_origin)

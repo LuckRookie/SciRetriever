@@ -71,6 +71,8 @@ from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
     AcquisitionPath,
     Asset,
+    AssetHint,
+    AssetHintKind,
     AssetRole,
     AutomaticPdfAcquisitionExhaustion,
     LiteratureAsset,
@@ -143,6 +145,7 @@ def _contract(
             ),
         ),
         doi_landing_origins=("https://publisher.example.test",),
+        doi_asset_origins=("https://assets.publisher.example.test",),
         download_locator_namespaces=("fixture-pdf",),
         normal_miss_reasons=(
             frozenset(AuthorizedNormalMiss) if normal_miss_reasons is None else normal_miss_reasons
@@ -163,6 +166,7 @@ def _observation(
     *,
     provider_name: str,
     record_id: str,
+    asset_hints: tuple[AssetHint, ...] = (),
 ) -> MetadataObservation:
     return MetadataObservation(
         observation_id=ObservationId(_id(index)),
@@ -176,6 +180,7 @@ def _observation(
             parameters_sha256=None,
         ),
         metadata=LiteratureMetadata(title="Fixture observation"),
+        asset_hints=asset_hints,
     )
 
 
@@ -549,6 +554,24 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                 identifiers=(Identifier(namespace="doi", value="10.5555/example"),),
                 resolved_landing_origin="https://publisher.example.test",
             ),
+            _request(
+                identifiers=(Identifier(namespace="doi", value="10.5555/asset-origin"),),
+                observations=(
+                    _observation(
+                        13,
+                        provider_name="unrelated-metadata",
+                        record_id="item:asset-origin",
+                        asset_hints=(
+                            AssetHint(
+                                url=(
+                                    "https://assets.publisher.example.test/article/asset-origin.pdf"
+                                ),
+                                kind=AssetHintKind.DIRECT_FILE,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
         )
         for request_value, evidence in strong_requests:
             with self.subTest(priority=evidence.priority):
@@ -565,6 +588,42 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                     [],
                 )
                 self.assertEqual(len(client.lookup_calls), 1)
+
+    def test_single_doi_binds_to_exact_asset_origin_without_doi_resolution(self) -> None:
+        request, evidence = _request(
+            identifiers=(Identifier(namespace="doi", value="10.5555/asset-origin"),),
+            observations=(
+                _observation(
+                    14,
+                    provider_name="unrelated-metadata",
+                    record_id="item:asset-origin",
+                    asset_hints=(
+                        AssetHint(
+                            url=("https://assets.publisher.example.test/article/asset-origin.pdf"),
+                            kind=AssetHintKind.DIRECT_FILE,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        client = _FixtureClient("no-primary.json")
+
+        self.assertEqual(
+            list(_source(client)._deliveries(request, evidence, CandidateKeyTracker())),
+            [],
+        )
+
+        self.assertEqual(
+            client.lookup_calls,
+            [
+                AuthorizedLookupTarget(
+                    evidence_kind=AuthorizedEvidenceKind.DOI_ASSET_ORIGIN,
+                    namespace="doi",
+                    value="10.5555/asset-origin",
+                    confirmed_origin="https://assets.publisher.example.test",
+                )
+            ],
+        )
 
     def test_publisher_prefix_scopus_source_and_wrong_origin_do_not_create_lookups(self) -> None:
         weak_requests = (
@@ -595,6 +654,56 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                 identifiers=(Identifier(namespace="doi", value="10.5555/example"),),
                 resolved_landing_origin="https://other-publisher.example.test",
             ),
+            _request(
+                identifiers=(Identifier(namespace="doi", value="10.5555/wrong-asset"),),
+                observations=(
+                    _observation(
+                        15,
+                        provider_name="unrelated-metadata",
+                        record_id="item:wrong-asset",
+                        asset_hints=(
+                            AssetHint(
+                                url="https://other-publisher.example.test/article.pdf",
+                                kind=AssetHintKind.DIRECT_FILE,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            _request(
+                observations=(
+                    _observation(
+                        16,
+                        provider_name="unrelated-metadata",
+                        record_id="item:no-doi",
+                        asset_hints=(
+                            AssetHint(
+                                url="https://assets.publisher.example.test/article.pdf",
+                                kind=AssetHintKind.DIRECT_FILE,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            _request(
+                identifiers=(
+                    Identifier(namespace="doi", value="10.5555/first"),
+                    Identifier(namespace="doi", value="10.5555/second"),
+                ),
+                observations=(
+                    _observation(
+                        17,
+                        provider_name="unrelated-metadata",
+                        record_id="item:ambiguous-doi",
+                        asset_hints=(
+                            AssetHint(
+                                url="https://assets.publisher.example.test/article.pdf",
+                                kind=AssetHintKind.DIRECT_FILE,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
         )
         for request_value, evidence in weak_requests:
             with self.subTest(priority=evidence.priority):
@@ -611,6 +720,32 @@ class AuthorizedProviderBoundaryTests(unittest.TestCase):
                     [],
                 )
                 self.assertEqual(client.lookup_calls, [])
+
+    def test_debug_logging_explains_zero_target_without_provider_io(self) -> None:
+        request, evidence = _request(
+            publisher="Fixture Publisher",
+            identifiers=(Identifier(namespace="doi", value="10.5555/weak-evidence"),),
+        )
+        client = _ClientFake(())
+        source = _source(client)
+
+        with self.assertLogs("sciretriever.acquisition.authorized", level="DEBUG") as captured:
+            deliveries = list(
+                source._deliveries(
+                    request,
+                    evidence,
+                    CandidateKeyTracker(),
+                )
+            )
+
+        output = "\n".join(captured.output)
+        self.assertEqual(deliveries, [])
+        self.assertEqual(client.lookup_calls, [])
+        self.assertIn("event=authorized-source-started", output)
+        self.assertIn("target_count=0 disposition=empty", output)
+        self.assertIn("event=authorized-source-finished", output)
+        self.assertIn("target_count=0 attempted=0 delivered=0 outcome=miss", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
 
     def test_target_selection_is_local_and_evidence_mismatch_fails_before_client_io(self) -> None:
         client = _FixtureClient("no-primary.json")
