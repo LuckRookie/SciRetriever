@@ -6,7 +6,8 @@ import logging
 import sys
 from typing import TextIO, cast
 
-from .redaction import RedactingFormatter, RedactionFilter
+from .presentation import DiagnosticFormatter, stream_supports_color
+from .redaction import RedactionFilter
 
 _PROJECT_LOGGER_NAME = "sciretriever"
 _OWNED_HANDLER_ATTRIBUTE = "_sciretriever_owned_handler"
@@ -50,10 +51,17 @@ def _owned_handlers(logger: logging.Logger) -> list[_BestEffortStreamHandler]:
     ]
 
 
-def _make_handler(stream: TextIO) -> _BestEffortStreamHandler:
+def _make_formatter(*, stream: TextIO, level: int) -> DiagnosticFormatter:
+    return DiagnosticFormatter(
+        debug=level <= logging.DEBUG,
+        color=stream_supports_color(stream),
+    )
+
+
+def _make_handler(stream: TextIO, *, level: int) -> _BestEffortStreamHandler:
     handler = _BestEffortStreamHandler(stream)
     setattr(handler, _OWNED_HANDLER_ATTRIBUTE, True)
-    handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.setFormatter(_make_formatter(stream=stream, level=level))
     handler.addFilter(RedactionFilter())
     return handler
 
@@ -79,8 +87,8 @@ def configure_logging(*, level: int) -> None:
         except Exception:
             # A broken previous stream should not make reconfiguration fail.
             handler.stream = sys.stderr
-        handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        handler.setFormatter(_make_formatter(stream=sys.stderr, level=level))
         handler.filters[:] = [RedactionFilter()]
         return
 
-    logger.addHandler(_make_handler(sys.stderr))
+    logger.addHandler(_make_handler(sys.stderr, level=level))
