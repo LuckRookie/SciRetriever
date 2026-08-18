@@ -1778,19 +1778,22 @@ class LiteratureWriter:
             raise LiteratureWriterIntegrityError()
         self._checkpoint("reference-after-supports")
 
-    def publish_provider_relation_observation(
+    def publish_provider_relation_observations(
         self,
-        observation: ProviderRelationObservation,
+        observations: tuple[ProviderRelationObservation, ...],
     ) -> None:
-        observation = _require_public(
-            cast(object, observation),
-            ProviderRelationObservation,
-            "observation must be ProviderRelationObservation",
-        )
+        if not isinstance(observations, tuple) or any(
+            not isinstance(observation, ProviderRelationObservation) for observation in observations
+        ):
+            raise TypeError("observations must be a tuple of ProviderRelationObservation")
+        if not observations:
+            raise ValueError("observations must not be empty")
 
         def operation(connection: sqlite3.Connection) -> None:
-            _store_provider_relation(connection, observation)
-            self._checkpoint("provider-relation-after")
+            for observation in observations:
+                _store_provider_relation(connection, observation)
+                self._checkpoint("provider-relation-after")
+            self._checkpoint("provider-relation-batch-after")
 
         _run_write(self._engine, operation)
 

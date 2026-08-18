@@ -1044,6 +1044,69 @@ class DataCiteAdapterTests(ProviderContractCase, unittest.TestCase):
             ),
         )
 
+    def test_100_raw_items_have_complete_auditable_dispositions(self) -> None:
+        environment = self._environment()
+        records: list[dict[str, object]] = []
+        for index in range(1, 101):
+            is_literature = index <= 51
+            doi = f"10.5555/disposition-{index:03d}"
+            records.append(
+                {
+                    "type": "dois",
+                    "id": doi,
+                    "attributes": {
+                        "doi": doi,
+                        "titles": [
+                            {
+                                "title": (
+                                    f"Auditable article {index}"
+                                    if is_literature
+                                    else "vendor-body-sentinel-must-not-leak"
+                                )
+                            }
+                        ],
+                        "types": {
+                            "resourceTypeGeneral": (
+                                "JournalArticle" if is_literature else "Dataset"
+                            )
+                        },
+                        "privateFixtureField": "vendor-body-sentinel-must-not-leak",
+                    },
+                }
+            )
+        environment.queue_http_response(
+            status=200,
+            body=json.dumps(
+                {
+                    "data": records,
+                    "links": {"self": "https://api.datacite.org/dois?page[cursor]=1"},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
+        with self.assertLogs("sciretriever.metadata.service", level="DEBUG") as captured:
+            result = environment.api.search_topic(_topic_request("datacite", 100)).providers[0]
+
+        output = "\n".join(captured.output)
+        self.assertEqual(result.outcome, "EXHAUSTED")
+        self.assertEqual(result.raw_item_count, 100)
+        self.assertEqual(len(result.observations), 51)
+        self.assertEqual(len(result.relations), 0)
+        self.assertEqual(output.count(" disposition=accepted "), 51)
+        self.assertEqual(output.count(" disposition=empty "), 49)
+        self.assertEqual(output.count(" disposition=rejected "), 0)
+        self.assertEqual(
+            output.count("reason=datacite-resource-type-not-supported-as-literature"),
+            49,
+        )
+        self.assertIn("raw_item_count=100", output)
+        self.assertIn("accepted_item_count=51", output)
+        self.assertIn("empty_item_count=49", output)
+        self.assertIn("rejected_record_count=0", output)
+        self.assertNotIn("vendor-body-sentinel-must-not-leak", output)
+        self.assertNotIn("vendor-body-sentinel-must-not-leak", result.model_dump_json())
+
     def test_lookup_uses_network_path_parameter_and_relation_types_are_separated(self) -> None:
         environment = self._environment()
         _queue_datacite_lookup(environment)

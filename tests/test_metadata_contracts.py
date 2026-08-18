@@ -430,6 +430,67 @@ class MetadataCapabilityContractTests(unittest.TestCase):
         self.assertIn("rejected_record_count=1", output)
         self.assertNotIn("vendor-response-must-not-leak", output)
 
+    def test_debug_logging_accounts_for_every_raw_item_disposition(self) -> None:
+        def convert(raw: _VendorItem) -> NeutralMetadataItem:
+            if raw.index == 1:
+                return NeutralMetadataItem(observations=(_observation(1),))
+            if raw.index == 2:
+                return NeutralMetadataItem(empty_reason="fixture-not-applicable")
+            raise MetadataProviderFailure(_failure(code="fixture-record-rejected"))
+
+        provider = _TopicFake(
+            "fake",
+            lambda: _pages(
+                {
+                    None: metadata_ports._RawPage(
+                        items=(_VendorItem(1), _VendorItem(2), _VendorItem(3)),
+                        next_cursor=None,
+                        exhausted=True,
+                    )
+                },
+                convert,
+            ),
+        )
+
+        with self.assertLogs("sciretriever.metadata.service", level="DEBUG") as captured:
+            result = (
+                MetadataApi(MetadataService(topic_search_ports=(provider,)))
+                .search_topic(_topic_request(("fake", 3)))
+                .providers[0]
+            )
+
+        output = "\n".join(captured.output)
+        self.assertEqual(result.raw_item_count, 3)
+        self.assertEqual(result.outcome, "FAILED")
+        self.assertEqual(len(result.observations), 1)
+        self.assertIn(
+            "raw_item_ordinal=1 disposition=accepted observation_delta=1 relation_delta=0",
+            output,
+        )
+        self.assertIn(
+            "raw_item_ordinal=2 disposition=empty observation_delta=0 relation_delta=0",
+            output,
+        )
+        self.assertIn(
+            "raw_item_ordinal=3 disposition=rejected observation_delta=0 relation_delta=0",
+            output,
+        )
+        self.assertIn("reason=fixture-not-applicable", output)
+        self.assertIn("raw_item_count=3", output)
+        self.assertIn("accepted_item_count=1", output)
+        self.assertIn("empty_item_count=1", output)
+        self.assertIn("rejected_record_count=1", output)
+        self.assertIn("observation_count=1", output)
+        self.assertIn("relation_count=0", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
+
+    def test_empty_disposition_reason_cannot_describe_nonempty_facts(self) -> None:
+        with self.assertRaises(ValidationError):
+            NeutralMetadataItem(
+                observations=(_observation(1),),
+                empty_reason="must-not-describe-accepted-item",
+            )
+
     def test_incomplete_and_duplicate_items_count_and_are_not_admitted_or_deduplicated(
         self,
     ) -> None:

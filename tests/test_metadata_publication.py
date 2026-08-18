@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import sqlite3
+import time
 import unittest
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sciretriever.literature.api import LiteratureApi, ObservationAcceptanceResult
 from sciretriever.literature.metadata import MetadataProjectionDecision
 from sciretriever.metadata.publication import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
     MetadataPublication,
     ProviderRelationObservationPublicationPort,
 )
@@ -99,6 +104,10 @@ def _relation(identifier: str = _ID_2) -> ProviderRelationObservation:
     )
 
 
+def _relation_id(index: int) -> str:
+    return f"{index:08x}-e89b-12d3-a456-426614174000"
+
+
 class _RecordingLiteratureApi(LiteratureApi):
     def __init__(self, result: ObservationAcceptanceResult) -> None:
         self.result = result
@@ -116,13 +125,29 @@ class _RecordingLiteratureApi(LiteratureApi):
 
 class _RecordingRelationPort:
     def __init__(self) -> None:
-        self.calls: list[ProviderRelationObservation] = []
+        self.calls: list[tuple[ProviderRelationObservation, ...]] = []
 
-    def publish_provider_relation_observation(
+    def publish_provider_relation_observations(
         self,
-        observation: ProviderRelationObservation,
+        observations: tuple[ProviderRelationObservation, ...],
     ) -> None:
-        self.calls.append(observation)
+        self.calls.append(observations)
+
+
+class _CountingCatalogEngine(CatalogEngine):
+    __slots__ = ("write_transaction_count",)
+
+    write_transaction_count: int
+
+    def __init__(self, catalog_path: Path) -> None:
+        super().__init__(catalog_path)
+        object.__setattr__(self, "write_transaction_count", 0)
+
+    @contextmanager
+    def write_transaction(self) -> Iterator[sqlite3.Connection]:
+        object.__setattr__(self, "write_transaction_count", self.write_transaction_count + 1)
+        with super().write_transaction() as connection:
+            yield connection
 
 
 class MetadataPublicationTests(unittest.TestCase):
@@ -170,7 +195,7 @@ class MetadataPublicationTests(unittest.TestCase):
         )
         self.assertEqual(relations.calls, [])
 
-    def test_relation_publication_is_one_edge_and_does_not_publish_observation(self) -> None:
+    def test_relation_publication_forwards_one_frozen_bounded_batch_only(self) -> None:
         literature = _RecordingLiteratureApi(
             ObservationAcceptanceResult(decision="rejected", reason="unused")
         )
@@ -179,12 +204,31 @@ class MetadataPublicationTests(unittest.TestCase):
         publication = MetadataPublication(literature, relations)
         relation = _relation()
 
-        publication.publish_relation_observation(relation)
+        publication.publish_relation_observations((relation,))
 
-        self.assertEqual(relations.calls, [relation])
+        self.assertEqual(relations.calls, [(relation,)])
         self.assertEqual(literature.calls, [])
-        self.assertFalse(hasattr(publication, "publish_batch"))
-        self.assertFalse(hasattr(publication, "publish_item"))
+        self.assertFalse(hasattr(publication, "publish_relation_observation"))
+
+    def test_relation_publication_rejects_mutable_empty_and_oversized_batches(self) -> None:
+        literature = _RecordingLiteratureApi(
+            ObservationAcceptanceResult(decision="rejected", reason="unused")
+        )
+        relations = _RecordingRelationPort()
+        publication = MetadataPublication(literature, relations)
+        relation = _relation()
+
+        with self.assertRaises(TypeError):
+            publication.publish_relation_observations([relation])  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            publication.publish_relation_observations(())
+        with self.assertRaises(ValueError):
+            publication.publish_relation_observations(
+                (relation,) * (MAX_PROVIDER_RELATION_PUBLICATION_BATCH + 1)
+            )
+
+        self.assertEqual(relations.calls, [])
+        self.assertEqual(literature.calls, [])
 
     def test_invalid_publication_dependencies_fail_before_any_call(self) -> None:
         literature = _RecordingLiteratureApi(
@@ -223,8 +267,8 @@ class SqliteMetadataPublicationTests(unittest.TestCase):
             }
         )
 
-        adapter.publish_provider_relation_observation(relation)
-        adapter.publish_provider_relation_observation(replay)
+        adapter.publish_provider_relation_observations((relation,))
+        adapter.publish_provider_relation_observations((replay,))
 
         self.assertEqual(self._count("provider_relation_observations"), 1)
         self.assertEqual(self._count("provenances"), 1)
@@ -234,19 +278,43 @@ class SqliteMetadataPublicationTests(unittest.TestCase):
         self.assertEqual(self._count("metadata_reference_text_supports"), 0)
         self.assertEqual(self._count("content_reference_text_supports"), 0)
 
-    def test_each_relation_is_its_own_transaction_and_failure_keeps_prior_edge(self) -> None:
+    def test_sqlite_adapter_rejects_mutable_empty_and_oversized_batches(self) -> None:
+        adapter = SqliteProviderRelationObservationPublication(LiteratureWriter(self.engine))
+        relation = _relation()
+
+        with self.assertRaises(TypeError):
+            adapter.publish_provider_relation_observations([relation])  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            adapter.publish_provider_relation_observations(())
+        with self.assertRaises(ValueError):
+            adapter.publish_provider_relation_observations(
+                (relation,) * (MAX_PROVIDER_RELATION_PUBLICATION_BATCH + 1)
+            )
+
+        self.assertEqual(self._count("provider_relation_observations"), 0)
+        self.assertEqual(self._count("provenances"), 0)
+
+    def test_batch_is_atomic_and_failure_keeps_prior_successful_batch(self) -> None:
         successful = SqliteProviderRelationObservationPublication(LiteratureWriter(self.engine))
-        successful.publish_provider_relation_observation(_relation(_ID_1))
+        successful.publish_provider_relation_observations((_relation(_ID_1),))
+
+        checkpoints = 0
 
         def fail_after_relation(name: str) -> None:
-            if name == "provider-relation-after":
+            nonlocal checkpoints
+            if name != "provider-relation-after":
+                return
+            checkpoints += 1
+            if checkpoints == 2:
                 raise RuntimeError("fixture failpoint")
 
         failing = SqliteProviderRelationObservationPublication(
             LiteratureWriter(self.engine, failpoint=fail_after_relation)
         )
         with self.assertRaises(RuntimeError):
-            failing.publish_provider_relation_observation(_relation(_ID_2))
+            failing.publish_provider_relation_observations(
+                (_relation(_ID_2), _relation(_relation_id(3)))
+            )
 
         self.assertEqual(self._count("provider_relation_observations"), 1)
         with self.engine.read_snapshot() as connection:
@@ -258,13 +326,15 @@ class SqliteMetadataPublicationTests(unittest.TestCase):
     def test_same_relation_observation_id_cannot_replace_an_immutable_edge(self) -> None:
         adapter = SqliteProviderRelationObservationPublication(LiteratureWriter(self.engine))
         original = _relation()
-        adapter.publish_provider_relation_observation(original)
+        adapter.publish_provider_relation_observations((original,))
         conflicting = original.model_copy(
             update={"cited": ProviderLiteratureKey(record_id="different-target")}
         )
 
         with self.assertRaises(LiteratureWriterConflictError):
-            adapter.publish_provider_relation_observation(conflicting)
+            adapter.publish_provider_relation_observations(
+                (_relation(_relation_id(3)), conflicting)
+            )
 
         self.assertEqual(self._count("provider_relation_observations"), 1)
         with self.engine.read_snapshot() as connection:
@@ -274,6 +344,106 @@ class SqliteMetadataPublicationTests(unittest.TestCase):
                 (_ID_2,),
             ).fetchone()
         self.assertEqual(cited, ("target-record",))
+        self.assertEqual(self._count("provenances"), 1)
+
+    def test_14k_relations_use_bounded_transactions_and_replay_idempotently(self) -> None:
+        engine = _CountingCatalogEngine(Path(self.temporary.name) / "counted.sqlite")
+        adapter = SqliteProviderRelationObservationPublication(LiteratureWriter(engine))
+        relations = tuple(_relation(_relation_id(index)) for index in range(1, 14_001))
+
+        started = time.monotonic()
+        for offset in range(0, len(relations), MAX_PROVIDER_RELATION_PUBLICATION_BATCH):
+            adapter.publish_provider_relation_observations(
+                relations[offset : offset + MAX_PROVIDER_RELATION_PUBLICATION_BATCH]
+            )
+        first_elapsed = time.monotonic() - started
+
+        expected_transactions = 55
+        self.assertEqual(engine.write_transaction_count, expected_transactions)
+        with engine.read_snapshot() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM provider_relation_observations"
+                ).fetchone(),
+                (14_000,),
+            )
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM provenances").fetchone(), (14_000,)
+            )
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM provider_relation_endpoints").fetchone(),
+                (28_000,),
+            )
+        self.assertLess(first_elapsed, 30.0)
+
+        for offset in range(0, len(relations), MAX_PROVIDER_RELATION_PUBLICATION_BATCH):
+            adapter.publish_provider_relation_observations(
+                relations[offset : offset + MAX_PROVIDER_RELATION_PUBLICATION_BATCH]
+            )
+
+        self.assertEqual(engine.write_transaction_count, expected_transactions * 2)
+        with engine.read_snapshot() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM provider_relation_observations"
+                ).fetchone(),
+                (14_000,),
+            )
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM provenances").fetchone(), (14_000,)
+            )
+
+    def test_batch_preserves_endpoint_identifiers_and_provenance_foreign_keys(self) -> None:
+        adapter = SqliteProviderRelationObservationPublication(LiteratureWriter(self.engine))
+        relation = _relation().model_copy(
+            update={
+                "citing": ProviderLiteratureKey(
+                    record_id="source-record",
+                    identifiers=(Identifier(namespace="doi", value="10.1000/source"),),
+                ),
+                "cited": ProviderLiteratureKey(
+                    record_id="target-record",
+                    identifiers=(Identifier(namespace="doi", value="10.1000/target"),),
+                ),
+            }
+        )
+
+        adapter.publish_provider_relation_observations((relation,))
+
+        with self.engine.read_snapshot() as connection:
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            rows = connection.execute(
+                "SELECT endpoint_kind,ordinal,namespace,value "
+                "FROM provider_relation_endpoint_identifiers ORDER BY endpoint_kind,ordinal"
+            ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    ("cited", 0, "doi", "10.1000/target"),
+                    ("citing", 0, "doi", "10.1000/source"),
+                ],
+            )
+
+    def test_concurrent_bounded_batches_commit_consistent_rows(self) -> None:
+        first = tuple(_relation(_relation_id(index)) for index in range(1, 513))
+        second = tuple(_relation(_relation_id(index)) for index in range(513, 1_025))
+
+        def publish(relations: tuple[ProviderRelationObservation, ...]) -> None:
+            adapter = SqliteProviderRelationObservationPublication(LiteratureWriter(self.engine))
+            for offset in range(0, len(relations), MAX_PROVIDER_RELATION_PUBLICATION_BATCH):
+                adapter.publish_provider_relation_observations(
+                    relations[offset : offset + MAX_PROVIDER_RELATION_PUBLICATION_BATCH]
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (executor.submit(publish, first), executor.submit(publish, second))
+            for future in futures:
+                future.result()
+
+        self.assertEqual(self._count("provider_relation_observations"), 1_024)
+        self.assertEqual(self._count("provenances"), 1_024)
+        with self.engine.read_snapshot() as connection:
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
 
 if __name__ == "__main__":

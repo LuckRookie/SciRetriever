@@ -17,6 +17,7 @@ from urllib.parse import urlencode, urlsplit
 
 from pydantic import ValidationError
 
+from sciretriever.logging.api import get_logger
 from sciretriever.metadata import ports as metadata_ports
 from sciretriever.metadata.ports import MetadataProviderFailure, RawItemSession
 from sciretriever.metadata.probe import (
@@ -91,8 +92,16 @@ _MAX_RESPONSE_BYTES = 4_194_304
 _EID = re.compile(r"^2-s2\.0-[1-9][0-9]*$", re.ASCII)
 _SCOPUS_ID = re.compile(r"^SCOPUS_ID:([1-9][0-9]*)$", re.IGNORECASE | re.ASCII)
 _YEAR_PREFIX = re.compile(r"^(?P<year>[0-9]{4})(?:-|$)", re.ASCII)
+_LOGGER = get_logger(__name__)
 
-ADAPTER_REVISION = "scopus-search-abstract-json-2026-08-15"
+_SEARCH_REQUIRED_FIELDS = (
+    "opensearch:totalResults",
+    "opensearch:itemsPerPage",
+    "cursor",
+    "entry",
+)
+
+ADAPTER_REVISION = "scopus-search-abstract-json-2026-08-18"
 SEARCH_ACCESS_SCOPE = AccessScope(
     provider_name=_PROVIDER_NAME,
     channel="api",
@@ -276,7 +285,7 @@ class ElsevierScopusAdapter:
                 requested_cursor=requested_cursor,
                 page_size=self._page_size,
             )
-            if start != seen_items:
+            if start is not None and start != seen_items:
                 raise _protocol_failure()
             if not values:
                 if total == 0 and seen_items == 0 and next_cursor is None:
@@ -331,12 +340,12 @@ class ElsevierScopusAdapter:
             )
             if response is None:
                 return metadata_ports._RawPage(items=(), next_cursor=None, exhausted=True)
-            root = require_json_object(
-                parse_bounded_json(
-                    response.transport.body,
-                    max_bytes=_MAX_RESPONSE_BYTES,
-                )
+            root = _response_root(
+                response.transport.body,
+                allow_resource_not_found=True,
             )
+            if root is None:
+                return metadata_ports._RawPage(items=(), next_cursor=None, exhausted=True)
             if "abstracts-retrieval-response" not in root:
                 raise unknown_shape_failure()
             value = root.get("abstracts-retrieval-response")
@@ -605,34 +614,197 @@ def _search_page(
     *,
     requested_cursor: str,
     page_size: int,
-) -> tuple[tuple[object, ...], str | None, int, int]:
-    root = require_json_object(parse_bounded_json(payload, max_bytes=_MAX_RESPONSE_BYTES))
-    if "search-results" not in root:
+) -> tuple[tuple[object, ...], str | None, int, int | None]:
+    parsed_root = _parsed_response_root(payload)
+    try:
+        root = _classified_response_root(
+            parsed_root,
+            allow_resource_not_found=False,
+        )
+    except MetadataProviderFailure as error:
+        _log_search_response_classification(
+            envelope=_controlled_response_envelope(parsed_root),
+            results=None,
+            disposition="failure",
+            failure_kind=_safe_search_failure_kind(error),
+        )
+        raise
+    if root is None:
+        raise RuntimeError("search response cannot resolve to an exact lookup miss")
+    results = _required_search_results(root)
+    if any(name not in results for name in _SEARCH_REQUIRED_FIELDS):
+        _log_search_response_classification(
+            envelope="search-results",
+            results=results,
+            disposition="failure",
+            failure_kind="missing-required-field",
+        )
         raise unknown_shape_failure()
-    results = require_json_object(root.get("search-results"))
-    required = (
-        "opensearch:totalResults",
-        "opensearch:startIndex",
-        "opensearch:itemsPerPage",
-        "cursor",
-        "entry",
+    try:
+        total = _vendor_integer(results.get("opensearch:totalResults"))
+        start = (
+            _vendor_integer(results.get("opensearch:startIndex"))
+            if "opensearch:startIndex" in results
+            else None
+        )
+        reported_count = _vendor_integer(results.get("opensearch:itemsPerPage"))
+        values = require_json_array(results.get("entry"))
+        if reported_count != len(values) or len(values) > page_size:
+            raise _protocol_failure()
+        cursor = require_json_object(results.get("cursor"))
+        current = optional_nonblank_string(cursor.get("@current"))
+        if current != requested_cursor:
+            raise _protocol_failure()
+        next_cursor = optional_nonblank_string(cursor.get("@next"))
+        if next_cursor == requested_cursor:
+            raise _protocol_failure()
+        if not values and (total != 0 or next_cursor is not None):
+            raise _protocol_failure()
+    except MetadataProviderFailure as error:
+        _log_search_response_classification(
+            envelope="search-results",
+            results=results,
+            disposition="failure",
+            failure_kind=_safe_search_failure_kind(error),
+        )
+        raise
+    _log_search_response_classification(
+        envelope="search-results",
+        results=results,
+        disposition="empty" if not values else "accepted",
+        failure_kind="-",
     )
-    if any(name not in results for name in required):
-        raise unknown_shape_failure()
-    total = _vendor_integer(results.get("opensearch:totalResults"))
-    start = _vendor_integer(results.get("opensearch:startIndex"))
-    reported_count = _vendor_integer(results.get("opensearch:itemsPerPage"))
-    values = require_json_array(results.get("entry"))
-    if reported_count != len(values) or len(values) > page_size:
-        raise _protocol_failure()
-    cursor = require_json_object(results.get("cursor"))
-    current = optional_nonblank_string(cursor.get("@current"))
-    if current != requested_cursor:
-        raise _protocol_failure()
-    next_cursor = optional_nonblank_string(cursor.get("@next"))
-    if next_cursor == requested_cursor:
-        raise _protocol_failure()
     return values, next_cursor, total, start
+
+
+def _required_search_results(root: dict[str, object]) -> dict[str, object]:
+    if "search-results" not in root:
+        _log_search_response_classification(
+            envelope="unknown",
+            results=None,
+            disposition="failure",
+            failure_kind="unknown-envelope",
+        )
+        raise unknown_shape_failure()
+    try:
+        results = require_json_object(root.get("search-results"))
+    except MetadataProviderFailure:
+        _log_search_response_classification(
+            envelope="search-results",
+            results=None,
+            disposition="failure",
+            failure_kind="invalid-search-results",
+        )
+        raise
+    return results
+
+
+def _response_root(
+    payload: bytes,
+    *,
+    allow_resource_not_found: bool,
+) -> dict[str, object] | None:
+    return _classified_response_root(
+        _parsed_response_root(payload),
+        allow_resource_not_found=allow_resource_not_found,
+    )
+
+
+def _parsed_response_root(payload: bytes) -> dict[str, object]:
+    return require_json_object(parse_bounded_json(payload, max_bytes=_MAX_RESPONSE_BYTES))
+
+
+def _classified_response_root(
+    root: dict[str, object],
+    *,
+    allow_resource_not_found: bool,
+) -> dict[str, object] | None:
+    if "service-error" not in root:
+        return root
+    if tuple(root) != ("service-error",):
+        raise unknown_shape_failure()
+    status_code = _service_error_status_code(root.get("service-error"))
+    if status_code == "RESOURCE_NOT_FOUND":
+        if allow_resource_not_found:
+            return None
+        raise _query_rejected_failure()
+    if status_code in {"AUTHENTICATION_ERROR", "INVALID_API_KEY", "INVALID_APIKEY"}:
+        raise _http_status_failure(401)
+    if status_code in {"AUTHORIZATION_ERROR", "ENTITLEMENT_ERROR", "NOT_ENTITLED"}:
+        raise _http_status_failure(403)
+    if status_code in {"QUOTA_EXCEEDED", "RATE_LIMIT_EXCEEDED"}:
+        raise _http_status_failure(429)
+    if status_code in {"INVALID_INPUT", "INVALID_REQUEST"}:
+        raise _query_rejected_failure()
+    if status_code in {"SYSTEM_ERROR", "SERVICE_UNAVAILABLE"}:
+        raise _provider_failure(
+            code="metadata-provider-http-status",
+            reason="The metadata provider service did not complete the request.",
+            action="Retry after the provider service is available.",
+            retryable=True,
+        )
+    raise unknown_shape_failure()
+
+
+def _controlled_response_envelope(root: dict[str, object]) -> str:
+    if "service-error" in root:
+        return "service-error"
+    if "search-results" in root:
+        return "search-results"
+    return "unknown"
+
+
+def _safe_search_failure_kind(error: MetadataProviderFailure) -> str:
+    values = {
+        "metadata-provider-authentication": "authentication",
+        "metadata-provider-entitlement": "entitlement",
+        "metadata-provider-throttled": "throttled",
+        "metadata-provider-query-rejected": "query-rejected",
+        "metadata-provider-http-status": "service",
+        "metadata-provider-invalid-record": "invalid-field",
+        "metadata-provider-protocol": "protocol",
+        "metadata-provider-unknown-shape": "unknown-shape",
+    }
+    return values.get(error.failure.code, "provider-failure")
+
+
+def _log_search_response_classification(
+    *,
+    envelope: str,
+    results: dict[str, object] | None,
+    disposition: str,
+    failure_kind: str,
+) -> None:
+    present = frozenset() if results is None else frozenset(results)
+    _LOGGER.debug(
+        "event=elsevier-metadata-response-classified provider=elsevier product=search "
+        "envelope=%s has_total=%s has_start=%s has_items_per_page=%s has_cursor=%s "
+        "has_entry=%s disposition=%s failure_kind=%s",
+        envelope,
+        str("opensearch:totalResults" in present).lower(),
+        str("opensearch:startIndex" in present).lower(),
+        str("opensearch:itemsPerPage" in present).lower(),
+        str("cursor" in present).lower(),
+        str("entry" in present).lower(),
+        disposition,
+        failure_kind,
+    )
+
+
+def _service_error_status_code(value: object) -> str:
+    service_error = require_json_object(value)
+    status = require_json_object(service_error.get("status"))
+    code = status.get("statusCode")
+    if type(code) is not str:
+        raise unknown_shape_failure()
+    normalized = code.strip().upper().replace("-", "_").replace(" ", "_")
+    if (
+        not normalized
+        or len(normalized) > 64
+        or not all(character == "_" or "A" <= character <= "Z" for character in normalized)
+    ):
+        raise unknown_shape_failure()
+    return normalized
 
 
 def _topic_query(query: TopicSearchQuery) -> str:
@@ -1174,6 +1346,15 @@ def _protocol_failure() -> MetadataProviderFailure:
     )
 
 
+def _query_rejected_failure() -> MetadataProviderFailure:
+    return _provider_failure(
+        code="metadata-provider-query-rejected",
+        reason="The metadata provider rejected the query or request parameters.",
+        action="Review the provider query and ordinary product configuration.",
+        retryable=False,
+    )
+
+
 def _http_status_failure(status: int) -> MetadataProviderFailure:
     if status == 401:
         return _provider_failure(
@@ -1196,6 +1377,8 @@ def _http_status_failure(status: int) -> MetadataProviderFailure:
             action="Retry after the shared provider access policy permits another request.",
             retryable=True,
         )
+    if status == 400:
+        return _query_rejected_failure()
     return _provider_failure(
         code="metadata-provider-http-status",
         reason="The metadata provider returned an unsuccessful HTTP status.",

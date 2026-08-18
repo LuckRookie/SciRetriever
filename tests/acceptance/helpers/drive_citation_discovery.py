@@ -327,8 +327,7 @@ over_limit_relation = _relation(
     citing_record_id="target",
     cited_record_id="over-limit",
 )
-publication.publish_relation_observation(depth_two_relation)
-publication.publish_relation_observation(over_limit_relation)
+publication.publish_relation_observations((depth_two_relation, over_limit_relation))
 
 first_relation = _relation(3, citing_record_id="seed", cited_record_id="target")
 target_observation = _observation(2, "target")
@@ -442,7 +441,7 @@ reverse_relation = _relation(
     citing_record_id="reverse-citing",
     cited_record_id="reverse-cited",
 )
-publication.publish_relation_observation(reverse_relation)
+publication.publish_relation_observations((reverse_relation,))
 reverse_report = _operation()(
     CitationDiscoveryInput(
         kind="citation",

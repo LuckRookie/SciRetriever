@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,6 +12,7 @@ from sciretriever.literature.api import LiteratureApi, ObservationAcceptanceResu
 from sciretriever.literature.metadata import MetadataProjectionDecision
 from sciretriever.literature.service import LiteratureService
 from sciretriever.metadata.api import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
     MetadataApi,
     MetadataProviderInvocation,
     MetadataProviderResult,
@@ -233,14 +234,25 @@ class _DiscoveryPublication:
 
 
 class _RelationPublication:
-    def __init__(self) -> None:
-        self.relations: list[ProviderRelationObservation] = []
-
-    def publish_provider_relation_observation(
+    def __init__(
         self,
-        observation: ProviderRelationObservation,
+        *,
+        after_batch: Callable[[int], None] | None = None,
     ) -> None:
-        self.relations.append(observation)
+        self.batches: list[tuple[ProviderRelationObservation, ...]] = []
+        self._after_batch = after_batch
+
+    @property
+    def relations(self) -> list[ProviderRelationObservation]:
+        return [relation for batch in self.batches for relation in batch]
+
+    def publish_provider_relation_observations(
+        self,
+        observations: tuple[ProviderRelationObservation, ...],
+    ) -> None:
+        self.batches.append(observations)
+        if self._after_batch is not None:
+            self._after_batch(len(self.batches))
 
 
 class _Literature(LiteratureApi):
@@ -344,6 +356,22 @@ class _VersionLinkedLiterature(_Literature):
         )
 
 
+class _RejectingLiterature(_Literature):
+    def __init__(self, reason: str) -> None:
+        super().__init__()
+        self.reason = reason
+
+    def accept_observation(
+        self,
+        observation: MetadataObservation,
+        *,
+        provider_precedence: Iterable[str] = (),
+    ) -> ObservationAcceptanceResult:
+        del provider_precedence
+        self.calls.append(observation)
+        return ObservationAcceptanceResult(decision="rejected", reason=self.reason)
+
+
 class _Metadata(MetadataApi):
     def __init__(self, invocations: list[MetadataProviderInvocation]) -> None:
         self.invocations = invocations
@@ -389,6 +417,7 @@ class TopicDiscoveryTests(unittest.TestCase):
         publication: _DiscoveryPublication | None = None,
         literature: _Literature | None = None,
         metadata: _Metadata | None = None,
+        relation_publication: _RelationPublication | None = None,
         admission_failure: BaseException | None = None,
     ) -> tuple[
         TopicDiscoveryOperation,
@@ -403,7 +432,7 @@ class TopicDiscoveryTests(unittest.TestCase):
         repository = _Repository(events)
         metadata = metadata or _Metadata(invocations)
         literature = literature or _Literature()
-        relations = _RelationPublication()
+        relations = relation_publication or _RelationPublication()
         discovery = publication or _DiscoveryPublication()
         operation = TopicDiscoveryOperation(
             metadata=metadata,
@@ -480,7 +509,8 @@ class TopicDiscoveryTests(unittest.TestCase):
             ),
         )
 
-        report = operation(request)
+        with self.assertLogs("sciretriever.entry.discovery", level="DEBUG") as captured:
+            report = operation(request)
 
         self.assertEqual(events[:3], ["admission", "recovery", "create"])
         self.assertEqual(repository.finalized, ["COMPLETED"])
@@ -494,10 +524,59 @@ class TopicDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(literature.calls), 2)
         self.assertEqual(len(discovery.results), 2)
         self.assertEqual(relations.relations, [relation])
+        self.assertEqual(relations.batches, [(relation,)])
         self.assertEqual(
             [tuple(item.providers) for item in metadata.calls],
             [(request.providers[0],), (request.providers[1],)],
         )
+        output = "\n".join(captured.output)
+        self.assertIn("event=discovery-observation-accepted", output)
+        self.assertIn("event=discovery-relation-batch-published", output)
+        self.assertRegex(
+            output,
+            r"event=discovery-relation-batch-published .*provider=beta .*batch=1 "
+            r".*relation_count=1 .*published_total=1 .*elapsed_ms=\d+",
+        )
+        self.assertIn("event=discovery-finished", output)
+        self.assertRegex(output, r"event=discovery-finished .*elapsed_ms=\d+")
+
+    def test_rejected_observation_debug_log_includes_stable_decision_reason(self) -> None:
+        reason = "metadata-title-or-doi-required"
+        observation = _observation(8, "provider", "10.1000/rejected")
+        rejecting = _RejectingLiterature(reason)
+        operation, repository, _, literature, discovery, relations, _ = self._operation(
+            [
+                MetadataProviderInvocation(
+                    provider_name="provider",
+                    observations=(observation,),
+                    relations=(),
+                    raw_item_count=1,
+                    outcome="EXHAUSTED",
+                )
+            ],
+            literature=rejecting,
+        )
+
+        with self.assertLogs("sciretriever.entry.discovery", level="DEBUG") as captured:
+            report = operation(
+                TopicDiscoveryInput(
+                    kind="topic",
+                    query="rejected observation",
+                    providers=(ProviderDiscoveryLimit(provider_name="provider", scan_limit=1),),
+                )
+            )
+
+        self.assertEqual(repository.finalized, ["COMPLETED"])
+        self.assertEqual(report.discovery_result_count, 0)
+        self.assertEqual(report.new_metadata_observation_count, 0)
+        self.assertEqual(report.providers[0].accepted_observation_count, 0)
+        self.assertEqual(literature.calls, [observation])
+        self.assertEqual(discovery.results, [])
+        self.assertEqual(relations.relations, [])
+        output = "\n".join(captured.output)
+        self.assertIn("event=discovery-observation-rejected", output)
+        self.assertIn(f"decision_reason={reason}", output)
+        self.assertNotIn(observation.metadata.title or "private-title", output)
 
     def test_partial_and_all_failed_have_correct_terminal_status(self) -> None:
         for outcomes, expected in (
@@ -528,14 +607,14 @@ class TopicDiscoveryTests(unittest.TestCase):
 
     def test_interrupted_invocation_commits_returned_facts_without_source_result(self) -> None:
         observation = _observation(9, "a", "10.1000/interrupted")
-        relation = _relation(10, "a")
+        relations_returned = tuple(_relation(index, "a") for index in range(10, 610))
         event = _Event(True)
         operation, repository, metadata, literature, discovery, relations, _ = self._operation(
             [
                 MetadataProviderInvocation(
                     provider_name="a",
                     observations=(observation,),
-                    relations=(relation,),
+                    relations=relations_returned,
                     raw_item_count=4,
                     outcome="INTERRUPTED",
                 )
@@ -568,9 +647,109 @@ class TopicDiscoveryTests(unittest.TestCase):
             [item.outcome for item in report.providers], ["INTERRUPTED", "NOT_STARTED"]
         )
         self.assertEqual(len(literature.calls), 1)
-        self.assertEqual(relations.relations, [relation])
+        self.assertEqual(relations.relations, list(relations_returned))
+        self.assertEqual(
+            [len(batch) for batch in relations.batches],
+            [MAX_PROVIDER_RELATION_PUBLICATION_BATCH] * 2 + [88],
+        )
         self.assertEqual(discovery.sources, [])
         self.assertEqual(len(discovery.results), 1)
+
+    def test_relations_are_published_in_ordered_bounded_batches(self) -> None:
+        returned = tuple(_relation(index, "a") for index in range(1, 602))
+        operation, repository, _, _, discovery, relations, _ = self._operation(
+            [
+                MetadataProviderInvocation(
+                    provider_name="a",
+                    observations=(),
+                    relations=returned,
+                    raw_item_count=601,
+                    outcome="SCAN_LIMIT_REACHED",
+                )
+            ]
+        )
+
+        report = operation(
+            TopicDiscoveryInput(
+                kind="topic",
+                query="q",
+                providers=(ProviderDiscoveryLimit(provider_name="a", scan_limit=601),),
+            )
+        )
+
+        self.assertEqual(report.run_status, "COMPLETED")
+        self.assertEqual(repository.finalized, ["COMPLETED"])
+        self.assertEqual(discovery.sources[0].outcome, "SCAN_LIMIT_REACHED")
+        self.assertEqual([len(batch) for batch in relations.batches], [256, 256, 89])
+        self.assertEqual(relations.relations, list(returned))
+
+    def test_report_counts_51_accepted_observations_from_100_raw_items(self) -> None:
+        observations = tuple(
+            _observation(index, "datacite", f"10.5555/disposition-{index:03d}")
+            for index in range(1, 52)
+        )
+        operation, repository, _, _, _, _, _ = self._operation(
+            [
+                MetadataProviderInvocation(
+                    provider_name="datacite",
+                    observations=observations,
+                    relations=(),
+                    raw_item_count=100,
+                    outcome="SCAN_LIMIT_REACHED",
+                )
+            ]
+        )
+
+        report = operation(
+            TopicDiscoveryInput(
+                kind="topic",
+                query="battery materials",
+                providers=(ProviderDiscoveryLimit(provider_name="datacite", scan_limit=100),),
+            )
+        )
+
+        self.assertEqual(repository.finalized, ["COMPLETED"])
+        self.assertEqual(report.run_status, "COMPLETED")
+        self.assertEqual(report.discovery_result_count, 51)
+        self.assertEqual(report.providers[0].raw_item_count, 100)
+        self.assertEqual(report.providers[0].accepted_observation_count, 51)
+
+    def test_cancellation_between_relation_batches_keeps_prior_batch_only(self) -> None:
+        event = _Event(False)
+
+        def cancel_after_first(batch_count: int) -> None:
+            if batch_count == 1:
+                event.value = True
+
+        relation_publication = _RelationPublication(after_batch=cancel_after_first)
+        returned = tuple(_relation(index, "a") for index in range(1, 602))
+        operation, repository, _, _, discovery, relations, _ = self._operation(
+            [
+                MetadataProviderInvocation(
+                    provider_name="a",
+                    observations=(),
+                    relations=returned,
+                    raw_item_count=601,
+                    outcome="SCAN_LIMIT_REACHED",
+                )
+            ],
+            event=event,
+            relation_publication=relation_publication,
+        )
+
+        report = operation(
+            TopicDiscoveryInput(
+                kind="topic",
+                query="q",
+                providers=(ProviderDiscoveryLimit(provider_name="a", scan_limit=601),),
+            )
+        )
+
+        self.assertEqual(report.run_status, "INTERRUPTED")
+        self.assertEqual(repository.finalized, ["INTERRUPTED"])
+        self.assertEqual(discovery.sources, [])
+        self.assertEqual([len(batch) for batch in relations.batches], [256])
+        self.assertEqual(relations.relations, list(returned[:256]))
 
     def test_real_literature_admission_supplies_meta_creation_count(self) -> None:
         observation = _observation(11, "provider", "10.1000/real-topic")

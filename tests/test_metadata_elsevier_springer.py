@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -93,6 +94,21 @@ class _IdFactories:
 
 def _fixture(provider: _Provider, name: str) -> bytes:
     return (_FIXTURES / provider / name).read_bytes()
+
+
+def _elsevier_service_error(status_code: str, private_message: str) -> bytes:
+    return json.dumps(
+        {
+            "service-error": {
+                "status": {
+                    "statusCode": status_code,
+                    "statusText": private_message,
+                }
+            }
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
 
 
 def _wall_timestamp(environment: ContractEnvironment) -> UtcTimestamp:
@@ -786,6 +802,42 @@ class ElsevierScopusAdapterTests(ProviderContractCase, unittest.TestCase):
             forbidden_values=("cursor-page-2",),
         )
 
+    def test_cursor_pages_accept_missing_offset_start_index_and_keep_cursor_guards(
+        self,
+    ) -> None:
+        environment = self._elsevier(id_start=11_500)
+        for fixture_name in ("search-page-1.json", "search-page-2.json"):
+            payload = json.loads(_fixture("elsevier", fixture_name))
+            results = cast(dict[str, object], payload["search-results"])
+            del results["opensearch:startIndex"]
+            environment.queue_http_response(
+                status=200,
+                body=json.dumps(payload, separators=(",", ":")).encode(),
+            )
+
+        with self.assertLogs(
+            "sciretriever.metadata.providers.elsevier.adapter",
+            level="DEBUG",
+        ) as captured:
+            result = self.assert_topic_scan(
+                environment,
+                _topic_request("elsevier", 10),
+                outcome="EXHAUSTED",
+                raw_item_count=3,
+                observation_count=3,
+            )
+
+        self.assertIsNone(result.failure)
+        self.assertEqual(len(environment.transport.calls), 2)
+        rendered = "\n".join(captured.output)
+        self.assertEqual(
+            rendered.count("event=elsevier-metadata-response-classified"),
+            2,
+        )
+        self.assertIn("has_start=false", rendered)
+        self.assertIn("disposition=accepted failure_kind=-", rendered)
+        self.assertNotIn(environment.secret_sentinel, rendered)
+
     def test_cursor_zero_and_empty_page_termination_are_stable(self) -> None:
         scenarios: tuple[
             tuple[str, DiscoverySourceOutcome, str | None],
@@ -873,6 +925,147 @@ class ElsevierScopusAdapterTests(ProviderContractCase, unittest.TestCase):
                     forbidden_values=(environment.secret_sentinel, "AUTHORIZATION_ERROR"),
                 )
                 self.assertEqual(len(environment.transport.calls), 1)
+
+    def test_http_200_service_error_envelopes_are_classified_without_vendor_text(
+        self,
+    ) -> None:
+        scenarios = (
+            (
+                "AUTHENTICATION_ERROR",
+                "metadata-provider-authentication",
+                False,
+            ),
+            (
+                "AUTHORIZATION_ERROR",
+                "metadata-provider-entitlement",
+                False,
+            ),
+            ("QUOTA_EXCEEDED", "metadata-provider-throttled", True),
+            ("SYSTEM_ERROR", "metadata-provider-http-status", True),
+            ("INVALID_INPUT", "metadata-provider-query-rejected", False),
+            (
+                "UNRECOGNIZED_PRIVATE_STATUS",
+                "metadata-provider-unknown-shape",
+                False,
+            ),
+        )
+        for index, (status_code, expected_code, retryable) in enumerate(scenarios):
+            with self.subTest(status_code=status_code):
+                environment = self._elsevier(id_start=14_600 + index * 10)
+                private_message = f"private-vendor-message-{index}"
+                environment.queue_http_response(
+                    status=200,
+                    body=_elsevier_service_error(status_code, private_message),
+                )
+                with self.assertLogs("sciretriever.metadata.service", level="WARNING") as captured:
+                    result = environment.api.search_topic(_topic_request("elsevier", 2)).providers[
+                        0
+                    ]
+
+                self.assert_stable_failure(
+                    result,
+                    expected_code=expected_code,
+                    forbidden_values=(
+                        environment.secret_sentinel,
+                        status_code,
+                        private_message,
+                    ),
+                )
+                assert result.failure is not None
+                self.assertEqual(result.failure.retryable, retryable)
+                rendered_logs = "\n".join(captured.output)
+                self.assertIn(f"code={expected_code}", rendered_logs)
+                self.assertNotIn(status_code, rendered_logs)
+                self.assertNotIn(private_message, rendered_logs)
+                self.assertNotIn(environment.secret_sentinel, rendered_logs)
+
+    def test_search_shape_telemetry_is_bounded_and_never_logs_vendor_content(self) -> None:
+        success = self._elsevier(id_start=14_680)
+        success.queue_http_response(
+            status=200,
+            body=_fixture("elsevier", "search-page-1.json"),
+        )
+        with self.assertLogs(
+            "sciretriever.metadata.providers.elsevier.adapter",
+            level="DEBUG",
+        ) as accepted_logs:
+            accepted = success.api.search_topic(_topic_request("elsevier", 1)).providers[0]
+
+        self.assertEqual(accepted.outcome, "SCAN_LIMIT_REACHED")
+        accepted_output = "\n".join(accepted_logs.output)
+        self.assertIn("event=elsevier-metadata-response-classified", accepted_output)
+        self.assertIn("provider=elsevier product=search envelope=search-results", accepted_output)
+        self.assertIn(
+            "has_total=true has_start=true has_items_per_page=true has_cursor=true has_entry=true",
+            accepted_output,
+        )
+        self.assertIn("disposition=accepted failure_kind=-", accepted_output)
+        self.assertNotIn(success.secret_sentinel, accepted_output)
+
+        missing_cursor = self._elsevier(id_start=14_690)
+        private_key = "private-vendor-key-must-not-log"
+        private_value = "private-vendor-value-must-not-log"
+        missing_cursor.queue_http_response(
+            status=200,
+            body=json.dumps(
+                {
+                    "search-results": {
+                        "opensearch:totalResults": "1",
+                        "opensearch:startIndex": "0",
+                        "opensearch:itemsPerPage": "1",
+                        "entry": [],
+                        private_key: private_value,
+                    }
+                }
+            ).encode(),
+        )
+        with self.assertLogs(
+            "sciretriever.metadata.providers.elsevier.adapter",
+            level="DEBUG",
+        ) as failed_logs:
+            failed = missing_cursor.api.search_topic(_topic_request("elsevier", 1)).providers[0]
+
+        self.assertEqual(failed.outcome, "FAILED")
+        assert failed.failure is not None
+        self.assertEqual(failed.failure.code, "metadata-provider-unknown-shape")
+        failed_output = "\n".join(failed_logs.output)
+        self.assertIn("envelope=search-results", failed_output)
+        self.assertIn(
+            "has_total=true has_start=true has_items_per_page=true has_cursor=false has_entry=true",
+            failed_output,
+        )
+        self.assertIn(
+            "disposition=failure failure_kind=missing-required-field",
+            failed_output,
+        )
+        for forbidden in (
+            missing_cursor.secret_sentinel,
+            private_key,
+            private_value,
+            "opensearch:totalResults",
+        ):
+            self.assertNotIn(forbidden, failed_output)
+
+    def test_http_200_resource_not_found_envelope_is_an_exact_lookup_miss(self) -> None:
+        environment = self._elsevier(id_start=14_700)
+        private_message = "private-resource-description"
+        environment.queue_http_response(
+            status=200,
+            body=_elsevier_service_error("RESOURCE_NOT_FOUND", private_message),
+        )
+
+        result = self.assert_lookup_scan(
+            environment,
+            _lookup_request("elsevier"),
+            outcome="EXHAUSTED",
+            raw_item_count=0,
+            observation_count=0,
+            relation_count=0,
+        )
+
+        self.assertIsNone(result.failure)
+        self.assertNotIn(private_message, result.model_dump_json())
+        self.assertNotIn(environment.secret_sentinel, result.model_dump_json())
 
     def test_elsevier_official_quota_headers_form_a_shared_monotonic_deadline(self) -> None:
         environment = self._elsevier(id_start=15_000)
@@ -1440,7 +1633,7 @@ class M8AdapterBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(
             ELSEVIER_ADAPTER_REVISION,
-            "scopus-search-abstract-json-2026-08-15",
+            "scopus-search-abstract-json-2026-08-18",
         )
         self.assertEqual(SPRINGER_ADAPTER_REVISION, "meta-v2-json-2026-08-07")
 

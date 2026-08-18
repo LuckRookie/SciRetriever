@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
+from sciretriever.metadata.ports import MAX_PROVIDER_RELATION_PUBLICATION_BATCH
 from sciretriever.model.metadata import ProviderRelationObservation
 from sciretriever.storage.sqlite.literature_writer import LiteratureWriter
 
 
 class SqliteProviderRelationObservationPublication:
-    """Delegate one relation transaction to the existing Literature writer."""
+    """Delegate one bounded relation transaction to the Literature writer."""
 
     def __init__(self, writer: LiteratureWriter) -> None:
         if not isinstance(writer, LiteratureWriter):
             raise TypeError("writer must be a LiteratureWriter")
         self._writer = writer
 
-    def publish_provider_relation_observation(
+    def publish_provider_relation_observations(
         self,
-        observation: ProviderRelationObservation,
+        observations: tuple[ProviderRelationObservation, ...],
     ) -> None:
-        self._writer.publish_provider_relation_observation(observation)
+        if not isinstance(observations, tuple) or any(
+            not isinstance(observation, ProviderRelationObservation) for observation in observations
+        ):
+            raise TypeError("observations must be a tuple of ProviderRelationObservation")
+        if not observations:
+            raise ValueError("observations must not be empty")
+        if len(observations) > MAX_PROVIDER_RELATION_PUBLICATION_BATCH:
+            raise ValueError("observations exceed the bounded publication batch")
+        self._writer.publish_provider_relation_observations(observations)
 
 
 __all__ = ("SqliteProviderRelationObservationPublication",)

@@ -992,7 +992,7 @@ class LiteraturePreconditionReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="source-record"),
             cited=ProviderLiteratureKey(record_id="target-record"),
         )
-        self.writer.publish_provider_relation_observation(provider_relation)
+        self.writer.publish_provider_relation_observations((provider_relation,))
         reference = Reference(
             reference_id=ReferenceId(_uuid(224)),
             source_literature_id=source.literature_id,

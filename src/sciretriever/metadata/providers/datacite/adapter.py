@@ -81,6 +81,7 @@ _PROVIDER_NAME = "datacite"
 _ORIGIN = "https://api.datacite.org"
 _DOIS_ENDPOINT = f"{_ORIGIN}/dois"
 _MAX_RESPONSE_BYTES = 1_048_576
+_NON_LITERATURE_REASON = "datacite-resource-type-not-supported-as-literature"
 
 ACCESS_SCOPE = AccessScope(provider_name=_PROVIDER_NAME, channel="api")
 BASELINE_ACCESS_POLICY = AccessPolicy(
@@ -396,7 +397,7 @@ class DataCiteAdapter:
             source_record_id = doi.value
         resource = _resource_type(attributes.get("types"))
         if resource is None:
-            return NeutralMetadataItem()
+            return NeutralMetadataItem(empty_reason=_NON_LITERATURE_REASON)
         document_type, version_role = resource
         identifiers = () if doi is None else (doi,)
         current = ProviderLiteratureKey(

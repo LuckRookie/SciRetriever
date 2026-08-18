@@ -1377,7 +1377,7 @@ class LiteratureReaderTests(unittest.TestCase):
                 identifiers=newest.metadata.identifiers,
             ),
         )
-        self.writer.publish_provider_relation_observation(provider_relation)
+        self.writer.publish_provider_relation_observations((provider_relation,))
         references: list[Reference] = []
         for index, target in enumerate((newest, alpha, beta)):
             reference = Reference(

@@ -544,14 +544,16 @@ class _RelationPublication:
         self.fail = fail
         self.published: list[ProviderRelationObservation] = []
 
-    def publish_provider_relation_observation(
+    def publish_provider_relation_observations(
         self,
-        observation: ProviderRelationObservation,
+        observations: tuple[ProviderRelationObservation, ...],
     ) -> None:
         if self.fail:
             raise RuntimeError("offline relation publication failure")
-        self.published.append(observation)
-        self.relations[observation.observation_id] = observation
+        self.published.extend(observations)
+        self.relations.update(
+            (observation.observation_id, observation) for observation in observations
+        )
 
 
 class _Repository:
@@ -799,7 +801,7 @@ class CitationDiscoveryTests(unittest.TestCase):
             cited_record_id="persisted-target",
         )
         relation_id = relation.observation_id
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
         del relation
 
         candidate_reader, literature_reader = self._new_readers()
@@ -843,12 +845,14 @@ class CitationDiscoveryTests(unittest.TestCase):
         )
         cited_observation = _observation(4, cited, provider="provider", record_id="direction-cited")
         self._publish_literatures(((citing, citing_observation), (cited, cited_observation)))
-        self.writer.publish_provider_relation_observation(
-            _relation(
-                2,
-                provider="provider",
-                citing_record_id="direction-citing",
-                cited_record_id="direction-cited",
+        self.writer.publish_provider_relation_observations(
+            (
+                _relation(
+                    2,
+                    provider="provider",
+                    citing_record_id="direction-citing",
+                    cited_record_id="direction-cited",
+                ),
             )
         )
         candidate_reader, literature_reader = self._new_readers()
@@ -885,21 +889,22 @@ class CitationDiscoveryTests(unittest.TestCase):
             _observation(7, third, provider="provider", record_id="depth-c"),
         )
         self._publish_literatures(tuple(zip((first, second, third), observations, strict=True)))
-        for relation in (
-            _relation(
-                3,
-                provider="provider",
-                citing_record_id="depth-a",
-                cited_record_id="depth-b",
-            ),
-            _relation(
-                4,
-                provider="provider",
-                citing_record_id="depth-b",
-                cited_record_id="depth-c",
-            ),
-        ):
-            self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations(
+            (
+                _relation(
+                    3,
+                    provider="provider",
+                    citing_record_id="depth-a",
+                    cited_record_id="depth-b",
+                ),
+                _relation(
+                    4,
+                    provider="provider",
+                    citing_record_id="depth-b",
+                    cited_record_id="depth-c",
+                ),
+            )
+        )
 
         zero_candidate, zero_reader = self._new_readers()
         zero_literature = _Literature(reader=zero_reader)
@@ -994,8 +999,7 @@ class CitationDiscoveryTests(unittest.TestCase):
                 cited_record_id="limit-over",
             ),
         )
-        for relation in relations:
-            self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations(relations)
         candidate_reader, literature_reader = self._new_readers()
         literature = _Literature(reader=literature_reader)
         operation, _, metadata, publication = self._operation(

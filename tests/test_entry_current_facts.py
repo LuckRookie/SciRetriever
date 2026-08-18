@@ -712,7 +712,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id=record_id),
             cited=ProviderLiteratureKey(record_id=f"broken-target-{number}"),
         )
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
         return seed, seed_observation, relation, provider_name
 
     def _assert_broken_relation_read(
@@ -1097,8 +1097,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="shared-provider-record"),
             cited=ProviderLiteratureKey(record_id="different-provider-target"),
         )
-        for relation in (same_provider, different_provider):
-            self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((same_provider, different_provider))
         before = self._catalog_counts()
 
         same_page = self._read_relation_candidates(
@@ -1179,8 +1178,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             ),
             cited=ProviderLiteratureKey(record_id="case-mismatch-target"),
         )
-        self.writer.publish_provider_relation_observation(exact)
-        self.writer.publish_provider_relation_observation(case_mismatch)
+        self.writer.publish_provider_relation_observations((exact, case_mismatch))
 
         page = self._read_relation_candidates(
             (second.literature_id, first.literature_id),
@@ -1236,7 +1234,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="direction-citing"),
             cited=ProviderLiteratureKey(record_id="direction-cited"),
         )
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
         seeds = (cited_seed.literature_id, citing_seed.literature_id)
 
         references = self._read_relation_candidates(
@@ -1316,13 +1314,14 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="last-miss"),
             cited=ProviderLiteratureKey(record_id="last-target"),
         )
-        for relation in (
-            first_miss,
-            filtered_other_provider,
-            middle_hit,
-            last_miss,
-        ):
-            self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations(
+            (
+                first_miss,
+                filtered_other_provider,
+                middle_hit,
+                last_miss,
+            )
+        )
         before = self._catalog_counts()
 
         first_page = self._read_relation_candidates(
@@ -1464,7 +1463,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="moved-record"),
             cited=ProviderLiteratureKey(record_id="merge-target"),
         )
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
 
         page = self._read_relation_candidates(
             (moved.literature_id,),
@@ -1607,7 +1606,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="snapshot-seed"),
             cited=ProviderLiteratureKey(record_id="snapshot-first-target"),
         )
-        self.writer.publish_provider_relation_observation(first_relation)
+        self.writer.publish_provider_relation_observations((first_relation,))
         pausing_engine = _PausingCatalogEngine(self.catalog_path)
         reader = SqliteEntryReader(pausing_engine, self.verified_reader)
         entered = threading.Event()
@@ -1640,7 +1639,7 @@ class EntryCurrentFactsReaderTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="snapshot-seed"),
             cited=ProviderLiteratureKey(record_id="snapshot-later-target"),
         )
-        self.writer.publish_provider_relation_observation(later_relation)
+        self.writer.publish_provider_relation_observations((later_relation,))
         release.set()
         thread.join(timeout=10)
 

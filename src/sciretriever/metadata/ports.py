@@ -1,17 +1,19 @@
-"""Capability-scoped Metadata provider ports.
+"""Capability-scoped Metadata provider and publication ports.
 
 There is intentionally no catch-all MetadataProvider and no CitationProvider.
 Each optional capability opens a short-lived, lazy raw-item session.  The
 session owns all vendor pagination state; cursors, pages, request/response
 objects, and vendor SDK values never cross the public :mod:`metadata.api`
-boundary or enter a scan result.
+boundary or enter a scan result.  Metadata-owned publication collaboration is
+also declared here so Storage can implement that Port without importing a
+Metadata runtime module.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar, cast, runtime_checkable
+from typing import Final, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from sciretriever.metadata.rules import (
     NeutralMetadataItem,
@@ -20,8 +22,20 @@ from sciretriever.metadata.rules import (
     _pagination_loop_failure,
     _provider_protocol_failure,
 )
-from sciretriever.model.metadata import ProviderLiteratureKey
+from sciretriever.model.metadata import ProviderLiteratureKey, ProviderRelationObservation
 from sciretriever.model.report import StableFailure
+
+MAX_PROVIDER_RELATION_PUBLICATION_BATCH: Final[int] = 256
+
+
+@runtime_checkable
+class ProviderRelationObservationPublicationPort(Protocol):
+    """Persist one non-empty bounded batch of validated relation facts."""
+
+    def publish_provider_relation_observations(
+        self,
+        observations: tuple[ProviderRelationObservation, ...],
+    ) -> None: ...
 
 
 class MetadataProviderFailure(RuntimeError):
@@ -180,8 +194,10 @@ class _PagedRawItemSession(Generic[_RawItemT, _CursorT]):
 
 
 __all__ = (
+    "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
     "MetadataLookupPort",
     "MetadataProviderFailure",
+    "ProviderRelationObservationPublicationPort",
     "RawItemDelivery",
     "RawItemSession",
     "ReferenceQueryPort",

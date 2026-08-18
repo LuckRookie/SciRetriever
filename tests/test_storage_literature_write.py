@@ -892,7 +892,7 @@ class LiteratureWriterTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="source"),
             cited=ProviderLiteratureKey(record_id="target"),
         )
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
         reference = Reference(
             reference_id=ReferenceId(_ID_7),
             source_literature_id=source.literature_id,
@@ -1029,7 +1029,7 @@ class LiteratureWriterTests(unittest.TestCase):
             citing=ProviderLiteratureKey(record_id="source"),
             cited=ProviderLiteratureKey(record_id="target"),
         )
-        self.writer.publish_provider_relation_observation(relation)
+        self.writer.publish_provider_relation_observations((relation,))
         reference = Reference(
             reference_id=ReferenceId(_ID_7),
             source_literature_id=source.literature_id,

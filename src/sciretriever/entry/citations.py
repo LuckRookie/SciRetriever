@@ -38,6 +38,7 @@ from sciretriever.literature.api import (
 )
 from sciretriever.logging.api import get_logger
 from sciretriever.metadata.api import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
     CancellationEvent,
     MetadataApi,
     MetadataLookupRequest,
@@ -942,8 +943,10 @@ class CitationDiscoveryOperation:
         self,
         relations: tuple[ProviderRelationObservation, ...],
     ) -> None:
-        for relation in relations:
-            self._relation_publication.publish_relation_observation(relation)
+        for offset in range(0, len(relations), MAX_PROVIDER_RELATION_PUBLICATION_BATCH):
+            self._relation_publication.publish_relation_observations(
+                relations[offset : offset + MAX_PROVIDER_RELATION_PUBLICATION_BATCH]
+            )
 
     def _accept_matching_lookup_observations(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import unicodedata
 from collections.abc import Callable, Iterable
 
@@ -167,10 +168,13 @@ class MetadataService:
         reference_query: ReferenceQueryContext | None = None,
         cancel_event: CancellationEvent | None = None,
     ) -> MetadataProviderInvocation:
+        started_ns = time.monotonic_ns()
         raw_item_count = 0
         observations: list[MetadataObservation] = []
         relations: list[ProviderRelationObservation] = []
         first_record_failure: StableFailure | None = None
+        accepted_item_count = 0
+        empty_item_count = 0
         rejected_record_count = 0
         _LOGGER.info(
             "event=metadata-provider-started provider=%s scan_limit=%d",
@@ -185,6 +189,10 @@ class MetadataService:
                     relations=relations,
                     raw_item_count=raw_item_count,
                     outcome="INTERRUPTED",
+                    accepted_item_count=accepted_item_count,
+                    empty_item_count=empty_item_count,
+                    rejected_record_count=rejected_record_count,
+                    started_ns=started_ns,
                 )
             session = open_session()
             if not isinstance(session, RawItemSession):
@@ -199,6 +207,10 @@ class MetadataService:
                         relations=relations,
                         raw_item_count=raw_item_count,
                         outcome="INTERRUPTED",
+                        accepted_item_count=accepted_item_count,
+                        empty_item_count=empty_item_count,
+                        rejected_record_count=rejected_record_count,
+                        started_ns=started_ns,
                     )
                 delivery = session.pull_raw_item()
                 if delivery is None:
@@ -209,7 +221,10 @@ class MetadataService:
                         raw_item_count=raw_item_count,
                         normal_outcome="EXHAUSTED",
                         record_failure=first_record_failure,
+                        accepted_item_count=accepted_item_count,
+                        empty_item_count=empty_item_count,
                         rejected_record_count=rejected_record_count,
+                        started_ns=started_ns,
                     )
                 if not isinstance(delivery, RawItemDelivery):
                     raise TypeError("raw item session returned an invalid delivery")
@@ -219,6 +234,8 @@ class MetadataService:
                 raw_item_count += 1
                 try:
                     item = session.convert_raw_item(delivery.raw_item)
+                    if not isinstance(item, NeutralMetadataItem):
+                        raise TypeError("raw item conversion must return NeutralMetadataItem")
                 except MetadataProviderFailure as error:
                     rejected_record_count += 1
                     if first_record_failure is None:
@@ -233,23 +250,69 @@ class MetadataService:
                         error.failure.reason,
                         error.failure.action,
                     )
+                    _log_item_disposition(
+                        provider_name=provider_name,
+                        raw_item_ordinal=raw_item_count,
+                        disposition="rejected",
+                        observation_delta=0,
+                        relation_delta=0,
+                        observation_count=len(observations),
+                        relation_count=len(relations),
+                        reason=error.failure.code,
+                    )
+                except Exception:
+                    rejected_record_count += 1
+                    _log_item_disposition(
+                        provider_name=provider_name,
+                        raw_item_ordinal=raw_item_count,
+                        disposition="rejected",
+                        observation_delta=0,
+                        relation_delta=0,
+                        observation_count=len(observations),
+                        relation_count=len(relations),
+                        reason="unexpected-conversion-error",
+                    )
+                    raise
                 else:
-                    if not isinstance(item, NeutralMetadataItem):
-                        raise TypeError("raw item conversion must return NeutralMetadataItem")
                     if reference_query is not None and any(
                         not relation_matches_query(relation, reference_query)
                         for relation in item.relations
                     ):
+                        rejected_record_count += 1
+                        failure = _reference_direction_failure()
+                        _log_item_disposition(
+                            provider_name=provider_name,
+                            raw_item_ordinal=raw_item_count,
+                            disposition="rejected",
+                            observation_delta=0,
+                            relation_delta=0,
+                            observation_count=len(observations),
+                            relation_count=len(relations),
+                            reason=failure.code,
+                        )
                         raise MetadataProviderFailure(_reference_direction_failure())
+                    observation_delta = len(item.observations)
+                    relation_delta = len(item.relations)
                     observations.extend(item.observations)
                     relations.extend(item.relations)
-                    _LOGGER.debug(
-                        "event=metadata-item-converted provider=%s raw_item_count=%d "
-                        "observation_count=%d relation_count=%d",
-                        provider_name,
-                        raw_item_count,
-                        len(observations),
-                        len(relations),
+                    nonempty = observation_delta > 0 or relation_delta > 0
+                    if nonempty:
+                        accepted_item_count += 1
+                    else:
+                        empty_item_count += 1
+                    _log_item_disposition(
+                        provider_name=provider_name,
+                        raw_item_ordinal=raw_item_count,
+                        disposition="accepted" if nonempty else "empty",
+                        observation_delta=observation_delta,
+                        relation_delta=relation_delta,
+                        observation_count=len(observations),
+                        relation_count=len(relations),
+                        reason=(
+                            "neutral-facts-produced"
+                            if nonempty
+                            else item.empty_reason or "no-neutral-facts"
+                        ),
                     )
 
                 # Preserve the converted neutral facts while returning control
@@ -261,7 +324,10 @@ class MetadataService:
                         relations=relations,
                         raw_item_count=raw_item_count,
                         outcome="INTERRUPTED",
+                        accepted_item_count=accepted_item_count,
+                        empty_item_count=empty_item_count,
                         rejected_record_count=rejected_record_count,
+                        started_ns=started_ns,
                     )
 
                 if delivery.source_exhausted_after:
@@ -272,7 +338,10 @@ class MetadataService:
                         raw_item_count=raw_item_count,
                         normal_outcome="EXHAUSTED",
                         record_failure=first_record_failure,
+                        accepted_item_count=accepted_item_count,
+                        empty_item_count=empty_item_count,
                         rejected_record_count=rejected_record_count,
+                        started_ns=started_ns,
                     )
                 if raw_item_count == scan_limit:
                     return _completed_scan_invocation(
@@ -282,7 +351,10 @@ class MetadataService:
                         raw_item_count=raw_item_count,
                         normal_outcome="SCAN_LIMIT_REACHED",
                         record_failure=first_record_failure,
+                        accepted_item_count=accepted_item_count,
+                        empty_item_count=empty_item_count,
                         rejected_record_count=rejected_record_count,
+                        started_ns=started_ns,
                     )
         except MetadataProviderFailure as error:
             return _logged_provider_invocation(
@@ -292,14 +364,22 @@ class MetadataService:
                 raw_item_count=raw_item_count,
                 outcome="FAILED",
                 failure=error.failure,
+                accepted_item_count=accepted_item_count,
+                empty_item_count=empty_item_count,
                 rejected_record_count=rejected_record_count,
+                started_ns=started_ns,
             )
         except Exception:
             _LOGGER.error(
                 "event=metadata-provider-crashed provider=%s raw_item_count=%d "
-                "code=metadata-provider-unexpected",
+                "accepted_item_count=%d empty_item_count=%d rejected_record_count=%d "
+                "elapsed_ms=%d code=metadata-provider-unexpected",
                 provider_name,
                 raw_item_count,
+                accepted_item_count,
+                empty_item_count,
+                rejected_record_count,
+                _elapsed_ms(started_ns),
             )
             raise
 
@@ -331,7 +411,10 @@ def _logged_provider_invocation(
     raw_item_count: int,
     outcome: MetadataProviderInvocationOutcome,
     failure: StableFailure | None = None,
+    accepted_item_count: int = 0,
+    empty_item_count: int = 0,
     rejected_record_count: int = 0,
+    started_ns: int,
 ) -> MetadataProviderInvocation:
     result = _provider_invocation(
         provider_name=provider_name,
@@ -344,14 +427,17 @@ def _logged_provider_invocation(
     if failure is not None:
         _LOGGER.warning(
             "event=metadata-provider-failed provider=%s raw_item_count=%d "
-            "observation_count=%d relation_count=%d rejected_record_count=%d "
-            "code=%s retryable=%s "
+            "accepted_item_count=%d empty_item_count=%d rejected_record_count=%d "
+            "observation_count=%d relation_count=%d elapsed_ms=%d code=%s retryable=%s "
             "reason=%s action=%s",
             provider_name,
             raw_item_count,
+            accepted_item_count,
+            empty_item_count,
+            rejected_record_count,
             len(observations),
             len(relations),
-            rejected_record_count,
+            _elapsed_ms(started_ns),
             failure.code,
             str(failure.retryable).lower(),
             failure.reason,
@@ -360,14 +446,17 @@ def _logged_provider_invocation(
     else:
         _LOGGER.info(
             "event=metadata-provider-finished provider=%s outcome=%s "
-            "raw_item_count=%d observation_count=%d relation_count=%d "
-            "rejected_record_count=%d",
+            "raw_item_count=%d accepted_item_count=%d empty_item_count=%d "
+            "rejected_record_count=%d observation_count=%d relation_count=%d elapsed_ms=%d",
             provider_name,
             outcome,
             raw_item_count,
+            accepted_item_count,
+            empty_item_count,
+            rejected_record_count,
             len(observations),
             len(relations),
-            rejected_record_count,
+            _elapsed_ms(started_ns),
         )
     return result
 
@@ -380,7 +469,10 @@ def _completed_scan_invocation(
     raw_item_count: int,
     normal_outcome: MetadataProviderInvocationOutcome,
     record_failure: StableFailure | None,
+    accepted_item_count: int,
+    empty_item_count: int,
     rejected_record_count: int,
+    started_ns: int,
 ) -> MetadataProviderInvocation:
     """Finish a complete scan without erasing isolated record failures."""
 
@@ -391,8 +483,41 @@ def _completed_scan_invocation(
         raw_item_count=raw_item_count,
         outcome="FAILED" if record_failure is not None else normal_outcome,
         failure=record_failure,
+        accepted_item_count=accepted_item_count,
+        empty_item_count=empty_item_count,
         rejected_record_count=rejected_record_count,
+        started_ns=started_ns,
     )
+
+
+def _log_item_disposition(
+    *,
+    provider_name: str,
+    raw_item_ordinal: int,
+    disposition: str,
+    observation_delta: int,
+    relation_delta: int,
+    observation_count: int,
+    relation_count: int,
+    reason: str,
+) -> None:
+    _LOGGER.debug(
+        "event=metadata-item-disposition provider=%s raw_item_ordinal=%d "
+        "disposition=%s observation_delta=%d relation_delta=%d "
+        "observation_count=%d relation_count=%d reason=%s",
+        provider_name,
+        raw_item_ordinal,
+        disposition,
+        observation_delta,
+        relation_delta,
+        observation_count,
+        relation_count,
+        reason,
+    )
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 def _completed_result(invocation: MetadataProviderInvocation) -> MetadataProviderResult:

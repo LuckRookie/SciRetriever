@@ -3,26 +3,20 @@
 Metadata owns provider calls and neutral conversion, but Literature alone owns
 observation admission, identity, current metadata and automatic PDF exhaustion
 cleanup.  Provider relation observations are independent source facts and are
-therefore published one edge at a time through a narrow Storage port.
+therefore published through a narrow, bounded-batch Storage port.  Each edge
+remains an independent immutable fact; batching only bounds transaction cost.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Protocol, runtime_checkable
 
 from sciretriever.literature.api import LiteratureApi, ObservationAcceptanceResult
+from sciretriever.metadata.ports import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
+    ProviderRelationObservationPublicationPort,
+)
 from sciretriever.model.metadata import MetadataObservation, ProviderRelationObservation
-
-
-@runtime_checkable
-class ProviderRelationObservationPublicationPort(Protocol):
-    """Persist one already validated provider relation source fact."""
-
-    def publish_provider_relation_observation(
-        self,
-        observation: ProviderRelationObservation,
-    ) -> None: ...
 
 
 class MetadataPublication:
@@ -53,16 +47,25 @@ class MetadataPublication:
             provider_precedence=provider_precedence,
         )
 
-    def publish_relation_observation(
+    def publish_relation_observations(
         self,
-        observation: ProviderRelationObservation,
+        observations: tuple[ProviderRelationObservation, ...],
     ) -> None:
-        """Publish one relation fact without resolving either endpoint."""
+        """Publish one bounded relation batch without resolving endpoints."""
 
-        self._relation_port.publish_provider_relation_observation(observation)
+        if not isinstance(observations, tuple) or any(
+            not isinstance(observation, ProviderRelationObservation) for observation in observations
+        ):
+            raise TypeError("observations must be a tuple of ProviderRelationObservation")
+        if not observations:
+            raise ValueError("observations must not be empty")
+        if len(observations) > MAX_PROVIDER_RELATION_PUBLICATION_BATCH:
+            raise ValueError("observations exceed the bounded publication batch")
+        self._relation_port.publish_provider_relation_observations(observations)
 
 
 __all__ = (
+    "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
     "MetadataPublication",
     "ProviderRelationObservationPublicationPort",
 )

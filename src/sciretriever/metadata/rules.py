@@ -176,11 +176,25 @@ class NeutralMetadataItem(_InvocationModel):
 
     observations: tuple[MetadataObservation, ...] = ()
     relations: tuple[ProviderRelationObservation, ...] = ()
+    empty_reason: str | None = Field(
+        default=None,
+        strict=True,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+        repr=False,
+    )
 
     @field_validator("observations", "relations", mode="before")
     @classmethod
     def normalize_values(cls, value: object) -> tuple[object, ...]:
         return _as_tuple(value, field_name="neutral item values")
+
+    @model_validator(mode="after")
+    def validate_empty_reason(self) -> "NeutralMetadataItem":
+        if self.empty_reason is not None and (self.observations or self.relations):
+            raise ValueError("empty_reason is valid only when no neutral facts were produced")
+        return self
 
 
 MetadataProviderInvocationOutcome: TypeAlias = DiscoverySourceOutcome | Literal["INTERRUPTED"]

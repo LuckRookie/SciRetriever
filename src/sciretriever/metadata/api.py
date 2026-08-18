@@ -8,10 +8,11 @@ lifecycle value crosses this API boundary.
 
 from __future__ import annotations
 
-from sciretriever.metadata.publication import (
-    MetadataPublication,
+from sciretriever.metadata.ports import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
     ProviderRelationObservationPublicationPort,
 )
+from sciretriever.metadata.publication import MetadataPublication
 from sciretriever.metadata.rules import (
     CancellationEvent,
     MetadataBatchResult,
@@ -73,6 +74,7 @@ class MetadataApi:
 
 __all__ = (
     "CancellationEvent",
+    "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
     "MetadataApi",
     "MetadataBatchResult",
     "MetadataLookupRequest",

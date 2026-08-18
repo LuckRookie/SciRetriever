@@ -9,6 +9,7 @@ returned :class:`DiscoveryReport`.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterable
 from typing import Literal, TypeAlias
 from uuid import uuid4
@@ -24,6 +25,7 @@ from sciretriever.entry.ports import (
 from sciretriever.literature.api import ObservationAcceptanceResult
 from sciretriever.logging.api import get_logger
 from sciretriever.metadata.api import (
+    MAX_PROVIDER_RELATION_PUBLICATION_BATCH,
     CancellationEvent,
     MetadataApi,
     MetadataProviderInvocation,
@@ -123,6 +125,7 @@ class TopicDiscoveryOperation:
     def __call__(self, request: TopicDiscoveryInput) -> DiscoveryReport:  # noqa: C901
         if not isinstance(request, TopicDiscoveryInput):
             raise TypeError("request must be a TopicDiscoveryInput")
+        started_ns = time.monotonic_ns()
         state: _RunState | None = None
         try:
             with self._write_admission.acquire_nowait():
@@ -131,7 +134,7 @@ class TopicDiscoveryOperation:
                     not isinstance(item, DiscoveryRunId) for item in interrupted
                 ):
                     raise _TopicDiscoveryContractError()
-                state = self._create_state(request)
+                state = self._create_state(request, diagnostic_started_ns=started_ns)
                 state = self._execute(state)
                 return self._report(state)
         except (_ControlledInterruption, KeyboardInterrupt):
@@ -142,9 +145,13 @@ class TopicDiscoveryOperation:
         except WriteAdmissionFailure as error:
             if state is None:
                 return _logged_discovery_report(
-                    _admission_failed_report(request, self._run_id_factory(), error.failure)
+                    _admission_failed_report(request, self._run_id_factory(), error.failure),
+                    started_ns=started_ns,
                 )
-            return _logged_discovery_report(_failed_after_admission_exit(state, error.failure))
+            return _logged_discovery_report(
+                _failed_after_admission_exit(state, error.failure),
+                started_ns=state.diagnostic_started_ns,
+            )
         except _TopicDiscoveryContractError:
             if state is None:
                 raise
@@ -155,7 +162,12 @@ class TopicDiscoveryOperation:
             return self._finish_failed(state, _operation_failure())
         raise _TopicDiscoveryContractError()
 
-    def _create_state(self, request: TopicDiscoveryInput) -> "_RunState":
+    def _create_state(
+        self,
+        request: TopicDiscoveryInput,
+        *,
+        diagnostic_started_ns: int,
+    ) -> "_RunState":
         run_id = self._run_id_factory()
         started_at = self._clock.now()
         if not isinstance(run_id, DiscoveryRunId) or not isinstance(started_at, UtcTimestamp):
@@ -172,7 +184,7 @@ class TopicDiscoveryOperation:
             run_id,
             len(request.providers),
         )
-        return _RunState(run)
+        return _RunState(run, diagnostic_started_ns=diagnostic_started_ns)
 
     def _execute(self, state: "_RunState") -> "_RunState":
         request = state.run.input
@@ -233,10 +245,26 @@ class TopicDiscoveryOperation:
             if observe_cancellation:
                 self._raise_if_cancelled()
             self._accept_observation(state, observation)
-        for relation in relations:
+        published_total = 0
+        for batch_index, offset in enumerate(
+            range(0, len(relations), MAX_PROVIDER_RELATION_PUBLICATION_BATCH),
+            start=1,
+        ):
             if observe_cancellation:
                 self._raise_if_cancelled()
-            self._publish_relation(relation)
+            batch = relations[offset : offset + MAX_PROVIDER_RELATION_PUBLICATION_BATCH]
+            started_ns = time.monotonic_ns()
+            self._metadata_publication.publish_relation_observations(batch)
+            published_total += len(batch)
+            _LOGGER.debug(
+                "event=discovery-relation-batch-published provider=%s batch=%d "
+                "relation_count=%d published_total=%d elapsed_ms=%d",
+                state.started_provider_name or "-",
+                batch_index,
+                len(batch),
+                published_total,
+                _elapsed_ms(started_ns),
+            )
 
     def _accept_observation(
         self,
@@ -250,12 +278,16 @@ class TopicDiscoveryOperation:
         if not isinstance(accepted, ObservationAcceptanceResult):
             raise _TopicDiscoveryContractError()
         if accepted.decision == "rejected":
+            decision_reason = accepted.reason
+            if decision_reason is None:
+                raise _TopicDiscoveryContractError()
             _LOGGER.debug(
                 "event=discovery-observation-rejected discovery_run_id=%s provider=%s "
-                "observation_id=%s",
+                "observation_id=%s decision_reason=%s",
                 state.run.discovery_run_id,
                 state.started_provider_name or "-",
                 observation.observation_id,
+                decision_reason,
             )
             return
         literature = accepted.literature
@@ -301,10 +333,6 @@ class TopicDiscoveryOperation:
             str(accepted.deduplicated).lower(),
         )
 
-    def _publish_relation(self, relation: ProviderRelationObservation) -> None:
-        self._metadata_publication.publish_relation_observation(relation)
-        _LOGGER.debug("event=discovery-relation-published")
-
     def _interrupt(self, state: "_RunState") -> None:
         _append_unfinished_provider_reports(state)
         finalized = self._repository.finalize(state.run.discovery_run_id, "INTERRUPTED")
@@ -334,7 +362,8 @@ class TopicDiscoveryOperation:
                 new_meta_literature_count=state.new_meta_count,
                 new_literature_count=state.new_literature_count,
                 new_metadata_observation_count=state.new_observation_count,
-            )
+            ),
+            started_ns=state.diagnostic_started_ns,
         )
 
     def _raise_if_cancelled(self) -> None:
@@ -345,6 +374,7 @@ class TopicDiscoveryOperation:
 class _RunState:
     __slots__ = (
         "run",
+        "diagnostic_started_ns",
         "run_status",
         "providers",
         "result_ids",
@@ -357,8 +387,9 @@ class _RunState:
         "end",
     )
 
-    def __init__(self, run: DiscoveryRun) -> None:
+    def __init__(self, run: DiscoveryRun, *, diagnostic_started_ns: int) -> None:
         self.run = run
+        self.diagnostic_started_ns = diagnostic_started_ns
         self.run_status: Literal["RUNNING", "COMPLETED", "PARTIAL", "FAILED", "INTERRUPTED"] = (
             "RUNNING"
         )
@@ -531,37 +562,49 @@ def _failed_after_admission_exit(state: _RunState, failure: StableFailure) -> Di
     )
 
 
-def _logged_discovery_report(report: DiscoveryReport) -> DiscoveryReport:
+def _logged_discovery_report(
+    report: DiscoveryReport,
+    *,
+    started_ns: int,
+) -> DiscoveryReport:
+    elapsed_ms = _elapsed_ms(started_ns)
     if isinstance(report.end, FailedReportEnd):
         failure = report.end.failure
         _LOGGER.error(
             "event=discovery-failed discovery_run_id=%s status=%s code=%s "
-            "retryable=%s reason=%s action=%s",
+            "elapsed_ms=%d retryable=%s reason=%s action=%s",
             report.discovery_run_id,
             report.run_status,
             failure.code,
+            elapsed_ms,
             str(failure.retryable).lower(),
             failure.reason,
             failure.action,
         )
     elif isinstance(report.end, InterruptedReportEnd):
         _LOGGER.warning(
-            "event=discovery-interrupted discovery_run_id=%s result_count=%d",
+            "event=discovery-interrupted discovery_run_id=%s result_count=%d elapsed_ms=%d",
             report.discovery_run_id,
             report.discovery_result_count,
+            elapsed_ms,
         )
     else:
         _LOGGER.info(
             "event=discovery-finished discovery_run_id=%s status=%s provider_count=%d "
-            "result_count=%d new_literature_count=%d new_observation_count=%d",
+            "result_count=%d new_literature_count=%d new_observation_count=%d elapsed_ms=%d",
             report.discovery_run_id,
             report.run_status,
             len(report.providers),
             report.discovery_result_count,
             report.new_literature_count,
             report.new_metadata_observation_count,
+            elapsed_ms,
         )
     return report
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 __all__ = ("TopicDiscoveryOperation",)

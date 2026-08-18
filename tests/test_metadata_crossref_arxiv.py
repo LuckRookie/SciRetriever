@@ -1468,12 +1468,10 @@ class CrossrefAdapterTests(ProviderContractCase, unittest.TestCase):
             writer.publish_exhaustion(
                 AutomaticPdfAcquisitionExhaustion(literature_id=accepted.literature.literature_id)
             )
-            for relation in first.relations:
-                publication.publish_relation_observation(relation)
+            publication.publish_relation_observations(first.relations)
 
             replayed = publication.publish_observation(replay.observations[0])
-            for relation in replay.relations:
-                publication.publish_relation_observation(relation)
+            publication.publish_relation_observations(replay.relations)
 
             self.assertEqual(replayed.decision, "matched")
             self.assertTrue(replayed.deduplicated)
