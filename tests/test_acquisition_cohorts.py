@@ -205,6 +205,259 @@ def _temporary(index: int, tier: AcquisitionPath) -> TemporaryPdf:
 
 
 class TieredAcquisitionCohortTests(unittest.TestCase):
+    def test_route_local_failure_does_not_hide_a_later_independent_success(self) -> None:
+        first = _route(AcquisitionPath.PUBLIC, "first")
+        second = _route(AcquisitionPath.PUBLIC, "second")
+        item = AcquisitionWorkItem(
+            work_key="route-fallback",
+            plan=_plan("route-fallback", tiers=(), extra_routes=(first, second)),
+        )
+        failure = StableFailure(
+            code="acquisition-fixture-first-route",
+            reason="The first independent fixture route failed.",
+            action="Inspect the first fixture route.",
+            retryable=True,
+        )
+
+        with self.assertLogs("sciretriever.acquisition.cohort", level="DEBUG") as captured:
+            result = TieredCohortExecutor().execute(
+                (item,),
+                lambda _item, route: (
+                    RouteExecutionResult.failed(failure)
+                    if route.route_key == first.route_key
+                    else RouteExecutionResult.delivered(_temporary(101, AcquisitionPath.PUBLIC))
+                ),
+            )
+
+        self.assertEqual(
+            result.items[0].attempted_route_keys,
+            (first.route_key, second.route_key),
+        )
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.DELIVERED)
+        self.assertIsNone(result.items[0].failure)
+        output = "\n".join(captured.output)
+        first_result = next(
+            line for line in captured.output if "event=acquisition-route-failure" in line
+        )
+        self.assertIn(f"route_key={first.route_key}", first_result)
+        self.assertIn("disposition=failure next=next-route", first_result)
+        self.assertRegex(first_result, r"elapsed_ms=\d+")
+        self.assertIn("event=acquisition-route-delivered", output)
+        delivered = result.items[0].temporary_pdf
+        self.assertIsNotNone(delivered)
+        assert delivered is not None
+        delivered.content.discard()
+
+    def test_public_route_local_failure_does_not_hide_later_api_success(self) -> None:
+        public = _route(AcquisitionPath.PUBLIC, "landing-crossref")
+        api = _route(AcquisitionPath.AUTHORIZED_PROVIDER_API, "publisher-pdf")
+        item = AcquisitionWorkItem(
+            work_key="api-rescue",
+            plan=_plan("api-rescue", tiers=(), extra_routes=(public, api)),
+        )
+        failure = StableFailure(
+            code="acquisition-public-locator-network-failed",
+            reason="The public fixture locator could not be accessed safely.",
+            action="Continue with an independent verified route.",
+            retryable=False,
+        )
+
+        result = TieredCohortExecutor().execute(
+            (item,),
+            lambda _item, route: (
+                RouteExecutionResult.failed(failure)
+                if route is public
+                else RouteExecutionResult.delivered(
+                    _temporary(102, AcquisitionPath.AUTHORIZED_PROVIDER_API)
+                )
+            ),
+        )
+
+        self.assertEqual(result.items[0].attempted_route_keys, (public.route_key, api.route_key))
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.DELIVERED)
+        self.assertIsNone(result.items[0].failure)
+        delivered = result.items[0].temporary_pdf
+        self.assertIsNotNone(delivered)
+        assert delivered is not None
+        delivered.content.discard()
+
+    def test_four_strong_springerlink_items_reach_browser_after_public_failures(self) -> None:
+        public = _route(
+            AcquisitionPath.PUBLIC,
+            "landing-crossref",
+            group="springerlink",
+        )
+        api = _route(
+            AcquisitionPath.AUTHORIZED_PROVIDER_API,
+            "springer-api",
+            group="springerlink",
+        )
+        browser = _route(
+            AcquisitionPath.CONTROLLED_BROWSER,
+            "springerlink",
+            group="springerlink",
+        )
+        items = tuple(
+            AcquisitionWorkItem(
+                work_key=f"springer-{index}",
+                plan=_plan(
+                    f"springer-{index}",
+                    group="springerlink",
+                    tiers=(),
+                    extra_routes=(public, api, browser),
+                ),
+            )
+            for index in range(1, 5)
+        )
+        public_failure = StableFailure(
+            code="acquisition-public-locator-network-failed",
+            reason="The public fixture locator could not be accessed safely.",
+            action="Continue with the verified SpringerLink Browser route.",
+            retryable=False,
+        )
+        browser_attempts: list[str] = []
+
+        def execute(
+            item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            if route is public:
+                return RouteExecutionResult.failed(public_failure)
+            if route is api:
+                return RouteExecutionResult.normal_miss()
+            browser_attempts.append(item.work_key)
+            return RouteExecutionResult.delivered(
+                _temporary(110 + int(item.work_key.rpartition("-")[2]), route.tier)
+            )
+
+        result = _executor("springerlink").execute(items, execute)
+
+        self.assertEqual(browser_attempts, [f"springer-{index}" for index in range(1, 5)])
+        self.assertEqual(
+            tuple(decision.work_key for decision in result.browser_admission.decisions),
+            tuple(browser_attempts),
+        )
+        self.assertTrue(
+            all(
+                decision.disposition is BrowserAdmissionDisposition.ALLOWED
+                for decision in result.browser_admission.decisions
+            )
+        )
+        summary = result.browser_admission.summary.groups[0]
+        self.assertEqual((summary.eligible_count, summary.allowed_count), (4, 4))
+        self.assertTrue(
+            all(item.disposition is WorkItemDisposition.DELIVERED for item in result.items)
+        )
+        for item in result.items:
+            self.assertEqual(
+                item.attempted_route_keys,
+                (public.route_key, api.route_key, browser.route_key),
+            )
+            self.assertIsNone(item.failure)
+            delivered = item.temporary_pdf
+            self.assertIsNotNone(delivered)
+            assert delivered is not None
+            delivered.content.discard()
+
+    def test_unrescued_route_local_failure_survives_browser_miss(self) -> None:
+        public = _route(AcquisitionPath.PUBLIC, "landing-crossref")
+        browser = _route(AcquisitionPath.CONTROLLED_BROWSER, "publisher-browser")
+        item = AcquisitionWorkItem(
+            work_key="unrescued-route-failure",
+            plan=_plan(
+                "unrescued-route-failure",
+                tiers=(),
+                extra_routes=(public, browser),
+            ),
+        )
+        failure = StableFailure(
+            code="acquisition-public-locator-response-failed",
+            reason="The public fixture locator returned a non-miss response.",
+            action="Review the first route failure before retrying.",
+            retryable=False,
+        )
+
+        result = _executor("publisher-a").execute(
+            (item,),
+            lambda _item, route: (
+                RouteExecutionResult.failed(failure)
+                if route is public
+                else RouteExecutionResult.normal_miss()
+            ),
+        )
+
+        self.assertEqual(
+            result.items[0].attempted_route_keys,
+            (public.route_key, browser.route_key),
+        )
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.FAILED)
+        self.assertEqual(result.items[0].failure, failure)
+        self.assertFalse(result.items[0].exhausted)
+
+    def test_unresolved_low_risk_issue_blocks_browser_only_after_api_pass(self) -> None:
+        public = _route(AcquisitionPath.PUBLIC, "public")
+        api = _route(AcquisitionPath.AUTHORIZED_PROVIDER_API, "api")
+        browser = _route(AcquisitionPath.CONTROLLED_BROWSER, "browser")
+        item = AcquisitionWorkItem(
+            work_key="low-risk-issue",
+            plan=_plan(
+                "low-risk-issue",
+                tiers=(),
+                extra_routes=(public, api, browser),
+            ),
+        )
+        attempts: list[str] = []
+        failure = StableFailure(
+            code="acquisition-fixture-public-deferred",
+            reason="The public fixture route is temporarily unavailable.",
+            action="Retry the public fixture route later.",
+            retryable=True,
+        )
+
+        def execute(
+            _item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            attempts.append(route.route_key)
+            if route is public:
+                return RouteExecutionResult.deferred(failure)
+            return RouteExecutionResult.normal_miss()
+
+        result = _executor("publisher-a").execute((item,), execute)
+
+        self.assertEqual(attempts, [public.route_key, api.route_key])
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.DEFERRED)
+        self.assertEqual(result.items[0].failure, failure)
+        self.assertEqual(result.browser_admission.decisions, ())
+
+    def test_fatal_route_contract_failure_stops_the_item_immediately(self) -> None:
+        first = _route(AcquisitionPath.PUBLIC, "fatal")
+        second = _route(AcquisitionPath.PUBLIC, "hidden")
+        item = AcquisitionWorkItem(
+            work_key="fatal-contract",
+            plan=_plan("fatal-contract", tiers=(), extra_routes=(first, second)),
+        )
+        attempts: list[str] = []
+        failure = StableFailure(
+            code="acquisition-port-contract",
+            reason="The fixture component violated its contract.",
+            action="Correct the fixture assembly.",
+            retryable=False,
+        )
+
+        def execute(
+            _item: AcquisitionWorkItem,
+            route: RouteSpec,
+        ) -> RouteExecutionResult:
+            attempts.append(route.route_key)
+            return RouteExecutionResult.fatal(failure)
+
+        result = TieredCohortExecutor().execute((item,), execute)
+
+        self.assertEqual(attempts, [first.route_key])
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.FAILED)
+        self.assertEqual(result.items[0].failure, failure)
+
     def test_public_and_api_overlap_but_each_tier_is_a_global_barrier(self) -> None:
         items = tuple(AcquisitionWorkItem(work_key=key, plan=_plan(key)) for key in ("a", "b"))
         barriers = {
@@ -680,7 +933,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
                 progress[3].failed,
                 progress[3].exhausted,
             ),
-            (5, 1, 1, 1, 1, 1, 0),
+            (5, 1, 2, 1, 1, 0, 0),
         )
         self.assertEqual(
             (
@@ -847,7 +1100,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         self.assertIn("event=acquisition-plan-failed", output)
         self.assertIn("tier=public", output)
 
-    def test_info_logging_explains_tiers_groups_misses_and_stable_failures(self) -> None:
+    def test_info_logging_keeps_results_and_failures_without_debug_route_noise(self) -> None:
         items = (
             AcquisitionWorkItem(work_key="deferred", plan=_plan("deferred")),
             AcquisitionWorkItem(
@@ -891,16 +1144,17 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
                 WorkItemDisposition.DELIVERED,
             ),
         )
-        for tier in AcquisitionPath:
-            self.assertIn(f"event=acquisition-tier-started tier={tier.value}", output)
-            self.assertIn(f"event=acquisition-tier-finished tier={tier.value}", output)
-        self.assertIn("event=acquisition-route-missed", output)
+        self.assertIn("event=acquisition-cohort-started", output)
+        self.assertIn("event=acquisition-cohort-finished", output)
         self.assertIn("event=acquisition-route-delivered", output)
-        self.assertIn("event=acquisition-tier-group-progress", output)
         self.assertIn("provider_group=publisher-b", output)
         self.assertIn("code=acquisition-authorized-quota", output)
         self.assertIn(quota_failure.reason, output)
         self.assertIn(quota_failure.action, output)
+        self.assertNotIn("event=acquisition-route-missed", output)
+        self.assertNotIn("event=acquisition-tier-started", output)
+        self.assertNotIn("event=acquisition-tier-finished", output)
+        self.assertNotIn("event=acquisition-tier-group-progress", output)
         self.assertNotIn("plan_revision=", output)
         delivered = result.items[2].temporary_pdf
         self.assertIsNotNone(delivered)
@@ -921,6 +1175,17 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         self.assertIn("resolution_evidence_kind=landing-origin", output)
         self.assertIn("route_key=public:debug-target", output)
         self.assertIn("provider_group=publisher-a", output)
+        self.assertIn("event=acquisition-route-missed", output)
+        self.assertIn("disposition=miss", output)
+        self.assertIn("next=", output)
+        self.assertRegex(output, r"elapsed_ms=\d+")
+        for tier in AcquisitionPath:
+            self.assertIn(f"event=acquisition-tier-started tier={tier.value}", output)
+            self.assertIn(f"event=acquisition-tier-finished tier={tier.value}", output)
+        self.assertIn("event=acquisition-tier-group-progress", output)
+        self.assertIn("event=acquisition-browser-escalation-ready", output)
+        self.assertIn("eligible=1 admitted=1", output)
+        self.assertIn("event=acquisition-browser-admission-allowed", output)
         self.assertNotIn("https://publisher-a.test", output)
 
 

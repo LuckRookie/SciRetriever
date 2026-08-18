@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -229,6 +230,11 @@ class AcquisitionWorkItem:
     current_tier: AcquisitionPath | None = field(default=None, init=False)
     attempted_route_keys: list[str] = field(default_factory=list, init=False, repr=False)
     route_hints: list[AccessRouteHint] = field(default_factory=list, init=False, repr=False)
+    route_issues: list[RouteExecutionResult] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
     temporary_pdf: TemporaryPdf | None = field(default=None, init=False, repr=False)
     failure: StableFailure | None = field(default=None, init=False)
     publication_receipt: object | None = field(default=None, init=False, repr=False)
@@ -386,6 +392,7 @@ class TieredCohortExecutor:
             on_browser_escalation,
             cancel_event,
         )
+        cohort_started_ns = time.monotonic_ns()
         _LOGGER.info(
             "event=acquisition-cohort-started target_count=%d",
             len(items),
@@ -393,11 +400,13 @@ class TieredCohortExecutor:
         for item in items:
             _log_plan(item, event="acquisition-plan-ready")
         for tier in _TIER_ORDER[:2]:
+            tier_started_ns = time.monotonic_ns()
             self._notify_progress(
                 items,
                 tier,
                 AcquisitionProgressPhase.STARTED,
                 on_progress,
+                elapsed_ms=None,
             )
             self._execute_tier_with_replanning(
                 items,
@@ -405,11 +414,14 @@ class TieredCohortExecutor:
                 execute_route,
                 refresh_plan,
             )
+            if tier is AcquisitionPath.AUTHORIZED_PROVIDER_API:
+                _finalize_blocking_low_risk_route_issues(items)
             self._notify_progress(
                 items,
                 tier,
                 AcquisitionProgressPhase.FINISHED,
                 on_progress,
+                elapsed_ms=_elapsed_ms(tier_started_ns),
             )
             self._notify_tier_completed(items, tier, on_tier_completed)
         browser_admission = self._admit_browser(items)
@@ -417,11 +429,13 @@ class TieredCohortExecutor:
         if on_browser_escalation is not None:
             on_browser_escalation(browser_admission.summary)
         self._apply_browser_admission(items, browser_admission)
+        browser_tier_started_ns = time.monotonic_ns()
         self._notify_progress(
             items,
             AcquisitionPath.CONTROLLED_BROWSER,
             AcquisitionProgressPhase.STARTED,
             on_progress,
+            elapsed_ms=None,
         )
         self._execute_browser_tier(
             items,
@@ -430,6 +444,7 @@ class TieredCohortExecutor:
             cancel_event=cancel_event,
         )
         for item in items:
+            _finalize_route_issue(item)
             if item.disposition is WorkItemDisposition.PENDING:
                 item.disposition = WorkItemDisposition.EXHAUSTED
                 item.current_tier = None
@@ -438,13 +453,14 @@ class TieredCohortExecutor:
             AcquisitionPath.CONTROLLED_BROWSER,
             AcquisitionProgressPhase.FINISHED,
             on_progress,
+            elapsed_ms=_elapsed_ms(browser_tier_started_ns),
         )
         self._notify_tier_completed(
             items,
             AcquisitionPath.CONTROLLED_BROWSER,
             on_tier_completed,
         )
-        _log_cohort_finished(items)
+        _log_cohort_finished(items, elapsed_ms=_elapsed_ms(cohort_started_ns))
         return CohortExecutionResult(
             tuple(_freeze_result(item) for item in items),
             browser_admission=browser_admission,
@@ -501,9 +517,11 @@ class TieredCohortExecutor:
         tier: AcquisitionPath,
         phase: AcquisitionProgressPhase,
         observer: AcquisitionProgressObserver | None,
+        *,
+        elapsed_ms: int | None,
     ) -> None:
         snapshot = _progress_snapshot(items, tier=tier, phase=phase)
-        _log_tier_progress(snapshot)
+        _log_tier_progress(snapshot, elapsed_ms=elapsed_ms)
         if observer is not None:
             observer(snapshot)
 
@@ -514,7 +532,8 @@ class TieredCohortExecutor:
         execute_route: RouteExecutor,
     ) -> None:
         item.current_tier = tier
-        for route in item.plan.routes_for(tier):
+        routes = item.plan.routes_for(tier)
+        for route_index, route in enumerate(routes):
             if item.disposition is not WorkItemDisposition.PENDING:
                 break
             if route.route_key in item.attempted_route_keys:
@@ -541,12 +560,39 @@ class TieredCohortExecutor:
                 item.plan.revision,
                 _resolution_evidence_kind(item),
             )
-            readiness = _readiness_outcome(route)
-            result = readiness if readiness is not None else execute_route(item, route)
+            route_started_ns = time.monotonic_ns()
+            try:
+                readiness = _readiness_outcome(route)
+                result = readiness if readiness is not None else execute_route(item, route)
+            except Exception:
+                _LOGGER.error(
+                    "event=acquisition-route-crashed work_key=%s tier=%s route_key=%s "
+                    "provider_group=%s disposition=fatal next=stop elapsed_ms=%d "
+                    "code=acquisition-route-unexpected",
+                    item.work_key,
+                    tier.value,
+                    route.route_key,
+                    _route_group(route),
+                    _elapsed_ms(route_started_ns),
+                )
+                raise
             if not isinstance(result, RouteExecutionResult):
                 raise TypeError("execute_route must return RouteExecutionResult")
-            _log_route_result(item, route, result)
+            _log_route_result(
+                item,
+                route,
+                result,
+                next_step=_route_next_step(
+                    item,
+                    route,
+                    result,
+                    has_remaining_route=route_index + 1 < len(routes),
+                ),
+                elapsed_ms=_elapsed_ms(route_started_ns),
+            )
             _apply_route_result(item, result)
+            if tier is AcquisitionPath.CONTROLLED_BROWSER:
+                _finalize_route_issue(item)
 
     def _execute_parallel_tier(
         self,
@@ -748,6 +794,7 @@ class TieredCohortExecutor:
         def run(attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[None]:
             item = items_by_key[attempt.attempt_key]
             pending_route = self._pending_browser_route(item)
+            started_ns = time.monotonic_ns()
             _LOGGER.info(
                 "event=acquisition-browser-group-item-started work_key=%s "
                 "provider_group=%s route_key=%s",
@@ -767,10 +814,11 @@ class TieredCohortExecutor:
             }
             _LOGGER.info(
                 "event=acquisition-browser-group-item-finished work_key=%s "
-                "provider_group=%s outcome=%s",
+                "provider_group=%s outcome=%s elapsed_ms=%d",
                 item.work_key,
                 attempt.rate_limit_group,
                 item.disposition.value,
+                _elapsed_ms(started_ns),
             )
             return BrowserAttemptCompletion(
                 None,
@@ -937,6 +985,8 @@ def _apply_scheduled_browser_blocks(
             route_key="-",
             provider_group=runtime_state.rate_limit_group,
             failure=failure,
+            disposition=item.disposition.value,
+            next_step="stop",
         )
 
 
@@ -957,14 +1007,41 @@ def _apply_route_result(item: AcquisitionWorkItem, result: RouteExecutionResult)
         return
     if result.outcome is RouteOutcome.PDF_DELIVERED:
         item.temporary_pdf = result.temporary_pdf
+        item.failure = None
+        item.route_issues.clear()
         item.disposition = WorkItemDisposition.DELIVERED
         return
-    item.failure = result.failure
+    if result.outcome is RouteOutcome.FATAL_FAILURE:
+        item.failure = result.failure
+        item.disposition = WorkItemDisposition.FAILED
+        return
+    item.route_issues.append(result)
+
+
+def _finalize_blocking_low_risk_route_issues(
+    items: tuple[AcquisitionWorkItem, ...],
+) -> None:
+    """Stop Browser escalation only for low-risk outcomes that require a pause."""
+
+    for item in items:
+        if any(
+            issue.outcome in {RouteOutcome.DEFERRED, RouteOutcome.ACTION_REQUIRED}
+            for issue in item.route_issues
+        ):
+            _finalize_route_issue(item)
+
+
+def _finalize_route_issue(item: AcquisitionWorkItem) -> None:
+    if item.disposition is not WorkItemDisposition.PENDING or not item.route_issues:
+        return
+    issue = item.route_issues[0]
+    item.failure = issue.failure
     item.disposition = {
         RouteOutcome.DEFERRED: WorkItemDisposition.DEFERRED,
         RouteOutcome.ACTION_REQUIRED: WorkItemDisposition.ACTION_REQUIRED,
         RouteOutcome.FAILURE: WorkItemDisposition.FAILED,
-    }[result.outcome]
+    }[issue.outcome]
+    item.current_tier = None
 
 
 def _resolution_evidence_kind(item: AcquisitionWorkItem) -> str:
@@ -1088,11 +1165,19 @@ def _group_progress(
     )
 
 
-def _log_tier_progress(snapshot: AcquisitionProgressSnapshot) -> None:
+def _log_tier_progress(
+    snapshot: AcquisitionProgressSnapshot,
+    *,
+    elapsed_ms: int | None,
+) -> None:
     event = f"acquisition-tier-{snapshot.phase.value}"
-    _LOGGER.info(
+    # Entry owns the user-facing tier snapshot.  Keep the Acquisition copy at
+    # DEBUG so a configured CLI does not print the same cohort partition
+    # twice, while direct diagnostics still retain the module boundary.
+    _LOGGER.debug(
         "event=%s tier=%s selected=%d resolved=%d pending=%d deferred=%d "
-        "action_required=%d failed=%d exhausted=%d provider_group_count=%d",
+        "action_required=%d failed=%d exhausted=%d provider_group_count=%d "
+        "next=%s elapsed_ms=%s",
         event,
         snapshot.tier.value,
         snapshot.selected,
@@ -1103,9 +1188,11 @@ def _log_tier_progress(snapshot: AcquisitionProgressSnapshot) -> None:
         snapshot.failed,
         snapshot.exhausted,
         len(snapshot.groups),
+        _tier_next_step(snapshot),
+        "-" if elapsed_ms is None else elapsed_ms,
     )
     for group in snapshot.groups:
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-tier-group-progress phase=%s tier=%s provider_group=%s "
             "selected=%d resolved=%d pending=%d deferred=%d action_required=%d "
             "failed=%d exhausted=%d",
@@ -1126,6 +1213,9 @@ def _log_route_result(
     item: AcquisitionWorkItem,
     route: RouteSpec,
     result: RouteExecutionResult,
+    *,
+    next_step: str,
+    elapsed_ms: int,
 ) -> None:
     common = (
         item.work_key,
@@ -1134,19 +1224,24 @@ def _log_route_result(
         _route_group(route),
     )
     if result.outcome in {RouteOutcome.NORMAL_MISS, RouteOutcome.HINTS}:
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-route-missed work_key=%s tier=%s route_key=%s "
-            "provider_group=%s outcome=%s hint_count=%d",
+            "provider_group=%s outcome=%s disposition=miss next=%s hint_count=%d "
+            "elapsed_ms=%d",
             *common,
             result.outcome.value,
+            next_step,
             len(result.hints),
+            elapsed_ms,
         )
         return
     if result.outcome is RouteOutcome.PDF_DELIVERED:
         _LOGGER.info(
             "event=acquisition-route-delivered work_key=%s tier=%s route_key=%s "
-            "provider_group=%s outcome=pdf-delivered",
+            "provider_group=%s outcome=pdf-delivered disposition=delivered next=stop "
+            "elapsed_ms=%d",
             *common,
+            elapsed_ms,
         )
         return
     failure = result.failure
@@ -1159,6 +1254,9 @@ def _log_route_result(
         route_key=route.route_key,
         provider_group=_route_group(route),
         failure=failure,
+        disposition=_route_disposition(result.outcome),
+        next_step=next_step,
+        elapsed_ms=elapsed_ms,
     )
 
 
@@ -1170,15 +1268,21 @@ def _log_failure(
     route_key: str,
     provider_group: str,
     failure: StableFailure,
+    disposition: str = "failure",
+    next_step: str = "stop",
+    elapsed_ms: int | None = None,
 ) -> None:
-    _LOGGER.info(
+    _LOGGER.warning(
         "event=%s work_key=%s tier=%s route_key=%s provider_group=%s "
-        "code=%s retryable=%s reason=%s action=%s",
+        "disposition=%s next=%s elapsed_ms=%s code=%s retryable=%s reason=%s action=%s",
         event,
         work_key,
         tier,
         route_key,
         provider_group,
+        disposition,
+        next_step,
+        "-" if elapsed_ms is None else elapsed_ms,
         failure.code,
         str(failure.retryable).lower(),
         failure.reason,
@@ -1193,12 +1297,14 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
         for group in groups
         if group.conservative_minimum_duration_seconds is not None
     )
-    _LOGGER.info(
+    _LOGGER.debug(
         "event=acquisition-browser-escalation-ready selected=%d parallel_group_count=%d "
-        "allowed=%d deferred=%d action_required=%d rejected=%d "
+        "eligible=%d admitted=%d allowed=%d deferred=%d action_required=%d rejected=%d "
         "minimum_duration_seconds=%s",
         sum(group.paper_count for group in groups),
         sum(group.allowed_count > 0 for group in groups),
+        sum(group.eligible_count for group in groups),
+        sum(group.allowed_count for group in groups),
         sum(group.allowed_count for group in groups),
         sum(group.deferred_count for group in groups),
         sum(group.action_required_count for group in groups),
@@ -1206,7 +1312,7 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
         "-" if not durations else f"{max(durations):g}",
     )
     for group in groups:
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-browser-group-admission provider_group=%s papers=%d "
             "eligible=%d allowed=%d deferred=%d action_required=%d rejected=%d "
             "readiness=%s minimum_start_interval=%s earliest_start_in_seconds=%s "
@@ -1227,7 +1333,7 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
             len(group.required_actions),
         )
         for action in group.required_actions:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=acquisition-browser-group-action provider_group=%s action=%s",
                 group.rate_limit_group,
                 action,
@@ -1241,9 +1347,11 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
                 route_key=decision.route_key,
                 provider_group=decision.rate_limit_group,
                 failure=decision.failure,
+                disposition=decision.disposition.value,
+                next_step="stop",
             )
         elif decision.disposition is BrowserAdmissionDisposition.REJECTED:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=acquisition-browser-admission-rejected work_key=%s tier=%s "
                 "route_key=%s provider_group=%s outcome=normal-skip",
                 decision.work_key,
@@ -1262,21 +1370,76 @@ def _log_browser_admission(result: BrowserAdmissionResult) -> None:
             )
 
 
-def _log_cohort_finished(items: tuple[AcquisitionWorkItem, ...]) -> None:
+def _log_cohort_finished(
+    items: tuple[AcquisitionWorkItem, ...],
+    *,
+    elapsed_ms: int,
+) -> None:
     counts = {
         disposition: sum(item.disposition is disposition for item in items)
         for disposition in WorkItemDisposition
     }
     _LOGGER.info(
         "event=acquisition-cohort-finished target_count=%d delivered=%d exhausted=%d "
-        "deferred=%d action_required=%d failed=%d",
+        "deferred=%d action_required=%d failed=%d elapsed_ms=%d",
         len(items),
         counts[WorkItemDisposition.DELIVERED],
         counts[WorkItemDisposition.EXHAUSTED],
         counts[WorkItemDisposition.DEFERRED],
         counts[WorkItemDisposition.ACTION_REQUIRED],
         counts[WorkItemDisposition.FAILED],
+        elapsed_ms,
     )
+
+
+def _route_disposition(outcome: RouteOutcome) -> str:
+    return {
+        RouteOutcome.NORMAL_MISS: "miss",
+        RouteOutcome.HINTS: "miss",
+        RouteOutcome.PDF_DELIVERED: "delivered",
+        RouteOutcome.DEFERRED: "deferred",
+        RouteOutcome.ACTION_REQUIRED: "action-required",
+        RouteOutcome.FAILURE: "failure",
+        RouteOutcome.FATAL_FAILURE: "fatal",
+    }[outcome]
+
+
+def _route_next_step(
+    item: AcquisitionWorkItem,
+    route: RouteSpec,
+    result: RouteExecutionResult,
+    *,
+    has_remaining_route: bool,
+) -> str:
+    if result.outcome in {RouteOutcome.PDF_DELIVERED, RouteOutcome.FATAL_FAILURE}:
+        return "stop"
+    if has_remaining_route:
+        return "next-route"
+    if route.tier is AcquisitionPath.PUBLIC:
+        return "next-tier"
+    if route.tier is AcquisitionPath.AUTHORIZED_PROVIDER_API:
+        route_issues = (*item.route_issues, result)
+        if any(
+            issue.outcome in {RouteOutcome.DEFERRED, RouteOutcome.ACTION_REQUIRED}
+            for issue in route_issues
+        ):
+            return "stop"
+        return "browser-admission"
+    return "stop"
+
+
+def _tier_next_step(snapshot: AcquisitionProgressSnapshot) -> str:
+    if snapshot.phase is AcquisitionProgressPhase.STARTED:
+        return "execute-tier"
+    if snapshot.tier is AcquisitionPath.PUBLIC:
+        return "next-tier"
+    if snapshot.tier is AcquisitionPath.AUTHORIZED_PROVIDER_API:
+        return "browser-admission"
+    return "stop"
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 def _freeze_result(item: AcquisitionWorkItem) -> AcquisitionWorkItemResult:

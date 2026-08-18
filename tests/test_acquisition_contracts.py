@@ -588,7 +588,7 @@ class TieredAcquisitionContractTests(unittest.TestCase):
         self.assertIn("attempt:public:one:public/accepted", events)
         self.assertNotIn("execute:api:later", events)
 
-    def test_transient_public_failure_defers_without_api_escalation_or_exhaustion(self) -> None:
+    def test_transient_public_failure_allows_api_then_defers_without_exhaustion(self) -> None:
         events: list[str] = []
         transient = AcquisitionSourceFailure(_failure("network-timeout"))
         public = _RouteFake(
@@ -618,7 +618,7 @@ class TieredAcquisitionContractTests(unittest.TestCase):
             api.prepare_primary_pdf(_request())
 
         self.assertEqual(raised.exception.failure.code, "network-timeout")
-        self.assertNotIn("execute:api:later", events)
+        self.assertIn("execute:api:later", events)
         self.assertEqual(exhaustion.calls, 0)
 
     def test_unrelated_unconfigured_route_is_omitted_but_selected_route_requires_action(

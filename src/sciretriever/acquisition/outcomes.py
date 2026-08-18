@@ -20,6 +20,7 @@ class RouteOutcome(str, Enum):
     DEFERRED = "deferred"
     ACTION_REQUIRED = "action-required"
     FAILURE = "failure"
+    FATAL_FAILURE = "fatal-failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +63,9 @@ class RouteExecutionResult:
                 raise ValueError("a normal miss carries no hints or failure")
             return
         if self.failure is None or self.hints:
-            raise ValueError("deferred, action-required, and failure need one failure only")
+            raise ValueError(
+                "deferred, action-required, failure, and fatal-failure need one failure only"
+            )
 
     @classmethod
     def delivered(
@@ -96,6 +99,12 @@ class RouteExecutionResult:
     @classmethod
     def failed(cls, failure: StableFailure) -> "RouteExecutionResult":
         return cls(outcome=RouteOutcome.FAILURE, failure=failure)
+
+    @classmethod
+    def fatal(cls, failure: StableFailure) -> "RouteExecutionResult":
+        """Return a component/commit-boundary failure that must stop the item."""
+
+        return cls(outcome=RouteOutcome.FATAL_FAILURE, failure=failure)
 
     def __reduce__(self) -> str | tuple[object, ...]:
         raise TypeError("RouteExecutionResult cannot be serialized")

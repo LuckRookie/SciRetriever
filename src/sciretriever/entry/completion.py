@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -346,13 +347,14 @@ class _CohortAcquisitionPort:
                 emitted[key] = item
 
         outcomes: tuple[tuple[_ParticipantKey, _CohortOutcome], ...] = ()
+        progress_logger = _AcquisitionProgressLogger()
         try:
             try:
                 prepared = self._acquisition.prepare_primary_pdf_cohort(
                     requests,
                     cancel_event=self._cancel_event,
                     on_prepared=publish_prepared,
-                    on_progress=_log_acquisition_progress,
+                    on_progress=progress_logger,
                     on_browser_escalation=_log_browser_escalation,
                 )
                 outcomes = self._map_batch_outcomes(
@@ -692,11 +694,32 @@ def _cohort_contract_failure() -> StableFailure:
     )
 
 
-def _log_acquisition_progress(progress: AcquisitionProgressSnapshot) -> None:
+class _AcquisitionProgressLogger:
+    """Add operation-local tier timing without changing the observer Model."""
+
+    def __init__(self) -> None:
+        self._started_ns: dict[str, int] = {}
+
+    def __call__(self, progress: AcquisitionProgressSnapshot) -> None:
+        tier = progress.tier.value
+        if progress.phase.value == "started":
+            self._started_ns[tier] = time.monotonic_ns()
+            elapsed_ms: int | str = "-"
+        else:
+            started_ns = self._started_ns.pop(tier, None)
+            elapsed_ms = "-" if started_ns is None else _elapsed_ms(started_ns)
+        _log_acquisition_progress(progress, elapsed_ms=elapsed_ms)
+
+
+def _log_acquisition_progress(
+    progress: AcquisitionProgressSnapshot,
+    *,
+    elapsed_ms: int | str = "-",
+) -> None:
     _LOGGER.info(
         "event=completion-acquisition-progress phase=%s tier=%s selected=%d "
         "resolved=%d pending=%d deferred=%d action_required=%d failed=%d "
-        "exhausted=%d provider_group_count=%d",
+        "exhausted=%d provider_group_count=%d elapsed_ms=%s",
         progress.phase.value,
         progress.tier.value,
         progress.selected,
@@ -707,6 +730,7 @@ def _log_acquisition_progress(progress: AcquisitionProgressSnapshot) -> None:
         progress.failed,
         progress.exhausted,
         len(progress.groups),
+        elapsed_ms,
     )
     for group in progress.groups:
         _LOGGER.info(
@@ -874,6 +898,7 @@ class _CompletionScheduler:
         self._results: list[TargetOrchestrationResult | NotStartedCompletionTarget | None] = [
             None
         ] * len(targets)
+        self._target_started_ns: list[int | None] = [None] * len(targets)
         self._next_index = 0
         self._interrupted = False
 
@@ -931,6 +956,7 @@ class _CompletionScheduler:
     ) -> TargetOrchestrationResult | NotStartedCompletionTarget:
         if self._cancel_event.is_set():
             return NotStartedCompletionTarget(target=execution.target)
+        self._target_started_ns[index] = time.monotonic_ns()
         target_kind, target_id = _completion_target_identity(execution.target)
         _LOGGER.debug(
             "event=completion-target-started progress=%d/%d target_kind=%s target_id=%s",
@@ -991,6 +1017,7 @@ class _CompletionScheduler:
                     self._index_offset + index,
                     self._total_target_count,
                     result,
+                    elapsed_ms=self._target_elapsed_ms(index),
                 )
                 if isinstance(result, NotStartedCompletionTarget) or isinstance(
                     result.outcome, InterruptedCompletionTarget
@@ -1008,12 +1035,21 @@ class _CompletionScheduler:
             self._interrupt_operation()
             return _interrupted_target(self._targets[index])
         except Exception:
+            target_kind, target_id = _completion_target_identity(self._targets[index].target)
             _LOGGER.error(
-                "event=completion-target-crashed progress=%d/%d code=completion-target-unexpected",
+                "event=completion-target-crashed progress=%d/%d target_kind=%s target_id=%s "
+                "elapsed_ms=%s code=completion-target-unexpected",
                 self._index_offset + index + 1,
                 self._total_target_count,
+                target_kind,
+                target_id,
+                self._target_elapsed_ms(index),
             )
             raise
+
+    def _target_elapsed_ms(self, index: int) -> int | str:
+        started_ns = self._target_started_ns[index]
+        return "-" if started_ns is None else _elapsed_ms(started_ns)
 
     def _interrupt_operation(self) -> None:
         self._interrupted = True
@@ -1258,6 +1294,7 @@ class DatabaseCompletionOperation:
     def __call__(self, request: BatchRequest) -> DatabaseCompletionReport:
         if not isinstance(request, BatchRequest):
             raise TypeError("request must be BatchRequest")
+        started_ns = time.monotonic_ns()
         operation_cancel_event = self._cancel_event or threading.Event()
         frozen: tuple[TransientExecution, ...] = ()
         run: _RunResult | None = None
@@ -1299,14 +1336,19 @@ class DatabaseCompletionOperation:
                         NotStartedCompletionTarget(target=execution.target) for execution in frozen
                     ),
                     interrupted=True,
-                )
+                ),
+                started_ns=started_ns,
             )
         except ExecutionSnapshotError:
-            return _logged_completion_report(_operation_failed_report(request, frozen))
+            return _logged_completion_report(
+                _operation_failed_report(request, frozen),
+                started_ns=started_ns,
+            )
         except WriteAdmissionFailure as error:
             if run is None:
                 return _logged_completion_report(
-                    _write_admission_failed_report(request, frozen, error.failure)
+                    _write_admission_failed_report(request, frozen, error.failure),
+                    started_ns=started_ns,
                 )
             return _logged_completion_report(
                 _report(
@@ -1314,11 +1356,15 @@ class DatabaseCompletionOperation:
                     run.results,
                     interrupted=run.interrupted,
                     failure=error.failure,
-                )
+                ),
+                started_ns=started_ns,
             )
         if run is None:
             raise AssertionError("completion execution returned no run result")
-        return _logged_completion_report(_report(request, run.results, interrupted=run.interrupted))
+        return _logged_completion_report(
+            _report(request, run.results, interrupted=run.interrupted),
+            started_ns=started_ns,
+        )
 
     def _run_frozen(
         self,
@@ -1475,16 +1521,19 @@ def _log_completion_target_result(
     index: int,
     total: int,
     result: TargetOrchestrationResult | NotStartedCompletionTarget,
+    *,
+    elapsed_ms: int | str = "-",
 ) -> None:
     if isinstance(result, NotStartedCompletionTarget):
         target_kind, target_id = _completion_target_identity(result.target)
         _LOGGER.warning(
             "event=completion-target-finished progress=%d/%d outcome=not-started "
-            "target_kind=%s target_id=%s",
+            "target_kind=%s target_id=%s elapsed_ms=%s",
             index + 1,
             total,
             target_kind,
             target_id,
+            elapsed_ms,
         )
         return
 
@@ -1493,36 +1542,40 @@ def _log_completion_target_result(
     if isinstance(outcome, GoalReachedTarget):
         _LOGGER.info(
             "event=completion-target-finished progress=%d/%d outcome=goal-reached "
-            "target_kind=%s target_id=%s literature_id=%s",
+            "target_kind=%s target_id=%s literature_id=%s elapsed_ms=%s",
             index + 1,
             total,
             target_kind,
             target_id,
             outcome.literature_id,
+            elapsed_ms,
         )
         return
     if isinstance(outcome, NeedsManualPdfTarget):
         _LOGGER.info(
             "event=completion-target-finished progress=%d/%d outcome=needs-manual-pdf "
-            "target_kind=%s target_id=%s literature_ids=%s",
+            "target_kind=%s target_id=%s literature_ids=%s elapsed_ms=%s",
             index + 1,
             total,
             target_kind,
             target_id,
             ",".join(str(value) for value in outcome.literature_ids),
+            elapsed_ms,
         )
         return
     if isinstance(outcome, FailedCompletionTarget):
         failure = outcome.failure
         _LOGGER.warning(
             "event=completion-target-failed progress=%d/%d target_kind=%s target_id=%s "
-            "literature_id=%s stage=%s code=%s retryable=%s reason=%s action=%s",
+            "literature_id=%s stage=%s elapsed_ms=%s code=%s retryable=%s "
+            "reason=%s action=%s",
             index + 1,
             total,
             target_kind,
             target_id,
             outcome.literature_id or "-",
             outcome.stage,
+            elapsed_ms,
             failure.code,
             str(failure.retryable).lower(),
             failure.reason,
@@ -1532,12 +1585,13 @@ def _log_completion_target_result(
     if isinstance(outcome, InterruptedCompletionTarget):
         _LOGGER.warning(
             "event=completion-target-finished progress=%d/%d outcome=interrupted "
-            "target_kind=%s target_id=%s literature_id=%s",
+            "target_kind=%s target_id=%s literature_id=%s elapsed_ms=%s",
             index + 1,
             total,
             target_kind,
             target_id,
             outcome.literature_id or "-",
+            elapsed_ms,
         )
 
 
@@ -1637,12 +1691,19 @@ def _write_admission_failed_report(
     return report.model_copy(update={"end": FailedReportEnd(kind="failed", failure=failure)})
 
 
-def _logged_completion_report(report: DatabaseCompletionReport) -> DatabaseCompletionReport:
+def _logged_completion_report(
+    report: DatabaseCompletionReport,
+    *,
+    started_ns: int,
+) -> DatabaseCompletionReport:
+    elapsed_ms = _elapsed_ms(started_ns)
     if isinstance(report.end, FailedReportEnd):
         failure = report.end.failure
         _LOGGER.error(
-            "event=completion-failed goal=%s code=%s retryable=%s reason=%s action=%s",
+            "event=completion-failed goal=%s elapsed_ms=%d code=%s retryable=%s "
+            "reason=%s action=%s",
             report.goal,
+            elapsed_ms,
             failure.code,
             str(failure.retryable).lower(),
             failure.reason,
@@ -1657,7 +1718,7 @@ def _logged_completion_report(report: DatabaseCompletionReport) -> DatabaseCompl
     log = _LOGGER.warning if isinstance(report.end, InterruptedReportEnd) else _LOGGER.info
     log(
         "%s goal=%s goal_reached=%d needs_manual_pdf=%d failed=%d interrupted=%d "
-        "not_started=%d no_usable_content=%d",
+        "not_started=%d no_usable_content=%d elapsed_ms=%d",
         message,
         report.goal,
         len(report.goal_reached),
@@ -1666,8 +1727,13 @@ def _logged_completion_report(report: DatabaseCompletionReport) -> DatabaseCompl
         len(report.interrupted),
         len(report.not_started),
         len(report.no_usable_content_literature_ids),
+        elapsed_ms,
     )
     return report
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
 
 
 __all__ = ("DatabaseCompletionOperation",)

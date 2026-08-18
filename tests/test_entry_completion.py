@@ -2192,6 +2192,9 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertIn("action=Complete provider login outside automation.", output)
         self.assertIn("resolved=1 pending=0", output)
         self.assertIn("action_required=1 failed=0 exhausted=0", output)
+        self.assertRegex(output, r"event=completion-target-finished .*elapsed_ms=\d+")
+        self.assertRegex(output, r"event=completion-target-failed .*elapsed_ms=\d+")
+        self.assertRegex(output, r"event=completion-finished .*elapsed_ms=\d+")
         for forbidden in (
             "https://private.invalid",
             "Cookie",

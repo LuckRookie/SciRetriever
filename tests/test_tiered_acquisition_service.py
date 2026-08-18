@@ -876,7 +876,7 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
                 "acquisition-authorized-response-schema",
                 False,
                 WorkItemDisposition.FAILED,
-                False,
+                True,
             ),
             (
                 "acquisition-authorized-authentication",
@@ -926,7 +926,7 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
                     bool(result.browser_escalation.groups),
                     browser_allowed,
                 )
-                if browser_allowed:
+                if expected_disposition is WorkItemDisposition.EXHAUSTED:
                     self.assertEqual(
                         result.browser_escalation.groups[0].paper_count,
                         1,

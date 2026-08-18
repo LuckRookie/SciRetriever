@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from threading import Lock
@@ -163,6 +164,7 @@ class TieredAcquisitionService:
         if on_browser_escalation is not None and not callable(on_browser_escalation):
             raise TypeError("on_browser_escalation must be callable or None")
         self._check_cancel(cancel_event)
+        started_ns = time.monotonic_ns()
         work_items = tuple(self._new_work_item(request) for request in requests)
         prepared_by_literature: dict[LiteratureId, CohortPreparationItem] = {}
         _LOGGER.debug(
@@ -213,16 +215,19 @@ class TieredAcquisitionService:
                 browser_escalation=result.browser_admission.summary,
             )
             _LOGGER.debug(
-                "event=acquisition-preparation-finished target_count=%d receipt_count=%d",
+                "event=acquisition-preparation-finished target_count=%d receipt_count=%d "
+                "elapsed_ms=%d",
                 len(work_items),
                 sum(item.prepared is not None for item in prepared_items),
+                _elapsed_ms(started_ns),
             )
             return prepared_cohort
         except BrowserSchedulingCancelled:
             _LOGGER.info(
                 "event=acquisition-preparation-interrupted code=%s retryable=true "
-                "reason=%s action=%s",
+                "elapsed_ms=%d reason=%s action=%s",
                 _interruption_failure().code,
+                _elapsed_ms(started_ns),
                 _interruption_failure().reason,
                 _interruption_failure().action,
             )
@@ -231,8 +236,9 @@ class TieredAcquisitionService:
         except BaseException:
             _LOGGER.debug(
                 "event=acquisition-preparation-aborted target_count=%d "
-                "cleanup=discard-work-preparations",
+                "cleanup=discard-work-preparations elapsed_ms=%d",
                 len(work_items),
+                _elapsed_ms(started_ns),
             )
             self._discard_work_preparations(work_items)
             raise
@@ -356,10 +362,10 @@ class TieredAcquisitionService:
         binding = self._route_registry.binding_for(route.route_key)
         adapter = binding.adapter
         if binding.spec != route or adapter is None:
-            return RouteExecutionResult.failed(_contract_failure())
+            return RouteExecutionResult.fatal(_contract_failure())
         request = item.request
         if request is None:
-            return RouteExecutionResult.failed(_contract_failure())
+            return RouteExecutionResult.fatal(_contract_failure())
         context = RouteExecutionContext(
             request=request,
             evidence=build_acquisition_evidence(request),
@@ -377,6 +383,7 @@ class TieredAcquisitionService:
             item.plan.revision,
             len(item.route_hints),
         )
+        started_ns = time.monotonic_ns()
         try:
             result = self._consume_route_results(
                 item,
@@ -385,22 +392,23 @@ class TieredAcquisitionService:
                 source_name=adapter.source_name,
                 cancel_event=cancel_event,
             )
-            _LOGGER.debug(
-                "event=acquisition-route-adapter-finished literature_id=%s tier=%s "
-                "route_key=%s outcome=%s hint_count=%d",
-                item.work_key,
-                route.tier.value,
-                route.route_key,
-                result.outcome.value,
-                len(result.hints),
-            )
-            return result
         except AcquisitionSourceFailure as error:
-            return _source_failure_outcome(error.failure)
+            result = _source_failure_outcome(error.failure)
         except AcquisitionFailure as error:
-            return RouteExecutionResult.failed(error.failure)
+            result = RouteExecutionResult.fatal(error.failure)
         except Exception:
-            return RouteExecutionResult.failed(_source_contract_failure())
+            result = RouteExecutionResult.fatal(_source_contract_failure())
+        _LOGGER.debug(
+            "event=acquisition-route-adapter-finished literature_id=%s tier=%s "
+            "route_key=%s outcome=%s hint_count=%d elapsed_ms=%d",
+            item.work_key,
+            route.tier.value,
+            route.route_key,
+            result.outcome.value,
+            len(result.hints),
+            _elapsed_ms(started_ns),
+        )
+        return result
 
     def _consume_route_results(
         self,
@@ -933,6 +941,10 @@ def _diagnostic_candidate_id(candidate_key: str) -> str:
     return f"sha256:{digest}"
 
 
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+
+
 def _remember_safe_hints(
     item: AcquisitionWorkItem,
     hints: list[AccessRouteHint],
@@ -968,13 +980,17 @@ def _apply_planning_failure(
     item: AcquisitionWorkItem,
     result: RouteExecutionResult,
 ) -> None:
-    item.failure = result.failure
-    item.disposition = {
-        RouteOutcome.DEFERRED: WorkItemDisposition.DEFERRED,
-        RouteOutcome.ACTION_REQUIRED: WorkItemDisposition.ACTION_REQUIRED,
-        RouteOutcome.FAILURE: WorkItemDisposition.FAILED,
-        RouteOutcome.NORMAL_MISS: WorkItemDisposition.PENDING,
-    }.get(result.outcome, WorkItemDisposition.FAILED)
+    if result.outcome is RouteOutcome.NORMAL_MISS:
+        return
+    if result.outcome not in {
+        RouteOutcome.DEFERRED,
+        RouteOutcome.ACTION_REQUIRED,
+        RouteOutcome.FAILURE,
+    }:
+        item.failure = _contract_failure()
+        item.disposition = WorkItemDisposition.FAILED
+        return
+    item.route_issues.append(result)
 
 
 def _failure(code: str, reason: str, action: str, *, retryable: bool) -> StableFailure:
