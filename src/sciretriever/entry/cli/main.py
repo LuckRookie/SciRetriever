@@ -28,6 +28,7 @@ from sciretriever.bootstrap import (
     DatabaseCompletionObjectGraph,
     LocalLibraryObjectGraph,
     ManualPdfObjectGraph,
+    ProductionConfigurationProbeSession,
     ProductionEntryScope,
     TopicDiscoveryObjectGraph,
     build_production_configuration_probe_session,
@@ -38,7 +39,6 @@ from sciretriever.configuration import (
     ConfigurationError,
     CredentialLookup,
     browser_access_status,
-    browser_profile_path,
     browser_profile_status,
     configurable_credential_providers,
     configuration_diff,
@@ -842,8 +842,11 @@ def _run_complete(arguments: argparse.Namespace) -> int:
         DatabaseCompletionObjectGraph,
         _load_scoped_graph(scope, debug=arguments.debug),
     )
-    result = graph.entry_api.complete_database(request)
-    return _present_result(result, as_json=arguments.json)
+    try:
+        result = graph.entry_api.complete_database(request)
+        return _present_result(result, as_json=arguments.json)
+    finally:
+        graph.close()
 
 
 def _run_literature_read(arguments: argparse.Namespace) -> int:
@@ -1295,9 +1298,9 @@ class _ProviderAccessOverview:
     @property
     def home_state(self) -> str:
         states = tuple(state for _name, state, _action in self.api_routes)
-        if "Action required" in states:
+        if "Action required" in states or self.browser_state == "Action required":
             return "Action required"
-        if "Ready" in states:
+        if "Ready" in states or self.browser_state == "Ready":
             return "Ready"
         return "Review"
 
@@ -1342,7 +1345,8 @@ def _provider_access_overview(
         api_routes.append((_credential_guide(provider).display_name, route_state, action))
 
     access = configuration.access
-    profile_status = browser_profile_status(access.browser_profile, home=None)
+    browser = browser_access_status(configuration, home=None)
+    profile_status = browser.profile
     identity = access.browser_profile
     selection = (
         "No profile is selected."
@@ -1358,19 +1362,24 @@ def _provider_access_overview(
     elif not access.browser_enabled:
         browser_state = "Disabled"
         browser_action = "Select and initialize a profile to enable Browser-last access."
-    elif profile_status.presence is BrowserProfilePresence.CONFIGURED:
-        browser_state = "Configured"
-        browser_action = "Use explicit visible login when the session needs operator attention."
+    elif browser.automatic_acquisition_available:
+        browser_state = "Ready"
+        browser_action = (
+            browser.action_required[0].action
+            if browser.action_required
+            else "No local action; article entitlement is checked during acquisition."
+        )
     else:
         browser_state = "Action required"
         browser_action = (
-            "Initialize the selected profile."
-            if profile_status.presence is BrowserProfilePresence.MISSING
-            else "Inspect the selected profile ownership and permissions."
+            browser.action_required[0].action
+            if browser.action_required
+            else "Review the local Browser runtime and selected profile."
         )
     browser_detail = (
         f"{selection} Browser access is {'enabled' if access.browser_enabled else 'disabled'}; "
-        "profile presence does not prove login or article entitlement."
+        "one persistent Chrome process is shared by Publisher lanes, with same-Publisher "
+        "articles serialized. Profile presence does not prove login or article entitlement."
     )
     return _ProviderAccessOverview(
         api_routes=tuple(api_routes),
@@ -1544,6 +1553,7 @@ def _plain_browser_access_action() -> str | None:
         "  2. Open a visible Browser when a Provider requires manual login\n"
         "  3. Remove the selected local Browser session\n"
         "  4. Disable Browser access and keep the local session\n"
+        "  5. Set cross-Publisher Browser concurrency\n"
         "  b. Back\n\n"
     )
     answer = _read_line("Choose an action: ")
@@ -1560,6 +1570,8 @@ def _plain_browser_access_action() -> str | None:
         "delete": "remove",
         "4": "disable",
         "disable": "disable",
+        "5": "concurrency",
+        "concurrency": "concurrency",
     }.get(answer.casefold(), "invalid")
 
 
@@ -1610,8 +1622,6 @@ def _select_browser_access_profile(console: ConfigConsole) -> None:
     elif presence is BrowserProfilePresence.CONFIGURED:
         console.message("This Browser profile is already selected and initialized.", kind="muted")
         return
-    actual_path = browser_profile_path(candidate.browser_profile, home=None)
-    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
     console.message(
         "This directory may contain login cookies and local storage. Keep it private; a local "
         "profile does not prove authentication or article entitlement.",
@@ -1648,14 +1658,12 @@ def _open_browser_access_login(console: ConfigConsole) -> None:
             kind="warning",
         )
         return
-    actual_path = browser_profile_path(identity, home=None)
     console.section(
         "Optional visible Browser login",
         "Normal article attempts use the current network, including institutional IP access, "
         "without requiring a personal login. Open this window only after a Provider actually "
         "requests login, institution selection, or MFA.",
     )
-    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
     console.message(
         "Sites opened in this dedicated profile may save sensitive session data. SciRetriever "
         "will not fill credentials, choose an institution, handle MFA/CAPTCHA, inspect Cookie "
@@ -1717,8 +1725,6 @@ def _remove_browser_access_session(console: ConfigConsole) -> None:
             kind="warning",
         )
         return
-    actual_path = browser_profile_path(identity, home=None)
-    console.message(f"Local session directory: {os.fspath(actual_path)}", kind="warning")
     console.message(
         "Removal permanently deletes this profile's local Browser session, including any login "
         "state. It does not remove Provider API keys or change config.toml.",
@@ -1764,6 +1770,45 @@ def _disable_browser_access(console: ConfigConsole) -> None:
     console.message("Browser access was disabled; the local session was retained.", kind="success")
 
 
+def _set_browser_max_concurrency(console: ConfigConsole) -> None:
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    raw_value = _read_line(
+        "Maximum concurrently active Publisher Browser lanes "
+        f"[current {before.access.browser_max_concurrency}, integer > 1]: "
+    )
+    if raw_value is None or not raw_value.strip():
+        console.message("Browser concurrency was not changed.", kind="muted")
+        return
+    try:
+        value = int(raw_value.strip())
+    except ValueError:
+        console.message("Browser concurrency must be an integer greater than 1.", kind="warning")
+        return
+    if value <= 1:
+        console.message("Browser concurrency must be an integer greater than 1.", kind="warning")
+        return
+    if value == before.access.browser_max_concurrency:
+        console.message("Browser concurrency is already set to that value.", kind="muted")
+        return
+    candidate = AccessConfig(
+        browser_enabled=before.access.browser_enabled,
+        browser_profile=before.access.browser_profile,
+        browser_max_concurrency=value,
+        browser_policy_overrides=before.access.browser_policy_overrides,
+    )
+    after = before.model_copy(update={"access": candidate})
+    console.changes(configuration_diff(before, after, sections=("access",)))
+    if not _confirm(f"Set the cross-Publisher Browser concurrency cap to {value}? [y/N] "):
+        console.message("Browser concurrency was not changed.", kind="muted")
+        return
+    update_configuration_sections(path, access=candidate)
+    console.message(
+        f"Cross-Publisher Browser concurrency was set to {value}.",
+        kind="success",
+    )
+
+
 def _perform_browser_access_action(action: str, console: ConfigConsole) -> None:
     if action == "select":
         _select_browser_access_profile(console)
@@ -1773,8 +1818,10 @@ def _perform_browser_access_action(action: str, console: ConfigConsole) -> None:
         _remove_browser_access_session(console)
     elif action == "disable":
         _disable_browser_access(console)
+    elif action == "concurrency":
+        _set_browser_max_concurrency(console)
     else:
-        console.message("Invalid action. Choose 1, 2, 3, 4, or b.", kind="warning")
+        console.message("Invalid action. Choose 1, 2, 3, 4, 5, or b.", kind="warning")
 
 
 def _manage_browser_access_plain(console: ConfigConsole) -> None:
@@ -1796,6 +1843,7 @@ def _manage_browser_access_rich(console: ConfigConsole) -> None:
                 ("login", "Open a visible Browser when a Provider requires manual login"),
                 ("remove", "Remove the selected local Browser session"),
                 ("disable", "Disable Browser access and keep the session"),
+                ("concurrency", "Set cross-Publisher Browser concurrency"),
                 ("back", "Back"),
             ],
             theme=console.palette.name,
@@ -1837,7 +1885,10 @@ def _run_core_test(service: Literal["llm", "mineru"]) -> None:
         return
     configuration = load_selected_configuration(None)
     session = build_production_configuration_probe_session(configuration)
-    result = session.run_llm() if service == "llm" else session.run_mineru()
+    try:
+        result = session.run_llm() if service == "llm" else session.run_mineru()
+    finally:
+        session.close()
     sys.stderr.write(f"{service.upper()} configuration test: {result.outcome.value}.\n")
     failure = result.failure_code
     if failure is not None:
@@ -2487,12 +2538,22 @@ def _run_config_status(arguments: argparse.Namespace) -> int:
 def _run_config_test(arguments: argparse.Namespace) -> int:
     configuration = load_selected_configuration(None)
     session = build_production_configuration_probe_session(configuration)
+    try:
+        return _run_config_test_session(arguments, session)
+    finally:
+        session.close()
+
+
+def _run_config_test_session(
+    arguments: argparse.Namespace,
+    session: ProductionConfigurationProbeSession,
+) -> int:
     if arguments.browser_access_key is not None:
         if not arguments.json and not _confirm(
-            "This starts one controlled headless Browser session and visits exactly one "
+            "This starts one controlled headed Browser session and visits exactly one "
             "approved minimal Publisher target under the shared provider scheduler. It checks "
-            "runtime and target reachability, may observe personal login, and does not assess "
-            "IP-based or article-specific entitlement. Continue? [y/N] "
+            "runtime and target reachability, and does not assess institution-IP or "
+            "article-specific entitlement. Continue? [y/N] "
         ):
             sys.stderr.write("Browser probe cancelled.\n")
             return 0

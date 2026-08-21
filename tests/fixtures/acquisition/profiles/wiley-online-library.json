@@ -4,8 +4,8 @@
   "display_name": "Wiley Online Library",
   "product_name": "Wiley Online Library TDM API v1",
   "verification_state": "production-ready",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "wiley-tdm-v1-client-1.2.0-2026-08-15",
+  "verification_date": "2026-08-19",
+  "evidence_revision": "wiley-api-persistent-browser-pdf-v3-2026-08-21",
   "notes_reference": "docs/notes/providers/wiley.md",
   "official_references": [
     "https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining",
@@ -16,17 +16,24 @@
     "https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining"
   ],
   "rate_limit_references": ["https://github.com/WileyLabs/tdm-client"],
-  "landing_origins": ["https://onlinelibrary.wiley.com"],
-  "asset_origins": ["https://onlinelibrary.wiley.com", "https://alm.wiley.com"],
+  "landing_origins": [
+    "https://onlinelibrary.wiley.com",
+    "https://advanced.onlinelibrary.wiley.com"
+  ],
+  "asset_origins": [
+    "https://onlinelibrary.wiley.com",
+    "https://advanced.onlinelibrary.wiley.com",
+    "https://alm.wiley.com"
+  ],
   "stable_identity": {
-    "locator_namespaces": [],
+    "locator_namespaces": ["doi"],
     "provider_record_names": ["wiley"],
     "examples": ["doi:10.1002/fixture"]
   },
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": ["api:wiley-tdm-v1"],
-    "browser_route": null
+    "browser_route": "browser:wiley-online-library"
   },
   "route_verification": {
     "authorized_api": {
@@ -35,13 +42,19 @@
       "priority": "after-public-before-browser"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "no-independent-page-rule-evidence",
-        "no-reviewed-browser-rate-policy",
-        "no-verified-login-entitlement-paywall-challenge-markers",
-        "no-verified-primary-versus-supplement-browser-fixture"
-      ]
+      "state": "production-ready",
+      "rule_id": "wiley-online-library-pdf",
+      "rule_revision": 2,
+      "allowed_origins": [
+        "https://onlinelibrary.wiley.com",
+        "https://advanced.onlinelibrary.wiley.com"
+      ],
+      "rate_limit_group": "wiley",
+      "session_group": "wiley",
+      "article_start_interval_seconds": 20,
+      "primary_contract": "doi-bound-pdfdirect-pdf-or-epdf-response",
+      "supplement_contract": "supplement-markers-are-never-primary",
+      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
     }
   },
   "ownership_cases": [
@@ -49,8 +62,7 @@
     {"case_id": "non-pdf-or-wrong-doi-is-not-promoted", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "browser-route-not-registered",
-    "browser-upstream-clues-not-independent-evidence",
+    "browser-challenge-is-detected-and-stopped-not-bypassed",
     "live-entitlement-not-asserted"
   ]
 }

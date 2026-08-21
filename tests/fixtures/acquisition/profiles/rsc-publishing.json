@@ -3,9 +3,9 @@
   "access_key": "rsc-publishing",
   "display_name": "RSC Publishing",
   "product_name": "Royal Society of Chemistry publishing platform",
-  "verification_state": "unsupported",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "rsc-browser-unsupported-2026-08-15",
+    "verification_state": "production-ready",
+  "verification_date": "2026-08-19",
+    "evidence_revision": "rsc-persistent-browser-pdf-v4-2026-08-21",
   "notes_reference": "docs/notes/providers/rsc.md",
   "official_references": [
     "https://pubs.rsc.org/",
@@ -21,14 +21,14 @@
   "landing_origins": ["https://pubs.rsc.org"],
   "asset_origins": ["https://pubs.rsc.org"],
   "stable_identity": {
-    "locator_namespaces": [],
+    "locator_namespaces": ["doi"],
     "provider_record_names": [],
     "examples": ["doi-prefix:10.1039-is-weak-only"]
   },
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_route": "browser:rsc-publishing"
   },
   "route_verification": {
     "public": {
@@ -40,14 +40,18 @@
       "payload": "no-verified-primary-pdf-api"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-terms-prohibit-automated-download",
-        "official-tdm-page-requires-prior-contact",
-        "no-published-browser-article-rate-policy",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-esi-rule",
-        "upstream-browser-success-is-not-production-evidence"
+            "state": "production-ready",
+      "rule_id": "rsc-publishing-pdf",
+      "rule_revision": 2,
+      "allowed_origins": ["https://pubs.rsc.org"],
+      "rate_limit_group": "rsc-publishing",
+      "session_group": "rsc-publishing",
+      "article_start_interval_seconds": 30,
+            "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication",
+            "production_admission": "reviewed-ip-entitled-browser",
+            "conditions": [
+                "article-entitlement-is-checked-per-attempt",
+                "access-denial-or-challenge-stops-the-attempt"
       ]
     }
   },
@@ -57,8 +61,6 @@
     {"case_id": "wrong-article-or-non-pdf", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "profile-not-in-production-catalog",
-    "browser-route-not-registered",
     "authorized-pdf-api-not-demonstrated",
     "numeric-browser-pacing-not-published",
     "live-entitlement-not-asserted"

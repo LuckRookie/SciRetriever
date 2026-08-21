@@ -5,7 +5,7 @@
   "product_name": "Springer Nature Link article platform",
   "verification_state": "production-ready",
   "verification_date": "2026-08-18",
-  "evidence_revision": "springerlink-browser-pdf-v4-2026-08-18",
+  "evidence_revision": "springerlink-persistent-browser-pdf-v6-2026-08-21",
   "notes_reference": "docs/notes/providers/springer-nature.md",
   "official_references": [
     "https://link.springer.com/",
@@ -45,7 +45,7 @@
     "browser": {
       "state": "production-ready",
       "rule_id": "springerlink-pdf",
-      "rule_revision": 3,
+      "rule_revision": 5,
       "allowed_origins": [
         "https://link.springer.com",
         "https://static-content.springer.com",
@@ -57,7 +57,7 @@
       "article_start_interval_seconds": 10,
       "primary_contract": "reviewed-article-page-entitlement-click-or-direct-pdf-response",
       "supplement_contract": "static-content-esm-is-never-primary",
-      "authentication_contract": "operator-managed-profile-only"
+      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
     }
   },
   "ownership_cases": [

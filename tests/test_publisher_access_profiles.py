@@ -128,7 +128,6 @@ class PublisherAccessProfileTests(unittest.TestCase):
                 minimum_start_interval=20.0,
             ),
         )
-
         self.assertEqual(first, second)
         self.assertEqual(first.revision_hash, second.revision_hash)
         self.assertNotEqual(first.revision_hash, revised.revision_hash)
@@ -170,6 +169,10 @@ class PublisherAccessProfileTests(unittest.TestCase):
             evidence=PolicyEvidence.OFFICIAL,
         )
         self.assertEqual(production.production_status, ProfileProductionStatus.PRODUCTION_READY)
+        self.assertNotIn(
+            "browser_machine_access_grant_required",
+            {field.name for field in dataclasses.fields(production)},
+        )
         with self.assertRaises(ValueError):
             dataclasses.replace(
                 production,

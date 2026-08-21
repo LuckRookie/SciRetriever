@@ -77,7 +77,7 @@ def _validate_rule_alignment(
 ) -> None:
     if profile.browser_rule_revision != rule.revision:
         raise PublisherProfileVerificationError("profile-browser-rule-revision-mismatch")
-    if profile.landing_origins != (rule.landing_origin,):
+    if profile.landing_origins != rule.recognized_landing_origins:
         raise PublisherProfileVerificationError("profile-browser-landing-origin-mismatch")
     if profile.browser_allowed_origins != rule.allowed_origins:
         raise PublisherProfileVerificationError("profile-browser-allowed-origins-mismatch")
@@ -91,6 +91,7 @@ def _validate_rule_alignment(
             *rule.excluded_url_prefixes,
         )
     }
+    capture_origins.update(rule.capture_origin_roots)
     if not capture_origins.issubset(profile.asset_origins):
         raise PublisherProfileVerificationError("profile-browser-asset-origin-mismatch")
     if BrowserArticleIdentityKind.IDENTIFIER_IN_PATH in rule.article_identity_kinds and not set(

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 from unittest import mock
 
-import sciretriever.configuration as configuration
+import sciretriever.configuration.browser_profiles as profile_boundary
 from sciretriever.configuration import (
     BrowserProfileHandle,
     ConfigurationError,
@@ -119,7 +119,7 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         os.chmod(cookie_store, 0o600)
 
         with mock.patch.object(
-            configuration.os,
+            profile_boundary.os,
             "read",
             side_effect=AssertionError("profile bytes must not be read"),
         ):
@@ -215,15 +215,15 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
                     if case == "owner":
                         current_uid = os.geteuid()
                         owner = mock.patch.object(
-                            configuration,
+                            profile_boundary,
                             "_current_uid",
                             return_value=current_uid + 1,
                         )
                     else:
                         owner = mock.patch.object(
-                            configuration,
+                            profile_boundary,
                             "_current_uid",
-                            wraps=configuration._current_uid,
+                            wraps=profile_boundary._current_uid,
                         )
                     with owner:
                         status = browser_profile_status(_PROFILE_IDENTITY, home=home)
@@ -280,6 +280,34 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "changed during validation"):
             handle.runtime_directory()
 
+    def test_runtime_lease_is_exclusive_and_path_free(self) -> None:
+        first_handle = self._initialize()
+        second_handle = resolve_browser_profile(_PROFILE_IDENTITY, home=self.home)
+
+        first = first_handle.acquire_runtime()
+        self.addCleanup(first.close)
+        with self.assertRaisesRegex(ConfigurationError, "already in use") as caught:
+            second_handle.acquire_runtime()
+        self.assertNotIn(os.fspath(self.home), str(caught.exception))
+        self.assertNotIn(_PROFILE_IDENTITY, repr(first))
+        self.assertNotIn(os.fspath(self.home), repr(first))
+
+        first.close()
+        second = second_handle.acquire_runtime()
+        second.close()
+
+    def test_running_profile_cannot_be_removed(self) -> None:
+        handle = self._initialize()
+        lease = handle.acquire_runtime()
+        self.addCleanup(lease.close)
+
+        with self.assertRaisesRegex(ConfigurationError, "already in use"):
+            remove_browser_profile(_PROFILE_IDENTITY, home=self.home)
+        self.assertTrue(handle.runtime_directory().is_dir())
+
+        lease.close()
+        self.assertTrue(remove_browser_profile(_PROFILE_IDENTITY, home=self.home))
+
     def test_profile_removal_deletes_only_the_selected_validated_session(self) -> None:
         config_path = self.home / "config.toml"
         config_path.write_text("[execution]\nmax_concurrency = 3\n", encoding="utf-8")
@@ -311,7 +339,7 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertEqual(credential_path(home=self.home).read_bytes(), credential_bytes)
         self.assertEqual(config_path.read_bytes(), configuration_bytes)
         storage = self.home / ".sciretriever" / "browser-profiles"
-        self.assertEqual(tuple(storage.iterdir()), ())
+        self.assertEqual(tuple(item.name for item in storage.iterdir()), (".locks",))
 
     def test_profile_removal_fails_closed_for_an_unsafe_tree(self) -> None:
         profile = self._initialize().runtime_directory()
@@ -337,7 +365,7 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         candidate = AccessConfig(
             browser_enabled=True,
             browser_profile="Institutional-Access",
-            browser_max_concurrency=1,
+            browser_max_concurrency=5,
         )
 
         configured = configure_browser_access_profile(

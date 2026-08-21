@@ -676,6 +676,12 @@ class _RequestAbort(Exception):
         self.code = code
 
 
+def _strict_bool(value: object, *, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{field_name} must be a bool")
+    return value
+
+
 class HttpClient:
     """Execute safe HTTP requests through one shared admission coordinator."""
 
@@ -763,6 +769,7 @@ class HttpClient:
         overall_timeout_seconds: float | None = None,
         max_response_bytes: int | None = None,
         max_redirects: int | None = None,
+        follow_redirects: bool = True,
         max_retries: int | None = None,
         cancel_event: threading.Event | None = None,
         response_feedback: ResponseFeedbackInterpreter | None = None,
@@ -772,8 +779,10 @@ class HttpClient:
     ) -> TransportResponse | AccessFailure:
         """Run one bounded request and return only a neutral access result.
 
-        Redirects are processed one hop at a time.  Each hop is resolved,
-        rechecked and admitted before the injected transport is called.  A
+        Redirects are processed one hop at a time by default.  Each followed
+        hop is resolved, rechecked and admitted before the injected transport
+        is called.  ``follow_redirects=False`` returns the first neutral 3xx
+        response without resolving or contacting its target.  A
         response status is returned to the adapter unchanged; this layer does
         not interpret provider status codes or response bodies.  A private
         header or query credential requires an explicit matching initial HTTPS
@@ -803,6 +812,10 @@ class HttpClient:
         if redirect_access_profile is not None and not callable(redirect_access_profile):
             return _failure("policy")
         try:
+            follow_redirects = _strict_bool(
+                follow_redirects,
+                field_name="follow_redirects",
+            )
             settings = self._request_settings(
                 connect_timeout_seconds=connect_timeout_seconds,
                 read_timeout_seconds=read_timeout_seconds,
@@ -867,6 +880,7 @@ class HttpClient:
             result = self._run_hops(
                 lease,
                 prepared,
+                follow_redirects=follow_redirects,
                 cancel_event=cancel_event,
                 deadline=deadline,
             )
@@ -914,6 +928,7 @@ class HttpClient:
         lease: _ScopeLease,
         prepared: _PreparedRequest,
         *,
+        follow_redirects: bool,
         cancel_event: threading.Event | None,
         deadline: float,
     ) -> TransportResponse | AccessFailure:
@@ -946,6 +961,7 @@ class HttpClient:
                 cancel_event=cancel_event,
                 deadline=deadline,
                 redirects=redirects,
+                follow_redirects=follow_redirects,
                 redirect_target_guard=prepared.redirect_target_guard,
                 allow_guarded_redirect_encoded_path_separators=(
                     prepared.allow_guarded_redirect_encoded_path_separators
@@ -1168,6 +1184,7 @@ class HttpClient:
         cancel_event: threading.Event | None,
         deadline: float,
         redirects: int,
+        follow_redirects: bool,
         redirect_target_guard: RedirectTargetGuard | None,
         allow_guarded_redirect_encoded_path_separators: bool,
     ) -> _HopResult:
@@ -1219,6 +1236,7 @@ class HttpClient:
                 cancel_event=cancel_event,
                 deadline=deadline,
                 redirects=redirects,
+                follow_redirects=follow_redirects,
                 credential_alias_guard=credential_alias_guard,
                 redirect_target_guard=redirect_target_guard,
                 allow_guarded_redirect_encoded_path_separators=(
@@ -1250,6 +1268,7 @@ class HttpClient:
         cancel_event: threading.Event | None,
         deadline: float,
         redirects: int,
+        follow_redirects: bool,
         credential_alias_guard: _CredentialAliasGuard,
         redirect_target_guard: RedirectTargetGuard | None,
         allow_guarded_redirect_encoded_path_separators: bool,
@@ -1273,6 +1292,8 @@ class HttpClient:
         if isinstance(response, AccessFailure):
             return _HopResult(response, next_usage)
         self._check_request_state(cancel_event, deadline)
+        if not follow_redirects:
+            return _HopResult(response, next_usage)
         return self._redirect_result(
             response,
             current=current,

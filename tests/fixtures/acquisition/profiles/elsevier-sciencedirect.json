@@ -4,8 +4,8 @@
   "display_name": "Elsevier / ScienceDirect",
   "product_name": "Article Retrieval direct PDF and Object Retrieval APIs",
   "verification_state": "production-ready",
-  "verification_date": "2026-08-18",
-  "evidence_revision": "elsevier-article-direct-object-2026-08-18",
+  "verification_date": "2026-08-19",
+  "evidence_revision": "elsevier-api-persistent-browser-pdf-v3-2026-08-21",
   "notes_reference": "docs/notes/providers/elsevier.md",
   "official_references": [
     "https://dev.elsevier.com/documentation/ArticleRetrievalAPI.wadl",
@@ -25,7 +25,7 @@
     "https://pdf.sciencedirectassets.com"
   ],
   "stable_identity": {
-    "locator_namespaces": ["pii", "elsevier-article-eid"],
+    "locator_namespaces": ["doi", "pii", "elsevier-article-eid"],
     "provider_record_names": [],
     "examples": [
       "pii:S0014579301033130",
@@ -35,7 +35,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": ["api:elsevier-article-object"],
-    "browser_route": null
+    "browser_route": "browser:elsevier-sciencedirect"
   },
   "route_verification": {
     "authorized_api": {
@@ -44,13 +44,22 @@
       "priority": "after-public-before-browser"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "no-independent-page-rule-evidence",
-        "latest-upstream-browser-record-stopped-at-challenge",
-        "no-reviewed-browser-rate-or-session-policy",
-        "no-verified-login-entitlement-paywall-challenge-markers"
-      ]
+      "state": "production-ready",
+      "rule_id": "sciencedirect-pdf",
+      "rule_revision": 2,
+      "allowed_origins": [
+        "https://www.sciencedirect.com",
+        "https://linkinghub.elsevier.com",
+        "https://pdf.sciencedirectassets.com",
+        "https://id.elsevier.com",
+        "https://auth.elsevier.com"
+      ],
+      "rate_limit_group": "elsevier",
+      "session_group": "elsevier",
+      "article_start_interval_seconds": 20,
+      "primary_contract": "pii-bound-main-pdf-response-or-download",
+      "supplement_contract": "mmc-and-supplement-markers-are-never-primary",
+      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
     }
   },
   "ownership_cases": [
@@ -60,8 +69,7 @@
     {"case_id": "arbitrary-or-scopus-eid", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "browser-route-not-registered",
-    "browser-upstream-challenge-not-rewritten-as-success",
+    "browser-challenge-is-detected-and-stopped-not-bypassed",
     "live-key-acceptance-and-entitlement-not-asserted"
   ]
 }

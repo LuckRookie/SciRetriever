@@ -405,21 +405,57 @@ reference_max_output_tokens = 64
         )
         browser = status_payload["providers"]["controlled_browser"]
         self.assertFalse(browser["automatic_acquisition_available"])
-        self.assertEqual(browser["production_route_count"], 1)
+        self.assertEqual(browser["production_route_count"], 9)
+        self.assertEqual(browser["automatic_route_count"], 9)
         self.assertEqual(
             [route["access_key"] for route in browser["routes"]],
-            ["springerlink"],
+            [
+                "acs-publications",
+                "aip-publishing",
+                "elsevier-sciencedirect",
+                "iopscience",
+                "oxford-academic",
+                "rsc-publishing",
+                "science-aaas",
+                "springerlink",
+                "wiley-online-library",
+            ],
         )
         self.assertTrue(browser["runtime"]["python_dependency_available"])
         self.assertFalse(browser["runtime"]["chromium_executable_available"])
+        self.assertTrue(browser["runtime"]["headed_display_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
-        self.assertEqual(browser["profile"]["presence"], "missing")
-        self.assertEqual(browser["session"]["assessment"], "not-assessed")
-        self.assertIsNone(browser["session"]["authenticated"])
-        self.assertEqual(browser["session"]["article_entitlement"], "not-proven")
+        self.assertEqual(browser["mode"], "headed-persistent-profile")
+        self.assertTrue(browser["persistent_authentication_supported"])
+        self.assertEqual(browser["article_entitlement"], "checked-per-article")
+        self.assertEqual(
+            browser["profile"],
+            {"selected": None, "presence": "missing"},
+        )
+        self.assertEqual(
+            browser["session"],
+            {
+                "assessment": "not-assessed",
+                "authenticated": None,
+                "article_entitlement": "not-proven",
+            },
+        )
         self.assertTrue(browser["probe"]["available"])
         self.assertTrue(browser["probe"]["requires_explicit_target"])
-        self.assertEqual(browser["probe"]["supported_access_keys"], ["springerlink"])
+        self.assertEqual(
+            browser["probe"]["supported_access_keys"],
+            [
+                "acs-publications",
+                "aip-publishing",
+                "elsevier-sciencedirect",
+                "iopscience",
+                "oxford-academic",
+                "rsc-publishing",
+                "science-aaas",
+                "springerlink",
+                "wiley-online-library",
+            ],
+        )
         self.assertEqual(
             browser["action_required"][0]["code"],
             "browser-chromium-unavailable",

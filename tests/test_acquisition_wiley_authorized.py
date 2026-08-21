@@ -98,12 +98,25 @@ def _response(
 
 
 class WileyAuthorizedPdfClientTests(unittest.TestCase):
-    def test_profile_keeps_tdm_api_ready_without_claiming_wiley_browser_support(self) -> None:
+    def test_profile_exposes_tdm_api_and_independent_browser_fallback(self) -> None:
         self.assertEqual(WILEY_ACCESS_PROFILE.api_route_keys, ("api:wiley-tdm-v1",))
-        self.assertIsNone(WILEY_ACCESS_PROFILE.browser_route_key)
+        self.assertEqual(
+            WILEY_ACCESS_PROFILE.browser_route_key,
+            "browser:wiley-online-library",
+        )
         self.assertEqual(
             tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            ("springerlink-pdf",),
+            (
+                "acs-publications-pdf",
+                "aip-publishing-pdf",
+                "sciencedirect-pdf",
+                "iopscience-pdf",
+                "oxford-academic-pdf",
+                "rsc-publishing-pdf",
+                "science-aaas-pdf",
+                "springerlink-pdf",
+                "wiley-online-library-pdf",
+            ),
         )
         resolution = PublisherAccessResolver(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG).resolve(
             (

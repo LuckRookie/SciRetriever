@@ -5,17 +5,16 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urljoin
 
 from sciretriever.acquisition.planning import DoiLandingResolution
 from sciretriever.acquisition.ports import AcquisitionFailure, AcquisitionSourceFailure
-from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
 from sciretriever.model.access import AccessFailure, TransportResponse
 from sciretriever.model.literature import Identifier
 from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessFeedback, AccessPolicy, AccessScope
 from sciretriever.network.http import HttpClient
-from sciretriever.network.policy import NormalizedURL, PolicyError, normalize_url
+from sciretriever.network.policy import PolicyError, normalize_url
 from sciretriever.network.response_feedback import FeedbackHeaderError, retry_after_feedback
 
 _DOI_RESOLVER_BASE: Final[str] = "https://doi.org"
@@ -26,6 +25,7 @@ _BASELINE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     min_start_interval=1.0,
 )
 _MAX_RESOLVER_RESPONSE_BYTES: Final[int] = 64 * 1024
+_REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 
 
 def _throttling_feedback(response: TransportResponse) -> AccessFeedback | None:
@@ -88,42 +88,30 @@ def _status_failure(*, retryable: bool) -> StableFailure:
     )
 
 
-def _final_origin(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        hostname = parsed.hostname
-        port = parsed.port
-    except (TypeError, ValueError):
-        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
-    if (
-        hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.fragment
-    ):
-        raise AcquisitionSourceFailure(_network_failure(retryable=False))
-    host = f"[{hostname}]" if ":" in hostname else hostname
-    authority = host if port is None else f"{host}:{port}"
-    try:
-        return normalize_url(f"{parsed.scheme}://{authority}").origin.text
-    except (PolicyError, TypeError, ValueError):
-        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
-
-
 def _resolution_from_response(result: TransportResponse) -> DoiLandingResolution | None:
     if result.status in {204, 404, 410}:
         return None
-    if not 200 <= result.status < 300:
-        retryable = result.status in {408, 425, 429} or result.status >= 500
-        raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
-    origin = _final_origin(result.final_url)
-    if origin in _DOI_RESOLVER_ORIGINS:
+    if result.status in _REDIRECT_STATUSES:
+        location = next(
+            (header.value for header in result.headers if header.name.casefold() == "location"),
+            None,
+        )
+        if location is None:
+            raise AcquisitionSourceFailure(_status_failure(retryable=False))
+        try:
+            canonical = normalize_url(urljoin(result.final_url, location))
+        except (PolicyError, TypeError, ValueError):
+            raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
+        if canonical.origin.text in _DOI_RESOLVER_ORIGINS:
+            return None
+        return DoiLandingResolution(
+            canonical_landing_url=canonical.url,
+            origin=canonical.origin.text,
+        )
+    if 200 <= result.status < 300:
         return None
-    try:
-        canonical = normalize_url(result.final_url).url
-        return DoiLandingResolution(canonical_landing_url=canonical, origin=origin)
-    except (PolicyError, TypeError, ValueError):
-        raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
+    retryable = result.status in {408, 425, 429} or result.status >= 500
+    raise AcquisitionSourceFailure(_status_failure(retryable=retryable))
 
 
 class DoiLandingResolver:
@@ -131,7 +119,6 @@ class DoiLandingResolver:
 
     __slots__ = (
         "_http_client",
-        "_web_access_profile_resolver",
         "_access_policy",
         "_cancel_event",
     )
@@ -140,29 +127,16 @@ class DoiLandingResolver:
         self,
         *,
         http_client: HttpClient,
-        web_access_profile_resolver: WebAccessProfileResolver | None = None,
         access_policy: AccessPolicy | None = None,
         cancel_event: threading.Event | None = None,
     ) -> None:
         if not isinstance(http_client, HttpClient):
             raise TypeError("http_client must be an HttpClient")
-        if web_access_profile_resolver is not None and not isinstance(
-            web_access_profile_resolver,
-            WebAccessProfileResolver,
-        ):
-            raise TypeError(
-                "web_access_profile_resolver must be a WebAccessProfileResolver or None"
-            )
         if access_policy is not None and not isinstance(access_policy, AccessPolicy):
             raise TypeError("access_policy must be an AccessPolicy or None")
         if cancel_event is not None and not isinstance(cancel_event, threading.Event):
             raise TypeError("cancel_event must be a threading.Event or None")
         self._http_client = http_client
-        self._web_access_profile_resolver = (
-            WebAccessProfileResolver()
-            if web_access_profile_resolver is None
-            else web_access_profile_resolver
-        )
         self._access_policy = (
             _BASELINE_WEB_POLICY
             if access_policy is None
@@ -178,28 +152,17 @@ class DoiLandingResolver:
         if doi.namespace != "doi":
             return None
 
-        def resolve_redirect_access_profile(
-            target: NormalizedURL,
-        ) -> tuple[AccessScope, AccessPolicy]:
-            if target.origin.text in _DOI_RESOLVER_ORIGINS:
-                return _DOI_SCOPE, self._access_policy
-            target_scope, target_policy = self._web_access_profile_resolver.resolve(target)
-            return target_scope, AccessPolicy.strictest(
-                self._access_policy,
-                target_policy,
-            )
-
         try:
             result = self._http_client.request(
                 _DOI_SCOPE,
                 _DOI_RESOLVER_BASE,
                 self._access_policy,
-                method="HEAD",
+                method="GET",
                 path_parameter=doi.value,
                 max_response_bytes=_MAX_RESOLVER_RESPONSE_BYTES,
+                follow_redirects=False,
                 cancel_event=self._cancel_event,
                 response_feedback=_throttling_feedback,
-                redirect_access_profile=resolve_redirect_access_profile,
             )
         except Exception:
             raise AcquisitionSourceFailure(_network_failure()) from None

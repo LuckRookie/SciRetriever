@@ -217,7 +217,7 @@ def _context(request: AcquisitionRequest) -> RouteExecutionContext:
 
 
 class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
-    def test_contract_and_profile_are_api_only_and_do_not_accept_scopus_identity(self) -> None:
+    def test_api_contract_and_profile_do_not_accept_scopus_identity(self) -> None:
         self.assertEqual(ELSEVIER_AUTHORIZED_CONTRACT.required_credential_fields, ("api_key",))
         self.assertEqual(
             ELSEVIER_AUTHORIZED_CONTRACT.stable_locator_namespaces,
@@ -242,11 +242,24 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
             ELSEVIER_ACCESS_PROFILE.api_route_keys,
             ("api:elsevier-article-object",),
         )
-        self.assertIsNone(ELSEVIER_ACCESS_PROFILE.browser_route_key)
+        self.assertEqual(
+            ELSEVIER_ACCESS_PROFILE.browser_route_key,
+            "browser:elsevier-sciencedirect",
+        )
         self.assertEqual(ELSEVIER_ACCESS_PROFILE.provider_record_names, ())
         self.assertEqual(
             tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            ("springerlink-pdf",),
+            (
+                "acs-publications-pdf",
+                "aip-publishing-pdf",
+                "sciencedirect-pdf",
+                "iopscience-pdf",
+                "oxford-academic-pdf",
+                "rsc-publishing-pdf",
+                "science-aaas-pdf",
+                "springerlink-pdf",
+                "wiley-online-library-pdf",
+            ),
         )
 
     def test_full_xml_lookup_uses_exact_doi_pii_and_article_eid_endpoints(self) -> None:
@@ -984,7 +997,7 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
             self.assertEqual(stream.read(), b"tiny-payload-for-downstream-pdf-reader")
         temporary.content.discard()
 
-    def test_normal_no_primary_preserves_runtime_hints_without_starting_browser(self) -> None:
+    def test_normal_no_primary_preserves_hints_for_later_browser_planning(self) -> None:
         http_client = _http_client()
         with mock.patch.object(
             http_client,
@@ -1013,7 +1026,10 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
         self.assertTrue(
             all(hint.profile_access_key == "elsevier-sciencedirect" for hint in results[0].hints)
         )
-        self.assertIsNone(ELSEVIER_ACCESS_PROFILE.browser_route_key)
+        self.assertEqual(
+            ELSEVIER_ACCESS_PROFILE.browser_route_key,
+            "browser:elsevier-sciencedirect",
+        )
 
     def test_source_falls_back_from_unusable_xml_to_direct_article_pdf(self) -> None:
         http_client = _http_client()

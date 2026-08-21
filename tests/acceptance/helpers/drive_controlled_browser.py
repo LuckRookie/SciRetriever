@@ -149,6 +149,9 @@ class _Page:
     def content(self) -> str:
         return "<html><body><a data-action='pdf'>PDF</a></body></html>"
 
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        return ()
+
     def has_selector(self, selector: str, *, timeout: int) -> bool:
         del timeout
         return selector == "a[data-action='pdf']"
@@ -252,12 +255,10 @@ class _Process:
     def new_context(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         accept_downloads: bool,
         connection_binding: object,
     ) -> _Context:
-        del profile
         if not accept_downloads:
             raise RuntimeError("controlled runtime requires downloads")
         self.downloads_path = downloads_path
@@ -283,11 +284,9 @@ class _Factory:
     def __call__(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         connection_binding: object,
     ) -> _Process:
-        del profile
         self.downloads_path = downloads_path
         self.binding_addresses = tuple(getattr(connection_binding, "verified_addresses"))
         return self.process

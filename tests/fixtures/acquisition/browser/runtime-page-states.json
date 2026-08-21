@@ -29,6 +29,11 @@
     "flow_disposition": "normal-miss",
     "group_effect": "none"
   },
+  "access-denied": {
+    "page_signal": "unclassified-http-denial",
+    "flow_disposition": "action-required",
+    "group_effect": "none"
+  },
   "rate-limited": {
     "page_signal": "provider-rate-limit",
     "flow_disposition": "deferred",

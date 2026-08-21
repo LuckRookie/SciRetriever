@@ -29,6 +29,7 @@ from sciretriever.acquisition.sources.browser import (
     ControlledBrowserPdfSource,
 )
 from sciretriever.acquisition.sources.browser_rules import (
+    BROWSER_RULE_VERIFICATION_CATALOG,
     PRODUCTION_BROWSER_RULE_CATALOG,
     BrowserActionKind,
     BrowserArticleIdentityKind,
@@ -276,6 +277,8 @@ class _FakeSession:
         marker_text: dict[str, str] | None = None,
         observation: BrowserPageObservation | None = None,
         available_captures: frozenset[BrowserCaptureKind] = frozenset(),
+        discovered_pdf_locators: tuple[str, ...] = (),
+        click_succeeds: bool = True,
     ) -> None:
         self.marker_text = {} if marker_text is None else marker_text
         self.observation = observation or BrowserPageObservation(
@@ -287,8 +290,12 @@ class _FakeSession:
         self.viewer_opens: list[str] = []
         self.verified_locator_opens: list[str] = []
         self.capture_waits: list[BrowserCaptureKind] = []
+        self.capture_wait_sets: list[tuple[BrowserCaptureKind, ...]] = []
         self.available_captures = available_captures
+        self.discovered_pdf_locators = discovered_pdf_locators
+        self.discovery_calls = 0
         self.fill_calls: list[tuple[str, str]] = []
+        self.click_succeeds = click_succeeds
 
     def text(self, selector: str) -> str:
         self.text_calls.append(selector)
@@ -298,8 +305,9 @@ class _FakeSession:
         self.text_calls.append(selector)
         return selector in self.marker_text
 
-    def click(self, selector: str) -> None:
+    def click(self, selector: str) -> bool:
         self.clicks.append(selector)
+        return self.click_succeeds
 
     def open_viewer(self, locator: str) -> None:
         self.viewer_opens.append(locator)
@@ -307,11 +315,18 @@ class _FakeSession:
     def open_verified_locator(self, locator: str) -> None:
         self.verified_locator_opens.append(locator)
 
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        self.discovery_calls += 1
+        return self.discovered_pdf_locators
+
     def capture_available(self, kind: BrowserCaptureKind) -> bool:
         return kind in self.available_captures
 
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
         self.capture_waits.append(kind)
+
+    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
+        self.capture_wait_sets.append(kinds)
 
     def observe(self) -> BrowserPageObservation:
         return self.observation
@@ -332,11 +347,17 @@ class _FakeRunner:
         *,
         marker_states: Iterable[dict[str, str]] = (),
         page_observations: Iterable[BrowserPageObservation] = (),
+        initial_captures_available: bool = False,
+        discovered_pdf_locators: Iterable[tuple[str, ...]] = (),
+        click_succeeds: bool = True,
         on_run: RunHook | None = None,
     ) -> None:
         self.results = list(results)
         self.marker_states = list(marker_states)
         self.page_observations = list(page_observations)
+        self.initial_captures_available = initial_captures_available
+        self.discovered_pdf_locators = list(discovered_pdf_locators)
+        self.click_succeeds = click_succeeds
         self.on_run = on_run
         self.calls: list[dict[str, object]] = []
         self.sessions: list[_FakeSession] = []
@@ -352,6 +373,7 @@ class _FakeRunner:
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
+        discard_unapproved_subresources: bool = False,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -368,6 +390,7 @@ class _FakeRunner:
                 "destination_guard": destination_guard,
                 "capture_guard": capture_guard,
                 "navigation_only": navigation_only,
+                "discard_unapproved_subresources": discard_unapproved_subresources,
                 "budget": budget,
                 "timeout_seconds": timeout_seconds,
                 "cancel_event": cancel_event,
@@ -387,10 +410,17 @@ class _FakeRunner:
         pending_result = self.results[0] if self.results else None
         available_captures = (
             frozenset(capture.kind for capture in pending_result.captures)
-            if isinstance(pending_result, BrowserCaptureBatch)
+            if self.initial_captures_available and isinstance(pending_result, BrowserCaptureBatch)
             else frozenset()
         )
-        session = _FakeSession(marker_state, observation, available_captures)
+        discovered = self.discovered_pdf_locators.pop(0) if self.discovered_pdf_locators else ()
+        session = _FakeSession(
+            marker_state,
+            observation,
+            available_captures,
+            discovered,
+            self.click_succeeds,
+        )
         self.sessions.append(session)
         try:
             if flow is not None:
@@ -603,6 +633,10 @@ def _source(
     )
 
 
+def _production_rule(rule_id: str) -> BrowserSiteRule:
+    return next(rule for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules if rule.rule_id == rule_id)
+
+
 def _payload(temporary_pdf: TemporaryPdf) -> bytes:
     context = temporary_pdf.content.open()
     if not isinstance(context, AbstractContextManager):
@@ -612,11 +646,30 @@ def _payload(temporary_pdf: TemporaryPdf) -> bytes:
 
 
 class BrowserRuleContractTests(unittest.TestCase):
-    def test_production_catalog_installs_one_closed_springerlink_rule(self) -> None:
-        self.assertEqual(len(PRODUCTION_BROWSER_RULE_CATALOG.rules), 1)
-        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+    def test_production_catalog_installs_only_policy_admitted_rules(self) -> None:
+        self.assertEqual(
+            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
+            (
+                "acs-publications-pdf",
+                "aip-publishing-pdf",
+                "sciencedirect-pdf",
+                "iopscience-pdf",
+                "oxford-academic-pdf",
+                "rsc-publishing-pdf",
+                "science-aaas-pdf",
+                "springerlink-pdf",
+                "wiley-online-library-pdf",
+            ),
+        )
+        self.assertEqual(len(BROWSER_RULE_VERIFICATION_CATALOG.rules), 9)
+        self.assertEqual(
+            BROWSER_RULE_VERIFICATION_CATALOG.rules,
+            PRODUCTION_BROWSER_RULE_CATALOG.rules,
+        )
+
+        rule = _production_rule("springerlink-pdf")
         self.assertEqual(rule.rule_id, "springerlink-pdf")
-        self.assertEqual(rule.revision, 4)
+        self.assertEqual(rule.revision, 5)
         self.assertEqual(rule.max_actions, 2)
         self.assertTrue(rule.actions_require_entitlement)
         self.assertEqual(rule.landing_origin, "https://link.springer.com")
@@ -649,7 +702,7 @@ class BrowserRuleContractTests(unittest.TestCase):
         self.assertEqual(runner.calls, [])
 
     def test_springerlink_rule_allows_only_the_reviewed_idp_login_target(self) -> None:
-        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+        rule = _production_rule("springerlink-pdf")
         self.assertTrue(rule.allows_url("https://idp.springer.com/authorize"))
         self.assertFalse(rule.allows_url("https://idp.springer.com.evil.invalid/authorize"))
         self.assertFalse(rule.allows_url("https://login.springer.com/authorize"))
@@ -675,6 +728,31 @@ class BrowserRuleContractTests(unittest.TestCase):
                 )
             )
         )
+
+    def test_elsevier_and_wiley_doi_aliases_produce_provider_specific_actions(self) -> None:
+        cases = (
+            (
+                _production_rule("sciencedirect-pdf"),
+                "https://linkinghub.elsevier.com/retrieve/pii/S0013468626000012",
+                "10.1016/j.fixture.2026.00001",
+            ),
+            (
+                _production_rule("wiley-online-library-pdf"),
+                "https://advanced.onlinelibrary.wiley.com/doi/10.1002/aenm.202601234",
+                "10.1002/aenm.202601234",
+            ),
+        )
+        for rule, landing_url, doi in cases:
+            with self.subTest(rule_id=rule.rule_id):
+                request = _request(
+                    observations=(_observation(11, (_landing_hint(landing_url),)),),
+                    literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
+                )
+                actions = _source(_FakeRunner([]), rule=rule)._actions(_evidence(request))
+                self.assertEqual(len(actions), 1)
+                self.assertIs(actions[0].rule, rule)
+                self.assertEqual(actions[0].landing_url, landing_url)
+                self.assertTrue(rule.allows_url(actions[0].start_url))
 
     def test_rule_uses_exact_https_dns_origins_and_canonical_tokens(self) -> None:
         rule = _rule(
@@ -1071,12 +1149,14 @@ class BrowserRuleContractTests(unittest.TestCase):
             {
                 "click",
                 "capture_available",
+                "discover_pdf_locators",
                 "has_selector",
                 "observe",
                 "open_verified_locator",
                 "open_viewer",
                 "text",
                 "wait_for_capture",
+                "wait_for_any_capture",
             },
         )
         self.assertFalse(
@@ -1216,8 +1296,9 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
             ],
             # Presence, not element text, proves this reviewed static link.
             marker_states=({"a[href*='/content/pdf/']": ""},),
+            initial_captures_available=True,
         )
-        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        source = _source(runner, rule=_production_rule("springerlink-pdf"))
         request = _request(
             literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
             observations=(_observation(31, (_landing_hint(landing),)),),
@@ -1231,7 +1312,8 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         self.assertIsInstance(browser_request, BrowserRequest)
         assert isinstance(browser_request, BrowserRequest)
         self.assertEqual(browser_request.url, pdf)
-        self.assertIs(call["navigation_only"], True)
+        self.assertIs(call["navigation_only"], False)
+        self.assertIs(call["discard_unapproved_subresources"], True)
         session = runner.sessions[0]
         self.assertEqual(session.clicks, [])
         self.assertEqual(session.capture_waits, [])
@@ -1243,7 +1325,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         doi = "10.1007/browser-direct-asset"
         encoded_doi = doi.replace("/", "%2F")
         runner = _FakeRunner([_failure("no-download")])
-        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        source = _source(runner, rule=_production_rule("springerlink-pdf"))
         request = _request(
             literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
             observations=(
@@ -1277,7 +1359,7 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         self.assertEqual(runner.sessions[0].capture_waits, [])
 
     def test_springerlink_direct_asset_origin_requires_exact_origin_and_one_doi(self) -> None:
-        rule = PRODUCTION_BROWSER_RULE_CATALOG.rules[0]
+        rule = _production_rule("springerlink-pdf")
         source = _source(_FakeRunner([]), rule=rule)
         valid_hint = _landing_hint(
             "https://link.springer.com/content/pdf/10.1007/browser-evidence.pdf",
@@ -1345,9 +1427,10 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
                         "application/pdf",
                     )
                 )
-            ]
+            ],
+            initial_captures_available=True,
         )
-        source = _source(runner, rule=PRODUCTION_BROWSER_RULE_CATALOG.rules[0])
+        source = _source(runner, rule=_production_rule("springerlink-pdf"))
         request = _request(
             literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
             observations=(
@@ -1369,6 +1452,68 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
         self.assertEqual(len(deliveries), 1)
         self.assertEqual(runner.sessions[0].clicks, [])
         self.assertEqual(runner.sessions[0].capture_waits, [])
+        deliveries[0].content.discard()
+
+    def test_sciencedirect_binds_final_pii_landing_and_redacts_capture_query(self) -> None:
+        doi = "10.1016/j.fixture.2026.123456"
+        pii = "S0123456789012345"
+        landing = f"https://www.sciencedirect.com/science/article/pii/{pii}"
+        captured_pdf = (
+            f"https://pdf.sciencedirectassets.com/271074/1-s2.0-{pii}-main.pdf?download=true"
+        )
+        runner = _FakeRunner(
+            [
+                _capture_batch(
+                    (
+                        b"elsevier browser pdf",
+                        BrowserCaptureKind.RESPONSE,
+                        captured_pdf,
+                        "application/pdf",
+                    )
+                )
+            ],
+            page_observations=(BrowserPageObservation(locator=landing, status_code=200),),
+            initial_captures_available=False,
+        )
+        rule = _production_rule("sciencedirect-pdf")
+        source = _source(runner, rule=rule)
+        request = _request(
+            literature=_literature(
+                identifiers=(
+                    Identifier(namespace="doi", value=doi),
+                    Identifier(namespace="pii", value=pii),
+                )
+            ),
+            resolved_landing_origin="https://www.sciencedirect.com",
+        )
+
+        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(
+            deliveries[0].safe_source_url,
+            (f"https://pdf.sciencedirectassets.com/271074/1-s2.0-{pii}-main.pdf"),
+        )
+        call = runner.calls[0]
+        capture_guard = call["capture_guard"]
+        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
+        assert isinstance(capture_guard, BrowserCaptureGuard)
+        self.assertTrue(
+            capture_guard.allows(
+                captured_pdf,
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        self.assertFalse(
+            capture_guard.allows(
+                captured_pdf.replace(pii, "S9999999999999999"),
+                BrowserCaptureKind.RESPONSE,
+                "application/pdf",
+            )
+        )
+        self.assertFalse(call["navigation_only"])
+        self.assertTrue(call["discard_unapproved_subresources"])
         deliveries[0].content.discard()
 
     def test_evidence_from_another_request_fails_before_browser_io(self) -> None:
@@ -1495,7 +1640,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertIn(delivery.candidate.candidate_key, tracker.tried_candidate_keys)
         self.assertEqual(
             delivery.safe_source_url,
-            "https://downloads.publisher.test/file/article.pdf?view=full",
+            "https://downloads.publisher.test/file/article.pdf",
         )
         self.assertEqual(delivery.provenance.source_record_id, "fixture-publisher@1")
         self.assertEqual(delivery.provenance.parameters_sha256, _rule().fingerprint)
@@ -1750,7 +1895,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(browser_request, BrowserRequest)
         self.assertEqual(browser_request.url, "https://publisher.test/article")
 
-    def test_empty_and_ordered_actions_use_only_the_closed_session_capabilities(self) -> None:
+    def test_empty_actions_use_only_the_closed_session_capabilities(self) -> None:
         observe_runner = _FakeRunner([_failure("no-download")])
         observe_rule = _rule(actions=(), max_actions=0)
         observe_source = _source(observe_runner, rule=observe_rule)
@@ -1767,6 +1912,38 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         self.assertEqual(observe_runner.sessions[0].clicks, [])
 
+    def test_generic_pdf_discovery_precedes_provider_actions_and_is_bounded(self) -> None:
+        locators = tuple(
+            f"https://downloads.publisher.test/article.pdf?signature=sentinel-{index}"
+            for index in range(6)
+        )
+        runner = _FakeRunner(
+            [_failure("no-download")],
+            discovered_pdf_locators=(locators,),
+        )
+        source = _source(runner)
+        request = _request(observations=(_observation(521, (_landing_hint(),)),))
+
+        self.assertEqual(
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
+            [],
+        )
+
+        session = runner.sessions[0]
+        self.assertEqual(session.discovery_calls, 1)
+        self.assertEqual(session.verified_locator_opens, list(locators[:4]))
+        self.assertEqual(session.clicks, ["a[data-action='pdf']"])
+
+    def test_capture_priority_is_checked_even_when_rule_actions_are_empty(self) -> None:
+        session = _FakeSession(
+            available_captures=frozenset({BrowserCaptureKind.RESPONSE}),
+        )
+        rule = _rule(actions=(), max_actions=0)
+
+        self.assertTrue(ControlledBrowserPdfSource._expected_capture_available(session, rule))
+
+    def test_ordered_actions_use_only_the_closed_session_capabilities(self) -> None:
+        request = _request(observations=(_observation(52, (_landing_hint(),)),))
         actions = (
             BrowserRuleAction(
                 kind=BrowserActionKind.CLICK,
@@ -1808,6 +1985,31 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         self.assertEqual(session.fill_calls, [])
         deliveries[0].content.discard()
 
+    def test_non_actionable_click_skips_the_dependent_capture_wait(self) -> None:
+        selector = "a[data-action='pdf']"
+        actions = (
+            BrowserRuleAction(
+                kind=BrowserActionKind.CLICK,
+                selector=selector,
+            ),
+            BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_ANY_CAPTURE),
+        )
+        runner = _FakeRunner(
+            [_failure("no-download")],
+            click_succeeds=False,
+        )
+        source = _source(runner, rule=_rule(actions=actions, max_actions=2))
+        request = _request(observations=(_observation(523, (_landing_hint(),)),))
+
+        self.assertEqual(
+            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
+            [],
+        )
+
+        session = runner.sessions[0]
+        self.assertEqual(session.clicks, [selector])
+        self.assertEqual(session.capture_wait_sets, [])
+
     def test_doi_flow_starts_at_canonical_resolver_but_uses_landing_web_scope(self) -> None:
         runner = _FakeRunner([_failure("no-download")])
         source = _source(runner)
@@ -1835,6 +2037,7 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         assert isinstance(guard, BrowserDestinationGuard)
         guard.check(browser_request.url, BrowserDestinationKind.INITIAL_NAVIGATION)
         guard.check(browser_request.url, BrowserDestinationKind.NAVIGATION)
+        guard.check(browser_request.url, BrowserDestinationKind.RESPONSE)
         guard.check(
             "https://publisher.test/article",
             BrowserDestinationKind.NAVIGATION,
@@ -2084,6 +2287,70 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         )
         self.assertEqual(runner.sessions[0].clicks, [])
 
+    def test_bare_403_challenge_and_paywall_have_distinct_results(self) -> None:
+        rule = _rule(
+            page_markers=(
+                BrowserPageMarker(
+                    marker_id="provider-paywall",
+                    kind=BrowserPageMarkerKind.PAYWALL,
+                    css_selectors=("#provider-paywall",),
+                ),
+                BrowserPageMarker(
+                    marker_id="provider-challenge",
+                    kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+                    text_markers=(("title", "just a moment"),),
+                ),
+                BrowserPageMarker(
+                    marker_id="provider-access-denied",
+                    kind=BrowserPageMarkerKind.ACCESS_DENIED,
+                    response_statuses=(403,),
+                ),
+            )
+        )
+        request = _request(observations=(_observation(545, (_landing_hint(),)),))
+        observation = BrowserPageObservation(
+            locator="https://publisher.test/article",
+            status_code=403,
+        )
+
+        for marker_text, expected_code in (
+            ({}, "acquisition-browser-access-denied"),
+            ({"title": "Just a Moment..."}, "acquisition-browser-challenge-required"),
+        ):
+            with self.subTest(expected_code=expected_code):
+                runner = _FakeRunner(
+                    [_download()],
+                    marker_states=(marker_text,),
+                    page_observations=(observation,),
+                )
+                with self.assertRaises(AcquisitionFailure) as caught:
+                    list(
+                        _source(runner, rule=rule)._deliveries(
+                            request,
+                            _evidence(request),
+                            CandidateKeyTracker(),
+                        )
+                    )
+                self.assertEqual(caught.exception.failure.code, expected_code)
+                self.assertEqual(runner.sessions[0].clicks, [])
+
+        paywall_runner = _FakeRunner(
+            [_download()],
+            marker_states=({"#provider-paywall": "Purchase access"},),
+            page_observations=(observation,),
+        )
+        self.assertEqual(
+            list(
+                _source(paywall_runner, rule=rule)._deliveries(
+                    request,
+                    _evidence(request),
+                    CandidateKeyTracker(),
+                )
+            ),
+            [],
+        )
+        self.assertEqual(paywall_runner.sessions[0].clicks, [])
+
     def test_conflicting_page_markers_fail_closed_with_safe_diagnosis(self) -> None:
         states = _access_page_states()
         request = _request(observations=(_observation(543, (_landing_hint(),)),))
@@ -2140,11 +2407,15 @@ class ControlledBrowserAcquisitionTests(unittest.TestCase):
         budget = call["budget"]
         self.assertEqual(budget, source.browser_budget)
         assert isinstance(budget, BrowserBudget)
+        self.assertEqual(budget.max_navigations, 4)
         self.assertEqual(budget.max_downloads, 4)
         self.assertEqual(budget.max_popups, 2)
         self.assertEqual(budget.max_captures, 4)
-        self.assertLessEqual(budget.max_requests, 64)
-        self.assertIs(call["navigation_only"], True)
+        self.assertEqual(budget.max_requests, 256)
+        self.assertEqual(budget.max_action_wait_seconds, 10.0)
+        self.assertEqual(budget.max_capture_wait_seconds, 10.0)
+        self.assertIs(call["navigation_only"], False)
+        self.assertIs(call["discard_unapproved_subresources"], True)
         self.assertEqual(call["cancel_event"], cancelled)
         policy = call["policy"]
         assert isinstance(policy, AccessPolicy)

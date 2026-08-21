@@ -97,6 +97,17 @@ _ALL_PROVIDERS = (
     "core",
     "sci-hub",
 )
+_BROWSER_ROUTE_KEYS = (
+    "browser:acs-publications",
+    "browser:aip-publishing",
+    "browser:elsevier-sciencedirect",
+    "browser:iopscience",
+    "browser:oxford-academic",
+    "browser:rsc-publishing",
+    "browser:science-aaas",
+    "browser:springerlink",
+    "browser:wiley-online-library",
+)
 
 
 def _id(index: int) -> str:
@@ -154,8 +165,8 @@ def _configuration(
         payload.extend(
             (
                 "[access]",
-                "browser_enabled = true",
-                'browser_profile = "research"',
+                f"browser_enabled = {'true' if browser_enabled else 'false'}",
+                'browser_profile = "fixture-profile"',
             )
         )
     return parse_configuration("\n".join(payload) + "\n")
@@ -357,6 +368,8 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             (
                 ("arxiv", ("arxiv.org", "export.arxiv.org")),
                 ("europe-pmc", ("europepmc.org", "www.ebi.ac.uk")),
+                ("acs-publications", ("pubs.acs.org",)),
+                ("aip-publishing", ("pubs.aip.org",)),
                 (
                     "elsevier",
                     (
@@ -364,8 +377,14 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                         "www.sciencedirect.com",
                         "linkinghub.elsevier.com",
                         "pdf.sciencedirectassets.com",
+                        "id.elsevier.com",
+                        "auth.elsevier.com",
                     ),
                 ),
+                ("iopscience", ("iopscience.iop.org",)),
+                ("oxford-academic", ("academic.oup.com",)),
+                ("rsc-publishing", ("pubs.rsc.org",)),
+                ("science-aaas", ("www.science.org",)),
                 (
                     "springer",
                     ("api.springernature.com",),
@@ -379,7 +398,14 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
                     ),
                 ),
                 ("nature-portfolio", ("www.nature.com",)),
-                ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
+                (
+                    "wiley",
+                    (
+                        "onlinelibrary.wiley.com",
+                        "advanced.onlinelibrary.wiley.com",
+                        "alm.wiley.com",
+                    ),
+                ),
                 ("core", ("api.core.ac.uk", "core.ac.uk")),
                 ("plos", ("journals.plos.org",)),
             ),
@@ -491,8 +517,20 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
             frozenset({"springer"}),
         )
-        self.assertEqual(len(PRODUCTION_BROWSER_RULE_CATALOG.rules), 1)
-        self.assertEqual(PRODUCTION_BROWSER_RULE_CATALOG.rules[0].rule_id, "springerlink-pdf")
+        self.assertEqual(
+            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
+            (
+                "acs-publications-pdf",
+                "aip-publishing-pdf",
+                "sciencedirect-pdf",
+                "iopscience-pdf",
+                "oxford-academic-pdf",
+                "rsc-publishing-pdf",
+                "science-aaas-pdf",
+                "springerlink-pdf",
+                "wiley-online-library-pdf",
+            ),
+        )
         self.assertIs(
             CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
             RouteReadiness.READY,
@@ -590,7 +628,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 AcquisitionPath.PUBLIC,
                 AcquisitionPath.PUBLIC,
                 AcquisitionPath.AUTHORIZED_PROVIDER_API,
-                AcquisitionPath.CONTROLLED_BROWSER,
+                *((AcquisitionPath.CONTROLLED_BROWSER,) * len(_BROWSER_ROUTE_KEYS)),
             ),
         )
         authorized = registry.route_registry.binding_for("api:core").adapter
@@ -612,7 +650,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertTrue(
             all(
                 binding.spec.tier is AcquisitionPath.PUBLIC
-                for binding in disabled.route_registry.bindings[:-1]
+                for binding in disabled.route_registry.bindings[: -len(_BROWSER_ROUTE_KEYS)]
             )
         )
         browser = disabled.route_registry.binding_for("browser:springerlink")
@@ -934,7 +972,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 "public:europe-pmc",
                 "public:landing-europe-pmc",
                 "public:landing-fallback",
-                "browser:springerlink",
+                *_BROWSER_ROUTE_KEYS,
             ),
         )
         sources = tuple(binding.adapter for binding in registry.route_registry.bindings)
@@ -1033,7 +1071,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 "public:direct",
                 "public:unpaywall",
                 "public:landing-fallback",
-                "browser:springerlink",
+                *_BROWSER_ROUTE_KEYS,
             ),
         )
         for providers, route_key in (
@@ -1093,12 +1131,16 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 "public:direct",
                 "public:landing-crossref",
                 "public:landing-fallback",
-                "browser:springerlink",
+                *_BROWSER_ROUTE_KEYS,
             ),
         )
         browser_binding = registry.route_registry.binding_for("browser:springerlink")
         self.assertIs(browser_binding.spec.readiness, RouteReadiness.READY)
         self.assertIsNotNone(browser_binding.adapter)
+        for route_key in _BROWSER_ROUTE_KEYS:
+            browser_route = registry.route_registry.binding_for(route_key)
+            self.assertIs(browser_route.spec.readiness, RouteReadiness.READY)
+            self.assertIsNotNone(browser_route.adapter)
         doi = "10.1007/browser-direct-origin"
         request = _request(
             (

@@ -3,9 +3,9 @@
   "access_key": "iopscience",
   "display_name": "IOPscience",
   "product_name": "IOPscience journals platform",
-  "verification_state": "unsupported",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "iopscience-automated-access-unsupported-2026-08-15",
+    "verification_state": "production-ready",
+  "verification_date": "2026-08-19",
+    "evidence_revision": "iopscience-persistent-browser-pdf-v4-2026-08-21",
   "notes_reference": "docs/notes/providers/iop.md",
   "official_references": [
     "https://ioppublishing.org/legal/textanddataminingpolicy/",
@@ -25,14 +25,14 @@
   "landing_origins": ["https://iopscience.iop.org"],
   "asset_origins": ["https://iopscience.iop.org"],
   "stable_identity": {
-    "locator_namespaces": [],
+    "locator_namespaces": ["doi"],
     "provider_record_names": [],
     "examples": ["doi-prefix:10.1088-is-weak-only"]
   },
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_route": "browser:iopscience"
   },
   "route_verification": {
     "public": {
@@ -45,16 +45,18 @@
       "known_contract": "contact-content-support-for-reviewed-xml-or-pdf-delivery"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-terms-prohibit-systematic-downloading",
-        "official-tdm-policy-requires-prior-contact-and-agreed-delivery",
-        "general-robots-policy-disallows-all",
-        "anonymous-article-platform-requests-return-bot-challenge",
-        "no-published-browser-article-rate-policy",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplementary-data-rule",
-        "institution-specific-upstream-sso-is-not-production-evidence"
+            "state": "production-ready",
+      "rule_id": "iopscience-pdf",
+      "rule_revision": 2,
+      "allowed_origins": ["https://iopscience.iop.org"],
+      "rate_limit_group": "iopscience",
+      "session_group": "iopscience",
+      "article_start_interval_seconds": 30,
+            "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication",
+            "production_admission": "reviewed-ip-entitled-browser",
+            "conditions": [
+                "article-entitlement-is-checked-per-attempt",
+                "access-denial-or-challenge-stops-the-attempt"
       ]
     }
   },
@@ -64,10 +66,8 @@
     {"case_id": "metadata-only-xml-or-wrong-article", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "profile-not-in-production-catalog",
-    "operator-specific-written-agreement-not-a-product-default",
-    "sftp-or-agreed-delivery-not-implemented",
-    "browser-route-not-registered",
+        "operator-specific-written-agreement-not-a-product-default",
+        "sftp-or-agreed-delivery-not-implemented",
     "numeric-browser-pacing-not-published",
     "live-entitlement-not-asserted"
   ]

@@ -1,15 +1,9 @@
-"""Local declarative rules for controlled Browser acquisition.
+"""Closed data model for controlled Browser site rules.
 
-Rules in this module are deliberately small, immutable, and executable only
-through the fixed observations and operations understood by
-:mod:`acquisition.sources.browser`.  Page markers may use reviewed static CSS
-selectors, exact-origin URL path prefixes, and response statuses.  They are
-not a remote rule language: there is no loader, JavaScript surface, login form
-description, Cookie/profile data, selector guessing, or fallback action
-sequence.
-
-The production catalog contains only rules whose page states, sessions,
-scheduling, capture paths and offline fixtures have been verified end to end.
+The immutable types in this module define the only rule language understood by
+the controlled Browser source. Provider-specific declarations and production
+admission catalogs live in sibling modules; none of them may extend this model
+with remote code, arbitrary JavaScript, credentials, or generic fallback logic.
 """
 
 from __future__ import annotations
@@ -117,6 +111,32 @@ def _markers(value: object, *, field_name: str) -> tuple[str, ...]:
     return result
 
 
+def _text_markers(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, tuple):
+        raise TypeError("text_markers must be a tuple")
+    if len(value) > _MAX_MARKERS:
+        raise ValueError("text_markers contains too many markers")
+    result: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError("text_markers must contain selector and fragment tuples")
+        selector = _static_selector(item[0], field_name="text marker selector")
+        fragment_value = item[1]
+        if not isinstance(fragment_value, str):
+            raise TypeError("text marker fragment must be a string")
+        fragment = fragment_value.strip().casefold()
+        if (
+            len(fragment) < 2
+            or len(fragment) > 160
+            or _CONTROL_CHARACTER.search(fragment) is not None
+        ):
+            raise ValueError("text marker fragment must be bounded plain text")
+        result.append((selector, fragment))
+    if len(set(result)) != len(result):
+        raise ValueError("text_markers must not contain duplicates")
+    return tuple(result)
+
+
 def _url_prefixes(value: object) -> tuple[str, ...]:
     if not isinstance(value, tuple):
         raise TypeError("url_prefixes must be a tuple")
@@ -131,6 +151,17 @@ def _url_prefixes(value: object) -> tuple[str, ...]:
     if len(set(result)) != len(result):
         raise ValueError("url_prefixes must not contain duplicates")
     return tuple(result)
+
+
+def _origin_roots(value: object, *, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError(f"{field_name} must be a tuple")
+    if len(value) > _MAX_MARKERS:
+        raise ValueError(f"{field_name} contains too many origins")
+    result = tuple(_exact_https_origin(item, field_name=field_name) for item in value)
+    if len(set(result)) != len(result):
+        raise ValueError(f"{field_name} must not contain duplicates")
+    return result
 
 
 def _status_codes(value: object) -> tuple[int, ...]:
@@ -202,6 +233,7 @@ class BrowserActionKind(str, Enum):
     OPEN_VIEWER = "open-viewer"
     OPEN_VERIFIED_LOCATOR = "open-verified-locator"
     WAIT_FOR_CAPTURE = "wait-for-capture"
+    WAIT_FOR_ANY_CAPTURE = "wait-for-any-capture"
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -239,6 +271,10 @@ class BrowserRuleAction:
                 raise ValueError("action locators must be query-free HTTPS file locators")
             object.__setattr__(self, "locator", normalized.url)
             return
+        if self.kind is BrowserActionKind.WAIT_FOR_ANY_CAPTURE:
+            if selector is not None or locator is not None or capture_kind is not None:
+                raise ValueError("wait-for-any actions do not accept operands")
+            return
         if (
             selector is not None
             or locator is not None
@@ -262,6 +298,7 @@ class BrowserArticleIdentityKind(str, Enum):
 
     EXACT_LANDING = "exact-landing"
     LANDING_PATH_STEM = "landing-path-stem"
+    LANDING_PATH_TOKEN = "landing-path-token"
     IDENTIFIER_IN_PATH = "identifier-in-path"
 
 
@@ -286,6 +323,7 @@ class BrowserPageMarkerKind(str, Enum):
     MFA_REQUIRED = "mfa-required"
     NOT_ENTITLED = "not-entitled"
     PAYWALL = "paywall"
+    ACCESS_DENIED = "access-denied"
     CHALLENGE_REQUIRED = "challenge-required"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
@@ -300,6 +338,7 @@ class BrowserPageMarker:
     marker_id: str
     kind: BrowserPageMarkerKind
     css_selectors: tuple[str, ...] = field(default=(), repr=False)
+    text_markers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
     url_prefixes: tuple[str, ...] = field(default=(), repr=False)
     response_statuses: tuple[int, ...] = field(default=(), repr=False)
 
@@ -316,13 +355,16 @@ class BrowserPageMarker:
             "css_selectors",
             _markers(self.css_selectors, field_name="css_selectors"),
         )
+        object.__setattr__(self, "text_markers", _text_markers(self.text_markers))
         object.__setattr__(self, "url_prefixes", _url_prefixes(self.url_prefixes))
         object.__setattr__(
             self,
             "response_statuses",
             _status_codes(self.response_statuses),
         )
-        if not (self.css_selectors or self.url_prefixes or self.response_statuses):
+        if not (
+            self.css_selectors or self.text_markers or self.url_prefixes or self.response_statuses
+        ):
             raise ValueError("a Browser page marker requires at least one bounded signal")
 
     def matches_observation(self, observation: BrowserPageObservation) -> bool:
@@ -346,6 +388,7 @@ class BrowserPageMarker:
             self.marker_id,
             self.kind.value,
             *self.css_selectors,
+            *(field for marker in self.text_markers for field in marker),
             *self.url_prefixes,
             *(str(status) for status in self.response_statuses),
         )
@@ -409,12 +452,15 @@ class BrowserSiteRule:
     landing_origin: str
     allowed_origins: tuple[str, ...]
     web_scope_provider_name: str
+    landing_origin_aliases: tuple[str, ...] = field(default=(), repr=False)
     actions: tuple[BrowserRuleAction, ...] = field(default=(), repr=False)
     actions_require_entitlement: bool = False
     doi_pdf_url_template: str | None = field(default=None, repr=False)
     max_actions: int = _MAX_ACTIONS
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
     capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
+    capture_origin_roots: tuple[str, ...] = field(default=(), repr=False)
+    capture_root_filename_markers: tuple[str, ...] = field(default=(), repr=False)
     article_identity_kinds: tuple[BrowserArticleIdentityKind, ...] = field(
         default=(BrowserArticleIdentityKind.LANDING_PATH_STEM,),
         repr=False,
@@ -442,6 +488,15 @@ class BrowserSiteRule:
         )
         object.__setattr__(self, "landing_origin", landing_origin)
         object.__setattr__(self, "allowed_origins", allowed_origins)
+        aliases = _origin_roots(
+            self.landing_origin_aliases,
+            field_name="landing_origin_aliases",
+        )
+        if landing_origin in aliases:
+            raise ValueError("landing_origin_aliases must not repeat landing_origin")
+        if any(origin not in allowed_origins for origin in aliases):
+            raise ValueError("landing_origin_aliases must use allowed rule origins")
+        object.__setattr__(self, "landing_origin_aliases", aliases)
         object.__setattr__(
             self,
             "web_scope_provider_name",
@@ -482,7 +537,27 @@ class BrowserSiteRule:
                 "doi_pdf_url_template",
                 _doi_pdf_url_template(self.doi_pdf_url_template),
             )
-        object.__setattr__(self, "capture_url_prefixes", _url_prefixes(self.capture_url_prefixes))
+        object.__setattr__(
+            self,
+            "capture_url_prefixes",
+            _url_prefixes(self.capture_url_prefixes),
+        )
+        object.__setattr__(
+            self,
+            "capture_origin_roots",
+            _origin_roots(
+                self.capture_origin_roots,
+                field_name="capture_origin_roots",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "capture_root_filename_markers",
+            _stable_tokens(
+                self.capture_root_filename_markers,
+                field_name="capture_root_filename_markers",
+            ),
+        )
         object.__setattr__(
             self,
             "supplement_url_prefixes",
@@ -499,7 +574,9 @@ class BrowserSiteRule:
             raise TypeError("article_identity_kinds must contain closed identity kinds")
         if len(set(self.article_identity_kinds)) != len(self.article_identity_kinds):
             raise ValueError("article_identity_kinds must not contain duplicates")
-        if self.capture_url_prefixes and not self.article_identity_kinds:
+        if (
+            self.capture_url_prefixes or self.capture_origin_roots
+        ) and not self.article_identity_kinds:
             raise ValueError("capture rules require an article identity rule")
         object.__setattr__(
             self,
@@ -537,6 +614,12 @@ class BrowserSiteRule:
         object.__setattr__(self, "capture_priority", _capture_priority(self.capture_priority))
 
     def _validate_document_rules(self) -> None:
+        self._validate_document_origins()
+        self._validate_document_exclusions()
+        self._validate_document_actions()
+        self._validate_doi_document_locator()
+
+    def _validate_document_origins(self) -> None:
         if any(
             _normalized_url(prefix).origin.text not in self.allowed_origins
             for prefix in (
@@ -546,10 +629,18 @@ class BrowserSiteRule:
             )
         ):
             raise ValueError("document URL prefixes must use allowed rule origins")
+        if any(origin not in self.allowed_origins for origin in self.capture_origin_roots):
+            raise ValueError("capture origin roots must use allowed rule origins")
+        if bool(self.capture_origin_roots) != bool(self.capture_root_filename_markers):
+            raise ValueError("capture origin roots require closed primary filename markers")
+
+    def _validate_document_exclusions(self) -> None:
         if set(self.supplement_url_prefixes) & set(self.excluded_url_prefixes):
             raise ValueError("supplement and excluded URL prefixes must be unambiguous")
         if set(self.supplement_filename_markers) & set(self.excluded_filename_markers):
             raise ValueError("supplement and excluded filename markers must be unambiguous")
+
+    def _validate_document_actions(self) -> None:
         if any(
             action.kind is BrowserActionKind.CLICK and action.selector in self.supplement_selectors
             for action in self.actions
@@ -564,6 +655,8 @@ class BrowserSiteRule:
             for action in self.actions
         ):
             raise ValueError("open action locators must match a reviewed capture prefix")
+
+    def _validate_doi_document_locator(self) -> None:
         if self.doi_pdf_url_template is not None:
             sample = self.doi_pdf_url_template.replace(
                 "{doi}",
@@ -591,6 +684,9 @@ class BrowserSiteRule:
         selectors = tuple(
             selector for marker in self.page_markers for selector in marker.css_selectors
         )
+        text_markers = tuple(
+            text_marker for marker in self.page_markers for text_marker in marker.text_markers
+        )
         prefixes = tuple(prefix for marker in self.page_markers for prefix in marker.url_prefixes)
         statuses = tuple(
             status for marker in self.page_markers for status in marker.response_statuses
@@ -599,6 +695,8 @@ class BrowserSiteRule:
             raise ValueError("page marker ids must be unique")
         if len(selectors) != len(set(selectors)):
             raise ValueError("page marker selectors must be unambiguous")
+        if len(text_markers) != len(set(text_markers)):
+            raise ValueError("page text markers must be unambiguous")
         if len(prefixes) != len(set(prefixes)):
             raise ValueError("page marker URL prefixes must be unambiguous")
         if len(statuses) != len(set(statuses)):
@@ -631,6 +729,7 @@ class BrowserSiteRule:
             self.rule_id,
             str(self.revision),
             self.landing_origin,
+            *self.landing_origin_aliases,
             *self.allowed_origins,
             self.web_scope_provider_name,
             str(self.max_actions),
@@ -647,6 +746,12 @@ class BrowserSiteRule:
             "capture-prefixes",
             str(len(self.capture_url_prefixes)),
             *self.capture_url_prefixes,
+            "capture-origin-roots",
+            str(len(self.capture_origin_roots)),
+            *self.capture_origin_roots,
+            "capture-root-filenames",
+            str(len(self.capture_root_filename_markers)),
+            *self.capture_root_filename_markers,
             "supplement-prefixes",
             str(len(self.supplement_url_prefixes)),
             *self.supplement_url_prefixes,
@@ -671,13 +776,19 @@ class BrowserSiteRule:
         return Sha256(hashlib.sha256("\x00".join(fields).encode("utf-8", "strict")).hexdigest())
 
     def matches_origin(self, value: str) -> bool:
-        """Return whether ``value`` is exactly this rule's HTTPS landing origin."""
+        """Return whether ``value`` is one reviewed Publisher landing origin."""
 
         try:
             candidate = _exact_https_origin(value, field_name="origin")
         except (TypeError, ValueError):
             return False
-        return candidate == self.landing_origin
+        return candidate in self.recognized_landing_origins
+
+    @property
+    def recognized_landing_origins(self) -> tuple[str, ...]:
+        """Return the canonical Browser entry followed by reviewed DOI aliases."""
+
+        return (self.landing_origin, *self.landing_origin_aliases)
 
     def allows_url(self, value: str) -> bool:
         """Return whether a safe locator belongs to an explicitly allowed origin."""
@@ -736,11 +847,31 @@ class BrowserSiteRule:
             marker in filename for marker in self.excluded_filename_markers
         ):
             return BrowserCaptureDisposition.EXCLUDED
-        if not _matches_url_prefix(candidate, self.capture_url_prefixes):
+        prefix_match = _matches_url_prefix(candidate, self.capture_url_prefixes)
+        root_match = candidate.origin.text in self.capture_origin_roots and any(
+            marker in filename for marker in self.capture_root_filename_markers
+        )
+        if not (prefix_match or root_match):
             return BrowserCaptureDisposition.REJECTED
         if not self._matches_article_identity(candidate, landing_url, identifiers):
             return BrowserCaptureDisposition.WRONG_ARTICLE
         return BrowserCaptureDisposition.PRIMARY
+
+    def safe_capture_locator(self, value: str) -> str:
+        """Return a persistable capture locator without transient query material.
+
+        Browser PDF endpoints frequently redirect to signed CDN URLs.  The
+        complete locator remains operation-local for request admission and
+        capture identity, but query parameters are never suitable provenance
+        or catalog data.  The normalized origin and path are sufficient to
+        describe where the captured bytes came from without retaining a
+        bearer-like signature.
+        """
+
+        candidate = _normalized_url(value)
+        if candidate.origin.text not in self.allowed_origins:
+            raise ValueError("capture locator must use an allowed rule origin")
+        return f"{candidate.origin.text}{candidate.path}"
 
     def _matches_article_identity(
         self,
@@ -754,31 +885,64 @@ class BrowserSiteRule:
                 landing = _normalized_url(landing_url)
             except (TypeError, ValueError):
                 return False
-        for kind in self.article_identity_kinds:
-            if kind is BrowserArticleIdentityKind.EXACT_LANDING and landing is not None:
-                if candidate.origin == landing.origin and candidate.path == landing.path:
-                    return True
-            elif kind is BrowserArticleIdentityKind.LANDING_PATH_STEM and landing is not None:
-                landing_stem = _path_stem(_filename(landing))
-                candidate_parts = tuple(
-                    _path_stem(part) for part in _decoded_path(candidate).split("/") if part
-                )
-                if landing_stem and landing_stem in candidate_parts:
-                    return True
-            elif kind is BrowserArticleIdentityKind.IDENTIFIER_IN_PATH:
-                candidate_path = _decoded_path(candidate)
-                if any(
-                    identifier.namespace in self.article_id_namespaces
-                    and identifier.value.casefold() in candidate_path
-                    for identifier in identifiers
-                ):
-                    return True
+        return any(
+            self._matches_identity_kind(kind, candidate, landing, identifiers)
+            for kind in self.article_identity_kinds
+        )
+
+    def _matches_identity_kind(
+        self,
+        kind: BrowserArticleIdentityKind,
+        candidate: NormalizedURL,
+        landing: NormalizedURL | None,
+        identifiers: tuple[Identifier, ...],
+    ) -> bool:
+        if kind is BrowserArticleIdentityKind.EXACT_LANDING:
+            return (
+                landing is not None
+                and candidate.origin == landing.origin
+                and candidate.path == landing.path
+            )
+        if kind is BrowserArticleIdentityKind.LANDING_PATH_STEM:
+            return self._matches_landing_path_stem(candidate, landing)
+        if kind is BrowserArticleIdentityKind.LANDING_PATH_TOKEN:
+            return self._matches_landing_path_token(candidate, landing)
+        if kind is BrowserArticleIdentityKind.IDENTIFIER_IN_PATH:
+            candidate_path = _decoded_path(candidate)
+            return any(
+                identifier.namespace in self.article_id_namespaces
+                and identifier.value.casefold() in candidate_path
+                for identifier in identifiers
+            )
         return False
+
+    @staticmethod
+    def _matches_landing_path_stem(
+        candidate: NormalizedURL,
+        landing: NormalizedURL | None,
+    ) -> bool:
+        if landing is None:
+            return False
+        landing_stem = _path_stem(_filename(landing))
+        candidate_parts = tuple(
+            _path_stem(part) for part in _decoded_path(candidate).split("/") if part
+        )
+        return bool(landing_stem and landing_stem in candidate_parts)
+
+    @staticmethod
+    def _matches_landing_path_token(
+        candidate: NormalizedURL,
+        landing: NormalizedURL | None,
+    ) -> bool:
+        if landing is None:
+            return False
+        landing_stem = _path_stem(_filename(landing))
+        return len(landing_stem) >= 8 and landing_stem in _decoded_path(candidate)
 
 
 @dataclass(frozen=True, slots=True)
 class BrowserRuleCatalog:
-    """A closed in-memory catalog with one current rule per exact origin."""
+    """A closed in-memory catalog with one current rule per reviewed landing origin."""
 
     rules: tuple[BrowserSiteRule, ...] = ()
 
@@ -788,7 +952,7 @@ class BrowserRuleCatalog:
         if any(not isinstance(rule, BrowserSiteRule) for rule in self.rules):
             raise TypeError("rules must contain BrowserSiteRule values")
         rule_ids = tuple(rule.rule_id for rule in self.rules)
-        origins = tuple(rule.landing_origin for rule in self.rules)
+        origins = tuple(origin for rule in self.rules for origin in rule.recognized_landing_origins)
         if len(set(rule_ids)) != len(rule_ids):
             raise ValueError("rules must have unique stable rule ids")
         if len(set(origins)) != len(origins):
@@ -801,7 +965,7 @@ class BrowserRuleCatalog:
             origin = _exact_https_origin(value, field_name="origin")
         except (TypeError, ValueError):
             return None
-        return next((rule for rule in self.rules if rule.landing_origin == origin), None)
+        return next((rule for rule in self.rules if rule.matches_origin(origin)), None)
 
     def match_url(self, value: str) -> BrowserSiteRule | None:
         """Find the rule whose exact landing origin owns a safe locator."""
@@ -813,102 +977,6 @@ class BrowserRuleCatalog:
         return self.match_origin(normalized.origin.text)
 
 
-SPRINGERLINK_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
-    rule_id="springerlink-pdf",
-    revision=4,
-    landing_origin="https://link.springer.com",
-    allowed_origins=(
-        "https://link.springer.com",
-        "https://static-content.springer.com",
-        "https://idp.springer.com",
-        "https://wayf.springernature.com",
-    ),
-    web_scope_provider_name="springerlink",
-    actions=(
-        BrowserRuleAction(
-            kind=BrowserActionKind.CLICK,
-            selector=(
-                "a[href*='/content/pdf/'], "
-                "a[data-track-action='download pdf'], "
-                "a.c-pdf-download__link"
-            ),
-        ),
-        BrowserRuleAction(
-            kind=BrowserActionKind.WAIT_FOR_CAPTURE,
-            capture_kind=BrowserCaptureKind.RESPONSE,
-        ),
-    ),
-    actions_require_entitlement=True,
-    doi_pdf_url_template="https://link.springer.com/content/pdf/{doi}.pdf",
-    max_actions=2,
-    page_markers=(
-        BrowserPageMarker(
-            marker_id="springerlink-entitled",
-            kind=BrowserPageMarkerKind.ENTITLED,
-            css_selectors=(
-                "a[href*='/content/pdf/']",
-                "a[data-track-action='download pdf']",
-                "a.c-pdf-download__link",
-            ),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-login-required",
-            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            url_prefixes=(
-                "https://link.springer.com/login",
-                "https://idp.springer.com/authorize",
-            ),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-paywall",
-            kind=BrowserPageMarkerKind.PAYWALL,
-            css_selectors=("[data-test='access-options']",),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-mfa-required",
-            kind=BrowserPageMarkerKind.MFA_REQUIRED,
-            url_prefixes=("https://wayf.springernature.com/mfa",),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-challenge",
-            kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
-            css_selectors=("#challenge-running",),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-rate-limited",
-            kind=BrowserPageMarkerKind.RATE_LIMITED,
-            response_statuses=(429,),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-ip-blocked",
-            kind=BrowserPageMarkerKind.IP_BLOCKED,
-            response_statuses=(403,),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-account-warning",
-            kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
-            css_selectors=("[data-test='account-warning']",),
-        ),
-        BrowserPageMarker(
-            marker_id="springerlink-not-found",
-            kind=BrowserPageMarkerKind.NOT_FOUND,
-            response_statuses=(404,),
-        ),
-    ),
-    capture_url_prefixes=("https://link.springer.com/content/pdf/",),
-    article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
-    article_id_namespaces=("doi",),
-    supplement_url_prefixes=("https://static-content.springer.com/esm/",),
-    supplement_filename_markers=("supplement", "mediaobjects"),
-    excluded_url_prefixes=("https://link.springer.com/content/pdf/book-cover/",),
-    excluded_filename_markers=("frontmatter", "sample"),
-)
-
-PRODUCTION_BROWSER_RULE_CATALOG: Final[BrowserRuleCatalog] = BrowserRuleCatalog(
-    (SPRINGERLINK_BROWSER_RULE,)
-)
-
-
 __all__ = (
     "BrowserActionKind",
     "BrowserArticleIdentityKind",
@@ -918,6 +986,4 @@ __all__ = (
     "BrowserRuleAction",
     "BrowserRuleCatalog",
     "BrowserSiteRule",
-    "PRODUCTION_BROWSER_RULE_CATALOG",
-    "SPRINGERLINK_BROWSER_RULE",
 )

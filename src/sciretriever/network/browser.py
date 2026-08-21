@@ -22,8 +22,9 @@ from dataclasses import dataclass, field
 from enum import Enum, unique
 from pathlib import Path
 from typing import Final, NoReturn, Protocol, TypeAlias, cast, runtime_checkable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote_to_bytes, urlsplit, urlunsplit
 
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
@@ -72,9 +73,13 @@ _DEFAULT_MAX_DOWNLOADS: Final[int] = 4
 _DEFAULT_MAX_CAPTURES: Final[int] = 4
 _DEFAULT_MAX_BYTES_PER_DOWNLOAD: Final[int] = 64 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
+_DEFAULT_MAX_ACTION_WAIT_SECONDS: Final[float] = 10.0
+_DEFAULT_MAX_CAPTURE_WAIT_SECONDS: Final[float] = 10.0
 _DEFAULT_MAX_TOTAL_SECONDS: Final[float] = 60.0
 _DEFAULT_CLEANUP_TIMEOUT_SECONDS: Final[float] = 5.0
 _MARKER_LOOKUP_TIMEOUT_MILLISECONDS: Final[int] = 250
+_MAX_DISCOVERED_PDF_LOCATORS: Final[int] = 16
+_MAX_DISCOVERED_LOCATOR_LENGTH: Final[int] = 8192
 _DEFAULT_HOST_REQUEST_POLICY: Final[AccessPolicy] = AccessPolicy(max_concurrency=1)
 _INTERNAL_SCHEMES = frozenset({"about"})
 _CHALLENGE_MARKERS = (
@@ -86,6 +91,7 @@ _CHALLENGE_MARKERS = (
     "access denied",
     "security check",
 )
+_LOGGER = get_logger(__name__)
 
 
 class BrowserError(RuntimeError):
@@ -117,6 +123,19 @@ class BrowserDestinationGuard(Protocol):
 
 
 @runtime_checkable
+class BrowserConnectionOriginGuard(Protocol):
+    """Optional closed origin set that Chromium may preconnect through.
+
+    Prebinding only authorizes a CONNECT tunnel to one already resolved
+    numeric address. Every HTTP request still remains paused by Playwright
+    until the ordinary destination guard succeeds and the current article has
+    acquired or reused its host admission lease.
+    """
+
+    def connection_origins(self) -> tuple[str, ...]: ...
+
+
+@runtime_checkable
 class BrowserCaptureGuard(Protocol):
     """Provider rule deciding whether an already-admitted body may be captured."""
 
@@ -132,15 +151,19 @@ class BrowserCaptureGuard(Protocol):
 class BrowserFlowSession(Protocol):
     """Capability-only flow surface shared with reviewed Acquisition rules."""
 
-    def click(self, selector: str) -> None: ...
+    def click(self, selector: str) -> bool: ...
 
     def open_viewer(self, locator: str) -> None: ...
 
     def open_verified_locator(self, locator: str) -> None: ...
 
+    def discover_pdf_locators(self) -> tuple[str, ...]: ...
+
     def capture_available(self, kind: BrowserCaptureKind) -> bool: ...
 
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None: ...
+
+    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None: ...
 
     def has_selector(self, selector: str) -> bool: ...
 
@@ -194,6 +217,8 @@ class BrowserBudget:
     max_captures: int = _DEFAULT_MAX_CAPTURES
     max_bytes_per_download: int = _DEFAULT_MAX_BYTES_PER_DOWNLOAD
     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES
+    max_action_wait_seconds: float = _DEFAULT_MAX_ACTION_WAIT_SECONDS
+    max_capture_wait_seconds: float = _DEFAULT_MAX_CAPTURE_WAIT_SECONDS
     max_total_seconds: float = _DEFAULT_MAX_TOTAL_SECONDS
 
     def __post_init__(self) -> None:
@@ -209,14 +234,18 @@ class BrowserBudget:
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if isinstance(self.max_total_seconds, bool) or not isinstance(
-            self.max_total_seconds, (int, float)
+        for name in (
+            "max_action_wait_seconds",
+            "max_capture_wait_seconds",
+            "max_total_seconds",
         ):
-            raise TypeError("max_total_seconds must be a number")
-        total_seconds = float(self.max_total_seconds)
-        if total_seconds <= 0 or total_seconds != total_seconds or total_seconds == float("inf"):
-            raise ValueError("max_total_seconds must be finite and positive")
-        object.__setattr__(self, "max_total_seconds", total_seconds)
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a number")
+            seconds = float(value)
+            if seconds <= 0 or seconds != seconds or seconds == float("inf"):
+                raise ValueError(f"{name} must be finite and positive")
+            object.__setattr__(self, name, seconds)
 
 
 @dataclass(slots=True)
@@ -264,7 +293,6 @@ class _ProcessRuntime(Protocol):
     def new_context(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         accept_downloads: bool,
         connection_binding: object,
@@ -299,17 +327,49 @@ class _RequestLease:
     request: object
     page: object | None
     destination: ResolvedDestination
-    host_permit: HostPermit
     navigation: bool
     completed: bool = False
+
+
+@dataclass(slots=True)
+class _ArticleHostLease:
+    """One host admission shared by every request in an article flow."""
+
+    permit: HostPermit | None = None
+    acquiring: bool = True
+    error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingResponseDownload:
+    lease: _RequestLease
+    kind: BrowserCaptureKind
+    media_type: str
+    capture_allowed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingLocalDownload:
+    destination: ResolvedDestination
+    media_type: str
+    kind: BrowserCaptureKind
+    lease: _RequestLease | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _DownloadCapturePlan:
+    destination: ResolvedDestination
+    request: object | None
+    kind: BrowserCaptureKind
+    media_type: str
+    capture_allowed: bool
 
 
 @dataclass(slots=True)
 class _Navigation:
     page: object
     destination: ResolvedDestination
-    initial_host: HostPermit | None
-    saw_request: bool = False
+    budget_counted: bool = True
 
 
 @dataclass(slots=True)
@@ -444,6 +504,55 @@ def _policy_url(value: str) -> str:
         raise _Abort("policy") from None
 
 
+def _runtime_url(value: str, policy: DestinationPolicy) -> str:
+    """Return a canonical operation-local URL while retaining its query.
+
+    Destination guards, DNS state, logs and neutral results use
+    :func:`_policy_url`, which removes the query.  Chromium still needs the
+    original query for short-lived Publisher download links.  This helper
+    validates the opaque query's wire shape without interpreting or exposing
+    its keys, then attaches it to the already-normalized safe destination.
+    """
+
+    if type(value) is not str or len(value) > _MAX_DISCOVERED_LOCATOR_LENGTH:
+        raise _Abort("policy")
+    policy_value = _policy_url(value)
+    try:
+        parsed = urlsplit(value)
+        query = parsed.query
+        index = 0
+        while index < len(query):
+            if query[index] != "%":
+                index += 1
+                continue
+            if (
+                index + 2 >= len(query)
+                or query[index + 1] not in "0123456789abcdefABCDEF"
+                or query[index + 2] not in "0123456789abcdefABCDEF"
+            ):
+                raise _Abort("policy")
+            index += 3
+        decoded = unquote_to_bytes(query.replace("+", " ")).decode("utf-8", "strict")
+        if any(
+            ord(character) < 32
+            or ord(character) == 127
+            or unicodedata.category(character) in {"Cc", "Cf"}
+            for character in decoded
+        ):
+            raise _Abort("policy")
+        normalized = normalize_url(
+            policy_value,
+            allowed_schemes=policy.allowed_schemes,
+            allowed_ports=policy.allowed_ports,
+        )
+        canonical = urlsplit(normalized.url)
+        return urlunsplit((canonical.scheme, canonical.netloc, canonical.path, query, ""))
+    except _Abort:
+        raise
+    except (UnicodeError, PolicyError, TypeError, ValueError):
+        raise _Abort("policy") from None
+
+
 class _FlowState:
     """Private state shared by route, popup, download and flow callbacks."""
 
@@ -455,6 +564,7 @@ class _FlowState:
         "destination_guard",
         "capture_guard",
         "navigation_only",
+        "discard_unapproved_subresources",
         "budget",
         "clock",
         "started_at",
@@ -464,9 +574,13 @@ class _FlowState:
         "cleanup_timeout_seconds",
         "usage",
         "destinations",
+        "host_leases",
+        "prebound_origins",
         "navigations",
         "page_statuses",
         "request_leases",
+        "pending_response_downloads",
+        "pending_local_downloads",
         "runtime",
         "lock",
         "condition",
@@ -496,6 +610,7 @@ class _FlowState:
         destination_guard: BrowserDestinationGuard | None,
         capture_guard: BrowserCaptureGuard | None,
         navigation_only: bool,
+        discard_unapproved_subresources: bool,
         budget: BrowserBudget,
         clock: Clock,
         deadline: float,
@@ -510,6 +625,7 @@ class _FlowState:
         self.destination_guard = destination_guard
         self.capture_guard = capture_guard
         self.navigation_only = navigation_only
+        self.discard_unapproved_subresources = discard_unapproved_subresources
         self.budget = budget
         self.clock = clock
         self.started_at = clock()
@@ -519,9 +635,13 @@ class _FlowState:
         self.cleanup_timeout_seconds = cleanup_timeout_seconds
         self.usage = _Usage()
         self.destinations: dict[str, ResolvedDestination] = {}
+        self.host_leases: dict[str, _ArticleHostLease] = {}
+        self.prebound_origins: set[str] = set()
         self.navigations: dict[int, _Navigation] = {}
         self.page_statuses: dict[int, int | None] = {}
         self.request_leases: dict[int, _RequestLease] = {}
+        self.pending_response_downloads: dict[str, _PendingResponseDownload] = {}
+        self.pending_local_downloads: list[_PendingLocalDownload] = []
         self.runtime: object | None = None
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
@@ -543,6 +663,8 @@ class _FlowState:
 
     def check(self) -> None:
         with self.lock:
+            if self.error is not None:
+                raise self.error
             if self.closed:
                 raise _Abort("cancelled")
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -582,6 +704,19 @@ class _FlowState:
             if all(candidate is not page for candidate in self.pages):
                 self.pages.append(page)
             return True
+
+    def register_popup(self, page: object) -> bool:
+        """Own one popup once across runtime events and direct return values."""
+
+        with self.lock:
+            if self.closed:
+                raise _Abort("cleanup")
+            is_new = all(candidate is not page for candidate in self.popups)
+            if is_new:
+                self.popups.append(page)
+            if all(candidate is not page for candidate in self.pages):
+                self.pages.append(page)
+            return is_new
 
     def own_download(self, download: object) -> bool:
         with self.lock:
@@ -697,18 +832,25 @@ class _FlowState:
             self.usage.downloads += downloads
             self.usage.captures += captures
             self.usage.total_bytes += total_bytes
-            if self.usage.navigations > self.budget.max_navigations:
-                raise _Abort("budget")
-            if self.usage.requests > self.budget.max_requests:
-                raise _Abort("budget")
-            if self.usage.popups > self.budget.max_popups:
-                raise _Abort("budget")
-            if self.usage.downloads > self.budget.max_downloads:
-                raise _Abort("budget")
-            if self.usage.captures > self.budget.max_captures:
-                raise _Abort("budget")
-            if self.usage.total_bytes > self.budget.max_total_bytes:
-                raise _Abort("oversize")
+            limits = (
+                ("navigations", self.usage.navigations, self.budget.max_navigations, "budget"),
+                ("requests", self.usage.requests, self.budget.max_requests, "budget"),
+                ("popups", self.usage.popups, self.budget.max_popups, "budget"),
+                ("downloads", self.usage.downloads, self.budget.max_downloads, "budget"),
+                ("captures", self.usage.captures, self.budget.max_captures, "budget"),
+                ("total-bytes", self.usage.total_bytes, self.budget.max_total_bytes, "oversize"),
+            )
+            for resource, used, limit, code in limits:
+                if used <= limit:
+                    continue
+                _LOGGER.debug(
+                    "event=browser-budget-exceeded resource=%s used=%d limit=%d code=%s",
+                    resource,
+                    used,
+                    limit,
+                    code,
+                )
+                raise _Abort(code)
 
     def allows_capture(
         self,
@@ -760,10 +902,63 @@ class _FlowState:
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
         if not isinstance(kind, BrowserCaptureKind):
             raise _Abort("policy")
+        self.wait_for_any_capture((kind,))
+
+    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
+        if (
+            not isinstance(kinds, tuple)
+            or not kinds
+            or any(not isinstance(kind, BrowserCaptureKind) for kind in kinds)
+            or len(kinds) != len(set(kinds))
+        ):
+            raise _Abort("policy")
+        started_at = self.clock()
+        settle_deadline = min(
+            self.deadline,
+            started_at + self.budget.max_capture_wait_seconds,
+        )
+        _LOGGER.debug(
+            "event=browser-capture-wait-started max_wait_seconds=%.3f",
+            self.budget.max_capture_wait_seconds,
+        )
         with self.condition:
-            while not any(capture.kind is kind for capture in self.captures):
+            while not any(capture.kind in kinds for capture in self.captures):
                 if self.error is not None:
                     raise self.error
+                self.check()
+                remaining = settle_deadline - self.clock()
+                if remaining <= 0:
+                    _LOGGER.debug(
+                        "event=browser-capture-wait-finished outcome=no-capture elapsed_ms=%d",
+                        max(int((self.clock() - started_at) * 1000), 0),
+                    )
+                    return
+                self.condition.wait(timeout=min(remaining, 0.25))
+        _LOGGER.debug(
+            "event=browser-capture-wait-finished outcome=captured elapsed_ms=%d",
+            max(int((self.clock() - started_at) * 1000), 0),
+        )
+
+    def wait_for_page_result(
+        self,
+        page: object,
+        *,
+        prior_capture_count: int,
+    ) -> None:
+        """Wait until a page's top-level request and capture callback settle."""
+
+        if type(prior_capture_count) is not int or prior_capture_count < 0:
+            raise _Abort("runtime")
+        with self.condition:
+            while True:
+                if self.error is not None:
+                    raise self.error
+                navigation_active = any(
+                    lease.page is page and lease.navigation
+                    for lease in self.request_leases.values()
+                )
+                if not navigation_active:
+                    return
                 self.check()
                 remaining = self.deadline - self.clock()
                 if remaining <= 0:
@@ -834,27 +1029,75 @@ class _FlowState:
             raise _Abort("policy") from error
 
     def acquire_host(self, destination: ResolvedDestination) -> HostPermit:
-        self.check()
+        """Acquire one host permit per article and reuse it for all subrequests.
+
+        A Playwright route callback runs on the same engine thread that emits
+        response completion events.  Waiting for a second same-host permit in
+        that callback can therefore prevent the event which would release the
+        first request from ever running.  The high-level Browser scheduler
+        already serializes articles for one Publisher; this lease keeps shared
+        cross-scope host admission while allowing a normal page to load its
+        same-host CSS, JavaScript, images and PDF request concurrently.
+        """
+
+        lease, existing = self._claim_article_host_lease(destination.hostname)
+        if existing is not None:
+            return existing
+
         try:
-            return self.scope_permit.acquire_host(
+            permit = self.scope_permit.acquire_host(
                 destination.hostname,
                 host_policy=self.host_policy,
                 cancel_event=self.cancel_event,
                 timeout=max(self.deadline - self.clock(), 0.001),
             )
         except AccessCancelled as error:
-            raise _Abort("cancelled") from error
+            code = "cancelled"
+            cause: Exception = error
         except AdmissionTimeout as error:
-            raise _Abort("timeout") from error
+            code = "timeout"
+            cause = error
         except Exception as error:
-            raise _Abort("admission") from error
+            code = "admission"
+            cause = error
+        else:
+            with self.condition:
+                lease.permit = permit
+                lease.acquiring = False
+                self.condition.notify_all()
+            self.check()
+            return permit
 
-    def close_host(self, permit: HostPermit) -> None:
-        try:
-            permit.release()
-        except Exception as error:
-            self.mark_cleanup_failure()
-            raise _Abort("cleanup") from error
+        with self.condition:
+            lease.error_code = code
+            lease.acquiring = False
+            self.condition.notify_all()
+        raise _Abort(code) from cause
+
+    def _claim_article_host_lease(
+        self,
+        hostname: str,
+    ) -> tuple[_ArticleHostLease, HostPermit | None]:
+        with self.condition:
+            while True:
+                self.check()
+                lease = self.host_leases.get(hostname)
+                if lease is None:
+                    lease = _ArticleHostLease()
+                    self.host_leases[hostname] = lease
+                    return lease, None
+                if lease.permit is not None:
+                    if lease.permit.released:
+                        raise _Abort("cleanup")
+                    return lease, lease.permit
+                if lease.error_code is not None:
+                    raise _Abort(lease.error_code)
+                if not lease.acquiring:
+                    raise _Abort("cleanup")
+                remaining = self.deadline - self.clock()
+                if remaining <= 0:
+                    raise _Abort("timeout")
+                self.condition.wait(timeout=min(remaining, 0.25))
 
     def bind_runtime(
         self,
@@ -899,41 +1142,12 @@ class _FlowState:
         if acknowledged is not binding:
             raise _Abort("runtime")
 
-    def take_initial_host(
-        self,
-        page: object | None,
-        destination: ResolvedDestination,
-    ) -> HostPermit | None:
-        if page is None:
-            return None
-        with self.lock:
-            navigation = self.navigations.get(id(page))
-            if navigation is None or navigation.saw_request:
-                return None
-            navigation.saw_request = True
-            initial_host = navigation.initial_host
-            if initial_host is not None and (
-                destination.hostname != navigation.destination.hostname
-                or destination.addresses != navigation.destination.addresses
-            ):
-                navigation.initial_host = None
-        if initial_host is not None and navigation.initial_host is None:
-            # The preflight target did not match the first actual request;
-            # release that unused reservation before admitting the real one.
-            self.close_host(initial_host)
-            return None
-        if initial_host is not None:
-            with self.lock:
-                navigation.initial_host = None
-        return initial_host
-
     def register_request(
         self,
         request: object,
         *,
         page: object | None,
         destination: ResolvedDestination,
-        host_permit: HostPermit,
         navigation: bool,
     ) -> None:
         with self.lock:
@@ -941,7 +1155,6 @@ class _FlowState:
                 request=request,
                 page=page,
                 destination=destination,
-                host_permit=host_permit,
                 navigation=navigation,
             )
 
@@ -956,7 +1169,8 @@ class _FlowState:
         if lease.completed:
             return
         lease.completed = True
-        self.close_host(lease.host_permit)
+        with self.condition:
+            self.condition.notify_all()
 
     def find_request_for_download(self, destination: ResolvedDestination) -> object | None:
         """Correlate a download with its intercepted request, fail closed if ambiguous."""
@@ -969,6 +1183,146 @@ class _FlowState:
             ]
         return matches[0] if len(matches) == 1 else None
 
+    def expect_response_download(
+        self,
+        destination: ResolvedDestination,
+        lease: _RequestLease,
+        *,
+        kind: BrowserCaptureKind,
+        media_type: str,
+        capture_allowed: bool,
+    ) -> None:
+        key = destination.url.url
+        with self.condition:
+            existing = self.pending_response_downloads.get(key)
+            pending = _PendingResponseDownload(
+                lease=lease,
+                kind=kind,
+                media_type=media_type,
+                capture_allowed=capture_allowed,
+            )
+            if existing is not None and existing != pending:
+                raise _Abort("runtime")
+            self.pending_response_downloads[key] = pending
+            self.condition.notify_all()
+
+    def take_response_download(
+        self,
+        destination: ResolvedDestination,
+    ) -> _PendingResponseDownload | None:
+        with self.condition:
+            pending = self.pending_response_downloads.pop(destination.url.url, None)
+            self.condition.notify_all()
+            return pending
+
+    def request_waits_for_response_download(self, request: object) -> bool:
+        with self.condition:
+            return any(
+                pending.lease.request is request
+                for pending in self.pending_response_downloads.values()
+            )
+
+    def expect_local_download(
+        self,
+        destination: ResolvedDestination,
+        *,
+        media_type: str,
+        kind: BrowserCaptureKind,
+        lease: _RequestLease,
+    ) -> None:
+        with self.lock:
+            if len(self.pending_local_downloads) >= self.budget.max_downloads:
+                raise _Abort("budget")
+            self.pending_local_downloads.append(
+                _PendingLocalDownload(
+                    destination=destination,
+                    media_type=media_type,
+                    kind=kind,
+                    lease=lease,
+                )
+            )
+            self.condition.notify_all()
+
+    def take_local_download(self) -> _PendingLocalDownload | None:
+        with self.condition:
+            pending = self.pending_local_downloads.pop(0) if self.pending_local_downloads else None
+            self.condition.notify_all()
+            return pending
+
+    def validate_local_blob(self, value: str) -> None:
+        """Accept only an opaque blob created on one prebound HTTPS origin."""
+
+        try:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme.casefold() != "blob"
+                or not parsed.path
+                or parsed.query
+                or parsed.fragment
+                or len(value) > 8192
+            ):
+                raise _Abort("policy")
+            embedded = normalize_url(
+                _policy_url(parsed.path),
+                allowed_schemes=self.destination_policy.allowed_schemes,
+                allowed_ports=self.destination_policy.allowed_ports,
+            )
+        except _Abort:
+            raise
+        except (PolicyError, TypeError, ValueError) as error:
+            raise _Abort("policy") from error
+        if embedded.origin.text not in self.prebound_origins:
+            raise _Abort("policy")
+
+    def correlate_response_request(
+        self,
+        request: object,
+        destination: ResolvedDestination,
+    ) -> _RequestLease | None:
+        """Find one live route lease, including a native redirect-chain root.
+
+        Playwright routes only the first URL of a native redirect chain.  A
+        later chain member is admissible only when it points back to that live
+        request, stays on the same non-null page, and its exact origin was
+        reviewed, resolved and pinned in the transparent CONNECT tunnel before
+        the article began.  These conditions apply equally to navigation and
+        ordinary page-subresource redirects.
+        """
+
+        current: object | None = request
+        redirected = False
+        seen: set[int] = set()
+        while current is not None and len(seen) < 32:
+            identity = id(current)
+            if identity in seen:
+                return None
+            seen.add(identity)
+            with self.lock:
+                lease = self.request_leases.get(identity)
+            if lease is not None and lease.request is current:
+                if lease.destination.url.url == destination.url.url:
+                    return lease
+                request_page = _attribute(request, "page")
+                if (
+                    redirected
+                    and lease.page is not None
+                    and request_page is lease.page
+                    and destination.url.origin.text in self.prebound_origins
+                ):
+                    # Playwright does not always expose a native redirect
+                    # member through a second route callback.  The reviewed,
+                    # prebound destination still needs its own article-level
+                    # host admission before any terminal response body can be
+                    # classified or captured.  Same-host redirects simply
+                    # reuse the existing permit; cross-host redirects acquire
+                    # and retain the additional permit through teardown.
+                    self.acquire_host(destination)
+                    return lease
+                return None
+            current = _attribute(current, "redirected_from")
+            redirected = True
+        return None
+
     def finish_page_navigation(self, page: object) -> None:
         """Finish navigation leases only after the runtime says goto is done."""
 
@@ -978,56 +1332,39 @@ class _FlowState:
                 for lease in self.request_leases.values()
                 if lease.page is page and lease.navigation
             ]
-            navigation = self.navigations.pop(id(page), None)
-            initial_host = navigation.initial_host if navigation is not None else None
-            if navigation is not None:
-                navigation.initial_host = None
+            self.navigations.pop(id(page), None)
         for lease in leases:
             self.finish_request(lease.request)
-        if initial_host is not None:
-            self.close_host(initial_host)
 
     def detach_navigation(self, page: object) -> None:
-        """Detach navigation bookkeeping while request leases remain live.
-
-        A browser navigation can yield a download after ``goto``/popup returns.
-        Request-finished/request-failed or download completion must therefore
-        release its host permit; detaching only removes the preflight marker.
-        """
+        """Detach navigation bookkeeping while request correlation stays live."""
 
         with self.lock:
-            navigation = self.navigations.pop(id(page), None)
-            initial_host = navigation.initial_host if navigation is not None else None
-            if navigation is not None:
-                navigation.initial_host = None
-        if initial_host is not None:
-            self.close_host(initial_host)
+            self.navigations.pop(id(page), None)
 
     def finish_all_requests(self) -> bool:
         with self.lock:
             leases = tuple(self.request_leases.values())
             self.request_leases.clear()
-            navigations = tuple(self.navigations.values())
+            self.pending_response_downloads.clear()
+            self.pending_local_downloads.clear()
             self.navigations.clear()
+            host_leases = tuple(self.host_leases.values())
+            self.host_leases.clear()
         failed = self.cleanup_failed
         for lease in leases:
             if lease.completed:
                 continue
             lease.completed = True
-            try:
-                lease.host_permit.release()
-            except Exception:
-                failed = True
-                self.mark_cleanup_failure()
-        for navigation in navigations:
-            if navigation.initial_host is None:
+        for host_lease in host_leases:
+            permit = host_lease.permit
+            if permit is None:
                 continue
             try:
-                navigation.initial_host.release()
+                permit.release()
             except Exception:
                 failed = True
                 self.mark_cleanup_failure()
-            navigation.initial_host = None
         return failed
 
     def check_challenge(self, page: object, response: object | None = None) -> None:
@@ -1057,6 +1394,7 @@ class _BrowserSession:
         "_popup_operation",
         "_viewer_operation",
         "_verified_locator_operation",
+        "_discover_pdf_locators_operation",
         "_click_operation",
         "_fill_operation",
         "_has_selector_operation",
@@ -1064,6 +1402,7 @@ class _BrowserSession:
         "_observe_operation",
         "_capture_available_operation",
         "_wait_for_capture_operation",
+        "_wait_for_any_capture_operation",
     )
 
     def __init__(self, client: BrowserClient, state: _FlowState, page: object) -> None:
@@ -1072,6 +1411,9 @@ class _BrowserSession:
         self._viewer_operation = lambda url: client._client_open_viewer(state, page, url)
         self._verified_locator_operation = lambda url: client._client_open_verified_locator(
             state, page, url
+        )
+        self._discover_pdf_locators_operation = lambda: client._client_discover_pdf_locators(
+            state, page
         )
         self._click_operation = lambda selector: client._client_click(state, page, selector)
         self._fill_operation = lambda selector, value: client._client_fill(
@@ -1084,6 +1426,7 @@ class _BrowserSession:
         self._observe_operation = lambda: client._client_observe(state, page)
         self._capture_available_operation = lambda kind: state.capture_available(kind)
         self._wait_for_capture_operation = lambda kind: state.wait_for_capture(kind)
+        self._wait_for_any_capture_operation = lambda kinds: state.wait_for_any_capture(kinds)
 
     def navigate(self, url: str) -> None:
         self._navigate_operation(url)
@@ -1097,8 +1440,11 @@ class _BrowserSession:
     def open_verified_locator(self, locator: str) -> None:
         self._verified_locator_operation(locator)
 
-    def click(self, selector: str) -> None:
-        self._click_operation(selector)
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        return self._discover_pdf_locators_operation()
+
+    def click(self, selector: str) -> bool:
+        return self._click_operation(selector)
 
     def fill(self, selector: str, value: str) -> None:
         self._fill_operation(selector, value)
@@ -1118,6 +1464,9 @@ class _BrowserSession:
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
         self._wait_for_capture_operation(kind)
 
+    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
+        self._wait_for_any_capture_operation(kinds)
+
 
 class BrowserClient:
     """Run one isolated, policy-checked Browser flow."""
@@ -1128,7 +1477,6 @@ class BrowserClient:
         "_coordinator",
         "_destination_policy",
         "_host_policy",
-        "_operator_profile",
         "_session_broker",
         "_clock",
         "_timeout_seconds",
@@ -1144,7 +1492,6 @@ class BrowserClient:
         coordinator: AccessCoordinator,
         destination_policy: DestinationPolicy | None = None,
         host_policy: AccessPolicy | None = None,
-        operator_profile: object | None = None,
         session_broker: BrowserSessionBroker | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         cleanup_timeout_seconds: float = _DEFAULT_CLEANUP_TIMEOUT_SECONDS,
@@ -1178,18 +1525,11 @@ class BrowserClient:
         self._coordinator = coordinator
         self._destination_policy = destination_policy or DestinationPolicy()
         self._host_policy = host_policy or _DEFAULT_HOST_REQUEST_POLICY
-        self._operator_profile = operator_profile
         self._session_broker = session_broker
         self._clock = clock or time.monotonic
         self._timeout_seconds = timeout
         self._cleanup_timeout_seconds = cleanup_timeout
         self._budget = budget or BrowserBudget()
-
-    @property
-    def operator_profile(self) -> object | None:
-        """Return the opaque profile injection token without inspecting it."""
-
-        return self._operator_profile
 
     @property
     def budget(self) -> BrowserBudget:
@@ -1207,6 +1547,7 @@ class BrowserClient:
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
+        discard_unapproved_subresources: bool = False,
         session_key: str | None = None,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
@@ -1244,6 +1585,10 @@ class BrowserClient:
             ):
                 raise _Abort("policy")
             if type(navigation_only) is not bool:
+                raise _Abort("policy")
+            if type(discard_unapproved_subresources) is not bool:
+                raise _Abort("policy")
+            if navigation_only and discard_unapproved_subresources:
                 raise _Abort("policy")
             if (self._session_broker is None) != (session_key is None):
                 raise _Abort("policy")
@@ -1299,6 +1644,7 @@ class BrowserClient:
                 destination_guard,
                 capture_guard,
                 navigation_only,
+                discard_unapproved_subresources,
                 effective_budget,
                 self._clock,
                 deadline,
@@ -1317,7 +1663,6 @@ class BrowserClient:
                 process_manager = self._run_cancellable(
                     state,
                     lambda: self._factory(
-                        profile=self._operator_profile,
                         downloads_path=str(temporary_path),
                         connection_binding=initial_binding,
                     ),
@@ -1352,7 +1697,6 @@ class BrowserClient:
                     self._run_cancellable(
                         state,
                         lambda: launch(
-                            profile=self._operator_profile,
                             downloads_path=str(temporary_path),
                             accept_downloads=True,
                             connection_binding=initial_binding,
@@ -1381,7 +1725,6 @@ class BrowserClient:
                         lambda: self._session_broker.acquire(
                             normalized_session_key,
                             factory=self._factory,
-                            profile=self._operator_profile,
                             downloads_path=str(temporary_path),
                             connection_binding=initial_binding,
                             route_handler=self._route_handler(state),
@@ -1396,6 +1739,12 @@ class BrowserClient:
                 process_runtime = session_lease.process_runtime
                 context = cast(_PageContext, session_lease.context)
                 state.runtime = process_runtime
+            self._prebind_connection_origins(
+                state,
+                context,
+                initial,
+                destination_guard,
+            )
             new_page = getattr(context, "new_page", None)
             if not callable(new_page):
                 raise _Abort("runtime")
@@ -1554,6 +1903,8 @@ class BrowserClient:
             max_captures=selected.max_captures,
             max_bytes_per_download=min(selected.max_bytes_per_download, request_max_bytes),
             max_total_bytes=selected.max_total_bytes,
+            max_action_wait_seconds=selected.max_action_wait_seconds,
+            max_capture_wait_seconds=selected.max_capture_wait_seconds,
             max_total_seconds=selected.max_total_seconds,
         )
 
@@ -1609,7 +1960,7 @@ class BrowserClient:
                     method()
                 except Exception:
                     continue
-                break
+                return
 
     def _run_cancellable(
         self,
@@ -1795,6 +2146,54 @@ class BrowserClient:
         except (PolicyError, TypeError, ValueError) as error:
             raise _Abort("policy") from error
 
+    def _prebind_connection_origins(
+        self,
+        state: _FlowState,
+        context: _PageContext,
+        initial: ResolvedDestination,
+        destination_guard: BrowserDestinationGuard | None,
+    ) -> None:
+        """Pin reviewed Browser origins before Chromium may open a tunnel.
+
+        Chromium can establish a proxy CONNECT and TLS session before the
+        Playwright route callback pauses the corresponding HTTP request. The
+        byte tunnel must therefore know every closed Provider origin up front;
+        request-level destination checks and article-host admission still
+        happen later in ``_admit_route``.
+        """
+
+        origins = [initial.url.origin.text]
+        if isinstance(destination_guard, BrowserConnectionOriginGuard):
+            try:
+                declared = destination_guard.connection_origins()
+            except Exception as error:
+                raise _Abort("policy") from error
+            if not isinstance(declared, tuple) or len(declared) > 32:
+                raise _Abort("policy")
+            origins.extend(declared)
+        for origin in dict.fromkeys(origins):
+            try:
+                normalized = normalize_url(
+                    origin,
+                    allowed_schemes=self._destination_policy.allowed_schemes,
+                    allowed_ports=self._destination_policy.allowed_ports,
+                )
+                if normalized.path != "/" or normalized.query:
+                    raise _Abort("policy")
+                destination = resolve_destination(
+                    normalized,
+                    self._resolver,
+                    policy=self._destination_policy,
+                    previous=state.destinations.get(normalized.hostname),
+                )
+            except _Abort:
+                raise
+            except (PolicyError, TypeError, ValueError) as error:
+                raise _Abort("policy") from error
+            state.destinations[destination.hostname] = destination
+            state.bind_runtime(context, destination, allow_runtime_fallback=False)
+            state.prebound_origins.add(destination.url.origin.text)
+
     def _install_handlers(self, state: _FlowState, context: _PageContext) -> None:
         route = getattr(context, "route", None)
         on = getattr(context, "on", None)
@@ -1837,7 +2236,17 @@ class BrowserClient:
                     state.mark_cleanup_failure()
                 return
             state.consume(requests=1)
-            destination = state.resolve_request(url, navigation=navigation)
+            try:
+                destination = state.resolve_request(url, navigation=navigation)
+            except _Abort as error:
+                if (
+                    error.code == "policy"
+                    and not navigation
+                    and state.discard_unapproved_subresources
+                ):
+                    self._finish_rejected_route(state, route, request)
+                    return
+                raise
             if destination is None:
                 self._continue_route(route)
                 return
@@ -1882,33 +2291,28 @@ class BrowserClient:
         destination: ResolvedDestination,
         navigation: bool,
     ) -> None:
-        if navigation and state.navigations.get(id(page)) is None:
+        current_navigation = state.navigations.get(id(page)) if navigation else None
+        if navigation and (current_navigation is None or not current_navigation.budget_counted):
             state.consume(navigations=1)
+            if current_navigation is not None:
+                current_navigation.budget_counted = True
         if navigation and page is not None:
             with state.lock:
                 current_navigation = state.navigations.get(id(page))
                 if current_navigation is not None:
                     current_navigation.destination = destination
-        host_permit = state.take_initial_host(page, destination) if navigation else None
-        if host_permit is None:
-            host_permit = state.acquire_host(destination)
-        try:
-            # Binding is mandatory and occurs before route continuation.  A
-            # route/runtime that merely accepts an ignored ``addresses`` kwarg
-            # cannot cross this boundary.
-            state.bind_runtime(route, destination, allow_runtime_fallback=False)
-            state.register_request(
-                request,
-                page=page,
-                destination=destination,
-                host_permit=host_permit,
-                navigation=navigation,
-            )
-            host_permit = None
-            self._continue_route(route)
-        finally:
-            if host_permit is not None:
-                state.close_host(host_permit)
+        state.acquire_host(destination)
+        # Binding is mandatory and occurs before route continuation.  A
+        # route/runtime that merely accepts an ignored ``addresses`` kwarg
+        # cannot cross this boundary.
+        state.bind_runtime(route, destination, allow_runtime_fallback=False)
+        state.register_request(
+            request,
+            page=page,
+            destination=destination,
+            navigation=navigation,
+        )
+        self._continue_route(route)
 
     @staticmethod
     def _request_from_event(value: object) -> object:
@@ -1917,7 +2321,10 @@ class BrowserClient:
 
     def _handle_request_finished(self, state: _FlowState, value: object) -> None:
         try:
-            state.finish_request(self._request_from_event(value))
+            request = self._request_from_event(value)
+            if state.request_waits_for_response_download(request):
+                return
+            state.finish_request(request)
         except _Abort as error:
             state.fail(error.code)
         except Exception:
@@ -1926,25 +2333,32 @@ class BrowserClient:
     def _handle_response(self, state: _FlowState, response: object) -> None:
         """Guard a response locator before any future body/capture operation."""
 
+        stage = "response-shape"
+        request: object | None = None
+        lease: _RequestLease | None = None
+        status: object = None
+        release_after_response = True
         try:
-            url = _text_attribute(response, "url")
-            request = _attribute(response, "request")
-            if url is None or request is None:
-                raise _Abort("runtime")
-            destination = state.resolve(url, kind=BrowserDestinationKind.RESPONSE)
-            with state.lock:
-                lease = state.request_leases.get(id(request))
-            if (
-                lease is None
-                or lease.request is not request
-                or lease.destination.url.url != destination.url.url
-            ):
-                # Response access was admitted only if its still-live route
-                # lease proves that guard, DNS binding and host admission ran
-                # before transport.  A future response-body capture reuses
-                # this same condition rather than admitting after the fact.
-                raise _Abort("runtime")
+            url, request = self._response_shape(response)
             status = _attribute(response, "status")
+            stage = "destination-guard"
+            destination = self._resolve_response_destination(state, url, request)
+            if destination is None:
+                return
+            stage = "request-correlation"
+            lease = self._correlate_response_request(
+                state,
+                request,
+                destination,
+                status=status,
+            )
+            stage = "response-classification"
+            if lease.navigation and lease.page is not None and type(status) is int:
+                # Script, click and native redirect navigations do not all
+                # return through ``page.goto``.  The correlated top-frame
+                # response is therefore the authoritative status update for
+                # later page-state classification.
+                state.page_statuses[id(lease.page)] = status
             if type(status) is not int or not 200 <= status <= 299:
                 return
             media_type = self._response_media_type(response)
@@ -1953,27 +2367,277 @@ class BrowserClient:
                 lease.page,
                 destination.url.url,
             )
-            if not state.allows_capture(destination.url.url, kind, media_type):
-                return
-            body = cast(
-                bytes,
-                self._run_cancellable(
-                    state,
-                    lambda: self._response_bytes(state, response),
-                    abort=lambda: self._abort_runtime(lease.page, None, state.runtime),
-                ),
+            capture_allowed = state.allows_capture(
+                destination.url.url,
+                kind,
+                media_type,
             )
-            state.check()
-            state.add_capture(
+            stage = "native-download-reservation"
+            if self._reserve_response_download(
+                state,
+                response,
+                destination,
+                lease,
                 kind=kind,
-                body=body,
                 media_type=media_type,
-                locator=destination.url.url,
+                capture_allowed=capture_allowed,
+            ):
+                release_after_response = False
+                return
+            if not capture_allowed:
+                self._reserve_local_pdf_download(
+                    state,
+                    destination,
+                    lease,
+                    media_type=media_type,
+                )
+                return
+            stage = "response-body"
+            self._capture_response_body(
+                state,
+                response,
+                destination,
+                lease,
+                kind=kind,
+                media_type=media_type,
             )
         except _Abort as error:
+            _LOGGER.debug(
+                "event=browser-response-failed stage=%s code=%s retryable=%s "
+                "status=%d navigation=%s redirected=%s",
+                stage,
+                error.code,
+                str(error.code in {"timeout", "admission", "runtime"}).lower(),
+                status if type(status) is int else -1,
+                str(request is not None and self._is_navigation_request(request)).lower(),
+                str(
+                    request is not None and _attribute(request, "redirected_from") is not None
+                ).lower(),
+            )
             state.fail(error.code)
         except Exception:
+            _LOGGER.debug(
+                "event=browser-response-failed stage=%s code=runtime retryable=true "
+                "status=%d navigation=%s redirected=%s",
+                stage,
+                status if type(status) is int else -1,
+                str(request is not None and self._is_navigation_request(request)).lower(),
+                str(
+                    request is not None and _attribute(request, "redirected_from") is not None
+                ).lower(),
+            )
             state.fail("runtime")
+        finally:
+            self._release_response_request(
+                state,
+                lease,
+                status=status,
+                release_after_response=release_after_response,
+            )
+
+    @staticmethod
+    def _response_shape(response: object) -> tuple[str, object]:
+        url = _text_attribute(response, "url")
+        request = _attribute(response, "request")
+        if url is None or request is None:
+            raise _Abort("runtime")
+        return url, request
+
+    def _resolve_response_destination(
+        self,
+        state: _FlowState,
+        url: str,
+        request: object,
+    ) -> ResolvedDestination | None:
+        try:
+            return state.resolve(url, kind=BrowserDestinationKind.RESPONSE)
+        except _Abort as error:
+            if (
+                error.code == "policy"
+                and state.discard_unapproved_subresources
+                and not self._is_navigation_request(request)
+            ):
+                # Chromium can emit a terminal response for a non-navigation
+                # redirect even when the unapproved destination was stopped by
+                # the pinned transport. Do not read or correlate that body, and
+                # do not convert an intentionally discarded tracker into an
+                # article failure. Top-level navigation remains fail closed.
+                _LOGGER.debug(
+                    "event=browser-response-discarded "
+                    "stage=destination-guard reason=unapproved-subresource"
+                )
+                return None
+            raise
+
+    @staticmethod
+    def _correlate_response_request(
+        state: _FlowState,
+        request: object,
+        destination: ResolvedDestination,
+        *,
+        status: object,
+    ) -> _RequestLease:
+        lease = state.correlate_response_request(request, destination)
+        if lease is not None:
+            return lease
+        with state.lock:
+            direct_lease = state.request_leases.get(id(request))
+        current = _attribute(request, "redirected_from")
+        redirect_depth = 0
+        ancestor_lease: _RequestLease | None = None
+        seen: set[int] = {id(request)}
+        while current is not None and redirect_depth < 32:
+            identity = id(current)
+            if identity in seen:
+                break
+            seen.add(identity)
+            redirect_depth += 1
+            with state.lock:
+                candidate = state.request_leases.get(identity)
+            if candidate is not None and candidate.request is current:
+                ancestor_lease = candidate
+                break
+            current = _attribute(current, "redirected_from")
+        request_page = _attribute(request, "page")
+        _LOGGER.debug(
+            "event=browser-response-correlation-miss lease_present=%s "
+            "request_identity_matches=%s destination_matches=%s status=%d "
+            "navigation=%s redirect_depth=%d ancestor_lease_present=%s "
+            "ancestor_navigation=%s page_matches=%s origin_prebound=%s",
+            str(direct_lease is not None).lower(),
+            str(direct_lease is not None and direct_lease.request is request).lower(),
+            str(
+                direct_lease is not None and direct_lease.destination.url.url == destination.url.url
+            ).lower(),
+            status if type(status) is int else -1,
+            str(BrowserClient._is_navigation_request(request)).lower(),
+            redirect_depth,
+            str(ancestor_lease is not None).lower(),
+            str(ancestor_lease is not None and ancestor_lease.navigation).lower(),
+            str(ancestor_lease is not None and request_page is ancestor_lease.page).lower(),
+            str(destination.url.origin.text in state.prebound_origins).lower(),
+        )
+        # Response access was admitted only if its still-live route lease
+        # proves that guard, DNS binding and host admission ran before
+        # transport. Future body capture reuses that proof.
+        raise _Abort("runtime")
+
+    @staticmethod
+    def _reserve_response_download(
+        state: _FlowState,
+        response: object,
+        destination: ResolvedDestination,
+        lease: _RequestLease,
+        *,
+        kind: BrowserCaptureKind,
+        media_type: str,
+        capture_allowed: bool,
+    ) -> bool:
+        if _attribute(response, "download_expected") is not True:
+            return False
+        if not capture_allowed and _attribute(response, "attachment_download") is True:
+            kind = BrowserCaptureKind.DOWNLOAD
+            capture_allowed = state.allows_capture(
+                destination.url.url,
+                kind,
+                media_type,
+            )
+        state.expect_response_download(
+            destination,
+            lease,
+            kind=kind,
+            media_type=media_type,
+            capture_allowed=capture_allowed,
+        )
+        return True
+
+    @staticmethod
+    def _reserve_local_pdf_download(
+        state: _FlowState,
+        destination: ResolvedDestination,
+        lease: _RequestLease,
+        *,
+        media_type: str,
+    ) -> None:
+        if media_type != "application/pdf" or not state.allows_capture(
+            destination.url.url,
+            BrowserCaptureKind.DOWNLOAD,
+            media_type,
+        ):
+            return
+        # A reviewed page script may turn an already-admitted PDF response
+        # into a local blob download. Keep only the safe response locator and
+        # media type as its one-shot provenance; the opaque blob URL never
+        # enters policy, logs or results.
+        state.expect_local_download(
+            destination,
+            media_type=media_type,
+            kind=BrowserCaptureKind.DOWNLOAD,
+            lease=lease,
+        )
+
+    def _capture_response_body(
+        self,
+        state: _FlowState,
+        response: object,
+        destination: ResolvedDestination,
+        lease: _RequestLease,
+        *,
+        kind: BrowserCaptureKind,
+        media_type: str,
+    ) -> None:
+        body = cast(
+            bytes,
+            self._run_cancellable(
+                state,
+                lambda: self._response_bytes(state, response),
+                abort=lambda: self._abort_runtime(lease.page, None, state.runtime),
+            ),
+        )
+        state.check()
+        state.add_capture(
+            kind=kind,
+            body=body,
+            media_type=media_type,
+            locator=destination.url.url,
+        )
+
+    @staticmethod
+    def _release_response_request(
+        state: _FlowState,
+        lease: _RequestLease | None,
+        *,
+        status: object,
+        release_after_response: bool,
+    ) -> None:
+        # A terminal response is enough to retire request correlation even
+        # when requestfinished has not arrived. The article-level host lease is
+        # intentionally unaffected and remains held through Browser cleanup.
+        # Native 3xx responses are the exception: Playwright does not route
+        # later redirect members, so their root correlation remains live until
+        # a terminal response arrives.
+        if (
+            lease is None
+            or lease.navigation
+            or not release_after_response
+            or status in {301, 302, 303, 307, 308}
+        ):
+            # A navigation can produce more than one response before
+            # Playwright emits requestfinished (redirects, authentication, or
+            # an informational response). Keep its route proof live for the
+            # complete native request lifecycle; requestfinished performs the
+            # retirement. Non-navigation responses may still retire here for
+            # runtimes that expose response completion without a separate
+            # completion event.
+            return
+        try:
+            state.finish_request(lease.request)
+        except _Abort as error:
+            state.fail(error.code)
+            state.mark_cleanup_failure()
+        except Exception:
+            state.fail("cleanup")
+            state.mark_cleanup_failure()
 
     @staticmethod
     def _is_navigation_request(request: object) -> bool:
@@ -2019,10 +2683,8 @@ class BrowserClient:
 
     def _handle_popup(self, state: _FlowState, page: object) -> None:
         try:
-            state.consume(popups=1)
-            state.popups.append(page)
-            if not state.own_page(page):
-                raise _Abort("cleanup")
+            if state.register_popup(page):
+                state.consume(popups=1)
         except _Abort as error:
             state.fail(error.code)
             if state.claim_cleanup(page) and not self._close_object(page):
@@ -2034,34 +2696,19 @@ class BrowserClient:
 
     def _handle_download(self, state: _FlowState, download: object) -> None:
         request: object | None = None
+        stage = "ownership"
         try:
             if not state.own_download(download):
                 raise _Abort("cleanup")
             state.consume(downloads=1)
-            url = _text_attribute(download, "url")
-            if url is None:
-                raise _Abort("policy")
-            destination = state.resolve(url, kind=BrowserDestinationKind.DOWNLOAD)
-            request_candidate = _attribute(download, "request")
-            request = (
-                request_candidate
-                if request_candidate is not None
-                else state.find_request_for_download(destination)
-            )
-            with state.lock:
-                existing = state.request_leases.get(id(request)) if request is not None else None
-            if existing is None or existing.destination.url.url != destination.url.url:
-                # A download event without a still-live intercepted request
-                # cannot prove that host admission preceded the connection.
-                # Acquiring a permit here would be too late, so fail closed.
-                raise _Abort("runtime")
-            # ``destination`` was resolved from a query-free policy URL.  It
-            # is therefore safe to expose as the locator even when the
-            # private Browser download object carried a signed query.
-            locator = destination.url.url
-            media_type = self._download_media_type(download)
-            if not state.allows_capture(locator, BrowserCaptureKind.DOWNLOAD, media_type):
+            stage = "capture-plan"
+            plan = self._download_capture_plan(state, download)
+            if plan is None:
                 return
+            request = plan.request
+            if not plan.capture_allowed:
+                return
+            stage = "download-body"
             body = cast(
                 bytes,
                 self._run_cancellable(
@@ -2071,16 +2718,27 @@ class BrowserClient:
                 ),
             )
             state.check()
+            stage = "capture"
             state.add_capture(
-                kind=BrowserCaptureKind.DOWNLOAD,
+                kind=plan.kind,
                 body=body,
-                media_type=media_type,
-                locator=locator,
+                media_type=plan.media_type,
+                locator=plan.destination.url.url,
             )
         except _Abort as error:
+            _LOGGER.debug(
+                "event=browser-download-failed stage=%s code=%s retryable=%s",
+                stage,
+                error.code,
+                str(error.code in {"timeout", "admission", "runtime"}).lower(),
+            )
             state.fail(error.code)
             self._discard_failed_download(state, download)
         except Exception:
+            _LOGGER.debug(
+                "event=browser-download-failed stage=%s code=runtime retryable=true",
+                stage,
+            )
             state.fail("runtime")
             self._discard_failed_download(state, download)
         finally:
@@ -2090,6 +2748,113 @@ class BrowserClient:
                 except Exception:
                     state.fail("cleanup")
                     state.mark_cleanup_failure()
+
+    def _download_capture_plan(
+        self,
+        state: _FlowState,
+        download: object,
+    ) -> _DownloadCapturePlan | None:
+        url = _text_attribute(download, "url")
+        if url is None:
+            raise _Abort("policy")
+        if urlsplit(url).scheme.casefold() == "blob":
+            return self._local_download_capture_plan(state, url)
+        return self._network_download_capture_plan(state, download, url)
+
+    def _local_download_capture_plan(
+        self,
+        state: _FlowState,
+        url: str,
+    ) -> _DownloadCapturePlan | None:
+        state.validate_local_blob(url)
+        pending = state.take_local_download()
+        if pending is None:
+            pending = self._infer_local_download(state)
+        if pending is None:
+            return None
+        request = None if pending.lease is None else pending.lease.request
+        return _DownloadCapturePlan(
+            destination=pending.destination,
+            request=request,
+            kind=pending.kind,
+            media_type=pending.media_type,
+            capture_allowed=True,
+        )
+
+    @staticmethod
+    def _infer_local_download(state: _FlowState) -> _PendingLocalDownload | None:
+        with state.lock:
+            capture_already_available = bool(state.captures)
+            live_leases = tuple(state.request_leases.values())
+        if capture_already_available:
+            return None
+        candidates: list[_PendingLocalDownload] = []
+        for lease in live_leases:
+            for kind in (
+                BrowserCaptureKind.RESPONSE,
+                BrowserCaptureKind.DOWNLOAD,
+            ):
+                if state.allows_capture(
+                    lease.destination.url.url,
+                    kind,
+                    "application/pdf",
+                ):
+                    candidates.append(
+                        _PendingLocalDownload(
+                            destination=lease.destination,
+                            media_type="application/pdf",
+                            kind=kind,
+                            lease=lease,
+                        )
+                    )
+                    break
+        if len(candidates) != 1:
+            raise _Abort("policy")
+        return candidates[0]
+
+    def _network_download_capture_plan(
+        self,
+        state: _FlowState,
+        download: object,
+        url: str,
+    ) -> _DownloadCapturePlan:
+        destination = state.resolve(url, kind=BrowserDestinationKind.DOWNLOAD)
+        pending = state.take_response_download(destination)
+        request_candidate = _attribute(download, "request")
+        request = (
+            pending.lease.request
+            if pending is not None
+            else (
+                request_candidate
+                if request_candidate is not None
+                else state.find_request_for_download(destination)
+            )
+        )
+        with state.lock:
+            existing = state.request_leases.get(id(request)) if request is not None else None
+        if (
+            existing is None
+            or (pending is None and existing.destination.url.url != destination.url.url)
+            or (pending is not None and existing is not pending.lease)
+        ):
+            # A network download without a still-live intercepted request
+            # cannot prove pre-transport admission. Local blob downloads use
+            # the separately recorded response proof.
+            raise _Abort("runtime")
+        kind = BrowserCaptureKind.DOWNLOAD if pending is None else pending.kind
+        media_type = self._download_media_type(download) if pending is None else pending.media_type
+        capture_allowed = (
+            state.allows_capture(destination.url.url, kind, media_type)
+            if pending is None
+            else pending.capture_allowed
+        )
+        return _DownloadCapturePlan(
+            destination=destination,
+            request=request,
+            kind=kind,
+            media_type=media_type,
+            capture_allowed=capture_allowed,
+        )
 
     @staticmethod
     def _discard_failed_download(state: _FlowState, download: object) -> None:
@@ -2228,46 +2993,41 @@ class BrowserClient:
         try:
             state.check()
             destination = state.resolve(url, kind=BrowserDestinationKind.NAVIGATION)
+            runtime_url = _runtime_url(url, state.destination_policy)
+            if _policy_url(runtime_url) != destination.url.url:
+                raise _Abort("policy")
             state.consume(navigations=1)
-            initial_host = state.acquire_host(destination)
-            navigation = _Navigation(page, destination, initial_host)
+            with state.lock:
+                prior_capture_count = len(state.captures)
+            state.acquire_host(destination)
+            navigation = _Navigation(page, destination)
             state.navigations[id(page)] = navigation
-            operation_complete = False
-            try:
-                goto = getattr(page, "goto", None)
-                if not callable(goto):
-                    raise _Abort("runtime")
-                response = self._run_cancellable(
-                    state,
-                    lambda: goto(
-                        destination.url.url,
-                        timeout=state.remaining_milliseconds(),
-                    ),
-                    abort=lambda: self._abort_runtime(page, None, state.runtime),
+            response = self._navigate_registered_page(
+                state,
+                page,
+                runtime_url,
+            )
+            state.check()
+            self._record_navigation_result(
+                state,
+                page,
+                response,
+                navigation,
+            )
+            media_type = _text_attribute(response, "media_type")
+            final_url = _text_attribute(page, "url") or _text_attribute(response, "url")
+            if (
+                media_type is not None
+                and final_url is not None
+                and any(
+                    state.allows_capture(final_url, kind, media_type)
+                    for kind in (BrowserCaptureKind.RESPONSE, BrowserCaptureKind.DOWNLOAD)
                 )
-                state.detach_navigation(page)
-                operation_complete = True
-                state.check()
-                final_url = _text_attribute(page, "url") or _text_attribute(response, "url")
-                if final_url is not None and not _is_internal_url(final_url):
-                    final_destination = state.resolve(
-                        final_url,
-                        kind=BrowserDestinationKind.NAVIGATION,
-                    )
-                    if final_destination.hostname != navigation.destination.hostname:
-                        final_host = state.acquire_host(final_destination)
-                        try:
-                            state.bind_runtime(state.runtime or page, final_destination)
-                        finally:
-                            state.close_host(final_host)
-                    navigation.destination = final_destination
-                status = _attribute(response, "status") if response is not None else None
-                if status is not None and (type(status) is not int or not 100 <= status <= 599):
-                    raise _Abort("runtime")
-                state.page_statuses[id(page)] = cast(int | None, status)
-            finally:
-                if not operation_complete:
-                    state.finish_page_navigation(page)
+            ):
+                state.wait_for_page_result(
+                    page,
+                    prior_capture_count=prior_capture_count,
+                )
         except _Abort:
             raise
         except (TimeoutError,):
@@ -2277,21 +3037,76 @@ class BrowserClient:
                 raise state.error
             raise _Abort("runtime") from error
 
-    def _client_open_popup(self, state: _FlowState, opener: object, url: str) -> None:
+    def _navigate_registered_page(
+        self,
+        state: _FlowState,
+        page: object,
+        runtime_url: str,
+    ) -> object:
+        operation_complete = False
+        try:
+            goto = getattr(page, "goto", None)
+            if not callable(goto):
+                raise _Abort("runtime")
+            response = self._run_cancellable(
+                state,
+                lambda: goto(
+                    runtime_url,
+                    timeout=state.remaining_milliseconds(),
+                ),
+                abort=lambda: self._abort_runtime(page, None, state.runtime),
+            )
+            state.detach_navigation(page)
+            operation_complete = True
+            return response
+        finally:
+            if not operation_complete:
+                state.finish_page_navigation(page)
+
+    @staticmethod
+    def _record_navigation_result(
+        state: _FlowState,
+        page: object,
+        response: object,
+        navigation: _Navigation,
+    ) -> None:
+        final_url = _text_attribute(page, "url") or _text_attribute(response, "url")
+        if final_url is not None and not _is_internal_url(final_url):
+            final_destination = state.resolve(
+                final_url,
+                kind=BrowserDestinationKind.NAVIGATION,
+            )
+            if final_destination.hostname != navigation.destination.hostname:
+                state.acquire_host(final_destination)
+                state.bind_runtime(state.runtime or page, final_destination)
+            navigation.destination = final_destination
+        status = _attribute(response, "status") if response is not None else None
+        if status is not None and (type(status) is not int or not 100 <= status <= 599):
+            raise _Abort("runtime")
+        state.page_statuses[id(page)] = cast(int | None, status)
+
+    def _client_open_popup(self, state: _FlowState, opener: object, url: str) -> object:
         try:
             state.check()
             destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
+            runtime_url = _runtime_url(url, state.destination_policy)
+            if _policy_url(runtime_url) != destination.url.url:
+                raise _Abort("policy")
             opener_method = getattr(opener, "open_popup", None)
             if not callable(opener_method):
                 raise _Abort("runtime")
             popup = self._run_cancellable(
                 state,
-                lambda: opener_method(destination.url.url),
+                lambda: opener_method(runtime_url),
                 abort=lambda: self._abort_runtime(opener, None, state.runtime),
             )
             if popup is None:
                 raise _Abort("runtime")
+            if state.register_popup(popup):
+                state.consume(popups=1)
             state.detach_navigation(popup)
+            self._validate_page_location(state, popup)
+            return popup
         except _Abort:
             raise
         except TimeoutError:
@@ -2309,8 +3124,13 @@ class BrowserClient:
     ) -> None:
         destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
         with state.lock:
+            prior_capture_count = len(state.captures)
             state.verified_locators.add(destination.url.url)
-        self._client_open_popup(state, opener, destination.url.url)
+        popup = self._client_open_popup(state, opener, url)
+        state.wait_for_page_result(
+            popup,
+            prior_capture_count=prior_capture_count,
+        )
 
     def _client_open_viewer(
         self,
@@ -2320,8 +3140,72 @@ class BrowserClient:
     ) -> None:
         destination = state.resolve(url, kind=BrowserDestinationKind.POPUP)
         with state.lock:
+            prior_capture_count = len(state.captures)
             state.viewer_locators.add(destination.url.url)
-        self._client_open_popup(state, opener, destination.url.url)
+        popup = self._client_open_popup(state, opener, url)
+        state.wait_for_page_result(
+            popup,
+            prior_capture_count=prior_capture_count,
+        )
+
+    def _client_discover_pdf_locators(
+        self,
+        state: _FlowState,
+        page: object,
+    ) -> tuple[str, ...]:
+        discover = getattr(page, "discover_pdf_locators", None)
+        if not callable(discover):
+            raise _Abort("runtime")
+        raw = self._run_cancellable(
+            state,
+            discover,
+            abort=lambda: self._abort_runtime(page, None, state.runtime),
+        )
+        if not isinstance(raw, tuple) or len(raw) > _MAX_DISCOVERED_PDF_LOCATORS:
+            raise _Abort("runtime")
+        discovered: dict[str, str] = {}
+        for value in raw:
+            reviewed = self._review_discovered_pdf_locator(state, value)
+            if reviewed is None:
+                continue
+            policy_locator, runtime_locator = reviewed
+            discovered.setdefault(policy_locator, runtime_locator)
+        return tuple(discovered.values())
+
+    @staticmethod
+    def _review_discovered_pdf_locator(
+        state: _FlowState,
+        value: object,
+    ) -> tuple[str, str] | None:
+        if type(value) is not str or not value or len(value) > _MAX_DISCOVERED_LOCATOR_LENGTH:
+            raise _Abort("runtime")
+        try:
+            policy_locator = _policy_url(value)
+            normalized = normalize_url(
+                policy_locator,
+                allowed_schemes=state.destination_policy.allowed_schemes,
+                allowed_ports=state.destination_policy.allowed_ports,
+            )
+            if normalized.origin.text not in state.prebound_origins:
+                return None
+            try:
+                state.guard(normalized.url, BrowserDestinationKind.POPUP)
+            except _Abort as error:
+                if error.code == "policy":
+                    return None
+                raise
+            destination = state.resolve(
+                value,
+                kind=BrowserDestinationKind.POPUP,
+            )
+            runtime_locator = _runtime_url(value, state.destination_policy)
+            if _policy_url(runtime_locator) != destination.url.url:
+                raise _Abort("policy")
+        except _Abort:
+            raise
+        except (PolicyError, TypeError, ValueError):
+            return None
+        return destination.url.url, runtime_locator
 
     @staticmethod
     def _selector(value: str) -> str:
@@ -2331,16 +3215,91 @@ class BrowserClient:
             raise _Abort("policy")
         return value
 
-    def _client_click(self, state: _FlowState, page: object, selector: str) -> None:
+    def _client_click(self, state: _FlowState, page: object, selector: str) -> bool:
         selector = self._selector(selector)
         click = getattr(page, "click", None)
         if not callable(click):
             raise _Abort("runtime")
-        self._run_cancellable(
-            state,
-            lambda: click(selector, timeout=state.remaining_milliseconds()),
-            abort=lambda: self._abort_runtime(page, None, state.runtime),
+        current_url = _text_attribute(page, "url")
+        if current_url is None or _is_internal_url(current_url):
+            raise _Abort("runtime")
+        try:
+            current = normalize_url(
+                _policy_url(current_url),
+                allowed_schemes=state.destination_policy.allowed_schemes,
+                allowed_ports=state.destination_policy.allowed_ports,
+            )
+        except (PolicyError, TypeError, ValueError) as error:
+            raise _Abort("policy") from error
+        current_destination = state.destinations.get(current.hostname)
+        if (
+            current_destination is None
+            or current_destination.url.scheme != current.scheme
+            or current_destination.url.port != current.port
+        ):
+            raise _Abort("runtime")
+        with state.lock:
+            if id(page) in state.navigations:
+                raise _Abort("runtime")
+            # A reviewed click may synchronously start one top-frame
+            # navigation.  Keep one lifecycle marker around the vendor call
+            # so every explicit 3xx hop belongs to that single budgeted
+            # navigation instead of being counted as a new user action.
+            # Non-navigating buttons leave ``budget_counted`` false and do not
+            # consume navigation budget.
+            state.navigations[id(page)] = _Navigation(
+                page,
+                current_destination,
+                budget_counted=False,
+            )
+        started_at = state.clock()
+        maximum_wait_milliseconds = min(
+            state.remaining_milliseconds(),
+            max(1, int(state.budget.max_action_wait_seconds * 1000)),
         )
+        _LOGGER.debug(
+            "event=browser-click-started max_wait_seconds=%.3f",
+            state.budget.max_action_wait_seconds,
+        )
+        try:
+            raw_clicked = self._run_cancellable(
+                state,
+                lambda: click(selector, timeout=maximum_wait_milliseconds),
+                abort=lambda: self._abort_runtime(page, None, state.runtime),
+            )
+            if raw_clicked is not None and type(raw_clicked) is not bool:
+                raise _Abort("runtime")
+            clicked = raw_clicked is not False
+            if clicked:
+                self._validate_page_location(state, page)
+            _LOGGER.debug(
+                "event=browser-click-finished outcome=%s elapsed_ms=%d",
+                "performed" if clicked else "not-actionable",
+                max(int((state.clock() - started_at) * 1000), 0),
+            )
+            return clicked
+        finally:
+            state.detach_navigation(page)
+
+    @staticmethod
+    def _validate_page_location(state: _FlowState, page: object) -> ResolvedDestination:
+        """Recheck the current top-frame URL after a vendor navigation call.
+
+        Route and response guards remain the pre-I/O boundary.  This final
+        check closes the separate postcondition: a vendor click/popup method
+        must not return a page that silently ended on an internal or
+        unreviewed target, even when the runtime did not expose the final hop
+        through the expected callback sequence.
+        """
+
+        locator = _text_attribute(page, "url")
+        if locator is None or _is_internal_url(locator):
+            raise _Abort("runtime")
+        destination = state.resolve(
+            locator,
+            kind=BrowserDestinationKind.NAVIGATION,
+        )
+        return destination
 
     def _client_fill(self, state: _FlowState, page: object, selector: str, value: str) -> None:
         selector = self._selector(selector)
@@ -2420,9 +3379,9 @@ class BrowserClient:
             )
         except (PolicyError, TypeError, ValueError) as error:
             raise _Abort("policy") from error
-        state.guard(normalized.url, BrowserDestinationKind.NAVIGATION)
-        if normalized.hostname not in state.destinations:
-            raise _Abort("runtime")
+        destination = self._validate_page_location(state, page)
+        if destination.url.url != normalized.url:
+            raise _Abort("policy")
         return BrowserPageObservation(
             locator=normalized.url,
             status_code=state.page_statuses.get(id(page)),
@@ -2477,7 +3436,7 @@ class BrowserClient:
             failed = True
         # Context close is the runtime-level abort/completion acknowledgement
         # for any subresource that did not emit requestfinished/requestfailed.
-        # Keep its host lease until after that close returns.
+        # Keep every article-host lease until after that close returns.
         if not keep_session and state.finish_all_requests():
             failed = True
         state.finish_cleanup(failed=failed)
@@ -2622,6 +3581,7 @@ __all__ = (
     "BrowserBudget",
     "BrowserCaptureGuard",
     "BrowserClient",
+    "BrowserConnectionOriginGuard",
     "BrowserDestinationGuard",
     "BrowserDestinationKind",
     "BrowserError",

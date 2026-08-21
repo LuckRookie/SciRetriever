@@ -2109,8 +2109,8 @@ class DatabaseCompletionTests(unittest.TestCase):
         world.acquisition_plans[successful_id] = ["publisher-success"]
         stable_failure = StableFailure(
             code="acquisition-browser-login-required",
-            reason="The Publisher Browser session requires a fresh login.",
-            action="Open the visible Browser login flow and retry Completion.",
+            reason="The Publisher page requires an unsupported login.",
+            action="Use an authorized API or provide the PDF manually.",
             retryable=False,
         )
         world.acquisition_plans[action_required_id] = [AcquisitionFailure(stable_failure)]

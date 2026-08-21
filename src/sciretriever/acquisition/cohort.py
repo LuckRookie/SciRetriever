@@ -937,10 +937,14 @@ def _browser_runtime_block_failure(
             retryable=True,
         )
     action_by_reason = {
-        BrowserCircuitReason.LOGIN_REQUIRED: "Complete provider login outside automation.",
-        BrowserCircuitReason.MFA_REQUIRED: "Complete provider MFA outside automation.",
+        BrowserCircuitReason.LOGIN_REQUIRED: (
+            "Use an authorized API or provide the PDF manually; Browser login is unsupported."
+        ),
+        BrowserCircuitReason.MFA_REQUIRED: (
+            "Use an authorized API or provide the PDF manually; Browser MFA is unsupported."
+        ),
         BrowserCircuitReason.CHALLENGE_REQUIRED: (
-            "Review the provider challenge outside automation."
+            "Provide the PDF manually; Browser challenge handling is unsupported."
         ),
         BrowserCircuitReason.IP_BLOCKED: "Review the provider IP access block.",
         BrowserCircuitReason.ACCOUNT_WARNING: "Review the provider account warning.",

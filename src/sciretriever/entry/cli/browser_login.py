@@ -1,10 +1,10 @@
-"""Explicit visible-Browser boundary for operator-managed login sessions.
+"""Explicit visible-Chrome boundary for operator-managed profile setup.
 
-This module is deliberately separate from automatic Acquisition.  It opens an
-empty visible Chromium window backed by an already validated local profile,
-then gives all navigation and authentication decisions to the operator.  The
-program does not navigate, inspect pages, enumerate storage, fill fields, or
-claim that closing the window proved authentication or article entitlement.
+This is deliberately separate from automatic Acquisition. It opens one blank
+visible Chrome window backed by the selected persistent profile and leaves all
+navigation, institution selection, login, MFA and verification to the user.
+SciRetriever never inspects a page, reads storage, fills credentials, handles
+CAPTCHA, or treats closing the window as proof of article entitlement.
 """
 
 from __future__ import annotations
@@ -15,15 +15,19 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Protocol, TypeAlias, cast
 
-from sciretriever.configuration import BrowserProfileHandle
+from sciretriever.configuration import (
+    BrowserProfileHandle,
+    ConfigurationError,
+)
 
 
 class VisibleBrowserLoginError(RuntimeError):
-    """Stable, path-free failure from the explicit Browser login boundary."""
+    """Stable, path-free failure from the visible profile-setup boundary."""
 
     _CODES = frozenset(
         {
             "runtime-unavailable",
+            "profile-in-use",
             "launch-failed",
             "session-failed",
             "cleanup-failed",
@@ -57,10 +61,7 @@ class _LoginChromium(Protocol):
     def launch_persistent_context(
         self,
         user_data_dir: str,
-        *,
-        headless: bool,
-        accept_downloads: bool,
-        no_viewport: bool,
+        **options: object,
     ) -> _LoginContext: ...
 
 
@@ -85,15 +86,26 @@ def _launch_visible_context(
     runtime: _LoginRuntime,
     profile_directory: str,
 ) -> _LoginContext:
+    options: dict[str, object] = {
+        "headless": False,
+        "accept_downloads": False,
+        "no_viewport": True,
+        "args": ("--no-first-run", "--disable-pdf-extension"),
+    }
     try:
         return runtime.chromium.launch_persistent_context(
             profile_directory,
-            headless=False,
-            accept_downloads=False,
-            no_viewport=True,
+            channel="chrome",
+            **options,
         )
     except Exception:
-        raise VisibleBrowserLoginError("launch-failed") from None
+        try:
+            return runtime.chromium.launch_persistent_context(
+                profile_directory,
+                **options,
+            )
+        except Exception:
+            raise VisibleBrowserLoginError("launch-failed") from None
 
 
 def _remaining_pages(context: _LoginContext) -> tuple[_LoginPage, ...]:
@@ -158,13 +170,7 @@ def open_visible_browser_login(
     runtime_factory: _RuntimeFactory | None = None,
     poll_milliseconds: int = 250,
 ) -> None:
-    """Open one visible persistent context until the operator closes it.
-
-    The Browser starts at its own blank page.  No URL, credentials, Cookie,
-    storage state, or page object crosses this boundary.  ``runtime_factory``
-    is an offline-test seam; production always uses the locked Playwright
-    dependency.
-    """
+    """Open a blank visible persistent Chrome window until the user closes it."""
 
     if not isinstance(profile, BrowserProfileHandle):
         raise TypeError("profile must be a BrowserProfileHandle")
@@ -172,15 +178,27 @@ def open_visible_browser_login(
         raise TypeError("runtime_factory must be callable")
     if type(poll_milliseconds) is not int or poll_milliseconds < 1:
         raise ValueError("poll_milliseconds must be a positive integer")
-    profile_directory = os.fspath(profile.runtime_directory())
+    try:
+        profile_lease = profile.acquire_runtime()
+    except ConfigurationError as error:
+        if str(error) == "browser profile is already in use":
+            raise VisibleBrowserLoginError("profile-in-use") from None
+        raise VisibleBrowserLoginError("launch-failed") from None
     factory = _production_runtime_manager if runtime_factory is None else runtime_factory
     try:
-        manager = factory()
-    except VisibleBrowserLoginError:
-        raise
-    except Exception:
-        raise VisibleBrowserLoginError("launch-failed") from None
-    _run_visible_runtime(manager, profile_directory, poll_milliseconds)
+        try:
+            manager = factory()
+        except VisibleBrowserLoginError:
+            raise
+        except Exception:
+            raise VisibleBrowserLoginError("launch-failed") from None
+        _run_visible_runtime(
+            manager,
+            os.fspath(profile_lease.directory),
+            poll_milliseconds,
+        )
+    finally:
+        profile_lease.close()
 
 
 __all__ = (

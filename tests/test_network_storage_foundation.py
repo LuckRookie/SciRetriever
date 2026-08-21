@@ -338,12 +338,10 @@ class _FakeProcess:
     def new_context(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         accept_downloads: bool,
         connection_binding: object,
     ) -> _FakeContext:
-        del profile
         if not accept_downloads:
             raise RuntimeError("downloads must be enabled")
         self.downloads_path = downloads_path
@@ -376,11 +374,10 @@ class _FakeBrowserFactory:
     def __call__(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         connection_binding: object,
     ) -> _FakeProcess:
-        del profile, downloads_path
+        del downloads_path
         process = _FakeProcess(
             configured_download=self.configured_download,
             blocking_goto=self.blocking_goto,
@@ -609,10 +606,10 @@ class MisownedAnalysisArtifactPort(Protocol):
         self.assertFalse(worker.is_alive())
         self.assertEqual(len(result), 1)
 
-    def test_browser_holds_host_permit_until_request_finished(self) -> None:
+    def test_browser_holds_host_permit_until_the_article_flow_finishes(self) -> None:
         resolver = _FakeResolver({"landing.test": ("93.184.216.34",)})
         coordinator = AccessCoordinator()
-        factory = _FakeBrowserFactory(hold_request_finished=True)
+        factory = _FakeBrowserFactory()
         browser = BrowserClient(
             factory=factory,
             resolver=resolver,
@@ -622,23 +619,26 @@ class MisownedAnalysisArtifactPort(Protocol):
         web_scope = AccessScope("browser-provider", "web")
         api_scope = AccessScope("api-provider", "api", "metadata")
         result_holder: list[object] = []
+        article_flow_entered = threading.Event()
+        release_article_flow = threading.Event()
+
+        def hold_article_flow(session: object) -> None:
+            del session
+            article_flow_entered.set()
+            release_article_flow.wait(1.0)
 
         worker = threading.Thread(
             target=lambda: result_holder.append(
-                browser.run(web_scope, "https://landing.test/start", _WEB_POLICY)
+                browser.run(
+                    web_scope,
+                    "https://landing.test/start",
+                    _WEB_POLICY,
+                    flow=hold_article_flow,
+                )
             )
         )
         worker.start()
-        context: _FakeContext | None = None
-        for _ in range(100):
-            if factory.processes and factory.processes[0].context is not None:
-                context = factory.processes[0].context
-                if context.request_continued.wait(0.01):
-                    break
-            time.sleep(0.01)
-        else:
-            self.fail("navigation did not reach route continuation")
-        assert context is not None
+        self.assertTrue(article_flow_entered.wait(1.0))
 
         api_permit = coordinator.acquire_scope(api_scope, AccessPolicy(max_concurrency=1))
         try:
@@ -647,7 +647,7 @@ class MisownedAnalysisArtifactPort(Protocol):
         finally:
             api_permit.release()
 
-        context.request_finished_gate.set()
+        release_article_flow.set()
         worker.join(2.0)
         self.assertFalse(worker.is_alive())
         self.assertEqual(_failure(result_holder[0]).code, "no-download")

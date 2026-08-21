@@ -1,56 +1,55 @@
-"""Production Playwright adapter for the controlled Browser boundary.
+"""Production headed-Playwright adapter for the controlled Browser boundary.
 
 The synchronous Playwright API is thread-affine, while :mod:`network.browser`
 executes every potentially blocking vendor operation in a cancellable worker.
-This adapter therefore owns one engine thread per persistent Browser session
-and marshals vendor calls onto it.  Every HTTP(S) request is intercepted and
-fulfilled through a socket bound to the exact DNS result already approved by
-``BrowserClient``; Chromium never performs an unreviewed network connection.
+This adapter therefore owns one engine thread for the shared persistent-profile
+runtime and marshals isolated Publisher article lanes onto it. Every HTTP(S) request is
+intercepted for destination admission and then continued through Chromium's
+native network stack. A loopback CONNECT tunnel pins the connection to the
+exact DNS result approved by ``BrowserClient`` while forwarding encrypted
+bytes without terminating TLS or replacing Chrome HTTP behaviour.
 
-Only opaque vendor wrappers cross into ``network.browser``.  Cookies and the
-operator-managed profile remain private to Playwright, response bodies remain
-bounded, and no URL, header, Cookie, profile path, or vendor exception is
-included in adapter errors or representations.
+Only opaque vendor wrappers cross into ``network.browser``. Cookies remain in
+the operator-managed persistent profile, response and download bodies remain
+bounded, and no URL, header, Cookie, profile path, workspace path, or vendor
+exception is included in adapter errors or representations.
 """
 
 from __future__ import annotations
 
-import http.client
 import importlib.util
 import json
 import os
 import queue
-import socket
-import ssl
+import shutil
 import sys
 import threading
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, TypeVar, cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
+
+from sciretriever.logging.api import get_logger
+
+from .browser_connect import (
+    BrowserConnectProxy,
+    HeadedDisplayLease,
+    acquire_headed_display,
+    xvfb_executable_available,
+)
 
 _T = TypeVar("_T")
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 65.0
-_CONNECT_TIMEOUT_SECONDS: Final[float] = 15.0
 _EVENT_PUMP_INTERVAL_SECONDS: Final[float] = 0.01
 _MAX_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
 _MAX_ARTICLE_BYTES: Final[int] = 128 * 1024 * 1024
-_MAX_NAVIGATION_REDIRECTS: Final[int] = 16
-_REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
-_HOP_BY_HOP_HEADERS: Final[frozenset[str]] = frozenset(
-    {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    }
+_MAX_DISCOVERED_PDF_LOCATORS: Final[int] = 16
+_MAX_DISCOVERED_LOCATOR_LENGTH: Final[int] = 8192
+_CAPTURE_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
+    {"content-type", "content-length", "content-disposition"}
 )
+_LOGGER = get_logger(__name__)
 
 
 class PlaywrightRuntimeError(RuntimeError):
@@ -61,18 +60,35 @@ def _runtime_error() -> PlaywrightRuntimeError:
     return PlaywrightRuntimeError("controlled Playwright runtime failed")
 
 
+class _ResponseViewError(PlaywrightRuntimeError):
+    """Payload-free response-view failure with one safe field identifier."""
+
+    __slots__ = ("field",)
+
+    def __init__(self, field: str) -> None:
+        self.field = field
+        super().__init__("controlled Playwright runtime failed")
+
+
+def _response_view_error(field: str) -> _ResponseViewError:
+    return _ResponseViewError(field)
+
+
 @dataclass(frozen=True, slots=True)
 class PlaywrightRuntimeAvailability:
-    """Static package/binary presence without starting Playwright or Chromium."""
+    """Static package, browser and headed-display presence without launching."""
 
     python_dependency_available: bool
     chromium_executable_available: bool
+    headed_display_available: bool
 
     def __post_init__(self) -> None:
         if type(self.python_dependency_available) is not bool:
             raise TypeError("python_dependency_available must be a bool")
         if type(self.chromium_executable_available) is not bool:
             raise TypeError("chromium_executable_available must be a bool")
+        if type(self.headed_display_available) is not bool:
+            raise TypeError("headed_display_available must be a bool")
         if self.chromium_executable_available and not self.python_dependency_available:
             raise ValueError("a Chromium executable requires the Playwright dependency")
 
@@ -157,15 +173,48 @@ def playwright_runtime_availability() -> PlaywrightRuntimeAvailability:
 
     package = _playwright_package_directory()
     if package is None:
-        return PlaywrightRuntimeAvailability(False, False)
+        return PlaywrightRuntimeAvailability(False, False, xvfb_executable_available())
     revision = _chromium_revision(package)
     if revision is None:
-        return PlaywrightRuntimeAvailability(True, False)
-    available = any(
+        return PlaywrightRuntimeAvailability(
+            True,
+            _stable_chrome_available(),
+            xvfb_executable_available(),
+        )
+    available = _stable_chrome_available() or any(
         candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK))
         for candidate in _chromium_executable_candidates(package, revision)
     )
-    return PlaywrightRuntimeAvailability(True, available)
+    return PlaywrightRuntimeAvailability(True, available, xvfb_executable_available())
+
+
+def _stable_chrome_available() -> bool:
+    if sys.platform.startswith("linux"):
+        candidates = (
+            shutil.which("google-chrome"),
+            shutil.which("google-chrome-stable"),
+            "/opt/google/chrome/chrome",
+        )
+    elif sys.platform == "darwin":
+        candidates = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",)
+    elif os.name == "nt":
+        candidates = tuple(
+            os.path.join(root, "Google", "Chrome", "Application", "chrome.exe")
+            for root in (
+                os.environ.get("PROGRAMFILES", ""),
+                os.environ.get("PROGRAMFILES(X86)", ""),
+                os.environ.get("LOCALAPPDATA", ""),
+            )
+            if root
+        )
+    else:
+        candidates = ()
+    return any(
+        candidate is not None
+        and os.path.isfile(candidate)
+        and (os.name == "nt" or os.access(candidate, os.X_OK))
+        for candidate in candidates
+    )
 
 
 def _required_callable(value: object, name: str) -> Callable[..., object]:
@@ -195,6 +244,16 @@ def _string_value(value: object, name: str) -> str:
     return candidate
 
 
+def _vendor_identity(value: object) -> object:
+    """Return one operation-local identity stable across Playwright wrappers."""
+
+    implementation = getattr(value, "_impl_obj", None)
+    guid = getattr(implementation, "_guid", None)
+    if type(guid) is str and guid:
+        return ("playwright-guid", guid)
+    return id(value)
+
+
 def _is_playwright_timeout(error: BaseException) -> bool:
     """Recognize only Playwright's bounded operation timeout lazily.
 
@@ -209,6 +268,26 @@ def _is_playwright_timeout(error: BaseException) -> bool:
     except (ImportError, ModuleNotFoundError):
         return False
     return isinstance(error, PlaywrightTimeoutError)
+
+
+def _playwright_error_category(error: BaseException) -> str:
+    """Map a vendor message to one fixed, payload-free diagnostic category."""
+
+    try:
+        message = str(error).casefold()
+    except BaseException:
+        return "unknown"
+    if "execution context was destroyed" in message or "because of a navigation" in message:
+        return "navigation-race"
+    if "frame was detached" in message or "cannot find context with specified id" in message:
+        return "frame-transition"
+    if "target page, context or browser has been closed" in message:
+        return "page-closed"
+    if "strict mode violation" in message or "unexpected token" in message:
+        return "selector-contract"
+    if "timeout" in message:
+        return "vendor-timeout"
+    return "other"
 
 
 @dataclass(slots=True)
@@ -285,83 +364,15 @@ class _EventDispatcher:
                 self._failed = True
 
 
-class _BoundHttpConnection(http.client.HTTPConnection):
-    """HTTP connection that cannot resolve or select another endpoint."""
-
-    def __init__(self, *, address: str, port: int, authority: str) -> None:
-        super().__init__(authority, port, timeout=_CONNECT_TIMEOUT_SECONDS)
-        self._address = address
-
-    def connect(self) -> None:
-        self.sock = socket.create_connection(
-            (self._address, self.port),
-            timeout=self.timeout,
-        )
-
-
-class _BoundHttpsConnection(http.client.HTTPSConnection):
-    """HTTPS connection pinned to an IP while preserving authority and SNI."""
-
-    def __init__(
-        self,
-        *,
-        address: str,
-        port: int,
-        authority: str,
-        server_name: str,
-    ) -> None:
-        super().__init__(
-            authority,
-            port,
-            context=(tls_context := ssl.create_default_context()),
-            timeout=_CONNECT_TIMEOUT_SECONDS,
-        )
-        self._address = address
-        self._server_name = server_name
-        self._tls_context = tls_context
-
-    def connect(self) -> None:
-        raw = socket.create_connection(
-            (self._address, self.port),
-            timeout=self.timeout,
-        )
-        try:
-            self.sock = self._tls_context.wrap_socket(raw, server_hostname=self._server_name)
-        except BaseException:
-            raw.close()
-            raise
-
-
 @dataclass(frozen=True, slots=True)
 class _NavigationResponse:
     url: str
     status: int
-    redirect_url: str | None = None
-
-
-def _redirect_url(response: _Response) -> str | None:
-    if response.status not in _REDIRECT_STATUSES:
-        return None
-    location = next(
-        (value for name, value in response.headers if name == "location"),
-        None,
-    )
-    if type(location) is not str or not location.strip():
-        return None
-    target = urljoin(response.url, location)
-    parsed = urlsplit(target)
-    if (
-        parsed.scheme.casefold() not in {"http", "https"}
-        or parsed.hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise _runtime_error()
-    return target
+    media_type: str
 
 
 class _Request:
-    """Thread-neutral snapshot of one intercepted Playwright request."""
+    """Thread-neutral identity and safe fields for one Playwright request."""
 
     __slots__ = (
         "raw",
@@ -369,22 +380,30 @@ class _Request:
         "url",
         "resource_type",
         "method",
-        "headers",
-        "body",
+        "redirected_from",
+        "article_token",
         "_navigation",
     )
 
-    def __init__(self, raw: object, page: _Page | None) -> None:
+    def __init__(
+        self,
+        raw: object,
+        page: _Page | None,
+        redirected_from: _Request | None,
+    ) -> None:
         self.raw = raw
         self.page = page
         self.url = _string_value(raw, "url")
         self.resource_type = _string_value(raw, "resource_type")
         self.method = _string_value(raw, "method")
-        self.headers = _request_headers(raw)
-        body = _optional_value(raw, "post_data_buffer")
-        if body is not None and not isinstance(body, bytes):
-            raise _runtime_error()
-        self.body = body
+        self.redirected_from = redirected_from
+        self.article_token = (
+            page.article_token
+            if page is not None
+            else None
+            if redirected_from is None
+            else redirected_from.article_token
+        )
         navigation = _optional_value(raw, "is_navigation_request")
         self._navigation = navigation is True
 
@@ -392,52 +411,176 @@ class _Request:
         return self._navigation
 
 
-def _request_headers(raw: object) -> tuple[tuple[str, str], ...]:
-    value = _optional_value(raw, "all_headers")
-    if value is None:
-        value = _optional_value(raw, "headers")
+@dataclass(slots=True)
+class _NativeRequestState:
+    """Order native response/completion events for one redirect-chain member."""
+
+    request: _Request
+    root: _NativeRequestState | None = None
+    chain: list[_NativeRequestState] = field(default_factory=list)
+    response_pending: int = 0
+    response_seen: bool = False
+    response_redirects: bool = False
+    completion_event: str | None = None
+    completion_submitted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.root is None:
+            self.root = self
+            self.chain.append(self)
+        else:
+            self.root.chain.append(self)
+
+
+@dataclass(slots=True)
+class _ArticleState:
+    """All mutable Browser facts owned by one active Publisher article lane."""
+
+    lane_key: str
+    token: object = field(default_factory=object)
+    route_handler: Callable[[object], object] | None = None
+    event_handlers: dict[str, Callable[[object], object]] = field(default_factory=dict)
+    page_keys: set[int] = field(default_factory=set)
+    request_keys: set[object] = field(default_factory=set)
+    navigation_responses: dict[int, _NavigationResponse] = field(default_factory=dict)
+    article_bytes: int = 0
+    transport_drained: bool = False
+    cleanup_failed: bool = False
+    active: bool = True
+
+
+def _headers(raw: object) -> tuple[tuple[str, str], ...]:
+    # Playwright's cached ``headers`` property is deliberately preferred here.
+    # Calling ``all_headers()`` from inside the synchronous native response
+    # callback pumps protocol events re-entrantly; a same-origin subresource
+    # route can then wait on the still-live parent host lease and deadlock the
+    # engine thread. Only three capture-classification fields are retained;
+    # unrelated multi-value fields such as Set-Cookie must never invalidate a
+    # complete response view.
+    value = _optional_value(raw, "headers")
     if not isinstance(value, Mapping):
-        raise _runtime_error()
-    headers = []
+        raise _response_view_error("headers")
+    headers: list[tuple[str, str]] = []
     for name, item in value.items():
-        if not isinstance(name, str) or not isinstance(item, str):
-            raise _runtime_error()
-        folded = name.strip().casefold()
-        if (
-            not folded
-            or folded in _HOP_BY_HOP_HEADERS
-            or folded in {"host", "content-length"}
-            or "\r" in item
-            or "\n" in item
-        ):
+        if not isinstance(name, str):
             continue
+        folded = name.strip().casefold()
+        if folded not in _CAPTURE_RESPONSE_HEADERS:
+            continue
+        if not isinstance(item, str) or "\r" in item or "\n" in item:
+            raise _response_view_error(folded)
         headers.append((folded, item))
     return tuple(headers)
 
 
-class _Response:
-    """Bounded response body retained only for BrowserClient capture."""
+def _content_length(headers: tuple[tuple[str, str], ...]) -> int | None:
+    value = next((item for name, item in headers if name == "content-length"), None)
+    if value is None or not value.isascii() or not value.isdigit():
+        return None
+    size = int(value)
+    return size if size >= 0 else None
 
-    __slots__ = ("request", "url", "status", "headers", "media_type", "size", "_body")
+
+class _Response:
+    """Thread-neutral response view whose body stays on the engine thread."""
+
+    __slots__ = (
+        "_context",
+        "_article",
+        "_raw",
+        "request",
+        "url",
+        "status",
+        "headers",
+        "media_type",
+        "size",
+        "download_expected",
+        "attachment_download",
+    )
 
     def __init__(
         self,
+        context: _Context,
+        article: _ArticleContext,
+        raw: object,
         request: _Request,
-        *,
-        status: int,
-        headers: tuple[tuple[str, str], ...],
-        body: bytes,
     ) -> None:
+        self._context = context
+        self._article = article
+        self._raw = raw
         self.request = request
-        self.url = request.url
+        self.url = _string_value(raw, "url")
+        status = _optional_value(raw, "status")
+        if type(status) is not int or not 100 <= status <= 599:
+            raise _runtime_error()
         self.status = status
-        self.headers = headers
-        self.media_type = _media_type(headers)
-        self.size = len(body)
-        self._body = body
+        self.headers = _headers(raw)
+        self.media_type = _media_type(self.headers)
+        self.size = _content_length(self.headers)
+        self.download_expected = (
+            request.is_navigation_request() and self.media_type == "application/pdf"
+        )
+        disposition = next(
+            (value for name, value in self.headers if name == "content-disposition"),
+            "",
+        )
+        self.attachment_download = (
+            request.is_navigation_request() and "attachment" in disposition.casefold()
+        )
 
     def body(self) -> bytes:
-        return self._body
+        declared = self.size
+        if declared is not None and declared > _MAX_RESPONSE_BYTES:
+            raise _runtime_error()
+        value = self._context.engine.call(lambda: _required_callable(self._raw, "body")())
+        if not isinstance(value, bytes) or len(value) > _MAX_RESPONSE_BYTES:
+            raise _runtime_error()
+        if not self._article.consume_article_bytes(len(value)):
+            raise _runtime_error()
+        return value
+
+
+class _Download:
+    """Thread-neutral view of one native Playwright download."""
+
+    __slots__ = ("_article", "_context", "_raw", "request", "url", "media_type", "size")
+
+    def __init__(self, context: _Context, article: _ArticleContext, raw: object) -> None:
+        self._context = context
+        self._article = article
+        self._raw = raw
+        self.request = None
+        self.url = _string_value(raw, "url")
+        self.media_type = "application/octet-stream"
+        self.size = None
+
+    def content(self, maximum_bytes: int) -> bytes:
+        if type(maximum_bytes) is not int or maximum_bytes < 1:
+            raise _runtime_error()
+        value = self._context.engine.call(lambda: _required_callable(self._raw, "path")())
+        if not isinstance(value, (str, Path)):
+            raise _runtime_error()
+        candidate = Path(value)
+        try:
+            resolved = candidate.resolve(strict=True)
+            root = self._context.downloads_root.resolve(strict=True)
+            resolved.relative_to(root)
+            if candidate.is_symlink() or not resolved.is_file():
+                raise _runtime_error()
+            if resolved.stat().st_size > maximum_bytes:
+                raise _runtime_error()
+            with resolved.open("rb") as stream:
+                body = stream.read(maximum_bytes + 1)
+        except PlaywrightRuntimeError:
+            raise
+        except OSError:
+            raise _runtime_error() from None
+        if len(body) > maximum_bytes or not self._article.consume_article_bytes(len(body)):
+            raise _runtime_error()
+        return body
+
+    def delete(self) -> None:
+        self._context.engine.call(lambda: _required_callable(self._raw, "delete")())
 
 
 def _media_type(headers: tuple[tuple[str, str], ...]) -> str:
@@ -448,7 +591,7 @@ def _media_type(headers: tuple[tuple[str, str], ...]) -> str:
 
 
 class _Engine:
-    """Own the Playwright driver and one persistent Chromium context."""
+    """Own one headed Chromium context, display lease and native byte tunnel."""
 
     __slots__ = (
         "_commands",
@@ -457,12 +600,19 @@ class _Engine:
         "_failure",
         "_runtime",
         "_context",
-        "_connections",
-        "_connection_lock",
+        "_proxy",
+        "_display",
+        "_profile_handle",
+        "_profile_lease",
+        "_ignore_https_errors",
         "_closed",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, profile_handle: object, *, ignore_https_errors: bool) -> None:
+        if type(ignore_https_errors) is not bool:
+            raise TypeError("ignore_https_errors must be a bool")
+        if not callable(getattr(profile_handle, "acquire_runtime", None)):
+            raise TypeError("profile_handle must expose acquire_runtime()")
         self._commands: queue.Queue[_Command | None] = queue.Queue()
         self._ready = threading.Event()
         self._thread = threading.Thread(
@@ -473,8 +623,11 @@ class _Engine:
         self._failure: BaseException | None = None
         self._runtime: object | None = None
         self._context: _Context | None = None
-        self._connections: set[http.client.HTTPConnection] = set()
-        self._connection_lock = threading.Lock()
+        self._proxy: BrowserConnectProxy | None = None
+        self._display: HeadedDisplayLease | None = None
+        self._profile_handle = profile_handle
+        self._profile_lease: object | None = None
+        self._ignore_https_errors = ignore_https_errors
         self._closed = False
 
     def start(self) -> None:
@@ -497,13 +650,16 @@ class _Engine:
         if not command.completed.wait(_COMMAND_TIMEOUT_SECONDS):
             self.interrupt()
             raise _runtime_error()
-        if command.failure or not command.result:
+        if command.failure:
+            if isinstance(command.failure[0], TimeoutError):
+                raise TimeoutError from None
+            raise _runtime_error()
+        if not command.result:
             raise _runtime_error()
         return cast(_T, command.result[0])
 
     def launch_context(
         self,
-        profile: object | None,
         downloads_path: str,
     ) -> _Context:
         if self._context is not None:
@@ -517,105 +673,51 @@ class _Engine:
             launch_persistent = getattr(chromium, "launch_persistent_context", None)
             if not callable(launch_persistent):
                 raise _runtime_error()
-            directory = _profile_directory(profile)
-            raw_context = launch_persistent(
-                os.fspath(directory),
-                headless=True,
-                accept_downloads=True,
-                downloads_path=downloads_path,
-                service_workers="block",
-                no_viewport=True,
-            )
-            context = _Context(self, raw_context)
+            profile_lease = _required_callable(self._profile_handle, "acquire_runtime")()
+            directory = _runtime_profile_directory(profile_lease)
+            self._profile_lease = profile_lease
+            _configure_pdf_download_preference(directory)
+            proxy = BrowserConnectProxy(maximum_article_bytes=_MAX_ARTICLE_BYTES)
+            display = acquire_headed_display()
+            self._proxy = proxy
+            self._display = display
+            options: dict[str, object] = {
+                "headless": False,
+                "accept_downloads": True,
+                "downloads_path": downloads_path,
+                "service_workers": "block",
+                "no_viewport": True,
+                "ignore_https_errors": self._ignore_https_errors,
+                "proxy": {"server": proxy.server_url},
+                "env": display.environment(),
+                "args": (
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-default-apps",
+                    "--disable-pdf-extension",
+                    "--disable-sync",
+                    "--no-first-run",
+                ),
+            }
+            if _stable_chrome_available():
+                options["channel"] = "chrome"
+            try:
+                raw_context = launch_persistent(os.fspath(directory), **options)
+            except BaseException:
+                if "channel" not in options:
+                    raise
+                options.pop("channel")
+                raw_context = launch_persistent(os.fspath(directory), **options)
+            context = _Context(self, raw_context, proxy, Path(downloads_path))
             self._context = context
             return context
 
         return self.call(launch)
 
-    def fetch(self, request: _Request, binding: object) -> _Response:
-        parsed = urlsplit(request.url)
-        scheme = _binding_text(binding, "scheme")
-        hostname = _binding_text(binding, "hostname")
-        address = _binding_text(binding, "address")
-        authority = _binding_text(binding, "authority")
-        server_name = _binding_text(binding, "tls_server_name")
-        port = _binding_port(binding)
-        verified = getattr(binding, "verified_addresses", None)
-        if (
-            scheme not in {"http", "https"}
-            or parsed.scheme.casefold() != scheme
-            or parsed.hostname is None
-            or parsed.hostname.casefold() != hostname
-            or parsed.port not in {None, port}
-            or not isinstance(verified, tuple)
-            or address not in verified
-        ):
-            raise _runtime_error()
-        connection: http.client.HTTPConnection
-        if scheme == "https":
-            connection = _BoundHttpsConnection(
-                address=address,
-                port=port,
-                authority=authority,
-                server_name=server_name,
-            )
-        else:
-            connection = _BoundHttpConnection(
-                address=address,
-                port=port,
-                authority=authority,
-            )
-        with self._connection_lock:
-            self._connections.add(connection)
-        try:
-            target = parsed.path or "/"
-            if parsed.query:
-                target = f"{target}?{parsed.query}"
-            headers = dict(request.headers)
-            headers["host"] = _authority_header(scheme, authority, port)
-            connection.request(
-                request.method,
-                target,
-                body=request.body,
-                headers=headers,
-            )
-            raw_response = connection.getresponse()
-            body = raw_response.read(_MAX_RESPONSE_BYTES + 1)
-            if len(body) > _MAX_RESPONSE_BYTES:
-                raise _runtime_error()
-            response_headers = _response_headers(raw_response.getheaders(), len(body))
-            status = raw_response.status
-            if type(status) is not int or not 100 <= status <= 599:
-                raise _runtime_error()
-            context = self._context
-            if context is None or not context.consume_article_bytes(len(body)):
-                raise _runtime_error()
-            return _Response(
-                request,
-                status=status,
-                headers=response_headers,
-                body=body,
-            )
-        except PlaywrightRuntimeError:
-            raise
-        except BaseException:
-            raise _runtime_error() from None
-        finally:
-            with self._connection_lock:
-                self._connections.discard(connection)
-            try:
-                connection.close()
-            except Exception:
-                pass
-
     def interrupt(self) -> None:
-        with self._connection_lock:
-            connections = tuple(self._connections)
-        for connection in connections:
-            try:
-                connection.close()
-            except Exception:
-                continue
+        context = self._context
+        if context is not None:
+            context.interrupt_transport()
 
     def close(self) -> None:
         if self._closed:
@@ -630,7 +732,15 @@ class _Engine:
             raise _runtime_error()
 
     def _main(self) -> None:
-        manager: object | None = None
+        if not self._start_runtime():
+            return
+        self._ready.set()
+        self._run_commands()
+        cleanup_failure = self._stop_runtime()
+        if cleanup_failure is not None:
+            self._failure = cleanup_failure
+
+    def _start_runtime(self) -> bool:
         try:
             from playwright.sync_api import sync_playwright
 
@@ -639,8 +749,10 @@ class _Engine:
         except BaseException as error:
             self._failure = error
             self._ready.set()
-            return
-        self._ready.set()
+            return False
+        return True
+
+    def _run_commands(self) -> None:
         while True:
             try:
                 command = self._commands.get(timeout=_EVENT_PUMP_INTERVAL_SECONDS)
@@ -657,6 +769,9 @@ class _Engine:
                 command.failure.append(error)
             finally:
                 command.completed.set()
+
+    def _stop_runtime(self) -> BaseException | None:
+        cleanup_failure: BaseException | None = None
         try:
             if self._context is not None:
                 self._context.close_from_engine()
@@ -664,74 +779,87 @@ class _Engine:
             if runtime is not None:
                 _required_callable(runtime, "stop")()
         except BaseException as error:
-            self._failure = error
-        finally:
-            self._runtime = None
+            cleanup_failure = error
+        self._runtime = None
+        proxy = self._proxy
+        self._proxy = None
+        cleanup_failure = self._close_cleanup_resource(proxy, cleanup_failure)
+        display = self._display
+        self._display = None
+        cleanup_failure = self._close_cleanup_resource(display, cleanup_failure)
+        profile_lease = self._profile_lease
+        self._profile_lease = None
+        return self._close_cleanup_resource(profile_lease, cleanup_failure)
+
+    @staticmethod
+    def _close_cleanup_resource(
+        resource: object | None,
+        prior: BaseException | None,
+    ) -> BaseException | None:
+        if resource is None:
+            return prior
+        try:
+            _required_callable(resource, "close")()
+        except BaseException as error:
+            return prior or error
+        return prior
 
 
-def _binding_text(binding: object, name: str) -> str:
-    value = getattr(binding, name, None)
-    if type(value) is not str:
-        raise _runtime_error()
-    return value.strip().casefold()
-
-
-def _binding_port(binding: object) -> int:
-    value = getattr(binding, "port", None)
-    if type(value) is not int or not 1 <= value <= 65535:
-        raise _runtime_error()
-    return value
-
-
-def _authority_header(scheme: str, authority: str, port: int) -> str:
-    default = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
-    return authority if default else f"{authority}:{port}"
-
-
-def _response_headers(
-    headers: list[tuple[str, str]],
-    body_size: int,
-) -> tuple[tuple[str, str], ...]:
-    combined: dict[str, list[str]] = {}
-    for name, value in headers:
-        folded = name.strip().casefold()
-        if (
-            not folded
-            or folded in _HOP_BY_HOP_HEADERS
-            or folded == "content-length"
-            or "\r" in value
-            or "\n" in value
-        ):
-            continue
-        combined.setdefault(folded, []).append(value)
-    result = []
-    for name, values in combined.items():
-        separator = "\n" if name == "set-cookie" else ", "
-        result.append((name, separator.join(values)))
-    result.append(("content-length", str(body_size)))
-    return tuple(result)
-
-
-def _profile_directory(profile: object | None) -> Path:
-    if profile is None:
-        raise _runtime_error()
-    runtime_directory = getattr(profile, "runtime_directory", None)
-    if not callable(runtime_directory):
+def _runtime_profile_directory(profile_lease: object) -> Path:
+    candidate = _optional_value(profile_lease, "directory")
+    if not isinstance(candidate, Path):
         raise _runtime_error()
     try:
-        value = runtime_directory()
-    except Exception:
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise _runtime_error()
+    except PlaywrightRuntimeError:
+        raise
+    except OSError:
         raise _runtime_error() from None
-    if not isinstance(value, Path) or not value.is_dir():
-        raise _runtime_error()
-    return value
+    return candidate
+
+
+def _configure_pdf_download_preference(directory: Path) -> None:
+    """Make native PDF navigation produce a bounded Chrome download event.
+
+    An empty newly initialized profile is seeded once. Existing user settings
+    are never overwritten: profile history, authentication state, extensions,
+    preferences and site data belong to the operator-managed identity.
+    """
+
+    try:
+        default = directory / "Default"
+        default.mkdir(mode=0o700, parents=False, exist_ok=True)
+        preferences = default / "Preferences"
+        if preferences.exists():
+            if preferences.is_symlink() or not preferences.is_file():
+                raise _runtime_error()
+            return
+        preferences.write_text(
+            json.dumps(
+                {"plugins": {"always_open_pdf_externally": True}},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(preferences, 0o600)
+    except OSError:
+        raise _runtime_error() from None
 
 
 class _Route:
-    __slots__ = ("_context", "_raw", "request", "_binding", "_finished")
+    __slots__ = ("_article", "_context", "_raw", "request", "_binding", "_finished")
 
-    def __init__(self, context: _Context, raw: object, request: _Request) -> None:
+    def __init__(
+        self,
+        context: _Context,
+        article: _ArticleContext,
+        raw: object,
+        request: _Request,
+    ) -> None:
         self._context = context
+        self._article = article
         self._raw = raw
         self.request = request
         self._binding: object | None = None
@@ -740,24 +868,20 @@ class _Route:
     def bind_connection(self, binding: object) -> object:
         if self._finished or self._binding is not None:
             raise _runtime_error()
+        acknowledged = self._context.proxy.authorize(self._article.article_token, binding)
+        if acknowledged is not binding:
+            raise _runtime_error()
         self._binding = binding
         return binding
 
     def continue_(self) -> None:
         if self._finished or self._binding is None:
             raise _runtime_error()
-        response = self._context.engine.fetch(self.request, self._binding)
-        headers = {name: value for name, value in response.headers}
         try:
-            cast(Any, self._raw).fulfill(
-                status=response.status,
-                headers=headers,
-                body=response.body(),
-            )
+            _required_callable(self._raw, "continue_")()
         except BaseException:
             raise _runtime_error() from None
         self._finished = True
-        self._context.note_response(self.request, response)
 
     def abort(self) -> None:
         if self._finished:
@@ -771,22 +895,22 @@ class _Route:
 
 
 class _Page:
-    __slots__ = ("context", "engine", "raw", "_closed", "_navigation_url")
+    __slots__ = ("article", "context", "engine", "raw", "_closed", "_navigation_url")
 
-    def __init__(self, context: _Context, raw: object) -> None:
+    def __init__(self, context: _Context, article: _ArticleContext, raw: object) -> None:
         self.context = context
+        self.article = article
         self.engine = context.engine
         self.raw = raw
         self._closed = False
         self._navigation_url: str | None = None
 
     @property
+    def article_token(self) -> object:
+        return self.article.article_token
+
+    @property
     def url(self) -> str:
-        # ``_goto`` records the final response locator only after every
-        # redirect has passed BrowserClient's destination and DNS guards.  A
-        # page-state observation should use that already-reviewed value
-        # instead of queueing behind arbitrary still-loading subresources on
-        # Playwright's single engine thread.
         if self._navigation_url is not None:
             return self._navigation_url
 
@@ -802,38 +926,33 @@ class _Page:
         return self.engine.call(lambda: self._goto(url, timeout=timeout))
 
     def _goto(self, url: str, *, timeout: int) -> _NavigationResponse:
-        deadline = time.monotonic() + (timeout / 1000.0)
-        target = url
-        for redirect_count in range(_MAX_NAVIGATION_REDIRECTS + 1):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                raise _runtime_error()
-            current = self._navigate_once(target, timeout=max(1, int(remaining * 1000)))
-            if current.redirect_url is None:
-                self._navigation_url = current.url
-                return current
-            if redirect_count >= _MAX_NAVIGATION_REDIRECTS:
-                raise _runtime_error()
-            target = current.redirect_url
-            self.context.replace_redirect_page(self)
-        raise _runtime_error()
-
-    def _navigate_once(self, target: str, *, timeout: int) -> _NavigationResponse:
+        if type(url) is not str or type(timeout) is not int or timeout <= 0:
+            raise _runtime_error()
         self.context.clear_navigation_response(self)
         try:
-            self.context.navigate_page(self, target, timeout=timeout)
-        except BaseException:
+            _required_callable(self.raw, "goto")(
+                url,
+                timeout=timeout,
+                wait_until="domcontentloaded",
+            )
+        except BaseException as error:
+            if _is_playwright_timeout(error):
+                raise TimeoutError from None
             remembered = self.context.navigation_response(self)
             if remembered is None:
                 raise _runtime_error() from None
-            return remembered
         remembered = self.context.navigation_response(self)
         if remembered is None:
             raise _runtime_error()
+        current_url = _string_value(self.raw, "url")
+        if urlsplit(current_url).scheme.casefold() in {"http", "https"}:
+            self._navigation_url = current_url
+        else:
+            self._navigation_url = remembered.url
         return remembered
 
     def open_popup(self, url: str) -> _Page:
-        return self.context.open_page(url)
+        return self.article.open_page(url)
 
     def title(self) -> str:
         value = self.engine.call(lambda: cast(Any, self.raw).evaluate("() => document.title || ''"))
@@ -856,13 +975,35 @@ class _Page:
             raise _runtime_error()
 
         def read() -> object:
-            locator = _required_callable(self.raw, "locator")(selector)
-            text_content = _required_callable(locator, "text_content")
+            stage = "locator"
             try:
+                locator = _required_callable(self.raw, "locator")(selector)
+                # Marker selectors describe a bounded page fact, not a strict
+                # locator assertion. Real article pages can contain multiple
+                # matching elements (notably HTML ``title`` plus SVG
+                # ``title`` nodes); Playwright's strict text_content call
+                # would turn that ordinary DOM shape into a runtime failure.
+                # DOM order plus the reviewed static selector gives one
+                # deterministic, bounded value.
+                locator = _optional_value(locator, "first")
+                if locator is None:
+                    raise _runtime_error()
+                stage = "text-content"
+                text_content = _required_callable(locator, "text_content")
+                stage = "vendor-call"
                 return text_content(timeout=timeout)
             except BaseException as error:
                 if _is_playwright_timeout(error):
                     return None
+                _LOGGER.debug(
+                    "event=browser-native-page-operation-failed "
+                    "operation=text-content stage=%s exception_type=%s "
+                    "failure_category=%s page_closed=%s code=runtime",
+                    stage,
+                    type(error).__name__,
+                    _playwright_error_category(error),
+                    str(_optional_value(self.raw, "is_closed") is True).lower(),
+                )
                 raise
 
         try:
@@ -878,12 +1019,26 @@ class _Page:
             raise _runtime_error()
 
         def count() -> object:
-            locator = _required_callable(self.raw, "locator")(selector)
-            # ``count`` is a non-waiting DOM-presence query.  Playwright's
-            # locator ``wait_for`` can monopolize the single engine thread
-            # while route interception is active even when given a short
-            # vendor timeout, so it is not a safe marker primitive here.
-            return _required_callable(locator, "count")()
+            stage = "locator"
+            try:
+                locator = _required_callable(self.raw, "locator")(selector)
+                # ``count`` is a non-waiting DOM-presence query. Playwright's
+                # locator ``wait_for`` can monopolize the single engine thread
+                # while route interception is active even when given a short
+                # vendor timeout, so it is not a safe marker primitive here.
+                stage = "vendor-call"
+                return _required_callable(locator, "count")()
+            except BaseException as error:
+                _LOGGER.debug(
+                    "event=browser-native-page-operation-failed "
+                    "operation=selector-count stage=%s exception_type=%s "
+                    "failure_category=%s page_closed=%s code=runtime",
+                    stage,
+                    type(error).__name__,
+                    _playwright_error_category(error),
+                    str(_optional_value(self.raw, "is_closed") is True).lower(),
+                )
+                raise
 
         try:
             value = self.engine.call(count)
@@ -893,14 +1048,97 @@ class _Page:
             raise _runtime_error()
         return value > 0
 
-    def click(self, selector: str, *, timeout: int) -> None:
-        self.engine.call(lambda: cast(Any, self.raw).click(selector, timeout=timeout))
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        """Discover bounded browser-resolved PDF entry points without clicking."""
+
+        script = """
+        () => {
+          const values = [];
+          const seen = new Set();
+          const add = (raw) => {
+            if (typeof raw !== 'string' || !raw.trim()) return;
+            try {
+              const value = new URL(raw, document.baseURI).href;
+              const parsed = new URL(value);
+              if (!['http:', 'https:'].includes(parsed.protocol)) return;
+              if (value.length > 8192 || seen.has(value)) return;
+              seen.add(value);
+              values.push(value);
+            } catch (_) {}
+          };
+          document.querySelectorAll(
+            "meta[name='citation_pdf_url'], meta[name='wkhealth_pdf_url'], " +
+            "meta[name='eprints.document_url'], meta[property='citation_pdf_url']"
+          ).forEach((node) => add(node.getAttribute('content')));
+          document.querySelectorAll('a[href], iframe[src], embed[src], object[data]')
+            .forEach((node) => {
+              const raw = node.getAttribute('href') || node.getAttribute('src') ||
+                node.getAttribute('data');
+              const label = [node.textContent, node.getAttribute('aria-label'),
+                node.getAttribute('title'), raw].filter(Boolean).join(' ').toLowerCase();
+              const mediaType = (node.getAttribute('type') || '').toLowerCase();
+              if (/supplement|supporting information|appendix|extended data/.test(label)) return;
+              if (mediaType.includes('pdf') ||
+                  /(^|[\\s_-])(download[\\s_-]*)?pdf($|[\\s_-])|full[\\s_-]*text/.test(label) ||
+                  /\\.pdf(?:$|[?#])|\\/(?:pdf|epdf|pdfdirect|pdfft)(?:$|[/?#])/.test(label)) {
+                add(raw);
+              }
+            });
+          return values.slice(0, 16);
+        }
+        """
+        value = self.engine.call(lambda: _required_callable(self.raw, "evaluate")(script))
+        if not isinstance(value, list) or len(value) > _MAX_DISCOVERED_PDF_LOCATORS:
+            raise _runtime_error()
+        result: list[str] = []
+        for item in value:
+            if type(item) is not str or not item or len(item) > _MAX_DISCOVERED_LOCATOR_LENGTH:
+                raise _runtime_error()
+            result.append(item)
+        return tuple(result)
+
+    def click(self, selector: str, *, timeout: int) -> bool:
+        def click() -> bool:
+            try:
+                locator = _required_callable(self.raw, "locator")(selector)
+                locator = _required_callable(locator, "filter")(visible=True)
+                locator = cast(Any, locator).first
+                _required_callable(locator, "click")(
+                    timeout=timeout,
+                    no_wait_after=True,
+                )
+            except BaseException as error:
+                if _is_playwright_timeout(error):
+                    _LOGGER.debug("event=browser-native-click-finished outcome=not-actionable")
+                    return False
+                _LOGGER.debug(
+                    "event=browser-native-page-operation-failed operation=click "
+                    "failure_category=%s page_closed=%s code=runtime",
+                    _playwright_error_category(error),
+                    str(_optional_value(self.raw, "is_closed") is True).lower(),
+                )
+                raise
+            return True
+
+        try:
+            clicked = self.engine.call(click)
+        except BaseException:
+            raise _runtime_error() from None
+        if type(clicked) is not bool or not clicked:
+            return False
+        try:
+            current_url = self.url
+        except PlaywrightRuntimeError:
+            return True
+        if urlsplit(current_url).scheme.casefold() in {"http", "https"}:
+            self._navigation_url = current_url
+        return True
 
     def fill(self, selector: str, value: str, *, timeout: int) -> None:
         self.engine.call(lambda: cast(Any, self.raw).fill(selector, value, timeout=timeout))
 
     def abort(self) -> None:
-        self.engine.interrupt()
+        self.article.interrupt_transport()
 
     cancel = abort
     stop = abort
@@ -915,39 +1153,146 @@ class _Page:
             self.context.forget_page(self)
 
 
+class _ArticleContext:
+    """One Publisher article capability view over the shared native context."""
+
+    __slots__ = ("_context", "_state", "_closed")
+
+    def __init__(self, context: _Context, state: _ArticleState) -> None:
+        self._context = context
+        self._state = state
+        self._closed = False
+
+    @property
+    def engine(self) -> _Engine:
+        return self._context.engine
+
+    @property
+    def article_token(self) -> object:
+        return self._state.token
+
+    def bind_connection(self, binding: object) -> object:
+        if self._closed or not self._state.active:
+            raise _runtime_error()
+        return self._context.bind_article_connection(self, binding)
+
+    def route(self, pattern: str, handler: Callable[[object], object]) -> None:
+        if (
+            self._closed
+            or not self._state.active
+            or pattern != "**/*"
+            or not callable(handler)
+            or self._state.route_handler is not None
+        ):
+            raise _runtime_error()
+        self._state.route_handler = handler
+
+    def on(self, event: str, handler: Callable[[object], object]) -> None:
+        if (
+            self._closed
+            or not self._state.active
+            or event in self._state.event_handlers
+            or event not in {"page", "download", "response", "requestfinished", "requestfailed"}
+            or not callable(handler)
+        ):
+            raise _runtime_error()
+        self._state.event_handlers[event] = handler
+
+    def new_page(self) -> _Page:
+        if self._closed or not self._state.active:
+            raise _runtime_error()
+        return self._context.new_article_page(self)
+
+    def open_page(self, url: str) -> _Page:
+        page = self.new_page()
+        page.goto(url, timeout=int(_COMMAND_TIMEOUT_SECONDS * 1000))
+        return page
+
+    def consume_article_bytes(self, amount: int) -> bool:
+        if self._closed or not self._state.active or type(amount) is not int or amount < 0:
+            return False
+        self._state.article_bytes += amount
+        return self._state.article_bytes <= _MAX_ARTICLE_BYTES
+
+    def interrupt_transport(self) -> None:
+        self._context.interrupt_article_transport(self)
+
+    def abort(self) -> None:
+        self.interrupt_transport()
+
+    cancel = abort
+    stop = abort
+
+    @property
+    def pages(self) -> tuple[_Page, ...]:
+        return self._context.article_pages(self)
+
+    def end_article(self) -> bool:
+        if self._closed:
+            return False
+        self._closed = True
+        return self._context.end_article(self)
+
+    def close(self) -> None:
+        if not self._closed:
+            self.end_article()
+
+
 class _Context:
-    """One persistent context reused by a broker across isolated article pages."""
+    """One persistent native context multiplexed across Publisher article lanes."""
 
     __slots__ = (
         "engine",
         "raw",
+        "proxy",
+        "downloads_root",
         "_dispatcher",
-        "_route_handler",
-        "_event_handlers",
+        "_articles",
+        "_lane_tokens",
         "_pages",
-        "_creating_page",
-        "_active_article",
-        "_article_bytes",
-        "_navigation_responses",
+        "_requests",
+        "_request_states",
+        "_article_lock",
+        "_event_lock",
+        "_creating_article_token",
         "_closed",
         "_cleanup_failed",
     )
 
-    def __init__(self, engine: _Engine, raw: object) -> None:
+    def __init__(
+        self,
+        engine: _Engine,
+        raw: object,
+        proxy: BrowserConnectProxy,
+        downloads_root: Path,
+    ) -> None:
         self.engine = engine
         self.raw = raw
+        self.proxy = proxy
+        self.downloads_root = downloads_root
         self._dispatcher = _EventDispatcher()
-        self._route_handler: Callable[[object], object] | None = None
-        self._event_handlers: dict[str, Callable[[object], object]] = {}
+        self._articles: dict[object, _ArticleState] = {}
+        self._lane_tokens: dict[str, object] = {}
         self._pages: dict[int, _Page] = {}
-        self._creating_page = False
-        self._active_article = False
-        self._article_bytes = 0
-        self._navigation_responses: dict[int, _NavigationResponse] = {}
+        self._requests: dict[object, _Request] = {}
+        self._request_states: dict[object, _NativeRequestState] = {}
+        self._article_lock = threading.Lock()
+        self._event_lock = threading.Lock()
+        self._creating_article_token: object | None = None
         self._closed = False
         self._cleanup_failed = False
         try:
+            cast(Any, raw).route("**/*", lambda value: self._on_route(value))
             cast(Any, raw).on("page", lambda value: self._on_page(value))
+            cast(Any, raw).on("response", lambda value: self._on_response(value))
+            cast(Any, raw).on(
+                "requestfinished",
+                lambda value: self._on_request_complete("requestfinished", value),
+            )
+            cast(Any, raw).on(
+                "requestfailed",
+                lambda value: self._on_request_complete("requestfailed", value),
+            )
         except BaseException:
             raise _runtime_error() from None
 
@@ -956,162 +1301,198 @@ class _Context:
             raise _runtime_error()
         return binding
 
-    def begin_article(self, *, downloads_path: str, connection_binding: object) -> object:
-        del downloads_path
-        if self._closed or self._active_article:
-            raise _runtime_error()
-        self._active_article = True
-        self._article_bytes = 0
-        self._navigation_responses.clear()
-        return connection_binding
-
-    def end_article(self) -> bool:
-        if not self._active_article:
-            return False
-        drained = self._dispatcher.drain()
-        self._active_article = False
-        self._navigation_responses.clear()
-        return drained and not self._cleanup_failed
-
-    def route(self, pattern: str, handler: Callable[[object], object]) -> None:
-        if pattern != "**/*" or not callable(handler) or self._route_handler is not None:
-            raise _runtime_error()
-        self._route_handler = handler
+    def begin_article(
+        self,
+        *,
+        lane_key: str,
+        downloads_path: str,
+        connection_binding: object,
+    ) -> _ArticleContext:
+        state = self._register_article(lane_key, downloads_path)
         try:
-            self.engine.call(
-                lambda: cast(Any, self.raw).route(
-                    pattern,
-                    lambda value: self._on_route(value),
-                )
-            )
+            self._start_article_transport(state, connection_binding)
+        except BaseException:
+            try:
+                self.proxy.end_lane(state.token)
+            except BaseException:
+                pass
+            with self._article_lock:
+                self._articles.pop(state.token, None)
+                self._lane_tokens.pop(lane_key, None)
+            raise _runtime_error() from None
+        return _ArticleContext(self, state)
+
+    def _register_article(self, lane_key: str, downloads_path: str) -> _ArticleState:
+        if type(lane_key) is not str or not lane_key:
+            raise _runtime_error()
+        if type(downloads_path) is not str or not downloads_path:
+            raise _runtime_error()
+        try:
+            directory = Path(downloads_path)
+            if directory.is_symlink() or not directory.is_dir():
+                raise _runtime_error()
+        except PlaywrightRuntimeError:
+            raise
+        except OSError:
+            raise _runtime_error() from None
+        state = _ArticleState(lane_key=lane_key)
+        with self._article_lock:
+            if self._closed or lane_key in self._lane_tokens:
+                raise _runtime_error()
+            self._articles[state.token] = state
+            self._lane_tokens[lane_key] = state.token
+        return state
+
+    def _start_article_transport(
+        self,
+        state: _ArticleState,
+        connection_binding: object,
+    ) -> None:
+        if self.proxy.begin_lane(state.token) is not state.token:
+            raise _runtime_error()
+        acknowledged = self.proxy.authorize(state.token, connection_binding)
+        if acknowledged is not connection_binding:
+            raise _runtime_error()
+
+    def bind_article_connection(
+        self,
+        article: _ArticleContext,
+        binding: object,
+    ) -> object:
+        state = self._article_state(article)
+        try:
+            acknowledged = self.proxy.authorize(state.token, binding)
         except BaseException:
             raise _runtime_error() from None
-
-    def on(self, event: str, handler: Callable[[object], object]) -> None:
-        if event in self._event_handlers or not callable(handler):
+        if acknowledged is not binding:
             raise _runtime_error()
-        self._event_handlers[event] = handler
+        return binding
 
-    def new_page(self) -> _Page:
+    def end_article(self, article: _ArticleContext) -> bool:
+        state = self._article_state(article, require_active=False)
+        if not state.active:
+            return False
+        try:
+            self.engine.call(lambda: self._pump_once(25, state.token))
+        except PlaywrightRuntimeError:
+            state.cleanup_failed = True
+        drained = self._dispatcher.drain()
+        if state.transport_drained:
+            transport_drained = True
+        else:
+            try:
+                transport_drained = self.proxy.end_lane(state.token)
+            except BaseException:
+                transport_drained = False
+            state.transport_drained = transport_drained
+        state.active = False
+        if not self._dispatcher.drain():
+            drained = False
+        if not self._close_remaining_article_pages(state):
+            state.cleanup_failed = True
+        for key in tuple(state.request_keys):
+            self._requests.pop(key, None)
+            self._request_states.pop(key, None)
+        state.request_keys.clear()
+        state.navigation_responses.clear()
+        with self._article_lock:
+            self._articles.pop(state.token, None)
+            if self._lane_tokens.get(state.lane_key) is state.token:
+                self._lane_tokens.pop(state.lane_key, None)
+        _LOGGER.debug(
+            "event=browser-native-article-drained lane_key=%s event_queue_drained=%s "
+            "connect_tunnel_drained=%s article_cleanup_failed=%s",
+            state.lane_key,
+            str(drained).lower(),
+            str(transport_drained).lower(),
+            str(state.cleanup_failed).lower(),
+        )
+        return drained and transport_drained and not state.cleanup_failed
+
+    def new_article_page(self, article: _ArticleContext) -> _Page:
+        state = self._article_state(article)
+
         def create() -> _Page:
-            self._creating_page = True
+            if self._creating_article_token is not None:
+                raise _runtime_error()
+            self._creating_article_token = state.token
             try:
                 raw_page = cast(Any, self.raw).new_page()
             finally:
-                self._creating_page = False
-            return self._page(raw_page)
+                self._creating_article_token = None
+            return self._page(raw_page, state)
 
         return self.engine.call(create)
 
-    def replace_redirect_page(self, page: _Page) -> None:
-        """Recover from Chromium's synthetic-redirect error in the same flow.
-
-        Chromium does not follow a redirect created by ``route.fulfill`` and
-        leaves that page in ``chrome-error://``.  A fresh page in the same
-        persistent context retains the operator session while the next
-        HTTP(S) navigation is intercepted again by BrowserClient's policy,
-        DNS binding, host admission, and destination guard.
-        """
-
-        old_raw = page.raw
-        self._creating_page = True
-        try:
-            raw_page = cast(Any, self.raw).new_page()
-        except BaseException:
-            raise _runtime_error() from None
-        finally:
-            self._creating_page = False
-        created = self._page(raw_page)
-        self._pages.pop(id(old_raw), None)
-        self._pages[id(raw_page)] = page
-        page.raw = raw_page
-        page._navigation_url = None
-        if created is not page:
-            created._closed = True
-        try:
-            cast(Any, old_raw).close()
-        except BaseException:
-            raise _runtime_error() from None
-
-    def navigate_page(self, page: _Page, target: str, *, timeout: int) -> None:
-        """Start one fixed top-frame navigation and await its intercepted response."""
-
-        if self._closed or type(timeout) is not int or timeout <= 0:
-            raise _runtime_error()
-        evaluate = _required_callable(page.raw, "evaluate")
-        wait = _required_callable(page.raw, "wait_for_timeout")
-        try:
-            evaluate("(url) => { window.location.assign(url); }", target)
-        except PlaywrightRuntimeError:
-            raise
-        except BaseException:
-            if self.navigation_response(page) is None:
-                raise _runtime_error() from None
-        deadline = time.monotonic() + (timeout / 1000.0)
-        while self.navigation_response(page) is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                raise _runtime_error()
-            try:
-                wait(max(1, min(10, int(remaining * 1000))))
-            except BaseException:
-                if self.navigation_response(page) is None:
-                    raise _runtime_error() from None
-
-    def open_page(self, url: str) -> _Page:
-        page = self.new_page()
-        page.goto(url, timeout=int(_COMMAND_TIMEOUT_SECONDS * 1000))
-        return page
-
-    def consume_article_bytes(self, amount: int) -> bool:
-        if not self._active_article or type(amount) is not int or amount < 0:
-            return False
-        self._article_bytes += amount
-        return self._article_bytes <= _MAX_ARTICLE_BYTES
-
     def pump_events_from_engine(self) -> None:
-        """Give Chromium a bounded sync-API turn while no vendor command is queued."""
+        """Give Chromium a bounded sync-API turn while lanes are active."""
 
-        if self._closed or not self._active_article:
-            return
-        page = next(
-            (candidate for candidate in self._pages.values() if not candidate._closed), None
-        )
-        if page is None:
+        if self._closed or not any(state.active for state in self._articles.values()):
             return
         try:
-            cast(Any, page.raw).wait_for_timeout(max(1, int(_EVENT_PUMP_INTERVAL_SECONDS * 1000)))
+            self._pump_once(max(1, int(_EVENT_PUMP_INTERVAL_SECONDS * 1000)), None)
         except BaseException:
             self._cleanup_failed = True
 
-    def note_response(self, request: _Request, response: _Response) -> None:
-        page = request.page
-        if page is not None and request.is_navigation_request():
-            self._navigation_responses[id(page)] = _NavigationResponse(
-                response.url,
-                response.status,
-                _redirect_url(response),
-            )
-        self._emit("response", response)
-        self._emit("requestfinished", request)
+    def _pump_once(self, milliseconds: int, article_token: object | None) -> None:
+        page = next(
+            (
+                candidate
+                for candidate in self._pages.values()
+                if not candidate._closed
+                and (article_token is None or candidate.article_token is article_token)
+            ),
+            None,
+        )
+        if page is not None:
+            cast(Any, page.raw).wait_for_timeout(milliseconds)
 
     def navigation_response(self, page: _Page) -> _NavigationResponse | None:
-        return self._navigation_responses.get(id(page))
+        state = self._articles.get(page.article_token)
+        return None if state is None else state.navigation_responses.get(id(page))
 
     def clear_navigation_response(self, page: _Page) -> None:
-        self._navigation_responses.pop(id(page), None)
+        state = self._articles.get(page.article_token)
+        if state is not None:
+            state.navigation_responses.pop(id(page), None)
 
     def forget_page(self, page: _Page) -> None:
-        """Release one article page wrapper after deterministic page cleanup."""
+        """Release one article page wrapper after deterministic cleanup."""
 
         self._pages.pop(id(page.raw), None)
-        self._navigation_responses.pop(id(page), None)
+        state = self._articles.get(page.article_token)
+        if state is not None:
+            state.page_keys.discard(id(page.raw))
+            state.navigation_responses.pop(id(page), None)
 
-    def abort(self) -> None:
-        self.engine.interrupt()
+    def article_pages(self, article: _ArticleContext) -> tuple[_Page, ...]:
+        state = self._article_state(article, require_active=False)
+        return tuple(
+            page for key in tuple(state.page_keys) if (page := self._pages.get(key)) is not None
+        )
 
-    cancel = abort
-    stop = abort
+    def interrupt_article_transport(self, article: _ArticleContext) -> None:
+        state = self._article_state(article, require_active=False)
+        if not state.active or state.transport_drained:
+            return
+        try:
+            state.transport_drained = self.proxy.end_lane(state.token)
+        except BaseException:
+            state.cleanup_failed = True
+
+    def interrupt_transport(self) -> None:
+        for state in tuple(self._articles.values()):
+            if not state.active or state.transport_drained:
+                continue
+            try:
+                state.transport_drained = self.proxy.end_lane(state.token)
+            except BaseException:
+                state.cleanup_failed = True
+                self._cleanup_failed = True
+
+    abort = interrupt_transport
+    cancel = interrupt_transport
+    stop = interrupt_transport
 
     @property
     def pages(self) -> tuple[_Page, ...]:
@@ -1122,6 +1503,7 @@ class _Context:
             if self._cleanup_failed:
                 raise _runtime_error()
             return
+        self.interrupt_transport()
         failed = not self._dispatcher.drain()
         try:
             self.engine.call(self._close_raw_from_engine)
@@ -1155,48 +1537,89 @@ class _Context:
         if self._closed:
             return
         self._closed = True
+        for state in self._articles.values():
+            state.active = False
         try:
             cast(Any, self.raw).close()
         except BaseException:
             raise _runtime_error() from None
 
-    def _page(self, raw_page: object) -> _Page:
+    def _article_state(
+        self,
+        article: _ArticleContext,
+        *,
+        require_active: bool = True,
+    ) -> _ArticleState:
+        if not isinstance(article, _ArticleContext) or article._context is not self:
+            raise _runtime_error()
+        state = self._articles.get(article.article_token)
+        if state is None or state is not article._state:
+            raise _runtime_error()
+        if require_active and not state.active:
+            raise _runtime_error()
+        return state
+
+    def _page(self, raw_page: object, state: _ArticleState) -> _Page:
+        if not state.active:
+            raise _runtime_error()
         key = id(raw_page)
         page = self._pages.get(key)
-        if page is None:
-            page = _Page(self, raw_page)
-            self._pages[key] = page
-            try:
-                cast(Any, raw_page).on(
-                    "download",
-                    lambda value: self._discard_download(value),
-                )
-            except BaseException:
-                raise _runtime_error() from None
+        if page is not None:
+            if page.article_token is not state.token:
+                raise _runtime_error()
+            return page
+        article = _ArticleContext(self, state)
+        page = _Page(self, article, raw_page)
+        self._pages[key] = page
+        state.page_keys.add(key)
+        try:
+            cast(Any, raw_page).on(
+                "download",
+                lambda value, page=page: self._on_download(page, value),
+            )
+        except BaseException:
+            self._pages.pop(key, None)
+            state.page_keys.discard(key)
+            raise _runtime_error() from None
         return page
 
     def _on_page(self, raw_page: object) -> None:
         try:
-            page = self._page(raw_page)
-            if not self._creating_page:
-                self._emit("page", page)
+            token = self._creating_article_token
+            explicit = token is not None
+            if token is None:
+                opener = _optional_value(raw_page, "opener")
+                opener_page = None if opener is None else self._pages.get(id(opener))
+                token = None if opener_page is None else opener_page.article_token
+            state = None if token is None else self._articles.get(token)
+            if state is None or not state.active:
+                cast(Any, raw_page).close()
+                return
+            page = self._page(raw_page, state)
+            if not explicit:
+                self._emit(state, "page", page)
         except BaseException:
             self._cleanup_failed = True
 
     def _on_route(self, raw_route: object) -> None:
-        handler = self._route_handler
-        if handler is None or not self._active_article:
-            _abort_raw_route(raw_route)
-            return
         request: _Request | None = None
+        state: _ArticleState | None = None
         try:
             raw_request = cast(Any, raw_route).request
             page = self._request_page(raw_request)
-            request = _Request(raw_request, page)
-            handler(_Route(self, raw_route, request))
+            if page is None:
+                _abort_raw_route(raw_route)
+                return
+            state = self._articles.get(page.article_token)
+            if state is None or not state.active or state.route_handler is None:
+                _abort_raw_route(raw_route)
+                return
+            request = self._request(raw_request, page)
+            state.route_handler(_Route(self, page.article, raw_route, request))
         except BaseException:
             _abort_raw_route(raw_route)
-            self._emit("requestfailed", request if request is not None else raw_route)
+            if state is not None:
+                self._emit(state, "requestfailed", request if request is not None else raw_route)
 
     def _request_page(self, raw_request: object) -> _Page | None:
         try:
@@ -1204,18 +1627,239 @@ class _Context:
             raw_page = frame.page
         except BaseException:
             return None
-        return self._page(raw_page)
+        return self._pages.get(id(raw_page))
 
-    def _emit(self, event: str, value: object) -> None:
-        handler = self._event_handlers.get(event)
-        if handler is not None:
-            self._dispatcher.submit(lambda: handler(value))
+    def _request(self, raw_request: object, page: _Page | None = None) -> _Request:
+        key = _vendor_identity(raw_request)
+        request = self._requests.get(key)
+        if request is None:
+            raw_previous = _optional_value(raw_request, "redirected_from")
+            previous = None if raw_previous is None else self._request(raw_previous)
+            request = _Request(
+                raw_request,
+                self._request_page(raw_request) if page is None else page,
+                previous,
+            )
+            if request.article_token is None:
+                raise _runtime_error()
+            state = self._articles.get(request.article_token)
+            if state is None or not state.active:
+                raise _runtime_error()
+            self._requests[key] = request
+            state.request_keys.add(key)
+            previous_state = (
+                None
+                if previous is None
+                else self._request_states.get(_vendor_identity(previous.raw))
+            )
+            root = None if previous_state is None else previous_state.root
+            self._request_states[key] = _NativeRequestState(request=request, root=root)
+        return request
 
-    def _discard_download(self, raw_download: object) -> None:
+    def _request_state(self, raw_request: object) -> _NativeRequestState:
+        request = self._request(raw_request)
+        state = self._request_states.get(_vendor_identity(raw_request))
+        if state is None or state.request is not request:
+            raise _runtime_error()
+        return state
+
+    def _on_response(self, raw_response: object) -> None:
+        native_state: _NativeRequestState | None = None
+        article_state: _ArticleState | None = None
+        stage = "request"
         try:
-            self.engine.call(lambda: cast(Any, raw_download).delete())
+            raw_request = cast(Any, raw_response).request
+            native_state = self._request_state(raw_request)
+            request = native_state.request
+            article_state = self._articles.get(request.article_token)
+            if article_state is None or not article_state.active:
+                return
+            stage = "status"
+            status = _optional_value(raw_response, "status")
+            if type(status) is not int or not 100 <= status <= 599:
+                raise _runtime_error()
+            with self._event_lock:
+                native_state.response_seen = True
+                native_state.response_redirects = status in {301, 302, 303, 307, 308}
+                native_state.response_pending += 1
+            stage = "response-view"
+            article = _ArticleContext(self, article_state)
+            response = _Response(self, article, raw_response, request)
+            stage = "navigation-view"
+            page = request.page
+            if page is not None and request.is_navigation_request():
+                article_state.navigation_responses[id(page)] = _NavigationResponse(
+                    response.url,
+                    response.status,
+                    response.media_type,
+                )
+            handler = article_state.event_handlers.get("response")
+            if handler is not None:
+                stage = "dispatch"
+                self._dispatcher.submit(
+                    lambda: self._dispatch_response(
+                        article_state,
+                        native_state,
+                        handler,
+                        response,
+                    )
+                )
+            else:
+                stage = "finish"
+                self._finish_response(native_state)
+        except BaseException as error:
+            response_field = error.field if isinstance(error, _ResponseViewError) else "unknown"
+            _LOGGER.debug(
+                "event=browser-native-event-failed browser_event=response stage=%s "
+                "response_field=%s exception_type=%s code=runtime",
+                stage,
+                response_field,
+                type(error).__name__,
+            )
+            if native_state is not None:
+                self._finish_response(native_state)
+            if article_state is None:
+                self._cleanup_failed = True
+            else:
+                article_state.cleanup_failed = True
+
+    def _on_request_complete(self, event: str, raw_request: object) -> None:
+        article_state: _ArticleState | None = None
+        try:
+            native_state = self._request_state(raw_request)
+            article_state = self._articles.get(native_state.request.article_token)
+            if article_state is None or not article_state.active:
+                return
+            with self._event_lock:
+                if native_state.completion_event is None:
+                    native_state.completion_event = event
+                elif native_state.completion_event != event:
+                    raise _runtime_error()
+                ready = self._ready_completions_locked(native_state)
+            for completion_event, request in ready:
+                self._emit(article_state, completion_event, request)
         except BaseException:
-            self._cleanup_failed = True
+            _LOGGER.debug(
+                "event=browser-native-event-failed browser_event=%s code=runtime",
+                event,
+            )
+            if article_state is None:
+                self._cleanup_failed = True
+            else:
+                article_state.cleanup_failed = True
+
+    def _dispatch_response(
+        self,
+        article_state: _ArticleState,
+        native_state: _NativeRequestState,
+        handler: Callable[[object], object],
+        response: _Response,
+    ) -> None:
+        self._invoke_handler(article_state, "response", handler, response)
+        ready = self._finish_response(native_state)
+        for event, request in ready:
+            completion_handler = article_state.event_handlers.get(event)
+            if completion_handler is not None:
+                self._invoke_handler(
+                    article_state,
+                    event,
+                    completion_handler,
+                    request,
+                )
+
+    def _finish_response(
+        self,
+        native_state: _NativeRequestState,
+    ) -> tuple[tuple[str, _Request], ...]:
+        with self._event_lock:
+            if native_state.response_pending <= 0:
+                return ()
+            native_state.response_pending -= 1
+            return self._ready_completions_locked(native_state)
+
+    @staticmethod
+    def _ready_completions_locked(
+        native_state: _NativeRequestState,
+    ) -> tuple[tuple[str, _Request], ...]:
+        root = native_state.root
+        if root is None:
+            raise _runtime_error()
+        chain = tuple(root.chain)
+        if any(item.response_pending for item in chain):
+            return ()
+        terminal = chain[-1]
+        if terminal.completion_event == "requestfinished" and not terminal.response_seen:
+            return ()
+        if terminal.response_seen and terminal.response_redirects:
+            return ()
+        if terminal.completion_event is None:
+            return ()
+        ready: list[tuple[str, _Request]] = []
+        for item in chain:
+            if item.completion_event is None or item.completion_submitted:
+                continue
+            item.completion_submitted = True
+            ready.append((item.completion_event, item.request))
+        return tuple(ready)
+
+    def _on_download(self, page: _Page, raw_download: object) -> None:
+        article_state = self._articles.get(page.article_token)
+        try:
+            if article_state is None or not article_state.active:
+                cast(Any, raw_download).delete()
+                return
+            self._emit(
+                article_state,
+                "download",
+                _Download(self, page.article, raw_download),
+            )
+        except BaseException:
+            _LOGGER.debug("event=browser-native-event-failed browser_event=download code=runtime")
+            if article_state is None:
+                self._cleanup_failed = True
+            else:
+                article_state.cleanup_failed = True
+
+    def _emit(self, article_state: _ArticleState, event: str, value: object) -> None:
+        handler = article_state.event_handlers.get(event)
+        if handler is None:
+            return
+        self._dispatcher.submit(lambda: self._invoke_handler(article_state, event, handler, value))
+
+    @staticmethod
+    def _invoke_handler(
+        article_state: _ArticleState,
+        event: str,
+        handler: Callable[[object], object],
+        value: object,
+    ) -> None:
+        try:
+            handler(value)
+        except BaseException as error:
+            article_state.cleanup_failed = True
+            _LOGGER.debug(
+                "event=browser-native-handler-failed browser_event=%s "
+                "exception_type=%s code=runtime",
+                event,
+                type(error).__name__,
+            )
+
+    def _close_remaining_article_pages(self, state: _ArticleState) -> bool:
+        pages = tuple(
+            page for key in tuple(state.page_keys) if (page := self._pages.get(key)) is not None
+        )
+        cleaned = True
+        for page in pages:
+            if page._closed:
+                self.forget_page(page)
+                continue
+            try:
+                self.engine.call(lambda page=page: cast(Any, page.raw).close())
+                page._closed = True
+                self.forget_page(page)
+            except BaseException:
+                cleaned = False
+        return cleaned
 
 
 def _abort_raw_route(raw_route: object) -> None:
@@ -1226,11 +1870,10 @@ def _abort_raw_route(raw_route: object) -> None:
 
 
 class _Process:
-    __slots__ = ("_engine", "_profile", "_closed")
+    __slots__ = ("_engine", "_closed")
 
-    def __init__(self, engine: _Engine, profile: object | None) -> None:
+    def __init__(self, engine: _Engine) -> None:
         self._engine = engine
-        self._profile = profile
         self._closed = False
 
     def bind_connection(self, binding: object) -> object:
@@ -1241,15 +1884,14 @@ class _Process:
     def new_context(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         accept_downloads: bool,
         connection_binding: object,
     ) -> _Context:
         del connection_binding
-        if self._closed or profile is not self._profile or not accept_downloads:
+        if self._closed or not accept_downloads:
             raise _runtime_error()
-        return self._engine.launch_context(profile, downloads_path)
+        return self._engine.launch_context(downloads_path)
 
     def abort(self) -> None:
         self._engine.interrupt()
@@ -1267,20 +1909,30 @@ class _Process:
 class PlaywrightBrowserFactory:
     """Stable callable injected into ``BrowserClient`` by production Bootstrap."""
 
-    __slots__ = ()
+    __slots__ = ("_ignore_https_errors", "_profile_handle")
+
+    def __init__(self, profile_handle: object, *, ignore_https_errors: bool = False) -> None:
+        if type(ignore_https_errors) is not bool:
+            raise TypeError("ignore_https_errors must be a bool")
+        if not callable(getattr(profile_handle, "acquire_runtime", None)):
+            raise TypeError("profile_handle must expose acquire_runtime()")
+        self._profile_handle = profile_handle
+        self._ignore_https_errors = ignore_https_errors
 
     def __call__(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         connection_binding: object,
     ) -> object:
         del downloads_path, connection_binding
-        engine = _Engine()
+        engine = _Engine(
+            self._profile_handle,
+            ignore_https_errors=self._ignore_https_errors,
+        )
         try:
             engine.start()
-            return _Process(engine, profile)
+            return _Process(engine)
         except BaseException:
             try:
                 engine.close()

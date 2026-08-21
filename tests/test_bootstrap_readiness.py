@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Mapping, cast
 from unittest import mock
 
+import sciretriever.bootstrap.assembly as bootstrap_assembly
+import sciretriever.bootstrap.probes as bootstrap_probes
+import sciretriever.bootstrap.storage as bootstrap_storage
 from sciretriever.analysis.ports import AnalysisLLMCall
 from sciretriever.configuration import (
     ConfigurationError,
@@ -470,7 +473,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             scoped_root = root / "scoped"
             full_root.mkdir(mode=0o700)
             scoped_root.mkdir(mode=0o700)
-            (root / "home").mkdir(mode=0o700)
+            home = root / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
             scoped_configuration = parse_configuration(
                 f"""
                 [paths]
@@ -482,11 +487,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
                 [access]
                 browser_enabled = true
-                browser_profile = "research"
+                browser_profile = "fixture-profile"
                 browser_max_concurrency = 3
                 """
             )
-            initialize_browser_profile("research", home=root / "home")
             with (
                 mock.patch(
                     "sciretriever.network.http.SystemResolver.resolve",
@@ -500,7 +504,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 mock.patch.object(BrowserGroupScheduler, "execute", side_effect=forbidden),
                 mock.patch(
                     "sciretriever.network.playwright.playwright_runtime_availability",
-                    return_value=PlaywrightRuntimeAvailability(True, True),
+                    return_value=PlaywrightRuntimeAvailability(True, True, True),
                 ),
             ):
                 full = bootstrap.build_object_graph(
@@ -508,14 +512,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     catalog_path=full_root / "catalog.sqlite3",
                     artifact_root=full_root / "artifacts",
                     external_dependencies=self._dependencies(),
-                    credentials_home=root / "home",
+                    credentials_home=home,
                 )
                 scoped = cast(
                     bootstrap.DatabaseCompletionObjectGraph,
                     bootstrap.build_production_object_graph(
                         scoped_configuration,
                         scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
-                        credentials_home=root / "home",
+                        credentials_home=home,
                         configure_process_logging=False,
                     ),
                 )
@@ -543,7 +547,8 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 )
                 self.assertIs(cast(Any, graph.http_client)._coordinator, graph.access_coordinator)
                 self.assertIs(runtime.browser_client, graph.browser_client)
-                self.assertEqual(runtime.browser_session_broker._entries, {})
+                self.assertEqual(runtime.browser_session_broker._lanes, {})
+                self.assertIsNone(runtime.browser_session_broker._shared)
                 self.assertEqual(runtime.browser_scheduler._policies, {})
                 self.assertEqual(
                     tuple(
@@ -551,11 +556,21 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                         for binding in registry.route_registry.bindings
                         if binding.spec.tier.value == "controlled-browser"
                     ),
-                    ("browser:springerlink",),
+                    (
+                        "browser:acs-publications",
+                        "browser:aip-publishing",
+                        "browser:elsevier-sciencedirect",
+                        "browser:iopscience",
+                        "browser:oxford-academic",
+                        "browser:rsc-publishing",
+                        "browser:science-aaas",
+                        "browser:springerlink",
+                        "browser:wiley-online-library",
+                    ),
                 )
 
             self.assertEqual(full.acquisition_runtime.cohort_executor._max_concurrency, 4)
-            self.assertEqual(full.acquisition_runtime.browser_scheduler._max_concurrency, 2)
+            self.assertEqual(full.acquisition_runtime.browser_scheduler._max_concurrency, 5)
             self.assertFalse(
                 full.acquisition_runtime.browser_admission._configuration.explicitly_enabled
             )
@@ -603,8 +618,16 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             )
             forbidden = AssertionError("local scope constructed an external capability")
             with (
-                mock.patch.object(bootstrap, "load_runtime_secrets", side_effect=forbidden),
-                mock.patch.object(bootstrap, "load_credentials", side_effect=forbidden),
+                mock.patch.object(
+                    bootstrap_assembly,
+                    "load_runtime_secrets",
+                    side_effect=forbidden,
+                ),
+                mock.patch.object(
+                    bootstrap_assembly,
+                    "load_credentials",
+                    side_effect=forbidden,
+                ),
                 mock.patch(
                     "sciretriever.metadata.registry.build_metadata_registry",
                     side_effect=forbidden,
@@ -741,8 +764,14 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     self.assertEqual(raised.exception.code, code)
 
             with (
-                mock.patch.object(bootstrap, "load_runtime_secrets") as load_secrets,
-                mock.patch.object(bootstrap, "load_credentials") as load_credentials,
+                mock.patch.object(
+                    bootstrap_assembly,
+                    "load_runtime_secrets",
+                ) as load_secrets,
+                mock.patch.object(
+                    bootstrap_assembly,
+                    "load_credentials",
+                ) as load_credentials,
                 mock.patch(
                     "sciretriever.parsing.adapters.mineru.OperatorManagedMinerUAdapter",
                     side_effect=AssertionError("asset completion constructed Parser"),
@@ -1083,8 +1112,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     self.assertFalse(artifacts.exists())
 
     def test_fresh_foundation_failure_removes_only_the_owned_pair(self) -> None:
-        import sciretriever.bootstrap as bootstrap
-
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-rollback-") as temporary:
             root = Path(temporary)
             catalog = root / "catalog.sqlite3"
@@ -1096,7 +1123,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 side_effect=RuntimeError("after-catalog"),
             ):
                 with self.assertRaises(RuntimeError):
-                    bootstrap._build_storage_foundation(catalog, artifacts)
+                    bootstrap_storage._build_storage_foundation(catalog, artifacts)
 
             self.assertFalse(catalog.exists())
             self.assertFalse(artifacts.exists())
@@ -1108,14 +1135,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-fd-") as temporary:
             root = Path(temporary)
             opened: list[int] = []
-            real_owned_node = bootstrap._owned_node
+            real_owned_node = bootstrap_storage._owned_node
 
             def record_owned(path: Path, *, directory: bool) -> Any:
                 node = real_owned_node(path, directory=directory)
                 opened.append(node.descriptor)
                 return node
 
-            with mock.patch.object(bootstrap, "_owned_node", side_effect=record_owned):
+            with mock.patch.object(
+                bootstrap_storage,
+                "_owned_node",
+                side_effect=record_owned,
+            ):
                 graph = bootstrap.build_object_graph(
                     Configuration(),
                     catalog_path=root / "ok.sqlite3",
@@ -1131,14 +1162,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
             opened.clear()
             with (
-                mock.patch.object(bootstrap, "_owned_node", side_effect=record_owned),
+                mock.patch.object(
+                    bootstrap_storage,
+                    "_owned_node",
+                    side_effect=record_owned,
+                ),
                 mock.patch(
                     "sciretriever.storage.files.store.ArtifactStore",
                     side_effect=KeyboardInterrupt(),
                 ),
                 self.assertRaises(KeyboardInterrupt),
             ):
-                bootstrap._build_storage_foundation(
+                bootstrap_storage._build_storage_foundation(
                     root / "failed.sqlite3",
                     root / "failed-artifacts",
                 )
@@ -1166,22 +1201,20 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertFalse((root / ".sciretriever-locks").exists())
 
     def test_fresh_rollback_preserves_nonempty_or_replaced_evidence(self) -> None:
-        import sciretriever.bootstrap as bootstrap
-
         with tempfile.TemporaryDirectory(prefix="sciretriever-e11-race-") as temporary:
             root = Path(temporary)
             for scenario in ("nonempty", "replaced"):
                 with self.subTest(scenario=scenario):
                     artifacts = root / scenario
                     os.mkdir(artifacts, 0o700)
-                    owned = bootstrap._owned_node(artifacts, directory=True)
+                    owned = bootstrap_storage._owned_node(artifacts, directory=True)
                     if scenario == "nonempty":
                         (artifacts / "evidence").write_text("keep", encoding="utf-8")
                     else:
                         artifacts.rmdir()
                         os.mkdir(artifacts, 0o700)
-                    bootstrap._rollback_fresh_storage(
-                        bootstrap._FreshStorageOwnership(artifact_root=owned)
+                    bootstrap_storage._rollback_fresh_storage(
+                        bootstrap_storage._FreshStorageOwnership(artifact_root=owned)
                     )
                     self.assertTrue(artifacts.exists())
 
@@ -1368,7 +1401,11 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     raise AssertionError("credentials must not be read twice")
                 return original(home=home)
 
-            with mock.patch("sciretriever.bootstrap.load_credentials", side_effect=one_load):
+            with mock.patch.object(
+                bootstrap_assembly,
+                "load_credentials",
+                side_effect=one_load,
+            ):
                 graph = bootstrap.build_production_object_graph(
                     configuration,
                     credentials_home=credentials_home,
@@ -1524,7 +1561,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         loads: list[object] = []
         status_bundles: list[object] = []
         registry_bundles: list[object] = []
-        original_status = bootstrap.configuration_status
+        original_status = bootstrap_probes.configuration_status
         from sciretriever.metadata import registry as metadata_registry_boundary
 
         original_registry = metadata_registry_boundary.build_metadata_probe_registry
@@ -1578,15 +1615,23 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 patches[2],
                 patches[3],
                 patches[4],
-                mock.patch.object(bootstrap, "load_credentials", side_effect=load_once),
-                mock.patch.object(bootstrap, "configuration_status", side_effect=record_status),
+                mock.patch.object(
+                    bootstrap_probes,
+                    "load_credentials",
+                    side_effect=load_once,
+                ),
+                mock.patch.object(
+                    bootstrap_probes,
+                    "configuration_status",
+                    side_effect=record_status,
+                ),
                 mock.patch.object(
                     metadata_registry_boundary,
                     "build_metadata_probe_registry",
                     side_effect=record_registry,
                 ),
                 mock.patch.object(
-                    bootstrap,
+                    bootstrap_probes,
                     "load_runtime_secrets",
                     side_effect=AssertionError("probe session read runtime environment"),
                 ),
@@ -1610,17 +1655,28 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 session.access_coordinator,
             )
             self.assertIs(session.http_client._coordinator, session.access_coordinator)
-            self.assertEqual(session.browser_status.production_route_count, 1)
+            self.assertEqual(session.browser_status.production_route_count, 9)
+            self.assertEqual(session.browser_status.automatic_route_count, 9)
             self.assertFalse(session.browser_status.automatic_acquisition_available)
             self.assertFalse(session.browser_status.runtime.launch_assessed)
-            self.assertIsNone(session.browser_status.session.authenticated)
-            self.assertEqual(
-                session.browser_status.session.article_entitlement,
-                "not-proven",
-            )
+            self.assertEqual(session.browser_status.mode, "headed-persistent-profile")
+            self.assertTrue(session.browser_status.persistent_authentication_supported)
+            self.assertEqual(session.browser_status.article_entitlement, "checked-per-article")
             self.assertEqual(
                 session.browser_probe_port.supported_access_keys,
-                frozenset({"springerlink"}),
+                frozenset(
+                    {
+                        "acs-publications",
+                        "aip-publishing",
+                        "elsevier-sciencedirect",
+                        "iopscience",
+                        "oxford-academic",
+                        "rsc-publishing",
+                        "science-aaas",
+                        "springerlink",
+                        "wiley-online-library",
+                    }
+                ),
             )
             self.assertEqual(
                 session.probe_port.supported_capabilities,
@@ -1646,7 +1702,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    bootstrap,
+                    bootstrap_probes,
                     "load_credentials",
                     side_effect=AssertionError("run reread credentials"),
                 ),
@@ -1720,7 +1776,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 )
             )
 
-    def test_enabled_production_browser_probe_normalizes_the_profile_session_key(self) -> None:
+    def test_enabled_production_browser_probe_uses_the_publisher_session_key(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import BrowserClient
@@ -1729,17 +1785,17 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
             home = Path(temporary) / "home"
             home.mkdir(mode=0o700)
-            initialize_browser_profile("springerlink-access", home=home)
+            initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
                 [access]
                 browser_enabled = true
-                browser_profile = "springerlink-access"
+                browser_profile = "fixture-profile"
                 """
             )
             with mock.patch(
                 "sciretriever.network.playwright.playwright_runtime_availability",
-                return_value=PlaywrightRuntimeAvailability(True, True),
+                return_value=PlaywrightRuntimeAvailability(True, True, True),
             ):
                 session = bootstrap.build_production_configuration_probe_session(
                     configuration,
@@ -1766,9 +1822,169 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(session_key, "springerlink")
             self.assertIs(run_browser.call_args.kwargs["navigation_only"], True)
 
-    def test_springerlink_probe_accepts_reachable_idp_without_personal_login(
+    def test_each_browser_probe_keeps_its_own_policy_session_and_landing_origin(
         self,
     ) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.admission import AccessPolicy, AccessScope
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+        )
+        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
+
+        expected = {
+            "acs-publications": (
+                "acs-publications",
+                "acs-publications",
+                "https://pubs.acs.org",
+                30.0,
+            ),
+            "aip-publishing": (
+                "aip-publishing",
+                "aip-publishing",
+                "https://pubs.aip.org",
+                30.0,
+            ),
+            "elsevier-sciencedirect": (
+                "elsevier",
+                "elsevier",
+                "https://www.sciencedirect.com",
+                20.0,
+            ),
+            "iopscience": (
+                "iopscience",
+                "iopscience",
+                "https://iopscience.iop.org",
+                30.0,
+            ),
+            "oxford-academic": (
+                "oxford-academic",
+                "oxford-academic",
+                "https://academic.oup.com",
+                30.0,
+            ),
+            "rsc-publishing": (
+                "rsc-publishing",
+                "rsc-publishing",
+                "https://pubs.rsc.org",
+                30.0,
+            ),
+            "science-aaas": (
+                "science-aaas",
+                "science-aaas",
+                "https://www.science.org",
+                30.0,
+            ),
+            "springerlink": (
+                "springerlink",
+                "springerlink",
+                "https://link.springer.com",
+                10.0,
+            ),
+            "wiley-online-library": (
+                "wiley",
+                "wiley",
+                "https://onlinelibrary.wiley.com",
+                20.0,
+            ),
+        }
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probes-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "fixture-profile"
+                """
+            )
+            with mock.patch(
+                "sciretriever.network.playwright.playwright_runtime_availability",
+                return_value=PlaywrightRuntimeAvailability(True, True, True),
+            ):
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+
+            self.assertEqual(session.browser_status.production_route_count, 9)
+            self.assertEqual(session.browser_status.automatic_route_count, 9)
+            self.assertTrue(session.browser_status.automatic_acquisition_available)
+            targets = cast(Any, session.browser_probe_port)._targets
+            self.assertEqual(set(targets), set(expected))
+            for access_key, (group, session_key, origin, interval) in expected.items():
+                with self.subTest(access_key=access_key):
+                    target = targets[access_key]
+                    self.assertEqual(target.policy.rate_limit_group, group)
+                    self.assertEqual(target.policy.minimum_start_interval, interval)
+                    self.assertEqual(target.session_key, session_key)
+                    self.assertEqual(target.rule.landing_origin, origin)
+
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+            observed: list[tuple[AccessScope, str, AccessPolicy, str]] = []
+
+            def reached(
+                _client: BrowserClient,
+                scope: AccessScope,
+                request: str,
+                policy: AccessPolicy,
+                **kwargs: Any,
+            ) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                destination_guard.check(
+                    request,
+                    BrowserDestinationKind.INITIAL_NAVIGATION,
+                )
+                flow_session = mock.Mock()
+                flow_session.observe.return_value = BrowserPageObservation(
+                    locator=request,
+                    status_code=200,
+                )
+                cast(Any, kwargs["flow"])(flow_session)
+                observed.append((scope, request, policy, cast(str, kwargs["session_key"])))
+                return no_download
+
+            with mock.patch.object(
+                BrowserClient,
+                "run",
+                autospec=True,
+                side_effect=reached,
+            ) as run_browser:
+                results = {access_key: session.run_browser(access_key) for access_key in expected}
+                unknown = session.run_browser("unknown-publisher")
+
+            self.assertTrue(
+                all(result.outcome is ProbeOutcome.PASSED for result in results.values())
+            )
+            self.assertTrue(
+                all(result.article_entitlement == "not-proven" for result in results.values())
+            )
+            self.assertIs(unknown.outcome, ProbeOutcome.SKIPPED)
+            self.assertEqual(unknown.failure_code, "browser-production-route-unavailable")
+            self.assertEqual(run_browser.call_count, len(expected))
+            self.assertEqual(
+                observed,
+                [
+                    (
+                        AccessScope(group, "web"),
+                        f"{origin}/",
+                        AccessPolicy(max_concurrency=1),
+                        session_key,
+                    )
+                    for group, session_key, origin, _interval in expected.values()
+                ],
+            )
+
+    def test_springerlink_probe_rejects_login_redirect_as_target_unreachable(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import (
@@ -1781,17 +1997,17 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
             home = Path(temporary) / "home"
             home.mkdir(mode=0o700)
-            initialize_browser_profile("springerlink-access", home=home)
+            initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
                 [access]
                 browser_enabled = true
-                browser_profile = "springerlink-access"
+                browser_profile = "fixture-profile"
                 """
             )
             with mock.patch(
                 "sciretriever.network.playwright.playwright_runtime_availability",
-                return_value=PlaywrightRuntimeAvailability(True, True),
+                return_value=PlaywrightRuntimeAvailability(True, True, True),
             ):
                 session = bootstrap.build_production_configuration_probe_session(
                     configuration,
@@ -1816,9 +2032,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     locator="https://idp.springer.com/authorize",
                     status_code=200,
                 )
-                flow_session.text.side_effect = AssertionError(
-                    "the probe must not inspect account UI on the login target"
-                )
                 flow(flow_session)
                 return no_download
 
@@ -1829,11 +2042,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             ):
                 result = session.run_browser("springerlink")
 
-            self.assertIs(result.outcome, ProbeOutcome.PASSED)
-            self.assertIsNone(result.failure_code)
+            self.assertIs(result.outcome, ProbeOutcome.FAILED)
+            self.assertEqual(result.failure_code, "browser-probe-target-unreachable")
             self.assertTrue(result.browser_launched)
-            self.assertTrue(result.minimal_target_reached)
-            self.assertFalse(result.authentication_accepted)
+            self.assertFalse(result.minimal_target_reached)
             self.assertEqual(result.article_entitlement, "not-proven")
             self.assertEqual(result.navigation_count, 1)
 

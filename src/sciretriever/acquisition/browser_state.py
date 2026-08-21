@@ -25,6 +25,7 @@ class BrowserRunState(str, Enum):
     MFA_REQUIRED = "mfa-required"
     CHALLENGE_REQUIRED = "challenge-required"
     NOT_ENTITLED = "not-entitled"
+    ACCESS_DENIED = "access-denied"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
@@ -81,6 +82,10 @@ _STATE_POLICY: Final[
         ),
         BrowserRunState.NOT_ENTITLED: (
             BrowserFlowDisposition.NORMAL_MISS,
+            BrowserGroupEffect.NONE,
+        ),
+        BrowserRunState.ACCESS_DENIED: (
+            BrowserFlowDisposition.ACTION_REQUIRED,
             BrowserGroupEffect.NONE,
         ),
         BrowserRunState.RATE_LIMITED: (

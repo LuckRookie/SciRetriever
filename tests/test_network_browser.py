@@ -75,6 +75,9 @@ class _OriginGuard:
         if origin not in self.origins:
             raise ValueError("fixture origin rejected")
 
+    def connection_origins(self) -> tuple[str, ...]:
+        return tuple(sorted(self.origins))
+
 
 class _CaptureGuard:
     def __init__(
@@ -103,6 +106,7 @@ class _RecordingCoordinator(AccessCoordinator):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self.hosts: list[str] = []
+        self.released_hosts: list[str] = []
 
     def _acquire_host(
         self,
@@ -122,6 +126,10 @@ class _RecordingCoordinator(AccessCoordinator):
             timeout=timeout,
         )
 
+    def _release_host(self, permit: HostPermit) -> None:
+        self.released_hosts.append(permit.host)
+        super()._release_host(permit)
+
 
 class _ReleaseFailingCoordinator(AccessCoordinator):
     def __init__(self) -> None:
@@ -136,11 +144,19 @@ class _ReleaseFailingCoordinator(AccessCoordinator):
 
 
 class _FakeRequest:
-    def __init__(self, url: str, page: _FakePage, *, navigation: bool) -> None:
+    def __init__(
+        self,
+        url: str,
+        page: _FakePage,
+        *,
+        navigation: bool,
+        redirected_from: _FakeRequest | None = None,
+    ) -> None:
         self.url = url
         self.page = page
         self._navigation = navigation
         self.resource_type = "document" if navigation else "image"
+        self.redirected_from = redirected_from
 
     def is_navigation_request(self) -> bool:
         return self._navigation
@@ -169,6 +185,7 @@ class _ResponseFixture:
     body: object
     media_type: str = "application/pdf"
     status: int = 200
+    final_url: str | None = None
 
 
 class _FakeResponse:
@@ -179,12 +196,17 @@ class _FakeResponse:
         *,
         body: object | None = None,
         media_type: str = "text/html",
+        download_expected: bool = False,
+        attachment_download: bool = False,
+        final_url: str | None = None,
     ) -> None:
         self.request = request
-        self.url = request.url
+        self.url = request.url if final_url is None else final_url
         self.status = status
         self.media_type = media_type
         self._body = body
+        self.download_expected = download_expected
+        self.attachment_download = attachment_download
         self.size = len(body) if isinstance(body, bytes) else None
         self.body_reads = 0
 
@@ -220,6 +242,7 @@ class _FakeDownload:
         self.deleted = False
         self.delete_calls = 0
         self.request: _FakeRequest | None = None
+        self.emitted_after_page_closed: bool | None = None
 
     def content(self) -> bytes:
         return self.body
@@ -259,12 +282,32 @@ class _FakePage:
                 if self.context.blocking_goto:
                     self.context.goto_started.set()
                     self.abort_event.wait()
+                if (
+                    self.context.delayed_native_download
+                    and self.context.configured_download is not None
+                    and current == self.context.configured_download.url
+                ):
+                    response = next(
+                        (
+                            candidate
+                            for candidate in reversed(self.context.responses)
+                            if candidate.request is route.request
+                        ),
+                        None,
+                    )
+                    if response is None:
+                        raise RuntimeError("navigation response fixture was not recorded")
+                    self.context.schedule_configured_download(self, route.request)
+                    return response
                 self.context.emit_configured_download(self)
                 return _FakeResponse(route.request, self.context.navigation_status)
             current = redirect
 
     def open_popup(self, url: str) -> _FakePage:
         return self.context.popup(url)
+
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        return self.context.discovered_pdf_locators
 
     def emit_download(self, download: _FakeDownload) -> None:
         self.context.download(download)
@@ -304,8 +347,10 @@ class _FakeContext:
         close_error: BaseException | None = None,
         goto_error: BaseException | None = None,
         configured_download: _FakeDownload | None = None,
+        delayed_native_download: bool = False,
         challenge: bool = False,
         subresources: tuple[str, ...] = (),
+        defer_subresource_responses: bool = False,
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
@@ -317,8 +362,10 @@ class _FakeContext:
         self.close_error = close_error
         self.goto_error = goto_error
         self.configured_download = configured_download
+        self.delayed_native_download = delayed_native_download
         self.challenge = challenge
         self.subresources = subresources
+        self.defer_subresource_responses = defer_subresource_responses
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
         self.response_fixtures = {} if response_fixtures is None else response_fixtures
@@ -329,6 +376,10 @@ class _FakeContext:
         self.second_subresource_continued = threading.Event()
         self.release_first_subresource = threading.Event()
         self.configured_download_emitted = False
+        self.delayed_download_scheduled = threading.Event()
+        self.release_delayed_download = threading.Event()
+        self.delayed_download_finished = threading.Event()
+        self.delayed_download_threads: list[threading.Thread] = []
         self.pages: list[_FakePage] = []
         self.route_handler: Callable[[_FakeRoute], object] | None = None
         self.handlers: dict[str, list[Callable[[object], object]]] = {}
@@ -339,26 +390,39 @@ class _FakeContext:
         self.bindings: list[object] = []
         self.article_paths: list[str] = []
         self.article_bindings: list[object] = []
+        self.article_lanes: list[str] = []
         self.article_active = False
+        self.discovered_pdf_locators: tuple[str, ...] = ()
 
     def bind_connection(self, binding: object) -> object:
         self.binding = binding
         self.bindings.append(binding)
         return binding
 
-    def begin_article(self, *, downloads_path: str, connection_binding: object) -> object:
+    def begin_article(
+        self,
+        *,
+        lane_key: str,
+        downloads_path: str,
+        connection_binding: object,
+    ) -> object:
         if self.article_active:
             raise RuntimeError("overlapping article sentinel")
         self.article_active = True
+        self.route_handler = None
+        self.handlers.clear()
+        self.article_lanes.append(lane_key)
         self.article_paths.append(downloads_path)
         self.article_bindings.append(connection_binding)
         self.configured_download_emitted = False
-        return connection_binding
+        return self
 
     def end_article(self) -> bool:
         if not self.article_active:
             raise RuntimeError("article was not active")
         self.article_active = False
+        self.route_handler = None
+        self.handlers.clear()
         return True
 
     def route(self, pattern: str, handler: Callable[[_FakeRoute], object]) -> None:
@@ -378,25 +442,46 @@ class _FakeContext:
         return page
 
     def request(self, url: str, page: _FakePage, *, navigation: bool) -> _FakeRoute:
+        route = self.begin_request(url, page, navigation=navigation)
+        if route.continued:
+            self.emit_response(route)
+        if route.continued and navigation:
+            self.finish_request(route)
+        return route
+
+    def begin_request(self, url: str, page: _FakePage, *, navigation: bool) -> _FakeRoute:
         route = _FakeRoute(_FakeRequest(url, page, navigation=navigation))
         if self.route_handler is None:
             raise AssertionError("route handler was not installed")
         self.route_handler(route)
-        if route.continued:
-            fixture = self.response_fixtures.get(url)
-            response = _FakeResponse(
-                route.request,
-                status=200 if fixture is None else fixture.status,
-                body=None if fixture is None else fixture.body,
-                media_type="text/html" if fixture is None else fixture.media_type,
-            )
-            self.responses.append(response)
-            for handler in self.handlers.get("response", ()):
-                handler(response)
-        if route.continued and navigation:
-            for handler in self.handlers.get("requestfinished", ()):
-                handler(route.request)
         return route
+
+    def emit_response(self, route: _FakeRoute) -> None:
+        url = route.request.url
+        fixture = self.response_fixtures.get(url)
+        configured_download = (
+            self.configured_download is not None and url == self.configured_download.url
+        )
+        response = _FakeResponse(
+            route.request,
+            status=200 if fixture is None else fixture.status,
+            body=None if fixture is None else fixture.body,
+            media_type=(
+                self.configured_download.media_type
+                if configured_download and self.configured_download is not None
+                else ("text/html" if fixture is None else fixture.media_type)
+            ),
+            download_expected=configured_download,
+            attachment_download=configured_download,
+            final_url=None if fixture is None else fixture.final_url,
+        )
+        self.responses.append(response)
+        for handler in self.handlers.get("response", ()):
+            handler(response)
+
+    def finish_request(self, route: _FakeRoute) -> None:
+        for handler in self.handlers.get("requestfinished", ()):
+            handler(route.request)
 
     def emit_configured_download(self, page: _FakePage) -> None:
         if self.configured_download is None or self.configured_download_emitted:
@@ -411,8 +496,35 @@ class _FakeContext:
             for handler in self.handlers.get("requestfinished", ()):
                 handler(route.request)
 
+    def schedule_configured_download(
+        self,
+        page: _FakePage,
+        request: _FakeRequest,
+    ) -> None:
+        download = self.configured_download
+        if download is None or self.configured_download_emitted:
+            raise RuntimeError("delayed download fixture was not available")
+        self.configured_download_emitted = True
+        download.request = request
+
+        def emit() -> None:
+            self.delayed_download_scheduled.set()
+            self.release_delayed_download.wait(2.0)
+            download.emitted_after_page_closed = page.closed
+            try:
+                self.download(download)
+            finally:
+                self.delayed_download_finished.set()
+
+        worker = threading.Thread(target=emit, daemon=True)
+        self.delayed_download_threads.append(worker)
+        worker.start()
+
     def emit_subresources(self, page: _FakePage) -> None:
         if not self.subresources:
+            return
+        if self.defer_subresource_responses:
+            self.emit_deferred_subresources(page)
             return
 
         def fetch(index: int, url: str) -> None:
@@ -435,6 +547,18 @@ class _FakeContext:
         for worker in workers:
             worker.join(2.0)
 
+    def emit_deferred_subresources(self, page: _FakePage) -> None:
+        routes = [self.begin_request(url, page, navigation=False) for url in self.subresources]
+        if routes[0].continued:
+            self.first_subresource_continued.set()
+        if len(routes) > 1 and routes[1].continued:
+            self.second_subresource_continued.set()
+        self.release_first_subresource.wait(1.0)
+        for route in routes:
+            if route.continued:
+                self.emit_response(route)
+                self.finish_request(route)
+
     def popup(self, url: str) -> _FakePage:
         page = _FakePage(self)
         self.pages.append(page)
@@ -454,8 +578,12 @@ class _FakeContext:
         self.close_calls += 1
         self.events.append("context-close")
         self.closed = True
+        self.release_delayed_download.set()
         for page in self.pages:
             page.abort_event.set()
+        for worker in self.delayed_download_threads:
+            if worker is not threading.current_thread():
+                worker.join(1.0)
         if self.close_error is not None:
             raise self.close_error
 
@@ -470,7 +598,9 @@ class _FakeProcess:
         context_close_error: BaseException | None = None,
         goto_error: BaseException | None = None,
         configured_download: _FakeDownload | None = None,
+        delayed_native_download: bool = False,
         subresources: tuple[str, ...] = (),
+        defer_subresource_responses: bool = False,
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
@@ -485,8 +615,10 @@ class _FakeProcess:
         self.context_close_error = context_close_error
         self.goto_error = goto_error
         self.configured_download = configured_download
+        self.delayed_native_download = delayed_native_download
         self.challenge = False
         self.subresources = subresources
+        self.defer_subresource_responses = defer_subresource_responses
         self.blocking_goto = blocking_goto
         self.navigation_status = navigation_status
         self.response_fixtures = response_fixtures
@@ -495,7 +627,6 @@ class _FakeProcess:
         self.new_context_error = new_context_error
         self.new_page_error = new_page_error
         self.context: _FakeContext | None = None
-        self.profile: object | None = None
         self.downloads_path: str | None = None
         self.closed = False
         self.close_calls = 0
@@ -522,7 +653,6 @@ class _FakeProcess:
     def new_context(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         accept_downloads: bool,
         connection_binding: object,
@@ -531,7 +661,6 @@ class _FakeProcess:
             raise self.new_context_error
         if not accept_downloads:
             raise AssertionError("downloads must be explicitly enabled")
-        self.profile = profile
         self.downloads_path = downloads_path
         self.events.append("context-create")
         self.context = _FakeContext(
@@ -540,8 +669,10 @@ class _FakeProcess:
             close_error=self.context_close_error,
             goto_error=self.goto_error,
             configured_download=self.configured_download,
+            delayed_native_download=self.delayed_native_download,
             challenge=self.challenge,
             subresources=self.subresources,
+            defer_subresource_responses=self.defer_subresource_responses,
             blocking_goto=self.blocking_goto,
             navigation_status=self.navigation_status,
             response_fixtures=self.response_fixtures,
@@ -570,7 +701,9 @@ class _FakeFactory:
         context_close_error: BaseException | None = None,
         goto_error: BaseException | None = None,
         configured_download: _FakeDownload | None = None,
+        delayed_native_download: bool = False,
         subresources: tuple[str, ...] = (),
+        defer_subresource_responses: bool = False,
         blocking_goto: bool = False,
         navigation_status: int = 200,
         response_fixtures: dict[str, _ResponseFixture] | None = None,
@@ -580,7 +713,6 @@ class _FakeFactory:
         new_page_error: BaseException | None = None,
     ) -> None:
         self.events: list[str] = []
-        self.profile: object | None = None
         self.downloads_path: str | None = None
         self.process = _FakeProcess(
             events=self.events,
@@ -589,7 +721,9 @@ class _FakeFactory:
             context_close_error=context_close_error,
             goto_error=goto_error,
             configured_download=configured_download,
+            delayed_native_download=delayed_native_download,
             subresources=subresources,
+            defer_subresource_responses=defer_subresource_responses,
             blocking_goto=blocking_goto,
             navigation_status=navigation_status,
             response_fixtures=response_fixtures,
@@ -604,11 +738,9 @@ class _FakeFactory:
     def __call__(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         connection_binding: object,
     ) -> _FakeProcess:
-        self.profile = profile
         self.downloads_path = downloads_path
         self.binding = connection_binding
         return self.process
@@ -623,11 +755,10 @@ class _RotatingFakeFactory:
     def __call__(
         self,
         *,
-        profile: object | None,
         downloads_path: str,
         connection_binding: object,
     ) -> _FakeProcess:
-        del profile, connection_binding
+        del connection_binding
         process = _FakeProcess(
             events=[],
             goto_error=(
@@ -684,7 +815,6 @@ class NetworkBrowserTests(unittest.TestCase):
             resolver=self.resolver,
             coordinator=self.coordinator,
             destination_policy=_PUBLIC_POLICY,
-            operator_profile=object(),
         )
         self.scope = AccessScope("fixture-provider", "web")
         self.policy = AccessPolicy(
@@ -777,7 +907,6 @@ class NetworkBrowserTests(unittest.TestCase):
             resolver=self.resolver,
             coordinator=self.coordinator,
             destination_policy=_PUBLIC_POLICY,
-            operator_profile=object(),
         )
 
         result = _download(
@@ -792,8 +921,6 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(result.size, 7)
         self.assertEqual(result.final_locator, "https://download.test/file")
         self.assertNotIn("sentinel", repr(result))
-        self.assertEqual(self.factory.profile, self.client.operator_profile)
-        self.assertNotIn("fixture", repr(self.factory.profile))
         self.assertTrue(self.factory.process.closed)
         self.assertTrue(self.factory.process.context is not None)
         assert self.factory.process.context is not None
@@ -903,6 +1030,358 @@ class NetworkBrowserTests(unittest.TestCase):
             "budget",
         )
 
+    def test_navigation_route_proof_survives_multiple_responses_until_completion(self) -> None:
+        factory = _FakeFactory()
+        original_new_context = factory.process.new_context
+
+        def new_context(**kwargs: object) -> _FakeContext:
+            context = original_new_context(**kwargs)  # type: ignore[arg-type]
+
+            def request(
+                url: str,
+                page: _FakePage,
+                *,
+                navigation: bool,
+            ) -> _FakeRoute:
+                route = context.begin_request(url, page, navigation=navigation)
+                if route.continued:
+                    context.emit_response(route)
+                    if navigation:
+                        # A native navigation can expose more than one
+                        # response before requestfinished (for example an
+                        # informational/authentication response followed by
+                        # the terminal response). Both must reuse the one
+                        # intercepted route proof.
+                        context.emit_response(route)
+                        context.finish_request(route)
+                return route
+
+            context.request = request  # type: ignore[method-assign]
+            return context
+
+        factory.process.new_context = new_context  # type: ignore[method-assign]
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        assert factory.process.context is not None
+        self.assertEqual(len(factory.process.context.responses), 2)
+
+    def test_subresource_redirect_reuses_same_page_prebound_route_proof(self) -> None:
+        factory = _FakeFactory()
+        responses: list[_FakeResponse] = []
+        coordinator = _RecordingCoordinator()
+
+        def flow(_session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+            route = context.begin_request(
+                "https://landing.test/assets/redirect",
+                page,
+                navigation=False,
+            )
+            self.assertTrue(route.continued)
+            redirect = _FakeResponse(route.request, status=302)
+            child = _FakeRequest(
+                "https://other.test/assets/article.js",
+                page,
+                navigation=False,
+                redirected_from=route.request,
+            )
+            terminal = _FakeResponse(
+                child,
+                status=200,
+                body=b"fixture-script",
+                media_type="application/javascript",
+            )
+            responses.extend((redirect, terminal))
+            for response in responses:
+                for handler in context.handlers.get("response", ()):
+                    handler(response)
+            for handler in context.handlers.get("requestfinished", ()):
+                handler(child)
+
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=_OriginGuard(
+                    "https://landing.test",
+                    "https://other.test",
+                ),
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(responses[1].body_reads, 0)
+        self.assertEqual(coordinator.hosts, ["landing.test", "other.test"])
+        self.assertEqual(coordinator.released_hosts, ["landing.test", "other.test"])
+        self.assertEqual(coordinator._active_host_permits, {})
+
+    def test_subresource_redirect_does_not_reuse_route_proof_across_pages(self) -> None:
+        factory = _FakeFactory()
+        terminal_responses: list[_FakeResponse] = []
+
+        def flow(_session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+            route = context.begin_request(
+                "https://landing.test/assets/redirect",
+                page,
+                navigation=False,
+            )
+            self.assertTrue(route.continued)
+            child = _FakeRequest(
+                "https://other.test/assets/article.js",
+                _FakePage(context),
+                navigation=False,
+                redirected_from=route.request,
+            )
+            terminal = _FakeResponse(
+                child,
+                status=200,
+                body=b"must-not-be-read",
+                media_type="application/javascript",
+            )
+            terminal_responses.append(terminal)
+            for handler in context.handlers.get("response", ()):
+                handler(terminal)
+
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=_OriginGuard(
+                    "https://landing.test",
+                    "https://other.test",
+                ),
+            )
+        )
+
+        self.assertEqual(result.code, "runtime")
+        self.assertEqual(terminal_responses[0].body_reads, 0)
+
+    def test_subresource_redirect_requires_a_prebound_terminal_origin(self) -> None:
+        class _ResponseOnlyGuard:
+            def check(self, url: str, kind: BrowserDestinationKind) -> None:
+                parsed = urlsplit(url)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                if origin == "https://landing.test":
+                    return
+                if origin == "https://other.test" and kind is BrowserDestinationKind.RESPONSE:
+                    return
+                raise ValueError("fixture origin rejected")
+
+            def connection_origins(self) -> tuple[str, ...]:
+                return ("https://landing.test",)
+
+        factory = _FakeFactory()
+        terminal_responses: list[_FakeResponse] = []
+
+        def flow(_session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+            route = context.begin_request(
+                "https://landing.test/assets/redirect",
+                page,
+                navigation=False,
+            )
+            self.assertTrue(route.continued)
+            child = _FakeRequest(
+                "https://other.test/assets/article.js",
+                page,
+                navigation=False,
+                redirected_from=route.request,
+            )
+            terminal = _FakeResponse(
+                child,
+                status=200,
+                body=b"must-not-be-read",
+                media_type="application/javascript",
+            )
+            terminal_responses.append(terminal)
+            for handler in context.handlers.get("response", ()):
+                handler(terminal)
+
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=_ResponseOnlyGuard(),
+            )
+        )
+
+        self.assertEqual(result.code, "runtime")
+        self.assertEqual(terminal_responses[0].body_reads, 0)
+
+    def test_script_navigation_updates_page_status_before_observation(self) -> None:
+        factory = _FakeFactory()
+        observed_statuses: list[int | None] = []
+
+        def flow(session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+
+            def click(selector: str, *, timeout: int) -> None:
+                del selector, timeout
+                target = "https://landing.test/after-click"
+                route = context.begin_request(target, page, navigation=True)
+                self.assertTrue(route.continued)
+                page.url = target
+                response = _FakeResponse(route.request, status=403)
+                context.responses.append(response)
+                for handler in context.handlers.get("response", ()):
+                    handler(response)
+                context.finish_request(route)
+
+            page.click = click  # type: ignore[method-assign]
+            session.click("button[data-action='continue']")  # type: ignore[attr-defined]
+            observed_statuses.append(session.observe().status_code)  # type: ignore[attr-defined]
+
+        result = _failure(
+            BrowserClient(
+                factory=factory,
+                resolver=self.resolver,
+                coordinator=AccessCoordinator(),
+                destination_policy=_PUBLIC_POLICY,
+            ).run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(observed_statuses, [403])
+
+    def test_click_final_location_is_rechecked_even_without_a_route_callback(self) -> None:
+        factory = _FakeFactory()
+        guard = _OriginGuard("https://landing.test")
+
+        def flow(session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+
+            def click(selector: str, *, timeout: int) -> None:
+                del selector, timeout
+                # Model a faulty vendor adapter that returns a final page
+                # location without exposing the hop to the route callback.
+                page.url = "https://other.test/unreviewed"
+
+            page.click = click  # type: ignore[method-assign]
+            session.click("button[data-action='continue']")  # type: ignore[attr-defined]
+
+        result = _failure(
+            BrowserClient(
+                factory=factory,
+                resolver=self.resolver,
+                coordinator=AccessCoordinator(),
+                destination_policy=_PUBLIC_POLICY,
+            ).run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=guard,
+            )
+        )
+
+        self.assertEqual(result.code, "policy")
+        self.assertNotIn("other.test", self.resolver.calls)
+
+    def test_non_actionable_click_is_a_bounded_normal_miss(self) -> None:
+        factory = _FakeFactory()
+        outcomes: list[bool] = []
+        timeouts: list[int] = []
+
+        def flow(session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+
+            def click(selector: str, *, timeout: int) -> bool:
+                del selector
+                timeouts.append(timeout)
+                return False
+
+            page.click = click  # type: ignore[method-assign]
+            outcomes.append(session.click("button[data-action='missing']"))  # type: ignore[attr-defined]
+
+        result = _failure(
+            BrowserClient(
+                factory=factory,
+                resolver=self.resolver,
+                coordinator=AccessCoordinator(),
+                destination_policy=_PUBLIC_POLICY,
+            ).run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                budget=BrowserBudget(
+                    max_action_wait_seconds=0.02,
+                    max_total_seconds=1.0,
+                ),
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(outcomes, [False])
+        self.assertEqual(len(timeouts), 1)
+        self.assertLessEqual(timeouts[0], 20)
+
     def test_response_and_download_duplicate_bytes_are_delivered_once(self) -> None:
         download_url = "https://download.test/article.pdf"
         body = b"%PDF-identical-event-body"
@@ -938,6 +1417,68 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(batch.captures[0].stream.chunks, (body,))
         self.assertTrue(download.deleted)
         self.assertEqual(download.delete_calls, 1)
+
+    def test_direct_pdf_waits_for_delayed_native_download_before_cleanup(self) -> None:
+        download_url = "https://download.test/article.pdf"
+        download = _FakeDownload(download_url, b"%PDF-delayed-native-download")
+        factory = _FakeFactory(
+            configured_download=download,
+            delayed_native_download=True,
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        guard = _CaptureGuard(
+            {
+                (
+                    download_url,
+                    BrowserCaptureKind.DOWNLOAD,
+                    "application/pdf",
+                )
+            }
+        )
+        results: list[object] = []
+
+        worker = threading.Thread(
+            target=lambda: results.append(
+                client.run(
+                    self.scope,
+                    download_url,
+                    self.policy,
+                    capture_guard=guard,
+                )
+            )
+        )
+        worker.start()
+        context: _FakeContext | None = None
+        for _ in range(200):
+            context = factory.process.context
+            if context is not None and context.delayed_download_scheduled.wait(0.01):
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("direct-PDF navigation did not reserve its native download")
+
+        assert context is not None
+        self.assertTrue(worker.is_alive())
+        self.assertFalse(context.pages[0].closed)
+        self.assertFalse(context.closed)
+        context.release_delayed_download.set()
+        worker.join(2.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(context.delayed_download_finished.is_set())
+        self.assertEqual(len(results), 1)
+        stream = _download(results[0])
+        self.assertEqual(stream.chunks, (b"%PDF-delayed-native-download",))
+        self.assertIs(download.emitted_after_page_closed, False)
+        self.assertTrue(download.deleted)
+        self.assertEqual(download.delete_calls, 1)
+        self.assertTrue(context.pages[0].closed)
+        self.assertTrue(context.closed)
 
     def test_private_response_stream_is_bounded_and_closed_exactly_once(self) -> None:
         response_url = "https://landing.test/start"
@@ -1035,6 +1576,105 @@ class NetworkBrowserTests(unittest.TestCase):
 
         self.assertEqual(failure.code, "policy")
 
+    def test_capture_wait_uses_a_local_settlement_budget(self) -> None:
+        client = BrowserClient(
+            factory=_FakeFactory(),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        def flow(session: object) -> None:
+            session.wait_for_any_capture(  # type: ignore[attr-defined]
+                (BrowserCaptureKind.DOWNLOAD,)
+            )
+
+        started_at = time.monotonic()
+        failure = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                budget=BrowserBudget(
+                    max_capture_wait_seconds=0.02,
+                    max_total_seconds=1.0,
+                ),
+            )
+        )
+
+        self.assertEqual(failure.code, "no-download")
+        self.assertLess(time.monotonic() - started_at, 0.5)
+
+    def test_capture_wait_does_not_hide_the_total_flow_deadline(self) -> None:
+        client = BrowserClient(
+            factory=_FakeFactory(),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        def flow(session: object) -> None:
+            session.wait_for_any_capture(  # type: ignore[attr-defined]
+                (BrowserCaptureKind.DOWNLOAD,)
+            )
+
+        failure = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                budget=BrowserBudget(
+                    max_capture_wait_seconds=1.0,
+                    max_total_seconds=0.02,
+                ),
+            )
+        )
+
+        self.assertEqual(failure.code, "timeout")
+
+    def test_capture_wait_budget_requires_finite_positive_seconds(self) -> None:
+        with self.assertRaises(TypeError):
+            BrowserBudget(max_capture_wait_seconds=True)
+        for value in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                BrowserBudget(max_capture_wait_seconds=value)
+
+    def test_action_wait_budget_requires_finite_positive_seconds(self) -> None:
+        with self.assertRaises(TypeError):
+            BrowserBudget(max_action_wait_seconds=True)
+        for value in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                BrowserBudget(max_action_wait_seconds=value)
+
+    def test_request_budget_failure_logs_the_exact_bounded_resource(self) -> None:
+        client = BrowserClient(
+            factory=_FakeFactory(
+                subresources=("https://landing.test/article.js",),
+            ),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        with self.assertLogs("sciretriever.network.browser", level="DEBUG") as captured:
+            failure = _failure(
+                client.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    self.policy,
+                    budget=BrowserBudget(max_requests=1),
+                )
+            )
+
+        self.assertEqual(failure.code, "budget")
+        output = "\n".join(captured.output)
+        self.assertIn(
+            "event=browser-budget-exceeded resource=requests used=2 limit=1 code=budget",
+            output,
+        )
+
     def test_response_capture_enforces_candidate_and_total_byte_budgets(self) -> None:
         response_url = "https://landing.test/start"
         fixture = _ResponseFixture(b"12345")
@@ -1092,6 +1732,80 @@ class NetworkBrowserTests(unittest.TestCase):
         )
         self.assertEqual(result.final_locator, "https://download.test/file")
         self.assertNotIn("sentinel", repr(result))
+
+    def test_verified_runtime_locator_keeps_signed_query_only_inside_browser(self) -> None:
+        signed = "https://download.test/article.pdf?signature=sentinel"
+        safe = "https://download.test/article.pdf"
+        factory = _FakeFactory(response_fixtures={signed: _ResponseFixture(b"%PDF-signed-runtime")})
+        guard = _OriginGuard("https://landing.test", "https://download.test")
+        capture_guard = _CaptureGuard(
+            {(safe, BrowserCaptureKind.VERIFIED_LOCATOR, "application/pdf")}
+        )
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        def flow(session: object) -> None:
+            session.open_verified_locator(signed)  # type: ignore[attr-defined]
+            session.wait_for_capture(  # type: ignore[attr-defined]
+                BrowserCaptureKind.VERIFIED_LOCATOR
+            )
+
+        batch = _captures(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=guard,
+                capture_guard=capture_guard,
+            )
+        )
+
+        self.assertEqual(len(batch.captures), 1)
+        self.assertIs(batch.captures[0].kind, BrowserCaptureKind.VERIFIED_LOCATOR)
+        result = batch.captures[0].stream
+        self.assertEqual(result.final_locator, safe)
+        assert factory.process.context is not None
+        self.assertEqual(factory.process.context.pages[1].url, signed)
+        self.assertNotIn("sentinel", repr(result))
+        self.assertTrue(all("sentinel" not in url for url, _kind in guard.calls))
+
+    def test_pdf_discovery_filters_origins_before_dns_and_retains_runtime_query(self) -> None:
+        signed = "https://download.test/article.pdf?signature=sentinel"
+        rejected = "https://other.test/unreviewed.pdf?signature=private"
+        factory = _FakeFactory()
+        guard = _OriginGuard("https://landing.test", "https://download.test")
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        discovered: list[tuple[str, ...]] = []
+
+        def flow(session: object) -> None:
+            assert factory.process.context is not None
+            factory.process.context.discovered_pdf_locators = (signed, rejected)
+            discovered.append(session.discover_pdf_locators())  # type: ignore[attr-defined]
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                flow=flow,
+                destination_guard=guard,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(discovered, [(signed,)])
+        self.assertNotIn("other.test", self.resolver.calls)
+        self.assertTrue(all("sentinel" not in url for url, _kind in guard.calls))
 
     def test_redirect_and_request_policy_rechecks_each_actual_navigation(self) -> None:
         factory = _FakeFactory(
@@ -1236,6 +1950,118 @@ class NetworkBrowserTests(unittest.TestCase):
                     (expected_url, expected_kind),
                     guard.calls,
                 )
+
+    def test_unapproved_subresources_can_be_discarded_without_weakening_navigation(self) -> None:
+        factory = _FakeFactory(
+            subresources=(
+                "https://landing.test/article.js",
+                "https://other.test/tracker.js",
+            )
+        )
+        resolver = _Resolver(self.resolver.answers)
+        guard = _OriginGuard("https://landing.test")
+        client = BrowserClient(
+            factory=factory,
+            resolver=resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                destination_guard=guard,
+                discard_unapproved_subresources=True,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertNotIn("other.test", resolver.calls)
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertIn(
+            "https://landing.test/article.js",
+            tuple(response.url for response in context.responses),
+        )
+        self.assertNotIn(
+            "https://other.test/tracker.js",
+            tuple(response.url for response in context.responses),
+        )
+        self.assertIn(
+            (
+                "https://other.test/tracker.js",
+                BrowserDestinationKind.REQUEST,
+            ),
+            guard.calls,
+        )
+
+        redirect_factory = _FakeFactory(
+            redirects={
+                "https://landing.test/start": "https://other.test/redirect",
+            }
+        )
+        redirect_resolver = _Resolver(self.resolver.answers)
+        redirect_client = BrowserClient(
+            factory=redirect_factory,
+            resolver=redirect_resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        redirect_result = _failure(
+            redirect_client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                destination_guard=_OriginGuard("https://landing.test"),
+                discard_unapproved_subresources=True,
+            )
+        )
+
+        self.assertEqual(redirect_result.code, "policy")
+        self.assertNotIn("other.test", redirect_resolver.calls)
+
+    def test_unapproved_redirected_subresource_response_is_locally_discarded(self) -> None:
+        approved_request = "https://landing.test/redirecting-tracker.js"
+        rejected_response = "https://other.test/tracker.js"
+        factory = _FakeFactory(
+            subresources=(approved_request,),
+            response_fixtures={
+                approved_request: _ResponseFixture(
+                    b"not-readable",
+                    media_type="application/javascript",
+                    final_url=rejected_response,
+                )
+            },
+        )
+        resolver = _Resolver(self.resolver.answers)
+        guard = _OriginGuard("https://landing.test")
+        client = BrowserClient(
+            factory=factory,
+            resolver=resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                destination_guard=guard,
+                discard_unapproved_subresources=True,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertNotIn("other.test", resolver.calls)
+        self.assertIn(
+            (rejected_response, BrowserDestinationKind.RESPONSE),
+            guard.calls,
+        )
 
     def test_destination_guard_covers_popup_request_and_download_capture(self) -> None:
         factory = _FakeFactory(
@@ -1599,7 +2425,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 else:
                     seen[name] = "exposed"
             self.assertIsNone(session.open_popup("https://popup.test/popup"))  # type: ignore[attr-defined]
-            self.assertIsNone(session.click("#download"))  # type: ignore[attr-defined]
+            self.assertTrue(session.click("#download"))  # type: ignore[attr-defined]
             self.assertIsNone(session.fill("#query", "fixture"))  # type: ignore[attr-defined]
             self.assertEqual(session.text("#title"), "#title")  # type: ignore[attr-defined]
             observation = cast(BrowserPageObservation, getattr(session, "observe")())
@@ -1659,20 +2485,22 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(len(observations), 1)
         self.assertEqual(observations[0].status_code, 403)
 
-    def test_subresource_host_permit_is_held_until_request_finished(self) -> None:
+    def test_same_article_subresources_reuse_host_before_response_events(self) -> None:
         factory = _FakeFactory(
             subresources=(
                 "https://landing.test/one.png",
                 "https://landing.test/two.png",
-            )
+            ),
+            defer_subresource_responses=True,
         )
+        coordinator = _RecordingCoordinator()
         client = BrowserClient(
             factory=factory,
             resolver=self.resolver,
-            coordinator=AccessCoordinator(),
+            coordinator=coordinator,
             destination_policy=_PUBLIC_POLICY,
         )
-        policy = AccessPolicy(max_concurrency=1)
+        policy = AccessPolicy(max_concurrency=1, min_start_interval=30.0)
         result_holder: list[object] = []
 
         def run() -> None:
@@ -1689,12 +2517,17 @@ class NetworkBrowserTests(unittest.TestCase):
             self.fail("first subresource did not reach route continuation")
         context = factory.process.context
         assert context is not None
-        self.assertFalse(context.second_subresource_continued.wait(0.05))
-        context.release_first_subresource.set()
+        # Neither response nor requestfinished has been emitted. A synchronous
+        # Playwright route callback must still admit the second same-origin
+        # request instead of waiting for an event on its own engine thread.
         self.assertTrue(context.second_subresource_continued.wait(1.0))
+        self.assertEqual(coordinator.hosts, ["landing.test"])
+        context.release_first_subresource.set()
         worker.join(2.0)
         self.assertFalse(worker.is_alive())
         self.assertEqual(_failure(result_holder[0]).code, "no-download")
+        self.assertEqual(coordinator.released_hosts, ["landing.test"])
+        self.assertEqual(coordinator._active_host_permits, {})
 
     def test_cancel_aborts_blocking_navigation_before_return(self) -> None:
         factory = _FakeFactory(
@@ -1746,12 +2579,10 @@ class NetworkBrowserTests(unittest.TestCase):
 
         def factory(
             *,
-            profile: object | None,
             downloads_path: str,
             connection_binding: object,
         ) -> object:
             process = delegate(
-                profile=profile,
                 downloads_path=downloads_path,
                 connection_binding=connection_binding,
             )
@@ -1867,7 +2698,7 @@ class NetworkBrowserTests(unittest.TestCase):
         permit = coordinator.acquire_scope(self.scope, timeout=0.1)
         permit.release()
 
-    def test_persistent_session_reuses_context_but_isolates_article_resources(self) -> None:
+    def test_shared_session_reuses_context_but_isolates_article_resources(self) -> None:
         factory = _FakeFactory(
             configured_download=_FakeDownload(
                 "https://download.test/article.pdf",
@@ -1881,7 +2712,6 @@ class NetworkBrowserTests(unittest.TestCase):
             resolver=self.resolver,
             coordinator=AccessCoordinator(),
             destination_policy=_PUBLIC_POLICY,
-            operator_profile=self.client.operator_profile,
             session_broker=broker,
         )
         policy = AccessPolicy(max_concurrency=1)
@@ -1907,13 +2737,16 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(second.chunks, (b"%PDF-persistent-fixture",))
         self.assertEqual(factory.events.count("process-enter"), 1)
         self.assertEqual(factory.events.count("context-create"), 1)
-        self.assertEqual(factory.events.count("route:**/*"), 1)
+        self.assertEqual(factory.events.count("route:**/*"), 2)
         context = factory.process.context
         self.assertIsNotNone(context)
         assert context is not None
         self.assertFalse(context.closed)
         self.assertFalse(factory.process.closed)
         self.assertFalse(context.article_active)
+        self.assertEqual(context.article_lanes, ["fixture-publisher"] * 2)
+        self.assertIsNone(context.route_handler)
+        self.assertEqual(context.handlers, {})
         self.assertEqual(len(context.article_paths), 2)
         self.assertNotEqual(context.article_paths[0], context.article_paths[1])
         self.assertTrue(all(not Path(path).exists() for path in context.article_paths))
@@ -1931,12 +2764,12 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertTrue(factory.process.closed)
         self.assertFalse(Path(session_path).exists())
 
-    def test_persistent_session_configuration_is_explicit_and_closed(self) -> None:
+    def test_operation_local_session_configuration_is_explicit_and_closed(self) -> None:
         resolver = _Resolver({"landing.test": ("93.184.216.34",)})
         factory = _FakeFactory()
         broker = BrowserSessionBroker()
         self.addCleanup(broker.close)
-        persistent = BrowserClient(
+        operation_local = BrowserClient(
             factory=factory,
             resolver=resolver,
             coordinator=AccessCoordinator(),
@@ -1952,7 +2785,7 @@ class NetworkBrowserTests(unittest.TestCase):
         policy = AccessPolicy(max_concurrency=1)
 
         self.assertEqual(
-            _failure(persistent.run(self.scope, "https://landing.test/start", policy)).code,
+            _failure(operation_local.run(self.scope, "https://landing.test/start", policy)).code,
             "policy",
         )
         self.assertEqual(
@@ -1968,7 +2801,7 @@ class NetworkBrowserTests(unittest.TestCase):
         )
         self.assertEqual(
             _failure(
-                persistent.run(
+                operation_local.run(
                     self.scope,
                     "https://landing.test/start",
                     policy,
@@ -1980,7 +2813,7 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(resolver.calls, [])
         self.assertEqual(factory.events, [])
 
-    def test_runtime_failure_retires_persistent_session_before_retry(self) -> None:
+    def test_runtime_failure_retires_shared_session_before_retry(self) -> None:
         factory = _RotatingFakeFactory(fail_first_navigation=True)
         broker = BrowserSessionBroker()
         self.addCleanup(broker.close)

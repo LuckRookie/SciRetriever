@@ -90,6 +90,7 @@ from sciretriever.network.browser import (
     BrowserDestinationGuard,
     BrowserDestinationKind,
     BrowserFlowSession,
+    BrowserPageObservation,
 )
 from sciretriever.network.policy import (
     NormalizedURL,
@@ -105,18 +106,21 @@ _ROUTE_KEY: Final[re.Pattern[str]] = re.compile(
 _DOI_RESOLVER_ORIGIN: Final[str] = "https://doi.org"
 _TIMEOUT_SECONDS: Final[float] = 60.0
 _MAX_DOWNLOAD_BYTES: Final[int] = 64 * 1024 * 1024
+_MAX_DISCOVERED_PDF_ATTEMPTS: Final[int] = 4
 _BASELINE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
     min_start_interval=1.0,
 )
 _CONSERVATIVE_BROWSER_BUDGET: Final[BrowserBudget] = BrowserBudget(
-    max_navigations=2,
-    max_requests=64,
+    max_navigations=4,
+    max_requests=256,
     max_popups=2,
     max_downloads=4,
     max_captures=4,
     max_bytes_per_download=_MAX_DOWNLOAD_BYTES,
     max_total_bytes=_MAX_DOWNLOAD_BYTES,
+    max_action_wait_seconds=10.0,
+    max_capture_wait_seconds=10.0,
     max_total_seconds=_TIMEOUT_SECONDS,
 )
 _KNOWN_BROWSER_FAILURES: Final[frozenset[str]] = frozenset(
@@ -229,19 +233,25 @@ def _browser_state_failure(state: BrowserRunState) -> StableFailure:
         BrowserRunState.LOGIN_REQUIRED: (
             "acquisition-browser-login-required",
             "The controlled Browser page requires an explicit login.",
-            "Complete login outside automated acquisition and use an approved source.",
+            "Use an authorized API or provide the PDF manually; Browser login is unsupported.",
             False,
         ),
         BrowserRunState.MFA_REQUIRED: (
             "acquisition-browser-mfa-required",
             "The controlled Browser page requires explicit MFA.",
-            "Complete MFA outside automated acquisition and use an approved source.",
+            "Use an authorized API or provide the PDF manually; Browser MFA is unsupported.",
+            False,
+        ),
+        BrowserRunState.ACCESS_DENIED: (
+            "acquisition-browser-access-denied",
+            "The Publisher denied this Browser request without a more specific page reason.",
+            "Check article access outside automation or use another approved source.",
             False,
         ),
         BrowserRunState.CHALLENGE_REQUIRED: (
             "acquisition-browser-challenge-required",
             "The controlled Browser encountered an unsupported access challenge.",
-            "Review the provider session before retrying controlled Browser acquisition.",
+            "Use another approved source or provide the PDF manually.",
             False,
         ),
         BrowserRunState.RATE_LIMITED: (
@@ -328,6 +338,7 @@ class BrowserRunner(Protocol):
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
+        discard_unapproved_subresources: bool = False,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -390,22 +401,57 @@ class _RuleDestinationGuard:
             in {
                 BrowserDestinationKind.INITIAL_NAVIGATION,
                 BrowserDestinationKind.NAVIGATION,
+                BrowserDestinationKind.RESPONSE,
             }
             and normalized.url == self.exact_start_url
         ):
+            # A DOI-resolver entry is deliberately admitted only as the exact
+            # initial locator.  Its HTTP response is the other half of that
+            # same admitted navigation and must pass the response guard before
+            # the reviewed Publisher redirect can be followed.  This does not
+            # authorize arbitrary resolver requests, downloads, or redirects.
             return
         raise ValueError("Browser destination is outside the closed site rule")
 
+    def connection_origins(self) -> tuple[str, ...]:
+        """Return the finite Provider origins that the native tunnel may pin."""
 
-@dataclass(frozen=True, slots=True, repr=False)
+        start = normalize_url_with_configured_port(self.exact_start_url).origin.text
+        return tuple(dict.fromkeys((start, *self.rule.allowed_origins)))
+
+
+@dataclass(slots=True, repr=False)
 class _RuleCaptureGuard:
     """Capture only reviewed main-PDF locator prefixes in the current rule."""
 
     action: _BrowserAction
+    _landing_url: str | None = field(init=False, default=None, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.action, _BrowserAction):
             raise TypeError("action must be a _BrowserAction")
+        self._landing_url = self.action.landing_url
+
+    def bind_landing(self, value: str) -> None:
+        """Bind the reviewed final article landing reached through DOI resolution."""
+
+        try:
+            normalized = normalize_url_with_configured_port(value)
+        except (PolicyError, TypeError, ValueError):
+            return
+        if normalized.origin.text != self.action.rule.landing_origin:
+            return
+        with self._lock:
+            if self._landing_url is None:
+                self._landing_url = normalized.url
+
+    @property
+    def landing_url(self) -> str | None:
+        """Return the latest exact-origin article landing observed in this flow."""
+
+        with self._lock:
+            return self._landing_url
 
     def allows(
         self,
@@ -414,12 +460,14 @@ class _RuleCaptureGuard:
         media_type: str,
     ) -> bool:
         action = self.action
+        with self._lock:
+            landing_url = self._landing_url
         return (
             action.rule.classify_capture(
                 url,
                 kind,
                 media_type,
-                landing_url=action.landing_url,
+                landing_url=landing_url,
                 identifiers=action.identifiers,
             )
             is BrowserCaptureDisposition.PRIMARY
@@ -521,6 +569,7 @@ def _state_for_browser_result(result: BrowserResult) -> BrowserRunState:
         "no-download": BrowserRunState.NOT_FOUND,
         "not-found": BrowserRunState.NOT_FOUND,
         "not-entitled": BrowserRunState.NOT_ENTITLED,
+        "access-denied": BrowserRunState.ACCESS_DENIED,
         "rate-limit": BrowserRunState.RATE_LIMITED,
         "rate-limited": BrowserRunState.RATE_LIMITED,
         "ip-blocked": BrowserRunState.IP_BLOCKED,
@@ -573,6 +622,7 @@ _TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
     BrowserPageMarkerKind.MFA_REQUIRED: BrowserRunState.MFA_REQUIRED,
     BrowserPageMarkerKind.NOT_ENTITLED: BrowserRunState.NOT_ENTITLED,
     BrowserPageMarkerKind.PAYWALL: BrowserRunState.NOT_ENTITLED,
+    BrowserPageMarkerKind.ACCESS_DENIED: BrowserRunState.ACCESS_DENIED,
     BrowserPageMarkerKind.CHALLENGE_REQUIRED: BrowserRunState.CHALLENGE_REQUIRED,
     BrowserPageMarkerKind.RATE_LIMITED: BrowserRunState.RATE_LIMITED,
     BrowserPageMarkerKind.IP_BLOCKED: BrowserRunState.IP_BLOCKED,
@@ -584,7 +634,7 @@ _TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
 def _classify_page(
     session: BrowserFlowSession,
     rule: BrowserSiteRule,
-) -> _PageClassification:
+) -> tuple[_PageClassification, BrowserPageObservation]:
     observation_started_ns = time.monotonic_ns()
     _LOGGER.debug(
         "event=browser-page-observation-started browser_rule_id=%s",
@@ -599,17 +649,28 @@ def _classify_page(
         _elapsed_ms(observation_started_ns),
     )
     matched: set[BrowserPageMarkerKind] = set()
+    observed_text: dict[str, str] = {}
     for marker in rule.page_markers:
         marker_started_ns = time.monotonic_ns()
         _LOGGER.debug(
             "event=browser-page-marker-check-started browser_rule_id=%s "
-            "marker_id=%s selector_count=%d",
+            "marker_id=%s selector_count=%d text_marker_count=%d",
             rule.rule_id,
             marker.marker_id,
             len(marker.css_selectors),
+            len(marker.text_markers),
         )
         selector_match = any(session.has_selector(selector) for selector in marker.css_selectors)
-        marker_match = selector_match or marker.matches_observation(observation)
+        text_match = False
+        for selector, fragment in marker.text_markers:
+            text_value = observed_text.get(selector)
+            if text_value is None:
+                text_value = session.text(selector).casefold()
+                observed_text[selector] = text_value
+            if fragment in text_value:
+                text_match = True
+                break
+        marker_match = selector_match or text_match or marker.matches_observation(observation)
         if marker_match:
             matched.add(marker.kind)
         _LOGGER.debug(
@@ -620,6 +681,16 @@ def _classify_page(
             "matched" if marker_match else "miss",
             _elapsed_ms(marker_started_ns),
         )
+
+    # A bare 403 is less specific than a reviewed page signal. Keep the
+    # generic denial only when no challenge, paywall, login, throttling, or
+    # other explicit terminal marker explains the response.
+    if BrowserPageMarkerKind.ACCESS_DENIED in matched and any(
+        kind in matched
+        for kind in _TERMINAL_PAGE_STATES
+        if kind is not BrowserPageMarkerKind.ACCESS_DENIED
+    ):
+        matched.remove(BrowserPageMarkerKind.ACCESS_DENIED)
 
     authenticated = BrowserPageMarkerKind.AUTHENTICATED in matched
     entitled = BrowserPageMarkerKind.ENTITLED in matched
@@ -638,12 +709,15 @@ def _classify_page(
         state = BrowserRunState.RUNTIME_FAILED
     elif state is None and authenticated:
         state = BrowserRunState.AUTHENTICATED
-    return _PageClassification(
-        state=state,
-        authenticated=authenticated,
-        entitled=entitled,
-        conflict=conflict,
-        matched=frozenset(matched),
+    return (
+        _PageClassification(
+            state=state,
+            authenticated=authenticated,
+            entitled=entitled,
+            conflict=conflict,
+            matched=frozenset(matched),
+        ),
+        observation,
     )
 
 
@@ -965,7 +1039,7 @@ class ControlledBrowserPdfSource:
         )
         candidate_delivered = 0
         try:
-            result, state_machine, page_failure = self._run_action(action)
+            result, state_machine, page_failure, capture_guard = self._run_action(action)
             if page_failure is not None:
                 raise AcquisitionSourceFailure(page_failure)
             if _state_ends_without_pdf(state_machine):
@@ -977,7 +1051,12 @@ class ControlledBrowserPdfSource:
                     started_ns=candidate_started_ns,
                 )
                 return None
-            captures = self._capture_deliveries(action, result, candidate_keys)
+            captures = self._capture_deliveries(
+                action,
+                result,
+                candidate_keys,
+                landing_url=capture_guard.landing_url,
+            )
             try:
                 for temporary_pdf in captures:
                     candidate_delivered += 1
@@ -1042,6 +1121,8 @@ class ControlledBrowserPdfSource:
         action: _BrowserAction,
         result: BrowserResult,
         candidate_keys: CandidateKeyTracker,
+        *,
+        landing_url: str | None,
     ) -> Generator[TemporaryPdf, None, None]:
         priority = {kind: index for index, kind in enumerate(action.rule.capture_priority)}
         captures = sorted(
@@ -1049,7 +1130,11 @@ class ControlledBrowserPdfSource:
             key=lambda capture: priority[capture.kind],
         )
         for capture in captures:
-            disposition = self._capture_disposition(action, capture)
+            disposition = self._capture_disposition(
+                action,
+                capture,
+                landing_url=landing_url,
+            )
             _LOGGER.debug(
                 "event=browser-capture-classified route_key=%s browser_rule_id=%s "
                 "capture_kind=%s disposition=%s",
@@ -1073,6 +1158,7 @@ class ControlledBrowserPdfSource:
                 action,
                 capture_key,
                 capture,
+                landing_url=landing_url,
             )
             try:
                 yield temporary_pdf
@@ -1091,13 +1177,15 @@ class ControlledBrowserPdfSource:
     def _capture_disposition(
         action: _BrowserAction,
         capture: BrowserCapture,
+        *,
+        landing_url: str | None,
     ) -> BrowserCaptureDisposition:
         stream = capture.stream
         return action.rule.classify_capture(
             stream.final_locator,
             capture.kind,
             stream.media_type,
-            landing_url=action.landing_url,
+            landing_url=landing_url,
             identifiers=action.identifiers,
         )
 
@@ -1126,6 +1214,8 @@ class ControlledBrowserPdfSource:
         action: _BrowserAction,
         key: str,
         capture: BrowserCapture,
+        *,
+        landing_url: str | None,
     ) -> TemporaryPdf:
         if not isinstance(capture, BrowserCapture):
             raise AcquisitionFailure(_contract_failure())
@@ -1134,7 +1224,14 @@ class ControlledBrowserPdfSource:
             final_url = _normalized_url(result.final_locator)
         except AcquisitionFailure as error:
             raise AcquisitionSourceFailure(error.failure) from None
-        if self._capture_disposition(action, capture) is not BrowserCaptureDisposition.PRIMARY:
+        if (
+            self._capture_disposition(
+                action,
+                capture,
+                landing_url=landing_url,
+            )
+            is not BrowserCaptureDisposition.PRIMARY
+        ):
             # Defence in depth: a compatible runner must already have
             # rejected this locator and media type through the pre-body
             # capture guard before access.
@@ -1149,7 +1246,7 @@ class ControlledBrowserPdfSource:
                     declared_media_type=result.media_type,
                 ),
                 content=content,
-                safe_source_url=final_url.url,
+                safe_source_url=action.rule.safe_capture_locator(final_url.url),
                 provenance=self._provenance(action.rule),
             )
         except Exception:
@@ -1159,7 +1256,12 @@ class ControlledBrowserPdfSource:
     def _run_action(
         self,
         action: _BrowserAction,
-    ) -> tuple[BrowserResult, BrowserRunStateMachine, StableFailure | None]:
+    ) -> tuple[
+        BrowserResult,
+        BrowserRunStateMachine,
+        StableFailure | None,
+        _RuleCaptureGuard,
+    ]:
         state_machine = BrowserRunStateMachine()
         _transition_browser_state(
             state_machine,
@@ -1167,9 +1269,16 @@ class ControlledBrowserPdfSource:
             rule_id=action.rule.rule_id,
         )
         page_failure: list[StableFailure] = []
+        capture_guard = _RuleCaptureGuard(action)
 
         def flow(session: BrowserFlowSession) -> None:
-            self._run_rule_flow(session, action.rule, state_machine, page_failure)
+            self._run_rule_flow(
+                session,
+                action.rule,
+                capture_guard,
+                state_machine,
+                page_failure,
+            )
 
         try:
             scope, effective_policy = self._access_profile(action.rule)
@@ -1183,8 +1292,9 @@ class ControlledBrowserPdfSource:
                 effective_policy,
                 flow=flow,
                 destination_guard=_RuleDestinationGuard(action.rule, action.start_url),
-                capture_guard=_RuleCaptureGuard(action),
-                navigation_only=True,
+                capture_guard=capture_guard,
+                navigation_only=False,
+                discard_unapproved_subresources=True,
                 budget=_CONSERVATIVE_BROWSER_BUDGET,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,
@@ -1210,20 +1320,34 @@ class ControlledBrowserPdfSource:
                 result_state,
                 rule_id=action.rule.rule_id,
             )
-        return result, state_machine, page_failure[0] if page_failure else None
+        return (
+            result,
+            state_machine,
+            page_failure[0] if page_failure else None,
+            capture_guard,
+        )
 
     @staticmethod
     def _run_rule_flow(
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
+        capture_guard: _RuleCaptureGuard,
         state_machine: BrowserRunStateMachine,
         page_failure: list[StableFailure],
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
+        if ControlledBrowserPdfSource._expected_capture_available(session, rule):
+            _LOGGER.debug(
+                "event=browser-rule-actions-skipped browser_rule_id=%s "
+                "decision_reason=initial-capture-available outcome=continue",
+                rule.rule_id,
+            )
+            return
         classification, terminal = ControlledBrowserPdfSource._apply_page_state(
             session,
             rule,
+            capture_guard,
             state_machine,
             page_failure,
             checkpoint="initial",
@@ -1237,6 +1361,8 @@ class ControlledBrowserPdfSource:
                 rule.rule_id,
             )
             return
+        if ControlledBrowserPdfSource._try_discovered_pdf_locators(session, rule):
+            return
         if rule.actions_require_entitlement and not classification.entitled:
             _LOGGER.debug(
                 "event=browser-rule-actions-skipped browser_rule_id=%s "
@@ -1244,34 +1370,88 @@ class ControlledBrowserPdfSource:
                 rule.rule_id,
             )
             return
-        for action_index, action in enumerate(rule.actions, start=1):
-            ControlledBrowserPdfSource._run_rule_action(session, action)
+        if ControlledBrowserPdfSource._run_provider_actions(
+            session,
+            rule,
+            capture_guard,
+            state_machine,
+            page_failure,
+        ):
+            return
+        ControlledBrowserPdfSource._apply_page_state(
+            session,
+            rule,
+            capture_guard,
+            state_machine,
+            page_failure,
+            checkpoint="final",
+        )
+
+    @staticmethod
+    def _try_discovered_pdf_locators(
+        session: BrowserFlowSession,
+        rule: BrowserSiteRule,
+    ) -> bool:
+        discovered = session.discover_pdf_locators()
+        if not isinstance(discovered, tuple):
+            raise TypeError("Browser PDF discovery violated its structural contract")
+        _LOGGER.debug(
+            "event=browser-pdf-locators-discovered browser_rule_id=%s candidate_count=%d "
+            "attempt_count=%d",
+            rule.rule_id,
+            len(discovered),
+            min(len(discovered), _MAX_DISCOVERED_PDF_ATTEMPTS),
+        )
+        for locator in discovered[:_MAX_DISCOVERED_PDF_ATTEMPTS]:
+            if type(locator) is not str:
+                raise TypeError("Browser PDF discovery returned an invalid locator")
+            session.open_verified_locator(locator)
             if ControlledBrowserPdfSource._expected_capture_available(session, rule):
-                return
+                return True
+        return False
+
+    @staticmethod
+    def _run_provider_actions(
+        session: BrowserFlowSession,
+        rule: BrowserSiteRule,
+        capture_guard: _RuleCaptureGuard,
+        state_machine: BrowserRunStateMachine,
+        page_failure: list[StableFailure],
+    ) -> bool:
+        for action_index, action in enumerate(rule.actions, start=1):
+            if not ControlledBrowserPdfSource._run_rule_action(session, action, rule):
+                _LOGGER.debug(
+                    "event=browser-rule-action-skipped browser_rule_action=%s "
+                    "decision_reason=not-actionable outcome=normal-miss",
+                    action.kind.value,
+                )
+                return False
+            if ControlledBrowserPdfSource._expected_capture_available(session, rule):
+                return True
             _classification, terminal = ControlledBrowserPdfSource._apply_page_state(
                 session,
                 rule,
+                capture_guard,
                 state_machine,
                 page_failure,
                 checkpoint=f"post-action-{action_index}",
             )
             if terminal:
-                return
+                return True
+        return False
 
     @staticmethod
     def _expected_capture_available(
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
     ) -> bool:
-        return any(
-            action.capture_kind is not None and session.capture_available(action.capture_kind)
-            for action in rule.actions
-        )
+        return any(session.capture_available(kind) for kind in rule.capture_priority)
 
     @staticmethod
     def _apply_page_state(
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
+        capture_guard: _RuleCaptureGuard,
         state_machine: BrowserRunStateMachine,
         page_failure: list[StableFailure],
         *,
@@ -1284,7 +1464,8 @@ class ControlledBrowserPdfSource:
             checkpoint,
         )
         try:
-            classification = _classify_page(session, rule)
+            classification, observation = _classify_page(session, rule)
+            capture_guard.bind_landing(observation.locator)
         except BaseException:
             _LOGGER.debug(
                 "event=browser-page-state-check-finished browser_rule_id=%s "
@@ -1321,34 +1502,61 @@ class ControlledBrowserPdfSource:
     def _run_rule_action(
         session: BrowserFlowSession,
         action: BrowserRuleAction,
-    ) -> None:
+        rule: BrowserSiteRule,
+    ) -> bool:
         if not isinstance(action, BrowserRuleAction):
             raise TypeError("Browser rule action violated its closed contract")
         _LOGGER.debug(
             "event=browser-rule-action browser_rule_action=%s",
             action.kind.value,
         )
+        if action.kind in {
+            BrowserActionKind.WAIT_FOR_CAPTURE,
+            BrowserActionKind.WAIT_FOR_ANY_CAPTURE,
+        }:
+            ControlledBrowserPdfSource._run_wait_action(session, action, rule)
+            return True
+        return ControlledBrowserPdfSource._run_navigation_action(session, action)
+
+    @staticmethod
+    def _run_navigation_action(
+        session: BrowserFlowSession,
+        action: BrowserRuleAction,
+    ) -> bool:
         if action.kind is BrowserActionKind.CLICK:
             if action.selector is None:
                 raise TypeError("click action lost its static selector")
-            session.click(action.selector)
-            return
+            clicked = session.click(action.selector)
+            if type(clicked) is not bool:
+                raise TypeError("click action returned an invalid outcome")
+            return clicked
         if action.kind is BrowserActionKind.OPEN_VIEWER:
             if action.locator is None:
                 raise TypeError("viewer action lost its static locator")
             session.open_viewer(action.locator)
-            return
+            return True
         if action.kind is BrowserActionKind.OPEN_VERIFIED_LOCATOR:
             if action.locator is None:
                 raise TypeError("verified-locator action lost its static locator")
             session.open_verified_locator(action.locator)
-            return
+            return True
+        raise TypeError("unknown Browser navigation action")
+
+    @staticmethod
+    def _run_wait_action(
+        session: BrowserFlowSession,
+        action: BrowserRuleAction,
+        rule: BrowserSiteRule,
+    ) -> None:
         if action.kind is BrowserActionKind.WAIT_FOR_CAPTURE:
             if action.capture_kind is None:
                 raise TypeError("wait action lost its capture kind")
             session.wait_for_capture(action.capture_kind)
             return
-        raise TypeError("unknown Browser rule action")
+        if action.kind is BrowserActionKind.WAIT_FOR_ANY_CAPTURE:
+            session.wait_for_any_capture(rule.capture_priority)
+            return
+        raise TypeError("unknown Browser wait action")
 
     def _access_profile(self, rule: BrowserSiteRule) -> tuple[AccessScope, AccessPolicy]:
         profile_url = _normalized_url(rule.landing_origin)

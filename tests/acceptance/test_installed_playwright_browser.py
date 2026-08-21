@@ -43,13 +43,14 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         )
         self.assertTrue(payload["runtime"]["python_dependency_available"])
         self.assertTrue(payload["runtime"]["chromium_executable_available"])
+        self.assertTrue(payload["runtime"]["headed_display_available"])
 
         network = payload["network"]
         self.assertTrue(network["resolver_only_returned_loopback"])
-        self.assertEqual(network["authorities"], [network["authority"]] * 3)
+        self.assertEqual(network["authorities"], [network["authority"]] * 4)
         self.assertEqual(
             network["paths"],
-            ["/article", "/article.pdf", "/article.pdf"],
+            ["/article", "/article.pdf", "/article.pdf", "/article.pdf"],
         )
         self.assertTrue(network["cookie_pair_preserved"])
 
@@ -61,14 +62,17 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         self.assertEqual(session["article_count"], 2)
         self.assertTrue(session["one_process_and_context_reused"])
         self.assertTrue(session["article_pages_closed"])
+        self.assertTrue(session["persistent_profile_created"])
 
         cleanup = payload["cleanup"]
         self.assertFalse(cleanup["temporary_root_exists"])
+        self.assertFalse(cleanup["runtime_directory_exists"])
+        self.assertTrue(cleanup["profile_survived_broker_close"])
         self.assertFalse(cleanup["server_thread_alive"])
         self.assertEqual(cleanup["playwright_threads_alive"], [])
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 1)
+        self.assertEqual(production["catalog_rule_count"], 9)
         self.assertTrue(production["ready"])
         self.assertIsNone(production["readiness_code"])
 

@@ -23,6 +23,7 @@ from sciretriever.model.configuration import (
     AnalysisProtocol,
     BrowserConfigurationProbeResult,
     BrowserProfilePresence,
+    BrowserProfileStatus,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationProbeResult,
@@ -258,12 +259,16 @@ class _RecordingEntryApi:
 class _RoutingObjectGraph:
     def __init__(self, entry_api: _RecordingEntryApi) -> None:
         self.entry_api = entry_api
+        self.close_calls = 0
         self.topic_provider_limits = (
             ProviderDiscoveryLimit(provider_name="topic-provider", scan_limit=101),
         )
         self.citation_provider_limits = (
             ProviderDiscoveryLimit(provider_name="citation-provider", scan_limit=202),
         )
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class CliCommandTreeTests(unittest.TestCase):
@@ -410,6 +415,7 @@ class CliProductionRoutingTests(unittest.TestCase):
             scope=module.ProductionEntryScope.ASSET_COMPLETION,
             logging_level=logging.DEBUG,
         )
+        self.assertEqual(graph.close_calls, 1)
 
     def test_each_business_command_selects_only_its_required_production_scope(self) -> None:
         module = _cli_module()
@@ -983,7 +989,10 @@ class CliConfigurationTests(unittest.TestCase):
                 ("Wiley Online Library", "Available", "Enable the Provider."),
             ),
             browser_state="Disabled",
-            browser_detail=("Profile 'institutional-access' is missing; login is not assessed."),
+            browser_detail=(
+                "No profile is selected. One persistent Chrome process is shared by Publisher "
+                "lanes."
+            ),
             browser_action="Select and initialize a profile to enable Browser-last access.",
             profile_presence=BrowserProfilePresence.MISSING,
         )
@@ -1248,12 +1257,17 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("api_key=configured", stdout)
         self.assertIn("elsevier, core, wiley · known unavailable: springer", stdout)
         self.assertIn("Controlled browser", stdout)
-        self.assertIn("1 production route", stdout)
+        self.assertIn("9 production routes", stdout)
+        self.assertIn("9/9 routes locally eligible", stdout)
         self.assertIn("local Browser not", stdout)
-        self.assertIn("Personal login", stdout)
-        self.assertIn("not assessed", stdout)
-        self.assertIn("IP / article access", stdout)
-        self.assertIn("not-proven", stdout)
+        self.assertIn("Access mode", stdout)
+        self.assertIn("persistent-profile", stdout)
+        self.assertIn("Selected profile", stdout)
+        self.assertIn("Chrome lifecycle", stdout)
+        self.assertIn("Publisher lanes", stdout)
+        self.assertIn("Session authenticat", stdout)
+        self.assertIn("Article access", stdout)
+        self.assertIn("checked-per-article", stdout)
         self.assertNotIn("status-secret-sentinel", stdout)
 
     def test_config_manager_sets_updates_and_removes_without_secret_output_or_storage(
@@ -1521,11 +1535,6 @@ class CliConfigurationTests(unittest.TestCase):
                 "build_production_configuration_probe_session",
                 side_effect=AssertionError("config status must not build a probe session"),
             ),
-            patch.object(
-                module,
-                "open_visible_browser_login",
-                side_effect=AssertionError("config status must not launch Browser"),
-            ),
         ):
             code, stdout, stderr = _invoke("config", "status", "--json")
 
@@ -1541,16 +1550,42 @@ class CliConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(payload["analysis"]["provider"], None)
         browser = payload["providers"]["controlled_browser"]
-        self.assertEqual(browser["production_route_count"], 1)
+        self.assertEqual(browser["production_route_count"], 9)
+        self.assertEqual(browser["automatic_route_count"], 9)
         self.assertFalse(browser["automatic_acquisition_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
-        self.assertEqual(browser["profile"]["presence"], "missing")
-        self.assertEqual(browser["session"]["assessment"], "not-assessed")
-        self.assertIsNone(browser["session"]["authenticated"])
-        self.assertEqual(browser["session"]["article_entitlement"], "not-proven")
+        self.assertEqual(browser["mode"], "headed-persistent-profile")
+        self.assertIn("headed_display_available", browser["runtime"])
+        self.assertTrue(browser["persistent_authentication_supported"])
+        self.assertEqual(browser["article_entitlement"], "checked-per-article")
+        self.assertEqual(
+            browser["profile"],
+            {"selected": None, "presence": "missing"},
+        )
+        self.assertEqual(
+            browser["session"],
+            {
+                "assessment": "not-assessed",
+                "authenticated": None,
+                "article_entitlement": "not-proven",
+            },
+        )
         self.assertTrue(browser["probe"]["available"])
         self.assertTrue(browser["probe"]["requires_explicit_target"])
-        self.assertEqual(browser["probe"]["supported_access_keys"], ["springerlink"])
+        self.assertEqual(
+            browser["probe"]["supported_access_keys"],
+            [
+                "acs-publications",
+                "aip-publishing",
+                "elsevier-sciencedirect",
+                "iopscience",
+                "oxford-academic",
+                "rsc-publishing",
+                "science-aaas",
+                "springerlink",
+                "wiley-online-library",
+            ],
+        )
         self.assertEqual(
             browser["action_required"][0]["code"],
             "browser-disabled",
@@ -1620,22 +1655,29 @@ class CliConfigurationTests(unittest.TestCase):
             "Public",
             "Authorized API",
             "Controlled Browser",
-            "Personal login",
-            "IP / article access",
+            "Access mode",
+            "Selected profile",
+            "Chrome lifecycle",
+            "Publisher lanes",
+            "Session authenticat",
+            "Article access",
             "Storage",
         ):
             self.assertIn(heading, stdout)
         self.assertIn("api_key=configured", stdout)
         self.assertNotIn("secret-value", stdout)
 
-    def test_plain_access_manager_selects_profile_and_explains_browser_enablement(
+    def test_plain_access_manager_selects_and_initializes_a_persistent_profile(
         self,
     ) -> None:
         module = _cli_module()
         before = Configuration()
         overview = self._provider_access_overview(module)
         with (
-            patch("builtins.input", side_effect=("a", "1", "", "y", "b", "q")),
+            patch(
+                "builtins.input",
+                side_effect=("a", "1", "fixture-profile", "y", "b", "q"),
+            ),
             patch.object(
                 module,
                 "select_configuration_edit_path",
@@ -1647,12 +1689,7 @@ class CliConfigurationTests(unittest.TestCase):
             patch.object(
                 module,
                 "browser_profile_status",
-                return_value=SimpleNamespace(presence=BrowserProfilePresence.MISSING),
-            ),
-            patch.object(
-                module,
-                "browser_profile_path",
-                return_value=Path("/fixed/browser-profiles/institutional-access"),
+                return_value=BrowserProfileStatus(presence=BrowserProfilePresence.MISSING),
             ),
             patch.object(module, "configure_browser_access_profile") as configure,
         ):
@@ -1663,22 +1700,23 @@ class CliConfigurationTests(unittest.TestCase):
             "Provider API and Browser Access",
             "CORE",
             "Elsevier / Scopus",
-            "Controlled Browser",
-            "/fixed/browser-profiles/institutional-access",
-            "login cookies and local storage",
-            "Browser-last",
+            "Select Browser profile",
+            "persistent Chrome profile",
+            "sensitive session data",
         ):
             self.assertIn(expected, stderr)
+        self.assertNotIn("browser-profiles", stderr)
+        self.assertNotIn("Cookie path", stderr)
         configure.assert_called_once()
-        call_args = configure.call_args
-        self.assertEqual(call_args.args[0], Path("config.toml"))
-        candidate = call_args.args[1]
+        self.assertEqual(configure.call_args.args[:1], (Path("config.toml"),))
+        candidate = configure.call_args.args[1]
         self.assertIsInstance(candidate, AccessConfig)
         self.assertTrue(candidate.browser_enabled)
-        self.assertEqual(candidate.browser_profile, "institutional-access")
-        self.assertEqual(call_args.kwargs, {"home": None})
+        self.assertEqual(candidate.browser_profile, "fixture-profile")
+        self.assertEqual(candidate.browser_max_concurrency, 5)
+        self.assertIsNone(configure.call_args.kwargs["home"])
 
-    def test_access_profile_selection_cancellation_has_no_write_or_browser_side_effect(
+    def test_access_enablement_cancellation_has_no_write_or_browser_side_effect(
         self,
     ) -> None:
         module = _cli_module()
@@ -1686,7 +1724,7 @@ class CliConfigurationTests(unittest.TestCase):
         with (
             patch(
                 "builtins.input",
-                side_effect=("a", "1", "institutional-access", "n", "b", "q"),
+                side_effect=("a", "1", "fixture-profile", "n", "b", "q"),
             ),
             patch.object(
                 module,
@@ -1699,124 +1737,50 @@ class CliConfigurationTests(unittest.TestCase):
             patch.object(
                 module,
                 "browser_profile_status",
-                return_value=SimpleNamespace(presence=BrowserProfilePresence.MISSING),
-            ),
-            patch.object(
-                module,
-                "browser_profile_path",
-                return_value=Path("/fixed/browser-profiles/institutional-access"),
+                return_value=BrowserProfileStatus(presence=BrowserProfilePresence.MISSING),
             ),
             patch.object(module, "configure_browser_access_profile") as configure,
-            patch.object(module, "open_visible_browser_login") as open_browser,
-            patch.object(module, "remove_browser_profile") as remove_profile,
-            patch.object(module, "update_configuration_sections") as update,
         ):
             code, stdout, stderr = _invoke("config")
 
         self.assertEqual((code, stdout), (0, ""))
         self.assertIn("No Browser access setting or profile was changed", stderr)
         configure.assert_not_called()
-        open_browser.assert_not_called()
-        remove_profile.assert_not_called()
-        update.assert_not_called()
 
-    def test_access_manager_opens_only_explicit_visible_login_and_never_claims_authentication(
+    def test_plain_access_manager_accepts_cross_publisher_concurrency_without_upper_bound(
         self,
     ) -> None:
         module = _cli_module()
-        configured = Configuration(
-            access=AccessConfig(
-                browser_enabled=True,
-                browser_profile="institutional-access",
-            )
-        )
+        before = Configuration()
         overview = self._provider_access_overview(module)
-        handle = Mock()
         with (
-            patch("builtins.input", side_effect=("a", "2", "y", "b", "q")),
+            patch("builtins.input", side_effect=("a", "5", "128", "y", "b", "q")),
             patch.object(
                 module,
                 "select_configuration_edit_path",
                 return_value=Path("config.toml"),
             ),
-            patch.object(module, "load_editable_configuration", return_value=configured),
+            patch.object(module, "load_editable_configuration", return_value=before),
             patch.object(module, "load_credentials", return_value=Mock()),
             patch.object(module, "_provider_access_overview", return_value=overview),
-            patch.object(
-                module,
-                "browser_profile_status",
-                return_value=SimpleNamespace(presence=BrowserProfilePresence.CONFIGURED),
-            ),
-            patch.object(
-                module,
-                "browser_profile_path",
-                return_value=Path("/fixed/browser-profiles/institutional-access"),
-            ),
-            patch.object(module, "resolve_browser_profile", return_value=handle) as resolve,
-            patch.object(module, "open_visible_browser_login") as open_browser,
-        ):
-            code, stdout, stderr = _invoke("config")
-
-        self.assertEqual((code, stdout), (0, ""))
-        resolve.assert_called_once_with("institutional-access", home=None)
-        open_browser.assert_called_once_with(handle)
-        self.assertIn("will not fill credentials", stderr)
-        self.assertIn("MFA/CAPTCHA", stderr)
-        self.assertIn("login and article", stderr)
-        self.assertIn("entitlement were not assessed", stderr)
-        self.assertNotIn("authenticated", stderr.casefold())
-
-    def test_access_manager_removes_session_without_config_or_api_credential_mutation(
-        self,
-    ) -> None:
-        module = _cli_module()
-        configured = Configuration(
-            access=AccessConfig(
-                browser_enabled=True,
-                browser_profile="institutional-access",
-            )
-        )
-        overview = self._provider_access_overview(module)
-        with (
-            patch("builtins.input", side_effect=("a", "3", "y", "b", "q")),
-            patch.object(
-                module,
-                "select_configuration_edit_path",
-                return_value=Path("config.toml"),
-            ),
-            patch.object(module, "load_editable_configuration", return_value=configured),
-            patch.object(module, "load_credentials", return_value=Mock()),
-            patch.object(module, "_provider_access_overview", return_value=overview),
-            patch.object(
-                module,
-                "browser_profile_status",
-                return_value=SimpleNamespace(presence=BrowserProfilePresence.CONFIGURED),
-            ),
-            patch.object(
-                module,
-                "browser_profile_path",
-                return_value=Path("/fixed/browser-profiles/institutional-access"),
-            ),
-            patch.object(module, "remove_browser_profile", return_value=True) as remove_profile,
             patch.object(module, "update_configuration_sections") as update,
-            patch.object(module, "remove_credentials") as remove_credentials,
         ):
             code, stdout, stderr = _invoke("config")
 
         self.assertEqual((code, stdout), (0, ""))
-        remove_profile.assert_called_once_with("institutional-access", home=None)
-        update.assert_not_called()
-        remove_credentials.assert_not_called()
-        self.assertIn("cannot be recovered", stderr)
-        self.assertIn("identity remains in config.toml", stderr)
+        update.assert_called_once()
+        candidate = update.call_args.kwargs["access"]
+        self.assertEqual(candidate.browser_max_concurrency, 128)
+        self.assertIn("integer > 1", stderr)
+        self.assertIn("was set to 128", stderr)
 
-    def test_access_manager_disables_browser_but_retains_selected_session(self) -> None:
+    def test_access_manager_disables_browser_and_preserves_local_limits(self) -> None:
         module = _cli_module()
         configured = Configuration(
             access=AccessConfig(
                 browser_enabled=True,
-                browser_profile="institutional-access",
-                browser_max_concurrency=1,
+                browser_profile="fixture-profile",
+                browser_max_concurrency=2,
             )
         )
         overview = self._provider_access_overview(module)
@@ -1831,7 +1795,6 @@ class CliConfigurationTests(unittest.TestCase):
             patch.object(module, "load_credentials", return_value=Mock()),
             patch.object(module, "_provider_access_overview", return_value=overview),
             patch.object(module, "update_configuration_sections") as update,
-            patch.object(module, "remove_browser_profile") as remove_profile,
         ):
             code, stdout, stderr = _invoke("config")
 
@@ -1840,10 +1803,10 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual(update.call_args.args, (Path("config.toml"),))
         candidate = update.call_args.kwargs["access"]
         self.assertFalse(candidate.browser_enabled)
-        self.assertEqual(candidate.browser_profile, "institutional-access")
-        self.assertEqual(candidate.browser_max_concurrency, 1)
-        remove_profile.assert_not_called()
-        self.assertIn("local session was retained", stderr)
+        self.assertEqual(candidate.browser_profile, "fixture-profile")
+        self.assertEqual(candidate.browser_max_concurrency, 2)
+        self.assertEqual(candidate.browser_policy_overrides, ())
+        self.assertIn("Browser access was disabled; the local session was retained", stderr)
 
     def test_tty_manager_exposes_access_area_and_returns_without_writing(self) -> None:
         module = _cli_module()
@@ -1882,21 +1845,29 @@ class CliConfigurationTests(unittest.TestCase):
                 autospec=True,
                 side_effect=("access", "back", "quit"),
             ) as prompt,
-            patch.object(module, "configure_browser_access_profile") as configure,
-            patch.object(module, "remove_browser_profile") as remove_profile,
         ):
             code, stdout, stderr = _invoke("config", "--theme", "mono")
 
         self.assertEqual((code, stdout), (0, ""))
         first_choice = prompt.call_args_list[0].args[0]
         self.assertIn(("access", "Provider APIs and Browser Access"), first_choice.options)
+        access_choice = prompt.call_args_list[1].args[0]
+        self.assertEqual(
+            access_choice.options,
+            [
+                ("select", "Select or initialize a Browser profile"),
+                ("login", "Open a visible Browser when a Provider requires manual login"),
+                ("remove", "Remove the selected local Browser session"),
+                ("disable", "Disable Browser access and keep the session"),
+                ("concurrency", "Set cross-Publisher Browser concurrency"),
+                ("back", "Back"),
+            ],
+        )
         self.assertIn("Provider Access", stderr)
         self.assertIn("Literature Provider access", stderr)
         self.assertNotIn("\x1b[", stderr)
-        configure.assert_not_called()
-        remove_profile.assert_not_called()
 
-    def test_access_overview_uses_three_authorized_apis_and_one_disabled_browser_route(
+    def test_access_overview_uses_three_authorized_apis_and_disabled_browser_routes(
         self,
     ) -> None:
         import sciretriever.configuration as configuration_boundary
@@ -1914,8 +1885,9 @@ class CliConfigurationTests(unittest.TestCase):
             ("CORE", "Elsevier / Scopus", "Wiley Online Library"),
         )
         self.assertEqual(overview.browser_state, "Disabled")
-        self.assertIn("enable Browser-last access", overview.browser_action)
-        self.assertIs(overview.profile_presence, BrowserProfilePresence.MISSING)
+        self.assertIn("Select and initialize a profile", overview.browser_action)
+        self.assertIn("No profile is selected", overview.browser_detail)
+        self.assertIn("persistent Chrome process", overview.browser_detail)
 
     def test_config_test_routes_named_and_all_to_probe_session_and_uses_result_exit_code(
         self,
@@ -1998,6 +1970,7 @@ class CliConfigurationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(build_probe.call_count, 2)
+        self.assertEqual(session.close.call_count, 2)
         session.run_browser.assert_not_called()
 
     def test_config_test_named_provider_and_all_are_parser_exclusive(self) -> None:
@@ -2058,11 +2031,12 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual(payload["article_entitlement"], "not-proven")
         self.assertFalse(payload["persisted"])
         session.run_browser.assert_called_once_with("springerlink")
+        session.close.assert_called_once_with()
         session.run.assert_not_called()
         session.run_llm.assert_not_called()
         session.run_mineru.assert_not_called()
 
-    def test_config_test_browser_passes_without_personal_login_or_entitlement_claim(self) -> None:
+    def test_config_test_browser_passes_without_entitlement_claim(self) -> None:
         module = _cli_module()
         session = Mock()
         session.run_browser.return_value = BrowserConfigurationProbeResult(
@@ -2071,7 +2045,6 @@ class CliConfigurationTests(unittest.TestCase):
             local_ready=True,
             browser_launched=True,
             minimal_target_reached=True,
-            authentication_accepted=False,
             navigation_count=1,
         )
         with (
@@ -2093,7 +2066,7 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual((code, stderr), (0, ""))
         payload = json.loads(stdout)
         self.assertEqual(payload["outcome"], "passed")
-        self.assertFalse(payload["authentication_accepted"])
+        self.assertNotIn("authentication_accepted", payload)
         self.assertEqual(payload["article_entitlement"], "not-proven")
         self.assertIsNone(payload["failure_code"])
 
@@ -2117,10 +2090,10 @@ class CliConfigurationTests(unittest.TestCase):
             )
 
         self.assertEqual((code, stdout), (0, ""))
-        self.assertIn("controlled headless Browser session", stderr)
+        self.assertIn("controlled headed Browser session", stderr)
         self.assertIn("exactly one approved minimal Publisher target", stderr)
         self.assertIn("runtime and target reachability", stderr)
-        self.assertIn("does not assess IP-based or article-specific entitlement", stderr)
+        self.assertIn("does not assess institution-IP or article-specific entitlement", stderr)
         self.assertIn("cancelled", stderr)
         session.run_browser.assert_not_called()
 
@@ -2212,8 +2185,8 @@ class CliResultAndFailureBoundaryTests(unittest.TestCase):
         )
         stable_failure = StableFailure(
             code="acquisition-browser-login-required",
-            reason="The Publisher Browser session requires a fresh login.",
-            action="Open the visible Browser login flow and retry Completion.",
+            reason="The Publisher page requires an unsupported login.",
+            action="Use an authorized API or provide the PDF manually.",
             retryable=False,
         )
         report = DatabaseCompletionReport(

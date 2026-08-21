@@ -84,7 +84,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
         )
         access = AccessConfig(
             browser_enabled=True,
-            browser_profile="institutional-access",
+            browser_profile="fixture-profile",
             browser_max_concurrency=3,
             browser_policy_overrides=(
                 BrowserPolicyOverrideConfig(
@@ -106,12 +106,12 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
                 "[access]\n"
                 "# keep Browser switch comment\n"
                 "browser_enabled = false\n"
-                "browser_max_concurrency = 1\n",
+                "browser_max_concurrency = 2\n",
                 encoding="utf-8",
             )
 
             with patch(
-                "sciretriever.configuration._production_browser_group_policies",
+                "sciretriever.configuration.browser_access._production_browser_group_policies",
                 return_value={baseline.rate_limit_group: baseline},
             ):
                 updated = update_configuration_sections(path, access=access)
@@ -122,8 +122,9 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             self.assertIn("# keep unrelated section comments", rendered)
             self.assertIn("# keep Browser switch comment", rendered)
             self.assertIn("browser_enabled = true", rendered)
-            self.assertIn('browser_profile = "institutional-access"', rendered)
+            self.assertIn('browser_profile = "fixture-profile"', rendered)
             self.assertIn("browser_max_concurrency = 3", rendered)
+            self.assertNotIn("browser_machine_access_grants", rendered)
             self.assertIn('rate_limit_group = "fixture-publisher"', rendered)
             self.assertIn("minimum_start_interval = 20.0", rendered)
             self.assertEqual(updated, reloaded)
@@ -213,7 +214,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
 
         access = AccessConfig(
             browser_enabled=True,
-            browser_profile="institutional-access",
+            browser_profile="fixture-profile",
             browser_max_concurrency=3,
         )
         access_changes = configuration_diff(
@@ -222,11 +223,12 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             sections=("access",),
         )
         self.assertIn(("access.browser_enabled", False, True), access_changes)
+        self.assertNotIn("machine_access", repr(access_changes))
         self.assertIn(
-            ("access.browser_profile", None, "institutional-access"),
+            ("access.browser_profile", None, "fixture-profile"),
             access_changes,
         )
-        self.assertIn(("access.browser_max_concurrency", 2, 3), access_changes)
+        self.assertIn(("access.browser_max_concurrency", 5, 3), access_changes)
         self.assertNotIn(_SECRET, repr(access_changes))
 
 

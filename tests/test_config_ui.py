@@ -80,15 +80,19 @@ def _status_payload() -> dict[str, object]:
             ],
             "controlled_browser": {
                 "enabled": True,
+                "mode": "headed-persistent-profile",
+                "persistent_authentication_supported": True,
+                "article_entitlement": "checked-per-article",
                 "local_max_concurrency": 2,
                 "runtime": {
                     "framework_available": True,
                     "python_dependency_available": True,
                     "chromium_executable_available": True,
+                    "headed_display_available": True,
                     "launch_assessed": False,
                 },
                 "profile": {
-                    "selected": "institutional-access",
+                    "selected": "fixture-profile",
                     "presence": "configured",
                 },
                 "session": {
@@ -98,6 +102,7 @@ def _status_payload() -> dict[str, object]:
                 },
                 "automatic_acquisition_available": True,
                 "production_route_count": 1,
+                "automatic_route_count": 1,
                 "routes": [
                     {
                         "access_key": "springerlink",
@@ -105,6 +110,7 @@ def _status_payload() -> dict[str, object]:
                         "route_key": "browser:springerlink",
                         "rate_limit_group": "springerlink",
                         "production_available": True,
+                        "automatic_acquisition_eligible": True,
                         "policy": {
                             "evidence": "project-conservative",
                             "policy_revision": "springerlink-browser-2026-08-16",
@@ -126,13 +132,7 @@ def _status_payload() -> dict[str, object]:
                     "requires_explicit_target": True,
                     "supported_access_keys": ["springerlink"],
                 },
-                "action_required": [
-                    {
-                        "code": "browser-session-not-assessed",
-                        "reason": "Status does not launch the Browser.",
-                        "action": "Run the explicit SpringerLink Browser probe.",
-                    }
-                ],
+                "action_required": [],
             },
         },
         "parsing": {
@@ -220,8 +220,8 @@ class ConfigPresentationTests(unittest.TestCase):
             console.access(
                 api_routes=(("Wiley", "Ready", "No local action"),),
                 browser_state="Unavailable",
-                browser_detail="Profile is missing; no production route is registered.",
-                browser_action="Initialize only for future supported routes.",
+                browser_detail="The persistent headed runtime is unavailable.",
+                browser_action="Install the reviewed Browser runtime if needed.",
             )
             console.changes((("analysis.model", "old", "new"),))
         self.assertEqual(stdout.getvalue(), "")
@@ -255,10 +255,14 @@ class ConfigPresentationTests(unittest.TestCase):
             "Authorized primary-PDF APIs",
             "PDF acquisition routes",
             "Controlled Browser",
-            "Personal login",
+            "Access mode",
+            "Selected profile",
+            "Chrome lifecycle",
+            "Publisher lanes",
+            "Session authenticat",
             "not assessed",
-            "IP / article access",
-            "not-proven",
+            "Article access",
+            "checked-per-article",
         ):
             self.assertIn(text, rendered)
         self.assertNotIn("\x1b[", rendered)
@@ -321,7 +325,7 @@ class ConfigPresentationTests(unittest.TestCase):
                         ),
                         browser_state="Unavailable",
                         browser_detail=(
-                            "Profile 'institutional-access' is configured; login is not assessed."
+                            "Headed runtime is unavailable; article entitlement is not assessed."
                         ),
                         browser_action="No production Browser route is registered.",
                     )
@@ -346,7 +350,7 @@ class ConfigPresentationTests(unittest.TestCase):
             ConfigConsole("dark", width=40).access(
                 api_routes=(("CORE", "Ready", "No local action."),),
                 browser_state="Unavailable",
-                browser_detail="Profile presence only.",
+                browser_detail="Local runtime readiness only.",
                 browser_action="No production route.",
             )
         self.assertNotIn("\x1b[", no_color.getvalue())
@@ -368,12 +372,15 @@ class ConfigPresentationTests(unittest.TestCase):
                     "Metadata APIs",
                     "Authorized primary-PDF APIs",
                     "Controlled Browser",
-                    "Profile",
-                    "configured",
-                    "Personal login",
-                    "not assessed",
-                    "IP / article access",
-                    "not-proven",
+                    "Access mode",
+                    "persistent",
+                    "Selected profile",
+                    "Chrome lifecycle",
+                    "one persistent",
+                    "Publisher lanes",
+                    "Session authenticat",
+                    "Article access",
+                    "checked-per-article",
                     "Policy evidence",
                     "Next action",
                 ):
@@ -397,7 +404,6 @@ class ConfigPresentationTests(unittest.TestCase):
                 "local_ready": True,
                 "browser_launched": True,
                 "minimal_target_reached": True,
-                "authentication_accepted": False,
                 "article_entitlement": "not-proven",
                 "navigation_count": 1,
                 "failure_code": None,
@@ -407,9 +413,8 @@ class ConfigPresentationTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("Browser · springerlink", rendered)
         self.assertIn("runtime target reached", rendered)
-        self.assertIn("personal login not detected", rendered)
-        self.assertIn("IP/article", rendered)
-        self.assertIn("entitlement not assessed", rendered)
+        self.assertIn("institution-IP/article", rendered)
+        self.assertIn("article entitlement remains not proven", rendered)
         self.assertNotIn("browser-session-not-authenticated", rendered)
         self.assertNotIn(_SECRET, rendered)
         self.assertNotIn("\x1b[", rendered)

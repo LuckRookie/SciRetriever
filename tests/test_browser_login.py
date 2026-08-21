@@ -9,7 +9,11 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, cast
 
-from sciretriever.configuration import credential_path, initialize_browser_profile
+from sciretriever.configuration import (
+    ConfigurationError,
+    credential_path,
+    initialize_browser_profile,
+)
 from sciretriever.entry.cli.browser_login import (
     VisibleBrowserLoginError,
     open_visible_browser_login,
@@ -68,30 +72,27 @@ class _Page:
 
 
 class _Chromium:
-    def __init__(self, context: _Context, *, launch_failure: bool = False) -> None:
+    def __init__(
+        self,
+        context: _Context,
+        *,
+        launch_failure: bool = False,
+        stable_channel_failure: bool = False,
+    ) -> None:
         self.context = context
         self.launch_failure = launch_failure
+        self.stable_channel_failure = stable_channel_failure
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def launch_persistent_context(
         self,
         user_data_dir: str,
-        *,
-        headless: bool,
-        accept_downloads: bool,
-        no_viewport: bool,
+        **options: object,
     ) -> _Context:
-        self.calls.append(
-            (
-                user_data_dir,
-                {
-                    "headless": headless,
-                    "accept_downloads": accept_downloads,
-                    "no_viewport": no_viewport,
-                },
-            )
-        )
-        if self.launch_failure:
+        self.calls.append((user_data_dir, dict(options)))
+        if self.launch_failure or (
+            self.stable_channel_failure and options.get("channel") == "chrome"
+        ):
             raise RuntimeError("private launch detail")
         return self.context
 
@@ -133,9 +134,14 @@ class VisibleBrowserLoginTests(unittest.TestCase):
         *,
         failure: BaseException | None = None,
         launch_failure: bool = False,
+        stable_channel_failure: bool = False,
     ) -> tuple[_Context, _Chromium, _Manager, Callable[[], Any]]:
         context = _Context(failure=failure)
-        chromium = _Chromium(context, launch_failure=launch_failure)
+        chromium = _Chromium(
+            context,
+            launch_failure=launch_failure,
+            stable_channel_failure=stable_channel_failure,
+        )
         manager = _Manager(_Runtime(chromium))
         factory = cast(Callable[[], Any], lambda: manager)
         return context, chromium, manager, factory
@@ -159,9 +165,46 @@ class VisibleBrowserLoginTests(unittest.TestCase):
         self.assertEqual(profile_path, os.fspath(self.handle.runtime_directory()))
         self.assertEqual(
             options,
-            {"headless": False, "accept_downloads": False, "no_viewport": True},
+            {
+                "headless": False,
+                "accept_downloads": False,
+                "no_viewport": True,
+                "args": ("--no-first-run", "--disable-pdf-extension"),
+                "channel": "chrome",
+            },
         )
         self.assertFalse(credential_path(home=self.home).exists())
+
+    def test_stable_chrome_failure_falls_back_to_bundled_chromium(self) -> None:
+        _context, chromium, _manager, factory = self._runtime(stable_channel_failure=True)
+
+        open_visible_browser_login(self.handle, runtime_factory=factory, poll_milliseconds=1)
+
+        self.assertEqual(len(chromium.calls), 2)
+        self.assertEqual(chromium.calls[0][1].get("channel"), "chrome")
+        self.assertNotIn("channel", chromium.calls[1][1])
+
+    def test_visible_session_holds_and_releases_the_profile_lock(self) -> None:
+        context, chromium, manager, _factory = self._runtime()
+        lock_observed = False
+
+        def factory() -> _Manager:
+            nonlocal lock_observed
+            with self.assertRaisesRegex(ConfigurationError, "already in use"):
+                self.handle.acquire_runtime()
+            lock_observed = True
+            return manager
+
+        open_visible_browser_login(
+            self.handle,
+            runtime_factory=cast(Callable[[], Any], factory),
+            poll_milliseconds=1,
+        )
+
+        self.assertTrue(lock_observed)
+        self.assertEqual(len(chromium.calls), 1)
+        lease = self.handle.acquire_runtime()
+        lease.close()
 
     def test_launch_and_session_failures_are_stable_and_path_free(self) -> None:
         cases = (

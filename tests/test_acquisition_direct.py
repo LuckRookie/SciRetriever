@@ -1479,14 +1479,10 @@ class DoiLandingResolverTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
         self.assertEqual(resolver.calls, [])
 
-    def test_returns_only_normalized_final_origin_even_when_response_looks_like_pdf(self) -> None:
+    def test_uses_first_get_redirect_without_requesting_the_publisher(self) -> None:
         first = _raw(302, location="https://publisher.test/articles/file.pdf?download=1")
-        second = _raw(
-            body=b"%PDF-1.4 bytes that DOI resolution must not deliver",
-            media_type="application/pdf",
-        )
-        client, transport, _resolver, coordinator = _http_environment(
-            [first, second],
+        client, transport, resolver, coordinator = _http_environment(
+            [first],
             {"doi.org": (_PUBLIC_IP,), "publisher.test": (_PUBLIC_IP,)},
         )
 
@@ -1501,34 +1497,42 @@ class DoiLandingResolverTests(unittest.TestCase):
             result.canonical_landing_url,
             "https://publisher.test/articles/file.pdf?download=1",
         )
-        self.assertEqual(coordinator.hosts, ["doi.org", "publisher.test"])
+        self.assertEqual(coordinator.hosts, ["doi.org"])
         self.assertEqual(
             [scope for scope, _policy in coordinator.scopes],
-            [
-                AccessScope("doi.org", "web"),
-                AccessScope("publisher.test", "web"),
-            ],
+            [AccessScope("doi.org", "web")],
         )
-        self.assertTrue(
-            all(
-                isinstance(call["request"], TransportRequest)
-                and cast(TransportRequest, call["request"]).method == "HEAD"
-                for call in transport.calls
-            )
-        )
+        self.assertEqual(len(transport.calls), 1)
+        request = cast(TransportRequest, transport.calls[0]["request"])
+        self.assertEqual(request.method, "GET")
+        self.assertNotIn("publisher.test", resolver.calls)
         self.assertIn("10.1234%2Fexample", _request_url(transport.calls[0]))
         self.assertTrue(first.closed)
-        self.assertTrue(second.closed)
 
-    def test_private_redirect_and_dns_rebinding_are_system_failures(self) -> None:
+    def test_redirect_without_a_location_is_a_stable_failure(self) -> None:
+        client, _transport, _resolver, _coordinator = _http_environment(
+            [_raw(302)],
+            {"doi.org": (_PUBLIC_IP,)},
+        )
+
+        with self.assertRaises(AcquisitionFailure):
+            DoiLandingResolver(http_client=client).resolve(
+                Identifier(namespace="doi", value="10.1234/example")
+            )
+
+    def test_redirect_target_is_not_resolved_but_doi_dns_rebinding_fails(self) -> None:
         doi = Identifier(namespace="doi", value="10.1234/example")
-        private_client, private_transport, _resolver, _coordinator = _http_environment(
+        private_client, private_transport, private_resolver, _coordinator = _http_environment(
             [_raw(302, location="https://private.test/article")],
             {"doi.org": (_PUBLIC_IP,), "private.test": ("127.0.0.1",)},
         )
-        with self.assertRaises(AcquisitionFailure):
-            DoiLandingResolver(http_client=private_client).resolve(doi)
+        resolution = DoiLandingResolver(http_client=private_client).resolve(doi)
+
+        self.assertIsNotNone(resolution)
+        assert resolution is not None
+        self.assertEqual(resolution.origin, "https://private.test")
         self.assertEqual(len(private_transport.calls), 1)
+        self.assertNotIn("private.test", private_resolver.calls)
 
         sequential = _SequentialResolver({"doi.org": [(_PUBLIC_IP,), ("127.0.0.1",)]})
         rebind_client, rebind_transport, _resolver, _coordinator = _http_environment(

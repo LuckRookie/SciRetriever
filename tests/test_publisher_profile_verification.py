@@ -80,6 +80,10 @@ def _load_fixture(reference: str) -> dict[str, object]:
     return _mapping(payload)
 
 
+def _production_rule(rule_id: str) -> BrowserSiteRule:
+    return next(rule for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules if rule.rule_id == rule_id)
+
+
 def _browser_profile(
     *,
     status: ProfileProductionStatus = ProfileProductionStatus.FIXTURE_VERIFIED,
@@ -213,14 +217,24 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
                 for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
             },
             {
+                "acs-publications": ((), (), "browser:acs-publications"),
+                "aip-publishing": ((), (), "browser:aip-publishing"),
                 "core-open-access": ((), ("api:core",), None),
                 "elsevier-sciencedirect": (
                     (),
                     ("api:elsevier-article-object",),
-                    None,
+                    "browser:elsevier-sciencedirect",
                 ),
+                "iopscience": ((), (), "browser:iopscience"),
+                "oxford-academic": ((), (), "browser:oxford-academic"),
+                "rsc-publishing": ((), (), "browser:rsc-publishing"),
+                "science-aaas": ((), (), "browser:science-aaas"),
                 "springerlink": ((), (), "browser:springerlink"),
-                "wiley-online-library": ((), ("api:wiley-tdm-v1",), None),
+                "wiley-online-library": (
+                    (),
+                    ("api:wiley-tdm-v1",),
+                    "browser:wiley-online-library",
+                ),
             },
         )
         self.assertEqual(
@@ -228,7 +242,17 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
                 rule.rule_id
                 for rule in PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_browser_rules.rules
             ),
-            ("springerlink-pdf",),
+            (
+                "acs-publications-pdf",
+                "aip-publishing-pdf",
+                "sciencedirect-pdf",
+                "iopscience-pdf",
+                "oxford-academic-pdf",
+                "rsc-publishing-pdf",
+                "science-aaas-pdf",
+                "springerlink-pdf",
+                "wiley-online-library-pdf",
+            ),
         )
         matrix_document = Path("docs/notes/providers/publisher-access-matrix.md").read_text(
             encoding="utf-8"
@@ -237,8 +261,8 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             self.assertEqual(matrix_document.count(f"| `{profile.access_key}` |"), 1)
             self.assertTrue(Path(profile.evidence.notes_reference).is_file())
         self.assertIn(
-            "当前验证矩阵有 23 项，production profile catalog 有 4 项，"
-            "production Browser rule catalog 有 1 项",
+            "当前验证矩阵有 23 项，production profile catalog 有 10 项，"
+            "production Browser rule catalog 有 9 项",
             matrix_document,
         )
 
@@ -304,6 +328,13 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
                     profile.api_route_keys,
                 )
                 self.assertEqual(capabilities["browser_route"], profile.browser_route_key)
+                if profile.browser_route_key is not None:
+                    route_verification = _mapping(fixture["route_verification"])
+                    browser_verification = _mapping(route_verification["browser"])
+                    self.assertEqual(
+                        browser_verification["authentication_contract"],
+                        "shared-persistent-profile-ip-first-user-managed-authentication",
+                    )
                 self.assertIn("primary", {item["expected"] for item in ownership_cases})
                 self.assertTrue(
                     {item["expected"] for item in ownership_cases} & {"supplement", "excluded"}
@@ -332,10 +363,10 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertEqual(SPRINGERLINK_ACCESS_PROFILE.browser_route_key, "browser:springerlink")
         self.assertEqual(SPRINGERLINK_ACCESS_PROFILE.browser_rate_limit_group, "springerlink")
         self.assertEqual(SPRINGERLINK_ACCESS_PROFILE.browser_session_key, "springerlink")
-        self.assertEqual(SPRINGERLINK_ACCESS_PROFILE.browser_rule_revision, 4)
+        self.assertEqual(SPRINGERLINK_ACCESS_PROFILE.browser_rule_revision, 5)
         self.assertEqual(
             SPRINGERLINK_ACCESS_PROFILE.browser_allowed_origins,
-            PRODUCTION_BROWSER_RULE_CATALOG.rules[0].allowed_origins,
+            _production_rule("springerlink-pdf").allowed_origins,
         )
         self.assertIs(
             PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get("springerlink"),
@@ -357,7 +388,7 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertEqual(springer_api["payload"], "jats-xml-not-pdf")
         self.assertEqual(springer_browser["state"], "production-ready")
         self.assertEqual(springer_browser["rule_id"], "springerlink-pdf")
-        self.assertEqual(springer_browser["rule_revision"], 3)
+        self.assertEqual(springer_browser["rule_revision"], 5)
         self.assertEqual(
             _strings(springer_browser["allowed_origins"]),
             SPRINGERLINK_ACCESS_PROFILE.browser_allowed_origins,
@@ -372,24 +403,38 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
         self.assertEqual(nature_browser["state"], "unsupported")
         self.assertTrue(_strings(nature_browser["blockers"]))
 
-    def test_acs_does_not_promote_tdm_xml_or_upstream_browser_verdict(self) -> None:
+    def test_acs_rule_is_production_admitted_for_article_level_ip_access(self) -> None:
         profile = ACS_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.provider_record_names, ())
         self.assertEqual(profile.weak_doi_prefixes, ("10.1021",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertEqual(profile.browser_route_key, "browser:acs-publications")
+        self.assertEqual(profile.browser_rule_id, "acs-publications-pdf")
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
+        self.assertIn(
+            profile.browser_rule_id,
+            {rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules},
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         authorized_api = _mapping(route_verification["authorized_api"])
         browser = _mapping(route_verification["browser"])
         self.assertEqual(authorized_api["payload"], "licensed-jats-xml-not-pdf")
-        self.assertEqual(browser["state"], "unsupported")
+        self.assertEqual(browser["state"], "production-ready")
+        self.assertEqual(browser["rule_id"], profile.browser_rule_id)
+        self.assertEqual(browser["production_admission"], "reviewed-ip-entitled-browser")
         self.assertIn(
-            "upstream-browser-success-is-not-production-evidence",
-            _strings(browser["blockers"]),
+            "article-entitlement-is-checked-per-attempt",
+            _strings(browser["conditions"]),
+        )
+        self.assertIn(
+            "access-denial-or-challenge-stops-the-attempt",
+            _strings(browser["conditions"]),
         )
 
     def test_acm_open_access_does_not_authorize_a_scripted_profile_route(self) -> None:
@@ -429,19 +474,22 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             ownership,
         )
 
-    def test_aip_terms_keep_automated_site_access_out_of_production(self) -> None:
+    def test_aip_rule_is_production_admitted_for_article_level_ip_access(self) -> None:
         profile = AIP_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.provider_record_names, ())
         self.assertEqual(profile.weak_doi_prefixes, ("10.1063",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(profile.browser_rate_limit_group)
-        self.assertIsNone(profile.browser_session_key)
+        self.assertEqual(profile.browser_route_key, "browser:aip-publishing")
+        self.assertEqual(profile.browser_rate_limit_group, "aip-publishing")
+        self.assertEqual(profile.browser_session_key, "aip-publishing")
         self.assertNotEqual(profile.platform_key, IOP_ACCESS_PROFILE.platform_key)
         self.assertTrue(set(profile.landing_origins).isdisjoint(IOP_ACCESS_PROFILE.landing_origins))
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         authorized_api = _mapping(route_verification["authorized_api"])
@@ -452,12 +500,12 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             "no-reviewed-machine-access-api",
         )
         self.assertIn(
-            "official-terms-prohibit-automated-site-access",
-            _strings(browser["blockers"]),
+            "article-entitlement-is-checked-per-attempt",
+            _strings(browser["conditions"]),
         )
         self.assertIn(
-            "upstream-browser-success-is-not-production-evidence",
-            _strings(browser["blockers"]),
+            "access-denial-or-challenge-stops-the-attempt",
+            _strings(browser["conditions"]),
         )
         self.assertIn(
             {"case_id": "supplementary-material-or-file", "expected": "supplement"},
@@ -507,21 +555,24 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             ownership,
         )
 
-    def test_oxford_platform_similarity_does_not_create_a_shared_browser_group(
+    def test_oxford_has_an_independent_production_browser_group(
         self,
     ) -> None:
         profile = OXFORD_ACADEMIC_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.provider_record_names, ())
         self.assertEqual(profile.weak_doi_prefixes, ("10.1093",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(profile.browser_rate_limit_group)
-        self.assertIsNone(profile.browser_session_key)
+        self.assertEqual(profile.browser_route_key, "browser:oxford-academic")
+        self.assertEqual(profile.browser_rate_limit_group, "oxford-academic")
+        self.assertEqual(profile.browser_session_key, "oxford-academic")
         self.assertNotEqual(profile.platform_key, AIP_ACCESS_PROFILE.platform_key)
         self.assertTrue(set(profile.landing_origins).isdisjoint(AIP_ACCESS_PROFILE.landing_origins))
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         authorized_api = _mapping(route_verification["authorized_api"])
@@ -531,36 +582,33 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             authorized_api["payload"],
             "no-reviewed-machine-access-pdf-api",
         )
-        self.assertIn(
-            "shared-platform-template-is-not-shared-risk-or-session-evidence",
-            _strings(browser["blockers"]),
-        )
-        self.assertIn(
-            "upstream-browser-success-is-not-production-evidence",
-            _strings(browser["blockers"]),
-        )
+        self.assertEqual(browser["state"], "production-ready")
+        self.assertEqual(browser["rule_id"], "oxford-academic-pdf")
         self.assertIn(
             {"case_id": "supplementary-material-or-file", "expected": "supplement"},
             ownership,
         )
 
-    def test_science_supplement_crawler_allowance_is_not_a_primary_pdf_route(
+    def test_science_browser_rule_keeps_supplements_out_of_the_primary_route(
         self,
     ) -> None:
         profile = SCIENCE_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.provider_record_names, ())
         self.assertEqual(profile.weak_doi_prefixes, ("10.1126",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(profile.browser_rate_limit_group)
-        self.assertIsNone(profile.browser_session_key)
+        self.assertEqual(profile.browser_route_key, "browser:science-aaas")
+        self.assertEqual(profile.browser_rate_limit_group, "science-aaas")
+        self.assertEqual(profile.browser_session_key, "science-aaas")
         self.assertNotEqual(profile.platform_key, PNAS_ACCESS_PROFILE.platform_key)
         self.assertTrue(
             set(profile.landing_origins).isdisjoint(PNAS_ACCESS_PROFILE.landing_origins)
         )
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         public = _mapping(route_verification["public"])
@@ -570,10 +618,8 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             "action-download-supplement",
             _strings(public["robots_allowances"]),
         )
-        self.assertIn(
-            "upstream-browser-success-is-not-production-evidence",
-            _strings(browser["blockers"]),
-        )
+        self.assertEqual(browser["state"], "production-ready")
+        self.assertEqual(browser["rule_id"], "science-aaas-pdf")
         self.assertIn(
             {"case_id": "downloaded-supplement", "expected": "supplement"},
             ownership,
@@ -839,22 +885,31 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             _strings(browser["blockers"]),
         )
 
-    def test_rsc_esi_is_never_promoted_by_an_unsupported_profile(self) -> None:
+    def test_rsc_rule_is_production_admitted_for_article_level_ip_access(self) -> None:
         profile = RSC_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.weak_doi_prefixes, ("10.1039",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertEqual(profile.browser_route_key, "browser:rsc-publishing")
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         browser = _mapping(route_verification["browser"])
         ownership = tuple(_mapping(item) for item in _sequence(fixture["ownership_cases"]))
         self.assertIn(
-            "official-terms-prohibit-automated-download",
-            _strings(browser["blockers"]),
+            "article-entitlement-is-checked-per-attempt",
+            _strings(browser["conditions"]),
         )
+        self.assertIn(
+            "access-denial-or-challenge-stops-the-attempt",
+            _strings(browser["conditions"]),
+        )
+        self.assertEqual(browser["state"], "production-ready")
+        self.assertEqual(browser["rule_id"], "rsc-publishing-pdf")
         self.assertIn(
             {"case_id": "electronic-supplementary-information", "expected": "supplement"},
             ownership,
@@ -882,17 +937,20 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             _strings(browser["blockers"]),
         )
 
-    def test_iop_agreed_delivery_does_not_become_a_browser_or_api_route(self) -> None:
+    def test_iop_rule_is_production_admitted_for_article_level_ip_access(self) -> None:
         profile = IOP_ACCESS_PROFILE
-        self.assertIs(profile.production_status, ProfileProductionStatus.UNSUPPORTED)
+        self.assertIs(profile.production_status, ProfileProductionStatus.PRODUCTION_READY)
         self.assertEqual(profile.provider_record_names, ())
         self.assertEqual(profile.weak_doi_prefixes, ("10.1088",))
         self.assertEqual(profile.public_route_keys, ())
         self.assertEqual(profile.api_route_keys, ())
-        self.assertIsNone(profile.browser_route_key)
-        self.assertIsNone(profile.browser_rate_limit_group)
-        self.assertIsNone(profile.browser_session_key)
-        self.assertIsNone(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key))
+        self.assertEqual(profile.browser_route_key, "browser:iopscience")
+        self.assertEqual(profile.browser_rate_limit_group, "iopscience")
+        self.assertEqual(profile.browser_session_key, "iopscience")
+        self.assertIs(
+            PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG.get(profile.access_key),
+            profile,
+        )
         fixture = _load_fixture(profile.evidence.fixture_reference)
         route_verification = _mapping(fixture["route_verification"])
         authorized_api = _mapping(route_verification["authorized_api"])
@@ -903,13 +961,15 @@ class PublisherProfileEvidenceFixtureTests(unittest.TestCase):
             "reviewed-sftp-or-agreed-delivery-is-not-a-public-api",
         )
         self.assertIn(
-            "official-terms-prohibit-systematic-downloading",
-            _strings(browser["blockers"]),
+            "article-entitlement-is-checked-per-attempt",
+            _strings(browser["conditions"]),
         )
         self.assertIn(
-            "general-robots-policy-disallows-all",
-            _strings(browser["blockers"]),
+            "access-denial-or-challenge-stops-the-attempt",
+            _strings(browser["conditions"]),
         )
+        self.assertEqual(browser["state"], "production-ready")
+        self.assertEqual(browser["rule_id"], "iopscience-pdf")
         self.assertIn(
             {"case_id": "supplementary-data-or-file", "expected": "supplement"},
             ownership,

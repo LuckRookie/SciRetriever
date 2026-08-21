@@ -993,20 +993,20 @@ class BrowserPolicyOverrideConfig(_FrozenModel):
 
 
 class AccessConfig(_FrozenModel):
-    """Secret-free Browser enablement, local cap, profile selection, and tightening."""
+    """Secret-free Browser enablement, profile selection, and policy tightening."""
 
     browser_enabled: bool = False
     browser_profile: BrowserProfileIdentity | None = None
-    browser_max_concurrency: Annotated[int, Field(strict=True, ge=1)] = 2
+    browser_max_concurrency: Annotated[int, Field(strict=True, gt=1)] = 5
     browser_policy_overrides: tuple[BrowserPolicyOverrideConfig, ...] = ()
 
     @field_validator("browser_policy_overrides", mode="before")
     @classmethod
-    def _normalize_policy_overrides(cls, value: object) -> object:
+    def _normalize_browser_tuples(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _validate_browser_selection(self) -> "AccessConfig":
+    def _validate_browser_policy_overrides(self) -> "AccessConfig":
         if self.browser_enabled and self.browser_profile is None:
             raise ValueError("enabled Browser access requires a selected profile")
         groups = tuple(item.rate_limit_group for item in self.browser_policy_overrides)
@@ -1108,18 +1108,18 @@ class ConfigurationStatus(_FrozenModel):
         return self
 
 
-class BrowserProfileStatus(_FrozenModel):
-    """Secret-free local presence of one selected operator-managed profile."""
-
-    presence: BrowserProfilePresence
-
-
 class ConfigurationActionRequired(_FrozenModel):
     """One stable local action without paths, secrets, or external response data."""
 
     code: StableFailureCode
     reason: NonBlankText
     action: NonBlankText
+
+
+class BrowserProfileStatus(_FrozenModel):
+    """Secret-free local presence of one selected operator-managed profile."""
+
+    presence: BrowserProfilePresence
 
 
 class BrowserRuntimeStatus(_FrozenModel):
@@ -1132,6 +1132,7 @@ class BrowserRuntimeStatus(_FrozenModel):
     framework_available: bool
     python_dependency_available: bool
     chromium_executable_available: bool
+    headed_display_available: bool
     launch_assessed: Literal[False] = False
 
     @model_validator(mode="after")
@@ -1193,6 +1194,7 @@ class BrowserRouteStatus(_FrozenModel):
     route_key: NonBlankText
     rate_limit_group: BrowserRateLimitGroupValue
     production_available: Literal[True] = True
+    automatic_acquisition_eligible: Literal[True] = True
     policy: BrowserPolicyStatus
 
 
@@ -1213,15 +1215,19 @@ class BrowserProbeAvailabilityStatus(_FrozenModel):
 
 
 class BrowserAccessStatus(_FrozenModel):
-    """Local, secret-free readiness for the optional final acquisition tier."""
+    """Local, secret-free readiness for the optional persistent Browser tier."""
 
     enabled: bool
-    local_max_concurrency: Annotated[int, Field(strict=True, ge=1)]
+    mode: Literal["headed-persistent-profile"] = "headed-persistent-profile"
+    persistent_authentication_supported: Literal[True] = True
+    article_entitlement: Literal["checked-per-article"] = "checked-per-article"
+    local_max_concurrency: Annotated[int, Field(strict=True, gt=1)]
     runtime: BrowserRuntimeStatus
     profile: BrowserProfileSelectionStatus
     session: BrowserSessionStatus = BrowserSessionStatus()
     automatic_acquisition_available: bool
     production_route_count: Annotated[int, Field(strict=True, ge=0)]
+    automatic_route_count: Annotated[int, Field(strict=True, ge=0)]
     routes: tuple[BrowserRouteStatus, ...] = ()
     probe: BrowserProbeAvailabilityStatus
     action_required: tuple[ConfigurationActionRequired, ...] = ()
@@ -1230,17 +1236,24 @@ class BrowserAccessStatus(_FrozenModel):
     def _validate_browser_access_status(self) -> "BrowserAccessStatus":
         if self.production_route_count != len(self.routes):
             raise ValueError("Browser production route count is inconsistent")
+        eligible_count = sum(route.automatic_acquisition_eligible for route in self.routes)
+        if self.automatic_route_count != eligible_count:
+            raise ValueError("Browser automatic route count is inconsistent")
         keys = tuple(route.access_key for route in self.routes)
         if len(keys) != len(set(keys)):
             raise ValueError("Browser production routes must have unique access keys")
-        if set(self.probe.supported_access_keys) - set(keys):
-            raise ValueError("Browser probe target is not a production route")
+        eligible_keys = {
+            route.access_key for route in self.routes if route.automatic_acquisition_eligible
+        }
+        if set(self.probe.supported_access_keys) - eligible_keys:
+            raise ValueError("Browser probe target is not an eligible production route")
         locally_usable = (
-            bool(self.routes)
+            bool(self.automatic_route_count)
             and self.enabled
             and self.runtime.framework_available
             and self.runtime.python_dependency_available
             and self.runtime.chromium_executable_available
+            and self.runtime.headed_display_available
             and self.profile.selected is not None
             and self.profile.presence is BrowserProfilePresence.CONFIGURED
         )
@@ -1429,7 +1442,7 @@ class CoreConfigurationProbeResult(_FrozenModel):
 def _validate_skipped_browser_probe_shape(
     *,
     local_ready: bool,
-    checks: tuple[bool | None, bool | None, bool | None],
+    checks: tuple[bool | None, bool | None],
     navigation_count: int,
     failure_code: str | None,
 ) -> None:
@@ -1444,11 +1457,11 @@ def _validate_skipped_browser_probe_shape(
 
 def _validate_passed_browser_probe_shape(
     *,
-    checks: tuple[bool | None, bool | None, bool | None],
+    checks: tuple[bool | None, bool | None],
     navigation_count: int,
     failure_code: str | None,
 ) -> None:
-    launched, target_reached, _personal_login_detected = checks
+    launched, target_reached = checks
     if (
         launched is not True
         or target_reached is not True
@@ -1460,11 +1473,11 @@ def _validate_passed_browser_probe_shape(
 
 def _validate_failed_browser_probe_shape(
     *,
-    checks: tuple[bool | None, bool | None, bool | None],
+    checks: tuple[bool | None, bool | None],
     navigation_count: int,
     failure_code: str | None,
 ) -> None:
-    if failure_code is None or checks == (True, True, True):
+    if failure_code is None or checks == (True, True):
         raise ValueError("failed Browser probe requires a failure code")
     terminal_seen = False
     for value in checks:
@@ -1481,11 +1494,10 @@ def _validate_failed_browser_probe_shape(
 class BrowserConfigurationProbeResult(_FrozenModel):
     """One explicit, single-target Browser readiness probe.
 
-    The result intentionally contains no URL, selector, profile path, page
-    data, Cookie characteristic, or raw exception.  Passing proves only that
-    the runtime launched and the reviewed target was reached.  Personal login
-    is an optional observation; neither it nor this probe proves IP-based or
-    article-specific entitlement.
+    The result intentionally contains no URL, selector, page data, Cookie
+    characteristic, or raw exception. Passing proves only that the headed
+    runtime launched and the reviewed target was reached; the probe never
+    proves institution-IP or article-specific entitlement.
     """
 
     access_key: BrowserAccessKeyValue
@@ -1493,7 +1505,6 @@ class BrowserConfigurationProbeResult(_FrozenModel):
     local_ready: bool
     browser_launched: bool | None = None
     minimal_target_reached: bool | None = None
-    authentication_accepted: bool | None = None
     article_entitlement: Literal["not-proven"] = "not-proven"
     navigation_count: Annotated[int, Field(strict=True, ge=0, le=1)] = 0
     failure_code: StableFailureCode | None = None
@@ -1504,7 +1515,6 @@ class BrowserConfigurationProbeResult(_FrozenModel):
         checks = (
             self.browser_launched,
             self.minimal_target_reached,
-            self.authentication_accepted,
         )
         if self.outcome is ProbeOutcome.SKIPPED:
             _validate_skipped_browser_probe_shape(

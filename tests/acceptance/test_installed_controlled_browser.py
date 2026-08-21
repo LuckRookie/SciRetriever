@@ -36,7 +36,7 @@ class InstalledControlledBrowserTests(unittest.TestCase):
             self.assertIn(os.sep + "site-packages" + os.sep, module_file)
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 1)
+        self.assertEqual(production["catalog_rule_count"], 9)
         self.assertTrue(production["ready"])
         self.assertIsNone(production["readiness_code"])
 
@@ -80,10 +80,14 @@ class InstalledControlledBrowserTests(unittest.TestCase):
             [
                 "publisher.test",
                 "publisher.test",
+                "downloads.publisher.test",
+                "publisher.test",
+                "publisher.test",
                 "publisher.test",
                 "publisher.test",
                 "downloads.publisher.test",
                 "downloads.publisher.test",
+                "publisher.test",
             ],
         )
         self.assertEqual(runtime["page_clicks"], ["a[data-action='pdf']"])

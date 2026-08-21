@@ -170,6 +170,8 @@ ACQUISITION_PROVIDER_ORDER: Final[tuple[str, ...]] = (
 PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("arxiv", ("arxiv.org", "export.arxiv.org")),
     ("europe-pmc", ("europepmc.org", "www.ebi.ac.uk")),
+    ("acs-publications", ("pubs.acs.org",)),
+    ("aip-publishing", ("pubs.aip.org",)),
     (
         "elsevier",
         (
@@ -177,8 +179,14 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
             "www.sciencedirect.com",
             "linkinghub.elsevier.com",
             "pdf.sciencedirectassets.com",
+            "id.elsevier.com",
+            "auth.elsevier.com",
         ),
     ),
+    ("iopscience", ("iopscience.iop.org",)),
+    ("oxford-academic", ("academic.oup.com",)),
+    ("rsc-publishing", ("pubs.rsc.org",)),
+    ("science-aaas", ("www.science.org",)),
     (
         "springer",
         ("api.springernature.com",),
@@ -192,7 +200,14 @@ PRODUCTION_WEB_HOSTS_BY_PROVIDER: Final[tuple[tuple[str, tuple[str, ...]], ...]]
         ),
     ),
     ("nature-portfolio", ("www.nature.com",)),
-    ("wiley", ("onlinelibrary.wiley.com", "alm.wiley.com")),
+    (
+        "wiley",
+        (
+            "onlinelibrary.wiley.com",
+            "advanced.onlinelibrary.wiley.com",
+            "alm.wiley.com",
+        ),
+    ),
     ("core", ("api.core.ac.uk", "core.ac.uk")),
     ("plos", ("journals.plos.org",)),
 )
@@ -620,10 +635,24 @@ def _validate_external_catalogs() -> None:
     if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
     expected_profile_routes = {
+        "acs-publications": ((), (), "browser:acs-publications"),
+        "aip-publishing": ((), (), "browser:aip-publishing"),
         "core-open-access": ((), ("api:core",), None),
-        "elsevier-sciencedirect": ((), ("api:elsevier-article-object",), None),
+        "elsevier-sciencedirect": (
+            (),
+            ("api:elsevier-article-object",),
+            "browser:elsevier-sciencedirect",
+        ),
+        "oxford-academic": ((), (), "browser:oxford-academic"),
+        "iopscience": ((), (), "browser:iopscience"),
+        "rsc-publishing": ((), (), "browser:rsc-publishing"),
+        "science-aaas": ((), (), "browser:science-aaas"),
         "springerlink": ((), (), "browser:springerlink"),
-        "wiley-online-library": ((), ("api:wiley-tdm-v1",), None),
+        "wiley-online-library": (
+            (),
+            ("api:wiley-tdm-v1",),
+            "browser:wiley-online-library",
+        ),
     }
     actual_profile_routes = {
         profile.access_key: (
@@ -854,7 +883,7 @@ class _OrderedDirectRoute:
 
 
 class _SessionBoundBrowserRunner:
-    """Bind one reviewed Publisher profile to its opaque persistent session."""
+    """Bind one reviewed Publisher profile to its shared-runtime lane."""
 
     __slots__ = ("_client", "_session_key")
 
@@ -874,6 +903,7 @@ class _SessionBoundBrowserRunner:
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
+        discard_unapproved_subresources: bool = False,
         budget: BrowserBudget | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
@@ -886,6 +916,7 @@ class _SessionBoundBrowserRunner:
             destination_guard=destination_guard,
             capture_guard=capture_guard,
             navigation_only=navigation_only,
+            discard_unapproved_subresources=discard_unapproved_subresources,
             session_key=self._session_key,
             budget=budget,
             timeout_seconds=timeout_seconds,
@@ -1250,6 +1281,7 @@ def _browser_rule_for_profile(profile: PublisherAccessProfile) -> BrowserSiteRul
 def _browser_route_readiness(
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
+    profile: PublisherAccessProfile,
 ) -> RouteReadiness:
     if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not RouteReadiness.READY:
         return RouteReadiness.UNSUPPORTED
@@ -1284,10 +1316,10 @@ def _assemble_browser_routes(
     dependencies: AcquisitionAssemblyDependencies,
     route_bindings: list[RouteAdapterBinding],
 ) -> None:
-    readiness = _browser_route_readiness(configuration, dependencies)
     for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
         if profile.browser_route_key is None:
             continue
+        readiness = _browser_route_readiness(configuration, dependencies, profile)
         rule = _browser_rule_for_profile(profile)
         adapter: ControlledBrowserPdfSource | None = None
         if readiness is RouteReadiness.READY:
@@ -1440,7 +1472,6 @@ def build_acquisition_registry(
         raise AcquisitionRegistryError("production-stage-mismatch")
     doi_landing_resolver = DoiLandingResolver(
         http_client=dependencies.http_client,
-        web_access_profile_resolver=dependencies.web_access_profile_resolver,
         cancel_event=dependencies.cancel_event,
     )
     route_registry = AcquisitionRouteRegistry(

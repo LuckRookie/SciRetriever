@@ -12,6 +12,8 @@ from unittest import mock
 from pydantic import ValidationError
 
 import sciretriever.configuration as configuration
+import sciretriever.configuration.credential_edits as credential_edits_module
+import sciretriever.configuration.credentials as credentials_module
 from sciretriever.configuration import (
     ConfigurationError,
     configurable_credential_providers,
@@ -28,12 +30,15 @@ from sciretriever.configuration import (
     set_credentials,
     tightened_browser_group_policies,
 )
+from sciretriever.configuration.file_store import _MAX_CREDENTIALS_BYTES
 from sciretriever.model.configuration import (
     AccessConfig,
+    AnalysisConfig,
     BrowserPolicyOverrideConfig,
     Configuration,
     CoreCredentialService,
     CredentialStatus,
+    ParsingConfig,
     ProviderCapability,
 )
 from sciretriever.network.browser_scheduler import BrowserGroupPolicy
@@ -42,19 +47,35 @@ SENTINEL = "CONFIGURATION-SECRET-SENTINEL"
 
 
 class ConfigurationModelBoundaryTests(unittest.TestCase):
-    def test_browser_access_requires_a_safe_opaque_profile_and_contains_no_session_material(
-        self,
-    ) -> None:
+    def test_browser_cross_publisher_concurrency_is_unbounded_above_one(self) -> None:
+        self.assertEqual(Configuration().access.browser_max_concurrency, 5)
+        self.assertEqual(
+            parse_configuration(
+                "[access]\nbrowser_max_concurrency = 2\n"
+            ).access.browser_max_concurrency,
+            2,
+        )
+        self.assertEqual(
+            parse_configuration(
+                "[access]\nbrowser_max_concurrency = 128\n"
+            ).access.browser_max_concurrency,
+            128,
+        )
+
+        for value in (1, 0, -1, True, 2.5):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                AccessConfig(browser_max_concurrency=value)  # type: ignore[arg-type]
+
+    def test_browser_access_selects_an_opaque_profile_without_session_material(self) -> None:
         selected = parse_configuration(
             """
             [access]
             browser_enabled = true
-            browser_profile = "  Institutional-Access  "
+            browser_profile = "fixture-profile"
             browser_max_concurrency = 3
             """
         )
         self.assertTrue(selected.access.browser_enabled)
-        self.assertEqual(selected.access.browser_profile, "institutional-access")
         self.assertEqual(selected.access.browser_max_concurrency, 3)
         self.assertEqual(selected.access.browser_policy_overrides, ())
         self.assertEqual(
@@ -71,12 +92,12 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             self.assertNotIn(forbidden.casefold(), rendered.casefold())
 
         invalid = (
-            "[access]\nbrowser_enabled = true\n",
             '[access]\nbrowser_profile = "/tmp/browser-profile"\n',
             '[access]\nbrowser_profile = "../browser-profile"\n',
             '[access]\nbrowser_profile = "https://publisher.example"\n',
             '[access]\nbrowser_profile = "publisher-token"\n',
             '[access]\nbrowser_profile = "a50e8400-e29b-41d4-a716-446655440000"\n',
+            "[access]\nbrowser_max_concurrency = 1\n",
             "[access]\nbrowser_max_concurrency = 0\n",
             f'[access]\ncookie = "{SENTINEL}"\n',
             '[access]\nbrowser_profile_path = "/tmp/profile"\n',
@@ -86,6 +107,20 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 with self.assertRaises(ConfigurationError) as caught:
                     parse_configuration(payload)
                 self.assertNotIn(SENTINEL, str(caught.exception))
+
+    def test_all_production_browser_routes_are_profile_eligible_without_local_grants(
+        self,
+    ) -> None:
+        selected = parse_configuration(
+            '[access]\nbrowser_enabled = true\nbrowser_profile = "fixture-profile"\n'
+        )
+        self.assertEqual(
+            len(configuration.eligible_production_browser_access_keys(selected.access)),
+            9,
+        )
+        with self.assertRaises(ConfigurationError) as caught:
+            parse_configuration('[access]\nbrowser_machine_access_grants = ["acs-publications"]\n')
+        self.assertEqual(str(caught.exception), "configuration value is invalid")
 
     def test_browser_policy_override_shape_rejects_unknown_duplicate_and_unbounded_values(
         self,
@@ -445,7 +480,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for base_url in invalid_urls:
             with self.subTest(base_url=base_url), self.assertRaises(ValidationError):
-                configuration.AnalysisConfig(**{**valid, "base_url": base_url})
+                AnalysisConfig(**{**valid, "base_url": base_url})
 
         invalid_budgets = (
             {"max_chunk_bytes": 262_145},
@@ -456,7 +491,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for changes in invalid_budgets:
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
-                configuration.AnalysisConfig(**{**valid, **changes})
+                AnalysisConfig(**{**valid, **changes})
 
     def test_official_llm_and_mineru_urls_match_adapter_endpoint_policy(self) -> None:
         official_cases = (
@@ -488,7 +523,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for payload in official_cases:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
-                configuration.AnalysisConfig(**payload)
+                AnalysisConfig(**payload)
 
         parser_cases = (
             {
@@ -512,7 +547,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for payload in parser_cases:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
-                configuration.ParsingConfig(**payload)
+                ParsingConfig(**payload)
 
     def test_model_contracts_are_frozen_and_secret_free(self) -> None:
         model = parse_configuration("[paths]\n")
@@ -810,7 +845,11 @@ class CredentialFileSecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             self._write(home, f'[web-of-science]\napi_key = "{SENTINEL}"\n'.encode())
-            with mock.patch.object(configuration, "_current_uid", return_value=os.getuid() + 1):
+            with mock.patch.object(
+                credentials_module,
+                "_current_uid",
+                return_value=os.getuid() + 1,
+            ):
                 with self.assertRaises(ConfigurationError) as caught:
                     load_credentials(home=home)
             self.assertNotIn(SENTINEL, str(caught.exception))
@@ -818,7 +857,7 @@ class CredentialFileSecurityTests(unittest.TestCase):
     def test_bounded_read_and_duplicate_unknown_empty_non_string_toml_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            path = self._write(home, b"x" * (configuration._MAX_CREDENTIALS_BYTES + 1))
+            path = self._write(home, b"x" * (_MAX_CREDENTIALS_BYTES + 1))
             with self.assertRaises(ConfigurationError):
                 load_credentials(home=home)
             path.write_text('[unknown]\napi_key = "value"\n', encoding="utf-8")
@@ -1018,7 +1057,7 @@ class CredentialPublicationTests(unittest.TestCase):
                 real_fsync(descriptor)
 
             with mock.patch.object(
-                configuration.os,
+                credential_edits_module.os,
                 "fsync",
                 side_effect=fail_directory_fsync,
             ):

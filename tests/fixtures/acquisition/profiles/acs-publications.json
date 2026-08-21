@@ -3,9 +3,9 @@
   "access_key": "acs-publications",
   "display_name": "ACS Publications",
   "product_name": "ACS Publications article platform",
-  "verification_state": "unsupported",
-  "verification_date": "2026-08-15",
-  "evidence_revision": "acs-browser-unsupported-2026-08-15",
+    "verification_state": "production-ready",
+  "verification_date": "2026-08-19",
+    "evidence_revision": "acs-persistent-browser-pdf-v4-2026-08-21",
   "notes_reference": "docs/notes/providers/acs.md",
   "official_references": [
     "https://pubs.acs.org/",
@@ -21,14 +21,14 @@
   "landing_origins": ["https://pubs.acs.org"],
   "asset_origins": ["https://pubs.acs.org"],
   "stable_identity": {
-    "locator_namespaces": [],
+    "locator_namespaces": ["doi"],
     "provider_record_names": [],
     "examples": ["doi-prefix:10.1021-is-weak-only"]
   },
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_route": "browser:acs-publications"
   },
   "route_verification": {
     "public": {
@@ -40,14 +40,18 @@
       "payload": "licensed-jats-xml-not-pdf"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "systematic-and-aggregate-download-prohibited-by-default-terms",
-        "no-published-browser-article-rate-policy",
-        "anonymous-policy-pages-returned-challenge",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supporting-information-rule",
-        "upstream-browser-success-is-not-production-evidence"
+            "state": "production-ready",
+      "rule_id": "acs-publications-pdf",
+      "rule_revision": 2,
+      "allowed_origins": ["https://pubs.acs.org"],
+      "rate_limit_group": "acs-publications",
+      "session_group": "acs-publications",
+      "article_start_interval_seconds": 30,
+            "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication",
+            "production_admission": "reviewed-ip-entitled-browser",
+            "conditions": [
+                "article-entitlement-is-checked-per-attempt",
+                "access-denial-or-challenge-stops-the-attempt"
       ]
     }
   },
@@ -57,8 +61,6 @@
     {"case_id": "licensed-tdm-jats-delivery", "expected": "excluded"}
   ],
   "evidence_gaps": [
-    "profile-not-in-production-catalog",
-    "browser-route-not-registered",
     "authorized-pdf-api-not-demonstrated",
     "numeric-browser-pacing-not-published",
     "live-entitlement-not-asserted"

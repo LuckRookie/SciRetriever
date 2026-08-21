@@ -1332,6 +1332,48 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertEqual(coordinator._active_host_permits, {})
         self.assertTrue(all(response.closed for response in responses))
 
+    def test_no_follow_returns_first_redirect_without_resolving_its_target(self) -> None:
+        first = _response(302, location="https://other.test/article")
+        resolver = _Resolver(
+            {
+                "example.test": ("93.184.216.34",),
+                "other.test": ("1.1.1.1",),
+            }
+        )
+        transport = _FakeTransport([first])
+
+        result = _response_value(
+            self._client(transport, resolver).request(
+                AccessScope("fixture-provider", "web"),
+                "https://example.test/start",
+                AccessPolicy(max_concurrency=1),
+                follow_redirects=False,
+            )
+        )
+
+        self.assertEqual(result.status, 302)
+        self.assertEqual(result.final_url, "https://example.test/start")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertNotIn("other.test", resolver.calls)
+        self.assertTrue(first.closed)
+
+    def test_no_follow_flag_is_strictly_boolean(self) -> None:
+        resolver = _Resolver({"example.test": ("93.184.216.34",)})
+        transport = _FakeTransport([_response()])
+
+        result = _failure_value(
+            self._client(transport, resolver).request(
+                AccessScope("fixture-provider", "web"),
+                "https://example.test/start",
+                AccessPolicy(max_concurrency=1),
+                follow_redirects=0,  # type: ignore[arg-type]
+            )
+        )
+
+        self.assertEqual(result.code, "policy")
+        self.assertEqual(resolver.calls, [])
+        self.assertEqual(transport.calls, [])
+
     def test_web_request_holds_one_scope_across_redirects_and_applies_final_cooldown(self) -> None:
         clock = _AdvancingClock()
         resolver = _Resolver(

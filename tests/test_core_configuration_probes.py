@@ -24,6 +24,7 @@ from sciretriever.model.configuration import (
     ProbeOutcome,
 )
 from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
 
 
@@ -169,8 +170,11 @@ def _session(
             configuration,
             home=home,
             python_dependency_available=True,
+            chromium_executable_available=True,
+            headed_display_available=True,
         ),
         browser_probe_port=cast(Any, _EmptyBrowserProbePort()),
+        browser_session_broker=BrowserSessionBroker(),
     )
 
 

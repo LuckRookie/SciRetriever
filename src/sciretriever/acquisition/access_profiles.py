@@ -3,7 +3,7 @@
 Profiles are Acquisition-owned knowledge.  They identify the party that
 serves an article and describe only closed, reviewable capabilities and
 Browser rules.  They are deliberately separate from Metadata Provider names
-and from operator-managed Browser session material.
+and from operation-local Browser runtime material.
 """
 
 from __future__ import annotations

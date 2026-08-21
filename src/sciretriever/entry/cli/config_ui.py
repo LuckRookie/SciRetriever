@@ -202,7 +202,7 @@ class ConfigConsole:
             table.add_row(
                 f"API · {name}",
                 _state_text(state, self.palette),
-                "Official authorized primary-PDF API; separate from Browser session state.",
+                "Official authorized primary-PDF API; separate from headed Browser access.",
                 action,
             )
         table.add_row(
@@ -214,8 +214,9 @@ class ConfigConsole:
         self.console.print(table)
         self.console.print(
             Text(
-                "A local Browser profile only proves that its private container is present. "
-                "It never proves login, institutional authorization, or article entitlement.",
+                "Controlled Browser uses one headed persistent Chrome profile. Publisher "
+                "lanes share its settings and session state; the same Publisher remains "
+                "serialized, and entitlement is checked per article.",
                 style=self.palette.muted,
             )
         )
@@ -480,9 +481,13 @@ class ConfigStatusPresenter:
             detail += f" · known unavailable: {', '.join(unsupported)}"
         table.add_row("2 · Authorized API", detail)
         route_count = browser.get("production_route_count", 0)
+        automatic_route_count = browser.get("automatic_route_count", 0)
         route_word = "route" if route_count == 1 else "routes"
         if browser.get("automatic_acquisition_available") is True:
-            browser_support = f"ready · {route_count} production {route_word}"
+            browser_support = (
+                f"ready · {automatic_route_count}/{route_count} production {route_word} "
+                "eligible for paced article checks"
+            )
         elif route_count:
             browser_support = (
                 f"installed · {route_count} production {route_word} · local Browser not ready"
@@ -513,6 +518,7 @@ class ConfigStatusPresenter:
             runtime.get("framework_available") is True
             and runtime.get("python_dependency_available") is True
             and runtime.get("chromium_executable_available") is True
+            and runtime.get("headed_display_available") is True
         )
         table.add_row(
             _layer_state(
@@ -520,10 +526,12 @@ class ConfigStatusPresenter:
                 "available" if runtime_ready else "unavailable",
                 self.palette,
             ),
-            "framework={} · Playwright Python={} · Chromium={} · launch not assessed".format(
+            "framework={} · Playwright Python={} · Chromium={} · headed display={} · "
+            "launch not assessed".format(
                 "present" if runtime.get("framework_available") is True else "missing",
                 "present" if runtime.get("python_dependency_available") is True else "missing",
                 ("present" if runtime.get("chromium_executable_available") is True else "missing"),
+                "present" if runtime.get("headed_display_available") is True else "missing",
             ),
         )
         route_names = ", ".join(
@@ -535,7 +543,17 @@ class ConfigStatusPresenter:
                 "available" if routes else "unavailable",
                 self.palette,
             ),
-            route_names or "none; fixture-only and unsupported profiles are not executable",
+            route_names or "none; unsupported site rules are not executable",
+        )
+        automatic_route_count = browser.get("automatic_route_count", 0)
+        table.add_row(
+            _layer_state(
+                "Automatic routes",
+                "ready" if automatic_route_count == len(routes) else "partial",
+                self.palette,
+            ),
+            f"{automatic_route_count}/{len(routes)} routes locally eligible · "
+            "article entitlement is checked by the Publisher during each paced attempt",
         )
         table.add_row(
             _layer_state(
@@ -545,20 +563,40 @@ class ConfigStatusPresenter:
             ),
             f"local cross-group concurrency cap {browser.get('local_max_concurrency')}",
         )
-        selected = profile.get("selected")
-        presence = str(profile.get("presence", "missing"))
         table.add_row(
-            _layer_state("Profile", presence, self.palette),
-            f"selected identity: {_shown(selected)} · presence only; contents were not read",
+            _layer_state("Access mode", "persistent", self.palette),
+            f"{browser.get('mode')} · headed Chrome · current machine network exit",
+        )
+        selected_profile = profile.get("selected")
+        profile_presence = str(profile.get("presence", "missing"))
+        table.add_row(
+            _layer_state(
+                "Selected profile",
+                profile_presence,
+                self.palette,
+            ),
+            (str(selected_profile) if selected_profile else "not selected")
+            + " · opaque identity only; no Cookie or login data is inspected",
         )
         table.add_row(
-            _layer_state("Personal login", "not assessed", self.palette),
-            "optional observation · status never opens the Browser",
+            _layer_state("Chrome lifecycle", "shared", self.palette),
+            "one persistent profile · one Chrome process/context · Publisher lanes share "
+            "settings and authentication state",
         )
         table.add_row(
-            _layer_state("IP / article access", "not assessed", self.palette),
-            str(session.get("article_entitlement", "not-proven"))
-            + " · assessed only by a concrete article attempt",
+            _layer_state("Publisher lanes", "paced", self.palette),
+            f"different Publishers may run up to {browser.get('local_max_concurrency')} lanes; "
+            "the same Publisher is strictly serial",
+        )
+        table.add_row(
+            _layer_state("Session authentication", "not assessed", self.palette),
+            f"{session.get('assessment', 'not-assessed')} · authenticated="
+            f"{_shown(session.get('authenticated'))} · status never opens Chrome",
+        )
+        table.add_row(
+            _layer_state("Article access", "checked per article", self.palette),
+            str(browser.get("article_entitlement", "checked-per-article"))
+            + " · profile presence or login never proves a particular PDF entitlement",
         )
         supported = ", ".join(
             str(value) for value in cast(Sequence[object], probe.get("supported_access_keys", ()))
@@ -786,7 +824,6 @@ def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
 def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
     launched = payload.get("browser_launched")
     target_reached = payload.get("minimal_target_reached")
-    personal_login = payload.get("authentication_accepted")
     if launched is True and target_reached is True:
         runtime_detail = "runtime target reached"
     elif launched is True and target_reached is False:
@@ -795,16 +832,10 @@ def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, st
         runtime_detail = "runtime not launched"
     else:
         runtime_detail = "runtime not assessed"
-    if personal_login is True:
-        login_detail = "personal login detected"
-    elif personal_login is False:
-        login_detail = "personal login not detected"
-    else:
-        login_detail = "personal login not assessed"
     return (
         f"Browser · {payload.get('access_key', 'publisher')}",
         str(payload.get("outcome", "failed")),
-        f"{runtime_detail}; {login_detail}; IP/article entitlement not assessed",
+        f"{runtime_detail}; institution-IP/article entitlement not assessed",
         str(payload.get("failure_code") or ""),
     )
 

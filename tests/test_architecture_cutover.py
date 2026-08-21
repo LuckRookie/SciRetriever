@@ -225,6 +225,15 @@ def _contract_surface_violations(source: str, *, filename: str) -> tuple[str, ..
 
 
 class ArchitectureCutoverTests(unittest.TestCase):
+    def test_configuration_and_bootstrap_use_one_package_each(self) -> None:
+        for name in ("configuration", "bootstrap"):
+            with self.subTest(name=name):
+                package = SOURCE_ROOT / name
+                self.assertTrue(package.is_dir())
+                self.assertTrue((package / "__init__.py").is_file())
+                self.assertFalse((SOURCE_ROOT / f"{name}.py").exists())
+                self.assertFalse((SOURCE_ROOT / f"_{name}").exists())
+
     def test_legacy_packages_and_model_files_are_absent(self) -> None:
         for package in LEGACY_PACKAGES:
             with self.subTest(package=package):

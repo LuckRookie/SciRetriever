@@ -24,6 +24,7 @@ import sciretriever.network.playwright as adapter_module
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.sources.browser import CONTROLLED_BROWSER_PRODUCTION_STATUS
 from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
+from sciretriever.configuration import initialize_browser_profile
 from sciretriever.model.access import (
     AccessFailure,
     BrowserCaptureBatch,
@@ -56,14 +57,6 @@ class _Resolver:
         return ("127.0.0.1",)
 
 
-class _Profile:
-    def __init__(self, path: Path) -> None:
-        self._path = path
-
-    def runtime_directory(self) -> Path:
-        return self._path
-
-
 class _DestinationGuard:
     def __init__(self, origin: str) -> None:
         self._origin = origin
@@ -75,15 +68,12 @@ class _DestinationGuard:
 
 
 class _CaptureGuard:
-    def __init__(self, pdf_url: str) -> None:
+    def __init__(self, pdf_url: str, kind: BrowserCaptureKind) -> None:
         self._pdf_url = pdf_url
+        self._kind = kind
 
     def allows(self, url: str, kind: BrowserCaptureKind, media_type: str) -> bool:
-        return (
-            url == self._pdf_url
-            and kind is BrowserCaptureKind.RESPONSE
-            and media_type == "application/pdf"
-        )
+        return url == self._pdf_url and kind is self._kind and media_type == "application/pdf"
 
 
 class _ServerState:
@@ -213,6 +203,13 @@ def _module_file(module: object) -> str:
     return os.fspath(Path(value).resolve(strict=True))
 
 
+def _restore_ssl_certificate(previous_certificate: str | None) -> None:
+    if previous_certificate is None:
+        os.environ.pop("SSL_CERT_FILE", None)
+    else:
+        os.environ["SSL_CERT_FILE"] = previous_certificate
+
+
 def main() -> None:
     pdf = _pdf()
     page = (
@@ -231,8 +228,6 @@ def main() -> None:
     ).encode()
     temporary = tempfile.TemporaryDirectory(prefix="sciretriever-installed-playwright-")
     root = Path(temporary.name).resolve(strict=True)
-    profile = root / "profile"
-    profile.mkdir(mode=0o700)
     certificate, key = _certificate(root)
     state = _ServerState(page, pdf)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(state))
@@ -252,13 +247,18 @@ def main() -> None:
     session_pages_empty: list[bool] = []
     delivered: list[bytes] = []
     direct_elapsed = 0.0
+    runtime_directory: Path | None = None
+    profile_directory: Path | None = None
+    profile_survived_broker_close = False
     resolver = _Resolver()
     try:
         port = server.server_port
         origin = f"https://{_HOSTNAME}:{port}"
         article_url = f"{origin}/article"
         pdf_url = f"{origin}/article.pdf"
-        factory = PlaywrightBrowserFactory()
+        profile = initialize_browser_profile("installed-fixture", home=root)
+        profile_directory = profile.runtime_directory()
+        factory = PlaywrightBrowserFactory(profile, ignore_https_errors=True)
         client = BrowserClient(
             factory=factory,
             resolver=resolver,
@@ -268,10 +268,8 @@ def main() -> None:
                 allowed_addresses=frozenset({"127.0.0.1"}),
                 allowed_ports=frozenset({("https", port)}),
             ),
-            operator_profile=_Profile(profile),
             session_broker=broker,
         )
-        capture_guard = _CaptureGuard(pdf_url)
         destination_guard = _DestinationGuard(origin)
         flows = (
             (
@@ -280,6 +278,7 @@ def main() -> None:
                     session.click("button[data-action='pdf']"),
                     session.wait_for_capture(BrowserCaptureKind.RESPONSE),
                 ),
+                BrowserCaptureKind.RESPONSE,
             ),
             (
                 pdf_url,
@@ -288,11 +287,12 @@ def main() -> None:
                     session.text("[data-test='missing-paywall']"),
                     session.text("#missing-challenge"),
                     session.text("[data-test='missing-account-warning']"),
-                    session.wait_for_capture(BrowserCaptureKind.RESPONSE),
+                    session.wait_for_capture(BrowserCaptureKind.DOWNLOAD),
                 ),
+                BrowserCaptureKind.DOWNLOAD,
             ),
         )
-        for index, (target, flow) in enumerate(flows):
+        for index, (target, flow, capture_kind) in enumerate(flows):
             started = time.monotonic()
             result = client.run(
                 AccessScope("publisher-fixture", "web"),
@@ -304,7 +304,7 @@ def main() -> None:
                 AccessPolicy(max_concurrency=1),
                 flow=flow,
                 destination_guard=destination_guard,
-                capture_guard=capture_guard,
+                capture_guard=_CaptureGuard(pdf_url, capture_kind),
                 session_key="publisher-fixture",
             )
             if index == 1:
@@ -314,12 +314,21 @@ def main() -> None:
             if not isinstance(result, BrowserCaptureBatch) or len(result.captures) != 1:
                 raise RuntimeError("installed Browser flow returned an invalid capture batch")
             delivered.append(b"".join(result.captures[0].stream.chunks))
-            entry = next(iter(broker._entries.values()))
-            context = entry.context
+            shared = broker._shared
+            if shared is None:
+                raise RuntimeError("shared Browser runtime was not retained")
+            context = shared.context
             if context is None:
                 raise RuntimeError("persistent Browser context was not retained")
-            session_ids.append((id(entry.process_runtime), id(context)))
+            session_ids.append((id(shared.process_runtime), id(context)))
             session_pages_empty.append(getattr(context, "pages", None) == ())
+            if shared.runtime_directory is None:
+                raise RuntimeError("temporary Browser download workspace was not retained")
+            runtime_directory = Path(shared.runtime_directory.name)
+            if not runtime_directory.is_dir():
+                raise RuntimeError("temporary Browser download workspace was not created")
+            if profile_directory is None or not profile_directory.is_dir():
+                raise RuntimeError("persistent Browser profile was not retained")
         runtime = playwright_runtime_availability()
         payload = {
             "product_module_files": {
@@ -331,6 +340,7 @@ def main() -> None:
             "runtime": {
                 "python_dependency_available": runtime.python_dependency_available,
                 "chromium_executable_available": runtime.chromium_executable_available,
+                "headed_display_available": runtime.headed_display_available,
             },
             "network": {
                 "hostname": _HOSTNAME,
@@ -352,6 +362,9 @@ def main() -> None:
                 "article_count": len(delivered),
                 "one_process_and_context_reused": len(set(session_ids)) == 1,
                 "article_pages_closed": all(session_pages_empty),
+                "persistent_profile_created": (
+                    profile_directory is not None and profile_directory.is_dir()
+                ),
             },
             "production_boundary": {
                 "catalog_rule_count": len(PRODUCTION_BROWSER_RULE_CATALOG.rules),
@@ -366,17 +379,21 @@ def main() -> None:
     finally:
         try:
             broker.close()
+            profile_survived_broker_close = (
+                profile_directory is not None and profile_directory.is_dir()
+            )
         finally:
-            if previous_certificate is None:
-                os.environ.pop("SSL_CERT_FILE", None)
-            else:
-                os.environ["SSL_CERT_FILE"] = previous_certificate
+            _restore_ssl_certificate(previous_certificate)
             server.shutdown()
             server.server_close()
             server_thread.join(10)
             temporary.cleanup()
     payload["cleanup"] = {
         "temporary_root_exists": root.exists(),
+        "runtime_directory_exists": (
+            None if runtime_directory is None else runtime_directory.exists()
+        ),
+        "profile_survived_broker_close": profile_survived_broker_close,
         "server_thread_alive": server_thread.is_alive(),
         "playwright_threads_alive": sorted(
             thread.name

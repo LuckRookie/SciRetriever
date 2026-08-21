@@ -45,7 +45,7 @@ class BrowserRuntimeStateTests(unittest.TestCase):
     def test_every_runtime_page_fixture_has_one_exact_decision(self) -> None:
         fixtures = _runtime_page_states()
         self.assertEqual(set(fixtures), {state.value for state in BrowserRunState})
-        self.assertEqual(len(fixtures), 12)
+        self.assertEqual(len(fixtures), 13)
 
         for state in BrowserRunState:
             with self.subTest(state=state.value):

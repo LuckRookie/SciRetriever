@@ -53,16 +53,16 @@ from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import SecureHttpTransport, SystemResolver
 
 root = Path(os.environ["SCIRETRIEVER_P76_ROOT"])
-profile_home = root / "home"
-profile_home.mkdir(mode=0o700)
-initialize_browser_profile("research", home=profile_home)
+home = root / "home"
+home.mkdir(mode=0o700)
+initialize_browser_profile("fixture-profile", home=home)
 configuration = parse_configuration(
     "[paths]\\n"
     + f"catalog_path = {str(root / 'catalog.sqlite3')!r}\\n"
     + f"artifact_root = {str(root / 'artifacts')!r}\\n"
     + "[execution]\\nmax_concurrency = 5\\n"
     + "[access]\\nbrowser_enabled = true\\n"
-    + 'browser_profile = "research"\\n'
+    + 'browser_profile = "fixture-profile"\\n'
     + "browser_max_concurrency = 3\\n"
 )
 forbidden = AssertionError("installed production assembly performed external I/O")
@@ -75,7 +75,7 @@ with (
     graph = build_production_object_graph(
         configuration,
         scope=ProductionEntryScope.ASSET_COMPLETION,
-        credentials_home=root / "home",
+        credentials_home=home,
         configure_process_logging=False,
     )
 
@@ -98,7 +98,10 @@ evidence = {
     ),
     "cohort_concurrency": runtime.cohort_executor._max_concurrency == 5,
     "browser_concurrency": runtime.browser_scheduler._max_concurrency == 3,
-    "broker_unused": runtime.browser_session_broker._entries == {},
+    "broker_unused": (
+        runtime.browser_session_broker._lanes == {}
+        and runtime.browser_session_broker._shared is None
+    ),
     "scheduler_unused": runtime.browser_scheduler._policies == {},
     "browser_client_ready": graph.browser_client is not None,
     "browser_switch": runtime.browser_admission._configuration.explicitly_enabled,
