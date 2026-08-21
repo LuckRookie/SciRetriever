@@ -1,9 +1,9 @@
 # IOPscience
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；IOPscience 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://iopscience.iop.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 API route
 
 ## 1. 官方入口与证据
 
@@ -45,20 +45,33 @@ IOP policy 明确把 full text 与 supplementary data 分开。即使约定交�
 
 ## 4. Browser 与限速结论
 
-机构订阅、IP access、OpenAthens 和 SeamlessAccess 证明用户可以合法登录并读取有 entitlement 的内容，但不授予自动 Browser 下载权。当前结论为 unsupported：
+机构订阅、IP access、OpenAthens 和 SeamlessAccess 证明用户可能读取有 entitlement 的内容，
+但不能由本地配置预先证明具体文章权限。当前政策风险仍必须保留：
 
 - 通用 Terms 明确写明 systematic downloading of files is prohibited；
 - TDM policy 要求先联系并走 SFTP/约定交付，且禁止未经明确授权的 automated search/scrape/deep-link/index；
 - 当前 `robots.txt` 对通用 user-agent 全站禁止，未给出可执行数值 Browser 文章间隔；
 - 匿名 IOPscience 请求在当前环境进入 PerfDrive CAPTCHA，本轮没有绕过；
-- 缺完整 login、entitlement、paywall、challenge/rate/account-warning marker；
-- 缺正文、supplement、wrong-article 的封闭页面归属 fixture；
 - ScanSci 的特定高校成功不能推广到其它用户或长期平台合同。
 
-因此没有 `browser_rate_limit_group` 或 session key；IOP 也不会因与 AIP/APS 同属物理出版领域而共享风险组。将来若获得单独 Browser 许可，必须为 IOPscience 建立自己的串行组和官方/协议内 pacing，不能复用 AIP 或 APS 配置。
+仓库已经建立技术规则 `iopscience-pdf@2`，用合成 fixture 验证 IOPscience 精确 origin、强 DOI
+归属、primary/supplement/wrong-article 分类、封闭页面状态，以及独立 `iopscience` risk/session
+group、组内并发 1 和 30 秒审慎基线。规则与生产对象图已达到工程准入要求并进入 production
+catalog；operator 显式启用受控 Browser 后，route 才能执行逐文章机构 IP 尝试。该总开关不能
+证明组织授权或文章 entitlement，operator 仍须确认使用符合 IOP 条款。IOP 不会因与 AIP/APS
+同属物理出版领域而共享风险组；约定 SFTP/XML/PDF 交付协议也不会被冒充成 Browser 成功证据。
 
 ## 5. 当前实现边界
 
-secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 fixture 为 `tests/fixtures/acquisition/profiles/iopscience.json`。Fixture 证明弱 DOI 证据、约定交付与公共 API 的分离、supplement 排除和无 executable route；不保存真实 DOI、正文、Cookie、账号、机构或通信内容。
+secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，技术
+规则位于 `src/sciretriever/acquisition/sources/browser_rules/providers/iop.py`，唯一 fixture 为
+`tests/fixtures/acquisition/profiles/iopscience.json`。Fixture 证明弱/强 DOI 证据边界、约定交付
+与公共 API 的分离、正文/supplement 归属和页面状态；不保存真实
+DOI、正文、Cookie、账号、机构或通信内容。
 
-现有 Metadata/OA 来源若明确提供安全 IOP PDF/landing `AssetHint`，仍可由通用第一层在用户授权边界内尝试，并接受实际字节、PDF reader、页面树、来源依据和不可变发布检查。unsupported Profile 本身不合成 `/article/{doi}/pdf`、不联系 IOP、不启动 Browser，也不新增 IOP credential section。
+现有 Metadata/OA 来源若明确提供安全 IOP PDF/landing `AssetHint`，仍可由通用第一层在用户授权
+边界内尝试，并接受实际字节、PDF reader、页面树、来源依据和不可变发布检查。Browser 总开关
+关闭时 Profile 不构造可执行 Browser adapter；启用后也只使用审核过的 `/article/{doi}/pdf`
+流程、固定调度和逐文章检查，不联系其它 IOP 服务、不新增 credential section，也不证明当前
+文章 entitlement。
+本轮没有执行真实 IOP 文章 probe 或正文下载。

@@ -1,9 +1,9 @@
 # Oxford Academic
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；Oxford Academic 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://academic.oup.com`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；无专属 Public 或授权 API route，已注册使用所选持久 Profile 的 Browser route `browser:oxford-academic`
 
 ## 1. 官方入口与本轮证据边界
 
@@ -13,10 +13,10 @@
 - [Open Access](https://academic.oup.com/pages/open-research/open-access)：官方 OA 入口；本轮匿名请求返回 403。
 - [academic.oup.com robots.txt](https://academic.oup.com/robots.txt)：当前路径级 crawler policy。
 
-本轮只匿名读取官方 `robots.txt`，并对首页、TDM、法律条款与 OA 页面做有界状态核对；没有
-访问文章正文、跟随真实 DOI、打开 PDF、登录机构账号、读取 Cookie/profile、调用真实 API、
-完成 Shibboleth/OpenAthens 或绕过 Cloudflare。无法读取的政策正文不被旧经验、ScanSci 或
-相似平台条款补写。
+本轮只核对上述官方引用及其作为访问条款/速率证据的边界；没有访问文章正文、跟随真实 DOI、
+打开 PDF、登录机构账号、读取 Cookie/profile、调用真实 API、完成 Shibboleth/OpenAthens 或
+绕过 Cloudflare。生产准入依赖版本化项目审慎政策和离线安全合同，不把旧经验、ScanSci 或相似
+平台条款写成当前在线授权证据。
 
 ## 2. DOI、Public 与 API 结论
 
@@ -49,23 +49,26 @@ Metadata Provider 来源不能单独证明 canonical landing、具体版本、�
 /advanced-search
 ```
 
-它没有禁止所有文章或所有 `article-pdf` 路径，但“未被 robots 禁止”不等于获得自动 PDF
-许可，也没有给出数值 Browser article-start interval、窗口额度、账号风控或 session policy。
-TDM 和法律条款正文又尚未核实，因此不能建立 Browser route。
+它没有禁止所有文章或所有 `article-pdf` 路径，但“未被 robots 禁止”不等于任意批量授权；官方
+也没有发布可直接采用的数值 Browser article-start interval。因此生产 Profile 使用项目审慎的
+30 秒最小文章启动间隔、组内并发 1、rate-limit cooldown 和 runtime circuit，并继续遵守页面
+返回的拒绝、challenge 与动态限流。
 
 ScanSci 记录过 Oxford journal-specific article path、`/article-pdf/`、`/doi/pdf/`、
 `/doi/epdf/`、Institutional Login/OpenAthens marker，以及一个 `pdf_response_captured` success。
-该结果依赖上游 Browser profile/Cookie 体系，且单个成功不能证明文章是否 OA、机构 entitlement、
+该结果依赖上游项目的 Browser profile/Cookie 体系，且单个成功不能证明文章是否 OA、机构 entitlement、
 长期 URL 合同或批量自动访问权。SciRetriever 不复制 Cookie、CARSI、selector、URL 改写或 verdict。
 
-当前还缺：
+当前生产规则 `oxford-academic-pdf@2` 只接受强 DOI/Oxford landing，精确允许
+`https://academic.oup.com`，从 `/doi/pdf/`、`/doi/epdf/` 或 `/article-pdf/` 的 response/download
+捕获候选，并排除 supplement、chapter/front matter 和 wrong-article。规则包含封闭的
+entitlement/paywall、login、MFA/challenge、rate/IP/account-warning 页面状态；登录等状态只识别
+后停止。Browser 使用当前机器网络出口，以及共享 persistent Profile/context 中独立的
+`oxford-academic` lane；自动流程不导入或读取 Cookie，也不执行认证。
 
-- 官方允许的 Browser 自动访问范围和数值 pacing；
-- login、entitlement、paywall、challenge/rate/account-warning 的封闭 marker；
-- primary、supplement、chapter/book 与 wrong-article 的现场归属证据；
-- 可推广的机构 session、credential origin 和跨 journal entitlement 边界。
-
-因此没有 Browser rule、`browser_rate_limit_group` 或 session key。
+该 route 的 `production-ready` 表示 Profile/rule/policy、合成 fixture、生产对象图和安全测试
+闭环；不表示当前 IP、机构协议或任意文章 entitlement 已经在线证明。官方未发布数值 pacing 和
+live entitlement 未核实仍作为 evidence gap 保留。
 
 ## 4. 共享平台不等于共享风险域
 
@@ -78,9 +81,9 @@ Oxford Academic 与 AIP Publishing 的 robots 路径、登录/下载端点名称
 - WAF/account-warning、quota 或 Browser article pacing；
 - primary/supplement 归属、产品许可或现场运营策略。
 
-所以两个 Profile 使用独立 `platform_key` 和 origin；在没有 executable Browser route 时都不
-创建 group。未来即使双方分别获准上线，也要先以各自官方/现场证据决定风险组，不能仅按底层
-技术名称合并或跨 origin 携带 credential。
+所以两个 Profile 使用独立 `platform_key`、origin 与 risk/session group。Oxford 与 AIP 的
+production route 分别接受总开关、各自调度和逐文章检查；未来证据变化也必须分别评估，不能仅按
+底层技术名称合并或跨 origin 携带 credential。
 
 ## 5. 资产归属与当前实现
 
@@ -89,10 +92,13 @@ Oxford Academic 与 AIP Publishing 的 robots 路径、登录/下载端点名称
 路径中出现 `article-pdf` 或 DOI suffix 只是一项 locator 线索，不替代实际字节、页面树和文章
 身份验证。
 
-secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/oxford-academic.json`。Fixture 证明弱 DOI、无专属 route、
-共享平台不共享 risk/session、supplement 排除和上游 Browser success 非生产证据；不保存真实
-DOI、正文、Cookie、账号、机构或 Browser profile。
+secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，生产规则位于
+`src/sciretriever/acquisition/sources/browser_rules/providers/oxford.py`，唯一 fixture 为
+`tests/fixtures/acquisition/profiles/oxford-academic.json`。Fixture 证明弱/强 DOI 边界、无专属
+API route、共享平台不共享 risk/session、正文/supplement/错文归属、Publisher lane 调度与上游
+Browser success 非授权证据；测试 Profile 只位于系统临时目录，不保存真实 DOI、正文、Cookie、
+账号、机构或 Browser Profile 内容。
 
-`unsupported` Profile 不进入 production catalog，不新增 Oxford credential section，也不会
-启动 Browser。替代路径仍是现有通用 Public/OA 来源和用户独立的手动 PDF 接纳。
+Profile 和 `oxford-academic-pdf@2` 已进入 production catalog，但只在 Public/API 正常结束、强
+访问方证据成立、Browser 显式启用且 runtime 就绪时启动。它不新增 Oxford credential section；
+无权限或未命中时仍可由用户独立手动接纳 PDF。

@@ -1,9 +1,9 @@
 # RSC Publishing
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；RSC Publishing 是 Publication/Access Provider
 - Access Platform：`https://pubs.rsc.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 PDF API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 PDF API route
 
 ## 1. 官方入口与证据
 
@@ -25,7 +25,7 @@ RSC 的非商业使用条款更明确：用户不得使用任何自动化软件�
 
 ## 3. 身份、locator 与 ESI
 
-当前 Profile 只把 DOI prefix `10.1039` 及 `Royal Society of Chemistry` / `RSC Publishing` 文本作为弱提示。它们不能单独证明原文访问方；当前 unsupported Profile 也不进入 production resolver。
+当前 Profile 只把 DOI prefix `10.1039` 及 `Royal Society of Chemistry` / `RSC Publishing` 文本作为弱提示。它们不能单独证明原文访问方；只有实际 RSC landing、可信 asset origin 或其它强证据才能让 production resolver 收敛到该 Profile。
 
 ScanSci 记录过以下页面形状：
 
@@ -36,17 +36,28 @@ PDF:     /en/content/articlepdf/{year}/{journal}/{article-id}
 
 以及一次 `rsc_articlepdf` 成功。这些仅是待核实上游观察，不能证明 URL 是长期官方合同、当前账号 entitlement 或正文归属，也不能替代每次 redirect/response 的 origin guard。
 
-RSC article page 可能同时提供 Electronic Supplementary Information（ESI）。没有独立页面 fixture 证明正文 action、ESI link、filename、response origin 和 wrong-article identity 前，任何通用 `/articlepdf/` selector 或 HTML extractor 都不能成为生产规则。Evidence fixture 明确把 ESI PDF 标为 `supplement`，但这只是 fail-closed 预期，不声称已经识别真实站点所有 ESI 形状。
+RSC article page 可能同时提供 Electronic Supplementary Information（ESI）。当前技术 fixture 已
+验证封闭正文 action、ESI、excluded 与 wrong-article 分类；它不表示已经识别真实站点所有 ESI
+形状，也不能把通用 `/articlepdf/` selector 或 HTML extractor 提升为生产合同。
 
 ## 4. 当前状态与实现边界
 
-`rsc-publishing` Profile 的状态为 `unsupported`：
+`rsc-publishing` Profile 的状态为 `production-ready`：
 
 - 无经过核实的 direct PDF API 或专属 public route；
-- 无 Browser rate/session group、页面状态 marker、正文/ESI capture rule 或 executable route；
+- 技术规则 `rsc-publishing-pdf@2` 使用独立 `rsc-publishing` risk/session group、组内并发 1 与
+  30 秒审慎 fixture 基线，并离线覆盖页面状态、正文/ESI/wrong-article；
+- 官方普通条款限制自动化软件下载，TDM 项目要求预先联系；operator 必须确认实际用途符合组织
+  授权与 RSC 条款，Browser 总开关不构成许可证明；
+- rule 进入 production catalog；只有总开关启用、runtime 就绪并通过同组调度后才做逐文章机构
+  IP 尝试，付费墙、裸 403、challenge 与正文捕获分别报告；
 - 不复制 ScanSci 的 generic selector、CARSI/Cookie 文件、任意脚本和 success verdict；
 - 不新增 Metadata Provider 或 credential section。
 
 现有来源若明确提供安全的 RSC PDF/landing `AssetHint`，仍可在第一层通过通用 Public Source 获取，并接受实际字节、PDF reader、页面树、来源依据与不可变发布检查。该路径不会因为存在 RSC Profile 而跳过授权判断，也不会把第一层失败自动升级到 Browser。
 
-生产源码的 secret-free 结论位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 evidence fixture 为 `tests/fixtures/acquisition/profiles/rsc-publishing.json`。本轮没有真实 entitlement 或内容下载证据。
+secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，技术规则位于
+`src/sciretriever/acquisition/sources/browser_rules/providers/rsc.py`，唯一 evidence fixture 为
+`tests/fixtures/acquisition/profiles/rsc-publishing.json`。本轮没有真实 entitlement 或内容下载
+证据；当前 IP 或一次页面可达也不能证明具体文章 entitlement。Browser 总开关关闭时 route 不构造
+可执行 adapter；启用后也不放宽 origin、规则、限速、正文/ESI 归属或 Network 安全边界。

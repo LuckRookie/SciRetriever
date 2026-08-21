@@ -1,10 +1,10 @@
 # Elsevier
 
-- 官方资料最后在线核对：2026-08-18
-- 当前实现离线对照：2026-08-18
+- 官方资料最后在线核对：2026-08-19
+- 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `elsevier`；Acquisition `elsevier`
 - 供应商角色：Scopus/Elsevier 元数据查询，以及受产品订阅和授权约束的文章全文/对象获取
-- 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter 已进入生产 registry；Article Retrieval 的直接 PDF 表示及 FULL XML 到 Object Retrieval 主 PDF 的授权 route 已进入生产 registry；ScienceDirect Browser route 仍为 unsupported
+- 当前仓库接入状态：Scopus Search 与 Abstract Retrieval 的专用 Metadata adapter、Article/Object Retrieval 授权 PDF route，以及使用所选持久 Profile 的 ScienceDirect Browser route 均已进入生产 registry
 
 ## 1. 官方入口与证据
 
@@ -297,7 +297,7 @@ full-text-retrieval-response
 - 官方默认配额和 throttle 会变化，且可能按 API key、机构协议或 TDM 合同覆盖；运行时以 headers 与账户设置为准，默认值变化时必须同步 policy revision、Notes 与直接测试。
 - `COMPLETE`/`STANDARD` 字段和每页上限不同；搜索翻页需直接测试 cursor 结束条件与 5,000 结果边界。
 - 当前优先接纳官方 FULL XML 明确标记的 `MAIN web-pdf`，并只在 XML/object locator 不可用时使用同一强身份的官方 Article PDF representation；其它附件类型或 schema 变化不能通过放宽 parser 猜测兼容。
-- ScienceDirect Browser 的 selector、登录/entitlement/paywall/challenge marker、供应商页面速率和 session group 仍缺独立生产证据。
+- ScienceDirect Browser 使用项目审慎的 20 秒文章启动间隔；当前 IP、机构协议和 live entitlement 未在线断言，challenge 只识别后停止。
 - Citation Overview 不是引用边 API；不要把年度计数当逐条引用。
 
 ## 10. 当前实现边界
@@ -316,14 +316,31 @@ PII 和 Article EID hints，且不写入数据库。lookup/download 的 Debug �
 envelope、disposition 与中性 failure kind，不记录 vendor status text、header、正文、locator、
 URL/query 或 credential。
 
-`elsevier-sciencedirect` Profile 当前是 API-only `production-ready`。ScienceDirect
-Browser capability 为 `unsupported`，没有 production rule、rate-limit group 或 session
-group：ScanSci 最近的 challenge/timeout 记录没有被改写成成功，也不会猜 selector 或通过
-Browser 绕过 API quota、429、临时错误或 challenge。2026-08-18 用户授权的隔离 Completion
+`elsevier-sciencedirect` Profile 当前同时为 API 与 Browser `production-ready`。生产规则
+`sciencedirect-pdf@2` 只接受强 DOI/PII/Article EID，或经安全解析的 ScienceDirect landing；
+DOI resolver 返回的 `https://linkinghub.elsevier.com` 是经审查的 landing alias，不会因为第一跳
+主机名不同而跳过 Elsevier Browser route。规则精确允许 ScienceDirect、linkinghub、
+`pdf.sciencedirectassets.com` 以及封闭的 Elsevier auth origin。它从 `/pdfft` 点击后的
+response、download、popup、viewer 或 verified locator 中等待任一正文 capture，亦可接收 HTTP
+attachment 或批准的 PDF CDN 候选，并在读取正文前排除 MMC、supplement、excluded 和
+wrong-article。规则包含 entitlement/paywall、login、MFA/challenge、rate/IP/account-warning
+等封闭页面状态；裸 403 记录为 access denied，只有明确 challenge 或 paywall 页面证据才分别
+归为 challenge 或无文章权限，登录/challenge 只识别后停止。
+
+Browser 使用当前机器正常网络出口，以及共享 persistent Profile/context 中独立的 `elsevier`
+lane；组内并发 1，项目审慎最小文章启动间隔 20 秒。无 GUI Linux 使用 Xvfb。自动流程不导入或
+读取 Cookie、不填写凭据，也不会通过 Browser 绕过 API quota、429、临时错误或 challenge；用户
+只能在配置中心的独立显式动作中打开同一 Profile 的可见 Browser，自行处理获授权的认证。离线真实 Chromium 场景
+覆盖外部 JavaScript、未批准 tracker 丢弃、`/pdfft` 点击后的跨 origin CDN redirect、HTTP
+attachment、supplement/错文排除、Publisher lane 隔离与临时下载工作区清理。这些证据不证明
+当前 IP、Profile 已登录、机构订阅或任意文章 entitlement。
+
+2026-08-18 用户授权的隔离 Completion
 已经让 27 个强证据目标进入真实 Article/Object route，其中 26 个交付 PDF，1 个在 lookup
 阶段形成 `http-status`/missing representation 的 response-schema failure。补齐 status-only
 telemetry 后，对该精确目标的另一次只读重试确认 lookup 返回 HTTP 400 / `client-error`；它不是
 401 authentication、403 entitlement、404 normal miss、429 quota 或 5xx service failure。
 在没有读取响应正文的边界内，当前只能保留为明确、非重试的 response-schema failure，不能猜测
 更具体的 vendor 原因或把 400 放宽成正常未命中。该诊断没有读取或记录 response body、vendor
-status text、header、URL/query、credential 或 PDF 字节。尚未调用 Elsevier Browser。
+status text、header、URL/query、credential 或 PDF 字节；历史批次没有调用 Elsevier Browser，
+所以不能作为 Browser 在线成功率证据。

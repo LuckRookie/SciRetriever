@@ -132,8 +132,8 @@ sciretriever/
   storage/            # 数据库、文件和本机写入互斥
   logging/            # logger 获取、进程配置与最终脱敏防线
 
-  bootstrap.py        # 实现选择和对象组装
-  configuration.py    # 运行配置读取与边界解析
+  bootstrap/          # 生产对象图模块；__init__ 提供稳定公开 surface
+  configuration/      # 运行配置模块；__init__ 提供稳定公开 surface
 ```
 
 每个核心功能模块可以在内部按需要区分以下职责，但这些职责不再成为项目级目录层次：
@@ -154,7 +154,10 @@ sciretriever/
 4. 需要网络或持久化的模块在自己的 `ports.py` 声明能力，由 `network`、`storage` 或本模块专属适配器实现；
 5. `network` 和 `storage` 不拥有文献身份、元数据收敛、内容判断和状态等业务规则；
 6. 除纯声明的 `model` 外，具有运行行为的模块只通过 `logging.api` 获取 logger，不直接配置 Python root logger、Handler 或 formatter；`logging` 只依赖 Python 标准库，不反向调用业务模块；
-7. 根级 `configuration.py` 负责读取并解析运行配置，`bootstrap.py` 是唯一选择具体实现并构造完整对象图的位置，并通过 `logging.api` 触发生产日志初始化；二者都不承载产品规则；
+7. `configuration/` 与 `bootstrap/` 分别是原 Configuration 和 Bootstrap 模块的 package 形态；
+   各自 `__init__.py` 提供稳定、窄小的公开 surface，其余同包文件按稳定概念拥有实现细节。
+   目录拆分不增加新的产品模块。Bootstrap 边界是唯一选择具体实现并构造完整对象图的位置，
+   并通过 `logging.api` 触发生产日志初始化；这些启动边界都不承载产品规则；
 8. Vendor、HTTP、浏览器、SQL、MinerU 和 LLM 私有类型只能存在于对应模块的适配边界，不能进入公共 API 或 Model。
 
 ### 2.4 Provider 能力与启动配置
@@ -165,9 +168,18 @@ sciretriever/
 
 目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的 Provider 能力，并由 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 约束原文访问计划。“能力已实现”“用户启用”“普通参数/凭据/政策就绪”“当前 Literature 适用”和“当前 route 实际需要”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 先形成访问方 Resolution 和分层 Plan，只执行其中适用且需要的 route。全面接入不会把每次运行变成对全部服务的无条件调用。
 
-普通配置由根级 `configuration.py` 解析；Provider、LLM 与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
+普通配置由 `sciretriever.configuration` 解析；Provider、LLM 与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
 
-Publisher access Profile 使用 `production-ready`、`fixture-verified` 和 `unsupported` 三种准入状态，Public、授权 API 与 Browser capability 另行表达。一个只完成授权 API 的 Profile 可以是 production-ready，同时没有 Browser route；fixture-verified 只证明离线合同，不能进入生产 catalog；unsupported 不保留可执行 route。易变 endpoint、页面 selector、限速数字和证据日期由 [Provider Notes](../notes/providers/README.md)维护，不能写进长期设计或由相似平台猜测继承。
+Publisher access Profile 使用 `production-ready`、`fixture-verified` 和 `unsupported` 三种准入状态，
+Public、授权 API 与 Browser capability 另行表达。一个只完成授权 API 的 Profile 可以是
+production-ready，同时没有 Browser route；fixture-verified 只证明离线合同，不能进入生产
+catalog；unsupported 不保留可执行 route。Browser production 准入只证明规则、政策、安全边界、
+对象图和离线验收闭环，不证明当前机构/IP/账号或文章权限，也不使用逐 Publisher 本地 grant。
+运行时只有一个 operator-managed Browser identity Profile；它可以由 Chrome 跨命令保留认证状态，
+所有 Publisher lane 共享一个 process/persistent context，但仍按 Provider 风险组串行/并行调度并
+逐文章判断 entitlement。Profile identity、presence、登录状态与文章权限是分立事实。易变 endpoint、
+页面 selector、限速数字和证据日期由 [Provider Notes](../notes/providers/README.md)维护，不能写进
+长期设计或由相似平台猜测继承。
 
 ## 3. 核心数据流
 
@@ -253,7 +265,19 @@ Public 层先消费明确的直接主 PDF 线索、公开仓储、OA locator 和
 
 公开协议和 API 按各自官方 quota identity、并发、间隔、window、周期/日额度、reset boundary 与 `Retry-After` 执行；共享额度池的 Metadata 与 Acquisition 调用共享当前进程 scope。Timeout、临时服务错误、`429`、有效 `Retry-After` 或 quota exhausted 形成延期或失败，不能通过自动切 Browser 制造替代流量。未配置但当前 plan 需要的 route 必须明确报告；是否仍允许 Browser 只由显式 admission policy 决定。
 
-Browser 按 `browser_rate_limit_group` 调度：不同独立风险组可以并行，同一组固定 `concurrency = 1` 并按该 Profile 的文章间隔、window 和 cooldown 限速串行。它复用 operator-managed persistent session，但 permit 覆盖一篇文章从 canonical landing、授权标记、有限页面动作、popup/viewer、response/download 到临时资源清理的完整流程。登录、MFA、challenge、无 entitlement、rate limit、IP block 或账号警告只暂停/熔断对应组；自动流程不登录、不处理 MFA/CAPTCHA、不执行任意 JavaScript 或反检测动作。每次 navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network 通用安全准入。
+Browser 按 `browser_rate_limit_group` 调度：不同独立风险组可以并行，同一组固定
+`concurrency = 1` 并按该 PublisherAccessProfile 的文章间隔、window 和 cooldown 限速串行。
+跨组本机 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；它不改变组内政策，也不会启动多个
+Browser。Browser 使用当前机器正常网络出口和一个 operator-managed 持久身份 Profile，在当前
+对象图内让所有 `browser_session_key` Publisher lane 共享一个有头 Chrome process/persistent
+context，并为每篇文章隔离 article token、page、handler 和临时下载目录；无 GUI Linux 由 Xvfb
+提供虚拟显示，broker 关闭或进程退出后清理 runtime 临时资源但保留 Profile。Permit 覆盖一篇
+文章从 canonical landing、授权标记、有限页面动作、popup/viewer、response/download 到资源清理
+的完整流程。登录、MFA、challenge、无 entitlement、rate limit、IP block 或账号警告只暂停/熔断
+对应组；用户可以显式打开使用同一 Profile 的可见 Browser 完成获授权的交互，自动流程不填写
+凭据、不选择机构、不读取 Cookie/登录结果、不处理或绕过 MFA/CAPTCHA，也不执行任意规则脚本或
+反检测动作。Publisher 请求由 Chrome 原生网络栈完成；每次 navigation、popup、viewer、response
+和 download 在继续访问前同时通过 PublisherAccessProfile guard 与 Network 通用安全准入。
 
 所有 HTTP、API 与 Browser 路径只把实际字节交付为统一 `TemporaryPdf`。候选通过实际字节、PDF reader、页面树和目标归属基本检查后才成为当前主 PDF；Storage 保存不可变 PDF、hash、来源和与 `Literature` 的唯一 `primary-pdf` 关系。文献状态由这些已经提交的事实推导为“已有文献资产”，而不是由下载任务或 Browser 状态单独维护。内容有效性留给后续 Analysis；下载阶段不提前建立严格正文验收，补充材料也不能成为主 PDF。
 
@@ -578,7 +602,9 @@ Vendor、HTTP、浏览器、SQL、MinerU 私有响应和 LLM 私有响应必须�
 - 对 API 按真实 quota identity 执行官方政策，并在共享额度池的当前进程调用方之间共享反馈；
 - 对 Browser 按 `browser_rate_limit_group` 执行不同组并行、同组 `concurrency = 1` 且按 Provider 文章政策限速串行；全局 Browser 上限只保护本机资源；
 - HTTPS、TLS、timeout、连接复用和有界响应读取；
-- operator-managed persistent Browser context、文章级 page 隔离、多路 PDF 捕获和资源清理；
+- 一个 operator-managed 持久身份 Profile、共享有头 Chrome process/context、无 GUI Linux 的
+  Xvfb 显示、Publisher lane 调度、文章级 page/handler 隔离、Chrome 原生网络/下载、多路 PDF
+  捕获和确定性清理；
 - 在每次 Browser navigation、popup、viewer、response 和 download 实际访问前，同时执行 Profile guard 与通用安全准入；
 - URL、header、query、错误和凭据脱敏；
 - 响应大小、导航次数和访问预算。

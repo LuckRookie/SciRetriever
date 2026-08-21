@@ -2,7 +2,7 @@
 
 - 状态：生效
 - 记录日期：2026-07-22
-- 最后同步：2026-08-18
+- 最后同步：2026-08-19
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
 本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Bootstrap 生产对象图、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
@@ -19,7 +19,7 @@
 
 - **文献来源接入**：生产 Bootstrap 按配置、实现状态和 readiness 组装 Metadata 与 Acquisition registry；配置接受 Provider 选择键仍不表示每项 capability 都有 concrete adapter。项目不对来源本身添加“合法/灰色/非法”的分类标签。
 - **资产获取**：当前 Acquisition 已连接通用公开路径和经过准入的授权 Provider API，Configured Sci-Hub 只接受 operator 明确注入且经过统一安全边界的 locator resolver。是否存在 route、是否已配置、当前目标是否适用和是否实际取得有效 PDF 是不同事实；工具不因来源道德标签另加拒绝条件。
-- **网络与访问方式**：受控 Browser foundation、operator-managed profile 配置入口和用户明确发起的可见空白 Browser 会话已经实现；production Browser rule catalog 当前有且仅有 `springerlink-pdf@4`。只有在公开与授权 API 层完成、目标仍缺 PDF、强证据解析到 SpringerLink，且 Browser 开关、安全 profile、Playwright 与 Chromium 全部就绪时，自动 Completion 才会产生该 Publisher 的受控 Browser 流量。该规则从唯一 DOI 构造并打开经审查的 SpringerLink PDF locator，不导航 Metadata Provider 给出的 opaque asset path；已有 PDF capture 优先返回，未捕获时才检查封闭页面状态和 entitlement-gated static click。自动登录、机构选择、MFA/CAPTCHA 处理、任意规则脚本、profile-copy fallback、代理轮换和反检测仍不属于当前能力；是否已 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
+- **网络与访问方式**：受控 Browser foundation 使用运行机器的正常网络出口和一个 operator-managed 持久身份 Profile；生产 rule catalog 包含 ACS、AIP、ScienceDirect、IOP、Oxford Academic、RSC、Science/AAAS、SpringerLink 和 Wiley Online Library 九条封闭 route。只有 Public 与适用的 Authorized API 层正常结束、目标仍缺 PDF、强证据解析到一个已准入平台，且 Browser 总开关、选中且安全存在的 Profile、Playwright、Chrome/Chromium 与 headed display 都就绪时，Completion 才产生受控有头 Browser 流量。总开关、Profile presence 或保存的浏览器状态不证明组织授权、认证成功或文章 entitlement；真实页面逐项区分正文、付费墙、裸 403、challenge 和限流。无 GUI Linux 使用 Xvfb；Publisher 请求由 Chrome 原生网络栈完成。所有 Publisher lane 共享一个 Chrome process/persistent context，不同供应商 risk group 可以并行，同组严格串行并服从各自政策；关闭后清理 runtime/临时下载工作区但保留 Profile。跨 Publisher cap 默认 `5`、只接受大于 `1` 的整数且不设上限，当前九条 route 不是配置最大值。配置中心可以显式打开使用同一 Profile 的可见 Browser，用户自行进行其获授权的登录、机构选择或 MFA；SciRetriever 不自动填写凭据、不读取 Cookie/登录结果、不处理或绕过 MFA/CAPTCHA/challenge。Cookie 导入导出、未知站点 fallback、代理轮换和反检测均不属于当前能力。是否 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
 
 ## 3. 工程约束 vs 使用限制
 

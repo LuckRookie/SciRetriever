@@ -20,7 +20,7 @@ SciRetriever 会在一次运行中并行处理多篇文献，Metadata、Acquisit
 
 Metadata 搜索、元数据引用关系查询、公开资产来源、授权资产 API、普通网页访问、受控浏览器、外部 parser 和 LLM provider 的真实网络操作，都必须先经过当前 SciRetriever 进程内由 Network 提供的共享 Access Coordinator。功能模块、provider adapter、vendor SDK 和浏览器页面流程不得绕过该边界直接发起不受控请求。
 
-`bootstrap.py` 每个 SciRetriever 进程只构造一个 Coordinator，并注入安全 HTTP 与受控浏览器。当前进程内的不同 Literature、批次、功能模块和 adapter 共享它；不能为每个调用方建立互不知情的 limiter。
+`sciretriever.bootstrap` 每个 SciRetriever 进程只构造一个 Coordinator，并注入安全 HTTP 与受控浏览器。当前进程内的不同 Literature、批次、功能模块和 adapter 共享它；不能为每个调用方建立互不知情的 limiter。
 
 ### 2. 规则由 adapter 声明，Network 在进程内执行
 

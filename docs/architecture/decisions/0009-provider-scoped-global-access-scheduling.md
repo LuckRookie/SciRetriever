@@ -22,7 +22,7 @@ PDF 获取又具有不同访问成本。Owner 已确认 Acquisition 对同一 Li
 
 Metadata 搜索、元数据引用关系查询、公开资产来源、授权资产 API、普通网页访问、受控浏览器、外部 parser 和 LLM provider 的真实网络操作都必须先经过 Network 的共享访问准入。功能模块、provider adapter、vendor SDK 和浏览器页面流程不得绕过该边界直接发起不受控请求。
 
-`bootstrap.py` 为一个本机 SciRetriever 部署构造同一个全局 Access Coordinator，并注入安全 HTTP 与受控浏览器。不同 Literature、批次、功能模块和 adapter 共享它；不能为每个调用方建立互不知情的 limiter。
+`sciretriever.bootstrap` 为一个本机 SciRetriever 部署构造同一个全局 Access Coordinator，并注入安全 HTTP 与受控浏览器。不同 Literature、批次、功能模块和 adapter 共享它；不能为每个调用方建立互不知情的 limiter。
 
 ### 2. 规则由 adapter 声明，Network 全局执行
 

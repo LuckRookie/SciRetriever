@@ -30,7 +30,7 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 | [ADR 0012：进程内供应商访问调度](0012-process-local-provider-access-scheduling.md) | Accepted，按 ADR 0015 修订 | 当前进程共享准入、provider/channel scope、Provider policy、内存运行状态和非跨进程边界 | 易变供应商数值、具体 endpoint、产品额度和当前实现状态 |
 | [ADR 0013：外部发现与数据库补全解耦](0013-decoupled-discovery-and-database-maintenance.md) | Accepted，按 ADR 0015 修订 | 最小且持久化的 DiscoveryRun、逐 Provider 原始扫描边界、无 Collection/ImportRun 的进程内数据库补全、运行时 selector 与目标冻结、ImportReportSelector、自动 PDF 获取耗尽、操作特有的非持久化 Report、Report/Logging 分离、Logging 公用基础模块边界、MetaLiterature 版本回退和手动 PDF 接纳 | 具体 CLI 语法、Report 技术字段、Logging 格式、物理表字段、供应商协议和当前实现状态 |
 | [ADR 0014：按能力接入 Provider 与本地凭据管理](0014-capability-scoped-providers-and-local-credentials.md) | Accepted，按 ADR 0015 修订 | Metadata/Acquisition 两类非互斥 Provider 能力、证据驱动原文路由、用户级 credentials.toml、config CLI、离线状态与显式连通性测试 | 易变 endpoint/认证字段、普通 Provider 参数、当前实现状态和具体文献 entitlement |
-| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、Browser 组间并行/组内限速串行、持久会话与升级/熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
+| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、一个 operator-managed 持久身份 Profile/共享有头 process-context、Browser 组间并行/组内限速串行、升级与 operation-local 熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
 
 ## 阅读方法
 

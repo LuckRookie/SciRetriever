@@ -261,13 +261,27 @@ chunk 会让全部 participant 形成 `not_started` 而不调用 Acquisition；�
 不依赖上一轮 chunk、generation、request、receipt 或 route hint。
 
 生产 Completion 已共享同一 Planner/Profile catalog、tiered cohort executor、Browser scheduler
-和 session broker；配置中心也已提供 Browser 总开关、operator-managed profile 初始化以及用户
-明确发起的可见空白 Browser 会话。当前 production Browser rule catalog 有
-`springerlink-pdf@4`；总开关、安全 profile、Playwright 与 Chromium 同时就绪时，Bootstrap
-创建真实 Browser client 并将 execution confirmation/runtime readiness 传入 Admission。Entry 仍只消费
-Acquisition 返回的中性 receipt 或脱敏 escalation summary，不接触 page、Cookie、profile 或
-Playwright 对象。独立人工登录操作的确认不能替代某次 Completion 的 route 准入，也不能
-证明当前 session 已登录或具体文章有 entitlement。
+和 session broker；配置中心提供 Browser 总开关、一个 operator-managed 持久 Profile、显式可见
+Browser 入口与跨 Publisher 本机并发 cap。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；
+当前 route 数量不构成上限。当前 production Browser rule catalog 有 `acs-publications-pdf@2`、
+`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、
+`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、
+`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。总开关、选中且安全存在的 Profile、
+Playwright、Chrome/Chromium 与 headed display 同时就绪时，Bootstrap 才创建对应 Browser client
+并将 execution confirmation/runtime readiness 传入 Admission。Browser 使用当前机器正常网络
+出口和一个共享有头 Chrome process/persistent context；无 GUI Linux 由 Xvfb 提供虚拟显示，broker
+关闭后清理 runtime 与临时下载工作区但保留 Profile。不同 Publisher lane 可以并行，同一
+Publisher 严格串行；每篇文章使用隔离 page/handler。Entry 仍只消费 Acquisition 返回的中性
+receipt 或脱敏 escalation summary，不接触 page、Cookie、Profile 路径/内容或 Playwright 对象；
+production catalog、Profile presence 或本地 runtime 就绪都不能证明已登录、机构 IP 或具体文章
+具有 entitlement。可见 Browser 只由配置用例显式打开；Entry 不自动登录或处理验证。
+
+拥有 Acquisition runtime 的 `ApplicationObjectGraph` 与 capability-scoped
+`DatabaseCompletionObjectGraph` 都是显式可关闭资源；CLI 的 `complete` 命令在 `finally` 中关闭 graph，
+`config test` 使用的 `ProductionConfigurationProbeSession` 同样在 `finally` 中关闭。正常返回、稳定
+失败、用户中断或 presenter 异常都不能跳过 broker close；关闭失败必须作为系统清理问题传播，
+不能把仍存活的 Chrome/Xvfb、Profile runtime lease、临时下载工作区或 host/scope permit 留给
+下一条 CLI 命令；持久 Profile 本身不属于临时资源，正常关闭不得删除。
 
 每个实际 `Literature` 的结果继续按下面的缺失步骤消费：
 
@@ -351,7 +365,7 @@ Entry 使用五种互斥 Report：
 
 数据库补全从冻结目标开始就为每个目标保留一个且仅一个最终分区。停止信号到达时，正在处理的目标进入 `interrupted`，未开始目标进入 `not_started`；目标已经提交 PDF 但随后 Parsing 失败时只进入 `failed`，PDF 仍由数据库事实表达。Report 中的成功、耗尽和失败只能来自模块 typed result 或稳定异常，不能通过解析日志文本推断。
 
-Entry 可以在当前操作内维护脱敏的 acquisition 进度摘要，向实时 UX 说明当前 tier、允许升级的目标数、Browser risk group、限速等待、deferred 和 action-required；它不增加持久化 BatchRun 或候选历史。最终 `DatabaseCompletionReport` 的五个分区保持不变：Browser 登录/MFA/challenge、quota 延期或其它 action-required 以对应目标的稳定 `code/reason/action/retryable` 进入 `failed`，不新增 Literature 状态或长期 failure 表。摘要和失败都不得包含 Cookie、profile 内容、完整 URL、selector、页面动作、短期 locator 或供应商原始响应。
+Entry 可以在当前操作内维护脱敏的 acquisition 进度摘要，向实时 UX 说明当前 tier、允许升级的目标数、Browser risk group、限速等待、deferred 和 action-required；它不增加持久化 BatchRun 或候选历史。最终 `DatabaseCompletionReport` 的五个分区保持不变：Browser 登录/MFA/challenge、quota 延期或其它 action-required 以对应目标的稳定 `code/reason/action/retryable` 进入 `failed`，不新增 Literature 状态或长期 failure 表。摘要和失败都不得包含 Cookie、临时 Browser 路径、完整 URL、selector、页面动作、短期 locator 或供应商原始响应。
 
 Report 不写入 Catalog 或 ArtifactStore，不产生 BatchRun、BatchTarget、目标结果表或 counts 表，不参与 Literature 状态、自动获取耗尽、版本回退或下一次 selector 展开。CLI presenter 可以显示摘要或输出完整 JSON，但摘要数字必须直接取各结果 tuple 的长度，不能维护第二套可漂移计数。
 

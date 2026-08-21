@@ -1,9 +1,9 @@
 # ACS Publications
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；ACS Publications 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://pubs.acs.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 PDF API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 PDF API route
 
 ## 1. 官方入口与证据
 
@@ -43,18 +43,30 @@ PDF:     https://pubs.acs.org/doi/pdf/{doi}
 
 ## 4. Browser 与 Supporting Information 结论
 
-当前无法建立生产 `BrowserSiteRule`：
+当前已经建立技术规则 `acs-publications-pdf@2`，并用合成 fixture 验证：
 
-- 没有官方、可执行的文章启动间隔/window policy；许可条款只说明 ACS 可以限制有不利影响的自动化行为；
-- 匿名读取站内政策页已遇到 Cloudflare challenge，禁止用 stealth、CAPTCHA 绕过、换入口或立即重试规避；
-- 没有独立核实 institutional login、authenticated/entitled、login-required、paywall/not-entitled、MFA/challenge/rate/account-warning 的封闭 marker；
-- 没有独立 fixture 证明 `/doi/pdf/` 只捕获当前正文，并排除 Supporting Information、附件、图形摘要和 wrong-article PDF；
-- 没有获准的 operator-managed session 现场验证，也没有证据确定 ACS 的 risk/session group 与其它 Atypon 风格站点是否共享。
+- landing/asset origin 精确限制为 `https://pubs.acs.org`，DOI 只在已有强 origin 时参与文章归属；
+- primary、Supporting Information、excluded 与 wrong-article 捕获分类；
+- login、entitlement/paywall、challenge/rate/account-warning 等封闭页面状态；
+- 独立 `acs-publications` risk/session group、组内并发 1 和 30 秒审慎 fixture 基线。
 
-所以 `acs-publications` 状态为 `unsupported`，没有 `browser_rate_limit_group`、`browser_session_key` 或 executable route。若用户以后单独授权现场核实，必须按一篇批准样本、可见 Browser、明确停止条件和供应商政策重新走统一准入门；上游历史成功不能直接改变状态。
+这些内容证明规则、生产对象图和离线安全验收已达到工程准入要求，但 ACS 的普通条款对系统性/
+聚合下载有限制。ACS rule 进入 production catalog；operator 显式启用受控 Browser 后，它只按
+`acs-publications` 组内串行和 30 秒审慎间隔做逐文章机构 IP 尝试。该启用不证明组织合同、当前
+IP 或文章 entitlement，operator 仍须确保实际使用符合组织授权和 ACS 条款。付费墙、裸 403、
+challenge 与正文捕获分别报告；challenge 必须立即停止，不能用 stealth、CAPTCHA 绕过、换入口
+或立即重试规避。
 
 ## 5. 当前实现边界
 
-`src/sciretriever/acquisition/profile_catalog.py` 记录了 secret-free 的 ACS unsupported Profile，唯一 evidence fixture 为 `tests/fixtures/acquisition/profiles/acs-publications.json`。Fixture 只证明 origin、弱身份、许可/TDM 结论、JATS 非 PDF、Supporting Information 不得提升和无 executable route；不包含真实 DOI、正文、Cookie、账号或响应。
+`src/sciretriever/acquisition/profile_catalog.py` 记录 secret-free 的 ACS production Profile，
+`src/sciretriever/acquisition/sources/browser_rules/providers/acs.py` 记录技术规则，唯一 evidence fixture 为
+`tests/fixtures/acquisition/profiles/acs-publications.json`。Fixture 证明 origin、弱/强身份边界、
+JATS 非 PDF、正文/Supporting Information 归属和页面状态；不包含
+真实 DOI、正文、Cookie、账号或响应。
 
-安全的 ACS PDF/landing `AssetHint` 若由现有 Metadata/OA 来源明确提供，仍可经过通用第一层获取、实际字节/PDF reader/页面树检查和不可变发布。Profile unsupported 不会删除这些候选，也不会把第一层失败自动提升成 ACS Browser。当前没有新增 ACS API credential、Metadata Provider 或旧架构兼容入口。
+安全的 ACS PDF/landing `AssetHint` 若由现有 Metadata/OA 来源明确提供，仍可经过通用第一层
+获取、实际字节/PDF reader/页面树检查和不可变发布。只有 Browser 总开关启用且前两层均未命中
+时，生产 Profile 才可能把目标升级到 ACS Browser；总开关不会放宽固定 origin、规则、限速、
+正文归属或 Network 安全边界。当前没有新增 ACS API credential、Metadata Provider 或旧架构兼容入口；
+本轮也没有执行真实 ACS 文章 probe 或正文下载。

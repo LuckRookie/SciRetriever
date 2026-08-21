@@ -1,9 +1,9 @@
 # AIP Publishing
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；AIP Publishing 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://pubs.aip.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 API route
 
 ## 1. 官方入口与证据
 
@@ -63,7 +63,7 @@ PDF:     /doi/epdf/{doi}
          /doi/pdf/{doi}
 ```
 
-它还记录过依赖持久 Browser profile 和机构 Cookie 的成功结果。SciRetriever 不采信该 verdict，
+它还记录过依赖该参考项目持久 Browser profile 和机构 Cookie 的成功结果。SciRetriever 不采信该 verdict，
 不复制 Cookie、机构身份或页面动作，也不把 URL 形状当作官方稳定合同。
 
 AIP 官方站点公开内容的 CSP 曾出现 `aipprc.silverchair.com`，当前文章 origin 则为
@@ -74,24 +74,26 @@ AIP 官方站点公开内容的 CSP 曾出现 `aipprc.silverchair.com`，当前�
 当前 `robots.txt` 对下载、citation、登录、Shibboleth 和搜索等路径包含明确禁止项，例如
 `/DownloadFile/`、`/Citation/Download`、`/signin.aspx`、`/Shibboleth.sso/` 和
 `/search-results`。文章页面没有全部被 robots 禁止，也不能反过来覆盖 Terms 对自动工具的
-明确禁止。当前还缺：
+明确禁止。当前已经建立技术规则 `aip-publishing-pdf@2`，用合成 fixture 验证 AIP 自有
+origin、强 DOI 归属、primary/supplement/wrong-article 分类、封闭页面状态，以及独立
+`aip-publishing` risk/session group、组内并发 1 和 30 秒审慎 fixture 基线。这些内容只证明
+技术分类和安全结构，不授权真实站点执行，也不与 IOP、APS 或任何共享技术平台建立 group。
 
-- 官方允许的 Browser 自动访问范围和数值文章 pacing；
-- login、entitlement、paywall、challenge/rate/account-warning 的封闭 marker；
-- primary、supplement、wrong-article 的现场页面归属证据；
-- 可推广的风险组、持久 session 与跨 origin credential 边界。
-
-因此当前没有 Browser rule、`browser_rate_limit_group` 或 session key，也不与 IOP、APS 或
-任何共享技术平台建立 group。即使以后获得自动 Browser 许可，也必须先以 AIP 自有 origin、
-账号和官方/协议政策建立独立证据，再判断是否存在真实共享风险域。
+由于普通 Terms 明确限制 automated program/tool/process，operator 必须先确认其组织授权和实际
+用途符合 AIP 条款。技术规则进入 production catalog；显式启用受控 Browser 后，只允许
+`aip-publishing` 组内串行、30 秒审慎间隔的逐文章机构 IP 尝试。总开关不是许可证明，也不会把
+AIP 与其它技术平台合并为共享风险组，或放宽固定规则和安全边界；裸 403、challenge、付费墙和
+正文捕获分别形成不同结果。
 
 ## 5. 当前实现边界
 
-secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/aip-publishing.json`。Fixture 证明弱 DOI 证据、无公共
-机器访问 API、自动站点访问限制、平台技术名称不形成共享组，以及 supplement 排除；不保存
-真实 DOI、正文、Cookie、账号、机构或 Browser profile。
+secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，
+技术规则位于 `src/sciretriever/acquisition/sources/browser_rules/providers/aip.py`，唯一 fixture 为
+`tests/fixtures/acquisition/profiles/aip-publishing.json`。Fixture 证明弱/强 DOI 证据边界、无
+公共机器访问 API、自动站点访问限制、平台技术名称不形成共享组，以及正文/supplement 排除；
+不保存真实 DOI、正文、Cookie、账号、机构或 Browser profile。
 
-`unsupported` Profile 不进入 production catalog，不合成 PDF URL、不启动 Browser，也不新增
-AIP credential section。现有通用 Public Source 仍可消费上游明确提供且通过安全复核的单篇
-locator；这不表示 SciRetriever 声明 AIP 专属自动下载能力。
+Browser 总开关关闭时 route 不构造可执行 adapter；启用后仍需 runtime 就绪、同组调度准入和
+逐文章 entitlement 检查。该开关不新增 AIP credential section，也不证明当前文章 entitlement。
+现有通用 Public Source 仍可消费上游明确提供且通过安全复核的单篇 locator；本轮
+没有执行真实 AIP 文章 probe 或正文下载。

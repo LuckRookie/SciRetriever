@@ -8,7 +8,7 @@
 
 本文只记录 ScanSci PDF 当前固定快照对 SciRetriever PDF 获取改革的参考边界，不批准任何 Provider 上线，也不把上游运行记录、selector、URL template 或验证结论变成本项目事实。获取顺序和安全合同仍以 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Acquisition 技术文档](../architecture/technical/acquisition.md)与 [Network 技术文档](../architecture/technical/network.md)为准。
 
-本次审计只读取仓库外的本地 Git checkout、许可证、源码和静态数据；没有连接真实 Provider、机构登录或 Browser profile，没有读取 Cookie、凭据或个人会话，也没有执行现场下载。
+本次审计只读取仓库外的本地 Git checkout、许可证、源码和静态数据；没有连接真实 Provider、启动 Browser 或机构登录，没有读取 Cookie、凭据或个人会话，也没有执行现场下载。
 
 ## 1. 许可结论
 
@@ -47,11 +47,11 @@ Copyright 2024-2026 scansci-pdf contributors
 | --- | --- | --- |
 | Publisher/access platform 识别 | 使用强弱证据形成无副作用 `PublisherAccessResolution` | 不能按 DOI prefix 或 publisher 字符串直接猜生产 route |
 | Publisher Profile | 版本化 origin allowlist、stable ID、capability、policy/session group | 不能把上游 profile、selector 或模板整体复制为已核实 catalog |
-| Persistent Browser context | operator-managed profile identity 与进程内 session broker | 不读取 Cookie DB，不导出 Cookie，不使用跨进程文件队列 |
+| Browser context reuse | 一个 operator-managed 持久身份 Profile、当前对象图内一个共享有头 process/context、无 GUI Linux 的 Xvfb 与进程内 Publisher-lane broker | 不接受任意外部 Profile 路径或 Cookie 导入，不读取/导出认证内容，不使用跨进程文件队列；跨命令认证状态只由 Chrome 留在本地 Profile |
 | 页面状态分类 | login、entitlement、paywall、MFA、challenge 的安全有限状态 | 不自动绕过 CAPTCHA、Cloudflare 或 MFA，不自动选择机构 |
 | 多路 PDF 捕获 | 已准入的 download、response、popup、viewer target | 不捕获任意 origin 的 PDF，不执行任意 JavaScript |
 | Verification matrix | 统一证据包、fixture 与明确 production state | 不继承上游 success/failed/unsupported verdict |
-| Health summary | 仅显示配置、readiness、action-required 的安全摘要 | 不检查 Chromium Cookie 数据库，不显示 profile 内容 |
+| Health summary | 仅显示生产 route、总开关、Profile identity/presence、Playwright/Chromium readiness 与 action-required 的安全摘要 | 不检查 Chromium Cookie/登录内容，不声称 Profile 已认证、IP 或具体文章 entitlement |
 
 ### 3.2 可以评估实质移植，但必须逐项归属
 
@@ -63,10 +63,10 @@ Copyright 2024-2026 scansci-pdf contributors
 | `institutional/publisher_profiles.py` | login/entitlement/page marker 线索 | P56-P68 | 排除 Tsinghua-specific selector，逐平台核实 |
 | `publisher_pdf_router.py` | primary PDF 与 supplement 路由线索 | P56-P69 | 官方 URL/页面事实与资产归属 fixture |
 | `publisher_access.py` | 有界页面动作和捕获线索 | P56-P68 | SciRetriever per-hop guard、预算和 cleanup 测试 |
-| `browser_login.py` | 登录与人工介入状态线索 | P56-P68 | 不自动选机构、不自动 MFA、不读取 Cookie 内容 |
+| `browser_login.py` | 第三方的登录与人工介入设计，仅用于理解未采用范围 | 不进入当前 Browser v1 | SciRetriever 的有头 runtime 不向用户开放；不提供人工登录、机构选择、MFA 或 Cookie 复用 |
 | `publisher_strategies.py` | response/download/popup 捕获线索 | P56-P68 | 删除任意 JS、反绕过、固定 sleep 和猜测 fallback |
 | `session_broker.py` | session/risk 分组理念 | P55、P70 | 只允许 SciRetriever 的进程内 broker，不复制文件队列 |
-| `profile_health.py` | 安全状态摘要理念 | P70、P71-P73 | 禁止读取 Cookie DB 或泄露 profile 内容 |
+| `profile_health.py` | 第三方 Profile 健康摘要理念 | 仅参考安全展示 | SciRetriever 只报告本地 runtime readiness，不读取 Cookie DB 或外部 Profile |
 | `data/publisher_access_catalog.json` | Provider 覆盖范围线索 | P56-P70 | 每一项重新取得官方证据和 SciRetriever fixture |
 | `data/publisher_browser_verification_matrix.json` | 证据字段和缺口表达线索 | P56-P70 | 不复用 verdict；不得引用个人运行环境为生产证据 |
 | `data/institutional_identity_policy.json` | session/identity 风险线索 | P55-P70 | 删除机构身份和专属网络事实，重新证明分组 |
@@ -80,7 +80,7 @@ Copyright 2024-2026 scansci-pdf contributors
 - `sources/scihub.py`、`sources/libgen.py`、Tor、embedded Tor、代理池和出口轮换；
 - `flaresolverr.py`、`cloakbrowser_compat.py`、stealth、指纹补丁、人性化反检测、CAPTCHA/Cloudflare/MFA 自动绕过；
 - `schools.py`、CARSI、WebVPN、EZProxy、`instsci` 和任何学校、机构或校园网络硬编码；
-- Cookie JSON/Netscape 导入导出、profile Cookie 数据库读取或跨模块共享 Cookie；
+- Cookie JSON/Netscape 导入导出、Profile/Cookie 数据库读取、跨操作登录状态或跨模块共享 Cookie；
 - 任意页面 JavaScript、通用未知站点 selector、自动搜索/点击机构或无限页面发现；
 - 跨进程文件队列 Browser broker；
 - 固定 PDF 最小字节、页数或正文阈值；
@@ -95,20 +95,20 @@ Copyright 2024-2026 scansci-pdf contributors
 
 - ScanSci 的成功项不能直接进入 production registry；
 - ScanSci 的失败或 unsupported 项也不能替代 SciRetriever 的独立审查；
-- 未经现场授权的页面画像最多是 `fixture-verified`，证据不足则为 `unsupported`；
-- production-ready 必须满足 P55 统一接入门，并以官方事实、SciRetriever 离线 fixture 和必要的明确授权验证为依据；
+- 只有上游页面画像、没有 SciRetriever 自己的封闭规则与离线执行证据时，最多是 `fixture-verified`，证据不足则为 `unsupported`；
+- production-ready 必须满足 P55 统一接入门，并以官方事实、SciRetriever 离线 fixture、生产对象图和固定风险政策为依据；Browser 总开关只允许已审查 route 做逐文章尝试，不证明组织授权或文章 entitlement；
 - fixture 只能证明规则和安全状态机，不证明用户账号 entitlement、真实站点稳定性或成功率。
 
 ## 5. 后续迁移登记流程
 
-P56-P70 每个 Provider 都应先完成统一证据包，再决定是 `production-ready` 的 public/API-only capability、Browser `fixture-verified`，还是 `unsupported`。若实施者准备从上游实质移植材料，顺序固定为：
+P56-P70 每个 Provider 都应先完成统一证据包，再决定是 `production-ready` 的 public/API/Browser capability、Browser `fixture-verified`，还是 `unsupported`。若实施者准备从上游实质移植材料，顺序固定为：
 
 1. 固定上游 repository 与 commit，并定位精确文件、对象或行；
 2. 判断是理念清洁重写，还是源码/数据/常量的 `copy` 或 `adapt`；
 3. 对 `copy`/`adapt` 保留 Apache-2.0 许可证和版权，标出 SciRetriever 修改；
 4. 在根 `NOTICE` 和本文复制登记表补充逐文件 provenance；
 5. 独立核实官方域名、产品、访问政策、速率、ID、origin、状态 marker 和资产归属；
-6. 增加不连接真实 Provider、凭据或个人 profile 的离线 fixture；
-7. 只有 production 对象图、配置、状态和测试闭环后才允许 production-ready。
+6. 增加不连接真实 Provider、凭据、Cookie 或用户会话的离线 fixture；
+7. 只有 production 对象图、配置、状态和测试闭环后才允许 production-ready；真实执行还必须由 Browser 总开关显式启用，并服从组织授权、Provider 条款和逐文章结果检查。
 
 如果不能完成其中任一步，保留为线索、fixture-only 或 unsupported；不能用猜测填补 selector、速率、风险组或 session group。

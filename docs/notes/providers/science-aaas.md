@@ -1,9 +1,9 @@
 # Science / AAAS
 
-- 官方资料最后在线核对：2026-08-15
+- 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；Science/AAAS 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://www.science.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：`production-ready`；无专属 Public 或授权 API route，已注册使用所选持久 Profile 的 Browser route `browser:science-aaas`
 
 ## 1. 官方入口与本轮证据边界
 
@@ -13,9 +13,10 @@
 - [Science open access](https://www.science.org/content/page/open-access-aaas)：OA 入口；本轮匿名请求返回 403。
 - [science.org robots.txt](https://www.science.org/robots.txt)：当前 crawler 路径与 agent policy。
 
-本轮只匿名读取官方 `robots.txt`，并对首页、条款和 OA 入口做有界状态核对；没有访问文章
-正文、跟随真实 DOI、打开 PDF、登录机构账号、读取 Cookie/profile、调用真实 API、完成 SSO
-或绕过 Cloudflare。无法读取的政策正文不由旧经验、ScanSci 或其它 Atypon 类站点补写。
+本轮只核对上述官方引用及其作为访问条款/速率证据的边界；没有访问文章正文、跟随真实 DOI、
+打开 PDF、登录机构账号、读取 Cookie/profile、调用真实 API、完成 SSO 或绕过 Cloudflare。
+生产准入依赖版本化项目审慎政策和离线安全合同，不把旧经验、ScanSci 或其它 Atypon 类站点写成
+当前在线授权证据。
 
 ## 2. DOI、Public 与 robots capability
 
@@ -44,20 +45,20 @@ landing `AssetHint`，通用第一层仍可逐项尝试，并继续经过实际�
 或稳定协议。因此 authorized API capability 为 `unsupported`。
 
 ScanSci 记录过 Science DOI landing、`/doi/epdf/`、`/doi/pdf/` 与一个
-`pdf_response_captured` success，同时建议持久 Browser profile 并处理机构 SSO/CAPTCHA。
+`pdf_response_captured` success，同时建议其参考实现使用持久 Browser profile 并处理机构 SSO/CAPTCHA。
 该单样本无法证明它是公开、机构授权还是长期 URL 合同，更不能形成批量 Browser 权利。
 SciRetriever 不复制 Cookie、CARSI、CAPTCHA/反检测、selector、URL 模板或 verdict。
 
-当前 Browser route 还缺：
+当前生产规则 `science-aaas-pdf@2` 只接受强 DOI/Science landing，精确允许
+`https://www.science.org`，从 `/doi/epdf/` 或 `/doi/pdf/` 的 response/download 捕获候选，并排除
+supplement、media/XML 和 wrong-article。规则包含封闭的 entitlement/paywall、login、
+MFA/challenge、rate/IP/account-warning 页面状态；登录等状态只识别后停止。Browser 使用当前
+机器网络出口，以及共享 persistent Profile/context 中独立的 `science-aaas` lane；组内并发 1、
+项目审慎最小文章启动间隔 30 秒。自动流程不导入或读取 Cookie，也不执行认证。
 
-- 可读取的官方自动访问条款与数值 article-start pacing；
-- login、entitlement、paywall、challenge/rate/account-warning 的封闭 marker；
-- primary、supplement、media/XML 与 wrong-article 的现场归属证据；
-- 可推广的机构 session、credential origin 和 account risk policy。
-
-所以没有 Browser rule、`browser_rate_limit_group` 或 session key。未来若得到明确许可，也必须
-按 Science 自有 origin/账号证据建立串行组；与 PNAS 共享页面模板、CDN 或 PDF path 都不能
-自动合并 risk/session group。
+该 route 的 `production-ready` 只表示 Profile/rule/policy、合成 fixture、生产对象图和安全测试
+闭环；官方未发布数值 pacing、当前 IP 和 live entitlement 未核实仍作为 evidence gap 保留。与
+PNAS 共享页面模板、CDN 或 PDF path 不会合并 risk/session group。
 
 ## 4. 资产归属与当前实现
 
@@ -65,10 +66,13 @@ SciRetriever 不复制 Cookie、CARSI、CAPTCHA/反检测、selector、URL 模�
 属于 supplement；XML、media、cover、loading 页面和 wrong article 不能成为 `primary-pdf`。
 URL 中出现 DOI 或 `pdf` 只是一项 locator 线索。
 
-secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/science-aaas.json`。Fixture 独立证明弱 DOI、robots 的 XML/
-supplement allowance 不生成主 PDF route、无 API/Browser、supplement 排除和上游 Browser
-success 非生产证据；不保存真实 DOI、正文、Cookie、账号、机构或 Browser profile。
+secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，生产规则位于
+`src/sciretriever/acquisition/sources/browser_rules/providers/science.py`，唯一 fixture 为
+`tests/fixtures/acquisition/profiles/science-aaas.json`。Fixture 独立证明弱/强 DOI 边界、robots
+的 XML/supplement allowance 不生成主 PDF、无授权 API、正文/supplement/错文归属、Publisher
+lane 调度和上游 Browser success 非授权证据；测试 Profile 只位于系统临时目录，不保存真实 DOI、
+正文、Cookie、账号、机构或 Browser Profile 内容。
 
-`unsupported` Profile 不进入 production catalog，不新增 Science credential section，也不会
-启动 Browser。替代路径仍是现有通用 Public/OA 来源和用户独立的手动 PDF 接纳。
+Profile 和 `science-aaas-pdf@2` 已进入 production catalog，但只在 Public/API 正常结束、强访问
+方证据成立、Browser 显式启用且 runtime 就绪时启动。它不新增 Science credential section；
+无权限或未命中时仍可由用户独立手动接纳 PDF。

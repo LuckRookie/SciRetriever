@@ -1,10 +1,10 @@
 # Springer Nature
 
 - 官方资料最后在线核对：2026-08-15
-- 当前实现离线对照：2026-08-18
+- 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `springer`；Acquisition `springer`
 - 供应商角色：Springer Nature 元数据，以及 OA/协议授权的 JATS/XML 全文和资产 locator
-- 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；SpringerLink 与 Nature 保持两个独立 Publisher Profile。SpringerLink 的 `browser:springerlink` 与 `springerlink-pdf@4` 已进入生产对象图，Nature Browser 仍为 unsupported；Springer Nature OA/Full Text API 返回 JATS/XML，不是授权主 PDF API
+- 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；SpringerLink 与 Nature 保持两个独立 Publisher Profile。SpringerLink 的 `browser:springerlink` 与 `springerlink-pdf@5` 已进入生产对象图，Nature Browser 仍为 unsupported；Springer Nature OA/Full Text API 返回 JATS/XML，不是授权主 PDF API
 
 ## 1. 官方入口与证据
 
@@ -246,15 +246,15 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 - 当前门户 Quick Start 标题/示例存在产品名称容易混淆之处；实现应以明确 endpoint 和契约响应为准。
 - Full Text 旧主机按计划于 2026-08-07 下线，但本轮未验证实际下线状态；禁止新实现依赖旧主机。
 - 官网公开样例含 legacy HTTP OpenURL；安全 HTTPS canonical locator 的获取方式需实现时核对。
-- 未找到 Springer Nature 逐边 citation API 或授权 PDF API 的足够依据；JATS/XML 和 metadata PDF locator 不能扩写成已验证 PDF API。SpringerLink 的 `/content/pdf/{doi}.pdf` 是在 operator-managed session 中打开的 Browser 内容平台 locator，不是 API endpoint。
-- Springer Nature Link 与 Nature.com 虽由同一集团运营并使用相近站点基础设施，但当前官方材料没有证明它们共享登录 Cookie、机构授权、账号风控、文章速率组或 Browser session；不得因集团名称合并。
-- 生产 adapter 已用本地 HTTPS fixture 和真实 Chromium 验证 DNS/IP 绑定、Host/TLS SNI、跨 origin `3xx`、navigation-only probe、两条 Cookie、JavaScript PDF response capture、直达 PDF、persistent session reuse、取消/超时与线程清理；这是离线运行合同，不是 SpringerLink 账号授权证据。
-- 配置 probe 只打开 SpringerLink 首页验证 runtime/目标可达性，并可选观察当前 account widget；个人登录不是通过条件。它不访问任意文章、不持久化结果，也不评估机构 IP 或任意文章 entitlement。真实文章小样本结果应在受控现场核实记录中单独保存。
+- 未找到 Springer Nature 逐边 citation API 或授权 PDF API 的足够依据；JATS/XML 和 metadata PDF locator 不能扩写成已验证 PDF API。SpringerLink 的 `/content/pdf/{doi}.pdf` 是由 persistent Profile-backed Browser 打开的内容平台 locator，不是 API endpoint。
+- Springer Nature Link 与 Nature.com 虽由同一集团运营并使用相近站点基础设施，但当前官方材料没有证明它们共享机构授权、风控、文章速率组或 Browser session；不得因集团名称合并。
+- 生产 adapter 已用本地 HTTPS fixture 和真实 Chromium 验证 DNS/IP 绑定、Host/TLS SNI、批准的 JavaScript、未批准 tracker 丢弃、点击/脚本跨 origin `3xx`、PDF response/attachment、共享 persistent context 中的 Publisher lane reuse/隔离、取消/超时与临时下载工作区/线程清理；这是离线运行合同，不是当前 Profile 登录状态、IP 或 SpringerLink 文章授权证据。
+- 配置 probe 只打开 SpringerLink 首页验证 runtime/目标可达性。它不访问任意文章、不下载 PDF、不持久化结果，也不评估机构 IP 或任意文章 entitlement。真实文章小样本结果应在受控现场核实记录中单独保存。
 
 ### 10.1 2026-08-16 脱敏首页现场 probe
 
-在用户明确授权的单次 `springerlink` 首页 probe 中，生产 Bootstrap、正式
-`PlaywrightBrowserFactory` 和当前 operator-managed profile 实际执行了以下认证链：
+在用户明确授权的单次 `springerlink` 首页 probe 中，当时的生产 Bootstrap 与正式
+`PlaywrightBrowserFactory` 实际执行了以下跳转链：
 
 ```text
 GET https://link.springer.com/
@@ -263,28 +263,29 @@ GET https://link.springer.com/
   -> 200
 ```
 
-认证 URL 的 query 已在边界移除。该次 probe 在约 4.36 秒内完成；原始观测为
-`browser_launched=true`、`minimal_target_reached=true`、`authentication_accepted=false`、
-`article_entitlement=not-proven`、`navigation_count=1`，且 `persisted=false`。当时实现把
-“未检测到个人登录”错误归类为 `browser-session-not-authenticated`/failed；该分类已修正为
-passed 且 `failure_code=null`，因为首页 probe 的成功合同只要求 runtime 启动和最小目标可达。
-这里的 navigation count 只统计用户请求的一个首页目标，内部认证 redirect 仍逐跳受 Network
-审查。
+认证 URL 的 query 已在边界移除。该次 probe 在约 4.36 秒内完成，证明 Browser 启动、最小
+目标可达且 navigation count 为 1。当时旧实现曾把“未检测到个人登录”错误归类为 failed；当前
+probe 已删除个人认证判断，只要求 runtime 启动和最小目标可达，并固定
+`article_entitlement=not-proven`、`persisted=false`。
+这里的 navigation count 只统计用户请求的一个首页目标；内部认证 redirect 的显式 request 逐项
+受 Network 审查，未再次暴露 route 的 native redirect 只允许复用同页 live、已批准且预绑定的
+关联，并在读 terminal body 前取得最终 host permit。
 
 现场没有读取或输出 `Set-Cookie`、Cookie、token、账号、机构信息、profile 文件或页面正文。
-因此该结果证明 Chromium runtime 可启动、官方认证 redirect 可安全跟随且首页目标可达；它同时
-表示当次没有检测到个人登录。该观测既不能否定机构 IP entitlement，也不证明任意文章
-entitlement。
+因此该结果只证明 Chromium runtime 可启动、官方 redirect 可安全跟随且首页目标可达；它既不
+判断机构 IP entitlement，也不证明任意文章 entitlement。
 
 ### 10.2 2026-08-18 脱敏文章流程核实
 
-在用户已授权的批量 Completion 残余中，一个 SpringerLink 文章样本已经使用生产
-Bootstrap、当前运行机器网段和 operator-managed persistent profile 做了多轮精确只读诊断。
+在用户已授权的批量 Completion 残余中，一个 SpringerLink 文章样本使用生产 Bootstrap 与当时
+运行机器网段做了多轮精确只读诊断。该历史批次仍使用当时的 operation-local 有头 context；当前
+实现已经改为普通配置选择的 operator-managed 持久 Profile。历史结果不能证明新 Profile 已认证、
+跨命令登录复用有效或其它文章有 entitlement。
 旧 revision 2 从直接 PDF locator 开始，主响应实际为 HTTP 200 HTML；页面 marker 命令又会被
 非关键子资源抢占单一 Playwright 引擎，随后无条件 `WAIT_FOR_CAPTURE` 消耗剩余文章预算，表现为
 约 60 秒 timeout。
 
-revision 3 改为顶层 navigation-only、landing-first 和 capture-first：非导航 stylesheet/script/
+revision 3 当时改为顶层 navigation-only、landing-first 和 capture-first：非导航 stylesheet/script/
 image/font 在连接前拒绝；页面状态使用不读取正文的静态 marker presence；初始导航已捕获 PDF
 时直接返回，否则只有经审查的静态 PDF entitlement link 存在时才点击并等待 response capture。
 没有该 marker 时立即形成 `normal-miss`，不再执行无条件 capture wait。
@@ -295,7 +296,8 @@ reusable 释放，没有 timeout，也没有新增资产。页面本身返回 HT
 PDF entitlement link、登录、paywall、MFA 或 challenge marker。这个结果只证明实现已经从
 不可解释超时变成可解释正常未命中；它不证明该机构网段对该文章有 PDF entitlement，也不能由
 一个未交付样本证明真实站点上的成功 session reuse。诊断没有记录完整 URL、DOI、selector、
-页面正文、Cookie、profile 内容、响应正文或 PDF 字节。
+页面正文、Cookie、profile 内容、响应正文或 PDF 字节。当前普通文章流已进一步改为允许规则批准
+的页面子资源、在 DNS 前丢弃未批准的第三方非关键资源；navigation-only 仅保留给配置 probe。
 
 随后四样本复验又暴露两个独立缺口。第四个样本在 Planner 已由 SpringerLink asset origin 完成
 强解析后，Browser Source 仍得到 `actions=0`；生产 Storage→Request→Evidence 重建证明 DOI 与
@@ -321,11 +323,11 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 - `10.1007` 和 `Springer` 文本只作为弱提示，不把 metadata 来源 `springer` 当成原文访问方强证据；
 - metadata 中明确的安全 PDF/landing locator 仍可由通用第一层按实际字节、PDF reader 和不可变发布边界处理；Profile 本身不声明专属 public route；
 - Open Access/Full Text API 的 JATS/XML 不是 PDF，当前没有授权 PDF API route；
-- production Browser route 为 `browser:springerlink`，rule 为 `springerlink-pdf@4`；它只接受经审查的 SpringerLink landing，或“精确 SpringerLink asset origin + 唯一 DOI”。Provider Hint 只贡献 routing origin，实际 Browser 起点由 rule 的 DOI PDF template 构造；文章流先接收初始 PDF capture，未捕获时才检查封闭页面状态并在 entitlement marker 存在时点击。任何实际 response 仍必须通过媒体类型、PDF reader、页面树、文章归属与补充材料排除检查；
-- 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 返回 `303`，跳转 origin/path 为 `https://idp.springer.com/authorize`。规则只精确加入该官方 IDP origin 和登录 path marker，不允许通配域名；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容。到达该认证入口表示 runtime/目标可达，个人登录未检测到只是可选观察，不再作为 probe failure；该结果不评估机构 IP 或文章 entitlement；
-- Browser 只使用 operator-managed persistent profile/session，并直接使用运行机器的正常网络出口；机构 IP 放行不要求个人登录。它不自动填写登录表单、选择机构、处理 MFA/CAPTCHA 或绕过 challenge；同 `springerlink` group 串行，不同 Publisher group 可在全局资源上限内并行；
+- production Browser route 为 `browser:springerlink`，rule 为 `springerlink-pdf@5`；它只接受经审查的 SpringerLink landing，或“精确 SpringerLink asset origin + 唯一 DOI”。Provider Hint 只贡献 routing origin，实际 Browser 起点由 rule 的 DOI PDF template 构造；文章流先接收初始 PDF capture，未捕获时才检查封闭页面状态，并在 entitlement marker 存在时点击后等待 response、download、popup、viewer 或 verified locator 中任一正文 capture。direct-PDF 导航触发的延迟 native download 会在 capture 和 request 生命周期完整结算后才允许清理 context，避免 `goto()` 返回与 download 事件之间的竞态。任何实际 capture 仍必须通过媒体类型、PDF reader、页面树、文章归属与补充材料排除检查；
+- 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 返回 `303`，跳转 origin/path 为 `https://idp.springer.com/authorize`。规则只精确加入该官方 IDP origin 和登录 path marker，不允许通配域名；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容。到达该入口只表示 runtime/目标可达，不评估机构 IP 或文章 entitlement；
+- Browser 使用运行机器的正常网络出口，以及共享 persistent Profile/context 中独立的 `springerlink` lane；无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA 或 challenge；配置中心可以通过独立显式动作打开同一 Profile 的可见 Browser，让用户自行完成其获授权的认证。同 `springerlink` group 严格串行，不同 Publisher group 可在全局资源上限内并行；
 - 登录、paywall、challenge、429、403、account warning 和 404 有封闭 marker/状态语义；`static-content.springer.com/esm/` 与 supplement 文件名永不提升为 primary PDF；
-- 状态为 `production-ready`，但该状态只声明 route/rule/policy/离线对象图已闭环；它不声明本地 profile 已登录、当前机构协议允许使用或某篇文章有 entitlement。
+- 状态为 `production-ready`，但该状态只声明 route/rule/policy/离线对象图已闭环；它不声明当前 IP、机构协议或某篇文章有 entitlement。
 
 ### 11.2 Nature Portfolio
 
@@ -336,7 +338,7 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 - ScanSci 的 `/articles/{doi_suffix}.pdf` 模板和 HTML link 正则只是待核实线索，尚未证明 extended data、supplementary information、wrong-article 和授权页面状态；
 - Nature.com 条款、具体机构许可和 Browser 页面证据未闭合，因此状态为 `unsupported`，无 Browser rule。
 
-两个 Profile 共享同一条集团 TDM policy 引用，但只有 SpringerLink 定义了 `springerlink` browser rate/session group；Nature 没有 Browser route、group 或 session key，也不会从 SpringerLink 相互推导。将来若得到 Nature 的单独现场授权，必须独立核实；只有证据证明真实共享账号、quota 或风控域时才能显式合并 group。
+两个 Profile 共享同一条集团 TDM policy 引用，但只有 SpringerLink 定义了 `springerlink` browser rate/session group；Nature 没有 Browser route、group 或 session key，也不会从 SpringerLink 相互推导。将来若得到 Nature 的单独现场授权，必须独立核实；只有证据证明真实共享 quota 或风控域时才能显式合并 group。
 
 ## 12. 当前实现边界
 
@@ -344,6 +346,11 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 
 当前 Metadata adapter 不调用 Open Access JATS、Full Text JATS/BITS 或旧主机，也不把 metadata 中的 `format=pdf` locator、XML/JATS 内容、HTTP 200 或有效 key 冒充已授权主 PDF。Acquisition registry 对 `springer` 的 authorized PDF capability 继续明确为 unsupported；安全 locator 仍需经过公开路径的实际字节与 PDF 验证。
 
-统一验证矩阵包含相互独立的 `springerlink` 与 `nature-portfolio` Profile。前者以 `springerlink-browser-pdf-v4-2026-08-18` 进入 production profile/rule catalog；后者仍为 unsupported。Bootstrap 只在 Browser 总开关打开、所选 profile 安全存在、Playwright Python 依赖和 Chromium executable 都就绪时创建真实 `BrowserClient`；否则 route 仍保留在 registry 中，但以 `disabled` 或 `unconfigured` 说明本地未就绪的精确原因。
+统一验证矩阵包含相互独立的 `springerlink` 与 `nature-portfolio` PublisherAccessProfile。前者以
+`springerlink-persistent-browser-pdf-v6-2026-08-21` 进入 production profile/rule catalog；后者
+仍为 unsupported。Bootstrap 只在 Browser 总开关打开、一个 Browser Profile 已选择并安全存在、
+Playwright Python 依赖、Chrome/Chromium executable 和 headed display 都就绪时创建真实
+`BrowserClient`；否则 route 仍保留在 registry 中，但以 `disabled` 或 runtime action-required
+说明本地未就绪的精确原因。
 
-2026-08-18 的文章核实同样没有读取真实 key、Cookie 或 profile 内容，也没有把配置状态或任意 HTTP 200 写成个人登录/普遍授权事实。Meta v2 schema、额度与失败行为由离线 fake/fixture 及另行记录的最小只读 probe 验证。SpringerLink evidence fixture 证明 route/rule/policy 与归属合同，Nature fixture 证明其 unsupported 边界；四样本中的一次真实 PDF 交付和三次 normal miss 也不证明站点长期稳定、本地账号已登录或任意文章有 entitlement。
+2026-08-18 的文章核实同样没有读取真实 key、Cookie 或 profile 内容，也没有把配置状态或任意 HTTP 200 写成普遍授权事实。Meta v2 schema、额度与失败行为由离线 fake/fixture 及另行记录的最小只读 probe 验证。SpringerLink evidence fixture 证明 route/rule/policy 与归属合同，Nature fixture 证明其 unsupported 边界；四样本中的一次真实 PDF 交付和三次 normal miss 也不证明站点长期稳定、当前 IP 或任意文章有 entitlement。

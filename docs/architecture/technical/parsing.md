@@ -27,7 +27,7 @@ parsing/
 - `ports.py` 声明 Parsing 消费的 Parser 与 artifact 存取能力；
 - `adapters/` 理解具体 Parser 私有协议并转换为统一合同。
 
-Parser Adapter 是 Parsing 模块内部的可替换实现，不是动态第三方插件平台。`bootstrap.py` 根据已解析配置显式构造一个 Adapter；同一 PDF 一次只调用一个 Parser，不竞赛、不合并，也不自动回退。增加新 Adapter 不得要求 Analysis 理解新的输入格式。
+Parser Adapter 是 Parsing 模块内部的可替换实现，不是动态第三方插件平台。`sciretriever.bootstrap` 根据已解析配置显式构造一个 Adapter；同一 PDF 一次只调用一个 Parser，不竞赛、不合并，也不自动回退。增加新 Adapter 不得要求 Analysis 理解新的输入格式。
 
 ## 2. 输入与 Parser Port
 
@@ -41,7 +41,7 @@ ParserRequest
   content_ref: StorageObjectRef
 ```
 
-`media_type` 当前 PDF 路径必须是 `application/pdf`；`content_ref` 是 Storage 提供的不含机器绝对路径的读取能力或引用。完整 `Literature`、元数据、供应商 URL、SQL row、Parser mode 和凭据不进入请求。Parser 选择、mode、模型和连接配置在 `bootstrap.py` 构造 Adapter 时固定。
+`media_type` 当前 PDF 路径必须是 `application/pdf`；`content_ref` 是 Storage 提供的不含机器绝对路径的读取能力或引用。完整 `Literature`、元数据、供应商 URL、SQL row、Parser mode 和凭据不进入请求。Parser 选择、mode、模型和连接配置在 `sciretriever.bootstrap` 构造 Adapter 时固定。
 
 逻辑 Port 为：
 

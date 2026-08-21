@@ -27,7 +27,7 @@ metadata/
 - `ports.py` 声明元数据领域搜索、稳定标识符 lookup、元数据供应商引用关系查询和 observation publication；
 - `providers/` 保存每个目标 Metadata Provider 的供应商专属适配器。
 
-只有对应生产适配器真实实现并由 `bootstrap.py` 连接后，供应商才能写成已接入能力。
+只有对应生产适配器真实实现并由 `sciretriever.bootstrap` 连接后，供应商才能写成已接入能力。
 
 ## 2. 公开 API
 
@@ -225,7 +225,7 @@ Scopus Search 的 offset 与 cursor 是两种分页合同：cursor 响应必须�
 adapter 会将它与本地已接收计数严格核对。Debug 只记录受控 envelope、字段存在位、disposition
 和中性 failure kind，不记录字段值、cursor、query 或响应正文。
 
-普通配置向 `bootstrap.py` 提供稳定 Provider key、能力启用状态、产品/database/edition、scan limit、非 secret 运行身份和 AccessPolicy；Provider secret 只由根级 configuration 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
+普通配置向 `sciretriever.bootstrap` 提供稳定 Provider key、能力启用状态、产品/database/edition、scan limit、非 secret 运行身份和 AccessPolicy；Provider secret 只由 `sciretriever.configuration` 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
 
 `config status` 只读取 capability spec、普通配置和凭据字段存在性，不调用 Metadata API 或 Network。用户显式执行的 `config test` 可以复用 adapter 声明的最小 probe，但它通过 Bootstrap 的配置测试边界和统一 Network 执行，不伪装成 Metadata Search/Lookup，不产生 MetadataObservation、ProviderRelationObservation、DiscoveryRun、Report 或持久化结果。
 

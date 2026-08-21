@@ -98,14 +98,15 @@ Elsevier Authorized lookup/download 的 response classification 在 Debug 中额
 response body、URL/query 或 credential。
 
 这些 Browser 字段已经由离线 route、scheduler、Completion 和安装 wheel 测试验证；当前
-production Browser route count 为 1，因此已就绪的 SpringerLink Completion 可以产生真实的脱敏
-Browser admission/group/state/capture/cleanup 日志。这些日志只证明实际执行步骤与结果分类，
-不能把 profile presence 、probe 成功或 route production-ready 写成任意文章 entitlement。
-SpringerLink revision 4 在初始 DOI PDF locator 没有形成 capture、且无经审查 entitlement marker 时还会记录
+production Browser route 与 local eligible count 均为 9。总开关和本地 runtime 就绪后，
+Completion 可以产生真实的脱敏 Browser admission/group/state/capture/cleanup 日志。这些日志只
+证明实际执行步骤与结果分类，不能把 production catalog、本地 runtime 就绪或 probe 成功写成
+组织授权或任意文章 entitlement。
+SpringerLink revision 5 在初始 DOI PDF locator 没有形成 capture、且无经审查 entitlement marker 时还会记录
 `decision_reason=entitlement-marker-absent outcome=normal-miss`，用来区分正常页面未命中与
 Browser timeout；该诊断不能反推账号、机构或订阅状态。
 
-携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 profile/risk-group identity 和状态类别，不能记录完整导航目标、selector、页面文本、Cookie、profile 内容或签名 locator。
+携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 rule/session/risk-group identity 和状态类别，不能记录完整导航目标、selector、页面文本、Cookie、Profile 路径/内容、登录细节或签名 locator。
 
 正常和 Debug 都只写 stderr。SciRetriever 不接管日志文件路径和轮转；用户需要保留文件时，用 shell、进程管理器或宿主应用把 stderr 定向到本次运行目录。例如：
 

@@ -53,10 +53,11 @@ model/
 network/
 storage/
 logging/
-bootstrap.py
+configuration/
+bootstrap/
 ~~~
 
-模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 `api.py` 和中性 Model 协作；外部协议在所属 adapter 边界转换；根级 `bootstrap.py` 负责生产组装。
+模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 `api.py` 和中性 Model 协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 是原启动阶段技术模块的 package 化代码组织，不增加新的核心产品模块，其中 `bootstrap` 负责生产组装。
 
 ## 3. 开发与架构演进
 

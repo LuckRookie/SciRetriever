@@ -179,7 +179,7 @@ Provider、LLM 与远程 MinerU 的 secret 与普通配置分离，统一固定�
 非符号链接目录；文件必须是当前用户拥有、权限为 `0600` 的普通非符号链接文件。
 
 - 裸运行 `config` 打开统一交互中心：首页分为 LLM Analysis、MinerU Parser 和 Literature Providers。LLM 向导配置协议、Base URL、模型、context window、认证与预算；MinerU 向导配置 loopback/remote endpoint、部署标识和远程上传确认；Provider 区继续提供凭据申请提示、设置、更新与移除。secret 只通过隐藏输入收集，不接受 argv/option 传值。
-- TTY 界面使用 Rich 与 prompt-toolkit，支持方向键、Enter 和 `L/M/T/Q` 快捷键；`--theme auto|dark|light|mono` 可选主题，`NO_COLOR` 强制单色。重定向输入时自动使用确定性的编号菜单。全部交互提示写 stderr，stdout 保持为空。
+- TTY 界面使用 Rich 与 prompt-toolkit，支持方向键、Enter 和 `A/L/M/T/Q` 快捷键；`--theme auto|dark|light|mono` 可选主题，`NO_COLOR` 强制单色。重定向输入时自动使用确定性的编号菜单。全部交互提示写 stderr，stdout 保持为空。
 - `config status` 是纯本地检查，不联网；默认用紧凑表格显示 LLM/MinerU 普通配置、凭据 presence 与 readiness，按 Metadata/Acquisition 列出 Provider 字段，并明确展示 PDF 的“公开路径 → 授权 API → 受控浏览器”顺序。它绝不显示 secret、mask、长度、hash 或 fingerprint；`--json` 提供无 ANSI 的稳定分组结果。
 - `config test llm` 发送一条不含用户文献内容的最小严格 schema 请求，可能消耗少量额度；`config test mineru` 只执行 health 检查，不上传 PDF；Provider probe 继续使用官方最小只读请求。`config test --all` 汇总已启用 Provider、LLM 和 MinerU，一个失败不阻断其它结果。所有 probe 都不创建 Catalog、DiscoveryRun、Literature、Report 或测试历史。
 
@@ -204,36 +204,72 @@ ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MA
 attachment EID，再用 Object Retrieval 获取 PDF；FULL XML 没有可用 MAIN object 或无法
 安全解释时，才以同一强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota
 或服务错误不会被该 fallback 绕过；普通 Scopus EID、任意 object、XML 和 supplement 不会
-冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF
-API；SpringerLink 已接入第一条生产 Browser route `browser:springerlink`，仅在公开与
-授权 API 层完成后对仍缺 PDF、且访问方证据收敛到 SpringerLink 的文献适用。
+冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Controlled Browser
+当前有 9 条生产 route：ACS Publications、AIP Publishing、Elsevier / ScienceDirect、IOPscience、
+Oxford Academic、RSC Publishing、Science / AAAS、Springer Nature Link 和 Wiley Online
+Library；它们只在公开与授权 API 层完成后，对仍缺 PDF 且强访问方证据收敛到对应平台的文献
+适用。9 条 route 均已通过 production 工程准入；用户选择并初始化一个持久 Browser Profile、
+显式启用 Browser 且本地 runtime 就绪后，它们分别按 Publisher 串行限速进行逐文章 Profile/IP
+尝试。总开关、Profile 存在或其中保存了浏览器状态都不证明组织合同、登录成功或具体文章有
+权限，operator 仍须确保实际使用符合组织授权和 Publisher 条款。
 
 同一批目标会先完成 Public cohort，再只对剩余目标执行 Authorized API cohort；低风险路线
 发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时会延期或失败，不会借机切换
 Browser 绕过限制。进入经过生产核实的 Browser route 时，不同
 `browser_rate_limit_group` 可以并行，同一组固定 `concurrency = 1`，并按该 Provider 的文章
-启动间隔、窗口和 cooldown 串行；`browser_max_concurrency` 只是跨组的本机资源上限。
+启动间隔、窗口和 cooldown 串行；`browser_max_concurrency` 只是跨组的本机资源上限。它默认
+为 `5`，必须是大于 `1` 的整数，不设上限；当前 `9` 条 route 不是配置上限。较大的值只允许
+更多不同 Publisher lane 在同一个 Chrome process/context 中同时活动，不会启动多个 Browser，
+也不会改变同一 Publisher 串行。
 
 Browser 升级前，正常日志会显示剩余篇数、并行组数、各组 `minimum_start_interval`、
 `next_allowed_in_seconds` 和保守 `minimum_duration_seconds`。跨组最低总时长取最慢组的下界，
-仍不包含无法预知的网络、页面渲染、人工登录或服务等待时间。登录、MFA、challenge、账号警告
-和 cleanup failure 会暂停或熔断对应组，并以稳定原因和建议动作进入本次报告；已提交的其它
-Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会重新读取数据库 current facts，只补仍缺失
-的步骤。
+仍不包含无法预知的网络、页面渲染或服务等待时间。登录、MFA、challenge、账号警告
+和 cleanup failure 会暂停或熔断对应组，并以稳定原因和建议动作进入本次报告；用户可以在配置
+中心显式打开同一 Profile 的可见 Browser，自行完成获授权的登录/机构选择/MFA 后重试，或者
+改用授权 API/手动 PDF。已提交的其它 Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会重新
+读取数据库 current facts，只补仍缺失的步骤。
 
-`sciretriever config` 可以初始化 operator-managed profile；这个 persistent profile 是隔离且
-可复用的 Browser 会话容器，不是个人登录前置条件。正式文章流程会先让无头 Browser 直接使用
-当前机器的正常网络出口；如果出版社认可机构 IP，PDF 可以在没有个人账号登录的情况下自然
-放行。只有具体文章实际返回登录、机构选择、MFA 等 action-required 状态时，用户才需要明确
-打开一个从空白页开始的可见 Browser 处理该动作；SciRetriever 不自动填写登录、选择机构或
-处理 MFA/CAPTCHA。profile 已存在、个人登录被检测到、机构 IP 被接受、某篇文章具有
-entitlement 是四个不同事实。当前
-production Browser route count 为 `1`（SpringerLink）。只有在 `[access]` 显式启用 Browser、
-所选 operator profile 通过本地安全检查、Playwright Python 依赖与 Chromium executable
-都就绪时，生产 Bootstrap 才会创建 `BrowserClient`。`sciretriever config status` 只检查
-这些静态事实；`sciretriever config test --browser springerlink` 是用户明确发起的最小受控
-无头 Browser 探测，只检查 runtime 与首页目标可达性，并可选观察个人登录迹象；没有个人登录
-不会使该探测失败。它不打开具体文章，因此不评估机构 IP 或任意文章 entitlement。
+Controlled Browser 使用一个 operator-managed 持久 Chrome Profile 作为用户/机构身份边界，
+并在每个生产对象图内只启动一个 `headless = false` 的 Chrome/Chromium process 和一个
+persistent BrowserContext。所有 Publisher lane 共享该 context；同一 Publisher 严格串行，不同
+Publisher 在全局 cap 内并行，每篇文章使用隔离 page、handler、连接绑定、预算和临时下载目录。
+对象图关闭后 process/context 与临时下载工作区会清理，但 Profile 跨命令保留 Cookie、Local
+Storage、IndexedDB、SSO 状态、偏好和历史。无 GUI Linux 使用 Xvfb；出版社请求继续由 Chrome
+原生完成 TLS、HTTP、Cookie、redirect、页面点击和下载。本机 loopback CONNECT proxy 只把已
+审核 hostname/port 固定到 Network 批准的精确 IP，并透传加密字节，不终止 TLS，也不以 Python
+HTTP 替代浏览器网络栈。
+
+`sciretriever config` 的 Browser Access 区用于选择/初始化一个不含敏感信息的 Profile identity、
+按需打开使用同一 Profile 的可见 Browser、删除本地 Profile、禁用自动 Browser 或调整跨
+Publisher 并发。可见 Browser 只把交互交给用户；SciRetriever 不填写账号/密码、不选择机构、
+不读取 Cookie 或登录结果，也不处理/绕过 MFA、CAPTCHA 或 challenge。自动流程和可见 Browser
+以独占 lease 互斥，同一 Profile 同时只能由一个 Chrome process 使用。
+
+生产 Browser route count 与 local eligible count 均为 `9`。只有
+`[access].browser_enabled = true`、`browser_profile` 已选择且安全初始化、Playwright Python
+依赖、Chrome/Chromium executable 和 headed display（Linux 上为 Xvfb）都就绪时，生产 Bootstrap
+才会创建可执行 Browser adapter。`sciretriever config status` 只检查这些本地静态事实以及 Profile
+的存在/安全状态，不读取 Profile 内容，也不会断言已登录；显式 probe 每次只能选择一个当前
+eligible 目标：
+
+```text
+sciretriever config test --browser acs-publications
+sciretriever config test --browser aip-publishing
+sciretriever config test --browser elsevier-sciencedirect
+sciretriever config test --browser iopscience
+sciretriever config test --browser oxford-academic
+sciretriever config test --browser rsc-publishing
+sciretriever config test --browser science-aaas
+sciretriever config test --browser springerlink
+sciretriever config test --browser wiley-online-library
+```
+
+启用 Browser 后，九家都可以成为显式 probe 目标；probe 仍服从各自 origin、规则、限速和安全
+边界，也不会把首页可达写成组织授权或文章 entitlement。
+
+Probe 只检查 runtime 启动与所选首页可达，不打开具体文章、不下载 PDF，也不评估 Profile 是否
+已登录、当前机构 IP 或任意文章 entitlement；`config test --all` 不会隐式启动 Browser。
 支持矩阵、等待语义、状态检查和故障处理详见
 [PDF 获取指南](docs/guides/pdf-acquisition.md)。限速只能降低风险，不能保证账号不会被限制；
 用户仍须遵守自己的访问授权和站点规则。
@@ -262,14 +298,21 @@ production Browser route count 为 `1`（SpringerLink）。只有在 `[access]` 
 
 MinerU QA 使用安装 wheel 中的 production resolver、policy、transport、client、converter 和 adapter，连接当前测试进程内的受控 loopback HTTP service，验证 `health → submit → poll → archive`，并形成 parser-neutral Markdown、resource 和 provenance；私有 MinerU 中间文件不会泄漏。这不代表 operator 的真实 MinerU 部署已经在线验证。
 
-Browser 已完成受控组件 QA 和真实 Chromium/Playwright QA；真实 Chromium 场景覆盖
-JavaScript `fetch`、普通 response/direct PDF、跨 origin `3xx`、navigation-only probe、双 Cookie、
-TLS/DNS/IP binding、persistent session reuse、取消/超时和无残留线程清理。Playwright 是 wheel 的正式 runtime dependency，但
-Chromium binary 仍需 operator 另行执行 `playwright install chromium` 安装。fresh-wheel 验收
+Browser 已完成受控组件 QA 和真实有头 Chromium/Playwright QA；真实 Chromium 场景覆盖
+规则批准的外部 JavaScript、未批准第三方 tracker 在 DNS 前丢弃、普通 response/direct PDF、
+点击或页面脚本触发的跨 origin `3xx`、CDN PDF、HTTP attachment、navigation-only probe、
+通用 PDF 发现、native Chrome download、TLS/DNS/IP binding、一个 persistent Profile/process/context、
+Publisher lane reuse 与文章级隔离、临时下载工作区清理、取消/超时和无残留线程清理。Playwright
+是 wheel 的正式 runtime dependency；运行环境还需系统
+Google Chrome Stable 或 `playwright install chromium` 提供 executable，无 GUI Linux 需提供
+Xvfb。fresh-wheel 验收
 直接驱动生产 `PlaywrightBrowserFactory` / `BrowserClient` / `BrowserSessionBroker`，不使用
-测试自有平行 runtime。当前 production Browser rule catalog 有且仅有
-`springerlink-pdf@4`；这证明安装产物与生产对象图已接线，不等于真实 SpringerLink
-账号、机构协议或具体文章已在线授权。
+测试自有平行 runtime。当前 production Browser rule catalog 有 `acs-publications-pdf@2`、
+`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、
+`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、
+`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。九家均以真实 Playwright Python、真实
+Chromium、本地 HTTPS 和生产 selector/locator 完成离线规则验收；这证明安装产物与生产对象图
+已接线，不等于当前 IP、真实机构协议或具体文章已在线授权。
 
 验收从未使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog；本项目也不据此宣称这些环境已被验证。
 

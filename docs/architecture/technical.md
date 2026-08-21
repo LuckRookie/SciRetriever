@@ -27,7 +27,8 @@ SciRetriever 使用按功能模块组织的 Python 模块化单体：
 - 一个可安装的 `sciretriever` 包；
 - 六个核心功能 package 和四个公用基础 package；
 - 模块内部使用 Ports/Adapters 隔离外部能力，不建立项目级技术分层目录；
-- 根级 `configuration.py` 解析运行配置，`bootstrap.py` 构造生产对象图；
+- `configuration/` 与 `bootstrap/` 分别是原运行配置与生产组装模块的 package 形态；各自
+  `__init__.py` 提供稳定窄 public surface，其余同包文件按变化原因组织实现；
 - 生产 Bootstrap 通过 Logging 模块公开 API 一次性配置 `sciretriever` 命名空间；日志走 stderr，稳定结果与 JSON 走 stdout；
 - SQLite 保存关系事实、事务、当前关系和统一读取视图；
 - 同一配置存储根下的文件系统保存不可变 PDF，以及只保留当前关系的可重建 ParserResult、结构化 `LiteratureContent` 和规范 Markdown；
@@ -45,7 +46,7 @@ SQLite 与文件系统组成一个逻辑文献数据库，但拥有不同物理�
 
 Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider、LLM 与远程 MinerU 密钥只从 `~/.sciretriever/credentials.toml` 注入，核心服务 secret 与规范 origin 精确绑定，凭据状态与连接测试都不是文献数据库事实。
 
-[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 Public → Authorized API → Browser admission；API 按官方 quota policy，Browser 按 `browser_rate_limit_group` 不同组并行、同组限速串行。Resolution、Plan、route hint、Browser queue/session/circuit 只属于当前操作，不进入文献数据库。
+[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 Public → Authorized API → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile 和一个共享 Chrome process/context，并按 `browser_rate_limit_group` 不同组并行、同组限速串行。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Chrome 自己管理的认证状态只留在 owner-only Profile 中。
 
 ### 2.1 目标代码结构
 
@@ -53,8 +54,25 @@ Provider 的目标能力集合、领域发现启用边界、Acquisition 证据�
 src/sciretriever/
   __init__.py
   __main__.py
-  bootstrap.py
-  configuration.py
+  bootstrap/
+    __init__.py
+    assembly.py
+    browser.py
+    graphs.py
+    probes.py
+    services.py
+    storage.py
+  configuration/
+    __init__.py
+    browser_access.py
+    browser_profiles.py
+    credential_edits.py
+    credentials.py
+    documents.py
+    errors.py
+    file_store.py
+    filesystem.py
+    status.py
 
   entry/
   metadata/
@@ -69,7 +87,9 @@ src/sciretriever/
   logging/
 ```
 
-十个一级 package 与设计模块一一对应。`bootstrap.py` 和 `configuration.py` 是启动文件，不是第十一个模块。
+十个功能/基础 package 与设计模块一一对应。`bootstrap/` 和 `configuration/` 仍是两个启动阶段
+技术模块，不计入产品功能/基础模块；各自 `__init__.py` 是稳定公开 surface，其余同包文件只是按
+概念拆分的实现。包化是一种代码治理手段，不增加产品模块；业务调用方不依赖内部实现符号。
 
 ### 2.2 模块内部约定
 
@@ -88,14 +108,14 @@ src/sciretriever/
 | 模块 | 技术文档 | 实现细节归属 |
 |---|---|---|
 | 入口与流程编排 | [Entry](technical/entry.md) | DiscoveryRun、运行时 BatchSelector、内存目标与版本候选、缺 PDF 目标的有界 tier cohort、非持久化 Report、手动 PDF、本地 Library 查询/详情/引用呈现、Artifact 打开与用户文件导出、书目 codec、固定导入 provenance，以及 `discover/complete/literature/import/export/config` 目标 CLI |
-| 启动配置与凭据 | [Configuration](technical/configuration.md) | 普通配置、统一固定 `credentials.toml`、核心服务 origin 绑定与可恢复发布、交互配置中心、能力 readiness、纯本地状态与显式 Provider/LLM/MinerU probe；secret 和测试结果不进入 Model 或文献数据库 |
+| 启动配置与凭据 | [Configuration](technical/configuration.md) | 普通配置、统一固定 `credentials.toml`、核心服务 origin 绑定与可恢复发布、owner-only Browser Profile identity/lifecycle、交互配置中心、能力 readiness、纯本地状态与显式 Provider/LLM/MinerU/Browser probe；secret、Profile 内容和测试结果不进入 Model 或文献数据库 |
 | 元数据供应商 | [Metadata](technical/metadata.md) | 领域搜索与稳定标识符 lookup、可选 version_links/引用关系/参考文献原文能力、逐边 ProviderRelationObservation、Author 中性转换、目标 Provider adapters、资产线索和部分失败 |
 | 文献管理 | [Literature](technical/literature.md) | MetaLiterature/Literature、version_links 身份证据、单一版本成员归属、Provider/用户导入 observations、导入优先的 LiteratureMetadata 与作者统一、单一当前 LiteratureContent 接纳、Reference/ReferenceSupport、状态、LibraryQuery/Search/Detail/Reference 读取语义、Artifact read Port 和交换规则 |
 | Acquisition | [Acquisition](technical/acquisition.md) | PublisherAccessProfile/Resolution、确定性 AcquisitionPlan 与 AccessRouteHint、Public/API/Browser route 执行、route-scoped readiness、独立手动 PDF 接纳、运行时 PdfCandidate、二值自动 AcquisitionResult、实际 PDF 字节/reader/页面树检查、唯一主资产关系和自动获取耗尽事实 |
 | Parsing | [Parsing](technical/parsing.md) | Parser Port、规范化 Markdown ParserResult、实际引用资源、当前结果替换和资产 lineage |
 | LLM 分析与总结 | [Analysis](technical/analysis.md) | Analysis 内部 LLM Port、先元数据后正文的两阶段内容分析、导入非空值保留边界、明确 NoUsableContent、Markdown-string LiteratureSection、统一“未提供”、有序文本参考文献和临时 ReferenceLookup |
 | Model | [Model](technical/model.md) | Pydantic 数据合同、LibraryQuery/SearchPage/LiteratureDetail/ReferencePage/ReferenceDetail 等非持久化读取合同、结构解析和外部类型隔离；binary stream 和目标路径不进入 Model |
-| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、官方 API quota policy、Browser risk-group 调度与 persistent session、per-hop Profile guard、内存限速/circuit 状态、URL/DNS/redirect policy、安全 HTTP 和脱敏 |
+| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、官方 API quota policy、一个 Profile-backed Chrome process/persistent context、Browser risk-group/Publisher lane 调度、Xvfb/Chrome 原生网络、per-request PublisherAccessProfile guard、内存限速/circuit 状态、URL/DNS/redirect policy、安全 HTTP 和脱敏 |
 | 存储 | [Storage](technical/storage.md) | DiscoveryRun、Provider/用户导入共用的 MetadataObservation、文献当前事实与自动 PDF 获取耗尽的关系 schema、SQLite、不可变文件、一致 read snapshot、临时 Search/Detail/Reference 投影、verified artifact reader、原子用户文件输出、事务、对账、锁和崩溃边界；不保存查询结果、导入过程、批量运行或 Report |
 | Logging | [Logging](technical/logging.md) | 命名 logger 公开入口、生产进程一次性配置、stderr handler、formatter、最终脱敏 Filter 和 best-effort 故障隔离 |
 
@@ -175,7 +195,8 @@ Port 由消费能力的模块所有：
 
 禁止建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` package。
 
-`bootstrap.py` 是唯一生产对象图组装点，负责把以下具体实现注入模块公开构造入口：
+Bootstrap 边界（公开 `sciretriever.bootstrap` package surface 与同包实现文件）是唯一生产对象图组装
+点，负责把以下具体实现注入模块公开构造入口：
 
 - raw `sqlite3` repository 与 publisher；
 - 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
@@ -186,13 +207,20 @@ Port 由消费能力的模块所有：
 - BibTeX、RIS 和 CSL JSON codec；
 - 本机写锁、时钟和资源预算。
 
-此外，`bootstrap.py` 在生产 CLI 启动时一次性调用 `logging.api.configure_logging(...)`；logger level、formatter、最终脱敏 Filter 和 stderr handler 由 Logging 模块实现，不通过模块构造器注入，也不形成 Logging Port。
+此外，`sciretriever.bootstrap` 在生产 CLI 启动时一次性调用 `logging.api.configure_logging(...)`；logger level、formatter、最终脱敏 Filter 和 stderr handler 由 Logging 模块实现，不通过模块构造器注入，也不形成 Logging Port。
 
-完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 有 CORE、Elsevier 与 Wiley 的授权 API capability，以及 SpringerLink 的 `browser:springerlink` capability；production Browser rule catalog 有 `springerlink-pdf@4`。生产对象图只在普通 `browser_enabled`、安全 operator profile、Playwright Python package 与 Chromium executable 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness。SpringerLink 规则以唯一 DOI 和 rule-owned template 构造经审查的 Provider PDF locator，采用顶层 navigation-only、capture-first 和 entitlement-gated static click；Metadata Provider 的 opaque asset path 不被导航。总开关、route 存在、profile presence、当前登录和具体文章 entitlement 仍是分立事实。
+完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 共 10 项：CORE 提供授权 API；Elsevier 与 Wiley 同时提供授权 API 和 Browser route；ACS、AIP、IOP、Oxford Academic、RSC、Science / AAAS 与 Springer Nature Link 提供 Browser route。production Browser rule catalog 为 `acs-publications-pdf@2`、`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。生产对象图只在普通 `browser_enabled`、选中且安全存在的 Browser Profile、Playwright Python package、Chrome/Chromium executable 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness。普通文章流程允许规则批准的页面子资源、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration probe 仍使用 navigation-only。所有 Publisher lane 共享一个 Profile 和一个 Chrome process/persistent context；同一 Publisher 严格串行，不同 Publisher 在 cap 内并行。production catalog、总开关、Profile presence、route/runtime 就绪、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
 
-模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `bootstrap.py` 构造。
+模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `sciretriever.bootstrap` 构造。
 
-根级 `configuration.py` 是唯一普通 TOML、非 secret 环境选择和统一凭据文件解析入口。未知 section、key、枚举或组合必须 fail closed；普通配置转换为 `model/configuration.py` 中不含 secret 的中性配置数据，再执行跨字段和运行环境规则。Provider、LLM 与远程 MinerU secret 只从 `~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret 环境变量回退。精确文件、权限、origin、readiness 和 CLI 合同见 [Configuration 技术文档](technical/configuration.md)。
+Configuration 边界（公开 `sciretriever.configuration` package surface 与同包实现文件）是唯一普通
+TOML、非 secret 环境选择、统一凭据文件与 Browser Profile 生命周期入口。未知 section、key、
+枚举或组合必须 fail closed；普通配置转换为 `model/configuration.py` 中不含 secret 的中性配置
+数据，再执行跨字段和运行环境规则。Provider、LLM 与远程 MinerU secret 只从
+`~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret
+环境变量回退。Browser Profile 只接受 opaque identity，Chrome 自己管理的 Cookie/认证内容不进入
+TOML、Model 或 status。精确文件、权限、origin、readiness 和 CLI 合同见
+[Configuration 技术文档](technical/configuration.md)。
 
 普通配置按以下九个责任组组织：
 
@@ -208,11 +236,11 @@ library
 access
 ```
 
-Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPolicy 和联系邮箱留在普通配置；Provider API key、token 与 metric 只进入固定凭据文件，不能形成普通配置中的 `credentials` 责任组。Secret 值不得进入 Model configuration、SQLite、ArtifactStore、provenance、Report、diagnostics、URL、文件名或用户输出。`bootstrap.py` 只把短生命周期凭据注入具体 adapter；adapter 决定允许附着凭据的 origin；`network` 负责 redirect stripping 和脱敏。
+Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPolicy 和联系邮箱留在普通配置；Provider API key、token 与 metric 只进入固定凭据文件，不能形成普通配置中的 `credentials` 责任组。Secret 值不得进入 Model configuration、SQLite、ArtifactStore、provenance、Report、diagnostics、URL、文件名或用户输出。`sciretriever.bootstrap` 只把短生命周期凭据注入具体 adapter；adapter 决定允许附着凭据的 origin；`network` 负责 redirect stripping 和脱敏。
 
 ### 5.1 Logging 模块启动与标准流
 
-除纯声明的 Model 外，具有运行行为的模块只使用 `logging.api.get_logger(__name__)` 获得命名 logger，不依赖 Bootstrap、全局 Observer、事件总线、Logging Port 或自定义 LogEvent Model。模块 import、adapter 构造和每次 Entry 操作都不得调用标准库 `basicConfig()`、修改 root logger 或安装 Handler。生产 CLI 启动时由 `bootstrap.py` 通过 Logging API 显式配置一次；程序内 API 不触发配置，也不修改宿主应用的 Logging 设置。精确目录、API 和测试合同见 [Logging 技术文档](technical/logging.md)。
+除纯声明的 Model 外，具有运行行为的模块只使用 `logging.api.get_logger(__name__)` 获得命名 logger，不依赖 Bootstrap、全局 Observer、事件总线、Logging Port 或自定义 LogEvent Model。模块 import、adapter 构造和每次 Entry 操作都不得调用标准库 `basicConfig()`、修改 root logger 或安装 Handler。生产 CLI 启动时由 `sciretriever.bootstrap` 通过 Logging API 显式配置一次；程序内 API 不触发配置，也不修改宿主应用的 Logging 设置。精确目录、API 和测试合同见 [Logging 技术文档](technical/logging.md)。
 
 默认生产输出只需要一个 stderr handler。实时进度、等待和安全诊断进入 stderr；CLI 的稳定文本结果、完整 JSON Report 或其它可管道结果进入 stdout。即使未来 formatter 使用结构化文本，日志也不得写 stdout。当前目标不建立日志文件、轮转、SQLite sink、Artifact、跨进程日志协调或持久审计；用户自行重定向 stderr 不改变其非权威性质。
 
@@ -267,8 +295,8 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - 违反第 4 节依赖方向的 import；
 - 跨模块导入对方私有规则、用例、Ports 或适配器；
 - `storage/sqlite/` 以外使用 `sqlite3` 或 SQL；
-- 根级 `configuration.py` 和 `bootstrap.py` 以外读取环境变量或 TOML；
-- `bootstrap.py` 以外构造跨模块生产对象图；
+- `sciretriever.configuration` package 以外读取环境变量或 TOML；
+- `sciretriever.bootstrap` package 以外构造跨模块生产对象图；
 - `logging/` 以外的目标生产代码配置 root logger、Handler 或 formatter，或直接绕过 `logging.api` 获取项目 logger；
 - `model` 导入 Logging，或 `logging` 导入任何 SciRetriever 业务模块、Model、Network 或 Storage；
 - vendor SDK、HTTP、浏览器或 SQL 类型进入 Model、模块公开 API、规则或用例；
@@ -299,14 +327,19 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - Acquisition 的 Resolution/Plan 由 AssetHint、稳定定位、Provider record identity 和必要时安全解析后的 DOI landing origin 决定；不能按 publisher 字符串、单独 DOI prefix 或 MetadataObservation 来源硬编码内容 API/Browser，readiness/权限错误也不能形成 `NoPrimaryPdf` 或自动获取耗尽；
 - 缺 PDF 目标按有界 cohort 完成 Public → API → Browser admission，单篇不能提前跨层；timeout、临时错误、`429`/quota 和 Browser action-required 不触发自动 Browser 绕行；
 - 每次 Browser navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network policy；重试、多标签页和备用入口不能绕过组内串行、interval、cooldown 或 circuit；
-- operator-managed persistent session 可以按安全 session key 复用，但 Cookie、profile 内容、完整 URL、selector 和页面对象不进入配置内容、日志、Report、provenance 或数据库；
+- 一个 operator-managed 持久 Browser Profile 同时只由一个 Chrome process 使用；所有 Publisher
+  lane 在当前对象图共享一个 persistent context，同一 risk group 串行、不同 group 可并行，每篇
+  文章使用隔离 page/handler/临时下载目录；broker 关闭后删除 runtime 临时资源但保留 Profile。
+  配置中心可以显式打开同一 Profile 的可见 Browser，自动流程不填写凭据或处理验证；Cookie、
+  Profile 路径/内容、登录细节、完整 URL、selector 和页面对象不进入配置内容、status、日志、
+  Report、provenance 或文献数据库；
 - 等待队列、permit、窗口计数、`next_allowed_at` 和 `blocked_until` 只存在于当前进程内存，不包含 DOI、Literature、候选、URL、凭据或响应正文，也不进入 Catalog、ArtifactStore、provenance 或协调文件；
 - 外部调用不在 SQLite 事务中执行；
 - 功能模块不直接创建或覆盖最终文件；
 - 间接调用、别名或动态值不能绕过模块责任；
 - 目标架构、当前实现和迁移计划没有被混写。
 
-离线产品验收覆盖 R1–R8：独立领域/引用 DiscoveryRun、逐 Provider 原始 scan limit、无元数据阶段语义过滤、目标 Metadata Provider 全启用且就绪搜索、Provider 配置/readiness 与 `credentials.toml` 安全边界、纯本地 `config status` 和 fake Network `config test`、最小 source result、按 MetaLiterature 去重的 DiscoveryResult 与直接 cause、无 Collection 的运行时 selector 与内存目标冻结、非持久化运行 Report、MetaLiterature 版本候选与稳定缺失回退、同文献 `version_links` 身份证据与单一 MetaLiterature 成员归属、文献内有序 Author/ORCID/署名单位、元数据供应商结构化关系和参考文献原文两种引用扩展、逐边独立且可延后物化的 `ProviderRelationObservation`、临时 `ReferenceLookup`、本地精确命中或目标元数据接纳、Literature 级 Reference 及三种 ReferenceSupport、多来源部分失败、身份收敛和版本分离、Publisher access resolution/plan、PDF Public/API/Browser cohort 严格升级、官方 API quota policy、Browser 组间并行/组内限速串行与 per-hop guard、独立手动 PDF 接纳、provider/channel/host 进程内共享准入、实际 PDF 字节/reader/页面树基本检查、二值自动 AcquisitionResult、自动获取耗尽与 `needs_manual_pdf`、Asset 与唯一 `primary-pdf` LiteratureAsset、Parser-neutral Markdown `ParserResult`、实际引用资源与 hash、单一当前结果替换、明确内容判断与失败保留 PDF、LLM 一次逻辑分析按先元数据后正文的两次有序核心请求形成最终 metadata/keywords、内容 Markdown 草稿、Markdown-string LiteratureSection、有序文本参考文献、统一“未提供”、单一 Analysis provenance、Literature 整体接纳与规范 Markdown、当前内容原子替换和旧 content support 清理、书目导入复用 MetadataObservation、导入非空值优先、完全重复 matched 不复制 observation、书目导出、本地 LibraryQuery、具体 Literature SearchPage、一致 snapshot LiteratureDetail、Reference 正反向页面与详情、verified artifact 打开/原子导出、局部失败、中断和重复执行。未解析 `version_links` 不得创建占位 Literature 或通用关系；供应商响应携带多少引用关系也不得自动创建同等数量的 Literature 或触发无边界递归。Harness、单元测试、构建和安装后离线验收不得读取真实用户凭据、Browser profile/Cookie、执行 `config test` 的真实网络路径、连接真实供应商、生产数据库或用户语料。
+离线产品验收覆盖 R1–R8：独立领域/引用 DiscoveryRun、逐 Provider 原始 scan limit、无元数据阶段语义过滤、目标 Metadata Provider 全启用且就绪搜索、Provider 配置/readiness 与 `credentials.toml` 安全边界、纯本地 `config status` 和 fake Network `config test`、最小 source result、按 MetaLiterature 去重的 DiscoveryResult 与直接 cause、无 Collection 的运行时 selector 与内存目标冻结、非持久化运行 Report、MetaLiterature 版本候选与稳定缺失回退、同文献 `version_links` 身份证据与单一 MetaLiterature 成员归属、文献内有序 Author/ORCID/署名单位、元数据供应商结构化关系和参考文献原文两种引用扩展、逐边独立且可延后物化的 `ProviderRelationObservation`、临时 `ReferenceLookup`、本地精确命中或目标元数据接纳、Literature 级 Reference 及三种 ReferenceSupport、多来源部分失败、身份收敛和版本分离、Publisher access resolution/plan、PDF Public/API/Browser cohort 严格升级、官方 API quota policy、Browser 组间并行/组内限速串行与 per-hop guard、独立手动 PDF 接纳、provider/channel/host 进程内共享准入、实际 PDF 字节/reader/页面树基本检查、二值自动 AcquisitionResult、自动获取耗尽与 `needs_manual_pdf`、Asset 与唯一 `primary-pdf` LiteratureAsset、Parser-neutral Markdown `ParserResult`、实际引用资源与 hash、单一当前结果替换、明确内容判断与失败保留 PDF、LLM 一次逻辑分析按先元数据后正文的两次有序核心请求形成最终 metadata/keywords、内容 Markdown 草稿、Markdown-string LiteratureSection、有序文本参考文献、统一“未提供”、单一 Analysis provenance、Literature 整体接纳与规范 Markdown、当前内容原子替换和旧 content support 清理、书目导入复用 MetadataObservation、导入非空值优先、完全重复 matched 不复制 observation、书目导出、本地 LibraryQuery、具体 Literature SearchPage、一致 snapshot LiteratureDetail、Reference 正反向页面与详情、verified artifact 打开/原子导出、局部失败、中断和重复执行。未解析 `version_links` 不得创建占位 Literature 或通用关系；供应商响应携带多少引用关系也不得自动创建同等数量的 Literature 或触发无边界递归。Harness、单元测试、构建和安装后离线验收不得读取真实用户凭据、Cookie、外部 Browser Profile、执行 `config test` 的真实网络路径、连接真实供应商、生产数据库或用户语料。
 
 ## 8. 需求追踪
 

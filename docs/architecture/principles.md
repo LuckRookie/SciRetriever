@@ -129,7 +129,7 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 
 ## 10. 单机不等于跨进程限速
 
-产品运行边界是个人单机工具，不要求跨机器协调或分布式任务所有权，也不保证多个 SciRetriever 进程共享供应商限速。每个进程由 `bootstrap.py` 构造自己的共享 Access Coordinator；多个进程同时运行或进程快速重启时，冷却和额度窗口不会延续。Storage 为保护同一 Catalog 而实施的本机写入互斥是独立的数据库完整性机制，不能与 Network 访问调度混为一体。
+产品运行边界是个人单机工具，不要求跨机器协调或分布式任务所有权，也不保证多个 SciRetriever 进程共享供应商限速。每个进程由 `sciretriever.bootstrap` 构造自己的共享 Access Coordinator；多个进程同时运行或进程快速重启时，冷却和额度窗口不会延续。Storage 为保护同一 Catalog 而实施的本机写入互斥是独立的数据库完整性机制，不能与 Network 访问调度混为一体。
 
 ## 11. 一个事实只有一个写入所有者
 
