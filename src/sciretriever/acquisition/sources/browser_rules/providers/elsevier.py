@@ -6,6 +6,7 @@ from typing import Final
 
 from ..helpers import (
     DEFAULT_EXCLUDED_FILENAME_MARKERS,
+    cloudflare_challenge_profile,
     pdf_actions,
     publisher_page_markers,
 )
@@ -13,7 +14,7 @@ from ..model import BrowserArticleIdentityKind, BrowserSiteRule
 
 ELSEVIER_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     rule_id="sciencedirect-pdf",
-    revision=2,
+    revision=3,
     landing_origin="https://www.sciencedirect.com",
     allowed_origins=(
         "https://www.sciencedirect.com",
@@ -62,6 +63,7 @@ ELSEVIER_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
         "supporting",
     ),
     excluded_filename_markers=DEFAULT_EXCLUDED_FILENAME_MARKERS,
+    challenge_resource_profile=cloudflare_challenge_profile(),
 )
 
 

@@ -16,7 +16,7 @@
 | 代码 commit | `<commit>` |
 | 核实负责人 | `<operator-role>`；不写账号、邮箱或机构身份 |
 | 授权生效 / 到期 | `<UTC-window>` |
-| 固定访问模式 | `headed-persistent-profile`；无 GUI Linux 使用 Xvfb，probe 不提供用户交互 |
+| 固定访问模式 | CloakBrowser patched Chromium + fixed identity + `headless = false`；无 GUI Linux 使用 Xvfb，probe 不提供用户交互 |
 | Browser Profile identity | `<opaque-nonsensitive-profile-identity>`；不是路径、账号、机构或登录结论 |
 
 允许的状态只有 `draft-not-authorized`、`authorized-not-started`、`running`、`stopped`、
@@ -31,7 +31,7 @@ production status。
 - [ ] Browser policy 数字有 Provider-specific 依据，不使用全局默认间隔。
 - [ ] Local HTTPS/真实 Chromium、页面资源/redirect、validation/publication、取消和清理测试通过。
 - [ ] 已选择并安全初始化持久 Profile；probe 不读取其内容，也不包含登录、机构选择、Cookie 导入、MFA/CAPTCHA、反检测或未知站点步骤。
-- [ ] 如需用户认证，已在配置中心的独立可见 Browser 动作中完成；关闭窗口没有被当作登录成功或文章 entitlement 证据。
+- [ ] 样本不需要登录、机构选择、MFA 或人工 challenge；这些交互不属于第一版现场核实范围。
 
 ## 3. 精确样本与授权预算
 
@@ -110,10 +110,11 @@ redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 ter
 
 - [ ] 再次显示并核对 policy、预算、落点、access key/rule revision 和当前时间窗。
 - [ ] Public/API 正常结束与 Browser admission 已由受控运行证明。
-- [ ] Playwright package、Chrome/Chromium executable、headed display/Xvfb、持久 Profile 独占 lease 和临时下载工作区 readiness 已确认。
+- [ ] Cloak wrapper、Playwright API、经核实 binary、fixed identity manifest、headed display/Xvfb、持久 Profile 独占 lease 和临时下载工作区 readiness 已确认。
 
-出现 `429`/quota/`Retry-After`、login、MFA/CAPTCHA/challenge、IP block、account warning、未知
-origin、entitlement 不确定、supplement/wrong article、budget、timeout、cleanup/publication/数据完整性
+出现 `429`/quota/`Retry-After`、login、MFA、CAPTCHA/Turnstile 人工交互、challenge
+resource-blocked/settle-timeout、IP block、account warning、未知 origin、entitlement 不确定、
+supplement/wrong article、budget、timeout、cleanup/publication/数据完整性
 错误或用户取消时立即停止；不得换入口、换网络、提高频率或扩大样本。
 
 | 结果字段 | 脱敏记录 |

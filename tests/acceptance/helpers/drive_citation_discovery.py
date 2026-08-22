@@ -20,10 +20,10 @@ import sciretriever.entry.citations as entry_citations_module
 import sciretriever.literature.service as literature_service_module
 import sciretriever.metadata.service as metadata_service_module
 import sciretriever.storage.sqlite.discovery_repository as discovery_repository_module
+from sciretriever.agents import AgentRequest, AgentStructuredResponse
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.content import ContentAnalysisLimits
 from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
     ContentInputIdentity,
     StagedContentMarkdown,
 )
@@ -47,7 +47,6 @@ from sciretriever.model.library import (
     LiteratureReferenceRequest,
 )
 from sciretriever.model.literature import Identifier, Literature
-from sciretriever.model.llm import LLMStructuredResponse
 from sciretriever.model.metadata import (
     LiteratureMetadata,
     MetadataObservation,
@@ -199,7 +198,7 @@ def _unexpected_analysis_boundary(name: str) -> NoReturn:
     raise AssertionError(f"unused Analysis boundary was called: {name}")
 
 
-class _UnusedAnalysisLLM:
+class _UnusedAnalysisAgent:
     def __init__(self) -> None:
         self.calls = 0
 
@@ -207,8 +206,8 @@ class _UnusedAnalysisLLM:
     def provider_name(self) -> str:
         return "citation-acceptance-analysis"
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
-        del call
+    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+        del request
         self.calls += 1
         _unexpected_analysis_boundary("llm.complete")
 
@@ -356,10 +355,10 @@ metadata = MetadataApi(
     )
 )
 repository = SqliteDiscoveryRepository(engine)
-analysis_llm = _UnusedAnalysisLLM()
+analysis_llm = _UnusedAnalysisAgent()
 analysis = AnalysisApi(
     content_service=AnalysisService(
-        llm=analysis_llm,
+        agents=analysis_llm,
         artifact_reader=_UnusedAnalysisArtifactReader(),
         current_inputs=_UnusedAnalysisCurrentInputs(),
         artifact_publisher=_UnusedAnalysisArtifactPublisher(),
@@ -375,7 +374,7 @@ analysis = AnalysisApi(
         ),
     ),
     reference_lookup_stage=ReferenceLookupStage(
-        llm=analysis_llm,
+        agents=analysis_llm,
         model="citation-acceptance-analysis",
         max_output_tokens=1,
     ),

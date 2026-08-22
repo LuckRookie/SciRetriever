@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,7 +25,6 @@ from sciretriever.acquisition.ports import (
 )
 from sciretriever.acquisition.routing import AcquisitionRequest, build_acquisition_evidence
 from sciretriever.acquisition.sources.browser import (
-    BrowserFlowSession,
     ControlledBrowserPdfSource,
 )
 from sciretriever.acquisition.sources.browser_rules import (
@@ -38,6 +37,7 @@ from sciretriever.acquisition.sources.browser_rules.model import (
     BrowserSiteRule,
 )
 from sciretriever.configuration import initialize_browser_profile
+from sciretriever.configuration.cloak_runtime import CloakRuntimeManager
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.access import (
     BrowserRequest,
@@ -67,13 +67,18 @@ from sciretriever.network.browser import (
     BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationGuard,
+    BrowserFlowController,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
-from sciretriever.network.playwright import PlaywrightBrowserFactory
+from sciretriever.network.cloakbrowser import (
+    CloakBrowserFactory,
+    cloakbrowser_runtime_availability,
+)
 from sciretriever.network.policy import AddressClass, DestinationPolicy
 
 _HOSTNAME = "browser-rules.sciretriever.test"
 _TIME = UtcTimestamp("2026-08-19T00:00:00Z")
+_RUNTIME_HOME_ENV = "SCIRETRIEVER_TEST_CLOAK_HOME"
 
 
 class _Resolver:
@@ -277,7 +282,7 @@ class _SessionBoundRunner:
         request: BrowserRequest | str,
         policy: AccessPolicy,
         *,
-        flow: Callable[[BrowserFlowSession], object] | None = None,
+        controller: BrowserFlowController | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
@@ -290,7 +295,7 @@ class _SessionBoundRunner:
             scope,
             request,
             policy,
-            flow=flow,
+            controller=controller,
             destination_guard=destination_guard,
             capture_guard=capture_guard,
             navigation_only=navigation_only,
@@ -462,12 +467,38 @@ def _payload(temporary_pdf: TemporaryPdf) -> bytes:
         return cast(BinaryIO, stream).read()
 
 
-class ProductionBrowserProviderPlaywrightTests(unittest.TestCase):
+class ProductionBrowserProviderCloakTests(unittest.TestCase):
+    """Run the nine production rules on an explicitly supplied Cloak runtime."""
+
+    _runtime: CloakRuntimeManager
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        raw_home = os.environ.get(_RUNTIME_HOME_ENV, "").strip()
+        if not raw_home:
+            raise unittest.SkipTest(f"set {_RUNTIME_HOME_ENV} to an installed Cloak runtime home")
+        manager = CloakRuntimeManager(home=raw_home)
+        status = manager.status()
+        if not status.ready or status.version is None:
+            raise unittest.SkipTest("explicit Cloak runtime is not ready")
+        availability = cloakbrowser_runtime_availability(
+            browser_version=status.version,
+            cache_directory=manager.cache_directory,
+        )
+        if not (
+            availability.cloak_wrapper_available
+            and availability.playwright_api_available
+            and availability.binary_executable_available
+            and availability.headed_display_available
+        ):
+            raise unittest.SkipTest("explicit Cloak runtime lacks wrapper, binary, or Xvfb")
+        lease = manager.acquire_runtime()
+        lease.close()
+        cls._runtime = manager
+
     def test_production_rules_run_real_selectors_and_fail_closed(self) -> None:
         pdf = _pdf()
-        with tempfile.TemporaryDirectory(
-            prefix="sciretriever-provider-rules-playwright-"
-        ) as raw_root:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-provider-rules-cloak-") as raw_root:
             root = Path(raw_root).resolve(strict=True)
             certificate, key = _certificate(root)
             state = _FixtureState(pdf)
@@ -488,8 +519,9 @@ class ProductionBrowserProviderPlaywrightTests(unittest.TestCase):
                 fixture_origin = f"https://{_HOSTNAME}:{port}"
                 resolver = _Resolver()
                 client = BrowserClient(
-                    factory=PlaywrightBrowserFactory(
+                    factory=CloakBrowserFactory(
                         profile,
+                        self._runtime,
                         ignore_https_errors=True,
                     ),
                     resolver=resolver,
@@ -659,7 +691,7 @@ class ProductionBrowserProviderPlaywrightTests(unittest.TestCase):
                     thread.is_alive()
                     and thread.name
                     in {
-                        "sciretriever-playwright-engine",
+                        "sciretriever-cloakbrowser-engine",
                         "sciretriever-playwright-events",
                     }
                     for thread in threading.enumerate()

@@ -5,8 +5,9 @@
 - 产品需求：[R5 语言模型内容判断与总结](../requirements.md#r5-语言模型内容判断与总结)
 - 当前内容合同：[ADR 0008](../decisions/0008-summarized-markdown-literature-content.md)
 - 引用解析：[ADR 0007](../decisions/0007-reference-resolution-and-authoritative-relations.md)
+- 模型基础：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)、[Agents 技术文档](agents.md)
 
-本文定义目标 `src/sciretriever/analysis/` 的 LLM Port、先元数据后正文的两阶段内容分析、内容 Markdown 草稿验证、`LiteratureSection` 解析和临时 `ReferenceLookup`。Analysis 消费经过 Parsing 检查的 `ParserResult`，不直接读取 PDF 字节、修改文献身份、接纳最终元数据、删除文件或写数据库。
+本文定义目标 `src/sciretriever/analysis/` 通过 Agents structured-text capability 执行的先元数据后正文两阶段内容分析、内容 Markdown 草稿验证、`LiteratureSection` 解析和临时 `ReferenceLookup`。Analysis 消费经过 Parsing 检查的 `ParserResult`，不直接读取 PDF 字节、修改文献身份、接纳最终元数据、删除文件或写数据库。
 
 ## 1. 目标结构
 
@@ -22,11 +23,6 @@ analysis/
   markdown_rules.py
   references.py
   ports.py
-  providers/
-    __init__.py
-    openai.py
-    openai_chat.py
-    anthropic.py
 ```
 
 - `api.py` 提供文献内容分析和参考文献 lookup 两个公开业务操作；
@@ -37,10 +33,9 @@ analysis/
 - `markdown.py` 解析第二阶段内容草稿并从已验收 metadata/content 确定性渲染规范 Markdown；
 - `markdown_rules.py` 检查固定标题、章节角色、reference 和 Markdown 结构；
 - `references.py` 形成临时、按原文对齐且不持久化的参考文献 lookup；
-- `ports.py` 声明 Analysis 消费的中性 LLM 能力；
-- `providers/` 实现具体 provider/model 协议，并通过 Network 访问外部服务。
+- `ports.py` 保留 Analysis 自己的 artifact/current-facts I/O Port、私有阶段输入和取消边界；模型 provider capability 由 `agents` 公开 API 提供。
 
-当前不建立顶层公共 `llm/` 功能或基础模块。文献总结和 `ReferenceLookup` 共用 Analysis 内部的 LLM Port 与 provider adapter；其它模块只调用 `analysis.api` 的业务操作，不能调用通用 prompt 接口。
+文献总结和 `ReferenceLookup` 共用一个由 Bootstrap 注入的 Agents structured-text 调用面。Analysis 仍构造 prompt、严格输入/响应 schema、阶段 request kind 和结果验收；这些文献语义不进入 Agents。其它模块只调用 `analysis.api` 的业务操作，不能借 Agents 调用 Analysis 私有 prompt 或绕过内容验收。
 
 ## 2. 两个 LLM 用例
 
@@ -51,7 +46,7 @@ Analysis 当前只有两个 LLM 业务用例：
 
 第二个用例不是第一个用例的完成条件。内容接纳不等待引用目标解析，lookup 失败也不撤销已经接纳的 `LiteratureContent`。
 
-只有未来至少两个独立功能模块真正消费不含文献业务语义的中性 LLM 能力时，才能通过新 ADR 考虑公共 LLM 基础设施；prompt、输出含义和验收规则始终归消费它的功能模块所有。
+Agents 只共享 provider/model/capability/budget/session 基础；prompt、输出含义和验收规则始终归 Analysis。Browser 是第二个独立消费者，但不能看到 metadata/content/reference request kind 或调用这两个 Analysis 用例。
 
 ## 3. 内容分析输入与输出
 
@@ -315,15 +310,17 @@ ReferenceLookup
 
 `reference_index` 只定位本次输入列表中的原文。LLM 只提取原文明示的搜索线索；至少存在一个可校验稳定标识符或非空标题时才返回可执行 lookup。代码验证并规范化 DOI、PMID、arXiv ID 等明确格式。Lookup 由 Entry 立即用于本地精确查询或 Metadata 搜索，不持久化、不写入 `LiteratureContent`，也不能直接创建目标 Literature、Reference 或 ReferenceSupport。
 
-## 11. LLM Port、Network 与失败
+## 11. Agents、Network 与失败
 
-LLM Port 使用 `model/llm.py` 中的中性请求与响应，明确区分元数据确定、内容总结和 ReferenceLookup 三种请求语义；前两种属于同一个文献内容分析用例的有序内部阶段。Provider adapter 负责 provider/model 映射、凭据附着、timeout、quota、协议重试、响应解析以及本次逻辑分析形成 provenance 所需的 provider/model identity。单次请求信息只用于当前调用与诊断，不作为 LiteratureContent 的两项持久化 provenance。所有外部访问都经过 Network 的 URL、TLS、redirect、预算和脱敏政策；vendor SDK 不能绕过这一边界。
+Analysis 把元数据确定、内容总结和 ReferenceLookup 三种私有请求语义转换为 Agents 的 structured-text 请求；前两种仍属于同一个文献内容分析用例的有序内部阶段。Agents 负责 provider/model 映射、凭据附着、capability、timeout、quota、协议响应和安全 provider/model/usage 身份；Analysis 负责把这些安全身份与 prompt/参数 hash 组成一项业务 provenance。单次请求和两个阶段的临时信息只用于当前调用，不形成两项持久化 provenance。
 
-Bootstrap 当前可以把同一中性 Port 组装为 OpenAI Responses、OpenAI Chat Completions 或
-Anthropic Messages。Base URL、模型、已核实 context window、认证和预算来自严格普通配置；
+Analysis 不再拥有 `AnalysisLLMPort`、provider adapter、重复配置或旧兼容导入。Agents 请求成功只说明协议边界完成；Analysis 仍解析 duplicate-free finite JSON、验证 LiteratureMetadata/Markdown/ReferenceLookup schema、复检输入 hash 和 stale 状态。所有外部访问由 Agents adapter 经过 Network 的 URL、TLS、redirect、共享 quota、预算和脱敏政策；Analysis 和 Browser 使用同一 provider/account scope 时不能各自建立 limiter。
+
+Bootstrap 可以把同一 Agents runtime 组装为 OpenAI Responses、OpenAI Chat Completions 或
+Anthropic Messages，并只向 Analysis 注入满足 structured-text capability 的调用面。Base URL、analysis role 模型、已核实 context window、认证和预算来自严格普通配置；
 API key 来自统一凭据文件并与规范 origin 精确绑定。官方服务固定使用官方 HTTPS origin；
 custom remote 必须使用 hostname-based HTTPS 与 API key；custom HTTP loopback 可以无认证。
-Adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
+Agents adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
 跨 origin redirect 不携带认证。
 
 `config test llm` 复用这里的生产 adapter，但只发送固定的极小 strict-schema probe，不发送
@@ -363,6 +360,7 @@ Secret、完整请求 header、底层 SDK 对象、prompt 原文和未脱敏异�
 - stale 输入或 Storage 失败不留下部分最终 metadata/content；
 - `ReferenceLookup` 只提取原文明示线索，不持久化或直接建关系；
 - 超长文献分段失败不会发布不完整合并结果，且总请求数受预算约束；
+- Analysis 不直接导入 Agents provider adapter/vendor SDK，Agents 不拥有文献 request kind、prompt/schema 或结果验收；
 - vendor 类型、secret、prompt 和未脱敏错误不进入公开 API、Model 或持久化结果。
 
 测试使用 fake LLM 和构造的 ParserResult，不调用真实模型或用户语料。

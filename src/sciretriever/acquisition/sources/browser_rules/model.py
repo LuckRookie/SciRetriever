@@ -19,7 +19,7 @@ from urllib.parse import quote, unquote, urlsplit
 from sciretriever.model.access import BrowserCaptureKind
 from sciretriever.model.literature import Identifier
 from sciretriever.model.primitives import Sha256
-from sciretriever.network.browser import BrowserPageObservation
+from sciretriever.network.browser import BrowserPageObservation, BrowserRequestObservation
 from sciretriever.network.policy import (
     NormalizedURL,
     PolicyError,
@@ -55,6 +55,159 @@ _DEFAULT_CAPTURE_PRIORITY: Final[tuple[BrowserCaptureKind, ...]] = (
     BrowserCaptureKind.VIEWER,
     BrowserCaptureKind.POPUP,
 )
+
+# These are diagnostic families, not an allow-list.  Keep the values short and
+# fixed so a rejected Cloudflare request can be explained without logging its
+# path, query, or any token-like locator component.
+_CHALLENGE_PLATFORM_PATH: Final[str] = "/cdn-cgi/challenge-platform"
+_TURNSTILE_PATH: Final[str] = "/turnstile"
+
+
+@unique
+class BrowserChallengePathFamily(str, Enum):
+    """Low-sensitivity Cloudflare path families used by rejection diagnostics."""
+
+    CHALLENGE_PLATFORM = "challenge-platform"
+    TURNSTILE = "turnstile"
+    OTHER = "other"
+
+
+def _path_has_family_prefix(path: str, prefix: str) -> bool:
+    """Match one fixed path family without treating lookalikes as members."""
+
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _challenge_path_family(path: str) -> BrowserChallengePathFamily:
+    """Classify a normalized path using only fixed, non-sensitive prefixes."""
+
+    folded = path.casefold()
+    if _path_has_family_prefix(folded, _CHALLENGE_PLATFORM_PATH):
+        return BrowserChallengePathFamily.CHALLENGE_PLATFORM
+    if _path_has_family_prefix(folded, _TURNSTILE_PATH):
+        return BrowserChallengePathFamily.TURNSTILE
+    return BrowserChallengePathFamily.OTHER
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserChallengeResourceProfile:
+    """One reviewed third-party resource profile scoped to one site rule.
+
+    The profile deliberately does not become part of ``allowed_origins``: it
+    is only admitted when a request carries proof that it was initiated by the
+    current Publisher page/frame.  Paths and resource types are closed and
+    query-free so a challenge host cannot silently become a general-purpose
+    navigation, download or capture target.
+    """
+
+    origin: str
+    path_prefixes: tuple[str, ...]
+    resource_types: tuple[str, ...]
+    interaction_selectors: tuple[str, ...] = ()
+    settling_selectors: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "origin", _exact_https_origin(self.origin, field_name="origin"))
+        if not isinstance(self.path_prefixes, tuple) or not self.path_prefixes:
+            raise TypeError("path_prefixes must be a non-empty tuple")
+        if len(self.path_prefixes) > _MAX_MARKERS:
+            raise ValueError("path_prefixes contains too many markers")
+        normalized_paths: list[str] = []
+        for value in self.path_prefixes:
+            try:
+                normalized = _normalized_url(value)
+            except (TypeError, ValueError):
+                raise ValueError("path_prefixes must contain safe HTTPS URLs") from None
+            if normalized.origin.text != self.origin or normalized.query or normalized.path == "/":
+                raise ValueError("path_prefixes must be query-free paths on origin")
+            normalized_paths.append(normalized.url)
+        if len(set(normalized_paths)) != len(normalized_paths):
+            raise ValueError("path_prefixes must not contain duplicates")
+        object.__setattr__(self, "path_prefixes", tuple(normalized_paths))
+        if not isinstance(self.resource_types, tuple) or not self.resource_types:
+            raise TypeError("resource_types must be a non-empty tuple")
+        if len(self.resource_types) > _MAX_MARKERS:
+            raise ValueError("resource_types contains too many markers")
+        resource_types = tuple(
+            _stable_token(value, field_name="resource_type") for value in self.resource_types
+        )
+        if len(set(resource_types)) != len(resource_types):
+            raise ValueError("resource_types must not contain duplicates")
+        object.__setattr__(self, "resource_types", resource_types)
+        object.__setattr__(
+            self,
+            "interaction_selectors",
+            _markers(self.interaction_selectors, field_name="interaction_selectors"),
+        )
+        object.__setattr__(
+            self,
+            "settling_selectors",
+            _markers(self.settling_selectors, field_name="settling_selectors"),
+        )
+
+    @property
+    def connection_origins(self) -> tuple[str, ...]:
+        """Return the exact origin needed by the CONNECT prebind boundary."""
+
+        return (self.origin,)
+
+    def match_reason(
+        self,
+        observation: BrowserRequestObservation,
+    ) -> "BrowserChallengeResourceMatch":
+        """Classify one request without exposing its locator or payload.
+
+        The result is intentionally a bounded enum so a guard can explain a
+        local policy rejection using only low-sensitivity request facts.  The
+        frame/ancestry proof remains the guard's responsibility.
+        """
+
+        if not isinstance(observation, BrowserRequestObservation):
+            raise TypeError("observation must be a BrowserRequestObservation")
+        candidate = _normalized_url(observation.locator)
+        if candidate.origin.text != self.origin:
+            return BrowserChallengeResourceMatch.ORIGIN_MISMATCH
+        if observation.resource_type not in self.resource_types:
+            return BrowserChallengeResourceMatch.RESOURCE_TYPE_MISMATCH
+        if not any(
+            candidate.path == prefix.path.rstrip("/")
+            or candidate.path.startswith(f"{prefix.path.rstrip('/')}/")
+            for prefix in (_normalized_url(value) for value in self.path_prefixes)
+        ):
+            return BrowserChallengeResourceMatch.PATH_MISMATCH
+        return BrowserChallengeResourceMatch.ADMITTED
+
+    def matches(self, observation: BrowserRequestObservation) -> bool:
+        return self.match_reason(observation) is BrowserChallengeResourceMatch.ADMITTED
+
+    def path_family(self, observation: BrowserRequestObservation) -> BrowserChallengePathFamily:
+        """Return a bounded diagnostic family without exposing the locator."""
+
+        if not isinstance(observation, BrowserRequestObservation):
+            raise TypeError("observation must be a BrowserRequestObservation")
+        return _challenge_path_family(_normalized_url(observation.locator).path)
+
+    @property
+    def fingerprint_fields(self) -> tuple[str, ...]:
+        return (
+            self.origin,
+            *self.path_prefixes,
+            *self.resource_types,
+            "interaction-selectors",
+            *self.interaction_selectors,
+            "settling-selectors",
+            *self.settling_selectors,
+        )
+
+
+@unique
+class BrowserChallengeResourceMatch(str, Enum):
+    """Bounded profile-match outcomes safe for diagnostic logging."""
+
+    ADMITTED = "admitted"
+    ORIGIN_MISMATCH = "origin-mismatch"
+    RESOURCE_TYPE_MISMATCH = "resource-type-mismatch"
+    PATH_MISMATCH = "path-mismatch"
 
 
 def _stable_token(value: object, *, field_name: str) -> str:
@@ -475,6 +628,10 @@ class BrowserSiteRule:
         default=_DEFAULT_CAPTURE_PRIORITY,
         repr=False,
     )
+    challenge_resource_profile: BrowserChallengeResourceProfile | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rule_id", _stable_token(self.rule_id, field_name="rule_id"))
@@ -509,6 +666,18 @@ class BrowserSiteRule:
         self._normalize_document_rules()
         self._validate_document_rules()
         self._validate_page_markers()
+        if self.challenge_resource_profile is not None and not isinstance(
+            self.challenge_resource_profile,
+            BrowserChallengeResourceProfile,
+        ):
+            raise TypeError(
+                "challenge_resource_profile must be a BrowserChallengeResourceProfile or None"
+            )
+        if (
+            self.challenge_resource_profile is not None
+            and self.challenge_resource_profile.origin in self.allowed_origins
+        ):
+            raise ValueError("challenge resource origin must remain outside allowed_origins")
 
     def _validate_actions(self) -> None:
         if not isinstance(self.actions, tuple) or any(
@@ -772,6 +941,10 @@ class BrowserSiteRule:
             "page-markers",
             str(len(self.page_markers)),
             *(field for marker in self.page_markers for field in marker.fingerprint_fields),
+            "challenge-resource-profile",
+            ""
+            if self.challenge_resource_profile is None
+            else "\x00".join(self.challenge_resource_profile.fingerprint_fields),
         )
         return Sha256(hashlib.sha256("\x00".join(fields).encode("utf-8", "strict")).hexdigest())
 
@@ -798,6 +971,24 @@ class BrowserSiteRule:
         except (TypeError, ValueError):
             return False
         return candidate.origin.text in self.allowed_origins
+
+    def allows_challenge_origin(self, value: str) -> bool:
+        """Return whether ``value`` uses this rule's reviewed dependency."""
+
+        profile = self.challenge_resource_profile
+        if profile is None:
+            return False
+        try:
+            candidate = _normalized_url(value)
+        except (TypeError, ValueError):
+            return False
+        return candidate.origin.text == profile.origin
+
+    def matches_challenge_request(self, observation: BrowserRequestObservation) -> bool:
+        """Match dependency path/type; frame proof is checked by the guard."""
+
+        profile = self.challenge_resource_profile
+        return profile is not None and profile.matches(observation)
 
     def doi_pdf_locator(self, identifiers: tuple[Identifier, ...]) -> str | None:
         """Build one reviewed direct-PDF Browser locator from one neutral DOI."""
@@ -872,6 +1063,35 @@ class BrowserSiteRule:
         if candidate.origin.text not in self.allowed_origins:
             raise ValueError("capture locator must use an allowed rule origin")
         return f"{candidate.origin.text}{candidate.path}"
+
+    def matches_article_landing(
+        self,
+        value: str,
+        *,
+        landing_url: str | None,
+        identifiers: tuple[Identifier, ...],
+    ) -> bool:
+        """Return whether a Publisher page change preserves article identity.
+
+        A Publisher may replace an article URL with another same-article path
+        while a third-party verification script is loading.  The challenge
+        guard must not accept that change merely because it stayed on the same
+        origin, but it can reuse the rule's already-reviewed article identity
+        contract.  This helper performs no I/O and never exposes identifiers
+        beyond the owning rule/capture boundary.
+        """
+
+        if not isinstance(identifiers, tuple) or any(
+            not isinstance(identifier, Identifier) for identifier in identifiers
+        ):
+            raise TypeError("identifiers must contain neutral Identifier values")
+        try:
+            candidate = _normalized_url(value)
+        except (TypeError, ValueError):
+            return False
+        if candidate.origin.text != self.landing_origin:
+            return False
+        return self._matches_article_identity(candidate, landing_url, identifiers)
 
     def _matches_article_identity(
         self,

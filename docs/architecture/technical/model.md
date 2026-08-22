@@ -24,7 +24,6 @@ model/
   execution.py
   report.py
   access.py
-  llm.py
   record.py
   configuration.py
 ```
@@ -47,7 +46,6 @@ model/
 | `execution.py` | 运行时 BatchRequest/BatchSelector/BatchGoal；目标和候选只服务当前进程，不定义持久化 BatchRun |
 | `report.py` | Entry 操作的非持久化 typed Report、最终停止方式、稳定脱敏失败和操作特有结果 |
 | `access.py` | HTTP 与浏览器访问请求、中性结果和脱敏失败数据 |
-| `llm.py` | LLM 请求、结构化响应和 provenance |
 | `record.py` | BibTeX、RIS、CSL JSON 边界记录；只组合现有 LiteratureMetadata 与输入序号，不复制一套导入元数据字段 |
 | `configuration.py` | 完成外部边界解析后的非 secret 运行配置、Provider capability/readiness 和安全配置诊断结果；不保存凭据值或文件原文 |
 
@@ -749,7 +747,7 @@ Model 不得使用 validator、自定义 serializer、自定义 `__init__`、`mo
 
 ADR 0012 的 `AccessScope`、访问政策、permit、`next_allowed_at` 和 `blocked_until` 是 Network 内部技术数据；其中动态状态只存在于当前进程内存。它们不属于模块间业务 Model，也不进入 `model/access.py`、Catalog、ArtifactStore、provenance 或独立协调文件，且不能携带 DOI、Literature ID、候选、完整 URL、凭据或响应正文。
 
-ADR 0015 的静态 `PublisherAccessProfile` catalog，以及当前操作的 `PublisherAccessResolution`、`AcquisitionPlan`、`AccessRouteHint`、Browser queue/session health/circuit，都是 Acquisition/Network 模块私有技术对象，不进入共享业务 Model 或持久化 schema。运行对象可以使用模块私有不可变类型在 Entry/Acquisition 边界内协作，但不能被序列化为 Literature、Report 自由 details、Catalog 或 Artifact。Cookie、持久 Browser Profile 的路径/内容、签名 locator 和页面对象始终留在适配边界；runtime process/context、article page、临时下载目录、queue/health/circuit 关闭后不得跨操作保留，但 Chrome 管理的 Profile 状态会在 owner-only 目录中跨命令保留，只有用户显式删除才移除。
+ADR 0015/0016 的静态 `PublisherAccessProfile` catalog、Cloak identity manifest，以及当前操作的 `PublisherAccessResolution`、`AcquisitionPlan`、`AccessRouteHint`、Browser queue/session health/circuit/challenge lifecycle 和 Agent observation/decision，都是 Configuration/Acquisition/Network/Agents 的私有技术对象，不进入共享业务 Model 或持久化 schema。运行对象可以使用模块私有不可变类型在 Entry/Acquisition 边界内协作，但不能被序列化为 Literature、Report 自由 details、Catalog 或 Artifact。Cookie、identity seed、持久 Browser Profile 的路径/内容、签名 locator、页面对象、Agent screenshot/response 始终留在适配边界；runtime process/context、article page、临时下载目录、queue/health/circuit/session 关闭后不得跨操作保留，但 Chromium 管理的 Profile 状态会在 owner-only 目录中跨命令保留，只有用户显式删除才移除。
 
 `ProviderLiteratureKey` 是供应商文献记录的中性定位，只包含可选 `record_id` 和稳定 `Identifier[]`，且至少具有其中一种定位。`MetadataObservation.version_links` 用它定位同文献其它版本；当前端点由父 observation 表达。`ProviderRelationObservation` 用两个 key 表达一条规范化 `citing -> cited` 有向引用边。两种用法都不接受本地 Literature ID、目标 MetadataObservation 或状态字段；Model validator 只检查封闭结构、至少一个定位值和非空格式，不决定版本归属、目标接纳或 Reference 建立。精确合同见 [Literature 技术文档](literature.md#42-metadataobservation-来源输入)与 [Metadata 技术文档](metadata.md#52-providerrelationobservation)。
 

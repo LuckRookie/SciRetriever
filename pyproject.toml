@@ -5,7 +5,8 @@ description = "Scientific-literature database for metadata, assets, light-struct
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "playwright>=1.55.0",
+    "cloakbrowser==0.5.8",
+    "playwright==1.55.0",
     "pydantic>=2.12.0",
     "prompt-toolkit>=3.0.51",
     "pypdf2>=3.0.1",

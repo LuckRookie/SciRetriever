@@ -8,7 +8,7 @@ from pathlib import Path
 from tests.acceptance.helpers.installed_wheel import InstalledWheel
 
 
-class InstalledPlaywrightBrowserTests(unittest.TestCase):
+class InstalledCloakBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = InstalledWheel()
@@ -18,17 +18,17 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.fixture.__exit__(None, None, None)
 
-    def test_real_chromium_runs_javascript_download_through_controlled_https(
+    def test_real_cloakbrowser_runs_javascript_download_through_controlled_https(
         self,
     ) -> None:
-        driver = Path(__file__).parent / "helpers" / "drive_playwright_browser.py"
+        runtime_home = os.environ.get("SCIRETRIEVER_TEST_CLOAK_HOME", "").strip()
+        if not runtime_home:
+            self.skipTest("set SCIRETRIEVER_TEST_CLOAK_HOME for real installed-runtime QA")
+        driver = Path(__file__).parent / "helpers" / "drive_cloakbrowser.py"
         fresh_site_packages = os.fspath(self.install.site_packages)
-        browser_cache = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-        if browser_cache is None:
-            browser_cache = os.fspath(Path.home() / ".cache" / "ms-playwright")
         result = self.install.run_driver(
             driver,
-            environment={"PLAYWRIGHT_BROWSERS_PATH": browser_cache},
+            environment={"SCIRETRIEVER_TEST_CLOAK_HOME": runtime_home},
             timeout=120,
         )
         self.assertEqual(result.returncode, 0, result.stderr_text)
@@ -38,12 +38,18 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         for module_file in payload["product_module_files"].values():
             self.assertTrue(module_file.startswith(fresh_site_packages + os.sep), module_file)
         self.assertTrue(
+            payload["cloakbrowser_module_file"].startswith(fresh_site_packages + os.sep),
+            payload["cloakbrowser_module_file"],
+        )
+        self.assertTrue(
             payload["playwright_module_file"].startswith(fresh_site_packages + os.sep),
             payload["playwright_module_file"],
         )
-        self.assertTrue(payload["runtime"]["python_dependency_available"])
-        self.assertTrue(payload["runtime"]["chromium_executable_available"])
+        self.assertTrue(payload["runtime"]["cloak_wrapper_available"])
+        self.assertTrue(payload["runtime"]["playwright_api_available"])
+        self.assertTrue(payload["runtime"]["binary_executable_available"])
         self.assertTrue(payload["runtime"]["headed_display_available"])
+        self.assertRegex(payload["runtime"]["browser_version"], r"^[0-9]+(?:\.[0-9]+){3,4}$")
 
         network = payload["network"]
         self.assertTrue(network["resolver_only_returned_loopback"])
@@ -69,7 +75,7 @@ class InstalledPlaywrightBrowserTests(unittest.TestCase):
         self.assertFalse(cleanup["runtime_directory_exists"])
         self.assertTrue(cleanup["profile_survived_broker_close"])
         self.assertFalse(cleanup["server_thread_alive"])
-        self.assertEqual(cleanup["playwright_threads_alive"], [])
+        self.assertEqual(cleanup["browser_threads_alive"], [])
 
         production = payload["production_boundary"]
         self.assertEqual(production["catalog_rule_count"], 9)

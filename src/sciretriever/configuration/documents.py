@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from pathlib import Path
 from typing import Final, Mapping
 
@@ -47,6 +47,7 @@ from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
     AccessConfig,
+    AgentsConfig,
     AnalysisConfig,
     AssetsConfig,
     BrowserProfilePresence,
@@ -69,6 +70,7 @@ def _empty_configuration() -> Configuration:
         sources=SourcesConfig(),
         assets=AssetsConfig(),
         parsing=ParsingConfig(),
+        agents=AgentsConfig(),
         analysis=AnalysisConfig(),
         execution=ExecutionConfig(),
         library=LibraryConfig(),
@@ -96,6 +98,7 @@ _CONFIGURATION_SECTIONS: Final[frozenset[str]] = frozenset(
         "sources",
         "assets",
         "parsing",
+        "agents",
         "analysis",
         "execution",
         "library",
@@ -193,14 +196,14 @@ def configuration_diff(
     before: Configuration,
     after: Configuration,
     *,
-    sections: tuple[str, ...] = ("analysis", "parsing"),
+    sections: tuple[str, ...] = ("agents", "analysis", "parsing"),
 ) -> tuple[ConfigurationChange, ...]:
     """Return a stable, non-secret ordinary-configuration field diff."""
 
     if not isinstance(before, Configuration) or not isinstance(after, Configuration):
         _fail("configuration value is invalid")
     if not isinstance(sections, tuple) or any(
-        type(section) is not str or section not in {"access", "analysis", "parsing"}
+        type(section) is not str or section not in {"access", "agents", "analysis", "parsing"}
         for section in sections
     ):
         _fail("configuration value is invalid")
@@ -249,11 +252,29 @@ def _replace_document_section(
         table = current
     else:
         _fail("configuration value is invalid")
-    for field in tuple(table):
-        if field not in payload:
-            del table[field]
-    for field, field_value in payload.items():
-        table[field] = field_value
+
+    def merge_table(
+        target: MutableMapping[str, object],
+        replacement: Mapping[str, object],
+    ) -> None:
+        # Keep TOMLKit table nodes in place so comments attached to existing
+        # scalar fields (including nested role tables) survive an edit.
+        for field in tuple(target):
+            if field not in replacement:
+                del target[field]
+        for field, field_value in replacement.items():
+            existing = target.get(field)
+            if isinstance(field_value, Mapping):
+                if isinstance(existing, dict):
+                    merge_table(existing, field_value)
+                else:
+                    nested = tomlkit.table()
+                    merge_table(nested, field_value)
+                    target[field] = nested
+            else:
+                target[field] = field_value
+
+    merge_table(table, payload)
 
 
 def _read_editable_configuration(path: Path) -> tuple[bytes, os.stat_result | None]:
@@ -455,6 +476,7 @@ def _commit_configuration_staging(
 def update_configuration_sections(
     path: str | Path,
     *,
+    agents: AgentsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     access: AccessConfig | None = None,
@@ -463,7 +485,9 @@ def update_configuration_sections(
     """Round-trip and atomically publish selected ordinary config sections."""
 
     selected = _safe_path(path)
-    if analysis is None and parsing is None and access is None:
+    if agents is None and analysis is None and parsing is None and access is None:
+        _fail("configuration value is invalid")
+    if agents is not None and not isinstance(agents, AgentsConfig):
         _fail("configuration value is invalid")
     if analysis is not None and not isinstance(analysis, AnalysisConfig):
         _fail("configuration value is invalid")
@@ -474,6 +498,7 @@ def update_configuration_sections(
     payload, expected, configuration = _configuration_update_payload(
         selected,
         analysis=analysis,
+        agents=agents,
         parsing=parsing,
         access=access,
     )
@@ -546,12 +571,15 @@ def configure_browser_access_profile(
 def _configuration_update_payload(
     path: Path,
     *,
+    agents: AgentsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     access: AccessConfig | None = None,
 ) -> tuple[bytes, os.stat_result | None, Configuration]:
     raw, expected = _read_editable_configuration(path)
     document = _configuration_document(raw)
+    if agents is not None:
+        _replace_document_section(document, "agents", agents)
     if analysis is not None:
         _replace_document_section(document, "analysis", analysis)
     if parsing is not None:

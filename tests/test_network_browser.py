@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
+    BrowserCapture,
     BrowserCaptureBatch,
     BrowserCaptureKind,
 )
@@ -29,11 +30,34 @@ from sciretriever.network.browser import (
     BrowserClient,
     BrowserDestinationKind,
     BrowserPageObservation,
+    _Abort,
+    _DownloadCapturePlan,
+    _FlowState,
+    _PendingResponseDownload,
+    _RequestLease,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
-from sciretriever.network.policy import AddressClass, DestinationPolicy
+from sciretriever.network.policy import (
+    AddressClass,
+    DestinationPolicy,
+    ResolvedDestination,
+    normalize_url,
+)
 
 _PUBLIC_POLICY = DestinationPolicy(allowed_classes=frozenset({AddressClass.PUBLIC}))
+
+
+class _FlowController:
+    """Typed Browser controller fixture for one capability-only flow."""
+
+    def __init__(self, flow: Callable[..., object]) -> None:
+        if not callable(flow):
+            raise TypeError("flow must be callable")
+        self._flow = flow
+
+    def run(self, session: object) -> None:
+        result = self._flow(session)
+        del result
 
 
 class _FakeClock:
@@ -79,6 +103,14 @@ class _OriginGuard:
         return tuple(sorted(self.origins))
 
 
+class _SubresourceRejectingGuard(_OriginGuard):
+    """Reject one admitted same-origin subresource at the request boundary."""
+
+    def check_request(self, observation: object) -> None:
+        if getattr(observation, "resource_type", None) != "document":
+            raise ValueError("fixture subresource rejected")
+
+
 class _CaptureGuard:
     def __init__(
         self,
@@ -100,6 +132,18 @@ class _CaptureGuard:
         if self.error is not None:
             raise self.error
         return (url, kind, media_type) in self.allowed
+
+
+class _DownloadProbe:
+    def __init__(self, url: str, request: object | None = None) -> None:
+        self.url = url
+        self.request = request
+        self.body_reads = 0
+
+    def content(self, maximum_bytes: int) -> bytes:
+        del maximum_bytes
+        self.body_reads += 1
+        raise AssertionError("late duplicate download body must not be read")
 
 
 class _RecordingCoordinator(AccessCoordinator):
@@ -150,12 +194,14 @@ class _FakeRequest:
         page: _FakePage,
         *,
         navigation: bool,
+        top_frame: bool | None = None,
         redirected_from: _FakeRequest | None = None,
     ) -> None:
         self.url = url
         self.page = page
         self._navigation = navigation
         self.resource_type = "document" if navigation else "image"
+        self.is_top_frame = top_frame
         self.redirected_from = redirected_from
 
     def is_navigation_request(self) -> bool:
@@ -914,7 +960,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
             )
         )
         self.assertEqual(result.chunks, (b"fixture",))
@@ -984,7 +1030,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 response_url,
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 capture_guard=guard,
                 budget=BrowserBudget(max_captures=4),
             )
@@ -1022,7 +1068,7 @@ class NetworkBrowserTests(unittest.TestCase):
                     self.scope,
                     response_url,
                     self.policy,
-                    flow=flow,
+                    controller=_FlowController(flow),
                     capture_guard=guard,
                     budget=BrowserBudget(max_captures=3),
                 )
@@ -1127,7 +1173,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=_OriginGuard(
                     "https://landing.test",
                     "https://other.test",
@@ -1185,7 +1231,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=_OriginGuard(
                     "https://landing.test",
                     "https://other.test",
@@ -1252,7 +1298,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=_ResponseOnlyGuard(),
             )
         )
@@ -1296,7 +1342,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
             )
         )
 
@@ -1332,7 +1378,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=guard,
             )
         )
@@ -1369,7 +1415,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 budget=BrowserBudget(
                     max_action_wait_seconds=0.02,
                     max_total_seconds=1.0,
@@ -1381,6 +1427,91 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(outcomes, [False])
         self.assertEqual(len(timeouts), 1)
         self.assertLessEqual(timeouts[0], 20)
+
+    def test_acknowledged_top_frame_policy_rejection_waits_for_action_and_reuses_session(
+        self,
+    ) -> None:
+        factory = _FakeFactory()
+        broker = BrowserSessionBroker()
+        self.addCleanup(broker.close)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            session_broker=broker,
+            cleanup_timeout_seconds=0.01,
+        )
+        guard = _OriginGuard("https://landing.test")
+        rejected_routes: list[_FakeRoute] = []
+        action_completed = threading.Event()
+
+        def flow(session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+
+            def click(selector: str, *, timeout: int) -> bool:
+                del selector, timeout
+                for index in range(3):
+                    request = _FakeRequest(
+                        f"https://other.test/unapproved-{index}",
+                        page,
+                        navigation=True,
+                        top_frame=True,
+                    )
+                    route = _FakeRoute(request)
+                    self.assertIsNotNone(context.route_handler)
+                    assert context.route_handler is not None
+                    context.route_handler(route)
+                    rejected_routes.append(route)
+                # Keep the vendor action alive beyond the local cleanup
+                # acknowledgement budget. A policy result must not turn this
+                # normal action unwind into an active transport cancellation.
+                time.sleep(0.04)
+                action_completed.set()
+                return False
+
+            page.click = click  # type: ignore[method-assign]
+            session.click("button[data-action='missing']")  # type: ignore[attr-defined]
+
+        first = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/first",
+                AccessPolicy(max_concurrency=1),
+                controller=_FlowController(flow),
+                destination_guard=guard,
+                session_key="fixture-publisher",
+            )
+        )
+
+        self.assertEqual(first.code, "policy")
+        self.assertTrue(action_completed.is_set())
+        self.assertEqual(len(rejected_routes), 3)
+        self.assertTrue(all(route.aborted for route in rejected_routes))
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        self.assertFalse(context.closed)
+        self.assertFalse(factory.process.closed)
+        self.assertFalse(context.pages[0].abort_event.is_set())
+        self.assertNotIn("other.test", self.resolver.calls)
+
+        second = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/second",
+                AccessPolicy(max_concurrency=1),
+                destination_guard=guard,
+                session_key="fixture-publisher",
+            )
+        )
+
+        self.assertEqual(second.code, "no-download")
+        self.assertEqual(factory.events.count("process-enter"), 1)
+        self.assertEqual(factory.events.count("context-create"), 1)
 
     def test_response_and_download_duplicate_bytes_are_delivered_once(self) -> None:
         download_url = "https://download.test/article.pdf"
@@ -1570,7 +1701,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
             )
         )
 
@@ -1595,7 +1726,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 budget=BrowserBudget(
                     max_capture_wait_seconds=0.02,
                     max_total_seconds=1.0,
@@ -1624,7 +1755,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 budget=BrowserBudget(
                     max_capture_wait_seconds=1.0,
                     max_total_seconds=0.02,
@@ -1759,7 +1890,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=guard,
                 capture_guard=capture_guard,
             )
@@ -1797,7 +1928,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=guard,
             )
         )
@@ -1939,7 +2070,7 @@ class NetworkBrowserTests(unittest.TestCase):
                         self.scope,
                         "https://landing.test/start",
                         self.policy,
-                        flow=flow,
+                        controller=None if flow is None else _FlowController(flow),
                         destination_guard=guard,
                     )
                 )
@@ -2024,6 +2155,45 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(redirect_result.code, "policy")
         self.assertNotIn("other.test", redirect_resolver.calls)
 
+    def test_request_guard_policy_rejection_discards_subresource_before_host_binding(self) -> None:
+        factory = _FakeFactory(subresources=("https://landing.test/challenge.js",))
+        coordinator = _RecordingCoordinator()
+        resolver = _Resolver(self.resolver.answers)
+        guard = _SubresourceRejectingGuard("https://landing.test")
+        client = BrowserClient(
+            factory=factory,
+            resolver=resolver,
+            coordinator=coordinator,
+            destination_policy=_PUBLIC_POLICY,
+        )
+
+        with self.assertLogs("sciretriever.network.browser", level="DEBUG") as logs:
+            result = _failure(
+                client.run(
+                    self.scope,
+                    "https://landing.test/start",
+                    self.policy,
+                    destination_guard=guard,
+                    discard_unapproved_subresources=True,
+                )
+            )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(coordinator.hosts, ["landing.test"])
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        # Process/context acknowledgement plus one prebound origin are the
+        # complete initial transport handshake; the rejected subresource must
+        # not add another context binding.
+        self.assertEqual(len(context.bindings), 3)
+        self.assertEqual(
+            tuple(response.url for response in context.responses),
+            ("https://landing.test/start",),
+        )
+        self.assertIn("blocked_requests=1", "\n".join(logs.output))
+        self.assertNotIn("challenge.js", "\n".join(logs.output))
+
     def test_unapproved_redirected_subresource_response_is_locally_discarded(self) -> None:
         approved_request = "https://landing.test/redirecting-tracker.js"
         rejected_response = "https://other.test/tracker.js"
@@ -2087,8 +2257,10 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=lambda session: session.open_popup(  # type: ignore[attr-defined]
-                    "https://popup.test/viewer"
+                controller=_FlowController(
+                    lambda session: session.open_popup(  # type: ignore[attr-defined]
+                        "https://popup.test/viewer"
+                    )
                 ),
                 destination_guard=guard,
             )
@@ -2125,7 +2297,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=oversized,
+                controller=_FlowController(oversized),
                 budget=BrowserBudget(max_bytes_per_download=4),
             )
         )
@@ -2149,7 +2321,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=popup_storm,
+                controller=_FlowController(popup_storm),
                 budget=BrowserBudget(max_popups=1),
             )
         )
@@ -2167,7 +2339,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=cancel_flow,
+                controller=_FlowController(cancel_flow),
                 cancel_event=cancelled,
             )
         )
@@ -2210,7 +2382,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/start",
                 self.policy,
-                flow=challenge_flow,
+                controller=_FlowController(challenge_flow),
             )
         )
         self.assertEqual(challenge_result.code, "challenge")
@@ -2435,7 +2607,12 @@ class NetworkBrowserTests(unittest.TestCase):
             self.assertEqual(observation.path, "/start")
 
         result = _download(
-            client.run(self.scope, "https://landing.test/start", self.policy, flow=flow)
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                controller=_FlowController(flow),
+            )
         )
         self.assertEqual(result.chunks, (b"ok",))
         self.assertEqual(set(seen), {"page", "context", "process", "route", "popups", "downloads"})
@@ -2477,7 +2654,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.scope,
                 "https://landing.test/article",
                 self.policy,
-                flow=flow,
+                controller=_FlowController(flow),
             )
         )
 
@@ -2698,6 +2875,82 @@ class NetworkBrowserTests(unittest.TestCase):
         permit = coordinator.acquire_scope(self.scope, timeout=0.1)
         permit.release()
 
+    def test_unacknowledged_top_frame_policy_abort_retires_shared_session(self) -> None:
+        class _UnacknowledgedRoute(_FakeRoute):
+            def __init__(self, request: _FakeRequest) -> None:
+                super().__init__(request)
+                self.abort_calls = 0
+
+            def abort(self) -> None:
+                self.abort_calls += 1
+                raise RuntimeError("route abort sentinel")
+
+        factory = _RotatingFakeFactory()
+        broker = BrowserSessionBroker()
+        self.addCleanup(broker.close)
+        client = BrowserClient(
+            factory=factory,
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            session_broker=broker,
+        )
+        guard = _OriginGuard(
+            "https://landing.test",
+            "https://download.test",
+        )
+        rejected_routes: list[_UnacknowledgedRoute] = []
+
+        def flow(session: object) -> None:
+            del session
+            context = factory.processes[0].context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+            route = _UnacknowledgedRoute(
+                _FakeRequest(
+                    "https://other.test/unapproved",
+                    page,
+                    navigation=True,
+                    top_frame=True,
+                )
+            )
+            self.assertIsNotNone(context.route_handler)
+            assert context.route_handler is not None
+            context.route_handler(route)
+            rejected_routes.append(route)
+
+        first = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/first",
+                AccessPolicy(max_concurrency=1),
+                controller=_FlowController(flow),
+                destination_guard=guard,
+                session_key="fixture-publisher",
+            )
+        )
+
+        self.assertEqual(first.code, "cleanup")
+        self.assertEqual(len(rejected_routes), 1)
+        self.assertEqual(rejected_routes[0].abort_calls, 1)
+        self.assertEqual(len(factory.processes), 1)
+        self.assertTrue(factory.processes[0].closed)
+
+        second = _download(
+            client.run(
+                self.scope,
+                "https://landing.test/second",
+                AccessPolicy(max_concurrency=1),
+                destination_guard=guard,
+                session_key="fixture-publisher",
+            )
+        )
+
+        self.assertEqual(second.chunks, (b"%PDF-persistent-fixture",))
+        self.assertEqual(len(factory.processes), 2)
+        self.assertFalse(factory.processes[1].closed)
+
     def test_shared_session_reuses_context_but_isolates_article_resources(self) -> None:
         factory = _FakeFactory(
             configured_download=_FakeDownload(
@@ -2852,6 +3105,115 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(second.chunks, (b"%PDF-persistent-fixture",))
         self.assertEqual(len(factory.processes), 2)
         self.assertFalse(factory.processes[1].closed)
+
+
+class BrowserLateDownloadCorrelationTests(unittest.TestCase):
+    """Network-only proofs for late native Download correlation."""
+
+    _LOCATOR = "https://download.test/article.pdf"
+    _OTHER_LOCATOR = "https://download.test/other.pdf"
+
+    def _state(self, locator: str) -> tuple[_FlowState, ResolvedDestination]:
+        destination = ResolvedDestination(
+            url=normalize_url(locator),
+            addresses=("93.184.216.34",),
+            classes=(AddressClass.PUBLIC,),
+        )
+        payload = b"%PDF-fixture"
+        coordinator = AccessCoordinator()
+        scope = AccessScope("fixture-provider", "web")
+        permit = coordinator.acquire_scope(scope, AccessPolicy(max_concurrency=1))
+        self.addCleanup(permit.release)
+        state = _FlowState(
+            scope_permit=permit,
+            host_policy=AccessPolicy(max_concurrency=1),
+            resolver=_Resolver({"download.test": ("93.184.216.34",)}),
+            destination_policy=_PUBLIC_POLICY,
+            destination_guard=None,
+            capture_guard=None,
+            navigation_only=False,
+            discard_unapproved_subresources=False,
+            budget=BrowserBudget(),
+            clock=lambda: 0.0,
+            deadline=60.0,
+            cancel_event=None,
+            max_bytes_per_download=BrowserBudget().max_bytes_per_download,
+            cleanup_timeout_seconds=5.0,
+        )
+        state.captures = [
+            BrowserCapture(
+                kind=BrowserCaptureKind.RESPONSE,
+                stream=BoundedByteStream(
+                    chunks=(payload,),
+                    media_type="application/pdf",
+                    final_locator=locator,
+                    size=len(payload),
+                ),
+            )
+        ]
+        return state, destination
+
+    @staticmethod
+    def _plan(
+        state: _FlowState,
+        download: _DownloadProbe,
+    ) -> _DownloadCapturePlan | None:
+        client = object.__new__(BrowserClient)
+        return BrowserClient._network_download_capture_plan(
+            client,
+            state,
+            download,
+            download.url,
+        )
+
+    def test_late_duplicate_download_without_request_is_discarded_without_body(self) -> None:
+        state, _ = self._state(self._LOCATOR)
+        download = _DownloadProbe(self._LOCATOR)
+        plan = self._plan(state, download)
+        self.assertIsNone(plan)
+        self.assertEqual(download.body_reads, 0)
+        self.assertEqual(len(state.captures), 1)
+
+    def test_late_duplicate_download_with_unassociated_request_fails_closed(self) -> None:
+        state, _ = self._state(self._LOCATOR)
+        download = _DownloadProbe(self._LOCATOR, request=object())
+        with self.assertRaises(_Abort) as raised:
+            self._plan(state, download)
+        self.assertEqual(raised.exception.code, "runtime")
+        self.assertEqual(len(state.captures), 1)
+        self.assertEqual(download.body_reads, 0)
+
+    def test_late_download_with_different_locator_fails_closed(self) -> None:
+        state, _ = self._state(self._LOCATOR)
+        download = _DownloadProbe(self._OTHER_LOCATOR)
+        with self.assertRaises(_Abort) as raised:
+            self._plan(state, download)
+        self.assertEqual(raised.exception.code, "runtime")
+        self.assertEqual(download.body_reads, 0)
+
+    def test_late_duplicate_with_pending_request_uses_correlation(self) -> None:
+        state, destination = self._state(self._LOCATOR)
+        request = object()
+        lease = _RequestLease(
+            request=request,
+            page=None,
+            destination=destination,
+            navigation=False,
+        )
+        pending = _PendingResponseDownload(
+            lease=lease,
+            kind=BrowserCaptureKind.RESPONSE,
+            media_type="application/pdf",
+            capture_allowed=True,
+        )
+        state.pending_response_downloads[destination.url.url] = pending
+        state.request_leases[id(request)] = lease
+        download = _DownloadProbe(self._LOCATOR)
+        plan = self._plan(state, download)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIs(plan.request, request)
+        self.assertEqual(download.body_reads, 0)
 
 
 if __name__ == "__main__":

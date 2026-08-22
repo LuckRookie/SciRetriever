@@ -1,8 +1,9 @@
 # 受控 Browser 现场核实门
 
 - 建立日期：2026-08-15
-- 最后同步：2026-08-21
-- 当前状态：Browser 使用所选持久 Chrome Profile、当前机器网络出口和单项明确授权
+- 最后同步：2026-08-22
+- 当前状态：Browser 使用所选持久 Profile、唯一 CloakBrowser runtime、当前机器
+  网络出口和单项明确授权
 - 当前 production Browser Profile：`9`（均由总开关显式启用并逐文章检查）
 - 当前 production Browser rule：`9`
 - 文档性质：真实 Provider 访问前的人工作业门；不是自动测试、运行指南或访问授权
@@ -14,11 +15,10 @@
 始终离线。
 
 自动 Browser 固定以 `headless = false` 运行；无 GUI Linux 由 Xvfb 提供虚拟显示，现场探测本身
-不提供交互窗口，也不填写密码、选择机构、读取登录结果或处理 MFA/CAPTCHA/challenge。Operator
-可以在另一个明确动作中从配置中心打开使用同一 Profile 的可见 Browser，自行完成其获授权的
-登录、机构选择或 MFA；该动作与真实 Provider probe 是两个不同授权边界。自动运行使用执行机器的
-正常网络出口，由站点逐文章判断公开可达性、Profile 状态、机构 IP 和具体 entitlement。一个
-Completion 对象图只启动一个 Chrome process 和一个 persistent context；不同 Publisher lane
+不提供交互窗口，也不填写密码、选择机构、读取登录结果或处理 MFA/CAPTCHA。第一版没有另行打开
+可见 Browser 的认证流程；需要登录、机构选择、MFA 或明确人工 challenge 的样本必须停止。自动运行
+使用执行机器的正常网络出口，由站点逐文章判断公开可达性、Profile 状态、机构 IP 和具体
+entitlement。一个 Completion 对象图只启动一个 patched Chromium process 和一个 persistent context；不同 Publisher lane
 共享它们，同一 Publisher risk group 严格串行。关闭对象图只清理 process/context 与临时下载
 工作区；Chrome 管理的 Profile 跨命令保留，只有显式删除操作才能移除。
 
@@ -30,6 +30,8 @@ Completion 对象图只启动一个 Chrome process 和一个 persistent context�
 | 其它矩阵 Profile | 没有 production Browser route；不是现场核实候选 |
 | 已公开的历史现场摘要 | 2026-08-18 SpringerLink 四个脱敏样本：三个 normal miss、一个通过当时机构网段交付 primary PDF；该小样本不证明当前 IP、其它文章或长期成功率 |
 | 本次脱敏现场摘要 | 2026-08-20 Browser-only 九 route 各一个样本：一个交付 primary PDF、一个 normal miss、七个由页面明确识别为 challenge；同 revision 的独立单项复验又有另一 Publisher 交付 primary PDF。两个成功文件分别为 30 页和 5 页，magic、严格 PDF reader、DOI/完整题名、SHA-256、Catalog/Artifact/SQLite 一致性均通过；批次内部 policy/runtime/timeout/cleanup/budget/correlation failure 为 0。时点结果不代表供应商成功率或未来 entitlement |
+| 切换前对照基线 | [2026-08-21 服务器 Browser 脱敏基线](2026-08-21-server-baseline.md)：同一 Profile/process/context、服务器 direct 出口，SpringerLink/IOP 2/9 成功；七家 challenge、Cloudflare dependency 被本地 guard 阻断、诊断放行后出现明确互动控件。该记录只用于 Cloak/challenge A/B，不是普遍 entitlement |
+| 最终 Cloak-only 现场准入 | 2026-08-22 固定九家每家一个代表样本：SpringerLink 以唯一 Cloak runtime 捕获并验证正文 PDF，记为 `ready`；ACS、AIP、Elsevier、Oxford、RSC、Science 和 Wiley 各加载 17 个 Cloudflare 受限资源且本地阻断为 0，但有界 settle 超时；IOP 转向未审查 PerfDrive 顶层 origin 并正确 fail closed，八家均记为 `deferred`。这只证明 Springer 固定样本无回归、Cloudflare 资源不再被本地误拦和未知验证 origin 保持 fail closed；不证明 Cloak 提高总体下载率，不外推任何文章 entitlement。逐家依据见[Publisher 准入矩阵](../publisher-access-matrix.md) |
 
 SpringerLink 历史运行还证明了当时实现中的 operation-local session reuse 和 Provider-specific
 pacing；它不能反向证明当前持久 Profile 已认证、能够跨命令复用某个登录，或对其它文章有权限。
@@ -69,10 +71,10 @@ pacing；它不能反向证明当前持久 Profile 已认证、能够跨命令�
 - 生效时间窗、Provider-specific policy、同组串行边界和强制停止条件；
 - Catalog、ArtifactStore、report 和日志的仓库外落点及运行后保留/清理选择。
 
-访问模式固定为 `headed-persistent-profile`。核实单必须使用普通配置已经选择的 Profile，不能
-临时指定外部路径、导入 Cookie，或把 probe 隐式扩展为人工登录；需要认证时，用户必须先在配置
-中心单独、显式打开同一 Profile 的可见 Browser。“测试一下 Browser”“使用我的现有配置”或
-一般性开发授权都不满足本门。
+访问模式固定为 CloakBrowser patched Chromium、`headless = false`、固定 identity manifest 和
+持久 Profile。核实单必须使用普通配置已经选择的 Profile，不能临时指定外部路径、导入 Cookie，
+或把 probe 扩展为人工登录；需要认证的样本不在第一版范围内。“测试一下 Browser”“使用我的现有
+配置”或一般性开发授权都不满足本门。
 
 ## 4. 执行边界
 
@@ -91,8 +93,9 @@ group 并行，同一 group 始终严格串行。执行必须：
 6. 成功捕获继续经过正文归属、实际 PDF 字节/reader/页面树验证和不可变发布；
 7. 正常与 Debug 日志只记录稳定 code、group/state/action 和匿名候选，不记录完整 URL、query、
    selector、页面正文、header、Cookie、token、临时路径或 PDF 字节；
-8. 登录、MFA、CAPTCHA、challenge、账号警告或机构选择页面一律识别后停止，建议改用已授权 API
-   或由用户手动提供 PDF，不尝试继续认证。
+8. 经规则审查的 challenge dependency 可以在局部预算内自然加载和 settle；只有自动 clear 才返回
+   文章流程。本地资源阻断、settle timeout、明确 CAPTCHA/Turnstile 互动控件、登录、MFA、账号
+   警告或机构选择页面形成不同终态并停止，建议改用已授权 API 或手动 PDF。
 
 ## 5. 强制停止条件
 
@@ -101,7 +104,8 @@ group 并行，同一 group 始终严格串行。执行必须：
 - 用户取消、授权到期或任一预算达到上限；
 - 官方政策、robots、产品/entitlement 或页面合同与核实单不一致；
 - `429`、quota、`Retry-After`、rate-limited、IP blocked 或服务明确要求降低频率；
-- login、CAPTCHA、MFA、challenge、账号警告、异常认证或机构选择；
+- login、CAPTCHA/Turnstile 人工交互、MFA、challenge resource-blocked/settle-timeout、账号警告、
+  异常认证或机构选择；
 - landing/capture 跳到未批准 origin，或 DNS/TLS/binding/redirect 检查失败；
 - 只得到 supplement、front matter、wrong article、HTML/XML、超限或不可验证 PDF；
 - timeout、runtime、cleanup、publication 或数据完整性失败；

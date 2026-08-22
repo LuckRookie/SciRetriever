@@ -54,6 +54,19 @@ _WEB_POLICY = AccessPolicy(
 )
 
 
+class _FlowController:
+    """Typed Browser controller fixture for one capability-only flow."""
+
+    def __init__(self, flow: Callable[..., object]) -> None:
+        if not callable(flow):
+            raise TypeError("flow must be callable")
+        self._flow = flow
+
+    def run(self, session: object) -> None:
+        result = self._flow(session)
+        del result
+
+
 class _FakeClock:
     def __init__(self) -> None:
         self.value = 0.0
@@ -492,6 +505,14 @@ class MisownedAnalysisArtifactPort(Protocol):
             "DocumentPackage",
             "WorkVersion",
         )
+        allowed_network_ports_by_module = {
+            "network/browser_control.py": ("BrowserAgentActionPort",),
+            "network/browser.py": ("_BrowserAgentActionPort",),
+            # This private structural seam only marshals Playwright calls onto
+            # the Cloak-owned engine thread. It owns no business fact and is
+            # not exported as a cross-module product port.
+            "network/playwright.py": ("_EnginePort",),
+        }
         sql_statement = re.compile(r"^(SELECT|INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
         for path in production_files:
             relative = path.relative_to(source_root).as_posix()
@@ -501,7 +522,17 @@ class MisownedAnalysisArtifactPort(Protocol):
             for term in revoked_legacy_terms:
                 self.assertNotIn(term, source, relative)
             tree = ast.parse(source, filename=relative)
-            self.assertEqual(_declared_port_classes(tree), (), relative)
+            declared_ports = _declared_port_classes(tree)
+            # Network owns the neutral Browser Agent action seam introduced by
+            # the controlled Browser contract.  It is intentionally limited
+            # to this one protocol and its request-local adapter; no business
+            # or storage ports are permitted in Network/Storage modules.
+            allowed_network_ports = allowed_network_ports_by_module.get(relative, ())
+            self.assertEqual(
+                tuple(name for name in declared_ports if name not in allowed_network_ports),
+                (),
+                relative,
+            )
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     names = [alias.name for alias in node.names]
@@ -633,7 +664,7 @@ class MisownedAnalysisArtifactPort(Protocol):
                     web_scope,
                     "https://landing.test/start",
                     _WEB_POLICY,
-                    flow=hold_article_flow,
+                    controller=_FlowController(hold_article_flow),
                 )
             )
         )
@@ -778,7 +809,7 @@ class MisownedAnalysisArtifactPort(Protocol):
                 scope,
                 "https://landing.test/start",
                 _WEB_POLICY,
-                flow=flow,
+                controller=_FlowController(flow),
                 cancel_event=cancel_event,
             )
             if label == "success":

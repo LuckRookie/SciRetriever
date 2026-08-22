@@ -7,6 +7,7 @@ from typing import Final
 from ..helpers import (
     DEFAULT_EXCLUDED_FILENAME_MARKERS,
     DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
+    cloudflare_challenge_profile,
     pdf_actions,
     publisher_page_markers,
 )
@@ -14,7 +15,7 @@ from ..model import BrowserArticleIdentityKind, BrowserSiteRule
 
 SCIENCE_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     rule_id="science-aaas-pdf",
-    revision=2,
+    revision=3,
     landing_origin="https://www.science.org",
     allowed_origins=("https://www.science.org",),
     web_scope_provider_name="science-aaas",
@@ -42,6 +43,7 @@ SCIENCE_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     article_id_namespaces=("doi",),
     supplement_filename_markers=DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
     excluded_filename_markers=DEFAULT_EXCLUDED_FILENAME_MARKERS,
+    challenge_resource_profile=cloudflare_challenge_profile(),
 )
 
 

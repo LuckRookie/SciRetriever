@@ -4,6 +4,14 @@ import unittest
 
 from pydantic import BaseModel, ValidationError
 
+from sciretriever.agents import (
+    AgentCapability,
+    AgentProvenance,
+    AgentRequest,
+    AgentRole,
+    AgentStructuredResponse,
+    AgentTextPart,
+)
 from sciretriever.model.access import (
     AccessFailure,
     BoundedByteStream,
@@ -15,12 +23,6 @@ from sciretriever.model.access import (
     TransportRequest,
     TransportResponse,
 )
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequest,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.primitives import ProvenanceId, Sha256
 
 _HASH = Sha256("a" * 64)
@@ -30,7 +32,7 @@ _ID = ProvenanceId("123e4567-e89b-12d3-a456-426614174000")
 def _strict_model_contract(model: type[BaseModel]) -> None:
     assert model.__module__ in {
         "sciretriever.model.access",
-        "sciretriever.model.llm",
+        "sciretriever.model.access",
     }
     assert model.model_config.get("frozen") is True
     assert model.model_config.get("strict") is True
@@ -477,89 +479,65 @@ class AccessModelTests(unittest.TestCase):
             )
 
 
-class LlmModelTests(unittest.TestCase):
-    def _request(self, **overrides: object) -> LLMRequest:
-        values: dict[str, object] = {
-            "kind": LLMRequestKind.METADATA,
-            "input_sha256": _HASH,
-            "model": "fixture-model",
-            "max_output_tokens": 64,
-        }
-        values.update(overrides)
-        return LLMRequest.model_validate(values)
+class AgentsModelTests(unittest.TestCase):
+    def _provenance(self) -> AgentProvenance:
+        return AgentProvenance(
+            provider="fixture-provider",
+            model="fixture-model",
+            input_sha256=_HASH,
+            parameters_sha256=_HASH,
+        )
 
-    def _provenance(self, **overrides: object) -> LLMProvenance:
-        values: dict[str, object] = {
-            "provider": "fixture-provider",
-            "model": "fixture-model",
-            "input_sha256": _HASH,
-            "parameters_sha256": _HASH,
-        }
-        values.update(overrides)
-        return LLMProvenance.model_validate(values)
+    def _request(self) -> AgentRequest:
+        return AgentRequest(
+            role=AgentRole.ANALYSIS,
+            capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
+            model="fixture-model",
+            input_sha256=_HASH,
+            text_parts=(
+                AgentTextPart(media_type="text/plain", text="instruction"),
+                AgentTextPart(media_type="application/json", text='{"document":"fixture"}'),
+            ),
+            response_schema='{"type":"object","additionalProperties":false}',
+            max_output_tokens=64,
+        )
 
-    def test_llm_contracts_are_neutral_strict_frozen_and_round_trip(self) -> None:
+    def test_agents_contracts_are_neutral_bounded_and_round_trip(self) -> None:
         request = self._request()
-        response = LLMStructuredResponse(
+        response = AgentStructuredResponse(
             result='{"outcome":"usable"}',
             provenance=self._provenance(),
         )
-        for model in (LLMRequest, LLMProvenance, LLMStructuredResponse):
-            _strict_model_contract(model)
-        self.assertEqual(
-            {kind.value for kind in LLMRequestKind},
-            {"metadata", "content", "reference-lookup"},
-        )
-        self.assertEqual(LLMRequest.model_validate_json(request.model_dump_json()), request)
-        self.assertEqual(
-            LLMStructuredResponse.model_validate_json(response.model_dump_json()), response
-        )
-        self.assertEqual(response.result, '{"outcome":"usable"}')
+        self.assertEqual(request.role, AgentRole.ANALYSIS)
+        self.assertEqual(request.structured_input, '{"document":"fixture"}')
+        self.assertEqual(response.value, {"outcome": "usable"})
+        self.assertEqual(response.provenance.provider, "fixture-provider")
 
-    def test_llm_contracts_reject_old_business_proposal_vendor_objects_secrets_and_state(
-        self,
-    ) -> None:
-        with self.assertRaises(ValidationError):
-            self._request(source="prompt text")  # type: ignore[call-arg]
-        with self.assertRaises(ValidationError):
-            self._request(api_key="llm-secret")  # type: ignore[call-arg]
-        with self.assertRaises(ValidationError):
-            self._request(kind="provider-specific-operation")
-        with self.assertRaises(ValidationError):
-            self._request(next_allowed_at="2026-08-10T12:00:00Z")  # type: ignore[call-arg]
-        with self.assertRaises(ValidationError):
-            LLMStructuredResponse(
-                proposal={"old": "business-proposal"},  # type: ignore[call-arg]
-                provenance=self._provenance(),
-            )
-        with self.assertRaises(ValidationError):
-            LLMStructuredResponse(
-                result=object(),  # type: ignore[arg-type]
-                provenance=self._provenance(),
-            )
-
-    def test_llm_provenance_has_no_secret_or_transport_fields(self) -> None:
-        self.assertEqual(
-            set(LLMProvenance.model_fields),
-            {"provider", "model", "input_sha256", "parameters_sha256"},
-        )
-        self.assertEqual(
-            set(LLMRequest.model_fields),
-            {"kind", "input_sha256", "model", "max_output_tokens"},
-        )
-        self.assertEqual(
-            set(LLMStructuredResponse.model_fields),
-            {"result", "provenance"},
-        )
-        self.assertNotIn("ACCESS-SECRET-SENTINEL", repr(self._request()))
-        with self.assertRaises(ValidationError):
-            LLMProvenance(
-                provider="fixture-provider",
+    def test_agents_contracts_reject_business_kind_vendor_objects_and_secret_fields(self) -> None:
+        with self.assertRaises((TypeError, ValueError)):
+            AgentRequest(
+                role=AgentRole.ANALYSIS,
+                capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
                 model="fixture-model",
                 input_sha256=_HASH,
-                parameters_sha256=_HASH,
-                secret="ACCESS-SECRET-SENTINEL",  # type: ignore[call-arg]
+                text_parts=(AgentTextPart(media_type="text/plain", text="instruction"),),
+                response_schema='{"type":"object","additionalProperties":false}',
+                max_output_tokens=64,
+                kind="metadata",  # type: ignore[call-arg]
             )
+        with self.assertRaises(ValueError):
+            AgentStructuredResponse(result='{"x":1,"x":2}', provenance=self._provenance())
+        self.assertNotIn("ACCESS-SECRET-SENTINEL", repr(self._request()))
+
+    def test_agents_provenance_has_only_neutral_identity_and_usage(self) -> None:
+        self.assertEqual(
+            set(AgentProvenance.__dataclass_fields__),
+            {"provider", "model", "input_sha256", "parameters_sha256", "usage"},
+        )
+        self.assertEqual(
+            set(AgentStructuredResponse.__dataclass_fields__),
+            {"result", "provenance"},
+        )
 
 
 if __name__ == "__main__":

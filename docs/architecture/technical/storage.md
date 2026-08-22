@@ -1,7 +1,7 @@
 # Storage 模块技术设计
 
 - 总技术入口：[技术文档索引](../technical.md)
-- 设计责任：[设计文档 5.3](../design.md#53-存储)
+- 设计责任：[设计文档 5.4](../design.md#54-存储)
 - 身份决策：[ADR 0002](../decisions/0002-literature-identity-and-incremental-processing.md)
 - 稳定原则：[架构原则](../principles.md)
 - 运行原则：[ADR 0011](../decisions/0011-literature-database-centered-incremental-maintenance.md)

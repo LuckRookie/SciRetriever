@@ -43,6 +43,7 @@ from sciretriever.configuration.file_store import (
 from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
+    AgentsConfig,
     AnalysisConfig,
     Configuration,
     CoreCredentialService,
@@ -537,6 +538,7 @@ def update_core_service_configuration(
     path: str | Path,
     service: CoreCredentialService | str,
     *,
+    agents: AgentsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     secret: str | None,
@@ -555,7 +557,7 @@ def update_core_service_configuration(
     """
 
     name = _core_service_name(service)
-    if (name is CoreCredentialService.LLM) != (analysis is not None) or (
+    if (name is CoreCredentialService.AGENTS) != (agents is not None) or (
         name is CoreCredentialService.MINERU
     ) != (parsing is not None):
         _fail("configuration value is invalid")
@@ -564,6 +566,7 @@ def update_core_service_configuration(
     selected = _safe_path(path)
     configuration_payload, configuration_expected, configuration = _configuration_update_payload(
         selected,
+        agents=agents,
         analysis=analysis,
         parsing=parsing,
     )

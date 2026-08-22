@@ -3,6 +3,10 @@
   "type": "message",
   "role": "assistant",
   "model": "fixture-anthropic-model",
+  "usage": {
+    "input_tokens": 23,
+    "output_tokens": 1
+  },
   "content": [
     {
       "type": "text",

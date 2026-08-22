@@ -170,14 +170,33 @@ body，以及从单次成功推导的长期授权/OA/版权结论。Wiley TDM PD
 Browser capability 均为 `production-ready`。该状态只表示当前 route/rule/policy、离线 fixture、
 生产对象图和安全测试闭环，不表示当前 IP、机构协议或任意文章 entitlement 已在线证明。
 
-生产规则 `wiley-online-library-pdf@2` 只接受强 DOI/WOL landing，精确允许
+生产规则 `wiley-online-library-pdf@3` 只接受强 DOI/WOL landing，精确允许
 `https://onlinelibrary.wiley.com` 与 `https://advanced.onlinelibrary.wiley.com`；后者是经审查的
 DOI landing alias，不会因为 resolver 第一跳进入 advanced 主机而跳过 Wiley Browser route。
 规则从 `/doi/pdfdirect/`、`/doi/pdf/` 或 `/doi/epdf/` 的 response、download、popup、viewer 或
 verified locator 中等待任一正文 capture，并排除 supporting information、excluded 和
 wrong-article。规则包含 entitlement/paywall、login、MFA/challenge、rate/IP/account-warning
-等封闭页面状态；Cloudflare challenge 只识别后停止，不尝试绕过，裸 403 则单独记录为 access
-denied。
+等封闭页面状态；自动 Cloudflare challenge 只在有界 settle 内等待自然完成，明确人工控件只
+识别后停止且不尝试点击或绕过，裸 403 则单独记录为 access denied。
+
+Revision 3 的新增证据日期为 2026-08-21，只为 Wiley 规则声明受限的 Cloudflare dependency：
+精确 origin `https://challenges.cloudflare.com`、path prefix
+`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
+`document`、`fetch`、`xhr` 和 `image`。它不加入 Wiley 的普通
+`allowed_origins`；只有当前 Wiley Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
+可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。运行时分别报告
+`resource-blocked`、`settling`、`cleared`、`interaction-required`、`settle-timeout` 和普通
+HTTP 403；只有自动 `cleared` 才返回正文流程，第一版不点击 CAPTCHA/Turnstile。该封闭规则和
+本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+
+2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
+均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
+Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
+权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+
+CBA72 将 Wiley Browser 的本次服务器现场准入记为 `deferred`。这不降低
+`wiley-online-library` 的 `production-ready` 工程状态，不删除生产 Browser rule，也不影响
+独立的 TDM API route；它只表示固定代表样本停在持续自动验证且没有可验证 PDF。
 
 ScanSci PDF revision `5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5` 提供了
 `/doi/pdfdirect/`、`/doi/pdf/`、`/doi/epdf/`、若干 supplement marker，以及一次转到
@@ -189,8 +208,8 @@ origin、模板、marker 或成功结论在 SciRetriever 中仍成立，详见
 
 Browser 使用当前机器正常网络出口，以及共享 persistent Profile/context 中独立的 `wiley`
 lane；组内并发 1、项目审慎最小文章启动间隔 20 秒，不猜测 Atypon 共享风险域。自动流程不导入或
-读取 Cookie、不填写凭据；配置中心可以通过独立显式动作打开同一 Profile 的可见 Browser，由用户
-自行处理获授权的认证。TDM API 的认证、quota、service 或 network failure 仍按第二层
+读取 Cookie、不填写凭据；第一版不提供可见 Browser 认证入口。TDM API 的认证、quota、service
+或 network failure 仍按第二层
 失败合同处理，不能靠 Browser 绕行；只有 API 正常未命中或无该文章 entitlement，且其它
 Browser admission 条件成立时才可能升级。
 

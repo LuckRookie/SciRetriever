@@ -157,10 +157,35 @@ class ConfigConsole:
         providers: Sequence[tuple[str, str, str]],
         access_state: str = "Unavailable",
         access_detail: str = "Authorized APIs and controlled Browser",
+        agent_provider: tuple[str, str] | None = None,
+        analysis_role: tuple[str, str] | None = None,
+        browser_role: tuple[str, str] | None = None,
+        cloak_binary: tuple[str, str] | None = None,
+        selected_profile: tuple[str, str] | None = None,
+        browser_enabled: tuple[str, str] | None = None,
     ) -> None:
         core = self._home_table()
         core.add_row("[L]", "LLM Analysis", llm_detail, _state_text(llm_state, self.palette))
         core.add_row("[M]", "MinerU Parser", mineru_detail, _state_text(mineru_state, self.palette))
+        capability_rows = (
+            ("[P]", "Agent provider", agent_provider),
+            ("[A]", "Analysis role", analysis_role),
+            ("[B]", "Browser role", browser_role),
+            ("[C]", "Cloak binary", cloak_binary),
+            ("[R]", "Selected Profile", selected_profile),
+            ("[E]", "Browser enabled", browser_enabled),
+        )
+        capability_table = self._home_table()
+        for shortcut, label, row in capability_rows:
+            if row is None:
+                continue
+            detail, state = row
+            capability_table.add_row(
+                shortcut,
+                label,
+                detail,
+                _state_text(state, self.palette),
+            )
         provider_table = self._home_table()
         provider_table.add_row(
             "[A]",
@@ -172,6 +197,9 @@ class ConfigConsole:
             provider_table.add_row(str(index), name, purpose, _state_text(state, self.palette))
         self.console.print(Text("CORE SERVICES", style=self.palette.heading))
         self.console.print(core)
+        if capability_table.row_count:
+            self.console.print(Text("AGENTS & BROWSER", style=self.palette.heading))
+            self.console.print(capability_table)
         self.console.print(Text("LITERATURE PROVIDERS", style=self.palette.heading))
         self.console.print(provider_table)
         self.console.print(
@@ -214,9 +242,9 @@ class ConfigConsole:
         self.console.print(table)
         self.console.print(
             Text(
-                "Controlled Browser uses one headed persistent Chrome profile. Publisher "
-                "lanes share its settings and session state; the same Publisher remains "
-                "serialized, and entitlement is checked per article.",
+                "Controlled Browser uses one headed fixed-profile CloakBrowser process and "
+                "context. Publisher lanes share its history, settings and site state; the "
+                "same Publisher remains serialized, and entitlement is checked per article.",
                 style=self.palette.muted,
             )
         )
@@ -335,7 +363,7 @@ class ConfigStatusPresenter:
 
     def _core_services(self, payload: Mapping[str, object]) -> Table:
         parsing = _mapping(payload["parsing"])
-        analysis = _mapping(payload["analysis"])
+        analysis = _mapping(payload.get("agents", payload.get("analysis", {})))
         parser_secret = _mapping(parsing["bearer_token"])
         analysis_secret = _mapping(analysis["api_key"])
         implementation = _mapping(parsing["implementation"])
@@ -352,7 +380,7 @@ class ConfigStatusPresenter:
                 value
                 for value in (
                     _shown(analysis.get("provider")),
-                    _shown(analysis.get("model")),
+                    _shown(analysis.get("model", analysis.get("analysis_model"))),
                     _token_count(analysis.get("context_window_tokens")),
                 )
                 if value != "not set"
@@ -369,6 +397,34 @@ class ConfigStatusPresenter:
             f"endpoint: {_shown(analysis.get('base_url'))}\n"
             f"model: {llm_identity}\n"
             f"credential: {_core_credential_state(analysis_secret)}",
+        )
+        analysis_role = _mapping(analysis.get("analysis_role"))
+        browser_role = _mapping(analysis.get("browser_role"))
+        table.add_row(
+            _layer_state(
+                "Analysis role",
+                "ready" if analysis_role.get("locally_ready") is True else "needs setup",
+                self.palette,
+            ),
+            "model: {} · context: {} · structured text: {}".format(
+                _shown(analysis_role.get("model")),
+                _token_count(analysis_role.get("context_window_tokens")),
+                "yes" if analysis_role.get("structured_output") is True else "no",
+            ),
+        )
+        browser_role_ready = browser_role.get("locally_ready") is True
+        table.add_row(
+            _layer_state(
+                "Browser role",
+                "ready" if browser_role_ready else "not configured",
+                self.palette,
+            ),
+            "model: {} · context: {} · image input: {} · tool decision: {}".format(
+                _shown(browser_role.get("model")),
+                _token_count(browser_role.get("context_window_tokens")),
+                "yes" if browser_role.get("image_input") is True else "no",
+                "yes" if browser_role.get("tool_decision") is True else "no",
+            ),
         )
         parser_identity = (
             f"MinerU {implementation.get('release')} · protocol "
@@ -504,6 +560,7 @@ class ConfigStatusPresenter:
         profile = _mapping(browser["profile"])
         session = _mapping(browser["session"])
         probe = _mapping(browser["probe"])
+        license_status = _mapping(browser.get("cloakbrowser_license"))
         routes = _mapping_sequence(browser["routes"])
         actions = _mapping_sequence(browser["action_required"])
         table = Table(
@@ -515,24 +572,46 @@ class ConfigStatusPresenter:
         table.add_column("Layer / state", width=20, no_wrap=True)
         table.add_column("Evidence / meaning", ratio=2, overflow="fold")
         runtime_ready = (
-            runtime.get("framework_available") is True
-            and runtime.get("python_dependency_available") is True
-            and runtime.get("chromium_executable_available") is True
+            runtime.get("cloak_wrapper_available") is True
+            and runtime.get("playwright_api_available") is True
+            and runtime.get("binary_presence") is True
+            and runtime.get("binary_verified") is True
             and runtime.get("headed_display_available") is True
+            and runtime.get("fixed_identity_manifest") is True
         )
         table.add_row(
             _layer_state(
-                "Runtime",
-                "available" if runtime_ready else "unavailable",
+                "Production runtime",
+                "ready" if runtime_ready else "not ready",
                 self.palette,
             ),
-            "framework={} · Playwright Python={} · Chromium={} · headed display={} · "
-            "launch not assessed".format(
-                "present" if runtime.get("framework_available") is True else "missing",
-                "present" if runtime.get("python_dependency_available") is True else "missing",
-                ("present" if runtime.get("chromium_executable_available") is True else "missing"),
+            "CloakBrowser wrapper={} · Playwright API={} · fixed binary={} · version={} · "
+            "verified={} · headed display={} · launch={}".format(
+                "present" if runtime.get("cloak_wrapper_available") is True else "missing",
+                "present" if runtime.get("playwright_api_available") is True else "missing",
+                "present" if runtime.get("binary_presence") is True else "missing",
+                _shown(runtime.get("binary_version")),
+                "yes" if runtime.get("binary_verified") is True else "no",
                 "present" if runtime.get("headed_display_available") is True else "missing",
+                "not assessed" if runtime.get("launch_assessed") is False else "unknown",
             ),
+        )
+        table.add_row(
+            _layer_state(
+                "Fixed identity manifest",
+                "ready" if runtime.get("fixed_identity_manifest") is True else "not ready",
+                self.palette,
+            ),
+            f"schema: {_shown(runtime.get('identity_schema'))} · profile lease: "
+            f"{runtime.get('profile_lease', 'not-assessed')} · launch not assessed",
+        )
+        table.add_row(
+            _layer_state(
+                "Optional Pro key",
+                "saved" if license_status.get("configured") else "not set",
+                self.palette,
+            ),
+            str(license_status.get("status", "reserved; not used by pinned free binary")),
         )
         route_names = ", ".join(
             f"{route.get('display_name')} [{route.get('rate_limit_group')}]" for route in routes
@@ -549,7 +628,7 @@ class ConfigStatusPresenter:
         table.add_row(
             _layer_state(
                 "Automatic routes",
-                "ready" if automatic_route_count == len(routes) else "partial",
+                "ready" if browser.get("automatic_acquisition_available") is True else "not ready",
                 self.palette,
             ),
             f"{automatic_route_count}/{len(routes)} routes locally eligible · "
@@ -564,8 +643,8 @@ class ConfigStatusPresenter:
             f"local cross-group concurrency cap {browser.get('local_max_concurrency')}",
         )
         table.add_row(
-            _layer_state("Access mode", "persistent", self.palette),
-            f"{browser.get('mode')} · headed Chrome · current machine network exit",
+            _layer_state("Access mode", "fixed profile", self.palette),
+            f"{browser.get('mode')} · headed CloakBrowser · current machine network exit",
         )
         selected_profile = profile.get("selected")
         profile_presence = str(profile.get("presence", "missing"))
@@ -579,9 +658,9 @@ class ConfigStatusPresenter:
             + " · opaque identity only; no Cookie or login data is inspected",
         )
         table.add_row(
-            _layer_state("Chrome lifecycle", "shared", self.palette),
-            "one persistent profile · one Chrome process/context · Publisher lanes share "
-            "settings and authentication state",
+            _layer_state("Browser lifecycle", "shared", self.palette),
+            "one fixed profile · one CloakBrowser process/context · Publisher lanes share "
+            "history, settings and site state",
         )
         table.add_row(
             _layer_state("Publisher lanes", "paced", self.palette),
@@ -589,14 +668,18 @@ class ConfigStatusPresenter:
             "the same Publisher is strictly serial",
         )
         table.add_row(
-            _layer_state("Session authentication", "not assessed", self.palette),
-            f"{session.get('assessment', 'not-assessed')} · authenticated="
-            f"{_shown(session.get('authenticated'))} · status never opens Chrome",
+            _layer_state("Interactive authentication", "unsupported", self.palette),
+            "interactive_authentication_supported={} · status never launches the Browser · "
+            "session assessment={}".format(
+                "yes" if browser.get("interactive_authentication_supported") is True else "no",
+                session.get("assessment", "not-assessed"),
+            ),
         )
         table.add_row(
-            _layer_state("Article access", "checked per article", self.palette),
+            _layer_state("Article access", "not evaluated", self.palette),
             str(browser.get("article_entitlement", "checked-per-article"))
-            + " · profile presence or login never proves a particular PDF entitlement",
+            + " · not evaluated by status; checked only per article during actual acquisition · "
+            "profile presence or login never proves a particular PDF entitlement",
         )
         supported = ", ".join(
             str(value) for value in cast(Sequence[object], probe.get("supported_access_keys", ()))
@@ -808,13 +891,23 @@ def _provider_probe_rows(payload: Mapping[str, object]) -> list[tuple[str, str, 
 
 def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
     service = str(payload.get("service", "service"))
-    detail = (
-        "minimal strict schema request; no Literature content"
-        if service == "llm"
-        else "health/release/protocol/profile only; no PDF upload"
-    )
+    is_agents = service in {"agents", "llm"}
+    details = _mapping(payload.get("details"))
+    role = details.get("role")
+    if is_agents and role == "browser-agent":
+        detail = (
+            "one synthetic-image + closed-tool request; no Literature/PDF/page content; "
+            "may consume quota"
+        )
+        target = "Browser Agent"
+    elif is_agents:
+        detail = "minimal strict schema request; no Literature content"
+        target = "LLM/Agents"
+    else:
+        detail = "health/release/protocol/profile only; no PDF upload"
+        target = service.title()
     return (
-        service.upper() if service == "llm" else service.title(),
+        target,
         str(payload.get("outcome", "failed")),
         detail,
         str(payload.get("failure_code") or ""),
@@ -843,7 +936,10 @@ def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, st
 def _probe_rows(payload: Mapping[str, object]) -> tuple[tuple[str, str, str, str], ...]:
     if "providers" in payload:
         rows = _provider_probe_rows(_mapping(payload["providers"]))
-        rows.append(_core_probe_row(_mapping(payload.get("llm"))))
+        rows.append(_core_probe_row(_mapping(payload.get("llm", payload.get("agents")))))
+        browser_agent = payload.get("browser-agent", payload.get("browser_agent"))
+        if isinstance(browser_agent, Mapping):
+            rows.append(_core_probe_row(browser_agent))
         rows.append(_core_probe_row(_mapping(payload.get("mineru"))))
         return tuple(rows)
     if "results" in payload:

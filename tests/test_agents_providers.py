@@ -9,31 +9,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from sciretriever.analysis.metadata import MetadataAnalysisStage, MetadataStageInput
-from sciretriever.analysis.metadata_rules import metadata_input_sha256
-from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
-    AnalysisLLMPort,
-    LLMProviderLimits,
-    canonical_json_bytes,
+from sciretriever.agents import (
+    AgentBudget,
+    AgentCapability,
+    AgentFailure,
+    AgentPort,
+    AgentProvenance,
+    AgentRequest,
+    AgentRole,
+    AgentStructuredResponse,
+    AgentTextPart,
 )
-from sciretriever.analysis.providers import (
+from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
+from sciretriever.agents.providers.base import (
     ANTHROPIC_ACCESS_SCOPE,
     OPENAI_ACCESS_SCOPE,
 )
-from sciretriever.analysis.providers.anthropic import AnthropicAnalysisLLMAdapter
-from sciretriever.analysis.providers.openai import OpenAIAnalysisLLMAdapter
-from sciretriever.analysis.providers.openai_chat import (
-    OpenAIChatCompletionsAnalysisLLMAdapter,
+from sciretriever.agents.providers.openai_chat import (
+    OpenAIChatCompletionsAdapter,
+)
+from sciretriever.agents.providers.openai_responses import OpenAIResponsesAdapter
+from sciretriever.analysis.metadata import MetadataAnalysisStage, MetadataStageInput
+from sciretriever.analysis.metadata_rules import metadata_input_sha256
+from sciretriever.analysis.ports import (
+    AnalysisCall,
+    AnalysisRequest,
+    AnalysisRequestKind,
+    canonical_json_bytes,
 )
 from sciretriever.model.access import Header, TransportRequest
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequest,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import (
     ParserArtifactRef,
@@ -144,26 +148,28 @@ class _RecordingCoordinator(AccessCoordinator):
 
 class _MetadataCallCapture:
     def __init__(self) -> None:
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
 
     @property
     def provider_name(self) -> str:
         return "metadata-schema-capture"
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
         self.calls.append(call)
+        if call.response_schema is None:
+            raise AssertionError("metadata stage did not declare a schema")
         schema = json.loads(call.response_schema)
         result = (
             '{"outcome":"no_usable_content"}'
             if "oneOf" in schema
             else '{"metadata":null,"outcome":"no_usable_content"}'
         )
-        return LLMStructuredResponse(
+        return AgentStructuredResponse(
             result=result,
-            provenance=LLMProvenance(
+            provenance=AgentProvenance(
                 provider=self.provider_name,
-                model=call.request.model,
-                input_sha256=call.request.input_sha256,
+                model=call.model,
+                input_sha256=call.input_sha256,
                 parameters_sha256=sha256_digest(b"metadata schema capture"),
             ),
         )
@@ -218,25 +224,28 @@ def _client(
 def _call(
     model: str,
     *,
-    kind: LLMRequestKind = LLMRequestKind.METADATA,
+    kind: AnalysisRequestKind = AnalysisRequestKind.METADATA,
     prompt_version: str = "fixture-prompt-v1",
     prompt: str = _PROMPT,
     structured_input: str = _INPUT,
     response_schema: str = _SCHEMA,
     max_output_tokens: int = 64,
     cancel_event: threading.Event | None = None,
-) -> AnalysisLLMCall:
-    return AnalysisLLMCall(
-        request=LLMRequest(
-            kind=kind,
-            input_sha256=sha256_digest(structured_input.encode("utf-8")),
-            model=model,
-            max_output_tokens=max_output_tokens,
+) -> AgentRequest:
+    # ``kind`` and ``prompt_version`` are deliberately Analysis-private and
+    # must not enter the neutral Agents request or provider provenance.
+    del kind, prompt_version
+    return AgentRequest(
+        role=AgentRole.ANALYSIS,
+        capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
+        model=model,
+        input_sha256=sha256_digest(structured_input.encode("utf-8")),
+        text_parts=(
+            AgentTextPart(media_type="text/plain", text=prompt),
+            AgentTextPart(media_type="application/json", text=structured_input),
         ),
-        prompt_version=prompt_version,
-        prompt=prompt,
-        structured_input=structured_input,
         response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
         cancel_event=cancel_event,
     )
 
@@ -265,7 +274,7 @@ def _body(transport: _FakeTransport, index: int = 0) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-def _real_metadata_stage_call(model: str) -> AnalysisLLMCall:
+def _real_metadata_stage_call(model: str) -> AgentRequest:
     markdown_bytes = b"# Fixture title\n\nCover page only"
     source_sha256 = sha256_digest(b"fixture source PDF")
     parameters_sha256 = sha256_digest(b"fixture parser parameters")
@@ -316,7 +325,7 @@ def _real_metadata_stage_call(model: str) -> AnalysisLLMCall:
     )
     capture = _MetadataCallCapture()
     stage = MetadataAnalysisStage(
-        llm=cast(AnalysisLLMPort, capture),
+        agents=cast(AgentPort, capture),
         model=model,
         max_output_tokens=64,
     )
@@ -328,44 +337,48 @@ def _real_metadata_stage_call(model: str) -> AnalysisLLMCall:
     return capture.calls[0]
 
 
-class AnalysisLlmProviderTests(unittest.TestCase):
-    def _failure(self, operation: object) -> AnalysisLLMFailure:
+class AgentsProviderTests(unittest.TestCase):
+    def _failure(self, operation: object) -> AgentFailure:
         if not callable(operation):
             raise TypeError("operation must be callable")
-        with self.assertRaises(AnalysisLLMFailure) as caught:
+        with self.assertRaises(AgentFailure) as caught:
             operation()
         return caught.exception
 
-    def test_neutral_port_preserves_all_three_request_meanings_and_order(self) -> None:
+    def test_neutral_port_accepts_analysis_turns_without_business_kind(self) -> None:
         client, transport, _, _ = _client(
             [_response(_fixture("openai", "success")) for _ in range(3)]
         )
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        self.assertIsInstance(adapter, AnalysisLLMPort)
+        self.assertIsInstance(adapter, AgentPort)
         results = [
             adapter.complete(_call(_OPENAI_MODEL, kind=kind))
             for kind in (
-                LLMRequestKind.METADATA,
-                LLMRequestKind.CONTENT,
-                LLMRequestKind.REFERENCE_LOOKUP,
+                AnalysisRequestKind.METADATA,
+                AnalysisRequestKind.CONTENT,
+                AnalysisRequestKind.REFERENCE_LOOKUP,
             )
         ]
 
-        self.assertTrue(all(isinstance(value, LLMStructuredResponse) for value in results))
+        self.assertTrue(all(isinstance(value, AgentStructuredResponse) for value in results))
         self.assertEqual(len(transport.calls), 3)
         self.assertEqual(
             len({str(value.provenance.parameters_sha256) for value in results}),
-            3,
+            1,
         )
+        self.assertTrue(all(isinstance(value, AgentStructuredResponse) for value in results))
+        structured_results = [
+            value for value in results if isinstance(value, AgentStructuredResponse)
+        ]
         self.assertEqual(
-            [value.result for value in results],
+            [value.result for value in structured_results],
             ['{"outcome":"usable","title":"Fixture"}'] * 3,
         )
 
     def test_openai_uses_responses_protocol_and_private_origin_bound_credential(self) -> None:
         client, transport, _, resolver = _client([_response(_fixture("openai", "success"))])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         result = adapter.complete(_call(_OPENAI_MODEL))
 
@@ -395,13 +408,13 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_anthropic_uses_messages_protocol_and_private_origin_bound_credential(self) -> None:
         client, transport, _, resolver = _client([_response(_fixture("anthropic", "success"))])
-        adapter = AnthropicAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
         result = adapter.complete(_call(_ANTHROPIC_MODEL))
 
         request = _safe_request(transport)
         body = _body(transport)
-        self.assertIsInstance(adapter, AnalysisLLMPort)
+        self.assertIsInstance(adapter, AgentPort)
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.url, "https://api.anthropic.com/v1/messages")
         self.assertEqual(_destination(transport).origin.text, "https://api.anthropic.com")
@@ -417,7 +430,9 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         self.assertEqual(body["system"], _PROMPT)
         messages = cast(list[dict[str, object]], body["messages"])
         self.assertEqual(messages[0]["role"], "user")
-        self.assertEqual(messages[0]["content"], _INPUT)
+        content = cast(list[dict[str, object]], messages[0]["content"])
+        self.assertEqual(content[0]["type"], "text")
+        self.assertEqual(content[0]["text"], _INPUT)
         self.assertEqual(result.provenance.provider, "anthropic")
         self.assertEqual(result.provenance.model, _ANTHROPIC_MODEL)
 
@@ -426,6 +441,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             "id": "chatcmpl-fixture",
             "object": "chat.completion",
             "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 23, "completion_tokens": 11},
             "choices": [
                 {
                     "index": 0,
@@ -439,7 +455,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             ],
         }
         client, transport, _, _ = _client([_response(json.dumps(response).encode("utf-8"))])
-        adapter = OpenAIChatCompletionsAnalysisLLMAdapter(
+        adapter = OpenAIChatCompletionsAdapter(
             http_client=client,
             api_key=_API_KEY,
         )
@@ -461,6 +477,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
     def test_custom_loopback_chat_service_never_requires_or_sends_a_credential(self) -> None:
         response = {
             "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 23, "completion_tokens": 1},
             "choices": [
                 {
                     "index": 0,
@@ -471,7 +488,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         }
         client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
         resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
-        adapter = OpenAIChatCompletionsAnalysisLLMAdapter(
+        adapter = OpenAIChatCompletionsAdapter(
             http_client=client,
             api_key=None,
             base_url="http://127.0.0.1:1234/v1",
@@ -480,6 +497,8 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
         result = adapter.complete(_call(_OPENAI_MODEL))
 
+        self.assertIsInstance(result, AgentStructuredResponse)
+        assert isinstance(result, AgentStructuredResponse)
         self.assertEqual(result.result, '{"ok":true}')
         request = _safe_request(transport)
         self.assertEqual(request.url, "http://127.0.0.1:1234/v1/chat/completions")
@@ -493,12 +512,13 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             "type": "message",
             "role": "assistant",
             "model": _ANTHROPIC_MODEL,
+            "usage": {"input_tokens": 23, "output_tokens": 1},
             "stop_reason": "end_turn",
             "content": [{"type": "text", "text": '{"ok":true}'}],
         }
         client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
         resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
-        adapter = AnthropicAnalysisLLMAdapter(
+        adapter = AnthropicMessagesAdapter(
             http_client=client,
             api_key=None,
             base_url="http://127.0.0.1:1234/v1",
@@ -507,6 +527,8 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
         result = adapter.complete(_call(_ANTHROPIC_MODEL))
 
+        self.assertIsInstance(result, AgentStructuredResponse)
+        assert isinstance(result, AgentStructuredResponse)
         self.assertEqual(result.result, '{"ok":true}')
         request = _safe_request(transport)
         self.assertEqual(request.url, "http://127.0.0.1:1234/v1/messages")
@@ -515,20 +537,20 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_context_window_fails_before_transport_with_a_stable_error(self) -> None:
         client, transport, _, _ = _client([])
-        adapter = OpenAIAnalysisLLMAdapter(
+        adapter = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=LLMProviderLimits(context_window_tokens=64),
+            limits=AgentBudget(context_window_tokens=64, max_output_tokens=64),
         )
 
         failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
 
-        self.assertEqual(failure.failure.code, "analysis-llm-context-budget")
+        self.assertEqual(failure.failure.code, "agent-context-budget")
         self.assertEqual(transport.calls, [])
 
     def test_custom_remote_endpoint_is_exact_and_credential_bound_to_its_origin(self) -> None:
         client, transport, _, _ = _client([_response(_fixture("openai", "success"))])
-        adapter = OpenAIAnalysisLLMAdapter(
+        adapter = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
             base_url="https://llm.example.invalid:8443/v1",
@@ -546,7 +568,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
     ) -> None:
         openai_call = _real_metadata_stage_call(_OPENAI_MODEL)
         openai_client, openai_transport, _, _ = _client([_response(_fixture("openai", "success"))])
-        OpenAIAnalysisLLMAdapter(
+        OpenAIResponsesAdapter(
             http_client=openai_client,
             api_key=_API_KEY,
         ).complete(openai_call)
@@ -559,7 +581,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         anthropic_client, anthropic_transport, _, _ = _client(
             [_response(_fixture("anthropic", "success"))]
         )
-        AnthropicAnalysisLLMAdapter(
+        AnthropicMessagesAdapter(
             http_client=anthropic_client,
             api_key=_API_KEY,
         ).complete(anthropic_call)
@@ -571,8 +593,14 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             )["format"],
         )
 
-        expected = json.loads(openai_call.response_schema)
-        self.assertEqual(expected, json.loads(anthropic_call.response_schema))
+        openai_schema = openai_call.response_schema
+        anthropic_schema = anthropic_call.response_schema
+        self.assertIsNotNone(openai_schema)
+        self.assertIsNotNone(anthropic_schema)
+        assert openai_schema is not None
+        assert anthropic_schema is not None
+        expected = json.loads(openai_schema)
+        self.assertEqual(expected, json.loads(anthropic_schema))
         self.assertEqual(expected.get("type"), "object")
         self.assertNotIn("oneOf", expected)
         self.assertNotIn("$schema", expected)
@@ -584,18 +612,15 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_provenance_hash_is_stable_and_binds_every_effective_parameter(self) -> None:
         client, _, _, _ = _client([_response(_fixture("openai", "success")) for _ in range(7)])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         calls = (
             _call(_OPENAI_MODEL),
             _call(_OPENAI_MODEL),
-            _call(_OPENAI_MODEL, kind=LLMRequestKind.CONTENT),
-            _call(_OPENAI_MODEL, prompt_version="fixture-prompt-v2"),
-            _call(_OPENAI_MODEL, prompt="changed private prompt"),
-            _call(
-                _OPENAI_MODEL,
-                response_schema='{"type":"object","additionalProperties":false}',
-            ),
+            _call(_OPENAI_MODEL, structured_input='{"document":"different"}'),
+            _call(_OPENAI_MODEL, prompt="changed second private prompt"),
+            _call(_OPENAI_MODEL, response_schema='{"type":"object","additionalProperties":false}'),
             _call(_OPENAI_MODEL, max_output_tokens=65),
+            _call(_OPENAI_MODEL, max_output_tokens=66),
         )
 
         hashes = [str(adapter.complete(value).provenance.parameters_sha256) for value in calls]
@@ -616,7 +641,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         client, transport, _, _ = _client(
             [_response(_fixture("openai", "success")) for _ in range(3)]
         )
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         original = adapter.complete(_call(_OPENAI_MODEL, response_schema=_SCHEMA))
         equivalent = adapter.complete(_call(_OPENAI_MODEL, response_schema=equivalent_schema))
@@ -635,8 +660,8 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         )
 
     def test_call_rejects_hash_mismatch_and_non_strict_json_without_leaking_input(self) -> None:
-        request = LLMRequest(
-            kind=LLMRequestKind.METADATA,
+        request = AnalysisRequest(
+            kind=AnalysisRequestKind.METADATA,
             input_sha256=sha256_digest(b"different"),
             model=_OPENAI_MODEL,
             max_output_tokens=64,
@@ -651,7 +676,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         for name, structured_input, response_schema in cases:
             with self.subTest(name=name):
                 with self.assertRaises(ValueError) as caught:
-                    AnalysisLLMCall(
+                    AnalysisCall(
                         request=request,
                         prompt_version="fixture-prompt-v1",
                         prompt=_PROMPT,
@@ -664,7 +689,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_deep_call_input_and_schema_are_stably_rejected_without_leaking(self) -> None:
         deep_json = _deep_json_object()
-        cases: tuple[tuple[str, Callable[[], AnalysisLLMCall]], ...] = (
+        cases: tuple[tuple[str, Callable[[], AgentRequest]], ...] = (
             ("input", lambda: _call(_OPENAI_MODEL, structured_input=deep_json)),
             ("schema", lambda: _call(_OPENAI_MODEL, response_schema=deep_json)),
         )
@@ -677,22 +702,22 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_deep_provider_envelope_is_a_stable_protocol_failure(self) -> None:
         client, _, _, _ = _client([_response(_deep_json_object().encode("utf-8"))])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
 
-        self.assertEqual(failure.failure.code, "analysis-llm-protocol")
+        self.assertEqual(failure.failure.code, "agent-protocol")
         self.assertNotIn(_DEEP_SENTINEL, repr(failure))
 
     def test_deep_provider_result_is_a_stable_structured_response_failure(self) -> None:
         envelope = json.loads(_fixture("openai", "success"))
         envelope["output"][0]["content"][0]["text"] = _deep_json_object()
         client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
 
-        self.assertEqual(failure.failure.code, "analysis-llm-structured-response")
+        self.assertEqual(failure.failure.code, "agent-structured-response")
         self.assertNotIn(_DEEP_SENTINEL, repr(failure))
 
     def test_private_canonical_encoder_never_exposes_recursion_error_or_value(self) -> None:
@@ -705,35 +730,35 @@ class AnalysisLlmProviderTests(unittest.TestCase):
     def test_request_and_field_budgets_fail_before_transport(self) -> None:
         cases = (
             (
-                "analysis-llm-prompt-budget",
-                LLMProviderLimits(max_prompt_bytes=4),
+                "agent-input-budget",
+                AgentBudget(max_prompt_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
-                "analysis-llm-input-budget",
-                LLMProviderLimits(max_input_bytes=4),
+                "agent-input-budget",
+                AgentBudget(max_input_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
-                "analysis-llm-schema-budget",
-                LLMProviderLimits(max_schema_bytes=4),
+                "agent-input-budget",
+                AgentBudget(max_schema_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
-                "analysis-llm-request-budget",
-                LLMProviderLimits(max_request_bytes=128),
+                "agent-request-budget",
+                AgentBudget(max_request_bytes=128),
                 _call(_OPENAI_MODEL),
             ),
             (
-                "analysis-llm-token-budget",
-                LLMProviderLimits(max_output_tokens=63),
+                "agent-output-budget",
+                AgentBudget(max_output_tokens=63),
                 _call(_OPENAI_MODEL),
             ),
         )
         for code, limits, call in cases:
             with self.subTest(code=code):
                 client, transport, _, _ = _client([])
-                adapter = OpenAIAnalysisLLMAdapter(
+                adapter = OpenAIResponsesAdapter(
                     http_client=client,
                     api_key=_API_KEY,
                     limits=limits,
@@ -744,34 +769,34 @@ class AnalysisLlmProviderTests(unittest.TestCase):
 
     def test_response_and_result_budgets_are_independent(self) -> None:
         client, transport, _, _ = _client([_response(_fixture("openai", "success"))])
-        response_limited = OpenAIAnalysisLLMAdapter(
+        response_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=LLMProviderLimits(max_response_bytes=32),
+            limits=AgentBudget(max_response_bytes=32),
         )
         failure = self._failure(lambda: response_limited.complete(_call(_OPENAI_MODEL)))
-        self.assertEqual(failure.failure.code, "analysis-llm-response-budget")
+        self.assertEqual(failure.failure.code, "agent-response-budget")
         self.assertEqual(len(transport.calls), 1)
 
         result_text = '{"value":"' + ("x" * 128) + '"}'
         envelope = json.loads(_fixture("openai", "success"))
         envelope["output"][0]["content"][0]["text"] = result_text
         client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
-        result_limited = OpenAIAnalysisLLMAdapter(
+        result_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=LLMProviderLimits(max_result_bytes=32),
+            limits=AgentBudget(max_result_bytes=32),
         )
         failure = self._failure(lambda: result_limited.complete(_call(_OPENAI_MODEL)))
-        self.assertEqual(failure.failure.code, "analysis-llm-result-budget")
+        self.assertEqual(failure.failure.code, "agent-result-budget")
 
     def test_http_statuses_are_stable_and_429_feedback_is_atomic(self) -> None:
         matrix = {
-            401: "analysis-llm-authentication",
-            403: "analysis-llm-authorization",
-            408: "analysis-llm-timeout",
-            429: "analysis-llm-quota",
-            500: "analysis-llm-http-status",
+            401: "agent-authentication",
+            403: "agent-authorization",
+            408: "agent-timeout",
+            429: "agent-quota",
+            500: "agent-http-status",
         }
         for status, code in matrix.items():
             with self.subTest(status=status):
@@ -779,7 +804,7 @@ class AnalysisLlmProviderTests(unittest.TestCase):
                 client, transport, coordinator, _ = _client(
                     [_response(b"RESPONSE-PRIVATE-SENTINEL", status=status, headers=headers)]
                 )
-                adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertEqual(len(transport.calls), 1)
@@ -800,17 +825,17 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             headers=(Header(name="Location", value="https://example.org/elsewhere"),),
         )
         client, transport, _, _ = _client([redirect, _response(_fixture("openai", "success"))])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
-        self.assertEqual(failure.failure.code, "analysis-llm-access")
+        self.assertEqual(failure.failure.code, "agent-access")
         self.assertEqual(len(transport.calls), 1)
 
         client, transport, _, _ = _client(
             [OSError("TRANSPORT-PRIVATE-SENTINEL"), _response(_fixture("openai", "success"))]
         )
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
-        self.assertEqual(failure.failure.code, "analysis-llm-access")
+        self.assertEqual(failure.failure.code, "agent-access")
         self.assertEqual(len(transport.calls), 1)
         self.assertNotIn("TRANSPORT-PRIVATE-SENTINEL", repr(failure))
 
@@ -818,19 +843,19 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         mismatch = json.loads(_fixture("openai", "success"))
         mismatch["model"] = "unexpected-model"
         cases = (
-            ("refusal", _fixture("openai", "refusal"), "analysis-llm-refusal"),
-            ("truncated", _fixture("openai", "truncated"), "analysis-llm-truncated"),
-            ("unknown", _fixture("openai", "unknown-shape"), "analysis-llm-protocol"),
+            ("refusal", _fixture("openai", "refusal"), "agent-refusal"),
+            ("truncated", _fixture("openai", "truncated"), "agent-truncated"),
+            ("unknown", _fixture("openai", "unknown-shape"), "agent-protocol"),
             (
                 "mismatch",
                 json.dumps(mismatch).encode("utf-8"),
-                "analysis-llm-model-mismatch",
+                "agent-model-mismatch",
             ),
         )
         for name, body, code in cases:
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
-                adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
@@ -844,11 +869,11 @@ class AnalysisLlmProviderTests(unittest.TestCase):
                 else:
                     envelope["object"] = object_value
                 client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
-                adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
                 failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
 
-                self.assertEqual(failure.failure.code, "analysis-llm-protocol")
+                self.assertEqual(failure.failure.code, "agent-protocol")
 
     def test_anthropic_refusal_truncation_unknown_shape_and_model_mismatch_are_distinct(
         self,
@@ -856,19 +881,19 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         mismatch = json.loads(_fixture("anthropic", "success"))
         mismatch["model"] = "unexpected-model"
         cases = (
-            ("refusal", _fixture("anthropic", "refusal"), "analysis-llm-refusal"),
-            ("truncated", _fixture("anthropic", "truncated"), "analysis-llm-truncated"),
-            ("unknown", _fixture("anthropic", "unknown-shape"), "analysis-llm-protocol"),
+            ("refusal", _fixture("anthropic", "refusal"), "agent-refusal"),
+            ("truncated", _fixture("anthropic", "truncated"), "agent-truncated"),
+            ("unknown", _fixture("anthropic", "unknown-shape"), "agent-protocol"),
             (
                 "mismatch",
                 json.dumps(mismatch).encode("utf-8"),
-                "analysis-llm-model-mismatch",
+                "agent-model-mismatch",
             ),
         )
         for name, body, code in cases:
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
-                adapter = AnthropicAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+                adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.complete(_call(_ANTHROPIC_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
@@ -879,27 +904,27 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         invalid_unicode_result = json.loads(_fixture("openai", "success"))
         invalid_unicode_result["output"][0]["content"][0]["text"] = '{"x":"\\ud800"}'
         cases = (
-            ("non-utf8", b"\xff", "analysis-llm-protocol"),
+            ("non-utf8", b"\xff", "agent-protocol"),
             (
                 "duplicate-envelope",
                 b'{"status":"completed","status":"failed"}',
-                "analysis-llm-protocol",
+                "agent-protocol",
             ),
             (
                 "duplicate-result",
                 json.dumps(invalid_result).encode("utf-8"),
-                "analysis-llm-structured-response",
+                "agent-structured-response",
             ),
             (
                 "non-unicode-result",
                 json.dumps(invalid_unicode_result).encode("utf-8"),
-                "analysis-llm-structured-response",
+                "agent-structured-response",
             ),
         )
         for name, body, code in cases:
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
-                adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
 
@@ -908,19 +933,19 @@ class AnalysisLlmProviderTests(unittest.TestCase):
         raw_result = '{"future_business_shape":{"kept":"opaque"}}'
         envelope["content"][0]["text"] = raw_result
         client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
-        adapter = AnthropicAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
-        result = adapter.complete(_call(_ANTHROPIC_MODEL, kind=LLMRequestKind.REFERENCE_LOOKUP))
+        result = adapter.complete(_call(_ANTHROPIC_MODEL))
 
+        self.assertIsInstance(result, AgentStructuredResponse)
+        assert isinstance(result, AgentStructuredResponse)
         self.assertEqual(result.result, raw_result)
-        self.assertEqual(
-            result.provenance.input_sha256, _call(_ANTHROPIC_MODEL).request.input_sha256
-        )
+        self.assertEqual(result.provenance.input_sha256, _call(_ANTHROPIC_MODEL).input_sha256)
 
     def test_repr_and_failures_do_not_expose_credentials_prompts_inputs_or_responses(self) -> None:
         call = _call(_OPENAI_MODEL)
         client, _, _, _ = _client([_response(b'{"private":"RESPONSE-PRIVATE-SENTINEL"}')])
-        adapter = OpenAIAnalysisLLMAdapter(http_client=client, api_key=_API_KEY)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         failure = self._failure(lambda: adapter.complete(call))
         rendered = "\n".join((repr(adapter), repr(call), str(failure), repr(failure)))
         for sentinel in (
@@ -934,15 +959,17 @@ class AnalysisLlmProviderTests(unittest.TestCase):
             self.assertNotIn(sentinel, rendered)
 
         client, _, _, _ = _client([])
-        failure = self._failure(lambda: OpenAIAnalysisLLMAdapter(http_client=client, api_key="   "))
-        self.assertEqual(failure.failure.code, "analysis-llm-credentials")
+        failure = self._failure(lambda: OpenAIResponsesAdapter(http_client=client, api_key="   "))
+        self.assertEqual(failure.failure.code, "agent-credentials")
 
     def test_adapters_have_no_sdk_or_direct_network_import(self) -> None:
-        provider_root = (
-            Path(__file__).parents[1] / "src" / "sciretriever" / "analysis" / "providers"
-        )
+        provider_root = Path(__file__).parents[1] / "src" / "sciretriever" / "agents" / "providers"
         forbidden = {"anthropic", "httpx", "openai", "requests", "socket", "urllib"}
-        for path in (provider_root / "openai.py", provider_root / "anthropic.py"):
+        for path in (
+            provider_root / "openai_responses.py",
+            provider_root / "openai_chat.py",
+            provider_root / "anthropic.py",
+        ):
             with self.subTest(path=path.name):
                 tree = ast.parse(path.read_text(encoding="utf-8"))
                 imported: set[str] = set()

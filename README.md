@@ -104,12 +104,16 @@ sciretriever --debug complete pdf --all-pending --json \
 
 | 退出码 | 含义 |
 | ---: | --- |
-| `0` | 成功，或正常到达操作边界 |
+| `0` | 正常到达操作边界；包括全部目标成功、局部目标失败和全部目标失败，逐目标结果以 Report 为准 |
 | `2` | 命令输入或 usage 错误 |
-| `3` | 业务失败，或显式 probe 未通过 |
+| `3` | 操作级失败，或显式 probe 未通过；不表示一个正常结束的批次中存在失败目标 |
 | `4` | 配置或生产 Bootstrap readiness 失败 |
-| `70` | 未分类的内部失败 |
+| `70` | 操作系统或系统级 I/O 失败 |
 | `130` | 受控中断 |
+
+批处理自动化不能只用退出码判断“每篇都成功”：`0` 表示命令完整走到正常边界，脚本还必须读取
+JSON Report 中各目标的结果分区；只有整个操作未能到达该边界时才返回 `3`。参数解析失败仍由
+`argparse` 返回 `2`，配置/组装失败返回 `4`，Ctrl+C 或 Report 的受控中断返回 `130`。
 
 ## 发现与补全是两类操作
 
@@ -219,39 +223,55 @@ Browser 绕过限制。进入经过生产核实的 Browser route 时，不同
 `browser_rate_limit_group` 可以并行，同一组固定 `concurrency = 1`，并按该 Provider 的文章
 启动间隔、窗口和 cooldown 串行；`browser_max_concurrency` 只是跨组的本机资源上限。它默认
 为 `5`，必须是大于 `1` 的整数，不设上限；当前 `9` 条 route 不是配置上限。较大的值只允许
-更多不同 Publisher lane 在同一个 Chrome process/context 中同时活动，不会启动多个 Browser，
+更多不同 Publisher lane 在同一个 CloakBrowser process/context 中同时活动，不会启动多个 Browser，
 也不会改变同一 Publisher 串行。
 
 Browser 升级前，正常日志会显示剩余篇数、并行组数、各组 `minimum_start_interval`、
 `next_allowed_in_seconds` 和保守 `minimum_duration_seconds`。跨组最低总时长取最慢组的下界，
-仍不包含无法预知的网络、页面渲染或服务等待时间。登录、MFA、challenge、账号警告
-和 cleanup failure 会暂停或熔断对应组，并以稳定原因和建议动作进入本次报告；用户可以在配置
-中心显式打开同一 Profile 的可见 Browser，自行完成获授权的登录/机构选择/MFA 后重试，或者
-改用授权 API/手动 PDF。已提交的其它 Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会重新
-读取数据库 current facts，只补仍缺失的步骤。
+仍不包含无法预知的网络、页面渲染或服务等待时间。验证页会进一步区分“受限资源正在加载”、
+“自动验证正在完成”、“本地策略挡住了必要资源”、“明确需要人工交互”和“等待超时”；只有自动
+验证自然完成才返回文章流程。登录、MFA、人工 challenge、账号警告和 cleanup failure 会暂停或
+熔断对应组，并以稳定原因和建议动作进入本次报告。第一版不提供交互式 Browser 登录、机构选择、
+MFA 或 CAPTCHA 处理入口；遇到这些状态时应改用获授权 API 或手动 PDF。已提交的其它 Provider
+结果不会回滚。Ctrl+C 形成受控中断，重跑会重新读取数据库 current facts，只补仍缺失的步骤。
 
-Controlled Browser 使用一个 operator-managed 持久 Chrome Profile 作为用户/机构身份边界，
-并在每个生产对象图内只启动一个 `headless = false` 的 Chrome/Chromium process 和一个
-persistent BrowserContext。所有 Publisher lane 共享该 context；同一 Publisher 严格串行，不同
-Publisher 在全局 cap 内并行，每篇文章使用隔离 page、handler、连接绑定、预算和临时下载目录。
-对象图关闭后 process/context 与临时下载工作区会清理，但 Profile 跨命令保留 Cookie、Local
-Storage、IndexedDB、SSO 状态、偏好和历史。无 GUI Linux 使用 Xvfb；出版社请求继续由 Chrome
-原生完成 TLS、HTTP、Cookie、redirect、页面点击和下载。本机 loopback CONNECT proxy 只把已
-审核 hostname/port 固定到 Network 批准的精确 IP，并透传加密字节，不终止 TLS，也不以 Python
-HTTP 替代浏览器网络栈。
+Controlled Browser 使用一个 operator-managed 持久 Profile，并在首次初始化时把 native Linux
+persona、locale、timezone、screen、Browser version policy 和 fingerprint seed 固化到 owner-only
+identity manifest。同一 Profile 冷启动时复用同一设备身份；seed、Profile 路径和浏览器状态不会
+进入普通配置、日志、Report 或文献数据库。每个生产对象图只启动一个 `headless = false` 的
+CloakBrowser patched Chromium process 和一个 persistent BrowserContext，SciRetriever 仍以
+Playwright API 作为内部控制协议。所有 Publisher lane 共享该 context；同一 Publisher 严格串行，
+不同 Publisher 在全局 cap 内并行，每篇文章使用隔离 page、handler、连接绑定、预算和临时下载
+目录。对象图关闭后 process/context 与临时下载工作区会清理，Profile 中由 Chromium 管理的状态
+跨命令保留。无 GUI Linux 使用 Xvfb；出版社请求继续由 Chromium 原生完成 TLS、HTTP、Cookie、
+redirect、页面点击和下载。本机 loopback CONNECT proxy 只把已审核 hostname/port 固定到 Network
+批准的精确 IP，并透传加密字节，不终止 TLS，也不以 Python HTTP 替代浏览器网络栈。
 
-`sciretriever config` 的 Browser Access 区用于选择/初始化一个不含敏感信息的 Profile identity、
-按需打开使用同一 Profile 的可见 Browser、删除本地 Profile、禁用自动 Browser 或调整跨
-Publisher 并发。可见 Browser 只把交互交给用户；SciRetriever 不填写账号/密码、不选择机构、
-不读取 Cookie 或登录结果，也不处理/绕过 MFA、CAPTCHA 或 challenge。自动流程和可见 Browser
-以独占 lease 互斥，同一 Profile 同时只能由一个 Chrome process 使用。
+`sciretriever config` 的 Browser Access 区用于显式安装、更新或回退经核实的 CloakBrowser
+binary，选择/初始化一个不含敏感信息的固定身份 Profile、删除本地 Profile、禁用自动 Browser 或
+调整跨 Publisher 并发。普通 Completion 不隐式下载 binary，wheel 也不嵌入 vendor binary。
+installer 只在该显式动作中保留并验证本次实际 archive：Ed25519 签名、manifest
+version、仓库固定 SHA-256 与 archive 实际 SHA-256 必须同时一致后才会发布。普通
+Browser 运行使用每次 lease 创建的无凭据临时 cache view，vendor 只能看见已验证的
+固定 v146 bundle，不会读取长期 runtime root 中的 license/Pro/update 状态。当前
+older-free v146 不消费 CloakBrowser license；已保留的凭据 section 在 status 中明确显示为
+`reserved-not-used-by-pinned-free-binary`。
+SciRetriever 不提供 Cookie 导入导出或人工登录窗口，不填写账号/密码、不选择机构、不读取 Cookie
+或登录结果，也不处理/绕过 MFA、CAPTCHA 或 challenge。同一 Profile 同时只能由一个 Browser
+process 使用。
+
+CloakBrowser 是普通 Acquisition 与显式 `config test --browser` 唯一的生产 Browser runtime；
+Playwright 只作为 CloakBrowser context 的内部控制 API。源码不再发现或启动 Playwright bundled
+Chromium、系统 Chrome 或其它 stock runtime，也没有用户可选或隐藏的双引擎开关、运行失败自动
+fallback 或 `cutover_pending` 状态。缺少任一 Cloak runtime 前置条件时，Browser route 会以稳定
+原因 fail closed，Public 与 Authorized API 路线仍按各自合同运行。
 
 生产 Browser route count 与 local eligible count 均为 `9`。只有
-`[access].browser_enabled = true`、`browser_profile` 已选择且安全初始化、Playwright Python
-依赖、Chrome/Chromium executable 和 headed display（Linux 上为 Xvfb）都就绪时，生产 Bootstrap
-才会创建可执行 Browser adapter。`sciretriever config status` 只检查这些本地静态事实以及 Profile
-的存在/安全状态，不读取 Profile 内容，也不会断言已登录；显式 probe 每次只能选择一个当前
-eligible 目标：
+`[access].browser_enabled = true`、`browser_profile` 已选择且固定 identity manifest 安全就绪、
+CloakBrowser wrapper、Playwright API、经签名核实的目标 binary 版本和 headed display（Linux 上
+为 Xvfb）都就绪时，生产 Bootstrap 才会创建可执行 Browser adapter。`sciretriever config status`
+只检查这些本地静态事实，不启动 Browser、不读取 Profile 内容，也不会断言已登录；显式 probe
+每次只能选择一个当前 eligible 目标：
 
 ```text
 sciretriever config test --browser acs-publications
@@ -265,11 +285,10 @@ sciretriever config test --browser springerlink
 sciretriever config test --browser wiley-online-library
 ```
 
-启用 Browser 后，九家都可以成为显式 probe 目标；probe 仍服从各自 origin、规则、限速和安全
-边界，也不会把首页可达写成组织授权或文章 entitlement。
-
-Probe 只检查 runtime 启动与所选首页可达，不打开具体文章、不下载 PDF，也不评估 Profile 是否
-已登录、当前机构 IP 或任意文章 entitlement；`config test --all` 不会隐式启动 Browser。
+启用 Browser 后，九家都可以成为显式 probe 目标；probe 使用生产规则/controller、目标 origin
+和该规则审查过的 challenge dependency，并以 deny-all capture guard 禁止 PDF/body 接纳。它只
+检查 Cloak runtime、固定身份和目标页面流程，不下载文章 PDF，也不评估 Profile 是否已登录、
+当前机构 IP 或任意文章 entitlement；`config test --all` 不会隐式启动 Browser。
 支持矩阵、等待语义、状态检查和故障处理详见
 [PDF 获取指南](docs/guides/pdf-acquisition.md)。限速只能降低风险，不能保证账号不会被限制；
 用户仍须遵守自己的访问授权和站点规则。
@@ -298,21 +317,19 @@ Probe 只检查 runtime 启动与所选首页可达，不打开具体文章、�
 
 MinerU QA 使用安装 wheel 中的 production resolver、policy、transport、client、converter 和 adapter，连接当前测试进程内的受控 loopback HTTP service，验证 `health → submit → poll → archive`，并形成 parser-neutral Markdown、resource 和 provenance；私有 MinerU 中间文件不会泄漏。这不代表 operator 的真实 MinerU 部署已经在线验证。
 
-Browser 已完成受控组件 QA 和真实有头 Chromium/Playwright QA；真实 Chromium 场景覆盖
-规则批准的外部 JavaScript、未批准第三方 tracker 在 DNS 前丢弃、普通 response/direct PDF、
-点击或页面脚本触发的跨 origin `3xx`、CDN PDF、HTTP attachment、navigation-only probe、
-通用 PDF 发现、native Chrome download、TLS/DNS/IP binding、一个 persistent Profile/process/context、
-Publisher lane reuse 与文章级隔离、临时下载工作区清理、取消/超时和无残留线程清理。Playwright
-是 wheel 的正式 runtime dependency；运行环境还需系统
-Google Chrome Stable 或 `playwright install chromium` 提供 executable，无 GUI Linux 需提供
-Xvfb。fresh-wheel 验收
-直接驱动生产 `PlaywrightBrowserFactory` / `BrowserClient` / `BrowserSessionBroker`，不使用
-测试自有平行 runtime。当前 production Browser rule catalog 有 `acs-publications-pdf@2`、
-`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、
-`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、
-`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。九家均以真实 Playwright Python、真实
-Chromium、本地 HTTPS 和生产 selector/locator 完成离线规则验收；这证明安装产物与生产对象图
-已接线，不等于当前 IP、真实机构协议或具体文章已在线授权。
+Browser 已完成受控组件 QA 和真实 CloakBrowser patched Chromium/Playwright API QA；本地 HTTPS
+场景覆盖规则批准的外部 JavaScript、受限 Cloudflare iframe/resource、未批准第三方 tracker 在
+DNS 前丢弃、自动 challenge clear、人工控件、settle timeout、普通 response/direct PDF、点击或
+页面脚本触发的跨 origin `3xx`、CDN PDF、HTTP attachment、通用 PDF 发现、native Chromium
+download、TLS/DNS/IP binding、固定身份 Profile 三次冷启动、一个 process/context、Publisher
+lane reuse 与文章级隔离、临时下载工作区清理、取消/超时和无残留资源清理。Playwright API 与
+CloakBrowser wrapper 是 wheel dependency；定制 Chromium binary 由用户显式安装并独立核实版本，
+不进入 wheel。当前 production Browser rule catalog 有 `acs-publications-pdf@3`、
+`aip-publishing-pdf@3`、`sciencedirect-pdf@3`、`iopscience-pdf@2`、
+`oxford-academic-pdf@3`、`rsc-publishing-pdf@3`、`science-aaas-pdf@3`、
+`springerlink-pdf@5` 和 `wiley-online-library-pdf@3`。九家均以真实 Playwright API、真实 patched
+Chromium、本地 HTTPS 和生产 selector/locator 完成离线规则验收；这证明安装产物与对象图接线，
+不等于当前 IP、真实机构协议或具体文章已在线授权。
 
 验收从未使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog；本项目也不据此宣称这些环境已被验证。
 

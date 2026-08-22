@@ -24,7 +24,7 @@ from sciretriever.configuration.credentials import (
 from sciretriever.configuration.errors import ConfigurationError
 from sciretriever.configuration.errors import fail as _fail
 from sciretriever.model.configuration import (
-    AnalysisAuthentication,
+    AgentAuthentication,
     AnalysisConfigurationStatus,
     BrowserAccessStatus,
     BrowserConfigurationProbeResult,
@@ -261,7 +261,8 @@ def configuration_runtime_status(
     parser = configuration.parsing
     analysis = configuration.analysis
     bearer_required = parser.connection_mode is ParserConnectionMode.REMOTE
-    api_key_required = analysis.authentication is AnalysisAuthentication.API_KEY
+    agents = configuration.agents
+    api_key_required = agents.authentication is AgentAuthentication.API_KEY
     bundle = (
         load_credentials(home=credentials_home)
         if credentials is None and (bearer_required or api_key_required)
@@ -297,21 +298,25 @@ def configuration_runtime_status(
     )
 
     reference_fields = (
-        ("provider", analysis.provider),
-        ("protocol", analysis.protocol),
-        ("base_url", analysis.base_url),
-        ("model", analysis.model),
-        ("context_window_tokens", analysis.context_window_tokens),
-        ("authentication", analysis.authentication),
+        ("provider", agents.provider),
+        ("protocol", agents.protocol),
+        ("base_url", agents.base_url),
+        ("model", agents.analysis.model),
+        ("context_window_tokens", agents.analysis.context_window_tokens),
+        ("max_output_tokens", agents.analysis.max_output_tokens),
+        ("structured_output", True if agents.analysis.structured_output else None),
+        ("authentication", agents.authentication),
         ("reference_max_output_tokens", analysis.reference_max_output_tokens),
     )
     content_fields = (
-        ("provider", analysis.provider),
-        ("protocol", analysis.protocol),
-        ("base_url", analysis.base_url),
-        ("model", analysis.model),
-        ("context_window_tokens", analysis.context_window_tokens),
-        ("authentication", analysis.authentication),
+        ("provider", agents.provider),
+        ("protocol", agents.protocol),
+        ("base_url", agents.base_url),
+        ("model", agents.analysis.model),
+        ("context_window_tokens", agents.analysis.context_window_tokens),
+        ("max_output_tokens", agents.analysis.max_output_tokens),
+        ("structured_output", True if agents.analysis.structured_output else None),
+        ("authentication", agents.authentication),
         ("metadata_max_output_tokens", analysis.metadata_max_output_tokens),
         ("content_max_output_tokens", analysis.content_max_output_tokens),
         ("reference_max_output_tokens", analysis.reference_max_output_tokens),
@@ -327,9 +332,9 @@ def configuration_runtime_status(
         assert bundle is not None
         api_key_present, analysis_origin_matches = _core_credential_presence(
             bundle,
-            CoreCredentialService.LLM,
-            _CORE_CREDENTIAL_SPECS[CoreCredentialService.LLM].secret_field,
-            analysis.base_url,
+            CoreCredentialService.AGENTS,
+            _CORE_CREDENTIAL_SPECS[CoreCredentialService.AGENTS].secret_field,
+            agents.base_url,
         )
     else:
         api_key_present, analysis_origin_matches = False, False
@@ -546,18 +551,31 @@ def _validated_browser_access_snapshot(snapshot: BrowserAccessStatus) -> Browser
         _fail("configuration value is invalid")
 
 
+def _browser_runtime_precondition(status: BrowserAccessStatus) -> str | None:
+    runtime = status.runtime
+    if not runtime.fixed_identity_manifest:
+        codes = {action.code for action in status.action_required}
+        return (
+            "needs-new-runtime-profile"
+            if "needs-new-runtime-profile" in codes
+            else "browser-profile-attention"
+        )
+    readiness = (
+        (runtime.cloak_wrapper_available, "browser-cloak-wrapper-unavailable"),
+        (runtime.playwright_api_available, "browser-playwright-api-unavailable"),
+        (runtime.binary_presence, "browser-cloak-binary-unavailable"),
+        (runtime.binary_verified, "browser-cloak-runtime-not-ready"),
+        (runtime.headed_display_available, "browser-headed-display-unavailable"),
+    )
+    return next((code for ready, code in readiness if not ready), None)
+
+
 def _browser_probe_precondition(
     access_key: str,
     status: BrowserAccessStatus,
 ) -> str | None:
     if access_key not in {route.access_key for route in status.routes}:
         return "browser-production-route-unavailable"
-    if not status.runtime.framework_available or not status.runtime.python_dependency_available:
-        return "browser-runtime-unavailable"
-    if not status.runtime.chromium_executable_available:
-        return "browser-chromium-unavailable"
-    if not status.runtime.headed_display_available:
-        return "browser-headed-display-unavailable"
     if not status.enabled:
         return "browser-disabled"
     if status.profile.selected is None:
@@ -566,6 +584,9 @@ def _browser_probe_precondition(
         return "browser-profile-missing"
     if status.profile.presence is BrowserProfilePresence.ATTENTION:
         return "browser-profile-attention"
+    runtime_failure = _browser_runtime_precondition(status)
+    if runtime_failure is not None:
+        return runtime_failure
     if access_key not in status.probe.supported_access_keys:
         return "browser-probe-unavailable"
     return None

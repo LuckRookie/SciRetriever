@@ -22,10 +22,11 @@ from sciretriever.configuration import (
 )
 from sciretriever.model.configuration import (
     AccessConfig,
-    AnalysisAuthentication,
-    AnalysisConfig,
-    AnalysisProtocol,
-    AnalysisProvider,
+    AgentAuthentication,
+    AgentProtocol,
+    AgentProvider,
+    AgentRoleConfig,
+    AgentsConfig,
     BrowserPolicyOverrideConfig,
     CoreCredentialService,
     ParserConnectionMode,
@@ -35,34 +36,30 @@ from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 _SECRET = "CORE-CONFIGURATION-SECRET-SENTINEL"
 
 
-def _analysis(*, base_url: str = "https://api.openai.com/v1") -> AnalysisConfig:
-    return AnalysisConfig(
-        provider=AnalysisProvider.OPENAI,
-        protocol=AnalysisProtocol.OPENAI_RESPONSES,
+def _agents(*, base_url: str = "https://api.openai.com/v1") -> AgentsConfig:
+    return AgentsConfig(
+        provider=AgentProvider.OPENAI,
+        protocol=AgentProtocol.OPENAI_RESPONSES,
         base_url=base_url,
-        model="fixture-model",
-        context_window_tokens=128_000,
-        authentication=AnalysisAuthentication.API_KEY,
-        metadata_max_output_tokens=512,
-        content_max_output_tokens=2_048,
-        reference_max_output_tokens=512,
-        max_input_bytes=1_048_576,
-        max_chunk_bytes=262_144,
-        max_chunk_count=4,
-        max_total_llm_requests=8,
-        max_total_output_tokens=8_192,
+        authentication=AgentAuthentication.API_KEY,
+        analysis=AgentRoleConfig(
+            model="fixture-model",
+            context_window_tokens=128_000,
+            max_output_tokens=2_048,
+            structured_output=True,
+        ),
     )
 
 
-def _custom_analysis(
+def _custom_agents(
     *,
     base_url: str,
     service_name: str = "fixture-service",
-) -> AnalysisConfig:
-    return AnalysisConfig(
+) -> AgentsConfig:
+    return AgentsConfig(
         **{
-            **_analysis().model_dump(mode="python"),
-            "provider": AnalysisProvider.CUSTOM,
+            **_agents().model_dump(mode="python"),
+            "provider": AgentProvider.CUSTOM,
             "service_name": service_name,
             "base_url": base_url,
         }
@@ -162,13 +159,14 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
                 "[paths]\n"
                 "# keep this path comment\n"
                 'catalog_path = "/private/catalog.sqlite3"\n\n'
-                "[analysis]\n"
+                "[agents]\n"
+                "[agents.analysis]\n"
                 "# replace this model, preserving its comment\n"
                 'model = "old-model"\n',
                 encoding="utf-8",
             )
 
-            updated = update_configuration_sections(path, analysis=_analysis())
+            updated = update_configuration_sections(path, agents=_agents())
 
             rendered = path.read_text(encoding="utf-8")
             self.assertIn("# operator heading", rendered)
@@ -182,7 +180,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "config.toml"
-            original = b"[analysis]\n"
+            original = b"[agents]\n"
             path.write_bytes(original)
 
             def failpoint(name: str) -> None:
@@ -192,7 +190,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 update_configuration_sections(
                     path,
-                    analysis=_analysis(),
+                    agents=_agents(),
                     failpoint=failpoint,
                 )
 
@@ -200,14 +198,21 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             self.assertEqual(tuple(root.glob(".config-*.staging")), ())
 
     def test_diff_is_section_scoped_secret_free_and_stable(self) -> None:
-        before = parse_configuration("[analysis]\n")
-        after = before.model_copy(update={"analysis": _analysis()})
+        before = parse_configuration("[agents]\n")
+        after = before.model_copy(update={"agents": _agents()})
 
-        changes = configuration_diff(before, after, sections=("analysis",))
+        changes = configuration_diff(before, after, sections=("agents",))
 
-        self.assertIn(("analysis.model", None, "fixture-model"), changes)
+        self.assertTrue(
+            any(
+                field == "agents.analysis"
+                and isinstance(new, dict)
+                and new.get("model") == "fixture-model"
+                for field, _old, new in changes
+            )
+        )
         self.assertIn(
-            ("analysis.protocol", None, AnalysisProtocol.OPENAI_RESPONSES.value),
+            ("agents.protocol", None, AgentProtocol.OPENAI_RESPONSES.value),
             changes,
         )
         self.assertNotIn(_SECRET, repr(changes))
@@ -240,7 +245,7 @@ class CoreServiceCredentialTests(unittest.TestCase):
 
             set_credentials("web-of-science", {"api_key": "provider-secret"}, home=home)
             set_core_credentials(
-                CoreCredentialService.LLM,
+                CoreCredentialService.AGENTS,
                 secret=_SECRET,
                 origin="https://api.openai.com",
                 home=home,
@@ -253,12 +258,12 @@ class CoreServiceCredentialTests(unittest.TestCase):
             )
 
             self.assertTrue(credentials.has_provider("web-of-science"))
-            self.assertTrue(credentials.has_core_service("llm"))
-            self.assertEqual(credentials.core_field_names("llm"), ("api_key", "origin"))
+            self.assertTrue(credentials.has_core_service("agents"))
+            self.assertEqual(credentials.core_field_names("agents"), ("api_key", "origin"))
             self.assertNotIn(_SECRET, repr(credentials))
 
-            removed = remove_core_credentials("llm", home=home)
-            self.assertFalse(removed.has_core_service("llm"))
+            removed = remove_core_credentials("agents", home=home)
+            self.assertFalse(removed.has_core_service("agents"))
             self.assertTrue(removed.has_core_service("mineru"))
             self.assertTrue(removed.has_provider("web-of-science"))
 
@@ -266,7 +271,7 @@ class CoreServiceCredentialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret=_SECRET,
                 origin="https://api.openai.com",
                 home=home,
@@ -276,13 +281,14 @@ class CoreServiceCredentialTests(unittest.TestCase):
             credentials = load_credentials(home=home)
             configuration = parse_configuration(
                 """
-                [analysis]
+                [agents]
                 provider = "openai"
                 protocol = "openai-responses"
                 base_url = "https://api.openai.com/v1"
+                authentication = "api-key"
+                [agents.analysis]
                 model = "fixture-model"
                 context_window_tokens = 128000
-                authentication = "api-key"
                 """
             )
             secrets = load_runtime_secrets(
@@ -290,20 +296,22 @@ class CoreServiceCredentialTests(unittest.TestCase):
                 credentials=credentials,
                 include_parser=False,
             )
-            self.assertEqual(secrets.analysis_api_key, _SECRET)
+            self.assertEqual(secrets.agents_api_key, _SECRET)
             self.assertNotIn(_SECRET, repr(secrets))
 
             wrong_origin = configuration.model_copy(
                 update={
-                    "analysis": AnalysisConfig(
-                        provider=AnalysisProvider.CUSTOM,
+                    "agents": AgentsConfig(
+                        provider=AgentProvider.CUSTOM,
                         service_name="other-service",
-                        protocol=AnalysisProtocol.OPENAI_RESPONSES,
+                        protocol=AgentProtocol.OPENAI_RESPONSES,
                         base_url="https://other.example.invalid/v1",
-                        model="fixture-model",
-                        context_window_tokens=128_000,
-                        authentication=AnalysisAuthentication.API_KEY,
-                    )
+                        authentication=AgentAuthentication.API_KEY,
+                        analysis=AgentRoleConfig(
+                            model="fixture-model",
+                            context_window_tokens=128_000,
+                        ),
+                    ),
                 }
             )
             with self.assertRaises(ConfigurationError):
@@ -321,14 +329,15 @@ class CoreServiceCredentialTests(unittest.TestCase):
             connection_mode = "loopback"
             model_identity = "mineru-3.4.4-vlm"
 
-            [analysis]
+            [agents]
             provider = "custom"
             service_name = "local-llm"
             protocol = "openai-chat-completions"
             base_url = "http://127.0.0.1:1234/v1"
+            authentication = "none"
+            [agents.analysis]
             model = "local-model"
             context_window_tokens = 32768
-            authentication = "none"
             """
         )
         with patch(
@@ -338,11 +347,11 @@ class CoreServiceCredentialTests(unittest.TestCase):
             secrets = load_runtime_secrets(
                 configuration,
                 include_parser=True,
-                include_analysis=True,
+                include_agents=True,
             )
         load.assert_not_called()
         self.assertIsNone(secrets.mineru_bearer_token)
-        self.assertIsNone(secrets.analysis_api_key)
+        self.assertIsNone(secrets.agents_api_key)
         self.assertIs(configuration.parsing.connection_mode, ParserConnectionMode.LOOPBACK)
 
     def test_cross_file_endpoint_change_keeps_old_and_new_origins_runnable_at_commits(
@@ -353,18 +362,18 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            old = _analysis()
-            update_configuration_sections(path, analysis=old)
+            old = _agents()
+            update_configuration_sections(path, agents=old)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
             )
-            replacement = AnalysisConfig(
+            replacement = AgentsConfig(
                 **{
                     **old.model_dump(mode="python"),
-                    "provider": AnalysisProvider.CUSTOM,
+                    "provider": AgentProvider.CUSTOM,
                     "service_name": "replacement",
                     "base_url": "https://llm.example.invalid/v1",
                 }
@@ -383,13 +392,13 @@ class CoreServiceCredentialTests(unittest.TestCase):
                     current,
                     credentials=credentials,
                     include_parser=False,
-                ).analysis_api_key
-                observations[name] = (current.analysis.base_url or "", current_secret or "")
+                ).agents_api_key
+                observations[name] = (current.agents.base_url or "", current_secret or "")
 
             update_core_service_configuration(
                 path,
-                "llm",
-                analysis=replacement,
+                "agents",
+                agents=replacement,
                 secret="new-secret",
                 origin="https://llm.example.invalid",
                 home=home,
@@ -410,10 +419,10 @@ class CoreServiceCredentialTests(unittest.TestCase):
                 },
             )
             final = load_credentials(home=home)
-            self.assertEqual(final.core_field_names("llm"), ("api_key", "origin"))
-            self.assertIsNone(final.core_secret_for_origin("llm", "https://api.openai.com"))
+            self.assertEqual(final.core_field_names("agents"), ("api_key", "origin"))
+            self.assertIsNone(final.core_secret_for_origin("agents", "https://api.openai.com"))
             self.assertEqual(
-                final.core_secret_for_origin("llm", "https://llm.example.invalid"),
+                final.core_secret_for_origin("agents", "https://llm.example.invalid"),
                 "new-secret",
             )
 
@@ -425,18 +434,18 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            old = _analysis()
-            update_configuration_sections(path, analysis=old)
+            old = _agents()
+            update_configuration_sections(path, agents=old)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
             )
-            replacement = AnalysisConfig(
+            replacement = AgentsConfig(
                 **{
                     **old.model_dump(mode="python"),
-                    "provider": AnalysisProvider.CUSTOM,
+                    "provider": AgentProvider.CUSTOM,
                     "service_name": "replacement",
                     "base_url": "https://llm.example.invalid/v1",
                 }
@@ -449,8 +458,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 update_core_service_configuration(
                     path,
-                    "llm",
-                    analysis=replacement,
+                    "agents",
+                    agents=replacement,
                     secret="new-secret",
                     origin="https://llm.example.invalid",
                     home=home,
@@ -459,13 +468,13 @@ class CoreServiceCredentialTests(unittest.TestCase):
 
             current = load_configuration(path)
             credentials = load_credentials(home=home)
-            self.assertEqual(current.analysis.base_url, "https://api.openai.com/v1")
+            self.assertEqual(current.agents.base_url, "https://api.openai.com/v1")
             self.assertEqual(
                 load_runtime_secrets(
                     current,
                     credentials=credentials,
                     include_parser=False,
-                ).analysis_api_key,
+                ).agents_api_key,
                 "old-secret",
             )
             self.assertNotIn("old-secret", repr(credentials))
@@ -477,9 +486,9 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            update_configuration_sections(path, analysis=_analysis())
+            update_configuration_sections(path, agents=_agents())
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -499,8 +508,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 update_core_service_configuration(
                     path,
-                    "llm",
-                    analysis=_custom_analysis(base_url="https://llm.example.invalid/v1"),
+                    "agents",
+                    agents=_custom_agents(base_url="https://llm.example.invalid/v1"),
                     secret="new-secret",
                     origin="https://llm.example.invalid",
                     home=home,
@@ -524,9 +533,9 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            update_configuration_sections(path, analysis=_analysis())
+            update_configuration_sections(path, agents=_agents())
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -539,8 +548,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 update_core_service_configuration(
                     path,
-                    "llm",
-                    analysis=_custom_analysis(base_url="https://llm.example.invalid/v1"),
+                    "agents",
+                    agents=_custom_agents(base_url="https://llm.example.invalid/v1"),
                     secret="new-secret",
                     origin="https://llm.example.invalid",
                     home=home,
@@ -549,16 +558,16 @@ class CoreServiceCredentialTests(unittest.TestCase):
 
             current = load_configuration(path)
             credentials = load_credentials(home=home)
-            self.assertEqual(current.analysis.base_url, "https://llm.example.invalid/v1")
+            self.assertEqual(current.agents.base_url, "https://llm.example.invalid/v1")
             self.assertEqual(
                 load_runtime_secrets(
                     current,
                     credentials=credentials,
                     include_parser=False,
-                ).analysis_api_key,
+                ).agents_api_key,
                 "new-secret",
             )
-            self.assertEqual(credentials.core_field_names("llm"), ("api_key", "origin"))
+            self.assertEqual(credentials.core_field_names("agents"), ("api_key", "origin"))
             self.assertNotIn("next_api_key", repr(credentials))
 
     def test_switch_to_loopback_none_auth_can_run_even_if_old_secret_cleanup_is_interrupted(
@@ -569,20 +578,20 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            update_configuration_sections(path, analysis=_analysis())
+            update_configuration_sections(path, agents=_agents())
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
             )
-            loopback = AnalysisConfig(
+            loopback = AgentsConfig(
                 **{
-                    **_analysis().model_dump(mode="python"),
-                    "provider": AnalysisProvider.CUSTOM,
+                    **_agents().model_dump(mode="python"),
+                    "provider": AgentProvider.CUSTOM,
                     "service_name": "local",
                     "base_url": "http://127.0.0.1:1234/v1",
-                    "authentication": AnalysisAuthentication.NONE,
+                    "authentication": AgentAuthentication.NONE,
                 }
             )
 
@@ -593,8 +602,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 update_core_service_configuration(
                     path,
-                    "llm",
-                    analysis=loopback,
+                    "agents",
+                    agents=loopback,
                     secret=None,
                     origin=None,
                     home=home,
@@ -602,7 +611,7 @@ class CoreServiceCredentialTests(unittest.TestCase):
                 )
 
             current = load_configuration(path)
-            self.assertIs(current.analysis.authentication, AnalysisAuthentication.NONE)
+            self.assertIs(current.agents.authentication, AgentAuthentication.NONE)
             with patch(
                 "sciretriever.configuration.load_credentials",
                 side_effect=AssertionError("loopback must ignore an unreferenced old secret"),
@@ -611,8 +620,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
                     current,
                     include_parser=False,
                 )
-            self.assertIsNone(secrets.analysis_api_key)
-            self.assertTrue(load_credentials(home=home).has_core_service("llm"))
+            self.assertIsNone(secrets.agents_api_key)
+            self.assertTrue(load_credentials(home=home).has_core_service("agents"))
 
     def test_same_origin_secret_update_publishes_one_credential_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -620,9 +629,9 @@ class CoreServiceCredentialTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             path = root / "config.toml"
-            update_configuration_sections(path, analysis=_analysis())
+            update_configuration_sections(path, agents=_agents())
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="old-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -630,8 +639,8 @@ class CoreServiceCredentialTests(unittest.TestCase):
 
             update_core_service_configuration(
                 path,
-                "llm",
-                analysis=_analysis(),
+                "agents",
+                agents=_agents(),
                 secret="new-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -641,7 +650,7 @@ class CoreServiceCredentialTests(unittest.TestCase):
             credentials = load_credentials(home=home)
             self.assertNotIn("next_", payload)
             self.assertEqual(
-                credentials.core_secret_for_origin("llm", "https://api.openai.com"),
+                credentials.core_secret_for_origin("agents", "https://api.openai.com"),
                 "new-secret",
             )
             self.assertEqual(tuple(root.glob(".config-*.staging")), ())

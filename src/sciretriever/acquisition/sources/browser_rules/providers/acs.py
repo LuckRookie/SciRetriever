@@ -7,6 +7,7 @@ from typing import Final
 from ..helpers import (
     DEFAULT_EXCLUDED_FILENAME_MARKERS,
     DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
+    cloudflare_challenge_profile,
     pdf_actions,
     publisher_page_markers,
 )
@@ -14,7 +15,7 @@ from ..model import BrowserArticleIdentityKind, BrowserSiteRule
 
 ACS_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     rule_id="acs-publications-pdf",
-    revision=2,
+    revision=3,
     landing_origin="https://pubs.acs.org",
     allowed_origins=("https://pubs.acs.org",),
     web_scope_provider_name="acs-publications",
@@ -44,6 +45,7 @@ ACS_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     article_id_namespaces=("doi",),
     supplement_filename_markers=DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
     excluded_filename_markers=DEFAULT_EXCLUDED_FILENAME_MARKERS,
+    challenge_resource_profile=cloudflare_challenge_profile(),
 )
 
 

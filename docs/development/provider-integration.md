@@ -1,6 +1,6 @@
 # Provider 接入开发手册
 
-新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Publisher/Access Provider 还必须进入统一的 [Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
+新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Publisher/Access Provider 还必须进入统一的 [Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)、[ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md)与 [ADR 0017](../architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md)，精确配置合同见 [Configuration 技术文档](../architecture/technical/configuration.md)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。
 
 本手册统一使用当前身份 `MetaLiterature`/`Literature`。`Work`/`WorkVersion` 是已删除旧架构中的历史名称，不得在当前实现或文档中与现行术语混用。
 
@@ -35,7 +35,7 @@
 | 匿名能力 |  |
 | 凭据字段 | `credentials.toml` 中已经由官方合同确认的字段名、必需性和适用 capability；不得记录值 |
 | 授权范围与已知限制 |  |
-| 本地 readiness | 生产 adapter/Profile、普通参数、凭据字段、官方 policy、origin guard、Playwright package 和 Chromium runtime 的要求 |
+| 本地 readiness | 生产 adapter/Profile、普通参数、凭据字段、官方 policy、origin/challenge guard、固定 identity manifest、Cloak wrapper、Playwright API、经核实 binary 和 headed display 的要求 |
 | Acquisition 适用性证据 | AssetHint origin / 来源稳定定位 / Provider record identity / DOI landing origin / 弱提示 / 不适用 |
 | 访问身份 | Metadata Provider / Publication-Access Provider / Access Platform-CDN；不能用展示名称混为一个调度 key |
 
@@ -83,10 +83,11 @@ Browser 不使用所有供应商统一的固定间隔。独立 risk group 可以
 popup、多个标签页或备用入口不能拆出新的 group。未知 Provider 不获得 generic Browser
 fallback。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；当前 route 数量不是配置上限，
 Publisher lane 仅为实际 Browser work 按需进入调度。生产 Browser 使用当前机器正常网络出口、
-一个 operator-managed 持久身份 Profile、一个共享有头 Chrome/Chromium process/context；无 GUI
-Linux 使用 Xvfb，Publisher 请求由 Chrome 原生网络栈完成。broker 关闭或进程退出后删除临时下载
-工作区但保留 Profile。普通配置只接受 opaque Profile identity，不接受路径、Cookie 或登录内容；
-`credentials.toml` 也不保存这些 Browser 状态。
+一个 operator-managed 固定身份 Profile、一个共享 CloakBrowser patched Chromium process/context；
+SciRetriever 继续以 Playwright API 控制它，无 GUI Linux 使用 Xvfb。Publisher 请求由 Chromium
+原生网络栈完成；broker 关闭或进程退出后删除临时下载工作区但保留 Profile。普通配置只接受
+opaque Profile identity，不接受路径、seed、Cookie 或登录内容；`credentials.toml` 也不保存这些
+Browser 状态。第一版不提供人工 Browser 认证流程。
 
 ## 4. 敏感信息边界
 
@@ -114,7 +115,7 @@ Linux 使用 Xvfb，Publisher 请求由 Chrome 原生网络栈完成。broker �
 - route 如何只填补指定 `Literature` 的资产缺口：
 - Resolution/Plan 如何根据 AssetHint、来源稳定定位、Provider record identity 或必要时 DOI landing origin 判断适用，且不会按 publisher/metadata 来源硬编码：
 - API capability、quota identity、官方 policy 和 route hint 如何表达，临时/额度错误为何不能自动升级 Browser：
-- Browser 如何证明显式 request 的 per-hop guard、未暴露 route 的 native redirect 只能复用同页 live 且已批准/预绑定的关联、不同 risk group 并行、同组串行、所有 Publisher lane 共享一个 persistent Profile/process/context、文章级隔离、批准页面资源、第三方 tracker 在 DNS 前丢弃、状态机、正文捕获和 supplement 排除：
+- Browser 如何证明显式 request 的 per-hop guard、未暴露 route 的 native redirect 只能复用同页 live 且已批准/预绑定的关联、不同 risk group 并行、同组串行、所有 Publisher lane 共享一个固定身份 Profile/process/context、文章级隔离、受限 challenge dependency/settle、第三方 tracker 在 DNS 前丢弃、确定性发现/Publisher 规则优先、可选 Agent 封闭动作、正文捕获和 supplement 排除：
 - primary PDF 与 supplemental XML/HTML 的角色验证；XML/HTML 不得提升为 PDF 或独立满足内容分析：
 - 基本检查如何只确认非空 PDF、可读取文件结构、可打开页面结构和候选具有文献来源依据，而不进行固定大小/页数阈值、正文完整性或标题/作者/DOI 身份比对：
 - 何时允许进入不可变资产接纳：
@@ -165,7 +166,7 @@ PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquis
 - 首候选失败后其它候选成功；
 - 一个有界 cohort 全部完成 Public 后才启动未解决目标的 Authorized API，API 层结束并通过 admission 后才启动最小 Browser 集合；同一 Literature 不跨层竞速；
 - 两个独立 Browser risk group 实际并行，同一 group 最大并发为 1 且精确满足自身 interval/window/cooldown；
-- navigation、页面 request、popup、viewer、response 和 download 通过 Profile guard 与 Network policy；普通文章只加载规则批准的页面资源，未批准第三方资源在 DNS 前丢弃；点击或页面脚本产生的显式 request 逐项复审，未暴露 route 的 native redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 terminal host admission 同时成立时才能关联；共享 persistent context 中的 Publisher lane reuse/文章隔离、operation-local 状态机/circuit 和 supplement exclusion 使用离线 fixture；
+- navigation、页面 request、popup、viewer、response 和 download 通过 Profile guard 与 Network policy；普通文章只加载规则批准的页面资源，challenge dependency 还必须满足发起页/frame/用途约束，未批准第三方资源在 DNS 前丢弃；点击或页面脚本产生的显式 request 逐项复审，未暴露 route 的 native redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 terminal host admission 同时成立时才能关联；共享 persistent context 中的 Publisher lane reuse/文章隔离、challenge 自动 clear/resource-blocked/interaction-required/settle-timeout、operation-local 状态机/circuit、可选受控 Agent 和 supplement exclusion 使用离线 fixture；
 - 重复候选收敛；
 - 429、timeout、redirect、截断、超限和无效内容；
 - 敏感 query/header/cookie 不进入 durable state 或输出；
@@ -199,7 +200,7 @@ PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquis
 - [ ] API 声明并执行真实 quota identity、并发、interval、window/周期额度、reset 和反馈头；普通配置只能收紧，公开/direct URL 没有绕过 provider/host scope。
 - [ ] Browser Profile 声明 risk/session group、文章 policy 与证据日期；不同独立 group 实际并行，同组 `concurrency=1` 且精确满足 interval/window/cooldown，全局 cap 只保护本机资源。
 - [ ] Publisher Profile 具有唯一 evidence manifest 和三态结论；production catalog 只由 `production-ready` 派生，fixture-verified/unsupported rule 未进入生产对象图；Browser 总开关关闭或 runtime 未就绪时不构造可执行 client，逐文章结果不由本地配置预先宣称。
-- [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Profile guard 与 Network policy；批准页面子资源、第三方 tracker 丢弃、动态 redirect、一个 persistent Profile/process/context、Publisher lane reuse/文章隔离、登录/MFA/challenge 的识别后停止、operation-local circuit、多路正文捕获和 supplement 排除有离线 fixture，Cookie、Profile 内容/路径和临时下载路径不泄露。
+- [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Profile guard 与 Network policy；批准页面子资源、受限 challenge dependency、第三方 tracker 丢弃、动态 redirect、一个固定身份 Profile/process/context、Publisher lane reuse/文章隔离、自动 settle 与人工终态、operation-local circuit、确定性规则优先/Agent 有界 fallback、多路正文捕获和 supplement 排除有离线 fixture，seed、Cookie、Profile 内容/路径、Agent 页面内容和临时下载路径不泄露。
 - [ ] Metadata、reference query 和 asset API 共享真实 quota 时使用同一 scope；adapter/SDK 没有自建局部 limiter 或绕过受控 transport。
 - [ ] 只有供应商明确声明的同文献版本目标进入 `MetadataObservation.version_links`；未解析目标不触发自动补查、占位 Literature 或通用关系。
 - [ ] 当前文献 identifier、Provider record identity 和相关版本 identifier 已按字段语义分流；Provider record ID 没有进入 `LiteratureMetadata.identifiers`，正式记录的相关 arXiv ID 没有冒充当前正式 Literature 的 ID。

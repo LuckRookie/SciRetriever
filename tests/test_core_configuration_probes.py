@@ -7,6 +7,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, cast
+from unittest.mock import patch
 
 from sciretriever.bootstrap import ProductionConfigurationProbeSession
 from sciretriever.configuration import (
@@ -18,13 +19,14 @@ from sciretriever.configuration import (
 )
 from sciretriever.model.access import Header, TransportRequest
 from sciretriever.model.configuration import (
+    AgentConfigurationProbeDetails,
     Configuration,
-    LLMConfigurationProbeDetails,
     MinerUConfigurationProbeDetails,
     ProbeOutcome,
 )
 from sciretriever.network.admission import AccessCoordinator
 from sciretriever.network.browser_sessions import BrowserSessionBroker
+from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 from sciretriever.network.http import HttpClient
 
 
@@ -111,13 +113,17 @@ def _response(payload: object, *, status: int = 200) -> _RawResponse:
 def _analysis_configuration(protocol: str = "openai-responses") -> Configuration:
     return parse_configuration(
         f"""
-        [analysis]
+        [agents]
         provider = "openai"
         protocol = "{protocol}"
         base_url = "https://api.openai.com/v1"
+        authentication = "api-key"
+        [agents.analysis]
         model = "probe-model"
         context_window_tokens = 128000
-        authentication = "api-key"
+        structured_output = true
+        max_output_tokens = 64
+        [analysis]
         metadata_max_output_tokens = 64
         content_max_output_tokens = 64
         reference_max_output_tokens = 64
@@ -126,6 +132,64 @@ def _analysis_configuration(protocol: str = "openai-responses") -> Configuration
         max_chunk_count = 1
         max_total_llm_requests = 3
         max_total_output_tokens = 192
+        """
+    )
+
+
+def _browser_agent_configuration() -> Configuration:
+    return parse_configuration(
+        """
+        [agents]
+        provider = "openai"
+        protocol = "openai-responses"
+        base_url = "https://api.openai.com/v1"
+        authentication = "api-key"
+        [agents.analysis]
+        model = "analysis-probe-model"
+        context_window_tokens = 128000
+        structured_output = true
+        max_output_tokens = 64
+        [agents.browser]
+        model = "browser-probe-model"
+        context_window_tokens = 128000
+        max_output_tokens = 64
+        image_input = true
+        tool_decision = true
+        image_media_types = ["image/png"]
+        image_count = 1
+        image_bytes = 1024
+        turns = 1
+        [analysis]
+        metadata_max_output_tokens = 64
+        content_max_output_tokens = 64
+        reference_max_output_tokens = 64
+        max_input_bytes = 4096
+        max_chunk_bytes = 4096
+        max_chunk_count = 1
+        max_total_llm_requests = 3
+        max_total_output_tokens = 192
+        """
+    )
+
+
+def _browser_agent_only_configuration() -> Configuration:
+    return parse_configuration(
+        """
+        [agents]
+        provider = "openai"
+        protocol = "openai-responses"
+        base_url = "https://api.openai.com/v1"
+        authentication = "api-key"
+        [agents.browser]
+        model = "browser-probe-model"
+        context_window_tokens = 128000
+        max_output_tokens = 64
+        image_input = true
+        tool_decision = true
+        image_media_types = ["image/png"]
+        image_count = 1
+        image_bytes = 1024
+        turns = 1
         """
     )
 
@@ -159,6 +223,29 @@ def _session(
         coordinator=coordinator,
     )
     credentials = load_credentials(home=home)
+    with patch(
+        "sciretriever.configuration.browser_access._cloak_local_status",
+        return_value=(
+            True,
+            True,
+            True,
+            "146.0.7680.177.5",
+            True,
+            True,
+            "sciretriever.browser-identity.v1",
+        ),
+    ):
+        browser_status = browser_access_status(
+            configuration,
+            home=home,
+            runtime_availability=CloakBrowserRuntimeAvailability(
+                cloak_wrapper_available=True,
+                playwright_api_available=True,
+                binary_executable_available=True,
+                headed_display_available=True,
+                browser_version="146.0.7680.177.5",
+            ),
+        )
     return ProductionConfigurationProbeSession(
         configuration=configuration,
         credentials=credentials,
@@ -166,26 +253,170 @@ def _session(
         probe_port=cast(Any, _EmptyProbeRegistry()),
         access_coordinator=coordinator,
         http_client=http_client,
-        browser_status=browser_access_status(
-            configuration,
-            home=home,
-            python_dependency_available=True,
-            chromium_executable_available=True,
-            headed_display_available=True,
-        ),
+        browser_status=browser_status,
         browser_probe_port=cast(Any, _EmptyBrowserProbePort()),
         browser_session_broker=BrowserSessionBroker(),
     )
 
 
 class CoreConfigurationProbeTests(unittest.TestCase):
+    def test_browser_agent_only_configuration_uses_browser_role_without_analysis(self) -> None:
+        response = {
+            "id": "resp_browser_probe",
+            "object": "response",
+            "status": "completed",
+            "model": "browser-probe-model",
+            "usage": {"input_tokens": 16, "output_tokens": 1},
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "probe_stop",
+                    "arguments": '{"ok":true}',
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_core_credentials(
+                "agents",
+                secret="probe-secret",
+                origin="https://api.openai.com",
+                home=home,
+            )
+            transport = _Transport([_response(response)])
+            result = _session(
+                _browser_agent_only_configuration(),
+                home,
+                transport,
+            ).run_browser_agent()
+
+        self.assertIs(result.outcome, ProbeOutcome.PASSED)
+        self.assertTrue(result.local_ready)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(cast(AgentConfigurationProbeDetails, result.details).role, "browser-agent")
+
+    def test_browser_agent_probe_uses_one_synthetic_image_and_closed_tool(self) -> None:
+        response = {
+            "id": "resp_browser_probe",
+            "object": "response",
+            "status": "completed",
+            "model": "browser-probe-model",
+            "usage": {"input_tokens": 16, "output_tokens": 1},
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "probe_stop",
+                    "arguments": '{"ok":true}',
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            set_core_credentials(
+                "agents",
+                secret="probe-secret",
+                origin="https://api.openai.com",
+                home=home,
+            )
+            transport = _Transport([_response(response)])
+            result = _session(_browser_agent_configuration(), home, transport).run_browser_agent()
+
+        self.assertIs(result.outcome, ProbeOutcome.PASSED)
+        self.assertIsInstance(result.details, AgentConfigurationProbeDetails)
+        details = cast(AgentConfigurationProbeDetails, result.details)
+        self.assertEqual(details.role, "browser-agent")
+        self.assertEqual(details.request_kind, "browser-agent-tool")
+        self.assertTrue(details.image_input)
+        self.assertTrue(details.tool_decision)
+        self.assertEqual(details.image_count, 1)
+        self.assertEqual(details.tool_count, 1)
+        self.assertTrue(details.tool_decision_parseable)
+        self.assertFalse(details.sends_user_literature)
+        self.assertFalse(details.sends_page_content)
+        self.assertFalse(details.sends_pdf)
+        self.assertTrue(details.may_consume_quota)
+        self.assertFalse(result.persisted)
+        self.assertEqual(len(transport.calls), 1)
+        request = transport.calls[0]["request"]
+        self.assertIsInstance(request, TransportRequest)
+        body = json.loads(cast(bytes, cast(TransportRequest, request).body))
+        serialized = json.dumps(body, separators=(",", ":"))
+        self.assertIn("probe_stop", serialized)
+        self.assertIn("synthetic", serialized)
+        self.assertNotIn("Literature", serialized)
+        self.assertNotIn("PDF", serialized)
+        self.assertNotIn("page content", serialized)
+        self.assertLess(len(cast(bytes, cast(TransportRequest, request).body)), 8_000)
+
+    def test_browser_agent_probe_skips_before_transport_when_role_is_unconfigured(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            transport = _Transport([])
+            result = _session(_analysis_configuration(), home, transport).run_browser_agent()
+
+        self.assertIs(result.outcome, ProbeOutcome.SKIPPED)
+        self.assertFalse(result.local_ready)
+        self.assertEqual(result.failure_code, "browser-agent-not-ready")
+        self.assertIsInstance(result.details, AgentConfigurationProbeDetails)
+        details = cast(AgentConfigurationProbeDetails, result.details)
+        self.assertEqual(details.role, "browser-agent")
+        self.assertEqual(details.request_kind, "browser-agent-tool")
+        self.assertEqual(transport.calls, [])
+
+    def test_browser_agent_probe_classifies_authentication_and_tool_contract_failures(self) -> None:
+        responses = (
+            (_response({}, status=401), "agent-authentication"),
+            (
+                _response(
+                    {
+                        "id": "resp_browser_probe",
+                        "object": "response",
+                        "status": "completed",
+                        "model": "browser-probe-model",
+                        "usage": {"input_tokens": 16, "output_tokens": 1},
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "other_tool",
+                                "arguments": '{"ok":true}',
+                            }
+                        ],
+                    }
+                ),
+                "browser-agent-probe-contract",
+            ),
+        )
+        for response, failure_code in responses:
+            with (
+                self.subTest(failure_code=failure_code),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                home = Path(temporary)
+                set_core_credentials(
+                    "agents",
+                    secret="probe-secret",
+                    origin="https://api.openai.com",
+                    home=home,
+                )
+                result = _session(
+                    _browser_agent_configuration(),
+                    home,
+                    _Transport([response]),
+                ).run_browser_agent()
+            self.assertIs(result.outcome, ProbeOutcome.FAILED)
+            self.assertEqual(result.failure_code, failure_code)
+            self.assertIsInstance(result.details, AgentConfigurationProbeDetails)
+            self.assertEqual(
+                cast(AgentConfigurationProbeDetails, result.details).role, "browser-agent"
+            )
+
     def test_llm_probe_uses_production_adapter_with_one_minimal_non_literature_request(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="probe-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -195,6 +426,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                 "object": "response",
                 "status": "completed",
                 "model": "probe-model",
+                "usage": {"input_tokens": 8, "output_tokens": 1},
                 "output": [
                     {
                         "id": "msg_probe",
@@ -212,11 +444,11 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                 ],
             }
             transport = _Transport([_response(response)])
-            result = _session(_analysis_configuration(), home, transport).run_llm()
+            result = _session(_analysis_configuration(), home, transport).run_agents()
 
         self.assertIs(result.outcome, ProbeOutcome.PASSED)
-        self.assertIsInstance(result.details, LLMConfigurationProbeDetails)
-        details = cast(LLMConfigurationProbeDetails, result.details)
+        self.assertIsInstance(result.details, AgentConfigurationProbeDetails)
+        details = cast(AgentConfigurationProbeDetails, result.details)
         self.assertFalse(details.sends_user_literature)
         self.assertTrue(details.may_consume_quota)
         self.assertFalse(result.persisted)
@@ -239,8 +471,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
 
     def test_llm_probe_classifies_authentication_protocol_and_contract_failures(self) -> None:
         cases = (
-            (_response({}, status=401), "analysis-llm-authentication"),
-            (_response({"unexpected": True}), "analysis-llm-protocol"),
+            (_response({}, status=401), "agent-authentication"),
+            (_response({"unexpected": True}), "agent-protocol"),
             (
                 _response(
                     {
@@ -248,6 +480,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                         "object": "response",
                         "status": "completed",
                         "model": "probe-model",
+                        "usage": {"input_tokens": 8, "output_tokens": 1},
                         "output": [
                             {
                                 "id": "msg_probe",
@@ -275,7 +508,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
             ):
                 home = Path(temporary)
                 set_core_credentials(
-                    "llm",
+                    "agents",
                     secret="probe-secret",
                     origin="https://api.openai.com",
                     home=home,
@@ -284,7 +517,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                     _analysis_configuration(),
                     home,
                     _Transport([response]),
-                ).run_llm()
+                ).run_agents()
             self.assertIs(result.outcome, ProbeOutcome.FAILED)
             self.assertEqual(result.failure_code, failure_code)
 

@@ -6,5 +6,9 @@
     "reason": "max_output_tokens"
   },
   "model": "fixture-openai-model",
+  "usage": {
+    "input_tokens": 23,
+    "output_tokens": 64
+  },
   "output": []
 }

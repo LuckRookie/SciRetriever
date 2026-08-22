@@ -47,7 +47,9 @@ from sciretriever.bootstrap import (
     ProductionEntryScope,
     build_production_object_graph,
 )
+import sciretriever.bootstrap.browser as browser_bootstrap
 from sciretriever.configuration import initialize_browser_profile, parse_configuration
+from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 from sciretriever.network.browser_scheduler import BrowserGroupScheduler
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import SecureHttpTransport, SystemResolver
@@ -65,8 +67,37 @@ configuration = parse_configuration(
     + 'browser_profile = "fixture-profile"\\n'
     + "browser_max_concurrency = 3\\n"
 )
+
+class _FakeCloakRuntimeStatus:
+    ready = True
+    presence = "configured"
+
+class _FakeCloakRuntimeManager:
+    def __init__(self, *, home=None):
+        del home
+        self.cache_directory = root / "fake-cloak-cache"
+
+    def status(self):
+        return _FakeCloakRuntimeStatus()
+
+    def acquire_runtime(self):
+        raise AssertionError("offline object-graph assembly launched the Browser")
+
+fake_availability = CloakBrowserRuntimeAvailability(
+    cloak_wrapper_available=True,
+    playwright_api_available=True,
+    binary_executable_available=True,
+    headed_display_available=True,
+    browser_version="146.0.7680.177.5",
+)
 forbidden = AssertionError("installed production assembly performed external I/O")
 with (
+    mock.patch.object(browser_bootstrap, "CloakRuntimeManager", _FakeCloakRuntimeManager),
+    mock.patch.object(
+        browser_bootstrap,
+        "cloakbrowser_runtime_availability",
+        return_value=fake_availability,
+    ),
     mock.patch.object(SystemResolver, "resolve", side_effect=forbidden),
     mock.patch.object(SecureHttpTransport, "send", side_effect=forbidden),
     mock.patch.object(BrowserSessionBroker, "acquire", side_effect=forbidden),
@@ -123,10 +154,6 @@ print(json.dumps(evidence, sort_keys=True))
             ("-I", "-c", script),
             environment={
                 "SCIRETRIEVER_P76_ROOT": os.fspath(root),
-                "PLAYWRIGHT_BROWSERS_PATH": os.environ.get(
-                    "PLAYWRIGHT_BROWSERS_PATH",
-                    os.fspath(Path.home() / ".cache" / "ms-playwright"),
-                ),
             },
             cwd=root,
         )
@@ -820,7 +847,7 @@ print(json.dumps(evidence, sort_keys=True))
         directory.chmod(0o700)
         credentials = directory / "credentials.toml"
         credentials.write_text(
-            '[llm]\napi_key = "offline-analysis-key"\norigin = "https://api.openai.com"\n',
+            '[agents]\napi_key = "offline-analysis-key"\norigin = "https://api.openai.com"\n',
             encoding="utf-8",
         )
         credentials.chmod(0o600)
@@ -939,13 +966,17 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[analysis]
+[agents]
 provider = "openai"
 protocol = "openai-responses"
 base_url = "https://api.openai.com/v1"
-model = "acceptance-model"
-context_window_tokens = 1000000
 authentication = "api-key"
+[agents.analysis]
+model = "acceptance-model"
+context_window_tokens = 2000000
+max_output_tokens = 4096
+structured_output = true
+[analysis]
 metadata_max_output_tokens = 2048
 content_max_output_tokens = 4096
 reference_max_output_tokens = 2048

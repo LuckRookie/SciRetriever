@@ -90,9 +90,24 @@ _FIELD_PRIORITY: Final[dict[str, int]] = {
             "target_count",
             "attempt_count",
             "action_count",
+            "agent_invoked",
+            "action_kind",
+            "evidence_kind",
             "selected",
             "resolved",
+            "resource_admitted",
+            "resource_blocked",
             "pending",
+            "pending_count",
+            "capture_count",
+            "capture",
+            "runtime_version",
+            "runtime_ready",
+            "identity_stable",
+            "process_reused",
+            "context_reused",
+            "adapter",
+            "controller",
             "delivered",
             "failed",
             "raw_item_count",
@@ -107,6 +122,7 @@ _FIELD_PRIORITY: Final[dict[str, int]] = {
             "result_count",
             "response_bytes",
             "elapsed_ms",
+            "settle_elapsed_ms",
             "duration_ms",
             "queue_wait_ms",
             "wait_ms",
@@ -125,6 +141,8 @@ _FIELD_ALIASES: Final[dict[str, str]] = {
     "accepted_item_count": "accepted-items",
     "accepted_observation_count": "accepted",
     "action_count": "actions",
+    "action_kind": "action",
+    "agent_invoked": "agent",
     "attempt_count": "attempts",
     "browser_rate_limit_group": "browser-group",
     "duration_ms": "duration",
@@ -142,6 +160,10 @@ _FIELD_ALIASES: Final[dict[str, str]] = {
     "relation_count": "relations",
     "response_bytes": "bytes",
     "result_count": "results",
+    "resource_admitted": "admitted",
+    "resource_blocked": "blocked",
+    "pending_count": "pending",
+    "settle_elapsed_ms": "settle",
     "scan_limit": "scan-limit",
     "target_count": "targets",
     "wait_ms": "wait",
@@ -282,7 +304,13 @@ def _format_milliseconds(value: str) -> str:
 
 def _display_field(key: str, value: str) -> tuple[str, str]:
     display_key = _FIELD_ALIASES.get(key, key.replace("_", "-"))
-    if key in {"elapsed_ms", "duration_ms", "queue_wait_ms", "wait_ms"}:
+    if key in {
+        "elapsed_ms",
+        "duration_ms",
+        "queue_wait_ms",
+        "wait_ms",
+        "settle_elapsed_ms",
+    }:
         return display_key, _format_milliseconds(value)
     return display_key, value
 

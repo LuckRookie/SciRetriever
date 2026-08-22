@@ -3,6 +3,10 @@
   "object": "response",
   "status": "completed",
   "model": "fixture-openai-model",
+  "usage": {
+    "input_tokens": 23,
+    "output_tokens": 1
+  },
   "output": [
     {
       "id": "msg_fixture_refusal",

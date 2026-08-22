@@ -5,11 +5,20 @@ from __future__ import annotations
 import threading
 import unicodedata
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from sciretriever.agents import (
+    AgentBudget,
+    AgentFailure,
+    AgentPort,
+    AgentProvenance,
+    AgentStructuredResponse,
+    open_session,
+)
 from sciretriever.analysis.content import (
     ContentAnalysisInput,
     ContentAnalysisLimits,
@@ -31,10 +40,9 @@ from sciretriever.analysis.metadata_rules import metadata_input_sha256
 from sciretriever.analysis.ports import (
     AnalysisArtifactPublicationPort,
     AnalysisArtifactReadPort,
+    AnalysisCall,
     AnalysisCurrentInputPort,
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
-    AnalysisLLMPort,
+    AnalysisRequestKind,
     ContentInputIdentity,
     StagedContentMarkdown,
     canonical_json_bytes,
@@ -46,11 +54,6 @@ from sciretriever.model.analysis import (
     NoUsableContent,
     analysis_input_sha256,
     content_sha256,
-)
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
 )
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import ParserResult
@@ -103,9 +106,9 @@ def _runtime_value(value: object) -> object:
     return value
 
 
-def _checked_llm(value: object) -> AnalysisLLMPort:
-    if not isinstance(value, AnalysisLLMPort):
-        raise TypeError("llm must implement AnalysisLLMPort")
+def _checked_agents(value: object) -> AgentPort:
+    if not isinstance(value, AgentPort):
+        raise TypeError("agent must implement AgentPort")
     return value
 
 
@@ -147,10 +150,11 @@ class AnalysisService:
         "_artifact_publisher",
         "_artifact_reader",
         "_clock",
+        "_content_agent_budget",
         "_content_max_output_tokens",
         "_current_inputs",
         "_limits",
-        "_llm",
+        "_agents",
         "_metadata_max_output_tokens",
         "_metadata_stage",
         "_model",
@@ -161,7 +165,7 @@ class AnalysisService:
     def __init__(  # noqa: C901
         self,
         *,
-        llm: AnalysisLLMPort,
+        agents: AgentPort,
         artifact_reader: AnalysisArtifactReadPort,
         current_inputs: AnalysisCurrentInputPort,
         artifact_publisher: AnalysisArtifactPublicationPort,
@@ -169,10 +173,11 @@ class AnalysisService:
         metadata_max_output_tokens: int,
         content_max_output_tokens: int,
         limits: ContentAnalysisLimits,
+        agent_budget: AgentBudget | None = None,
         provenance_id_factory: ProvenanceIdFactory = _new_provenance_id,
         clock: Clock = _utc_now,
     ) -> None:
-        checked_llm = _checked_llm(llm)
+        checked_agents = _checked_agents(agents)
         checked_artifact_reader = _checked_artifact_reader(artifact_reader)
         checked_current_inputs = _checked_current_inputs(current_inputs)
         checked_artifact_publisher = _checked_artifact_publisher(artifact_publisher)
@@ -181,6 +186,22 @@ class AnalysisService:
             raise ValueError("metadata_max_output_tokens must be a positive integer")
         if type(content_max_output_tokens) is not int or content_max_output_tokens < 1:
             raise ValueError("content_max_output_tokens must be a positive integer")
+        selected_agent_budget = (
+            AgentBudget(
+                max_output_tokens=max(
+                    metadata_max_output_tokens,
+                    content_max_output_tokens,
+                )
+            )
+            if agent_budget is None
+            else agent_budget
+        )
+        if not isinstance(selected_agent_budget, AgentBudget):
+            raise TypeError("agent_budget must be an AgentBudget")
+        if max(metadata_max_output_tokens, content_max_output_tokens) > (
+            selected_agent_budget.max_output_tokens
+        ):
+            raise ValueError("Analysis stage output must fit the Agent budget")
         if not callable(provenance_id_factory):
             raise TypeError("provenance_id_factory must be callable")
         if not callable(clock):
@@ -192,14 +213,14 @@ class AnalysisService:
         )
         try:
             checked_provider = _stable_identity(
-                checked_llm.provider_name,
+                checked_agents.provider_name,
                 field_name="provider_name",
                 maximum_bytes=_MAX_PROVIDER_BYTES,
             )
         except Exception:
-            raise TypeError("llm provider_name must be stable bounded text") from None
+            raise TypeError("Agent provider_name must be stable bounded text") from None
 
-        self._llm = checked_llm
+        self._agents = checked_agents
         self._artifact_reader = checked_artifact_reader
         self._current_inputs = checked_current_inputs
         self._artifact_publisher = checked_artifact_publisher
@@ -207,13 +228,18 @@ class AnalysisService:
         self._provider_name = checked_provider
         self._metadata_max_output_tokens = metadata_max_output_tokens
         self._content_max_output_tokens = content_max_output_tokens
+        self._content_agent_budget = replace(
+            selected_agent_budget,
+            max_output_tokens=content_max_output_tokens,
+        )
         self._limits = checked_limits
         self._provenance_id_factory = provenance_id_factory
         self._clock = clock
         self._metadata_stage = MetadataAnalysisStage(
-            llm=checked_llm,
+            agents=checked_agents,
             model=checked_model,
             max_output_tokens=metadata_max_output_tokens,
+            agent_budget=selected_agent_budget,
         )
 
     def __repr__(self) -> str:
@@ -406,7 +432,7 @@ class AnalysisService:
 
     def _validate_metadata_receipt(self, receipt: MetadataAnalysisReceipt) -> None:
         aligned = (
-            receipt.request.kind is LLMRequestKind.METADATA
+            receipt.request.kind is AnalysisRequestKind.METADATA
             and receipt.request.model == self._model
             and receipt.request.max_output_tokens == self._metadata_max_output_tokens
             and receipt.provenance.provider == self._provider_name
@@ -416,31 +442,43 @@ class AnalysisService:
         if not aligned:
             raise content_analysis_failure("analysis-content-contract")
 
-    def _complete_content_call(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def _complete_content_call(self, call: AnalysisCall) -> AgentStructuredResponse:
         if (
-            call.request.kind is not LLMRequestKind.CONTENT
+            call.request.kind is not AnalysisRequestKind.CONTENT
             or call.request.model != self._model
             or call.request.max_output_tokens != self._content_max_output_tokens
         ):
             raise content_analysis_failure("analysis-content-contract")
         try:
-            response = self._llm.complete(call)
-        except AnalysisLLMFailure as error:
+            request = call.to_agent_request(budget=self._content_agent_budget)
+            with open_session(
+                self._agents,
+                max_turns=1,
+                cancel_event=call.cancel_event,
+                budget=self._content_agent_budget,
+            ) as session:
+                response = session.complete(request)
+        except AgentFailure as error:
             raise content_analysis_failure(
                 "analysis-content-llm",
                 retryable=error.failure.retryable,
             ) from None
         except Exception:
             raise content_analysis_failure("analysis-content-llm") from None
+        if not isinstance(response, AgentStructuredResponse):
+            raise content_analysis_failure(
+                "analysis-content-llm",
+                retryable=False,
+            )
         try:
             response_value = _runtime_value(response)
             current_provider = _stable_identity(
-                self._llm.provider_name,
+                self._agents.provider_name,
                 field_name="provider_name",
                 maximum_bytes=_MAX_PROVIDER_BYTES,
             )
             aligned = (
-                isinstance(response_value, LLMStructuredResponse)
+                isinstance(response_value, AgentStructuredResponse)
                 and current_provider == self._provider_name
                 and response_value.provenance.provider == self._provider_name
                 and response_value.provenance.model == self._model
@@ -488,8 +526,8 @@ class AnalysisService:
         references: tuple[str, ...],
         markdown: ArtifactRef,
         metadata_receipt: MetadataAnalysisReceipt,
-        content_call: AnalysisLLMCall,
-        content_provenance: LLMProvenance,
+        content_call: AnalysisCall,
+        content_provenance: AgentProvenance,
     ) -> LiteratureContentProposal:
         try:
             checked_sections = tuple(sections)

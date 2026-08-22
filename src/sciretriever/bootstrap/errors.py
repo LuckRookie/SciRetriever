@@ -10,6 +10,7 @@ class BootstrapError(RuntimeError):
             "paths-not-ready",
             "parser-not-ready",
             "analysis-not-ready",
+            "browser-agent-not-ready",
             "metadata-not-ready",
             "acquisition-not-ready",
             "storage-unavailable",

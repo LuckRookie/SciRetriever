@@ -86,7 +86,7 @@ CLI 或其它入口只负责：
 | 书目导入 | 否 | 是 | 否 | 是，`ImportReport` |
 | 书目导出 | 否 | 否；只写用户目标文件 | 否 | 是，`ExportReport` |
 | 统一配置中心与 status | 否 | 否；只安全修改普通配置和固定凭据文件 | 否 | 否 |
-| Provider/LLM/MinerU test | 是；仅用户显式最小只读 probe | 否 | 否 | 否 |
+| Provider/Agents role/MinerU test | 是；仅用户显式最小只读 probe | 否 | 否 | 否 |
 
 读取操作直接返回 read result；不能为了接口统一套通用 Report。写数据库的四组入口必须取得写入准入，并只提交各业务模块已经确认的事实。公开 API 不接受 Provider 名称之外的私有参数、SQL、内部路径、adapter、数据库连接、HTTP client、Parser client 或 LLM client；实现选择只在 Bootstrap。
 
@@ -125,7 +125,7 @@ sciretriever export content
 
 sciretriever config
 sciretriever config status
-sciretriever config test <provider|llm|mineru>
+sciretriever config test <provider|llm|mineru> [--role analysis|browser]
 sciretriever config test --all
 ```
 
@@ -138,7 +138,7 @@ sciretriever config test --all
 - `import pdf` 必须指定一个已经存在的具体 Literature，复制、检查并接纳用户 PDF，不隐式继续 Parsing/Analysis；
 - `export metadata` 按已接受的导出范围与格式原子发布书目文件；
 - `export pdf` 和 `export content` 从一个具体 LiteratureDetail 取得当前主 PDF 或规范轻结构化 Markdown 引用，再按 artifact 导出规则写入用户目标。
-- 裸 `config` 打开统一交互中心，分区管理 LLM Analysis、MinerU Parser 和 Provider；核心服务同时安全发布普通配置与同一 `~/.sciretriever/credentials.toml` 中的 origin-bound secret，Provider 区设置/更新或移除自己的 section。公开子命令只保留 `status/test`，旧 `set/remove` 路径拒绝。`config status` 只做本地状态检查；`config test` 是用户显式发起并经过统一 Network 的最小只读 Provider/LLM/MinerU probe。这些动作都不读取或写入文献数据库，也不形成五类 Entry Report。
+- 裸 `config` 打开统一交互中心，分区管理唯一 Agents provider 的 Analysis/Browser role、MinerU Parser、Provider、CloakBrowser binary 与固定身份 Profile；核心服务同时安全发布普通配置与同一 `~/.sciretriever/credentials.toml` 中的 origin-bound secret，Provider 区设置/更新或移除自己的 section。公开子命令只保留 `status/test`，旧 `set/remove` 路径拒绝。`config status` 只做本地状态检查，分别呈现 Analysis 与 Browser Agent capability、Cloak wrapper/binary/version/Profile manifest，不启动模型或 Browser；`config test` 是用户显式发起并经过统一 Network 的最小只读 Provider/Agents role/MinerU probe，或显式单目标 Cloak Browser probe。这些动作都不读取或写入文献数据库，也不形成五类 Entry Report。
 
 这里不建立 `exchange` 一级组，也不使用容易被理解为参考文献列表的 `bibliography` 命令名；书目信息文件统一称为 `metadata`。`metadata`、`acquisition`、`parsing`、`analysis`、`storage` 和 `artifact` 都不是当前一级命令：前五个是内部责任名称，通用 artifact 能力保留在 Python API，CLI 只暴露用户实际需要的 PDF 与 content。`config` 表达用户配置动作，不把 Configuration 提升为新的文献业务模块。
 
@@ -263,24 +263,28 @@ chunk 会让全部 participant 形成 `not_started` 而不调用 Acquisition；�
 生产 Completion 已共享同一 Planner/Profile catalog、tiered cohort executor、Browser scheduler
 和 session broker；配置中心提供 Browser 总开关、一个 operator-managed 持久 Profile、显式可见
 Browser 入口与跨 Publisher 本机并发 cap。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；
-当前 route 数量不构成上限。当前 production Browser rule catalog 有 `acs-publications-pdf@2`、
-`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、
-`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、
-`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。总开关、选中且安全存在的 Profile、
-Playwright、Chrome/Chromium 与 headed display 同时就绪时，Bootstrap 才创建对应 Browser client
+当前 route 数量不构成上限。当前 production Browser rule catalog 有 `acs-publications-pdf@3`、
+`aip-publishing-pdf@3`、`sciencedirect-pdf@3`、`iopscience-pdf@2`、
+`oxford-academic-pdf@3`、`rsc-publishing-pdf@3`、`science-aaas-pdf@3`、
+`springerlink-pdf@5` 和 `wiley-online-library-pdf@3`。总开关、选中且安全存在的固定身份 Profile、
+CloakBrowser wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时，Bootstrap 才创建对应 Browser client
 并将 execution confirmation/runtime readiness 传入 Admission。Browser 使用当前机器正常网络
-出口和一个共享有头 Chrome process/persistent context；无 GUI Linux 由 Xvfb 提供虚拟显示，broker
+出口和一个共享有头 CloakBrowser Chromium process/persistent context；无 GUI Linux 由 Xvfb 提供虚拟显示，broker
 关闭后清理 runtime 与临时下载工作区但保留 Profile。不同 Publisher lane 可以并行，同一
 Publisher 严格串行；每篇文章使用隔离 page/handler。Entry 仍只消费 Acquisition 返回的中性
-receipt 或脱敏 escalation summary，不接触 page、Cookie、Profile 路径/内容或 Playwright 对象；
+receipt 或脱敏 escalation summary，不接触 page、Cookie、Profile 路径/内容、CloakBrowser 或 Playwright 对象；
 production catalog、Profile presence 或本地 runtime 就绪都不能证明已登录、机构 IP 或具体文章
-具有 entitlement。可见 Browser 只由配置用例显式打开；Entry 不自动登录或处理验证。
+具有 entitlement。确定性 capture/locator/Publisher rule 正常未命中后，Acquisition 可以在角色
+capability 与预算允许时调用受控 Browser Agent；Entry 只看到该 route 的中性结果。Challenge 自动
+资源加载/settle、明确人工交互、本地资源阻断和普通拒绝分别映射为稳定 failure/action，Entry 不
+读取页面证据，也不让 Agent 处理 login、MFA 或 CAPTCHA。第一版没有用户可见 Browser 认证用例；
+Entry 不自动登录、选择机构或处理人工验证。
 
 拥有 Acquisition runtime 的 `ApplicationObjectGraph` 与 capability-scoped
 `DatabaseCompletionObjectGraph` 都是显式可关闭资源；CLI 的 `complete` 命令在 `finally` 中关闭 graph，
 `config test` 使用的 `ProductionConfigurationProbeSession` 同样在 `finally` 中关闭。正常返回、稳定
 失败、用户中断或 presenter 异常都不能跳过 broker close；关闭失败必须作为系统清理问题传播，
-不能把仍存活的 Chrome/Xvfb、Profile runtime lease、临时下载工作区或 host/scope permit 留给
+不能把仍存活的 CloakBrowser Chromium/Xvfb、Agents session/response、Profile runtime lease、临时下载工作区或 host/scope permit 留给
 下一条 CLI 命令；持久 Profile 本身不属于临时资源，正常关闭不得删除。
 
 每个实际 `Literature` 的结果继续按下面的缺失步骤消费：

@@ -248,13 +248,17 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
             model_identity = "mineru-vlm"
             remote_upload_authorized = true
 
-            [analysis]
+            [agents]
             provider = "openai"
             protocol = "openai-responses"
             base_url = "https://api.openai.com/v1"
+            authentication = "api-key"
+            [agents.analysis]
             model = "analysis-model"
             context_window_tokens = 128000
-            authentication = "api-key"
+            max_output_tokens = 200
+            structured_output = true
+            [analysis]
             metadata_max_output_tokens = 100
             content_max_output_tokens = 200
             reference_max_output_tokens = 50
@@ -274,7 +278,7 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
                 home=home,
             )
             credentials = set_core_credentials(
-                "llm",
+                "agents",
                 secret=_SENTINEL,
                 origin="https://api.openai.com",
                 home=home,
@@ -318,12 +322,40 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
                 "base_url",
                 "model",
                 "context_window_tokens",
+                "max_output_tokens",
+                "structured_output",
                 "authentication",
                 "reference_max_output_tokens",
             ),
         )
         self.assertIn("max_total_llm_requests", status.analysis.content_missing_fields)
         self.assertIsNone(status.analysis.api_key_configured)
+
+    def test_analysis_readiness_requires_declared_structured_output_capability(self) -> None:
+        configuration = parse_configuration(
+            """
+            [agents]
+            provider = "custom"
+            service_name = "fixture-service"
+            protocol = "openai-responses"
+            base_url = "http://127.0.0.1:8765/v1"
+            authentication = "none"
+            [agents.analysis]
+            model = "fixture-model"
+            context_window_tokens = 128000
+            max_output_tokens = 64
+            [analysis]
+            reference_max_output_tokens = 64
+            """
+        )
+
+        status = configuration_runtime_status(configuration)
+
+        self.assertFalse(status.analysis.reference_configuration_complete)
+        self.assertEqual(
+            status.analysis.reference_missing_fields,
+            ("structured_output",),
+        )
 
 
 class ConfigurationProbeSessionTests(unittest.TestCase):

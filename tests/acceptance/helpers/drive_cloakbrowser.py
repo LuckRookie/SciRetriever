@@ -1,4 +1,4 @@
-"""Drive the installed production Playwright adapter against local HTTPS only."""
+"""Drive the installed production CloakBrowser adapter against local HTTPS only."""
 
 from __future__ import annotations
 
@@ -11,20 +11,22 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import cloakbrowser
 import playwright
 from PyPDF2 import PdfWriter
 
 import sciretriever.acquisition.sources.browser as source_module
 import sciretriever.network.browser as browser_module
-import sciretriever.network.playwright as adapter_module
+import sciretriever.network.cloakbrowser as adapter_module
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.sources.browser import CONTROLLED_BROWSER_PRODUCTION_STATUS
 from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 from sciretriever.configuration import initialize_browser_profile
+from sciretriever.configuration.cloak_runtime import CloakRuntimeManager
 from sciretriever.model.access import (
     AccessFailure,
     BrowserCaptureBatch,
@@ -37,13 +39,27 @@ from sciretriever.network.browser import (
     BrowserDestinationKind,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
-from sciretriever.network.playwright import (
-    PlaywrightBrowserFactory,
-    playwright_runtime_availability,
+from sciretriever.network.cloakbrowser import (
+    CloakBrowserFactory,
+    cloakbrowser_runtime_availability,
 )
 from sciretriever.network.policy import AddressClass, DestinationPolicy
 
 _HOSTNAME = "publisher.sciretriever.test"
+_RUNTIME_HOME_ENV = "SCIRETRIEVER_TEST_CLOAK_HOME"
+
+
+class _FlowController:
+    """Typed Browser controller fixture for the installed adapter journey."""
+
+    def __init__(self, flow: Callable[..., object]) -> None:
+        if not callable(flow):
+            raise TypeError("flow must be callable")
+        self._flow = flow
+
+    def run(self, session: object) -> None:
+        result = self._flow(session)
+        del result
 
 
 class _Resolver:
@@ -210,7 +226,19 @@ def _restore_ssl_certificate(previous_certificate: str | None) -> None:
         os.environ["SSL_CERT_FILE"] = previous_certificate
 
 
+def _runtime_manager() -> tuple[CloakRuntimeManager, str]:
+    runtime_home = os.environ.get(_RUNTIME_HOME_ENV, "").strip()
+    if not runtime_home:
+        raise RuntimeError("an explicit installed Cloak runtime home is required")
+    manager = CloakRuntimeManager(home=runtime_home)
+    status = manager.status()
+    if not status.ready or status.version is None:
+        raise RuntimeError("the explicit Cloak runtime is not ready")
+    return manager, status.version
+
+
 def main() -> None:
+    runtime_manager, runtime_version = _runtime_manager()
     pdf = _pdf()
     page = (
         "<!doctype html><html><body>"
@@ -226,7 +254,7 @@ def main() -> None:
         "});"
         "</script></body></html>"
     ).encode()
-    temporary = tempfile.TemporaryDirectory(prefix="sciretriever-installed-playwright-")
+    temporary = tempfile.TemporaryDirectory(prefix="sciretriever-installed-cloakbrowser-")
     root = Path(temporary.name).resolve(strict=True)
     certificate, key = _certificate(root)
     state = _ServerState(page, pdf)
@@ -258,7 +286,11 @@ def main() -> None:
         pdf_url = f"{origin}/article.pdf"
         profile = initialize_browser_profile("installed-fixture", home=root)
         profile_directory = profile.runtime_directory()
-        factory = PlaywrightBrowserFactory(profile, ignore_https_errors=True)
+        factory = CloakBrowserFactory(
+            profile,
+            runtime_manager,
+            ignore_https_errors=True,
+        )
         client = BrowserClient(
             factory=factory,
             resolver=resolver,
@@ -302,7 +334,7 @@ def main() -> None:
                     max_response_bytes=8 * 1024 * 1024,
                 ),
                 AccessPolicy(max_concurrency=1),
-                flow=flow,
+                controller=_FlowController(flow),
                 destination_guard=destination_guard,
                 capture_guard=_CaptureGuard(pdf_url, capture_kind),
                 session_key="publisher-fixture",
@@ -329,18 +361,24 @@ def main() -> None:
                 raise RuntimeError("temporary Browser download workspace was not created")
             if profile_directory is None or not profile_directory.is_dir():
                 raise RuntimeError("persistent Browser profile was not retained")
-        runtime = playwright_runtime_availability()
+        runtime = cloakbrowser_runtime_availability(
+            browser_version=runtime_version,
+            cache_directory=runtime_manager.cache_directory,
+        )
         payload = {
             "product_module_files": {
                 "acquisition_browser": _module_file(source_module),
                 "network_browser": _module_file(browser_module),
-                "network_playwright": _module_file(adapter_module),
+                "network_cloakbrowser": _module_file(adapter_module),
             },
+            "cloakbrowser_module_file": _module_file(cloakbrowser),
             "playwright_module_file": _module_file(playwright),
             "runtime": {
-                "python_dependency_available": runtime.python_dependency_available,
-                "chromium_executable_available": runtime.chromium_executable_available,
+                "cloak_wrapper_available": runtime.cloak_wrapper_available,
+                "playwright_api_available": runtime.playwright_api_available,
+                "binary_executable_available": runtime.binary_executable_available,
                 "headed_display_available": runtime.headed_display_available,
+                "browser_version": runtime.browser_version,
             },
             "network": {
                 "hostname": _HOSTNAME,
@@ -395,11 +433,12 @@ def main() -> None:
         ),
         "profile_survived_broker_close": profile_survived_broker_close,
         "server_thread_alive": server_thread.is_alive(),
-        "playwright_threads_alive": sorted(
+        "browser_threads_alive": sorted(
             thread.name
             for thread in threading.enumerate()
             if thread.is_alive()
-            and thread.name in {"sciretriever-playwright-engine", "sciretriever-playwright-events"}
+            and thread.name
+            in {"sciretriever-cloakbrowser-engine", "sciretriever-playwright-events"}
         ),
     }
     print(json.dumps(payload, separators=(",", ":"), sort_keys=True))

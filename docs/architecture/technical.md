@@ -25,7 +25,7 @@ SciRetriever 使用按功能模块组织的 Python 模块化单体：
 
 - Python 3.10+，开发基线 Python 3.12；
 - 一个可安装的 `sciretriever` 包；
-- 六个核心功能 package 和四个公用基础 package；
+- 六个核心功能 package 和五个公用基础 package；
 - 模块内部使用 Ports/Adapters 隔离外部能力，不建立项目级技术分层目录；
 - `configuration/` 与 `bootstrap/` 分别是原运行配置与生产组装模块的 package 形态；各自
   `__init__.py` 提供稳定窄 public surface，其余同包文件按变化原因组织实现；
@@ -44,9 +44,13 @@ SQLite 与文件系统组成一个逻辑文献数据库，但拥有不同物理�
 
 网络、浏览器、Parser、LLM 和 vendor 调用在事务外发生，并以开始时读取的 ID/hash 绑定输入；提交前重新检查 current facts，过期结果拒绝写入。重启后重新读取当前数据库并重新选择实际目标，不恢复旧 HTTP 请求、浏览器页面、Parser/LLM task、线程、队列或内存现场。具体长期约束见 [ADR 0011](decisions/0011-literature-database-centered-incremental-maintenance.md)。
 
-Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider、LLM 与远程 MinerU 密钥只从 `~/.sciretriever/credentials.toml` 注入，核心服务 secret 与规范 origin 精确绑定，凭据状态与连接测试都不是文献数据库事实。
+Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider、Agents 模型服务、可选 CloakBrowser Pro 与远程 MinerU 密钥只从 `~/.sciretriever/credentials.toml` 注入，核心服务 secret 与规范 origin 精确绑定，凭据状态与连接测试都不是文献数据库事实。
 
-[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 Public → Authorized API → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile 和一个共享 Chrome process/context，并按 `browser_rate_limit_group` 不同组并行、同组限速串行。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Chrome 自己管理的认证状态只留在 owner-only Profile 中。
+[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 Public → Authorized API → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile 和一个共享 Browser process/context，并按 `browser_rate_limit_group` 不同组并行、同组限速串行。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Browser 自己管理的认证状态只留在 owner-only Profile 中。具体唯一 runtime 与固定身份由 ADR 0016 修订。
+
+[ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md)把生产 Browser runtime 切换为 CloakBrowser patched Chromium，同时保留 Playwright API、一个长期 Profile/process/context、原始出口、Provider 调度和 Network guard。Profile 使用固定设备身份；经证据确认的 challenge dependency 只在发起页面、frame ancestry 和文章预算内加载，并通过有界 settle 区分自动完成、人工交互、本地资源阻断和普通拒绝。
+
+[ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md)新增 Analysis 与 Browser 共用的 Agents 基础。Agents 只拥有 provider/model/capability/budget/session 与协议边界；Analysis 保留文献 prompt/schema 和两阶段验收，Acquisition 保留 Browser 目标/动作语义，Network 在同一 Cloak session 中唯一执行动作。确定性规则始终先于有界 Agent fallback。
 
 ### 2.1 目标代码结构
 
@@ -82,12 +86,13 @@ src/sciretriever/
   analysis/
 
   model/
+  agents/
   network/
   storage/
   logging/
 ```
 
-十个功能/基础 package 与设计模块一一对应。`bootstrap/` 和 `configuration/` 仍是两个启动阶段
+十一个功能/基础 package 与设计模块一一对应。`bootstrap/` 和 `configuration/` 仍是两个启动阶段
 技术模块，不计入产品功能/基础模块；各自 `__init__.py` 是稳定公开 surface，其余同包文件只是按
 概念拆分的实现。包化是一种代码治理手段，不增加产品模块；业务调用方不依赖内部实现符号。
 
@@ -108,14 +113,15 @@ src/sciretriever/
 | 模块 | 技术文档 | 实现细节归属 |
 |---|---|---|
 | 入口与流程编排 | [Entry](technical/entry.md) | DiscoveryRun、运行时 BatchSelector、内存目标与版本候选、缺 PDF 目标的有界 tier cohort、非持久化 Report、手动 PDF、本地 Library 查询/详情/引用呈现、Artifact 打开与用户文件导出、书目 codec、固定导入 provenance，以及 `discover/complete/literature/import/export/config` 目标 CLI |
-| 启动配置与凭据 | [Configuration](technical/configuration.md) | 普通配置、统一固定 `credentials.toml`、核心服务 origin 绑定与可恢复发布、owner-only Browser Profile identity/lifecycle、交互配置中心、能力 readiness、纯本地状态与显式 Provider/LLM/MinerU/Browser probe；secret、Profile 内容和测试结果不进入 Model 或文献数据库 |
+| 启动配置与凭据 | [Configuration](technical/configuration.md) | 普通配置、统一固定 `credentials.toml`、核心服务 origin 绑定与可恢复发布、Agents role/capability、Cloak wrapper/binary/version 与 owner-only fixed Profile identity/lifecycle、交互配置中心、纯本地状态与显式 Provider/Agents/MinerU/Browser probe；secret、seed、Profile 内容和测试结果不进入 Model 或文献数据库 |
 | 元数据供应商 | [Metadata](technical/metadata.md) | 领域搜索与稳定标识符 lookup、可选 version_links/引用关系/参考文献原文能力、逐边 ProviderRelationObservation、Author 中性转换、目标 Provider adapters、资产线索和部分失败 |
 | 文献管理 | [Literature](technical/literature.md) | MetaLiterature/Literature、version_links 身份证据、单一版本成员归属、Provider/用户导入 observations、导入优先的 LiteratureMetadata 与作者统一、单一当前 LiteratureContent 接纳、Reference/ReferenceSupport、状态、LibraryQuery/Search/Detail/Reference 读取语义、Artifact read Port 和交换规则 |
 | Acquisition | [Acquisition](technical/acquisition.md) | PublisherAccessProfile/Resolution、确定性 AcquisitionPlan 与 AccessRouteHint、Public/API/Browser route 执行、route-scoped readiness、独立手动 PDF 接纳、运行时 PdfCandidate、二值自动 AcquisitionResult、实际 PDF 字节/reader/页面树检查、唯一主资产关系和自动获取耗尽事实 |
 | Parsing | [Parsing](technical/parsing.md) | Parser Port、规范化 Markdown ParserResult、实际引用资源、当前结果替换和资产 lineage |
-| LLM 分析与总结 | [Analysis](technical/analysis.md) | Analysis 内部 LLM Port、先元数据后正文的两阶段内容分析、导入非空值保留边界、明确 NoUsableContent、Markdown-string LiteratureSection、统一“未提供”、有序文本参考文献和临时 ReferenceLookup |
+| LLM 分析与总结 | [Analysis](technical/analysis.md) | 通过 Agents structured-text capability 执行先元数据后正文的两阶段内容分析；Analysis 独占文献 prompt/schema、导入非空值保留边界、明确 NoUsableContent、Markdown-string LiteratureSection、统一“未提供”、有序文本参考文献和临时 ReferenceLookup |
 | Model | [Model](technical/model.md) | Pydantic 数据合同、LibraryQuery/SearchPage/LiteratureDetail/ReferencePage/ReferenceDetail 等非持久化读取合同、结构解析和外部类型隔离；binary stream 和目标路径不进入 Model |
-| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、官方 API quota policy、一个 Profile-backed Chrome process/persistent context、Browser risk-group/Publisher lane 调度、Xvfb/Chrome 原生网络、per-request PublisherAccessProfile guard、内存限速/circuit 状态、URL/DNS/redirect policy、安全 HTTP 和脱敏 |
+| Agents | [Agents](technical/agents.md) | provider-neutral 模型协议、structured text/image/tool capability、模型 readiness、预算、取消、请求级 session、稳定失败和 fake runtime；不拥有消费模块 prompt、工具含义或结果验收 |
+| 网络基础设施 | [Network](technical/network.md) | provider/channel/host 进程内共享准入、官方 API/Agents quota policy、一个 fixed Profile-backed CloakBrowser Chromium process/persistent context、Browser risk-group/Publisher lane 调度、Xvfb/Chromium 原生网络、CONNECT、per-request guard、受限 challenge dependency、Agent observation/action、内存限速/circuit 状态、URL/DNS/redirect policy、安全 HTTP 和脱敏 |
 | 存储 | [Storage](technical/storage.md) | DiscoveryRun、Provider/用户导入共用的 MetadataObservation、文献当前事实与自动 PDF 获取耗尽的关系 schema、SQLite、不可变文件、一致 read snapshot、临时 Search/Detail/Reference 投影、verified artifact reader、原子用户文件输出、事务、对账、锁和崩溃边界；不保存查询结果、导入过程、批量运行或 Report |
 | Logging | [Logging](technical/logging.md) | 命名 logger 公开入口、生产进程一次性配置、stderr handler、formatter、最终脱敏 Filter 和 best-effort 故障隔离 |
 
@@ -136,6 +142,7 @@ literature ----------------> model
 acquisition ---------------> model
 parsing -------------------> model
 analysis ------------------> model
+agents --------------------> model
 network -------------------> model
 storage -------------------> model
 
@@ -145,6 +152,7 @@ literature ----------------> logging.api
 acquisition ---------------> logging.api
 parsing -------------------> logging.api
 analysis ------------------> logging.api
+agents --------------------> logging.api
 network -------------------> logging.api
 storage -------------------> logging.api
 
@@ -157,7 +165,9 @@ logging -------------------> Python standard library only
 metadata.providers --------> metadata.ports + network
 acquisition.routes --------> acquisition.ports + network
 parsing.mineru ------------> parsing.ports + network
-analysis.providers --------> analysis.ports + network
+analysis ------------------> agents.api
+acquisition.browser_agent -> agents.api + network
+agents.providers ----------> agents.ports + network
 entry.codecs --------------> entry.ports + model
 
 storage adapters ----------> 消费模块的 ports + model
@@ -168,13 +178,13 @@ bootstrap -----------------> logging.api.configure_logging
 全局依赖规则是：
 
 1. `model` 只能依赖 Pydantic 和 Python 标准库中的声明性类型能力；
-2. 功能模块的规则和用例只依赖本模块、`model`、`logging.api` 和本模块声明的 Ports；
+2. 功能模块的规则和用例只依赖本模块、`model`、`logging.api`、本模块声明的 Ports，以及经过 ADR 0017 允许的 `agents` 中性公开 API；
 3. `entry` 是跨功能模块顺序编排的唯一位置；
 4. 功能模块之间的业务调用只使用对方 `api.py` 和 Model 数据，不导入对方私有规则、用例、Ports 或适配器；
 5. 规则和用例不得直接使用 `sqlite3`、SQL、绝对路径、HTTP response、Playwright、vendor SDK、环境变量或 TOML；
 6. SQL 和 `sqlite3` 只存在于 `storage/sqlite/`，最终文件创建、对账和回收只存在于 `storage/files/`；
 7. 共享 URL、DNS、redirect、HTTP 和浏览器执行只存在于 `network/`，供应商专属协议和页面步骤留在消费模块的适配目录；
-8. Vendor、HTTP、浏览器、SQL、MinerU 和 LLM 私有类型不得进入模块公开 API、规则、用例或 Model；
+8. Vendor、HTTP、浏览器、SQL、MinerU 和模型协议私有类型不得进入模块公开 API、规则、用例或 Model；Agents 中性交换值不得携带 Literature、Publisher、Page、Cookie、任意 callable 或消费模块业务枚举；
 9. `storage` 只实现功能模块定义的持久化 Ports，不形成身份、验收、状态或导出资格决定；
 10. 除 `model` 外的目标生产模块只通过 `logging.api` 获取 logger；Handler、formatter、最终脱敏 Filter 和 `sciretriever` logger 配置只存在于 `logging/`，该模块只依赖 Python 标准库；
 11. 任何完整快照或下游导出不得成为核心身份、状态或处理完成的前置条件；
@@ -191,7 +201,8 @@ Port 由消费能力的模块所有：
 | `literature` | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication |
 | `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成 |
 | `parsing` | parser |
-| `analysis` | LLM provider access；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication |
+| `analysis` | Agents structured-text capability；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication |
+| `agents` | provider/model 协议执行、capability、预算、取消和请求级 session；不拥有文献或 Browser 业务结果 |
 
 禁止建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` package。
 
@@ -203,20 +214,20 @@ Bootstrap 边界（公开 `sciretriever.bootstrap` package surface 与同包实�
 - metadata search、metadata reference query 和 Acquisition route adapters；
 - 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、tiered cohort orchestrator 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
 - MinerU parser；
-- LLM adapter；
+- 一个共享 Agents runtime 与具体模型 provider adapter，再按 capability 向 Analysis 和 Browser controller 注入受限调用面；
 - BibTeX、RIS 和 CSL JSON codec；
 - 本机写锁、时钟和资源预算。
 
 此外，`sciretriever.bootstrap` 在生产 CLI 启动时一次性调用 `logging.api.configure_logging(...)`；logger level、formatter、最终脱敏 Filter 和 stderr handler 由 Logging 模块实现，不通过模块构造器注入，也不形成 Logging Port。
 
-完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 共 10 项：CORE 提供授权 API；Elsevier 与 Wiley 同时提供授权 API 和 Browser route；ACS、AIP、IOP、Oxford Academic、RSC、Science / AAAS 与 Springer Nature Link 提供 Browser route。production Browser rule catalog 为 `acs-publications-pdf@2`、`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。生产对象图只在普通 `browser_enabled`、选中且安全存在的 Browser Profile、Playwright Python package、Chrome/Chromium executable 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness。普通文章流程允许规则批准的页面子资源、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration probe 仍使用 navigation-only。所有 Publisher lane 共享一个 Profile 和一个 Chrome process/persistent context；同一 Publisher 严格串行，不同 Publisher 在 cap 内并行。production catalog、总开关、Profile presence、route/runtime 就绪、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
+完整对象图与 `ASSET_COMPLETION`/`CONTENT_COMPLETION` capability-scoped 对象图必须分别只拥有一套上述 Acquisition 运行对象，并以对象 identity 证明 Registry、Planner、Service 与 Executor 共享同一 Profile catalog、Coordinator、scheduler、session broker 和 admission controller。当前发布的 production Profile catalog 共 10 项：CORE 提供授权 API；Elsevier 与 Wiley 同时提供授权 API 和 Browser route；ACS、AIP、IOP、Oxford Academic、RSC、Science / AAAS 与 Springer Nature Link 提供 Browser route。production Browser rule catalog 为 `acs-publications-pdf@3`、`aip-publishing-pdf@3`、`sciencedirect-pdf@3`、`iopscience-pdf@2`、`oxford-academic-pdf@3`、`rsc-publishing-pdf@3`、`science-aaas-pdf@3`、`springerlink-pdf@5` 和 `wiley-online-library-pdf@3`。目标生产对象图只在普通 `browser_enabled`、选中且安全存在的固定身份 Browser Profile、CloakBrowser wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness；切换完成后不存在 stock Chrome/Chromium fallback。普通文章流程允许规则批准的页面子资源和受限 challenge dependency、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration probe 使用生产 rule/controller 加 deny-all capture guard。所有 Publisher lane 共享一个 Profile 和一个 CloakBrowser process/persistent context；同一 Publisher 严格串行，不同 Publisher 在 cap 内并行。确定性流程正常未命中且页面非终态时才可调用受控 Browser Agent，所有决定仍由同一 session 执行。production catalog、总开关、Profile presence、route/runtime/Agent capability 就绪、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
 
 模块 `api.py` 不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake Port；生产对象图只能由 `sciretriever.bootstrap` 构造。
 
 Configuration 边界（公开 `sciretriever.configuration` package surface 与同包实现文件）是唯一普通
 TOML、非 secret 环境选择、统一凭据文件与 Browser Profile 生命周期入口。未知 section、key、
 枚举或组合必须 fail closed；普通配置转换为 `model/configuration.py` 中不含 secret 的中性配置
-数据，再执行跨字段和运行环境规则。Provider、LLM 与远程 MinerU secret 只从
+数据，再执行跨字段和运行环境规则。Provider、Agents 模型服务与远程 MinerU secret 只从
 `~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret
 环境变量回退。Browser Profile 只接受 opaque identity，Chrome 自己管理的 Cookie/认证内容不进入
 TOML、Model 或 status。精确文件、权限、origin、readiness 和 CLI 合同见
@@ -277,7 +288,7 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - 所有外部访问先经过 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md) 的进程内共享 Access Coordinator。公开协议和 API 按 adapter 声明的官方 quota identity、并发、间隔、window/周期额度、reset boundary 和 `Retry-After` 执行；普通配置只能收紧。Browser 按 `browser_rate_limit_group` 不同组并行、同组 `concurrency=1` 且按 Profile 的文章间隔/window/cooldown 串行；全局 Browser cap 只保护本机资源。等待 permit、session health 和 circuit 不形成 Literature 状态。
 - Timeout、临时服务错误、`429`、有效 `Retry-After`、quota exhausted 或 Browser 登录/MFA/challenge 不能通过自动切换 Browser、重试、新 Literature、popup 或备用入口绕过；只有全部适用 routes 正常结束且没有 deferred/action-required/未解决 failure 时才能提交自动耗尽。
 - `config status` 只检查本地 Provider/LLM/MinerU 普通字段、凭据 presence/origin 与静态 readiness，不调用 Network；用户显式执行的 `config test` 仍经过同一 Access Coordinator、安全 HTTP、限速、redirect 与脱敏边界。LLM probe 不发送用户文献，MinerU probe 不上传 PDF；结果只属于当次 CLI，不创建 DiscoveryRun、Report 或任何数据库事实，也不保存最后结果和时间。
-- 当前不建立公共 LLM 模块；文献总结与临时 ReferenceLookup 共用 Analysis 内部 Port/adapter，adapter 通过 Network。
+- Analysis 与 Browser 共用 Agents 的 provider/capability/budget/session 基础；Analysis 保留文献 prompt/schema 和两阶段验收，Acquisition 保留 Browser 目标/动作语义，Network 在同一 Cloak session 中唯一执行动作。Agents 不形成公共任意 prompt、Page/CDP 或长期 memory 接口。
 - LiteratureSection 只结构化 H1/H2，章节正文继续保存 Markdown 字符串；固定内容缺失统一渲染“未提供”，参考文献空 tuple 的缺失标记不成为一条引用。
 - 每个 Literature 只保留一个当前 LiteratureContent；内容 hash、UTF-8 Markdown 字节 hash 和单一 Analysis provenance 分别表达结构化内容、发布字节和形成依据。成功重分析完整接纳后原子替换，失败保留旧结果。
 - 文献内容处理链优先长期保护来源元数据、当前权威 metadata 和原始 PDF；ParserResult 与 LiteratureContent 是保留当前结果、可以重建且不维护历史的派生产物。本轮不从该结论新增 Storage 物理目录、备份、缓存配额、清理周期或恢复算法，未决细节留待 Storage 模块后续讨论。
@@ -300,6 +311,7 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - `logging/` 以外的目标生产代码配置 root logger、Handler 或 formatter，或直接绕过 `logging.api` 获取项目 logger；
 - `model` 导入 Logging，或 `logging` 导入任何 SciRetriever 业务模块、Model、Network 或 Storage；
 - vendor SDK、HTTP、浏览器或 SQL 类型进入 Model、模块公开 API、规则或用例；
+- Analysis/Acquisition 直接导入 Agents provider adapter 或 vendor SDK，或 Agents 公共 API 携带 Literature、Publisher、Page、Cookie、任意 URL/JavaScript/callable；
 - provider-specific browser flow 进入 `network/browser.py`；
 - provider adapter、vendor SDK、普通 HTTP 或浏览器绕过共享 Access Coordinator；
 - 已撤销的 `DocumentPackage` 2.0 名称、占位或类型进入目标 Model、公开 API 或持久化。
@@ -327,12 +339,15 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - Acquisition 的 Resolution/Plan 由 AssetHint、稳定定位、Provider record identity 和必要时安全解析后的 DOI landing origin 决定；不能按 publisher 字符串、单独 DOI prefix 或 MetadataObservation 来源硬编码内容 API/Browser，readiness/权限错误也不能形成 `NoPrimaryPdf` 或自动获取耗尽；
 - 缺 PDF 目标按有界 cohort 完成 Public → API → Browser admission，单篇不能提前跨层；timeout、临时错误、`429`/quota 和 Browser action-required 不触发自动 Browser 绕行；
 - 每次 Browser navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network policy；重试、多标签页和备用入口不能绕过组内串行、interval、cooldown 或 circuit；
-- 一个 operator-managed 持久 Browser Profile 同时只由一个 Chrome process 使用；所有 Publisher
+- 一个 operator-managed 固定身份 Browser Profile 同时只由一个 CloakBrowser Chromium process 使用；所有 Publisher
   lane 在当前对象图共享一个 persistent context，同一 risk group 串行、不同 group 可并行，每篇
   文章使用隔离 page/handler/临时下载目录；broker 关闭后删除 runtime 临时资源但保留 Profile。
-  配置中心可以显式打开同一 Profile 的可见 Browser，自动流程不填写凭据或处理验证；Cookie、
+  第一版不提供用户可见 Browser 认证入口，自动流程不填写凭据或处理人工验证；Cookie、seed、
   Profile 路径/内容、登录细节、完整 URL、selector 和页面对象不进入配置内容、status、日志、
   Report、provenance 或文献数据库；
+- 同一 Browser Profile 跨冷启动保持固定 seed 派生身份、native Linux persona、语言/时区/屏幕/字体与 Browser version 表面一致；CloakBrowser 是唯一生产 runtime，不存在公开或隐藏的 stock launcher、系统 Chrome、Playwright bundled Chromium 或其它 fallback；
+- 经核实的 challenge dependency 只有在批准 Publisher 顶层页面、frame ancestry 和当前文章预算内可加载；自动 clear 继续 PDF 流程，`resource-blocked`、`settle-timeout`、`interaction-required` 和普通 access denied 分别稳定化，challenge 资源不能成为 capture；
+- Analysis 与 Browser 通过同一 Agents runtime 共享 provider/account quota、capability、预算、取消和稳定失败；Analysis 仍验收文献结果，Browser Agent 只返回封闭动作并由同一 Cloak session 执行，缺少 image/tool capability 时不影响确定性 Browser；
 - 等待队列、permit、窗口计数、`next_allowed_at` 和 `blocked_until` 只存在于当前进程内存，不包含 DOI、Literature、候选、URL、凭据或响应正文，也不进入 Catalog、ArtifactStore、provenance 或协调文件；
 - 外部调用不在 SQLite 事务中执行；
 - 功能模块不直接创建或覆盖最终文件；
@@ -347,9 +362,9 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 |---|---|
 | R1 发起文献收集 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[Entry](technical/entry.md)、[Metadata](technical/metadata.md)、[Literature](technical/literature.md) |
 | R2 多来源元数据搜索 | [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[Configuration](technical/configuration.md)、[Metadata](technical/metadata.md)、[Literature](technical/literature.md)、[Network](technical/network.md) |
-| R3 文献资产获取 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Configuration](technical/configuration.md)、[Metadata](technical/metadata.md)、[Acquisition](technical/acquisition.md)、[Network](technical/network.md)、[Storage](technical/storage.md) |
+| R3 文献资产获取 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md)、[Configuration](technical/configuration.md)、[Agents](technical/agents.md)、[Metadata](technical/metadata.md)、[Acquisition](technical/acquisition.md)、[Network](technical/network.md)、[Storage](technical/storage.md) |
 | R4 文献解析 | [Parsing](technical/parsing.md) |
-| R5 语言模型内容判断与总结 | [Analysis](technical/analysis.md)、[Literature](technical/literature.md)、[Storage](technical/storage.md) |
+| R5 语言模型内容判断与总结 | [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md)、[Agents](technical/agents.md)、[Analysis](technical/analysis.md)、[Literature](technical/literature.md)、[Storage](technical/storage.md) |
 | R6 文献数据库 | [ADR 0011](decisions/0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[Literature](technical/literature.md)、[Storage](technical/storage.md)、[Entry](technical/entry.md) |
 | R7 书目信息导入与导出 | [Entry](technical/entry.md)、[Literature](technical/literature.md) |
 | R8 大批量处理 | [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Entry](technical/entry.md)、[Network](technical/network.md)、[Storage](technical/storage.md)、[Logging](technical/logging.md) |
@@ -362,7 +377,7 @@ Provider 启用状态、顺序、产品/database/edition、scan limit、AccessPo
 - 让功能模块规则或用例直接访问 SQLite、文件系统、HTTP 或浏览器；
 - 把浏览器当作 HTTP transport，或让浏览器流程绕过统一访问 policy；
 - 让 source、parser 或 LLM adapter 执行文献身份与最终验收；
-- 顶层公共 LLM 模块，或其它模块绕过 Analysis 直接调用当前两个 LLM 用例；
+- 绕过 Agents provider 边界复制模型 adapter，或把 Agents 扩大为任意 prompt/workflow、长期 memory、Browser/CDP 接管接口；
 - 与 `LiteratureContent` 平行的独立分析、分类或标签结果；
 - 已撤销的 `DocumentPackage` 2.0 占位或实现；
 - 可独立修改的文献状态列；

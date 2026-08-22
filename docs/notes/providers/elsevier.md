@@ -317,7 +317,7 @@ envelope、disposition 与中性 failure kind，不记录 vendor status text、h
 URL/query 或 credential。
 
 `elsevier-sciencedirect` Profile 当前同时为 API 与 Browser `production-ready`。生产规则
-`sciencedirect-pdf@2` 只接受强 DOI/PII/Article EID，或经安全解析的 ScienceDirect landing；
+`sciencedirect-pdf@3` 只接受强 DOI/PII/Article EID，或经安全解析的 ScienceDirect landing；
 DOI resolver 返回的 `https://linkinghub.elsevier.com` 是经审查的 landing alias，不会因为第一跳
 主机名不同而跳过 Elsevier Browser route。规则精确允许 ScienceDirect、linkinghub、
 `pdf.sciencedirectassets.com` 以及封闭的 Elsevier auth origin。它从 `/pdfft` 点击后的
@@ -325,12 +325,35 @@ response、download、popup、viewer 或 verified locator 中等待任一正文 
 attachment 或批准的 PDF CDN 候选，并在读取正文前排除 MMC、supplement、excluded 和
 wrong-article。规则包含 entitlement/paywall、login、MFA/challenge、rate/IP/account-warning
 等封闭页面状态；裸 403 记录为 access denied，只有明确 challenge 或 paywall 页面证据才分别
-归为 challenge 或无文章权限，登录/challenge 只识别后停止。
+归为 challenge 或无文章权限。自动 challenge 只在有界 settle 内等待自然完成；登录或明确人工
+控件只识别后停止。
 
-Browser 使用当前机器正常网络出口，以及共享 persistent Profile/context 中独立的 `elsevier`
+Revision 3 的新增证据日期为 2026-08-21，只为 ScienceDirect 规则声明受限的 Cloudflare
+dependency：精确 origin `https://challenges.cloudflare.com`、path prefix
+`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
+`document`、`fetch`、`xhr` 和 `image`。
+它不加入 Elsevier 的普通 `allowed_origins`；只有当前 ScienceDirect Publisher 页面或其 frame
+ancestry 能给出发起与用途证明时才可加载，不能作为初始/任意顶层导航、popup、PDF locator 或
+capture source。运行时分别报告 `resource-blocked`、`settling`、`cleared`、
+`interaction-required`、`settle-timeout` 和普通 HTTP 403；只有自动 `cleared` 才返回正文流程，
+第一版不点击 CAPTCHA/Turnstile。该封闭规则和本地 fixture 只证明程序没有自行挡住必要资源，
+不证明当前 IP、机构合同或文章 entitlement。
+
+2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
+均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。ScienceDirect 在 challenge
+加载期间改变了同篇文章的 Publisher path；当前 guard 只有在精确 Publisher origin 与既有文章
+identity 同时成立时才更新绑定，跨文章和未知 origin 仍拒绝。这个结果证明 article binding、
+Turnstile 路径和 image 子资源没有再被本地策略误拦；它不证明自动验证已通过、文章有权限或
+Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+
+CBA72 将 ScienceDirect Browser 的本次服务器现场准入记为 `deferred`。这不降低
+`elsevier-sciencedirect` 的 `production-ready` 工程状态，不删除生产 Browser rule，也不影响
+独立的授权 Article/Object API route；它只表示固定代表样本停在持续自动验证且没有可验证 PDF。
+
+Browser 使用当前机器正常网络出口，以及共享固定身份 Profile/context 中独立的 `elsevier`
 lane；组内并发 1，项目审慎最小文章启动间隔 20 秒。无 GUI Linux 使用 Xvfb。自动流程不导入或
-读取 Cookie、不填写凭据，也不会通过 Browser 绕过 API quota、429、临时错误或 challenge；用户
-只能在配置中心的独立显式动作中打开同一 Profile 的可见 Browser，自行处理获授权的认证。离线真实 Chromium 场景
+读取 Cookie、不填写凭据，也不会通过 Browser 绕过 API quota、429、临时错误或人工 challenge；
+第一版不提供可见 Browser 认证入口。离线真实 Chromium 场景
 覆盖外部 JavaScript、未批准 tracker 丢弃、`/pdfft` 点击后的跨 origin CDN redirect、HTTP
 attachment、supplement/错文排除、Publisher lane 隔离与临时下载工作区清理。这些证据不证明
 当前 IP、Profile 已登录、机构订阅或任意文章 entitlement。

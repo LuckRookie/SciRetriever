@@ -7,6 +7,7 @@ from typing import Final
 from ..helpers import (
     DEFAULT_EXCLUDED_FILENAME_MARKERS,
     DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
+    cloudflare_challenge_profile,
     pdf_actions,
     publisher_page_markers,
 )
@@ -14,7 +15,7 @@ from ..model import BrowserArticleIdentityKind, BrowserSiteRule
 
 RSC_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     rule_id="rsc-publishing-pdf",
-    revision=2,
+    revision=3,
     landing_origin="https://pubs.rsc.org",
     allowed_origins=("https://pubs.rsc.org",),
     web_scope_provider_name="rsc-publishing",
@@ -47,6 +48,7 @@ RSC_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     ),
     supplement_filename_markers=DEFAULT_SUPPLEMENT_FILENAME_MARKERS,
     excluded_filename_markers=DEFAULT_EXCLUDED_FILENAME_MARKERS,
+    challenge_resource_profile=cloudflare_challenge_profile(),
 )
 
 

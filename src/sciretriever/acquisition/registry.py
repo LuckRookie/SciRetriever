@@ -98,6 +98,7 @@ from sciretriever.acquisition.sources.unpaywall import (
 from sciretriever.acquisition.sources.unpaywall import (
     BASELINE_ACCESS_POLICY as UNPAYWALL_ACCESS_POLICY,
 )
+from sciretriever.agents import AgentBudget, AgentPort
 from sciretriever.configuration import CredentialLookup
 from sciretriever.model.access import BrowserRequest, BrowserResult
 from sciretriever.model.acquisition import (
@@ -119,7 +120,7 @@ from sciretriever.network.browser import (
     BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationGuard,
-    BrowserFlowSession,
+    BrowserFlowController,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
@@ -344,6 +345,29 @@ class AcquisitionProviderStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserAgentDependency:
+    """Optional Browser-role capability shared by every production route.
+
+    The dependency is intentionally one value rather than three independent
+    optional constructor arguments.  A present value is therefore always
+    complete and can be passed by identity to every ``ControlledBrowserPdfSource``
+    in one registry.
+    """
+
+    port: AgentPort = field(repr=False)
+    model: str
+    budget: AgentBudget = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, AgentPort):
+            raise TypeError("port must implement AgentPort")
+        if type(self.model) is not str or not self.model.strip():
+            raise ValueError("model must be nonblank text")
+        if not isinstance(self.budget, AgentBudget):
+            raise TypeError("budget must be an AgentBudget")
+
+
+@dataclass(frozen=True, slots=True)
 class AcquisitionAssemblyDependencies:
     """Shared process-local objects supplied later by the production Bootstrap."""
 
@@ -360,6 +384,7 @@ class AcquisitionAssemblyDependencies:
         repr=False,
     )
     browser_client: BrowserClient | None = field(default=None, repr=False)
+    browser_agent: BrowserAgentDependency | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.http_client, HttpClient):
@@ -384,6 +409,11 @@ class AcquisitionAssemblyDependencies:
             BrowserClient,
         ):
             raise TypeError("browser_client must be a BrowserClient or None")
+        if self.browser_agent is not None and not isinstance(
+            self.browser_agent,
+            BrowserAgentDependency,
+        ):
+            raise TypeError("browser_agent must be a BrowserAgentDependency or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,7 +929,7 @@ class _SessionBoundBrowserRunner:
         request: BrowserRequest | str,
         policy: AccessPolicy,
         *,
-        flow: Callable[[BrowserFlowSession], object] | None = None,
+        controller: BrowserFlowController | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
@@ -912,7 +942,7 @@ class _SessionBoundBrowserRunner:
             scope,
             request,
             policy,
-            flow=flow,
+            controller=controller,
             destination_guard=destination_guard,
             capture_guard=capture_guard,
             navigation_only=navigation_only,
@@ -1125,6 +1155,15 @@ def _validate_dependencies(dependencies: AcquisitionAssemblyDependencies) -> Non
         getattr(browser, "_session_broker", None) is not dependencies.browser_session_broker
     ):
         raise AcquisitionRegistryError("network-bypass", "controlled-browser")
+    # Browser Agent is an optional, already-assembled capability.  Its value
+    # object validates the all-or-none port/model/budget contract at the
+    # Bootstrap boundary; registry validation keeps this boundary explicit so
+    # malformed dependency values fail before any route adapter is created.
+    if dependencies.browser_agent is not None and not isinstance(
+        dependencies.browser_agent,
+        BrowserAgentDependency,
+    ):
+        raise AcquisitionRegistryError("browser-agent-dependency-invalid")
 
 
 def _route_requirements(
@@ -1336,6 +1375,17 @@ def _assemble_browser_routes(
                 cancel_event=dependencies.cancel_event,
                 provenance_id_factory=dependencies.provenance_id_factory,
                 clock=dependencies.clock,
+                browser_agent_port=(
+                    None if dependencies.browser_agent is None else dependencies.browser_agent.port
+                ),
+                browser_agent_model=(
+                    None if dependencies.browser_agent is None else dependencies.browser_agent.model
+                ),
+                browser_agent_budget=(
+                    None
+                    if dependencies.browser_agent is None
+                    else dependencies.browser_agent.budget
+                ),
             )
         route_bindings.append(
             RouteAdapterBinding(
@@ -1496,6 +1546,7 @@ __all__ = (
     "PRODUCTION_WEB_HOSTS_BY_PROVIDER",
     "AcquisitionAssemblyDependencies",
     "AcquisitionCapability",
+    "BrowserAgentDependency",
     "AcquisitionProviderMapping",
     "AcquisitionProviderStatus",
     "AcquisitionRegistry",

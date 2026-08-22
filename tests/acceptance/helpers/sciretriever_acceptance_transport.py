@@ -330,6 +330,7 @@ def _openai_response(body: bytes | None) -> _Response:
             "object": "response",
             "status": "completed",
             "model": model,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
             "output": [
                 {
                     "id": "msg_acceptance",

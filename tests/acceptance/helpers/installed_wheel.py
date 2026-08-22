@@ -1,8 +1,10 @@
-"""Build and install the current source snapshot without touching the repository.
+"""Install an isolated SciRetriever wheel without touching the repository.
 
-The helper deliberately creates a normal virtual environment with no system site
-packages, installs all wheel runtime dependencies from the local uv cache in
-offline mode, and runs every probe outside the repository.  Acceptance drivers
+By default the helper builds a current-source snapshot.  A final artifact check
+may explicitly select one prebuilt wheel through the acceptance-only environment
+variable below.  Both paths create a normal virtual environment with no system
+site packages, install all wheel runtime dependencies from the local uv cache in
+offline mode, and run every probe outside the repository.  Acceptance drivers
 are copied into the temporary root before execution so their ``sys.path[0]``
 cannot make repository tests importable.
 """
@@ -21,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+
+_PREBUILT_WHEEL_ENVIRONMENT_NAME = "SCIRETRIEVER_ACCEPTANCE_PREBUILT_WHEEL"
 
 _COPIED_FILES = ("README.md", "pyproject.toml")
 _COPIED_TREES = ("src",)
@@ -46,6 +50,7 @@ _CLEARED_ENVIRONMENT_NAMES = frozenset(
         "PYTHONPATH",
         "REQUESTS_CA_BUNDLE",
         "SCIRETRIEVER_CONFIG",
+        _PREBUILT_WHEEL_ENVIRONMENT_NAME,
         "SSL_CERT_FILE",
         "UV_CACHE_DIR",
         "UV_DEFAULT_INDEX",
@@ -80,9 +85,10 @@ class CommandResult:
 
 
 class InstalledWheel:
-    """One current-source wheel installed into one isolated temporary venv."""
+    """One selected wheel installed into one isolated temporary venv."""
 
     def __init__(self) -> None:
+        self._prebuilt_wheel = _prebuilt_wheel_from_environment()
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self.root: Path | None = None
         self.snapshot_root: Path | None = None
@@ -104,8 +110,11 @@ class InstalledWheel:
         self.home.mkdir(mode=0o700)
         self.cwd.mkdir(mode=0o700)
         try:
-            self._copy_source_snapshot()
-            self._build_wheel()
+            if self._prebuilt_wheel is None:
+                self._copy_source_snapshot()
+                self._build_wheel()
+            else:
+                self._copy_prebuilt_wheel()
             self._create_venv()
             self._install_wheel()
         except BaseException:
@@ -321,6 +330,17 @@ class InstalledWheel:
             raise InstalledWheelError("isolated wheel build did not produce exactly one wheel")
         self.wheel = wheels[0].resolve(strict=True)
 
+    def _copy_prebuilt_wheel(self) -> None:
+        source = self._prebuilt_wheel
+        if source is None:
+            raise RuntimeError("prebuilt wheel selection is unavailable")
+        wheel_directory = self._required(self.root) / "wheel"
+        wheel_directory.mkdir(mode=0o700)
+        target = wheel_directory / source.name
+        shutil.copyfile(source, target)
+        target.chmod(0o600)
+        self.wheel = target.resolve(strict=True)
+
     def _create_venv(self) -> None:
         completed = subprocess.run(
             (sys.executable, "-m", "venv", os.fspath(self._required(self.venv))),
@@ -416,6 +436,25 @@ def _uv_cache_directory() -> Path:
     candidate = Path(completed.stdout.strip()).expanduser().resolve(strict=True)
     if not candidate.is_dir():
         raise InstalledWheelError("uv cache directory is unavailable")
+    return candidate
+
+
+def _prebuilt_wheel_from_environment() -> Path | None:
+    selected = os.environ.get(_PREBUILT_WHEEL_ENVIRONMENT_NAME)
+    if selected is None:
+        return None
+    if not selected.strip():
+        raise InstalledWheelError("prebuilt acceptance wheel path is empty")
+    try:
+        candidate = Path(selected).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise InstalledWheelError("prebuilt acceptance wheel is unavailable") from None
+    if (
+        not candidate.is_file()
+        or candidate.suffix != ".whl"
+        or not candidate.name.startswith("sciretriever-")
+    ):
+        raise InstalledWheelError("prebuilt acceptance wheel is invalid")
     return candidate
 
 

@@ -164,8 +164,9 @@ fallback 绕过；XML、任意 object、supplement 和有效 key 本身都不冒
 entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
 `unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 只有在 operator 通过
 Python 组装边界注入受支持的中性 locator resolver 时才 ready。受控 Browser 的组件已
-实现，但生产站点规则目录仍为空；普通 TOML 没有 endpoint、selector、session、profile
-或站点规则字段。
+实现，当前内置 9 条 production 站点规则；规则、origin、selector、risk/session group 和
+限速政策不是普通 TOML 字段。普通配置只通过 `[access]` 选择固定身份 Profile、显式启用
+Browser、设置跨 Publisher 本机并发上限，并可用封闭 override 把既有政策收得更严格。
 
 ### `[assets]`
 
@@ -197,17 +198,52 @@ token 与远程上传授权；remote 模式要求 `https`、非 IP/非 `localhos
 规范化结果。SciRetriever 只作为 client 使用 operator 管理的 MinerU，不负责安装、
 启动、停止或升级该服务。
 
-### `[analysis]`
+### `[agents]`、`[agents.analysis]` 与 `[agents.browser]`
 
 | 字段 | 类型 | 默认值 | 用途 |
 | --- | --- | --- | --- |
-| `provider` | `openai`、`anthropic`、`custom` 或省略 | 未配置 | 选择官方或自定义兼容服务。 |
-| `service_name` | 安全服务标识或省略 | 未配置 | `custom` 必需；官方服务禁止。 |
-| `protocol` | `openai-responses`、`openai-chat-completions`、`anthropic-messages` 或省略 | 未配置 | 明确选择 wire protocol。 |
-| `base_url` | 非空字符串或省略 | 未配置 | 官方服务固定到官方 `/v1`；自定义服务使用安全 URL。 |
-| `model` | 非空字符串或省略 | 未配置 | 请求使用的模型标识。 |
-| `context_window_tokens` | 大于等于 1024 的整数或省略 | 未配置 | 已核实的模型 context window。 |
-| `authentication` | `api-key`、`none` 或省略 | 未配置 | 远程使用 API key；只有自定义 HTTP loopback 可无认证。 |
+| `[agents].provider` | `openai`、`anthropic`、`custom` 或省略 | 未配置 | 选择共享的 Agent 服务。 |
+| `[agents].service_name` | 安全服务标识或省略 | 未配置 | `custom` 必需；官方服务禁止。 |
+| `[agents].protocol` | `openai-responses`、`openai-chat-completions`、`anthropic-messages` 或省略 | 未配置 | 明确选择共享 wire protocol。 |
+| `[agents].base_url` | 非空字符串或省略 | 未配置 | 官方服务固定到官方 `/v1`；自定义服务使用安全 URL。 |
+| `[agents].authentication` | `api-key`、`none` 或省略 | 未配置 | 远程使用 API key；只有自定义 HTTP loopback 可无认证。 |
+| `[agents.analysis].model` | NFC 单行 UTF-8 字符串（最多 512 bytes）或省略 | 未配置 | Analysis role 使用的模型标识。 |
+| `[agents.analysis].context_window_tokens` | 大于等于 1024 的整数或省略 | 未配置 | 已核实的模型 context window。 |
+| `[agents.analysis].max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 模型单次响应的硬上限。 |
+| `[agents.analysis].structured_output` | Boolean | `false` | Analysis role 必须显式声明严格结构化输出能力。 |
+| `[agents.analysis].deadline_seconds` | 大于 0 的有限数 | `180.0` | 单次 Analysis Agent 调用的总 deadline。 |
+| `[agents.browser].model` | NFC 单行 UTF-8 字符串（最多 512 bytes）或省略 | 未配置 | 可选 Browser Agent role 使用的视觉/工具模型；不配置时只运行确定性规则。 |
+| `[agents.browser].context_window_tokens` | 大于等于 1024 的整数或省略 | 未配置 | Browser role 已核实的模型 context window。 |
+| `[agents.browser].max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 单次 Browser Agent 决定的输出上限。 |
+| `[agents.browser].structured_output` | Boolean | `false` | Browser 使用封闭 tool decision，当前不要求 Analysis 式 structured text。 |
+| `[agents.browser].image_input` | Boolean | `false` | Browser Agent 就绪时必须为 `true`。 |
+| `[agents.browser].tool_decision` | Boolean | `false` | Browser Agent 就绪时必须为 `true`；只暴露 Click/Scroll/Wait/Stop。 |
+| `[agents.browser].image_media_types` | 字符串数组 | `[]` | 只允许 `image/png`、`image/jpeg`、`image/webp`，不得重复。 |
+| `[agents.browser].image_count` | 大于等于 0 的整数 | `0` | 每 turn 图像数上限；启用图像时必须至少为 1。 |
+| `[agents.browser].image_bytes` | 大于等于 0 的整数 | `0` | 每 turn 图像总字节上限；启用图像时必须大于 0。 |
+| `[agents.browser].turns` | 大于等于 1 的整数 | `1` | 当前文章 request-local Agent session 的最大 turn 数；多 turn 要求 tool decision。 |
+| `[agents.browser].deadline_seconds` | 大于 0 的有限数 | `180.0` | 单次 Browser Agent provider 调用的总 deadline。 |
+
+`[agents]` 是 Analysis 与受控 Browser Agent 共用的唯一 endpoint、协议和凭据边界；角色只能
+选择模型和各自能力预算，不能复制 Base URL 或 secret。Analysis 生产路径消费
+`[agents.analysis]`。`[agents.browser]` 是可选项：模型与完整图像/tool 预算存在时，只有在初始
+capture、页面终态、通用 locator 和 Publisher 确定性规则都正常未命中后才可能调用；缺少它不
+阻断确定性 Browser。challenge、登录、MFA、timeout、quota 或 runtime failure 等终态不会调用
+Agent 生成替代流量。
+
+官方 OpenAI 只允许 `https://api.openai.com/v1` 与两种 OpenAI 协议，官方 Anthropic
+只允许 `https://api.anthropic.com/v1` 与 Messages 协议。自定义远程服务必须是
+hostname-based HTTPS 且使用 API key；自定义 loopback 必须是 HTTP，且只能选择
+`authentication = "none"`。URL 拒绝 userinfo、query、fragment、IP literal remote、
+路径跳转、编码分隔符和非规范端口文本。
+
+### `[analysis]`
+
+`[analysis]` 只保存文献分析自身的 chunk、阶段和总量预算，不拥有 provider、协议、
+endpoint、认证或模型选择。
+
+| 字段 | 类型 | 默认值 | 用途 |
+| --- | --- | --- | --- |
 | `metadata_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | metadata 阶段输出上限。 |
 | `content_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | content 阶段输出上限。 |
 | `reference_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 引用 lookup 输出上限。 |
@@ -217,17 +253,12 @@ token 与远程上传授权；remote 模式要求 `https`、非 IP/非 `localhos
 | `max_total_llm_requests` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总 LLM 请求上限。 |
 | `max_total_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总输出 token 上限。 |
 
-引用发现需要服务、协议、URL、模型、context、认证和
-`reference_max_output_tokens`；`content` 补全还要求全部预算字段。官方 OpenAI 只允许
-`https://api.openai.com/v1` 与两种 OpenAI 协议，官方 Anthropic 只允许
-`https://api.anthropic.com/v1` 与 Messages 协议。自定义远程服务必须是
-hostname-based HTTPS 且使用 API key；自定义 loopback 必须是 HTTP，且只能选择
-`authentication = "none"`。URL 拒绝 userinfo、query、fragment、IP literal remote、
-路径跳转、编码分隔符和非规范端口文本。
+引用发现需要完整的 `[agents]`、Analysis role 的模型/context/最大输出/结构化能力，以及
+`reference_max_output_tokens`；`content` 补全还要求全部 `[analysis]` 预算字段。
 
-`context_window_tokens` 不是展示字段：程序用保守的 UTF-8 字节估算检查 chunk 输入和
+`[agents.analysis].context_window_tokens` 不是展示字段：程序用保守的 UTF-8 字节上界检查 chunk 输入和
 最大输出预留是否能同时装入 context。单阶段输出、两阶段总输出、chunk/总输入和总请求数
-也必须相互一致。交互向导的 Conservative、Balanced、Large context 只是输入便利，最终
+也必须相互一致；每个阶段输出还必须不超过 `[agents.analysis].max_output_tokens`。交互向导的 Conservative、Balanced、Large context 只是输入便利，最终
 写入的是每个明确数值，不保存 preset 名称。
 
 ### `[execution]`
@@ -272,10 +303,10 @@ selector、rule revision 或官方 `Retry-After` 语义。
 对应的最小文章启动间隔分别为 30、30、20、30、30、30、30、10 和 20 秒。
 `browser_policy_overrides` 可以分别收紧这些 group 的间隔、窗口、cooldown 或其它封闭策略，
 不能放宽。总开关不会把 fixture-verified/unsupported Profile 变为可执行能力。自动 Completion
-只在总开关、选中的 Profile、Playwright 依赖、Chrome/Chromium executable 与 headed display
+只在总开关、选中的固定身份 Profile、CloakBrowser wrapper、Playwright API、经核实 binary 与 headed display
 各自适用且就绪时使用对应 production route。当前 `9` 个 production group 只是 catalog 规模，
 不是 `browser_max_concurrency` 的最大值；较大的配置值只允许更多不同 Publisher lane 共享同一
-Chrome process/context，不会启动多个 Browser。
+patched Chromium process/context，不会启动多个 Browser。
 
 配置不接受逐 Publisher 的本地许可占位字段。`browser_enabled = true` 只启用已经通过 production
 准入的封闭 route，并不会证明组织合同、机构 IP、Profile 已登录或具体文章权限；这些 route 仍
@@ -343,7 +374,7 @@ api_key = "<secret>"
 [wiley]
 tdm_api_token = "<secret>"
 
-[llm]
+[agents]
 api_key = "<secret>"
 origin = "https://api.openai.com"
 
@@ -352,7 +383,7 @@ bearer_token = "<secret>"
 origin = "https://mineru.example.invalid"
 ```
 
-`[llm]` 与 `[mineru]` 的 secret 必须与保存时的规范 origin 精确绑定。Bootstrap 只会把
+`[agents]` 与 `[mineru]` 的 secret 必须与保存时的规范 origin 精确绑定。Bootstrap 只会把
 secret 发送给普通配置当前引用的同一 origin；修改 Base URL 后，旧 secret 不会被发送到
 新服务，跨 origin redirect 也不携带它。loopback LLM/MinerU 不保存或读取核心 secret。
 
@@ -425,21 +456,31 @@ Wiley 是否接受 token、token 是否符合 Wiley 当前签发格式、当前�
 确认，未配置时明确提示且不写文件。它不修改普通配置，也不删除已经接纳的文献事实或资产。
 
 Provider Access 区把 CORE、Elsevier、Wiley 的 authorized primary-PDF API 本地 readiness 与
-Controlled Browser 分开显示。Browser 菜单提供五个动作：
+Controlled Browser 分开显示。Browser 菜单只管理自动路线：
 
-1. 选择或初始化一个 Browser Profile；
-2. 在供应商实际要求登录、机构选择或 MFA 时，显式打开使用同一 Profile 的可见 Browser；
-3. 永久删除选中的本地 Profile 及其中的浏览器会话状态；
-4. 禁用自动 Browser access，同时保留 Profile、并发上限、policy override 和 Provider API credential；
-5. 设置跨 Publisher 的 Browser 并发 cap；只接受大于 `1` 的整数，不设置上限。
+1. 选择或初始化一个 Browser Profile，并一次生成固定 identity manifest；
+2. 永久删除选中的本地 Profile、identity manifest 及其中由 Chromium 管理的状态；
+3. 禁用自动 Browser access，同时保留 Profile、并发上限、policy override 和 Provider API credential；
+4. 设置跨 Publisher 的 Browser 并发 cap；只接受大于 `1` 的整数，不设置上限。
 
-Profile identity 只是 `config.toml` 中不含敏感信息的选择名；真实 Chrome 数据进入固定的 owner-only
-目录。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[access]` 或启动 Browser。
-自动 Browser 使用当前机器正常网络出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。可见 Browser
-只在用户显式选择后打开；SciRetriever 不导航登录页、不填写凭据、不选择机构、不读取 Cookie 或
-登录结果，也不处理/绕过 MFA、CAPTCHA 或 challenge。自动流程与可见 Browser 以 Profile 独占 lease
-互斥。当前 production Browser route count 和 local eligible count 都是 9；route 已安装、Profile
-存在、总开关与 runtime ready 都不能证明 Profile 已登录、机构 IP 或具体文章具有 entitlement。
+首页独立的 CloakBrowser runtime 区显示 wrapper、Playwright API、binary presence/version/signature
+和回退版本，并提供显式安装、更新、回退以及可选 Pro credential 的预留管理。当前固定
+older-free v146 不消费该 credential，status 明确标记
+`reserved-not-used-by-pinned-free-binary`。安装/更新是会联网和写盘的独立动作，执行前需要
+两次确认；它们必须将签名 manifest 的版本/摘要、仓库固定 SHA-256 和本次实际 archive 字节
+绑定后才发布。普通 Completion、status 和 Profile 初始化都不会隐式下载 binary，wheel 也不
+包含 binary。普通 Browser 只通过无凭据的临时 cache view 暴露已验证固定版本，不读取长期
+runtime root 中的 license/Pro/update 状态。
+
+Profile identity 只是 `config.toml` 中不含敏感信息的选择名；真实 Chromium 数据和 owner-only
+identity manifest 进入固定私有目录。manifest 固化 native Linux persona、locale、timezone、
+screen、Browser version policy 和 seed 派生身份；seed、Profile 路径与站点状态不会进入普通配置、
+status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[access]` 或启动
+Browser。自动 Browser 使用当前机器正常网络出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。
+第一版不提供可见 Browser 登录、机构选择、MFA、Cookie 导入导出或 CAPTCHA 交互入口。
+SciRetriever 不导航登录页、不填写凭据、不选择机构、不读取 Cookie 或登录结果，也不处理或绕过
+MFA/CAPTCHA。当前 production Browser route count 和 local eligible count 都是 9；route 已安装、
+Profile/identity 就绪、总开关与 runtime ready 都不能证明机构 IP 或具体文章具有 entitlement。
 
 ### `config status`
 
@@ -453,18 +494,18 @@ Storage/execution；`--json` 使用稳定分组结构供
   Unpaywall、operator locator 等独立公开服务的本地就绪状态；
 - `Authorized Provider APIs`：逐 Provider 显示是否已有可执行主 PDF API、当前限制和
   所需凭据字段；
-- `Controlled browser`：显示持久 Profile 模式、选中的 opaque identity 及其存在/安全状态、
-  本地 runtime 依赖、9 条 production route、默认 9/9 条 local eligible、总开关、共享 Chrome
-  lifecycle、Publisher lane、未评估的认证状态、逐文章 entitlement、policy evidence、显式
-  probe 和下一动作。
+- `Controlled browser`：显示持久固定身份 Profile、选中的 opaque identity 及其存在/安全状态、
+  Cloak wrapper/Playwright API/binary/version/signature/Xvfb、本地 runtime readiness、9 条
+  production route、默认 9/9 条 local eligible、总开关、共享 process/context、Publisher lane、
+  未评估的文章 entitlement、policy evidence、显式 probe 和下一动作。
 
 Metadata 人类表格只逐项展开已经启用或已有凭据的 Provider，其余禁用能力以数量摘要收起；
 完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，固定单列 CORE、
 Elsevier、Wiley 和当前不支持直接主 PDF 的 Springer API。当前 production Browser route 为
 ACS Publications、AIP Publishing、Elsevier / ScienceDirect、IOPscience、Oxford Academic、
 RSC Publishing、Science / AAAS、Springer Nature Link 与 Wiley Online Library；Browser 分区
-始终显示这 9 条 route，再根据总开关、Profile 选择/存在、Playwright、Chrome/Chromium 与 headed
-display 的实际静态状态给出 `browser-disabled`、`browser-profile-unselected`、
+始终显示这 9 条 route，再根据总开关、Profile/identity manifest、Cloak wrapper、Playwright API、
+经核实 binary 与 headed display 的实际静态状态给出 `browser-disabled`、`browser-profile-not-selected`、
 `browser-profile-missing`、runtime 未就绪原因或 ready。
 `browser-production-route-unavailable` 只是将来 production catalog 真的变为空时的 fail-closed
 分支，不是当前默认状态。未获 production 验证的其它站点仍不会成为自动路线。
@@ -488,16 +529,17 @@ fingerprint。`enabled = false` 不会改写其它 readiness 层：status 是完
 
 Browser JSON 位于 `providers.controlled_browser`，稳定区分：
 
-- `mode = headed-persistent-profile`、`persistent_authentication_supported = true` 和
-  `article_entitlement = checked-per-article`：明确 Profile 可以保存 Chrome 自己管理的认证
-  状态，但 status 不评估是否已登录，文章权限仍在运行时判断；
-- `profile.selected` 与 `profile.presence`：只报告不含敏感信息的 identity 和
-  `missing/configured/attention`，不报告路径、Cookie、站点或登录内容；
+- `mode = headed-fixed-profile` 与 `article_entitlement = checked-per-article`：`headed` 只表示
+  使用完整窗口栈和 Xvfb，不表示存在用户可见登录窗口；文章权限仍在运行时逐篇判断；
+- `profile.selected`、`profile.presence`、`fixed_identity_manifest` 与 `identity_schema`：只报告
+  opaque identity、`missing/configured/attention/needs-new-runtime-profile` 和安全 schema，不报告
+  路径、seed、Cookie、站点或登录内容；
 - `session.assessment = not-assessed`、`authenticated = null` 与
   `article_entitlement = not-proven`：本地状态不会把 Profile presence 冒充认证或授权证明；
-- `runtime`：框架、Playwright Python package、Chrome/Chromium executable 与 headed display
-  （Linux 上为 Xvfb）是否可发现；
-  `launch_assessed` 始终为 `false`，因为 status 只检查安装文件，不启动 Browser；
+- `runtime`：Cloak wrapper、Playwright API、binary presence/version/signature、回退版本与 headed
+  display（Linux 上为 Xvfb）是否可用；`launch_assessed` 始终为 `false`，因为 status 只检查本地
+  文件，不启动 Browser。CloakBrowser 是唯一生产 runtime；JSON 不提供引擎选择、stock fallback
+  或迁移期 `cutover_pending` 字段；
 - `routes`：只有通过 production verification 的 Browser route 及其 risk group、官方/项目
   保守 policy revision、验证日期、Notes 引用和有效限速；不含 origin、selector 或页面规则；
 - `probe` 与 `action_required`：可显式探测的精确 access key，以及稳定 code/reason/action。
@@ -622,13 +664,20 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[analysis]
+[agents]
 provider = "openai"
 protocol = "openai-responses"
 base_url = "https://api.openai.com/v1"
-model = "operator-selected-model"
-context_window_tokens = 128000
 authentication = "api-key"
+
+[agents.analysis]
+model = "operator-selected-model"
+context_window_tokens = 300000
+max_output_tokens = 4096
+structured_output = true
+deadline_seconds = 180.0
+
+[analysis]
 metadata_max_output_tokens = 1024
 content_max_output_tokens = 4096
 reference_max_output_tokens = 1024

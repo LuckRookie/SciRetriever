@@ -13,12 +13,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sciretriever.bootstrap.errors import BootstrapError
+from sciretriever.configuration.cloak_runtime import (
+    CLOAKBROWSER_BROWSER_VERSION,
+    CloakRuntimeManager,
+)
 from sciretriever.model.configuration import (
     BrowserConfigurationProbeResult,
     Configuration,
     ProbeOutcome,
 )
 from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.cloakbrowser import (
+    CloakBrowserFactory,
+    CloakBrowserRuntimeAvailability,
+    cloakbrowser_runtime_availability,
+)
 from sciretriever.network.policy import ResolverLike
 
 if TYPE_CHECKING:
@@ -27,7 +36,6 @@ if TYPE_CHECKING:
     from sciretriever.acquisition.sources.browser_rules import BrowserSiteRule
     from sciretriever.network.browser import (
         BrowserClient,
-        BrowserDestinationKind,
         BrowserFlowSession,
     )
     from sciretriever.network.browser_scheduler import (
@@ -76,16 +84,13 @@ class _AcquisitionExecutionRuntime:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class _BrowserProbeDestinationGuard:
-    """Keep one configuration probe inside its reviewed Publisher origins."""
+class _BrowserRuntimeAssembly:
+    """One isolated assembly of the sole production Browser runtime."""
 
-    rule: BrowserSiteRule = field(repr=False)
-
-    def check(self, url: str, kind: BrowserDestinationKind) -> None:
-        from sciretriever.network.browser import BrowserDestinationKind
-
-        if not isinstance(kind, BrowserDestinationKind) or not self.rule.allows_url(url):
-            raise ValueError("Browser probe destination is outside the approved rule")
+    execution: _AcquisitionExecutionRuntime = field(repr=False)
+    availability: CloakBrowserRuntimeAvailability = field(repr=False)
+    ready: bool
+    failure_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -93,6 +98,32 @@ class _BrowserProbeTarget:
     policy: BrowserGroupPolicy = field(repr=False)
     session_key: str
     rule: BrowserSiteRule = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _BrowserProbeExecution:
+    """Typed deterministic probe execution; no raw callback crosses Network."""
+
+    rule: BrowserSiteRule = field(repr=False)
+    launched: list[bool] = field(repr=False)
+    target_reached: list[bool] = field(repr=False)
+
+    def run(self, session: BrowserFlowSession) -> None:
+        self.launched[0] = True
+        observation = session.observe()
+        self.target_reached[0] = (
+            self.rule.matches_origin(observation.origin) and observation.status_code == 200
+        )
+
+
+class _DenyAllBrowserCaptureGuard:
+    """Configuration probes may inspect page state but never read article bytes."""
+
+    __slots__ = ()
+
+    def allows(self, url: str, kind: object, media_type: str) -> bool:
+        del url, kind, media_type
+        return False
 
 
 class _ProductionBrowserConfigurationProbePort:
@@ -161,6 +192,10 @@ class _ProductionBrowserConfigurationProbePort:
         return self._supported_access_keys
 
     def probe(self, access_key: str) -> BrowserConfigurationProbeResult:
+        from sciretriever.acquisition.browser_control import RuleBrowserController
+        from sciretriever.acquisition.sources.browser import (
+            build_browser_rule_destination_guard,
+        )
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.admission import AccessPolicy, AccessScope
         from sciretriever.network.browser_scheduler import (
@@ -193,28 +228,39 @@ class _ProductionBrowserConfigurationProbePort:
             _attempt: BrowserArticleAttempt,
         ) -> BrowserAttemptCompletion[BrowserConfigurationProbeResult]:
             del _attempt
-            launched = False
-            target_reached = False
-
-            def flow(session: BrowserFlowSession) -> None:
-                nonlocal launched, target_reached
-                launched = True
-                observation = session.observe()
-                target_reached = (
-                    observation.origin == rule.landing_origin and observation.status_code == 200
-                )
+            execution = _BrowserProbeExecution(
+                rule=rule,
+                launched=[False],
+                target_reached=[False],
+            )
+            destination_guard = build_browser_rule_destination_guard(
+                rule,
+                f"{rule.landing_origin}/",
+            )
 
             result = self._client.run(
                 AccessScope(rule.web_scope_provider_name, "web"),
                 f"{rule.landing_origin}/",
                 AccessPolicy(max_concurrency=1),
-                flow=flow,
-                destination_guard=_BrowserProbeDestinationGuard(rule),
-                navigation_only=True,
+                controller=RuleBrowserController(execution),
+                destination_guard=destination_guard,
+                capture_guard=_DenyAllBrowserCaptureGuard(),
+                navigation_only=False,
+                discard_unapproved_subresources=True,
                 session_key=session_key,
             )
+            launched = execution.launched[0]
+            target_reached = execution.target_reached[0]
+            facts = destination_guard.challenge_resource_facts()
+            challenge_declared = rule.challenge_resource_profile is not None
+            challenge_blocked = facts.blocked_count > 0
             expected_completion = isinstance(result, AccessFailure) and result.code == "no-download"
-            passed = expected_completion and target_reached
+            passed = expected_completion and target_reached and not challenge_blocked
+            result_fields = {
+                "challenge_dependency_declared": challenge_declared,
+                "challenge_resource_admitted_count": facts.admitted_count,
+                "challenge_resource_blocked_count": facts.blocked_count,
+            }
             if passed:
                 probe_result = BrowserConfigurationProbeResult(
                     access_key=access_key,
@@ -223,6 +269,7 @@ class _ProductionBrowserConfigurationProbePort:
                     browser_launched=True,
                     minimal_target_reached=True,
                     navigation_count=1,
+                    **result_fields,
                 )
                 return BrowserAttemptCompletion(
                     probe_result,
@@ -230,7 +277,11 @@ class _ProductionBrowserConfigurationProbePort:
                     BrowserGroupFeedback.SUCCESS,
                 )
 
-            failure_code, feedback = self._probe_failure(result, target_reached)
+            if challenge_blocked:
+                failure_code = "browser-probe-challenge-resource-blocked"
+                feedback = BrowserGroupFeedback.RUNTIME_FAILURE
+            else:
+                failure_code, feedback = self._probe_failure(result, target_reached)
             probe_result = BrowserConfigurationProbeResult(
                 access_key=access_key,
                 outcome=ProbeOutcome.FAILED,
@@ -239,6 +290,7 @@ class _ProductionBrowserConfigurationProbePort:
                 minimal_target_reached=target_reached if launched else None,
                 navigation_count=1 if launched else 0,
                 failure_code=failure_code,
+                **result_fields,
             )
             return BrowserAttemptCompletion(
                 probe_result,
@@ -257,6 +309,7 @@ class _ProductionBrowserConfigurationProbePort:
             outcome=ProbeOutcome.FAILED,
             local_ready=True,
             browser_launched=False,
+            challenge_dependency_declared=target.rule.challenge_resource_profile is not None,
             failure_code=(
                 "browser-probe-action-required"
                 if scheduled.disposition is BrowserScheduledDisposition.ACTION_REQUIRED
@@ -325,7 +378,30 @@ def _new_acquisition_execution_runtime(
     resolver: ResolverLike,
     browser_profile_home: str | Path | None = None,
 ) -> _AcquisitionExecutionRuntime:
-    """Construct one no-Network Acquisition runtime for this object graph."""
+    """Construct one CloakBrowser Acquisition runtime for this object graph."""
+
+    return _new_browser_runtime(
+        configuration,
+        access_coordinator=access_coordinator,
+        resolver=resolver,
+        browser_profile_home=browser_profile_home,
+    ).execution
+
+
+def _new_browser_runtime(  # noqa: C901
+    configuration: Configuration,
+    *,
+    access_coordinator: AccessCoordinator,
+    resolver: ResolverLike,
+    browser_profile_home: str | Path | None = None,
+) -> _BrowserRuntimeAssembly:
+    """Build one isolated assembly of the sole production CloakBrowser runtime.
+
+    Ordinary Acquisition and an explicit ``config test`` each call this
+    function, so they share the same readiness and object-graph contract while
+    retaining independent brokers and live runtime lifecycles. Missing local
+    readiness never falls back to a stock launcher.
+    """
 
     from sciretriever.acquisition.browser_admission import (
         BrowserAdmissionConfiguration,
@@ -338,6 +414,7 @@ def _new_acquisition_execution_runtime(
         PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     )
     from sciretriever.configuration import (
+        browser_profile_identity_status,
         browser_profile_status,
         configured_browser_group_policies,
         resolve_browser_profile,
@@ -346,10 +423,6 @@ def _new_acquisition_execution_runtime(
     from sciretriever.network.browser import BrowserClient
     from sciretriever.network.browser_scheduler import BrowserGroupScheduler
     from sciretriever.network.browser_sessions import BrowserSessionBroker
-    from sciretriever.network.playwright import (
-        PlaywrightBrowserFactory,
-        playwright_runtime_availability,
-    )
 
     if not isinstance(configuration, Configuration):
         raise TypeError("configuration must be a Configuration")
@@ -372,28 +445,105 @@ def _new_acquisition_execution_runtime(
         selected_profile,
         home=browser_profile_home,
     ).presence
-    runtime_availability = playwright_runtime_availability()
-    runtime_files_ready = (
-        runtime_availability.python_dependency_available
-        and runtime_availability.chromium_executable_available
-        and runtime_availability.headed_display_available
+    identity_status = browser_profile_identity_status(
+        selected_profile,
+        home=browser_profile_home,
     )
+
+    try:
+        runtime_manager = CloakRuntimeManager(home=browser_profile_home)
+        runtime_status = runtime_manager.status()
+    except Exception:
+        runtime_manager = None
+        runtime_status = None
+    cache_directory: Path | None = None
+    runtime_verified = bool(runtime_status is not None and runtime_status.ready)
+    if runtime_verified and runtime_manager is not None:
+        try:
+            cache_directory = runtime_manager.cache_directory
+        except Exception:
+            runtime_verified = False
+    try:
+        availability = cloakbrowser_runtime_availability(
+            browser_version=CLOAKBROWSER_BROWSER_VERSION,
+            cache_directory=cache_directory if runtime_verified else None,
+        )
+    except (TypeError, ValueError):
+        availability = CloakBrowserRuntimeAvailability(
+            cloak_wrapper_available=False,
+            playwright_api_available=False,
+            binary_executable_available=False,
+            headed_display_available=False,
+            browser_version=None,
+        )
+
     profile_ready = (
-        selected_profile is not None and profile_presence is BrowserProfilePresence.CONFIGURED
+        selected_profile is not None
+        and profile_presence is BrowserProfilePresence.CONFIGURED
+        and identity_status.ready
     )
+    runtime_files_ready = (
+        runtime_verified
+        and availability.cloak_wrapper_available
+        and availability.playwright_api_available
+        and availability.binary_executable_available
+        and availability.headed_display_available
+    )
+    ready = (
+        configuration.access.browser_enabled
+        and bool(profiles)
+        and profile_ready
+        and runtime_files_ready
+    )
+    failure_code: str | None = None
+    if not configuration.access.browser_enabled:
+        failure_code = "browser-disabled"
+    elif not profiles:
+        failure_code = "browser-production-route-unavailable"
+    elif selected_profile is None:
+        failure_code = "browser-profile-not-selected"
+    elif profile_presence is BrowserProfilePresence.MISSING:
+        failure_code = "browser-profile-missing"
+    elif identity_status.presence == "needs-new-runtime-profile":
+        failure_code = "needs-new-runtime-profile"
+    elif (
+        profile_presence is BrowserProfilePresence.ATTENTION
+        or identity_status.presence == "attention"
+    ):
+        failure_code = "browser-profile-attention"
+    elif not availability.cloak_wrapper_available:
+        failure_code = "browser-cloak-wrapper-unavailable"
+    elif not availability.playwright_api_available:
+        failure_code = "browser-playwright-api-unavailable"
+    elif runtime_status is None or not runtime_status.ready:
+        failure_code = (
+            "browser-cloak-binary-unavailable"
+            if runtime_status is None or runtime_status.presence == "missing"
+            else "browser-cloak-runtime-not-ready"
+        )
+    elif not availability.binary_executable_available:
+        failure_code = "browser-cloak-binary-unavailable"
+    elif not availability.headed_display_available:
+        failure_code = "browser-headed-display-unavailable"
+
     browser_client: BrowserClient | None = None
-    if profiles and configuration.access.browser_enabled and profile_ready and runtime_files_ready:
+    if ready:
         assert selected_profile is not None
-        profile_handle = resolve_browser_profile(
-            selected_profile,
-            home=browser_profile_home,
-        )
-        browser_client = BrowserClient(
-            factory=PlaywrightBrowserFactory(profile_handle),
-            resolver=resolver,
-            coordinator=access_coordinator,
-            session_broker=session_broker,
-        )
+        assert runtime_manager is not None
+        try:
+            profile_handle = resolve_browser_profile(
+                selected_profile,
+                home=browser_profile_home,
+            )
+            browser_client = BrowserClient(
+                factory=CloakBrowserFactory(profile_handle, runtime_manager),
+                resolver=resolver,
+                coordinator=access_coordinator,
+                session_broker=session_broker,
+            )
+        except Exception:
+            ready = False
+            failure_code = "browser-cloak-runtime-not-ready"
 
     effective_policies = configured_browser_group_policies(configuration.access)
     if not profile_ready:
@@ -420,7 +570,7 @@ def _new_acquisition_execution_runtime(
             groups=groups,
         )
     )
-    return _AcquisitionExecutionRuntime(
+    execution = _AcquisitionExecutionRuntime(
         browser_client=browser_client,
         browser_session_broker=session_broker,
         browser_scheduler=scheduler,
@@ -430,4 +580,10 @@ def _new_acquisition_execution_runtime(
             browser_admission=admission,
             browser_scheduler=scheduler,
         ),
+    )
+    return _BrowserRuntimeAssembly(
+        execution=execution,
+        availability=availability,
+        ready=ready,
+        failure_code=failure_code,
     )

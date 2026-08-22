@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import stat
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import cast
 from unittest import mock
 
+import sciretriever.configuration.browser_identity as identity_module
 import sciretriever.configuration.browser_profiles as profile_boundary
 from sciretriever.configuration import (
     BrowserProfileHandle,
@@ -24,6 +26,7 @@ from sciretriever.configuration import (
     resolve_browser_profile,
     set_credentials,
 )
+from sciretriever.configuration.browser_profiles import BrowserProfileTransitionError
 from sciretriever.model.configuration import AccessConfig, BrowserProfilePresence
 
 _PROFILE_IDENTITY = "wiley-online-library"
@@ -295,6 +298,101 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         first.close()
         second = second_handle.acquire_runtime()
         second.close()
+
+    def test_first_runtime_lease_seeds_complete_language_preferences(self) -> None:
+        handle = self._initialize()
+        lease = handle.acquire_runtime()
+        lease.close()
+
+        preferences = (
+            browser_profile_path(_PROFILE_IDENTITY, home=self.home) / "Default" / "Preferences"
+        )
+        self.assertEqual(
+            json.loads(preferences.read_bytes()),
+            {
+                "intl": {
+                    "accept_languages": ",".join(identity_module.LANGUAGES),
+                    "selected_languages": ",".join(identity_module.LANGUAGES),
+                }
+            },
+        )
+        self.assertEqual(self._mode(preferences), 0o600)
+
+    def test_repeated_runtime_lease_preserves_other_preference_fields(self) -> None:
+        handle = self._initialize()
+        first = handle.acquire_runtime()
+        first.close()
+        preferences = (
+            browser_profile_path(_PROFILE_IDENTITY, home=self.home) / "Default" / "Preferences"
+        )
+        payload = json.loads(preferences.read_text(encoding="utf-8"))
+        payload["profile"] = {"name": "operator-fixture", "managed": False}
+        payload["plugins"] = {"always_open_pdf_externally": True}
+        preferences.write_text(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+        os.chmod(preferences, 0o600)
+        before = preferences.read_bytes()
+
+        second = handle.acquire_runtime()
+        second.close()
+
+        self.assertEqual(preferences.read_bytes(), before)
+        self.assertEqual(
+            json.loads(preferences.read_bytes())["profile"],
+            {"managed": False, "name": "operator-fixture"},
+        )
+
+    def test_conflicting_language_preferences_fail_without_overwrite(self) -> None:
+        handle = self._initialize()
+        first = handle.acquire_runtime()
+        first.close()
+        preferences = (
+            browser_profile_path(_PROFILE_IDENTITY, home=self.home) / "Default" / "Preferences"
+        )
+        payload = json.loads(preferences.read_text(encoding="utf-8"))
+        payload["intl"]["selected_languages"] = "fr-FR,fr"
+        payload["sentinel"] = "preserve-me"
+        preferences.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(preferences, 0o600)
+        before = preferences.read_bytes()
+
+        with self.assertRaises(BrowserProfileTransitionError) as caught:
+            handle.acquire_runtime()
+
+        self.assertEqual(caught.exception.code, "needs-new-runtime-profile")
+        self.assertEqual(preferences.read_bytes(), before)
+        self.assertIn(b"preserve-me", preferences.read_bytes())
+
+    def test_existing_state_without_preferences_requires_new_profile(self) -> None:
+        handle = self._initialize()
+        default = handle.runtime_directory() / "Default"
+        default.mkdir(mode=0o700)
+        cookies = default / "Cookies"
+        cookies.write_bytes(b"opaque-fixture-session")
+        os.chmod(cookies, 0o600)
+
+        with self.assertRaises(BrowserProfileTransitionError) as caught:
+            handle.acquire_runtime()
+
+        self.assertEqual(caught.exception.code, "needs-new-runtime-profile")
+        self.assertEqual(cookies.read_bytes(), b"opaque-fixture-session")
+        self.assertFalse((default / "Preferences").exists())
+
+    def test_profile_removal_deletes_seeded_preferences_with_the_profile(self) -> None:
+        handle = self._initialize()
+        lease = handle.acquire_runtime()
+        lease.close()
+        preferences = (
+            browser_profile_path(_PROFILE_IDENTITY, home=self.home) / "Default" / "Preferences"
+        )
+        self.assertTrue(preferences.exists())
+
+        self.assertTrue(remove_browser_profile(_PROFILE_IDENTITY, home=self.home))
+
+        self.assertFalse(preferences.exists())
+        self.assertFalse(browser_profile_path(_PROFILE_IDENTITY, home=self.home).exists())
 
     def test_running_profile_cannot_be_removed(self) -> None:
         handle = self._initialize()

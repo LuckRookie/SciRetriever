@@ -8,6 +8,12 @@ from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, closing
 from typing import BinaryIO, cast
 
+from sciretriever.agents import (
+    AgentFailure,
+    AgentProvenance,
+    AgentRequest,
+    AgentStructuredResponse,
+)
 from sciretriever.analysis.content import (
     ContentAnalysisFailure,
     ContentAnalysisLimits,
@@ -15,8 +21,6 @@ from sciretriever.analysis.content import (
 from sciretriever.analysis.markdown import render_canonical_markdown
 from sciretriever.analysis.metadata_rules import metadata_input_sha256
 from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
     ContentAnalysisInput,
     ContentInputIdentity,
     StagedContentMarkdown,
@@ -31,11 +35,6 @@ from sciretriever.model.analysis import (
     content_sha256,
 )
 from sciretriever.model.literature import Author, AuthorKind, Identifier
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import (
     ParserArtifactRef,
@@ -217,47 +216,49 @@ def _analysis_input(markdown: str | None = None) -> ContentAnalysisInput:
 class _FakeLLM:
     def __init__(
         self,
-        actions: Iterable[str | BaseException | Callable[[AnalysisLLMCall], object]],
+        actions: Iterable[str | BaseException | Callable[[AgentRequest], object]],
         *,
         provider_name: str = _PROVIDER,
     ) -> None:
         self.actions = list(actions)
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
         self._provider_name = provider_name
 
     @property
     def provider_name(self) -> str:
         return self._provider_name
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+        call = request
         self.calls.append(call)
         action = self.actions.pop(0)
         if isinstance(action, BaseException):
             raise action
         if callable(action):
             result = action(call)
-            if not isinstance(result, LLMStructuredResponse):
+            if not isinstance(result, AgentStructuredResponse):
                 raise TypeError("fake action returned a private invalid value")
             return result
-        parameter_bytes = f"{call.request.kind.value}-parameters".encode()
+        stage = "content" if "final_metadata" in call.structured_input else "metadata"
+        parameter_bytes = f"{stage}-parameters".encode()
         return _response(call, action, parameters_sha256=sha256_digest(parameter_bytes))
 
 
 def _response(
-    call: AnalysisLLMCall,
+    call: AgentRequest,
     result: str,
     *,
     provider: str = _PROVIDER,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
     parameters_sha256: Sha256 | None = None,
-) -> LLMStructuredResponse:
-    return LLMStructuredResponse(
+) -> AgentStructuredResponse:
+    return AgentStructuredResponse(
         result=result,
-        provenance=LLMProvenance(
+        provenance=AgentProvenance(
             provider=provider,
-            model=call.request.model if model is None else model,
-            input_sha256=call.request.input_sha256 if input_sha256 is None else input_sha256,
+            model=call.model if model is None else model,
+            input_sha256=call.input_sha256 if input_sha256 is None else input_sha256,
             parameters_sha256=(
                 sha256_digest(b"fixture parameters")
                 if parameters_sha256 is None
@@ -356,7 +357,7 @@ def _service(
     verifier = _CurrentInputs() if current_inputs is None else current_inputs
     artifact_publisher = _Publisher() if publisher is None else publisher
     service = AnalysisService(
-        llm=llm,
+        agents=llm,
         artifact_reader=artifact_reader,
         current_inputs=verifier,
         artifact_publisher=artifact_publisher,
@@ -392,10 +393,8 @@ class AnalysisContentProposalTests(unittest.TestCase):
 
         self.assertIsInstance(result, LiteratureContentProposal)
         assert isinstance(result, LiteratureContentProposal)
-        self.assertEqual(
-            tuple(call.request.kind for call in llm.calls),
-            (LLMRequestKind.METADATA, LLMRequestKind.CONTENT),
-        )
+        self.assertIn("parser", llm.calls[0].structured_input)
+        self.assertIn("final_metadata", llm.calls[1].structured_input)
         self.assertTrue(all(call.cancel_event is cancel_event for call in llm.calls))
         self.assertEqual(reader.calls, [stage_input.parser_result.markdown])
         self.assertEqual(len(verifier.calls), 2)
@@ -460,13 +459,13 @@ class AnalysisContentProposalTests(unittest.TestCase):
                     "kind": "metadata",
                     "max_output_tokens": 2048,
                     "parameters_sha256": str(sha256_digest(b"metadata-parameters")),
-                    "prompt_version": llm.calls[0].prompt_version,
+                    "prompt_version": "analysis-metadata-stage-v1",
                 },
                 {
                     "kind": "content",
                     "max_output_tokens": 4096,
                     "parameters_sha256": str(sha256_digest(b"content-parameters")),
-                    "prompt_version": llm.calls[1].prompt_version,
+                    "prompt_version": "content-markdown-v1",
                 },
             ],
         }
@@ -492,7 +491,7 @@ class AnalysisContentProposalTests(unittest.TestCase):
         self.assertEqual(provenance_factory.calls, 0)
 
     def test_stage_failures_never_return_or_publish_partial_results(self) -> None:
-        provider_failure = AnalysisLLMFailure(
+        provider_failure = AgentFailure(
             StableFailure(
                 code="fixture-provider-failure",
                 reason="The fixture provider failed.",
@@ -567,8 +566,8 @@ class AnalysisContentProposalTests(unittest.TestCase):
         def forged(
             result: str,
             **updates: object,
-        ) -> Callable[[AnalysisLLMCall], LLMStructuredResponse]:
-            def action(call: AnalysisLLMCall) -> LLMStructuredResponse:
+        ) -> Callable[[AgentRequest], AgentStructuredResponse]:
+            def action(call: AgentRequest) -> AgentStructuredResponse:
                 return _response(call, result, **updates)  # type: ignore[arg-type]
 
             return action

@@ -35,7 +35,9 @@ from sciretriever.bootstrap import (
     build_production_object_graph,
 )
 from sciretriever.configuration import (
-    BrowserProfileHandle,
+    CLOAKBROWSER_BROWSER_VERSION,
+    CLOAKBROWSER_ORIGIN,
+    CloakRuntimeManager,
     ConfigurationError,
     CredentialLookup,
     browser_access_status,
@@ -54,16 +56,13 @@ from sciretriever.configuration import (
     load_editable_configuration,
     load_selected_configuration,
     remove_browser_profile,
+    remove_core_credentials,
     remove_credentials,
-    resolve_browser_profile,
     select_configuration_edit_path,
+    set_core_credentials,
     set_credentials,
     update_configuration_sections,
     update_core_service_configuration,
-)
-from sciretriever.entry.cli.browser_login import (
-    VisibleBrowserLoginError,
-    open_visible_browser_login,
 )
 from sciretriever.entry.cli.config_ui import (
     ConfigConsole,
@@ -77,10 +76,12 @@ from sciretriever.literature.api import LiteratureArtifactReference
 from sciretriever.logging.api import configure_logging
 from sciretriever.model.configuration import (
     AccessConfig,
-    AnalysisAuthentication,
+    AgentAuthentication,
+    AgentProtocol,
+    AgentProvider,
+    AgentRoleConfig,
+    AgentsConfig,
     AnalysisConfig,
-    AnalysisProtocol,
-    AnalysisProvider,
     BrowserAccessStatus,
     BrowserConfigurationProbeResult,
     BrowserProfilePresence,
@@ -89,6 +90,7 @@ from sciretriever.model.configuration import (
     ConfigurationProbeSummary,
     ConfigurationRuntimeStatus,
     CoreConfigurationProbeResult,
+    CoreCredentialService,
     CredentialStatus,
     ParserConnectionMode,
     ParsingConfig,
@@ -544,6 +546,17 @@ def _write_result(value: object, *, as_json: bool) -> None:
 
 
 def _result_code(value: object) -> int:
+    """Map the operation boundary to a stable shell exit code.
+
+    A completed batch is a normal operation boundary even when individual
+    targets are recorded in the report's ``failed`` partition.  Those
+    per-target failures are business data for the caller to inspect (and are
+    rendered identically in human and JSON output); only an operation-level
+    failed end changes the process result.  Keeping that distinction here
+    prevents a batch with useful partial results from being mistaken for an
+    unhandled CLI failure while still giving scripts a deterministic code for
+    cancellation and operation failure.
+    """
     end = getattr(value, "end", None)
     kind = getattr(end, "kind", None)
     if kind == "failed":
@@ -1239,15 +1252,32 @@ def _run_plain_config_manager() -> int:  # noqa: C901
     """Deterministic fallback for pipes, redirected input, and basic terminals."""
 
     while True:
+        try:
+            configuration, runtime = _configuration_summary()
+            browser = browser_access_status(configuration)
+            cloak = CloakRuntimeManager().status()
+            _render_configuration_home(
+                ConfigConsole(ConfigTheme.MONO),
+                configuration,
+                runtime,
+                browser,
+                cloak,
+            )
+        except (ConfigurationError, OSError, TypeError, ValueError):
+            # A redirected/fixture-backed configuration center may not have
+            # enough local metadata to render readiness.  Keep the ordinary
+            # deterministic menu usable; actions still validate at commit.
+            pass
         sys.stderr.write(
             "SciRetriever configuration center\n\n"
             "  L. LLM Analysis\n"
             "  M. MinerU Parser\n"
             "  A. Provider API and Browser Access\n"
+            "  B. CloakBrowser runtime and Profile identity\n"
             "  P. Literature Provider credentials\n"
             "  Q. Quit\n\n"
         )
-        answer = _read_line("Choose L, M, A, P, or Q: ")
+        answer = _read_line("Choose L, M, A, B, P, or Q: ")
         if answer is None or answer.casefold() in {"q", "quit"}:
             return 0
         selected = answer.casefold()
@@ -1260,8 +1290,11 @@ def _run_plain_config_manager() -> int:  # noqa: C901
         if selected in {"a", "access"}:
             _manage_browser_access_plain(ConfigConsole(ConfigTheme.MONO))
             continue
+        if selected in {"b", "browser", "cloak", "cloakbrowser"}:
+            _manage_cloak_runtime_plain(ConfigConsole(ConfigTheme.MONO))
+            continue
         if selected not in {"p", "providers"}:
-            sys.stderr.write("Invalid selection. Choose L, M, A, P, or Q.\n")
+            sys.stderr.write("Invalid selection. Choose L, M, A, B, P, or Q.\n")
             continue
         while True:
             provider = _choose_credential_provider()
@@ -1378,8 +1411,9 @@ def _provider_access_overview(
         )
     browser_detail = (
         f"{selection} Browser access is {'enabled' if access.browser_enabled else 'disabled'}; "
-        "one persistent Chrome process is shared by Publisher lanes, with same-Publisher "
-        "articles serialized. Profile presence does not prove login or article entitlement."
+        "one fixed-profile CloakBrowser process is shared by Publisher lanes, with "
+        "same-Publisher articles serialized. Interactive authentication is unsupported, and "
+        "profile presence does not prove article entitlement."
     )
     return _ProviderAccessOverview(
         api_routes=tuple(api_routes),
@@ -1412,54 +1446,163 @@ def _provider_home_rows() -> list[tuple[str, str, str]]:
     ]
 
 
+def _configuration_home_rows(
+    configuration: Configuration,
+    runtime: ConfigurationRuntimeStatus,
+    browser: BrowserAccessStatus,
+    cloak: object,
+) -> dict[str, tuple[str, str]]:
+    """Build the secret-free capability rows shared by both config UIs.
+
+    The configuration center deliberately keeps these facts together on its
+    home screen.  They are all local readiness observations: no profile bytes,
+    seed, Cookie, endpoint credential, Browser launch, or Agent request is
+    needed to render them.
+    """
+
+    agents = configuration.agents
+    analysis = agents.analysis
+    browser_role = agents.browser
+    analysis_key_ready = not runtime.analysis.api_key_required or (
+        runtime.analysis.api_key_configured is True
+        and runtime.analysis.credential_origin_matches is True
+    )
+    agents_transport_ready = all(
+        value is not None
+        for value in (
+            agents.provider,
+            agents.protocol,
+            agents.base_url,
+            agents.authentication,
+        )
+    )
+    analysis_role_ready = runtime.analysis.reference_configuration_complete and analysis_key_ready
+    browser_role_ready = (
+        agents_transport_ready
+        and analysis_key_ready
+        and browser_role.model is not None
+        and browser_role.context_window_tokens is not None
+        and browser_role.max_output_tokens is not None
+        and browser_role.image_input
+        and browser_role.tool_decision
+    )
+
+    def value_text(value: object) -> str:
+        if value is None:
+            return "not set"
+        return str(getattr(value, "value", value))
+
+    provider_detail = (
+        " · ".join(
+            value_text(value) for value in (agents.provider, agents.protocol) if value is not None
+        )
+        or "not configured"
+    )
+    analysis_detail = (
+        f"model {value_text(analysis.model)} · "
+        f"context {analysis.context_window_tokens or 'not set'} · "
+        f"structured text {'yes' if analysis.structured_output else 'no'}"
+    )
+    browser_detail = (
+        f"model {value_text(browser_role.model)} · "
+        f"context {browser_role.context_window_tokens or 'not set'} · "
+        f"image {'yes' if browser_role.image_input else 'no'} · "
+        f"tool {'yes' if browser_role.tool_decision else 'no'}"
+    )
+    cloak_version = getattr(cloak, "version", None)
+    cloak_presence = getattr(cloak, "presence", "missing")
+    cloak_verified = bool(getattr(cloak, "verified", False))
+    cloak_detail = (
+        f"{cloak_presence} · version {cloak_version or 'not installed'} · "
+        f"{'verified' if cloak_verified else 'not verified'} · explicit install only"
+    )
+    profile = browser.profile
+    profile_identity = profile.selected or "not selected"
+    profile_detail = f"{profile_identity} · presence {profile.presence.value} · opaque identity"
+    enabled_detail = (
+        "automatic Browser admission is enabled"
+        if configuration.access.browser_enabled
+        else "automatic Browser admission is disabled"
+    )
+    return {
+        "agent_provider": (
+            provider_detail,
+            "Ready" if agents_transport_ready and analysis_key_ready else "Incomplete",
+        ),
+        "analysis_role": (analysis_detail, "Ready" if analysis_role_ready else "Incomplete"),
+        "browser_role": (browser_detail, "Ready" if browser_role_ready else "Not configured"),
+        "cloak_binary": (cloak_detail, "Ready" if cloak_verified else "Review"),
+        "selected_profile": (profile_detail, profile.presence.value),
+        "browser_enabled": (
+            enabled_detail,
+            "Enabled" if configuration.access.browser_enabled else "Disabled",
+        ),
+    }
+
+
+def _render_configuration_home(
+    console: ConfigConsole,
+    configuration: Configuration,
+    runtime: ConfigurationRuntimeStatus,
+    browser: BrowserAccessStatus,
+    cloak: object,
+) -> None:
+    """Render one identical local readiness home for Rich and plain UIs."""
+
+    agents = configuration.agents
+    parser = configuration.parsing
+    parser_ready = runtime.parsing.configuration_complete and (
+        not runtime.parsing.bearer_token_required
+        or (
+            runtime.parsing.bearer_token_configured is True
+            and runtime.parsing.credential_origin_matches is True
+        )
+    )
+    access_overview = _provider_access_overview(configuration)
+    rows = _configuration_home_rows(configuration, runtime, browser, cloak)
+    console.home(
+        llm_state=("Ready" if rows["analysis_role"][1] == "Ready" else "Incomplete"),
+        llm_detail=(
+            "Not configured"
+            if agents.protocol is None
+            else f"{agents.protocol.value} · {agents.analysis.model or 'model missing'}"
+        ),
+        mineru_state="Ready" if parser_ready else "Incomplete",
+        mineru_detail=(
+            "MinerU 3.4.4 · protocol 2 · vlm-engine"
+            if parser.base_url is not None
+            else "Not configured"
+        ),
+        providers=_provider_home_rows(),
+        access_state=access_overview.home_state,
+        access_detail=access_overview.home_detail,
+        agent_provider=rows["agent_provider"],
+        analysis_role=rows["analysis_role"],
+        browser_role=rows["browser_role"],
+        cloak_binary=rows["cloak_binary"],
+        selected_profile=rows["selected_profile"],
+        browser_enabled=rows["browser_enabled"],
+    )
+
+
 def _run_rich_config_manager(theme: str) -> int:
     active_theme = theme
     while True:
         console = ConfigConsole(active_theme)
         configuration, runtime = _configuration_summary()
         config_path = select_configuration_edit_path()
+        browser = browser_access_status(configuration)
+        cloak = CloakRuntimeManager().status()
         console.header(
             config_path=os.fspath(config_path),
             credentials_path=os.fspath(credential_path()),
         )
-        analysis = configuration.analysis
-        parser = configuration.parsing
-        llm_ready = runtime.analysis.reference_configuration_complete and (
-            not runtime.analysis.api_key_required
-            or (
-                runtime.analysis.api_key_configured is True
-                and runtime.analysis.credential_origin_matches is True
-            )
-        )
-        parser_ready = runtime.parsing.configuration_complete and (
-            not runtime.parsing.bearer_token_required
-            or (
-                runtime.parsing.bearer_token_configured is True
-                and runtime.parsing.credential_origin_matches is True
-            )
-        )
-        access_overview = _provider_access_overview(configuration)
-        console.home(
-            llm_state="Ready" if llm_ready else "Incomplete",
-            llm_detail=(
-                "Not configured"
-                if analysis.protocol is None
-                else f"{analysis.protocol.value} · {analysis.model or 'model missing'}"
-            ),
-            mineru_state="Ready" if parser_ready else "Incomplete",
-            mineru_detail=(
-                "MinerU 3.4.4 · protocol 2 · vlm-engine"
-                if parser.base_url is not None
-                else "Not configured"
-            ),
-            providers=_provider_home_rows(),
-            access_state=access_overview.home_state,
-            access_detail=access_overview.home_detail,
-        )
+        _render_configuration_home(console, configuration, runtime, browser, cloak)
         options: list[tuple[object, str]] = [
             ("llm", "LLM Analysis"),
             ("mineru", "MinerU Parser"),
             ("access", "Provider APIs and Browser Access"),
+            ("browser", "CloakBrowser runtime and Profile identity"),
             ("theme", "Change theme"),
         ]
         options.extend(
@@ -1473,6 +1616,7 @@ def _run_rich_config_manager(theme: str) -> int:
             theme=active_theme,
             shortcuts={
                 "a": "access",
+                "b": "browser",
                 "l": "llm",
                 "m": "mineru",
                 "t": "theme",
@@ -1489,6 +1633,8 @@ def _run_rich_config_manager(theme: str) -> int:
             _manage_mineru_rich(console)
         elif selected == "access":
             _manage_browser_access_rich(console)
+        elif selected == "browser":
+            _manage_cloak_runtime_rich(console)
         elif isinstance(selected, ProviderName):
             _manage_provider_rich(selected, active_theme)
 
@@ -1550,10 +1696,9 @@ def _plain_browser_access_action() -> str | None:
     sys.stderr.write(
         "\nManage Browser Access\n\n"
         "  1. Select or initialize a Browser profile\n"
-        "  2. Open a visible Browser when a Provider requires manual login\n"
-        "  3. Remove the selected local Browser session\n"
-        "  4. Disable Browser access and keep the local session\n"
-        "  5. Set cross-Publisher Browser concurrency\n"
+        "  2. Remove the selected local Browser session\n"
+        "  3. Disable Browser access and keep the local session\n"
+        "  4. Set cross-Publisher Browser concurrency\n"
         "  b. Back\n\n"
     )
     answer = _read_line("Choose an action: ")
@@ -1563,14 +1708,12 @@ def _plain_browser_access_action() -> str | None:
         "1": "select",
         "select": "select",
         "initialize": "select",
-        "2": "login",
-        "login": "login",
-        "3": "remove",
+        "2": "remove",
         "remove": "remove",
         "delete": "remove",
-        "4": "disable",
+        "3": "disable",
         "disable": "disable",
-        "5": "concurrency",
+        "4": "concurrency",
         "concurrency": "concurrency",
     }.get(answer.casefold(), "invalid")
 
@@ -1638,73 +1781,6 @@ def _select_browser_access_profile(console: ConfigConsole) -> None:
         return
     configure_browser_access_profile(path, candidate, home=None)
     console.message("Browser access settings and the local profile were saved.", kind="success")
-
-
-def _open_browser_access_login(console: ConfigConsole) -> None:
-    configuration = load_editable_configuration(select_configuration_edit_path())
-    identity = configuration.access.browser_profile
-    if identity is None:
-        console.message("Select and initialize a Browser profile first.", kind="warning")
-        return
-    presence = browser_profile_status(identity, home=None).presence
-    if presence is BrowserProfilePresence.MISSING:
-        console.message(
-            "The selected Browser profile is missing; initialize it first.", kind="warning"
-        )
-        return
-    if presence is BrowserProfilePresence.ATTENTION:
-        console.message(
-            "The selected Browser profile requires operator inspection; no Browser was opened.",
-            kind="warning",
-        )
-        return
-    console.section(
-        "Optional visible Browser login",
-        "Normal article attempts use the current network, including institutional IP access, "
-        "without requiring a personal login. Open this window only after a Provider actually "
-        "requests login, institution selection, or MFA.",
-    )
-    console.message(
-        "Sites opened in this dedicated profile may save sensitive session data. SciRetriever "
-        "will not fill credentials, choose an institution, handle MFA/CAPTCHA, inspect Cookie "
-        "data, or infer entitlement. Close every Browser window when finished.",
-        kind="warning",
-    )
-    if not CONTROLLED_BROWSER_PRODUCTION_AVAILABLE:
-        console.message(
-            "Automatic Controlled Browser acquisition remains unavailable because no production "
-            "Publisher Browser route is registered.",
-            kind="warning",
-        )
-    if not _confirm("Open the visible Browser now? [y/N] "):
-        console.message("Optional visible Browser was cancelled; nothing was opened.", kind="muted")
-        return
-    handle: BrowserProfileHandle = resolve_browser_profile(identity, home=None)
-    console.message(
-        "Visible Browser opened. Complete only the Provider action that the article attempt "
-        "requested and that you are authorized to perform."
-    )
-    try:
-        open_visible_browser_login(handle)
-    except VisibleBrowserLoginError as error:
-        console.message(
-            f"Visible Browser could not complete ({error.code}); the profile was retained.",
-            kind="warning",
-        )
-        return
-    final_presence = browser_profile_status(identity, home=None).presence
-    if final_presence is BrowserProfilePresence.ATTENTION:
-        console.message(
-            "The Browser closed, but the local profile now requires ownership or permission "
-            "inspection. Authentication was not assessed.",
-            kind="warning",
-        )
-        return
-    console.message(
-        "Visible Browser closed. The local session was retained; login and article entitlement "
-        "were not assessed.",
-        kind="success",
-    )
 
 
 def _remove_browser_access_session(console: ConfigConsole) -> None:
@@ -1809,11 +1885,228 @@ def _set_browser_max_concurrency(console: ConfigConsole) -> None:
     )
 
 
+def _cloak_runtime_status_text(status: object) -> str:
+    """Render only the stable, path/secret-free Cloak status fields."""
+
+    presence = getattr(status, "presence", "missing")
+    version = getattr(status, "version", None) or "not installed"
+    reason = getattr(status, "reason", None)
+    verified = "verified" if getattr(status, "verified", False) else "not verified"
+    suffix = f" · reason: {reason}" if reason else ""
+    return f"{presence} · version {version} · {verified}{suffix}"
+
+
+def _show_cloak_runtime(console: ConfigConsole) -> None:
+    status = CloakRuntimeManager().status()
+    credentials = load_credentials(home=None)
+    console.section(
+        "CloakBrowser runtime",
+        "Pinned free v146 is explicit-install only; status never downloads or launches it.",
+    )
+    console.message(f"Runtime: {_cloak_runtime_status_text(status)}")
+    console.message(
+        "Wrapper: cloakbrowser 0.5.8 · Playwright API: 1.55.0 · binary is not bundled in the wheel."
+    )
+    console.message(
+        "Optional Pro key: "
+        + (
+            "saved"
+            if credentials.has_core_service(CoreCredentialService.CLOAKBROWSER)
+            else "not set"
+        )
+        + " (reserved; the pinned free installer does not use it).",
+        kind="muted",
+    )
+
+
+def _confirm_cloak_network_action(action: str) -> bool:
+    """Require two explicit confirmations before any vendor network action."""
+
+    if not _confirm(
+        f"{action} downloads the pinned CloakBrowser binary from the vendor and "
+        "verifies its signature/digest. Continue? [y/N] "
+    ):
+        return False
+    return _confirm(
+        "Confirm this explicit network and disk operation now "
+        "(nothing else will be changed)? [y/N] "
+    )
+
+
+def _cloak_install_or_update(action: Literal["install", "update"], console: ConfigConsole) -> None:
+    manager = CloakRuntimeManager()
+    current = manager.status()
+    if action == "install" and current.ready:
+        console.message(
+            "The pinned CloakBrowser binary is already installed and verified.",
+            kind="muted",
+        )
+        return
+    if action == "update" and current.ready and current.version == CLOAKBROWSER_BROWSER_VERSION:
+        console.message(
+            "The pinned CloakBrowser binary is already current and verified.",
+            kind="muted",
+        )
+        return
+    if not _confirm_cloak_network_action(action.title()):
+        console.message("No CloakBrowser files were changed.", kind="muted")
+        return
+    try:
+        result = (
+            manager.install(CLOAKBROWSER_BROWSER_VERSION)
+            if action == "install"
+            else manager.update(CLOAKBROWSER_BROWSER_VERSION)
+        )
+    except ConfigurationError:
+        console.message(
+            "CloakBrowser installation was not completed; the current verified "
+            "runtime was retained.",
+            kind="warning",
+        )
+        return
+    console.message(
+        f"CloakBrowser {result.version or CLOAKBROWSER_BROWSER_VERSION} is installed and verified.",
+        kind="success",
+    )
+
+
+def _cloak_rollback(console: ConfigConsole) -> None:
+    manager = CloakRuntimeManager()
+    current = manager.status()
+    if not current.rollback_available:
+        console.message(
+            "No verified previous CloakBrowser version is available to roll back.",
+            kind="muted",
+        )
+        return
+    if not _confirm_cloak_network_action("Rollback"):
+        console.message("No CloakBrowser files were changed.", kind="muted")
+        return
+    try:
+        result = manager.rollback()
+    except ConfigurationError:
+        console.message(
+            "CloakBrowser rollback was not completed; the current runtime was retained.",
+            kind="warning",
+        )
+        return
+    console.message(f"CloakBrowser was rolled back to {result.version}.", kind="success")
+
+
+def _set_cloak_license(console: ConfigConsole) -> None:
+    console.message(
+        "The pinned free v146 installer explicitly rejects Pro credentials. The value is "
+        "stored only as an origin-bound, optional future entitlement and is never used by "
+        "normal Completion or status.",
+        kind="warning",
+    )
+    if not _confirm("Save an optional CloakBrowser Pro key for future use? [y/N] "):
+        console.message("No CloakBrowser credential was changed.", kind="muted")
+        return
+    try:
+        secret = getpass.getpass("CloakBrowser Pro key (input hidden): ").strip()
+    except EOFError:
+        console.message("No CloakBrowser credential was changed.", kind="muted")
+        return
+    if not secret:
+        console.message("An optional key was not entered; no credential was changed.", kind="muted")
+        return
+    try:
+        set_core_credentials(
+            CoreCredentialService.CLOAKBROWSER,
+            secret=secret,
+            origin=CLOAKBROWSER_ORIGIN,
+            home=None,
+        )
+    except ConfigurationError:
+        console.message("The optional CloakBrowser credential could not be saved.", kind="warning")
+        return
+    console.message(
+        "Optional CloakBrowser Pro key saved (reserved; not used by v146).",
+        kind="success",
+    )
+
+
+def _remove_cloak_license(console: ConfigConsole) -> None:
+    credentials = load_credentials(home=None)
+    if not credentials.has_core_service(CoreCredentialService.CLOAKBROWSER):
+        console.message(
+            "No optional CloakBrowser Pro key is configured; nothing changed.",
+            kind="muted",
+        )
+        return
+    if not _confirm("Remove the optional CloakBrowser Pro key? [y/N] "):
+        console.message("No CloakBrowser credential was changed.", kind="muted")
+        return
+    try:
+        remove_core_credentials(CoreCredentialService.CLOAKBROWSER, home=None)
+    except ConfigurationError:
+        console.message(
+            "The optional CloakBrowser credential could not be removed.",
+            kind="warning",
+        )
+        return
+    console.message("Optional CloakBrowser Pro key removed.", kind="success")
+
+
+def _manage_cloak_runtime_plain(console: ConfigConsole) -> None:
+    while True:
+        _show_cloak_runtime(console)
+        sys.stderr.write(
+            "\n  1. Install pinned free v146\n"
+            "  2. Update to pinned free v146\n"
+            "  3. Roll back to the verified previous version\n"
+            "  4. Save or replace optional Pro key (reserved)\n"
+            "  5. Remove optional Pro key\n"
+            "  b. Back\n\n"
+        )
+        answer = _read_line("Choose a CloakBrowser action: ")
+        if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
+            return
+        if answer in {"1", "install"}:
+            _cloak_install_or_update("install", console)
+        elif answer in {"2", "update"}:
+            _cloak_install_or_update("update", console)
+        elif answer in {"3", "rollback"}:
+            _cloak_rollback(console)
+        elif answer in {"4", "license", "pro"}:
+            _set_cloak_license(console)
+        elif answer in {"5", "remove"}:
+            _remove_cloak_license(console)
+        else:
+            console.message("Invalid action; choose 1–5 or b.", kind="warning")
+
+
+def _manage_cloak_runtime_rich(console: ConfigConsole) -> None:
+    while True:
+        _show_cloak_runtime(console)
+        action = TerminalChoice[str](
+            message="Manage CloakBrowser runtime",
+            options=[
+                ("install", "Install pinned free v146"),
+                ("update", "Update to pinned free v146"),
+                ("rollback", "Roll back verified previous version"),
+                ("license", "Save/replace optional Pro key (reserved)"),
+                ("remove-license", "Remove optional Pro key"),
+                ("back", "Back"),
+            ],
+            theme=console.palette.name,
+        ).prompt()
+        if action == "back":
+            return
+        if action in {"install", "update"}:
+            _cloak_install_or_update(cast(Literal["install", "update"], action), console)
+        elif action == "rollback":
+            _cloak_rollback(console)
+        elif action == "license":
+            _set_cloak_license(console)
+        elif action == "remove-license":
+            _remove_cloak_license(console)
+
+
 def _perform_browser_access_action(action: str, console: ConfigConsole) -> None:
     if action == "select":
         _select_browser_access_profile(console)
-    elif action == "login":
-        _open_browser_access_login(console)
     elif action == "remove":
         _remove_browser_access_session(console)
     elif action == "disable":
@@ -1821,7 +2114,7 @@ def _perform_browser_access_action(action: str, console: ConfigConsole) -> None:
     elif action == "concurrency":
         _set_browser_max_concurrency(console)
     else:
-        console.message("Invalid action. Choose 1, 2, 3, 4, 5, or b.", kind="warning")
+        console.message("Invalid action. Choose 1, 2, 3, 4, or b.", kind="warning")
 
 
 def _manage_browser_access_plain(console: ConfigConsole) -> None:
@@ -1840,7 +2133,6 @@ def _manage_browser_access_rich(console: ConfigConsole) -> None:
             message="Manage Provider API and Browser Access",
             options=[
                 ("select", "Select or initialize a Browser profile"),
-                ("login", "Open a visible Browser when a Provider requires manual login"),
                 ("remove", "Remove the selected local Browser session"),
                 ("disable", "Disable Browser access and keep the session"),
                 ("concurrency", "Set cross-Publisher Browser concurrency"),
@@ -1854,13 +2146,15 @@ def _manage_browser_access_rich(console: ConfigConsole) -> None:
 
 
 def _configuration_action(service: Literal["LLM", "MinerU"]) -> str | None:
-    sys.stderr.write(
+    menu = (
         f"\nManage {service}\n\n"
         "  1. Set up or edit\n"
         "  2. Test configuration\n"
         "  3. Reset configuration and credential\n"
-        "  b. Back\n\n"
     )
+    if service == "LLM":
+        menu += "  4. Configure Browser role capability\n"
+    sys.stderr.write(menu + "  b. Back\n\n")
     answer = _read_line("Choose an action: ")
     if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
         return None
@@ -1873,6 +2167,9 @@ def _configuration_action(service: Literal["LLM", "MinerU"]) -> str | None:
         "3": "reset",
         "reset": "reset",
         "remove": "reset",
+        "4": "browser-role",
+        "browser": "browser-role",
+        "browser-role": "browser-role",
     }.get(answer.casefold(), "invalid")
 
 
@@ -1886,7 +2183,7 @@ def _run_core_test(service: Literal["llm", "mineru"]) -> None:
     configuration = load_selected_configuration(None)
     session = build_production_configuration_probe_session(configuration)
     try:
-        result = session.run_llm() if service == "llm" else session.run_mineru()
+        result = session.run_agents() if service == "llm" else session.run_mineru()
     finally:
         session.close()
     sys.stderr.write(f"{service.upper()} configuration test: {result.outcome.value}.\n")
@@ -1900,11 +2197,12 @@ def _reset_core_configuration(service: Literal["llm", "mineru"], console: Config
     path = select_configuration_edit_path()
     before = load_editable_configuration(path)
     ordinary_configured = (
-        before.analysis != AnalysisConfig()
+        before.agents != AgentsConfig() or before.analysis != AnalysisConfig()
         if service == "llm"
         else before.parsing != ParsingConfig()
     )
-    secret_configured = core_credential_section_exists(service)
+    secret_service = "agents" if service == "llm" else service
+    secret_configured = core_credential_section_exists(secret_service)
     if not ordinary_configured and not secret_configured:
         console.message(f"{label} is not configured; nothing changed.", kind="muted")
         return
@@ -1914,11 +2212,12 @@ def _reset_core_configuration(service: Literal["llm", "mineru"], console: Config
     if service == "llm":
         update_core_service_configuration(
             path,
-            "llm",
-            analysis=AnalysisConfig(),
+            "agents",
+            agents=AgentsConfig(),
             secret=None,
             origin=None,
         )
+        update_configuration_sections(path, analysis=AnalysisConfig())
     else:
         update_core_service_configuration(
             path,
@@ -1941,8 +2240,10 @@ def _manage_llm_plain(console: ConfigConsole) -> None:
             _run_core_test("llm")
         elif action == "reset":
             _reset_core_configuration("llm", console)
+        elif action == "browser-role":
+            _configure_browser_role(console)
         else:
-            console.message("Invalid action. Choose 1, 2, 3, or b.", kind="warning")
+            console.message("Invalid action. Choose 1, 2, 3, 4, or b.", kind="warning")
 
 
 def _manage_mineru_plain(console: ConfigConsole) -> None:
@@ -1967,6 +2268,7 @@ def _manage_llm_rich(console: ConfigConsole) -> None:
             ("edit", "Set up or edit"),
             ("test", "Test configuration"),
             ("reset", "Reset settings and credential"),
+            ("browser-role", "Configure Browser role capability"),
             ("back", "Back"),
         ],
         theme=console.palette.name,
@@ -1977,6 +2279,8 @@ def _manage_llm_rich(console: ConfigConsole) -> None:
         _run_core_test("llm")
     elif action == "reset":
         _reset_core_configuration("llm", console)
+    elif action == "browser-role":
+        _configure_browser_role(console)
 
 
 def _manage_mineru_rich(console: ConfigConsole) -> None:
@@ -2049,7 +2353,7 @@ def _confirm_changes(
     before: Configuration,
     after: Configuration,
     *,
-    section: Literal["analysis", "parsing"],
+    section: Literal["agents", "analysis", "parsing"],
 ) -> bool:
     changes = configuration_diff(before, after, sections=(section,))
     if not changes:
@@ -2059,26 +2363,31 @@ def _confirm_changes(
     return _confirm("Save these ordinary configuration changes? [y/N] ")
 
 
-def _analysis_candidate(
+def _agents_candidate(
     *,
-    provider: AnalysisProvider,
+    provider: AgentProvider,
     service_name: str | None,
-    protocol: AnalysisProtocol,
+    protocol: AgentProtocol,
     base_url: str,
     model: str,
     context_window_tokens: int,
-    authentication: AnalysisAuthentication,
+    authentication: AgentAuthentication,
     budgets: dict[str, int],
-) -> AnalysisConfig:
-    return AnalysisConfig(
+    browser: AgentRoleConfig,
+) -> AgentsConfig:
+    return AgentsConfig(
         provider=provider,
         service_name=service_name,
         protocol=protocol,
         base_url=base_url,
-        model=model,
-        context_window_tokens=context_window_tokens,
         authentication=authentication,
-        **budgets,
+        analysis=AgentRoleConfig(
+            model=model,
+            context_window_tokens=context_window_tokens,
+            max_output_tokens=budgets.get("content_max_output_tokens", 1),
+            structured_output=True,
+        ),
+        browser=browser,
     )
 
 
@@ -2138,42 +2447,42 @@ def _configure_llm(console: ConfigConsole) -> None:  # noqa: C901, PLR0915
     if preset is None:
         return
     if preset == "openai":
-        provider = AnalysisProvider.OPENAI
+        provider = AgentProvider.OPENAI
         service_name = None
-        protocol = AnalysisProtocol.OPENAI_RESPONSES
+        protocol = AgentProtocol.OPENAI_RESPONSES
         base_url = "https://api.openai.com/v1"
-        authentication = AnalysisAuthentication.API_KEY
+        authentication = AgentAuthentication.API_KEY
     elif preset == "anthropic":
-        provider = AnalysisProvider.ANTHROPIC
+        provider = AgentProvider.ANTHROPIC
         service_name = None
-        protocol = AnalysisProtocol.ANTHROPIC_MESSAGES
+        protocol = AgentProtocol.ANTHROPIC_MESSAGES
         base_url = "https://api.anthropic.com/v1"
-        authentication = AnalysisAuthentication.API_KEY
+        authentication = AgentAuthentication.API_KEY
     else:
-        provider = AnalysisProvider.CUSTOM
+        provider = AgentProvider.CUSTOM
         service_name = _ask_text("Safe service identity (letters/numbers/dash)")
         protocol_value = _select_value(
             "Choose the exact compatible protocol",
             [
-                (AnalysisProtocol.OPENAI_RESPONSES.value, "OpenAI Responses"),
+                (AgentProtocol.OPENAI_RESPONSES.value, "OpenAI Responses"),
                 (
-                    AnalysisProtocol.OPENAI_CHAT_COMPLETIONS.value,
+                    AgentProtocol.OPENAI_CHAT_COMPLETIONS.value,
                     "OpenAI Chat Completions",
                 ),
-                (AnalysisProtocol.ANTHROPIC_MESSAGES.value, "Anthropic Messages"),
+                (AgentProtocol.ANTHROPIC_MESSAGES.value, "Anthropic Messages"),
             ],
             console=console,
         )
         base_url = _ask_text("Service Base URL")
         if service_name is None or protocol_value is None or base_url is None:
             return
-        protocol = AnalysisProtocol(protocol_value)
+        protocol = AgentProtocol(protocol_value)
         authentication_value = _select_value(
             "Choose authentication",
             [
-                (AnalysisAuthentication.API_KEY.value, "API key"),
+                (AgentAuthentication.API_KEY.value, "API key"),
                 (
-                    AnalysisAuthentication.NONE.value,
+                    AgentAuthentication.NONE.value,
                     "No authentication · custom HTTP loopback only",
                 ),
             ],
@@ -2181,14 +2490,16 @@ def _configure_llm(console: ConfigConsole) -> None:  # noqa: C901, PLR0915
         )
         if authentication_value is None:
             return
-        authentication = AnalysisAuthentication(authentication_value)
+        authentication = AgentAuthentication(authentication_value)
     model = _ask_text("Model / deployment name")
     context = _ask_positive_integer("Verified context window (tokens)", default=1_000_000)
     budgets = _choose_analysis_budgets(console)
     if model is None or context is None or budgets is None:
         return
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
     try:
-        candidate = _analysis_candidate(
+        candidate = _agents_candidate(
             provider=provider,
             service_name=service_name,
             protocol=protocol,
@@ -2197,25 +2508,25 @@ def _configure_llm(console: ConfigConsole) -> None:  # noqa: C901, PLR0915
             context_window_tokens=context,
             authentication=authentication,
             budgets=budgets,
+            browser=before.agents.browser,
         )
     except (ValidationError, ValueError, TypeError):
         console.message(
             "The LLM settings are invalid or conflict with their budgets.", kind="warning"
         )
         return
-    path = select_configuration_edit_path()
-    before = load_editable_configuration(path)
-    after = before.model_copy(update={"analysis": candidate})
-    if not _confirm_changes(console, before, after, section="analysis"):
+    analysis_candidate = AnalysisConfig(**budgets)
+    after = before.model_copy(update={"agents": candidate, "analysis": analysis_candidate})
+    if not _confirm_changes(console, before, after, section="agents"):
         console.message("No configuration was changed.", kind="muted")
         return
     origin = (
         configuration_service_origin(base_url)
-        if authentication is AnalysisAuthentication.API_KEY
+        if authentication is AgentAuthentication.API_KEY
         else None
     )
     secret: str | None = None
-    if authentication is AnalysisAuthentication.API_KEY:
+    if authentication is AgentAuthentication.API_KEY:
         try:
             secret = getpass.getpass("API key (input hidden): ").strip()
         except EOFError:
@@ -2225,12 +2536,107 @@ def _configure_llm(console: ConfigConsole) -> None:  # noqa: C901, PLR0915
             return
     update_core_service_configuration(
         path,
-        "llm",
-        analysis=candidate,
+        "agents",
+        agents=candidate,
         secret=secret,
         origin=origin,
     )
+    update_configuration_sections(path, analysis=analysis_candidate)
     console.message("LLM Analysis configuration was saved.", kind="success")
+
+
+def _configure_browser_role(console: ConfigConsole) -> None:  # noqa: C901
+    """Configure the shared Agents Browser role without touching its secret."""
+
+    path = select_configuration_edit_path()
+    before = load_editable_configuration(path)
+    agents = before.agents
+    if any(
+        value is None
+        for value in (agents.provider, agents.protocol, agents.base_url, agents.authentication)
+    ):
+        console.message(
+            "Configure the shared Agent provider and Analysis role first; the Browser role "
+            "reuses that endpoint and credential.",
+            kind="warning",
+        )
+        return
+    console.section(
+        "Browser role",
+        "This role reuses the shared Agents provider; only image/tool capability is added.",
+    )
+    default_model = agents.browser.model or agents.analysis.model
+    default_context = agents.browser.context_window_tokens or agents.analysis.context_window_tokens
+    model = _ask_text("Browser model / deployment name", default=default_model)
+    context = _ask_positive_integer(
+        "Browser context window (tokens)",
+        default=default_context or 32_768,
+    )
+    max_output = _ask_positive_integer(
+        "Browser output limit (tokens)",
+        default=agents.browser.max_output_tokens or 2_048,
+    )
+    image_enabled = _select_value(
+        "Enable image input",
+        [("yes", "Yes · allow bounded screenshots"), ("no", "No")],
+        console=console,
+    )
+    tool_enabled = _select_value(
+        "Enable closed tool decisions",
+        [("yes", "Yes · Click/Scroll/Wait/Stop only"), ("no", "No")],
+        console=console,
+    )
+    if None in (model, context, max_output, image_enabled, tool_enabled):
+        console.message(
+            "Browser role configuration was cancelled; no changes were made.", kind="muted"
+        )
+        return
+    image_input = image_enabled == "yes"
+    tool_decision = tool_enabled == "yes"
+    if not image_input or not tool_decision:
+        console.message(
+            "The Browser Agent requires both image input and closed tool decisions; "
+            "leave both enabled or cancel.",
+            kind="warning",
+        )
+        return
+    image_count = _ask_positive_integer(
+        "Maximum images per turn",
+        default=agents.browser.image_count or 1,
+    )
+    image_bytes = _ask_positive_integer(
+        "Maximum total image bytes per turn",
+        default=agents.browser.image_bytes or 4_194_304,
+    )
+    turns = _ask_positive_integer("Maximum Browser Agent turns", default=agents.browser.turns or 4)
+    if image_count is None or image_bytes is None or turns is None:
+        console.message(
+            "Browser role configuration was cancelled; no changes were made.", kind="muted"
+        )
+        return
+    try:
+        role = AgentRoleConfig(
+            model=model,
+            context_window_tokens=context,
+            max_output_tokens=max_output,
+            structured_output=False,
+            image_input=True,
+            tool_decision=True,
+            image_media_types=("image/png", "image/jpeg", "image/webp"),
+            image_count=image_count,
+            image_bytes=image_bytes,
+            turns=turns,
+        )
+        candidate = agents.model_copy(update={"browser": role})
+    except (ValidationError, ValueError, TypeError):
+        console.message("Browser role settings are invalid; no changes were made.", kind="warning")
+        return
+    after = before.model_copy(update={"agents": candidate})
+    if not _confirm_changes(console, before, after, section="agents"):
+        console.message("No configuration was changed.", kind="muted")
+        return
+    update_configuration_sections(path, agents=candidate)
+    console.message("Browser role configuration was saved.", kind="success")
 
 
 def _configure_mineru(console: ConfigConsole) -> None:  # noqa: C901
@@ -2418,6 +2824,7 @@ def _config_status_payload(
     capabilities: tuple[ConfigurationCapabilityStatus, ...],
     runtime: ConfigurationRuntimeStatus,
     browser: BrowserAccessStatus,
+    credentials: CredentialLookup | None = None,
 ) -> dict[str, object]:
     parser = configuration.parsing
     analysis = configuration.analysis
@@ -2429,6 +2836,22 @@ def _config_status_payload(
     analysis_key_ready = not runtime.analysis.api_key_required or (
         runtime.analysis.api_key_configured is True
         and runtime.analysis.credential_origin_matches is True
+    )
+    agents_transport_ready = all(
+        value is not None
+        for value in (
+            configuration.agents.provider,
+            configuration.agents.protocol,
+            configuration.agents.base_url,
+            configuration.agents.authentication,
+        )
+    )
+    browser_role_capability_ready = (
+        configuration.agents.browser.model is not None
+        and configuration.agents.browser.context_window_tokens is not None
+        and configuration.agents.browser.max_output_tokens is not None
+        and configuration.agents.browser.image_input
+        and configuration.agents.browser.tool_decision
     )
     return {
         "storage": {
@@ -2450,7 +2873,22 @@ def _config_status_payload(
                 for item in capabilities
                 if item.capability is ProviderCapability.ACQUISITION
             ],
-            "controlled_browser": browser.model_dump(mode="json"),
+            "controlled_browser": {
+                **browser.model_dump(mode="json"),
+                # The compatibility value above describes when Completion
+                # evaluates entitlement.  This explicit local-status marker
+                # prevents callers from mistaking it for an assessment made
+                # by ``config status`` itself.
+                "article_entitlement_assessment": "not-evaluated",
+                "article_entitlement_evaluated": False,
+                "cloakbrowser_license": {
+                    "configured": bool(
+                        credentials is not None
+                        and credentials.has_core_service("cloakbrowser") is True
+                    ),
+                    "status": "reserved-not-used-by-pinned-free-binary",
+                },
+            },
         },
         "parsing": {
             "locally_ready": parser_ready,
@@ -2476,21 +2914,60 @@ def _config_status_payload(
                 "origin_matches": runtime.parsing.credential_origin_matches,
             },
         },
-        "analysis": {
+        "agents": {
             "reference_locally_ready": (
                 runtime.analysis.reference_configuration_complete and analysis_key_ready
             ),
             "content_locally_ready": (
                 runtime.analysis.content_configuration_complete and analysis_key_ready
             ),
-            "provider": None if analysis.provider is None else analysis.provider.value,
-            "service_name": analysis.service_name,
-            "protocol": None if analysis.protocol is None else analysis.protocol.value,
-            "base_url": analysis.base_url,
-            "model": analysis.model,
-            "context_window_tokens": analysis.context_window_tokens,
+            "provider": (
+                None
+                if configuration.agents.provider is None
+                else configuration.agents.provider.value
+            ),
+            "service_name": configuration.agents.service_name,
+            "protocol": (
+                None
+                if configuration.agents.protocol is None
+                else configuration.agents.protocol.value
+            ),
+            "base_url": configuration.agents.base_url,
+            "analysis_model": configuration.agents.analysis.model,
+            "browser_model": configuration.agents.browser.model,
+            "context_window_tokens": configuration.agents.analysis.context_window_tokens,
+            "analysis_role": {
+                "model": configuration.agents.analysis.model,
+                "context_window_tokens": configuration.agents.analysis.context_window_tokens,
+                "max_output_tokens": configuration.agents.analysis.max_output_tokens,
+                "structured_output": configuration.agents.analysis.structured_output,
+                "image_input": configuration.agents.analysis.image_input,
+                "tool_decision": configuration.agents.analysis.tool_decision,
+                "locally_ready": (
+                    runtime.analysis.reference_configuration_complete and analysis_key_ready
+                ),
+                "required_capability": "structured-text",
+            },
+            "browser_role": {
+                "model": configuration.agents.browser.model,
+                "context_window_tokens": configuration.agents.browser.context_window_tokens,
+                "max_output_tokens": configuration.agents.browser.max_output_tokens,
+                "structured_output": configuration.agents.browser.structured_output,
+                "image_input": configuration.agents.browser.image_input,
+                "tool_decision": configuration.agents.browser.tool_decision,
+                "image_media_types": list(configuration.agents.browser.image_media_types),
+                "image_count": configuration.agents.browser.image_count,
+                "image_bytes": configuration.agents.browser.image_bytes,
+                "turns": configuration.agents.browser.turns,
+                "locally_ready": (
+                    agents_transport_ready and analysis_key_ready and browser_role_capability_ready
+                ),
+                "required_capabilities": ["image-input", "tool-decision"],
+            },
             "authentication": (
-                None if analysis.authentication is None else analysis.authentication.value
+                None
+                if configuration.agents.authentication is None
+                else configuration.agents.authentication.value
             ),
             "api_key": {
                 "source": "credentials.toml" if runtime.analysis.api_key_required else None,
@@ -2498,7 +2975,9 @@ def _config_status_payload(
                 "configured": runtime.analysis.api_key_configured,
                 "origin_matches": runtime.analysis.credential_origin_matches,
             },
-            "reference_configuration_complete": (runtime.analysis.reference_configuration_complete),
+        },
+        "analysis": {
+            "reference_configuration_complete": runtime.analysis.reference_configuration_complete,
             "content_configuration_complete": runtime.analysis.content_configuration_complete,
             "reference_missing_fields": runtime.analysis.reference_missing_fields,
             "content_missing_fields": runtime.analysis.content_missing_fields,
@@ -2527,7 +3006,13 @@ def _run_config_status(arguments: argparse.Namespace) -> int:
         configuration,
         probe_supported_access_keys=PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
     )
-    payload = _config_status_payload(configuration, result.capabilities, runtime, browser)
+    payload = _config_status_payload(
+        configuration,
+        result.capabilities,
+        runtime,
+        browser,
+        credentials,
+    )
     if arguments.json:
         _write_result(payload, as_json=True)
     else:
@@ -2544,7 +3029,7 @@ def _run_config_test(arguments: argparse.Namespace) -> int:
         session.close()
 
 
-def _run_config_test_session(
+def _run_config_test_session(  # noqa: C901
     arguments: argparse.Namespace,
     session: ProductionConfigurationProbeSession,
 ) -> int:
@@ -2566,7 +3051,18 @@ def _run_config_test_session(
         ):
             sys.stderr.write("LLM probe cancelled.\n")
             return 0
-        result: object = session.run_llm()
+        result: object = session.run_agents()
+        passed = result.outcome is ProbeOutcome.PASSED
+    elif arguments.provider == "browser-agent":
+        if not arguments.json and not _confirm(
+            "The Browser Agent probe sends one minimal external request with a fixed synthetic "
+            "image and one closed generic tool. It sends no Literature, PDF, page content, or "
+            "Browser screenshot, and may consume a small amount of quota. It does not start a "
+            "Browser or visit a Publisher. Continue? [y/N] "
+        ):
+            sys.stderr.write("Browser Agent probe cancelled.\n")
+            return 0
+        result = session.run_browser_agent()
         passed = result.outcome is ProbeOutcome.PASSED
     elif arguments.provider == "mineru":
         result = session.run_mineru()
@@ -2575,21 +3071,39 @@ def _run_config_test_session(
         if not arguments.json and not _confirm(
             "This runs enabled Provider probes, one minimal LLM request that may consume a "
             "small amount of quota, and a MinerU health check that uploads no PDF. "
+            "It also attempts the optional Browser Agent probe with one fixed synthetic image "
+            "and one closed generic tool; it sends no Literature, PDF, page content, or Browser "
+            "screenshot. "
             "Continue? [y/N] "
         ):
             sys.stderr.write("Configuration probes cancelled.\n")
             return 0
         provider_result = session.run(test_all=True)
-        llm_result = session.run_llm()
+        llm_result = session.run_agents()
+        browser_agent_result = session.run_browser_agent()
         mineru_result = session.run_mineru()
         result = {
             "providers": provider_result.model_dump(mode="json"),
             "llm": llm_result.model_dump(mode="json"),
             "mineru": mineru_result.model_dump(mode="json"),
         }
+        if isinstance(browser_agent_result, CoreConfigurationProbeResult):
+            result["browser-agent"] = browser_agent_result.model_dump(mode="json")
         passed = provider_result.passed and all(
             item.outcome is ProbeOutcome.PASSED for item in (llm_result, mineru_result)
         )
+        if isinstance(browser_agent_result, CoreConfigurationProbeResult):
+            # Browser Agent is an optional role.  A local skip means it was
+            # not configured and must not make required Provider/Analysis/
+            # MinerU capabilities fail; an executed failure remains visible
+            # and does fail the aggregate probe.
+            passed = passed and (
+                browser_agent_result.outcome is ProbeOutcome.PASSED
+                or (
+                    browser_agent_result.outcome is ProbeOutcome.SKIPPED
+                    and not browser_agent_result.local_ready
+                )
+            )
     else:
         result = session.run(provider=arguments.provider)
         passed = result.passed

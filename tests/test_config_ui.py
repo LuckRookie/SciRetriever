@@ -80,15 +80,20 @@ def _status_payload() -> dict[str, object]:
             ],
             "controlled_browser": {
                 "enabled": True,
-                "mode": "headed-persistent-profile",
-                "persistent_authentication_supported": True,
+                "mode": "headed-fixed-profile",
+                "interactive_authentication_supported": False,
                 "article_entitlement": "checked-per-article",
                 "local_max_concurrency": 2,
                 "runtime": {
-                    "framework_available": True,
-                    "python_dependency_available": True,
-                    "chromium_executable_available": True,
+                    "cloak_wrapper_available": True,
+                    "playwright_api_available": True,
+                    "binary_presence": True,
+                    "binary_version": "146.0.7680.177.5",
+                    "binary_verified": True,
                     "headed_display_available": True,
+                    "fixed_identity_manifest": True,
+                    "identity_schema": "sciretriever.browser-identity.v1",
+                    "profile_lease": "not-assessed",
                     "launch_assessed": False,
                 },
                 "profile": {
@@ -235,6 +240,42 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertNotIn("\x1b[", rendered)
         self.assertNotIn(_SECRET, rendered)
 
+    def test_home_renders_unified_agents_browser_local_summary(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            ConfigConsole("mono", width=80).home(
+                llm_state="Incomplete",
+                llm_detail="not configured",
+                mineru_state="Incomplete",
+                mineru_detail="not configured",
+                providers=(),
+                agent_provider=("openai · openai-responses", "Ready"),
+                analysis_role=("model gpt-test · structured text yes", "Ready"),
+                browser_role=("model not set · image no · tool no", "Not configured"),
+                cloak_binary=("missing · version not installed · explicit install only", "Review"),
+                selected_profile=(
+                    "institutional-access · presence missing · opaque identity",
+                    "missing",
+                ),
+                browser_enabled=("automatic Browser admission is disabled", "Disabled"),
+            )
+        rendered = stderr.getvalue()
+        for value in (
+            "AGENTS & BROWSER",
+            "Agent provider",
+            "Analysis role",
+            "Browser role",
+            "Cloak binary",
+            "Selected Profile",
+            "Browser enabled",
+            "explicit install only",
+            "opaque identity",
+        ):
+            self.assertIn(value, rendered)
+        self.assertNotIn("fingerprint_seed", rendered)
+        self.assertNotIn("browser-profiles/", rendered)
+        self.assertNotIn(_SECRET, rendered)
+
     def test_status_presenter_is_stdout_only_and_survives_narrow_terminal(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -257,12 +298,13 @@ class ConfigPresentationTests(unittest.TestCase):
             "Controlled Browser",
             "Access mode",
             "Selected profile",
-            "Chrome lifecycle",
+            "Browser lifecycle",
             "Publisher lanes",
-            "Session authenticat",
+            "Interactive authent",
             "not assessed",
             "Article access",
             "checked-per-article",
+            "not evaluated",
         ):
             self.assertIn(text, rendered)
         self.assertNotIn("\x1b[", rendered)
@@ -373,12 +415,12 @@ class ConfigPresentationTests(unittest.TestCase):
                     "Authorized primary-PDF APIs",
                     "Controlled Browser",
                     "Access mode",
-                    "persistent",
+                    "fixed profile",
                     "Selected profile",
-                    "Chrome lifecycle",
-                    "one persistent",
+                    "Browser lifecycle",
+                    "one fixed",
                     "Publisher lanes",
-                    "Session authenticat",
+                    "Interactive authent",
                     "Article access",
                     "checked-per-article",
                     "Policy evidence",
@@ -416,6 +458,41 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertIn("institution-IP/article", rendered)
         self.assertIn("article entitlement remains not proven", rendered)
         self.assertNotIn("browser-session-not-authenticated", rendered)
+        self.assertNotIn(_SECRET, rendered)
+        self.assertNotIn("\x1b[", rendered)
+
+    def test_browser_agent_probe_presentation_names_its_closed_request(self) -> None:
+        output = io.StringIO()
+        ConfigStatusPresenter(
+            "mono",
+            file=output,
+            force_terminal=False,
+            width=120,
+        ).probes(
+            {
+                "service": "agents",
+                "outcome": "skipped",
+                "local_ready": False,
+                "failure_code": "browser-agent-not-ready",
+                "details": {
+                    "role": "browser-agent",
+                    "request_kind": "browser-agent-tool",
+                    "image_input": True,
+                    "tool_decision": True,
+                    "image_count": 1,
+                    "tool_count": 1,
+                    "sends_user_literature": False,
+                    "sends_page_content": False,
+                    "sends_pdf": False,
+                    "may_consume_quota": True,
+                },
+            }
+        )
+        rendered = output.getvalue()
+        self.assertIn("Browser Agent", rendered)
+        self.assertIn("synthetic-image + closed-tool", rendered)
+        self.assertIn("Literature/PDF/page content", rendered)
+        self.assertIn("may consume quota", rendered)
         self.assertNotIn(_SECRET, rendered)
         self.assertNotIn("\x1b[", rendered)
 

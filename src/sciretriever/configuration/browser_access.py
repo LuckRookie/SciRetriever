@@ -7,6 +7,7 @@ presence metadata. ``sciretriever.configuration`` remains the public surface.
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -28,8 +29,77 @@ from sciretriever.model.configuration import (
 )
 from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
-from .browser_profiles import browser_profile_status
+from .browser_identity import IDENTITY_SCHEMA as _IDENTITY_SCHEMA
+from .browser_profiles import browser_profile_identity_status, browser_profile_status
+from .cloak_runtime import (
+    CLOAKBROWSER_PLAYWRIGHT_VERSION,
+    CLOAKBROWSER_WRAPPER_VERSION,
+    CloakRuntimeManager,
+)
 from .errors import fail as _fail
+
+
+def _cloak_local_status(
+    *,
+    home: str | Path | None,
+    profile_identity: str | None,
+) -> tuple[bool, bool, bool, str | None, bool, bool, str | None]:
+    """Return bounded Cloak/profile metadata without importing the vendor.
+
+    The tuple is intentionally primitive and secret/path-free.  Wrapper and
+    Playwright package discovery use local package metadata only.  The binary
+    manager performs its own owner-only manifest verification with
+    ``create=False``; no cache is created and no network action is possible.
+    Profile identity status reads only the bounded identity manifest, never
+    Preferences, cookies, history or site content.
+    """
+
+    try:
+        wrapper_available = (
+            importlib.metadata.version("cloakbrowser") == CLOAKBROWSER_WRAPPER_VERSION
+        )
+    except (importlib.metadata.PackageNotFoundError, ImportError, OSError, ValueError):
+        wrapper_available = False
+    try:
+        playwright_api_available = (
+            importlib.metadata.version("playwright") == CLOAKBROWSER_PLAYWRIGHT_VERSION
+        )
+    except (importlib.metadata.PackageNotFoundError, ImportError, OSError, ValueError):
+        playwright_api_available = False
+
+    try:
+        runtime = CloakRuntimeManager(home=home).status()
+    except Exception:
+        # Status is a diagnostic boundary: malformed/unsafe runtime is
+        # represented as unavailable rather than leaking a path or exception.
+        runtime = None
+    binary_presence = bool(runtime is not None and runtime.version is not None)
+    binary_version = None if runtime is None else runtime.version
+    binary_verified = bool(runtime is not None and runtime.verified)
+
+    fixed_identity_manifest = False
+    identity_schema: str | None = None
+    if profile_identity is not None:
+        try:
+            identity = browser_profile_identity_status(profile_identity, home=home)
+            fixed_identity_manifest = identity.manifest_ready
+            identity_schema = identity.identity_schema
+        except Exception:
+            fixed_identity_manifest = False
+            identity_schema = None
+    # Keep a stable schema marker in fixtures that explicitly provide a ready
+    # profile but where older test doubles do not return one.
+    if fixed_identity_manifest and identity_schema is None:
+        identity_schema = _IDENTITY_SCHEMA
+    return (
+        wrapper_available,
+        playwright_api_available,
+        binary_presence,
+        binary_version,
+        binary_verified,
+        fixed_identity_manifest,
+        identity_schema,
+    )
 
 
 def _operator_browser_policy(
@@ -245,39 +315,24 @@ def _normalized_browser_probe_keys(
     return normalized
 
 
-def _browser_required_action(
+def _browser_required_action(  # noqa: C901
     *,
     routes_available: bool,
-    dependency_available: bool,
-    chromium_executable_available: bool,
+    cloak_wrapper_available: bool,
+    playwright_api_available: bool,
+    binary_presence: bool,
+    binary_verified: bool,
     headed_display_available: bool,
     access: AccessConfig,
     selected_profile: str | None,
     presence: BrowserProfilePresence,
+    identity_presence: str,
 ) -> tuple[ConfigurationActionRequired, ...]:
     if not routes_available:
         return _browser_action(
             "browser-production-route-unavailable",
             "No Publisher Browser route has completed production verification.",
             "Use Public and authorized API routes; Browser access remains unavailable.",
-        )
-    if not dependency_available:
-        return _browser_action(
-            "browser-runtime-unavailable",
-            "The Playwright Python dependency is not available in this installation.",
-            "Repair the SciRetriever installation before attempting Browser access.",
-        )
-    if not chromium_executable_available:
-        return _browser_action(
-            "browser-chromium-unavailable",
-            "The Playwright Chromium executable is not installed for this runtime.",
-            "Run 'playwright install chromium' in the SciRetriever environment.",
-        )
-    if not headed_display_available:
-        return _browser_action(
-            "browser-headed-display-unavailable",
-            "The headed Browser display runtime is not available on this machine.",
-            "Install Xvfb on headless Linux before attempting Browser access.",
         )
     if not access.browser_enabled:
         return _browser_action(
@@ -303,23 +358,63 @@ def _browser_required_action(
             "The selected Browser profile failed its local safety check.",
             "Inspect or remove the selected profile through the configuration center.",
         )
+    if identity_presence == "needs-new-runtime-profile":
+        return _browser_action(
+            "needs-new-runtime-profile",
+            "The selected profile predates the fixed CloakBrowser identity contract.",
+            "Create and select a new Browser profile; the existing profile is left untouched.",
+        )
+    if identity_presence != "configured":
+        return _browser_action(
+            "browser-profile-attention",
+            "The selected Browser profile identity manifest failed its local safety check.",
+            "Inspect or remove the selected profile through the configuration center.",
+        )
+    if not cloak_wrapper_available:
+        return _browser_action(
+            "browser-cloak-wrapper-unavailable",
+            "The pinned CloakBrowser Python wrapper is not ready in this installation.",
+            "Repair the SciRetriever installation before attempting Browser access.",
+        )
+    if not playwright_api_available:
+        return _browser_action(
+            "browser-playwright-api-unavailable",
+            "The pinned Playwright API dependency is not ready in this installation.",
+            "Repair the SciRetriever installation before attempting Browser access.",
+        )
+    if not binary_presence:
+        return _browser_action(
+            "browser-cloak-binary-unavailable",
+            "The pinned CloakBrowser binary is not present in the local runtime cache.",
+            "Install the pinned CloakBrowser binary from the configuration center.",
+        )
+    if not binary_verified:
+        return _browser_action(
+            "browser-cloak-runtime-not-ready",
+            "The local CloakBrowser binary did not pass its manifest and signature checks.",
+            "Repair, reinstall, or roll back the CloakBrowser runtime before Browser access.",
+        )
+    if not headed_display_available:
+        return _browser_action(
+            "browser-headed-display-unavailable",
+            "The headed Browser display runtime is not available on this machine.",
+            "Install Xvfb on headless Linux before attempting Browser access.",
+        )
     return _browser_action(
         "browser-session-not-assessed",
-        "Status does not open the Browser, so current login is not assessed.",
+        "Status does not launch the Browser or prove article entitlement.",
         "Run one explicit Browser probe for an approved Publisher target if needed.",
     )
 
 
-def browser_access_status(
+def browser_access_status(  # noqa: C901
     configuration: Configuration,
     *,
     home: str | Path | None = None,
-    python_dependency_available: bool | None = None,
-    chromium_executable_available: bool | None = None,
-    headed_display_available: bool | None = None,
     probe_supported_access_keys: frozenset[str] = frozenset(),
+    runtime_availability: object | None = None,
 ) -> BrowserAccessStatus:
-    """Report persistent headed Browser readiness without Network or launch.
+    """Report fixed-profile CloakBrowser readiness without Network or launch.
 
     The selected profile is checked only for safe presence and filesystem
     metadata. No Cookie, local-storage, history, account or authentication
@@ -331,39 +426,9 @@ def browser_access_status(
         _fail("configuration value is invalid")
     if home is not None and not isinstance(home, (str, Path)):
         _fail("configuration value is invalid")
-    if python_dependency_available is not None and type(python_dependency_available) is not bool:
-        _fail("configuration value is invalid")
-    if (
-        chromium_executable_available is not None
-        and type(chromium_executable_available) is not bool
-    ):
-        _fail("configuration value is invalid")
-    if headed_display_available is not None and type(headed_display_available) is not bool:
-        _fail("configuration value is invalid")
     if not isinstance(probe_supported_access_keys, frozenset) or any(
         type(key) is not str for key in probe_supported_access_keys
     ):
-        _fail("configuration value is invalid")
-
-    from sciretriever.network.playwright import playwright_runtime_availability
-
-    runtime_availability = playwright_runtime_availability()
-    dependency_available = (
-        runtime_availability.python_dependency_available
-        if python_dependency_available is None
-        else python_dependency_available
-    )
-    executable_available = (
-        runtime_availability.chromium_executable_available
-        if chromium_executable_available is None
-        else chromium_executable_available
-    )
-    display_available = (
-        runtime_availability.headed_display_available
-        if headed_display_available is None
-        else headed_display_available
-    )
-    if executable_available and not dependency_available:
         _fail("configuration value is invalid")
     routes = _production_browser_route_statuses(configuration.access)
     route_keys = frozenset(route.access_key for route in routes)
@@ -378,6 +443,39 @@ def browser_access_status(
 
     selected_profile = configuration.access.browser_profile
     presence = browser_profile_status(selected_profile, home=home).presence
+    try:
+        identity_status = browser_profile_identity_status(selected_profile, home=home)
+    except Exception:
+        identity_status = None
+    (
+        cloak_wrapper_available,
+        playwright_api_available,
+        binary_presence,
+        binary_version,
+        binary_verified,
+        fixed_identity_manifest,
+        identity_schema,
+    ) = _cloak_local_status(home=home, profile_identity=selected_profile)
+    if runtime_availability is None:
+        from sciretriever.network.browser_connect import xvfb_executable_available
+
+        display_available = xvfb_executable_available()
+    else:
+        runtime_wrapper = getattr(runtime_availability, "cloak_wrapper_available", None)
+        runtime_playwright = getattr(runtime_availability, "playwright_api_available", None)
+        runtime_binary = getattr(runtime_availability, "binary_executable_available", None)
+        runtime_display = getattr(runtime_availability, "headed_display_available", None)
+        if any(
+            type(value) is not bool
+            for value in (runtime_wrapper, runtime_playwright, runtime_binary, runtime_display)
+        ):
+            _fail("configuration value is invalid")
+        cloak_wrapper_available = cloak_wrapper_available and runtime_wrapper is True
+        playwright_api_available = playwright_api_available and runtime_playwright is True
+        binary_presence = binary_presence and runtime_binary is True
+        binary_verified = binary_verified and runtime_binary is True
+        display_available = runtime_display is True
+    identity_presence = "attention" if identity_status is None else identity_status.presence
     profile = BrowserProfileSelectionStatus(
         selected=selected_profile,
         presence=presence,
@@ -386,29 +484,39 @@ def browser_access_status(
     locally_usable = (
         bool(eligible_route_keys)
         and configuration.access.browser_enabled
-        and dependency_available
-        and executable_available
+        and cloak_wrapper_available
+        and playwright_api_available
+        and binary_presence
+        and binary_verified
         and display_available
+        and fixed_identity_manifest
         and selected_profile is not None
         and presence is BrowserProfilePresence.CONFIGURED
     )
     required = _browser_required_action(
         routes_available=bool(routes),
-        dependency_available=dependency_available,
-        chromium_executable_available=executable_available,
+        cloak_wrapper_available=cloak_wrapper_available,
+        playwright_api_available=playwright_api_available,
+        binary_presence=binary_presence,
+        binary_verified=binary_verified,
         headed_display_available=display_available,
         access=configuration.access,
         selected_profile=selected_profile,
         presence=presence,
+        identity_presence=identity_presence,
     )
     return BrowserAccessStatus(
         enabled=configuration.access.browser_enabled,
         local_max_concurrency=configuration.access.browser_max_concurrency,
         runtime=BrowserRuntimeStatus(
-            framework_available=True,
-            python_dependency_available=dependency_available,
-            chromium_executable_available=executable_available,
+            cloak_wrapper_available=cloak_wrapper_available,
+            playwright_api_available=playwright_api_available,
+            binary_presence=binary_presence,
+            binary_version=binary_version,
+            binary_verified=binary_verified,
             headed_display_available=display_available,
+            fixed_identity_manifest=fixed_identity_manifest,
+            identity_schema=identity_schema,
         ),
         profile=profile,
         session=BrowserSessionStatus(),

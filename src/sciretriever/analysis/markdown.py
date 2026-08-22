@@ -9,6 +9,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Final
 
+from sciretriever.agents import AgentStructuredResponse
 from sciretriever.analysis.markdown_rules import (
     FINAL_FIXED_TITLES,
     FIXED_SECTION_TITLES,
@@ -24,7 +25,9 @@ from sciretriever.analysis.markdown_rules import (
     validate_sections,
 )
 from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
+    AnalysisCall,
+    AnalysisRequest,
+    AnalysisRequestKind,
     canonical_json_bytes,
     parse_strict_json_object,
 )
@@ -34,7 +37,6 @@ from sciretriever.model.analysis import (
     LiteratureSubsection,
 )
 from sciretriever.model.literature import Author, Identifier
-from sciretriever.model.llm import LLMRequest, LLMRequestKind, LLMStructuredResponse
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import ParserResult
 from sciretriever.model.primitives import sha256_digest
@@ -247,7 +249,7 @@ def build_content_analysis_call(
     final_metadata: LiteratureMetadata,
     max_output_tokens: int,
     cancel_event: threading.Event | None = None,
-) -> AnalysisLLMCall:
+) -> AnalysisCall:
     """Build the only valid second-stage call with complete aligned context."""
 
     if not isinstance(final_metadata, LiteratureMetadata):
@@ -261,9 +263,9 @@ def build_content_analysis_call(
             "parser_result": parser_result.model_dump(mode="json"),
         }
     ).decode("utf-8")
-    return AnalysisLLMCall(
-        request=LLMRequest(
-            kind=LLMRequestKind.CONTENT,
+    return AnalysisCall(
+        request=AnalysisRequest(
+            kind=AnalysisRequestKind.CONTENT,
             input_sha256=sha256_digest(structured_input.encode("utf-8")),
             model=model,
             max_output_tokens=max_output_tokens,
@@ -277,15 +279,15 @@ def build_content_analysis_call(
 
 
 def parse_content_markdown_response(
-    response: LLMStructuredResponse,
+    response: AgentStructuredResponse,
     *,
     parser_result: ParserResult,
     parser_markdown: str,
 ) -> ContentMarkdownDraft:
     """Parse the closed provider-neutral response into sections and references."""
 
-    if not isinstance(response, LLMStructuredResponse):
-        raise TypeError("response must be an LLMStructuredResponse")
+    if not isinstance(response, AgentStructuredResponse):
+        raise TypeError("response must be an AgentStructuredResponse")
     try:
         result = parse_strict_json_object(response.result)
     except (TypeError, ValueError):

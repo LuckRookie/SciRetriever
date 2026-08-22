@@ -16,11 +16,19 @@ from sciretriever.configuration.browser_profiles import (
     BrowserProfileCancellation,
     BrowserProfileHandle,
     BrowserProfileRuntimeLease,
+    browser_profile_identity_status,
     browser_profile_path,
     browser_profile_status,
     initialize_browser_profile,
     remove_browser_profile,
     resolve_browser_profile,
+)
+from sciretriever.configuration.cloak_runtime import (
+    CLOAKBROWSER_BROWSER_VERSION,
+    CLOAKBROWSER_ORIGIN,
+    CLOAKBROWSER_PLAYWRIGHT_VERSION,
+    CLOAKBROWSER_WRAPPER_VERSION,
+    CloakRuntimeManager,
 )
 from sciretriever.configuration.credential_edits import (
     remove_core_credentials,
@@ -65,6 +73,11 @@ from sciretriever.configuration.status import (
 )
 from sciretriever.model.configuration import (
     AcquisitionSourcesConfig,
+    AgentAuthentication,
+    AgentProtocol,
+    AgentProvider,
+    AgentRoleConfig,
+    AgentsConfig,
     BrowserAccessStatus,
     BrowserConfigurationProbeResult,
     BrowserProfilePresence,
@@ -83,6 +96,11 @@ from sciretriever.model.configuration import (
 
 __all__ = (
     "AcquisitionSourcesConfig",
+    "AgentAuthentication",
+    "AgentProvider",
+    "AgentProtocol",
+    "AgentRoleConfig",
+    "AgentsConfig",
     "BrowserAccessStatus",
     "BrowserConfigurationProbePort",
     "BrowserConfigurationProbeResult",
@@ -91,6 +109,11 @@ __all__ = (
     "BrowserProfilePresence",
     "BrowserProfileRuntimeLease",
     "BrowserProfileStatus",
+    "CLOAKBROWSER_BROWSER_VERSION",
+    "CLOAKBROWSER_ORIGIN",
+    "CLOAKBROWSER_PLAYWRIGHT_VERSION",
+    "CLOAKBROWSER_WRAPPER_VERSION",
+    "CloakRuntimeManager",
     "Configuration",
     "ConfigurationDiagnostic",
     "ConfigurationError",
@@ -107,6 +130,7 @@ __all__ = (
     "UnpaywallAcquisitionConfig",
     "browser_access_status",
     "browser_profile_path",
+    "browser_profile_identity_status",
     "browser_profile_status",
     "configurable_credential_providers",
     "configure_browser_access_profile",

@@ -472,8 +472,10 @@ class BrowserSessionBroker:
             raise
         _LOGGER.debug(
             "event=browser-session-acquired session_key=%s session_reused=%s "
-            "disposition=acquired elapsed_ms=%d",
+            "disposition=acquired process_reused=%s context_reused=%s elapsed_ms=%d",
             key,
+            str(reused).lower(),
+            str(reused).lower(),
             str(reused).lower(),
             _elapsed_ms(started_ns),
         )

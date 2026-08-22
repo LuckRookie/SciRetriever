@@ -1,10 +1,12 @@
 # Network 模块技术设计
 
 - 总技术入口：[技术文档索引](../technical.md)
-- 设计责任：[设计文档 5.2](../design.md#52-网络基础设施)
+- 设计责任：[设计文档 5.3](../design.md#53-网络基础设施)
 - 长期决策：[ADR 0012](../decisions/0012-process-local-provider-access-scheduling.md)
 - Provider 与凭据：[ADR 0014](../decisions/0014-capability-scoped-providers-and-local-credentials.md)、[Configuration 技术文档](configuration.md)
 - PDF 路由与 Browser 调度：[ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)
+- 固定身份 runtime 与 challenge：[ADR 0016](../decisions/0016-cloakbrowser-fixed-identity-runtime.md)
+- 受控 Browser Agent：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)
 - 外部事实：[Provider 注意事项](../../notes/providers/README.md)
 
 本文定义目标 `src/sciretriever/network/` 的共享访问政策、进程内供应商级准入、安全 HTTP 和受控浏览器实现。Network 负责协议无关的安全访问与限速执行，不理解供应商业务协议，也不判断文献身份、PDF 归属或文献状态。
@@ -19,19 +21,21 @@ network/
   browser.py
   browser_sessions.py
   browser_connect.py
-  playwright.py
+  browser_control.py
+  cloakbrowser.py
 ```
 
 - `policy.py` 形成 URL、DNS、redirect、origin、credential forwarding、资源预算和脱敏决定；
 - `admission.py` 定义 AccessScope、规范化访问政策和进程内共享 Access Coordinator；
 - `http.py` 执行同时符合 policy 与 admission 的普通 HTTP 请求；
 - `browser.py` 执行符合相同边界、带 Provider rule guard 的隔离浏览器操作；
+- `browser_control.py` 生成有界 Agent 页面 observation，并把封闭动作解析到当前 page/revision；
 - `browser_sessions.py` 在一个共享 persistent context 中按无 secret 的 Publisher lane identity
   管理组内串行、跨组并行和文章级事件隔离；
 - `browser_connect.py` 管理无 GUI Linux 的进程内 Xvfb display lease，以及只做精确 IP pinning
   和加密字节透传的 loopback CONNECT proxy；
-- `playwright.py` 在生产边界驱动真实有头 Chrome/Chromium，并让所有已批准 HTTP(S) 请求继续
-  由浏览器原生网络栈执行。
+- `cloakbrowser.py` 通过 Playwright API 驱动真实有头 CloakBrowser patched Chromium，并让所有
+  已批准 HTTP(S) 请求继续由浏览器原生网络栈执行；CloakBrowser/Playwright vendor 类型不越过该边界。
 
 HTTP 与 Browser 是平级能力。Browser 不是 HTTP transport 的特殊模式；Acquisition 决定公开来源、授权 Provider API 和受控浏览器的业务阶段，Network 只决定真实访问何时可以安全执行。
 
@@ -197,7 +201,7 @@ redirect-target guard 并显式启用 guarded opaque-path 模式；guard 在目�
 
 ## 9. 浏览器实现
 
-`browser_sessions.py` 提供进程内 `BrowserSessionBroker`，为当前生产对象图持有一个共享 Chrome
+`browser_sessions.py` 提供进程内 `BrowserSessionBroker`，为当前生产对象图持有一个共享 CloakBrowser Chromium
 process 和一个 persistent BrowserContext，同时按稳定的 `browser_session_key` 建立 Publisher
 lane lock。同一 key 的 lease 严格串行，不同 key 可以并行，但不创建独立 Browser 身份或
 context；每个 lease 只覆盖一篇文章。共享 runtime 首次创建时 process 与 context 必须分别按
@@ -220,13 +224,23 @@ abort，late page/download 必须各关闭或删除一次；该动作失败会�
 活动 lane 排空后淘汰并传播 cleanup failure，不能复用、吞错或在 broken entry 上自旋。
 
 生产对象图接收 Configuration 边界解析出的 opaque `BrowserProfileHandle`，不接收任意路径、
-Cookie 或认证内容。Playwright 启动前从 handle 取得跨进程独占 runtime lease，并将其中的固定
+Cookie 或认证内容。CloakBrowser 启动前从 handle 取得跨进程独占 runtime lease，并将其中的固定
 owner-only 目录作为 `launch_persistent_context` 的 user-data directory；同一 Profile 同时只能由
-一个 Chrome process 使用。Network 不读取 `credentials.toml` 或 Profile 文件内容，也不导入、
+一个 Browser process 使用。handle 同时提供不暴露 seed 原值的固定 identity manifest，使同一
+Profile 跨冷启动复用 native Linux persona、locale/timezone、screen 和 Browser version policy；
+Network 不读取 `credentials.toml`、Cookie 或其它 Profile 文件内容，也不导入、
 导出、复制或显示 Cookie、local storage、账号或机构身份。page/context/process、Profile path、
 Cookie 和 vendor event 对象都不能越过 Configuration/Network/Acquisition 边界。runtime 关闭后
-释放 Profile lease，Profile 字节继续由 Chrome 管理并跨命令保留；删除只由 Configuration 的
+释放 Profile lease，Profile 字节继续由 CloakBrowser Chromium 管理并跨命令保留；删除只由 Configuration 的
 显式用户动作拥有。
+
+Binary runtime lease 与 Profile lease 分离。Configuration 在持有已验证 binary 的共享锁期间，
+为每次 Browser runtime 建立系统临时目录中的 owner-only sterile cache view；其中只有指向当前
+已验证 `chromium-<fixed-version>` bundle 的定位项，没有 `license.key`、license cache、Pro/latest
+marker、update 状态或其它版本。Network 只把该 view 和 manifest 中的精确版本传给 wrapper，
+同时删除 ambient `CLOAKBROWSER_*`/proxy 环境控制；context/process 关闭后先删除 view，再释放
+binary lease。长期 runtime root 从不直接暴露给 vendor launch，普通 Completion 因而不能通过
+cache-file credential 改变 binary、触发 license 验证或下载其它版本。
 
 Broker 的 Debug 诊断只使用经过校验的安全 session key，明确 acquire 的 `session_reused=true|false`、article drain、release/invalidate/retire 和 broker cleanup outcome 与耗时；绝不记录 profile 路径或内容。外层 `BrowserGroupScheduler` 记录 provider group、匿名 attempt key、queue wait、Provider pacing wait、是否真正 attempted、article disposition/group feedback、耗时和 permit cleanup。不同 group 的这些记录可以交错，同一 group 的文章开始记录必须保持串行。
 
@@ -267,7 +281,8 @@ task 中运行。取消或文章 deadline 到达后先发送非占有式 `abort/
 Provider 专属 origin、selector、有限动作、正文/补充材料判别和页面 marker 位于 Acquisition
 的版本化 access profile/Browser route adapter，不进入 Network。规则只能表达经过静态验证
 的有限 observe/click/wait/capture 动作；Network 不执行任意 JavaScript、selector guessing、
-自动登录、机构选择、MFA/CAPTCHA 或反检测动作。Profile guard 不能放宽通用 Network policy，
+自动登录、机构选择、MFA/CAPTCHA 或运行时指纹脚本。CloakBrowser 的固定身份和 humanized 输入
+属于 adapter/runtime，不形成 Publisher 规则动作。Profile guard 不能放宽通用 Network policy，
 规则外目标必须在 DNS 或 transport 前 fail closed；未知 Provider 不获得 generic Browser
 fallback。
 
@@ -322,9 +337,24 @@ response 与 download 也只交付一次，但全部实际读取字节仍计入�
 完整 URL query、response/header/body、page、context 和 Cookie 不跨越该边界。Marker 的 DOM
 presence 使用非等待式计数；需要读取有界文本时，对同一静态 selector 的多个匹配按 DOM 顺序只取
 第一个元素，避免 Playwright strict-locator 因正常页面存在多个 `title` 等节点而误报 runtime。
-Network 仍可对明确 runtime challenge flag 与通用 challenge 页面文本 fail closed，但不把所有
-`401/403` 自行猜成 challenge；同一状态在不同 Provider 可能表示登录、无文章 entitlement、
-paywall、通用拒绝或 challenge，必须由 Acquisition 的版本化 Provider marker 决定。
+Network 不再扫描通用页面文本后把 challenge 当作 runtime abort。它只提供主状态、经过审查的
+marker presence、frame/challenge-resource admitted/blocked、navigation 和 capture 等有界事实；
+同一 `401/403` 在不同 Provider 可能表示登录、无文章 entitlement、paywall、通用拒绝或
+challenge，必须由 Acquisition 的版本化 Provider marker 决定。
+
+经 Profile 声明的 challenge dependency 只能由已批准 Publisher 顶层页面和当前 frame ancestry
+发起，并继续执行 HTTPS/443、DNS/地址、CONNECT prebind、host admission、request/frame/字节和
+总时长预算。它不能成为顶层初始导航、popup、PDF locator 或 capture source。Network 对资源和
+页面事实使用 `resource-loading | settling | cleared | interaction-required | resource-blocked |
+settle-timeout | failed` 的运行生命周期；只有 terminal 状态结束文章，`cleared` 回到普通页面
+流程。Acquisition 唯一把这些事实解释成用户 failure 和 Publisher circuit feedback。
+
+页面正常未命中且 Acquisition 允许 Agent fallback 时，`browser_control.py` 从同一 page 生成
+request-local `BrowserAgentObservation`：page revision、query-free origin/path、status、硬上限
+viewport screenshot、有限可见元素 role/name/state/短期 element ID、capture 状态和剩余预算。
+Agent 决定只能映射为 `ClickElement`、`ScrollPage`、`WaitForPage` 或 `StopFlow`；revision 过期、
+元素不可见/disabled、越界滚动/等待和未知动作在 vendor 调用前拒绝。实际动作始终通过同一
+CloakBrowser humanized Page/Locator 执行，不创建第二 context、CDP client 或任意脚本入口。
 `browser_scheduler.py` 已把每个静态 risk-group policy 固定为 `max_concurrency = 1`，并执行
 文章启动间隔、可选滑动窗口、完成冷却和失败冷却；同一 scheduler 中不同 group 受独立锁
 保护并在本机全局资源上限内并行。Scheduler callback 的边界是一篇完整文章流程，只有 callback
@@ -354,25 +384,39 @@ circuit 只能由持有精确 group 与 policy revision 的显式 `acknowledge_c
 admission controller 和 cohort executor 接入完整及 capability-scoped Completion 对象图，运行
 状态机、封闭页面 marker、多路正文捕获、封闭 action contract、supplement/错文排除、Provider
 cooldown/circuit 和确定性取消/资源清理都已验收。
-`network/playwright.py` 是正式 adapter：它在一个 Profile-backed shared runtime 的专用 engine
-thread 上驱动有头 Chrome/Chromium persistent context，固定使用 `headless = false`。无 GUI Linux
-由 `browser_connect.py` 的 Xvfb lease 提供虚拟显示；共享 runtime 关闭后停止 display。Playwright
-是 wheel runtime dependency，运行时可以选择系统 Google Chrome Stable 或 Playwright Chromium
-executable；二者都不等于已完成真实启动检查。Profile 的独占 runtime lease 与 Chrome/context
-同生命周期，关闭后释放但不删除 Profile。
+`network/cloakbrowser.py` 是唯一正式 adapter：它在一个 Profile-backed shared runtime 的专用
+engine thread 上通过 Playwright API 驱动有头 CloakBrowser patched Chromium persistent context，
+固定使用 `headless = false` 和 Profile identity manifest 中的 seed/persona。无 GUI Linux 由
+`browser_connect.py` 的 Xvfb lease 提供虚拟显示；共享 runtime 关闭后停止 display。Python wrapper
+可以进入 wheel，vendor Chromium binary 由 Configuration 显式安装、锁定版本和校验，不进入 wheel、
+普通 Completion 或隐式更新。不存在系统 Google Chrome/Playwright Chromium 的生产 fallback。
+Profile 的独占 runtime lease 与 Cloak process/context 同生命周期，关闭后释放但不删除 Profile。
 
-每个 Chrome HTTP(S) request 先被 Playwright route 暂停。`BrowserClient` 在 route 继续前依次执行
+第一版使用 native Linux persona，并把 locale、languages、timezone、screen/window、WebGL、字体和
+Browser version 作为同一身份快照验收。CloakBrowser `humanize=True` 是所有生产 click、scroll、
+wait 和允许输入的唯一执行路径；静态规则与 Agent 都不能用 ElementHandle、直接 DOM click、另一个
+CDP client 或任意页面脚本绕过。候选明确使用 `service_workers="block"`：Playwright route 无法保证
+观察 Service Worker 接管的请求，而 CONNECT 透传 TLS，不能补证加密流量内的 path、resource type、
+frame ancestry 或 capture source。launch flag 与 Profile preference 必须逐项有证据，不能无条件
+复制 stock launcher 的历史参数。
+
+每个 CloakBrowser Chromium HTTP(S) request 先被 Playwright route 暂停。`BrowserClient` 在 route 继续前依次执行
 Provider destination guard、通用 URL/地址类别检查、DNS 解析、host admission 与请求预算，并形成
 hostname/port 到精确已批准 IP 的一次连接 binding。`_Route.bind_connection()` 只把该 binding
-登记到 loopback proxy，随后 `route.continue_()` 让请求回到 Chrome 原生网络栈。Proxy 对 HTTPS
+登记到 loopback proxy，随后 `route.continue_()` 让请求回到 Chromium 原生网络栈。Proxy 对 HTTPS
 只接受已登记 authority 的 `CONNECT`，连接指定 IP 后透传加密字节；它不终止 TLS、不读取 HTTPS
-header/body、不生成证书，Host authority、TLS SNI、HTTP 协议、Cookie 与连接行为仍由 Chrome
+header/body、不生成证书，Host authority、TLS SNI、HTTP 协议、Cookie 与连接行为仍由 Chromium
 完成。HTTP 也只转发已登记的精确目标。未登记、过期或与当前 article generation 不符的连接
 fail closed。
 
-Chrome 原生处理服务器 redirect、页面脚本导航、popup、Cookie 和点击，因此不需要 Python 合成
+这两个边界提供不同证据：Playwright route 在 transport 前检查 query-free URL、reviewed path、
+resource/frame 上下文、文章归属和 capture 用途；CONNECT 只把已经批准的 authority 绑定到已解析
+IP/port，并在整个文章生命周期维持 host permit 和字节上限。不能用后一层的 origin 许可替代前一层
+的请求语义检查，也不能允许 route 不可见的 Service Worker 流量仅凭 CONNECT 放行。
+
+Chromium 原生处理服务器 redirect、页面脚本导航、popup、Cookie 和点击，因此不需要 Python 合成
 `3xx`、替换页面或实现另一套 HTTP 客户端。显式导航和 Playwright 暴露的 request 仍逐项进入
-route 审查。Chrome 对 native redirect 的后续成员有时不再次触发 route；这时 response 只能复用
+route 审查。Chromium 对 native redirect 的后续成员有时不再次触发 route；这时 response 只能复用
 仍存活的同页祖先 request proof，且最终 origin 必须已经属于 Provider 的有限 origin 集、完成
 DNS prebind，并在读取 terminal body 前取得或复用最终 host permit。跨 page、祖先已结束、redirect
 链循环/超过 32 层或未预绑定 origin 一律 correlation failure，且不得读取 body。最终 response
@@ -389,7 +433,7 @@ challenge 文本与 selector marker 使用有界 DOM snapshot，不把 selector 
 iframe/embed/object 发现最多 16 个有界 locator。Network 在 DNS 前丢弃不属于预绑定 Provider
 origin 的候选，重新执行 guard/policy，并按 query-free locator 去重；Acquisition 最多打开前 4
 个候选，之后才运行 Provider 专属动作。运行时 URL 可以保留经过严格 wire-shape 校验的短期签名
-query 并交给 Chrome，guard、DNS key、日志、capture locator、中性结果与 provenance 始终只使用
+query 并交给 Chromium，guard、DNS key、日志、capture locator、中性结果与 provenance 始终只使用
 去除 query 的 URL。
 
 Response handler 只在对应 intercepted request correlation 仍存活，且当前文章仍持有 route host
@@ -399,38 +443,48 @@ PDF body。普通 HTML response 完成分类后可以立即结束单项 request 
 这样 Playwright 的单一 engine thread 即使尚未派发第一个 response 事件，也能放行同页第二个已
 批准同源子请求；原生 download 则通过 response reservation 保持 request correlation 到 download
 event。
-新初始化且尚无用户设置的持久 Profile 会一次性 seed Chrome native-PDF-download preference；
-已有 `Preferences`、认证状态、扩展、历史或站点数据绝不覆盖。因此顶层 PDF 仍由 Chrome 下载而
-不是 Python 重新请求；Network 从 download handle 有界读取并继续执行 capture guard、总字节
-预算、正文归属和确定性清理。
+Cloak runtime 在取得独占 Profile lease 后原子合并 `always_open_pdf_externally=true` 与
+`open_pdf_in_system_reader=false`；只拥有这两个字段，保留其它 Preferences，遇到矛盾值时 fail closed。
+该选择会让 v146 把顶层 PDF 交给原生 Browser download/response 事件，而不是内置 viewer；固定身份
+验收因此以整套受控 Profile policy 为基线，不把 plugin 数量单独冒充身份结论。普通顶层 inline PDF、
+明确 attachment 和页面基于已准入 response 创建的本地 blob download 都只从 Chromium 原生事件有界
+读取。各路径复用 transport 前的 request proof，重新执行 query-free capture guard、总字节预算、
+正文归属与确定性清理；SciRetriever 不用 Python HTTP 客户端重新请求 PDF，也不存在第二个 stock
+runtime 合同。
 
-显式 Configuration Browser probe 使用 `navigation_only=True`：只放行顶层主文档与规则批准的
-redirect，stylesheet、script、image、font 等非导航子请求在连接前终止。Probe 只证明 runtime
-可以启动且目标首页可达，不检查文章、不下载 PDF，也不证明 Profile 已登录、机构 IP 或文章
-entitlement。
+显式 Configuration Browser probe 使用 `navigation_only=False` 与生产 rule/controller：顶层文档、
+普通规则批准资源、redirect，以及该 Profile 明确声明且由当前页面/frame ancestry 证明用途的
+challenge dependency 都经过相同 guard。Probe 另装配 deny-all capture guard，任何 PDF/body
+候选在读取前拒绝；它可以在局部预算内报告 challenge resource/settle 状态，但只证明 Cloak
+runtime、固定身份与目标流程可以运行，不下载文章 PDF，也不证明 Profile 已登录、机构 IP、
+challenge 已普遍通过或文章 entitlement。合法最终跳转到规则批准 origin 不能被误报为
+reachability failure。
 
 普通文章流则使用 `navigation_only=False` 和 `discard_unapproved_subresources=True`。规则允许的
-同源或批准 origin CSS/JavaScript 等资源可以执行；未批准的第三方 tracker 等非关键子资源在
+同源或批准 origin CSS/JavaScript 等资源，以及满足发起页/frame/用途约束的受限 challenge
+dependency 可以执行；未批准的第三方 tracker 等非关键子资源在
 DNS 前 abort，且不会把整篇文章改写为 policy failure。顶层 navigation、popup、viewer、PDF
 capture 和 redirect 仍 fail closed。这样既支持需要页面 JavaScript 或点击后异步导航的官方
 交付链，又不允许未知第三方扩张网络访问面。
 
-当前 production Browser rule catalog 有 9 条：`acs-publications-pdf@2`、
-`aip-publishing-pdf@2`、`sciencedirect-pdf@2`、`iopscience-pdf@2`、
-`oxford-academic-pdf@2`、`rsc-publishing-pdf@2`、`science-aaas-pdf@2`、
-`springerlink-pdf@5` 和 `wiley-online-library-pdf@2`。Acquisition 只从强身份与 Provider AssetHint 提取精确 routing
+当前 production Browser rule catalog 有 9 条：`acs-publications-pdf@3`、
+`aip-publishing-pdf@3`、`sciencedirect-pdf@3`、`iopscience-pdf@2`、
+`oxford-academic-pdf@3`、`rsc-publishing-pdf@3`、`science-aaas-pdf@3`、
+`springerlink-pdf@5` 和 `wiley-online-library-pdf@3`。Acquisition 只从强身份与 Provider AssetHint 提取精确 routing
 origin；Network 不导航其中可能含 encoded separator 的 opaque path。每条规则先接收导航期间
 已经捕获且归属当前文章的 PDF，否则只执行经审查的封闭动作。只有总开关、production rule、
-选中的 Profile 安全存在、Playwright、Chrome/Chromium 和 headed display 同时就绪时，Bootstrap
+选中的固定身份 Profile 安全存在、CloakBrowser wrapper/经验证 binary、Playwright API 和 headed
+display 同时就绪时，Bootstrap
 才创建 Browser client 并将 runtime readiness 设为 true；否则 route 仍可在 Registry/status 中
 观测，但 fail closed。生产对象图传入 Configuration 解析出的 Profile handle；status 只评估
 selection/presence，不读取内容或判断登录。这个 production-ready 状态只证明
 adapter/access-profile/rule/policy 的离线工程准入，不证明 Browser Profile 已认证、当前 IP、
 机构协议或具体文章 entitlement。
 
-Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge、
-明确无当前文献 entitlement、普通 access denied、rate limited、IP blocked、账号警告、not found、
-PDF captured 和 runtime failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit；它不
+Browser 当前运行状态至少能稳定区分正常开放或已认证、需要登录、需要 MFA、challenge resource
+loading/settling/cleared、interaction required、resource blocked、settle timeout、明确无当前文献
+entitlement、普通 access denied、rate limited、IP blocked、账号警告、not found、PDF captured
+和 runtime failure。状态只驱动本次对应 risk group 的继续、暂停或 circuit；它不
 形成 Literature 状态，也不写入 Catalog、ArtifactStore 或配置文件。一个 group 的
 action-required/circuit 不阻塞其它独立 group。
 
@@ -447,7 +501,7 @@ exception 不进入 `PdfCandidate`、Report、SQLite、provenance、status 或�
 metadata.providers       -> network.http
 acquisition.routes       -> network.http and/or network.browser
 parsing.mineru           -> network.http
-analysis.providers       -> network.http
+agents.providers        -> network.http
 bootstrap provider probe -> network.http
 
 network.http              -> network.policy + network.admission
@@ -513,19 +567,22 @@ lane 排空后淘汰共享 runtime，并立即打开当前 `browser_rate_limit_g
 - 等待队列、permit、时间截止和额度计数只存在于内存，不创建限速表、协调目录、状态文件、lease 或跨进程锁；
 - 新 Coordinator 不恢复旧进程状态，测试和文档不宣称跨进程或跨重启限速保证；
 - `browser_max_concurrency` 默认 `5`、严格大于 `1` 且没有上限；`2` 与远大于当前 route 数量的值均合法，`1`、bool 和 float 非法；较大 cap 不启动多个 Browser，也不改变单组串行；
-- 所有 session key 共享一个持久 Profile、一个有头 Chrome process/context；同一 key 严格串行，不同 key 可并行，每篇文章的 token、page、popup、download、response stream 和临时目录完整隔离；一个 lane invalidate 只能在其它活动 lane 排空后淘汰共享 runtime；
+- 所有 session key 共享一个固定身份 Profile、一个有头 CloakBrowser Chromium process/context；同一 key 严格串行，不同 key 可并行，每篇文章的 token、page、popup、download、response stream 和临时目录完整隔离；一个 lane invalidate 只能在其它活动 lane 排空后淘汰共享 runtime；
 - Profile identity 不能是路径或敏感标识，Profile 目录树满足 owner-only/no-follow 安全合同；同一 Profile 的跨进程 runtime lease 互斥，使用中不能再次启动或删除；runtime 关闭后 Profile 保留且可以再次取得 lease；
 - 安装 wheel 的本地 HTTPS/真实有头 Chromium fixture 连续执行文章或执行 9 家 production rule 时只创建一个 process/context，每篇使用独立 page、download 和文章临时目录，并对每个 landing/PDF hop 重新执行 DNS、TLS authority、connection binding 与 host admission；broker 关闭后临时下载根删除而持久 Profile 保留；无 GUI Linux 通过 Xvfb 启动；
-- Publisher 请求由 Chrome 原生完成 TLS/HTTP/redirect/click/download，loopback CONNECT proxy 只接受已审核的精确 IP binding 并透传加密字节，不终止 TLS 或用 Python HTTP 代发；
-- 通用 PDF 发现只返回已批准 origin 的有界 locator，最多尝试前 4 个；签名 query 只进入当前 Chrome operation，不进入 guard、日志、结果或 provenance；
+- Publisher 请求由 CloakBrowser Chromium 原生完成 TLS/HTTP/redirect/click/download，loopback CONNECT proxy 只接受已审核的精确 IP binding 并透传加密字节，不终止 TLS 或用 Python HTTP 代发；
+- 通用 PDF 发现只返回已批准 origin 的有界 locator，最多尝试前 4 个；签名 query 只进入当前 Chromium operation，不进入 guard、日志、结果或 provenance；
 - native redirect response 只有在同页 live ancestor、批准且预绑定的 terminal origin 与最终 host admission 同时成立时才能复用 route proof；跨页或未预绑定时不读取 body；
 - production Browser budget 固定覆盖 4 navigation、256 request、10 秒 action/capture 局部等待和 60 秒整篇 deadline；`not-actionable` 与局部 `no-capture` 是正常未命中，真正总 deadline 才是 timeout；
 - 每个 cleanup failpoint 后资源释放至多调用一次，重复 session/broker cleanup 保留首次失败，且 cleanup failure 不形成耗尽；
-- 登录、MFA、challenge、无 entitlement、rate limit、IP block 和 runtime failure 形成稳定的当前运行状态；对应 group 正确暂停或熔断且不会持久化；
+- 登录、MFA、challenge resource loading/settling/cleared、interaction required、resource blocked、settle timeout、无 entitlement、rate limit、IP block 和 runtime failure 形成稳定的当前运行状态；只有对应 terminal feedback 暂停/熔断 group，状态不会持久化；
+- 经 Profile 声明的 challenge dependency 只能由已批准 Publisher 页面/frame ancestry 发起，仍受 HTTPS/443、DNS/地址、CONNECT/host、frame/request/字节/总时长预算；不能成为初始导航、popup、PDF locator 或 capture source，未知 Publisher/origin escape 在 I/O 或 body read 前拒绝；
+- 同一固定身份 Profile 三次冷启动的 seed 派生 persona、UA/Client Hints、platform、plugins/languages、screen、WebGL、fonts、locale/timezone 保持稳定，不同 Profile 可区分；seed/原始 fingerprint 不进入配置、日志或持久事实；
+- Agent observation 具有 screenshot/元素/字节/revision 硬限制；过期 element、未知动作、任意 URL/selector/JavaScript、越界滚动/等待在 vendor 调用前拒绝，所有允许动作复用同一 humanized page、permit、Network guard 和 capture handler；
 - 普通 `403` 只形成文章级 `ACCESS_DENIED`，不冒充明确 paywall/无 entitlement，也不会误报 `IP_BLOCKED` 或打开整个 group circuit；
 - Browser 能在封闭规则内从 download、response、popup/viewer 和官方 locator 交付临时 PDF，且正文/补充材料区分、候选数量和全部资源预算均受控；
 - Provider 页面流程不能绕过 PDF 基本检查直接发布资产；
-- Cookie、Profile 路径/内容、登录细节、完整 URL、selector、凭据和 Browser vendor object 不出现在文献持久化、status、日志或业务结果中；Profile 中由 Chrome 管理的认证字节是唯一例外且不由 SciRetriever 解释；
+- Cookie、Profile 路径/内容、identity seed、登录细节、完整 URL、selector、Agent screenshot/页面文本、凭据和 Browser vendor object 不出现在文献持久化、status、日志或业务结果中；Profile 中由 Chromium 管理的认证字节是唯一例外且不由 SciRetriever 解释；
 - `config status` 完全不触发 Network；`config test` 通过同一 Coordinator 和安全访问边界，单项失败不泄漏 secret，且不持久化测试结果、时间或文献事实；
 - 原始 exception、response、URL、header、Cookie、credential 和 response body 不进入 LogRecord；边界脱敏先于 Logging filter，限速日志的缺失不影响准入结果。
 

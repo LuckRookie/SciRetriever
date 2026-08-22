@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Mapping, cast
 from unittest import mock
@@ -12,7 +13,7 @@ from unittest import mock
 import sciretriever.bootstrap.assembly as bootstrap_assembly
 import sciretriever.bootstrap.probes as bootstrap_probes
 import sciretriever.bootstrap.storage as bootstrap_storage
-from sciretriever.analysis.ports import AnalysisLLMCall
+from sciretriever.agents import AgentBudget, AgentPort, AgentRequest, AgentResult
 from sciretriever.configuration import (
     ConfigurationError,
     initialize_browser_profile,
@@ -22,8 +23,12 @@ from sciretriever.configuration import (
     set_core_credentials,
     set_credentials,
 )
+from sciretriever.configuration.cloak_runtime import (
+    CLOAKBROWSER_BROWSER_VERSION,
+    CloakRuntimeStatus,
+)
 from sciretriever.model.configuration import (
-    AnalysisProvider,
+    AgentProvider,
     Configuration,
     ParserConnectionMode,
     ProbeOutcome,
@@ -31,8 +36,8 @@ from sciretriever.model.configuration import (
     ProviderName,
 )
 from sciretriever.model.library import LibraryQuery, LibrarySearchRequest
-from sciretriever.model.llm import LLMStructuredResponse
 from sciretriever.model.parsing import ParserRequest
+from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 from sciretriever.parsing.ports import StagedParserOutput
 
 
@@ -50,13 +55,17 @@ class ProductionConfigurationContractTests(unittest.TestCase):
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = false
 
-            [analysis]
+            [agents]
             provider = "openai"
             protocol = "openai-responses"
             base_url = "https://api.openai.com/v1"
-            model = "fixture-model"
-            context_window_tokens = 1000000
             authentication = "api-key"
+            [agents.analysis]
+            model = "fixture-model"
+            context_window_tokens = 2000000
+            structured_output = true
+            max_output_tokens = 1024
+            [analysis]
             metadata_max_output_tokens = 256
             content_max_output_tokens = 1024
             reference_max_output_tokens = 256
@@ -77,7 +86,7 @@ class ProductionConfigurationContractTests(unittest.TestCase):
         self.assertEqual(configuration.paths.catalog_path, "/tmp/catalog.sqlite3")
         self.assertEqual(configuration.paths.artifact_root, "/tmp/artifacts")
         self.assertIs(configuration.parsing.connection_mode, ParserConnectionMode.LOOPBACK)
-        self.assertIs(configuration.analysis.provider, AnalysisProvider.OPENAI)
+        self.assertIs(configuration.agents.provider, AgentProvider.OPENAI)
 
     def test_retired_paths_and_dynamic_runtime_fields_fail_closed(self) -> None:
         invalid = (
@@ -111,13 +120,16 @@ class ProductionConfigurationContractTests(unittest.TestCase):
             connection_mode = "remote"
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = true
-            [analysis]
+            [agents]
             provider = "anthropic"
             protocol = "anthropic-messages"
             base_url = "https://api.anthropic.com/v1"
+            authentication = "api-key"
+            [agents.analysis]
             model = "fixture-model"
             context_window_tokens = 128000
-            authentication = "api-key"
+            structured_output = true
+            max_output_tokens = 256
             """
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -129,7 +141,7 @@ class ProductionConfigurationContractTests(unittest.TestCase):
                 home=home,
             )
             credentials = set_core_credentials(
-                "llm",
+                "agents",
                 secret="anthropic-secret",
                 origin="https://api.anthropic.com",
                 home=home,
@@ -137,7 +149,7 @@ class ProductionConfigurationContractTests(unittest.TestCase):
             parser_only = load_runtime_secrets(
                 selected,
                 credentials=credentials,
-                include_analysis=False,
+                include_agents=False,
             )
             analysis_only = load_runtime_secrets(
                 selected,
@@ -145,9 +157,9 @@ class ProductionConfigurationContractTests(unittest.TestCase):
                 include_parser=False,
             )
         self.assertEqual(parser_only.mineru_bearer_token, "mineru-secret")
-        self.assertIsNone(parser_only.analysis_api_key)
+        self.assertIsNone(parser_only.agents_api_key)
         self.assertIsNone(analysis_only.mineru_bearer_token)
-        self.assertEqual(analysis_only.analysis_api_key, "anthropic-secret")
+        self.assertEqual(analysis_only.agents_api_key, "anthropic-secret")
         self.assertNotIn("anthropic-secret", repr(analysis_only))
 
 
@@ -313,13 +325,17 @@ def _production_configuration(root: Path) -> Configuration:
         model_identity = "mineru-3.4.4-vlm"
         remote_upload_authorized = false
 
-        [analysis]
+        [agents]
         provider = "openai"
         protocol = "openai-responses"
         base_url = "https://api.openai.com/v1"
-        model = "offline-model"
-        context_window_tokens = 1000000
         authentication = "api-key"
+        [agents.analysis]
+        model = "offline-model"
+        context_window_tokens = 2000000
+        structured_output = true
+        max_output_tokens = 256
+        [analysis]
         metadata_max_output_tokens = 256
         content_max_output_tokens = 256
         reference_max_output_tokens = 256
@@ -345,6 +361,34 @@ def _probe_configuration() -> Configuration:
     )
 
 
+def _ready_cloak_probe_patches() -> ExitStack:
+    stack = ExitStack()
+    stack.enter_context(
+        mock.patch(
+            "sciretriever.bootstrap.browser.CloakRuntimeManager.status",
+            return_value=CloakRuntimeStatus(
+                presence="configured",
+                ready=True,
+                version=CLOAKBROWSER_BROWSER_VERSION,
+                signature_verified=True,
+            ),
+        )
+    )
+    stack.enter_context(
+        mock.patch(
+            "sciretriever.bootstrap.browser.cloakbrowser_runtime_availability",
+            return_value=CloakBrowserRuntimeAvailability(
+                cloak_wrapper_available=True,
+                playwright_api_available=True,
+                binary_executable_available=True,
+                headed_display_available=True,
+                browser_version=CLOAKBROWSER_BROWSER_VERSION,
+            ),
+        )
+    )
+    return stack
+
+
 def _passed_probe(provider: ProviderName) -> Any:
     from sciretriever.model.configuration import ConfigurationProbeResult
 
@@ -365,18 +409,98 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         self,
         *,
         parser_factory: Any | None = None,
-        llm_factory: Any | None = None,
+        agents_factory: Any | None = None,
     ) -> Any:
         from sciretriever.bootstrap import BootstrapExternalDependencies
 
         return BootstrapExternalDependencies(
             parser_factory=parser_factory or (lambda _http, _coordinator: _OfflineParser()),
-            analysis_llm_factory=llm_factory or (lambda _http, _coordinator: _OfflineAnalysisLlm()),
-            analysis_model="offline-contract-model",
+            agents_factory=agents_factory or (lambda _http, _coordinator: _OfflineAgents()),
+            agents_analysis_model="offline-contract-model",
+            agents_analysis_budget=AgentBudget(
+                max_input_bytes=1_048_576,
+                max_output_tokens=1_024,
+                context_window_tokens=2_000_000,
+            ),
             metadata_max_output_tokens=256,
             content_max_output_tokens=256,
             reference_max_output_tokens=256,
         )
+
+    def test_production_analysis_budget_preserves_configured_context_and_deadline(self) -> None:
+        from sciretriever.bootstrap.services import _production_dependencies
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configuration = _production_configuration(root)
+            credentials_home = root / "home"
+            credentials_home.mkdir(mode=0o700)
+            set_core_credentials(
+                "agents",
+                secret="offline-key",
+                origin="https://api.openai.com",
+                home=credentials_home,
+            )
+            secrets = load_runtime_secrets(
+                configuration,
+                credentials=load_credentials(home=credentials_home),
+                include_parser=False,
+            )
+            budget = _production_dependencies(
+                configuration,
+                secrets,
+            ).agents_analysis_budget
+
+        self.assertEqual(budget.max_input_bytes, 1_048_576)
+        self.assertEqual(budget.max_output_tokens, 256)
+        self.assertEqual(budget.context_window_tokens, 2_000_000)
+        self.assertEqual(budget.overall_timeout_seconds, 180.0)
+
+    def test_reference_only_analysis_receives_a_usable_agent_input_budget(self) -> None:
+        from sciretriever.bootstrap.services import _agent_provider_limits
+
+        configuration = parse_configuration(
+            """
+            [agents]
+            provider = "custom"
+            service_name = "fixture-service"
+            protocol = "openai-responses"
+            base_url = "http://127.0.0.1:8765/v1"
+            authentication = "none"
+            [agents.analysis]
+            model = "fixture-model"
+            context_window_tokens = 128000
+            max_output_tokens = 256
+            structured_output = true
+            [analysis]
+            reference_max_output_tokens = 256
+            """
+        )
+
+        budget = _agent_provider_limits(configuration)
+
+        self.assertEqual(budget.max_input_bytes, 127_744)
+        self.assertEqual(budget.context_window_tokens, 128_000)
+
+    def test_browser_agent_dependency_is_typed_and_complete(self) -> None:
+        from sciretriever.acquisition.registry import BrowserAgentDependency
+
+        budget = AgentBudget(max_input_bytes=1024, max_output_tokens=64)
+        offline = _OfflineAgents()
+        dependency = BrowserAgentDependency(
+            port=offline,
+            model="offline-browser-model",
+            budget=budget,
+        )
+        self.assertIs(dependency.port, offline)
+        self.assertEqual(dependency.model, "offline-browser-model")
+        self.assertIs(dependency.budget, budget)
+        with self.assertRaises(TypeError):
+            BrowserAgentDependency(
+                port=offline,
+                model="offline-browser-model",
+                budget=object(),  # type: ignore[arg-type]
+            )
 
     def test_full_and_scoped_acquisition_use_the_same_production_web_profiles(
         self,
@@ -403,7 +527,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             credentials_home = root / "home"
             credentials_home.mkdir(mode=0o700)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="offline-key",
                 origin="https://api.openai.com",
                 home=credentials_home,
@@ -464,7 +588,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         from sciretriever.network.browser import BrowserClient
         from sciretriever.network.browser_scheduler import BrowserGroupScheduler
         from sciretriever.network.browser_sessions import BrowserSessionBroker
-        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
 
         forbidden = AssertionError("object graph construction performed external I/O")
         with tempfile.TemporaryDirectory(prefix="sciretriever-p76-graph-") as temporary:
@@ -502,10 +625,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 ),
                 mock.patch.object(BrowserSessionBroker, "acquire", side_effect=forbidden),
                 mock.patch.object(BrowserGroupScheduler, "execute", side_effect=forbidden),
-                mock.patch(
-                    "sciretriever.network.playwright.playwright_runtime_availability",
-                    return_value=PlaywrightRuntimeAvailability(True, True, True),
-                ),
+                _ready_cloak_probe_patches(),
             ):
                 full = bootstrap.build_object_graph(
                     Configuration(),
@@ -604,6 +724,224 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             full.acquisition_runtime.browser_session_broker.close()
             scoped.acquisition_runtime.browser_session_broker.close()
 
+    def test_scoped_content_and_asset_reuse_one_agent_runtime_for_browser_routes(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.agents import (
+            AgentModelCapabilities,
+            AgentRole,
+            AgentRoleBinding,
+            AgentRuntime,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cba55-agent-graph-") as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+
+            def configuration_for(
+                graph_root: Path,
+                *,
+                content: bool,
+                authentication: str = "none",
+                browser_capability: bool = True,
+                agent_base_url: str = "http://127.0.0.1:8765/v1",
+            ) -> Configuration:
+                graph_root.mkdir(mode=0o700)
+                browser_capabilities = (
+                    """
+                    image_input = true
+                    image_media_types = ["image/png"]
+                    image_count = 1
+                    image_bytes = 100000
+                    tool_decision = true
+                    """
+                    if browser_capability
+                    else ""
+                )
+                analysis = (
+                    """
+                    [agents.analysis]
+                    model = "analysis-model"
+                    context_window_tokens = 128000
+                    max_output_tokens = 256
+                    structured_output = true
+                    [analysis]
+                    metadata_max_output_tokens = 64
+                    content_max_output_tokens = 64
+                    reference_max_output_tokens = 64
+                    max_input_bytes = 1024
+                    max_chunk_bytes = 1024
+                    max_chunk_count = 1
+                    max_total_llm_requests = 3
+                    max_total_output_tokens = 192
+                    [parsing]
+                    base_url = "http://127.0.0.1:8000"
+                    connection_mode = "loopback"
+                    model_identity = "mineru-fixture"
+                    """
+                    if content
+                    else ""
+                )
+                return parse_configuration(
+                    f"""
+                    [paths]
+                    catalog_path = {str(graph_root / "catalog.sqlite3")!r}
+                    artifact_root = {str(graph_root / "artifacts")!r}
+                    [agents]
+                    provider = "custom"
+                    service_name = "fixture-agents"
+                    protocol = "openai-responses"
+                    base_url = {agent_base_url!r}
+                    authentication = {authentication!r}
+                    [agents.browser]
+                    model = "browser-model"
+                    context_window_tokens = 128000
+                    max_output_tokens = 256
+                    {browser_capabilities}
+                    [access]
+                    browser_enabled = true
+                    browser_profile = "fixture-profile"
+                    {analysis}
+                    """
+                )
+
+            capabilities = AgentModelCapabilities(
+                context_window_tokens=128000,
+                max_output_tokens=256,
+                structured_output=True,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset({"image/png"}),
+                max_image_count=1,
+                max_image_bytes=100000,
+            )
+            shared = _OfflineAgents()
+            runtime = AgentRuntime(
+                adapter=shared,
+                analysis=AgentRoleBinding(
+                    role=AgentRole.ANALYSIS,
+                    model="analysis-model",
+                    capabilities=capabilities,
+                ),
+                browser=AgentRoleBinding(
+                    role=AgentRole.BROWSER,
+                    model="browser-model",
+                    capabilities=capabilities,
+                ),
+            )
+            calls: list[tuple[object, object]] = []
+
+            def build_agents(*_args: object, **kwargs: object) -> AgentRuntime:
+                calls.append((kwargs.get("required_roles"), kwargs.get("optional_roles")))
+                return runtime
+
+            with (
+                mock.patch.object(
+                    bootstrap_assembly, "_build_agents_runtime", side_effect=build_agents
+                ),
+                _ready_cloak_probe_patches(),
+            ):
+                content = cast(
+                    bootstrap.DatabaseCompletionObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration_for(root / "content", content=True),
+                        scope=bootstrap.ProductionEntryScope.CONTENT_COMPLETION,
+                        credentials_home=home,
+                        configure_process_logging=False,
+                    ),
+                )
+                asset = cast(
+                    bootstrap.DatabaseCompletionObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration_for(root / "asset", content=False),
+                        scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                        credentials_home=home,
+                        configure_process_logging=False,
+                    ),
+                )
+
+            try:
+                content_routes = [
+                    binding.adapter
+                    for binding in cast(Any, content.acquisition_registry).route_registry.bindings
+                    if binding.adapter is not None
+                    and binding.spec.tier.value == "controlled-browser"
+                ]
+                self.assertEqual(len(content_routes), 9)
+                self.assertEqual(
+                    {id(getattr(route, "_browser_agent_port")) for route in content_routes},
+                    {id(runtime)},
+                )
+                analysis = cast(Any, content.entry_api)._operation._analysis
+                self.assertIs(cast(Any, analysis)._content_service._agents, runtime)
+                self.assertIs(cast(Any, analysis)._reference_lookup_stage._agents, runtime)
+
+                asset_routes = [
+                    binding.adapter
+                    for binding in cast(Any, asset.acquisition_registry).route_registry.bindings
+                    if binding.adapter is not None
+                    and binding.spec.tier.value == "controlled-browser"
+                ]
+                self.assertEqual(len(asset_routes), 9)
+                self.assertEqual(
+                    {id(getattr(route, "_browser_agent_port")) for route in asset_routes},
+                    {id(runtime)},
+                )
+            finally:
+                content.close()
+                asset.close()
+
+            with _ready_cloak_probe_patches():
+                missing_credential = cast(
+                    bootstrap.DatabaseCompletionObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration_for(
+                            root / "missing-credential",
+                            content=False,
+                            authentication="api-key",
+                            agent_base_url="https://agents.example.invalid/v1",
+                        ),
+                        scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                        credentials_home=home,
+                        configure_process_logging=False,
+                    ),
+                )
+                missing_capability = cast(
+                    bootstrap.DatabaseCompletionObjectGraph,
+                    bootstrap.build_production_object_graph(
+                        configuration_for(
+                            root / "missing-capability",
+                            content=False,
+                            browser_capability=False,
+                        ),
+                        scope=bootstrap.ProductionEntryScope.ASSET_COMPLETION,
+                        credentials_home=home,
+                        configure_process_logging=False,
+                    ),
+                )
+            try:
+                for graph in (missing_credential, missing_capability):
+                    routes = [
+                        binding.adapter
+                        for binding in cast(Any, graph.acquisition_registry).route_registry.bindings
+                        if binding.adapter is not None
+                        and binding.spec.tier.value == "controlled-browser"
+                    ]
+                    self.assertEqual(len(routes), 9)
+                    self.assertTrue(
+                        all(getattr(route, "_browser_agent_port") is None for route in routes)
+                    )
+            finally:
+                missing_credential.close()
+                missing_capability.close()
+
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0][0], frozenset({AgentRole.ANALYSIS}))
+            self.assertEqual(calls[0][1], frozenset({AgentRole.BROWSER}))
+            self.assertEqual(calls[1][0], frozenset())
+            self.assertEqual(calls[1][1], frozenset({AgentRole.BROWSER}))
+
     def test_local_library_scope_uses_only_paths_and_no_external_assembly(self) -> None:
         import sciretriever.bootstrap as bootstrap
 
@@ -672,20 +1010,24 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 [sources.metadata.crossref]
                 mode = "anonymous"
 
-                [analysis]
+                [agents]
                 provider = "openai"
                 protocol = "openai-responses"
                 base_url = "https://api.openai.com/v1"
+                authentication = "api-key"
+                [agents.analysis]
                 model = "reference-only-model"
                 context_window_tokens = 128000
-                authentication = "api-key"
+                structured_output = true
+                max_output_tokens = 256
+                [analysis]
                 reference_max_output_tokens = 256
                 """
             )
             credentials_home = root / "home"
             credentials_home.mkdir(mode=0o700)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="reference-only-secret",
                 origin="https://api.openai.com",
                 home=credentials_home,
@@ -777,7 +1119,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     side_effect=AssertionError("asset completion constructed Parser"),
                 ),
                 mock.patch(
-                    "sciretriever.analysis.providers.openai.OpenAIAnalysisLLMAdapter",
+                    "sciretriever.agents.providers.openai_responses.OpenAIResponsesAdapter",
                     side_effect=AssertionError("asset completion constructed Analysis"),
                 ),
             ):
@@ -792,7 +1134,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 configuration,
                 credentials=None,
                 include_parser=False,
-                include_analysis=False,
+                include_agents=False,
             )
             load_credentials.assert_not_called()
 
@@ -993,14 +1335,15 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
         parser_arguments: list[tuple[object, object]] = []
         llm_arguments: list[tuple[object, object]] = []
+        shared_agent = _OfflineAgents()
 
         def parser_factory(http: object, coordinator: object) -> _OfflineParser:
             parser_arguments.append((http, coordinator))
             return _OfflineParser()
 
-        def llm_factory(http: object, coordinator: object) -> _OfflineAnalysisLlm:
+        def agents_factory(http: object, coordinator: object) -> _OfflineAgents:
             llm_arguments.append((http, coordinator))
-            return _OfflineAnalysisLlm()
+            return shared_agent
 
         configuration = parse_configuration(
             """
@@ -1022,7 +1365,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 artifact_root=root / "artifacts",
                 external_dependencies=self._dependencies(
                     parser_factory=parser_factory,
-                    llm_factory=llm_factory,
+                    agents_factory=agents_factory,
                 ),
                 credentials_home=root / "home",
             )
@@ -1077,6 +1420,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(citations._provider_precedence, expected_precedence)
             self.assertEqual(bibliography._provider_precedence, expected_precedence)
 
+            analysis = cast(Any, completion)._analysis
+            self.assertIs(cast(Any, analysis)._content_service._agents, shared_agent)
+            self.assertIs(cast(Any, analysis)._reference_lookup_stage._agents, shared_agent)
+
         self.assertEqual(parser_arguments, [(graph.http_client, graph.access_coordinator)])
         self.assertEqual(llm_arguments, [(graph.http_client, graph.access_coordinator)])
 
@@ -1089,7 +1436,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 "parser-not-ready",
             ),
             (
-                self._dependencies(llm_factory=lambda _http, _coordinator: object()),
+                self._dependencies(agents_factory=lambda _http, _coordinator: object()),
                 "analysis-not-ready",
             ),
         )
@@ -1387,7 +1734,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             credentials_home = root / "home"
             credentials_home.mkdir(mode=0o700)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="offline-key",
                 origin="https://api.openai.com",
                 home=credentials_home,
@@ -1426,7 +1773,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             credentials_home = root / "home"
             credentials_home.mkdir(mode=0o700)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="offline-key",
                 origin="https://api.openai.com",
                 home=credentials_home,
@@ -1442,7 +1789,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 forbidden(
                     "sciretriever.parsing.adapters.mineru.OperatorManagedMinerUAdapter.parse"
                 ),
-                forbidden("sciretriever.analysis.providers.ProviderHttpAdapterBase.complete"),
+                forbidden("sciretriever.agents.providers.base.ProviderHttpAdapterBase.complete"),
                 forbidden("sciretriever.metadata.registry.MetadataProbeRegistry.probe"),
             ):
                 graph = bootstrap.build_production_object_graph(
@@ -1464,7 +1811,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             credentials_home = root / "home"
             credentials_home.mkdir(mode=0o700)
             set_core_credentials(
-                "llm",
+                "agents",
                 secret="offline-key",
                 origin="https://api.openai.com",
                 home=credentials_home,
@@ -1659,24 +2006,12 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(session.browser_status.automatic_route_count, 9)
             self.assertFalse(session.browser_status.automatic_acquisition_available)
             self.assertFalse(session.browser_status.runtime.launch_assessed)
-            self.assertEqual(session.browser_status.mode, "headed-persistent-profile")
-            self.assertTrue(session.browser_status.persistent_authentication_supported)
+            self.assertEqual(session.browser_status.mode, "headed-fixed-profile")
+            self.assertFalse(session.browser_status.interactive_authentication_supported)
             self.assertEqual(session.browser_status.article_entitlement, "checked-per-article")
             self.assertEqual(
                 session.browser_probe_port.supported_access_keys,
-                frozenset(
-                    {
-                        "acs-publications",
-                        "aip-publishing",
-                        "elsevier-sciencedirect",
-                        "iopscience",
-                        "oxford-academic",
-                        "rsc-publishing",
-                        "science-aaas",
-                        "springerlink",
-                        "wiley-online-library",
-                    }
-                ),
+                frozenset(),
             )
             self.assertEqual(
                 session.probe_port.supported_capabilities,
@@ -1780,7 +2115,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import BrowserClient
-        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
 
         with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
             home = Path(temporary) / "home"
@@ -1793,10 +2127,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 browser_profile = "fixture-profile"
                 """
             )
-            with mock.patch(
-                "sciretriever.network.playwright.playwright_runtime_availability",
-                return_value=PlaywrightRuntimeAvailability(True, True, True),
-            ):
+            with _ready_cloak_probe_patches():
                 session = bootstrap.build_production_configuration_probe_session(
                     configuration,
                     credentials_home=home,
@@ -1820,7 +2151,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             session_key = run_browser.call_args.kwargs["session_key"]
             self.assertIs(type(session_key), str)
             self.assertEqual(session_key, "springerlink")
-            self.assertIs(run_browser.call_args.kwargs["navigation_only"], True)
+            self.assertIs(run_browser.call_args.kwargs["navigation_only"], False)
 
     def test_each_browser_probe_keeps_its_own_policy_session_and_landing_origin(
         self,
@@ -1833,7 +2164,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             BrowserDestinationKind,
             BrowserPageObservation,
         )
-        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
 
         expected = {
             "acs-publications": (
@@ -1902,10 +2232,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 browser_profile = "fixture-profile"
                 """
             )
-            with mock.patch(
-                "sciretriever.network.playwright.playwright_runtime_availability",
-                return_value=PlaywrightRuntimeAvailability(True, True, True),
-            ):
+            with _ready_cloak_probe_patches():
                 session = bootstrap.build_production_configuration_probe_session(
                     configuration,
                     credentials_home=home,
@@ -1949,7 +2276,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     locator=request,
                     status_code=200,
                 )
-                cast(Any, kwargs["flow"])(flow_session)
+                cast(Any, kwargs["controller"]).execution.run(flow_session)
                 observed.append((scope, request, policy, cast(str, kwargs["session_key"])))
                 return no_download
 
@@ -1992,7 +2319,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             BrowserDestinationKind,
             BrowserPageObservation,
         )
-        from sciretriever.network.playwright import PlaywrightRuntimeAvailability
 
         with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-") as temporary:
             home = Path(temporary) / "home"
@@ -2005,10 +2331,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 browser_profile = "fixture-profile"
                 """
             )
-            with mock.patch(
-                "sciretriever.network.playwright.playwright_runtime_availability",
-                return_value=PlaywrightRuntimeAvailability(True, True, True),
-            ):
+            with _ready_cloak_probe_patches():
                 session = bootstrap.build_production_configuration_probe_session(
                     configuration,
                     credentials_home=home,
@@ -2026,13 +2349,13 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     "https://idp.springer.com/authorize",
                     BrowserDestinationKind.NAVIGATION,
                 )
-                flow = cast(Any, kwargs["flow"])
+                controller = cast(Any, kwargs["controller"])
                 flow_session = mock.Mock()
                 flow_session.observe.return_value = BrowserPageObservation(
                     locator="https://idp.springer.com/authorize",
                     status_code=200,
                 )
-                flow(flow_session)
+                controller.execution.run(flow_session)
                 return no_download
 
             with mock.patch.object(
@@ -2049,6 +2372,220 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(result.article_entitlement, "not-proven")
             self.assertEqual(result.navigation_count, 1)
 
+    def test_wiley_probe_accepts_reviewed_landing_origin_alias(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-alias-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "fixture-profile"
+                """
+            )
+            with _ready_cloak_probe_patches():
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+
+            def reached_alias(*_args: object, **kwargs: Any) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                destination_guard.check(
+                    "https://onlinelibrary.wiley.com/",
+                    BrowserDestinationKind.INITIAL_NAVIGATION,
+                )
+                controller = cast(Any, kwargs["controller"])
+                flow_session = mock.Mock()
+                flow_session.observe.return_value = BrowserPageObservation(
+                    locator="https://advanced.onlinelibrary.wiley.com/doi/10.1000/fixture",
+                    status_code=200,
+                )
+                controller.execution.run(flow_session)
+                return no_download
+
+            with mock.patch.object(BrowserClient, "run", side_effect=reached_alias):
+                result = session.run_browser("wiley-online-library")
+
+            self.assertIs(result.outcome, ProbeOutcome.PASSED)
+            self.assertTrue(result.minimal_target_reached)
+            self.assertEqual(result.navigation_count, 1)
+
+    def test_wiley_probe_uses_reviewed_challenge_dependency_facts(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+            BrowserRequestObservation,
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="sciretriever-browser-probe-challenge-"
+        ) as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "fixture-profile"
+                """
+            )
+            with _ready_cloak_probe_patches():
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+
+            def reached_with_challenge(*_args: object, **kwargs: Any) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                destination_guard.check(
+                    "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/v1",
+                    BrowserDestinationKind.REQUEST,
+                )
+                destination_guard.check_request(
+                    BrowserRequestObservation(
+                        locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/v1",
+                        kind=BrowserDestinationKind.REQUEST,
+                        resource_type="script",
+                        is_navigation=False,
+                        is_top_frame=False,
+                        frame_depth=1,
+                        frame_ancestry=("https://onlinelibrary.wiley.com/",),
+                        top_frame_locator="https://onlinelibrary.wiley.com/",
+                    )
+                )
+                cast(Any, kwargs["controller"]).execution.run(
+                    mock.Mock(
+                        observe=mock.Mock(
+                            return_value=BrowserPageObservation(
+                                locator="https://advanced.onlinelibrary.wiley.com/doi/10.1000/fixture",
+                                status_code=200,
+                            )
+                        )
+                    )
+                )
+                return no_download
+
+            with mock.patch.object(BrowserClient, "run", side_effect=reached_with_challenge):
+                result = session.run_browser("wiley-online-library")
+
+        self.assertIs(result.outcome, ProbeOutcome.PASSED)
+        self.assertTrue(result.challenge_dependency_declared)
+        self.assertEqual(result.challenge_resource_admitted_count, 1)
+        self.assertEqual(result.challenge_resource_blocked_count, 0)
+        self.assertFalse(result.persisted)
+        payload = result.model_dump(mode="json")
+        self.assertEqual(payload["challenge_dependency_declared"], True)
+        self.assertEqual(payload["challenge_resource_admitted_count"], 1)
+        self.assertEqual(payload["challenge_resource_blocked_count"], 0)
+        self.assertNotIn("cloudflare", str(payload).casefold())
+
+    def test_wiley_probe_rejects_unreviewed_challenge_and_login_origins(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+            BrowserRequestObservation,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-guard-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            configuration = parse_configuration(
+                """
+                [access]
+                browser_enabled = true
+                browser_profile = "fixture-profile"
+                """
+            )
+            with _ready_cloak_probe_patches():
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+
+            def rejected_challenge(*_args: object, **kwargs: Any) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                with self.assertRaises(ValueError):
+                    destination_guard.check(
+                        "https://idp.wiley.com/login",
+                        BrowserDestinationKind.NAVIGATION,
+                    )
+                destination_guard.check(
+                    "https://challenges.cloudflare.com/other/not-reviewed",
+                    BrowserDestinationKind.REQUEST,
+                )
+                with self.assertRaises(ValueError):
+                    destination_guard.check_request(
+                        BrowserRequestObservation(
+                            locator="https://challenges.cloudflare.com/other/not-reviewed",
+                            kind=BrowserDestinationKind.REQUEST,
+                            resource_type="script",
+                            is_navigation=False,
+                            is_top_frame=False,
+                            frame_depth=1,
+                            frame_ancestry=("https://onlinelibrary.wiley.com/",),
+                            top_frame_locator="https://onlinelibrary.wiley.com/",
+                        )
+                    )
+                cast(Any, kwargs["controller"]).execution.run(
+                    mock.Mock(
+                        observe=mock.Mock(
+                            return_value=BrowserPageObservation(
+                                locator="https://onlinelibrary.wiley.com/",
+                                status_code=200,
+                            )
+                        )
+                    )
+                )
+                return no_download
+
+            with mock.patch.object(BrowserClient, "run", side_effect=rejected_challenge):
+                result = session.run_browser("wiley-online-library")
+
+        self.assertIs(result.outcome, ProbeOutcome.FAILED)
+        self.assertEqual(result.failure_code, "browser-probe-challenge-resource-blocked")
+        self.assertTrue(result.browser_launched)
+        self.assertTrue(result.minimal_target_reached)
+        self.assertTrue(result.challenge_dependency_declared)
+        self.assertEqual(result.challenge_resource_admitted_count, 0)
+        self.assertEqual(result.challenge_resource_blocked_count, 1)
+        self.assertEqual(result.navigation_count, 1)
+
 
 class _OfflineParser:
     def parse(
@@ -2061,13 +2598,13 @@ class _OfflineParser:
         raise AssertionError("construction must not invoke the Parser")
 
 
-class _OfflineAnalysisLlm:
+class _OfflineAgents(AgentPort):
     @property
     def provider_name(self) -> str:
         return "offline-analysis"
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
-        del call
+    def complete(self, request: AgentRequest) -> AgentResult:
+        del request
         raise AssertionError("construction must not invoke the LLM")
 
 

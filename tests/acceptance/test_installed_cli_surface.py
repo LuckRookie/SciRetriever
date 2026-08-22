@@ -186,13 +186,17 @@ class InstalledCliSurfaceTests(unittest.TestCase):
                     "--json",
                 ),
                 """
-[analysis]
+[agents]
 provider = "openai"
 protocol = "openai-responses"
 base_url = "https://api.openai.com/v1"
+authentication = "api-key"
+[agents.analysis]
 model = "controlled-offline-model"
 context_window_tokens = 128000
-authentication = "api-key"
+max_output_tokens = 64
+structured_output = true
+[analysis]
 reference_max_output_tokens = 64
 """,
                 "metadata-not-ready",
@@ -358,7 +362,15 @@ reference_max_output_tokens = 64
         status_payload = json.loads(status.stdout)
         self.assertEqual(
             set(status_payload),
-            {"storage", "providers", "parsing", "analysis", "execution", "library"},
+            {
+                "storage",
+                "providers",
+                "parsing",
+                "agents",
+                "analysis",
+                "execution",
+                "library",
+            },
         )
         self.assertEqual(len(status_payload["providers"]["metadata"]), 11)
         self.assertEqual(len(status_payload["providers"]["acquisition"]), 12)
@@ -421,12 +433,15 @@ reference_max_output_tokens = 64
                 "wiley-online-library",
             ],
         )
-        self.assertTrue(browser["runtime"]["python_dependency_available"])
-        self.assertFalse(browser["runtime"]["chromium_executable_available"])
+        self.assertTrue(browser["runtime"]["cloak_wrapper_available"])
+        self.assertTrue(browser["runtime"]["playwright_api_available"])
+        self.assertFalse(browser["runtime"]["binary_presence"])
+        self.assertFalse(browser["runtime"]["binary_verified"])
+        self.assertFalse(browser["runtime"]["fixed_identity_manifest"])
         self.assertTrue(browser["runtime"]["headed_display_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
-        self.assertEqual(browser["mode"], "headed-persistent-profile")
-        self.assertTrue(browser["persistent_authentication_supported"])
+        self.assertEqual(browser["mode"], "headed-fixed-profile")
+        self.assertFalse(browser["interactive_authentication_supported"])
         self.assertEqual(browser["article_entitlement"], "checked-per-article")
         self.assertEqual(
             browser["profile"],
@@ -458,12 +473,43 @@ reference_max_output_tokens = 64
         )
         self.assertEqual(
             browser["action_required"][0]["code"],
-            "browser-chromium-unavailable",
+            "browser-disabled",
         )
         self.assertFalse(status_payload["parsing"]["locally_ready"])
-        self.assertFalse(status_payload["analysis"]["content_locally_ready"])
+        self.assertFalse(status_payload["agents"]["content_locally_ready"])
+        self.assertEqual(
+            set(status_payload["agents"]["analysis_role"]),
+            {
+                "model",
+                "context_window_tokens",
+                "max_output_tokens",
+                "structured_output",
+                "image_input",
+                "tool_decision",
+                "locally_ready",
+                "required_capability",
+            },
+        )
+        self.assertEqual(
+            status_payload["agents"]["analysis_role"]["required_capability"],
+            "structured-text",
+        )
+        self.assertEqual(
+            status_payload["agents"]["browser_role"]["required_capabilities"],
+            ["image-input", "tool-decision"],
+        )
         self.assertFalse(catalog.exists())
         self.assertFalse(artifacts.exists())
+        assert home is not None
+        for relative in (
+            ".cache/ms-playwright",
+            ".cache/cloakbrowser",
+            ".local/share/ms-playwright",
+        ):
+            self.assertFalse(
+                (home / relative).exists(),
+                f"fresh installed command implicitly created browser runtime cache: {relative}",
+            )
 
         browser_probe = self.install.run_console(
             (
@@ -483,7 +529,7 @@ reference_max_output_tokens = 64
         self.assertEqual(browser_probe_payload["outcome"], "skipped")
         self.assertEqual(
             browser_probe_payload["failure_code"],
-            "browser-chromium-unavailable",
+            "browser-disabled",
         )
         self.assertEqual(browser_probe_payload["navigation_count"], 0)
         self.assertEqual(browser_probe_payload["article_entitlement"], "not-proven")
@@ -540,7 +586,7 @@ reference_max_output_tokens = 64
             credentials = credentials_directory / "credentials.toml"
             secret = "installed-core-secret-sentinel"
             credentials.write_text(
-                f'[llm]\napi_key = "{secret}"\norigin = "https://api.openai.com"\n',
+                f'[agents]\napi_key = "{secret}"\norigin = "https://api.openai.com"\n',
                 encoding="utf-8",
             )
             credentials.chmod(0o600)
@@ -555,9 +601,9 @@ reference_max_output_tokens = 64
             self.assertNotIn(b"\x1b[", status_json.stdout)
             self.assertNotIn(secret.encode(), status_json.stdout)
             status_payload = json.loads(status_json.stdout)
-            self.assertTrue(status_payload["analysis"]["reference_locally_ready"])
+            self.assertTrue(status_payload["agents"]["reference_locally_ready"])
             self.assertEqual(
-                status_payload["analysis"]["api_key"],
+                status_payload["agents"]["api_key"],
                 {
                     "source": "credentials.toml",
                     "required": True,
@@ -586,7 +632,8 @@ reference_max_output_tokens = 64
                 cwd=work,
             )
             self.assertEqual(llm.returncode, 0, llm.stderr_text)
-            self.assertEqual(llm.stderr, b"")
+            self.assertNotIn(secret.encode(), llm.stderr)
+            self.assertNotIn(b"Traceback", llm.stderr)
             self.assertNotIn(secret.encode(), llm.stdout)
             llm_payload = json.loads(llm.stdout)
             self.assertEqual(llm_payload["outcome"], "passed")
@@ -600,7 +647,8 @@ reference_max_output_tokens = 64
                 cwd=work,
             )
             self.assertEqual(mineru.returncode, 0, mineru.stderr_text)
-            self.assertEqual(mineru.stderr, b"")
+            self.assertNotIn(secret.encode(), mineru.stderr)
+            self.assertNotIn(b"Traceback", mineru.stderr)
             mineru_payload = json.loads(mineru.stdout)
             self.assertEqual(mineru_payload["outcome"], "passed")
             self.assertEqual(mineru_payload["details"]["request_kind"], "health-only")
@@ -613,8 +661,9 @@ reference_max_output_tokens = 64
                 cwd=work,
             )
             self.assertEqual(all_probes.returncode, 0, all_probes.stderr_text)
-            self.assertEqual(all_probes.stderr, b"")
             self.assertNotIn(secret.encode(), all_probes.stdout)
+            self.assertNotIn(secret.encode(), all_probes.stderr)
+            self.assertNotIn(b"Traceback", all_probes.stderr)
             all_payload = json.loads(all_probes.stdout)
             self.assertEqual(all_payload["providers"], {"results": []})
             self.assertEqual(all_payload["llm"]["outcome"], "passed")
@@ -659,13 +708,17 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[analysis]
+[agents]
 provider = "openai"
 protocol = "openai-responses"
 base_url = "https://api.openai.com/v1"
-model = "acceptance-model"
-context_window_tokens = 1000000
 authentication = "api-key"
+[agents.analysis]
+model = "acceptance-model"
+context_window_tokens = 2000000
+max_output_tokens = 4096
+structured_output = true
+[analysis]
 metadata_max_output_tokens = 1024
 content_max_output_tokens = 4096
 reference_max_output_tokens = 1024

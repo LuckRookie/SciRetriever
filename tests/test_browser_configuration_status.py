@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -35,9 +36,49 @@ from sciretriever.network.browser_scheduler import (
     BrowserGroupScheduler,
     BrowserSchedulerCancellation,
 )
+from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 
 _ACCESS_KEY = "fixture-publisher"
 _GROUP = "fixture-publisher"
+_BROWSER_VERSION = "146.0.7680.177.5"
+_READY_LOCAL_STATUS = (
+    True,
+    True,
+    True,
+    _BROWSER_VERSION,
+    True,
+    True,
+    "sciretriever.browser-identity.v1",
+)
+
+
+def _runtime_availability(*, display: bool = True) -> CloakBrowserRuntimeAvailability:
+    return CloakBrowserRuntimeAvailability(
+        cloak_wrapper_available=True,
+        playwright_api_available=True,
+        binary_executable_available=True,
+        headed_display_available=display,
+        browser_version=_BROWSER_VERSION,
+    )
+
+
+def _browser_status(
+    configuration: Configuration,
+    *,
+    home: Path | None = None,
+    display: bool = True,
+    probe_supported_access_keys: frozenset[str] = frozenset(),
+) -> BrowserAccessStatus:
+    with patch(
+        "sciretriever.configuration.browser_access._cloak_local_status",
+        return_value=_READY_LOCAL_STATUS,
+    ):
+        return browser_access_status(
+            configuration,
+            home=home,
+            probe_supported_access_keys=probe_supported_access_keys,
+            runtime_availability=_runtime_availability(display=display),
+        )
 
 
 class _FixtureClock:
@@ -79,10 +120,14 @@ def _approved_status() -> BrowserAccessStatus:
         enabled=True,
         local_max_concurrency=2,
         runtime=BrowserRuntimeStatus(
-            framework_available=True,
-            python_dependency_available=True,
-            chromium_executable_available=True,
+            cloak_wrapper_available=True,
+            playwright_api_available=True,
+            binary_presence=True,
+            binary_version=_BROWSER_VERSION,
+            binary_verified=True,
             headed_display_available=True,
+            fixed_identity_manifest=True,
+            identity_schema="sciretriever.browser-identity.v1",
         ),
         profile=BrowserProfileSelectionStatus(
             selected="fixture-profile",
@@ -164,16 +209,13 @@ class _ScheduledFixtureBrowserProbe:
 
 class BrowserConfigurationStatusTests(unittest.TestCase):
     def test_production_status_has_nine_persistent_profile_routes(self) -> None:
-        status = browser_access_status(
-            Configuration(),
-            python_dependency_available=True,
-            chromium_executable_available=True,
-            headed_display_available=True,
-        )
+        status = _browser_status(Configuration())
 
-        self.assertTrue(status.runtime.framework_available)
-        self.assertTrue(status.runtime.python_dependency_available)
-        self.assertTrue(status.runtime.chromium_executable_available)
+        self.assertTrue(status.runtime.cloak_wrapper_available)
+        self.assertTrue(status.runtime.playwright_api_available)
+        self.assertTrue(status.runtime.binary_presence)
+        self.assertTrue(status.runtime.binary_verified)
+        self.assertTrue(status.runtime.fixed_identity_manifest)
         self.assertTrue(status.runtime.headed_display_available)
         self.assertFalse(status.runtime.launch_assessed)
         self.assertEqual(status.production_route_count, 9)
@@ -208,8 +250,8 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         )
         self.assertTrue(all(route.automatic_acquisition_eligible for route in status.routes))
         self.assertFalse(status.automatic_acquisition_available)
-        self.assertEqual(status.mode, "headed-persistent-profile")
-        self.assertTrue(status.persistent_authentication_supported)
+        self.assertEqual(status.mode, "headed-fixed-profile")
+        self.assertFalse(status.interactive_authentication_supported)
         self.assertEqual(status.article_entitlement, "checked-per-article")
         self.assertEqual(
             status.action_required[0].code,
@@ -220,7 +262,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             initialize_browser_profile("fixture-profile", home=home)
-            status = browser_access_status(
+            status = _browser_status(
                 Configuration.model_validate(
                     {
                         "access": {
@@ -230,9 +272,6 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                     }
                 ),
                 home=home,
-                python_dependency_available=True,
-                chromium_executable_available=True,
-                headed_display_available=True,
             )
 
         rendered = status.model_dump_json()
@@ -253,7 +292,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             initialize_browser_profile("fixture-profile", home=home)
-            status = browser_access_status(
+            status = _browser_status(
                 Configuration.model_validate(
                     {
                         "access": {
@@ -263,9 +302,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                     }
                 ),
                 home=home,
-                python_dependency_available=True,
-                chromium_executable_available=True,
-                headed_display_available=False,
+                display=False,
             )
 
         self.assertFalse(status.automatic_acquisition_available)
@@ -279,7 +316,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             initialize_browser_profile("fixture-profile", home=home)
-            status = browser_access_status(
+            status = _browser_status(
                 Configuration.model_validate(
                     {
                         "access": {
@@ -289,9 +326,6 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                     }
                 ),
                 home=home,
-                python_dependency_available=True,
-                chromium_executable_available=True,
-                headed_display_available=True,
                 probe_supported_access_keys=frozenset(
                     {
                         "acs-publications",
@@ -319,11 +353,8 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
 
     def test_status_rejects_probe_targets_that_are_not_production_routes(self) -> None:
         with self.assertRaises(configuration_boundary.ConfigurationError):
-            browser_access_status(
+            _browser_status(
                 Configuration(),
-                python_dependency_available=True,
-                chromium_executable_available=True,
-                headed_display_available=True,
                 probe_supported_access_keys=frozenset({_ACCESS_KEY}),
             )
 
@@ -355,11 +386,8 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
 class BrowserConfigurationProbeTests(unittest.TestCase):
     def test_disabled_production_probe_is_stably_skipped_without_browser_io(self) -> None:
         port = _UnavailableBrowserProbe()
-        status = browser_access_status(
+        status = _browser_status(
             Configuration(),
-            python_dependency_available=True,
-            chromium_executable_available=True,
-            headed_display_available=True,
             probe_supported_access_keys=frozenset({"springerlink"}),
         )
 

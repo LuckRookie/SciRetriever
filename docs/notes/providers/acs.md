@@ -43,19 +43,38 @@ PDF:     https://pubs.acs.org/doi/pdf/{doi}
 
 ## 4. Browser 与 Supporting Information 结论
 
-当前已经建立技术规则 `acs-publications-pdf@2`，并用合成 fixture 验证：
+当前已经建立技术规则 `acs-publications-pdf@3`，并用合成 fixture 验证：
 
 - landing/asset origin 精确限制为 `https://pubs.acs.org`，DOI 只在已有强 origin 时参与文章归属；
 - primary、Supporting Information、excluded 与 wrong-article 捕获分类；
 - login、entitlement/paywall、challenge/rate/account-warning 等封闭页面状态；
 - 独立 `acs-publications` risk/session group、组内并发 1 和 30 秒审慎 fixture 基线。
 
+Revision 3 的新增证据日期为 2026-08-21，只为 ACS 规则声明受限的 Cloudflare dependency：
+精确 origin `https://challenges.cloudflare.com`、path prefix
+`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
+`document`、`fetch`、`xhr` 和 `image`。它不加入 ACS 的普通
+`allowed_origins`；只有当前 ACS Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
+可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。运行时分别报告
+`resource-blocked`、`settling`、`cleared`、`interaction-required`、`settle-timeout` 和普通
+HTTP 403；只有自动 `cleared` 才返回正文流程，第一版不点击 CAPTCHA/Turnstile。该封闭规则和
+本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+
+2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
+均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
+Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
+权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+
+CBA72 将 ACS 的本次服务器现场准入记为 `deferred`。这不降低其 `production-ready` 工程状态、
+不删除生产 rule，也不等于其它机构/Profile 全局 unsupported；它只表示固定代表样本停在持续
+自动验证且没有可验证 PDF，后续仍须逐文章判断并保留该稳定失败。
+
 这些内容证明规则、生产对象图和离线安全验收已达到工程准入要求，但 ACS 的普通条款对系统性/
 聚合下载有限制。ACS rule 进入 production catalog；operator 显式启用受控 Browser 后，它只按
 `acs-publications` 组内串行和 30 秒审慎间隔做逐文章机构 IP 尝试。该启用不证明组织合同、当前
 IP 或文章 entitlement，operator 仍须确保实际使用符合组织授权和 ACS 条款。付费墙、裸 403、
-challenge 与正文捕获分别报告；challenge 必须立即停止，不能用 stealth、CAPTCHA 绕过、换入口
-或立即重试规避。
+challenge 与正文捕获分别报告；自动 challenge 只在有界 settle 内等待自然完成，明确人工控件
+出现后立即停止，不能点击或用 CAPTCHA 绕过、换入口或立即重试规避。
 
 ## 5. 当前实现边界
 

@@ -6,6 +6,14 @@ import unittest
 from collections.abc import Callable, Iterable
 from typing import cast
 
+from sciretriever.agents import (
+    AgentFailure,
+    AgentPort,
+    AgentProvenance,
+    AgentRequest,
+    AgentStructuredResponse,
+)
+from sciretriever.agents.failures import agent_failure
 from sciretriever.analysis.metadata import (
     MetadataAnalysisFailure,
     MetadataAnalysisReceipt,
@@ -13,15 +21,9 @@ from sciretriever.analysis.metadata import (
     MetadataStageInput,
 )
 from sciretriever.analysis.metadata_rules import metadata_input_sha256
-from sciretriever.analysis.ports import AnalysisLLMCall, AnalysisLLMFailure, AnalysisLLMPort
 from sciretriever.literature.metadata import project_metadata
 from sciretriever.model.analysis import FinalMetadataProposal, NoUsableContent
 from sciretriever.model.literature import Affiliation, Author, AuthorKind, Identifier
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import (
     ParserArtifactRef,
@@ -62,40 +64,43 @@ _METADATA_GOLDEN_SHA256 = Sha256("d04b1b40ff6fd1adc2f8e3b41c366a94b6906a8361d4bb
 class _FakeLLM:
     def __init__(self, actions: Iterable[object]) -> None:
         self.actions = list(actions)
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
 
     @property
     def provider_name(self) -> str:
         return "fixture-provider"
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
         self.calls.append(call)
         action = self.actions.pop(0)
         if isinstance(action, BaseException):
             raise action
         if callable(action):
             value = action(call)
-            if not isinstance(value, LLMStructuredResponse):
-                raise TypeError("fake action must return LLMStructuredResponse")
+            if not isinstance(value, AgentStructuredResponse):
+                raise TypeError("fake action must return AgentStructuredResponse")
             return value
         if not isinstance(action, str):
             raise TypeError("fake action must be result text, failure, or callable")
-        return _llm_response(call, action)
+        try:
+            return _llm_response(call, action)
+        except ValueError:
+            raise agent_failure("structured-response") from None
 
 
 def _llm_response(
-    call: AnalysisLLMCall,
+    call: AgentRequest,
     result: str,
     *,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
-) -> LLMStructuredResponse:
-    return LLMStructuredResponse(
+) -> AgentStructuredResponse:
+    return AgentStructuredResponse(
         result=result,
-        provenance=LLMProvenance(
+        provenance=AgentProvenance(
             provider="fixture-provider",
-            model=call.request.model if model is None else model,
-            input_sha256=(call.request.input_sha256 if input_sha256 is None else input_sha256),
+            model=call.model if model is None else model,
+            input_sha256=(call.input_sha256 if input_sha256 is None else input_sha256),
             parameters_sha256=sha256_digest(b"fixture metadata response parameters"),
         ),
     )
@@ -278,7 +283,7 @@ def _stage_input(
 
 def _stage(llm: _FakeLLM) -> MetadataAnalysisStage:
     return MetadataAnalysisStage(
-        llm=cast(AnalysisLLMPort, llm),
+        agents=cast(AgentPort, llm),
         model=_MODEL,
         max_output_tokens=4_096,
     )
@@ -326,11 +331,11 @@ class AnalysisMetadataStageTests(unittest.TestCase):
         self.assertEqual(cast(FinalMetadataProposal, result).metadata, final)
         self.assertEqual(len(llm.calls), 1)
         call = llm.calls[0]
-        self.assertEqual(call.request.kind, LLMRequestKind.METADATA)
-        self.assertEqual(call.request.model, _MODEL)
-        self.assertEqual(call.request.max_output_tokens, 4_096)
+        self.assertEqual(call.role.value, "analysis")
+        self.assertEqual(call.model, _MODEL)
+        self.assertEqual(call.max_output_tokens, 4_096)
         self.assertEqual(
-            call.request.input_sha256,
+            call.input_sha256,
             sha256_digest(call.structured_input.encode("utf-8")),
         )
         private_input = json.loads(call.structured_input)
@@ -358,7 +363,10 @@ class AnalysisMetadataStageTests(unittest.TestCase):
 
         _stage(llm).analyze(_stage_input("# Cover\n\nCover page only"))
 
-        schema = json.loads(llm.calls[0].response_schema)
+        schema_value = llm.calls[0].response_schema
+        self.assertIsNotNone(schema_value)
+        assert schema_value is not None
+        schema = json.loads(schema_value)
         self.assertEqual(
             set(schema),
             {"additionalProperties", "properties", "required", "type"},
@@ -467,9 +475,9 @@ class AnalysisMetadataStageTests(unittest.TestCase):
                 self.assertNotIsInstance(failure, NoUsableContent)
 
     def test_provider_and_untrusted_port_failures_are_redacted_analysis_failures(self) -> None:
-        provider_failure = AnalysisLLMFailure(
+        provider_failure = AgentFailure(
             StableFailure(
-                code="analysis-llm-refusal",
+                code="agent-refusal",
                 reason="The provider refused the structured request.",
                 action="Review the private prompt before retrying.",
                 retryable=False,
@@ -889,9 +897,9 @@ Computing Institute<sup>2</sup>
         self.assertEqual(llm.calls, [])
 
     def test_execute_forwards_cancellation_and_returns_only_safe_an4_receipt(self) -> None:
-        responses: list[LLMStructuredResponse] = []
+        responses: list[AgentStructuredResponse] = []
 
-        def response_for(call: AnalysisLLMCall) -> LLMStructuredResponse:
+        def response_for(call: AgentRequest) -> AgentStructuredResponse:
             response = _llm_response(call, _usable(_final_metadata()))
             responses.append(response)
             return response
@@ -904,9 +912,10 @@ Computing Institute<sup>2</sup>
 
         self.assertIsInstance(receipt, MetadataAnalysisReceipt)
         self.assertIs(llm.calls[0].cancel_event, cancel_event)
-        self.assertEqual(receipt.request, llm.calls[0].request)
+        self.assertEqual(receipt.request.model, llm.calls[0].model)
+        self.assertEqual(receipt.request.input_sha256, llm.calls[0].input_sha256)
         self.assertEqual(receipt.provenance, responses[0].provenance)
-        self.assertEqual(receipt.prompt_version, llm.calls[0].prompt_version)
+        self.assertEqual(receipt.prompt_version, "analysis-metadata-stage-v1")
         self.assertIsInstance(receipt.result, FinalMetadataProposal)
         rendered = repr(receipt)
         for private_value in (

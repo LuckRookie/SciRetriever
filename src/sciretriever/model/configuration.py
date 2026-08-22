@@ -102,37 +102,56 @@ def _parser_connection_mode(value: object) -> "ParserConnectionMode":
         raise ValueError("parser connection mode is unsupported") from error
 
 
-def _analysis_provider(value: object) -> "AnalysisProvider":
-    if isinstance(value, AnalysisProvider):
+def _agent_provider(value: object) -> "AgentProvider":
+    if isinstance(value, AgentProvider):
         return value
     if type(value) is not str:
-        raise ValueError("analysis provider must be a string")
+        raise ValueError("Agent provider must be a string")
     try:
-        return AnalysisProvider(value)
+        return AgentProvider(value)
     except ValueError as error:
-        raise ValueError("analysis provider is unsupported") from error
+        raise ValueError("Agent provider is unsupported") from error
 
 
-def _analysis_protocol(value: object) -> "AnalysisProtocol":
-    if isinstance(value, AnalysisProtocol):
+def _agent_protocol(value: object) -> "AgentProtocol":
+    if isinstance(value, AgentProtocol):
         return value
     if type(value) is not str:
-        raise ValueError("analysis protocol must be a string")
+        raise ValueError("Agent protocol must be a string")
     try:
-        return AnalysisProtocol(value)
+        return AgentProtocol(value)
     except ValueError as error:
-        raise ValueError("analysis protocol is unsupported") from error
+        raise ValueError("Agent protocol is unsupported") from error
 
 
-def _analysis_authentication(value: object) -> "AnalysisAuthentication":
-    if isinstance(value, AnalysisAuthentication):
+def _agent_authentication(value: object) -> "AgentAuthentication":
+    if isinstance(value, AgentAuthentication):
         return value
     if type(value) is not str:
-        raise ValueError("analysis authentication must be a string")
+        raise ValueError("Agent authentication must be a string")
     try:
-        return AnalysisAuthentication(value)
+        return AgentAuthentication(value)
     except ValueError as error:
-        raise ValueError("analysis authentication is unsupported") from error
+        raise ValueError("Agent authentication is unsupported") from error
+
+
+def _agent_model_identity(value: object) -> str:
+    """Normalize the model identity before readiness can accept the role."""
+
+    if type(value) is not str:
+        raise ValueError("Agent model identity must be a string")
+    normalized = unicodedata.normalize("NFC", value)
+    if not normalized.strip() or any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in normalized
+    ):
+        raise ValueError("Agent model identity must be stable single-line text")
+    try:
+        encoded = normalized.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ValueError("Agent model identity must be valid UTF-8") from None
+    if len(encoded) > 512:
+        raise ValueError("Agent model identity exceeds its 512-byte budget")
+    return normalized
 
 
 def _probe_outcome(value: object) -> "ProbeOutcome":
@@ -479,15 +498,15 @@ class ParserConnectionMode(str, Enum):
     REMOTE = "remote"
 
 
-class AnalysisProvider(str, Enum):
-    """The fixed production Analysis adapters."""
+class AgentProvider(str, Enum):
+    """Configured Agent service family."""
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     CUSTOM = "custom"
 
 
-class AnalysisProtocol(str, Enum):
+class AgentProtocol(str, Enum):
     """The three explicit structured-output wire protocols."""
 
     OPENAI_RESPONSES = "openai-responses"
@@ -495,18 +514,25 @@ class AnalysisProtocol(str, Enum):
     ANTHROPIC_MESSAGES = "anthropic-messages"
 
 
-class AnalysisAuthentication(str, Enum):
-    """Explicit authentication choice for the selected LLM service."""
+class AgentAuthentication(str, Enum):
+    """Explicit authentication choice for the selected Agent service."""
 
     API_KEY = "api-key"
     NONE = "none"
 
 
 class CoreCredentialService(str, Enum):
-    """The two non-Provider secret sections in credentials.toml."""
+    """Non-Provider secret sections in ``credentials.toml``.
 
-    LLM = "llm"
+    ``CLOAKBROWSER`` is deliberately separate from Agents/MinerU runtime
+    secrets.  The pinned free binary does not consume this optional value;
+    Configuration may retain it for a future vendor entitlement without ever
+    injecting it into normal Completion or exposing it in status output.
+    """
+
+    AGENTS = "agents"
     MINERU = "mineru"
+    CLOAKBROWSER = "cloakbrowser"
 
 
 class ProbeOutcome(str, Enum):
@@ -582,6 +608,11 @@ NonBlankText = Annotated[
     BeforeValidator(_nonblank),
     Field(strict=True, min_length=1, max_length=4096),
 ]
+AgentModelIdentity = Annotated[
+    str,
+    BeforeValidator(_agent_model_identity),
+    Field(strict=True, min_length=1),
+]
 ProviderValue = Annotated[ProviderName, BeforeValidator(_provider)]
 CapabilityValue = Annotated[ProviderCapability, BeforeValidator(_capability)]
 StatusValue = Annotated[CredentialStatus, BeforeValidator(_status)]
@@ -597,17 +628,17 @@ ParserConnectionModeValue = Annotated[
     ParserConnectionMode,
     BeforeValidator(_parser_connection_mode),
 ]
-AnalysisProviderValue = Annotated[
-    AnalysisProvider,
-    BeforeValidator(_analysis_provider),
+AgentProviderValue = Annotated[
+    AgentProvider,
+    BeforeValidator(_agent_provider),
 ]
-AnalysisProtocolValue = Annotated[
-    AnalysisProtocol,
-    BeforeValidator(_analysis_protocol),
+AgentProtocolValue = Annotated[
+    AgentProtocol,
+    BeforeValidator(_agent_protocol),
 ]
-AnalysisAuthenticationValue = Annotated[
-    AnalysisAuthentication,
-    BeforeValidator(_analysis_authentication),
+AgentAuthenticationValue = Annotated[
+    AgentAuthentication,
+    BeforeValidator(_agent_authentication),
 ]
 ProbeOutcomeValue = Annotated[ProbeOutcome, BeforeValidator(_probe_outcome)]
 ConfigurationFingerprint = Annotated[
@@ -774,61 +805,61 @@ class ParsingConfig(_FrozenModel):
         return self
 
 
-def _validate_analysis_protocol_choice(
-    provider: AnalysisProvider | None,
-    protocol: AnalysisProtocol | None,
+def _validate_agent_protocol_choice(
+    provider: AgentProvider | None,
+    protocol: AgentProtocol | None,
 ) -> None:
-    if provider is AnalysisProvider.OPENAI and protocol not in {
+    if provider is AgentProvider.OPENAI and protocol not in {
         None,
-        AnalysisProtocol.OPENAI_RESPONSES,
-        AnalysisProtocol.OPENAI_CHAT_COMPLETIONS,
+        AgentProtocol.OPENAI_RESPONSES,
+        AgentProtocol.OPENAI_CHAT_COMPLETIONS,
     }:
-        raise ValueError("OpenAI provider requires an OpenAI protocol")
-    if provider is AnalysisProvider.ANTHROPIC and protocol not in {
+        raise ValueError("OpenAI Agent provider requires an OpenAI protocol")
+    if provider is AgentProvider.ANTHROPIC and protocol not in {
         None,
-        AnalysisProtocol.ANTHROPIC_MESSAGES,
+        AgentProtocol.ANTHROPIC_MESSAGES,
     }:
-        raise ValueError("Anthropic provider requires the Anthropic protocol")
+        raise ValueError("Anthropic Agent provider requires the Anthropic protocol")
 
 
-def _validate_official_analysis_url(
-    provider: AnalysisProvider | None,
+def _validate_official_agent_url(
+    provider: AgentProvider | None,
     *,
     scheme: str,
     hostname: str,
     port: int,
     path: str,
 ) -> None:
-    if provider is AnalysisProvider.OPENAI:
+    if provider is AgentProvider.OPENAI:
         official = "api.openai.com"
-    elif provider is AnalysisProvider.ANTHROPIC:
+    elif provider is AgentProvider.ANTHROPIC:
         official = "api.anthropic.com"
     else:
         return
     if scheme != "https" or hostname != official or port != 443 or path.rstrip("/") != "/v1":
-        label = "OpenAI" if provider is AnalysisProvider.OPENAI else "Anthropic"
+        label = "OpenAI" if provider is AgentProvider.OPENAI else "Anthropic"
         raise ValueError(f"{label} provider requires the official Base URL")
 
 
-def _validate_analysis_service_choice(
+def _validate_agent_service_choice(
     *,
-    provider: AnalysisProvider | None,
+    provider: AgentProvider | None,
     service_name: str | None,
-    protocol: AnalysisProtocol | None,
+    protocol: AgentProtocol | None,
     base_url: str | None,
     model: str | None,
     context_window_tokens: int | None,
-    authentication: AnalysisAuthentication | None,
+    authentication: AgentAuthentication | None,
 ) -> None:
     custom_values = (protocol, base_url, model, context_window_tokens, authentication)
     if (
-        provider is AnalysisProvider.CUSTOM
+        provider is AgentProvider.CUSTOM
         and service_name is None
         and any(value is not None for value in custom_values)
     ):
         raise ValueError("custom Analysis service requires a service name")
-    if provider is not AnalysisProvider.CUSTOM and service_name is not None:
-        raise ValueError("official Analysis providers do not accept a custom service name")
+    if provider is not AgentProvider.CUSTOM and service_name is not None:
+        raise ValueError("official Agent providers do not accept a custom service name")
     if base_url is None:
         return
     scheme, hostname, port, path, loopback = _service_url(base_url)
@@ -840,19 +871,19 @@ def _validate_analysis_service_choice(
         raise ValueError("loopback Analysis requires an HTTP Base URL")
     if not loopback and address is not None:
         raise ValueError("remote Analysis requires a hostname-based HTTPS Base URL")
-    _validate_official_analysis_url(
+    _validate_official_agent_url(
         provider,
         scheme=scheme,
         hostname=hostname,
         port=port,
         path=path,
     )
-    if authentication is AnalysisAuthentication.NONE and (
-        provider is not AnalysisProvider.CUSTOM or not loopback
+    if authentication is AgentAuthentication.NONE and (
+        provider is not AgentProvider.CUSTOM or not loopback
     ):
         raise ValueError("unauthenticated Analysis is limited to a custom loopback service")
-    if loopback and authentication is AnalysisAuthentication.API_KEY:
-        raise ValueError("loopback Analysis does not send API-key credentials")
+    if loopback and authentication is AgentAuthentication.API_KEY:
+        raise ValueError("loopback Agent service does not send API-key credentials")
 
 
 def _validate_analysis_budget_choice(
@@ -888,25 +919,95 @@ def _validate_analysis_budget_choice(
     if any(value >= context_window_tokens for value in configured_outputs):
         raise ValueError("Analysis output budget must fit the context window")
     if max_chunk_bytes is not None:
-        # Until a provider tokenizer is introduced, three UTF-8 bytes per
-        # token is the deliberately conservative planning estimate.  The
-        # adapter repeats the check against the actual serialized request.
-        input_tokens = (max_chunk_bytes + 2) // 3
+        # Without a provider tokenizer, one token per UTF-8 byte is the safe
+        # upper bound.  A byte/3 estimate can undercount punctuation-heavy or
+        # non-ASCII input and allow an over-context request.
+        input_tokens = max_chunk_bytes
         reserve = max(configured_outputs, default=0)
         if input_tokens + reserve > context_window_tokens:
             raise ValueError("Analysis chunk budget must fit the context window")
 
 
-class AnalysisConfig(_FrozenModel):
-    """Non-secret Analysis service, protocol, model, and budget selection."""
+class AgentRoleConfig(_FrozenModel):
+    """One role's explicit model capability and bounded request budget."""
 
-    provider: AnalysisProviderValue | None = None
-    service_name: ServiceIdentity | None = None
-    protocol: AnalysisProtocolValue | None = None
-    base_url: NonBlankText | None = None
-    model: NonBlankText | None = None
+    model: AgentModelIdentity | None = None
     context_window_tokens: Annotated[int, Field(strict=True, ge=1_024)] | None = None
-    authentication: AnalysisAuthenticationValue | None = None
+    max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
+    structured_output: Annotated[bool, Field(strict=True)] = False
+    image_input: Annotated[bool, Field(strict=True)] = False
+    tool_decision: Annotated[bool, Field(strict=True)] = False
+    image_media_types: tuple[NonBlankText, ...] = ()
+    image_count: Annotated[int, Field(strict=True, ge=0)] = 0
+    image_bytes: Annotated[int, Field(strict=True, ge=0)] = 0
+    turns: Annotated[int, Field(strict=True, ge=1)] = 1
+    deadline_seconds: Annotated[float, Field(strict=True, gt=0)] = 180.0
+
+    @field_validator("image_media_types", mode="before")
+    @classmethod
+    def _normalize_media_types(cls, value: object) -> object:
+        if isinstance(value, list):
+            return tuple(value)
+        return value
+
+    @model_validator(mode="after")
+    def _validate_capability_limits(self) -> "AgentRoleConfig":
+        if (
+            self.context_window_tokens is not None
+            and self.max_output_tokens is not None
+            and self.max_output_tokens > self.context_window_tokens
+        ):
+            raise ValueError("Agent role output limit must fit the context window")
+        if len(self.image_media_types) != len(set(self.image_media_types)) or any(
+            value not in {"image/png", "image/jpeg", "image/webp"}
+            for value in self.image_media_types
+        ):
+            raise ValueError("Agent image media types are invalid")
+        if self.image_input and (self.image_count < 1 or self.image_bytes < 1):
+            raise ValueError("image-input capability requires image limits")
+        if not self.image_input and (
+            self.image_count or self.image_bytes or self.image_media_types
+        ):
+            raise ValueError("image limits require image-input capability")
+        if not self.tool_decision and self.turns != 1:
+            raise ValueError("multi-turn budget requires tool-decision capability")
+        return self
+
+
+class AgentsConfig(_FrozenModel):
+    """Unique provider transport boundary shared by Analysis and Browser roles."""
+
+    provider: AgentProviderValue | None = None
+    service_name: ServiceIdentity | None = None
+    protocol: AgentProtocolValue | None = None
+    base_url: NonBlankText | None = None
+    authentication: AgentAuthenticationValue | None = None
+    analysis: AgentRoleConfig = AgentRoleConfig()
+    browser: AgentRoleConfig = AgentRoleConfig()
+
+    @model_validator(mode="after")
+    def _validate_protocol_and_service(self) -> "AgentsConfig":
+        _validate_agent_protocol_choice(self.provider, self.protocol)
+        _validate_agent_service_choice(
+            provider=self.provider,
+            service_name=self.service_name,
+            protocol=self.protocol,
+            base_url=self.base_url,
+            model=self.analysis.model or self.browser.model,
+            context_window_tokens=self.analysis.context_window_tokens,
+            authentication=self.authentication,
+        )
+        if (
+            self.provider in {AgentProvider.OPENAI, AgentProvider.ANTHROPIC}
+            and self.authentication is AgentAuthentication.NONE
+        ):
+            raise ValueError("official Agent providers require API-key authentication")
+        return self
+
+
+class AnalysisConfig(_FrozenModel):
+    """Analysis-only document/chunk and stage budget; no provider transport."""
+
     metadata_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
     content_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
     reference_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
@@ -917,24 +1018,9 @@ class AnalysisConfig(_FrozenModel):
     max_total_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
 
     @model_validator(mode="after")
-    def _validate_protocol_and_budgets(self) -> "AnalysisConfig":
-        _validate_analysis_protocol_choice(self.provider, self.protocol)
-        _validate_analysis_service_choice(
-            provider=self.provider,
-            service_name=self.service_name,
-            protocol=self.protocol,
-            base_url=self.base_url,
-            model=self.model,
-            context_window_tokens=self.context_window_tokens,
-            authentication=self.authentication,
-        )
-        if (
-            self.provider in {AnalysisProvider.OPENAI, AnalysisProvider.ANTHROPIC}
-            and self.authentication is AnalysisAuthentication.NONE
-        ):
-            raise ValueError("official Analysis providers require API-key authentication")
+    def _validate_budgets(self) -> "AnalysisConfig":
         _validate_analysis_budget_choice(
-            context_window_tokens=self.context_window_tokens,
+            context_window_tokens=None,
             max_input_bytes=self.max_input_bytes,
             max_chunk_bytes=self.max_chunk_bytes,
             max_total_llm_requests=self.max_total_llm_requests,
@@ -1016,17 +1102,49 @@ class AccessConfig(_FrozenModel):
 
 
 class Configuration(_FrozenModel):
-    """Ordinary configuration with exactly nine accepted responsibility groups."""
+    """Ordinary configuration with one shared Agents transport boundary."""
 
     paths: PathsConfig = PathsConfig()
     discovery: DiscoveryConfig = DiscoveryConfig()
     sources: SourcesConfig = SourcesConfig()
     assets: AssetsConfig = AssetsConfig()
     parsing: ParsingConfig = ParsingConfig()
+    agents: AgentsConfig = AgentsConfig()
     analysis: AnalysisConfig = AnalysisConfig()
     execution: ExecutionConfig = ExecutionConfig()
     library: LibraryConfig = LibraryConfig()
     access: AccessConfig = AccessConfig()
+
+    @model_validator(mode="after")
+    def _validate_analysis_role_budgets(self) -> "Configuration":
+        role = self.agents.analysis
+        analysis = self.analysis
+        _validate_analysis_budget_choice(
+            context_window_tokens=role.context_window_tokens,
+            max_input_bytes=analysis.max_input_bytes,
+            max_chunk_bytes=analysis.max_chunk_bytes,
+            max_total_llm_requests=analysis.max_total_llm_requests,
+            max_total_output_tokens=analysis.max_total_output_tokens,
+            output_tokens=(
+                analysis.metadata_max_output_tokens,
+                analysis.content_max_output_tokens,
+                analysis.reference_max_output_tokens,
+            ),
+        )
+        stage_outputs = tuple(
+            value
+            for value in (
+                analysis.metadata_max_output_tokens,
+                analysis.content_max_output_tokens,
+                analysis.reference_max_output_tokens,
+            )
+            if value is not None
+        )
+        if role.max_output_tokens is not None and any(
+            value > role.max_output_tokens for value in stage_outputs
+        ):
+            raise ValueError("Analysis stage output must fit the Agent role output limit")
+        return self
 
 
 class CredentialFieldSpec(_FrozenModel):
@@ -1123,22 +1241,31 @@ class BrowserProfileStatus(_FrozenModel):
 
 
 class BrowserRuntimeStatus(_FrozenModel):
-    """Purely local Browser implementation/dependency readiness.
+    """Purely local production CloakBrowser readiness.
 
     A status operation may verify package and executable file presence but
     never launches the runtime, so launchability remains explicitly unassessed.
     """
 
-    framework_available: bool
-    python_dependency_available: bool
-    chromium_executable_available: bool
+    cloak_wrapper_available: bool
+    playwright_api_available: bool
+    binary_presence: bool
+    binary_version: NonBlankText | None = None
+    binary_verified: bool
     headed_display_available: bool
+    fixed_identity_manifest: bool
+    identity_schema: NonBlankText | None = None
+    profile_lease: Literal["not-assessed"] = "not-assessed"
     launch_assessed: Literal[False] = False
 
     @model_validator(mode="after")
     def _validate_runtime_files(self) -> "BrowserRuntimeStatus":
-        if self.chromium_executable_available and not self.python_dependency_available:
-            raise ValueError("Browser Chromium readiness requires the Python dependency")
+        if self.binary_verified and not self.binary_presence:
+            raise ValueError("verified Cloak binary requires binary presence")
+        if self.binary_presence and self.binary_version is None:
+            raise ValueError("Cloak binary presence requires a version")
+        if self.fixed_identity_manifest and self.identity_schema is None:
+            raise ValueError("fixed identity manifest requires an identity schema")
         return self
 
 
@@ -1215,11 +1342,11 @@ class BrowserProbeAvailabilityStatus(_FrozenModel):
 
 
 class BrowserAccessStatus(_FrozenModel):
-    """Local, secret-free readiness for the optional persistent Browser tier."""
+    """Local, secret-free readiness for the fixed-profile Browser tier."""
 
     enabled: bool
-    mode: Literal["headed-persistent-profile"] = "headed-persistent-profile"
-    persistent_authentication_supported: Literal[True] = True
+    mode: Literal["headed-fixed-profile"] = "headed-fixed-profile"
+    interactive_authentication_supported: Literal[False] = False
     article_entitlement: Literal["checked-per-article"] = "checked-per-article"
     local_max_concurrency: Annotated[int, Field(strict=True, gt=1)]
     runtime: BrowserRuntimeStatus
@@ -1250,10 +1377,12 @@ class BrowserAccessStatus(_FrozenModel):
         locally_usable = (
             bool(self.automatic_route_count)
             and self.enabled
-            and self.runtime.framework_available
-            and self.runtime.python_dependency_available
-            and self.runtime.chromium_executable_available
+            and self.runtime.cloak_wrapper_available
+            and self.runtime.playwright_api_available
+            and self.runtime.binary_presence
+            and self.runtime.binary_verified
             and self.runtime.headed_display_available
+            and self.runtime.fixed_identity_manifest
             and self.profile.selected is not None
             and self.profile.presence is BrowserProfilePresence.CONFIGURED
         )
@@ -1388,15 +1517,47 @@ class ConfigurationProbeSummary(_FrozenModel):
         return all(result.outcome is ProbeOutcome.PASSED for result in self.results)
 
 
-class LLMConfigurationProbeDetails(_FrozenModel):
-    """Stable disclosure of the minimal LLM probe's bounded side effects."""
+class AgentConfigurationProbeDetails(_FrozenModel):
+    """Stable disclosure of the minimal Agent probe's bounded side effects."""
 
-    request_kind: Literal["minimal-schema"] = "minimal-schema"
+    role: Literal["analysis", "browser-agent"] = "analysis"
+    request_kind: Literal["minimal-schema", "browser-agent-tool"] = "minimal-schema"
     sends_user_literature: Literal[False] = False
+    sends_page_content: Literal[False] = False
+    sends_pdf: Literal[False] = False
     may_consume_quota: Literal[True] = True
     strict_response_parseable: bool | None = None
+    tool_decision_parseable: bool | None = None
+    image_input: bool = False
+    tool_decision: bool = False
+    image_count: Annotated[int, Field(strict=True, ge=0)] = 0
+    tool_count: Annotated[int, Field(strict=True, ge=0)] = 0
     model: NonBlankText | None = None
-    protocol: AnalysisProtocolValue | None = None
+    protocol: AgentProtocolValue | None = None
+
+    @model_validator(mode="after")
+    def _validate_probe_role(self) -> "AgentConfigurationProbeDetails":
+        if self.role == "analysis":
+            if (
+                self.request_kind != "minimal-schema"
+                or self.image_input
+                or self.tool_decision
+                or self.image_count != 0
+                or self.tool_count != 0
+                or self.tool_decision_parseable is not None
+            ):
+                raise ValueError("Analysis probe details contain Browser capability fields")
+            return self
+        if (
+            self.request_kind != "browser-agent-tool"
+            or not self.image_input
+            or not self.tool_decision
+            or self.image_count < 1
+            or self.tool_count < 1
+            or self.strict_response_parseable is not None
+        ):
+            raise ValueError("Browser Agent probe details are inconsistent")
+        return self
 
 
 class MinerUConfigurationProbeDetails(_FrozenModel):
@@ -1417,7 +1578,7 @@ class CoreConfigurationProbeResult(_FrozenModel):
     outcome: ProbeOutcomeValue
     local_ready: bool
     failure_code: StableFailureCode | None = None
-    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails
+    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails
     persisted: Literal[False] = False
 
     @model_validator(mode="after")
@@ -1445,12 +1606,16 @@ def _validate_skipped_browser_probe_shape(
     checks: tuple[bool | None, bool | None],
     navigation_count: int,
     failure_code: str | None,
+    challenge_dependency_declared: bool,
+    challenge_resource_counts: tuple[int, int],
 ) -> None:
     if (
         local_ready
         or any(value is not None for value in checks)
         or navigation_count != 0
         or failure_code is None
+        or challenge_dependency_declared
+        or any(value != 0 for value in challenge_resource_counts)
     ):
         raise ValueError("skipped Browser probe result is inconsistent")
 
@@ -1476,8 +1641,9 @@ def _validate_failed_browser_probe_shape(
     checks: tuple[bool | None, bool | None],
     navigation_count: int,
     failure_code: str | None,
+    challenge_resource_blocked_count: int,
 ) -> None:
-    if failure_code is None or checks == (True, True):
+    if failure_code is None or (checks == (True, True) and challenge_resource_blocked_count == 0):
         raise ValueError("failed Browser probe requires a failure code")
     terminal_seen = False
     for value in checks:
@@ -1507,6 +1673,13 @@ class BrowserConfigurationProbeResult(_FrozenModel):
     minimal_target_reached: bool | None = None
     article_entitlement: Literal["not-proven"] = "not-proven"
     navigation_count: Annotated[int, Field(strict=True, ge=0, le=1)] = 0
+    # These are payload-free facts from the Acquisition-owned destination
+    # guard.  A declared dependency is not evidence that a challenge was
+    # encountered or solved; the counts only record rule-admitted/blocked
+    # resources during this bounded navigation-only probe.
+    challenge_dependency_declared: bool = False
+    challenge_resource_admitted_count: Annotated[int, Field(strict=True, ge=0)] = 0
+    challenge_resource_blocked_count: Annotated[int, Field(strict=True, ge=0)] = 0
     failure_code: StableFailureCode | None = None
     persisted: Literal[False] = False
 
@@ -1522,11 +1695,23 @@ class BrowserConfigurationProbeResult(_FrozenModel):
                 checks=checks,
                 navigation_count=self.navigation_count,
                 failure_code=self.failure_code,
+                challenge_dependency_declared=self.challenge_dependency_declared,
+                challenge_resource_counts=(
+                    self.challenge_resource_admitted_count,
+                    self.challenge_resource_blocked_count,
+                ),
             )
             return self
+        if not self.challenge_dependency_declared and (
+            self.challenge_resource_admitted_count != 0
+            or self.challenge_resource_blocked_count != 0
+        ):
+            raise ValueError("Browser challenge resource facts require a declared dependency")
         if not self.local_ready:
             raise ValueError("executed Browser probe result is inconsistent")
         if self.outcome is ProbeOutcome.PASSED:
+            if self.challenge_resource_blocked_count != 0:
+                raise ValueError("passed Browser probe cannot contain blocked challenge resources")
             _validate_passed_browser_probe_shape(
                 checks=checks,
                 navigation_count=self.navigation_count,
@@ -1537,27 +1722,35 @@ class BrowserConfigurationProbeResult(_FrozenModel):
             checks=checks,
             navigation_count=self.navigation_count,
             failure_code=self.failure_code,
+            challenge_resource_blocked_count=self.challenge_resource_blocked_count,
         )
         return self
 
 
 def _validate_core_probe_details(
     service: CoreCredentialService,
-    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails,
 ) -> None:
-    if service is CoreCredentialService.LLM:
-        if not isinstance(details, LLMConfigurationProbeDetails):
+    if service is CoreCredentialService.AGENTS:
+        if not isinstance(details, AgentConfigurationProbeDetails):
             raise ValueError("core probe details do not match the service")
-    elif not isinstance(details, MinerUConfigurationProbeDetails):
+    elif service is CoreCredentialService.MINERU and not isinstance(
+        details, MinerUConfigurationProbeDetails
+    ):
         raise ValueError("core probe details do not match the service")
+    elif service is CoreCredentialService.CLOAKBROWSER:
+        raise ValueError("CloakBrowser does not expose a configuration probe")
 
 
 def _validate_passed_core_probe_details(
-    details: LLMConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails,
 ) -> None:
-    if isinstance(details, LLMConfigurationProbeDetails):
-        if details.strict_response_parseable is not True:
-            raise ValueError("passed LLM probe result is inconsistent")
+    if isinstance(details, AgentConfigurationProbeDetails):
+        if details.role == "analysis":
+            if details.strict_response_parseable is not True:
+                raise ValueError("passed Analysis probe result is inconsistent")
+        elif details.tool_decision_parseable is not True:
+            raise ValueError("passed Browser Agent probe result is inconsistent")
         return
     if details.health != "healthy" or details.release != "3.4.4" or details.api_protocol != 2:
         raise ValueError("passed MinerU probe result is inconsistent")
@@ -1568,9 +1761,11 @@ __all__ = (
     "AcquisitionProviderTuple",
     "AcquisitionSourcesConfig",
     "AnalysisConfig",
-    "AnalysisAuthentication",
-    "AnalysisProvider",
-    "AnalysisProtocol",
+    "AgentAuthentication",
+    "AgentProvider",
+    "AgentProtocol",
+    "AgentRoleConfig",
+    "AgentsConfig",
     "AssetsConfig",
     "BrowserAccessKeyValue",
     "BrowserAccessStatus",
@@ -1605,7 +1800,7 @@ __all__ = (
     "DiscoveryConfig",
     "ExecutionConfig",
     "LibraryConfig",
-    "LLMConfigurationProbeDetails",
+    "AgentConfigurationProbeDetails",
     "MetadataProviderTuple",
     "MetadataSourcesConfig",
     "MinerUConfigurationProbeDetails",

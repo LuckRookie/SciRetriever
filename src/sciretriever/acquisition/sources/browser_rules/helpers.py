@@ -6,6 +6,7 @@ from typing import Final
 
 from .model import (
     BrowserActionKind,
+    BrowserChallengeResourceProfile,
     BrowserPageMarker,
     BrowserPageMarkerKind,
     BrowserRuleAction,
@@ -26,6 +27,37 @@ DEFAULT_EXCLUDED_FILENAME_MARKERS: Final[tuple[str, ...]] = (
     "preview",
     "sample",
 )
+
+
+def cloudflare_challenge_profile() -> BrowserChallengeResourceProfile:
+    """Return the closed Cloudflare dependency used by verified rules.
+
+    The profile is intentionally a factory so each Provider rule owns an
+    immutable value that participates in that rule's revision fingerprint.
+    It does not add the challenge origin to the Publisher origin allow-list.
+    """
+
+    return BrowserChallengeResourceProfile(
+        origin="https://challenges.cloudflare.com",
+        # Cloudflare's documented Turnstile client script is rooted at the
+        # fixed ``/turnstile/v0/`` family.  Keep this alongside the existing
+        # challenge-platform family; the profile remains path- and
+        # resource-type-closed and does not admit the whole challenge origin.
+        path_prefixes=(
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/",
+            "https://challenges.cloudflare.com/turnstile/v0/",
+        ),
+        resource_types=("script", "document", "fetch", "xhr", "image"),
+        interaction_selectors=(
+            "#challenge-form",
+            "[data-captcha]",
+            "iframe[src*='captcha']",
+        ),
+        settling_selectors=(
+            "#challenge-running",
+            ".cf-challenge-running",
+        ),
+    )
 
 
 def pdf_actions(selector: str) -> tuple[BrowserRuleAction, ...]:
@@ -108,6 +140,7 @@ def publisher_page_markers(
 __all__ = (
     "DEFAULT_EXCLUDED_FILENAME_MARKERS",
     "DEFAULT_SUPPLEMENT_FILENAME_MARKERS",
+    "cloudflare_challenge_profile",
     "pdf_actions",
     "publisher_page_markers",
 )

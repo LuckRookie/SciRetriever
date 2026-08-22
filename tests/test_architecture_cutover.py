@@ -31,6 +31,7 @@ LEGACY_MODEL_FILES = (
     "library_pages.py",
     "library_query.py",
     "library_views.py",
+    "llm.py",
     "sources.py",
 )
 
@@ -47,7 +48,6 @@ TARGET_MODEL_MODULES = (
     "execution",
     "report",
     "access",
-    "llm",
     "record",
     "configuration",
 )
@@ -117,6 +117,14 @@ def _entry_private_function_import(module: str) -> bool:
 def _storage_concrete_import(module: str) -> bool:
     return any(
         module == prefix or module.startswith(f"{prefix}.") for prefix in STORAGE_CONCRETE_PREFIXES
+    )
+
+
+def _consumer_agent_provider_import(module: str) -> bool:
+    return (
+        module == "sciretriever.agents.providers"
+        or module.startswith("sciretriever.agents.providers.")
+        or module.split(".", maxsplit=1)[0] in {"anthropic", "openai"}
     )
 
 
@@ -372,6 +380,17 @@ class WosCoreCollectionResponse:
             for path in sorted((SOURCE_ROOT / package).rglob("*.py")):
                 violations = tuple(
                     module for module in _import_names(path) if _storage_concrete_import(module)
+                )
+                with self.subTest(path=path.relative_to(ROOT)):
+                    self.assertEqual(violations, ())
+
+    def test_analysis_and_acquisition_do_not_import_agent_providers_or_vendor_sdks(self) -> None:
+        for package in ("analysis", "acquisition"):
+            for path in sorted((SOURCE_ROOT / package).rglob("*.py")):
+                violations = tuple(
+                    module
+                    for module in _import_names(path)
+                    if _consumer_agent_provider_import(module)
                 )
                 with self.subTest(path=path.relative_to(ROOT)):
                     self.assertEqual(violations, ())

@@ -1,24 +1,29 @@
-"""Path-free Ports and private exchange values owned by Analysis.
+"""Path-free values owned by the Analysis business boundary.
 
-The public neutral exchange values remain in :mod:`sciretriever.model.llm`.
-This module owns the private prompt, bounded structured input, response schema,
-and cancellation handle needed by Analysis provider adapters.  None of those
-values may cross the Analysis business API or become persistent provenance.
+Analysis keeps its stage classification, prompts, schemas and business input
+validation here.  Provider execution is the neutral :mod:`sciretriever.agents`
+Port; no provider adapter or vendor object crosses this module.
 """
 
 from __future__ import annotations
 
 import json
-import math
 import re
 import threading
 import unicodedata
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from enum import Enum, unique
 from typing import BinaryIO, NoReturn, Protocol, cast, runtime_checkable
 
+from sciretriever.agents import (
+    AgentBudget,
+    AgentCapability,
+    AgentRequest,
+    AgentRole,
+    AgentTextPart,
+)
 from sciretriever.model.analysis import ArtifactRef
-from sciretriever.model.llm import LLMRequest, LLMStructuredResponse
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import ParserArtifactRef, ParserResult
 from sciretriever.model.primitives import (
@@ -27,7 +32,6 @@ from sciretriever.model.primitives import (
     Sha256,
     sha256_digest,
 )
-from sciretriever.model.report import StableFailure
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _MAX_PROMPT_VERSION_BYTES = 1_024
@@ -119,26 +123,38 @@ def utf8_size(value: str) -> int:
         raise ValueError("bounded value must be valid UTF-8 text") from None
 
 
-class AnalysisLLMFailure(RuntimeError):
-    """Expected provider/access/protocol failure, already stable and redacted."""
+@unique
+class AnalysisRequestKind(str, Enum):
+    """Analysis-only meaning of a model turn; never sent to Agents."""
 
-    _MESSAGE = "analysis language-model provider call failed"
+    METADATA = "metadata"
+    CONTENT = "content"
+    REFERENCE_LOOKUP = "reference-lookup"
 
-    def __init__(self, failure: object) -> None:
-        if not isinstance(failure, StableFailure):
-            raise TypeError("failure must be a StableFailure")
-        super().__init__(self._MESSAGE)
-        self.failure = failure
 
-    def __repr__(self) -> str:
-        return "<AnalysisLLMFailure>"
+@dataclass(frozen=True, slots=True)
+class AnalysisRequest:
+    kind: AnalysisRequestKind
+    input_sha256: Sha256
+    model: str
+    max_output_tokens: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, AnalysisRequestKind):
+            raise TypeError("kind must be AnalysisRequestKind")
+        if not isinstance(self.input_sha256, Sha256):
+            raise TypeError("input_sha256 must be Sha256")
+        if type(self.model) is not str or not self.model.strip() or utf8_size(self.model) > 512:
+            raise ValueError("model must be bounded nonblank text")
+        if type(self.max_output_tokens) is not int or self.max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class AnalysisLLMCall:
+class AnalysisCall:
     """One private Analysis call around a neutral request descriptor."""
 
-    request: LLMRequest
+    request: AnalysisRequest
     prompt_version: str
     prompt: str = field(repr=False)
     structured_input: str = field(repr=False)
@@ -147,8 +163,8 @@ class AnalysisLLMCall:
 
     def __post_init__(self) -> None:
         request_value = _runtime_value(self.request)
-        if not isinstance(request_value, LLMRequest):
-            raise TypeError("request must be an LLMRequest")
+        if not isinstance(request_value, AnalysisRequest):
+            raise TypeError("request must be an AnalysisRequest")
         version = _prompt_version(self.prompt_version)
         object.__setattr__(self, "prompt_version", version)
         _bounded_nonblank_text(
@@ -176,72 +192,28 @@ class AnalysisLLMCall:
             raise TypeError("cancel_event must expose is_set()")
 
     def __repr__(self) -> str:
-        return f"<AnalysisLLMCall kind={self.request.kind.value}>"
+        return f"<AnalysisCall kind={self.request.kind.value}>"
 
+    def to_agent_request(self, *, budget: AgentBudget) -> AgentRequest:
+        """Convert a private business call to the neutral provider contract."""
 
-@dataclass(frozen=True, slots=True)
-class LLMProviderLimits:
-    """Request-local hard limits applied before and during provider access."""
+        if not isinstance(budget, AgentBudget):
+            raise TypeError("budget must be an AgentBudget")
 
-    max_prompt_bytes: int = 131_072
-    max_input_bytes: int = 8_388_608
-    max_schema_bytes: int = 262_144
-    max_request_bytes: int = 10_000_000
-    max_response_bytes: int = 10_000_000
-    max_result_bytes: int = 8_388_608
-    max_output_tokens: int = 131_072
-    context_window_tokens: int = 1_000_000
-    connect_timeout_seconds: float = 10.0
-    read_timeout_seconds: float = 120.0
-    overall_timeout_seconds: float = 180.0
-    max_redirects: int = 0
-    max_retries: int = 0
-
-    def __post_init__(self) -> None:
-        for field_name in (
-            "max_prompt_bytes",
-            "max_input_bytes",
-            "max_schema_bytes",
-            "max_request_bytes",
-            "max_response_bytes",
-            "max_result_bytes",
-            "max_output_tokens",
-            "context_window_tokens",
-        ):
-            value = getattr(self, field_name)
-            if type(value) is not int or value < 1:
-                raise ValueError(f"{field_name} must be a positive integer")
-        for field_name in (
-            "connect_timeout_seconds",
-            "read_timeout_seconds",
-            "overall_timeout_seconds",
-        ):
-            value = getattr(self, field_name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise TypeError(f"{field_name} must be a number")
-            normalized = float(value)
-            if not math.isfinite(normalized) or normalized <= 0:
-                raise ValueError(f"{field_name} must be finite and positive")
-            object.__setattr__(self, field_name, normalized)
-        if self.overall_timeout_seconds < max(
-            self.connect_timeout_seconds,
-            self.read_timeout_seconds,
-        ):
-            raise ValueError("overall timeout must cover each phase timeout")
-        if type(self.max_redirects) is not int or self.max_redirects != 0:
-            raise ValueError("Analysis provider redirects must be disabled")
-        if type(self.max_retries) is not int or self.max_retries != 0:
-            raise ValueError("Analysis provider POST retries must be disabled")
-
-
-@runtime_checkable
-class AnalysisLLMPort(Protocol):
-    """The only provider-level LLM capability visible inside Analysis."""
-
-    @property
-    def provider_name(self) -> str: ...
-
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse: ...
+        return AgentRequest(
+            role=AgentRole.ANALYSIS,
+            capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
+            model=self.request.model,
+            input_sha256=self.request.input_sha256,
+            text_parts=(
+                AgentTextPart(media_type="text/plain", text=self.prompt),
+                AgentTextPart(media_type="application/json", text=self.structured_input),
+            ),
+            response_schema=self.response_schema,
+            max_output_tokens=self.request.max_output_tokens,
+            budget=budget,
+            cancel_event=self.cancel_event,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,11 +379,10 @@ __all__ = (
     "AnalysisArtifactPublicationPort",
     "AnalysisArtifactReadPort",
     "AnalysisCurrentInputPort",
-    "AnalysisLLMCall",
-    "AnalysisLLMFailure",
-    "AnalysisLLMPort",
+    "AnalysisCall",
+    "AnalysisRequest",
+    "AnalysisRequestKind",
     "ContentAnalysisInput",
     "ContentInputIdentity",
-    "LLMProviderLimits",
     "StagedContentMarkdown",
 )

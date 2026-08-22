@@ -55,9 +55,14 @@ from sciretriever.acquisition.routes import (
 )
 from sciretriever.acquisition.routing import AcquisitionRequest
 from sciretriever.acquisition.tiered_service import TieredAcquisitionService
+from sciretriever.agents import (
+    AgentFailure,
+    AgentProvenance,
+    AgentRequest,
+    AgentStructuredResponse,
+)
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.content import ContentAnalysisLimits
-from sciretriever.analysis.ports import AnalysisLLMCall, AnalysisLLMFailure
 from sciretriever.analysis.references import ReferenceLookupStage
 from sciretriever.analysis.service import AnalysisService
 from sciretriever.entry.completion import DatabaseCompletionOperation
@@ -68,11 +73,6 @@ from sciretriever.metadata.publication import MetadataPublication
 from sciretriever.model.acquisition import AcquisitionPath, PdfCandidate
 from sciretriever.model.execution import AllPendingSelector, BatchRequest, LiteratureSelector
 from sciretriever.model.literature import Identifier
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import ParserArtifactRef, ParserProvenance, ParserRequest
 from sciretriever.model.primitives import (
@@ -388,9 +388,17 @@ class _Parser:
         )
 
 
+def _request_stage(call: AgentRequest) -> str:
+    if "final_metadata" in call.structured_input:
+        return "content"
+    if "references" in call.structured_input:
+        return "reference"
+    return "metadata"
+
+
 class _LLM:
     def __init__(self) -> None:
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
         self.no_usable_once_titles: set[str] = set()
         self.fail_metadata_once_titles: set[str] = set()
         self.metadata_attempts: Counter[str] = Counter()
@@ -399,15 +407,16 @@ class _LLM:
     def provider_name(self) -> str:
         return _LLM_PROVIDER
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
-        self.calls.append(call)
-        structured = json.loads(call.structured_input)
-        if call.request.kind is LLMRequestKind.METADATA:
+    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+        self.calls.append(request)
+        structured = json.loads(request.structured_input)
+        stage = _request_stage(request)
+        if stage == "metadata":
             initial = LiteratureMetadata.model_validate(structured["initial_metadata"])
             title = initial.title or ""
             self.metadata_attempts[title] += 1
             if title in self.fail_metadata_once_titles and self.metadata_attempts[title] == 1:
-                raise AnalysisLLMFailure(
+                raise AgentFailure(
                     StableFailure(
                         code="acceptance-llm-failed-once",
                         reason="The controlled language model failed on its first attempt.",
@@ -427,7 +436,7 @@ class _LLM:
                     separators=(",", ":"),
                     sort_keys=True,
                 )
-        elif call.request.kind is LLMRequestKind.CONTENT:
+        elif stage == "content":
             result = json.dumps(
                 {"markdown": _content_draft()},
                 ensure_ascii=False,
@@ -435,13 +444,13 @@ class _LLM:
             )
         else:
             raise AssertionError("database completion must not run reference lookup")
-        return LLMStructuredResponse(
+        return AgentStructuredResponse(
             result=result,
-            provenance=LLMProvenance(
+            provenance=AgentProvenance(
                 provider=self.provider_name,
-                model=call.request.model,
-                input_sha256=call.request.input_sha256,
-                parameters_sha256=sha256_digest(f"{call.request.kind.value}-parameters".encode()),
+                model=request.model,
+                input_sha256=request.input_sha256,
+                parameters_sha256=sha256_digest(f"{stage}-parameters".encode()),
             ),
         )
 
@@ -669,7 +678,7 @@ parsing = ParsingApi(
 )
 analysis = AnalysisApi(
     content_service=AnalysisService(
-        llm=llm,
+        agents=llm,
         artifact_reader=AnalysisArtifactReader(engine, verified_reader),
         current_inputs=SqliteAnalysisCurrentInputs(engine),
         artifact_publisher=AnalysisArtifactPublisher(artifact_store),
@@ -687,7 +696,7 @@ analysis = AnalysisApi(
         clock=lambda: _TIME,
     ),
     reference_lookup_stage=ReferenceLookupStage(
-        llm=llm,
+        agents=llm,
         model=_LLM_MODEL,
         max_output_tokens=2_048,
     ),
@@ -905,7 +914,7 @@ partial_details_after_first = {
     "success": literature.read_detail(partial_success_literature.literature_id),
 }
 partial_counts_after_first = {
-    "llm_kinds": [call.request.kind.value for call in llm.calls],
+    "llm_kinds": [_request_stage(call) for call in llm.calls],
     "parser_attempts": dict(parser.attempts_by_candidate),
     "source_request_count": len(source.requests),
 }
@@ -916,7 +925,7 @@ partial_details_after_second = {
     "success": literature.read_detail(partial_success_literature.literature_id),
 }
 partial_counts_after_second = {
-    "llm_kinds": [call.request.kind.value for call in llm.calls],
+    "llm_kinds": [_request_stage(call) for call in llm.calls],
     "parser_attempts": dict(parser.attempts_by_candidate),
     "source_request_count": len(source.requests),
 }
@@ -993,13 +1002,14 @@ with engine.read_snapshot() as connection:
 llm_kinds_by_title: dict[str, list[str]] = {}
 for call in llm.calls:
     structured = json.loads(call.structured_input)
-    if call.request.kind is LLMRequestKind.METADATA:
+    stage = _request_stage(call)
+    if stage == "metadata":
         title = structured["initial_metadata"]["title"]
-    elif call.request.kind is LLMRequestKind.CONTENT:
+    elif stage == "content":
         title = structured["final_metadata"]["title"]
     else:
         title = "reference-lookup"
-    llm_kinds_by_title.setdefault(title, []).append(call.request.kind.value)
+    llm_kinds_by_title.setdefault(title, []).append(stage)
 
 payload = {
     "catalog": {

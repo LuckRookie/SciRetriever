@@ -6,13 +6,22 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, NoReturn, cast
 from uuid import uuid4
 
-from sciretriever.analysis.ports import AnalysisLLMPort
+from sciretriever.agents import (
+    AgentBudget,
+    AgentFailure,
+    AgentModelCapabilities,
+    AgentPort,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+)
 from sciretriever.bootstrap.errors import BootstrapError
 from sciretriever.bootstrap.graphs import BootstrapExternalDependencies
 from sciretriever.configuration import CredentialLookup, RuntimeSecretLookup
 from sciretriever.model.configuration import (
-    AnalysisAuthentication,
-    AnalysisProvider,
+    AgentAuthentication,
+    AgentProtocol,
+    AgentProvider,
     Configuration,
     ParserConnectionMode,
 )
@@ -83,41 +92,51 @@ def _require_parser_configuration(configuration: Configuration) -> None:
 
 def _require_analysis_configuration(configuration: Configuration) -> None:
     analysis = configuration.analysis
-    if any(
-        value is None
-        for value in (
-            analysis.provider,
-            analysis.protocol,
-            analysis.base_url,
-            analysis.model,
-            analysis.context_window_tokens,
-            analysis.authentication,
-            analysis.metadata_max_output_tokens,
-            analysis.content_max_output_tokens,
-            analysis.reference_max_output_tokens,
-            analysis.max_input_bytes,
-            analysis.max_chunk_bytes,
-            analysis.max_chunk_count,
-            analysis.max_total_llm_requests,
-            analysis.max_total_output_tokens,
+    agents = configuration.agents
+    if (
+        any(
+            value is None
+            for value in (
+                agents.provider,
+                agents.protocol,
+                agents.base_url,
+                agents.analysis.model,
+                agents.analysis.context_window_tokens,
+                agents.analysis.max_output_tokens,
+                agents.authentication,
+                analysis.metadata_max_output_tokens,
+                analysis.content_max_output_tokens,
+                analysis.reference_max_output_tokens,
+                analysis.max_input_bytes,
+                analysis.max_chunk_bytes,
+                analysis.max_chunk_count,
+                analysis.max_total_llm_requests,
+                analysis.max_total_output_tokens,
+            )
         )
+        or not agents.analysis.structured_output
     ):
         raise BootstrapError("analysis-not-ready")
 
 
 def _require_reference_analysis_configuration(configuration: Configuration) -> None:
     analysis = configuration.analysis
-    if any(
-        value is None
-        for value in (
-            analysis.provider,
-            analysis.protocol,
-            analysis.base_url,
-            analysis.model,
-            analysis.context_window_tokens,
-            analysis.authentication,
-            analysis.reference_max_output_tokens,
+    agents = configuration.agents
+    if (
+        any(
+            value is None
+            for value in (
+                agents.provider,
+                agents.protocol,
+                agents.base_url,
+                agents.analysis.model,
+                agents.analysis.context_window_tokens,
+                agents.analysis.max_output_tokens,
+                agents.authentication,
+                analysis.reference_max_output_tokens,
+            )
         )
+        or not agents.analysis.structured_output
     ):
         raise BootstrapError("analysis-not-ready")
 
@@ -141,18 +160,60 @@ def _analysis_limits(configuration: Configuration):  # noqa: ANN202
     )
 
 
-def _analysis_provider_limits(configuration: Configuration):  # noqa: ANN202
-    from sciretriever.analysis.ports import LLMProviderLimits
+def _agent_provider_limits(
+    configuration: Configuration,
+    *,
+    required_roles: frozenset[AgentRole] | None = None,
+):  # noqa: ANN202
+    """Build one shared provider budget for the explicitly required role set.
 
+    Analysis remains the default so existing production assembly keeps its
+    exact limits.  A Browser-only probe selects the Browser role's bounded
+    context/output/deadline values instead of inheriting an unconfigured
+    Analysis role's fallback one-token budget.
+    """
+
+    selected_roles = frozenset({AgentRole.ANALYSIS}) if required_roles is None else required_roles
+    if (
+        not isinstance(selected_roles, frozenset)
+        or not selected_roles
+        or any(not isinstance(role, AgentRole) for role in selected_roles)
+    ):
+        raise TypeError("required_roles must be a non-empty AgentRole set")
     analysis = configuration.analysis
-    return LLMProviderLimits(
-        max_input_bytes=analysis.max_input_bytes or 1,
-        max_output_tokens=max(
-            analysis.metadata_max_output_tokens or 1,
-            analysis.content_max_output_tokens or 1,
-            analysis.reference_max_output_tokens or 1,
+    agents = configuration.agents
+    role_configs = tuple(
+        agents.analysis if role is AgentRole.ANALYSIS else agents.browser for role in selected_roles
+    )
+    deadline = min(role.deadline_seconds for role in role_configs)
+    context_window_tokens = max(
+        (role.context_window_tokens or 1_024 for role in role_configs),
+        default=1_024,
+    )
+    max_output_tokens = max(
+        (
+            role.max_output_tokens
+            or max(
+                analysis.metadata_max_output_tokens or 1,
+                analysis.content_max_output_tokens or 1,
+                analysis.reference_max_output_tokens or 1,
+            )
+            for role in role_configs
         ),
-        context_window_tokens=analysis.context_window_tokens or 1_024,
+        default=1,
+    )
+    context_input_bytes = max(1, context_window_tokens - max_output_tokens)
+    return AgentBudget(
+        max_input_bytes=(
+            context_input_bytes
+            if AgentRole.ANALYSIS not in selected_roles or analysis.max_input_bytes is None
+            else min(analysis.max_input_bytes, context_input_bytes)
+        ),
+        max_output_tokens=max_output_tokens,
+        context_window_tokens=context_window_tokens,
+        connect_timeout_seconds=min(10.0, deadline),
+        read_timeout_seconds=min(120.0, deadline),
+        overall_timeout_seconds=deadline,
     )
 
 
@@ -169,6 +230,7 @@ def _production_dependencies(
 
     parser = configuration.parsing
     analysis = configuration.analysis
+    agents = configuration.agents
 
     def parser_factory(
         http_client: HttpClient,
@@ -195,21 +257,24 @@ def _production_dependencies(
         except (MinerUProtocol2Error, TypeError, ValueError):
             raise BootstrapError("parser-not-ready") from None
 
-    def analysis_factory(
+    def agents_factory(
         http_client: HttpClient,
         coordinator: AccessCoordinator,
-    ) -> AnalysisLLMPort:
-        return _build_analysis_llm(
+    ) -> AgentPort:
+        return _build_agents_runtime(
             configuration,
             secrets,
             http_client,
             coordinator,
+            required_roles=frozenset({AgentRole.ANALYSIS}),
+            optional_roles=frozenset({AgentRole.BROWSER}),
         )
 
     return BootstrapExternalDependencies(
         parser_factory=parser_factory,
-        analysis_llm_factory=analysis_factory,
-        analysis_model=analysis.model or "",
+        agents_factory=agents_factory,
+        agents_analysis_model=agents.analysis.model or "",
+        agents_analysis_budget=_agent_provider_limits(configuration),
         metadata_max_output_tokens=analysis.metadata_max_output_tokens or 0,
         content_max_output_tokens=analysis.content_max_output_tokens or 0,
         reference_max_output_tokens=analysis.reference_max_output_tokens or 0,
@@ -241,7 +306,7 @@ def _raise_production_assembly_error(error: Exception) -> NoReturn:
     """Translate every production assembly failure to one stable safe code."""
 
     from sciretriever.acquisition.registry import AcquisitionRegistryError
-    from sciretriever.analysis.ports import AnalysisLLMFailure
+    from sciretriever.agents import AgentFailure
     from sciretriever.metadata.registry import MetadataRegistryError
     from sciretriever.parsing.adapters.mineru import MinerUProtocol2Error
     from sciretriever.storage.files.output import AtomicOutputError
@@ -255,7 +320,7 @@ def _raise_production_assembly_error(error: Exception) -> NoReturn:
         raise BootstrapError("acquisition-not-ready") from None
     if isinstance(error, MinerUProtocol2Error):
         raise BootstrapError("parser-not-ready") from None
-    if isinstance(error, AnalysisLLMFailure):
+    if isinstance(error, AgentFailure):
         raise BootstrapError("analysis-not-ready") from None
     if isinstance(
         error,
@@ -302,54 +367,176 @@ def _build_metadata_components(
     return registry, api
 
 
-def _build_analysis_llm(
+def _build_agents_runtime(  # noqa: C901
     configuration: Configuration,
     secrets: RuntimeSecretLookup,
     http_client: HttpClient,
     coordinator: AccessCoordinator,
-) -> AnalysisLLMPort:
-    from sciretriever.analysis.ports import AnalysisLLMFailure
-    from sciretriever.analysis.providers.anthropic import AnthropicAnalysisLLMAdapter
-    from sciretriever.analysis.providers.openai import OpenAIAnalysisLLMAdapter
-    from sciretriever.analysis.providers.openai_chat import (
-        OpenAIChatCompletionsAnalysisLLMAdapter,
+    *,
+    required_roles: frozenset[AgentRole] | None = None,
+    optional_roles: frozenset[AgentRole] = frozenset(),
+) -> AgentPort:
+    from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
+    from sciretriever.agents.providers.openai_chat import (
+        OpenAIChatCompletionsAdapter,
     )
-    from sciretriever.model.configuration import AnalysisProtocol
+    from sciretriever.agents.providers.openai_responses import OpenAIResponsesAdapter
+
+    selected_roles = frozenset({AgentRole.ANALYSIS}) if required_roles is None else required_roles
+    if not isinstance(selected_roles, frozenset) or any(
+        not isinstance(role, AgentRole) for role in selected_roles
+    ):
+        raise BootstrapError("agents-not-ready")
+    if (
+        not isinstance(optional_roles, frozenset)
+        or any(not isinstance(role, AgentRole) for role in optional_roles)
+        or selected_roles & optional_roles
+        or not (selected_roles or optional_roles)
+    ):
+        raise BootstrapError("agents-not-ready")
+    configured_roles = selected_roles | optional_roles
+
+    def not_ready() -> BootstrapError:
+        if selected_roles == frozenset({AgentRole.ANALYSIS}):
+            return BootstrapError("analysis-not-ready")
+        if selected_roles == frozenset({AgentRole.BROWSER}):
+            return BootstrapError("browser-agent-not-ready")
+        if not selected_roles and optional_roles == frozenset({AgentRole.BROWSER}):
+            return BootstrapError("browser-agent-not-ready")
+        return BootstrapError("agents-not-ready")
 
     if getattr(http_client, "_coordinator", None) is not coordinator:
-        raise BootstrapError("analysis-not-ready")
-    analysis = configuration.analysis
+        raise not_ready()
+    agents = configuration.agents
     adapter_by_protocol = {
-        AnalysisProtocol.OPENAI_RESPONSES: OpenAIAnalysisLLMAdapter,
-        AnalysisProtocol.OPENAI_CHAT_COMPLETIONS: OpenAIChatCompletionsAnalysisLLMAdapter,
-        AnalysisProtocol.ANTHROPIC_MESSAGES: AnthropicAnalysisLLMAdapter,
+        AgentProtocol.OPENAI_RESPONSES: OpenAIResponsesAdapter,
+        AgentProtocol.OPENAI_CHAT_COMPLETIONS: OpenAIChatCompletionsAdapter,
+        AgentProtocol.ANTHROPIC_MESSAGES: AnthropicMessagesAdapter,
     }
     try:
-        analysis_api_key = secrets.analysis_api_key
-        if analysis.authentication is AnalysisAuthentication.API_KEY and analysis_api_key is None:
-            raise BootstrapError("analysis-not-ready")
-        protocol = analysis.protocol
-        base_url = analysis.base_url
+        agents_api_key = secrets.agents_api_key
+        if agents.authentication is AgentAuthentication.API_KEY and agents_api_key is None:
+            raise not_ready()
+        protocol = agents.protocol
+        base_url = agents.base_url
         if protocol is None or base_url is None:
-            raise BootstrapError("analysis-not-ready")
+            raise not_ready()
         adapter = adapter_by_protocol[protocol]
         provider_name = (
-            analysis.provider.value
-            if analysis.provider is not AnalysisProvider.CUSTOM
-            else analysis.service_name or "custom"
+            agents.provider.value
+            if agents.provider is not AgentProvider.CUSTOM
+            else agents.service_name or "custom"
         )
-        return cast(
-            AnalysisLLMPort,
+        adapter_port = cast(
+            AgentPort,
             adapter(
                 http_client=http_client,
-                api_key=analysis_api_key,
+                api_key=agents_api_key,
                 base_url=base_url,
                 provider_name=provider_name,
-                limits=_analysis_provider_limits(configuration),
+                limits=_agent_provider_limits(
+                    configuration,
+                    required_roles=configured_roles,
+                ),
             ),
         )
-    except (AnalysisLLMFailure, KeyError, TypeError, ValueError):
-        raise BootstrapError("analysis-not-ready") from None
+
+        def role_binding(role: AgentRole, role_config: object) -> AgentRoleBinding | None:
+            from sciretriever.model.configuration import AgentRoleConfig
+
+            if not isinstance(role_config, AgentRoleConfig):
+                raise not_ready()
+            if (
+                role_config.model is None
+                or role_config.context_window_tokens is None
+                or role_config.max_output_tokens is None
+            ):
+                return None
+            capabilities = AgentModelCapabilities(
+                context_window_tokens=role_config.context_window_tokens,
+                max_output_tokens=role_config.max_output_tokens,
+                structured_output=role_config.structured_output,
+                image_input=role_config.image_input,
+                tool_decision=role_config.tool_decision,
+                supported_image_media_types=frozenset(role_config.image_media_types),
+                max_image_count=role_config.image_count,
+                max_image_bytes=role_config.image_bytes,
+            )
+            return AgentRoleBinding(
+                role=role,
+                model=role_config.model,
+                capabilities=capabilities,
+            )
+
+        runtime = AgentRuntime(
+            adapter=adapter_port,
+            analysis=role_binding(AgentRole.ANALYSIS, agents.analysis),
+            browser=role_binding(AgentRole.BROWSER, agents.browser),
+        )
+        readiness = runtime.readiness
+        if any(
+            not (
+                readiness.analysis.ready if role is AgentRole.ANALYSIS else readiness.browser.ready
+            )
+            for role in selected_roles
+        ):
+            raise not_ready()
+        return runtime
+    except (AgentFailure, KeyError, TypeError, ValueError):
+        raise not_ready() from None
+
+
+def _browser_agent_declared(configuration: Configuration) -> bool:
+    """Return whether the optional Browser role has any operator declaration."""
+
+    return configuration.agents.browser.model is not None
+
+
+def _browser_agent_dependency(
+    configuration: Configuration,
+    agent: AgentPort | None,
+    *,
+    model: str | None = None,
+    budget: AgentBudget | None = None,
+):
+    """Convert a ready shared runtime to Acquisition's optional dependency.
+
+    Production scoped graphs pass an :class:`AgentRuntime`, whose local
+    readiness is authoritative.  The explicit low-level graph may inject a
+    structural ``AgentPort`` instead; in that case a complete model/budget
+    pair supplied by its explicit dependencies is the readiness declaration.
+    No exception is swallowed here: malformed explicit values remain
+    programming/configuration errors and fail closed at the Acquisition
+    dependency boundary.
+    """
+
+    from sciretriever.acquisition.registry import BrowserAgentDependency
+
+    if agent is None:
+        return None
+    if not isinstance(agent, AgentPort):
+        raise TypeError("agent must implement AgentPort")
+    if isinstance(agent, AgentRuntime):
+        if not agent.readiness.browser.ready:
+            return None
+        selected_model = configuration.agents.browser.model if model is None else model
+        selected_budget = (
+            _agent_provider_limits(configuration, required_roles=frozenset({AgentRole.BROWSER}))
+            if budget is None
+            else budget
+        )
+    else:
+        if model is None or budget is None:
+            return None
+        selected_model = model
+        selected_budget = budget
+    if selected_model is None:
+        return None
+    return BrowserAgentDependency(
+        port=agent,
+        model=selected_model,
+        budget=selected_budget,
+    )
 
 
 __all__ = ()

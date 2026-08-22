@@ -74,10 +74,29 @@ AIP 官方站点公开内容的 CSP 曾出现 `aipprc.silverchair.com`，当前�
 当前 `robots.txt` 对下载、citation、登录、Shibboleth 和搜索等路径包含明确禁止项，例如
 `/DownloadFile/`、`/Citation/Download`、`/signin.aspx`、`/Shibboleth.sso/` 和
 `/search-results`。文章页面没有全部被 robots 禁止，也不能反过来覆盖 Terms 对自动工具的
-明确禁止。当前已经建立技术规则 `aip-publishing-pdf@2`，用合成 fixture 验证 AIP 自有
+明确禁止。当前已经建立技术规则 `aip-publishing-pdf@3`，用合成 fixture 验证 AIP 自有
 origin、强 DOI 归属、primary/supplement/wrong-article 分类、封闭页面状态，以及独立
 `aip-publishing` risk/session group、组内并发 1 和 30 秒审慎 fixture 基线。这些内容只证明
 技术分类和安全结构，不授权真实站点执行，也不与 IOP、APS 或任何共享技术平台建立 group。
+
+Revision 3 的新增证据日期为 2026-08-21，只为 AIP 规则声明受限的 Cloudflare dependency：
+精确 origin `https://challenges.cloudflare.com`、path prefix
+`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
+`document`、`fetch`、`xhr` 和 `image`。它不加入 AIP 的普通
+`allowed_origins`；只有当前 AIP Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
+可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。运行时分别报告
+`resource-blocked`、`settling`、`cleared`、`interaction-required`、`settle-timeout` 和普通
+HTTP 403；只有自动 `cleared` 才返回正文流程，第一版不点击 CAPTCHA/Turnstile。该封闭规则和
+本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+
+2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
+均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
+Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
+权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+
+CBA72 将 AIP 的本次服务器现场准入记为 `deferred`。这不降低其 `production-ready` 工程状态、
+不删除生产 rule，也不等于其它机构/Profile 全局 unsupported；它只表示固定代表样本停在持续
+自动验证且没有可验证 PDF，后续仍须逐文章判断并保留该稳定失败。
 
 由于普通 Terms 明确限制 automated program/tool/process，operator 必须先确认其组织授权和实际
 用途符合 AIP 条款。技术规则进入 production catalog；显式启用受控 Browser 后，只允许

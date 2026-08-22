@@ -49,12 +49,33 @@ ScanSci 记录过 Science DOI landing、`/doi/epdf/`、`/doi/pdf/` 与一个
 该单样本无法证明它是公开、机构授权还是长期 URL 合同，更不能形成批量 Browser 权利。
 SciRetriever 不复制 Cookie、CARSI、CAPTCHA/反检测、selector、URL 模板或 verdict。
 
-当前生产规则 `science-aaas-pdf@2` 只接受强 DOI/Science landing，精确允许
+当前生产规则 `science-aaas-pdf@3` 只接受强 DOI/Science landing，精确允许
 `https://www.science.org`，从 `/doi/epdf/` 或 `/doi/pdf/` 的 response/download 捕获候选，并排除
 supplement、media/XML 和 wrong-article。规则包含封闭的 entitlement/paywall、login、
-MFA/challenge、rate/IP/account-warning 页面状态；登录等状态只识别后停止。Browser 使用当前
+MFA/challenge、rate/IP/account-warning 页面状态；自动 challenge 只在有界 settle 内等待自然
+完成，登录或明确人工控件只识别后停止。Browser 使用当前
 机器网络出口，以及共享 persistent Profile/context 中独立的 `science-aaas` lane；组内并发 1、
 项目审慎最小文章启动间隔 30 秒。自动流程不导入或读取 Cookie，也不执行认证。
+
+Revision 3 的新增证据日期为 2026-08-21，只为 Science/AAAS 规则声明受限的 Cloudflare
+dependency：精确 origin `https://challenges.cloudflare.com`、path prefix
+`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
+`document`、`fetch`、`xhr` 和 `image`。
+它不加入 Science 的普通 `allowed_origins`；只有当前 Science Publisher 页面或其 frame ancestry
+能给出发起与用途证明时才可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture
+source。运行时分别报告 `resource-blocked`、`settling`、`cleared`、
+`interaction-required`、`settle-timeout` 和普通 HTTP 403；只有自动 `cleared` 才返回正文流程，
+第一版不点击 CAPTCHA/Turnstile。该封闭规则和本地 fixture 只证明程序没有自行挡住必要资源，
+不证明当前 IP、机构合同或文章 entitlement。
+
+2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
+均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
+Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
+权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+
+CBA72 将 Science / AAAS 的本次服务器现场准入记为 `deferred`。这不降低其
+`production-ready` 工程状态、不删除生产 rule，也不等于其它机构/Profile 全局 unsupported；
+它只表示固定代表样本停在持续自动验证且没有可验证 PDF。
 
 该 route 的 `production-ready` 只表示 Profile/rule/policy、合成 fixture、生产对象图和安全测试
 闭环；官方未发布数值 pacing、当前 IP 和 live entitlement 未核实仍作为 evidence gap 保留。与
@@ -73,6 +94,6 @@ secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，�
 lane 调度和上游 Browser success 非授权证据；测试 Profile 只位于系统临时目录，不保存真实 DOI、
 正文、Cookie、账号、机构或 Browser Profile 内容。
 
-Profile 和 `science-aaas-pdf@2` 已进入 production catalog，但只在 Public/API 正常结束、强访问
+Profile 和 `science-aaas-pdf@3` 已进入 production catalog，但只在 Public/API 正常结束、强访问
 方证据成立、Browser 显式启用且 runtime 就绪时启动。它不新增 Science credential section；
 无权限或未命中时仍可由用户独立手动接纳 PDF。

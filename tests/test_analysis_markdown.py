@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 
+from sciretriever.agents import AgentProvenance, AgentStructuredResponse
 from sciretriever.analysis.markdown import (
     ContentMarkdownDraft,
     build_content_analysis_call,
@@ -12,13 +13,13 @@ from sciretriever.analysis.markdown import (
     render_canonical_markdown,
 )
 from sciretriever.analysis.markdown_rules import ContentMarkdownError, heading_comparison_key
+from sciretriever.analysis.ports import AnalysisRequestKind
 from sciretriever.model.analysis import (
     LiteratureSection,
     LiteratureSectionRole,
     LiteratureSubsection,
 )
 from sciretriever.model.literature import Affiliation, Author, AuthorKind, Identifier
-from sciretriever.model.llm import LLMProvenance, LLMRequestKind, LLMStructuredResponse
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import (
     ParserArtifactRef,
@@ -144,10 +145,10 @@ def _minimal_draft(*, references: str = "未提供") -> str:
 """
 
 
-def _response(call_input_sha256: Sha256, result: object) -> LLMStructuredResponse:
-    return LLMStructuredResponse(
+def _response(call_input_sha256: Sha256, result: object) -> AgentStructuredResponse:
+    return AgentStructuredResponse(
         result=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-        provenance=LLMProvenance(
+        provenance=AgentProvenance(
             provider="fixture-provider",
             model=_MODEL,
             input_sha256=call_input_sha256,
@@ -190,7 +191,7 @@ class AnalysisMarkdownTests(unittest.TestCase):
             cancel_event=cancel_event,
         )
 
-        self.assertIs(call.request.kind, LLMRequestKind.CONTENT)
+        self.assertIs(call.request.kind, AnalysisRequestKind.CONTENT)
         self.assertEqual(call.request.model, _MODEL)
         self.assertEqual(call.request.max_output_tokens, 4096)
         self.assertIs(call.cancel_event, cancel_event)

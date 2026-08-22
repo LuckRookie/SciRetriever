@@ -75,3 +75,20 @@ DOI、正文、Cookie、账号、机构或通信内容。
 流程、固定调度和逐文章检查，不联系其它 IOP 服务、不新增 credential section，也不证明当前
 文章 entitlement。
 本轮没有执行真实 IOP 文章 probe 或正文下载。
+
+## 6. 2026-08-22 Cloak 切换门现场证据
+
+固定单篇、stock/Cloak 交替且同 Publisher 启动间隔至少 30 秒的真实 A/B 中，两套引擎都没有
+取得 PDF：stock 形成 `no-download`；Cloak 观察到 IOP 顶层流程三次转向
+`validate.perfdrive.com` 后，因该 origin 不属于已审核 IOP 规则而 fail closed 为 `policy`。
+定向诊断只保留 hostname、导航形状和有界结果，没有记录完整 URL、path/query、页面正文、
+Cookie、Profile 或 challenge token；它确认该结果不是 cleanup/runtime 故障，Cloak 共享
+process/context 仍可被后续 Publisher 复用。
+
+这次结果不能复现 2026-08-21 的 IOP 成功样本，也不能据此宣称是 CloakBrowser 提高或降低了
+文章 entitlement：同轮 stock 同样没有交付，差异只是 Cloak 对未审核顶层 challenge 导航明确
+拒绝。SciRetriever 不把 PerfDrive origin 临时加入普通 `allowed_origins`，不自动点击或破解
+CAPTCHA，也不以放宽 top-frame/文章绑定换取成功。CBA72 的本次服务器现场准入已将 IOP 记为
+`deferred`，直到有独立的、受限 PerfDrive 生命周期合同或新的无 challenge 成功证据；这不删除
+`production-ready` 工程 rule，也不等于其它机构/Profile 全局 unsupported。离线
+IOP PDF response/download fixture 继续证明已审核成功链没有被删除。

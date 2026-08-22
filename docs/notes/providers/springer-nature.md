@@ -253,8 +253,8 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 
 ### 10.1 2026-08-16 脱敏首页现场 probe
 
-在用户明确授权的单次 `springerlink` 首页 probe 中，当时的生产 Bootstrap 与正式
-`PlaywrightBrowserFactory` 实际执行了以下跳转链：
+在用户明确授权的单次 `springerlink` 首页 probe 中，2026-08-16 当时尚未切换的 stock
+Playwright adapter 实际执行了以下跳转链：
 
 ```text
 GET https://link.springer.com/
@@ -315,6 +315,24 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 两次文章启动相隔约 66.06 秒，满足同组串行和至少 10 秒间隔。没有样本触发登录、MFA、challenge
 或 action-required。该结果只证明当前网段对其中一个明确样本可交付，不外推任意文章授权。
 
+### 10.3 2026-08-22 stock/Cloak 切换门复验
+
+固定单篇、两个隔离测试 Profile、stock/Cloak 交替且同 Publisher 启动间隔至少 30 秒的真实
+A/B 中，两套引擎都从同一审核规则捕获正文 PDF，并分别通过 `%PDF-`、EOF、页面树和大小上限
+验证。两个引擎都复用各自唯一的 process/context，运行后正常清理；没有登录、MFA、challenge、
+账号警告或人工交互。
+
+本轮还修正了一个只影响 Cloak 的候选捕获错误：用 `Route.fetch()/fulfill()` 模拟顶层 PDF 导航
+时，Springer 返回一个 MIME 声称为 PDF、实际只有 536 bytes 的非 PDF 响应。最终实现删除这条
+Python 代取 workaround，在固定 Profile 中启用 Chromium 原生 external-PDF preference，让
+Playwright/CloakBrowser 的原生 response/download 事件进入统一 validator。定向复验取得约
+8 MB 的有效 PDF。该结果只证明目标 Cloak runtime 没有回归这一条已知 Springer 成功链，不外推
+其它文章、其它 Profile 或长期 entitlement。
+
+CBA72 将 SpringerLink 的本次服务器现场准入记为 `ready`：最终唯一 Cloak runtime 对固定代表
+样本捕获并验证了正文 PDF，且没有回归已知成功链。`ready` 仍然只描述该证据集，不声明其它
+文章、Profile、机构协议或当前长期 entitlement；Nature Portfolio 继续保持独立 `unsupported`。
+
 ## 11. SpringerLink 与 Nature 访问画像结论
 
 ### 11.1 Springer Nature Link
@@ -325,7 +343,7 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 - Open Access/Full Text API 的 JATS/XML 不是 PDF，当前没有授权 PDF API route；
 - production Browser route 为 `browser:springerlink`，rule 为 `springerlink-pdf@5`；它只接受经审查的 SpringerLink landing，或“精确 SpringerLink asset origin + 唯一 DOI”。Provider Hint 只贡献 routing origin，实际 Browser 起点由 rule 的 DOI PDF template 构造；文章流先接收初始 PDF capture，未捕获时才检查封闭页面状态，并在 entitlement marker 存在时点击后等待 response、download、popup、viewer 或 verified locator 中任一正文 capture。direct-PDF 导航触发的延迟 native download 会在 capture 和 request 生命周期完整结算后才允许清理 context，避免 `goto()` 返回与 download 事件之间的竞态。任何实际 capture 仍必须通过媒体类型、PDF reader、页面树、文章归属与补充材料排除检查；
 - 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 返回 `303`，跳转 origin/path 为 `https://idp.springer.com/authorize`。规则只精确加入该官方 IDP origin 和登录 path marker，不允许通配域名；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容。到达该入口只表示 runtime/目标可达，不评估机构 IP 或文章 entitlement；
-- Browser 使用运行机器的正常网络出口，以及共享 persistent Profile/context 中独立的 `springerlink` lane；无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA 或 challenge；配置中心可以通过独立显式动作打开同一 Profile 的可见 Browser，让用户自行完成其获授权的认证。同 `springerlink` group 严格串行，不同 Publisher group 可在全局资源上限内并行；
+- Browser 使用运行机器的正常网络出口，以及共享固定身份 Profile/context 中独立的 `springerlink` lane；无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA；第一版不提供可见 Browser 认证入口。同 `springerlink` group 严格串行，不同 Publisher group 可在全局资源上限内并行；
 - 登录、paywall、challenge、429、403、account warning 和 404 有封闭 marker/状态语义；`static-content.springer.com/esm/` 与 supplement 文件名永不提升为 primary PDF；
 - 状态为 `production-ready`，但该状态只声明 route/rule/policy/离线对象图已闭环；它不声明当前 IP、机构协议或某篇文章有 entitlement。
 
@@ -348,8 +366,8 @@ routing-only origin 提取；Hint path 不被导航，实际目标由唯一 DOI 
 
 统一验证矩阵包含相互独立的 `springerlink` 与 `nature-portfolio` PublisherAccessProfile。前者以
 `springerlink-persistent-browser-pdf-v6-2026-08-21` 进入 production profile/rule catalog；后者
-仍为 unsupported。Bootstrap 只在 Browser 总开关打开、一个 Browser Profile 已选择并安全存在、
-Playwright Python 依赖、Chrome/Chromium executable 和 headed display 都就绪时创建真实
+仍为 unsupported。Bootstrap 只在 Browser 总开关打开、一个固定身份 Browser Profile 已选择并安全存在、
+CloakBrowser wrapper、Playwright API、经核实 binary 和 headed display 都就绪时创建真实
 `BrowserClient`；否则 route 仍保留在 registry 中，但以 `disabled` 或 runtime action-required
 说明本地未就绪的精确原因。
 

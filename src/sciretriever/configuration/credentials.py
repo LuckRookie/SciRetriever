@@ -27,7 +27,7 @@ from sciretriever.configuration.filesystem import current_uid as _current_uid
 from sciretriever.configuration.filesystem import mode as _mode
 from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.model.configuration import (
-    AnalysisAuthentication,
+    AgentAuthentication,
     Configuration,
     ConfigurationDiagnostic,
     CoreCredentialService,
@@ -54,8 +54,13 @@ class _CoreCredentialSpec:
 
 
 _CORE_CREDENTIAL_SPECS: Final[dict[CoreCredentialService, _CoreCredentialSpec]] = {
-    CoreCredentialService.LLM: _CoreCredentialSpec("api_key"),
+    CoreCredentialService.AGENTS: _CoreCredentialSpec("api_key"),
     CoreCredentialService.MINERU: _CoreCredentialSpec("bearer_token"),
+    # The reviewed free v146 installer intentionally refuses a Pro key.  We
+    # still accept an origin-bound optional value so the interactive manager
+    # can retain an operator's future entitlement without ever treating it as
+    # evidence of a usable download or injecting it into normal operations.
+    CoreCredentialService.CLOAKBROWSER: _CoreCredentialSpec("license_key"),
 }
 _CORE_ORIGIN_FIELD: Final[str] = "origin"
 _CORE_NEXT_ORIGIN_FIELD: Final[str] = "next_origin"
@@ -194,13 +199,13 @@ class CredentialLookup(Protocol):
 
 @runtime_checkable
 class RuntimeSecretLookup(Protocol):
-    """Opaque, capability-selected Parser/Analysis secrets for Bootstrap."""
+    """Opaque, capability-selected Parser/Agents secrets for Bootstrap."""
 
     @property
     def mineru_bearer_token(self) -> str | None: ...
 
     @property
-    def analysis_api_key(self) -> str | None: ...
+    def agents_api_key(self) -> str | None: ...
 
 
 def credential_path(*, home: str | Path | None = None) -> Path:
@@ -583,18 +588,18 @@ class _CredentialBundle:
 
 
 class _RuntimeSecrets:
-    """Opaque selected Parser/Analysis secrets for one production assembly."""
+    """Opaque selected Parser/Agents secrets for one production assembly."""
 
-    __slots__ = ("_analysis_api_key", "_mineru_bearer_token")
+    __slots__ = ("_agents_api_key", "_mineru_bearer_token")
 
     def __init__(
         self,
         *,
         mineru_bearer_token: str | None,
-        analysis_api_key: str | None,
+        agents_api_key: str | None,
     ) -> None:
         self._mineru_bearer_token = mineru_bearer_token
-        self._analysis_api_key = analysis_api_key
+        self._agents_api_key = agents_api_key
 
     def __repr__(self) -> str:
         return "<RuntimeSecrets>"
@@ -609,8 +614,8 @@ class _RuntimeSecrets:
         return self._mineru_bearer_token
 
     @property
-    def analysis_api_key(self) -> str | None:
-        return self._analysis_api_key
+    def agents_api_key(self) -> str | None:
+        return self._agents_api_key
 
 
 def _service_origin(base_url: str | None) -> str:
@@ -653,11 +658,11 @@ def load_runtime_secrets(
     credentials: CredentialLookup | None = None,
     credentials_home: str | Path | None = None,
     include_parser: bool = True,
-    include_analysis: bool = True,
+    include_agents: bool = True,
 ) -> RuntimeSecretLookup:
-    """Select origin-bound Parser/Analysis secrets from credentials.toml."""
+    """Select origin-bound Parser/Agents secrets from credentials.toml."""
 
-    if type(include_parser) is not bool or type(include_analysis) is not bool:
+    if type(include_parser) is not bool or type(include_agents) is not bool:
         _fail("configuration value is invalid")
     if credentials is not None and credentials_home is not None:
         _fail("configuration value is invalid")
@@ -666,14 +671,12 @@ def load_runtime_secrets(
     if not isinstance(configuration, Configuration):
         _fail("configuration value is invalid")
     parser = configuration.parsing
-    analysis = configuration.analysis
+    agents = configuration.agents
     parser_needs_secret = include_parser and parser.connection_mode is ParserConnectionMode.REMOTE
-    analysis_needs_secret = (
-        include_analysis and analysis.authentication is AnalysisAuthentication.API_KEY
-    )
+    agents_needs_secret = include_agents and agents.authentication is AgentAuthentication.API_KEY
     bundle = (
         load_credentials(home=credentials_home)
-        if credentials is None and (parser_needs_secret or analysis_needs_secret)
+        if credentials is None and (parser_needs_secret or agents_needs_secret)
         else credentials
     )
     if parser_needs_secret:
@@ -686,23 +689,23 @@ def load_runtime_secrets(
         )
     else:
         mineru = None
-    if not include_analysis:
-        analysis_key = None
-    elif analysis.authentication is AnalysisAuthentication.NONE:
-        analysis_key = None
-    elif analysis.authentication is AnalysisAuthentication.API_KEY:
+    if not include_agents:
+        agents_key = None
+    elif not agents_needs_secret:
+        agents_key = None
+    elif agents.authentication is AgentAuthentication.API_KEY:
         assert bundle is not None
-        analysis_key = _bound_core_secret(
+        agents_key = _bound_core_secret(
             bundle,
-            CoreCredentialService.LLM,
-            _CORE_CREDENTIAL_SPECS[CoreCredentialService.LLM].secret_field,
-            _service_origin(analysis.base_url),
+            CoreCredentialService.AGENTS,
+            _CORE_CREDENTIAL_SPECS[CoreCredentialService.AGENTS].secret_field,
+            _service_origin(agents.base_url),
         )
     else:
         _fail("configuration value is invalid")
     return _RuntimeSecrets(
         mineru_bearer_token=mineru,
-        analysis_api_key=analysis_key,
+        agents_api_key=agents_key,
     )
 
 

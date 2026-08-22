@@ -39,7 +39,8 @@ providers = []
 # institution_token。secret 都不能写在本文件中。Springer 当前全文产品
 # 是 JATS/XML，不是主 PDF API；Wiley 仅对 DOI 安全落地到 Wiley Online
 # Library 的文献适用。
-# 受控 Browser 生产站点规则仍为空。
+# 9 条受控 Browser 规则由产品内置，不写进 Provider 列表；只有下方
+# `[access]` 显式启用后，才会在 Public/API 正常结束后逐文章尝试。
 
 # 当上方启用 unpaywall 时，必须提供非敏感联系邮箱：
 # [sources.acquisition.unpaywall]
@@ -54,16 +55,38 @@ providers = []
 # model_identity = "mineru-3.4.4-vlm"
 # remote_upload_authorized = false
 
-[analysis]
-# `complete content` 还需要选择 Analysis adapter、模型和全部预算参数。
-# 推荐直接运行 `sciretriever config` 使用 Guided setup。下面是 OpenAI
-# Responses 的普通配置形状；API key 进入 credentials.toml，不写在这里。
+[agents]
+# Analysis 使用共享 Agents provider。推荐直接运行 `sciretriever config`
+# 使用 Guided setup；API key 进入 credentials.toml 的 [agents]，不写在这里。
 # provider = "openai"
 # protocol = "openai-responses"
 # base_url = "https://api.openai.com/v1"
-# model = "operator-selected-model"
-# context_window_tokens = 128000
 # authentication = "api-key"
+
+[agents.analysis]
+# model = "operator-selected-model"
+# context_window_tokens = 2000000
+# max_output_tokens = 8192
+# structured_output = true
+# deadline_seconds = 180.0
+
+[agents.browser]
+# Browser Agent 是确定性 Publisher 规则之后的可选 fallback，复用上方
+# 唯一 Agents endpoint 与 credential，但必须单独声明图像和工具能力。
+# model = "operator-selected-vision-model"
+# context_window_tokens = 32768
+# max_output_tokens = 2048
+# structured_output = false
+# image_input = true
+# tool_decision = true
+# image_media_types = ["image/png", "image/jpeg", "image/webp"]
+# image_count = 1
+# image_bytes = 4194304
+# turns = 4
+# deadline_seconds = 180.0
+
+[analysis]
+# `complete content` 还需要全部 Analysis 业务预算参数。
 # metadata_max_output_tokens = 1024
 # content_max_output_tokens = 4096
 # reference_max_output_tokens = 1024
@@ -81,5 +104,5 @@ max_input_bytes = 67108864
 
 [access]
 browser_enabled = false
-browser_max_concurrency = 2
+browser_max_concurrency = 5
 browser_policy_overrides = []

@@ -11,11 +11,19 @@ the neutral request identity, aligned provenance hashes, and prompt version.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from pydantic import ValidationError
 
+from sciretriever.agents import (
+    AgentBudget,
+    AgentFailure,
+    AgentPort,
+    AgentProvenance,
+    AgentStructuredResponse,
+    open_session,
+)
 from sciretriever.analysis.metadata_rules import (
     MetadataRuleViolation,
     metadata_input_sha256,
@@ -23,19 +31,13 @@ from sciretriever.analysis.metadata_rules import (
     validate_user_observations,
 )
 from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
-    AnalysisLLMPort,
+    AnalysisCall,
+    AnalysisRequest,
+    AnalysisRequestKind,
     canonical_json_bytes,
     parse_strict_json_object,
 )
 from sciretriever.model.analysis import FinalMetadataProposal, NoUsableContent
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequest,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import ParserResult
 from sciretriever.model.primitives import Sha256, sha256_digest
@@ -89,17 +91,17 @@ class MetadataAnalysisReceipt:
     """Safe execution identity consumed by the later Analysis service stage."""
 
     result: NoUsableContent | FinalMetadataProposal
-    request: LLMRequest
-    provenance: LLMProvenance
+    request: AnalysisRequest
+    provenance: AgentProvenance
     prompt_version: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.result, (NoUsableContent, FinalMetadataProposal)):
             raise TypeError("result must be a metadata Analysis result")
-        if not isinstance(self.request, LLMRequest):
-            raise TypeError("request must be an LLMRequest")
-        if not isinstance(self.provenance, LLMProvenance):
-            raise TypeError("provenance must be an LLMProvenance")
+        if not isinstance(self.request, AnalysisRequest):
+            raise TypeError("request must be an AnalysisRequest")
+        if not isinstance(self.provenance, AgentProvenance):
+            raise TypeError("provenance must be an AgentProvenance")
         if type(self.prompt_version) is not str or not self.prompt_version:
             raise ValueError("prompt_version must be nonblank text")
 
@@ -128,19 +130,33 @@ class MetadataAnalysisStage:
     def __init__(
         self,
         *,
-        llm: AnalysisLLMPort,
+        agents: AgentPort,
         model: str,
         max_output_tokens: int,
+        agent_budget: AgentBudget | None = None,
     ) -> None:
-        if not isinstance(llm, AnalysisLLMPort):
-            raise TypeError("llm must implement AnalysisLLMPort")
+        if not isinstance(agents, AgentPort):
+            raise TypeError("agent must implement AgentPort")
         if type(model) is not str or not model.strip() or len(model.strip()) > 512:
             raise ValueError("model must be stable bounded text")
         if type(max_output_tokens) is not int or max_output_tokens < 1:
             raise ValueError("max_output_tokens must be a positive integer")
-        self._llm = llm
+        selected_budget = (
+            AgentBudget(max_output_tokens=max_output_tokens)
+            if agent_budget is None
+            else agent_budget
+        )
+        if not isinstance(selected_budget, AgentBudget):
+            raise TypeError("agent_budget must be an AgentBudget")
+        if max_output_tokens > selected_budget.max_output_tokens:
+            raise ValueError("stage output must fit the Agent budget")
+        self._agents = agents
         self._model = model.strip()
         self._max_output_tokens = max_output_tokens
+        self._agent_budget = replace(
+            selected_budget,
+            max_output_tokens=max_output_tokens,
+        )
 
     def __repr__(self) -> str:
         return "<MetadataAnalysisStage>"
@@ -230,7 +246,7 @@ class MetadataAnalysisStage:
         markdown: str,
         *,
         cancel_event: threading.Event | None,
-    ) -> AnalysisLLMCall:
+    ) -> AnalysisCall:
         parser = stage_input.parser_result
         payload = {
             "initial_metadata": stage_input.initial_metadata.model_dump(mode="json"),
@@ -248,13 +264,13 @@ class MetadataAnalysisStage:
         try:
             structured_bytes = canonical_json_bytes(payload)
             structured_input = structured_bytes.decode("utf-8", errors="strict")
-            request = LLMRequest(
-                kind=LLMRequestKind.METADATA,
+            request = AnalysisRequest(
+                kind=AnalysisRequestKind.METADATA,
                 input_sha256=sha256_digest(structured_bytes),
                 model=self._model,
                 max_output_tokens=self._max_output_tokens,
             )
-            return AnalysisLLMCall(
+            return AnalysisCall(
                 request=request,
                 prompt_version=_PROMPT_VERSION,
                 prompt=_PROMPT,
@@ -267,10 +283,21 @@ class MetadataAnalysisStage:
                 _failure_for("analysis-metadata-input", retryable=False)
             ) from None
 
-    def _complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def _complete(self, call: AnalysisCall) -> AgentStructuredResponse:
         try:
-            response = self._llm.complete(call)
-        except AnalysisLLMFailure as error:
+            request = call.to_agent_request(budget=self._agent_budget)
+            with open_session(
+                self._agents,
+                max_turns=1,
+                cancel_event=call.cancel_event,
+                budget=self._agent_budget,
+            ) as session:
+                response = session.complete(request)
+        except AgentFailure as error:
+            if error.failure.code == "agent-structured-response":
+                raise MetadataAnalysisFailure(
+                    _failure_for("analysis-metadata-structure", retryable=False)
+                ) from None
             raise MetadataAnalysisFailure(
                 _failure_for(
                     "analysis-metadata-llm",
@@ -282,11 +309,12 @@ class MetadataAnalysisStage:
                 _failure_for("analysis-metadata-llm", retryable=True)
             ) from None
 
+        if not isinstance(response, AgentStructuredResponse):
+            raise MetadataAnalysisFailure(_failure_for("analysis-metadata-llm", retryable=False))
         try:
-            provider_name = self._llm.provider_name
+            provider_name = self._agents.provider_name
             aligned = (
-                isinstance(response, LLMStructuredResponse)
-                and type(provider_name) is str
+                type(provider_name) is str
                 and bool(provider_name.strip())
                 and response.provenance.provider == provider_name.strip()
                 and response.provenance.model == call.request.model
@@ -300,7 +328,7 @@ class MetadataAnalysisStage:
 
     def _parse_response(
         self,
-        response: LLMStructuredResponse,
+        response: AgentStructuredResponse,
     ) -> NoUsableContent | LiteratureMetadata:
         try:
             root = parse_strict_json_object(response.result)

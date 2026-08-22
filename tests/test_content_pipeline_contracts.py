@@ -13,6 +13,12 @@ from typing import TypeAlias, cast, get_args
 
 import sciretriever.analysis.api as analysis_api_module
 import sciretriever.parsing.api as parsing_api_module
+from sciretriever.agents import (
+    AgentFailure,
+    AgentProvenance,
+    AgentRequest,
+    AgentStructuredResponse,
+)
 from sciretriever.analysis.api import (
     AnalysisApi,
     ContentAnalysisFailure,
@@ -26,8 +32,6 @@ from sciretriever.analysis.metadata_rules import metadata_input_sha256
 from sciretriever.analysis.ports import (
     AnalysisArtifactPublicationPort,
     AnalysisCurrentInputPort,
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
     ContentInputIdentity,
     StagedContentMarkdown,
 )
@@ -57,11 +61,6 @@ from sciretriever.model.literature import (
     LiteratureStatus,
     MetaLiterature,
     VersionRole,
-)
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
 )
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import (
@@ -294,38 +293,47 @@ class _FakeParser:
         )
 
 
-_LLMAction: TypeAlias = str | BaseException | Callable[[AnalysisLLMCall], LLMStructuredResponse]
+_LLMAction: TypeAlias = str | BaseException | Callable[[AgentRequest], AgentStructuredResponse]
+
+
+def _request_stage(call: AgentRequest) -> str:
+    if "references" in call.structured_input:
+        return "reference"
+    if "final_metadata" in call.structured_input:
+        return "content"
+    return "metadata"
 
 
 class _FakeLLM:
     def __init__(self, actions: Iterable[_LLMAction]) -> None:
         self._actions = list(actions)
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
 
     @property
     def provider_name(self) -> str:
         return _PROVIDER
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+        call = request
         self.calls.append(call)
         action = self._actions.pop(0)
         if isinstance(action, BaseException):
             raise action
         if callable(action):
             return action(call)
-        return LLMStructuredResponse(
+        return AgentStructuredResponse(
             result=action,
-            provenance=LLMProvenance(
+            provenance=AgentProvenance(
                 provider=_PROVIDER,
-                model=call.request.model,
-                input_sha256=call.request.input_sha256,
-                parameters_sha256=sha256_digest(f"{call.request.kind.value}-parameters".encode()),
+                model=call.model,
+                input_sha256=call.input_sha256,
+                parameters_sha256=sha256_digest(f"{_request_stage(call)}-parameters".encode()),
             ),
         )
 
 
-def _llm_failure() -> AnalysisLLMFailure:
-    return AnalysisLLMFailure(
+def _llm_failure() -> AgentFailure:
+    return AgentFailure(
         StableFailure(
             code="offline-llm-failure",
             reason="The offline fake language-model call failed.",
@@ -570,7 +578,7 @@ class _PipelineEnvironment:
         llm = _FakeLLM(actions)
         provenance_id = ProvenanceId(_uuid(400_000 + self.number * 100 + self._analysis_attempt))
         content_service = AnalysisService(
-            llm=llm,
+            agents=llm,
             artifact_reader=AnalysisArtifactReader(self.engine, self.reader),
             current_inputs=(
                 SqliteAnalysisCurrentInputs(self.engine)
@@ -594,7 +602,7 @@ class _PipelineEnvironment:
             clock=lambda: _TIME,
         )
         lookup_stage = ReferenceLookupStage(
-            llm=llm,
+            agents=llm,
             model=_MODEL,
             max_output_tokens=2_048,
         )
@@ -715,7 +723,7 @@ class ContentPipelineContractTests(unittest.TestCase):
         for private_name in (
             "AnalysisService",
             "ReferenceLookupStage",
-            "AnalysisLLMPort",
+            "AgentPort",
             "ParsingService",
             "ParserPort",
             "StagedParserOutput",
@@ -800,8 +808,8 @@ class ContentPipelineContractTests(unittest.TestCase):
         self.assertIsInstance(result, LiteratureContentProposal)
         assert isinstance(result, LiteratureContentProposal)
         self.assertEqual(
-            tuple(call.request.kind for call in llm.calls),
-            (LLMRequestKind.METADATA, LLMRequestKind.CONTENT),
+            [_request_stage(call) for call in llm.calls],
+            ["metadata", "content"],
         )
         content_input = cast(dict[str, object], json.loads(llm.calls[1].structured_input))
         self.assertEqual(
@@ -887,10 +895,7 @@ class ContentPipelineContractTests(unittest.TestCase):
 
         self.assertIsInstance(result, NoUsableContent)
         self.assertNotIsInstance(result, LiteratureContentProposal)
-        self.assertEqual(
-            tuple(call.request.kind for call in llm.calls),
-            (LLMRequestKind.METADATA,),
-        )
+        self.assertEqual([_request_stage(call) for call in llm.calls], ["metadata"])
         self.assertEqual(environment.authoritative_snapshot(), before_snapshot)
         self.assertEqual(
             literature_api.read_facts(environment.literature.literature_id),
@@ -1109,10 +1114,7 @@ class ContentPipelineContractTests(unittest.TestCase):
             analysis_api.extract_reference_lookups(before_facts.current_content.references)
 
         self.assertEqual(raised.exception.failure.code, "analysis-reference-llm")
-        self.assertEqual(
-            tuple(call.request.kind for call in llm.calls),
-            (LLMRequestKind.REFERENCE_LOOKUP,),
-        )
+        self.assertEqual([_request_stage(call) for call in llm.calls], ["reference"])
         self.assertEqual(environment.authoritative_snapshot(), before_snapshot)
         self.assertEqual(
             literature_api.read_facts(environment.literature.literature_id),

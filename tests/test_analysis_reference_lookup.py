@@ -6,11 +6,16 @@ import unittest
 from collections.abc import Callable, Iterable
 from typing import cast
 
+from sciretriever.agents import (
+    AgentFailure,
+    AgentPort,
+    AgentProvenance,
+    AgentRequest,
+    AgentStructuredResponse,
+)
+from sciretriever.agents.failures import agent_failure
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.ports import (
-    AnalysisLLMCall,
-    AnalysisLLMFailure,
-    AnalysisLLMPort,
     ContentAnalysisInput,
 )
 from sciretriever.analysis.references import (
@@ -19,11 +24,6 @@ from sciretriever.analysis.references import (
     ReferenceLookupStage,
 )
 from sciretriever.model.analysis import ReferenceLookup
-from sciretriever.model.llm import (
-    LLMProvenance,
-    LLMRequestKind,
-    LLMStructuredResponse,
-)
 from sciretriever.model.primitives import Sha256, sha256_digest
 from sciretriever.model.report import StableFailure
 
@@ -55,19 +55,19 @@ def _payload(*lookups: dict[str, object]) -> str:
 
 
 def _response_for(
-    call: AnalysisLLMCall,
+    call: AgentRequest,
     result: str,
     *,
     provider: str = _PROVIDER,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
-) -> LLMStructuredResponse:
-    return LLMStructuredResponse(
+) -> AgentStructuredResponse:
+    return AgentStructuredResponse(
         result=result,
-        provenance=LLMProvenance(
+        provenance=AgentProvenance(
             provider=provider,
-            model=call.request.model if model is None else model,
-            input_sha256=(call.request.input_sha256 if input_sha256 is None else input_sha256),
+            model=call.model if model is None else model,
+            input_sha256=(call.input_sha256 if input_sha256 is None else input_sha256),
             parameters_sha256=sha256_digest(b"reference fixture parameters"),
         ),
     )
@@ -79,27 +79,30 @@ class _FakeLLM:
         actions: Iterable[
             str
             | BaseException
-            | LLMStructuredResponse
-            | Callable[[AnalysisLLMCall], LLMStructuredResponse]
+            | AgentStructuredResponse
+            | Callable[[AgentRequest], AgentStructuredResponse]
         ],
     ) -> None:
         self.actions = list(actions)
-        self.calls: list[AnalysisLLMCall] = []
+        self.calls: list[AgentRequest] = []
 
     @property
     def provider_name(self) -> str:
         return _PROVIDER
 
-    def complete(self, call: AnalysisLLMCall) -> LLMStructuredResponse:
+    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
         self.calls.append(call)
         action = self.actions.pop(0)
         if isinstance(action, BaseException):
             raise action
-        if isinstance(action, LLMStructuredResponse):
+        if isinstance(action, AgentStructuredResponse):
             return action
         if callable(action):
             return action(call)
-        return _response_for(call, action)
+        try:
+            return _response_for(call, action)
+        except ValueError:
+            raise agent_failure("structured-response") from None
 
 
 def _stage(
@@ -108,7 +111,7 @@ def _stage(
     budget: ReferenceLookupBudget | None = None,
 ) -> ReferenceLookupStage:
     return ReferenceLookupStage(
-        llm=cast(AnalysisLLMPort, llm),
+        agents=cast(AgentPort, llm),
         model=_MODEL,
         max_output_tokens=2_048,
         budget=ReferenceLookupBudget() if budget is None else budget,
@@ -176,12 +179,12 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         self.assertTrue(all(isinstance(lookup, ReferenceLookup) for lookup in result))
         self.assertEqual(len(llm.calls), 1)
         call = llm.calls[0]
-        self.assertEqual(call.request.kind, LLMRequestKind.REFERENCE_LOOKUP)
-        self.assertEqual(call.request.model, _MODEL)
-        self.assertEqual(call.request.max_output_tokens, 2_048)
+        self.assertEqual(call.role.value, "analysis")
+        self.assertEqual(call.model, _MODEL)
+        self.assertEqual(call.max_output_tokens, 2_048)
         self.assertIs(call.cancel_event, cancel_event)
         self.assertEqual(
-            call.request.input_sha256,
+            call.input_sha256,
             sha256_digest(call.structured_input.encode("utf-8")),
         )
         private_input = json.loads(call.structured_input)
@@ -195,7 +198,10 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
             },
         )
 
-        schema = json.loads(call.response_schema)
+        schema_value = call.response_schema
+        self.assertIsNotNone(schema_value)
+        assert schema_value is not None
+        schema = json.loads(schema_value)
 
         def assert_closed_objects(value: object) -> None:
             if isinstance(value, dict):
@@ -525,9 +531,9 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
                 self.assertEqual(failure.failure.code, code)
 
     def test_provider_failures_and_provenance_mismatch_are_stable_and_redacted(self) -> None:
-        provider_failure = AnalysisLLMFailure(
+        provider_failure = AgentFailure(
             StableFailure(
-                code="analysis-llm-refusal",
+                code="agent-refusal",
                 reason="Provider refused a private request.",
                 action="Retry with another configured model.",
                 retryable=False,
@@ -535,7 +541,7 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         )
         cases: tuple[
             tuple[
-                str | BaseException | Callable[[AnalysisLLMCall], LLMStructuredResponse],
+                str | BaseException | Callable[[AgentRequest], AgentStructuredResponse],
                 bool,
             ],
             ...,

@@ -33,6 +33,8 @@ from sciretriever.configuration import (
 from sciretriever.configuration.file_store import _MAX_CREDENTIALS_BYTES
 from sciretriever.model.configuration import (
     AccessConfig,
+    AgentRoleConfig,
+    AgentsConfig,
     AnalysisConfig,
     BrowserPolicyOverrideConfig,
     Configuration,
@@ -320,13 +322,16 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             connection_mode = "remote"
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = true
-            [analysis]
+            [agents]
             provider = "openai"
             protocol = "openai-responses"
             base_url = "https://api.openai.com/v1"
+            authentication = "api-key"
+            [agents.analysis]
             model = "fixture-model"
             context_window_tokens = 128000
-            authentication = "api-key"
+            max_output_tokens = 1024
+            structured_output = true
             """
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -339,7 +344,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 home=home,
             )
             set_core_credentials(
-                CoreCredentialService.LLM,
+                CoreCredentialService.AGENTS,
                 secret=f"analysis-{SENTINEL}",
                 origin="https://api.openai.com",
                 home=home,
@@ -364,13 +369,16 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             connection_mode = "remote"
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = true
-            [analysis]
+            [agents]
             provider = "openai"
             protocol = "openai-responses"
             base_url = "https://api.openai.com/v1"
+            authentication = "api-key"
+            [agents.analysis]
             model = "fixture-model"
             context_window_tokens = 128000
-            authentication = "api-key"
+            max_output_tokens = 1024
+            structured_output = true
             """
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -382,7 +390,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 home=home,
             )
             credentials = set_core_credentials(
-                "llm",
+                "agents",
                 secret="analysis-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -392,18 +400,18 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 (False, True, None, "analysis-secret"),
                 (False, False, None, None),
             )
-            for include_parser, include_analysis, expected_parser, expected_analysis in cases:
-                with self.subTest(parser=include_parser, analysis=include_analysis):
+            for include_parser, include_agents, expected_parser, expected_agents in cases:
+                with self.subTest(parser=include_parser, agents=include_agents):
                     runtime = load_runtime_secrets(
                         selected,
                         credentials=credentials,
                         include_parser=include_parser,
-                        include_analysis=include_analysis,
+                        include_agents=include_agents,
                     )
                     self.assertEqual(runtime.mineru_bearer_token, expected_parser)
-                    self.assertEqual(runtime.analysis_api_key, expected_analysis)
+                    self.assertEqual(runtime.agents_api_key, expected_agents)
 
-    def test_only_nine_empty_responsibility_groups_are_ordinary_configuration(self) -> None:
+    def test_only_ten_empty_responsibility_groups_are_ordinary_configuration(self) -> None:
         configuration_model = parse_configuration(
             """
             [paths]
@@ -411,6 +419,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             [sources]
             [assets]
             [parsing]
+            [agents]
             [analysis]
             [execution]
             [library]
@@ -426,6 +435,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 "sources",
                 "assets",
                 "parsing",
+                "agents",
                 "analysis",
                 "execution",
                 "library",
@@ -449,15 +459,21 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     parse_configuration(payload)
                 self.assertNotIn(SENTINEL, str(caught.exception))
 
-    def test_llm_service_urls_and_budget_combinations_fail_before_runtime(self) -> None:
-        valid = {
+    def test_agent_service_urls_and_analysis_budget_combinations_fail_before_runtime(self) -> None:
+        valid_transport = {
             "provider": "custom",
             "service_name": "fixture-service",
             "protocol": "openai-responses",
             "base_url": "https://llm.example.invalid/v1",
-            "model": "fixture-model",
-            "context_window_tokens": 128_000,
             "authentication": "api-key",
+        }
+        role = AgentRoleConfig(
+            model="fixture-model",
+            context_window_tokens=128_000,
+            max_output_tokens=4_096,
+            structured_output=True,
+        )
+        valid_analysis = {
             "metadata_max_output_tokens": 512,
             "content_max_output_tokens": 2_048,
             "reference_max_output_tokens": 512,
@@ -480,18 +496,61 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for base_url in invalid_urls:
             with self.subTest(base_url=base_url), self.assertRaises(ValidationError):
-                AnalysisConfig(**{**valid, "base_url": base_url})
+                AgentsConfig.model_validate(
+                    {**valid_transport, "base_url": base_url, "analysis": role}
+                )
 
         invalid_budgets = (
             {"max_chunk_bytes": 262_145},
             {"max_total_llm_requests": 1},
             {"max_total_output_tokens": 2_559},
             {"content_max_output_tokens": 4_097},
-            {"context_window_tokens": 1_024, "reference_max_output_tokens": 1_024},
         )
         for changes in invalid_budgets:
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
-                AnalysisConfig(**{**valid, **changes})
+                AnalysisConfig(**{**valid_analysis, **changes})
+        with self.assertRaises(ValidationError):
+            Configuration(
+                agents=AgentsConfig.model_validate(
+                    {
+                        **valid_transport,
+                        "analysis": AgentRoleConfig(
+                            model="fixture-model",
+                            context_window_tokens=1_024,
+                            max_output_tokens=1_024,
+                            structured_output=True,
+                        ),
+                    }
+                ),
+                analysis=AnalysisConfig(
+                    reference_max_output_tokens=1_024,
+                    max_input_bytes=1_024,
+                    max_chunk_bytes=1_024,
+                ),
+            )
+
+    def test_agent_model_identity_fails_before_readiness_or_runtime(self) -> None:
+        decomposed = "fixture-e\u0301-model"
+        self.assertEqual(
+            AgentRoleConfig(model=decomposed).model,
+            "fixture-\u00e9-model",
+        )
+
+        for invalid in (
+            "fixture\nforged",
+            "fixture\u0085forged",
+            "\u754c" * 171,
+        ):
+            with self.subTest(invalid=invalid[:16]), self.assertRaises(ValidationError):
+                AgentRoleConfig(model=invalid)
+
+        exact_byte_limit = "\u754c" * 170 + "ab"
+        self.assertEqual(
+            AgentRoleConfig(model=exact_byte_limit).model,
+            exact_byte_limit,
+        )
+        with self.assertRaises(ConfigurationError):
+            parse_configuration('[agents.analysis]\nmodel = "fixture\\nforged"\n')
 
     def test_official_llm_and_mineru_urls_match_adapter_endpoint_policy(self) -> None:
         official_cases = (
@@ -523,7 +582,14 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for payload in official_cases:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
-                AnalysisConfig(**payload)
+                transport = dict(payload)
+                role = AgentRoleConfig(
+                    model=cast(str, transport.pop("model")),
+                    context_window_tokens=cast(int, transport.pop("context_window_tokens")),
+                    max_output_tokens=1,
+                    structured_output=True,
+                )
+                AgentsConfig(**transport, analysis=role)
 
         parser_cases = (
             {
@@ -882,16 +948,16 @@ class CredentialFileSecurityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             valid_transition = (
-                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
                 'next_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n'
             )
             credentials = load_credentials(home=home)  # missing remains a valid empty snapshot
-            self.assertEqual(credentials.core_field_names("llm"), ())
+            self.assertEqual(credentials.core_field_names("agents"), ())
             path = self._write(home, valid_transition.encode("utf-8"))
             credentials = load_credentials(home=home)
-            self.assertEqual(credentials.core_field_names("llm"), ("api_key", "origin"))
+            self.assertEqual(credentials.core_field_names("agents"), ("api_key", "origin"))
             self.assertEqual(
-                credentials.core_secret_for_origin("llm", "https://llm.example.invalid"),
+                credentials.core_secret_for_origin("agents", "https://llm.example.invalid"),
                 "new",
             )
             self.assertNotIn("next_", repr(credentials))
@@ -899,11 +965,12 @@ class CredentialFileSecurityTests(unittest.TestCase):
             self.assertNotIn("new", repr(credentials))
 
             invalid = (
-                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\nnext_api_key = "new"\n',
-                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                'next_api_key = "new"\n',
+                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
                 'next_origin = "https://llm.example.invalid"\n',
-                '[llm]\nnext_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n',
-                '[llm]\napi_key = "old"\norigin = "https://api.openai.com"\n'
+                '[agents]\nnext_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n',
+                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
                 'next_api_key = "new"\nnext_origin = "https://api.openai.com"\n',
             )
             for payload in invalid:

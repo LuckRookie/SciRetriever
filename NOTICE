@@ -26,3 +26,29 @@ docs/notes/scansci-migration-audit.md with exact provenance.
 The upstream exception for precompiled src/scansci_pdf/_core extensions states
 that their Cython sources are proprietary and are not included.  SciRetriever
 does not copy, link, redistribute, or claim provenance from those extensions.
+
+CloakBrowser Python wrapper
+---------------------------
+
+Repository: https://github.com/CloakHQ/CloakBrowser
+Validated wrapper version: 0.5.8
+Upstream license: MIT License
+Copyright: Copyright (c) 2026 CloakHQ
+
+SciRetriever declares ``cloakbrowser==0.5.8`` as an external Python runtime
+dependency.  The upstream wrapper package includes its MIT license; the
+permission notice and warranty disclaimer apply to that wrapper software.
+
+CloakBrowser patched Chromium binary
+-------------------------------------
+
+License: https://github.com/CloakHQ/CloakBrowser/blob/v0.5.8/BINARY-LICENSE.md
+Validated Linux x86_64 candidate: 146.0.7680.177.5
+
+The patched Chromium binary is a separately licensed distribution and is not
+covered by the wrapper's MIT license.  SciRetriever does not bundle,
+redistribute, repackage, or embed that binary in its source tree, wheel,
+fixtures, or build artifacts.  An operator must explicitly obtain a permitted
+binary from the vendor through SciRetriever's verified local runtime lifecycle.
+Hosted Browser, OEM, SaaS, redistribution, and third-party-control use cases
+may require separate permission from CloakHQ; this notice grants none.

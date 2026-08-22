@@ -17,10 +17,13 @@ from unittest.mock import Mock, call, patch
 from sciretriever.entry.ports import UserOutputConflictError
 from sciretriever.model.configuration import (
     AccessConfig,
-    AnalysisAuthentication,
-    AnalysisConfig,
+    AgentAuthentication,
+    AgentConfigurationProbeDetails,
+    AgentProtocol,
+    AgentProvider,
+    AgentRoleConfig,
+    AgentsConfig,
     AnalysisConfigurationStatus,
-    AnalysisProtocol,
     BrowserConfigurationProbeResult,
     BrowserProfilePresence,
     BrowserProfileStatus,
@@ -35,7 +38,6 @@ from sciretriever.model.configuration import (
     CredentialFieldSpec,
     CredentialFieldStatus,
     CredentialStatus,
-    LLMConfigurationProbeDetails,
     MinerUConfigurationProbeDetails,
     ParserConnectionMode,
     ParsingConfigurationStatus,
@@ -84,6 +86,7 @@ from sciretriever.model.report import (
     LiteratureCompletionTarget,
     NeedsManualPdfTarget,
     NotStartedCompletionTarget,
+    ReportEnd,
     StableFailure,
 )
 
@@ -990,8 +993,8 @@ class CliConfigurationTests(unittest.TestCase):
             ),
             browser_state="Disabled",
             browser_detail=(
-                "No profile is selected. One persistent Chrome process is shared by Publisher "
-                "lanes."
+                "No profile is selected. One fixed-profile CloakBrowser process is shared by "
+                "Publisher lanes."
             ),
             browser_action="Select and initialize a profile to enable Browser-last access.",
             profile_presence=BrowserProfilePresence.MISSING,
@@ -1000,7 +1003,18 @@ class CliConfigurationTests(unittest.TestCase):
     def test_plain_manager_configures_official_llm_and_never_renders_secret(self) -> None:
         module = _cli_module()
         secret = "llm-manager-secret-sentinel"
-        before = Configuration()
+        browser_role = AgentRoleConfig(
+            model="browser-model",
+            context_window_tokens=32_768,
+            max_output_tokens=2_048,
+            image_input=True,
+            tool_decision=True,
+            image_media_types=("image/png",),
+            image_count=1,
+            image_bytes=1_024,
+            turns=2,
+        )
+        before = Configuration(agents=AgentsConfig(browser=browser_role))
         with (
             patch(
                 "builtins.input",
@@ -1024,14 +1038,15 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertNotIn(secret, stdout + stderr)
         update.assert_called_once()
         call_args = update.call_args
-        self.assertEqual(call_args.args[:2], (Path("config.toml"), "llm"))
-        candidate = call_args.kwargs["analysis"]
-        self.assertIsInstance(candidate, AnalysisConfig)
-        self.assertIs(candidate.protocol, AnalysisProtocol.OPENAI_RESPONSES)
-        self.assertIs(candidate.authentication, AnalysisAuthentication.API_KEY)
+        self.assertEqual(call_args.args[:2], (Path("config.toml"), "agents"))
+        candidate = call_args.kwargs["agents"]
+        self.assertIsInstance(candidate, AgentsConfig)
+        self.assertIs(candidate.protocol, AgentProtocol.OPENAI_RESPONSES)
+        self.assertIs(candidate.authentication, AgentAuthentication.API_KEY)
         self.assertEqual(candidate.base_url, "https://api.openai.com/v1")
-        self.assertEqual(candidate.model, "fixture-model")
-        self.assertEqual(candidate.context_window_tokens, 1_000_000)
+        self.assertEqual(candidate.analysis.model, "fixture-model")
+        self.assertEqual(candidate.analysis.context_window_tokens, 1_000_000)
+        self.assertEqual(candidate.browser, browser_role)
         self.assertEqual(call_args.kwargs["secret"], secret)
         self.assertEqual(call_args.kwargs["origin"], "https://api.openai.com")
 
@@ -1074,11 +1089,67 @@ class CliConfigurationTests(unittest.TestCase):
 
         self.assertEqual((code, stdout), (0, ""))
         self.assertIn("configuration was saved", stderr)
-        candidate = update.call_args.kwargs["analysis"]
-        self.assertIs(candidate.protocol, AnalysisProtocol.OPENAI_CHAT_COMPLETIONS)
-        self.assertIs(candidate.authentication, AnalysisAuthentication.NONE)
+        candidate = update.call_args.kwargs["agents"]
+        self.assertIs(candidate.protocol, AgentProtocol.OPENAI_CHAT_COMPLETIONS)
+        self.assertIs(candidate.authentication, AgentAuthentication.NONE)
         self.assertEqual(update.call_args.kwargs["secret"], None)
         self.assertEqual(update.call_args.kwargs["origin"], None)
+
+    def test_plain_manager_configures_browser_role_on_shared_agents_provider(self) -> None:
+        module = _cli_module()
+        before = Configuration(
+            agents=AgentsConfig(
+                provider=AgentProvider.OPENAI,
+                protocol=AgentProtocol.OPENAI_RESPONSES,
+                base_url="https://api.openai.com/v1",
+                authentication=AgentAuthentication.API_KEY,
+                analysis=AgentRoleConfig(
+                    model="analysis-model",
+                    context_window_tokens=128_000,
+                    max_output_tokens=4_096,
+                    structured_output=True,
+                ),
+            )
+        )
+        with (
+            patch(
+                "builtins.input",
+                side_effect=(
+                    "l",
+                    "4",
+                    "",
+                    "",
+                    "",
+                    "1",
+                    "1",
+                    "",
+                    "",
+                    "",
+                    "y",
+                    "b",
+                    "q",
+                ),
+            ),
+            patch.object(
+                module, "select_configuration_edit_path", return_value=Path("config.toml")
+            ),
+            patch.object(module, "load_editable_configuration", return_value=before),
+            patch.object(module, "update_configuration_sections") as update,
+        ):
+            code, stdout, stderr = _invoke("config")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("Browser role configuration was saved", stderr)
+        update.assert_called_once()
+        candidate = update.call_args.kwargs["agents"]
+        self.assertEqual(candidate.provider, AgentProvider.OPENAI)
+        self.assertEqual(candidate.analysis, before.agents.analysis)
+        self.assertEqual(candidate.browser.model, "analysis-model")
+        self.assertTrue(candidate.browser.image_input)
+        self.assertTrue(candidate.browser.tool_decision)
+        self.assertEqual(
+            candidate.browser.image_media_types, ("image/png", "image/jpeg", "image/webp")
+        )
 
     def test_plain_manager_configures_loopback_mineru_without_upload_consent_or_token(
         self,
@@ -1140,13 +1211,17 @@ class CliConfigurationTests(unittest.TestCase):
     def test_core_reset_removes_ordinary_configuration_and_bound_credential_together(self) -> None:
         module = _cli_module()
         configured = Configuration(
-            analysis=AnalysisConfig(
-                provider=module.AnalysisProvider.OPENAI,
-                protocol=AnalysisProtocol.OPENAI_RESPONSES,
+            agents=AgentsConfig(
+                provider=module.AgentProvider.OPENAI,
+                protocol=AgentProtocol.OPENAI_RESPONSES,
                 base_url="https://api.openai.com/v1",
-                model="fixture-model",
-                context_window_tokens=128_000,
-                authentication=AnalysisAuthentication.API_KEY,
+                authentication=AgentAuthentication.API_KEY,
+                analysis=AgentRoleConfig(
+                    model="fixture-model",
+                    context_window_tokens=128_000,
+                    max_output_tokens=256,
+                    structured_output=True,
+                ),
             )
         )
         with (
@@ -1166,8 +1241,8 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("configuration was reset", stderr)
         update.assert_called_once_with(
             Path("config.toml"),
-            "llm",
-            analysis=AnalysisConfig(),
+            "agents",
+            agents=AgentsConfig(),
             secret=None,
             origin=None,
         )
@@ -1190,7 +1265,7 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("uploads no PDF", stderr)
         self.assertIn("cancelled", stderr)
         session.run.assert_not_called()
-        session.run_llm.assert_not_called()
+        session.run_agents.assert_not_called()
         session.run_mineru.assert_not_called()
 
     def test_eof_during_hidden_core_secret_input_is_a_controlled_interruption(self) -> None:
@@ -1261,13 +1336,14 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("9/9 routes locally eligible", stdout)
         self.assertIn("local Browser not", stdout)
         self.assertIn("Access mode", stdout)
-        self.assertIn("persistent-profile", stdout)
+        self.assertIn("fixed-profile", stdout)
         self.assertIn("Selected profile", stdout)
-        self.assertIn("Chrome lifecycle", stdout)
+        self.assertIn("Browser lifecycle", stdout)
         self.assertIn("Publisher lanes", stdout)
-        self.assertIn("Session authenticat", stdout)
+        self.assertIn("Interactive authent", stdout)
         self.assertIn("Article access", stdout)
         self.assertIn("checked-per-article", stdout)
+        self.assertIn("not evaluated by status", stdout)
         self.assertNotIn("status-secret-sentinel", stdout)
 
     def test_config_manager_sets_updates_and_removes_without_secret_output_or_storage(
@@ -1542,22 +1618,26 @@ class CliConfigurationTests(unittest.TestCase):
         payload = json.loads(stdout)
         self.assertEqual(
             set(payload),
-            {"storage", "providers", "parsing", "analysis", "execution", "library"},
+            {"storage", "providers", "parsing", "agents", "analysis", "execution", "library"},
         )
         self.assertEqual(
             payload["providers"]["metadata"][0]["missing_ordinary_fields"],
             ["mode"],
         )
-        self.assertEqual(payload["analysis"]["provider"], None)
+        self.assertEqual(payload["agents"]["provider"], None)
         browser = payload["providers"]["controlled_browser"]
         self.assertEqual(browser["production_route_count"], 9)
         self.assertEqual(browser["automatic_route_count"], 9)
         self.assertFalse(browser["automatic_acquisition_available"])
         self.assertFalse(browser["runtime"]["launch_assessed"])
-        self.assertEqual(browser["mode"], "headed-persistent-profile")
+        self.assertEqual(browser["mode"], "headed-fixed-profile")
         self.assertIn("headed_display_available", browser["runtime"])
-        self.assertTrue(browser["persistent_authentication_supported"])
+        self.assertFalse(browser["interactive_authentication_supported"])
+        self.assertNotIn("framework_available", browser["runtime"])
+        self.assertNotIn("chromium_executable_available", browser["runtime"])
         self.assertEqual(browser["article_entitlement"], "checked-per-article")
+        self.assertEqual(browser["article_entitlement_assessment"], "not-evaluated")
+        self.assertFalse(browser["article_entitlement_evaluated"])
         self.assertEqual(
             browser["profile"],
             {"selected": None, "presence": "missing"},
@@ -1657,9 +1737,9 @@ class CliConfigurationTests(unittest.TestCase):
             "Controlled Browser",
             "Access mode",
             "Selected profile",
-            "Chrome lifecycle",
+            "Browser lifecycle",
             "Publisher lanes",
-            "Session authenticat",
+            "Interactive authent",
             "Article access",
             "Storage",
         ):
@@ -1701,7 +1781,7 @@ class CliConfigurationTests(unittest.TestCase):
             "CORE",
             "Elsevier / Scopus",
             "Select Browser profile",
-            "persistent Chrome profile",
+            "headed fixed-profile CloakBrowser process",
             "sensitive session data",
         ):
             self.assertIn(expected, stderr)
@@ -1754,7 +1834,7 @@ class CliConfigurationTests(unittest.TestCase):
         before = Configuration()
         overview = self._provider_access_overview(module)
         with (
-            patch("builtins.input", side_effect=("a", "5", "128", "y", "b", "q")),
+            patch("builtins.input", side_effect=("a", "4", "128", "y", "b", "q")),
             patch.object(
                 module,
                 "select_configuration_edit_path",
@@ -1785,7 +1865,7 @@ class CliConfigurationTests(unittest.TestCase):
         )
         overview = self._provider_access_overview(module)
         with (
-            patch("builtins.input", side_effect=("a", "4", "y", "b", "q")),
+            patch("builtins.input", side_effect=("a", "3", "y", "b", "q")),
             patch.object(
                 module,
                 "select_configuration_edit_path",
@@ -1856,7 +1936,6 @@ class CliConfigurationTests(unittest.TestCase):
             access_choice.options,
             [
                 ("select", "Select or initialize a Browser profile"),
-                ("login", "Open a visible Browser when a Provider requires manual login"),
                 ("remove", "Remove the selected local Browser session"),
                 ("disable", "Disable Browser access and keep the session"),
                 ("concurrency", "Set cross-Publisher Browser concurrency"),
@@ -1887,7 +1966,7 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual(overview.browser_state, "Disabled")
         self.assertIn("Select and initialize a profile", overview.browser_action)
         self.assertIn("No profile is selected", overview.browser_detail)
-        self.assertIn("persistent Chrome process", overview.browser_detail)
+        self.assertIn("fixed-profile CloakBrowser process", overview.browser_detail)
 
     def test_config_test_routes_named_and_all_to_probe_session_and_uses_result_exit_code(
         self,
@@ -1921,12 +2000,12 @@ class CliConfigurationTests(unittest.TestCase):
 
         session = Mock()
         session.run.side_effect = (passed, skipped)
-        session.run_llm.return_value = CoreConfigurationProbeResult(
-            service=CoreCredentialService.LLM,
+        session.run_agents.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.AGENTS,
             outcome=ProbeOutcome.SKIPPED,
             local_ready=False,
             failure_code="analysis-not-ready",
-            details=LLMConfigurationProbeDetails(),
+            details=AgentConfigurationProbeDetails(),
         )
         session.run_mineru.return_value = CoreConfigurationProbeResult(
             service=CoreCredentialService.MINERU,
@@ -2033,7 +2112,7 @@ class CliConfigurationTests(unittest.TestCase):
         session.run_browser.assert_called_once_with("springerlink")
         session.close.assert_called_once_with()
         session.run.assert_not_called()
-        session.run_llm.assert_not_called()
+        session.run_agents.assert_not_called()
         session.run_mineru.assert_not_called()
 
     def test_config_test_browser_passes_without_entitlement_claim(self) -> None:
@@ -2096,6 +2175,118 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertIn("does not assess institution-IP or article-specific entitlement", stderr)
         self.assertIn("cancelled", stderr)
         session.run_browser.assert_not_called()
+
+    def test_named_browser_agent_probe_confirms_and_serializes_role_contract(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        session.run_browser_agent.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.AGENTS,
+            outcome=ProbeOutcome.PASSED,
+            local_ready=True,
+            details=AgentConfigurationProbeDetails(
+                role="browser-agent",
+                request_kind="browser-agent-tool",
+                image_input=True,
+                tool_decision=True,
+                image_count=1,
+                tool_count=1,
+                tool_decision_parseable=True,
+                model="browser-model",
+                protocol=AgentProtocol.OPENAI_RESPONSES,
+            ),
+        )
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+        ):
+            code, stdout, stderr = _invoke("config", "test", "browser-agent", "--json")
+
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["service"], "agents")
+        self.assertEqual(payload["outcome"], "passed")
+        self.assertEqual(payload["details"]["role"], "browser-agent")
+        self.assertEqual(payload["details"]["request_kind"], "browser-agent-tool")
+        session.run_browser_agent.assert_called_once_with()
+        session.run_agents.assert_not_called()
+
+    def test_named_browser_agent_human_confirmation_describes_synthetic_request(self) -> None:
+        module = _cli_module()
+        session = Mock()
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+            patch("builtins.input", return_value="n"),
+        ):
+            code, stdout, stderr = _invoke("config", "test", "browser-agent")
+
+        self.assertEqual((code, stdout), (0, ""))
+        self.assertIn("fixed synthetic image", stderr)
+        self.assertIn("closed generic tool", stderr)
+        self.assertIn("no Literature, PDF, page content", stderr)
+        self.assertIn("may consume a small amount of quota", stderr)
+        self.assertIn("does not start a Browser or visit a Publisher", stderr)
+        self.assertIn("cancelled", stderr)
+        session.run_browser_agent.assert_not_called()
+
+    def test_all_optional_browser_agent_skip_does_not_fail_required_probes(self) -> None:
+        module = _cli_module()
+        passed = ConfigurationProbeSummary(results=())
+        session = Mock()
+        session.run.return_value = passed
+        session.run_agents.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.AGENTS,
+            outcome=ProbeOutcome.PASSED,
+            local_ready=True,
+            details=AgentConfigurationProbeDetails(strict_response_parseable=True),
+        )
+        session.run_browser_agent.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.AGENTS,
+            outcome=ProbeOutcome.SKIPPED,
+            local_ready=False,
+            failure_code="browser-agent-not-ready",
+            details=AgentConfigurationProbeDetails(
+                role="browser-agent",
+                request_kind="browser-agent-tool",
+                image_input=True,
+                tool_decision=True,
+                image_count=1,
+                tool_count=1,
+            ),
+        )
+        session.run_mineru.return_value = CoreConfigurationProbeResult(
+            service=CoreCredentialService.MINERU,
+            outcome=ProbeOutcome.PASSED,
+            local_ready=True,
+            details=MinerUConfigurationProbeDetails(
+                health="healthy",
+                release="3.4.4",
+                api_protocol=2,
+            ),
+        )
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(
+                module,
+                "build_production_configuration_probe_session",
+                return_value=session,
+            ),
+        ):
+            code, stdout, stderr = _invoke("config", "test", "--all", "--json")
+
+        self.assertEqual((code, stderr), (0, ""))
+        payload = json.loads(stdout)
+        self.assertEqual(payload["browser-agent"]["outcome"], "skipped")
+        self.assertEqual(payload["browser-agent"]["details"]["role"], "browser-agent")
+        session.run_browser_agent.assert_called_once_with()
 
 
 class CliResultAndFailureBoundaryTests(unittest.TestCase):
@@ -2255,6 +2446,267 @@ class CliResultAndFailureBoundaryTests(unittest.TestCase):
         self.assertIn(f"reason: {stable_failure.reason}", human[1])
         self.assertIn(f"action: {stable_failure.action}", human[1])
         self.assertNotIn("{'", human[1])
+
+    def test_completion_exit_code_distinguishes_operation_boundary_from_end_state(self) -> None:
+        """Keep batch-partition failures separate from operation failures.
+
+        A completion report may legitimately finish with every target in its
+        ``failed`` partition: the operation reached its requested boundary
+        and the report remains the source of per-target business outcomes.
+        Only a failed report end is an operation-level failure.  This test
+        fixes the contract for complete, partial, all-failed, failed and
+        interrupted outcomes without making shell status depend on partition
+        formatting.
+        """
+
+        module = _cli_module()
+        target = LiteratureCompletionTarget(
+            kind="literature",
+            literature_id=LiteratureId("00000000-0000-0000-0000-000000000001"),
+        )
+        second_target = LiteratureCompletionTarget(
+            kind="literature",
+            literature_id=LiteratureId("00000000-0000-0000-0000-000000000002"),
+        )
+        failure = StableFailure(
+            code="acquisition-no-source",
+            reason="No usable source was found.",
+            action="Provide the PDF manually or retry later.",
+            retryable=True,
+        )
+
+        def report_with_end(
+            end: ReportEnd,
+            *,
+            goal_reached: tuple[GoalReachedTarget, ...] = (),
+            failed: tuple[FailedCompletionTarget, ...] = (),
+        ) -> DatabaseCompletionReport:
+            return DatabaseCompletionReport(
+                kind="database-completion",
+                end=end,
+                goal="ASSET_READY",
+                goal_reached=goal_reached,
+                needs_manual_pdf=(),
+                failed=failed,
+                interrupted=(),
+                not_started=(),
+                no_usable_content_literature_ids=(),
+            )
+
+        failed_target = FailedCompletionTarget(
+            target=second_target,
+            literature_id=second_target.literature_id,
+            stage="acquisition",
+            failure=failure,
+        )
+        cases = (
+            ("complete", report_with_end(FinishedReportEnd(kind="finished")), 0),
+            (
+                "partial",
+                report_with_end(
+                    FinishedReportEnd(kind="finished"),
+                    goal_reached=(
+                        GoalReachedTarget(
+                            target=target,
+                            literature_id=target.literature_id,
+                        ),
+                    ),
+                    failed=(failed_target,),
+                ),
+                0,
+            ),
+            (
+                "all-failed",
+                report_with_end(
+                    FinishedReportEnd(kind="finished"),
+                    failed=(failed_target,),
+                ),
+                0,
+            ),
+            (
+                "operation-failed",
+                report_with_end(
+                    FailedReportEnd(
+                        kind="failed",
+                        failure=failure,
+                    ),
+                    failed=(failed_target,),
+                ),
+                3,
+            ),
+            (
+                "interrupted",
+                report_with_end(InterruptedReportEnd(kind="interrupted")),
+                130,
+            ),
+        )
+        for name, report, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(module._result_code(report), expected)
+
+    def test_completion_exit_codes_are_enforced_by_the_cli_boundary(self) -> None:
+        """Exercise completion through ``main`` in both output modes.
+
+        The helper-level contract above protects the mapping itself.  This
+        test additionally proves that ``complete`` writes the typed report,
+        closes its graph, and returns the same code for human and JSON output
+        for every accepted report boundary.
+        """
+
+        module = _cli_module()
+        target = LiteratureCompletionTarget(
+            kind="literature",
+            literature_id=LiteratureId("00000000-0000-0000-0000-000000000011"),
+        )
+        second_target = LiteratureCompletionTarget(
+            kind="literature",
+            literature_id=LiteratureId("00000000-0000-0000-0000-000000000012"),
+        )
+        failure = StableFailure(
+            code="acquisition-no-source",
+            reason="No usable source was found.",
+            action="Provide the PDF manually or retry later.",
+            retryable=True,
+        )
+        failed_target = FailedCompletionTarget(
+            target=second_target,
+            literature_id=second_target.literature_id,
+            stage="acquisition",
+            failure=failure,
+        )
+
+        def report(
+            end: ReportEnd,
+            *,
+            goal_reached: tuple[GoalReachedTarget, ...] = (),
+            failed: tuple[FailedCompletionTarget, ...] = (),
+        ) -> DatabaseCompletionReport:
+            return DatabaseCompletionReport(
+                kind="database-completion",
+                end=end,
+                goal="ASSET_READY",
+                goal_reached=goal_reached,
+                needs_manual_pdf=(),
+                failed=failed,
+                interrupted=(),
+                not_started=(),
+                no_usable_content_literature_ids=(),
+            )
+
+        cases = (
+            (
+                "finished-all-success",
+                report(
+                    FinishedReportEnd(kind="finished"),
+                    goal_reached=(
+                        GoalReachedTarget(target=target, literature_id=target.literature_id),
+                    ),
+                ),
+                0,
+            ),
+            (
+                "finished-partial",
+                report(
+                    FinishedReportEnd(kind="finished"),
+                    goal_reached=(
+                        GoalReachedTarget(target=target, literature_id=target.literature_id),
+                    ),
+                    failed=(failed_target,),
+                ),
+                0,
+            ),
+            (
+                "finished-all-targets-failed",
+                report(FinishedReportEnd(kind="finished"), failed=(failed_target,)),
+                0,
+            ),
+            (
+                "operation-failed",
+                report(
+                    FailedReportEnd(kind="failed", failure=failure),
+                    failed=(failed_target,),
+                ),
+                3,
+            ),
+            (
+                "user-cancelled-report",
+                report(InterruptedReportEnd(kind="interrupted")),
+                130,
+            ),
+        )
+        for name, expected_report, expected_code in cases:
+            for as_json in (False, True):
+                with self.subTest(name=name, output="json" if as_json else "human"):
+                    entry_api = _RecordingEntryApi()
+                    entry_api.completion_result = expected_report
+                    graph = _RoutingObjectGraph(entry_api)
+                    arguments = ["complete", "pdf", "--all-pending"]
+                    if as_json:
+                        arguments.append("--json")
+                    with (
+                        patch.object(
+                            module,
+                            "load_selected_configuration",
+                            return_value=Configuration(),
+                        ),
+                        patch.object(module, "build_production_object_graph", return_value=graph),
+                    ):
+                        code, stdout, stderr = _invoke(*arguments)
+                    self.assertEqual(code, expected_code)
+                    self.assertEqual(stderr, "")
+                    self.assertEqual(graph.close_calls, 1)
+                    if as_json:
+                        self.assertEqual(
+                            json.loads(stdout),
+                            expected_report.model_dump(mode="json"),
+                        )
+                    else:
+                        self.assertIn("Database completion", stdout)
+                        self.assertIn(f"Outcome: {expected_report.end.kind}", stdout)
+
+    def test_completion_keyboard_cancellation_and_boundary_errors_keep_stable_codes(self) -> None:
+        module = _cli_module()
+        sentinel = "completion-secret-sentinel"
+        private_path = "/private/user/catalog.db"
+
+        entry_api = _RecordingEntryApi()
+        graph = _RoutingObjectGraph(entry_api)
+        with (
+            patch.object(module, "load_selected_configuration", return_value=Configuration()),
+            patch.object(module, "build_production_object_graph", return_value=graph),
+            patch.object(
+                entry_api,
+                "complete_database",
+                side_effect=KeyboardInterrupt(f"{sentinel} {private_path}"),
+            ),
+        ):
+            cancelled = _invoke("complete", "pdf", "--all-pending", "--json")
+        self.assertEqual(cancelled, (130, "", "operation interrupted.\n"))
+        self.assertEqual(graph.close_calls, 1)
+        self.assertNotIn(sentinel, cancelled[2])
+        self.assertNotIn(private_path, cancelled[2])
+
+        for exception, expected_code, expected_message in (
+            (
+                module.ConfigurationError(f"api_key={sentinel} {private_path}"),
+                4,
+                "configuration operation failed",
+            ),
+            (OSError(f"{private_path}: {sentinel}"), 70, "internal operation failed"),
+        ):
+            with self.subTest(exception=type(exception).__name__):
+                with patch.object(module, "load_selected_configuration", side_effect=exception):
+                    code, stdout, stderr = _invoke(
+                        "complete",
+                        "pdf",
+                        "--all-pending",
+                        "--json",
+                    )
+                self.assertEqual(code, expected_code)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected_message, stderr)
+                self.assertNotIn(sentinel, stderr)
+                self.assertNotIn(private_path, stderr)
 
     def test_configuration_bootstrap_and_io_errors_are_redacted(self) -> None:
         module = _cli_module()
