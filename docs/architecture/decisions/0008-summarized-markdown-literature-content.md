@@ -6,7 +6,7 @@
 - Supersedes: [ADR 0005](0005-document-package-2-breaking-contract.md)、[ADR 0006](0006-llm-produced-literature-content.md)
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Analysis 技术文档](../technical/analysis.md)、[Literature 技术文档](../technical/literature.md)
-- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
+- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
 
 ## 背景
 
@@ -217,11 +217,11 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 
 已经形成有效 `LiteratureContent` 的当前主 PDF 不由其它候选自动替换。补充资产可以保存，但不驱动 Parsing、Analysis 或 Literature 状态。
 
-### 11. 当前不建立公共 LLM 基础设施模块
+### 11. Analysis 拥有 LLM 业务语义
 
-当前两个 LLM 用例——文献总结和从参考文献原文形成临时 `ReferenceLookup`——都属于 Analysis。两个用例共用 Analysis 内部的 LLM Port 和 provider adapter；其它模块只调用 Analysis 的公开业务 API，不能直接调用通用 prompt 接口。Provider adapter 继续经过 Network 的统一访问政策。
+文献总结和从参考文献原文形成临时 `ReferenceLookup` 都属于 Analysis。Analysis 始终拥有两阶段顺序、prompt、请求分类、响应 schema、业务验收和最终 provenance；其它模块只能调用 Analysis 的公开业务 API，不能直接调用这些文献业务用例或通用 prompt 接口。
 
-只有未来至少两个独立功能模块出现明确、不同的 LLM 业务需求，并且能够提取不包含文献业务语义的中性 provider/model 调用机制时，才通过新 ADR 考虑公共 `llm` 基础设施。功能模块始终拥有自己的 prompt 语义、业务输出和验收规则。
+[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md) 后来确认 Acquisition/Browser 是第二个独立模型能力消费者，因此把不含文献或 Browser 业务语义的 provider/model、capability、预算、取消和请求级 session 提升到公共 `agents` 基础模块。该修订不改变本 ADR 的 Analysis 业务所有权；Analysis 通过 Agents 的 structured-text capability 调用模型，Browser 不能复用 Analysis 的 request kind、prompt 或结果验收。
 
 ### 12. ReferenceLookup 仍是按需补充操作
 
@@ -244,7 +244,7 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 - 每个 Literature 只保留一个可原子替换的当前 `LiteratureContent`；它与 ParserResult 都可以从权威元数据和 PDF 重建，不维护历史结果。
 - 内容级 hash、Markdown 字节 hash 和单一 Analysis provenance 各自具有唯一含义，不保存两次模型调用的平行 lineage。
 - `DocumentPackage` 2.0 不再约束当前设计；未来完整快照必须重新立项和版本化。
-- 当前仍只有十个目标模块，LLM 不是新的项目级公用模块。
+- Analysis 不再私有拥有模型协议 adapter，但仍唯一拥有文献分析业务语义；中性的模型运行基础由 ADR 0017 的 Agents 公用模块提供。
 
 ## 需要新 ADR 的变化
 

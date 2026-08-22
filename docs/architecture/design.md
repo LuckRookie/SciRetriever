@@ -97,7 +97,7 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 
 ### 2.2 模块划分
 
-系统只使用六个核心功能模块和四个公用基础模块描述产品架构。
+系统只使用六个核心功能模块和五个公用基础模块描述产品架构。
 
 | 类别 | 模块 | 主要责任 |
 |---|---|---|
@@ -108,6 +108,7 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 | 核心功能 | Parsing | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果 |
 | 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索 |
 | 公用基础 | Model | 定义除 Logging 外各模块交换的领域中立数据合同 |
+| 公用基础 | Agents | 为 Analysis 与受控 Browser 提供中性 provider、模型 capability、请求预算、取消、请求级 session 和严格结构化/tool decision；不拥有消费模块的 prompt、工具含义或结果验收 |
 | 公用基础 | 网络基础设施 | 统一提供安全 HTTP、受控浏览器、资源预算和脱敏 |
 | 公用基础 | 存储 | 保存 DiscoveryRun、文献当前关系事实、自动 PDF 获取耗尽事实和不可变文件，提供一致查询与事务边界；不保存批量运行现场或报告 |
 | 公用基础 | Logging | 统一 logger 获取、生产进程配置、stderr 输出、formatter 和最终脱敏防线；不形成 Report 或业务事件系统 |
@@ -116,7 +117,7 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 
 ### 2.3 按功能模块组织
 
-代码按六个核心功能模块和四个公用基础模块组织，不再建立 `core`、`services`、`infrastructure`、`interface`、`composition` 等顶层分层目录。目录名称与本设计中的模块名称保持一一对应，使一个功能的规则、用例、Ports 和供应商适配能够在同一模块内阅读和维护。
+代码按六个核心功能模块和五个公用基础模块组织，不再建立 `core`、`services`、`infrastructure`、`interface`、`composition` 等顶层分层目录。目录名称与本设计中的模块名称保持一一对应，使一个功能的规则、用例、Ports 和供应商适配能够在同一模块内阅读和维护。
 
 ```text
 sciretriever/
@@ -128,6 +129,7 @@ sciretriever/
   analysis/           # LLM 分析与总结
 
   model/              # 统一数据合同
+  agents/             # 中性模型 provider、capability、预算与请求级 session
   network/            # 网络基础设施
   storage/            # 数据库、文件和本机写入互斥
   logging/            # logger 获取、进程配置与最终脱敏防线
@@ -151,14 +153,14 @@ sciretriever/
 1. 除 `logging` 外的模块可以使用 `model` 中的中性数据合同；
 2. `entry` 只通过其它核心模块的公开 API 编排流程，不导入其私有实现；
 3. 核心功能模块之间只通过公开 API 和 Model 数据协作，不跨模块调用私有规则或适配器；
-4. 需要网络或持久化的模块在自己的 `ports.py` 声明能力，由 `network`、`storage` 或本模块专属适配器实现；
+4. 需要网络或持久化的模块在自己的 `ports.py` 声明能力，由 `network`、`storage` 或本模块专属适配器实现；Analysis 与 Acquisition 只通过 `agents` 的中性公开 API 使用模型能力，不直接导入其 provider adapter；
 5. `network` 和 `storage` 不拥有文献身份、元数据收敛、内容判断和状态等业务规则；
 6. 除纯声明的 `model` 外，具有运行行为的模块只通过 `logging.api` 获取 logger，不直接配置 Python root logger、Handler 或 formatter；`logging` 只依赖 Python 标准库，不反向调用业务模块；
 7. `configuration/` 与 `bootstrap/` 分别是原 Configuration 和 Bootstrap 模块的 package 形态；
    各自 `__init__.py` 提供稳定、窄小的公开 surface，其余同包文件按稳定概念拥有实现细节。
    目录拆分不增加新的产品模块。Bootstrap 边界是唯一选择具体实现并构造完整对象图的位置，
    并通过 `logging.api` 触发生产日志初始化；这些启动边界都不承载产品规则；
-8. Vendor、HTTP、浏览器、SQL、MinerU 和 LLM 私有类型只能存在于对应模块的适配边界，不能进入公共 API 或 Model。
+8. Vendor、HTTP、浏览器、SQL、MinerU 和模型协议私有类型只能存在于对应模块的适配边界，不能进入公共 API 或 Model；Agents 的中性交换值也不能携带 Literature、Publisher、Page、Cookie、任意 callable 或消费模块业务枚举。
 
 ### 2.4 Provider 能力与启动配置
 
@@ -168,7 +170,7 @@ sciretriever/
 
 目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的 Provider 能力，并由 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 约束原文访问计划。“能力已实现”“用户启用”“普通参数/凭据/政策就绪”“当前 Literature 适用”和“当前 route 实际需要”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 先形成访问方 Resolution 和分层 Plan，只执行其中适用且需要的 route。全面接入不会把每次运行变成对全部服务的无条件调用。
 
-普通配置由 `sciretriever.configuration` 解析；Provider、LLM 与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
+普通配置由 `sciretriever.configuration` 解析；Provider、Agents 模型服务与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。模型 endpoint/凭据可以由 analysis/browser 角色复用，但 capability 与预算分别判断；密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
 
 Publisher access Profile 使用 `production-ready`、`fixture-verified` 和 `unsupported` 三种准入状态，
 Public、授权 API 与 Browser capability 另行表达。一个只完成授权 API 的 Profile 可以是
@@ -268,15 +270,17 @@ Public 层先消费明确的直接主 PDF 线索、公开仓储、OA locator 和
 Browser 按 `browser_rate_limit_group` 调度：不同独立风险组可以并行，同一组固定
 `concurrency = 1` 并按该 PublisherAccessProfile 的文章间隔、window 和 cooldown 限速串行。
 跨组本机 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；它不改变组内政策，也不会启动多个
-Browser。Browser 使用当前机器正常网络出口和一个 operator-managed 持久身份 Profile，在当前
-对象图内让所有 `browser_session_key` Publisher lane 共享一个有头 Chrome process/persistent
+Browser。Browser 使用当前机器正常网络出口和一个 operator-managed 固定身份 Profile，在当前
+对象图内让所有 `browser_session_key` Publisher lane 共享一个有头 CloakBrowser Chromium process/persistent
 context，并为每篇文章隔离 article token、page、handler 和临时下载目录；无 GUI Linux 由 Xvfb
 提供虚拟显示，broker 关闭或进程退出后清理 runtime 临时资源但保留 Profile。Permit 覆盖一篇
 文章从 canonical landing、授权标记、有限页面动作、popup/viewer、response/download 到资源清理
-的完整流程。登录、MFA、challenge、无 entitlement、rate limit、IP block 或账号警告只暂停/熔断
-对应组；用户可以显式打开使用同一 Profile 的可见 Browser 完成获授权的交互，自动流程不填写
-凭据、不选择机构、不读取 Cookie/登录结果、不处理或绕过 MFA/CAPTCHA，也不执行任意规则脚本或
-反检测动作。Publisher 请求由 Chrome 原生网络栈完成；每次 navigation、popup、viewer、response
+的完整流程。Challenge dependency 只在已核实 Publisher、frame ancestry 与当前文章预算内加载；
+自动 settle/clear、本地资源阻断、明确人工交互和普通拒绝分别表达。登录、MFA、明确人工 challenge、
+无 entitlement、rate limit、IP block 或账号警告只暂停/熔断对应组。第一版不提供用户可见 Browser
+认证、机构选择、MFA 或 CAPTCHA 交互；自动流程不填写凭据、不选择机构、不读取 Cookie/登录结果、
+不处理或绕过 MFA/CAPTCHA，也不执行任意规则脚本。
+固定设备身份由 CloakBrowser runtime 管理，不是 Publisher 动作。Publisher 请求由 Chromium 原生网络栈完成；每次 navigation、popup、viewer、response
 和 download 在继续访问前同时通过 PublisherAccessProfile guard 与 Network 通用安全准入。
 
 所有 HTTP、API 与 Browser 路径只把实际字节交付为统一 `TemporaryPdf`。候选通过实际字节、PDF reader、页面树和目标归属基本检查后才成为当前主 PDF；Storage 保存不可变 PDF、hash、来源和与 `Literature` 的唯一 `primary-pdf` 关系。文献状态由这些已经提交的事实推导为“已有文献资产”，而不是由下载任务或 Browser 状态单独维护。内容有效性留给后续 Analysis；下载阶段不提前建立严格正文验收，补充材料也不能成为主 PDF。
@@ -429,6 +433,8 @@ Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文
 - 接受 Entry 的 cohort 层级调用，为 API/DOI/页面产生的安全 route hint 重新规划，并保证同一 Literature 不跨层竞速；
 - 把 API capability 明确区分为 metadata/search、locator/resolution、entitlement、structured full text、direct PDF 和 multi-step PDF object retrieval，只有实际 PDF 字节形成临时候选；
 - 为 Browser route 声明封闭页面规则、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 与政策证据；
+- 以 `BrowserFlowController` 组织页面流程：初始 capture、通用 PDF locator 和 Publisher 静态规则优先，只有页面仍为非终态且正常未命中时才允许有界 Agent fallback；
+- 解释 Network 提供的有界页面/资源事实，区分 challenge resource loading/settling/cleared、明确人工交互、本地资源阻断、普通拒绝、paywall、login 和 entitlement；
 - 对每个候选执行统一基本检查；
 - 对手动提供的文件复制内部副本并执行同一基本检查，不移动、修改或删除用户原文件；
 - 一个候选正常未命中或未通过基本检查时继续其它候选；timeout、临时服务错误、`429`/quota、Browser action-required、Network/API/权限/配置错误和取消不能被解释为正常耗尽或无条件升级；
@@ -566,9 +572,9 @@ Analysis 从第一阶段的结构化响应取得最终元数据和摘要，从�
 
 `ReferenceLookup` 是 Analysis 内按引用扩展需要调用的另一个 LLM 用例。Lookup 只包含原文中明确识别出的稳定标识符、标题、作者和年份等搜索线索；它不持久化，也不能作为被引文献的权威元数据。明确格式的 DOI、PMID、arXiv ID 等由代码校验和规范化。引用 lookup 失败不影响原文保存、文档导出或内容完成。
 
-当前不建立公共 LLM 基础设施模块。文献总结和 `ReferenceLookup` 共用 Analysis 内部的 LLM Port 与 provider adapter，adapter 经过 Network；其它模块只调用 Analysis 的业务 API。只有未来至少两个独立功能模块真实需要中性的 LLM 能力时，才通过新 ADR 讨论提升。
+Analysis 通过 Agents 的 structured-text capability 发起模型请求，但仍独占文献 prompt、两阶段 request kind、输入/响应 schema、NoUsableContent、Markdown、ReferenceLookup 和最终结果验收。Agents 调用成功不替代这些业务检查，Browser 也不能通过 Agents 调用 Analysis 私有用例。具体共享边界由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 约束。
 
-## 5. 四个公用基础模块
+## 5. 五个公用基础模块
 
 ### 5.1 Model
 
@@ -586,11 +592,19 @@ Model 定义除 Logging 外各模块之间交换的统一数据合同，包括�
 
 `LibraryQuery`、搜索请求/页面、列表项、资产组合 view、`LiteratureDetail`、引用关系页面和 `ReferenceDetail` 也使用 Pydantic，以便 CLI、JSON 和程序调用共享稳定读取合同；但这些只是查询时形成的不可变投影，不是新的数据库主体或长期业务事实。Artifact binary stream 和用户目标路径是 I/O boundary 对象，不进入 Pydantic，也不让 Detail 执行 I/O。
 
-Vendor、HTTP、浏览器、SQL、MinerU 私有响应和 LLM 私有响应必须在对应模块的适配边界转换成 Model，不能进入模块公开 API 或业务规则。
+Vendor、HTTP、浏览器、SQL、MinerU 私有响应和模型协议私有响应必须在对应模块的适配边界转换，不能进入 Model、模块公开 API 或业务规则。Agents 的中性交换值只服务当前请求，不成为文献 Model 或持久化事实。
 
-### 5.2 网络基础设施
+### 5.2 Agents
 
-网络基础设施为元数据供应商、Acquisition、Parsing 和 LLM 提供共同的安全访问能力，逻辑上包含共享访问政策、进程内供应商级准入、普通 HTTP 和受控浏览器。
+Agents 是 Analysis 与受控 Browser 的公用模型调用基础，只拥有中性的 provider/model identity、capability、输入/输出边界、预算、取消、请求级 session、协议转换和稳定失败。它至少区分 structured text、image input 与 tool decision；某个模型可以满足 Analysis 而不满足 Browser Agent，readiness 不能只按 provider 名称推断。
+
+Analysis 和 Acquisition 分别构造业务目标、prompt/schema、允许动作并验收结果。Browser Agent 只能根据 Network 生成的有界 observation 返回 `ClickElement`、`ScrollPage`、`WaitForPage` 或 `StopFlow`；Network 在同一 CloakBrowser context、同一文章 permit 和同一资源预算中执行。Agents 不获得 Literature、Publisher rule、Page、Context、CDP、Cookie、Profile、任意 URL/selector/JavaScript、文件系统或事实写入能力。
+
+Agents session 只存在于一次 Analysis 请求或当前文章 Browser flow；关闭、取消或 deadline 后释放文本、图像、tool output 和模型响应，不跨文章、Publisher、命令或进程恢复，也不进入 Catalog、ArtifactStore、Profile、Report 或日志。具体 API、适配器和验证见 [Agents 技术文档](technical/agents.md)。
+
+### 5.3 网络基础设施
+
+网络基础设施为元数据供应商、Acquisition、Parsing 和 Agents 提供共同的安全访问能力，逻辑上包含共享访问政策、进程内供应商级准入、普通 HTTP 和受控浏览器。
 
 它负责：
 
@@ -602,16 +616,17 @@ Vendor、HTTP、浏览器、SQL、MinerU 私有响应和 LLM 私有响应必须�
 - 对 API 按真实 quota identity 执行官方政策，并在共享额度池的当前进程调用方之间共享反馈；
 - 对 Browser 按 `browser_rate_limit_group` 执行不同组并行、同组 `concurrency = 1` 且按 Provider 文章政策限速串行；全局 Browser 上限只保护本机资源；
 - HTTPS、TLS、timeout、连接复用和有界响应读取；
-- 一个 operator-managed 持久身份 Profile、共享有头 Chrome process/context、无 GUI Linux 的
-  Xvfb 显示、Publisher lane 调度、文章级 page/handler 隔离、Chrome 原生网络/下载、多路 PDF
+- 一个 operator-managed 固定身份 Profile、共享有头 CloakBrowser Chromium process/context、无 GUI Linux 的
+  native Linux 设备身份、Xvfb 显示、Publisher lane 调度、文章级 page/handler 隔离、Chromium 原生网络/下载、多路 PDF
   捕获和确定性清理；
+- 经 Publisher Profile 明确声明的 challenge dependency 受限加载、局部 settle 和有界页面观察/动作执行；
 - 在每次 Browser navigation、popup、viewer、response 和 download 实际访问前，同时执行 Profile guard 与通用安全准入；
 - URL、header、query、错误和凭据脱敏；
 - 响应大小、导航次数和访问预算。
 
 网络基础设施不理解 Crossref、arXiv、出版商、MinerU 或某个 LLM 的业务协议，也不判断记录身份、PDF 归属、正文/补充材料或文献状态。供应商分页、配额含义、页面步骤和 Browser 状态 marker 属于相应 adapter/Profile；adapter 负责解释和声明政策，Network 负责在当前进程的全部调用方之间执行。等待队列、permit、窗口计数、session health、circuit 和截止时间只存在于当前进程内存，不属于由 Catalog 与 ArtifactStore 组成的文献数据库，也不携带 DOI、Literature、候选、完整 URL、Cookie 或凭据。Network 不持久化动态限速状态，不提供跨进程或跨重启的访问协调。
 
-### 5.3 存储
+### 5.4 存储
 
 统一逻辑文献数据库由结构化 Catalog 和同一配置存储根下的 ArtifactStore 共同构成，二者由 Storage 提供技术实现：
 
@@ -632,7 +647,7 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 
 在文献内容处理链中，来源 observation、当前权威元数据和原始 PDF 是优先长期可靠保存的权威输入；当前 ParserResult、Parser Markdown 与引用资源、当前 LiteratureContent、总结型 Markdown 和由当前内容形成的 `ContentReferenceTextSupport` 是可以重建的派生产物。派生产物仍须有一个完整当前结果、hash、轻量 provenance 和原子发布，但不维护历史；它们的损坏、清理或丢失不能破坏元数据和 PDF。本节只确定该逻辑合同，不提前规定物理目录、备份、缓存配额、清理周期或恢复算法。
 
-#### 5.3.1 事实所有权
+#### 5.4.1 事实所有权
 
 | 事实 | 业务所有者 | 存储责任 |
 |---|---|---|
@@ -646,7 +661,7 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 | 最终 LiteratureMetadata、当前 LiteratureContent 与规范 Markdown | 文献管理 | 权威元数据长期保存；结构化章节、参考文献和 artifact 关系只保存一个可重建当前结果，不形成历史 |
 | BatchSelector、冻结目标候选、逐目标运行结果和 Report | 入口与流程编排 | 只在当前进程内展开、冻结、汇总并返回；不进入 Catalog，也不参与下次选择 |
 
-#### 5.3.2 一致提交
+#### 5.4.2 一致提交
 
 以下逻辑更新必须整体成功，用户不能观察到互相矛盾的部分结果：
 
@@ -664,7 +679,7 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 
 网络、浏览器、MinerU 和 LLM 调用发生在数据库事务之外。提交前必须重新确认输入 `Literature`、当前元数据和 PDF 没有变化，拒绝过期结果。
 
-### 5.4 Logging
+### 5.5 Logging
 
 Logging 是公用基础模块，拥有独立的 `sciretriever/logging/` 目录和 `api.py` 公开边界。它统一提供命名 logger，配置 `sciretriever` logger 层级、stderr handler、formatter 和最终脱敏 Filter，并承载当前进程中的操作开始、阶段推进、局部失败、限速等待、目标完成和受控停止信息，为用户提供实时反馈、为实现者提供安全诊断。
 
@@ -674,7 +689,7 @@ Logging 不拥有业务结果：各模块先形成 typed result 或稳定 failur
 
 具有运行行为的模块通过 `logging.api.get_logger(__name__)` 获取 logger，不直接调用标准库配置函数。生产 Bootstrap 只通过 `logging.api.configure_logging(...)` 传入 level 并触发一次生产配置；formatter、最终脱敏 Filter 和 stderr handler 全部由 Logging 模块实现。模块 import、adapter 构造和每次操作不得私自安装 handler。Logging 不修改宿主应用的 root logger，纯声明的 Model 不依赖 Logging。
 
-日志和用户主要结果使用不同通道：实时日志与进度进入 stderr，CLI 文本结果、JSON Report 和其它可管道结果进入 stdout。日志格式不是稳定公开 API，也不能成为批次历史或恢复输入。Network 负责 URL、header、Cookie、凭据和网络异常的边界脱敏；Provider、Parser 和 LLM adapter 负责各自私有对象、响应、prompt 和异常的边界转换；Logging 的 Filter 只提供最终防线，不能替代这些来源边界。Entry 只记录已经稳定化的 failure 与安全 ID，不直接记录原始外部对象或文献正文。
+日志和用户主要结果使用不同通道：实时日志与进度进入 stderr，CLI 文本结果、JSON Report 和其它可管道结果进入 stdout。日志格式不是稳定公开 API，也不能成为批次历史或恢复输入。Network 负责 URL、header、Cookie、凭据、challenge 资源事实和网络异常的边界脱敏；Provider、Parser 与 Agents adapter 负责各自私有对象、响应、prompt 和异常的边界转换；Logging 的 Filter 只提供最终防线，不能替代这些来源边界。Entry 只记录已经稳定化的 failure 与安全 ID，不直接记录原始外部对象、Browser observation 或文献正文。
 
 ## 6. 文献身份、元数据与状态
 

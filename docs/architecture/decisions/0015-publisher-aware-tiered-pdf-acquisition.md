@@ -5,6 +5,7 @@
 - Last amended: 2026-08-21
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
+- Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Network 技术文档](../technical/network.md)、[Entry 技术文档](../technical/entry.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
@@ -105,7 +106,7 @@ one session health / circuit state
 
 不同风险组可以并行运行各自一个文章流程；同一组内严格限速串行。全局 Browser concurrency 只作为本机 CPU、内存和同时活动 Publisher lane 的资源上限，不能把不同供应商重新设计成一个全局业务锁。
 
-普通配置 `browser_max_concurrency` 的默认值为 `5`，必须是严格整数且大于 `1`，不设置上限。当前 production Browser route 数量为 `9`，这只是当前 Provider catalog 的实现事实，不是配置边界；以后 route 增加时无需修改该合同。Publisher lane 按实际 Browser work 延迟进入调度，较大的 cap 不会启动多个 Chrome process、创建空闲 context，也不会提高同一组固定为 `1` 的文章并发或放宽该组间隔、window、cooldown 与 circuit。
+普通配置 `browser_max_concurrency` 的默认值为 `5`，必须是严格整数且大于 `1`，不设置上限。当前 production Browser route 数量为 `9`，这只是当前 Provider catalog 的实现事实，不是配置边界；以后 route 增加时无需修改该合同。Publisher lane 按实际 Browser work 延迟进入调度，较大的 cap 不会启动多个 Browser process、创建空闲 context，也不会提高同一组固定为 `1` 的文章并发或放宽该组间隔、window、cooldown 与 circuit。
 
 Browser 限速单位是一篇文章的受控流程。Permit 从 canonical landing 第一次导航前持有，覆盖授权和页面状态检查、有限页面动作、popup/viewer、response/download 捕获、临时文件和页面资源完整清理。失败重试也重新排队并服从同一政策；多个标签页、redirect、selector fallback 或换入口不能绕过组内串行和间隔。页面子资源由 host admission 与导航、请求、popup、下载、字节和总时长预算约束，不把每个 CSS/JS 请求误当下一篇文章。
 
@@ -115,18 +116,22 @@ Browser 的身份状态边界和调度边界明确分离：
 
 ```text
 一个用户/机构身份 Profile
-  -> 一个 Chrome process + 一个 persistent BrowserContext
+  -> 一个 Browser process + 一个 persistent BrowserContext
      -> 多个 Publisher lane
 
 Profile = 身份与认证状态边界
 Publisher/rate-limit group = 调度与风险边界
 ```
 
-普通配置只保存一个不含敏感信息的 `browser_profile` 身份名，不接受 Profile 路径、Cookie、账号、机构名或认证内容。Configuration 把该身份解析到固定的 owner-only 本地目录，验证目录树的 owner、权限和文件类型，并以跨进程独占 lease 保证同一 Profile 同时只能由一个 Chrome process 使用。Profile 可以跨命令保留 Chrome 自己管理的 Cookie、Local Storage、IndexedDB、SSO 状态、偏好和历史；SciRetriever 不读取、解释、导入、导出、复制或显示这些内容。删除 Profile 只能由用户在配置中心显式执行，正在使用的 Profile 拒绝删除。
+普通配置只保存一个不含敏感信息的 `browser_profile` 身份名，不接受 Profile 路径、Cookie、账号、机构名或认证内容。Configuration 把该身份解析到固定的 owner-only 本地目录，验证目录树的 owner、权限和文件类型，并以跨进程独占 lease 保证同一 Profile 同时只能由一个 Browser process 使用。Profile 可以跨命令保留 Browser 自己管理的 Cookie、Local Storage、IndexedDB、SSO 状态、偏好和历史；SciRetriever 不读取、解释、导入、导出、复制或显示这些内容。删除 Profile 只能由用户在配置中心显式执行，正在使用的 Profile 拒绝删除。固定设备身份、identity manifest 与 Profile 迁移由 ADR 0016 修订本段。
 
-生产对象图按需为选中的 Profile 启动一个有头 Chrome/Chromium process 和一个 persistent BrowserContext，并让所有 Publisher lane 共享它。每篇文章仍拥有隔离的 article token、page、route/event handler、连接绑定、字节预算和临时下载目录；同一 Publisher 严格串行，不同 Publisher 在 `browser_max_concurrency` 上限内并行。对象图关闭时必须关闭 process/context、Xvfb、CONNECT proxy 和临时下载工作区，但保留持久 Profile。一个 lane 的 runtime/cleanup failure 可以请求在其它活动 lane 排空后淘汰共享 runtime，不能中断或接管另一个 Publisher 正在处理的文章。
+生产对象图按需为选中的 Profile 启动一个有头 Browser process 和一个 persistent BrowserContext，并让所有 Publisher lane 共享它。每篇文章仍拥有隔离的 article token、page、route/event handler、连接绑定、字节预算和临时下载目录；同一 Publisher 严格串行，不同 Publisher 在 `browser_max_concurrency` 上限内并行。对象图关闭时必须关闭 process/context、Xvfb、CONNECT proxy 和临时下载工作区，但保留持久 Profile。一个 lane 的 runtime/cleanup failure 可以请求在其它活动 lane 排空后淘汰共享 runtime，不能中断或接管另一个 Publisher 正在处理的文章。唯一 CloakBrowser runtime 由 ADR 0016 修订本段。
 
-自动流程首先使用当前机器正常网络出口，因此机构 IP entitlement 仍可直接生效。用户只有在站点实际要求登录、机构选择或 MFA 时，才可从配置中心显式打开使用同一 Profile 的可见 Chrome，自行完成其获授权的交互并关闭窗口；可见 Browser 与自动 Acquisition 不能同时占用同一 Profile。SciRetriever 不自动导航登录页、不填写账号或密码、不选择机构、不读取登录结果，也不处理或绕过 MFA、CAPTCHA、challenge。关闭窗口、Profile 存在或保存了浏览器状态都不构成认证成功或文章 entitlement 的证明。
+自动流程首先使用当前机器正常网络出口，因此机构 IP entitlement 仍可直接生效。按 ADR 0016，
+第一版不提供用户可见 Browser 登录、机构选择、MFA、Cookie 导入导出或 CAPTCHA 交互流程。
+SciRetriever 不自动导航登录页、不填写账号或密码、不选择机构、不读取登录结果，也不点击、处理
+或绕过 MFA/CAPTCHA。Profile 存在、其中保存了浏览器状态或 challenge 自动清除都不构成认证成功
+或文章 entitlement 的证明。
 
 `production-ready` Browser Profile 表示规则、政策证据、安全边界、生产对象图和离线验收已经
 闭环，可以在保守政策下执行一次机构 IP 文章访问尝试；它不表示当前组织、当前 IP 或具体文章
@@ -140,13 +145,13 @@ Publisher/rate-limit group = 调度与风险边界
 结果区分成功、明确付费墙、通用拒绝、challenge、限流和无正文，不能用本地配置字段预先宣称
 文章 entitlement。
 
-生产 adapter 固定以 `headless = false` 启动 Chrome/Chromium；无 GUI Linux 由进程内共享的 Xvfb 提供虚拟显示。自动运行时的“有头”只表示使用真实浏览器窗口栈，不表示自动流程会等待用户交互。页面、context、Cookie、download、Profile 路径或 Browser vendor object 不越过 Configuration/Network/Acquisition adapter 边界。当前版本不提供自动登录、Cookie 导入导出、MFA/CAPTCHA/challenge 处理、代理轮换、stealth、指纹伪装或任意规则脚本。
+生产 adapter 固定以 `headless = false` 启动 Browser；无 GUI Linux 由进程内共享的 Xvfb 提供虚拟显示。自动运行时的“有头”只表示使用真实浏览器窗口栈，不表示自动流程会等待用户交互。页面、context、Cookie、download、Profile 路径或 Browser vendor object 不越过 Configuration/Network/Acquisition adapter 边界。ADR 0016 后，固定身份 CloakBrowser runtime 取代 stock launcher，并允许受限 challenge dependency 与自动 settle；系统仍不提供自动登录、Cookie 导入导出、MFA/CAPTCHA 点击或绕过、代理轮换或任意规则脚本。
 
-Publisher 请求由 Chrome/Chromium 原生完成 TLS、HTTP、Cookie、redirect、页面脚本、点击和 native download。Playwright route 对 runtime 暴露的每个请求在实际继续前执行 Provider guard、通用 URL/DNS/地址检查和 host admission；本机 loopback CONNECT proxy 只把已经审核的 hostname/port 绑定到精确、已批准的 IP，并透传加密字节，不终止 TLS、不读取 HTTPS 内容，也不以 Python HTTP 替代浏览器网络栈。Chrome native redirect 的后续成员若没有再次暴露 route，只能复用同页仍存活的祖先 request proof，且最终 origin 必须已经过有限 Provider origin 审查、DNS prebind，并在 terminal body 读取前取得对应 host admission；跨 page、祖先已结束、循环/超深链或未预绑定 origin 均 fail closed 且不读取 body。
+Publisher 请求由 Browser 原生完成 TLS、HTTP、Cookie、redirect、页面脚本、点击和 native download。Playwright route 对 runtime 暴露的每个请求在实际继续前执行 Provider guard、通用 URL/DNS/地址检查和 host admission；本机 loopback CONNECT proxy 只把已经审核的 hostname/port 绑定到精确、已批准的 IP，并透传加密字节，不终止 TLS、不读取 HTTPS 内容，也不以 Python HTTP 替代浏览器网络栈。Browser native redirect 的后续成员若没有再次暴露 route，只能复用同页仍存活的祖先 request proof，且最终 origin 必须已经过有限 Provider origin 审查、DNS prebind，并在 terminal body 读取前取得对应 host admission；跨 page、祖先已结束、循环/超深链或未预绑定 origin 均 fail closed 且不读取 body。
 
 `PublisherAccessProfile` 必须在每次 navigation、popup、viewer、response 和 download 的可观察边界实施封闭 origin/target guard，并同时通过 Network 的通用 URL、DNS、redirect、credential forwarding、host admission 和资源预算。host admission 的所有权单位是“当前文章访问到的 hostname”：第一次准入时取得实际 permit，同篇文章后续已批准请求复用，直到整篇清理后统一释放；其它 API/Browser 流程仍不能并发抢占该 host。它不能退化成每个 CSS/JS 都在 Playwright 单一事件线程中重新等待 permit，否则第二个 route callback 会阻止第一个 response event 派发而使页面自锁。规则明确允许的同源或批准 origin 页面子资源可以执行；未批准的第三方非关键子资源在 DNS 前丢弃而不拖垮正文流程，顶层 navigation、popup 和 PDF capture 仍 fail closed。页面脚本触发的显式 request 重新进入 route 审查，未暴露 route 的 native redirect 只能使用上一段规定的封闭关联。未知站点没有 generic arbitrary-site Browser fallback。
 
-Browser 先检查初始 capture 和页面状态，再从当前 DOM 的 citation metadata、正文/PDF 链接和 iframe/embed/object 中做通用 PDF 发现；最多接收 16 个有界 locator，并只尝试前 4 个已经通过 origin、Provider guard、URL policy、DNS prebinding 与去重检查的候选，之后才执行 Provider 专属静态动作。每个点击和 capture settle wait 必须有短于整篇 deadline 的局部上限；按钮在局部预算内不可操作或局部未捕获属于正常未命中，不能被伪装成 runtime failure，也不能让单个动作耗尽整篇预算。补充材料、appendix、supporting information 和已知错文 locator 在规则边界排除。短期签名 query 只保留在当前 Browser operation 内并交给 Chrome 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除 query 的 locator。
+Browser 先检查初始 capture 和页面状态，再从当前 DOM 的 citation metadata、正文/PDF 链接和 iframe/embed/object 中做通用 PDF 发现；最多接收 16 个有界 locator，并只尝试前 4 个已经通过 origin、Provider guard、URL policy、DNS prebinding 与去重检查的候选，之后才执行 Provider 专属静态动作。每个点击和 capture settle wait 必须有短于整篇 deadline 的局部上限；按钮在局部预算内不可操作或局部未捕获属于正常未命中，不能被伪装成 runtime failure，也不能让单个动作耗尽整篇预算。补充材料、appendix、supporting information 和已知错文 locator 在规则边界排除。短期签名 query 只保留在当前 Browser operation 内并交给 Browser 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除 query 的 locator。ADR 0017 进一步规定确定性步骤正常未命中后才可进入受控 Agent fallback。
 
 Browser 可以从受控 download event、PDF response、允许的 popup/viewer 或已核实官方 locator 交付 `TemporaryPdf`。顶层 PDF 由 Chrome 的 PDF 下载偏好和 native download manager 处理；Network 仍以对应已审核 request lease 关联下载并执行字节预算。正文与 supplementary material 必须按稳定文章 ID、origin 和 Profile 规则区分；下载事件、扩展名或媒体类型仍不能替代统一 PDF reader/页面树检查。
 
@@ -156,7 +161,7 @@ Browser 可以从受控 download event、PDF response、允许的 popup/viewer �
 
 以下状态不得通过自动切换 Browser 制造替代流量：timeout、临时传输或服务失败、`429`、有效 `Retry-After`、quota exhausted、未到 reset boundary。它们形成延期或稳定失败，并更新共享 scope。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
 
-Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`CHALLENGE_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。裸 HTTP `403` 在没有更具体页面证据时稳定分类为文章级 `ACCESS_DENIED`，停止当前尝试但不据此推断“无订阅权限”或打开整个 Publisher circuit。只有明确 paywall/购买访问页面才分类为 `NOT_ENTITLED`；只有 Provider 规则通过明确 URL、selector 或页面文本证据识别出 challenge 或 IP block 时才使用 `CHALLENGE_REQUIRED` 或 `IP_BLOCKED`。登录、机构选择和 MFA 只是自动流程识别后停止的页面状态；用户可以显式打开选中的可见 Profile 自行处理并重试，也可以改用授权 API 或手动 PDF。challenge/CAPTCHA 不由 SciRetriever 处理或绕过。自动策略只能保持或降低速率，不能因连续成功自动提速，也不能通过新 Literature、重试或备用入口绕过 circuit。
+Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。ADR 0016 将旧的单一 `CHALLENGE_REQUIRED` 修订为 resource-loading/settling/cleared、interaction-required、resource-blocked、settle-timeout 和 failed 生命周期：只有明确人工交互打开对应 action-required circuit，本地资源策略缺口不能冒充人工验证。裸 HTTP `403` 在没有更具体页面证据时稳定分类为文章级 `ACCESS_DENIED`，停止当前尝试但不据此推断“无订阅权限”、challenge 或打开整个 Publisher circuit。只有明确 paywall/购买访问页面才分类为 `NOT_ENTITLED`；只有 Provider 规则通过经审查 marker/resource/frame 事实识别出 challenge 或 IP block 时才进入对应状态。登录、机构选择和 MFA 只是自动流程识别后停止的页面状态；用户可以显式打开选中的可见 Profile 自行处理并重试，也可以改用授权 API 或手动 PDF。challenge/CAPTCHA 不由 SciRetriever 自动点击或绕过。自动策略只能保持或降低速率，不能因连续成功自动提速，也不能通过新 Literature、重试或备用入口绕过 circuit。
 
 只有所有适用 routes 正常结束且不存在 deferred、action-required、未解决 route failure、配置/Port/清理/发布/stale 错误时，Acquisition 才能提交 `AutomaticPdfAcquisitionExhaustion` 并返回 `NoPrimaryPdf`。
 

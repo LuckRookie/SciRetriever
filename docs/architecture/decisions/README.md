@@ -23,14 +23,16 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 | [ADR 0005：DocumentPackage 2.0 不兼容合同](0005-document-package-2-breaking-contract.md) | Superseded by ADR 0008 | 已撤销的 Package 2.0 历史合同 | 当前目标设计 |
 | [ADR 0006：由 LLM 形成 LiteratureContent 与文本参考文献](0006-llm-produced-literature-content.md) | Superseded by ADR 0008 | 旧 LiteratureContent 内容形状的历史决策 | 当前内容合同 |
 | [ADR 0007：参考文献解析与权威引用关系](0007-reference-resolution-and-authoritative-relations.md) | Accepted | 逐边 ProviderRelationObservation、来源原文、临时 ReferenceLookup、选择性目标物化、Literature 级 Reference 和三类 ReferenceSupport | 供应商协议细节、物理表结构和已撤销的 Package 投影 |
-| [ADR 0008：LLM 总结型 Markdown LiteratureContent](0008-summarized-markdown-literature-content.md) | Accepted | 先元数据后正文的两阶段 LLM 分析、两道 PDF 验收边界、NoUsableContent、固定标题/“未提供”/有序参考文献、Markdown-string LiteratureSection、单一当前 LiteratureContent、内容/字节 hash、单一 Analysis provenance、内容接纳、LLM 所有权和旧 Package 撤销 | 分块算法和 Storage 物理实现 |
+| [ADR 0008：LLM 总结型 Markdown LiteratureContent](0008-summarized-markdown-literature-content.md) | Accepted，按 ADR 0017 修订 | 先元数据后正文的两阶段 LLM 分析、两道 PDF 验收边界、NoUsableContent、固定标题/“未提供”/有序参考文献、Markdown-string LiteratureSection、单一当前 LiteratureContent、内容/字节 hash、单一 Analysis provenance、Analysis 业务所有权和旧 Package 撤销 | 中性 Agents provider/runtime 基础、分块算法和 Storage 物理实现 |
 | [ADR 0009：供应商级全局访问调度](0009-provider-scoped-global-access-scheduling.md) | Superseded by ADR 0012 | 旧同机跨进程 Access Coordinator 与持久化运行协调边界 | 当前访问调度 |
 | [ADR 0010：Parser-neutral Markdown 与单一当前解析结果](0010-parser-neutral-markdown-current-result.md) | Accepted | ParserResult 的 Markdown/artifact/provenance 合同、实际引用资源、单一当前结果替换、Parser 私有过程文件和无逐段 locator 边界 | 具体 Parser 协议、缓存额度、多模态 Analysis 和当前实现状态 |
 | [ADR 0011：以文献数据库为中心的增量维护](0011-literature-database-centered-incremental-maintenance.md) | Accepted | 统一逻辑文献数据库作为产品中心、当前事实驱动的增量操作与恢复、Catalog/ArtifactStore 边界和第二真相源禁令 | 具体表结构、物理目录、备份、缓存和未确认的新产品能力 |
 | [ADR 0012：进程内供应商访问调度](0012-process-local-provider-access-scheduling.md) | Accepted，按 ADR 0015 修订 | 当前进程共享准入、provider/channel scope、Provider policy、内存运行状态和非跨进程边界 | 易变供应商数值、具体 endpoint、产品额度和当前实现状态 |
 | [ADR 0013：外部发现与数据库补全解耦](0013-decoupled-discovery-and-database-maintenance.md) | Accepted，按 ADR 0015 修订 | 最小且持久化的 DiscoveryRun、逐 Provider 原始扫描边界、无 Collection/ImportRun 的进程内数据库补全、运行时 selector 与目标冻结、ImportReportSelector、自动 PDF 获取耗尽、操作特有的非持久化 Report、Report/Logging 分离、Logging 公用基础模块边界、MetaLiterature 版本回退和手动 PDF 接纳 | 具体 CLI 语法、Report 技术字段、Logging 格式、物理表字段、供应商协议和当前实现状态 |
 | [ADR 0014：按能力接入 Provider 与本地凭据管理](0014-capability-scoped-providers-and-local-credentials.md) | Accepted，按 ADR 0015 修订 | Metadata/Acquisition 两类非互斥 Provider 能力、证据驱动原文路由、用户级 credentials.toml、config CLI、离线状态与显式连通性测试 | 易变 endpoint/认证字段、普通 Provider 参数、当前实现状态和具体文献 entitlement |
-| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、一个 operator-managed 持久身份 Profile/共享有头 process-context、Browser 组间并行/组内限速串行、升级与 operation-local 熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
+| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted，按 ADR 0016/0017 修订 | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、一个 operator-managed 持久身份 Profile/共享有头 process-context、Browser 组间并行/组内限速串行、升级与 operation-local 熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
+| [ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页生命周期](0016-cloakbrowser-fixed-identity-runtime.md) | Accepted | CloakBrowser 单生产 runtime、固定 Profile 设备身份、Linux/Xvfb persona、binary/Profile 生命周期、受限 challenge dependency、settle/终态与无兼容层切换门 | 具体 binary 版本、单个 Provider marker、实际 entitlement、CAPTCHA/MFA 自动处理 |
+| [ADR 0017：共享 Agents 基础与受控 Browser Agent](0017-shared-agents-and-controlled-browser-agent.md) | Accepted | Analysis/Browser 共用的中性 Agents provider/capability/budget/session、消费模块所有权、确定性规则优先、受控页面观察和封闭动作 | 文献 prompt/schema、Publisher 规则、任意 Browser/CDP 接管、长期 Agent memory |
 
 ## 阅读方法
 
@@ -51,6 +53,8 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
    - 外部发现、进程内数据库补全、多版本选择、自动 PDF 获取耗尽、运行报告边界、Logging 公用基础模块、手动 PDF 接纳和当前不建立 Collection：ADR 0013。
    - Provider 能力分类、全面 adapter 目标、出版社与聚合来源解耦、本地凭据文件和配置/连通性命令：ADR 0014。
    - 访问方画像与运行时计划、Public/API/Browser 风险升级、官方 API policy 和 Provider-scoped Browser 调度：ADR 0015。
+   - CloakBrowser 固定身份、binary/Profile 生命周期、受限验证资源和 challenge settle/终态：ADR 0016。
+   - Analysis 与 Browser 的共享 Agents 基础、capability/预算和受控 Browser Agent：ADR 0017。
 4. 讨论代码组织、持久化、外部访问和具体运行机制时再读[技术文档](../technical.md)。
 
 尚未接受的设计放在讨论或活动提案中，不得提前写成 Accepted ADR。完成、拒绝或被替代的讨论材料进入 `docs/archive/`，不参与当前架构解释。

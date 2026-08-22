@@ -5,7 +5,7 @@
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
-- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Metadata 技术文档](../technical/metadata.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
@@ -53,17 +53,17 @@ Readiness 按本次实际 plan 区分项目支持、用户启用、静态配置�
 
 ### 4. 唯一本地凭据文件
 
-生产只从用户主目录下的固定文件读取 Provider、LLM 与远程 MinerU 密钥：
+生产只从用户主目录下的固定文件读取 Provider、共享 Agents 与远程 MinerU 密钥：
 
 ```text
 ~/.sciretriever/credentials.toml
 ```
 
-目录必须为当前用户所有并限制为 `0700`，文件必须为当前用户所有的普通文件并限制为 `0600`。文件以稳定 Provider key 及固定 `[llm]`、`[mineru]` 为 section，每类当前只保存一套凭据；字段由已经实现的 adapter 依据官方合同声明。Provider section 只保存 API key、token、API metric 等认证材料；LLM/MinerU section 还保存用于防止错发的规范 origin。文件不保存启用状态、来源顺序、产品选择、database/edition、scan limit、普通 Base URL、访问政策、浏览器 profile、测试结果或时间。联系邮箱等非密钥设置继续属于普通配置。
+目录必须为当前用户所有并限制为 `0700`，文件必须为当前用户所有的普通文件并限制为 `0600`。文件以稳定 Provider key 及固定 `[agents]`、`[mineru]` 为 section，每类当前只保存一套凭据；字段由已经实现的 adapter 依据官方合同声明。Provider section 只保存 API key、token、API metric 等认证材料；Agents/MinerU section 还保存用于防止错发的规范 origin。文件不保存启用状态、来源顺序、产品选择、database/edition、scan limit、普通 Base URL、访问政策、浏览器 profile、测试结果或时间。联系邮箱等非密钥设置继续属于普通配置。
 
 用户可以直接编辑同一文件，也可以通过 CLI 安全修改。CLI 写入前完整解析和验证现有 TOML，拒绝未知 section、未知字段、空值、不安全所有权或权限；写入使用同目录 owner-only staging 和原子替换，不生成包含旧密钥的备份。核心服务同时改变普通 Base URL 与 secret 时，先验证两份 staging，再通过可恢复的过渡凭据顺序发布，保证进程中断前后的旧或新配置至少一套仍可运行。真实 secret 不进入可序列化 Model configuration；根级 configuration/bootstrap 边界只在当前进程解析并注入具体 adapter。
 
-LLM/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secret 不会被发送到新 origin，Network 跨 origin redirect 也不得携带认证。自定义 HTTP loopback LLM 与 loopback MinerU 不需要凭据。旧的 LLM/MinerU secret 环境变量不再是产品合同，不读取、不回退，也不自动迁移。
+Agents/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secret 不会被发送到新 origin，Network 跨 origin redirect 也不得携带认证。自定义 HTTP loopback Agent 服务与 loopback MinerU 不需要凭据。旧的 LLM/MinerU secret 环境变量不再是产品合同，不读取、不回退，也不自动迁移。
 
 ### 5. CLI 配置、状态与连通性测试
 
