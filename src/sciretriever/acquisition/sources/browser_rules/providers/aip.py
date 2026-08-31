@@ -21,7 +21,6 @@ AIP_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     web_scope_provider_name="aip-publishing",
     actions=pdf_actions("a[href*='/doi/epdf/'], a[href*='/doi/pdf/'], a[data-resource-type='pdf']"),
     doi_pdf_url_template="https://pubs.aip.org/doi/epdf/{doi}",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "aip",
         entitled_selectors=(

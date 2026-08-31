@@ -22,7 +22,6 @@ RSC_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     actions=pdf_actions(
         "a[href*='/content/articlepdf/'], a[title='Download PDF'], a[data-type='pdf']"
     ),
-    max_actions=2,
     page_markers=publisher_page_markers(
         "rsc",
         entitled_selectors=(

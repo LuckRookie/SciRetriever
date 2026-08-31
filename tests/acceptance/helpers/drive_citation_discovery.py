@@ -20,7 +20,14 @@ import sciretriever.entry.citations as entry_citations_module
 import sciretriever.literature.service as literature_service_module
 import sciretriever.metadata.service as metadata_service_module
 import sciretriever.storage.sqlite.discovery_repository as discovery_repository_module
-from sciretriever.agents import AgentRequest, AgentStructuredResponse
+from sciretriever.agents.api import (
+    AgentModelCapabilities,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
+)
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.content import ContentAnalysisLimits
 from sciretriever.analysis.ports import (
@@ -206,8 +213,8 @@ class _UnusedAnalysisAgent:
     def provider_name(self) -> str:
         return "citation-acceptance-analysis"
 
-    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
-        del request
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
+        del call
         self.calls += 1
         _unexpected_analysis_boundary("llm.complete")
 
@@ -356,13 +363,24 @@ metadata = MetadataApi(
 )
 repository = SqliteDiscoveryRepository(engine)
 analysis_llm = _UnusedAnalysisAgent()
+analysis_runtime = AgentRuntime(
+    adapter=analysis_llm,
+    analysis=AgentRoleBinding(
+        role=AgentRole.ANALYSIS,
+        model="citation-acceptance-analysis",
+        capabilities=AgentModelCapabilities(
+            context_window_tokens=4_096,
+            max_output_tokens=128,
+            structured_output=True,
+        ),
+    ),
+)
 analysis = AnalysisApi(
     content_service=AnalysisService(
-        agents=analysis_llm,
+        runtime=analysis_runtime,
         artifact_reader=_UnusedAnalysisArtifactReader(),
         current_inputs=_UnusedAnalysisCurrentInputs(),
         artifact_publisher=_UnusedAnalysisArtifactPublisher(),
-        model="citation-acceptance-analysis",
         metadata_max_output_tokens=1,
         content_max_output_tokens=1,
         limits=ContentAnalysisLimits(
@@ -374,8 +392,7 @@ analysis = AnalysisApi(
         ),
     ),
     reference_lookup_stage=ReferenceLookupStage(
-        agents=analysis_llm,
-        model="citation-acceptance-analysis",
+        runtime=analysis_runtime,
         max_output_tokens=1,
     ),
 )
@@ -481,10 +498,12 @@ with engine.read_snapshot() as connection:
         (over_limit.literature_id.root, over_limit.literature_id.root),
     ).fetchone()[0]
 
-configuration = root / "config.toml"
+configuration = Path.home() / ".sciretriever" / "config.toml"
+configuration.parent.mkdir(mode=0o700, exist_ok=True)
+configuration.parent.chmod(0o700)
 configuration.write_text(_configuration(catalog, artifacts), encoding="utf-8")
+configuration.chmod(0o600)
 environment = dict(os.environ)
-environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
 console = Path(sys.executable).with_name("sciretriever")
 completed = subprocess.run(
     (

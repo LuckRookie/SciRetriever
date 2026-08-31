@@ -29,6 +29,7 @@ from sciretriever.bootstrap.graphs import (
 from sciretriever.bootstrap.probes import (
     ProductionConfigurationProbeSession,
     build_production_configuration_probe_session,
+    fetch_agent_models,
 )
 
 __all__ = (
@@ -47,4 +48,5 @@ __all__ = (
     "build_object_graph",
     "build_production_configuration_probe_session",
     "build_production_object_graph",
+    "fetch_agent_models",
 )

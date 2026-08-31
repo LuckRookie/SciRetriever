@@ -1,10 +1,11 @@
-"""Operator-injected neutral locators for configured ``sci-hub`` acquisition.
+"""Bundled or configured neutral locators for DOI-only ``sci-hub`` acquisition.
 
-This module deliberately owns no remote protocol.  An injected resolver sees
-only the target's accepted immutable identifiers and returns a finite tuple of
-neutral HTTPS locators.  Every locator is validated locally, then handed to
-A5's public locator boundary for the actual URL, DNS, redirect, admission, and
-byte work.
+The resolver converts a finite mirror list and the target's accepted DOI into
+an ordered tuple.  Production assembly selects an explicitly injected
+resolver, an operator custom list, or the bundled list in that order.  None of
+those choices owns HTTP here: every locator is validated locally, then handed
+to A5's public locator boundary for the actual URL, DNS, redirect, admission,
+and byte work.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import ipaddress
 import threading
 from collections.abc import Iterable, Iterator
 from typing import Final, Protocol
+from urllib.parse import quote
 
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import RouteReadiness
@@ -49,9 +51,18 @@ _SOURCE_NAME: Final[str] = "sci-hub"
 _RESOLVER_KEY_DOMAIN: Final[bytes] = b"sciretriever/configured-sci-hub/resolver/v1"
 _LOCATOR_KEY_DOMAIN: Final[bytes] = b"sciretriever/configured-sci-hub/locator/v1"
 
+# Maintainer-verified root entry points bundled with this release.  They are
+# inert until the operator explicitly enables the ``sci-hub`` Acquisition
+# Provider.  Verification scope and observation date live in the Provider
+# Note; runtime requests still pass through the shared Network safety boundary.
+BUILTIN_SCI_HUB_MIRROR_URLS: Final[tuple[str, ...]] = (
+    "https://sci-hub.ru",
+    "https://sci-hub.kr",
+)
+
 
 class ConfiguredLocatorResolver(Protocol):
-    """Private composition seam that emits only neutral locator strings."""
+    """Composition seam that emits only neutral locator strings."""
 
     def resolve(
         self,
@@ -77,6 +88,61 @@ class PublicLocatorFetcher(Protocol):
     ) -> Iterable[TemporaryPdf]: ...
 
 
+class ConfiguredSciHubLandingResolver:
+    """Build ordered safe DOI landing locators from one selected mirror list."""
+
+    __slots__ = ("_base_urls",)
+
+    def __init__(self, base_urls: tuple[str, ...]) -> None:
+        if type(base_urls) is not tuple or not 1 <= len(base_urls) <= 8:
+            raise ValueError("base_urls must contain between one and eight URLs")
+        normalized_urls: list[str] = []
+        seen: set[str] = set()
+        for base_url in base_urls:
+            normalized = _normalized_base_url(base_url)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_urls.append(normalized)
+        self._base_urls = tuple(normalized_urls)
+
+    def resolve(
+        self,
+        identifiers: tuple[Identifier, ...],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[str, ...]:
+        if type(identifiers) is not tuple or any(
+            not isinstance(identifier, Identifier) for identifier in identifiers
+        ):
+            raise TypeError("identifiers must contain Identifier values")
+        if cancel_event is not None and not isinstance(cancel_event, threading.Event):
+            raise TypeError("cancel_event must be a threading.Event or None")
+        _raise_if_cancelled(cancel_event)
+        doi = next(
+            (identifier.value for identifier in identifiers if identifier.namespace == "doi"),
+            None,
+        )
+        if doi is None:
+            return ()
+        encoded = _encoded_doi_path(doi)
+        result: list[str] = []
+        for base_url in self._base_urls:
+            _raise_if_cancelled(cancel_event)
+            try:
+                landing = normalize_url(
+                    f"{base_url}/{encoded}",
+                    allowed_schemes=("https",),
+                )
+            except (PolicyError, TypeError, ValueError):
+                raise ValueError("DOI could not form a safe Sci-Hub landing URL") from None
+            result.append(landing.url)
+        return tuple(result)
+
+    def __repr__(self) -> str:
+        return f"<ConfiguredSciHubLandingResolver mirrors={len(self._base_urls)}>"
+
+
 class _Sha256Digest(Protocol):
     def update(self, data: bytes, /) -> None: ...
 
@@ -97,7 +163,7 @@ def configured_sci_hub_route_status(
 
 
 class ConfiguredSciHubPdfSource:
-    """PUBLIC Source over one explicitly injected, operator-approved resolver."""
+    """PUBLIC Source over one bundled, configured, or injected resolver."""
 
     source_name = _SOURCE_NAME
     acquisition_path = AcquisitionPath.PUBLIC
@@ -234,6 +300,36 @@ def _add_digest_part(digest: _Sha256Digest, value: str) -> None:
     payload = value.encode("utf-8", "strict")
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
+
+
+def _encoded_doi_path(value: str) -> str:
+    segments = value.split("/")
+    if len(segments) < 2 or any(not segment or segment in {".", ".."} for segment in segments):
+        raise ValueError("DOI cannot form a safe landing path")
+    return "/".join(quote(segment, safe="-._~!$&'()*+,;=:@") for segment in segments)
+
+
+def _normalized_base_url(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError("base_urls must contain safe hostname-based HTTPS URLs")
+    try:
+        normalized = normalize_url(value, allowed_schemes=("https",))
+    except (PolicyError, TypeError, ValueError):
+        raise ValueError("base_urls must contain safe hostname-based HTTPS URLs") from None
+    try:
+        ipaddress.ip_address(normalized.hostname)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("base_urls must contain safe hostname-based HTTPS URLs")
+    if (
+        normalized.hostname == "localhost"
+        or normalized.hostname.endswith(".localhost")
+        or normalized.port != 443
+        or normalized.query
+    ):
+        raise ValueError("base_urls must contain safe hostname-based HTTPS URLs")
+    return normalized.url.rstrip("/")
 
 
 def _claim(candidate_keys: CandidateKeyTracker, candidate_key: str) -> bool:
@@ -441,8 +537,8 @@ def _cancelled_failure() -> StableFailure:
 def _resolver_failure() -> StableFailure:
     return _stable_failure(
         code="acquisition-configured-sci-hub-resolver-failed",
-        reason="The injected configured locator resolver failed.",
-        action="Review the private resolver and retry the acquisition request.",
+        reason="The configured Sci-Hub locator resolver failed.",
+        action="Review the configured Sci-Hub URL or resolver and retry the request.",
         retryable=True,
     )
 
@@ -450,8 +546,8 @@ def _resolver_failure() -> StableFailure:
 def _resolver_contract_failure() -> StableFailure:
     return _stable_failure(
         code="acquisition-configured-sci-hub-resolver-contract",
-        reason="The injected resolver did not return a finite locator tuple.",
-        action="Correct the private resolver contract before retrying.",
+        reason="The configured resolver did not return a finite locator tuple.",
+        action="Correct the configured resolver contract before retrying.",
         retryable=False,
     )
 
@@ -459,8 +555,8 @@ def _resolver_contract_failure() -> StableFailure:
 def _locator_failure() -> StableFailure:
     return _stable_failure(
         code="acquisition-configured-sci-hub-locator-invalid",
-        reason="The injected resolver returned an unsafe locator.",
-        action="Correct the private resolver to return neutral safe HTTPS locators.",
+        reason="The configured resolver returned an unsafe locator.",
+        action="Configure the resolver to return neutral safe HTTPS locators.",
         retryable=False,
     )
 
@@ -511,7 +607,9 @@ def _contract_failure() -> StableFailure:
 
 
 __all__ = (
+    "BUILTIN_SCI_HUB_MIRROR_URLS",
     "ConfiguredLocatorResolver",
+    "ConfiguredSciHubLandingResolver",
     "ConfiguredSciHubPdfSource",
     "PublicLocatorFetcher",
     "configured_sci_hub_route_status",

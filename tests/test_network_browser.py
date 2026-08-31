@@ -25,16 +25,31 @@ from sciretriever.network.admission import (
     HostPermit,
 )
 from sciretriever.network.browser import (
-    BrowserBudget,
     BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationKind,
+    BrowserOperationLimits,
     BrowserPageObservation,
     _Abort,
     _DownloadCapturePlan,
     _FlowState,
     _PendingResponseDownload,
     _RequestLease,
+)
+from sciretriever.network.browser_control import (
+    BrowserAction,
+    BrowserActionOutcome,
+    BrowserCaptureState,
+    BrowserControlSession,
+    BrowserObservation,
+    BrowserPageState,
+    BrowserSurfaceKind,
+    ClickElement,
+    ClickPoint,
+    GoBack,
+    ScrollSurface,
+    Stop,
+    WaitForChange,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.policy import (
@@ -307,6 +322,13 @@ class _FakePage:
         self.close_calls = 0
         self.goto_error: BaseException | None = None
         self.abort_event = threading.Event()
+        self.control_generation = 0
+        self.control_snapshot_calls = 0
+        self.control_calls: list[tuple[object, ...]] = []
+        self.control_click_result = True
+        self.control_go_back_result = True
+        self.control_wait_result = False
+        self.control_capture_url: str | None = None
 
     def goto(self, url: str, *, timeout: int) -> _FakeResponse:
         del timeout
@@ -382,6 +404,135 @@ class _FakePage:
     def text_content(self, selector: str, *, timeout: int) -> str:
         del timeout
         return selector
+
+    def control_snapshot(
+        self,
+        *,
+        timeout: int,
+        include_screenshot: bool,
+        static_selector: str | None = None,
+    ) -> dict[str, object]:
+        if timeout <= 0:
+            raise AssertionError("control snapshot timeout must be positive")
+        self.control_snapshot_calls += 1
+        locator = self.url or "https://landing.test/start"
+        title = f"fixture-{self.control_generation}"
+        screenshot = (
+            f"screenshot-{self.control_generation}".encode() if include_screenshot else None
+        )
+        return {
+            "width": 1280,
+            "height": 720,
+            "title": title,
+            "surfaces": (
+                (0, None, "page", locator, title, 0, 0, 1280, 720, 0, 0, 0, 1440, None),
+                (
+                    1,
+                    0,
+                    "frame",
+                    f"{locator.rstrip('/')}/frame",
+                    "frame",
+                    20,
+                    20,
+                    800,
+                    600,
+                    0,
+                    0,
+                    0,
+                    600,
+                    None,
+                ),
+                (
+                    2,
+                    1,
+                    "shadow",
+                    f"{locator.rstrip('/')}/frame",
+                    "shadow",
+                    40,
+                    40,
+                    600,
+                    400,
+                    0,
+                    0,
+                    0,
+                    400,
+                    None,
+                ),
+                (
+                    3,
+                    0,
+                    "viewer",
+                    f"{locator.rstrip('/')}/viewer",
+                    "viewer",
+                    100,
+                    100,
+                    700,
+                    500,
+                    0,
+                    0,
+                    0,
+                    500,
+                    None,
+                ),
+            ),
+            "elements": (
+                (1, 0, "button", "Download PDF", True, True, 20, 20, 180, 40),
+                (2, 0, "button", "Disabled", True, False, 20, 80, 180, 40),
+                (3, 1, "button", "Frame action", True, True, 80, 80, 160, 40),
+                (4, 2, "button", "Hidden", False, True, 100, 100, 160, 40),
+            ),
+            "static_element_key": (
+                None if static_selector is None or "missing" in static_selector else 1
+            ),
+            "screenshot": screenshot,
+            "screenshot_media_type": "image/png" if include_screenshot else None,
+        }
+
+    def control_click_element(
+        self,
+        element_key: int,
+        *,
+        expected_role: str,
+        expected_name: str,
+        expected_enabled: bool,
+        expected_surface_key: int,
+        timeout: int,
+    ) -> bool:
+        self.control_calls.append(
+            (
+                "click-element",
+                element_key,
+                expected_role,
+                expected_name,
+                expected_enabled,
+                expected_surface_key,
+                timeout,
+            )
+        )
+        if self.control_capture_url is not None:
+            route = self.context.begin_request(self.control_capture_url, self, navigation=False)
+            if not route.aborted:
+                download = _FakeDownload(self.control_capture_url, b"%PDF-control-capture")
+                download.request = route.request
+                self.context.download(download)
+                if route.continued:
+                    self.context.finish_request(route)
+        return self.control_click_result
+
+    def control_click_point(self, x: float, y: float, *, timeout: int) -> bool:
+        self.control_calls.append(("click-point", x, y, timeout))
+        return self.control_click_result
+
+    def control_scroll_surface(self, surface_key: int, delta_y: int, *, timeout: int) -> None:
+        self.control_calls.append(("scroll-surface", surface_key, delta_y, timeout))
+
+    def control_go_back(self, *, timeout: int) -> bool:
+        self.control_calls.append(("go-back", timeout))
+        return self.control_go_back_result
+
+    def control_wait_for_change(self, *, timeout: int) -> bool:
+        self.control_calls.append(("wait-for-change", timeout))
+        return self.control_wait_result
 
 
 class _FakeContext:
@@ -1032,7 +1183,6 @@ class NetworkBrowserTests(unittest.TestCase):
                 self.policy,
                 controller=_FlowController(flow),
                 capture_guard=guard,
-                budget=BrowserBudget(max_captures=4),
             )
         )
 
@@ -1054,26 +1204,6 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(
             [response.body_reads for response in factory.process.context.responses],
             [1, 1, 1, 1],
-        )
-
-        limited_client = BrowserClient(
-            factory=_FakeFactory(response_fixtures=fixtures),
-            resolver=self.resolver,
-            coordinator=AccessCoordinator(),
-            destination_policy=_PUBLIC_POLICY,
-        )
-        self.assertEqual(
-            _failure(
-                limited_client.run(
-                    self.scope,
-                    response_url,
-                    self.policy,
-                    controller=_FlowController(flow),
-                    capture_guard=guard,
-                    budget=BrowserBudget(max_captures=3),
-                )
-            ).code,
-            "budget",
         )
 
     def test_navigation_route_proof_survives_multiple_responses_until_completion(self) -> None:
@@ -1316,8 +1446,23 @@ class NetworkBrowserTests(unittest.TestCase):
             assert context is not None
             page = context.pages[0]
 
-            def click(selector: str, *, timeout: int) -> None:
-                del selector, timeout
+            def click(
+                element_key: int,
+                *,
+                expected_role: str,
+                expected_name: str,
+                expected_enabled: bool,
+                expected_surface_key: int,
+                timeout: int,
+            ) -> bool:
+                del (
+                    element_key,
+                    expected_role,
+                    expected_name,
+                    expected_enabled,
+                    expected_surface_key,
+                    timeout,
+                )
                 target = "https://landing.test/after-click"
                 route = context.begin_request(target, page, navigation=True)
                 self.assertTrue(route.continued)
@@ -1327,8 +1472,9 @@ class NetworkBrowserTests(unittest.TestCase):
                 for handler in context.handlers.get("response", ()):
                     handler(response)
                 context.finish_request(route)
+                return True
 
-            page.click = click  # type: ignore[method-assign]
+            page.control_click_element = click  # type: ignore[method-assign]
             session.click("button[data-action='continue']")  # type: ignore[attr-defined]
             observed_statuses.append(session.observe().status_code)  # type: ignore[attr-defined]
 
@@ -1359,13 +1505,29 @@ class NetworkBrowserTests(unittest.TestCase):
             assert context is not None
             page = context.pages[0]
 
-            def click(selector: str, *, timeout: int) -> None:
-                del selector, timeout
+            def click(
+                element_key: int,
+                *,
+                expected_role: str,
+                expected_name: str,
+                expected_enabled: bool,
+                expected_surface_key: int,
+                timeout: int,
+            ) -> bool:
+                del (
+                    element_key,
+                    expected_role,
+                    expected_name,
+                    expected_enabled,
+                    expected_surface_key,
+                    timeout,
+                )
                 # Model a faulty vendor adapter that returns a final page
                 # location without exposing the hop to the route callback.
                 page.url = "https://other.test/unreviewed"
+                return True
 
-            page.click = click  # type: ignore[method-assign]
+            page.control_click_element = click  # type: ignore[method-assign]
             session.click("button[data-action='continue']")  # type: ignore[attr-defined]
 
         result = _failure(
@@ -1392,17 +1554,6 @@ class NetworkBrowserTests(unittest.TestCase):
         timeouts: list[int] = []
 
         def flow(session: object) -> None:
-            context = factory.process.context
-            self.assertIsNotNone(context)
-            assert context is not None
-            page = context.pages[0]
-
-            def click(selector: str, *, timeout: int) -> bool:
-                del selector
-                timeouts.append(timeout)
-                return False
-
-            page.click = click  # type: ignore[method-assign]
             outcomes.append(session.click("button[data-action='missing']"))  # type: ignore[attr-defined]
 
         result = _failure(
@@ -1416,17 +1567,89 @@ class NetworkBrowserTests(unittest.TestCase):
                 "https://landing.test/start",
                 self.policy,
                 controller=_FlowController(flow),
-                budget=BrowserBudget(
-                    max_action_wait_seconds=0.02,
-                    max_total_seconds=1.0,
+                limits=BrowserOperationLimits(
+                    action_timeout_seconds=0.02,
                 ),
             )
         )
 
         self.assertEqual(result.code, "no-download")
         self.assertEqual(outcomes, [False])
-        self.assertEqual(len(timeouts), 1)
-        self.assertLessEqual(timeouts[0], 20)
+        self.assertEqual(timeouts, [])
+        self.assertEqual(factory.process.context.pages[0].control_calls, [])
+
+    def test_progressing_flow_has_no_article_total_deadline(self) -> None:
+        class _JumpClock:
+            value = 0.0
+
+            def __call__(self) -> float:
+                return self.value
+
+        clock = _JumpClock()
+        client = BrowserClient(
+            factory=_FakeFactory(),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+            clock=clock,
+        )
+
+        def flow(session: object) -> None:
+            session.text("body")  # type: ignore[attr-defined]
+            clock.value = 120.0
+            session.text("body")  # type: ignore[attr-defined]
+
+        result = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                controller=_FlowController(flow),
+                timeout_seconds=60.0,
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+
+    def test_static_rule_selector_uses_snapshot_and_shared_action_executor(self) -> None:
+        factory = _FakeFactory()
+        outcomes: list[bool] = []
+
+        def flow(session: object) -> None:
+            context = factory.process.context
+            self.assertIsNotNone(context)
+            assert context is not None
+            page = context.pages[0]
+
+            def forbidden_direct_click(selector: str, *, timeout: int) -> bool:
+                del selector, timeout
+                raise AssertionError("static selector bypassed the control action executor")
+
+            page.click = forbidden_direct_click  # type: ignore[method-assign]
+            outcomes.append(session.click("button[data-action='continue']"))  # type: ignore[attr-defined]
+
+        result = _failure(
+            BrowserClient(
+                factory=factory,
+                resolver=self.resolver,
+                coordinator=AccessCoordinator(),
+                destination_policy=_PUBLIC_POLICY,
+            ).run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                controller=_FlowController(flow),
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(outcomes, [True])
+        context = factory.process.context
+        self.assertIsNotNone(context)
+        assert context is not None
+        page = context.pages[0]
+        self.assertEqual(page.control_snapshot_calls, 2)
+        self.assertEqual(page.control_calls[0][0], "click-element")
 
     def test_acknowledged_top_frame_policy_rejection_waits_for_action_and_reuses_session(
         self,
@@ -1452,8 +1675,23 @@ class NetworkBrowserTests(unittest.TestCase):
             assert context is not None
             page = context.pages[0]
 
-            def click(selector: str, *, timeout: int) -> bool:
-                del selector, timeout
+            def click(
+                element_key: int,
+                *,
+                expected_role: str,
+                expected_name: str,
+                expected_enabled: bool,
+                expected_surface_key: int,
+                timeout: int,
+            ) -> bool:
+                del (
+                    element_key,
+                    expected_role,
+                    expected_name,
+                    expected_enabled,
+                    expected_surface_key,
+                    timeout,
+                )
                 for index in range(3):
                     request = _FakeRequest(
                         f"https://other.test/unapproved-{index}",
@@ -1473,8 +1711,8 @@ class NetworkBrowserTests(unittest.TestCase):
                 action_completed.set()
                 return False
 
-            page.click = click  # type: ignore[method-assign]
-            session.click("button[data-action='missing']")  # type: ignore[attr-defined]
+            page.control_click_element = click  # type: ignore[method-assign]
+            session.click("button[data-action='continue']")  # type: ignore[attr-defined]
 
         first = _failure(
             client.run(
@@ -1707,7 +1945,7 @@ class NetworkBrowserTests(unittest.TestCase):
 
         self.assertEqual(failure.code, "policy")
 
-    def test_capture_wait_uses_a_local_settlement_budget(self) -> None:
+    def test_capture_wait_uses_a_single_operation_timeout(self) -> None:
         client = BrowserClient(
             factory=_FakeFactory(),
             resolver=self.resolver,
@@ -1727,9 +1965,8 @@ class NetworkBrowserTests(unittest.TestCase):
                 "https://landing.test/start",
                 self.policy,
                 controller=_FlowController(flow),
-                budget=BrowserBudget(
-                    max_capture_wait_seconds=0.02,
-                    max_total_seconds=1.0,
+                limits=BrowserOperationLimits(
+                    capture_wait_timeout_seconds=0.02,
                 ),
             )
         )
@@ -1737,49 +1974,21 @@ class NetworkBrowserTests(unittest.TestCase):
         self.assertEqual(failure.code, "no-download")
         self.assertLess(time.monotonic() - started_at, 0.5)
 
-    def test_capture_wait_does_not_hide_the_total_flow_deadline(self) -> None:
-        client = BrowserClient(
-            factory=_FakeFactory(),
-            resolver=self.resolver,
-            coordinator=AccessCoordinator(),
-            destination_policy=_PUBLIC_POLICY,
-        )
-
-        def flow(session: object) -> None:
-            session.wait_for_any_capture(  # type: ignore[attr-defined]
-                (BrowserCaptureKind.DOWNLOAD,)
-            )
-
-        failure = _failure(
-            client.run(
-                self.scope,
-                "https://landing.test/start",
-                self.policy,
-                controller=_FlowController(flow),
-                budget=BrowserBudget(
-                    max_capture_wait_seconds=1.0,
-                    max_total_seconds=0.02,
-                ),
-            )
-        )
-
-        self.assertEqual(failure.code, "timeout")
-
-    def test_capture_wait_budget_requires_finite_positive_seconds(self) -> None:
+    def test_capture_wait_limit_requires_finite_positive_seconds(self) -> None:
         with self.assertRaises(TypeError):
-            BrowserBudget(max_capture_wait_seconds=True)
+            BrowserOperationLimits(capture_wait_timeout_seconds=True)
         for value in (0.0, -1.0, float("nan"), float("inf")):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                BrowserBudget(max_capture_wait_seconds=value)
+                BrowserOperationLimits(capture_wait_timeout_seconds=value)
 
-    def test_action_wait_budget_requires_finite_positive_seconds(self) -> None:
+    def test_action_limit_requires_finite_positive_seconds(self) -> None:
         with self.assertRaises(TypeError):
-            BrowserBudget(max_action_wait_seconds=True)
+            BrowserOperationLimits(action_timeout_seconds=True)
         for value in (0.0, -1.0, float("nan"), float("inf")):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                BrowserBudget(max_action_wait_seconds=value)
+                BrowserOperationLimits(action_timeout_seconds=value)
 
-    def test_request_budget_failure_logs_the_exact_bounded_resource(self) -> None:
+    def test_page_request_count_is_not_an_article_job_budget(self) -> None:
         client = BrowserClient(
             factory=_FakeFactory(
                 subresources=("https://landing.test/article.js",),
@@ -1789,50 +1998,37 @@ class NetworkBrowserTests(unittest.TestCase):
             destination_policy=_PUBLIC_POLICY,
         )
 
-        with self.assertLogs("sciretriever.network.browser", level="DEBUG") as captured:
-            failure = _failure(
-                client.run(
-                    self.scope,
-                    "https://landing.test/start",
-                    self.policy,
-                    budget=BrowserBudget(max_requests=1),
-                )
+        failure = _failure(
+            client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
             )
-
-        self.assertEqual(failure.code, "budget")
-        output = "\n".join(captured.output)
-        self.assertIn(
-            "event=browser-budget-exceeded resource=requests used=2 limit=1 code=budget",
-            output,
         )
+        self.assertEqual(failure.code, "no-download")
 
-    def test_response_capture_enforces_candidate_and_total_byte_budgets(self) -> None:
+    def test_response_capture_enforces_the_single_capture_byte_limit(self) -> None:
         response_url = "https://landing.test/start"
         fixture = _ResponseFixture(b"12345")
         guard = _CaptureGuard({(response_url, BrowserCaptureKind.RESPONSE, "application/pdf")})
-        for budget in (
-            BrowserBudget(max_bytes_per_download=4),
-            BrowserBudget(max_total_bytes=4),
-        ):
-            with self.subTest(budget=budget):
-                client = BrowserClient(
-                    factory=_FakeFactory(response_fixtures={response_url: fixture}),
-                    resolver=self.resolver,
-                    coordinator=AccessCoordinator(),
-                    destination_policy=_PUBLIC_POLICY,
+        client = BrowserClient(
+            factory=_FakeFactory(response_fixtures={response_url: fixture}),
+            resolver=self.resolver,
+            coordinator=AccessCoordinator(),
+            destination_policy=_PUBLIC_POLICY,
+        )
+        self.assertEqual(
+            _failure(
+                client.run(
+                    self.scope,
+                    response_url,
+                    self.policy,
+                    capture_guard=guard,
+                    limits=BrowserOperationLimits(max_capture_bytes=4),
                 )
-                self.assertEqual(
-                    _failure(
-                        client.run(
-                            self.scope,
-                            response_url,
-                            self.policy,
-                            capture_guard=guard,
-                            budget=budget,
-                        )
-                    ).code,
-                    "oversize",
-                )
+            ).code,
+            "oversize",
+        )
 
     def test_initial_signed_query_is_rejected_but_runtime_download_is_redacted(self) -> None:
         initial = _failure(
@@ -2281,7 +2477,7 @@ class NetworkBrowserTests(unittest.TestCase):
         )
         self.assertTrue(all("?" not in url for url, _kind in guard.calls))
 
-    def test_download_oversize_and_popup_budget_fail_closed(self) -> None:
+    def test_download_oversize_is_bounded_but_popup_count_is_not_a_job_budget(self) -> None:
         def oversized(session: object) -> None:
             del session
 
@@ -2298,7 +2494,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 "https://landing.test/start",
                 self.policy,
                 controller=_FlowController(oversized),
-                budget=BrowserBudget(max_bytes_per_download=4),
+                limits=BrowserOperationLimits(max_capture_bytes=4),
             )
         )
         self.assertEqual(oversized_result.code, "oversize")
@@ -2322,12 +2518,363 @@ class NetworkBrowserTests(unittest.TestCase):
                 "https://landing.test/start",
                 self.policy,
                 controller=_FlowController(popup_storm),
-                budget=BrowserBudget(max_popups=1),
             )
         )
-        self.assertEqual(storm_result.code, "budget")
+        self.assertEqual(storm_result.code, "no-download")
 
-    def test_cancel_timeout_and_challenge_never_return_late_download(self) -> None:
+    def test_control_observation_enumerates_article_surfaces_and_clears_after_cleanup(
+        self,
+    ) -> None:
+        observed: list[BrowserObservation] = []
+        retained_control: list[BrowserControlSession] = []
+
+        def inspect_flow(session: object) -> None:
+            getattr(session, "open_popup")("https://popup.test/viewer")
+            control = cast(BrowserControlSession, getattr(session, "control_session")())
+            retained_control.append(control)
+            observed.append(control.observe(page_state=BrowserPageState.CHALLENGE))
+
+        result = _failure(
+            self.client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                controller=_FlowController(inspect_flow),
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        observation = observed[0]
+        self.assertIs(observation.page_state, BrowserPageState.CHALLENGE)
+        self.assertIs(observation.capture_state, BrowserCaptureState.NONE)
+        self.assertEqual(len(observation.surfaces), 8)
+        self.assertEqual(
+            {surface.kind for surface in observation.surfaces},
+            {
+                BrowserSurfaceKind.PAGE,
+                BrowserSurfaceKind.POPUP,
+                BrowserSurfaceKind.FRAME,
+                BrowserSurfaceKind.SHADOW,
+                BrowserSurfaceKind.VIEWER,
+            },
+        )
+        self.assertEqual(len(observation.elements), 6)
+        self.assertEqual(observation.page_id, observation.screenshot.page_id)
+        control_state = getattr(getattr(retained_control[0], "_state"), "control")
+        self.assertIsNone(control_state.ledger.current)
+        self.assertIsNone(control_state.observation)
+        self.assertEqual(control_state.page_keys, {})
+        self.assertEqual(control_state.surface_keys, {})
+        self.assertEqual(control_state.element_keys, {})
+
+    def test_control_executes_six_closed_actions_and_returns_receipts(self) -> None:
+        receipts: list[object] = []
+        vendor_calls: list[tuple[object, ...]] = []
+
+        def action_flow(session: object) -> None:
+            control = cast(BrowserControlSession, getattr(session, "control_session")())
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            enabled = next(
+                element for element in observation.elements if element.name == "Download PDF"
+            )
+            enabled_surface = next(
+                surface
+                for surface in observation.surfaces
+                if surface.surface_id == enabled.surface_id
+            )
+            receipts.append(
+                control.execute(
+                    ClickElement(
+                        observation.article_token,
+                        enabled_surface.page_id,
+                        enabled_surface.surface_id,
+                        observation.revision,
+                        enabled.element_id,
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            frame = next(
+                surface
+                for surface in observation.surfaces
+                if surface.kind is BrowserSurfaceKind.FRAME
+            )
+            receipts.append(
+                control.execute(
+                    ClickPoint(
+                        observation.article_token,
+                        frame.page_id,
+                        frame.surface_id,
+                        observation.revision,
+                        observation.screenshot.screenshot_id,
+                        100,
+                        100,
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            receipts.append(
+                control.execute(
+                    ScrollSurface(
+                        observation.article_token,
+                        observation.page_id,
+                        frame.surface_id,
+                        observation.revision,
+                        300,
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            receipts.append(
+                control.execute(
+                    GoBack(
+                        observation.article_token,
+                        observation.page_id,
+                        observation.revision,
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            receipts.append(
+                control.execute(
+                    WaitForChange(
+                        observation.article_token,
+                        observation.page_id,
+                        observation.revision,
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+            receipts.append(
+                control.execute(
+                    Stop(
+                        observation.article_token,
+                        observation.page_id,
+                        observation.revision,
+                        "normal-miss",
+                    ),
+                    observation,
+                    timeout_seconds=0.5,
+                )
+            )
+            context = self.factory.process.context
+            assert context is not None
+            vendor_calls.extend(context.pages[0].control_calls)
+
+        result = _failure(
+            self.client.run(
+                self.scope,
+                "https://landing.test/start",
+                self.policy,
+                controller=_FlowController(action_flow),
+            )
+        )
+
+        self.assertEqual(result.code, "no-download")
+        self.assertEqual(
+            tuple(getattr(receipt, "outcome") for receipt in receipts),
+            (
+                BrowserActionOutcome.APPLIED,
+                BrowserActionOutcome.APPLIED,
+                BrowserActionOutcome.APPLIED,
+                BrowserActionOutcome.NAVIGATION,
+                BrowserActionOutcome.NO_CHANGE,
+                BrowserActionOutcome.APPLIED,
+            ),
+        )
+        self.assertEqual(
+            tuple(call[0] for call in vendor_calls),
+            ("click-element", "click-point", "scroll-surface", "go-back", "wait-for-change"),
+        )
+        self.assertTrue(all(call[-1] == 500 for call in vendor_calls), vendor_calls)
+
+    def test_control_rejects_invalid_targets_before_vendor_action(self) -> None:  # noqa: C901
+        case_names = (
+            "stale-revision",
+            "unknown-element",
+            "hidden-element",
+            "disabled-element",
+            "unknown-page",
+            "unknown-surface",
+            "wrong-screenshot",
+            "outside-viewport",
+            "outside-surface",
+            "unknown-scroll-surface",
+        )
+
+        def build_action(name: str, observation: BrowserObservation) -> BrowserAction:
+            enabled = next(
+                element for element in observation.elements if element.name == "Download PDF"
+            )
+            disabled = next(
+                element for element in observation.elements if element.name == "Disabled"
+            )
+            root = next(
+                surface
+                for surface in observation.surfaces
+                if surface.kind is BrowserSurfaceKind.PAGE
+            )
+            frame = next(
+                surface
+                for surface in observation.surfaces
+                if surface.kind is BrowserSurfaceKind.FRAME
+            )
+            if name == "stale-revision":
+                return ClickElement(
+                    observation.article_token,
+                    observation.page_id,
+                    root.surface_id,
+                    observation.revision + 1,
+                    enabled.element_id,
+                )
+            if name in {"unknown-element", "hidden-element"}:
+                return ClickElement(
+                    observation.article_token,
+                    observation.page_id,
+                    root.surface_id,
+                    observation.revision,
+                    "effffffff" if name == "unknown-element" else "efffffffe",
+                )
+            if name == "disabled-element":
+                return ClickElement(
+                    observation.article_token,
+                    observation.page_id,
+                    root.surface_id,
+                    observation.revision,
+                    disabled.element_id,
+                )
+            if name == "unknown-page":
+                return ClickElement(
+                    observation.article_token,
+                    "pffffffff",
+                    root.surface_id,
+                    observation.revision,
+                    enabled.element_id,
+                )
+            if name == "unknown-scroll-surface":
+                return ScrollSurface(
+                    observation.article_token,
+                    observation.page_id,
+                    "sffffffff",
+                    observation.revision,
+                    200,
+                )
+            surface_id = "sffffffff" if name == "unknown-surface" else root.surface_id
+            screenshot_id = (
+                "iffffffff" if name == "wrong-screenshot" else observation.screenshot.screenshot_id
+            )
+            x = 1281.0 if name == "outside-viewport" else 100.0
+            if name == "outside-surface":
+                surface_id = frame.surface_id
+                x = 1000.0
+            return ClickPoint(
+                observation.article_token,
+                observation.page_id,
+                surface_id,
+                observation.revision,
+                screenshot_id,
+                x,
+                100,
+            )
+
+        for name in case_names:
+            with self.subTest(case=name):
+                factory = _FakeFactory()
+                client = BrowserClient(
+                    factory=factory,
+                    resolver=self.resolver,
+                    coordinator=AccessCoordinator(),
+                    destination_policy=_PUBLIC_POLICY,
+                )
+                rejected: list[bool] = []
+                snapshot_calls_before_execute: list[int] = []
+
+                def rejected_flow(session: object) -> None:
+                    control = cast(
+                        BrowserControlSession,
+                        getattr(session, "control_session")(),
+                    )
+                    observation = control.observe(page_state=BrowserPageState.NORMAL)
+                    context = factory.process.context
+                    assert context is not None
+                    snapshot_calls_before_execute.append(context.pages[0].control_snapshot_calls)
+                    try:
+                        control.execute(
+                            build_action(name, observation),
+                            observation,
+                            timeout_seconds=0.5,
+                        )
+                    except Exception:
+                        rejected.append(True)
+
+                result = _failure(
+                    client.run(
+                        self.scope,
+                        "https://landing.test/start",
+                        self.policy,
+                        controller=_FlowController(rejected_flow),
+                    )
+                )
+                self.assertEqual(result.code, "no-download")
+                self.assertEqual(rejected, [True])
+                context = factory.process.context
+                assert context is not None
+                self.assertEqual(context.pages[0].control_calls, [])
+                self.assertEqual(snapshot_calls_before_execute, [1])
+                self.assertEqual(context.pages[0].control_snapshot_calls, 1)
+
+    def test_control_capture_receipt_uses_shared_download_pipeline(self) -> None:
+        receipt_outcomes: list[BrowserActionOutcome] = []
+
+        def capture_flow(session: object) -> None:
+            context = self.factory.process.context
+            assert context is not None
+            context.pages[0].control_capture_url = "https://download.test/control.pdf"
+            control = cast(BrowserControlSession, getattr(session, "control_session")())
+            observation = control.observe(page_state=BrowserPageState.NORMAL)
+            element = next(value for value in observation.elements if value.name == "Download PDF")
+            surface = next(
+                value for value in observation.surfaces if value.surface_id == element.surface_id
+            )
+            receipt = control.execute(
+                ClickElement(
+                    observation.article_token,
+                    surface.page_id,
+                    surface.surface_id,
+                    observation.revision,
+                    element.element_id,
+                ),
+                observation,
+                timeout_seconds=0.5,
+            )
+            receipt_outcomes.append(receipt.outcome)
+
+        result = self.client.run(
+            self.scope,
+            "https://landing.test/start",
+            self.policy,
+            controller=_FlowController(capture_flow),
+        )
+
+        self.assertIsInstance(result, BrowserCaptureBatch)
+        self.assertEqual(receipt_outcomes, [BrowserActionOutcome.CAPTURE])
+        assert isinstance(result, BrowserCaptureBatch)
+        self.assertEqual(b"".join(result.captures[0].stream.chunks), b"%PDF-control-capture")
+
+    def test_cancel_and_timeout_never_return_late_download(self) -> None:
         cancelled = threading.Event()
 
         def cancel_flow(session: object) -> None:
@@ -2363,29 +2910,6 @@ class NetworkBrowserTests(unittest.TestCase):
         )
         self.assertIn(timeout_result.code, {"timeout", "runtime"})
         self.assertNotIn("timeout-secret", repr(timeout_result))
-
-        challenge_factory = _FakeFactory()
-        challenge_client = BrowserClient(
-            factory=challenge_factory,
-            resolver=self.resolver,
-            coordinator=AccessCoordinator(),
-            destination_policy=_PUBLIC_POLICY,
-        )
-
-        challenge_factory.process.challenge = True
-
-        def challenge_flow(session: object) -> None:
-            del session
-
-        challenge_result = _failure(
-            challenge_client.run(
-                self.scope,
-                "https://landing.test/start",
-                self.policy,
-                controller=_FlowController(challenge_flow),
-            )
-        )
-        self.assertEqual(challenge_result.code, "challenge")
 
     def test_cleanup_exception_is_neutral_and_scope_cooldown_starts_after_cleanup(self) -> None:
         marker = "cleanup-secret-sentinel"
@@ -2597,7 +3121,7 @@ class NetworkBrowserTests(unittest.TestCase):
                 else:
                     seen[name] = "exposed"
             self.assertIsNone(session.open_popup("https://popup.test/popup"))  # type: ignore[attr-defined]
-            self.assertTrue(session.click("#download"))  # type: ignore[attr-defined]
+            self.assertTrue(callable(getattr(session, "click")))
             self.assertIsNone(session.fill("#query", "fixture"))  # type: ignore[attr-defined]
             self.assertEqual(session.text("#title"), "#title")  # type: ignore[attr-defined]
             observation = cast(BrowserPageObservation, getattr(session, "observe")())
@@ -3133,11 +3657,10 @@ class BrowserLateDownloadCorrelationTests(unittest.TestCase):
             capture_guard=None,
             navigation_only=False,
             discard_unapproved_subresources=False,
-            budget=BrowserBudget(),
+            limits=BrowserOperationLimits(),
             clock=lambda: 0.0,
-            deadline=60.0,
+            operation_timeout_seconds=60.0,
             cancel_event=None,
-            max_bytes_per_download=BrowserBudget().max_bytes_per_download,
             cleanup_timeout_seconds=5.0,
         )
         state.captures = [

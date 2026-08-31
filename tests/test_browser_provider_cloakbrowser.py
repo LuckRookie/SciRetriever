@@ -63,11 +63,11 @@ from sciretriever.model.primitives import (
 from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
-    BrowserBudget,
     BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationGuard,
     BrowserFlowController,
+    BrowserOperationLimits,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.cloakbrowser import (
@@ -252,7 +252,6 @@ def _mapped_rule(rule: BrowserSiteRule, fixture_origin: str) -> BrowserSiteRule:
             if rule.doi_pdf_url_template is None
             else _mapped_url(rule.doi_pdf_url_template, fixture_origin)
         ),
-        max_actions=rule.max_actions,
         page_markers=page_markers,
         capture_url_prefixes=_mapped_urls(rule.capture_url_prefixes, fixture_origin),
         capture_origin_roots=((fixture_origin,) if rule.capture_origin_roots else ()),
@@ -287,7 +286,7 @@ class _SessionBoundRunner:
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
-        budget: BrowserBudget | None = None,
+        limits: BrowserOperationLimits | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BrowserResult:
@@ -301,7 +300,7 @@ class _SessionBoundRunner:
             navigation_only=navigation_only,
             discard_unapproved_subresources=discard_unapproved_subresources,
             session_key=self._session_key,
-            budget=budget,
+            limits=limits,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
         )
@@ -626,7 +625,7 @@ class ProductionBrowserProviderCloakTests(unittest.TestCase):
                     )
                 self.assertEqual(
                     challenge_error.exception.failure.code,
-                    "acquisition-browser-challenge-required",
+                    "acquisition-browser-challenge-unresolved",
                 )
 
                 outside_hostname = "outside.sciretriever.test"

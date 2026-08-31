@@ -28,11 +28,16 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 | [ADR 0010：Parser-neutral Markdown 与单一当前解析结果](0010-parser-neutral-markdown-current-result.md) | Accepted | ParserResult 的 Markdown/artifact/provenance 合同、实际引用资源、单一当前结果替换、Parser 私有过程文件和无逐段 locator 边界 | 具体 Parser 协议、缓存额度、多模态 Analysis 和当前实现状态 |
 | [ADR 0011：以文献数据库为中心的增量维护](0011-literature-database-centered-incremental-maintenance.md) | Accepted | 统一逻辑文献数据库作为产品中心、当前事实驱动的增量操作与恢复、Catalog/ArtifactStore 边界和第二真相源禁令 | 具体表结构、物理目录、备份、缓存和未确认的新产品能力 |
 | [ADR 0012：进程内供应商访问调度](0012-process-local-provider-access-scheduling.md) | Accepted，按 ADR 0015 修订 | 当前进程共享准入、provider/channel scope、Provider policy、内存运行状态和非跨进程边界 | 易变供应商数值、具体 endpoint、产品额度和当前实现状态 |
-| [ADR 0013：外部发现与数据库补全解耦](0013-decoupled-discovery-and-database-maintenance.md) | Accepted，按 ADR 0015 修订 | 最小且持久化的 DiscoveryRun、逐 Provider 原始扫描边界、无 Collection/ImportRun 的进程内数据库补全、运行时 selector 与目标冻结、ImportReportSelector、自动 PDF 获取耗尽、操作特有的非持久化 Report、Report/Logging 分离、Logging 公用基础模块边界、MetaLiterature 版本回退和手动 PDF 接纳 | 具体 CLI 语法、Report 技术字段、Logging 格式、物理表字段、供应商协议和当前实现状态 |
-| [ADR 0014：按能力接入 Provider 与本地凭据管理](0014-capability-scoped-providers-and-local-credentials.md) | Accepted，按 ADR 0015 修订 | Metadata/Acquisition 两类非互斥 Provider 能力、证据驱动原文路由、用户级 credentials.toml、config CLI、离线状态与显式连通性测试 | 易变 endpoint/认证字段、普通 Provider 参数、当前实现状态和具体文献 entitlement |
-| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted，按 ADR 0016/0017 修订 | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、一个 operator-managed 持久身份 Profile/共享有头 process-context、Browser 组间并行/组内限速串行、升级与 operation-local 熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
-| [ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页生命周期](0016-cloakbrowser-fixed-identity-runtime.md) | Accepted | CloakBrowser 单生产 runtime、固定 Profile 设备身份、Linux/Xvfb persona、binary/Profile 生命周期、受限 challenge dependency、settle/终态与无兼容层切换门 | 具体 binary 版本、单个 Provider marker、实际 entitlement、CAPTCHA/MFA 自动处理 |
-| [ADR 0017：共享 Agents 基础与受控 Browser Agent](0017-shared-agents-and-controlled-browser-agent.md) | Accepted | Analysis/Browser 共用的中性 Agents provider/capability/budget/session、消费模块所有权、确定性规则优先、受控页面观察和封闭动作 | 文献 prompt/schema、Publisher 规则、任意 Browser/CDP 接管、长期 Agent memory |
+| [ADR 0013：外部发现与数据库补全解耦](0013-decoupled-discovery-and-database-maintenance.md) | Accepted，按 ADR 0015/0019 修订 | 最小且持久化的 DiscoveryRun、逐 Provider 原始扫描边界、无 Collection/ImportRun 的进程内数据库补全、运行时 selector 与目标冻结、三种推进目标、ImportReportSelector、自动 PDF 获取耗尽、操作特有的非持久化 Report、Report/Logging 分离、Logging 公用基础模块边界、MetaLiterature 版本回退和手动 PDF 接纳 | 具体 CLI 语法、Report 技术字段、Logging 格式、物理表字段、供应商协议和当前实现状态 |
+| [ADR 0014：按能力接入 Provider 与本地凭据管理](0014-capability-scoped-providers-and-local-credentials.md) | Accepted，按 ADR 0021/0022 于 2026-08-31 修订 | Metadata/Acquisition 两类非互斥 Provider 能力、证据驱动原文路由、用户级 credentials.toml、capability owner 就近管理凭据、离线状态与显式连通性测试 | Source Auto/Custom 与逐 Source limit、Model Provider/Model 注册表与任务选择、易变 endpoint/认证字段、当前实现状态和具体文献 entitlement |
+| [ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度](0015-publisher-aware-tiered-pdf-acquisition.md) | Accepted，按 ADR 0016/0017 于 2026-08-26 修订 | Publisher access resolution、Profile 三态准入与 capability 分离、三级风险升级、层级 cohort、官方 API policy、一个 operator-managed 持久身份 Profile/共享有头 process-context、Browser 组间并行/组内限速串行、作业级 Rules/Agent 二选一、升级与 operation-local 熔断边界 | 单个 Provider 的易变 endpoint、selector、速率数字和当前实现状态 |
+| [ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页资源边界](0016-cloakbrowser-fixed-identity-runtime.md) | Accepted，2026-08-26 修订 | CloakBrowser 单生产 runtime、固定 Profile 设备身份、Linux/Xvfb persona、binary/Profile 生命周期、受限 challenge dependency、统一 Challenge 页面合同与无兼容层切换门 | 具体 binary 版本、单个 Provider marker、实际 entitlement、登录/机构选择/MFA |
+| [ADR 0017：无状态共享 Agents 与受控 Browser Controller](0017-shared-agents-and-controlled-browser-agent.md) | Accepted，按 ADR 0019/0021 于 2026-08-28 修订 | Provider-neutral 无状态单次 Agents Runtime、独立 Analysis/Browser role、消费模块 controller 所有权、Rules/Agent 作业级二选一、统一 Browser Observation、六种封闭动作和自然终态 | Model Provider/Model 配置所有权、具体 SDK/transport、文献 prompt/schema、Publisher 规则、任意 Browser/CDP 接管、长期 Agent memory |
+| [ADR 0018：固定用户级普通配置文件](0018-fixed-user-configuration-home.md) | Accepted | 唯一 `~/.sciretriever/config.toml`、Configuration 路径所有权、CLI/人工编辑、安全发布与旧配置人工迁移 | 普通配置字段、secret schema、项目级配置继承、当前实现状态 |
+| [ADR 0019：Agent 可编排应用边界与 SDK 驱动模型运行时](0019-agent-operable-application-and-sdk-model-runtime.md) | Accepted | 外部 Agent 控制面、Entry/MCP/Skill 边界、第三种解析目标、PydanticAI Direct 首选实现、SDK Network transport gate 与 LangGraph 延后条件 | 具体 MCP schema、SDK 版本、远程多租户服务、当前实现状态 |
+| [ADR 0020：可复用 Model Profile 与任务级绑定](0020-reusable-model-profiles-and-task-bindings.md) | Superseded by ADR 0021 | 已撤销的 Model Service/Profile 配置合同 | 当前 Provider/Model 注册表与任务直接选择 |
+| [ADR 0021：Provider、Model 注册表与任务直接选择](0021-provider-model-registry-and-direct-task-selection.md) | Accepted | Provider 的 API/endpoint/exact-origin key、`provider/model` Model 的 reasoning/image、Analyze/Download 直接选择、模块派生 capability/limits、自动有界模型目录与无旧 schema 兼容层 | 模型协议或 SDK 具体实现、Analysis/Browser workflow、长期 Agent 状态、远端 capability 自动证明 |
+| [ADR 0022：默认安全 Source 选择与逐 Source 扫描上限](0022-default-safe-source-selection-and-per-source-limits.md) | Accepted | Metadata/Acquisition 的 Auto/Custom、版本内置默认安全集合、Custom 精确顺序、逐 Source raw-item limit、有效 Source resolver 与旧 discovery schema 删除 | Provider adapter 协议、在线可用性、凭据内容、具体 Literature route 适用性、Browser enablement |
 
 ## 阅读方法
 
@@ -53,8 +58,13 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
    - 外部发现、进程内数据库补全、多版本选择、自动 PDF 获取耗尽、运行报告边界、Logging 公用基础模块、手动 PDF 接纳和当前不建立 Collection：ADR 0013。
    - Provider 能力分类、全面 adapter 目标、出版社与聚合来源解耦、本地凭据文件和配置/连通性命令：ADR 0014。
    - 访问方画像与运行时计划、Public/API/Browser 风险升级、官方 API policy 和 Provider-scoped Browser 调度：ADR 0015。
-   - CloakBrowser 固定身份、binary/Profile 生命周期、受限验证资源和 challenge settle/终态：ADR 0016。
-   - Analysis 与 Browser 的共享 Agents 基础、capability/预算和受控 Browser Agent：ADR 0017。
+   - CloakBrowser 固定身份、binary/Profile 生命周期、受限验证资源和统一 Challenge 页面合同：ADR 0016。
+   - Analysis 与 Browser 的无状态共享 Agents Runtime、消费模块 controller 和受控 Browser 二选一：ADR 0017。
+   - 唯一用户级普通配置文件、配置路径所有权和旧配置迁移：ADR 0018。
+   - 外部 Agent 编排、Entry/MCP/Skill、解析目标、SDK 驱动模型运行时和 Network transport gate：ADR 0019。
+   - ADR 0020 只用于理解已撤销的 Model Service/Profile 配置合同。
+   - Provider/Model 注册表、Model 自有 reasoning/image、Analyze/Download 直接选择、模块派生调用合同、自动模型目录与旧 schema 严格拒绝：ADR 0021。
+   - Source Auto/Custom、默认安全 catalog、Custom 冻结列表、逐 Source metadata limit 与旧 `[discovery]` 删除：ADR 0022。
 4. 讨论代码组织、持久化、外部访问和具体运行机制时再读[技术文档](../technical.md)。
 
 尚未接受的设计放在讨论或活动提案中，不得提前写成 Accepted ADR。完成、拒绝或被替代的讨论材料进入 `docs/archive/`，不参与当前架构解释。

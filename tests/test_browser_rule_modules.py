@@ -324,7 +324,7 @@ class BrowserRuleModuleTests(unittest.TestCase):
             BrowserPageMarkerKind.ENTITLED,
             BrowserPageMarkerKind.LOGIN_REQUIRED,
             BrowserPageMarkerKind.PAYWALL,
-            BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            BrowserPageMarkerKind.CHALLENGE,
             BrowserPageMarkerKind.RATE_LIMITED,
             BrowserPageMarkerKind.ACCESS_DENIED,
             BrowserPageMarkerKind.NOT_FOUND,
@@ -338,7 +338,7 @@ class BrowserRuleModuleTests(unittest.TestCase):
                         BrowserActionKind.WAIT_FOR_ANY_CAPTURE,
                     ),
                 )
-                self.assertLessEqual(len(case.rule.actions), case.rule.max_actions)
+                self.assertIsInstance(case.rule.actions, tuple)
                 self.assertIsNotNone(case.rule.actions[0].selector)
                 self.assertIsNone(case.rule.actions[1].capture_kind)
                 self.assertTrue(

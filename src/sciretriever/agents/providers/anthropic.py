@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sciretriever.agents.calls import AgentCallLimits, AgentUsage
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.agents.providers.base import (
     ANTHROPIC_BASELINE_ACCESS_POLICY,
     ProviderHttpAdapterBase,
@@ -12,14 +14,9 @@ from sciretriever.agents.providers.base import (
     tool_declarations,
     usage_from_payload,
 )
-from sciretriever.agents.requests import (
-    AgentBudget,
-    AgentRequest,
-    AgentUsage,
-    canonical_json_bytes,
-    parse_strict_json_object,
-)
+from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json_object
 from sciretriever.model.access import Header
+from sciretriever.model.configuration import AgentReasoningEffort
 from sciretriever.network.admission import AccessPolicy
 from sciretriever.network.http import HttpClient
 
@@ -37,7 +34,7 @@ class AnthropicMessagesAdapter(ProviderHttpAdapterBase):
         http_client: HttpClient,
         api_key: str | None,
         base_url: str = "https://api.anthropic.com/v1",
-        limits: AgentBudget | None = None,
+        limits: AgentCallLimits | None = None,
         access_policy: AccessPolicy | None = None,
         provider_name: str = _PROVIDER_NAME,
         service_name: str = "messages",
@@ -52,7 +49,7 @@ class AnthropicMessagesAdapter(ProviderHttpAdapterBase):
         super().__init__(
             http_client=http_client,
             api_key=api_key,
-            limits=limits or AgentBudget(),
+            limits=limits or AgentCallLimits(),
             access_policy=access_policy,
             provider_name=provider_name,
             endpoint=endpoint,
@@ -73,7 +70,7 @@ class AnthropicMessagesAdapter(ProviderHttpAdapterBase):
     def _credential_headers(self) -> tuple[tuple[str, str], ...]:
         return () if self._api_key is None else (("X-Api-Key", self._api_key),)
 
-    def _build_request_body(self, call: AgentRequest) -> bytes:
+    def _build_request_body(self, call: AgentProviderCall) -> bytes:
         body: dict[str, object] = {
             "model": call.model,
             "max_tokens": call.max_output_tokens,
@@ -87,12 +84,17 @@ class AnthropicMessagesAdapter(ProviderHttpAdapterBase):
                     "schema": parse_strict_json_object(call.response_schema),
                 }
             }
+        if call.reasoning_effort is not AgentReasoningEffort.PROVIDER_DEFAULT:
+            output_config = body.setdefault("output_config", {})
+            if not isinstance(output_config, dict):  # pragma: no cover - local invariant.
+                raise TypeError("Anthropic output configuration is invalid")
+            output_config["effort"] = call.reasoning_effort.value
         if call.tools:
             body["tools"] = tool_declarations(call, anthropic=True)
             body["tool_choice"] = {"type": "any"}
         return canonical_json_bytes(body)
 
-    def _parse_result(self, body: bytes, call: AgentRequest) -> _ParsedResult:
+    def _parse_result(self, body: bytes, call: AgentProviderCall) -> _ParsedResult:
         root = _anthropic_root(body, call)
         usage = usage_from_payload(root.get("usage"))
         stop_reason, content = _anthropic_content(root)
@@ -110,7 +112,7 @@ class AnthropicMessagesAdapter(ProviderHttpAdapterBase):
 __all__ = ("AnthropicMessagesAdapter",)
 
 
-def _anthropic_root(body: bytes, call: AgentRequest) -> dict[str, object]:
+def _anthropic_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:
     try:
         root = parse_strict_json_object(body)
     except (TypeError, ValueError):

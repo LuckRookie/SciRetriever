@@ -23,12 +23,17 @@ from sciretriever.configuration.credentials import (
 )
 from sciretriever.configuration.errors import ConfigurationError
 from sciretriever.configuration.errors import fail as _fail
+from sciretriever.configuration.source_selection import (
+    acquisition_source_providers,
+    metadata_source_providers,
+)
 from sciretriever.model.configuration import (
-    AgentAuthentication,
-    AnalysisConfigurationStatus,
+    AgentsConfigurationStatus,
+    AnalysisRoleConfigurationStatus,
     BrowserAccessStatus,
     BrowserConfigurationProbeResult,
     BrowserProfilePresence,
+    BrowserRoleConfigurationStatus,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationProbeResult,
@@ -231,7 +236,7 @@ def _core_credential_presence(
     return present, credentials.core_secret_for_origin(service, expected_origin) is not None
 
 
-def configuration_runtime_status(
+def configuration_runtime_status(  # noqa: C901
     configuration: Configuration,
     *,
     credentials: CredentialLookup | None = None,
@@ -261,8 +266,24 @@ def configuration_runtime_status(
     parser = configuration.parsing
     analysis = configuration.analysis
     bearer_required = parser.connection_mode is ParserConnectionMode.REMOTE
-    agents = configuration.agents
-    api_key_required = agents.authentication is AgentAuthentication.API_KEY
+    analysis_model = configuration.models.get(analysis.model)
+    browser_model = configuration.models.get(configuration.access.model)
+    analysis_provider = (
+        None if analysis_model is None else configuration.providers.get(analysis_model.provider)
+    )
+    browser_provider = (
+        None if browser_model is None else configuration.providers.get(browser_model.provider)
+    )
+    selected_providers = tuple(
+        provider
+        for index, provider in enumerate((analysis_provider, browser_provider))
+        if provider is not None
+        and provider.name
+        not in {
+            item.name for item in (analysis_provider, browser_provider)[:index] if item is not None
+        }
+    )
+    api_key_required = any(provider.requires_api_key for provider in selected_providers)
     bundle = (
         load_credentials(home=credentials_home)
         if credentials is None and (bearer_required or api_key_required)
@@ -297,26 +318,45 @@ def configuration_runtime_status(
         missing_fields=tuple(parsing_missing),
     )
 
+    provider_missing = () if selected_providers else ("model",)
+
+    def credential_state(provider: object | None) -> tuple[bool, bool, bool]:
+        from sciretriever.model.configuration import ModelProviderConfig
+
+        if not isinstance(provider, ModelProviderConfig):
+            return False, False, False
+        if not provider.requires_api_key:
+            return False, True, True
+        assert bundle is not None
+        configured = bundle.has_model_provider(provider.name)
+        try:
+            origin = _service_origin(provider.base_url)
+        except ConfigurationError:
+            return True, configured, False
+        return (
+            True,
+            configured,
+            bundle.model_secret_for_origin(provider.name, origin) is not None,
+        )
+
+    analysis_key_required, analysis_key_present, analysis_origin_matches = credential_state(
+        analysis_provider
+    )
+    browser_key_required, browser_key_present, browser_origin_matches = credential_state(
+        browser_provider
+    )
+    analysis_credential_ready = analysis_provider is not None and (
+        not analysis_key_required or (analysis_key_present and analysis_origin_matches)
+    )
+    browser_credential_ready = browser_provider is not None and (
+        not browser_key_required or (browser_key_present and browser_origin_matches)
+    )
     reference_fields = (
-        ("provider", agents.provider),
-        ("protocol", agents.protocol),
-        ("base_url", agents.base_url),
-        ("model", agents.analysis.model),
-        ("context_window_tokens", agents.analysis.context_window_tokens),
-        ("max_output_tokens", agents.analysis.max_output_tokens),
-        ("structured_output", True if agents.analysis.structured_output else None),
-        ("authentication", agents.authentication),
+        ("model", analysis.model),
         ("reference_max_output_tokens", analysis.reference_max_output_tokens),
     )
     content_fields = (
-        ("provider", agents.provider),
-        ("protocol", agents.protocol),
-        ("base_url", agents.base_url),
-        ("model", agents.analysis.model),
-        ("context_window_tokens", agents.analysis.context_window_tokens),
-        ("max_output_tokens", agents.analysis.max_output_tokens),
-        ("structured_output", True if agents.analysis.structured_output else None),
-        ("authentication", agents.authentication),
+        ("model", analysis.model),
         ("metadata_max_output_tokens", analysis.metadata_max_output_tokens),
         ("content_max_output_tokens", analysis.content_max_output_tokens),
         ("reference_max_output_tokens", analysis.reference_max_output_tokens),
@@ -328,30 +368,47 @@ def configuration_runtime_status(
     )
     reference_missing = tuple(name for name, value in reference_fields if value is None)
     content_missing = tuple(name for name, value in content_fields if value is None)
-    if api_key_required:
-        assert bundle is not None
-        api_key_present, analysis_origin_matches = _core_credential_presence(
-            bundle,
-            CoreCredentialService.AGENTS,
-            _CORE_CREDENTIAL_SPECS[CoreCredentialService.AGENTS].secret_field,
-            agents.base_url,
+    browser_fields = (
+        ("model", configuration.access.model),
+        ("image", True if browser_model is not None and browser_model.image else None),
+    )
+    browser_missing = tuple(name for name, value in browser_fields if value is None)
+    required_key_states = tuple(
+        (present, origin_matches)
+        for required, present, origin_matches in (
+            (analysis_key_required, analysis_key_present, analysis_origin_matches),
+            (browser_key_required, browser_key_present, browser_origin_matches),
         )
-    else:
-        api_key_present, analysis_origin_matches = False, False
-    analysis_status = AnalysisConfigurationStatus(
+        if required
+    )
+    api_key_present = all(item[0] for item in required_key_states)
+    all_origins_match = all(item[1] for item in required_key_states)
+    agents_status = AgentsConfigurationStatus(
+        provider_configuration_complete=not provider_missing,
+        provider_missing_fields=provider_missing,
         api_key_required=api_key_required,
         api_key_configured=api_key_present if api_key_required else None,
-        credential_origin_matches=analysis_origin_matches if api_key_required else None,
-        reference_configuration_complete=not reference_missing,
-        content_configuration_complete=not content_missing,
-        reference_missing_fields=reference_missing,
-        content_missing_fields=content_missing,
+        credential_origin_matches=all_origins_match if api_key_required else None,
+        analysis=AnalysisRoleConfigurationStatus(
+            provider_configuration_complete=analysis_provider is not None,
+            credential_ready=analysis_credential_ready,
+            reference_configuration_complete=not reference_missing,
+            content_configuration_complete=not content_missing,
+            reference_missing_fields=reference_missing,
+            content_missing_fields=content_missing,
+        ),
+        browser=BrowserRoleConfigurationStatus(
+            provider_configuration_complete=browser_provider is not None,
+            credential_ready=browser_credential_ready,
+            configuration_complete=not browser_missing,
+            missing_fields=browser_missing,
+        ),
     )
     return ConfigurationRuntimeStatus(
         storage_configuration_complete=not storage_missing,
         storage_missing_fields=storage_missing,
         parsing=parsing_status,
-        analysis=analysis_status,
+        agents=agents_status,
     )
 
 
@@ -424,8 +481,8 @@ def _validated_status_snapshot(
         _fail("configuration value is invalid")
     if checked.configuration_fingerprint != _configuration_fingerprint(configuration):
         _fail("configuration value is invalid")
-    metadata_enabled = frozenset(configuration.sources.metadata.providers)
-    acquisition_enabled = frozenset(configuration.sources.acquisition.providers)
+    metadata_enabled = frozenset(metadata_source_providers(configuration))
+    acquisition_enabled = frozenset(acquisition_source_providers(configuration))
     for status in checked.capabilities:
         enabled = (
             status.provider in metadata_enabled

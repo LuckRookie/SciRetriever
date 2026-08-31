@@ -27,7 +27,7 @@
     "rule_revision": 1,
     "rate_limit_group": "fixture-publisher",
     "session_group": "fixture-publisher",
-    "page_states": ["entitled", "login-required", "paywall", "challenge-required"],
+    "page_states": ["entitled", "login-required", "paywall", "challenge"],
     "capture_cases": [
       {
         "case_id": "primary",

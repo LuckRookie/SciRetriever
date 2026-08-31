@@ -1,369 +1,395 @@
 from __future__ import annotations
 
+import inspect
 import pickle
 import unittest
+from dataclasses import replace
 
-from sciretriever.acquisition.browser_state import (
-    BrowserGroupEffect,
-    BrowserRunState,
-    decision_for_browser_state,
-)
-from sciretriever.acquisition.sources.browser import (
-    BrowserChallengeState,
-    BrowserChallengeStateMachine,
-    _browser_state_for_challenge,
-    _settle_challenge,
-    build_browser_rule_destination_guard,
-)
-from sciretriever.acquisition.sources.browser_rules import (
+from sciretriever.model.primitives import sha256_digest
+from sciretriever.network import browser as browser_module
+from sciretriever.network import browser_control as control_module
+from sciretriever.network.browser_control import (
     BrowserActionKind,
-    BrowserChallengeResourceProfile,
-    BrowserPageMarker,
-    BrowserPageMarkerKind,
-    BrowserRuleAction,
-    BrowserSiteRule,
+    BrowserActionOutcome,
+    BrowserActionReceipt,
+    BrowserAgentStatus,
+    BrowserBounds,
+    BrowserCaptureState,
+    BrowserElement,
+    BrowserElementState,
+    BrowserObservation,
+    BrowserPageState,
+    BrowserScreenshot,
+    BrowserScrollState,
+    BrowserSurface,
+    BrowserSurfaceKind,
+    BrowserViewport,
+    ClickElement,
+    ClickPoint,
+    GoBack,
+    ScrollSurface,
+    Stop,
+    WaitForChange,
+    observation_hash,
+    semantic_page_fingerprint,
 )
-from sciretriever.model.access import BrowserCaptureKind
-from sciretriever.network.browser import (
-    BrowserChallengeObservation,
-    BrowserChallengeResourceFacts,
-    BrowserDestinationKind,
-    BrowserPageObservation,
-    BrowserRequestObservation,
-)
-from sciretriever.network.browser_control import BrowserAgentActionPort
 
 
-def _profile() -> BrowserChallengeResourceProfile:
-    return BrowserChallengeResourceProfile(
-        origin="https://challenges.cloudflare.com",
-        path_prefixes=("https://challenges.cloudflare.com/cdn-cgi/challenge-platform/",),
-        resource_types=("script", "document", "fetch", "image"),
-        interaction_selectors=("#challenge-form",),
-        settling_selectors=("#challenge-running",),
+def _surface(
+    surface_id: str,
+    page_id: str,
+    kind: BrowserSurfaceKind,
+    *,
+    parent: str | None,
+    origin: str = "https://publisher.test",
+    path: str = "/article",
+    bounds: BrowserBounds | None = None,
+) -> BrowserSurface:
+    viewport = BrowserViewport(1280, 720)
+    return BrowserSurface(
+        surface_id=surface_id,
+        page_id=page_id,
+        kind=kind,
+        parent_surface_id=parent,
+        origin=origin,
+        path=path,
+        title=f"{kind.value} fixture",
+        viewport=viewport,
+        bounds=bounds or BrowserBounds(0, 0, 1280, 720),
+        scroll=BrowserScrollState(0, 0, 0, 1440),
     )
 
 
-def _rule() -> BrowserSiteRule:
-    return BrowserSiteRule(
-        rule_id="challenge-fixture",
-        revision=1,
-        landing_origin="https://publisher.test",
-        allowed_origins=("https://publisher.test",),
-        web_scope_provider_name="challenge-fixture",
-        actions=(BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_ANY_CAPTURE),),
-        max_actions=1,
-        page_markers=(
-            BrowserPageMarker(
-                marker_id="challenge",
-                kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
-                css_selectors=("#challenge-running",),
-                text_markers=(("title", "just a moment"),),
+def _observation(
+    *,
+    page_state: BrowserPageState = BrowserPageState.NORMAL,
+    agent_status: BrowserAgentStatus = BrowserAgentStatus.RUNNING,
+    capture_state: BrowserCaptureState = BrowserCaptureState.NONE,
+    revision: int = 1,
+    screenshot_content: bytes = b"unified-browser-screenshot",
+    screenshot_id: str = "i00000001",
+) -> BrowserObservation:
+    surfaces = (
+        _surface("s00000001", "p00000001", BrowserSurfaceKind.PAGE, parent=None),
+        _surface(
+            "s00000002",
+            "p00000001",
+            BrowserSurfaceKind.FRAME,
+            parent="s00000001",
+            path="/article/frame",
+            bounds=BrowserBounds(20, 20, 800, 600),
+        ),
+        _surface(
+            "s00000003",
+            "p00000001",
+            BrowserSurfaceKind.SHADOW,
+            parent="s00000002",
+            path="/article/frame",
+            bounds=BrowserBounds(40, 40, 600, 400),
+        ),
+        _surface(
+            "s00000004",
+            "p00000001",
+            BrowserSurfaceKind.VIEWER,
+            parent="s00000003",
+            path="/article/viewer",
+            bounds=BrowserBounds(60, 60, 500, 300),
+        ),
+        _surface(
+            "s00000005",
+            "p00000002",
+            BrowserSurfaceKind.POPUP,
+            parent=None,
+            path="/article/popup",
+        ),
+        _surface(
+            "s00000006",
+            "p00000002",
+            BrowserSurfaceKind.VIEWER,
+            parent="s00000005",
+            path="/article/popup/viewer",
+            bounds=BrowserBounds(100, 100, 700, 500),
+        ),
+    )
+    viewport = BrowserViewport(1280, 720)
+    return BrowserObservation(
+        article_token="article-fixture",
+        revision=revision,
+        page_id="p00000002",
+        surfaces=surfaces,
+        elements=(
+            BrowserElement(
+                element_id="e00000001",
+                surface_id="s00000003",
+                role="button",
+                name="Continue",
+                state=BrowserElementState.ENABLED,
+                bounds=BrowserBounds(100, 100, 120, 40),
             ),
-            BrowserPageMarker(
-                marker_id="entitled",
-                kind=BrowserPageMarkerKind.ENTITLED,
-                css_selectors=("#entitled",),
+            BrowserElement(
+                element_id="e00000002",
+                surface_id="s00000006",
+                role="button",
+                name="Disabled download",
+                state=BrowserElementState.DISABLED,
+                bounds=BrowserBounds(200, 200, 160, 40),
             ),
         ),
-        capture_url_prefixes=("https://publisher.test/article.pdf",),
-        challenge_resource_profile=_profile(),
+        screenshot=BrowserScreenshot(
+            screenshot_id=screenshot_id,
+            article_token="article-fixture",
+            page_id="p00000002",
+            surface_id="s00000005",
+            revision=revision,
+            viewport=viewport,
+            media_type="image/png",
+            sha256=sha256_digest(screenshot_content),
+            content=screenshot_content,
+        ),
+        page_state=page_state,
+        agent_status=agent_status,
+        capture_state=capture_state,
     )
 
 
-class _ChallengeSession:
-    def __init__(self, snapshots: tuple[BrowserChallengeObservation, ...]) -> None:
-        self._snapshots = list(snapshots)
-        self._current = "challenge"
-        self.wait_calls: list[float] = []
-
-    def click(self, selector: str) -> bool:
-        del selector
-        return False
-
-    def open_viewer(self, locator: str) -> None:
-        del locator
-
-    def open_verified_locator(self, locator: str) -> None:
-        del locator
-
-    def discover_pdf_locators(self) -> tuple[str, ...]:
-        return ()
-
-    def capture_available(self, kind: BrowserCaptureKind) -> bool:
-        del kind
-        return False
-
-    def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
-        del kind
-
-    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
-        del kinds
-
-    def agent_action_port(self) -> BrowserAgentActionPort:
-        raise AssertionError("challenge lifecycle fixture does not expose Agent actions")
-
-    def has_selector(self, selector: str) -> bool:
-        return selector == "#challenge-form" and self._current == "interaction"
-
-    def text(self, selector: str) -> str:
-        if selector == "title":
-            return "Just a Moment" if self._current == "challenge" else "Article"
-        return ""
-
-    def observe(self) -> BrowserPageObservation:
-        return BrowserPageObservation(
-            locator="https://publisher.test/article",
-            status_code=200,
-        )
-
-    def challenge_observation(self) -> BrowserChallengeObservation:
-        return self._snapshots[0]
-
-    def wait_for_challenge_settle(self, timeout_seconds: float) -> BrowserChallengeObservation:
-        self.wait_calls.append(timeout_seconds)
-        if len(self._snapshots) > 1:
-            self._snapshots.pop(0)
-        return self._snapshots[0]
-
-
-class _DelayedNavigationSession(_ChallengeSession):
-    """Network-quiet snapshots before a later JavaScript top-frame navigation."""
-
-    def wait_for_challenge_settle(self, timeout_seconds: float) -> BrowserChallengeObservation:
-        value = super().wait_for_challenge_settle(timeout_seconds)
-        if len(self.wait_calls) == 2:
-            self._current = "article"
-        return value
-
-
-class _InterruptedSettleSession(_ChallengeSession):
-    def wait_for_challenge_settle(self, timeout_seconds: float) -> BrowserChallengeObservation:
-        self.wait_calls.append(timeout_seconds)
-        raise RuntimeError("fixture Network cancellation")
-
-
-class BrowserChallengeLifecycleTests(unittest.TestCase):
-    def test_state_machine_has_bounded_transient_and_terminal_paths(self) -> None:
-        machine = BrowserChallengeStateMachine()
-        self.assertEqual(machine.state, BrowserChallengeState.RESOURCE_LOADING)
-        machine.transition(BrowserChallengeState.SETTLING)
-        cleared = machine.transition(BrowserChallengeState.CLEARED)
+class BrowserObservationContractTests(unittest.TestCase):
+    def test_page_state_vocabulary_has_only_the_eight_unified_values(self) -> None:
         self.assertEqual(
-            cleared.history,
+            tuple(value.value for value in BrowserPageState),
             (
-                BrowserChallengeState.RESOURCE_LOADING,
-                BrowserChallengeState.SETTLING,
-                BrowserChallengeState.CLEARED,
+                "normal",
+                "challenge",
+                "login-required",
+                "mfa-required",
+                "not-entitled",
+                "access-denied",
+                "not-found",
+                "failed",
             ),
         )
-        with self.assertRaises(RuntimeError):
-            machine.transition(BrowserChallengeState.INTERACTION_REQUIRED)
+        self.assertNotIn("interaction", " ".join(value.value for value in BrowserPageState))
+        self.assertNotIn("settle", " ".join(value.value for value in BrowserPageState))
+
+    def test_page_agent_and_capture_dimensions_are_orthogonal(self) -> None:
+        observations = tuple(
+            _observation(
+                page_state=page_state,
+                agent_status=agent_status,
+                capture_state=capture_state,
+            )
+            for page_state in BrowserPageState
+            for agent_status in BrowserAgentStatus
+            for capture_state in BrowserCaptureState
+        )
+        self.assertEqual(len(observations), 8 * 3 * 3)
+        self.assertEqual(
+            {(value.page_state, value.agent_status, value.capture_state) for value in observations},
+            {
+                (page_state, agent_status, capture_state)
+                for page_state in BrowserPageState
+                for agent_status in BrowserAgentStatus
+                for capture_state in BrowserCaptureState
+            },
+        )
+
+    def test_challenge_is_an_ordinary_observation_not_a_special_target(self) -> None:
+        observation = _observation(
+            page_state=BrowserPageState.CHALLENGE,
+            capture_state=BrowserCaptureState.CANDIDATE,
+        )
+        self.assertIs(observation.page_state, BrowserPageState.CHALLENGE)
+        self.assertIs(observation.agent_status, BrowserAgentStatus.RUNNING)
+        self.assertIs(observation.capture_state, BrowserCaptureState.CANDIDATE)
+        self.assertEqual(len(observation.surfaces), 6)
+        self.assertEqual(len(observation.elements), 2)
+        self.assertFalse(hasattr(observation, "resources"))
+        self.assertFalse(hasattr(observation, "settled"))
+
+    def test_surface_tree_covers_page_popup_frame_shadow_and_viewer(self) -> None:
+        observation = _observation()
+        self.assertEqual(
+            {surface.kind for surface in observation.surfaces},
+            {
+                BrowserSurfaceKind.PAGE,
+                BrowserSurfaceKind.POPUP,
+                BrowserSurfaceKind.FRAME,
+                BrowserSurfaceKind.SHADOW,
+                BrowserSurfaceKind.VIEWER,
+            },
+        )
+        by_id = {surface.surface_id: surface for surface in observation.surfaces}
+        for surface in observation.surfaces:
+            if surface.parent_surface_id is not None:
+                self.assertEqual(
+                    by_id[surface.parent_surface_id].page_id,
+                    surface.page_id,
+                )
+        self.assertEqual(observation.primary_surface.kind, BrowserSurfaceKind.POPUP)
+        self.assertEqual(observation.origin, "https://publisher.test")
+        self.assertEqual(observation.path, "/article/popup")
+
+    def test_surface_tree_rejects_cross_page_parent_and_cycles(self) -> None:
+        observation = _observation()
+        cross_page = replace(
+            observation.surfaces[1],
+            parent_surface_id="s00000005",
+        )
+        with self.assertRaisesRegex(ValueError, "same page"):
+            replace(
+                observation,
+                surfaces=(observation.surfaces[0], cross_page, *observation.surfaces[2:]),
+            )
+        frame = replace(observation.surfaces[1], parent_surface_id="s00000003")
+        shadow = replace(observation.surfaces[2], parent_surface_id="s00000002")
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            replace(
+                observation,
+                surfaces=(
+                    observation.surfaces[0],
+                    frame,
+                    shadow,
+                    *observation.surfaces[3:],
+                ),
+            )
+
+    def test_elements_are_surface_scoped_and_only_enabled_values_are_actionable(self) -> None:
+        observation = _observation()
+        self.assertEqual(
+            tuple(element.element_id for element in observation.actionable_elements),
+            ("e00000001",),
+        )
+        self.assertTrue(observation.elements[0].visible)
+        self.assertFalse(observation.elements[1].enabled)
+        with self.assertRaisesRegex(ValueError, "element surface"):
+            replace(
+                observation,
+                elements=(replace(observation.elements[0], surface_id="sffffffff"),),
+            )
+
+    def test_screenshot_is_bound_to_article_page_surface_viewport_revision_and_hash(self) -> None:
+        observation = _observation()
+        screenshot = observation.screenshot
+        self.assertEqual(screenshot.article_token, observation.article_token)
+        self.assertEqual(screenshot.page_id, observation.page_id)
+        self.assertEqual(screenshot.revision, observation.revision)
+        self.assertEqual(screenshot.viewport, observation.viewport)
+        self.assertEqual(screenshot.sha256, sha256_digest(screenshot.content))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            replace(observation, screenshot=replace(screenshot, page_id="p00000001"))
+        with self.assertRaisesRegex(ValueError, "hash"):
+            replace(screenshot, sha256=sha256_digest(b"different"))
+
+    def test_semantic_fingerprint_is_stable_and_pixel_hash_is_exact(self) -> None:
+        first = _observation()
+        same = _observation()
+        changed_pixels = _observation(
+            screenshot_content=b"different-screenshot",
+            screenshot_id="i00000002",
+        )
+        self.assertEqual(semantic_page_fingerprint(first), semantic_page_fingerprint(same))
+        self.assertEqual(
+            semantic_page_fingerprint(first),
+            semantic_page_fingerprint(changed_pixels),
+        )
+        self.assertNotEqual(observation_hash(first), observation_hash(changed_pixels))
+
+    def test_receipt_expresses_every_closed_outcome_without_payload(self) -> None:
+        for outcome in BrowserActionOutcome:
+            with self.subTest(outcome=outcome.value):
+                receipt = BrowserActionReceipt(
+                    action_kind=BrowserActionKind.CLICK_POINT,
+                    outcome=outcome,
+                    article_token="article-fixture",
+                    page_id="p00000002",
+                    surface_id="s00000006",
+                    before_revision=1,
+                    after_revision=2 if outcome is BrowserActionOutcome.NAVIGATION else None,
+                    elapsed_milliseconds=5,
+                    failure_code=(
+                        "browser-action-failed" if outcome is BrowserActionOutcome.FAILURE else None
+                    ),
+                )
+                self.assertIs(receipt.outcome, outcome)
+        with self.assertRaisesRegex(ValueError, "failure receipt"):
+            BrowserActionReceipt(
+                BrowserActionKind.CLICK_POINT,
+                BrowserActionOutcome.FAILURE,
+                "article-fixture",
+                "p00000002",
+                "s00000006",
+                1,
+                None,
+                5,
+            )
+
+    def test_observation_and_screenshot_do_not_serialize_or_leak_content_in_repr(self) -> None:
+        observation = _observation()
         with self.assertRaises(TypeError):
-            pickle.dumps(machine)
+            pickle.dumps(observation)
+        representation = repr(observation)
+        self.assertNotIn("Continue", representation)
+        self.assertNotIn("unified-browser-screenshot", representation)
+        self.assertNotIn("/article/popup", representation)
 
-        blocked = BrowserChallengeStateMachine()
-        blocked.transition(BrowserChallengeState.RESOURCE_BLOCKED)
-        with self.assertRaises(RuntimeError):
-            blocked.transition(BrowserChallengeState.SETTLING)
 
-    def test_automatic_clear_returns_to_provider_page_classification(self) -> None:
-        page = BrowserPageObservation(locator="https://publisher.test/article", status_code=200)
-        initial = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=2, pending_count=1),
-            settled=False,
-        )
-        final = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=3),
-            settled=True,
-        )
-        session = _ChallengeSession((initial, final))
-        session._current = "article"
-        state, classification = _settle_challenge(session, _rule())
-        self.assertEqual(state, BrowserChallengeState.CLEARED)
-        self.assertIsNotNone(classification)
-        assert classification is not None
-        self.assertTrue(classification.entitled is False)
-        self.assertEqual(len(session.wait_calls), 1)
-        self.assertLessEqual(session.wait_calls[0], 5.0)
-
-    def test_interaction_and_timeout_are_distinct_terminal_states(self) -> None:
-        page = BrowserPageObservation(locator="https://publisher.test/article", status_code=200)
-        observation = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=1),
-            settled=True,
-        )
-        interaction = _ChallengeSession((observation,))
-        interaction._current = "interaction"
-        state, _classification = _settle_challenge(interaction, _rule())
-        self.assertEqual(state, BrowserChallengeState.INTERACTION_REQUIRED)
-        self.assertEqual(interaction.wait_calls, [])
-
-        timeout = _ChallengeSession((observation, observation))
-        state, _classification = _settle_challenge(timeout, _rule())
-        self.assertEqual(state, BrowserChallengeState.SETTLE_TIMEOUT)
-        self.assertGreaterEqual(len(timeout.wait_calls), 2)
-        self.assertLessEqual(timeout.wait_calls[0], 5.0)
-
-    def test_settle_keeps_observing_after_network_quiet_before_js_navigation(self) -> None:
-        page = BrowserPageObservation(locator="https://publisher.test/article", status_code=200)
-        quiet = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=2, pending_count=0),
-            settled=True,
-        )
-        session = _DelayedNavigationSession((quiet, quiet))
-        state, classification = _settle_challenge(session, _rule())
-        self.assertEqual(state, BrowserChallengeState.CLEARED)
-        self.assertIsNotNone(classification)
-        self.assertGreaterEqual(len(session.wait_calls), 2)
-
-    def test_runtime_interruption_escapes_the_page_challenge_lifecycle(self) -> None:
-        page = BrowserPageObservation(locator="https://publisher.test/article", status_code=200)
-        observation = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=1, pending_count=1),
-            settled=False,
-        )
-        session = _InterruptedSettleSession((observation,))
-
-        with self.assertRaisesRegex(RuntimeError, "Network cancellation"):
-            _settle_challenge(session, _rule())
-
-        self.assertEqual(len(session.wait_calls), 1)
-
-    def test_only_manual_interaction_opens_challenge_circuit(self) -> None:
-        self.assertEqual(
-            _browser_state_for_challenge(BrowserChallengeState.INTERACTION_REQUIRED),
-            BrowserRunState.CHALLENGE_REQUIRED,
+class BrowserClosedActionContractTests(unittest.TestCase):
+    def test_six_actions_bind_only_current_article_page_surface_or_screenshot(self) -> None:
+        observation = _observation()
+        actions = (
+            ClickElement(
+                observation.article_token,
+                "p00000001",
+                "s00000003",
+                observation.revision,
+                "e00000001",
+            ),
+            ClickPoint(
+                observation.article_token,
+                observation.page_id,
+                "s00000006",
+                observation.revision,
+                observation.screenshot.screenshot_id,
+                240,
+                220,
+            ),
+            ScrollSurface(
+                observation.article_token,
+                observation.page_id,
+                "s00000006",
+                observation.revision,
+                400,
+            ),
+            GoBack(observation.article_token, observation.page_id, observation.revision),
+            WaitForChange(observation.article_token, observation.page_id, observation.revision),
+            Stop(observation.article_token, observation.page_id, observation.revision, "done"),
         )
         self.assertEqual(
-            _browser_state_for_challenge(BrowserChallengeState.RESOURCE_BLOCKED),
-            BrowserRunState.ACCESS_DENIED,
+            tuple(action.kind for action in actions),
+            tuple(BrowserActionKind),
         )
-        self.assertEqual(
-            _browser_state_for_challenge(BrowserChallengeState.SETTLE_TIMEOUT),
-            BrowserRunState.ACCESS_DENIED,
-        )
-        self.assertEqual(
-            _browser_state_for_challenge(BrowserChallengeState.FAILED),
-            BrowserRunState.RUNTIME_FAILED,
-        )
-        self.assertIs(
-            decision_for_browser_state(BrowserRunState.ACCESS_DENIED).group_effect,
-            BrowserGroupEffect.NONE,
-        )
+        for action in actions:
+            parameters = inspect.signature(type(action)).parameters
+            self.assertNotIn("url", parameters)
+            self.assertNotIn("selector", parameters)
+            self.assertNotIn("javascript", parameters)
 
-    def test_challenge_logs_are_actionable_without_page_content(self) -> None:
-        page = BrowserPageObservation(locator="https://publisher.test/article", status_code=200)
-        initial = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=2, pending_count=1),
-            settled=False,
-        )
-        final = BrowserChallengeObservation(
-            page=page,
-            resources=BrowserChallengeResourceFacts(admitted_count=3),
-            settled=True,
-        )
-        session = _ChallengeSession((initial, final))
-        session._current = "article"
-
-        with self.assertLogs(
-            "sciretriever.acquisition.sources.browser",
-            level="INFO",
-        ) as captured:
-            state, _classification = _settle_challenge(session, _rule())
-
-        self.assertEqual(state, BrowserChallengeState.CLEARED)
-        output = "\n".join(captured.output)
-        self.assertIn("event=browser-challenge-started", output)
-        self.assertIn("event=browser-challenge-finished", output)
-        self.assertIn("evidence_kind=page-state-transition", output)
-        self.assertIn("outcome=cleared", output)
-        self.assertIn("resource_admitted=3", output)
-        self.assertIn("reason=Automatic verification completed", output)
-        self.assertIn("action=Continue with the reviewed PDF acquisition steps.", output)
-        self.assertNotIn("Just a Moment", output)
-        self.assertNotIn("#challenge-form", output)
-        self.assertNotIn("challenge.js", output)
-
-    def test_guard_counts_only_bounded_challenge_facts(self) -> None:
-        guard = build_browser_rule_destination_guard(_rule(), "https://publisher.test/article")
-        valid = BrowserRequestObservation(
-            locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/challenge.js",
-            kind=BrowserDestinationKind.REQUEST,
-            resource_type="script",
-            is_navigation=False,
-            is_top_frame=True,
-            frame_depth=0,
-            top_frame_locator="https://publisher.test/article",
-        )
-        guard.check_request(valid)
-        self.assertEqual(guard.challenge_resource_facts().admitted_count, 1)
-        frame_response = BrowserRequestObservation(
-            locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/frame",
-            kind=BrowserDestinationKind.RESPONSE,
-            resource_type="document",
-            is_navigation=True,
-            is_top_frame=False,
-            frame_depth=1,
-            frame_ancestry=("https://publisher.test/article",),
-            top_frame_locator="https://publisher.test/article",
-            capture_kind=BrowserCaptureKind.RESPONSE,
-        )
-        # Network reports a tentative RESPONSE kind for every successful
-        # response; the challenge iframe/document must therefore load even
-        # though a challenge PDF/body is never capture-eligible.
-        guard.check_request(frame_response)
-        self.assertEqual(guard.challenge_resource_facts().admitted_count, 2)
-        image_response = BrowserRequestObservation(
-            locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/challenge.gif",
-            kind=BrowserDestinationKind.RESPONSE,
-            resource_type="image",
-            is_navigation=False,
-            is_top_frame=False,
-            frame_depth=1,
-            frame_ancestry=("https://publisher.test/article",),
-            top_frame_locator="https://publisher.test/article",
-            capture_kind=BrowserCaptureKind.RESPONSE,
-        )
-        # RESPONSE is Network's tentative classification for a successful
-        # subresource response, not permission to expose the image as a
-        # capture.  The bounded iframe image must still reach the page.
-        guard.check_request(image_response)
-        self.assertEqual(guard.challenge_resource_facts().admitted_count, 3)
-        body_capture = BrowserRequestObservation(
-            locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/challenge.pdf",
-            kind=BrowserDestinationKind.RESPONSE,
-            resource_type="fetch",
-            is_navigation=False,
-            is_top_frame=False,
-            frame_depth=1,
-            frame_ancestry=("https://publisher.test/article",),
-            top_frame_locator="https://publisher.test/article",
-            capture_kind=BrowserCaptureKind.RESPONSE,
-        )
-        with self.assertRaises(ValueError):
-            guard.check_request(body_capture)
-        self.assertEqual(guard.challenge_resource_facts().blocked_count, 1)
-        invalid = BrowserRequestObservation(
-            locator="https://challenges.cloudflare.com/other.js",
-            kind=BrowserDestinationKind.REQUEST,
-            resource_type="script",
-            is_navigation=False,
-            is_top_frame=True,
-            frame_depth=0,
-            top_frame_locator="https://publisher.test/article",
-        )
-        with self.assertRaises(ValueError):
-            guard.check_request(invalid)
-        facts = guard.challenge_resource_facts()
-        self.assertEqual(facts.admitted_count, 3)
-        self.assertEqual(facts.blocked_count, 2)
+    def test_public_network_surface_has_no_vendor_or_challenge_lifecycle_types(self) -> None:
+        revoked = {
+            "BrowserAgentActionCommand",
+            "BrowserAgentActionPort",
+            "BrowserAgentObservation",
+            "BrowserObservationBudget",
+            "BrowserChallengeObservation",
+            "BrowserChallengeResourceFacts",
+            "BrowserChallengeState",
+            "BrowserChallengeStateMachine",
+        }
+        for module in (control_module, browser_module):
+            with self.subTest(module=module.__name__):
+                self.assertTrue(revoked.isdisjoint(vars(module)))
+        public_names = set(control_module.__all__)
+        self.assertTrue({"BrowserObservation", "BrowserControlSession"} <= public_names)
+        self.assertTrue(revoked.isdisjoint(public_names))
 
 
 if __name__ == "__main__":

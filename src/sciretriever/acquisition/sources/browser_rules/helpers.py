@@ -103,7 +103,7 @@ def publisher_page_markers(
         ),
         BrowserPageMarker(
             marker_id=f"{provider}-challenge",
-            kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            kind=BrowserPageMarkerKind.CHALLENGE,
             css_selectors=(
                 "#challenge-running",
                 "#challenge-form",

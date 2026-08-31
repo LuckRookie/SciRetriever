@@ -10,7 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, BinaryIO, Protocol, cast
 
 from sciretriever.acquisition.sources.configured_sci_hub import ConfiguredLocatorResolver
-from sciretriever.agents import AgentBudget, AgentPort
+from sciretriever.agents.api import AgentRuntime
 from sciretriever.bootstrap.browser import _AcquisitionExecutionRuntime
 from sciretriever.model.configuration import Configuration
 from sciretriever.model.discovery import (
@@ -73,9 +73,7 @@ class BootstrapExternalDependencies:
     """Explicit external capabilities for Python integration and offline tests."""
 
     parser_factory: Callable[[HttpClient, AccessCoordinator], ParserPort] = field(repr=False)
-    agents_factory: Callable[[HttpClient, AccessCoordinator], AgentPort] = field(repr=False)
-    agents_analysis_model: str
-    agents_analysis_budget: AgentBudget
+    agents_factory: Callable[[HttpClient, AccessCoordinator], AgentRuntime] = field(repr=False)
     metadata_max_output_tokens: int
     content_max_output_tokens: int
     reference_max_output_tokens: int
@@ -88,27 +86,10 @@ class BootstrapExternalDependencies:
         default=None,
         repr=False,
     )
-    agents_browser_model: str | None = None
-    agents_browser_budget: AgentBudget | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not callable(self.parser_factory) or not callable(self.agents_factory):
             raise TypeError("external dependency factories must be callable")
-        if type(self.agents_analysis_model) is not str or not self.agents_analysis_model.strip():
-            raise ValueError("agents_analysis_model must be nonblank")
-        if not isinstance(self.agents_analysis_budget, AgentBudget):
-            raise TypeError("agents_analysis_budget must be an AgentBudget")
-        if self.agents_browser_model is not None and (
-            type(self.agents_browser_model) is not str or not self.agents_browser_model.strip()
-        ):
-            raise ValueError("agents_browser_model must be nonblank or None")
-        if self.agents_browser_budget is not None and not isinstance(
-            self.agents_browser_budget,
-            AgentBudget,
-        ):
-            raise TypeError("agents_browser_budget must be an AgentBudget or None")
-        if (self.agents_browser_model is None) != (self.agents_browser_budget is None):
-            raise ValueError("Browser Agent model and budget must be configured together")
         for name in (
             "metadata_max_output_tokens",
             "content_max_output_tokens",

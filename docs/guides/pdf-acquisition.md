@@ -20,13 +20,54 @@ Public
 | 层 | 当前生产能力 | 配置或适用条件 | 主要边界 |
 | --- | --- | --- | --- |
 | Public | 已保存的 direct/landing `AssetHint` | 当前 Literature 已有来源明确的 locator | URL、redirect、媒体类型和实际 PDF 字节仍重新检查 |
-| Public | arXiv、Europe PMC、Unpaywall | 在 `[sources.acquisition].providers` 启用；Unpaywall 另需联系邮箱 | 正常未命中才继续下一条路线 |
+| Public | arXiv、Europe PMC | Acquisition Auto 默认启用；Custom 时必须列入精确 providers | 正常未命中才继续下一条路线 |
+| Public | Unpaywall | 切到 Custom、列入 providers，并配置联系邮箱 | 正常未命中才继续下一条路线 |
 | Public | Metadata Provider 提供的公开 locator | Metadata adapter 先形成 `AssetHint` | locator 不等于 PDF，仍由通用 Public route 获取和验证 |
-| Public | Configured Sci-Hub operator locator | 只有 Python 调用方显式注入中性 resolver 时才 ready | stock CLI 不提供 endpoint、resolver 或凭据配置 |
+| Public | Configured Sci-Hub locator | 默认关闭；启用后使用当前版本 builtin，或配置一到八个 HTTPS custom override；Literature 需有 DOI；Python 可显式注入 resolver | 不自动发现镜像，无 Key/Cookie/代理；按序而非并发尝试，继续走共享 Network 与 PDF 验收 |
 | Authorized API | CORE API v3 | 启用 `core`、配置 `api_key`，并有 CORE `work:`/`output:` 强身份 | 有 key 不等于当前记录或文章可下载 |
 | Authorized API | Elsevier Article/Object Retrieval | 启用 `elsevier`、配置 `api_key`；可选 `institution_token`；需 PII、Article EID 或已确认 landing | MAIN PDF object 优先；XML、supplement 和任意 object 不冒充主 PDF |
 | Authorized API | Wiley TDM API v1 | 启用 `wiley`、配置 `tdm_api_token`，且 DOI 安全落地到 Wiley Online Library | token 被配置、API 接受 token 和当前文章有权限是不同事实 |
 | Authorized API | Springer | 无主 PDF API route | 当前 Full Text 产品提供 JATS/XML，不把它冒充 PDF |
+
+### Configured Sci-Hub
+
+通过 `sciretriever config` 的 `Download → Sources → sci-hub` 管理镜像，或直接编辑普通配置：
+
+```toml
+[sources.acquisition]
+mode = "custom"
+providers = ["sci-hub"]
+
+[sources.acquisition.sci-hub]
+urls = [
+  "https://mirror-one.example",
+  "https://mirror-two.example/base",
+]
+```
+
+只需把 `sci-hub` 加入 providers 就会使用当前版本 builtin mirror set；上面的 custom table 是可选
+完整覆盖，不是启用前置条件。Reset 删除 custom table 并重新跟随 builtin，Disable 保留 custom。
+operator 必须先确认自己的法律、机构政策、内容许可和服务条款。有效 `urls` 的顺序就是尝试顺序；
+一个镜像正常未命中或没有安全候选后才尝试下一个，不做并发竞速。每个 hostname 使用独立的共享
+Network web scope 与保守限速，所有 URL、DNS、redirect、响应大小和 timeout 规则仍然有效。
+
+内置 resolver 只消费当前 Literature 已接纳的规范 DOI，不执行 HTTP；它把 DOI 逐 segment 安全编码
+后附到每个镜像 Base URL。Landing 可以直接返回 PDF，也可以通过共享 Public locator parser 的
+`citation_pdf_url`，或带 `type="application/pdf"` 的 `a/link/embed/object` 明确声明 PDF locator。
+系统不执行镜像脚本、不猜 selector、不处理 CAPTCHA/登录，不绕过访问控制、付费授权或地区限制。
+Landing HTML 会先作为普通候选经过实际 PDF 检查，不能因为 HTTP 200 或媒体类型声明而被接纳；
+只有最终 PDF 字节通过统一 reader/页面树检查后才可能发布。
+
+普通配置不接受 Sci-Hub API Key、Cookie、session、代理或 selector。Python 集成可显式注入
+`ConfiguredLocatorResolver`，优先级为 injected → custom → builtin，用于已获准的私有环境或离线
+测试。无论使用哪种 resolver，catalog/provenance 都不保存镜像 URL、query、landing HTML 或页面
+细节。项目测试只使用
+保留域名、fake transport 和 fixture，不访问真实 Sci-Hub 或下载真实文献。
+
+`mode = "auto"` 时命名 Source 只有 arXiv 与 Europe PMC，不能加入 `sci-hub` 或其它固定
+providers；切到 Custom 后数组就是精确集合与顺序，可以为空。所有模式仍会先消费 Literature 已有
+且通过安全检查的 direct/landing `AssetHint`。Key 是否存在不会自动加入 CORE、Elsevier、Wiley
+或 Sci-Hub，Browser 也继续由 Download 独立显式启用。
 
 ### Controlled Browser
 
@@ -76,36 +117,42 @@ AssetHint origin、稳定文章 ID 或 Provider record identity 确认访问平�
 4. 允许规则内同源页面资源，以及由当前 Publisher 页面/frame ancestry 证明用途的受限 challenge
    iframe、script、fetch/xhr；challenge origin 不能成为顶层任意导航、popup、PDF locator 或
    capture source。未批准的第三方 tracker 在 DNS 前丢弃，但不会仅因此让整篇文章失败；
-5. 先检查已有 capture 和页面状态。出现高特异性 challenge 时，在文章总预算内有界等待批准资源
-   和页面脚本自然完成；自动跳回文章页才继续，明确互动控件、本地资源阻断和 settle timeout 分别
-   形成不同终态，普通 HTTP 403 不冒充 challenge；
-6. 页面仍可继续时，从 citation metadata、正文/PDF 链接及
-   iframe/embed/object 做通用 PDF 发现；最多接收 16 个 locator，只尝试前 4 个已经过 origin、
-   guard、DNS prebinding 与去重的候选；
-7. 仍未捕获时执行版本化 Publisher 静态规则中有限的点击、viewer 或等待动作；点击和 capture wait 各自最多
-   局部等待 10 秒，按钮不可操作或局部未捕获是正常未命中，整篇 60 秒截止到期才是 timeout；
-   Chromium 原生 redirect 与页面脚本导航仍受同一批准边界；
-8. 只有初始发现和静态规则都正常未命中、页面仍为非终态、Browser role 同时具备 image/tool
-   capability 时，才调用可选 Browser Agent。Agent 每 turn 只看到有界 screenshot、去 query 的
-   origin/path、可见元素短期 ID、capture 状态和剩余预算，并且只能返回 click、scroll、wait 或
-   stop；它不能取得 Page/Context、Cookie、Profile、CDP、任意 URL/selector/JavaScript、键盘文本、
-   文件系统或第二个 Browser。动作仍由同一 humanized session 和所有 Network/Publisher guard
-   执行；challenge/login/MFA 等终态不会调用 Agent；
-9. 从 native download event、PDF response、批准的 popup/viewer、跨 origin CDN 或 HTTP attachment
+5. 先检查已有 capture，并把当前 page、popup、frame、Shadow/viewer surface、截图、可见控件、
+   capture 和上一动作 receipt 组成同一种 `BrowserObservation`。高特异性 Challenge 只把
+   `page_state` 标成 `CHALLENGE`，不是专属流程或默认终态；页面脚本可以自然清除，当前选中的
+   controller 也可以按普通页面合同继续。普通 HTTP 403 仍只是 `ACCESS_DENIED`，不能冒充
+   Challenge；
+6. 一项下载作业开始前已经冻结唯一 controller，运行中不因 miss、timeout、Challenge 或失败切换：
+   - `rules` 先检查已有 capture，从 citation metadata、正文/PDF 链接和 iframe/embed/object 做
+     通用 PDF 发现，再执行当前 Publisher 已审查的有限确定性动作；它不构造模型调用；
+   - `agent` 从第一份统一 Observation 起调用由 Download 所选 Model 与对应 Model Provider 解析出的 Browser role；它不先执行通用 locator 或 Publisher
+     确定性点击规则。每次模型调用只返回 `ClickElement`、`ClickPoint`、`ScrollSurface`、`GoBack`、
+     `WaitForChange` 或 `Stop` 之一；
+   - 两种 controller 都复用同一 Publisher rule/profile、文章 permit、Network guard、capture 和
+     PDF 验收。Agent 不能取得 Page/Context、Cookie、Profile、CDP、任意 URL/selector/JavaScript、
+     键盘文本、文件系统或第二个 Browser；
+7. Network 逐项执行动作并返回新 revision。每次 navigation/action/capture wait、单项响应和
+   cleanup 都有独立客观 timeout 或字节上限，但不累计整篇 step、总时长、request、popup、download、
+   capture、总字节、token/image 或重复动作预算。Agent 只有在同一语义页面中的同一动作已被证明
+   再次返回同一语义页面时才以“无进展”自然停止；页面确有变化时可以继续；
+8. 从 native download event、PDF response、批准的 popup/viewer、跨 origin CDN 或 HTTP attachment
    捕获候选，并在读取正文前排除 supplement、错文和不属于当前文章的文件；
    短期签名 query 只在当前 Browser operation 内交给 Chrome，不进入日志、结果或 provenance；
-10. 对候选执行统一的实际 PDF 字节、reader、页面树和至少一页检查，再以不可变方式提交唯一
+9. 对候选执行统一的实际 PDF 字节、reader、页面树和至少一页检查，再以不可变方式提交唯一
    `primary-pdf`；
-11. 无论成功、未命中、失败、取消或超时，都清理 Agent session、page、download、response、
-    文章临时目录和相应 permit。
+10. 无论成功、未命中、失败、取消或超时，都清理 page、download、response、文章临时目录和
+    相应 permit。Agents 没有需要关闭或恢复的 Session；下一次模型决定从新的当前 Observation
+    构造一个独立调用。
 
 所有 `browser_session_key`/Publisher lane 共享一个 patched Chromium process 和 persistent context；
 `browser_session_key` 只标识调度 lane，不再标识独立浏览器身份。Broker 关闭或进程退出后会
 关闭 process/context、Xvfb、CONNECT proxy 并删除文章临时下载目录，但保留 Profile 中由 Chrome
 管理的 Cookie、Local Storage、IndexedDB、SSO 状态、偏好和历史。每篇文章的 token、page、
-handler、连接绑定和预算仍严格隔离。运行时的“有头”只表示使用完整浏览器窗口栈；无 GUI Linux
+handler、连接绑定和临时资源仍严格隔离。运行时的“有头”只表示使用完整浏览器窗口栈；无 GUI Linux
 中的 Xvfb 不构成用户可见或可交互的登录能力。第一版不开放人工 Browser 认证流程。SciRetriever
-不填写登录凭据、不选择机构、不读取登录结果，也不点击、处理或绕过 MFA/CAPTCHA。
+不填写登录凭据、不选择机构、不读取登录结果，也不处理 MFA。Challenge 页面上的可见控件可以由
+当前 Rules 或 Agent controller 在同一封闭动作合同内操作，但产品不引入外部 solver、验证 token
+注入、任意脚本或身份/出口切换。
 
 ## 3. 启用、状态与显式探测
 
@@ -113,17 +160,20 @@ handler、连接绑定和预算仍严格隔离。运行时的“有头”只表�
 
 ```bash
 sciretriever config
-# CloakBrowser runtime: explicitly install the pinned verified binary
-# Provider API and Browser Access
-# 1. Select or initialize a Browser profile
+# Browser → Runtime: install the pinned verified binary explicitly
+# Browser → Setup: choose Rules or Agent, Model, Profile and concurrency
+# Browser → Profiles: select or remove a local Browser identity profile
 ```
 
 或在普通配置中明确设置：
 
 ```toml
-[access]
+[download]
+# Agent controller additionally requires an `image = true` Model:
+# model = "openai/operator-selected-browser-model"
 browser_enabled = true
 browser_profile = "institutional-access"
+browser_controller = "rules" # 或 "agent"
 browser_max_concurrency = 5
 browser_policy_overrides = []
 ```
@@ -132,6 +182,12 @@ browser_policy_overrides = []
 不含敏感信息的 identity，不接受路径、账号、机构名、URL、UUID、Token 或 Cookie 标签。真实
 Chromium 状态和固定 identity manifest 保存在 owner-only 目录，与 `credentials.toml` 分离。
 同一 Profile 同时只能由一个 Browser process 使用；自动 Completion 与显式 probe 互斥。
+
+`browser_controller` 只接受 `rules` 或 `agent`，默认是 `rules`。选择 `rules` 不要求 Download
+Model，也不会产生模型请求；选择 `agent` 要求 `[download].model`（配置中心中的 Browser Model）引用一个配置了
+`image = true` 的完整 `provider/model` Model。tool decision、`image/png`、单图、图片字节和调用
+上限由 Acquisition/Bootstrap 派生；Reasoning 属于 Model，不在 Browser Setup 覆盖。该选择在一项作业
+开始前冻结，不是运行中的 fallback 开关。
 
 `browser_max_concurrency` 必须是大于 1 的整数，默认值为 5，不设置上限。它是跨 Publisher 的
 本机资源 cap：Publisher lane 只在有任务时进入调度，所有 lane 共享一个 Chrome process/context；
@@ -145,7 +201,7 @@ challenge、限流和无正文会分别报告。总开关、Profile 存在或其
 这些受控尝试，不证明组织合同、认证成功、当前 IP 或具体文章具有 entitlement。
 
 CloakBrowser wrapper 与 Playwright API 是 wheel 的运行依赖；定制 Chromium binary 由
-`sciretriever config` 中的 CloakBrowser runtime 管理器显式安装、核实版本/签名并按需回退。
+`sciretriever config` 中的 `Browser → Runtime` 管理器显式安装、核实版本/签名并按需回退。
 普通 Completion 不下载 binary，也不使用系统 Google Chrome 或 `playwright install chromium`
 作为 fallback。无 GUI Linux 还需安装 `Xvfb`；SciRetriever 会在共享 runtime 启动时按需启动
 虚拟显示并在关闭时停止。纯 SSH/Xvfb 环境没有用户可见的交互窗口。
@@ -157,7 +213,8 @@ sciretriever config status
 sciretriever config status --json
 ```
 
-状态页会分别显示 9 条 production route、9/9 条本地可尝试 route、总开关、选中的 Profile
+状态页会分别显示 9 条 production route、9/9 条本地可尝试 route、总开关、当前 controller 及其
+所需 Browser Model readiness、选中的 Browser identity Profile
 identity 及 `missing/configured/attention/needs-new-runtime-profile` presence、fixed identity schema、
 Cloak wrapper、Playwright API、binary/version/signature、headed display/Xvfb、跨组本机并发上限
 和各组政策。
@@ -186,7 +243,9 @@ Probe 使用所选供应商的 production rule/controller、risk-group scheduler
 审查过的 challenge dependency；普通页面资源可以按生产边界加载，但 deny-all capture guard 会
 拒绝任何 PDF/body 接纳。它只检查 Cloak runtime、固定身份与目标流程，不评估机构 IP 或文章
 权限，结果固定 `article_entitlement = not-proven` 且不持久化。`config test --all` 永远不会
-隐式执行 Browser probe。
+隐式启动 Publisher Browser probe；它始终测试已启用 Provider、Analyze Model 与 MinerU，并且只有
+当前 controller 为 `agent` 时才额外执行一项不启动 Browser、不访问 Publisher 的 Browser Model
+合成图片/tool probe。
 
 ## 4. 批次、限速与预计时间
 
@@ -226,9 +285,9 @@ Browser admission 日志会在触网前报告剩余篇数、并行组数、各�
 | Browser 页面没有全文权限/paywall | 当前 Profile/IP 对这篇文章没有被页面放行 | 正常未命中；可手动提供 PDF |
 | Browser 返回普通 `403` | 当前文章被拒绝，但仅凭状态码不知道是何种权限原因 | 归为文章级访问拒绝并提示处理；不冒充明确 paywall，也不熔断整个 Publisher |
 | 验证资源被本地策略挡住 | 页面验证流程没有完整加载，不代表站点已经拒绝文章 | 报告 `resource-blocked` 并停止；修正规则/依赖后才能复验 |
-| 自动验证正在进行并自然完成 | 已批准的 challenge 资源完成站点自己的自动流程 | 有界 settle 后返回文章流程；仍需逐篇判断 entitlement |
-| 自动验证等待超时 | 在局部期限内既未清除也未出现明确互动控件 | 报告 `settle-timeout` 并停止，不立即重试制造流量 |
-| 页面明确要求 CAPTCHA/Turnstile 人工交互 | 当前自动流程不能继续 | 报告 `interaction-required` 并暂停/熔断该组；不自动点击或绕过 |
+| Challenge 由页面脚本自然清除 | 已批准的验证资源完成站点自己的页面流程 | 下一份 Observation 回到普通页面并继续当前 controller |
+| Challenge 出现可见控件 | 它仍是当前文章页面，不是专属终态 | Rules 只执行已审查动作；Agent 可用当前 revision 的元素或截图坐标点击，所有 Network/Publisher guard 仍生效 |
+| Controller 停止或语义无进展时仍是 Challenge | 当前自动选择没有清除页面 | 报告文章级 `challenge-unresolved`；不打开 Challenge group circuit，同组下一篇仍可按限速执行 |
 | 页面要求登录、机构选择或 MFA | 第一版不提供 Browser 认证流程 | 暂停/熔断该组；改用获授权 API 或手动 PDF |
 | IP block、账号警告 | 供应商明确阻止继续访问 | 熔断该组；其它供应商组仍可继续 |
 | Browser runtime 或资源清理失败 | 本机 Chromium 流程没有安全结束 | 系统失败并阻止同组继续，不写成“查不到” |
@@ -252,8 +311,10 @@ Profile 路径/内容、登录状态细节或 PDF 字节。
 
 ## 6. 使用责任
 
-按 Provider 政策限速、同风险组串行和 challenge 熔断能降低误用与封禁风险，但不能保证机构
+按 Provider 政策限速、同风险组串行以及登录、MFA、IP block、账号警告和 runtime/cleanup circuit
+能降低误用与封禁风险，但不能保证机构
 访问或公网 IP 永远不受限。用户必须自行确认文献访问授权并遵守机构、出版社和站点的适用规则。
-SciRetriever 不自动或交互式登录、不选择机构、不处理或绕过 CAPTCHA/MFA，也不通过代理轮换、
-多身份池或备用入口绕过限速与拒绝。固定身份 Profile 只是由 Chromium 管理的本地运行容器，
-不是组织合同、登录成功或文章授权证明。
+SciRetriever 不自动或交互式登录、不选择机构、不处理 MFA，也不通过代理轮换、多身份池或备用
+入口绕过限速与拒绝。当前 controller 可以在准入文章页上用封闭动作处理可见 Challenge，但不使用
+外部 solver、验证 token 注入、任意脚本、身份或出口切换。固定身份 Profile 只是由 Chromium 管理的
+本地运行容器，不是组织合同、登录成功或文章授权证明。

@@ -13,6 +13,7 @@ from sciretriever.configuration.credentials import (
     _CORE_NEXT_ORIGIN_FIELD,
     _CORE_ORIGIN_FIELD,
     _CREDENTIAL_PROVIDER_NAMES,
+    _MODEL_CREDENTIAL_SPEC,
     _UNSUPPORTED_CREDENTIAL_PROVIDERS,
     CredentialLookup,
     _canonical_credential_origin,
@@ -21,6 +22,7 @@ from sciretriever.configuration.credentials import (
     _credential_specs,
     _credential_value,
     _CredentialBundle,
+    _model_provider_name,
     _provider_name,
     _read_credentials,
     credential_path,
@@ -31,6 +33,7 @@ from sciretriever.configuration.documents import (
     _commit_configuration_staging,
     _configuration_update_payload,
     _prepare_configuration_staging,
+    configuration_path,
 )
 from sciretriever.configuration.errors import ConfigurationError
 from sciretriever.configuration.errors import fail as _fail
@@ -40,13 +43,14 @@ from sciretriever.configuration.file_store import (
     _read_verified,
     _secure_directory,
 )
-from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
-    AgentsConfig,
+    AccessConfig,
     AnalysisConfig,
     Configuration,
     CoreCredentialService,
+    ModelProvidersConfig,
+    ModelsConfig,
     ParsingConfig,
     ProviderName,
 )
@@ -60,6 +64,7 @@ def _toml_quote(value: str) -> str:
 def _render_credentials(
     values: Mapping[ProviderName, Mapping[str, str]],
     core: Mapping[CoreCredentialService, Mapping[str, str]],
+    models: Mapping[str, Mapping[str, str]],
 ) -> bytes:
     lines: list[str] = []
     for service in CoreCredentialService:
@@ -67,6 +72,14 @@ def _render_credentials(
         if not section:
             continue
         lines.append(f"[{service.value}]\n")
+        for field in sorted(section):
+            lines.append(f"{field} = {_toml_quote(section[field])}\n")
+        lines.append("\n")
+    for service in sorted(models):
+        section = models[service]
+        if not section:
+            continue
+        lines.append(f"[providers.{_toml_quote(service)}]\n")
         for field in sorted(section):
             lines.append(f"{field} = {_toml_quote(section[field])}\n")
         lines.append("\n")
@@ -106,6 +119,31 @@ def _transition_core_section(
         spec.secret_field: primary_secret,
         _CORE_ORIGIN_FIELD: primary_origin,
         spec.next_secret_field: replacement[spec.secret_field],
+        _CORE_NEXT_ORIGIN_FIELD: replacement[_CORE_ORIGIN_FIELD],
+    }
+
+
+def _model_section(secret: str, origin: str) -> dict[str, str]:
+    return {
+        _MODEL_CREDENTIAL_SPEC.secret_field: _credential_value(secret),
+        _CORE_ORIGIN_FIELD: _canonical_credential_origin(origin),
+    }
+
+
+def _transition_model_section(
+    current: Mapping[str, str],
+    replacement: Mapping[str, str],
+) -> dict[str, str]:
+    if current.get(_CORE_ORIGIN_FIELD) == replacement[_CORE_ORIGIN_FIELD]:
+        return dict(replacement)
+    primary_secret = current.get(_MODEL_CREDENTIAL_SPEC.secret_field)
+    primary_origin = current.get(_CORE_ORIGIN_FIELD)
+    if primary_secret is None or primary_origin is None:
+        _fail("credentials value is invalid")
+    return {
+        _MODEL_CREDENTIAL_SPEC.secret_field: primary_secret,
+        _CORE_ORIGIN_FIELD: primary_origin,
+        _MODEL_CREDENTIAL_SPEC.next_secret_field: replacement[_MODEL_CREDENTIAL_SPEC.secret_field],
         _CORE_NEXT_ORIGIN_FIELD: replacement[_CORE_ORIGIN_FIELD],
     }
 
@@ -363,10 +401,10 @@ def set_credentials(
 
     name, updates = _validated_updates(provider, values)
     path = credential_path(home=home)
-    values_before, core_before, metadata_before = _read_credentials(home)
+    values_before, core_before, models_before, metadata_before = _read_credentials(home)
     merged = {provider_name: dict(fields) for provider_name, fields in values_before.items()}
     merged[name] = updates
-    payload = _render_credentials(merged, core_before)
+    payload = _render_credentials(merged, core_before, models_before)
     _atomic_publish(
         path,
         payload,
@@ -376,6 +414,7 @@ def set_credentials(
     return _CredentialBundle(
         {provider_name: dict(fields) for provider_name, fields in merged.items()},
         {service: dict(fields) for service, fields in core_before.items()},
+        {service: dict(fields) for service, fields in models_before.items()},
     )
 
 
@@ -393,14 +432,15 @@ def remove_credentials(
     if name not in _CREDENTIAL_PROVIDER_NAMES:
         _fail("credentials provider is unknown")
     path = credential_path(home=home)
-    values_before, core_before, metadata_before = _read_credentials(home)
+    values_before, core_before, models_before, metadata_before = _read_credentials(home)
     if name not in values_before:
         return _CredentialBundle(
             {provider_name: dict(fields) for provider_name, fields in values_before.items()},
             {service: dict(fields) for service, fields in core_before.items()},
+            {service: dict(fields) for service, fields in models_before.items()},
         )
     del values_before[name]
-    payload = _render_credentials(values_before, core_before)
+    payload = _render_credentials(values_before, core_before, models_before)
     _atomic_publish(
         path,
         payload,
@@ -410,6 +450,7 @@ def remove_credentials(
     return _CredentialBundle(
         {provider_name: dict(fields) for provider_name, fields in values_before.items()},
         {service: dict(fields) for service, fields in core_before.items()},
+        {service: dict(fields) for service, fields in models_before.items()},
     )
 
 
@@ -426,10 +467,10 @@ def set_core_credentials(
     name = _core_service_name(service)
     section = _core_section(secret, origin, name)
     path = credential_path(home=home)
-    providers_before, core_before, metadata_before = _read_credentials(home)
+    providers_before, core_before, models_before, metadata_before = _read_credentials(home)
     merged_core = {item: dict(fields) for item, fields in core_before.items()}
     merged_core[name] = section
-    payload = _render_credentials(providers_before, merged_core)
+    payload = _render_credentials(providers_before, merged_core, models_before)
     _atomic_publish(
         path,
         payload,
@@ -439,6 +480,7 @@ def set_core_credentials(
     return _CredentialBundle(
         {provider: dict(fields) for provider, fields in providers_before.items()},
         {item: dict(fields) for item, fields in merged_core.items()},
+        {service: dict(fields) for service, fields in models_before.items()},
     )
 
 
@@ -452,18 +494,58 @@ def remove_core_credentials(
 
     name = _core_service_name(service)
     path = credential_path(home=home)
-    providers_before, core_before, metadata_before = _read_credentials(home)
+    providers_before, core_before, models_before, metadata_before = _read_credentials(home)
     if name not in core_before:
-        return _CredentialBundle(providers_before, core_before)
+        return _CredentialBundle(providers_before, core_before, models_before)
     del core_before[name]
-    payload = _render_credentials(providers_before, core_before)
+    payload = _render_credentials(providers_before, core_before, models_before)
     _atomic_publish(
         path,
         payload,
         expected_target=metadata_before,
         failpoint=failpoint,
     )
-    return _CredentialBundle(providers_before, core_before)
+    return _CredentialBundle(providers_before, core_before, models_before)
+
+
+def set_model_provider_credentials(
+    provider: str,
+    *,
+    secret: str,
+    origin: str,
+    home: str | Path | None = None,
+    failpoint: Callable[[str], None] | None = None,
+) -> CredentialLookup:
+    """Atomically replace one model Provider's exact-origin API key."""
+
+    name = _model_provider_name(provider)
+    section = _model_section(secret, origin)
+    path = credential_path(home=home)
+    providers, core, models, metadata = _read_credentials(home)
+    merged = {item: dict(fields) for item, fields in models.items()}
+    merged[name] = section
+    payload = _render_credentials(providers, core, merged)
+    _atomic_publish(path, payload, expected_target=metadata, failpoint=failpoint)
+    return _CredentialBundle(providers, core, merged)
+
+
+def remove_model_provider_credentials(
+    provider: str,
+    *,
+    home: str | Path | None = None,
+    failpoint: Callable[[str], None] | None = None,
+) -> CredentialLookup:
+    """Atomically remove one model Provider credential section."""
+
+    name = _model_provider_name(provider)
+    path = credential_path(home=home)
+    providers, core, models, metadata = _read_credentials(home)
+    if name not in models:
+        return _CredentialBundle(providers, core, models)
+    del models[name]
+    payload = _render_credentials(providers, core, models)
+    _atomic_publish(path, payload, expected_target=metadata, failpoint=failpoint)
+    return _CredentialBundle(providers, core, models)
 
 
 def _core_credential_versions(
@@ -486,6 +568,25 @@ def _core_credential_versions(
         dict(replacement)
         if current is None
         else _transition_core_section(current, replacement, name)
+    )
+    return transitional, final
+
+
+def _model_provider_credential_versions(
+    name: str,
+    current_models: Mapping[str, Mapping[str, str]],
+    replacement: Mapping[str, str] | None,
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    merged = {item: dict(fields) for item, fields in current_models.items()}
+    transitional = {item: dict(fields) for item, fields in merged.items()}
+    final = {item: dict(fields) for item, fields in merged.items()}
+    if replacement is None:
+        final.pop(name, None)
+        return transitional, final
+    final[name] = dict(replacement)
+    current = merged.get(name)
+    transitional[name] = (
+        dict(replacement) if current is None else _transition_model_section(current, replacement)
     )
     return transitional, final
 
@@ -534,12 +635,96 @@ def _cleanup_stagings(*stagings: Path | None) -> None:
             pass
 
 
+def update_model_provider_configuration(
+    *,
+    provider: str,
+    providers: ModelProvidersConfig,
+    models: ModelsConfig,
+    secret: str | None,
+    origin: str | None,
+    analysis: AnalysisConfig | None = None,
+    access: AccessConfig | None = None,
+    home: str | Path | None = None,
+    failpoint: Callable[[str], None] | None = None,
+) -> Configuration:
+    """Publish Provider/model registry changes and an exact-origin key safely."""
+
+    name = _model_provider_name(provider)
+    if (
+        not isinstance(providers, ModelProvidersConfig)
+        or providers.get(name) is None
+        or not isinstance(models, ModelsConfig)
+    ):
+        _fail("configuration value is invalid")
+    if (secret is None) != (origin is None):
+        _fail("configuration value is invalid")
+    selected = configuration_path(home=home)
+    configuration_payload, configuration_expected, configuration = _configuration_update_payload(
+        selected,
+        providers=providers,
+        models=models,
+        analysis=analysis,
+        access=access,
+    )
+    credentials_target = credential_path(home=home)
+    provider_credentials, core, current_models, credentials_expected = _read_credentials(home)
+    replacement = None if secret is None else _model_section(secret, origin or "")
+    transitional_models, final_models = _model_provider_credential_versions(
+        name,
+        current_models,
+        replacement,
+    )
+    transition_payload = _render_credentials(provider_credentials, core, transitional_models)
+    final_payload = _render_credentials(provider_credentials, core, final_models)
+    credentials_changed = transitional_models != current_models
+    final_credentials_changed = final_models != transitional_models
+    configuration_staging, transition_staging, final_staging = _prepare_core_update_stagings(
+        selected=selected,
+        configuration_payload=configuration_payload,
+        credentials_target=credentials_target,
+        transition_payload=transition_payload,
+        final_payload=final_payload,
+        credentials_changed=credentials_changed,
+        final_credentials_changed=final_credentials_changed,
+    )
+    try:
+        _call_configuration_failpoint(failpoint, "all-stagings-validated")
+        if transition_staging is not None:
+            _commit_credentials_staging(
+                transition_staging,
+                credentials_target,
+                credentials_expected,
+            )
+            transition_staging = None
+            _providers, _core, _models, credentials_expected = _read_credentials(home)
+            del _providers, _core, _models
+        if credentials_changed:
+            _call_configuration_failpoint(failpoint, "credentials-transition-published")
+        assert configuration_staging is not None
+        _commit_configuration_staging(
+            configuration_staging,
+            selected,
+            configuration_expected,
+        )
+        configuration_staging = None
+        _call_configuration_failpoint(failpoint, "configuration-published")
+        if final_staging is not None:
+            _call_configuration_failpoint(failpoint, "before-credentials-finalize")
+            _commit_credentials_staging(
+                final_staging,
+                credentials_target,
+                credentials_expected,
+            )
+            final_staging = None
+            _call_post_commit_observer(failpoint, "credentials-finalized")
+    finally:
+        _cleanup_stagings(configuration_staging, transition_staging, final_staging)
+    return configuration
+
+
 def update_core_service_configuration(
-    path: str | Path,
     service: CoreCredentialService | str,
     *,
-    agents: AgentsConfig | None = None,
-    analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     secret: str | None,
     origin: str | None,
@@ -557,29 +742,25 @@ def update_core_service_configuration(
     """
 
     name = _core_service_name(service)
-    if (name is CoreCredentialService.AGENTS) != (agents is not None) or (
-        name is CoreCredentialService.MINERU
-    ) != (parsing is not None):
+    if name is not CoreCredentialService.MINERU or parsing is None:
         _fail("configuration value is invalid")
     if (secret is None) != (origin is None):
         _fail("configuration value is invalid")
-    selected = _safe_path(path)
+    selected = configuration_path(home=home)
     configuration_payload, configuration_expected, configuration = _configuration_update_payload(
         selected,
-        agents=agents,
-        analysis=analysis,
         parsing=parsing,
     )
     credentials_target = credential_path(home=home)
-    providers, current_core, credentials_expected = _read_credentials(home)
+    providers, current_core, models, credentials_expected = _read_credentials(home)
     replacement = None if secret is None else _core_section(secret, origin or "", name)
     transitional_core, final_core = _core_credential_versions(
         name,
         current_core,
         replacement,
     )
-    transition_payload = _render_credentials(providers, transitional_core)
-    final_payload = _render_credentials(providers, final_core)
+    transition_payload = _render_credentials(providers, transitional_core, models)
+    final_payload = _render_credentials(providers, final_core, models)
     credentials_changed = transitional_core != current_core
     final_credentials_changed = final_core != transitional_core
     # Cross-directory atomicity is impossible.  Prepare, fsync, and fully
@@ -605,8 +786,8 @@ def update_core_service_configuration(
                 credentials_expected,
             )
             transition_staging = None
-            _providers, _core, credentials_expected = _read_credentials(home)
-            del _providers, _core
+            _providers, _core, _models, credentials_expected = _read_credentials(home)
+            del _providers, _core, _models
         if credentials_changed:
             # Keep the observation stable even when the replacement used the
             # same origin and did not require a two-origin recovery section.

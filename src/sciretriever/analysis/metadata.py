@@ -11,18 +11,16 @@ the neutral request identity, aligned provenance hashes, and prompt version.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Final
 
 from pydantic import ValidationError
 
-from sciretriever.agents import (
-    AgentBudget,
+from sciretriever.agents.api import (
     AgentFailure,
-    AgentPort,
     AgentProvenance,
-    AgentStructuredResponse,
-    open_session,
+    AgentRuntime,
+    AgentStructuredResult,
 )
 from sciretriever.analysis.metadata_rules import (
     MetadataRuleViolation,
@@ -130,33 +128,15 @@ class MetadataAnalysisStage:
     def __init__(
         self,
         *,
-        agents: AgentPort,
-        model: str,
+        runtime: AgentRuntime,
         max_output_tokens: int,
-        agent_budget: AgentBudget | None = None,
     ) -> None:
-        if not isinstance(agents, AgentPort):
-            raise TypeError("agent must implement AgentPort")
-        if type(model) is not str or not model.strip() or len(model.strip()) > 512:
-            raise ValueError("model must be stable bounded text")
+        if not isinstance(runtime, AgentRuntime):
+            raise TypeError("runtime must be an AgentRuntime")
         if type(max_output_tokens) is not int or max_output_tokens < 1:
             raise ValueError("max_output_tokens must be a positive integer")
-        selected_budget = (
-            AgentBudget(max_output_tokens=max_output_tokens)
-            if agent_budget is None
-            else agent_budget
-        )
-        if not isinstance(selected_budget, AgentBudget):
-            raise TypeError("agent_budget must be an AgentBudget")
-        if max_output_tokens > selected_budget.max_output_tokens:
-            raise ValueError("stage output must fit the Agent budget")
-        self._agents = agents
-        self._model = model.strip()
+        self._runtime = runtime
         self._max_output_tokens = max_output_tokens
-        self._agent_budget = replace(
-            selected_budget,
-            max_output_tokens=max_output_tokens,
-        )
 
     def __repr__(self) -> str:
         return "<MetadataAnalysisStage>"
@@ -267,7 +247,6 @@ class MetadataAnalysisStage:
             request = AnalysisRequest(
                 kind=AnalysisRequestKind.METADATA,
                 input_sha256=sha256_digest(structured_bytes),
-                model=self._model,
                 max_output_tokens=self._max_output_tokens,
             )
             return AnalysisCall(
@@ -283,16 +262,12 @@ class MetadataAnalysisStage:
                 _failure_for("analysis-metadata-input", retryable=False)
             ) from None
 
-    def _complete(self, call: AnalysisCall) -> AgentStructuredResponse:
+    def _complete(self, call: AnalysisCall) -> AgentStructuredResult:
         try:
-            request = call.to_agent_request(budget=self._agent_budget)
-            with open_session(
-                self._agents,
-                max_turns=1,
+            response = self._runtime.execute(
+                call.to_agent_call(),
                 cancel_event=call.cancel_event,
-                budget=self._agent_budget,
-            ) as session:
-                response = session.complete(request)
+            )
         except AgentFailure as error:
             if error.failure.code == "agent-structured-response":
                 raise MetadataAnalysisFailure(
@@ -309,26 +284,15 @@ class MetadataAnalysisStage:
                 _failure_for("analysis-metadata-llm", retryable=True)
             ) from None
 
-        if not isinstance(response, AgentStructuredResponse):
+        if not isinstance(response, AgentStructuredResult):
             raise MetadataAnalysisFailure(_failure_for("analysis-metadata-llm", retryable=False))
-        try:
-            provider_name = self._agents.provider_name
-            aligned = (
-                type(provider_name) is str
-                and bool(provider_name.strip())
-                and response.provenance.provider == provider_name.strip()
-                and response.provenance.model == call.request.model
-                and response.provenance.input_sha256 == call.request.input_sha256
-            )
-        except Exception:
-            aligned = False
-        if not aligned:
+        if response.provenance.input_sha256 != call.request.input_sha256:
             raise MetadataAnalysisFailure(_failure_for("analysis-metadata-llm", retryable=False))
         return response
 
     def _parse_response(
         self,
-        response: AgentStructuredResponse,
+        response: AgentStructuredResult,
     ) -> NoUsableContent | LiteratureMetadata:
         try:
             root = parse_strict_json_object(response.result)

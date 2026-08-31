@@ -20,7 +20,7 @@
 | 代码结构、Model、Ports 和运行技术 | `docs/architecture/technical.md`、`docs/architecture/technical/` |
 | 当前已经实现的安装与用户行为 | `README.md`、`docs/guides/`、源码和测试 |
 | 易变 Provider、MinerU 等外部事实 | `docs/notes/` |
-| 实施计划和历史进度 | `.omo/plans/`；不属于项目真相源，不进入正式提交 |
+| 活动实施计划 | `docs/plans/`；用于执行与恢复，不属于产品或架构真相源 |
 
 目标文档说明应当实现什么，README、源码和测试说明当前行为。不得用当前实现否定已接受设计，也不得把尚未实现的能力写成已发布行为。
 
@@ -38,7 +38,7 @@
 | 质量入口 | `scripts/harness.py quick / full` |
 | CI | 普通非 master 分支 push 运行 Python 3.12 Quick；PR、master 和手动运行执行 Python 3.10/3.12 Full |
 | 临时文件 | 系统临时目录下的 `sciretriever-*` |
-| 不提交内容 | `.omo/`、个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件 |
+| 不提交内容 | 个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件 |
 
 当前实现是按功能模块组织的模块化单体：
 

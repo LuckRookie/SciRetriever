@@ -10,10 +10,12 @@ from enum import Enum
 from typing import Generic, Mapping, Sequence, TextIO, TypeVar, cast
 
 from prompt_toolkit.application.current import create_app_session
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.input import Input, create_input
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
+from prompt_toolkit.shortcuts.prompt import prompt as prompt_text
 from prompt_toolkit.styles import Style
 from rich import box
 from rich.console import Console
@@ -22,6 +24,8 @@ from rich.table import Table
 from rich.text import Text
 
 _T = TypeVar("_T")
+_NO_BACK = object()
+_SEARCH_CHOICE = object()
 
 
 class ConfigTheme(str, Enum):
@@ -29,6 +33,48 @@ class ConfigTheme(str, Enum):
     DARK = "dark"
     LIGHT = "light"
     MONO = "mono"
+
+
+class ConfigActionKind(str, Enum):
+    """Stable visual semantics shared by every configuration menu."""
+
+    CONFIGURE = "configure"
+    INSPECT = "inspect"
+    TEST = "test"
+    DANGER = "danger"
+    NAVIGATE = "navigate"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigOption(Generic[_T]):
+    """One single-word menu option with an explicit interaction meaning."""
+
+    value: _T
+    label: str
+    kind: ConfigActionKind = ConfigActionKind.CONFIGURE
+
+    def __post_init__(self) -> None:
+        if not self.label or any(character.isspace() for character in self.label):
+            raise ValueError("configuration option label must be one word")
+
+    @property
+    def marker(self) -> str:
+        if self.kind is ConfigActionKind.CONFIGURE:
+            return "◆"
+        if self.kind is ConfigActionKind.INSPECT:
+            return "◇"
+        if self.kind is ConfigActionKind.TEST:
+            return "▶"
+        if self.kind is ConfigActionKind.DANGER:
+            return "!"
+        return "×" if self.label.casefold() == "quit" else "←"
+
+    @property
+    def plain_label(self) -> str:
+        return f"{self.marker} {self.label}"
+
+    def prompt_label(self) -> FormattedText:
+        return FormattedText([(f"class:action.{self.kind.value}", self.plain_label)])
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,39 +86,59 @@ class ThemePalette:
     warning: str
     muted: str
     border: str
+    configure: str
+    inspect: str
+    test: str
+    danger: str
+    navigate: str
     no_color: bool
 
 
 _PALETTES = {
     ConfigTheme.DARK: ThemePalette(
-        ConfigTheme.DARK,
-        "bright_cyan",
-        "bold white",
-        "bright_green",
-        "bright_yellow",
-        "grey66",
-        "cyan",
-        False,
+        name=ConfigTheme.DARK,
+        accent="bright_cyan",
+        heading="bold white",
+        ready="bright_green",
+        warning="bright_yellow",
+        muted="grey66",
+        border="cyan",
+        configure="bright_cyan",
+        inspect="bright_magenta",
+        test="bright_yellow",
+        danger="bright_red",
+        navigate="grey66",
+        no_color=False,
     ),
     ConfigTheme.LIGHT: ThemePalette(
-        ConfigTheme.LIGHT,
-        "blue",
-        "bold black",
-        "green4",
-        "dark_orange3",
-        "grey42",
-        "blue",
-        False,
+        name=ConfigTheme.LIGHT,
+        accent="blue",
+        heading="bold black",
+        ready="green4",
+        warning="dark_orange3",
+        muted="grey42",
+        border="blue",
+        configure="blue",
+        inspect="magenta3",
+        test="dark_orange3",
+        danger="red3",
+        navigate="grey42",
+        no_color=False,
     ),
     ConfigTheme.MONO: ThemePalette(
-        ConfigTheme.MONO,
-        "none",
-        "bold",
-        "none",
-        "none",
-        "dim",
-        "none",
-        True,
+        name=ConfigTheme.MONO,
+        accent="bold",
+        heading="bold",
+        ready="none",
+        warning="none",
+        muted="dim",
+        border="none",
+        configure="bold",
+        inspect="underline",
+        test="bold",
+        danger="bold",
+        navigate="dim",
+        no_color=True,
     ),
 }
 
@@ -137,6 +203,7 @@ class ConfigConsole:
         body.add_row("Project", config_path)
         body.add_row("Secrets", credentials_path)
         body.add_row("Theme", self.palette.name.value.title())
+        body.add_row("Network", "Local status only · no network requests")
         self.console.print(
             Panel(
                 body,
@@ -150,62 +217,45 @@ class ConfigConsole:
     def home(
         self,
         *,
-        llm_state: str,
-        llm_detail: str,
-        mineru_state: str,
-        mineru_detail: str,
-        providers: Sequence[tuple[str, str, str]],
-        access_state: str = "Unavailable",
-        access_detail: str = "Authorized APIs and controlled Browser",
-        agent_provider: tuple[str, str] | None = None,
-        analysis_role: tuple[str, str] | None = None,
-        browser_role: tuple[str, str] | None = None,
-        cloak_binary: tuple[str, str] | None = None,
-        selected_profile: tuple[str, str] | None = None,
-        browser_enabled: tuple[str, str] | None = None,
+        models_state: str,
+        models_detail: str,
+        search_state: str,
+        search_detail: str,
+        download_state: str,
+        download_detail: str,
+        parse_state: str,
+        parse_detail: str,
+        analyze_state: str,
+        analyze_detail: str,
+        browser_state: str,
+        browser_detail: str,
+        status_detail: str = "Local readiness; no network requests",
+        theme_detail: str = "Auto",
     ) -> None:
-        core = self._home_table()
-        core.add_row("[L]", "LLM Analysis", llm_detail, _state_text(llm_state, self.palette))
-        core.add_row("[M]", "MinerU Parser", mineru_detail, _state_text(mineru_state, self.palette))
-        capability_rows = (
-            ("[P]", "Agent provider", agent_provider),
-            ("[A]", "Analysis role", analysis_role),
-            ("[B]", "Browser role", browser_role),
-            ("[C]", "Cloak binary", cloak_binary),
-            ("[R]", "Selected Profile", selected_profile),
-            ("[E]", "Browser enabled", browser_enabled),
-        )
-        capability_table = self._home_table()
-        for shortcut, label, row in capability_rows:
-            if row is None:
-                continue
-            detail, state = row
-            capability_table.add_row(
+        areas = self._home_table()
+        for shortcut, label, detail, state in (
+            ("[M]", "Models", models_detail, models_state),
+            ("[S]", "Search", search_detail, search_state),
+            ("[D]", "Download", download_detail, download_state),
+            ("[P]", "Parse", parse_detail, parse_state),
+            ("[A]", "Analyze", analyze_detail, analyze_state),
+            ("[B]", "Browser", browser_detail, browser_state),
+            ("[I]", "Status", status_detail, "Local"),
+            ("[T]", "Theme", theme_detail, "Local"),
+        ):
+            areas.add_row(
                 shortcut,
                 label,
                 detail,
                 _state_text(state, self.palette),
             )
-        provider_table = self._home_table()
-        provider_table.add_row(
-            "[A]",
-            "Provider Access",
-            access_detail,
-            _state_text(access_state, self.palette),
-        )
-        for index, (name, purpose, state) in enumerate(providers, start=1):
-            provider_table.add_row(str(index), name, purpose, _state_text(state, self.palette))
-        self.console.print(Text("CORE SERVICES", style=self.palette.heading))
-        self.console.print(core)
-        if capability_table.row_count:
-            self.console.print(Text("AGENTS & BROWSER", style=self.palette.heading))
-            self.console.print(capability_table)
-        self.console.print(Text("LITERATURE PROVIDERS", style=self.palette.heading))
-        self.console.print(provider_table)
+        self.console.print(Text("CONFIGURATION AREAS", style=self.palette.heading))
+        self.console.print(areas)
         self.console.print(
-            "[dim]↑↓ Move · Enter Open · A Access · L LLM · M MinerU · T Theme · Q Quit[/dim]"
+            "[dim]↑↓ Move · Enter Open · M Models · S Search · D Download · P Parse · "
+            "A Analyze · B Browser · I Status · T Theme · Q Quit[/dim]"
             if not self.palette.no_color
-            else "Move: arrows  Open: Enter  Shortcuts: A/L/M/T/Q"
+            else "Move: arrows  Open: Enter  Shortcuts: M/S/D/P/A/B/I/T/Q"
         )
 
     def access(
@@ -262,6 +312,48 @@ class ConfigConsole:
         if subtitle:
             text.append(f"\n{subtitle}", style=self.palette.muted)
         self.console.print(Panel(text, border_style=self.palette.border, box=box.ROUNDED))
+
+    def page(
+        self,
+        title: str,
+        description: str,
+        *,
+        facts: Sequence[tuple[str, object]] = (),
+        notes: Sequence[str] = (),
+    ) -> None:
+        """Render a self-explanatory configuration page before its actions."""
+
+        body = Table.grid(expand=True, padding=(0, 1))
+        body.add_column(overflow="fold")
+        body.add_row(Text(description))
+        if facts:
+            fact_table = Table.grid(expand=True, padding=(0, 1))
+            fact_table.add_column(style=self.palette.muted, no_wrap=True)
+            fact_table.add_column(overflow="fold")
+            for name, value in facts:
+                fact_table.add_row(name, _plain_value(value))
+            body.add_row(Text())
+            body.add_row(fact_table)
+        for note in notes:
+            body.add_row(Text(f"! {note}", style=self.palette.warning))
+        self.console.print(
+            Panel(
+                body,
+                title=Text(title, style=self.palette.heading),
+                subtitle=Text("LOCAL CONFIGURATION", style=self.palette.muted),
+                border_style=self.palette.border,
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
+
+    def setup_step(self, position: int, total: int, title: str, detail: str) -> None:
+        """Render one compact, consistent step marker for guided setup."""
+
+        marker = Text(f" {position:02d}/{total:02d} ", style=f"reverse {self.palette.accent}")
+        marker.append(f"  {title}", style=self.palette.heading)
+        marker.append(f"\n         {detail}", style=self.palette.muted)
+        self.console.print(marker)
 
     def message(self, value: str, *, kind: str = "normal") -> None:
         style = {
@@ -353,7 +445,8 @@ class ConfigStatusPresenter:
         self.console.print(table)
         self.console.print(
             Text(
-                "LLM: minimal strict schema request; may consume quota; no Literature content. "
+                "Analysis model: minimal strict schema request; may consume quota; no "
+                "Literature content. "
                 "MinerU: GET health only; no PDF upload. Browser: one explicitly selected "
                 "approved minimal target; article entitlement remains not proven. Results are "
                 "not persisted.",
@@ -363,69 +456,85 @@ class ConfigStatusPresenter:
 
     def _core_services(self, payload: Mapping[str, object]) -> Table:
         parsing = _mapping(payload["parsing"])
-        analysis = _mapping(payload.get("agents", payload.get("analysis", {})))
+        models = _mapping(payload.get("models"))
+        analyze = _mapping(payload.get("analyze"))
+        download = _mapping(payload.get("download"))
         parser_secret = _mapping(parsing["bearer_token"])
-        analysis_secret = _mapping(analysis["api_key"])
         implementation = _mapping(parsing["implementation"])
         table = Table(
-            title="Core services",
+            title="Models, Analyze, Download and Parse",
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
         )
-        table.add_column("Service / readiness", width=20, no_wrap=True)
+        table.add_column("Owner / readiness", width=20, no_wrap=True)
         table.add_column("Configured values", overflow="fold")
-        llm_identity = (
-            " · ".join(
-                value
-                for value in (
-                    _shown(analysis.get("provider")),
-                    _shown(analysis.get("model", analysis.get("analysis_model"))),
-                    _token_count(analysis.get("context_window_tokens")),
-                )
-                if value != "not set"
+
+        model_providers = _mapping_sequence(models.get("providers", ()))
+        if not model_providers:
+            table.add_row(
+                _layer_state("Models · Providers", "needs setup", self.palette),
+                "none",
             )
-            or "not set"
-        )
+        for provider in model_providers:
+            key = _mapping(provider.get("key"))
+            table.add_row(
+                _layer_state(
+                    f"Provider · {provider.get('name')}",
+                    (
+                        "ready"
+                        if key.get("required") is not True
+                        or (key.get("configured") is True and key.get("origin_matches") is True)
+                        else "needs key"
+                    ),
+                    self.palette,
+                ),
+                f"api: {_shown(provider.get('api'))}\n"
+                f"endpoint: {_shown(provider.get('base_url'))}\n"
+                f"credential: {_core_credential_state(key)}",
+            )
+
+        configured_models = _mapping_sequence(models.get("models", ()))
+        if not configured_models:
+            table.add_row(
+                _layer_state("Models", "needs setup", self.palette),
+                "none",
+            )
+        for model in configured_models:
+            table.add_row(
+                _layer_state(f"Model · {model.get('reference')}", "configured", self.palette),
+                f"provider: {_shown(model.get('provider'))}\n"
+                f"model: {_shown(model.get('model'))}\n"
+                f"reasoning: {_shown(model.get('reasoning'))} · "
+                f"image: {'yes' if model.get('image') is True else 'no'}",
+            )
+
+        analyze_model = _mapping(analyze.get("selected_model"))
         table.add_row(
             _layer_state(
-                "LLM Analysis",
-                "ready" if analysis.get("reference_locally_ready") is True else "needs setup",
+                "Analyze",
+                "ready" if analyze.get("reference_locally_ready") is True else "needs setup",
                 self.palette,
             ),
-            f"protocol: {_shown(analysis.get('protocol'))}\n"
-            f"endpoint: {_shown(analysis.get('base_url'))}\n"
-            f"model: {llm_identity}\n"
-            f"credential: {_core_credential_state(analysis_secret)}",
+            f"model: {_shown(analyze.get('model'))}\n"
+            f"remote: {_shown(analyze_model.get('model'))} · "
+            f"reasoning {_shown(analyze_model.get('reasoning'))}\n"
+            "Analyze selects one configured Model",
         )
-        analysis_role = _mapping(analysis.get("analysis_role"))
-        browser_role = _mapping(analysis.get("browser_role"))
+
+        download_model = _mapping(download.get("selected_model"))
         table.add_row(
             _layer_state(
-                "Analysis role",
-                "ready" if analysis_role.get("locally_ready") is True else "needs setup",
+                "Download · Model",
+                "ready" if download.get("model_locally_ready") is True else "optional",
                 self.palette,
             ),
-            "model: {} · context: {} · structured text: {}".format(
-                _shown(analysis_role.get("model")),
-                _token_count(analysis_role.get("context_window_tokens")),
-                "yes" if analysis_role.get("structured_output") is True else "no",
-            ),
+            f"model: {_shown(download.get('model'))}\n"
+            f"remote: {_shown(download_model.get('model'))} · "
+            f"reasoning {_shown(download_model.get('reasoning'))}\n"
+            f"controller: {_shown(download.get('controller'))}",
         )
-        browser_role_ready = browser_role.get("locally_ready") is True
-        table.add_row(
-            _layer_state(
-                "Browser role",
-                "ready" if browser_role_ready else "not configured",
-                self.palette,
-            ),
-            "model: {} · context: {} · image input: {} · tool decision: {}".format(
-                _shown(browser_role.get("model")),
-                _token_count(browser_role.get("context_window_tokens")),
-                "yes" if browser_role.get("image_input") is True else "no",
-                "yes" if browser_role.get("tool_decision") is True else "no",
-            ),
-        )
+
         parser_identity = (
             f"MinerU {implementation.get('release')} · protocol "
             f"{implementation.get('api_protocol')} · {implementation.get('profile')}\n"
@@ -435,7 +544,7 @@ class ConfigStatusPresenter:
         )
         table.add_row(
             _layer_state(
-                "MinerU Parser",
+                "Parse",
                 "ready" if parsing.get("locally_ready") is True else "needs setup",
                 self.palette,
             ),
@@ -449,7 +558,13 @@ class ConfigStatusPresenter:
     def _metadata_apis(self, payload: Mapping[str, object]) -> Table:
         providers = _mapping(payload["providers"])
         table = Table(
-            title=f"Metadata APIs · secrets in {providers['credentials_file']}",
+            title=(
+                "Metadata APIs · {} · {} raw items / Source · secrets in {}".format(
+                    providers.get("metadata_mode", "auto"),
+                    _shown(providers.get("metadata_limit")),
+                    providers["credentials_file"],
+                )
+            ),
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
@@ -476,7 +591,12 @@ class ConfigStatusPresenter:
     def _acquisition_apis(self, payload: Mapping[str, object]) -> Table:
         providers = _mapping(payload["providers"])
         table = Table(
-            title=f"Authorized primary-PDF APIs · secrets in {providers['credentials_file']}",
+            title=(
+                "Authorized primary-PDF APIs · {} · secrets in {}".format(
+                    providers.get("acquisition_mode", "auto"),
+                    providers["credentials_file"],
+                )
+            ),
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
@@ -484,7 +604,10 @@ class ConfigStatusPresenter:
         table.add_column("Provider / readiness", width=18, no_wrap=True)
         table.add_column("Credential fields", overflow="fold")
         table.add_column("Next action", overflow="fold")
+        visible = 0
         for item in _mapping_sequence(providers["acquisition"]):
+            if item.get("enabled") is not True:
+                continue
             authorized = _mapping(item["authorized_api"])
             if (
                 authorized.get("available") is not True
@@ -499,6 +622,9 @@ class ConfigStatusPresenter:
                 if unsupported and authorized.get("detail")
                 else _provider_next_action(item),
             )
+            visible += 1
+        if not visible:
+            table.add_row("None enabled", "—", "No authorized PDF API is enabled.")
         return table
 
     def _pdf_routes(self, payload: Mapping[str, object]) -> Table:
@@ -507,17 +633,19 @@ class ConfigStatusPresenter:
         public = [
             str(item["provider"])
             for item in acquisition
-            if _mapping(_mapping(item["public_source"]).get("provider_service"))
+            if item.get("enabled") is True
+            and _mapping(_mapping(item["public_source"]).get("provider_service"))
         ]
         authorized = [
             str(item["provider"])
             for item in acquisition
-            if _mapping(item["authorized_api"])["available"] is True
+            if item.get("enabled") is True and _mapping(item["authorized_api"])["available"] is True
         ]
         unsupported = [
             str(item["provider"])
             for item in acquisition
-            if _mapping(item["authorized_api"])["unsupported"] is True
+            if item.get("enabled") is True
+            and _mapping(item["authorized_api"])["unsupported"] is True
         ]
         browser = _mapping(providers["controlled_browser"])
         table = Table(
@@ -538,6 +666,7 @@ class ConfigStatusPresenter:
         table.add_row("2 · Authorized API", detail)
         route_count = browser.get("production_route_count", 0)
         automatic_route_count = browser.get("automatic_route_count", 0)
+        controller = str(browser.get("controller", "rules"))
         route_word = "route" if route_count == 1 else "routes"
         if browser.get("automatic_acquisition_available") is True:
             browser_support = (
@@ -550,7 +679,7 @@ class ConfigStatusPresenter:
             )
         else:
             browser_support = "unavailable · no production routes"
-        table.add_row("3 · Controlled browser", browser_support)
+        table.add_row("3 · Controlled browser", f"{browser_support} · controller {controller}")
         return table
 
     def _controlled_browser(self, payload: Mapping[str, object]) -> Table:
@@ -641,6 +770,21 @@ class ConfigStatusPresenter:
                 self.palette,
             ),
             f"local cross-group concurrency cap {browser.get('local_max_concurrency')}",
+        )
+        controller = str(browser.get("controller", "rules"))
+        controller_ready = browser.get("controller_ready") is True
+        table.add_row(
+            _layer_state(
+                "Browser controller",
+                "ready" if controller_ready else "needs setup",
+                self.palette,
+            ),
+            f"{controller} · frozen before each job · Rules and Agent are mutually exclusive · "
+            + (
+                "no Agent role is required"
+                if browser.get("controller_required_role") is None
+                else "requires the ready Browser model role"
+            ),
         )
         table.add_row(
             _layer_state("Access mode", "fixed profile", self.palette),
@@ -899,10 +1043,10 @@ def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
             "one synthetic-image + closed-tool request; no Literature/PDF/page content; "
             "may consume quota"
         )
-        target = "Browser Agent"
+        target = "Browser model"
     elif is_agents:
         detail = "minimal strict schema request; no Literature content"
-        target = "LLM/Agents"
+        target = "Analysis model"
     else:
         detail = "health/release/protocol/profile only; no PDF upload"
         target = service.title()
@@ -956,36 +1100,28 @@ class TerminalChoice(Generic[_T]):
         self,
         *,
         message: str,
-        options: Sequence[tuple[_T, str]],
+        options: Sequence[ConfigOption[_T]],
         default: _T | None = None,
         theme: str | ConfigTheme = ConfigTheme.AUTO,
         shortcuts: dict[str, _T] | None = None,
+        back_value: _T | object = _NO_BACK,
+        searchable: bool = False,
         input_factory: Callable[[], Input] | None = None,
         output_factory: Callable[[], Output] | None = None,
     ) -> None:
         self.message = message
-        self.options = options
+        if not options:
+            raise ValueError("configuration menu requires at least one option")
+        self.options = tuple(options)
         self.default = default
         self.theme = resolve_theme(theme)
         self.shortcuts = dict(shortcuts or {})
+        self.back_value = back_value
+        self.searchable = searchable
         self._input_factory = input_factory
         self._output_factory = output_factory
 
     def prompt(self) -> _T:
-        bindings = KeyBindings()
-        for key, value in self.shortcuts.items():
-            bindings.add(key)(self._shortcut(value))
-        chooser = ChoiceInput[_T](
-            message=self.message,
-            options=self.options,
-            default=self.default,
-            symbol="›",
-            bottom_toolbar="↑↓ move · Enter open · Ctrl+C cancel",
-            show_frame=False,
-            show_numbers=False,
-            style=_prompt_style(self.theme),
-            key_bindings=bindings,
-        )
         input_stream = (
             create_input(stdin=sys.stdin, always_prefer_tty=True)
             if self._input_factory is None
@@ -998,12 +1134,49 @@ class TerminalChoice(Generic[_T]):
         )
         try:
             with create_app_session(input=input_stream, output=output_stream):
-                return chooser.prompt()
+                visible_options = list(self.options)
+                while True:
+                    bindings = KeyBindings()
+                    for key, value in self.shortcuts.items():
+                        bindings.add(key)(self._shortcut(value))
+                    if self.back_value is not _NO_BACK:
+                        bindings.add("left", eager=True)(self._shortcut(self.back_value))
+                        bindings.add("escape")(self._shortcut(self.back_value))
+                    if self.searchable:
+                        bindings.add("/", eager=True)(self._shortcut(_SEARCH_CHOICE))
+                    toolbar = "↑↓ move · Enter open"
+                    if self.back_value is not _NO_BACK:
+                        toolbar += " · ←/Esc back"
+                    if self.searchable:
+                        toolbar += " · / search"
+                    toolbar += " · Ctrl+C cancel · ◆ set · ◇ view · ▶ test · ! danger · ← control"
+                    visible_values = {option.value for option in visible_options}
+                    chooser = ChoiceInput[object](
+                        message=self.message,
+                        options=[
+                            (option.value, option.prompt_label()) for option in visible_options
+                        ],
+                        default=self.default if self.default in visible_values else None,
+                        symbol="›",
+                        bottom_toolbar=toolbar,
+                        show_frame=False,
+                        show_numbers=False,
+                        style=_prompt_style(self.theme),
+                        key_bindings=bindings,
+                    )
+                    result = chooser.prompt()
+                    if result is not _SEARCH_CHOICE:
+                        return cast(_T, result)
+                    query = prompt_text("Search: ").strip().casefold()
+                    filtered = [
+                        option for option in self.options if query in option.label.casefold()
+                    ]
+                    visible_options = filtered or list(self.options)
         finally:
             input_stream.close()
 
     @staticmethod
-    def _shortcut(value: _T):  # noqa: ANN205
+    def _shortcut(value: object):  # noqa: ANN205
         def handler(event):  # noqa: ANN001, ANN202
             event.app.exit(result=value)
 
@@ -1012,18 +1185,38 @@ class TerminalChoice(Generic[_T]):
 
 def _prompt_style(theme: ConfigTheme) -> Style:
     if theme is ConfigTheme.MONO:
-        return Style.from_dict({"selected-option": "bold", "bottom-toolbar": "reverse"})
+        return Style.from_dict(
+            {
+                "selected-option": "bold reverse",
+                "action.configure": "bold",
+                "action.inspect": "underline",
+                "action.test": "bold",
+                "action.danger": "bold",
+                "action.navigate": "dim",
+                "bottom-toolbar": "reverse",
+            }
+        )
     if theme is ConfigTheme.LIGHT:
         return Style.from_dict(
             {
-                "selected-option": "bold fg:#005faf",
+                "selected-option": "bold bg:#dceeff",
+                "action.configure": "fg:#005faf",
+                "action.inspect": "fg:#875faf",
+                "action.test": "fg:#af5f00",
+                "action.danger": "bold fg:#af0000",
+                "action.navigate": "fg:#666666",
                 "input-selection": "fg:#1c1c1c",
                 "bottom-toolbar": "fg:#4e4e4e bg:#eeeeee",
             }
         )
     return Style.from_dict(
         {
-            "selected-option": "bold fg:#5fffff",
+            "selected-option": "bold bg:#303a42",
+            "action.configure": "fg:#5fffff",
+            "action.inspect": "fg:#d787ff",
+            "action.test": "fg:#ffd75f",
+            "action.danger": "bold fg:#ff5f5f",
+            "action.navigate": "fg:#a8a8a8",
             "input-selection": "fg:#eeeeee",
             "bottom-toolbar": "fg:#bcbcbc bg:#262626",
         }
@@ -1031,7 +1224,9 @@ def _prompt_style(theme: ConfigTheme) -> Style:
 
 
 __all__ = (
+    "ConfigActionKind",
     "ConfigConsole",
+    "ConfigOption",
     "ConfigStatusPresenter",
     "ConfigTheme",
     "TerminalChoice",

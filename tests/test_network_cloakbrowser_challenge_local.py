@@ -18,23 +18,16 @@ import unittest
 from collections.abc import Callable, Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
-from sciretriever.acquisition.browser_state import BrowserRunState
 from sciretriever.acquisition.sources.browser import (
-    ControlledBrowserPdfSource,
+    BrowserRuleDestinationGuard,
     _BrowserAction,
     _RuleCaptureGuard,
     build_browser_rule_destination_guard,
 )
 from sciretriever.acquisition.sources.browser_rules import (
-    BrowserActionKind,
     BrowserChallengeResourceProfile,
-    BrowserPageMarker,
-    BrowserPageMarkerKind,
-    BrowserRuleAction,
-    BrowserRuleCatalog,
     BrowserSiteRule,
 )
 from sciretriever.configuration import initialize_browser_profile
@@ -48,11 +41,16 @@ from sciretriever.model.access import (
 )
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
-    BrowserBudget,
-    BrowserCaptureGuard,
     BrowserClient,
-    BrowserDestinationGuard,
-    BrowserFlowController,
+)
+from sciretriever.network.browser_control import (
+    BrowserActionOutcome,
+    BrowserActionReceipt,
+    BrowserControlSession,
+    BrowserObservation,
+    BrowserPageState,
+    Stop,
+    WaitForChange,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.cloakbrowser import CloakBrowserFactory, cloakbrowser_runtime_availability
@@ -220,7 +218,7 @@ class _ChallengeHandler(BaseHTTPRequestHandler):
         elif mode == "body":
             script = "fetch('/cdn-cgi/challenge-platform/challenge.pdf').catch(() => {});"
         elif mode in {"auto", "late", "turnstile"}:
-            delay = 1200 if mode == "late" else 350
+            delay = 1200
             script = (
                 "const image = document.getElementById('challenge-image');"
                 "const clear = () => window.setTimeout("
@@ -280,44 +278,6 @@ class _Resolver:
         return ("127.0.0.1",)
 
 
-class _BrokerRunner:
-    """Give the Acquisition Source a stable Broker lane without widening it."""
-
-    def __init__(self, client: BrowserClient, session_key: str = "challenge-fixture") -> None:
-        self._client = client
-        self._session_key = session_key
-
-    def run(
-        self,
-        scope: AccessScope,
-        request: BrowserRequest | str,
-        policy: AccessPolicy,
-        *,
-        controller: BrowserFlowController | None = None,
-        destination_guard: BrowserDestinationGuard | None = None,
-        capture_guard: BrowserCaptureGuard | None = None,
-        navigation_only: bool = False,
-        discard_unapproved_subresources: bool = False,
-        budget: BrowserBudget | None = None,
-        timeout_seconds: float | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> BrowserResult:
-        return self._client.run(
-            scope,
-            request,
-            policy,
-            controller=controller,
-            destination_guard=destination_guard,
-            capture_guard=capture_guard,
-            navigation_only=navigation_only,
-            discard_unapproved_subresources=discard_unapproved_subresources,
-            session_key=self._session_key,
-            budget=budget,
-            timeout_seconds=timeout_seconds,
-            cancel_event=cancel_event,
-        )
-
-
 def _destination_policy(port: int) -> DestinationPolicy:
     return DestinationPolicy(
         allowed_classes=frozenset({AddressClass.LOOPBACK}),
@@ -333,27 +293,6 @@ def _rule(origin: str, challenge_origin: str) -> BrowserSiteRule:
         landing_origin=origin,
         allowed_origins=(origin,),
         web_scope_provider_name="cloudflare-local-fixture",
-        actions=(BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_ANY_CAPTURE),),
-        max_actions=1,
-        page_markers=(
-            BrowserPageMarker(
-                marker_id="challenge",
-                kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
-                css_selectors=("#challenge-running",),
-                text_markers=(("title", "just a moment"),),
-            ),
-            BrowserPageMarker(
-                marker_id="access-denied",
-                kind=BrowserPageMarkerKind.ACCESS_DENIED,
-                css_selectors=("#denied",),
-                response_statuses=(403,),
-            ),
-            BrowserPageMarker(
-                marker_id="article-ready",
-                kind=BrowserPageMarkerKind.ENTITLED,
-                css_selectors=("#article-ready",),
-            ),
-        ),
         capture_url_prefixes=(origin + "/article.pdf",),
         challenge_resource_profile=BrowserChallengeResourceProfile(
             # This is an explicitly test-only profile.  Production Cloudflare
@@ -397,8 +336,8 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
         lease.close()
         cls._runtime = manager
 
-    def test_real_cloudflare_shaped_lifecycle(self) -> None:
-        """Exercise CONNECT, route, iframe, JS navigation and Acquisition states."""
+    def test_real_cloudflare_shaped_unified_control(self) -> None:  # noqa: C901
+        """Exercise guarded resources through the ordinary control session."""
 
         with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-challenge-") as raw:
             root = Path(raw)
@@ -418,12 +357,7 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                     destination_policy=_destination_policy(port),
                     session_broker=broker,
                 )
-                runner = _BrokerRunner(client)
                 rule = _rule(fixture.origin, fixture.challenge_origin)
-                source = ControlledBrowserPdfSource(
-                    runner=runner,
-                    rule_catalog=BrowserRuleCatalog((rule,)),
-                )
 
                 def action(path: str) -> _BrowserAction:
                     locator = fixture.origin + path
@@ -436,160 +370,159 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                         identity=locator,
                     )
 
-                try:
-                    with (
-                        self.assertLogs(
-                            "sciretriever.acquisition.sources.browser",
-                            level="DEBUG",
-                        ) as captured,
-                    ):
-                        result, state, failure, _capture_guard = source._run_action(
-                            action("/challenge-auto")
-                        )
-                    self.assertIsInstance(
-                        result,
-                        BrowserCaptureBatch,
-                        f"result={result!r} state={state.state!r} "
-                        f"failure={None if failure is None else failure.code!r}",
-                    )
-                    assert isinstance(result, BrowserCaptureBatch)
-                    self.assertEqual(state.state, BrowserRunState.PDF_CAPTURED)
-                    self.assertIsNone(failure)
-                    self.assertEqual(b"".join(result.captures[0].stream.chunks), _PDF)
-                    self.assertEqual(result.captures[0].kind, BrowserCaptureKind.RESPONSE)
-                    output = "\n".join(captured.output)
-                    self.assertIn("outcome=cleared", output)
-                    self.assertIn("resource_admitted=", output)
-                    self.assertNotIn(_CHALLENGE_BODY.decode(), output)
-                    self.assertNotIn("Just a Moment", output)
+                def control_session(session: object) -> BrowserControlSession:
+                    factory_method = getattr(session, "control_session", None)
+                    if not callable(factory_method):
+                        raise AssertionError("fixture session lost its control capability")
+                    value = factory_method()
+                    if not isinstance(value, BrowserControlSession):
+                        raise AssertionError("fixture control session violated its contract")
+                    return value
 
-                    turnstile_result, turnstile_state, turnstile_failure, _ = source._run_action(
-                        action("/challenge-turnstile")
+                def run(
+                    path: str,
+                    flow: Callable[[object], object],
+                    *,
+                    cancel_event: threading.Event | None = None,
+                ) -> tuple[BrowserResult, BrowserRuleDestinationGuard]:
+                    current_action = action(path)
+                    capture_guard = _RuleCaptureGuard(current_action)
+                    destination_guard = build_browser_rule_destination_guard(
+                        rule,
+                        current_action.start_url,
+                        capture_guard.rebind_landing,
                     )
-                    self.assertIsInstance(turnstile_result, BrowserCaptureBatch)
-                    assert isinstance(turnstile_result, BrowserCaptureBatch)
-                    self.assertEqual(turnstile_state.state, BrowserRunState.PDF_CAPTURED)
-                    self.assertIsNone(turnstile_failure)
-                    self.assertEqual(b"".join(turnstile_result.captures[0].stream.chunks), _PDF)
-
-                    with self.assertLogs(
-                        "sciretriever.acquisition.sources.browser",
-                        level="INFO",
-                    ) as interaction_logs:
-                        (
-                            interaction_result,
-                            interaction_state,
-                            interaction_failure,
-                            _,
-                        ) = source._run_action(action("/challenge-interaction"))
-                    self.assertIsInstance(interaction_result, AccessFailure)
-                    assert isinstance(interaction_result, AccessFailure)
-                    self.assertEqual(interaction_result.code, "no-download")
-                    self.assertEqual(interaction_state.state, BrowserRunState.CHALLENGE_REQUIRED)
-                    self.assertIsNotNone(interaction_failure)
-                    assert interaction_failure is not None
-                    self.assertEqual(
-                        interaction_failure.code,
-                        "acquisition-browser-challenge-interaction-required",
-                    )
-                    interaction_output = "\n".join(interaction_logs.output)
-                    self.assertIn("outcome=interaction-required", interaction_output)
-                    self.assertIn("evidence_kind=interaction-control", interaction_output)
-                    self.assertIn("manual verification control", interaction_output)
-
-                    with (
-                        mock.patch(
-                            "sciretriever.acquisition.sources.browser._CHALLENGE_SETTLE_SECONDS",
-                            0.5,
+                    result = client.run(
+                        AccessScope("cloudflare-local-fixture", "web"),
+                        BrowserRequest(
+                            url=current_action.start_url,
+                            timeout_seconds=10.0,
+                            max_response_bytes=1024 * 1024,
                         ),
-                        self.assertLogs(
-                            "sciretriever.acquisition.sources.browser",
-                            level="INFO",
-                        ) as timeout_logs,
-                    ):
-                        timeout_result, timeout_state, timeout_failure, _ = source._run_action(
-                            action("/challenge-timeout")
-                        )
-                    self.assertIsInstance(timeout_result, AccessFailure)
-                    assert isinstance(timeout_result, AccessFailure)
-                    self.assertEqual(timeout_result.code, "no-download")
-                    self.assertEqual(timeout_state.state, BrowserRunState.ACCESS_DENIED)
-                    self.assertIsNotNone(timeout_failure)
-                    assert timeout_failure is not None
-                    self.assertEqual(
-                        timeout_failure.code,
-                        "acquisition-browser-challenge-settle-timeout",
+                        AccessPolicy(max_concurrency=1),
+                        controller=_FlowController(flow),
+                        destination_guard=destination_guard,
+                        capture_guard=capture_guard,
+                        session_key=f"challenge-{path.removeprefix('/')}",
+                        cancel_event=cancel_event,
                     )
-                    timeout_output = "\n".join(timeout_logs.output)
-                    self.assertIn("outcome=settle-timeout", timeout_output)
-                    self.assertIn("bounded wait", timeout_output)
+                    return result, destination_guard
 
-                    with self.assertLogs(
-                        "sciretriever.acquisition.sources.browser",
-                        level="INFO",
-                    ) as blocked_logs:
-                        blocked_result, blocked_state, blocked_failure, _ = source._run_action(
-                            action("/challenge-blocked")
+                def wait_for_clear(
+                    observations: list[BrowserObservation],
+                    receipts: list[BrowserActionReceipt],
+                ) -> Callable[[object], None]:
+                    def flow(session: object) -> None:
+                        control = control_session(session)
+                        first = control.observe(page_state=BrowserPageState.CHALLENGE)
+                        observations.append(first)
+                        receipt = control.execute(
+                            WaitForChange(
+                                article_token=first.article_token,
+                                page_id=first.page_id,
+                                revision=first.revision,
+                            ),
+                            first,
+                            timeout_seconds=5.0,
                         )
+                        receipts.append(receipt)
+                        observations.append(control.observe(page_state=BrowserPageState.NORMAL))
+
+                    return flow
+
+                def stop_on(page_state: BrowserPageState) -> Callable[[object], None]:
+                    def flow(session: object) -> None:
+                        control = control_session(session)
+                        observation = control.observe(page_state=page_state)
+                        control.execute(
+                            Stop(
+                                article_token=observation.article_token,
+                                page_id=observation.page_id,
+                                revision=observation.revision,
+                                reason="fixture-stop",
+                            ),
+                            observation,
+                            timeout_seconds=1.0,
+                        )
+
+                    return flow
+
+                try:
+                    auto_observations: list[BrowserObservation] = []
+                    auto_receipts: list[BrowserActionReceipt] = []
+                    auto, auto_guard = run(
+                        "/challenge-auto",
+                        wait_for_clear(auto_observations, auto_receipts),
+                    )
+                    self.assertIsInstance(auto, BrowserCaptureBatch)
+                    assert isinstance(auto, BrowserCaptureBatch)
+                    self.assertEqual(b"".join(auto.captures[0].stream.chunks), _PDF)
+                    self.assertEqual(auto.captures[0].kind, BrowserCaptureKind.RESPONSE)
+                    self.assertEqual(
+                        [value.page_state for value in auto_observations],
+                        [BrowserPageState.CHALLENGE, BrowserPageState.NORMAL],
+                    )
+                    self.assertIn(
+                        auto_receipts[0].outcome,
+                        {BrowserActionOutcome.APPLIED, BrowserActionOutcome.CAPTURE},
+                    )
+                    admitted, blocked = auto_guard.challenge_resource_counts()
+                    self.assertGreater(admitted, 0)
+                    self.assertEqual(blocked, 0)
+
+                    turnstile, turnstile_guard = run(
+                        "/challenge-turnstile",
+                        wait_for_clear([], []),
+                    )
+                    self.assertIsInstance(turnstile, BrowserCaptureBatch)
+                    assert isinstance(turnstile, BrowserCaptureBatch)
+                    self.assertEqual(b"".join(turnstile.captures[0].stream.chunks), _PDF)
+                    self.assertGreater(turnstile_guard.challenge_resource_counts()[0], 0)
+
+                    interaction, interaction_guard = run(
+                        "/challenge-interaction",
+                        stop_on(BrowserPageState.CHALLENGE),
+                    )
+                    self.assertIsInstance(interaction, AccessFailure)
+                    assert isinstance(interaction, AccessFailure)
+                    self.assertEqual(interaction.code, "no-download")
+                    self.assertGreater(interaction_guard.challenge_resource_counts()[0], 0)
+
+                    blocked_result, blocked_guard = run(
+                        "/challenge-blocked",
+                        stop_on(BrowserPageState.CHALLENGE),
+                    )
                     self.assertIsInstance(blocked_result, AccessFailure)
-                    assert isinstance(blocked_result, AccessFailure)
-                    self.assertEqual(blocked_result.code, "no-download")
-                    self.assertEqual(blocked_state.state, BrowserRunState.ACCESS_DENIED)
-                    self.assertIsNotNone(blocked_failure)
-                    assert blocked_failure is not None
-                    self.assertEqual(
-                        blocked_failure.code,
-                        "acquisition-browser-challenge-resource-blocked",
-                    )
-                    blocked_output = "\n".join(blocked_logs.output)
-                    self.assertIn("outcome=resource-blocked", blocked_output)
-                    self.assertIn("local safety rules", blocked_output)
+                    self.assertGreater(blocked_guard.challenge_resource_counts()[1], 0)
 
-                    with self.assertLogs(
-                        "sciretriever.acquisition.sources.browser",
-                        level="INFO",
-                    ) as body_logs:
-                        body_result, body_state, body_failure, _ = source._run_action(
-                            action("/challenge-body")
-                        )
+                    body_result, body_guard = run(
+                        "/challenge-body",
+                        stop_on(BrowserPageState.CHALLENGE),
+                    )
                     self.assertIsInstance(body_result, AccessFailure)
-                    assert isinstance(body_result, AccessFailure)
-                    self.assertEqual(body_result.code, "policy")
-                    self.assertEqual(body_state.state, BrowserRunState.ACCESS_DENIED)
-                    self.assertIsNotNone(body_failure)
-                    assert body_failure is not None
-                    self.assertEqual(
-                        body_failure.code,
-                        "acquisition-browser-challenge-resource-blocked",
-                    )
-                    self.assertFalse(
-                        isinstance(body_result, BrowserCaptureBatch),
-                        "challenge PDF body must never cross the capture boundary",
-                    )
-                    self.assertIn("outcome=resource-blocked", "\n".join(body_logs.output))
+                    self.assertFalse(isinstance(body_result, BrowserCaptureBatch))
+                    self.assertGreater(body_guard.challenge_resource_counts()[1], 0)
 
-                    with self.assertLogs(
-                        "sciretriever.acquisition.sources.browser",
-                        level="DEBUG",
-                    ) as denied_logs:
-                        denied_result, denied_state, denied_failure, _ = source._run_action(
-                            action("/challenge-403")
-                        )
-                    self.assertIsInstance(denied_result, AccessFailure)
-                    assert isinstance(denied_result, AccessFailure)
-                    self.assertEqual(denied_result.code, "no-download")
-                    self.assertEqual(denied_state.state, BrowserRunState.ACCESS_DENIED)
-                    self.assertIsNone(denied_failure)
-                    denied_output = "\n".join(denied_logs.output)
-                    self.assertIn("event=browser-flow-finished", denied_output)
-                    self.assertIn("outcome=access-denied", denied_output)
-                    self.assertIn("Publisher denied", denied_output)
-                    self.assertIn("http_status=403", denied_output)
+                    denied, denied_guard = run(
+                        "/challenge-403",
+                        stop_on(BrowserPageState.ACCESS_DENIED),
+                    )
+                    self.assertIsInstance(denied, AccessFailure)
+                    assert isinstance(denied, AccessFailure)
+                    self.assertEqual(denied.code, "no-download")
+                    self.assertEqual(denied_guard.challenge_resource_counts(), (0, 0))
 
                     escape_guard = build_browser_rule_destination_guard(
                         rule,
                         fixture.origin + "/article",
                     )
+
+                    def escape_flow(session: object) -> None:
+                        operation = getattr(session, "open_verified_locator", None)
+                        if not callable(operation):
+                            raise AssertionError("fixture session lost its locator capability")
+                        operation(f"https://unknown-origin.invalid:{port}/escape")
+
                     escape = client.run(
                         AccessScope("cloudflare-local-fixture", "web"),
                         BrowserRequest(
@@ -598,11 +531,7 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                             max_response_bytes=1024 * 1024,
                         ),
                         AccessPolicy(max_concurrency=1),
-                        controller=_FlowController(
-                            lambda session: session.open_verified_locator(
-                                f"https://unknown-origin.invalid:{port}/escape"
-                            )
-                        ),
+                        controller=_FlowController(escape_flow),
                         destination_guard=escape_guard,
                         capture_guard=_RuleCaptureGuard(action("/article")),
                         session_key="challenge-escape",
@@ -612,16 +541,13 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                     self.assertEqual(escape.code, "policy")
 
                     cancel = threading.Event()
-                    cancelled_source = ControlledBrowserPdfSource(
-                        runner=runner,
-                        rule_catalog=BrowserRuleCatalog((rule,)),
-                        cancel_event=cancel,
-                    )
                     timer = threading.Timer(0.2, cancel.set)
                     timer.start()
                     try:
-                        cancelled, _cancelled_state, _cancelled_failure, _ = (
-                            cancelled_source._run_action(action("/challenge-late"))
+                        cancelled, _cancelled_guard = run(
+                            "/challenge-late",
+                            wait_for_clear([], []),
+                            cancel_event=cancel,
                         )
                     finally:
                         timer.cancel()
@@ -629,7 +555,6 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                     self.assertIsInstance(cancelled, AccessFailure)
                     assert isinstance(cancelled, AccessFailure)
                     self.assertEqual(cancelled.code, "cancelled")
-                    self.assertIsNone(_cancelled_failure)
                     self.assertFalse(fixture.state.late_navigation.wait(0.2))
 
                     with fixture.state.lock:
@@ -639,12 +564,6 @@ class CloakBrowserCloudflareChallengeAcceptanceTests(unittest.TestCase):
                     self.assertIn("/cdn-cgi/challenge-platform/challenge.js", paths)
                     self.assertIn("/cdn-cgi/challenge-platform/challenge.gif", paths)
                     self.assertIn("/turnstile/v0/api.js", paths)
-                    # The unreviewed challenge dependency is rejected at the
-                    # route admission boundary, before transport I/O.  Its
-                    # absence from the fixture server is therefore expected;
-                    # the stable resource-blocked failure above proves this
-                    # was an intentional policy decision rather than a
-                    # missing browser request.
                     self.assertNotIn("/cdn-cgi/other/unreviewed.js", paths)
                     self.assertIn("/cdn-cgi/challenge-platform/challenge.pdf", paths)
                     self.assertIn(("/challenge-403", 403), statuses)

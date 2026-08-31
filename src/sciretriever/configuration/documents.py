@@ -36,46 +36,33 @@ from sciretriever.configuration.browser_profiles import (
 from sciretriever.configuration.errors import ConfigurationError
 from sciretriever.configuration.errors import fail as _fail
 from sciretriever.configuration.file_store import (
-    _DIRECTORY_MODE,
     _FILE_MODE,
     _MAX_CONFIGURATION_BYTES,
     _MAX_CREDENTIALS_BYTES,
     _lstat,
+    _lstat_directory,
     _read_verified,
+    _secure_configuration_directory,
 )
 from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
     AccessConfig,
-    AgentsConfig,
     AnalysisConfig,
-    AssetsConfig,
     BrowserProfilePresence,
     Configuration,
-    DiscoveryConfig,
-    ExecutionConfig,
-    LibraryConfig,
+    ModelProvidersConfig,
+    ModelsConfig,
     ParsingConfig,
-    PathsConfig,
     SourcesConfig,
 )
 
-_CONFIGURATION_ENVIRONMENT: Final[str] = "SCIRETRIEVER_CONFIG"
+_CONFIGURATION_DIRECTORY_NAME: Final[str] = ".sciretriever"
+_CONFIGURATION_FILE_NAME: Final[str] = "config.toml"
 
 
 def _empty_configuration() -> Configuration:
-    return Configuration(
-        paths=PathsConfig(),
-        discovery=DiscoveryConfig(),
-        sources=SourcesConfig(),
-        assets=AssetsConfig(),
-        parsing=ParsingConfig(),
-        agents=AgentsConfig(),
-        analysis=AnalysisConfig(),
-        execution=ExecutionConfig(),
-        library=LibraryConfig(),
-        access=AccessConfig(),
-    )
+    return Configuration()
 
 
 def _parse_toml(raw: bytes, *, credentials: bool) -> dict[str, object]:
@@ -94,15 +81,15 @@ def _parse_toml(raw: bytes, *, credentials: bool) -> dict[str, object]:
 _CONFIGURATION_SECTIONS: Final[frozenset[str]] = frozenset(
     {
         "paths",
-        "discovery",
         "sources",
         "assets",
         "parsing",
-        "agents",
-        "analysis",
+        "providers",
+        "models",
+        "analyze",
         "execution",
         "library",
-        "access",
+        "download",
     }
 )
 
@@ -133,60 +120,65 @@ def parse_configuration(payload: str | bytes) -> Configuration:
 
 
 def load_configuration(path: str | Path) -> Configuration:
-    """Load one ordinary TOML file through a bounded descriptor read."""
+    """Parse one explicitly selected ordinary TOML document.
+
+    This low-level reader does not select the production configuration.  CLI,
+    Entry, and Bootstrap use :func:`load_user_configuration` instead.
+    """
 
     selected = _safe_path(path)
     raw, _metadata = _read_verified(selected, credentials=False, secure=False)
     return _parse_configuration_payload(raw)
 
 
-def select_configuration_path(
-    explicit: str | Path | None = None,
-    *,
-    environment: Mapping[str, str] | None = None,
-    cwd: str | Path | None = None,
-) -> Path:
-    """Select an ordinary config file; this never selects credentials."""
+def configuration_path(*, home: str | Path | None = None) -> Path:
+    """Return the one user-level ordinary configuration path.
 
-    if explicit is not None:
-        return _safe_path(explicit)
-    values = os.environ if environment is None else environment
-    selected = values.get(_CONFIGURATION_ENVIRONMENT)
-    if selected:
-        return _safe_path(selected)
-    local = (Path.cwd() if cwd is None else _safe_path(cwd)) / "config.toml"
-    try:
-        if local.is_file():
-            return local
-    except OSError:
+    ``home`` is a controlled dependency-injection seam for offline tests.  A
+    caller cannot select another filename or directory below that home.
+    """
+
+    base = Path.home() if home is None else _safe_path(home)
+    return base / _CONFIGURATION_DIRECTORY_NAME / _CONFIGURATION_FILE_NAME
+
+
+def _read_private_configuration_path(
+    path: Path,
+    *,
+    missing_ok: bool,
+) -> tuple[bytes, os.stat_result | None]:
+    directory = _lstat_directory(
+        path.parent,
+        missing_ok=True,
+        credentials=False,
+    )
+    if directory is None:
+        if missing_ok:
+            return b"", None
         _fail("configuration file is unavailable")
-    _fail("configuration file is unavailable")
+    _secure_configuration_directory(path.parent, create=False)
+    metadata = _lstat(path, missing_ok=missing_ok, credentials=False)
+    if metadata is None:
+        return b"", None
+    return _read_verified(path, credentials=False, secure=True)
 
 
-def load_selected_configuration(
-    explicit: str | Path | None = None,
+def _read_user_configuration(
     *,
-    environment: Mapping[str, str] | None = None,
-    cwd: str | Path | None = None,
-) -> Configuration:
-    return load_configuration(select_configuration_path(explicit, environment=environment, cwd=cwd))
+    home: str | Path | None,
+    missing_ok: bool,
+) -> tuple[bytes, os.stat_result | None]:
+    return _read_private_configuration_path(
+        configuration_path(home=home),
+        missing_ok=missing_ok,
+    )
 
 
-def select_configuration_edit_path(
-    explicit: str | Path | None = None,
-    *,
-    environment: Mapping[str, str] | None = None,
-    cwd: str | Path | None = None,
-) -> Path:
-    """Select the ordinary config target even when it does not exist yet."""
+def load_user_configuration(*, home: str | Path | None = None) -> Configuration:
+    """Load the fixed user-level ordinary configuration."""
 
-    if explicit is not None:
-        return _safe_path(explicit)
-    values = os.environ if environment is None else environment
-    selected = values.get(_CONFIGURATION_ENVIRONMENT)
-    if selected:
-        return _safe_path(selected)
-    return (Path.cwd() if cwd is None else _safe_path(cwd)) / "config.toml"
+    raw, _metadata = _read_user_configuration(home=home, missing_ok=False)
+    return _parse_configuration_payload(raw)
 
 
 ConfigurationChange = tuple[str, object, object]
@@ -196,23 +188,26 @@ def configuration_diff(
     before: Configuration,
     after: Configuration,
     *,
-    sections: tuple[str, ...] = ("agents", "analysis", "parsing"),
+    sections: tuple[str, ...] = ("providers", "models", "analyze", "parsing"),
 ) -> tuple[ConfigurationChange, ...]:
     """Return a stable, non-secret ordinary-configuration field diff."""
 
     if not isinstance(before, Configuration) or not isinstance(after, Configuration):
         _fail("configuration value is invalid")
     if not isinstance(sections, tuple) or any(
-        type(section) is not str or section not in {"access", "agents", "analysis", "parsing"}
+        type(section) is not str
+        or section not in {"sources", "download", "providers", "models", "analyze", "parsing"}
         for section in sections
     ):
         _fail("configuration value is invalid")
     before_payload = before.model_dump(mode="json")
     after_payload = after.model_dump(mode="json")
     changes: list[ConfigurationChange] = []
+    field_by_section = {"download": "access", "analyze": "analysis"}
     for section in sections:
-        old = before_payload[section]
-        new = after_payload[section]
+        field = field_by_section.get(section, section)
+        old = before_payload[field]
+        new = after_payload[field]
         if not isinstance(old, dict) or not isinstance(new, dict):
             _fail("configuration value is invalid")
         for field in sorted(set(old) | set(new)):
@@ -232,7 +227,10 @@ def _configuration_document(raw: bytes) -> tomlkit.TOMLDocument:
 
 
 def _configuration_section_payload(value: BaseModel) -> dict[str, object]:
-    payload = value.model_dump(mode="json", exclude_none=True)
+    # The TOML document is a public configuration boundary.  Keep Python-only
+    # attribute spellings (for example ``sci_hub``) inside the model and emit
+    # the documented aliases (for example ``sci-hub``) when publishing it.
+    payload = value.model_dump(mode="json", by_alias=True, exclude_none=True)
     if not isinstance(payload, dict):
         _fail("configuration value is invalid")
     return payload
@@ -277,19 +275,20 @@ def _replace_document_section(
     merge_table(table, payload)
 
 
-def _read_editable_configuration(path: Path) -> tuple[bytes, os.stat_result | None]:
-    metadata = _lstat(path, missing_ok=True, credentials=False)
-    if metadata is None:
-        return b"", None
-    raw, final = _read_verified(path, credentials=False, secure=False)
-    return raw, final
+def _read_editable_configuration(
+    *,
+    home: str | Path | None,
+) -> tuple[bytes, os.stat_result | None]:
+    return _read_user_configuration(home=home, missing_ok=True)
 
 
-def load_editable_configuration(path: str | Path) -> Configuration:
-    """Load an editable ordinary config, treating a missing target as empty."""
+def load_editable_user_configuration(
+    *,
+    home: str | Path | None = None,
+) -> Configuration:
+    """Load the fixed user config, treating a missing target as empty."""
 
-    selected = _safe_path(path)
-    raw, _metadata = _read_editable_configuration(selected)
+    raw, _metadata = _read_editable_configuration(home=home)
     return _empty_configuration() if not raw else _parse_configuration_payload(raw)
 
 
@@ -382,6 +381,7 @@ def _replace_configuration_staging(
     expected: os.stat_result | None,
     failpoint: Callable[[str], None] | None,
 ) -> None:
+    _secure_configuration_directory(path.parent, create=False)
     current = _lstat(path, missing_ok=True, credentials=False)
     if expected is None:
         if current is not None:
@@ -404,10 +404,7 @@ def _publish_configuration(
     staging: Path | None = None
     directory_fd: int | None = None
     try:
-        try:
-            path.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
-        except OSError:
-            _fail("configuration directory is unavailable")
+        _secure_configuration_directory(path.parent, create=True)
         staging = _stage_configuration(path, payload, failpoint)
         staged_raw, _metadata = _read_verified(staging, credentials=False, secure=True)
         _parse_configuration_payload(staged_raw)
@@ -433,10 +430,7 @@ def _publish_configuration(
 
 
 def _prepare_configuration_staging(path: Path, payload: bytes) -> Path:
-    try:
-        path.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
-    except OSError:
-        _fail("configuration directory is unavailable")
+    _secure_configuration_directory(path.parent, create=True)
     staging = _stage_configuration(path, payload, None)
     try:
         staged_raw, _metadata = _read_verified(staging, credentials=False, secure=True)
@@ -474,20 +468,33 @@ def _commit_configuration_staging(
 
 
 def update_configuration_sections(
-    path: str | Path,
     *,
-    agents: AgentsConfig | None = None,
+    sources: SourcesConfig | None = None,
+    providers: ModelProvidersConfig | None = None,
+    models: ModelsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     access: AccessConfig | None = None,
+    home: str | Path | None = None,
     failpoint: Callable[[str], None] | None = None,
 ) -> Configuration:
-    """Round-trip and atomically publish selected ordinary config sections."""
+    """Round-trip selected sections in the fixed user configuration."""
 
-    selected = _safe_path(path)
-    if agents is None and analysis is None and parsing is None and access is None:
+    selected = configuration_path(home=home)
+    if (
+        sources is None
+        and providers is None
+        and models is None
+        and analysis is None
+        and parsing is None
+        and access is None
+    ):
         _fail("configuration value is invalid")
-    if agents is not None and not isinstance(agents, AgentsConfig):
+    if sources is not None and not isinstance(sources, SourcesConfig):
+        _fail("configuration value is invalid")
+    if providers is not None and not isinstance(providers, ModelProvidersConfig):
+        _fail("configuration value is invalid")
+    if models is not None and not isinstance(models, ModelsConfig):
         _fail("configuration value is invalid")
     if analysis is not None and not isinstance(analysis, AnalysisConfig):
         _fail("configuration value is invalid")
@@ -497,8 +504,10 @@ def update_configuration_sections(
         _fail("configuration value is invalid")
     payload, expected, configuration = _configuration_update_payload(
         selected,
+        sources=sources,
+        providers=providers,
         analysis=analysis,
-        agents=agents,
+        models=models,
         parsing=parsing,
         access=access,
     )
@@ -507,7 +516,6 @@ def update_configuration_sections(
 
 
 def configure_browser_access_profile(
-    path: str | Path,
     access: AccessConfig,
     *,
     home: str | Path | None = None,
@@ -522,7 +530,7 @@ def configure_browser_access_profile(
     rollback.  This function never opens a Browser or reads profile bytes.
     """
 
-    selected = _safe_path(path)
+    selected = configuration_path(home=home)
     if not isinstance(access, AccessConfig):
         _fail("configuration value is invalid")
     if not access.browser_enabled or access.browser_profile is None:
@@ -571,21 +579,27 @@ def configure_browser_access_profile(
 def _configuration_update_payload(
     path: Path,
     *,
-    agents: AgentsConfig | None = None,
+    sources: SourcesConfig | None = None,
+    providers: ModelProvidersConfig | None = None,
+    models: ModelsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
     access: AccessConfig | None = None,
 ) -> tuple[bytes, os.stat_result | None, Configuration]:
-    raw, expected = _read_editable_configuration(path)
+    raw, expected = _read_private_configuration_path(path, missing_ok=True)
     document = _configuration_document(raw)
-    if agents is not None:
-        _replace_document_section(document, "agents", agents)
+    if sources is not None:
+        _replace_document_section(document, "sources", sources)
+    if providers is not None:
+        _replace_document_section(document, "providers", providers)
+    if models is not None:
+        _replace_document_section(document, "models", models)
     if analysis is not None:
-        _replace_document_section(document, "analysis", analysis)
+        _replace_document_section(document, "analyze", analysis)
     if parsing is not None:
         _replace_document_section(document, "parsing", parsing)
     if access is not None:
-        _replace_document_section(document, "access", access)
+        _replace_document_section(document, "download", access)
     try:
         payload = tomlkit.dumps(document).encode("utf-8")
     except (TOMLKitError, UnicodeEncodeError, ValueError, TypeError):

@@ -23,7 +23,6 @@ ACS_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
         "a[href*='/doi/pdf/'], a[href*='/doi/epdf/'], a[data-test='pdf-link'], a[title='PDF']"
     ),
     doi_pdf_url_template="https://pubs.acs.org/doi/pdf/{doi}",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "acs",
         entitled_selectors=(

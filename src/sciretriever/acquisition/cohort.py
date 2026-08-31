@@ -916,7 +916,6 @@ def _browser_group_feedback(item: AcquisitionWorkItem) -> BrowserGroupFeedback:
     return {
         "acquisition-browser-login-required": BrowserGroupFeedback.LOGIN_REQUIRED,
         "acquisition-browser-mfa-required": BrowserGroupFeedback.MFA_REQUIRED,
-        "acquisition-browser-challenge-required": BrowserGroupFeedback.CHALLENGE_REQUIRED,
         "acquisition-browser-ip-blocked": BrowserGroupFeedback.IP_BLOCKED,
         "acquisition-browser-account-warning": BrowserGroupFeedback.ACCOUNT_WARNING,
         "acquisition-browser-rate-limited": BrowserGroupFeedback.RATE_LIMITED,
@@ -942,9 +941,6 @@ def _browser_runtime_block_failure(
         ),
         BrowserCircuitReason.MFA_REQUIRED: (
             "Use an authorized API or provide the PDF manually; Browser MFA is unsupported."
-        ),
-        BrowserCircuitReason.CHALLENGE_REQUIRED: (
-            "Provide the PDF manually; Browser challenge handling is unsupported."
         ),
         BrowserCircuitReason.IP_BLOCKED: "Review the provider IP access block.",
         BrowserCircuitReason.ACCOUNT_WARNING: "Review the provider account warning.",

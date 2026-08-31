@@ -32,17 +32,19 @@ from urllib.parse import urlsplit
 
 from sciretriever.acquisition.browser_control import (
     AgentBrowserController,
-    AgentsBrowserAgentDecisionPort,
     BrowserAgentDisposition,
-    BrowserAgentLoopBudget,
 )
-from sciretriever.agents import (
+from sciretriever.agents.api import (
+    AgentCallLimits,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentResult,
-    AgentToolDecision,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentToolCall,
     AgentUsage,
 )
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.configuration import (
     initialize_browser_profile,
     remove_browser_profile,
@@ -57,14 +59,18 @@ from sciretriever.model.access import (
 )
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
-    BrowserBudget,
     BrowserClient,
     BrowserDestinationKind,
+    BrowserOperationLimits,
     _ConnectionBinding,
 )
 from sciretriever.network.browser_control import (
-    BrowserAgentActionCommand,
-    BrowserAgentActionKind,
+    BrowserAction,
+    BrowserActionReceipt,
+    BrowserControlSession,
+    BrowserObservation,
+    BrowserPageState,
+    ClickElement,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.cloakbrowser import (
@@ -111,13 +117,13 @@ class _FixtureMultimodalBrowserAgent:
         self._scroll_requested = False
         self._wait_requested = False
 
-    def complete(self, request: AgentRequest) -> AgentResult:  # noqa: C901
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:  # noqa: C901
         self.turns += 1
-        if not request.image_parts or not request.tools:
+        if not call.image_parts or not call.tools:
             raise AssertionError("Browser Agent fixture did not receive multimodal tools")
         self.image_turns += 1
         try:
-            summary = json.loads(request.user_text)
+            summary = json.loads(call.text_parts[1].text)
         except (TypeError, ValueError) as error:
             raise AssertionError(
                 "Browser Agent fixture received invalid observation JSON"
@@ -125,8 +131,17 @@ class _FixtureMultimodalBrowserAgent:
         if not isinstance(summary, dict):
             raise AssertionError("Browser Agent observation is not an object")
         revision = summary.get("revision")
+        article_token = summary.get("article_token")
+        page_id = summary.get("page_id")
         elements = summary.get("elements")
-        if type(revision) is not int or not isinstance(elements, list):
+        surfaces = summary.get("surfaces")
+        if (
+            type(revision) is not int
+            or type(article_token) is not str
+            or type(page_id) is not str
+            or not isinstance(elements, list)
+            or not isinstance(surfaces, list)
+        ):
             raise AssertionError("Browser Agent observation omitted bounded action facts")
 
         def find(name: str, *, visible: bool | None = None) -> dict[str, object] | None:
@@ -147,39 +162,119 @@ class _FixtureMultimodalBrowserAgent:
 
         consent = find("Accept cookies", visible=True)
         pdf = find("Download PDF", visible=True)
+        identity: dict[str, object] = {
+            "article_token": article_token,
+            "page_id": page_id,
+            "revision": revision,
+        }
         if consent is not None:
             tool_name = "click_element"
-            arguments = {"revision": revision, "element_id": consent.get("id")}
+            arguments = {
+                **identity,
+                "surface_id": consent.get("surface_id"),
+                "element_id": consent.get("element_id"),
+            }
         elif pdf is not None and not self._wait_requested:
             self._wait_requested = True
-            tool_name = "wait_for_page"
-            arguments = {"revision": revision, "seconds": 0.2}
+            tool_name = "wait_for_change"
+            arguments = identity
         elif pdf is not None:
             tool_name = "click_element"
-            arguments = {"revision": revision, "element_id": pdf.get("id")}
+            arguments = {
+                **identity,
+                "surface_id": pdf.get("surface_id"),
+                "element_id": pdf.get("element_id"),
+            }
         elif not self._scroll_requested:
             self._scroll_requested = True
-            tool_name = "scroll_page"
-            arguments = {"revision": revision, "delta_y": 500}
+            surface = next((value for value in surfaces if isinstance(value, dict)), None)
+            if surface is None:
+                raise AssertionError("Browser Agent observation omitted its page surface")
+            tool_name = "scroll_surface"
+            arguments = {
+                **identity,
+                "surface_id": surface.get("surface_id"),
+                "delta_y": 500,
+            }
         else:
             # Native wheel dispatch can return before a page's scroll listener
             # has run.  Keep the wait on the same closed Browser action seam;
             # no JavaScript or selector is sent to the Agent.
             self._wait_requested = True
-            tool_name = "wait_for_page"
-            arguments = {"revision": revision, "seconds": 0.2}
+            tool_name = "wait_for_change"
+            arguments = identity
         encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-        return AgentToolDecision(
+        return AgentToolCall(
             tool_name=tool_name,
             arguments=encoded,
             provenance=AgentProvenance(
                 provider=self.provider_name,
-                model=request.model,
-                input_sha256=request.input_sha256,
-                parameters_sha256=request.input_sha256,
+                model=call.model,
+                input_sha256=call.input_sha256,
+                parameters_sha256=call.input_sha256,
                 usage=AgentUsage(output_tokens=1, response_bytes=len(encoded.encode("utf-8"))),
             ),
         )
+
+
+def _agent_runtime(adapter: _FixtureMultimodalBrowserAgent) -> AgentRuntime:
+    return AgentRuntime(
+        adapter=adapter,
+        browser=AgentRoleBinding(
+            role=AgentRole.BROWSER,
+            model="fixture-browser-model",
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=32_768,
+                max_output_tokens=512,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset({"image/png", "image/jpeg", "image/webp"}),
+                max_image_count=1,
+                max_image_bytes=8 * 1024 * 1024,
+            ),
+            limits=AgentCallLimits(
+                max_prompt_bytes=131_072,
+                max_input_bytes=8 * 1024 * 1024,
+                max_request_bytes=9 * 1024 * 1024,
+                max_response_bytes=1 * 1024 * 1024,
+                max_result_bytes=1 * 1024 * 1024,
+                max_output_tokens=512,
+                context_window_tokens=32_768,
+            ),
+        ),
+    )
+
+
+class _NormalPageAgentControl:
+    def __init__(self, inner: BrowserControlSession) -> None:
+        self.inner = inner
+
+    def observe(self) -> BrowserObservation:
+        return self.inner.observe(page_state=BrowserPageState.NORMAL)
+
+    def execute(
+        self,
+        action: BrowserAction,
+        observation: BrowserObservation,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserActionReceipt:
+        return self.inner.execute(
+            action,
+            observation,
+            timeout_seconds=timeout_seconds,
+        )
+
+
+class _NormalPageAgentControlFactory:
+    def open(self, session: object) -> _NormalPageAgentControl:
+        control_factory = getattr(session, "control_session", None)
+        if not callable(control_factory):
+            raise AssertionError("Browser flow did not expose its bounded control session")
+        inner = control_factory()
+        if not isinstance(inner, BrowserControlSession):
+            raise AssertionError("Browser control session violated its neutral contract")
+        return _NormalPageAgentControl(inner)
 
 
 class _Resolver:
@@ -1065,9 +1160,8 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         capture_guard=_CaptureGuard(origin, BrowserCaptureKind.RESPONSE),
                         navigation_only=True,
                         session_key="cloak-local-publisher",
-                        budget=BrowserBudget(
-                            max_bytes_per_download=max(1, len(_PDF) - 1),
-                            max_total_bytes=max(1, len(_PDF) - 1),
+                        limits=BrowserOperationLimits(
+                            max_capture_bytes=max(1, len(_PDF) - 1),
                         ),
                     )
                     self.assertIsInstance(limited, AccessFailure)
@@ -1089,10 +1183,10 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                     assert isinstance(escape, AccessFailure)
                     self.assertEqual(escape.code, "policy")
 
-                    request_limited = client.run(
+                    request_count_unbounded = client.run(
                         AccessScope("cloak-local-publisher", "web"),
                         BrowserRequest(
-                            url=origin + "/article?request-budget=fixture",
+                            url=origin + "/article?request-count=fixture",
                             timeout_seconds=15.0,
                             max_response_bytes=8 * 1024 * 1024,
                         ),
@@ -1100,11 +1194,10 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         controller=_FlowController(lambda session: session.text("#ready")),
                         destination_guard=guard,
                         session_key="cloak-local-publisher",
-                        budget=BrowserBudget(max_requests=1),
                     )
-                    self.assertIsInstance(request_limited, AccessFailure)
-                    assert isinstance(request_limited, AccessFailure)
-                    self.assertEqual(request_limited.code, "budget")
+                    self.assertIsInstance(request_count_unbounded, AccessFailure)
+                    assert isinstance(request_count_unbounded, AccessFailure)
+                    self.assertEqual(request_count_unbounded.code, "no-download")
 
                     fixture.state.stall_released.clear()
                     timeout_result = client.run(
@@ -1182,22 +1275,10 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                 )
 
                 fixture_agent = _FixtureMultimodalBrowserAgent()
-
-                def agent_flow(session: Any) -> None:
-                    controller = AgentBrowserController(
-                        agent_port=fixture_agent,
-                        decision_port=AgentsBrowserAgentDecisionPort(model="fixture-browser-model"),
-                        action_port=session.agent_action_port(),
-                        budget=BrowserAgentLoopBudget(
-                            max_steps=8,
-                            max_seconds=20.0,
-                            max_repeated_actions=4,
-                        ),
-                    )
-                    result = controller.run("cloak-local-agent")
-                    self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
-                    self.assertGreaterEqual(fixture_agent.turns, 4)
-                    self.assertEqual(fixture_agent.turns, fixture_agent.image_turns)
+                controller = AgentBrowserController(
+                    runtime=_agent_runtime(fixture_agent),
+                    control_factory=_NormalPageAgentControlFactory(),
+                )
 
                 guard = _DestinationGuard(origin)
                 capture_guard = _CaptureGuard(origin, BrowserCaptureKind.RESPONSE)
@@ -1210,11 +1291,20 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                             max_response_bytes=8 * 1024 * 1024,
                         ),
                         AccessPolicy(max_concurrency=1),
-                        controller=_FlowController(agent_flow),
+                        controller=controller,
                         destination_guard=guard,
                         capture_guard=capture_guard,
                         session_key="cloak-local-agent",
                     )
+                    controller_result = controller.result
+                    if controller_result is None:
+                        self.fail("Browser Agent controller did not retain a result")
+                    self.assertEqual(
+                        controller_result.disposition,
+                        BrowserAgentDisposition.CAPTURE_AVAILABLE,
+                    )
+                    self.assertGreaterEqual(fixture_agent.turns, 4)
+                    self.assertEqual(fixture_agent.turns, fixture_agent.image_turns)
                     self.assertIsInstance(result, BrowserCaptureBatch)
                     assert isinstance(result, BrowserCaptureBatch)
                     self.assertEqual(len(result.captures), 1)
@@ -1268,24 +1358,31 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
 
                 def replacement_flow(session: Any) -> None:
                     nonlocal fail_closed
-                    action_port = session.agent_action_port()
-                    first = action_port.observe()
+                    action_port = session.control_session()
+                    first = action_port.observe(page_state=BrowserPageState.NORMAL)
                     control = next(
                         element for element in first.elements if element.name == "Replace DOM"
                     )
                     target = next(
                         element for element in first.elements if element.name == "Replace target"
                     )
+                    control_surface = next(
+                        surface
+                        for surface in first.surfaces
+                        if surface.surface_id == control.surface_id
+                    )
                     action_port.execute(
-                        BrowserAgentActionCommand(
-                            BrowserAgentActionKind.CLICK_ELEMENT,
+                        ClickElement(
+                            first.article_token,
+                            control_surface.page_id,
+                            control_surface.surface_id,
                             first.revision,
-                            element_id=control.element_id,
+                            control.element_id,
                         ),
                         first,
                         timeout_seconds=5.0,
                     )
-                    changed = action_port.observe()
+                    changed = action_port.observe(page_state=BrowserPageState.NORMAL)
                     self.assertNotEqual(changed.revision, first.revision)
                     replacement = next(
                         element
@@ -1295,10 +1392,12 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                     self.assertNotEqual(replacement.element_id, target.element_id)
                     with self.assertRaises(Exception):
                         action_port.execute(
-                            BrowserAgentActionCommand(
-                                BrowserAgentActionKind.CLICK_ELEMENT,
+                            ClickElement(
+                                first.article_token,
+                                control_surface.page_id,
+                                target.surface_id,
                                 first.revision,
-                                element_id=target.element_id,
+                                target.element_id,
                             ),
                             first,
                             timeout_seconds=5.0,

@@ -112,8 +112,8 @@ redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 ter
 - [ ] Public/API 正常结束与 Browser admission 已由受控运行证明。
 - [ ] Cloak wrapper、Playwright API、经核实 binary、fixed identity manifest、headed display/Xvfb、持久 Profile 独占 lease 和临时下载工作区 readiness 已确认。
 
-出现 `429`/quota/`Retry-After`、login、MFA、CAPTCHA/Turnstile 人工交互、challenge
-resource-blocked/settle-timeout、IP block、account warning、未知 origin、entitlement 不确定、
+出现 `429`/quota/`Retry-After`、login、MFA、challenge resource-blocked、所选 controller 结束后
+仍为 `challenge-unresolved`、IP block、account warning、未知 origin、entitlement 不确定、
 supplement/wrong article、budget、timeout、cleanup/publication/数据完整性
 错误或用户取消时立即停止；不得换入口、换网络、提高频率或扩大样本。
 

@@ -52,8 +52,8 @@ SciRetriever 不复制 Cookie、CARSI、CAPTCHA/反检测、selector、URL 模�
 当前生产规则 `science-aaas-pdf@3` 只接受强 DOI/Science landing，精确允许
 `https://www.science.org`，从 `/doi/epdf/` 或 `/doi/pdf/` 的 response/download 捕获候选，并排除
 supplement、media/XML 和 wrong-article。规则包含封闭的 entitlement/paywall、login、
-MFA/challenge、rate/IP/account-warning 页面状态；自动 challenge 只在有界 settle 内等待自然
-完成，登录或明确人工控件只识别后停止。Browser 使用当前
+MFA/challenge、rate/IP/account-warning 页面状态；Challenge 由作业开始前选定的 Rules 或 Agent
+controller 按统一页面合同继续处理，登录/MFA 页面仍识别后停止。Browser 使用当前
 机器网络出口，以及共享 persistent Profile/context 中独立的 `science-aaas` lane；组内并发 1、
 项目审慎最小文章启动间隔 30 秒。自动流程不导入或读取 Cookie，也不执行认证。
 
@@ -63,10 +63,11 @@ dependency：精确 origin `https://challenges.cloudflare.com`、path prefix
 `document`、`fetch`、`xhr` 和 `image`。
 它不加入 Science 的普通 `allowed_origins`；只有当前 Science Publisher 页面或其 frame ancestry
 能给出发起与用途证明时才可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture
-source。运行时分别报告 `resource-blocked`、`settling`、`cleared`、
-`interaction-required`、`settle-timeout` 和普通 HTTP 403；只有自动 `cleared` 才返回正文流程，
-第一版不点击 CAPTCHA/Turnstile。该封闭规则和本地 fixture 只证明程序没有自行挡住必要资源，
-不证明当前 IP、机构合同或文章 entitlement。
+source。这里记录的 `resource-blocked`、`settling`、`cleared`、`interaction-required` 与
+`settle-timeout` 是 2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。
+当前 Rules 只执行已审查动作，Agent 可以使用统一元素/坐标点击；controller 停止时仍为 Challenge
+形成文章级 `challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则和本地 fixture
+只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
 
 2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
 均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、

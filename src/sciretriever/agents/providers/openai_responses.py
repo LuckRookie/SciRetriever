@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sciretriever.agents.calls import AgentCallLimits
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.agents.providers.base import (
     OPENAI_BASELINE_ACCESS_POLICY,
     ProviderHttpAdapterBase,
@@ -12,13 +14,9 @@ from sciretriever.agents.providers.base import (
     tool_declarations,
     usage_from_payload,
 )
-from sciretriever.agents.requests import (
-    AgentBudget,
-    AgentRequest,
-    canonical_json_bytes,
-    parse_strict_json_object,
-)
+from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json_object
 from sciretriever.model.access import Header
+from sciretriever.model.configuration import AgentReasoningEffort
 from sciretriever.network.admission import AccessPolicy
 from sciretriever.network.http import HttpClient
 
@@ -35,7 +33,7 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
         http_client: HttpClient,
         api_key: str | None,
         base_url: str = "https://api.openai.com/v1",
-        limits: AgentBudget | None = None,
+        limits: AgentCallLimits | None = None,
         access_policy: AccessPolicy | None = None,
         provider_name: str = _PROVIDER_NAME,
         service_name: str = "responses",
@@ -50,7 +48,7 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
         super().__init__(
             http_client=http_client,
             api_key=api_key,
-            limits=limits or AgentBudget(),
+            limits=limits or AgentCallLimits(),
             access_policy=access_policy,
             provider_name=provider_name,
             endpoint=endpoint,
@@ -70,7 +68,7 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
     def _credential_headers(self) -> tuple[tuple[str, str], ...]:
         return () if self._api_key is None else (("Authorization", f"Bearer {self._api_key}"),)
 
-    def _build_request_body(self, call: AgentRequest) -> bytes:
+    def _build_request_body(self, call: AgentProviderCall) -> bytes:
         body: dict[str, object] = {
             "model": call.model,
             "input": [
@@ -94,9 +92,11 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
         if call.tools:
             body["tools"] = tool_declarations(call)
             body["tool_choice"] = "required"
+        if call.reasoning_effort is not AgentReasoningEffort.PROVIDER_DEFAULT:
+            body["reasoning"] = {"effort": call.reasoning_effort.value}
         return canonical_json_bytes(body)
 
-    def _parse_result(self, body: bytes, call: AgentRequest) -> _ParsedResult:
+    def _parse_result(self, body: bytes, call: AgentProviderCall) -> _ParsedResult:
         root = _response_root(body, call)
         usage = usage_from_payload(root.get("usage"))
         output = root.get("output")
@@ -132,7 +132,7 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
         }
 
 
-def _response_root(body: bytes, call: AgentRequest) -> dict[str, object]:
+def _response_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:
     try:
         root = parse_strict_json_object(body)
     except (TypeError, ValueError):

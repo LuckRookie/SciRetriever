@@ -1,11 +1,12 @@
 """Evidence-routed, declarative controlled-Browser PDF acquisition.
 
-This adapter exposes only a closed structural Browser capability set to local
-rules: observe a bounded query-free page snapshot, read bounded marker text,
-perform a static click, open one reviewed viewer/locator, or wait for one
-closed capture kind.  It never receives a page, context, process, profile,
-Cookie, download object, or vendor lifecycle handle, and it never fills
-login/MFA forms or attempts to solve challenges.
+This adapter selects exactly one controller before an article flow starts.
+Rules use reviewed static discovery and click knowledge; Agent control starts
+from the first unified observation and may operate an ordinary visible
+challenge through six closed actions.  Both modes reuse Network's guarded
+action/capture runtime.  Neither receives a page, context, process, profile,
+Cookie, download object, vendor lifecycle handle, login/MFA input, arbitrary
+URL, selector execution handle, or script capability.
 
 The Network Browser checks every real destination against both its general
 URL/DNS/admission policy and the closed site-rule guard supplied here.  The
@@ -27,22 +28,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, unique
 from io import BytesIO
-from typing import BinaryIO, Final, NoReturn, Protocol, cast, runtime_checkable
+from typing import BinaryIO, Final, NoReturn, Protocol, runtime_checkable
 from urllib.parse import quote
 from uuid import uuid4
 
 from sciretriever.acquisition.browser_control import (
     AgentBrowserController,
-    AgentsBrowserAgentDecisionPort,
+    BrowserAgentControlFactory,
+    BrowserAgentControlSession,
     BrowserAgentDisposition,
-    BrowserAgentLoopBudget,
+    BrowserAgentResult,
+    BrowserControllerKind,
     RuleBrowserController,
-)
-from sciretriever.acquisition.browser_state import (
-    BrowserFlowDisposition,
-    BrowserRunState,
-    BrowserRunStateMachine,
-    BrowserStateDecision,
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import RouteReadiness, runtime_url_origin
@@ -74,7 +71,7 @@ from sciretriever.acquisition.sources.browser_rules import (
 )
 from sciretriever.acquisition.sources.browser_rules.model import BrowserChallengePathFamily
 from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
-from sciretriever.agents import AgentBudget, AgentPort
+from sciretriever.agents.api import AgentRuntime
 from sciretriever.logging.api import get_logger
 from sciretriever.model.access import (
     AccessFailure,
@@ -96,21 +93,21 @@ from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessPolicy, AccessScope
 from sciretriever.network.browser import (
-    BrowserBudget,
     BrowserCaptureGuard,
-    BrowserChallengeObservation,
-    BrowserChallengeResourceFacts,
     BrowserDestinationGuard,
     BrowserDestinationKind,
     BrowserFlowController,
     BrowserFlowSession,
+    BrowserOperationLimits,
     BrowserPageObservation,
     BrowserRequestObservation,
 )
 from sciretriever.network.browser_control import (
-    BrowserAgentActionCommand,
-    BrowserAgentActionPort,
-    BrowserAgentObservation,
+    BrowserAction,
+    BrowserActionReceipt,
+    BrowserControlSession,
+    BrowserObservation,
+    BrowserPageState,
 )
 from sciretriever.network.policy import (
     NormalizedURL,
@@ -131,17 +128,10 @@ _BASELINE_WEB_POLICY: Final[AccessPolicy] = AccessPolicy(
     max_concurrency=1,
     min_start_interval=1.0,
 )
-_CONSERVATIVE_BROWSER_BUDGET: Final[BrowserBudget] = BrowserBudget(
-    max_navigations=4,
-    max_requests=256,
-    max_popups=2,
-    max_downloads=4,
-    max_captures=4,
-    max_bytes_per_download=_MAX_DOWNLOAD_BYTES,
-    max_total_bytes=_MAX_DOWNLOAD_BYTES,
-    max_action_wait_seconds=10.0,
-    max_capture_wait_seconds=10.0,
-    max_total_seconds=_TIMEOUT_SECONDS,
+_BROWSER_OPERATION_LIMITS: Final[BrowserOperationLimits] = BrowserOperationLimits(
+    max_capture_bytes=_MAX_DOWNLOAD_BYTES,
+    action_timeout_seconds=10.0,
+    capture_wait_timeout_seconds=10.0,
 )
 _KNOWN_BROWSER_FAILURES: Final[frozenset[str]] = frozenset(
     {
@@ -149,13 +139,8 @@ _KNOWN_BROWSER_FAILURES: Final[frozenset[str]] = frozenset(
         "admission",
         "cancelled",
         "timeout",
-        "budget",
         "oversize",
-        "challenge",
         "challenge-resource-blocked",
-        "challenge-interaction-required",
-        "challenge-settle-timeout",
-        "challenge-failed",
         "cleanup",
         "runtime",
     }
@@ -239,13 +224,8 @@ def _browser_failure(code: str) -> StableFailure:
             "Retry after checking Browser and provider availability.",
             True,
         ),
-        "budget": (
-            "The controlled Browser resource budget was exceeded.",
-            "Review the verified local site rule before retrying.",
-            False,
-        ),
         "oversize": (
-            "The controlled Browser download exceeded its byte budget.",
+            "The controlled Browser capture exceeded its per-capture byte limit.",
             "Use another approved PDF source.",
             False,
         ),
@@ -258,21 +238,6 @@ def _browser_failure(code: str) -> StableFailure:
             "The controlled Browser challenge resource was blocked by local policy.",
             "Review the approved challenge resource profile before retrying.",
             False,
-        ),
-        "challenge-interaction-required": (
-            "The Publisher requires a manual Browser verification.",
-            "Complete verification outside automation or use another approved source.",
-            False,
-        ),
-        "challenge-settle-timeout": (
-            "The controlled Browser challenge did not finish within its bounded wait.",
-            "Retry later or use another approved source.",
-            True,
-        ),
-        "challenge-failed": (
-            "The controlled Browser challenge lifecycle failed.",
-            "Check the Browser runtime and approved challenge profile before retrying.",
-            True,
         ),
         "cleanup": (
             "The controlled Browser could not clean up all runtime resources.",
@@ -294,48 +259,24 @@ def _browser_failure(code: str) -> StableFailure:
     )
 
 
-def _browser_state_failure(state: BrowserRunState) -> StableFailure:
-    details: dict[BrowserRunState, tuple[str, str, str, bool]] = {
-        BrowserRunState.LOGIN_REQUIRED: (
+def _browser_page_failure(state: BrowserPageState) -> StableFailure:
+    details: dict[BrowserPageState, tuple[str, str, str, bool]] = {
+        BrowserPageState.LOGIN_REQUIRED: (
             "acquisition-browser-login-required",
             "The controlled Browser page requires an explicit login.",
             "Use an authorized API or provide the PDF manually; Browser login is unsupported.",
             False,
         ),
-        BrowserRunState.MFA_REQUIRED: (
+        BrowserPageState.MFA_REQUIRED: (
             "acquisition-browser-mfa-required",
             "The controlled Browser page requires explicit MFA.",
             "Use an authorized API or provide the PDF manually; Browser MFA is unsupported.",
             False,
         ),
-        BrowserRunState.ACCESS_DENIED: (
+        BrowserPageState.ACCESS_DENIED: (
             "acquisition-browser-access-denied",
             "The Publisher denied this Browser request without a more specific page reason.",
             "Check article access outside automation or use another approved source.",
-            False,
-        ),
-        BrowserRunState.CHALLENGE_REQUIRED: (
-            "acquisition-browser-challenge-required",
-            "The controlled Browser encountered an unsupported access challenge.",
-            "Use another approved source or provide the PDF manually.",
-            False,
-        ),
-        BrowserRunState.RATE_LIMITED: (
-            "acquisition-browser-rate-limited",
-            "The controlled Browser provider is currently rate limited.",
-            "Retry after the provider risk group becomes available.",
-            True,
-        ),
-        BrowserRunState.IP_BLOCKED: (
-            "acquisition-browser-ip-blocked",
-            "The controlled Browser provider reported an IP access block.",
-            "Review provider access outside automation before retrying.",
-            False,
-        ),
-        BrowserRunState.ACCOUNT_WARNING: (
-            "acquisition-browser-account-warning",
-            "The controlled Browser provider reported an account safety warning.",
-            "Review the provider account outside automation before retrying.",
             False,
         ),
     }
@@ -351,61 +292,55 @@ def _browser_state_failure(state: BrowserRunState) -> StableFailure:
     )
 
 
-def _challenge_failure(state: BrowserChallengeState) -> StableFailure:
-    details: dict[BrowserChallengeState, tuple[str, str, str, bool]] = {
-        BrowserChallengeState.RESOURCE_BLOCKED: (
-            "acquisition-browser-challenge-resource-blocked",
-            "The controlled Browser challenge resource was blocked by local policy.",
-            "Review the approved challenge resource profile before retrying.",
-            False,
-        ),
-        BrowserChallengeState.INTERACTION_REQUIRED: (
-            "acquisition-browser-challenge-interaction-required",
-            "The Publisher requires a manual Browser verification.",
-            "Complete verification outside automation or use another approved source.",
-            False,
-        ),
-        BrowserChallengeState.SETTLE_TIMEOUT: (
-            "acquisition-browser-challenge-settle-timeout",
-            "The controlled Browser challenge did not finish within its bounded wait.",
-            "Retry later or use another approved source.",
+def _browser_marker_failure(kind: BrowserPageMarkerKind) -> StableFailure:
+    details: dict[BrowserPageMarkerKind, tuple[str, str, str, bool]] = {
+        BrowserPageMarkerKind.RATE_LIMITED: (
+            "acquisition-browser-rate-limited",
+            "The controlled Browser provider is currently rate limited.",
+            "Retry after the provider risk group becomes available.",
             True,
         ),
-        BrowserChallengeState.FAILED: (
-            "acquisition-browser-challenge-failed",
-            "The controlled Browser challenge lifecycle failed.",
-            "Check the Browser runtime and approved challenge profile before retrying.",
-            True,
+        BrowserPageMarkerKind.IP_BLOCKED: (
+            "acquisition-browser-ip-blocked",
+            "The controlled Browser provider reported an IP access block.",
+            "Review provider access outside automation before retrying.",
+            False,
+        ),
+        BrowserPageMarkerKind.ACCOUNT_WARNING: (
+            "acquisition-browser-account-warning",
+            "The controlled Browser provider reported an account safety warning.",
+            "Review the provider account outside automation before retrying.",
+            False,
         ),
     }
     try:
-        code, reason, action, retryable = details[state]
+        code, reason, action, retryable = details[kind]
     except KeyError:
         raise AcquisitionFailure(_contract_failure()) from None
-    return _stable_failure(code=code, reason=reason, action=action, retryable=retryable)
+    return _stable_failure(
+        code=code,
+        reason=reason,
+        action=action,
+        retryable=retryable,
+    )
 
 
-def _browser_state_for_challenge(state: BrowserChallengeState) -> BrowserRunState:
-    """Map a challenge lifecycle terminal to the existing Browser policy.
+def _challenge_resource_blocked_failure() -> StableFailure:
+    return _stable_failure(
+        code="acquisition-browser-challenge-resource-blocked",
+        reason="A reviewed challenge dependency was blocked by local Network policy.",
+        action="Review the Publisher challenge resource profile before retrying.",
+        retryable=False,
+    )
 
-    Only an explicit interaction control means that the operator must handle
-    a verification step.  A challenge resource blocked by our own policy or
-    a bounded settle timeout is an article-local access failure and must not
-    open the provider's manual-challenge circuit.  A lifecycle implementation
-    failure remains a runtime failure so the existing runtime diagnostics can
-    account for it.
-    """
 
-    if state is BrowserChallengeState.INTERACTION_REQUIRED:
-        return BrowserRunState.CHALLENGE_REQUIRED
-    if state in {
-        BrowserChallengeState.RESOURCE_BLOCKED,
-        BrowserChallengeState.SETTLE_TIMEOUT,
-    }:
-        return BrowserRunState.ACCESS_DENIED
-    if state is BrowserChallengeState.FAILED:
-        return BrowserRunState.RUNTIME_FAILED
-    raise ValueError("challenge state is not a terminal failure")
+def _challenge_unresolved_failure() -> StableFailure:
+    return _stable_failure(
+        code="acquisition-browser-challenge-unresolved",
+        reason="The selected Browser controller stopped while the access challenge remained.",
+        action="Retry later or select another approved PDF source.",
+        retryable=True,
+    )
 
 
 def _contract_failure() -> StableFailure:
@@ -448,7 +383,7 @@ class BrowserRunner(Protocol):
 
     The private Network ``_BrowserSession`` type is intentionally absent.  A
     compatible runner supplies an object that structurally implements the
-    neutral controller seam while invoking one request-local session.
+    neutral controller seam while invoking one article-local Browser flow.
     """
 
     def run(
@@ -462,7 +397,7 @@ class BrowserRunner(Protocol):
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
-        budget: BrowserBudget | None = None,
+        limits: BrowserOperationLimits | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BrowserResult: ...
@@ -480,11 +415,29 @@ class _BrowserAction:
 
 @dataclass(frozen=True, slots=True)
 class _PageClassification:
-    state: BrowserRunState | None
+    page_state: BrowserPageState
     authenticated: bool
     entitled: bool
     conflict: bool
     matched: frozenset[BrowserPageMarkerKind]
+    failure: StableFailure | None = field(default=None, repr=False)
+
+
+@dataclass(slots=True)
+class _BrowserAttemptFacts:
+    """Current article facts without a parallel lifecycle or transition history."""
+
+    page_state: BrowserPageState = BrowserPageState.NORMAL
+    failure: StableFailure | None = field(default=None, repr=False)
+
+    def observe(self, classification: _PageClassification) -> None:
+        self.page_state = classification.page_state
+        if self.failure is None and classification.failure is not None:
+            self.failure = classification.failure
+
+    def fail(self, failure: StableFailure) -> None:
+        if self.failure is None:
+            self.failure = failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,173 +446,66 @@ class _DeterministicRuleExecution:
 
     rule: BrowserSiteRule
     capture_guard: _RuleCaptureGuard
-    state_machine: BrowserRunStateMachine
-    page_failure: list[StableFailure] = field(repr=False)
-    browser_agent_port: AgentPort | None = field(default=None, repr=False)
-    browser_agent_model: str | None = field(default=None, repr=False)
-    browser_agent_budget: AgentBudget | None = field(default=None, repr=False)
-    article_token: str = field(default="browser-article", repr=False)
-    cancel_event: threading.Event | None = field(default=None, repr=False)
+    facts: _BrowserAttemptFacts = field(repr=False)
 
     def run(self, session: BrowserFlowSession) -> None:
         ControlledBrowserPdfSource._run_rule_flow(
             session,
             self.rule,
             self.capture_guard,
-            self.state_machine,
-            self.page_failure,
-            browser_agent_port=self.browser_agent_port,
-            browser_agent_model=self.browser_agent_model,
-            browser_agent_budget=self.browser_agent_budget,
-            article_token=self.article_token,
-            cancel_event=self.cancel_event,
+            self.facts,
         )
-
-
-class _AgentAdmissionStop(Exception):
-    """Stop the Agent loop after an Acquisition-owned terminal checkpoint."""
-
-    __slots__ = ()
 
 
 @dataclass(slots=True)
-class _RuleAgentActionPort:
-    """Gate each Agent observation through reviewed page-state admission.
+class _PublisherAgentControl:
+    """Add Publisher page classification to Network's neutral control handle."""
 
-    The wrapped Network action port remains the only vendor-facing capability.
-    Acquisition owns the marker classification and state transition; a
-    terminal page raises a private, typed stop before a model decision can be
-    requested.  No page object, selector or marker definition crosses this
-    wrapper boundary.
-    """
-
-    inner: BrowserAgentActionPort
+    inner: BrowserControlSession
     session: BrowserFlowSession
     rule: BrowserSiteRule
     capture_guard: _RuleCaptureGuard
-    state_machine: BrowserRunStateMachine
-    page_failure: list[StableFailure]
-    turn: int = 0
+    facts: _BrowserAttemptFacts
 
-    def observe(self) -> BrowserAgentObservation:
+    def observe(self) -> BrowserObservation:
         if ControlledBrowserPdfSource._expected_capture_available(self.session, self.rule):
-            return self.inner.observe()
-        self.turn += 1
-        _classification, terminal = ControlledBrowserPdfSource._apply_page_state(
-            self.session,
-            self.rule,
-            self.capture_guard,
-            self.state_machine,
-            self.page_failure,
-            checkpoint=f"agent-pre-decision-{self.turn}",
-        )
-        if terminal:
-            raise _AgentAdmissionStop
-        return self.inner.observe()
+            return self.inner.observe(page_state=self.facts.page_state)
+        classification, page = _classify_page(self.session, self.rule)
+        self.capture_guard.bind_landing(page.locator)
+        self.facts.observe(classification)
+        return self.inner.observe(page_state=classification.page_state)
 
     def execute(
         self,
-        command: BrowserAgentActionCommand,
-        observation: BrowserAgentObservation,
+        action: BrowserAction,
+        observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> None:
-        self.inner.execute(command, observation, timeout_seconds=timeout_seconds)
-
-
-@unique
-class BrowserChallengeState(str, Enum):
-    """Transient/terminal lifecycle for one reviewed page challenge."""
-
-    RESOURCE_LOADING = "resource-loading"
-    SETTLING = "settling"
-    CLEARED = "cleared"
-    INTERACTION_REQUIRED = "interaction-required"
-    RESOURCE_BLOCKED = "resource-blocked"
-    SETTLE_TIMEOUT = "settle-timeout"
-    FAILED = "failed"
+    ) -> BrowserActionReceipt:
+        return self.inner.execute(action, observation, timeout_seconds=timeout_seconds)
 
 
 @dataclass(frozen=True, slots=True)
-class BrowserChallengeLifecycle:
-    """Immutable transition result holder for a single challenge flow.
+class _PublisherAgentControlFactory:
+    """Open one Publisher-classified control view for the current article."""
 
-    The object is deliberately operation-local and cannot be serialized.  A
-    mutable transition wrapper is used by the Acquisition flow below so that
-    state history remains bounded and auditable without becoming a business
-    Model or a persisted retry record.
-    """
+    rule: BrowserSiteRule
+    capture_guard: _RuleCaptureGuard
+    facts: _BrowserAttemptFacts = field(repr=False)
 
-    state: BrowserChallengeState
-    history: tuple[BrowserChallengeState, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.state, BrowserChallengeState):
-            raise TypeError("state must be a BrowserChallengeState")
-        if not isinstance(self.history, tuple) or not self.history:
-            raise TypeError("history must be a non-empty tuple")
-        if self.history[-1] is not self.state:
-            raise ValueError("history must end at state")
-
-    def __reduce__(self) -> str | tuple[object, ...]:
-        raise TypeError("BrowserChallengeLifecycle cannot be serialized")
-
-
-class BrowserChallengeStateMachine:
-    __slots__ = ("_state", "_history")
-
-    def __init__(self) -> None:
-        self._state = BrowserChallengeState.RESOURCE_LOADING
-        self._history = [self._state]
-
-    @property
-    def state(self) -> BrowserChallengeState:
-        return self._state
-
-    @property
-    def history(self) -> tuple[BrowserChallengeState, ...]:
-        return tuple(self._history)
-
-    def snapshot(self) -> BrowserChallengeLifecycle:
-        return BrowserChallengeLifecycle(self._state, tuple(self._history))
-
-    def __reduce__(self) -> str | tuple[object, ...]:
-        raise TypeError("BrowserChallengeStateMachine cannot be serialized")
-
-    def transition(self, state: BrowserChallengeState) -> BrowserChallengeLifecycle:
-        if not isinstance(state, BrowserChallengeState):
-            raise TypeError("state must be a BrowserChallengeState")
-        current = self._state
-        if current is state:
-            return self.snapshot()
-        allowed: dict[BrowserChallengeState, frozenset[BrowserChallengeState]] = {
-            BrowserChallengeState.RESOURCE_LOADING: frozenset(
-                {
-                    BrowserChallengeState.SETTLING,
-                    BrowserChallengeState.RESOURCE_BLOCKED,
-                    BrowserChallengeState.FAILED,
-                }
-            ),
-            BrowserChallengeState.SETTLING: frozenset(
-                {
-                    BrowserChallengeState.CLEARED,
-                    BrowserChallengeState.INTERACTION_REQUIRED,
-                    BrowserChallengeState.RESOURCE_BLOCKED,
-                    BrowserChallengeState.SETTLE_TIMEOUT,
-                    BrowserChallengeState.FAILED,
-                }
-            ),
-            BrowserChallengeState.CLEARED: frozenset(),
-            BrowserChallengeState.INTERACTION_REQUIRED: frozenset(),
-            BrowserChallengeState.RESOURCE_BLOCKED: frozenset(),
-            BrowserChallengeState.SETTLE_TIMEOUT: frozenset(),
-            BrowserChallengeState.FAILED: frozenset(),
-        }
-        if state not in allowed[current]:
-            raise RuntimeError("Browser challenge lifecycle transition is invalid")
-        self._state = state
-        self._history.append(state)
-        return self.snapshot()
+    def open(self, session: BrowserFlowSession) -> BrowserAgentControlSession:
+        if not isinstance(session, BrowserFlowSession):
+            raise TypeError("Browser flow session violated its structural contract")
+        inner = session.control_session()
+        if not isinstance(inner, BrowserControlSession):
+            raise TypeError("Browser control session violated its structural contract")
+        return _PublisherAgentControl(
+            inner=inner,
+            session=session,
+            rule=self.rule,
+            capture_guard=self.capture_guard,
+            facts=self.facts,
+        )
 
 
 @dataclass(slots=True)
@@ -798,14 +644,11 @@ class BrowserRuleDestinationGuard:
                 self._challenge_admitted_count + 1,
             )
 
-    def challenge_resource_facts(self) -> BrowserChallengeResourceFacts:
-        """Return aggregate, payload-free challenge dependency facts."""
+    def challenge_resource_counts(self) -> tuple[int, int]:
+        """Return aggregate, payload-free challenge dependency counts."""
 
         with self._top_frame_lock:
-            return BrowserChallengeResourceFacts(
-                admitted_count=self._challenge_admitted_count,
-                blocked_count=self._challenge_blocked_count,
-            )
+            return self._challenge_admitted_count, self._challenge_blocked_count
 
     def _track_top_frame(self, observation: BrowserRequestObservation) -> None:
         if not observation.is_navigation or not observation.is_top_frame or observation.is_popup:
@@ -1192,101 +1035,45 @@ def _eligible_landing_role(role: AssetRole | None) -> bool:
     return role is None or role is AssetRole.PRIMARY_PDF
 
 
-def _state_for_browser_result(result: BrowserResult) -> BrowserRunState:
+def _result_ends_without_pdf(result: BrowserResult) -> bool:
+    """Interpret one Network result without inventing a second Browser lifecycle."""
+
     if isinstance(result, BrowserCaptureBatch):
-        return BrowserRunState.PDF_CAPTURED
+        return False
     if not isinstance(result, AccessFailure):
-        return BrowserRunState.RUNTIME_FAILED
-    return {
-        "no-download": BrowserRunState.NOT_FOUND,
-        "not-found": BrowserRunState.NOT_FOUND,
-        "not-entitled": BrowserRunState.NOT_ENTITLED,
-        "access-denied": BrowserRunState.ACCESS_DENIED,
-        "rate-limit": BrowserRunState.RATE_LIMITED,
-        "rate-limited": BrowserRunState.RATE_LIMITED,
-        "ip-blocked": BrowserRunState.IP_BLOCKED,
-        "challenge": BrowserRunState.CHALLENGE_REQUIRED,
-    }.get(result.code, BrowserRunState.RUNTIME_FAILED)
-
-
-def _state_ends_without_pdf(state_machine: BrowserRunStateMachine) -> bool:
-    decision = state_machine.decision
-    if decision is None or decision.continues_current_flow:
         raise AcquisitionFailure(_contract_failure())
-    if decision.flow_disposition is BrowserFlowDisposition.NORMAL_MISS:
+    if result.code in {"no-download", "not-found", "not-entitled"}:
         return True
-    if decision.flow_disposition in {
-        BrowserFlowDisposition.DEFERRED,
-        BrowserFlowDisposition.ACTION_REQUIRED,
-    }:
-        raise AcquisitionSourceFailure(_browser_state_failure(decision.state))
+    if result.code == "challenge":
+        raise AcquisitionSourceFailure(_challenge_unresolved_failure())
+    if result.code == "access-denied":
+        raise AcquisitionSourceFailure(_browser_page_failure(BrowserPageState.ACCESS_DENIED))
+    if result.code in {"rate-limit", "rate-limited"}:
+        raise AcquisitionSourceFailure(_browser_marker_failure(BrowserPageMarkerKind.RATE_LIMITED))
+    if result.code == "ip-blocked":
+        raise AcquisitionSourceFailure(_browser_marker_failure(BrowserPageMarkerKind.IP_BLOCKED))
+    if result.code == "account-warning":
+        raise AcquisitionSourceFailure(
+            _browser_marker_failure(BrowserPageMarkerKind.ACCOUNT_WARNING)
+        )
     return False
-
-
-def _browser_state_value(state_machine: BrowserRunStateMachine) -> str:
-    state = state_machine.state
-    return "none" if state is None else state.value
-
-
-def _log_challenge_finished(
-    rule_id: str,
-    *,
-    stage: str,
-    evidence_kind: str,
-    outcome: str,
-    facts: BrowserChallengeResourceFacts,
-    started_ns: int,
-    reason: str,
-    action: str,
-) -> None:
-    """Emit the one user-facing record that owns a challenge terminal.
-
-    Challenge diagnostics deliberately contain only bounded facts.  In
-    particular, this helper is the single normal-mode owner for the
-    resource/settle outcome; lower-level Network records remain DEBUG-only and
-    do not repeat the same failure explanation.
-    """
-
-    elapsed_ms = _elapsed_ms(started_ns)
-    _LOGGER.info(
-        "event=browser-challenge-finished browser_rule_id=%s stage=%s "
-        "evidence_kind=%s outcome=%s resource_admitted=%d resource_blocked=%d "
-        "pending_count=%d elapsed_ms=%d settle_elapsed_ms=%d reason=%s action=%s",
-        rule_id,
-        stage,
-        evidence_kind,
-        outcome,
-        facts.admitted_count,
-        facts.blocked_count,
-        facts.pending_count,
-        elapsed_ms,
-        elapsed_ms,
-        reason,
-        action,
-    )
 
 
 def _log_browser_terminal(
     rule: BrowserSiteRule,
     *,
-    state: BrowserRunState,
+    page_state: BrowserPageState,
     failure: StableFailure,
     started_ns: int,
 ) -> None:
-    """Explain a non-challenge Browser stop in normal mode.
-
-    Acquisition owns the page-state classification, so this record is emitted
-    only after challenge handling has had a chance to produce its own terminal
-    event.  Stable ``reason``/``action`` text is safe to show to an operator;
-    no provider response or locator is interpolated here.
-    """
+    """Explain one classified Browser stop without logging page contents."""
 
     _LOGGER.info(
         "event=browser-flow-finished browser_rule_id=%s stage=page-state "
         "outcome=%s disposition=failure code=%s retryable=%s elapsed_ms=%d "
         "reason=%s action=%s",
         rule.rule_id,
-        state.value,
+        page_state.value,
         failure.code,
         str(failure.retryable).lower(),
         _elapsed_ms(started_ns),
@@ -1307,25 +1094,17 @@ def _agent_terminal_text(disposition: BrowserAgentDisposition) -> tuple[str, str
             "The Browser Agent stopped without an approved PDF response.",
             "Use another approved source or retry the Browser route.",
         ),
-        BrowserAgentDisposition.UNAVAILABLE: (
-            "The Browser Agent is not available for this request.",
-            "Use deterministic Browser rules or configure the Browser Agent capability.",
-        ),
-        BrowserAgentDisposition.BUDGET_EXHAUSTED: (
-            "The Browser Agent reached its bounded time or step budget.",
-            "Retry later or use another approved source.",
+        BrowserAgentDisposition.PAGE_TERMINAL: (
+            "The Browser page reached a terminal access state.",
+            "Review the reported page state or use another approved source.",
         ),
         BrowserAgentDisposition.CANCELLED: (
             "The Browser Agent operation was cancelled.",
             "Retry the acquisition operation when appropriate.",
         ),
-        BrowserAgentDisposition.STALE_OBSERVATION: (
-            "The Browser page changed before the Browser Agent action could run.",
-            "Retry the Browser route; no stale action was sent to the page.",
-        ),
         BrowserAgentDisposition.NO_PROGRESS: (
-            "The Browser Agent made no progress within its bounded loop.",
-            "Use deterministic Browser rules or another approved source.",
+            "The Browser Agent proved that the selected action did not change this page.",
+            "Use another approved source or retry after the page changes.",
         ),
         BrowserAgentDisposition.FAILED: (
             "The Browser Agent could not complete a safe action.",
@@ -1335,39 +1114,53 @@ def _agent_terminal_text(disposition: BrowserAgentDisposition) -> tuple[str, str
     return values[disposition]
 
 
-def _transition_browser_state(
-    state_machine: BrowserRunStateMachine,
-    state: BrowserRunState,
-    *,
-    rule_id: str,
-) -> BrowserStateDecision:
-    previous = state_machine.state
-    decision = state_machine.transition(state)
-    if previous is not state:
-        _LOGGER.debug(
-            "event=browser-state-transition route_key=browser:controlled "
-            "browser_rule_id=%s previous_state=%s state=%s disposition=%s group_effect=%s",
-            rule_id,
-            "none" if previous is None else previous.value,
-            state.value,
-            decision.flow_disposition.value,
-            decision.group_effect.value,
-        )
-    return decision
-
-
-_TERMINAL_PAGE_STATES: Final[dict[BrowserPageMarkerKind, BrowserRunState]] = {
-    BrowserPageMarkerKind.LOGIN_REQUIRED: BrowserRunState.LOGIN_REQUIRED,
-    BrowserPageMarkerKind.MFA_REQUIRED: BrowserRunState.MFA_REQUIRED,
-    BrowserPageMarkerKind.NOT_ENTITLED: BrowserRunState.NOT_ENTITLED,
-    BrowserPageMarkerKind.PAYWALL: BrowserRunState.NOT_ENTITLED,
-    BrowserPageMarkerKind.ACCESS_DENIED: BrowserRunState.ACCESS_DENIED,
-    BrowserPageMarkerKind.CHALLENGE_REQUIRED: BrowserRunState.CHALLENGE_REQUIRED,
-    BrowserPageMarkerKind.RATE_LIMITED: BrowserRunState.RATE_LIMITED,
-    BrowserPageMarkerKind.IP_BLOCKED: BrowserRunState.IP_BLOCKED,
-    BrowserPageMarkerKind.ACCOUNT_WARNING: BrowserRunState.ACCOUNT_WARNING,
-    BrowserPageMarkerKind.NOT_FOUND: BrowserRunState.NOT_FOUND,
+_PAGE_MARKER_OUTCOMES: Final[dict[BrowserPageMarkerKind, str]] = {
+    BrowserPageMarkerKind.LOGIN_REQUIRED: "login-required",
+    BrowserPageMarkerKind.MFA_REQUIRED: "mfa-required",
+    BrowserPageMarkerKind.NOT_ENTITLED: "not-entitled",
+    BrowserPageMarkerKind.PAYWALL: "not-entitled",
+    BrowserPageMarkerKind.ACCESS_DENIED: "access-denied",
+    BrowserPageMarkerKind.CHALLENGE: "challenge",
+    BrowserPageMarkerKind.RATE_LIMITED: "rate-limited",
+    BrowserPageMarkerKind.IP_BLOCKED: "ip-blocked",
+    BrowserPageMarkerKind.ACCOUNT_WARNING: "account-warning",
+    BrowserPageMarkerKind.NOT_FOUND: "not-found",
 }
+_PAGE_STATES_BY_OUTCOME: Final[dict[str, BrowserPageState]] = {
+    "login-required": BrowserPageState.LOGIN_REQUIRED,
+    "mfa-required": BrowserPageState.MFA_REQUIRED,
+    "not-entitled": BrowserPageState.NOT_ENTITLED,
+    "access-denied": BrowserPageState.ACCESS_DENIED,
+    "challenge": BrowserPageState.CHALLENGE,
+    "rate-limited": BrowserPageState.FAILED,
+    "ip-blocked": BrowserPageState.FAILED,
+    "account-warning": BrowserPageState.FAILED,
+    "not-found": BrowserPageState.NOT_FOUND,
+}
+
+
+def _page_classification_failure(
+    page_state: BrowserPageState,
+    matched: set[BrowserPageMarkerKind],
+    *,
+    conflict: bool,
+) -> StableFailure | None:
+    if conflict:
+        return _page_state_conflict_failure()
+    if page_state in {
+        BrowserPageState.LOGIN_REQUIRED,
+        BrowserPageState.MFA_REQUIRED,
+        BrowserPageState.ACCESS_DENIED,
+    }:
+        return _browser_page_failure(page_state)
+    for marker_kind in (
+        BrowserPageMarkerKind.RATE_LIMITED,
+        BrowserPageMarkerKind.IP_BLOCKED,
+        BrowserPageMarkerKind.ACCOUNT_WARNING,
+    ):
+        if marker_kind in matched:
+            return _browser_marker_failure(marker_kind)
+    return None
 
 
 def _classify_page(
@@ -1426,14 +1219,14 @@ def _classify_page(
     # other explicit terminal marker explains the response.
     if BrowserPageMarkerKind.ACCESS_DENIED in matched and any(
         kind in matched
-        for kind in _TERMINAL_PAGE_STATES
+        for kind in _PAGE_MARKER_OUTCOMES
         if kind is not BrowserPageMarkerKind.ACCESS_DENIED
     ):
         matched.remove(BrowserPageMarkerKind.ACCESS_DENIED)
 
     authenticated = BrowserPageMarkerKind.AUTHENTICATED in matched
     entitled = BrowserPageMarkerKind.ENTITLED in matched
-    terminal_states = {state for kind, state in _TERMINAL_PAGE_STATES.items() if kind in matched}
+    outcomes = {outcome for kind, outcome in _PAGE_MARKER_OUTCOMES.items() if kind in matched}
     login_conflict = authenticated and bool(
         matched
         & {
@@ -1441,20 +1234,22 @@ def _classify_page(
             BrowserPageMarkerKind.MFA_REQUIRED,
         }
     )
-    entitlement_conflict = entitled and BrowserRunState.NOT_ENTITLED in terminal_states
-    conflict = len(terminal_states) > 1 or login_conflict or entitlement_conflict
-    state = None if not terminal_states else next(iter(terminal_states))
+    entitlement_conflict = entitled and "not-entitled" in outcomes
+    conflict = len(outcomes) > 1 or login_conflict or entitlement_conflict
+    page_state = (
+        BrowserPageState.NORMAL if not outcomes else _PAGE_STATES_BY_OUTCOME[next(iter(outcomes))]
+    )
     if conflict:
-        state = BrowserRunState.RUNTIME_FAILED
-    elif state is None and authenticated:
-        state = BrowserRunState.AUTHENTICATED
+        page_state = BrowserPageState.FAILED
+    failure = _page_classification_failure(page_state, matched, conflict=conflict)
     return (
         _PageClassification(
-            state=state,
+            page_state=page_state,
             authenticated=authenticated,
             entitled=entitled,
             conflict=conflict,
             matched=frozenset(matched),
+            failure=failure,
         ),
         observation,
     )
@@ -1499,9 +1294,8 @@ class ControlledBrowserPdfSource:
         "_cancel_event",
         "_provenance_id_factory",
         "_clock",
-        "_browser_agent_port",
-        "_browser_agent_model",
-        "_browser_agent_budget",
+        "_browser_controller",
+        "_agent_runtime",
     )
 
     def __init__(  # noqa: C901
@@ -1515,9 +1309,8 @@ class ControlledBrowserPdfSource:
         cancel_event: threading.Event | None = None,
         provenance_id_factory: ProvenanceIdFactory = _new_provenance_id,
         clock: Clock = _utc_now,
-        browser_agent_port: AgentPort | None = None,
-        browser_agent_model: str | None = None,
-        browser_agent_budget: AgentBudget | None = None,
+        browser_controller: BrowserControllerKind = BrowserControllerKind.RULES,
+        agent_runtime: AgentRuntime | None = None,
     ) -> None:
         if not isinstance(runner, BrowserRunner):
             raise TypeError("runner must implement BrowserRunner")
@@ -1540,16 +1333,14 @@ class ControlledBrowserPdfSource:
             raise TypeError("provenance_id_factory must be callable")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        if browser_agent_port is not None and not isinstance(browser_agent_port, AgentPort):
-            raise TypeError("browser_agent_port must implement AgentPort or be None")
-        if browser_agent_model is not None and (
-            type(browser_agent_model) is not str or not browser_agent_model.strip()
-        ):
-            raise TypeError("browser_agent_model must be nonblank text or None")
-        if browser_agent_budget is not None and not isinstance(browser_agent_budget, AgentBudget):
-            raise TypeError("browser_agent_budget must be AgentBudget or None")
-        if (browser_agent_port is None) != (browser_agent_model is None):
-            raise ValueError("browser Agent port and model must be configured together")
+        if not isinstance(browser_controller, BrowserControllerKind):
+            raise TypeError("browser_controller must be BrowserControllerKind")
+        if agent_runtime is not None and not isinstance(agent_runtime, AgentRuntime):
+            raise TypeError("agent_runtime must be AgentRuntime or None")
+        if browser_controller is BrowserControllerKind.AGENT and agent_runtime is None:
+            raise ValueError("Agent Browser control requires an AgentRuntime")
+        if browser_controller is BrowserControllerKind.RULES and agent_runtime is not None:
+            raise ValueError("Rules Browser control must not receive an AgentRuntime")
         resolver = _browser_rule_resolver(rule_catalog, web_access_profile_resolver)
         self._runner = runner
         self._route_key = route_key
@@ -1559,9 +1350,8 @@ class ControlledBrowserPdfSource:
         self._cancel_event = cancel_event
         self._provenance_id_factory = provenance_id_factory
         self._clock = clock
-        self._browser_agent_port = browser_agent_port
-        self._browser_agent_model = browser_agent_model
-        self._browser_agent_budget = browser_agent_budget
+        self._browser_controller = browser_controller
+        self._agent_runtime = agent_runtime
 
     @property
     def source_name(self) -> str:
@@ -1576,10 +1366,16 @@ class ControlledBrowserPdfSource:
         return self._route_key
 
     @property
-    def browser_budget(self) -> BrowserBudget:
-        """Expose the immutable conservative budget for assembly/tests."""
+    def browser_controller(self) -> BrowserControllerKind:
+        """Return the controller frozen when this Source was assembled."""
 
-        return _CONSERVATIVE_BROWSER_BUDGET
+        return self._browser_controller
+
+    @property
+    def browser_operation_limits(self) -> BrowserOperationLimits:
+        """Expose immutable single-operation limits for assembly and tests."""
+
+        return _BROWSER_OPERATION_LIMITS
 
     def execute(self, context: RouteExecutionContext) -> Iterable[RouteExecutionResult]:
         if not isinstance(context, RouteExecutionContext):
@@ -1797,15 +1593,19 @@ class ControlledBrowserPdfSource:
         )
         candidate_delivered = 0
         try:
-            result, state_machine, page_failure, capture_guard = self._run_action(action)
+            result, page_state, page_failure, capture_guard = self._run_action(action)
             if page_failure is not None:
                 raise AcquisitionSourceFailure(page_failure)
-            if _state_ends_without_pdf(state_machine):
+            if page_state in {
+                BrowserPageState.NOT_ENTITLED,
+                BrowserPageState.NOT_FOUND,
+            } or _result_ends_without_pdf(result):
                 self._log_candidate_finished(
                     action,
                     key=key,
                     delivered=0,
-                    state_machine=state_machine,
+                    page_state=page_state,
+                    result=result,
                     started_ns=candidate_started_ns,
                 )
                 return None
@@ -1826,7 +1626,8 @@ class ControlledBrowserPdfSource:
                 action,
                 key=key,
                 delivered=candidate_delivered,
-                state_machine=state_machine,
+                page_state=page_state,
+                result=result,
                 started_ns=candidate_started_ns,
             )
             return None
@@ -1856,13 +1657,21 @@ class ControlledBrowserPdfSource:
         *,
         key: str,
         delivered: int,
-        state_machine: BrowserRunStateMachine,
+        page_state: BrowserPageState,
+        result: BrowserResult,
         started_ns: int,
     ) -> None:
+        result_value = (
+            "capture"
+            if isinstance(result, BrowserCaptureBatch)
+            else result.code
+            if isinstance(result, AccessFailure)
+            else "invalid"
+        )
         _LOGGER.debug(
             "event=browser-candidate-finished route_key=%s browser_rule_id=%s "
             "provider_group=%s candidate_id=%s disposition=%s next=%s delivered=%d "
-            "state=%s elapsed_ms=%d",
+            "page_state=%s result=%s elapsed_ms=%d",
             self.route_key,
             action.rule.rule_id,
             action.rule.web_scope_provider_name,
@@ -1870,7 +1679,8 @@ class ControlledBrowserPdfSource:
             "delivered" if delivered else "miss",
             "route-consumer" if delivered else "next-candidate",
             delivered,
-            _browser_state_value(state_machine),
+            page_state.value,
+            result_value,
             _elapsed_ms(started_ns),
         )
 
@@ -2011,23 +1821,17 @@ class ControlledBrowserPdfSource:
             content.discard()
             raise AcquisitionFailure(_contract_failure()) from None
 
-    def _run_action(
+    def _run_action(  # noqa: C901
         self,
         action: _BrowserAction,
     ) -> tuple[
         BrowserResult,
-        BrowserRunStateMachine,
+        BrowserPageState,
         StableFailure | None,
         _RuleCaptureGuard,
     ]:
         action_started_ns = time.monotonic_ns()
-        state_machine = BrowserRunStateMachine()
-        _transition_browser_state(
-            state_machine,
-            BrowserRunState.OPEN,
-            rule_id=action.rule.rule_id,
-        )
-        page_failure: list[StableFailure] = []
+        facts = _BrowserAttemptFacts()
         capture_guard = _RuleCaptureGuard(action)
         destination_guard = build_browser_rule_destination_guard(
             action.rule,
@@ -2035,17 +1839,32 @@ class ControlledBrowserPdfSource:
             capture_guard.rebind_landing,
         )
 
-        execution = _DeterministicRuleExecution(
-            rule=action.rule,
-            capture_guard=capture_guard,
-            state_machine=state_machine,
-            page_failure=page_failure,
-            browser_agent_port=self._browser_agent_port,
-            browser_agent_model=self._browser_agent_model,
-            browser_agent_budget=self._browser_agent_budget,
-            article_token=_candidate_key(action),
-            cancel_event=self._cancel_event,
-        )
+        agent_controller: AgentBrowserController | None = None
+        if self._browser_controller is BrowserControllerKind.RULES:
+            flow_controller: BrowserFlowController = RuleBrowserController(
+                _DeterministicRuleExecution(
+                    rule=action.rule,
+                    capture_guard=capture_guard,
+                    facts=facts,
+                )
+            )
+        else:
+            runtime = self._agent_runtime
+            if runtime is None:
+                raise AcquisitionFailure(_contract_failure())
+            control_factory = _PublisherAgentControlFactory(
+                rule=action.rule,
+                capture_guard=capture_guard,
+                facts=facts,
+            )
+            if not isinstance(control_factory, BrowserAgentControlFactory):
+                raise AcquisitionFailure(_contract_failure())
+            agent_controller = AgentBrowserController(
+                runtime=runtime,
+                control_factory=control_factory,
+                cancel_event=self._cancel_event,
+            )
+            flow_controller = agent_controller
 
         try:
             scope, effective_policy = self._access_profile(action.rule)
@@ -2057,86 +1876,110 @@ class ControlledBrowserPdfSource:
                     max_response_bytes=_MAX_DOWNLOAD_BYTES,
                 ),
                 effective_policy,
-                controller=RuleBrowserController(execution),
+                controller=flow_controller,
                 destination_guard=destination_guard,
                 capture_guard=capture_guard,
                 navigation_only=False,
                 discard_unapproved_subresources=True,
-                budget=_CONSERVATIVE_BROWSER_BUDGET,
+                limits=_BROWSER_OPERATION_LIMITS,
                 timeout_seconds=_TIMEOUT_SECONDS,
                 cancel_event=self._cancel_event,
             )
         except AcquisitionFailure:
             raise
         except Exception:
-            _transition_browser_state(
-                state_machine,
-                BrowserRunState.RUNTIME_FAILED,
-                rule_id=action.rule.rule_id,
-            )
             raise AcquisitionSourceFailure(_browser_failure("runtime")) from None
-        try:
-            challenge_facts = destination_guard.challenge_resource_facts()
-        except Exception:
-            challenge_facts = None
-        if challenge_facts is not None and challenge_facts.blocked_count:
-            page_failure.append(_challenge_failure(BrowserChallengeState.RESOURCE_BLOCKED))
+        if agent_controller is not None:
+            agent_result = agent_controller.result
+            if agent_result is None:
+                facts.fail(_contract_failure())
+            else:
+                self._apply_agent_result(
+                    action.rule,
+                    agent_result,
+                    facts,
+                )
+        challenge_admitted_count, challenge_blocked_count = (
+            destination_guard.challenge_resource_counts()
+        )
+        if challenge_blocked_count:
+            facts.fail(_challenge_resource_blocked_failure())
             _LOGGER.debug(
                 "event=browser-challenge-resource-summary browser_rule_id=%s "
                 "stage=resource-blocked evidence_kind=network-guard "
                 "resource_admitted=%d resource_blocked=%d",
                 action.rule.rule_id,
-                challenge_facts.admitted_count,
-                challenge_facts.blocked_count,
+                challenge_admitted_count,
+                challenge_blocked_count,
             )
-            # This is a local dependency-policy failure, not an operator
-            # challenge.  Preserve an article-local state so the eventual
-            # runner result cannot promote it to a runtime failure/circuit.
-            if state_machine.state in {
-                BrowserRunState.OPEN,
-                BrowserRunState.AUTHENTICATED,
-            }:
-                _transition_browser_state(
-                    state_machine,
-                    BrowserRunState.ACCESS_DENIED,
-                    rule_id=action.rule.rule_id,
-                )
-        result_state = _state_for_browser_result(result)
-        decision = state_machine.decision
-        if (
-            decision is None
-            or decision.continues_current_flow
-            or (
-                result_state is BrowserRunState.RUNTIME_FAILED
-                and not (challenge_facts is not None and challenge_facts.blocked_count)
-            )
-        ):
-            _transition_browser_state(
-                state_machine,
-                result_state,
-                rule_id=action.rule.rule_id,
-            )
-        terminal_state = state_machine.state or result_state
-        if not page_failure and terminal_state not in {
-            BrowserRunState.PDF_CAPTURED,
-            BrowserRunState.NOT_FOUND,
-            BrowserRunState.NOT_ENTITLED,
-        }:
-            try:
-                failure = _browser_state_failure(terminal_state)
-            except AcquisitionFailure:
-                failure = _browser_failure("runtime")
+        if facts.failure is not None:
             _log_browser_terminal(
                 action.rule,
-                state=terminal_state,
-                failure=failure,
+                page_state=facts.page_state,
+                failure=facts.failure,
                 started_ns=action_started_ns,
             )
         return (
             result,
-            state_machine,
-            page_failure[0] if page_failure else None,
+            facts.page_state,
+            facts.failure,
             capture_guard,
+        )
+
+    @staticmethod
+    def _apply_agent_result(  # noqa: C901
+        rule: BrowserSiteRule,
+        result: BrowserAgentResult,
+        facts: _BrowserAttemptFacts,
+    ) -> None:
+        """Translate one operation-local Agent result into route semantics."""
+
+        if not isinstance(result, BrowserAgentResult):
+            raise TypeError("Browser Agent returned an invalid result")
+        if result.page_state is not None:
+            facts.page_state = result.page_state
+        if result.disposition in {
+            BrowserAgentDisposition.STOPPED,
+            BrowserAgentDisposition.NO_PROGRESS,
+        }:
+            if result.page_state is BrowserPageState.CHALLENGE:
+                facts.fail(_challenge_unresolved_failure())
+        elif result.disposition in {
+            BrowserAgentDisposition.CANCELLED,
+            BrowserAgentDisposition.FAILED,
+        }:
+            facts.fail(_contract_failure() if result.failure is None else result.failure)
+        elif result.disposition is BrowserAgentDisposition.PAGE_TERMINAL:
+            page_state = result.page_state
+            if page_state is None or page_state is BrowserPageState.NORMAL:
+                facts.fail(_contract_failure())
+            elif page_state is BrowserPageState.CHALLENGE:
+                facts.fail(_challenge_unresolved_failure())
+            elif page_state in {
+                BrowserPageState.LOGIN_REQUIRED,
+                BrowserPageState.MFA_REQUIRED,
+                BrowserPageState.ACCESS_DENIED,
+            }:
+                facts.fail(_browser_page_failure(page_state))
+            elif page_state is BrowserPageState.FAILED and facts.failure is None:
+                facts.fail(_contract_failure())
+
+        reason, next_action = _agent_terminal_text(result.disposition)
+        _LOGGER.info(
+            "event=browser-agent-finished browser_rule_id=%s stage=agent "
+            "agent_invoked=true outcome=%s disposition=%s action_count=%d "
+            "page_state=%s capture=%s action_kind=%s failure_code=%s "
+            "reason=%s action=%s",
+            rule.rule_id,
+            result.disposition.value,
+            result.disposition.value,
+            result.action_count,
+            "none" if result.page_state is None else result.page_state.value,
+            result.capture_state.value,
+            "none" if result.last_action is None else result.last_action.kind.value,
+            "none" if result.failure is None else result.failure.code,
+            reason,
+            next_action,
         )
 
     @staticmethod
@@ -2144,14 +1987,7 @@ class ControlledBrowserPdfSource:
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
         capture_guard: _RuleCaptureGuard,
-        state_machine: BrowserRunStateMachine,
-        page_failure: list[StableFailure],
-        *,
-        browser_agent_port: AgentPort | None = None,
-        browser_agent_model: str | None = None,
-        browser_agent_budget: AgentBudget | None = None,
-        article_token: str = "browser-article",
-        cancel_event: threading.Event | None = None,
+        facts: _BrowserAttemptFacts,
     ) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("Browser flow session violated its structural contract")
@@ -2166,8 +2002,7 @@ class ControlledBrowserPdfSource:
             session,
             rule,
             capture_guard,
-            state_machine,
-            page_failure,
+            facts,
             checkpoint="initial",
         )
         if terminal:
@@ -2192,113 +2027,18 @@ class ControlledBrowserPdfSource:
             session,
             rule,
             capture_guard,
-            state_machine,
-            page_failure,
+            facts,
         ):
             return
-        classification, terminal = ControlledBrowserPdfSource._apply_page_state(
+        _classification, terminal = ControlledBrowserPdfSource._apply_page_state(
             session,
             rule,
             capture_guard,
-            state_machine,
-            page_failure,
+            facts,
             checkpoint="final",
         )
-        if (
-            terminal
-            or (
-                classification.state is not None
-                and classification.state is not BrowserRunState.AUTHENTICATED
-            )
-            or page_failure
-            or ControlledBrowserPdfSource._expected_capture_available(session, rule)
-        ):
+        if terminal or ControlledBrowserPdfSource._expected_capture_available(session, rule):
             return
-        if (
-            browser_agent_port is None
-            or browser_agent_model is None
-            or not browser_agent_model.strip()
-        ):
-            _LOGGER.info(
-                "event=browser-agent-finished browser_rule_id=%s stage=agent "
-                "agent_invoked=false outcome=not-configured disposition=unavailable "
-                "action_count=0 capture=none reason=%s action=%s",
-                rule.rule_id,
-                "The Browser Agent is not configured for this request.",
-                "Use deterministic Browser rules or configure the Browser Agent capability.",
-            )
-            return
-        action_port = _RuleAgentActionPort(
-            inner=cast(BrowserAgentActionPort, session.agent_action_port()),
-            session=session,
-            rule=rule,
-            capture_guard=capture_guard,
-            state_machine=state_machine,
-            page_failure=page_failure,
-        )
-        decision_port = AgentsBrowserAgentDecisionPort(
-            model=browser_agent_model,
-            budget=browser_agent_budget,
-        )
-        loop_budget = BrowserAgentLoopBudget(
-            max_output_tokens=(
-                256
-                if browser_agent_budget is None
-                else min(256, browser_agent_budget.max_output_tokens)
-            ),
-            max_image_bytes=(
-                2 * 1024 * 1024
-                if browser_agent_budget is None
-                else min(2 * 1024 * 1024, browser_agent_budget.max_input_bytes)
-            ),
-        )
-        agent_controller = AgentBrowserController(
-            agent_port=browser_agent_port,
-            decision_port=decision_port,
-            action_port=action_port,
-            budget=loop_budget,
-        )
-        _LOGGER.debug(
-            "event=browser-agent-started browser_rule_id=%s stage=agent "
-            "agent_invoked=true capability=image-input,tool-decision",
-            rule.rule_id,
-        )
-        try:
-            agent_result = agent_controller.run(article_token, cancel_event=cancel_event)
-        except _AgentAdmissionStop:
-            # A per-turn page-state checkpoint has already transitioned the
-            # Acquisition state machine. Stop before another model decision;
-            # the existing terminal/result mapping owns final semantics.
-            _LOGGER.debug(
-                "event=browser-agent-admission-stopped browser_rule_id=%s state=%s turns=%d",
-                rule.rule_id,
-                _browser_state_value(state_machine),
-                action_port.turn,
-            )
-            return
-        reason, next_action = _agent_terminal_text(agent_result.disposition)
-        action_kind = "none"
-        if agent_result.last_action is not None:
-            action_kind = (
-                type(agent_result.last_action)
-                .__name__.replace("Page", "-page")
-                .replace("Element", "-element")
-                .casefold()
-            )
-        _LOGGER.info(
-            "event=browser-agent-finished browser_rule_id=%s stage=agent "
-            "agent_invoked=true outcome=%s disposition=%s action_count=%d "
-            "capture=%s action_kind=%s failure_code=%s reason=%s action=%s",
-            rule.rule_id,
-            agent_result.disposition.value,
-            agent_result.disposition.value,
-            agent_result.steps,
-            agent_result.capture_state.value,
-            action_kind,
-            "none" if agent_result.failure_code is None else agent_result.failure_code,
-            reason,
-            next_action,
-        )
 
     @staticmethod
     def _try_discovered_pdf_locators(
@@ -2328,8 +2068,7 @@ class ControlledBrowserPdfSource:
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
         capture_guard: _RuleCaptureGuard,
-        state_machine: BrowserRunStateMachine,
-        page_failure: list[StableFailure],
+        facts: _BrowserAttemptFacts,
     ) -> bool:
         for action_index, action in enumerate(rule.actions, start=1):
             if not ControlledBrowserPdfSource._run_rule_action(session, action, rule):
@@ -2345,8 +2084,7 @@ class ControlledBrowserPdfSource:
                 session,
                 rule,
                 capture_guard,
-                state_machine,
-                page_failure,
+                facts,
                 checkpoint=f"post-action-{action_index}",
             )
             if terminal:
@@ -2365,8 +2103,7 @@ class ControlledBrowserPdfSource:
         session: BrowserFlowSession,
         rule: BrowserSiteRule,
         capture_guard: _RuleCaptureGuard,
-        state_machine: BrowserRunStateMachine,
-        page_failure: list[StableFailure],
+        facts: _BrowserAttemptFacts,
         *,
         checkpoint: str,
     ) -> tuple[_PageClassification, bool]:
@@ -2394,60 +2131,24 @@ class ControlledBrowserPdfSource:
             "entitled=%s conflict=%s elapsed_ms=%d",
             rule.rule_id,
             checkpoint,
-            "none" if classification.state is None else classification.state.value,
+            classification.page_state.value,
             str(classification.authenticated).lower(),
             str(classification.entitled).lower(),
             str(classification.conflict).lower(),
             _elapsed_ms(started_ns),
         )
-        if classification.conflict and not page_failure:
-            page_failure.append(_page_state_conflict_failure())
-        if classification.state is None:
-            return classification, False
-        if classification.state is BrowserRunState.CHALLENGE_REQUIRED:
-            # Runtime cancellation, timeout and transport failures belong to
-            # Network's operation boundary.  They must escape the controller
-            # unchanged so BrowserClient can translate them into a stable
-            # AccessFailure; treating them as a page-local challenge outcome
-            # would incorrectly permit the next candidate to start.
-            challenge_state, cleared_classification = _settle_challenge(session, rule)
-            if challenge_state is not None:
-                if challenge_state is BrowserChallengeState.CLEARED:
-                    if cleared_classification is None:
-                        page_failure.append(_challenge_failure(BrowserChallengeState.FAILED))
-                        _transition_browser_state(
-                            state_machine,
-                            BrowserRunState.CHALLENGE_REQUIRED,
-                            rule_id=rule.rule_id,
-                        )
-                        return classification, True
-                    classification = cleared_classification
-                    # ``_settle_challenge`` re-observes the page after a
-                    # delayed JavaScript navigation.  Refresh the capture
-                    # guard's landing binding as well; otherwise a PDF
-                    # fetched immediately by the newly reached article is
-                    # compared with the stale challenge URL and discarded as
-                    # the wrong article.
-                    capture_guard.rebind_landing(session.observe().locator)
-                    if classification.conflict and not page_failure:
-                        page_failure.append(_page_state_conflict_failure())
-                    if classification.state is None:
-                        return classification, False
-                else:
-                    if not page_failure:
-                        page_failure.append(_challenge_failure(challenge_state))
-                    _transition_browser_state(
-                        state_machine,
-                        _browser_state_for_challenge(challenge_state),
-                        rule_id=rule.rule_id,
-                    )
-                    return classification, True
-        decision = _transition_browser_state(
-            state_machine,
-            classification.state,
-            rule_id=rule.rule_id,
-        )
-        return classification, decision.is_terminal
+        facts.observe(classification)
+        if facts.failure is not None:
+            return classification, True
+        if classification.page_state in {
+            BrowserPageState.NOT_ENTITLED,
+            BrowserPageState.NOT_FOUND,
+        }:
+            return classification, True
+        if classification.page_state is BrowserPageState.CHALLENGE and checkpoint == "final":
+            facts.fail(_challenge_unresolved_failure())
+            return classification, True
+        return classification, False
 
     @staticmethod
     def _run_rule_action(
@@ -2542,238 +2243,7 @@ class ControlledBrowserPdfSource:
         )
 
 
-_CHALLENGE_SETTLE_SECONDS: Final[float] = 5.0
-# A Browser runtime is allowed to return from ``wait_for_challenge_settle``
-# when its network requests have become quiet.  That is only a progress
-# observation, not proof that the page's delayed JavaScript navigation has
-# happened.  Keep each subsequent observation bounded so Acquisition can
-# re-classify the page throughout the local deadline without an unbounded
-# vendor wait.  The value is passed to the runtime waiter (which performs its
-# own cancellable condition wait); this module never sleeps a fixed interval.
-_CHALLENGE_SETTLE_POLL_SECONDS: Final[float] = 0.25
-_DEFAULT_CHALLENGE_INTERACTION_SELECTORS: Final[tuple[str, ...]] = (
-    "#challenge-form",
-    "[data-captcha]",
-    "iframe[src*='captcha']",
-)
-
-
-def _challenge_interaction_present(
-    session: BrowserFlowSession,
-    rule: BrowserSiteRule,
-) -> bool:
-    profile = rule.challenge_resource_profile
-    selectors = (
-        _DEFAULT_CHALLENGE_INTERACTION_SELECTORS
-        if profile is None or not profile.interaction_selectors
-        else profile.interaction_selectors
-    )
-    return any(session.has_selector(selector) for selector in selectors)
-
-
-def _challenge_resource_snapshot(
-    session: BrowserFlowSession,
-) -> BrowserChallengeObservation | None:
-    observer = getattr(session, "challenge_observation", None)
-    if not callable(observer):
-        return None
-    value = observer()
-    if not isinstance(value, BrowserChallengeObservation):
-        raise TypeError("Browser challenge observation violated its contract")
-    return value
-
-
-def _settle_challenge(  # noqa: C901
-    session: BrowserFlowSession,
-    rule: BrowserSiteRule,
-) -> tuple[BrowserChallengeState | None, _PageClassification | None]:
-    """Run the bounded challenge lifecycle owned by Acquisition.
-
-    A missing optional observation hook means this is an older/fake runner;
-    retain the historical immediate challenge classification for that seam.
-    Production Cloak sessions implement both hooks and therefore receive a
-    resource-aware settle window.
-    """
-
-    # A Provider without an explicitly verified dependency keeps the legacy
-    # terminal challenge path; no generic third-party loading is inferred.
-    if rule.challenge_resource_profile is None:
-        return None, None
-    snapshot = _challenge_resource_snapshot(session)
-    waiter = getattr(session, "wait_for_challenge_settle", None)
-    if snapshot is None or not callable(waiter):
-        return None, None
-    lifecycle = BrowserChallengeStateMachine()
-    started_ns = time.monotonic_ns()
-    _LOGGER.debug(
-        "event=browser-challenge-transition browser_rule_id=%s stage=%s "
-        "evidence_kind=resource-observation resource_admitted=%d "
-        "resource_blocked=%d pending_count=%d elapsed_ms=%d",
-        rule.rule_id,
-        lifecycle.state.value,
-        snapshot.resources.admitted_count,
-        snapshot.resources.blocked_count,
-        snapshot.resources.pending_count,
-        _elapsed_ms(started_ns),
-    )
-    _LOGGER.info(
-        "event=browser-challenge-started browser_rule_id=%s stage=resource-loading "
-        "evidence_kind=challenge-resource-profile outcome=automatic-check "
-        "resource_admitted=%d resource_blocked=%d pending_count=%d reason=%s action=%s",
-        rule.rule_id,
-        snapshot.resources.admitted_count,
-        snapshot.resources.blocked_count,
-        snapshot.resources.pending_count,
-        "Automatic verification is in progress.",
-        "Wait for the approved challenge to finish automatically.",
-    )
-    if snapshot.resources.resource_blocked:
-        lifecycle.transition(BrowserChallengeState.RESOURCE_BLOCKED)
-        _log_challenge_finished(
-            rule.rule_id,
-            stage=lifecycle.state.value,
-            evidence_kind="network-guard",
-            outcome=lifecycle.state.value,
-            facts=snapshot.resources,
-            started_ns=started_ns,
-            reason="The program blocked a verification resource under its local safety rules.",
-            action="Review the approved challenge resource profile before retrying.",
-        )
-        return lifecycle.state, None
-    if _challenge_interaction_present(session, rule):
-        lifecycle.transition(BrowserChallengeState.SETTLING)
-        lifecycle.transition(BrowserChallengeState.INTERACTION_REQUIRED)
-        _log_challenge_finished(
-            rule.rule_id,
-            stage=lifecycle.state.value,
-            evidence_kind="interaction-control",
-            outcome=lifecycle.state.value,
-            facts=snapshot.resources,
-            started_ns=started_ns,
-            reason="The page presents a manual verification control.",
-            action="Complete verification outside automation or use another approved source.",
-        )
-        return lifecycle.state, None
-    lifecycle.transition(BrowserChallengeState.SETTLING)
-    _LOGGER.debug(
-        "event=browser-challenge-transition browser_rule_id=%s stage=%s "
-        "evidence_kind=resource-observation resource_admitted=%d "
-        "resource_blocked=%d pending_count=%d elapsed_ms=%d",
-        rule.rule_id,
-        lifecycle.state.value,
-        snapshot.resources.admitted_count,
-        snapshot.resources.blocked_count,
-        snapshot.resources.pending_count,
-        _elapsed_ms(started_ns),
-    )
-    deadline = time.monotonic() + _CHALLENGE_SETTLE_SECONDS
-    latest = snapshot
-    first_wait = True
-    unchanged_fast_polls = 0
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        # The first call retains the complete local deadline.  A runtime may
-        # return early after a quiet network window; later calls use a short
-        # bounded window so delayed JS navigation can still be observed.  The
-        # runtime implementation owns cancellation and does not require a
-        # fixed sleep here.
-        wait_window = remaining if first_wait else min(remaining, _CHALLENGE_SETTLE_POLL_SECONDS)
-        first_wait = False
-        wait_started = time.monotonic()
-        settled = waiter(wait_window)
-        if not isinstance(settled, BrowserChallengeObservation):
-            lifecycle.transition(BrowserChallengeState.FAILED)
-            _log_challenge_finished(
-                rule.rule_id,
-                stage=lifecycle.state.value,
-                evidence_kind="settle-observation",
-                outcome=lifecycle.state.value,
-                facts=latest.resources,
-                started_ns=started_ns,
-                reason="Automatic verification returned an invalid progress observation.",
-                action="Check the Browser runtime and approved challenge profile before retrying.",
-            )
-            return lifecycle.state, None
-        wait_elapsed = time.monotonic() - wait_started
-        if settled == latest and wait_elapsed <= 0.001:
-            # A structural fake/legacy runner may return immediately without
-            # implementing the waiter contract.  Permit one retry (which can
-            # observe a delayed navigation), then stop a no-progress busy
-            # loop.  Real Network/Cloak sessions perform a cancellable
-            # condition wait and therefore do not take this escape path.
-            unchanged_fast_polls += 1
-            fast_no_progress = unchanged_fast_polls >= 2
-        else:
-            unchanged_fast_polls = 0
-            fast_no_progress = False
-        latest = settled
-        if settled.resources.resource_blocked:
-            lifecycle.transition(BrowserChallengeState.RESOURCE_BLOCKED)
-            _log_challenge_finished(
-                rule.rule_id,
-                stage=lifecycle.state.value,
-                evidence_kind="network-guard",
-                outcome=lifecycle.state.value,
-                facts=settled.resources,
-                started_ns=started_ns,
-                reason="The program blocked a verification resource under its local safety rules.",
-                action="Review the approved challenge resource profile before retrying.",
-            )
-            return lifecycle.state, None
-        # Re-classify after every waiter return.  In particular, a quiet
-        # challenge network can be followed by a delayed top-frame JS
-        # navigation, which is the signal that permits the ordinary PDF flow
-        # to continue.
-        post_classification, _observation = _classify_page(session, rule)
-        if post_classification.state is not BrowserRunState.CHALLENGE_REQUIRED:
-            lifecycle.transition(BrowserChallengeState.CLEARED)
-            _log_challenge_finished(
-                rule.rule_id,
-                stage=lifecycle.state.value,
-                evidence_kind="page-state-transition",
-                outcome=lifecycle.state.value,
-                facts=settled.resources,
-                started_ns=started_ns,
-                reason="Automatic verification completed and the article page is available.",
-                action="Continue with the reviewed PDF acquisition steps.",
-            )
-            return lifecycle.state, post_classification
-        if _challenge_interaction_present(session, rule):
-            lifecycle.transition(BrowserChallengeState.INTERACTION_REQUIRED)
-            _log_challenge_finished(
-                rule.rule_id,
-                stage=lifecycle.state.value,
-                evidence_kind="interaction-control",
-                outcome=lifecycle.state.value,
-                facts=settled.resources,
-                started_ns=started_ns,
-                reason="The page presents a manual verification control.",
-                action="Complete verification outside automation or use another approved source.",
-            )
-            return lifecycle.state, post_classification
-        if fast_no_progress:
-            break
-    lifecycle.transition(BrowserChallengeState.SETTLE_TIMEOUT)
-    _log_challenge_finished(
-        rule.rule_id,
-        stage=lifecycle.state.value,
-        evidence_kind="settle-observation",
-        outcome=lifecycle.state.value,
-        facts=latest.resources,
-        started_ns=started_ns,
-        reason="Automatic verification did not finish within the bounded wait.",
-        action="Retry later or use another approved source.",
-    )
-    post_classification, _observation = _classify_page(session, rule)
-    return lifecycle.state, post_classification
-
-
 __all__ = (
-    "BrowserChallengeLifecycle",
-    "BrowserChallengeState",
-    "BrowserChallengeStateMachine",
     "BrowserFlowSession",
     "BrowserRuleDestinationGuard",
     "BrowserRunner",

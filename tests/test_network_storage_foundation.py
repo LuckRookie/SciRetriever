@@ -243,6 +243,7 @@ class _FakeContext:
         configured_download: _FakeDownload | None = None,
         blocking_goto: bool = False,
         hold_request_finished: bool = False,
+        popup_error: BaseException | None = None,
     ) -> None:
         self.process = process
         self.pages: list[_FakePage] = []
@@ -253,6 +254,7 @@ class _FakeContext:
         self.configured_download_emitted = False
         self.blocking_goto = blocking_goto
         self.hold_request_finished = hold_request_finished
+        self.popup_error = popup_error
         self.request_continued = threading.Event()
         self.request_finished_gate = threading.Event()
         self.goto_started = threading.Event()
@@ -289,6 +291,8 @@ class _FakeContext:
         return route
 
     def popup(self, url: str) -> _FakePage:
+        if self.popup_error is not None:
+            raise self.popup_error
         page = self.new_page()
         for handler in self.handlers.get("page", ()):
             handler(page)
@@ -327,11 +331,13 @@ class _FakeProcess:
         configured_download: _FakeDownload | None = None,
         blocking_goto: bool = False,
         hold_request_finished: bool = False,
+        popup_error: BaseException | None = None,
     ) -> None:
         self.context: _FakeContext | None = None
         self.configured_download = configured_download
         self.blocking_goto = blocking_goto
         self.hold_request_finished = hold_request_finished
+        self.popup_error = popup_error
         self.downloads_path: str | None = None
         self.closed = False
         self.binding: object | None = None
@@ -363,6 +369,7 @@ class _FakeProcess:
             configured_download=self.configured_download,
             blocking_goto=self.blocking_goto,
             hold_request_finished=self.hold_request_finished,
+            popup_error=self.popup_error,
         )
         self.context.bind_connection(connection_binding)
         return self.context
@@ -378,11 +385,13 @@ class _FakeBrowserFactory:
         configured_download: _FakeDownload | None = None,
         blocking_goto: bool = False,
         hold_request_finished: bool = False,
+        popup_error: BaseException | None = None,
     ) -> None:
         self.processes: list[_FakeProcess] = []
         self.configured_download = configured_download
         self.blocking_goto = blocking_goto
         self.hold_request_finished = hold_request_finished
+        self.popup_error = popup_error
 
     def __call__(
         self,
@@ -395,6 +404,7 @@ class _FakeBrowserFactory:
             configured_download=self.configured_download,
             blocking_goto=self.blocking_goto,
             hold_request_finished=self.hold_request_finished,
+            popup_error=self.popup_error,
         )
         process.bind_connection(connection_binding)
         self.processes.append(process)
@@ -506,8 +516,6 @@ class MisownedAnalysisArtifactPort(Protocol):
             "WorkVersion",
         )
         allowed_network_ports_by_module = {
-            "network/browser_control.py": ("BrowserAgentActionPort",),
-            "network/browser.py": ("_BrowserAgentActionPort",),
             # This private structural seam only marshals Playwright calls onto
             # the Cloak-owned engine thread. It owns no business fact and is
             # not exported as a cross-module product port.
@@ -523,10 +531,9 @@ class MisownedAnalysisArtifactPort(Protocol):
                 self.assertNotIn(term, source, relative)
             tree = ast.parse(source, filename=relative)
             declared_ports = _declared_port_classes(tree)
-            # Network owns the neutral Browser Agent action seam introduced by
-            # the controlled Browser contract.  It is intentionally limited
-            # to this one protocol and its request-local adapter; no business
-            # or storage ports are permitted in Network/Storage modules.
+            # Network owns BrowserControlSession as a capability protocol; its
+            # name deliberately does not present the seam as a business Port.
+            # No business or storage Ports are permitted in Network/Storage.
             allowed_network_ports = allowed_network_ports_by_module.get(relative, ())
             self.assertEqual(
                 tuple(name for name in declared_ports if name not in allowed_network_ports),
@@ -764,7 +771,7 @@ class MisownedAnalysisArtifactPort(Protocol):
             ),
             (
                 "timeout",
-                lambda session: (clock.advance(2.0), None)[1],
+                lambda session: getattr(session, "open_popup")("https://popup.test/popup"),
                 "timeout",
             ),
             (
@@ -780,7 +787,8 @@ class MisownedAnalysisArtifactPort(Protocol):
                     _FakeDownload("https://download.test/file?token=secret", b"fixture")
                     if label == "success"
                     else None
-                )
+                ),
+                popup_error=(TimeoutError("runtime-secret") if label == "timeout" else None),
             )
             browser = BrowserClient(
                 factory=factory,

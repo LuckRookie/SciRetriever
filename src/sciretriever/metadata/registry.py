@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Callable, Final, Mapping, TypedDict, cast
 
 from sciretriever.configuration import CredentialLookup, credential_status_for
+from sciretriever.configuration.source_selection import metadata_source_providers
 from sciretriever.metadata.ports import (
     MetadataLookupPort,
     ReferenceQueryPort,
@@ -143,6 +144,7 @@ from sciretriever.model.configuration import (
     ConfigurationProbeResult,
     CredentialStatus,
     CrossrefAccessMode,
+    CrossrefMetadataConfig,
     ProbeOutcome,
     ProviderCapability,
     ProviderName,
@@ -591,17 +593,9 @@ def _crossref_status(
     *,
     enabled: bool,
 ) -> MetadataProviderStatus:
-    ordinary = configuration.sources.metadata.crossref
-    if ordinary is None:
-        return _status_failure(
-            provider_name=ProviderName.CROSSREF.value,
-            implementation=CrossrefAdapter,
-            capabilities=_SEARCH_LOOKUP,
-            enabled=enabled,
-            code="missing-ordinary-parameter",
-            access_scope=None,
-            access_policy=None,
-        )
+    ordinary = configuration.sources.metadata.crossref or CrossrefMetadataConfig(
+        mode=CrossrefAccessMode.ANONYMOUS
+    )
     if ordinary.mode is CrossrefAccessMode.POLITE:
         access_scope = CROSSREF_POLITE_ACCESS_SCOPE
         access_policy = CROSSREF_POLITE_ACCESS_POLICY
@@ -653,7 +647,7 @@ def metadata_provider_statuses(
         raise MetadataRegistryError("configuration-invalid")
     if not isinstance(credentials, CredentialLookup):
         raise MetadataRegistryError("credentials-invalid")
-    enabled = frozenset(item.value for item in configuration.sources.metadata.providers)
+    enabled = frozenset(item.value for item in metadata_source_providers(configuration))
     statuses: list[MetadataProviderStatus] = []
     for provider_name in METADATA_PROVIDER_ORDER:
         is_enabled = provider_name in enabled
@@ -875,9 +869,9 @@ def _build_adapter(
             )
         raise MetadataRegistryError("implementation-mismatch", provider_name)
     if provider_name == ProviderName.CROSSREF.value:
-        ordinary = configuration.sources.metadata.crossref
-        if ordinary is None:
-            raise MetadataRegistryError("missing-ordinary-parameter", provider_name)
+        ordinary = configuration.sources.metadata.crossref or CrossrefMetadataConfig(
+            mode=CrossrefAccessMode.ANONYMOUS
+        )
         return CrossrefAdapter(**common, mailto=ordinary.mailto)
     return _build_fixed_adapter(provider_name, credentials, common)
 
@@ -1028,17 +1022,12 @@ def build_metadata_registry(
         raise MetadataRegistryError("network-bypass")
     statuses = metadata_provider_statuses(configuration, credentials)
     status_by_name = {status.provider_name: status for status in statuses}
-    selected = tuple(item.value for item in configuration.sources.metadata.providers)
-    scan_limit = configuration.discovery.metadata_scan_limit
+    selected = tuple(item.value for item in metadata_source_providers(configuration))
+    scan_limit = configuration.sources.metadata.limit
     discovery_capabilities = {
         MetadataCapability.TOPIC_SEARCH,
         MetadataCapability.REFERENCE_QUERY,
     }
-    if scan_limit is None and any(
-        discovery_capabilities.intersection(status_by_name[provider].capabilities)
-        for provider in selected
-    ):
-        raise MetadataRegistryError("missing-scan-limit")
 
     registrations: list[MetadataProviderRegistration] = []
     topic_ports: list[TopicSearchPort] = []
@@ -1067,8 +1056,6 @@ def build_metadata_registry(
             )
         )
         if MetadataCapability.TOPIC_SEARCH in status.capabilities:
-            if scan_limit is None:  # pragma: no cover - checked before assembly.
-                raise MetadataRegistryError("missing-scan-limit", provider_name)
             topic_ports.append(cast(TopicSearchPort, adapter))
             topic_limits.append(
                 ProviderDiscoveryLimit(
@@ -1083,7 +1070,7 @@ def build_metadata_registry(
             citation_limits.append(
                 ProviderDiscoveryLimit(
                     provider_name=provider_name,
-                    scan_limit=cast(int, scan_limit),
+                    scan_limit=scan_limit,
                 )
             )
 

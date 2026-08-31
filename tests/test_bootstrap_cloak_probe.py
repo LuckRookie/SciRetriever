@@ -19,7 +19,7 @@ class CloakProbeAssemblyTests(unittest.TestCase):
     def _configuration(self) -> Configuration:
         return parse_configuration(
             """
-            [access]
+            [download]
             browser_enabled = true
             browser_profile = "fixture-profile"
             """

@@ -39,7 +39,6 @@ SPRINGERLINK_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     ),
     actions_require_entitlement=True,
     doi_pdf_url_template="https://link.springer.com/content/pdf/{doi}.pdf",
-    max_actions=2,
     page_markers=(
         BrowserPageMarker(
             marker_id="springerlink-entitled",
@@ -70,7 +69,7 @@ SPRINGERLINK_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
         ),
         BrowserPageMarker(
             marker_id="springerlink-challenge",
-            kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            kind=BrowserPageMarkerKind.CHALLENGE,
             css_selectors=("#challenge-running",),
             text_markers=(
                 ("title", "just a moment"),

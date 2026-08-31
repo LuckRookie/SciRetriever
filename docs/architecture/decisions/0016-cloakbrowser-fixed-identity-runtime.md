@@ -1,7 +1,8 @@
-# ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页生命周期
+# ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页资源边界
 
 - Status: Accepted
 - Date: 2026-08-21
+- Last amended: 2026-08-26
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Network 技术文档](../technical/network.md)、[Configuration 技术文档](../technical/configuration.md)、[Provider Notes](../../notes/providers/README.md)
@@ -10,7 +11,7 @@
 
 ADR 0015 已经确定 Public → Authorized Provider API → Controlled Browser 的严格风险顺序、一个长期身份 Profile、一个共享 process/context，以及 Publisher 风险组之间并行、组内限速串行。当前 stock Playwright runtime 能执行这些合同，但服务器实测仍暴露 `navigator.webdriver=true`、空 plugin surface 等明显自动化特征；同一长期 Profile 若在每次启动配合随机设备指纹，也会产生“Cookie 和历史不变、设备身份持续变化”的矛盾。
 
-2026-08-21 的九家 Browser-only 小样本还发现了另一个独立问题：七家进入验证页时，`https://challenges.cloudflare.com` 不在对应 Provider 的批准资源集合，SciRetriever 自己的 origin/CONNECT guard 阻断了 challenge iframe 和脚本。页面因此停留在不完整的 `Just a moment...`，随后又被初次状态检查立即统一终止。诊断性放行该 origin 后，页面能够加载真实的人工验证控件，但没有在短时间内自动完成。这说明“验证资源被本地阻断”“自动验证仍在进行”和“明确需要人工交互”必须分别表达；更换 Browser runtime 也不能被当作绕过 CAPTCHA 或内容授权的保证。
+2026-08-21 的九家 Browser-only 小样本还发现了另一个独立问题：七家进入验证页时，`https://challenges.cloudflare.com` 不在对应 Provider 的批准资源集合，SciRetriever 自己的 origin/CONNECT guard 阻断了 challenge iframe 和脚本。页面因此停留在不完整的 `Just a moment...`，随后又被初次状态检查立即统一终止。诊断性放行该 origin 后，页面能够加载真实的验证控件，但没有在短时间内自动完成。这说明“验证资源被本地阻断”“自动验证仍在进行”和“需要可见交互”必须分别表达。Operator 已明确要求 Browser Agent 作为其受控网页助手，在原始机构 IP、固定身份 Profile 和当前文章许可内完成站点展示的 challenge；更换 Browser runtime 或清除 challenge 仍不能被当作当前文章已经取得内容授权的保证。
 
 ## 决策
 
@@ -50,7 +51,7 @@ CloakBrowser Python wrapper 与定制 Chromium binary 的版本、许可和分�
 
 ### 4. 原始出口、共享调度和 Network guard 保持不变
 
-CloakBrowser 继续通过现有 loopback CONNECT 边界使用服务器原始网络出口，不读取环境 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`。Publisher Profile guard、URL/DNS/地址、host permit、redirect、请求/导航/字节预算、统一 PDF capture 和不可变发布合同不因 runtime 切换而放宽。
+CloakBrowser 继续通过现有 loopback CONNECT 边界使用服务器原始网络出口，不读取环境 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`。Publisher Profile guard、URL/DNS/地址、host permit、redirect、单次请求/导航超时、字节上限、统一 PDF capture 和不可变发布合同不因 runtime 切换而放宽。
 
 所有 Publisher lane 继续共享一个 process/context；同一 `browser_rate_limit_group` 始终只有一个活动文章流程并服从 Provider policy，不同独立组只在全局本机资源 cap 内并行。Cloak runtime、Playwright manager、事件泵、Xvfb、CONNECT、Profile lease 和 close 必须由一个明确的 engine 生命周期拥有，失败、取消和退出不得残留第二套 manager、thread 或 Browser 进程。
 
@@ -60,29 +61,21 @@ CloakBrowser 继续通过现有 loopback CONNECT 边界使用服务器原始网�
 
 - 已批准 Publisher 顶层页面发起的必要 iframe、script 或 request；
 - HTTPS/443、经过 DNS/地址和 host admission 的请求；
-- 当前文章预算、frame ancestry 和页面生命周期内的资源。
+- 当前文章 permit、frame ancestry 和页面生命周期内的资源。
 
 它不允许把 challenge origin 用作初始或任意顶层导航、PDF locator、popup 目标、capture source、跨文章 locator 或未知 Publisher 的通用第三方 origin。Publisher Cookie/Authorization 不由 SciRetriever 复制到该 origin，query、token 和页面正文不进入结果或日志。
 
-### 6. Challenge 使用有界 transient/terminal 生命周期
+### 6. Challenge 使用统一页面合同
 
-Browser 页面状态至少区分：
+Challenge 是普通 `BrowserObservation.page_state=CHALLENGE`，不是独立的交互子系统。Network 对普通文章页、popup、viewer、frame、Shadow surface 和 Challenge 页面生成同一种 revision、surface tree、screenshot、可见 element、capture state 与上一动作 receipt；不提供 `BrowserChallengeObservation`、interaction target、专属 controller 或 interaction-required/active/exhausted 状态族。裸 HTTP 403、普通 paywall、登录、IP block 和 runtime failure 不能仅凭通用文本归入 Challenge。
 
-```text
-resource-loading
-settling
-cleared
-interaction-required
-resource-blocked
-settle-timeout
-failed
-```
+Network 允许已批准 challenge dependency 在当前文章 permit、frame ancestry 和页面生命周期内自然加载，并只报告加载/阻断事实。页面脚本若自动清除 Challenge，下一次 Observation 自然回到普通文章页；资源被本地 origin/CONNECT policy 阻断时形成真实 Network 失败，不能伪装成用户无权限或 Agent 失败。局部资源加载和每次动作使用客观的单次超时，不形成整篇 Browser 作业 deadline 或 Challenge 专属重试预算。
 
-出现高特异性 challenge 证据后，系统先在文章总预算内进入局部 settle，允许已经批准的资源和页面脚本自然完成。自动跳转回文章页面时继续正常 DOM/PDF 流程；明确互动控件出现时立即进入 `interaction-required`；本地 origin/CONNECT policy 阻断形成 `resource-blocked`；局部 deadline 到期形成 `settle-timeout`。裸 HTTP 403、普通 paywall、登录、IP block 和 runtime failure 不能仅凭通用文本归入 challenge。
+作业开始前已经冻结的 Browser controller 决定页面如何继续：`rules` 只能执行已审查的确定性页面规则，`agent` 从第一次统一 Observation 起选择 ADR 0017 规定的六种封闭动作；二者不会在 Challenge 或其它页面上相互 fallback。Browser Agent 可以使用 `ClickElement`，也可以用绑定当前 article/page/surface/viewport/screenshot/revision 的 `ClickPoint` 操作当前页面可见控件。它不取得 selector、任意或跨 revision 坐标、JavaScript、CDP、Cookie、验证 token、文件系统或新 Browser/context。
 
-Network 只提供 status、frame/resource admission、navigation、capture 和预算等有界事实；Acquisition/Publisher rule 唯一解释 challenge、paywall、login、entitlement 和文章结果。正常与 Debug 日志只记录证据类别、阶段、资源计数和耗时，不记录 title/body、selector、截图、token 或完整 URL。
+Operator 选择 Agent controller 并发起当前文献获取，即表达了由 Browser Agent 在同一 Profile、原始出口、Publisher permit 和文章页面边界内处理可见 Challenge 的意志，不再为每个 Challenge 请求一次人工确认。系统不把 Challenge 外包给第三方服务，不注入或伪造验证结果，不切换代理/IP/Profile，不自动登录、选择机构或处理 MFA。Challenge 清除不构成 entitlement 证明；Acquisition 仍需完成正文归属、capture 与 PDF 验收。Agent 停止时页面仍为 Challenge，可以稳定解释为 `challenge-unresolved`，无需专属状态机或硬预算。
 
-第一版不自动点击、破解或外包 CAPTCHA/Turnstile，不自动登录、选择机构或处理 MFA。明确人工验证仍是对应 Publisher 风险组的 action-required 终态。
+正常与 Debug 日志只记录脱敏 page state、资源准入/阻断、动作类别、capture、语义进展和单次耗时，不记录 title/body、selector、截图字节、token、模型原文或完整 URL。
 
 ### 7. 切换采用离线门、真实小样本门和单点删除
 
@@ -90,7 +83,7 @@ Network 只提供 status、frame/resource admission、navigation、capture 和�
 
 1. 固定身份、Profile lease、Linux persona、共享 process/context 与清理；
 2. 本地 HTTPS 下的 CONNECT、redirect、iframe、service worker 和 PDF 捕获；
-3. Cloudflare-shaped 第三方 iframe 的受限加载、自动 clear、人工控件、资源阻断和 origin escape；
+3. Cloudflare-shaped 第三方 iframe 的受限加载、自动 clear、统一 Observation、通用 Agent 动作、语义无进展、资源阻断和 origin escape；
 4. 用户明确授权的极小 stock/Cloak 串行 A/B，且 SpringerLink/IOP 已有成功链不回归。
 
 通过后一次性删除 stock runtime，再在最终单 runtime 对象图上重新执行 Quick、Full 和 fresh-wheel 验收。切换失败通过完整提交回退，不在产品中保留兼容开关。真实 Provider 结果只决定逐家 ready/deferred/unsupported，不把单篇成功或失败扩写成普遍 entitlement。
@@ -99,7 +92,7 @@ Network 只提供 status、frame/resource admission、navigation、capture 和�
 
 - 长期 Profile 的 Cookie/历史与设备身份一致，不再因每次随机 seed 自相矛盾。
 - CloakBrowser 降低 stock automation surface，但不保证通过 Cloudflare，也不改变 Publisher entitlement。
-- Cloudflare 必需资源不再被 SciRetriever 自己无差别阻断；自动检查和人工验证得到不同结果。
+- Cloudflare 必需资源不再被 SciRetriever 自己无差别阻断；自动页面变化和受控动作都通过统一 Observation/Action 合同表达，不再形成第二套 Challenge 生命周期。
 - Binary、版本和 Profile 迁移成为明确 operator 生命周期，wheel 保持可安装且不携带 vendor binary。
 - Browser 仍是三级获取的最后一层，原始 IP、Provider 限速、一个共享身份和 Network 安全边界保持不变。
 
@@ -111,13 +104,14 @@ Network 只提供 status、frame/resource admission、navigation、capture 和�
 - 每 Publisher 一个 Profile、Browser process 或身份池；
 - 代理轮换、住宅代理或自动改变机构出口；
 - 全局放行 Cloudflare origin，或把 challenge body 当作 PDF/页面内容捕获；
-- 自动点击或破解 CAPTCHA、自动登录、自动机构选择或 MFA；
-- 为通过 fixture 而关闭 origin、DNS、host admission、资源预算或组内串行。
+- 把 challenge 外包给第三方 solver、注入验证 token、轮换代理/IP/Profile，或把 challenge 权限扩张为自动登录、自动机构选择或 MFA；
+- 为通过 fixture 而关闭 origin、DNS、host admission、单次资源上限或组内串行。
 
 ## 需要新 ADR 的变化
 
 - 同时激活多个身份 Profile、把 Profile 拆为逐 Publisher 身份池或引入代理/IP 池；
 - 恢复公开多引擎选择或长期 stock runtime fallback；
-- 自动登录、Cookie 导入导出、机构选择、MFA 或 CAPTCHA/Turnstile 处理；
+- 自动登录、Cookie 导入导出、机构选择或 MFA；
+- 让 Challenge 页面动作脱离当前文章、统一 Observation、同一 Publisher permit 或 Network action executor；
 - 允许 Agent、插件或外部 CDP 绕过 SciRetriever BrowserControlSession；
 - 将 fingerprint、challenge 页面、Cookie、Profile 内容或 Agent 页面观察持久化为产品事实。

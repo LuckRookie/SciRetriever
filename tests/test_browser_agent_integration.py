@@ -8,36 +8,50 @@ open a socket or read a user profile.
 
 from __future__ import annotations
 
+import json
 import threading
 import unittest
 from collections.abc import Callable
+from dataclasses import replace
 from tempfile import TemporaryDirectory
-from unittest import mock
 
-from sciretriever.acquisition import browser_control as browser_control_module
 from sciretriever.acquisition.browser_control import (
     AgentBrowserController,
-    AgentsBrowserAgentDecisionPort,
     BrowserAgentDisposition,
 )
-from sciretriever.agents import (
-    AgentBudget,
-    AgentPort,
+from sciretriever.agents.api import (
+    AgentCallLimits,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentSession,
-    AgentToolDecision,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentToolCall,
     AgentUsage,
 )
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.model.primitives import sha256_digest
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
+from sciretriever.network.browser import (
+    BrowserCaptureKind,
+    BrowserControlSession,
+    BrowserPageObservation,
+)
 from sciretriever.network.browser_control import (
-    BrowserAgentActionCommand,
-    BrowserAgentObservation,
+    BrowserAction,
+    BrowserActionOutcome,
+    BrowserActionReceipt,
+    BrowserAgentStatus,
+    BrowserBounds,
     BrowserCaptureState,
     BrowserElement,
     BrowserElementState,
-    BrowserObservationBudget,
+    BrowserObservation,
+    BrowserPageState,
+    BrowserScreenshot,
+    BrowserScrollState,
+    BrowserSurface,
+    BrowserSurfaceKind,
     BrowserViewport,
 )
 from sciretriever.network.browser_scheduler import (
@@ -97,6 +111,43 @@ class _Article:
         if event not in _EVENTS or event in self.handlers:
             raise AssertionError("fixture event registration is not closed")
         self.handlers[event] = handler
+
+    def click(self, selector: str) -> bool:
+        del selector
+        return False
+
+    def open_viewer(self, locator: str) -> None:
+        del locator
+
+    def open_verified_locator(self, locator: str) -> None:
+        del locator
+
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        return ()
+
+    def capture_available(self, kind: BrowserCaptureKind) -> bool:
+        del kind
+        return False
+
+    def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
+        del kind
+
+    def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
+        del kinds
+
+    def has_selector(self, selector: str) -> bool:
+        del selector
+        return False
+
+    def text(self, selector: str) -> str:
+        del selector
+        return ""
+
+    def observe(self) -> BrowserPageObservation:
+        return BrowserPageObservation("https://publisher.invalid/article", 200)
+
+    def control_session(self) -> BrowserControlSession:
+        raise AssertionError("the integration fixture injects its bounded control session")
 
     def end_article(self) -> bool:
         if not self.active:
@@ -187,25 +238,69 @@ class _Factory:
 class _Agent:
     provider_name = "fixture-browser-agent"
 
-    def __init__(self, *, on_call: Callable[[AgentRequest], None] | None = None) -> None:
-        self.calls = 0
+    def __init__(
+        self,
+        *,
+        on_call: Callable[[AgentProviderCall], None] | None = None,
+    ) -> None:
+        self.calls: list[AgentProviderCall] = []
         self.on_call = on_call
 
-    def complete(self, request: AgentRequest) -> AgentToolDecision:
-        self.calls += 1
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:
+        self.calls.append(call)
         if self.on_call is not None:
-            self.on_call(request)
-        return AgentToolDecision(
+            self.on_call(call)
+        summary = json.loads(call.text_parts[1].text)
+        encoded = json.dumps(
+            {
+                "article_token": summary["article_token"],
+                "page_id": summary["page_id"],
+                "revision": summary["revision"],
+                "surface_id": "s00000001",
+                "element_id": "e00000001",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return AgentToolCall(
             tool_name="click_element",
-            arguments='{"element_id":"e1","revision":1}',
+            arguments=encoded,
             provenance=AgentProvenance(
                 provider=self.provider_name,
-                model=request.model,
-                input_sha256=request.input_sha256,
+                model=call.model,
+                input_sha256=call.input_sha256,
                 parameters_sha256=sha256_digest(b"browser-agent-fixture"),
-                usage=AgentUsage(output_tokens=1, response_bytes=32),
+                usage=AgentUsage(output_tokens=1, response_bytes=len(encoded)),
             ),
         )
+
+
+def _agent_runtime(agent: _Agent) -> AgentRuntime:
+    return AgentRuntime(
+        adapter=agent,
+        browser=AgentRoleBinding(
+            role=AgentRole.BROWSER,
+            model="fixture-model",
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=32_768,
+                max_output_tokens=512,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset({"image/png"}),
+                max_image_count=1,
+                max_image_bytes=2 * 1024 * 1024,
+            ),
+            limits=AgentCallLimits(
+                max_prompt_bytes=131_072,
+                max_input_bytes=2 * 1024 * 1024,
+                max_request_bytes=3 * 1024 * 1024,
+                max_response_bytes=1 * 1024 * 1024,
+                max_result_bytes=1 * 1024 * 1024,
+                max_output_tokens=512,
+                context_window_tokens=32_768,
+            ),
+        ),
+    )
 
 
 class _ActionPort:
@@ -216,66 +311,96 @@ class _ActionPort:
         self.observation = self._make_observation()
 
     @staticmethod
-    def _make_observation() -> BrowserAgentObservation:
-        return BrowserAgentObservation(
+    def _make_observation() -> BrowserObservation:
+        viewport = BrowserViewport(width=1280, height=720)
+        screenshot = b"fixture-image"
+        return BrowserObservation(
+            article_token="article",
             revision=1,
-            page_token="article",
-            locator="https://publisher.invalid/article",
-            status_code=200,
-            viewport=BrowserViewport(width=1280, height=720),
-            screenshot=b"fixture-image",
-            screenshot_media_type="image/png",
-            elements=(
-                BrowserElement(
-                    element_id="e1",
-                    role="button",
-                    name="Download PDF",
-                    state=BrowserElementState.VISIBLE_ENABLED,
+            page_id="p00000001",
+            surfaces=(
+                BrowserSurface(
+                    surface_id="s00000001",
+                    page_id="p00000001",
+                    kind=BrowserSurfaceKind.PAGE,
+                    parent_surface_id=None,
+                    origin="https://publisher.invalid",
+                    path="/article",
+                    title="Article",
+                    viewport=viewport,
+                    bounds=BrowserBounds(0, 0, 1280, 720),
+                    scroll=BrowserScrollState(0, 0, 0, 1440),
                 ),
             ),
-            capture_state=BrowserCaptureState.NONE,
-            remaining_budget=BrowserObservationBudget(
-                remaining_steps=2,
-                remaining_seconds=10.0,
-                remaining_image_bytes=1024,
-                remaining_navigations=1,
+            elements=(
+                BrowserElement(
+                    element_id="e00000001",
+                    surface_id="s00000001",
+                    role="button",
+                    name="Download PDF",
+                    state=BrowserElementState.ENABLED,
+                    bounds=BrowserBounds(20, 20, 180, 40),
+                ),
             ),
+            screenshot=BrowserScreenshot(
+                screenshot_id="i00000001",
+                article_token="article",
+                page_id="p00000001",
+                surface_id="s00000001",
+                revision=1,
+                viewport=viewport,
+                media_type="image/png",
+                sha256=sha256_digest(screenshot),
+                content=screenshot,
+            ),
+            page_state=BrowserPageState.NORMAL,
+            agent_status=BrowserAgentStatus.RUNNING,
+            capture_state=BrowserCaptureState.NONE,
         )
 
     def mark_capture(self) -> None:
-        self.capture_state = BrowserCaptureState.AVAILABLE
-        self.observation = BrowserAgentObservation(
-            revision=1,
-            page_token="article",
-            locator="https://publisher.invalid/article",
-            status_code=200,
-            viewport=self.observation.viewport,
-            screenshot=self.observation.screenshot,
-            screenshot_media_type=self.observation.screenshot_media_type,
-            elements=self.observation.elements,
-            capture_state=self.capture_state,
-            remaining_budget=self.observation.remaining_budget,
-        )
+        self.capture_state = BrowserCaptureState.CAPTURED
+        self.observation = replace(self.observation, capture_state=self.capture_state)
 
-    def observe(self) -> BrowserAgentObservation:
+    def observe(self) -> BrowserObservation:
         return self.observation
 
     def execute(
         self,
-        command: BrowserAgentActionCommand,
-        observation: BrowserAgentObservation,
+        action: BrowserAction,
+        observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> None:
+    ) -> BrowserActionReceipt:
         del observation
         if timeout_seconds <= 0:
             raise AssertionError("fixture action deadline was not positive")
         self.executed += 1
         if self.capture_race:
             raise AssertionError("capture-race action must not be executed")
-        if command.kind.value != "click-element":
+        if action.kind.value != "click-element":
             raise AssertionError("fixture Agent should click the PDF control")
         self.mark_capture()
+        return BrowserActionReceipt(
+            action_kind=action.kind,
+            outcome=BrowserActionOutcome.CAPTURE,
+            article_token=self.observation.article_token,
+            page_id=action.page_id,
+            surface_id=action.surface_id,
+            before_revision=self.observation.revision,
+            after_revision=None,
+            elapsed_milliseconds=1,
+        )
+
+
+class _ControlFactory:
+    def __init__(self, control: _ActionPort) -> None:
+        self.control = control
+
+    def open(self, session: object) -> _ActionPort:
+        if not isinstance(session, _Article):
+            raise AssertionError("controller did not receive the leased article session")
+        return self.control
 
 
 class _PermitRecorder(AccessCoordinator):
@@ -310,7 +435,8 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
         factory = _Factory()
         broker = BrowserSessionBroker()
         coordinator = _PermitRecorder()
-        agents: dict[str, _Agent] = {}
+        agent = _Agent()
+        agent_runtime = _agent_runtime(agent)
         action_ports: dict[str, _ActionPort] = {}
         started: dict[str, list[float]] = {"acs": [], "wiley": []}
         active: dict[str, int] = {"acs": 0, "wiley": 0}
@@ -335,7 +461,6 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
                 )
                 try:
                     action_port = _ActionPort()
-                    agent = agents.setdefault(attempt.rate_limit_group, _Agent())
                     action_ports[attempt.attempt_key] = action_port
                     with lock:
                         active[attempt.rate_limit_group] += 1
@@ -347,11 +472,17 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
                         group_entered[attempt.rate_limit_group].set()
                         if all(event.is_set() for event in group_entered.values()):
                             both_groups_entered.set()
-                    result = AgentBrowserController(
-                        agent_port=agent,
-                        decision_port=AgentsBrowserAgentDecisionPort(model="fixture-model"),
-                        action_port=action_port,
-                    ).run(attempt.attempt_key)
+                    article = lease.context
+                    if not isinstance(article, _Article):
+                        self.fail("broker did not return the fixture article session")
+                    controller = AgentBrowserController(
+                        runtime=agent_runtime,
+                        control_factory=_ControlFactory(action_port),
+                    )
+                    controller.run(article)
+                    result = controller.result
+                    if result is None:
+                        self.fail("Agent Browser controller did not retain a result")
                     self.assertIs(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
                     # Hold the first article in each group long enough to prove
                     # independent groups overlap in the same Browser context.
@@ -394,7 +525,7 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
         self.assertEqual(runtime.close_calls, 1)
         self.assertEqual(runtime.context.close_calls, 1)
         self.assertEqual(len(action_ports), 3)
-        self.assertEqual(sum(agent.calls for agent in agents.values()), 3)
+        self.assertEqual(len(agent.calls), 3)
         self.assertCountEqual(coordinator.released_scopes, ["acs", "wiley", "acs"])
         self.assertEqual(getattr(coordinator, "_active_scope_permits"), {})
         self.assertEqual(getattr(coordinator, "_active_host_permits"), {})
@@ -408,7 +539,7 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
         binding = object()
         with TemporaryDirectory(prefix="sciretriever-cba67-") as raw:
             capture_port = _ActionPort(capture_race=True)
-            capture_agent = _Agent(on_call=lambda _request: capture_port.mark_capture())
+            capture_agent = _Agent(on_call=lambda _call: capture_port.mark_capture())
             capture_lease = broker.acquire(
                 "acs",
                 factory=factory,
@@ -419,16 +550,22 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
                 timeout=2.0,
             )
             try:
-                capture_result = AgentBrowserController(
-                    agent_port=capture_agent,
-                    decision_port=AgentsBrowserAgentDecisionPort(model="fixture-model"),
-                    action_port=capture_port,
-                ).run("capture-race")
+                article = capture_lease.context
+                if not isinstance(article, _Article):
+                    self.fail("broker did not return the fixture article session")
+                controller = AgentBrowserController(
+                    runtime=_agent_runtime(capture_agent),
+                    control_factory=_ControlFactory(capture_port),
+                )
+                controller.run(article)
+                capture_result = controller.result
             finally:
                 capture_lease.release()
+            if capture_result is None:
+                self.fail("Agent Browser controller did not retain a result")
             self.assertIs(capture_result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
             self.assertEqual(capture_port.executed, 0)
-            self.assertEqual(capture_agent.calls, 1)
+            self.assertEqual(len(capture_agent.calls), 1)
 
             def fail(_attempt: BrowserArticleAttempt) -> BrowserAttemptCompletion[str]:
                 scope = AccessScope("wiley", "web")
@@ -472,31 +609,18 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
         self.assertEqual(getattr(coordinator, "_active_scope_permits"), {})
         self.assertEqual(getattr(coordinator, "_active_host_permits"), {})
 
-    def test_user_cancellation_closes_agent_session_and_releases_lane_and_permit(self) -> None:
+    def test_user_cancellation_releases_lane_and_permit_without_session_state(self) -> None:
         factory = _Factory()
         broker = BrowserSessionBroker()
         coordinator = _PermitRecorder()
         cancel_event = threading.Event()
         binding = object()
         calls: list[str] = []
-        sessions: list[AgentSession] = []
-        real_open_session = browser_control_module.open_session
+        agent_calls: list[AgentProviderCall] = []
 
-        def spy_open_session(
-            port: AgentPort,
-            *,
-            max_turns: int = 8,
-            cancel_event: threading.Event | None = None,
-            budget: AgentBudget | None = None,
-        ) -> AgentSession:
-            session = real_open_session(
-                port,
-                max_turns=max_turns,
-                cancel_event=cancel_event,
-                budget=budget,
-            )
-            sessions.append(session)
-            return session
+        def cancel_during_call(call: AgentProviderCall) -> None:
+            agent_calls.append(call)
+            cancel_event.set()
 
         with TemporaryDirectory(prefix="sciretriever-cba67-") as raw:
 
@@ -515,14 +639,22 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
                 )
                 try:
                     action_port = _ActionPort()
-                    agent = _Agent(on_call=lambda _request: cancel_event.set())
-                    result = AgentBrowserController(
-                        agent_port=agent,
-                        decision_port=AgentsBrowserAgentDecisionPort(model="fixture-model"),
-                        action_port=action_port,
-                    ).run(attempt.attempt_key, cancel_event=cancel_event)
+                    agent = _Agent(on_call=cancel_during_call)
+                    article = lease.context
+                    if not isinstance(article, _Article):
+                        self.fail("broker did not return the fixture article session")
+                    controller = AgentBrowserController(
+                        runtime=_agent_runtime(agent),
+                        control_factory=_ControlFactory(action_port),
+                        cancel_event=cancel_event,
+                    )
+                    controller.run(article)
+                    result = controller.result
+                    if result is None:
+                        self.fail("Agent Browser controller did not retain a result")
                     calls.append(result.disposition.value)
                     self.assertIs(result.disposition, BrowserAgentDisposition.CANCELLED)
+                    self.assertEqual(action_port.executed, 0)
                     return BrowserAttemptCompletion(
                         attempt.attempt_key,
                         BrowserAttemptDisposition.FAILED,
@@ -533,27 +665,21 @@ class BrowserAgentIntegrationTests(unittest.TestCase):
                     permit.release()
 
             scheduler = BrowserGroupScheduler(clock=_AdvancingClock(), max_concurrency=1)
-            with mock.patch.object(
-                browser_control_module,
-                "open_session",
-                side_effect=spy_open_session,
-            ):
-                with self.assertRaises(BrowserSchedulingCancelled):
-                    scheduler.execute(
-                        (
-                            self._attempt("acs-cancel", "acs"),
-                            self._attempt("acs-never", "acs"),
-                        ),
-                        run,
-                        cancel_event=cancel_event,
-                    )
-            self.assertEqual(len(sessions), 1)
-            session = sessions[0]
-            self.assertTrue(getattr(session, "_closed"))
-            self.assertEqual(getattr(session, "_history"), [])
+            with self.assertRaises(BrowserSchedulingCancelled):
+                scheduler.execute(
+                    (
+                        self._attempt("acs-cancel", "acs"),
+                        self._attempt("acs-never", "acs"),
+                    ),
+                    run,
+                    cancel_event=cancel_event,
+                )
             broker.close()
 
         self.assertEqual(calls, [BrowserAgentDisposition.CANCELLED.value])
+        self.assertEqual(len(agent_calls), 1)
+        self.assertFalse(hasattr(agent_calls[0], "history"))
+        self.assertFalse(hasattr(agent_calls[0], "session"))
         self.assertEqual(len(factory.runtimes), 1)
         self.assertEqual(factory.runtimes[0].close_calls, 1)
         self.assertEqual(coordinator.released_scopes, ["acs"])

@@ -46,7 +46,7 @@
     "status_code": 402,
     "markers": {}
   },
-  "challenge-required": {
+  "challenge": {
     "locator": "https://publisher.test/article",
     "status_code": 200,
     "markers": {

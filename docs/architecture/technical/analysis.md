@@ -5,7 +5,7 @@
 - 产品需求：[R5 语言模型内容判断与总结](../requirements.md#r5-语言模型内容判断与总结)
 - 当前内容合同：[ADR 0008](../decisions/0008-summarized-markdown-literature-content.md)
 - 引用解析：[ADR 0007](../decisions/0007-reference-resolution-and-authoritative-relations.md)
-- 模型基础：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)、[Agents 技术文档](agents.md)
+- 模型基础：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](../decisions/0021-provider-model-registry-and-direct-task-selection.md)、[Agents 技术文档](agents.md)
 
 本文定义目标 `src/sciretriever/analysis/` 通过 Agents structured-text capability 执行的先元数据后正文两阶段内容分析、内容 Markdown 草稿验证、`LiteratureSection` 解析和临时 `ReferenceLookup`。Analysis 消费经过 Parsing 检查的 `ParserResult`，不直接读取 PDF 字节、修改文献身份、接纳最终元数据、删除文件或写数据库。
 
@@ -26,14 +26,14 @@ analysis/
 ```
 
 - `api.py` 提供文献内容分析和参考文献 lookup 两个公开业务操作；
-- `content.py` 声明完整内容分析的输入、资源预算和稳定失败；
+- `content.py` 声明完整内容分析的输入、单次输出边界和稳定失败；
 - `service.py` 按顺序组织元数据确定、内容总结、草稿解析和中性结果返回；
 - `metadata.py` 组织第一阶段元数据请求、严格响应解析和阶段结果；
 - `metadata_rules.py` 检查结构化最终元数据、用户输入保护和 Parser 输入对齐；
 - `markdown.py` 解析第二阶段内容草稿并从已验收 metadata/content 确定性渲染规范 Markdown；
 - `markdown_rules.py` 检查固定标题、章节角色、reference 和 Markdown 结构；
 - `references.py` 形成临时、按原文对齐且不持久化的参考文献 lookup；
-- `ports.py` 保留 Analysis 自己的 artifact/current-facts I/O Port、私有阶段输入和取消边界；模型 provider capability 由 `agents` 公开 API 提供。
+- `ports.py` 保留 Analysis 自己的 artifact/current-facts I/O Port、私有阶段输入和取消边界；模型 capability/readiness 与单次执行由 `agents` 公开 API 提供。
 
 文献总结和 `ReferenceLookup` 共用一个由 Bootstrap 注入的 Agents structured-text 调用面。Analysis 仍构造 prompt、严格输入/响应 schema、阶段 request kind 和结果验收；这些文献语义不进入 Agents。其它模块只调用 `analysis.api` 的业务操作，不能借 Agents 调用 Analysis 私有 prompt 或绕过内容验收。
 
@@ -46,7 +46,7 @@ Analysis 当前只有两个 LLM 业务用例：
 
 第二个用例不是第一个用例的完成条件。内容接纳不等待引用目标解析，lookup 失败也不撤销已经接纳的 `LiteratureContent`。
 
-Agents 只共享 provider/model/capability/budget/session 基础；prompt、输出含义和验收规则始终归 Analysis。Browser 是第二个独立消费者，但不能看到 metadata/content/reference request kind 或调用这两个 Analysis 用例。
+Agents 只共享由 Analyze 所选 Model 与对应 Model Provider 解析出的 role binding、provider protocol、capability/readiness、客观单次 limits、取消、usage 和稳定失败；prompt、阶段顺序、输出含义和验收规则始终归 Analysis。Browser 是第二个独立消费者，但不能看到 metadata/content/reference request kind 或调用这两个 Analysis 用例。
 
 ## 3. 内容分析输入与输出
 
@@ -56,7 +56,7 @@ Agents 只共享 provider/model/capability/budget/session 基础；prompt、输�
 - 当前主 PDF ID 与 SHA-256；
 - 对齐该 PDF 且通过 Parsing 检查的 `ParserResult`；
 - 当前统一初始 `LiteratureMetadata` 及其 revision/hash；
-- 已解析的 Analysis 配置、资源预算和允许的模型选择。
+- Analysis prompt/schema 版本、本次 `max_output_tokens` 和取消信号。
 
 PDF 绝对路径、SQL row、MinerU 私有输出、HTTP response 和 provider SDK model 不进入公开 API。
 
@@ -105,7 +105,7 @@ ContentAnalysisResult =
 
 第二阶段必须实际收到第一阶段确定的完整 `LiteratureMetadata`，不能只收到 metadata hash、供应商初始元数据或再次自行推断的摘要。它不得重新生成标题、作者、关键词、摘要或其它元数据。两次请求是一个 Analysis 业务用例的两个内部阶段，对公开 API 仍只返回 `NoUsableContent` 或一份完整 `LiteratureContentProposal`。
 
-超长文献可以在各阶段的 adapter 内使用有界分段和汇总请求，但第二阶段必须等待第一阶段的唯一最终元数据形成。分块必须有明确 token、片段数和总请求预算，任何片段或汇总失败都使本次逻辑分析失败，不能发布拼接残缺结果或第一阶段的部分结果。
+每个阶段只构造一个独立 `AgentCall`，不在 Provider adapter 内隐藏分段、汇总或额外模型调用。Bootstrap 根据 Analysis 自己的业务预算与内部安全上限派生 role binding 的单次 context/output 边界，Runtime 再按本次 output 预留检查输入；超出该调用边界时形成稳定 Analysis 失败并保留 PDF，不截断正文、不发布第一阶段部分结果，也不把分块 workflow 偷渡进 Agents。未来若需要超长文献分块，必须由 Analysis 明确拥有阶段 workflow、合并语义和直接验收。
 
 ### 4.1 第一阶段的作者处理
 
@@ -312,14 +312,18 @@ ReferenceLookup
 
 ## 11. Agents、Network 与失败
 
-Analysis 把元数据确定、内容总结和 ReferenceLookup 三种私有请求语义转换为 Agents 的 structured-text 请求；前两种仍属于同一个文献内容分析用例的有序内部阶段。Agents 负责 provider/model 映射、凭据附着、capability、timeout、quota、协议响应和安全 provider/model/usage 身份；Analysis 负责把这些安全身份与 prompt/参数 hash 组成一项业务 provenance。单次请求和两个阶段的临时信息只用于当前调用，不形成两项持久化 provenance。
+Analysis 把元数据确定、内容总结和 ReferenceLookup 三种私有请求语义分别转换为带 Analysis role、messages、strict response schema、input hash 和 `max_output_tokens` 的 `AgentCall`；前两种仍属于同一个文献内容分析用例的有序内部阶段。Analysis 直接调用 `AgentRuntime.execute`，先验收第一阶段，再决定是否构造第二阶段。Runtime 负责 role-to-model binding、凭据附着、capability、单次 timeout/limit、quota、协议响应和安全 provider/model/usage 身份；Analysis 负责把这些安全身份与 prompt/参数 hash 组成一项业务 provenance。单次调用和两个阶段的临时信息只用于当前业务调用，不形成两项持久化 provenance。
 
-Analysis 不再拥有 `AnalysisLLMPort`、provider adapter、重复配置或旧兼容导入。Agents 请求成功只说明协议边界完成；Analysis 仍解析 duplicate-free finite JSON、验证 LiteratureMetadata/Markdown/ReferenceLookup schema、复检输入 hash 和 stale 状态。所有外部访问由 Agents adapter 经过 Network 的 URL、TLS、redirect、共享 quota、预算和脱敏政策；Analysis 和 Browser 使用同一 provider/account scope 时不能各自建立 limiter。
+Analysis 不拥有 `AnalysisLLMPort`、provider adapter、model 选择、Session、重复配置或旧兼容导入。Agents 请求成功只说明协议边界完成；Analysis 仍解析 duplicate-free finite JSON、验证 LiteratureMetadata/Markdown/ReferenceLookup schema、复检输入 hash 和 stale 状态。所有外部访问由 Agents adapter 经过 Network 的 URL、TLS、redirect、共享 quota、单次响应上限和脱敏政策；Analysis 和 Browser 使用同一 provider/account scope 时不能各自建立 limiter。
 
-Bootstrap 可以把同一 Agents runtime 组装为 OpenAI Responses、OpenAI Chat Completions 或
-Anthropic Messages，并只向 Analysis 注入满足 structured-text capability 的调用面。Base URL、analysis role 模型、已核实 context window、认证和预算来自严格普通配置；
-API key 来自统一凭据文件并与规范 origin 精确绑定。官方服务固定使用官方 HTTPS origin；
-custom remote 必须使用 hostname-based HTTPS 与 API key；custom HTTP loopback 可以无认证。
+Bootstrap 解析 `[analyze].model` 的完整 `provider/model` 引用，从 `[models]` 取得 reasoning，
+从 `[providers]` 取得 API 与 Base URL，并在同一 Agents runtime 中为 Analysis role 冻结满足
+structured-text capability 的 binding。OpenAI Responses、OpenAI Chat Completions 或 Anthropic
+Messages adapter 按 Model Provider 的 `api` 选择；strict structured output、text-only、no-tool、
+context/output 与单次调用限制由 Analysis/Bootstrap 派生，不由用户在 Model 上重复声明。API key
+来自 `credentials.toml.[providers.<provider>]` 并与规范 origin 精确绑定。Analysis 不提供
+task-level model、reasoning 或 capability override。远程 Provider 必须使用 hostname-based HTTPS
+与 API key；HTTP loopback Provider 可以无认证。
 Agents adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
 跨 origin redirect 不携带认证。
 
@@ -359,7 +363,8 @@ Secret、完整请求 header、底层 SDK 对象、prompt 原文和未脱敏异�
 - 每个 Literature 只有一个当前 LiteratureContent，新结果失败保留旧结果，成功替换时清理旧 content support 及因此无 support 的 Reference；
 - stale 输入或 Storage 失败不留下部分最终 metadata/content；
 - `ReferenceLookup` 只提取原文明示线索，不持久化或直接建关系；
-- 超长文献分段失败不会发布不完整合并结果，且总请求数受预算约束；
+- 超出 Analysis/Bootstrap 派生单次调用边界的文献稳定失败并保留 PDF，不截断输入、隐藏分段或发布部分结果；
+- 两阶段分别构造独立 `AgentCall`，第一阶段未通过业务验收时不执行第二次 Runtime 调用；ReferenceLookup 空输入不调用模型；
 - Analysis 不直接导入 Agents provider adapter/vendor SDK，Agents 不拥有文献 request kind、prompt/schema 或结果验收；
 - vendor 类型、secret、prompt 和未脱敏错误不进入公开 API、Model 或持久化结果。
 

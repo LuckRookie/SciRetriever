@@ -63,7 +63,7 @@ configuration = parse_configuration(
     + f"catalog_path = {str(root / 'catalog.sqlite3')!r}\\n"
     + f"artifact_root = {str(root / 'artifacts')!r}\\n"
     + "[execution]\\nmax_concurrency = 5\\n"
-    + "[access]\\nbrowser_enabled = true\\n"
+    + "[download]\\nbrowser_enabled = true\\n"
     + 'browser_profile = "fixture-profile"\\n'
     + "browser_max_concurrency = 3\\n"
 )
@@ -172,14 +172,9 @@ print(json.dumps(evidence, sort_keys=True))
         artifacts = root / "artifacts"
         pdf = _pdf()
         (self.install.root / "input.pdf").write_bytes(pdf)
-        configuration = root / "config.toml"
-        configuration.write_text(
-            _configuration(catalog, artifacts),
-            encoding="utf-8",
-        )
+        self.install.write_user_configuration(_configuration(catalog, artifacts))
         self._write_llm_credentials()
         environment = {
-            "SCIRETRIEVER_CONFIG": os.fspath(configuration),
             "SCIRETRIEVER_TEST_MINERU_ARCHIVE": base64.b64encode(_mineru_archive()).decode("ascii"),
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
@@ -340,12 +335,8 @@ print(json.dumps(evidence, sort_keys=True))
         root.mkdir(mode=0o700)
         catalog = root / "catalog.sqlite3"
         artifacts = root / "artifacts"
-        configuration = root / "config.toml"
-        configuration.write_text(
-            _local_configuration(catalog, artifacts),
-            encoding="utf-8",
-        )
-        environment = {"SCIRETRIEVER_CONFIG": os.fspath(configuration)}
+        self.install.write_user_configuration(_local_configuration(catalog, artifacts))
+        environment: dict[str, str] = {}
 
         initialized = self.install.run_console(
             ("literature", "search", "--json"),
@@ -392,13 +383,8 @@ print(json.dumps(evidence, sort_keys=True))
         root.mkdir(mode=0o700)
         catalog = root / "catalog.sqlite3"
         artifacts = root / "artifacts"
-        configuration = root / "config.toml"
-        configuration.write_text(
-            _local_configuration(catalog, artifacts),
-            encoding="utf-8",
-        )
+        self.install.write_user_configuration(_local_configuration(catalog, artifacts))
         environment = {
-            "SCIRETRIEVER_CONFIG": os.fspath(configuration),
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
         bibliography = root / "input.csl-json"
@@ -527,16 +513,11 @@ print(json.dumps(evidence, sort_keys=True))
                 resource_bytes=_PNG + b"accepted",
             )
         )
-        configuration = root / "config.toml"
-        configuration.write_text(
-            _configuration(catalog, artifacts),
-            encoding="utf-8",
-        )
+        self.install.write_user_configuration(_configuration(catalog, artifacts))
         self._write_llm_credentials()
         environment = {
             "SCIRETRIEVER_ACCEPTANCE_CASE_ROOT": os.fspath(root),
             "SCIRETRIEVER_ACCEPTANCE_SCENARIO": "no-usable-content",
-            "SCIRETRIEVER_CONFIG": os.fspath(configuration),
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
         topic = self._json(
@@ -632,15 +613,10 @@ print(json.dumps(evidence, sort_keys=True))
         artifacts = root / "artifacts"
         (root / "r8-success.pdf").write_bytes(_pdf("R8 success"))
         (root / "r8-retry.pdf").write_bytes(_pdf("R8 retry"))
-        configuration = root / "config.toml"
-        configuration.write_text(
-            _r8_configuration(catalog, artifacts),
-            encoding="utf-8",
-        )
+        self.install.write_user_configuration(_r8_configuration(catalog, artifacts))
         environment = {
             "SCIRETRIEVER_ACCEPTANCE_CASE_ROOT": os.fspath(root),
             "SCIRETRIEVER_ACCEPTANCE_SCENARIO": "r8-batch",
-            "SCIRETRIEVER_CONFIG": os.fspath(configuration),
             "SCIRETRIEVER_TEST_PRODUCTION_FIXTURE": "1",
         }
         discovery = self._json(
@@ -847,7 +823,8 @@ print(json.dumps(evidence, sort_keys=True))
         directory.chmod(0o700)
         credentials = directory / "credentials.toml"
         credentials.write_text(
-            '[agents]\napi_key = "offline-analysis-key"\norigin = "https://api.openai.com"\n',
+            '[providers.openai]\napi_key = "offline-analysis-key"\n'
+            'origin = "https://api.openai.com"\n',
             encoding="utf-8",
         )
         credentials.chmod(0o600)
@@ -948,16 +925,16 @@ def _configuration(catalog: Path, artifacts: Path) -> str:
 catalog_path = {json.dumps(os.fspath(catalog))}
 artifact_root = {json.dumps(os.fspath(artifacts))}
 
-[discovery]
-metadata_scan_limit = 2
-
 [sources.metadata]
+mode = "custom"
 providers = ["crossref", "semantic-scholar"]
+limit = 2
 
 [sources.metadata.crossref]
 mode = "anonymous"
 
 [sources.acquisition]
+mode = "custom"
 providers = ["semantic-scholar"]
 
 [parsing]
@@ -966,17 +943,14 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[agents]
-provider = "openai"
-protocol = "openai-responses"
+[providers.openai]
+api = "openai-responses"
 base_url = "https://api.openai.com/v1"
-authentication = "api-key"
-[agents.analysis]
-model = "acceptance-model"
-context_window_tokens = 2000000
-max_output_tokens = 4096
-structured_output = true
-[analysis]
+[models."openai/acceptance-model"]
+reasoning = "default"
+image = false
+[analyze]
+model = "openai/acceptance-model"
 metadata_max_output_tokens = 2048
 content_max_output_tokens = 4096
 reference_max_output_tokens = 2048
@@ -998,6 +972,7 @@ catalog_path = {json.dumps(os.fspath(catalog))}
 artifact_root = {json.dumps(os.fspath(artifacts))}
 
 [sources.acquisition]
+mode = "custom"
 providers = []
 
 [execution]
@@ -1011,13 +986,13 @@ def _r8_configuration(catalog: Path, artifacts: Path) -> str:
 catalog_path = {json.dumps(os.fspath(catalog))}
 artifact_root = {json.dumps(os.fspath(artifacts))}
 
-[discovery]
-metadata_scan_limit = 5
-
 [sources.metadata]
+mode = "custom"
 providers = ["semantic-scholar"]
+limit = 5
 
 [sources.acquisition]
+mode = "custom"
 providers = ["semantic-scholar"]
 
 [execution]

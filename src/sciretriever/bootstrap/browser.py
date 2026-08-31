@@ -251,15 +251,17 @@ class _ProductionBrowserConfigurationProbePort:
             )
             launched = execution.launched[0]
             target_reached = execution.target_reached[0]
-            facts = destination_guard.challenge_resource_facts()
+            challenge_admitted_count, challenge_blocked_count = (
+                destination_guard.challenge_resource_counts()
+            )
             challenge_declared = rule.challenge_resource_profile is not None
-            challenge_blocked = facts.blocked_count > 0
+            challenge_blocked = challenge_blocked_count > 0
             expected_completion = isinstance(result, AccessFailure) and result.code == "no-download"
             passed = expected_completion and target_reached and not challenge_blocked
             result_fields = {
                 "challenge_dependency_declared": challenge_declared,
-                "challenge_resource_admitted_count": facts.admitted_count,
-                "challenge_resource_blocked_count": facts.blocked_count,
+                "challenge_resource_admitted_count": challenge_admitted_count,
+                "challenge_resource_blocked_count": challenge_blocked_count,
             }
             if passed:
                 probe_result = BrowserConfigurationProbeResult(
@@ -331,8 +333,8 @@ class _ProductionBrowserConfigurationProbePort:
             return "browser-probe-unexpected-response", BrowserGroupFeedback.RUNTIME_FAILURE
         return {
             "challenge": (
-                "browser-probe-challenge-required",
-                BrowserGroupFeedback.CHALLENGE_REQUIRED,
+                "browser-probe-challenge-unresolved",
+                BrowserGroupFeedback.NONE,
             ),
             "timeout": ("browser-probe-timeout", BrowserGroupFeedback.RUNTIME_FAILURE),
             "cleanup": ("browser-probe-cleanup-failed", BrowserGroupFeedback.CLEANUP_FAILURE),

@@ -24,7 +24,9 @@ from sciretriever.acquisition.sources.browser_rules import (
     BrowserSiteRule,
 )
 from sciretriever.acquisition.sources.configured_sci_hub import (
+    BUILTIN_SCI_HUB_MIRROR_URLS,
     ConfiguredLocatorResolver,
+    ConfiguredSciHubLandingResolver,
     ConfiguredSciHubPdfSource,
     configured_sci_hub_route_status,
 )
@@ -49,8 +51,10 @@ __all__ = (
     "BrowserRuleCatalog",
     "BrowserRunner",
     "BrowserSiteRule",
+    "BUILTIN_SCI_HUB_MIRROR_URLS",
     "CONTROLLED_BROWSER_PRODUCTION_STATUS",
     "ConfiguredLocatorResolver",
+    "ConfiguredSciHubLandingResolver",
     "ConfiguredSciHubPdfSource",
     "ControlledBrowserPdfSource",
     "DirectPdfSource",

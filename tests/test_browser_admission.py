@@ -214,7 +214,7 @@ class BrowserAdmissionTests(unittest.TestCase):
             observed_at=10.0,
             blocked_until=25.0,
             consecutive_runtime_failures=0,
-            circuit_reason=BrowserCircuitReason.CHALLENGE_REQUIRED,
+            circuit_reason=BrowserCircuitReason.IP_BLOCKED,
         )
         action_required = controller.evaluate(
             (_candidate(),),
@@ -226,12 +226,12 @@ class BrowserAdmissionTests(unittest.TestCase):
             decision.disposition,
             BrowserAdmissionDisposition.ACTION_REQUIRED,
         )
-        self.assertEqual(action_required.summary.groups[0].readiness, "challenge-required")
+        self.assertEqual(action_required.summary.groups[0].readiness, "ip-blocked")
         self.assertEqual(action_required.summary.groups[0].action_required_count, 1)
         self.assertIsNotNone(decision.failure)
         if decision.failure is None:
             self.fail("circuit outcome did not carry a stable failure")
-        self.assertEqual(decision.failure.code, "acquisition-browser-challenge-required")
+        self.assertEqual(decision.failure.code, "acquisition-browser-ip-blocked")
 
     def test_missing_group_requires_configuration(self) -> None:
         decision = _controller().evaluate((_candidate(),)).decisions[0]

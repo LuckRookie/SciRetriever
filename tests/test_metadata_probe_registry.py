@@ -142,10 +142,10 @@ def _configuration(
     crossref_mode: str | None = "polite",
 ) -> Configuration:
     lines = [
-        "[discovery]",
-        "metadata_scan_limit = 17",
         "[sources.metadata]",
+        'mode = "custom"',
         "providers = [" + ", ".join(f'"{provider}"' for provider in providers) + "]",
+        "limit = 17",
     ]
     if product is not None:
         lines.extend(
@@ -317,6 +317,7 @@ class MetadataProbeRegistryTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.provider.value for item in registry.registrations),
             (
+                "crossref",
                 "semantic-scholar",
                 "arxiv",
                 "openalex",

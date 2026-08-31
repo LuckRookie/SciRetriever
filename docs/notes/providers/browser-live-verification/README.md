@@ -81,7 +81,7 @@ pacing；它不能反向证明当前持久 Profile 已认证、能够跨命令�
 现场核实一次只执行一张核实单。首次核实不并行多个 Provider；产品常规运行仍允许不同 risk
 group 并行，同一 group 始终严格串行。执行必须：
 
-1. 在副作用前再次显示 access key、样本数、policy、预算、落点、授权时间窗和停止条件；
+1. 在副作用前再次显示 access key、样本数、policy、核实单的人类授权预算、落点、授权时间窗和停止条件；该核实预算限制本次真实外部测试范围，不是产品 Browser 作业预算；
 2. 只使用生产受控有头 Browser、当前机器网络出口、普通配置选中的持久 Profile 和自动创建的
    临时下载工作区；无 GUI Linux 使用 Xvfb，probe 期间不开放用户交互；
 3. Public 与适用的 Authorized API 层正常结束且 Browser admission 明确允许后才启动；
@@ -93,9 +93,10 @@ group 并行，同一 group 始终严格串行。执行必须：
 6. 成功捕获继续经过正文归属、实际 PDF 字节/reader/页面树验证和不可变发布；
 7. 正常与 Debug 日志只记录稳定 code、group/state/action 和匿名候选，不记录完整 URL、query、
    selector、页面正文、header、Cookie、token、临时路径或 PDF 字节；
-8. 经规则审查的 challenge dependency 可以在局部预算内自然加载和 settle；只有自动 clear 才返回
-   文章流程。本地资源阻断、settle timeout、明确 CAPTCHA/Turnstile 互动控件、登录、MFA、账号
-   警告或机构选择页面形成不同终态并停止，建议改用已授权 API 或手动 PDF。
+8. 经规则审查的 challenge dependency 可以在单次资源/动作限制内加载；Challenge 进入与普通页面
+   相同的 Observation，由核实单冻结的 Rules 或 Agent controller 处理。自动或经封闭动作 clear 后
+   返回文章流程；本地资源阻断、controller 停止后仍为 `challenge-unresolved`、登录、MFA、账号
+   警告或机构选择页面分别记录并停止本次核实，不切换 controller 或引入外部 solver。
 
 ## 5. 强制停止条件
 
@@ -104,8 +105,8 @@ group 并行，同一 group 始终严格串行。执行必须：
 - 用户取消、授权到期或任一预算达到上限；
 - 官方政策、robots、产品/entitlement 或页面合同与核实单不一致；
 - `429`、quota、`Retry-After`、rate-limited、IP blocked 或服务明确要求降低频率；
-- login、CAPTCHA/Turnstile 人工交互、MFA、challenge resource-blocked/settle-timeout、账号警告、
-  异常认证或机构选择；
+- login、MFA、challenge resource-blocked、所选 controller 结束后仍为 `challenge-unresolved`、账号
+  警告、异常认证或机构选择；
 - landing/capture 跳到未批准 origin，或 DNS/TLS/binding/redirect 检查失败；
 - 只得到 supplement、front matter、wrong article、HTML/XML、超限或不可验证 PDF；
 - timeout、runtime、cleanup、publication 或数据完整性失败；

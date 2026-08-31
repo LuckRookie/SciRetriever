@@ -6,14 +6,17 @@ import unittest
 from collections.abc import Callable, Iterable
 from typing import cast
 
-from sciretriever.agents import (
+from sciretriever.agents.api import (
     AgentFailure,
-    AgentPort,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
 )
 from sciretriever.agents.failures import agent_failure
+from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.analysis.metadata import (
     MetadataAnalysisFailure,
     MetadataAnalysisReceipt,
@@ -64,21 +67,21 @@ _METADATA_GOLDEN_SHA256 = Sha256("d04b1b40ff6fd1adc2f8e3b41c366a94b6906a8361d4bb
 class _FakeLLM:
     def __init__(self, actions: Iterable[object]) -> None:
         self.actions = list(actions)
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
 
     @property
     def provider_name(self) -> str:
         return "fixture-provider"
 
-    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
         self.calls.append(call)
         action = self.actions.pop(0)
         if isinstance(action, BaseException):
             raise action
         if callable(action):
             value = action(call)
-            if not isinstance(value, AgentStructuredResponse):
-                raise TypeError("fake action must return AgentStructuredResponse")
+            if not isinstance(value, AgentStructuredResult):
+                raise TypeError("fake action must return AgentStructuredResult")
             return value
         if not isinstance(action, str):
             raise TypeError("fake action must be result text, failure, or callable")
@@ -89,13 +92,13 @@ class _FakeLLM:
 
 
 def _llm_response(
-    call: AgentRequest,
+    call: AgentProviderCall,
     result: str,
     *,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
-) -> AgentStructuredResponse:
-    return AgentStructuredResponse(
+) -> AgentStructuredResult:
+    return AgentStructuredResult(
         result=result,
         provenance=AgentProvenance(
             provider="fixture-provider",
@@ -281,10 +284,28 @@ def _stage_input(
     )
 
 
+def _structured_input(call: AgentProviderCall) -> str:
+    return call.text_parts[-1].text
+
+
+def _runtime(llm: _FakeLLM) -> AgentRuntime:
+    return AgentRuntime(
+        adapter=cast(AgentProviderPort, llm),
+        analysis=AgentRoleBinding(
+            role=AgentRole.ANALYSIS,
+            model=_MODEL,
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=2_000_000,
+                max_output_tokens=65_536,
+                structured_output=True,
+            ),
+        ),
+    )
+
+
 def _stage(llm: _FakeLLM) -> MetadataAnalysisStage:
     return MetadataAnalysisStage(
-        agents=cast(AgentPort, llm),
-        model=_MODEL,
+        runtime=_runtime(llm),
         max_output_tokens=4_096,
     )
 
@@ -336,15 +357,15 @@ class AnalysisMetadataStageTests(unittest.TestCase):
         self.assertEqual(call.max_output_tokens, 4_096)
         self.assertEqual(
             call.input_sha256,
-            sha256_digest(call.structured_input.encode("utf-8")),
+            sha256_digest(_structured_input(call).encode("utf-8")),
         )
-        private_input = json.loads(call.structured_input)
+        private_input = json.loads(_structured_input(call))
         self.assertEqual(private_input["parser"]["page_count"], 1)
         self.assertEqual(private_input["parser_markdown"], _valid_markdown())
         self.assertEqual(
             private_input["initial_metadata"], _initial_metadata().model_dump(mode="json")
         )
-        serialized = call.structured_input.casefold()
+        serialized = _structured_input(call).casefold()
         for forbidden in (
             "declared_keywords",
             "metadata-provider",
@@ -624,7 +645,7 @@ class AnalysisMetadataStageTests(unittest.TestCase):
             ("retrieval", "quantum materials"),
         )
         self.assertNotEqual(proposal.metadata.keywords, _initial_metadata().keywords)
-        self.assertNotIn("declared_keywords", llm.calls[0].structured_input)
+        self.assertNotIn("declared_keywords", _structured_input(llm.calls[0]))
 
         for keywords in (("retrieval", "Retrieval"), ("invented method",)):
             with self.subTest(keywords=keywords):
@@ -865,7 +886,7 @@ Computing Institute<sup>2</sup>
 
         self.assertIsInstance(result, FinalMetadataProposal)
         self.assertEqual(len(llm.calls), 1)
-        serialized = llm.calls[0].structured_input
+        serialized = _structured_input(llm.calls[0])
         self.assertNotIn("Other User Title", serialized)
         self.assertNotIn("bibliographic-import", serialized)
         self.assertNotIn("observation_id", serialized)
@@ -897,9 +918,9 @@ Computing Institute<sup>2</sup>
         self.assertEqual(llm.calls, [])
 
     def test_execute_forwards_cancellation_and_returns_only_safe_an4_receipt(self) -> None:
-        responses: list[AgentStructuredResponse] = []
+        responses: list[AgentStructuredResult] = []
 
-        def response_for(call: AgentRequest) -> AgentStructuredResponse:
+        def response_for(call: AgentProviderCall) -> AgentStructuredResult:
             response = _llm_response(call, _usable(_final_metadata()))
             responses.append(response)
             return response
@@ -912,7 +933,7 @@ Computing Institute<sup>2</sup>
 
         self.assertIsInstance(receipt, MetadataAnalysisReceipt)
         self.assertIs(llm.calls[0].cancel_event, cancel_event)
-        self.assertEqual(receipt.request.model, llm.calls[0].model)
+        self.assertNotIn("model", receipt.request.__dataclass_fields__)
         self.assertEqual(receipt.request.input_sha256, llm.calls[0].input_sha256)
         self.assertEqual(receipt.provenance, responses[0].provenance)
         self.assertEqual(receipt.prompt_version, "analysis-metadata-stage-v1")
@@ -923,7 +944,7 @@ Computing Institute<sup>2</sup>
             _PRIVATE_RESPONSE_SENTINEL,
             _final_metadata().title,
             llm.calls[0].prompt,
-            llm.calls[0].structured_input,
+            _structured_input(llm.calls[0]),
             llm.calls[0].response_schema,
         ):
             self.assertNotIn(private_value, rendered)

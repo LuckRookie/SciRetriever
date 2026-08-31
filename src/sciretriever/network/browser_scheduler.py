@@ -287,7 +287,6 @@ class BrowserGroupFeedback(str, Enum):
     RATE_LIMITED = "rate-limited"
     LOGIN_REQUIRED = "login-required"
     MFA_REQUIRED = "mfa-required"
-    CHALLENGE_REQUIRED = "challenge-required"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
     CLEANUP_FAILURE = "cleanup-failure"
@@ -300,7 +299,6 @@ class BrowserCircuitReason(str, Enum):
 
     LOGIN_REQUIRED = "login-required"
     MFA_REQUIRED = "mfa-required"
-    CHALLENGE_REQUIRED = "challenge-required"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
     CLEANUP_FAILURE = "cleanup-failure"
@@ -918,7 +916,6 @@ class BrowserGroupScheduler:
         reason_by_feedback = {
             BrowserGroupFeedback.LOGIN_REQUIRED: BrowserCircuitReason.LOGIN_REQUIRED,
             BrowserGroupFeedback.MFA_REQUIRED: BrowserCircuitReason.MFA_REQUIRED,
-            BrowserGroupFeedback.CHALLENGE_REQUIRED: BrowserCircuitReason.CHALLENGE_REQUIRED,
             BrowserGroupFeedback.IP_BLOCKED: BrowserCircuitReason.IP_BLOCKED,
             BrowserGroupFeedback.ACCOUNT_WARNING: BrowserCircuitReason.ACCOUNT_WARNING,
             BrowserGroupFeedback.CLEANUP_FAILURE: BrowserCircuitReason.CLEANUP_FAILURE,

@@ -13,12 +13,16 @@ from typing import TypeAlias, cast, get_args
 
 import sciretriever.analysis.api as analysis_api_module
 import sciretriever.parsing.api as parsing_api_module
-from sciretriever.agents import (
+from sciretriever.agents.api import (
     AgentFailure,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
 )
+from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.analysis.api import (
     AnalysisApi,
     ContentAnalysisFailure,
@@ -293,13 +297,17 @@ class _FakeParser:
         )
 
 
-_LLMAction: TypeAlias = str | BaseException | Callable[[AgentRequest], AgentStructuredResponse]
+_LLMAction: TypeAlias = str | BaseException | Callable[[AgentProviderCall], AgentStructuredResult]
 
 
-def _request_stage(call: AgentRequest) -> str:
-    if "references" in call.structured_input:
+def _structured_input(call: AgentProviderCall) -> str:
+    return call.text_parts[-1].text
+
+
+def _request_stage(call: AgentProviderCall) -> str:
+    if "references" in _structured_input(call):
         return "reference"
-    if "final_metadata" in call.structured_input:
+    if "final_metadata" in _structured_input(call):
         return "content"
     return "metadata"
 
@@ -307,13 +315,13 @@ def _request_stage(call: AgentRequest) -> str:
 class _FakeLLM:
     def __init__(self, actions: Iterable[_LLMAction]) -> None:
         self._actions = list(actions)
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
 
     @property
     def provider_name(self) -> str:
         return _PROVIDER
 
-    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+    def execute(self, request: AgentProviderCall) -> AgentStructuredResult:
         call = request
         self.calls.append(call)
         action = self._actions.pop(0)
@@ -321,7 +329,7 @@ class _FakeLLM:
             raise action
         if callable(action):
             return action(call)
-        return AgentStructuredResponse(
+        return AgentStructuredResult(
             result=action,
             provenance=AgentProvenance(
                 provider=_PROVIDER,
@@ -576,9 +584,21 @@ class _PipelineEnvironment:
     ) -> tuple[AnalysisApi, _FakeLLM]:
         self._analysis_attempt += 1
         llm = _FakeLLM(actions)
+        runtime = AgentRuntime(
+            adapter=cast(AgentProviderPort, llm),
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=AgentModelCapabilities(
+                    context_window_tokens=2_000_000,
+                    max_output_tokens=65_536,
+                    structured_output=True,
+                ),
+            ),
+        )
         provenance_id = ProvenanceId(_uuid(400_000 + self.number * 100 + self._analysis_attempt))
         content_service = AnalysisService(
-            agents=llm,
+            runtime=runtime,
             artifact_reader=AnalysisArtifactReader(self.engine, self.reader),
             current_inputs=(
                 SqliteAnalysisCurrentInputs(self.engine)
@@ -588,7 +608,6 @@ class _PipelineEnvironment:
             artifact_publisher=(
                 AnalysisArtifactPublisher(self.store) if publisher is None else publisher
             ),
-            model=_MODEL,
             metadata_max_output_tokens=2_048,
             content_max_output_tokens=4_096,
             limits=ContentAnalysisLimits(
@@ -602,8 +621,7 @@ class _PipelineEnvironment:
             clock=lambda: _TIME,
         )
         lookup_stage = ReferenceLookupStage(
-            agents=llm,
-            model=_MODEL,
+            runtime=runtime,
             max_output_tokens=2_048,
         )
         return (
@@ -811,7 +829,7 @@ class ContentPipelineContractTests(unittest.TestCase):
             [_request_stage(call) for call in llm.calls],
             ["metadata", "content"],
         )
-        content_input = cast(dict[str, object], json.loads(llm.calls[1].structured_input))
+        content_input = cast(dict[str, object], json.loads(_structured_input(llm.calls[1])))
         self.assertEqual(
             content_input["final_metadata"],
             final_metadata.model_dump(mode="json"),

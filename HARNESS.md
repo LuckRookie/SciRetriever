@@ -168,7 +168,7 @@ Full 执行：
 - 同一事实只指定一个真相源，其它文档通过链接解释，不维护相互漂移的独立定义。
 - requirements 说明用户问题和验收，architecture 说明已接受设计，README 和用户指南说明当前行为，源码与测试提供实现证据。
 - 公开 API、CLI、配置、schema、序列化格式、持久化语义、默认值、模块职责、入口或验证命令变化时，按 `docs/development/documentation-map.md` 检查文档影响。
-- `.omo/plans/` 只保存个人实施计划和历史进度，不属于产品真相源，也不进入正式提交。
+- `docs/plans/` 保存需要跨阶段恢复的活动实施计划；它不是产品或架构真相源，计划状态不能替代源码、测试和验收证据。
 - 文档-only 修改不要求运行 Python Harness；应检查链接、术语、Markdown 结构、命令事实和 `git diff --check`。
 
 ## 9. Git 与提交

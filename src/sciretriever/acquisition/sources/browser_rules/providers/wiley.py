@@ -28,7 +28,6 @@ WILEY_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
         "a[href*='/doi/epdf/'], a[data-test='pdf-link']"
     ),
     doi_pdf_url_template="https://onlinelibrary.wiley.com/doi/pdfdirect/{doi}",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "wiley",
         entitled_selectors=(

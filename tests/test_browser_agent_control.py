@@ -2,615 +2,749 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import unittest
-from dataclasses import replace
+from collections.abc import Callable
 
 from sciretriever.acquisition.browser_control import (
     AgentBrowserController,
-    AgentsBrowserAgentDecisionPort,
-    BrowserAction,
-    BrowserAgentDecisionRequest,
+    BrowserAgentControlSession,
     BrowserAgentDisposition,
-    BrowserAgentLoopBudget,
-    BrowserAgentRequestContext,
-    ClickElement,
     RuleBrowserController,
-    ScrollPage,
-    StopFlow,
-    WaitForPage,
-    action_from_tool_decision,
-    build_browser_agent_request,
+    action_from_agent_tool_call,
+    browser_agent_tool_declarations,
+    build_browser_agent_call,
 )
-from sciretriever.agents import (
-    AgentFailure,
+from sciretriever.agents.api import (
+    AgentCallLimits,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentResult,
-    AgentToolDecision,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentToolCall,
     AgentUsage,
-    open_session,
 )
-from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
-from sciretriever.agents.providers.openai_chat import OpenAIChatCompletionsAdapter
-from sciretriever.agents.providers.openai_responses import OpenAIResponsesAdapter
-from sciretriever.network.admission import AccessCoordinator
+from sciretriever.agents.failures import agent_failure
+from sciretriever.agents.ports import AgentProviderCall
+from sciretriever.model.primitives import sha256_digest
 from sciretriever.network.browser import BrowserPageObservation
 from sciretriever.network.browser_control import (
-    BrowserAgentActionCommand,
-    BrowserAgentActionPort,
-    BrowserAgentObservation,
+    BrowserAction,
+    BrowserActionOutcome,
+    BrowserActionReceipt,
+    BrowserAgentStatus,
+    BrowserBounds,
     BrowserCaptureState,
+    BrowserControlSession,
     BrowserElement,
     BrowserElementState,
-    BrowserObservationBudget,
-    BrowserObservationLedger,
+    BrowserObservation,
+    BrowserPageState,
+    BrowserScreenshot,
+    BrowserScrollState,
+    BrowserSurface,
+    BrowserSurfaceKind,
     BrowserViewport,
+    ClickElement,
+    ClickPoint,
+    GoBack,
+    ScrollSurface,
+    Stop,
+    WaitForChange,
     observation_hash,
+    semantic_page_fingerprint,
 )
-from sciretriever.network.http import HttpClient
+
+_MODEL = "fixture-browser-model"
 
 
 def _observation(
     revision: int = 1,
     *,
+    path: str = "/article",
     capture: BrowserCaptureState = BrowserCaptureState.NONE,
-    page_token: str = "article",
-) -> BrowserAgentObservation:
-    return BrowserAgentObservation(
+    page_state: BrowserPageState = BrowserPageState.NORMAL,
+) -> BrowserObservation:
+    viewport = BrowserViewport(width=1280, height=720)
+    screenshot = f"png-fixture-{revision}-{path}".encode()
+    return BrowserObservation(
+        article_token="article",
         revision=revision,
-        page_token=page_token,
-        locator="https://publisher.invalid/article",
-        status_code=200,
-        viewport=BrowserViewport(width=1280, height=720),
-        screenshot=b"png-fixture",
-        screenshot_media_type="image/png",
-        elements=(
-            BrowserElement(
-                element_id="e1",
-                role="button",
-                name="Download PDF",
-                state=BrowserElementState.VISIBLE_ENABLED,
-            ),
-            BrowserElement(
-                element_id="e2",
-                role="button",
-                name="Disabled",
-                state=BrowserElementState.VISIBLE_DISABLED,
+        page_id="p00000001",
+        surfaces=(
+            BrowserSurface(
+                surface_id="s00000001",
+                page_id="p00000001",
+                kind=BrowserSurfaceKind.PAGE,
+                parent_surface_id=None,
+                origin="https://publisher.invalid",
+                path=path,
+                title="Article",
+                viewport=viewport,
+                bounds=BrowserBounds(x=0, y=0, width=1280, height=720),
+                scroll=BrowserScrollState(x=0, y=0, maximum_x=0, maximum_y=1440),
             ),
         ),
+        elements=(
+            BrowserElement(
+                element_id="e00000001",
+                surface_id="s00000001",
+                role="button",
+                name="Download PDF",
+                state=BrowserElementState.ENABLED,
+                bounds=BrowserBounds(x=20, y=20, width=180, height=40),
+            ),
+            BrowserElement(
+                element_id="e00000002",
+                surface_id="s00000001",
+                role="button",
+                name="Disabled",
+                state=BrowserElementState.DISABLED,
+                bounds=BrowserBounds(x=20, y=80, width=180, height=40),
+            ),
+        ),
+        screenshot=BrowserScreenshot(
+            screenshot_id=f"i{revision:08x}",
+            article_token="article",
+            page_id="p00000001",
+            surface_id="s00000001",
+            revision=revision,
+            viewport=viewport,
+            media_type="image/png",
+            sha256=sha256_digest(screenshot),
+            content=screenshot,
+        ),
+        page_state=page_state,
+        agent_status=BrowserAgentStatus.RUNNING,
         capture_state=capture,
-        remaining_budget=BrowserObservationBudget(
-            remaining_steps=8,
-            remaining_seconds=30.0,
-            remaining_image_bytes=2_000_000,
-            remaining_navigations=3,
+    )
+
+
+def _identity(observation: BrowserObservation) -> dict[str, object]:
+    return {
+        "article_token": observation.article_token,
+        "page_id": observation.page_id,
+        "revision": observation.revision,
+    }
+
+
+def _decision(
+    tool_name: str,
+    extra: dict[str, object] | None = None,
+) -> Callable[[AgentProviderCall], tuple[str, dict[str, object]]]:
+    def build(call: AgentProviderCall) -> tuple[str, dict[str, object]]:
+        summary = json.loads(call.text_parts[1].text)
+        arguments: dict[str, object] = {
+            "article_token": summary["article_token"],
+            "page_id": summary["page_id"],
+            "revision": summary["revision"],
+        }
+        if extra is not None:
+            arguments.update(extra)
+        return tool_name, arguments
+
+    return build
+
+
+class _SequenceProvider:
+    provider_name = "fixture-agent"
+
+    def __init__(
+        self,
+        decisions: list[Callable[[AgentProviderCall], tuple[str, dict[str, object]]]],
+        *,
+        on_call: Callable[[int, AgentProviderCall], None] | None = None,
+    ) -> None:
+        self.decisions = decisions
+        self.on_call = on_call
+        self.calls: list[AgentProviderCall] = []
+
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:
+        self.calls.append(call)
+        index = len(self.calls) - 1
+        if self.on_call is not None:
+            self.on_call(index, call)
+        tool_name, arguments = self.decisions[min(index, len(self.decisions) - 1)](call)
+        encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+        return AgentToolCall(
+            tool_name=tool_name,
+            arguments=encoded,
+            provenance=AgentProvenance(
+                provider=self.provider_name,
+                model=call.model,
+                input_sha256=call.input_sha256,
+                parameters_sha256=sha256_digest(b"fixture-browser-parameters"),
+                usage=AgentUsage(output_tokens=1, response_bytes=len(encoded)),
+            ),
+        )
+
+
+class _FailingProvider(_SequenceProvider):
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:
+        self.calls.append(call)
+        raise agent_failure("quota")
+
+
+def _runtime(provider: _SequenceProvider) -> AgentRuntime:
+    return AgentRuntime(
+        adapter=provider,
+        browser=AgentRoleBinding(
+            role=AgentRole.BROWSER,
+            model=_MODEL,
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=32_768,
+                max_output_tokens=512,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset({"image/png"}),
+                max_image_count=1,
+                max_image_bytes=2 * 1024 * 1024,
+            ),
+            limits=AgentCallLimits(
+                max_prompt_bytes=131_072,
+                max_input_bytes=2 * 1024 * 1024,
+                max_request_bytes=3 * 1024 * 1024,
+                max_response_bytes=1 * 1024 * 1024,
+                max_result_bytes=1 * 1024 * 1024,
+                max_output_tokens=512,
+                context_window_tokens=32_768,
+            ),
         ),
     )
 
 
-class _FakeAgentPort:
-    provider_name = "fixture-agent"
+class _Control:
+    def __init__(
+        self,
+        observation: BrowserObservation,
+        *,
+        results: list[BrowserObservation] | None = None,
+    ) -> None:
+        self.current = observation
+        self.results = [] if results is None else list(results)
+        self.executed: list[tuple[BrowserAction, BrowserObservation, float]] = []
+        self.observe_count = 0
 
-    def complete(self, request: AgentRequest) -> AgentResult:
-        raise AssertionError("decision fake should not call a provider directly")
-
-
-class _NoopResolver:
-    """Typed resolver seam for adapter body tests; it never performs DNS."""
-
-    def resolve(self, hostname: str) -> tuple[str, ...]:
-        del hostname
-        return ("127.0.0.1",)
-
-
-class _ToolAgentPort:
-    provider_name = "fixture-agent"
-
-    def complete(self, request: AgentRequest) -> AgentResult:
-        return AgentToolDecision(
-            tool_name="click_element",
-            arguments='{"revision":1,"element_id":"e1"}',
-            provenance=AgentProvenance(
-                provider="fixture-agent",
-                model=request.model,
-                input_sha256=request.input_sha256,
-                parameters_sha256=observation_hash(_observation()),
-                usage=AgentUsage(output_tokens=1, response_bytes=1),
-            ),
-        )
-
-
-class _SessionPort:
-    """Only used to construct a request-local session for wire fixtures."""
-
-    provider_name = "fixture-agent"
-
-    def complete(self, request: AgentRequest) -> AgentResult:
-        raise AssertionError("wire fixture must not execute an Agent request")
-
-
-class _NoopTransport:
-    def send(self, *args: object, **kwargs: object) -> object:
-        raise AssertionError("wire fixture must not send an HTTP request")
-
-
-class _FakeActionPort:
-    def __init__(self, observations: list[BrowserAgentObservation]) -> None:
-        self.observations = observations
-        self.executed: list[tuple[object, int]] = []
-
-    def observe(self) -> BrowserAgentObservation:
-        return self.observations[0]
+    def observe(self) -> BrowserObservation:
+        self.observe_count += 1
+        return self.current
 
     def execute(
         self,
-        command: BrowserAgentActionCommand,
-        observation: BrowserAgentObservation,
+        action: BrowserAction,
+        observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> None:
-        self.assert_timeout(timeout_seconds)
-        self.executed.append((command, observation.revision))
-        if len(self.observations) > 1:
-            self.observations.pop(0)
-
-    @staticmethod
-    def assert_timeout(timeout_seconds: float) -> None:
-        if timeout_seconds <= 0 or timeout_seconds > 10:
-            raise AssertionError("action timeout was not bounded")
-
-
-class _FakeDecisionPort:
-    def __init__(self, actions: list[BrowserAction]) -> None:
-        self.actions = actions
-        self.requests: list[BrowserAgentDecisionRequest] = []
-
-    def decide(self, request: BrowserAgentDecisionRequest) -> BrowserAction:
-        self.requests.append(request)
-        return self.actions[min(len(self.requests) - 1, len(self.actions) - 1)]
-
-
-class BrowserAgentObservationTests(unittest.TestCase):
-    def test_observation_is_query_free_bounded_and_revision_scoped(self) -> None:
-        value = _observation()
-        self.assertEqual(value.origin, "https://publisher.invalid")
-        self.assertEqual(value.path, "/article")
-        self.assertEqual(len(value.actionable_elements), 1)
-        self.assertNotIn("Download PDF", repr(value))
-        with self.assertRaises(ValueError):
-            _observation().with_revision(0)
-        with self.assertRaises(ValueError):
-            BrowserAgentObservation(
-                revision=1,
-                page_token="article",
-                locator="https://publisher.invalid/article?token=secret",
-                status_code=200,
-                viewport=BrowserViewport(1, 1),
-                screenshot=None,
-                screenshot_media_type=None,
-                elements=(),
-                capture_state=BrowserCaptureState.NONE,
-                remaining_budget=BrowserObservationBudget(1, 1.0, 1),
-            )
-
-    def test_ledger_invalidates_element_revision(self) -> None:
-        ledger = BrowserObservationLedger()
-        current = ledger.publish(_observation(revision=99))
-        self.assertEqual(current.revision, 1)
-        self.assertEqual(ledger.element(1, "e1").name, "Download PDF")
-        ledger.publish(_observation(revision=100))
-        with self.assertRaises(ValueError):
-            ledger.element(1, "e1")
+    ) -> BrowserActionReceipt:
+        if not 0 < timeout_seconds <= 10:
+            raise AssertionError("single Browser action timeout is not bounded")
+        self.executed.append((action, observation, timeout_seconds))
+        before = semantic_page_fingerprint(observation)
+        if self.results and not isinstance(action, Stop):
+            self.current = self.results.pop(0)
+        after = semantic_page_fingerprint(self.current)
+        outcome = (
+            BrowserActionOutcome.CAPTURE
+            if self.current.capture_state is not BrowserCaptureState.NONE
+            else BrowserActionOutcome.NO_CHANGE
+            if before == after
+            else BrowserActionOutcome.APPLIED
+        )
+        return BrowserActionReceipt(
+            action_kind=action.kind,
+            outcome=outcome,
+            article_token=observation.article_token,
+            page_id=action.page_id,
+            surface_id=action.surface_id,
+            before_revision=observation.revision,
+            after_revision=self.current.revision,
+            elapsed_milliseconds=1,
+        )
 
 
-class BrowserAgentActionTests(unittest.TestCase):
-    def test_closed_actions_and_tool_parser_reject_open_ended_values(self) -> None:
+class _FailingControl(_Control):
+    def execute(
+        self,
+        action: BrowserAction,
+        observation: BrowserObservation,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserActionReceipt:
+        del action, observation, timeout_seconds
+        raise RuntimeError("network-policy-sentinel")
+
+
+class _ControlFactory:
+    def __init__(self, control: BrowserAgentControlSession) -> None:
+        self.control = control
+        self.opened = 0
+
+    def open(self, session: object) -> BrowserAgentControlSession:
+        del session
+        self.opened += 1
+        return self.control
+
+
+class _Session:
+    def __init__(self, control: BrowserControlSession | None = None) -> None:
+        self.control = control
+        self.clicks: list[str] = []
+
+    def click(self, selector: str) -> bool:
+        self.clicks.append(selector)
+        return True
+
+    def open_viewer(self, locator: str) -> None:
+        del locator
+
+    def open_verified_locator(self, locator: str) -> None:
+        del locator
+
+    def discover_pdf_locators(self) -> tuple[str, ...]:
+        return ()
+
+    def capture_available(self, kind: object) -> bool:
+        del kind
+        return False
+
+    def wait_for_capture(self, kind: object) -> None:
+        del kind
+
+    def wait_for_any_capture(self, kinds: tuple[object, ...]) -> None:
+        del kinds
+
+    def has_selector(self, selector: str) -> bool:
+        del selector
+        return False
+
+    def text(self, selector: str) -> str:
+        del selector
+        return ""
+
+    def observe(self) -> BrowserPageObservation:
+        return BrowserPageObservation("https://publisher.invalid/article", 200)
+
+    def control_session(self) -> BrowserControlSession:
+        if self.control is None:
+            raise AssertionError("control session was not configured")
+        return self.control
+
+
+def _controller(
+    provider: _SequenceProvider,
+    control: BrowserAgentControlSession,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> tuple[AgentBrowserController, _ControlFactory]:
+    factory = _ControlFactory(control)
+    return (
+        AgentBrowserController(
+            runtime=_runtime(provider),
+            control_factory=factory,
+            cancel_event=cancel_event,
+        ),
+        factory,
+    )
+
+
+def _tool_call(
+    tool_name: str,
+    arguments: dict[str, object],
+    observation: BrowserObservation,
+) -> AgentToolCall:
+    return AgentToolCall(
+        tool_name=tool_name,
+        arguments=json.dumps(arguments, sort_keys=True, separators=(",", ":")),
+        provenance=AgentProvenance(
+            provider="fixture-agent",
+            model=_MODEL,
+            input_sha256=observation_hash(observation),
+            parameters_sha256=sha256_digest(b"fixture-browser-parameters"),
+        ),
+    )
+
+
+class BrowserAgentCallTests(unittest.TestCase):
+    def test_call_is_one_stateless_role_bound_observation_with_six_tools(self) -> None:
+        observation = _observation(page_state=BrowserPageState.CHALLENGE)
+        call = build_browser_agent_call(observation)
+        self.assertEqual(call.role, AgentRole.BROWSER)
+        self.assertEqual(call.input_sha256, observation_hash(observation))
+        self.assertEqual(len(call.text_parts), 2)
+        self.assertEqual(len(call.image_parts), 1)
         self.assertEqual(
-            action_from_tool_decision(
+            tuple(tool.name for tool in call.tools),
+            (
                 "click_element",
-                '{"revision":1,"element_id":"e1"}',
+                "click_point",
+                "scroll_surface",
+                "go_back",
+                "wait_for_change",
+                "stop",
             ),
-            ClickElement(1, "e1"),
         )
+        self.assertIn("visible access challenge as an ordinary page", call.system_text)
+        self.assertNotIn(observation.page_id, call.system_text)
+        summary = json.loads(call.text_parts[1].text)
+        self.assertEqual(summary["page_state"], "challenge")
+        self.assertEqual(summary["article_token"], observation.article_token)
+        self.assertNotIn("?", call.text_parts[1].text)
+        self.assertFalse(hasattr(call, "history"))
+        self.assertFalse(hasattr(call, "turn"))
+        self.assertFalse(hasattr(call, "session"))
+        self.assertFalse(hasattr(call, "budget"))
+
+        schemas = {tool.name: json.loads(tool.input_schema) for tool in call.tools}
+        for schema in schemas.values():
+            properties = schema["properties"]
+            self.assertEqual(properties["article_token"]["const"], observation.article_token)
+            self.assertEqual(properties["page_id"]["const"], observation.page_id)
+            self.assertEqual(properties["revision"]["const"], observation.revision)
         self.assertEqual(
-            action_from_tool_decision(
-                "scroll_page",
-                '{"revision":1,"delta_y":-200}',
-            ),
-            ScrollPage(1, -200),
+            schemas["click_point"]["properties"]["screenshot_id"]["const"],
+            observation.screenshot.screenshot_id,
         )
-        self.assertEqual(
-            action_from_tool_decision(
-                "wait_for_page",
-                '{"revision":1,"seconds":0.2}',
+
+    def test_tool_parser_supports_only_the_six_observation_bound_actions(self) -> None:
+        observation = _observation()
+        base = _identity(observation)
+        values = (
+            (
+                "click_element",
+                {**base, "surface_id": "s00000001", "element_id": "e00000001"},
+                ClickElement("article", "p00000001", "s00000001", 1, "e00000001"),
             ),
-            WaitForPage(1, 0.2),
-        )
-        self.assertEqual(
-            action_from_tool_decision(
-                "stop_flow",
-                '{"revision":1,"reason":"normal-miss"}',
+            (
+                "click_point",
+                {
+                    **base,
+                    "surface_id": "s00000001",
+                    "screenshot_id": "i00000001",
+                    "x": 50,
+                    "y": 50,
+                },
+                ClickPoint("article", "p00000001", "s00000001", 1, "i00000001", 50, 50),
             ),
-            StopFlow(1),
+            (
+                "scroll_surface",
+                {**base, "surface_id": "s00000001", "delta_y": 300},
+                ScrollSurface("article", "p00000001", "s00000001", 1, 300),
+            ),
+            ("go_back", base, GoBack("article", "p00000001", 1)),
+            ("wait_for_change", base, WaitForChange("article", "p00000001", 1)),
+            (
+                "stop",
+                {**base, "reason": "normal-miss"},
+                Stop("article", "p00000001", 1, "normal-miss"),
+            ),
         )
-        for name, args in (
-            ("navigate", '{"url":"https://evil.invalid"}'),
-            ("click_element", '{"revision":1,"element_id":"e1","js":"alert(1)"}'),
-            ("scroll_page", '{"revision":1,"delta_y":100000}'),
-            ("wait_for_page", '{"revision":1,"seconds":20}'),
-            ("stop_flow", '{"revision":1,"reason":"CAPTCHA"}'),
-        ):
-            with self.subTest(name=name):
+        for tool_name, arguments, expected in values:
+            with self.subTest(tool_name=tool_name):
+                self.assertEqual(
+                    action_from_agent_tool_call(
+                        _tool_call(tool_name, arguments, observation),
+                        observation,
+                    ),
+                    expected,
+                )
+
+        rejected = (
+            ("navigate", {**base, "url": "https://evil.invalid"}),
+            (
+                "click_element",
+                {**base, "surface_id": "s00000001", "element_id": "e00000002"},
+            ),
+            (
+                "click_point",
+                {
+                    **base,
+                    "surface_id": "s00000001",
+                    "screenshot_id": "i00000001",
+                    "x": 2000,
+                    "y": 50,
+                },
+            ),
+            (
+                "scroll_surface",
+                {**base, "surface_id": "s00000001", "delta_y": 100_000},
+            ),
+            ("stop", {**base, "reason": "login"}),
+            ("go_back", {**base, "url": "https://evil.invalid"}),
+        )
+        for tool_name, arguments in rejected:
+            with self.subTest(rejected=tool_name):
                 with self.assertRaises((TypeError, ValueError)):
-                    action_from_tool_decision(name, args)
+                    action_from_agent_tool_call(
+                        _tool_call(tool_name, arguments, observation),
+                        observation,
+                    )
+
+    def test_tool_declarations_never_expose_open_browser_capabilities(self) -> None:
+        encoded = "\n".join(
+            declaration.input_schema
+            for declaration in browser_agent_tool_declarations(_observation())
+        )
+        for forbidden in (
+            '"url"',
+            '"selector"',
+            '"javascript"',
+            '"text"',
+            '"file"',
+            '"cookie"',
+            '"profile"',
+            '"cdp"',
+        ):
+            self.assertNotIn(forbidden, encoded.casefold())
 
 
 class BrowserAgentControllerTests(unittest.TestCase):
-    def _controller(
-        self,
-        actions: list[BrowserAction],
-        observations: list[BrowserAgentObservation],
-        *,
-        budget: BrowserAgentLoopBudget | None = None,
-    ) -> tuple[AgentBrowserController, _FakeActionPort, _FakeDecisionPort]:
-        action_port = _FakeActionPort(observations)
-        decision_port = _FakeDecisionPort(actions)
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-            budget=budget,
-        )
-        return controller, action_port, decision_port
-
-    def test_click_loop_binds_article_step_hash_and_closes_session(self) -> None:
-        controller, action_port, decision_port = self._controller(
-            [ClickElement(1, "e1")],
-            [_observation(), _observation(2, capture=BrowserCaptureState.AVAILABLE)],
-        )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
-        self.assertEqual(result.steps, 1)
-        self.assertEqual(len(action_port.executed), 1)
-        self.assertEqual(decision_port.requests[0].context.article_token, "article-token")
-        self.assertEqual(decision_port.requests[0].context.step, 1)
-        self.assertEqual(
-            decision_port.requests[0].context.observation_hash,
-            observation_hash(_observation()),
-        )
-
-    def test_disabled_controller_does_not_call_agent_or_page(self) -> None:
-        action_port = _FakeActionPort([_observation()])
-        decision_port = _FakeDecisionPort([StopFlow(1)])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-            enabled=False,
-        )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.UNAVAILABLE)
-        self.assertEqual(decision_port.requests, [])
-        self.assertEqual(action_port.executed, [])
-
-    def test_stale_observation_is_rejected_before_execute(self) -> None:
-        action_port = _FakeActionPort([_observation(), _observation(2)])
-        decision_port = _FakeDecisionPort([ClickElement(1, "e1")])
-
-        class _MutatingDecision(_FakeDecisionPort):
-            def decide(self, request: BrowserAgentDecisionRequest) -> BrowserAction:
-                action_port.observations[0] = _observation(2)
-                return super().decide(request)
-
-        decision_port = _MutatingDecision([ClickElement(1, "e1")])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-        )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.STALE_OBSERVATION)
-        self.assertEqual(action_port.executed, [])
-
-    def test_capture_race_after_decision_never_executes_late_action(self) -> None:
-        action_port = _FakeActionPort([_observation()])
-
-        class _CaptureDecision(_FakeDecisionPort):
-            def decide(self, request: BrowserAgentDecisionRequest) -> BrowserAction:
-                action_port.observations[0] = _observation(
-                    1,
-                    capture=BrowserCaptureState.AVAILABLE,
+    def test_debug_logs_safe_observation_action_receipt_and_fingerprints(self) -> None:
+        initial = _observation()
+        captured = _observation(2, path="/article/pdf", capture=BrowserCaptureState.CAPTURED)
+        provider = _SequenceProvider(
+            [
+                _decision(
+                    "click_element",
+                    {"surface_id": "s00000001", "element_id": "e00000001"},
                 )
-                return super().decide(request)
-
-        decision_port = _CaptureDecision([ClickElement(1, "e1")])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
+            ]
         )
-        result = controller.run("article-token")
+        controller, _factory = _controller(provider, _Control(initial, results=[captured]))
+
+        with self.assertLogs("sciretriever.acquisition.browser_control", level="DEBUG") as logs:
+            controller.run(_Session())
+
+        rendered = "\n".join(logs.output)
+        for expected in (
+            "event=browser-controller-start",
+            "event=browser-agent-observation",
+            "event=browser-agent-action ",
+            "event=browser-agent-action-result",
+            "event=browser-agent-receipt",
+            "event=browser-agent-result",
+            "page_state=normal",
+            "action=click-element",
+            "result=capture-available",
+            "before_fingerprint=",
+            "action_fingerprint=",
+            "screenshot_bytes=",
+        ):
+            self.assertIn(expected, rendered)
+        for sensitive in (
+            "Download PDF",
+            "Disabled",
+            "Article",
+            "png-fixture",
+            "e00000001",
+            '"surface_id"',
+            '"article_token"',
+        ):
+            self.assertNotIn(sensitive, rendered)
+
+    def test_info_logs_stable_agent_failure_without_tool_or_page_payload(self) -> None:
+        controller, _factory = _controller(
+            _FailingProvider([_decision("wait_for_change")]),
+            _Control(_observation()),
+        )
+
+        with self.assertLogs("sciretriever.acquisition.browser_control", level="INFO") as logs:
+            controller.run(_Session())
+
+        rendered = "\n".join(logs.output)
+        self.assertIn("role=browser", rendered)
+        self.assertIn("provider=fixture-agent", rendered)
+        self.assertIn("result=failed", rendered)
+        self.assertIn("failure=agent-quota", rendered)
+        self.assertNotIn("Download PDF", rendered)
+        self.assertNotIn("wait_for_change", rendered)
+
+    def test_first_model_input_is_first_observation_and_capture_ends_flow(self) -> None:
+        initial = _observation()
+        captured = _observation(2, path="/article/pdf", capture=BrowserCaptureState.CAPTURED)
+        provider = _SequenceProvider(
+            [_decision("click_element", {"surface_id": "s00000001", "element_id": "e00000001"})]
+        )
+        control = _Control(initial, results=[captured])
+        controller, factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
         self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
-        self.assertEqual(result.capture_state, BrowserCaptureState.AVAILABLE)
-        self.assertEqual(action_port.executed, [])
+        self.assertEqual(result.action_count, 1)
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(provider.calls[0].input_sha256, observation_hash(initial))
+        self.assertEqual(len(control.executed), 1)
+        self.assertEqual(factory.opened, 1)
 
-    def test_controller_budget_is_minimum_exposed_to_decision(self) -> None:
-        controller, _, decision_port = self._controller(
-            [StopFlow(1)],
-            [_observation()],
-            budget=BrowserAgentLoopBudget(
-                max_steps=2,
-                max_seconds=3.0,
-                max_image_bytes=2_000_000,
-            ),
+    def test_challenge_uses_the_same_call_and_click_point_action(self) -> None:
+        challenge = _observation(page_state=BrowserPageState.CHALLENGE)
+        captured = _observation(2, capture=BrowserCaptureState.CAPTURED)
+        provider = _SequenceProvider(
+            [
+                _decision(
+                    "click_point",
+                    {
+                        "surface_id": "s00000001",
+                        "screenshot_id": challenge.screenshot.screenshot_id,
+                        "x": 100,
+                        "y": 100,
+                    },
+                )
+            ]
         )
-        result = controller.run("article-token")
+        control = _Control(challenge, results=[captured])
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
+        self.assertIsInstance(control.executed[0][0], ClickPoint)
+        summary = json.loads(provider.calls[0].text_parts[1].text)
+        self.assertEqual(summary["page_state"], "challenge")
+
+    def test_identity_pages_stop_before_any_model_call(self) -> None:
+        for page_state in (BrowserPageState.LOGIN_REQUIRED, BrowserPageState.MFA_REQUIRED):
+            with self.subTest(page_state=page_state):
+                provider = _SequenceProvider([_decision("stop", {"reason": "normal-miss"})])
+                control = _Control(_observation(page_state=page_state))
+                controller, _factory = _controller(provider, control)
+                controller.run(_Session())
+                result = controller.result
+                assert result is not None
+                self.assertEqual(result.disposition, BrowserAgentDisposition.PAGE_TERMINAL)
+                self.assertEqual(provider.calls, [])
+                self.assertEqual(control.executed, [])
+
+    def test_stop_is_a_closed_network_action_and_never_requires_page_progress(self) -> None:
+        provider = _SequenceProvider([_decision("stop", {"reason": "not-actionable"})])
+        control = _Control(_observation())
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
         self.assertEqual(result.disposition, BrowserAgentDisposition.STOPPED)
-        request = decision_port.requests[0]
-        self.assertEqual(request.context.remaining_budget.remaining_steps, 2)
-        self.assertLessEqual(request.context.remaining_budget.remaining_seconds, 3.0)
+        self.assertEqual(result.action_count, 1)
+        self.assertIsInstance(control.executed[0][0], Stop)
 
-    def test_cumulative_image_budget_stops_before_second_agent_decision(self) -> None:
-        first = _observation()
-        second = _observation(2)
-        screenshot_bytes = len(first.screenshot or b"")
-        controller, action_port, decision_port = self._controller(
-            [ClickElement(1, "e1"), ClickElement(1, "e1")],
-            [first, second],
-            budget=BrowserAgentLoopBudget(max_image_bytes=screenshot_bytes),
+    def test_capture_race_wins_and_late_action_never_reaches_network(self) -> None:
+        control = _Control(_observation())
+
+        def capture_during_call(index: int, call: AgentProviderCall) -> None:
+            del index, call
+            control.current = _observation(capture=BrowserCaptureState.CAPTURED)
+
+        provider = _SequenceProvider(
+            [_decision("click_element", {"surface_id": "s00000001", "element_id": "e00000001"})],
+            on_call=capture_during_call,
         )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.BUDGET_EXHAUSTED)
-        self.assertEqual(result.failure_code, "agent-image-budget")
-        self.assertEqual(len(decision_port.requests), 1)
-        self.assertEqual(len(action_port.executed), 1)
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
+        self.assertEqual(control.executed, [])
 
-    def test_cancel_during_decision_prevents_follow_up_action(self) -> None:
+    def test_page_change_during_model_call_gets_a_fresh_stateless_decision(self) -> None:
+        control = _Control(
+            _observation(),
+            results=[_observation(3, path="/article/pdf", capture=BrowserCaptureState.CAPTURED)],
+        )
+
+        def mutate_first_call(index: int, call: AgentProviderCall) -> None:
+            del call
+            if index == 0:
+                control.current = _observation(2, path="/article/next")
+
+        provider = _SequenceProvider(
+            [
+                _decision(
+                    "click_element",
+                    {"surface_id": "s00000001", "element_id": "e00000001"},
+                ),
+                _decision("wait_for_change"),
+            ],
+            on_call=mutate_first_call,
+        )
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
+        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(len(control.executed), 1)
+        self.assertIsInstance(control.executed[0][0], WaitForChange)
+        self.assertNotEqual(provider.calls[0].input_sha256, provider.calls[1].input_sha256)
+
+    def test_proven_semantic_self_transition_stops_without_a_repeat_budget(self) -> None:
+        provider = _SequenceProvider([_decision("wait_for_change")])
+        control = _Control(_observation())
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.NO_PROGRESS)
+        self.assertEqual(result.action_count, 1)
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(len(control.executed), 1)
+
+    def test_repeated_action_kind_continues_while_semantic_page_changes(self) -> None:
+        provider = _SequenceProvider([_decision("wait_for_change"), _decision("wait_for_change")])
+        control = _Control(
+            _observation(),
+            results=[
+                _observation(2, path="/article/step"),
+                _observation(3, path="/article/pdf", capture=BrowserCaptureState.CAPTURED),
+            ],
+        )
+        controller, _factory = _controller(provider, control)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.CAPTURE_AVAILABLE)
+        self.assertEqual(result.action_count, 2)
+        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(len(control.executed), 2)
+
+    def test_user_cancellation_and_agent_failure_are_natural_terminals(self) -> None:
         cancel_event = threading.Event()
-        action_port = _FakeActionPort([_observation()])
-
-        class _CancellingDecision(_FakeDecisionPort):
-            def decide(self, request: BrowserAgentDecisionRequest) -> BrowserAction:
-                cancel_event.set()
-                return super().decide(request)
-
-        decision_port = _CancellingDecision([ClickElement(1, "e1")])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-        )
-        result = controller.run("article-token", cancel_event=cancel_event)
+        cancel_event.set()
+        provider = _SequenceProvider([_decision("wait_for_change")])
+        control = _Control(_observation())
+        controller, factory = _controller(provider, control, cancel_event=cancel_event)
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
         self.assertEqual(result.disposition, BrowserAgentDisposition.CANCELLED)
-        self.assertEqual(result.failure_code, "agent-cancelled")
-        self.assertEqual(action_port.executed, [])
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(control.observe_count, 0)
+        self.assertEqual(factory.opened, 1)
 
-    def test_late_decision_after_deadline_never_executes_action(self) -> None:
-        action_port = _FakeActionPort([_observation()])
+        failing = _FailingProvider([_decision("wait_for_change")])
+        controller, _factory = _controller(failing, _Control(_observation()))
+        controller.run(_Session())
+        result = controller.result
+        assert result is not None
+        self.assertEqual(result.disposition, BrowserAgentDisposition.FAILED)
+        assert result.failure is not None
+        self.assertEqual(result.failure.code, "agent-quota")
 
-        class _LateDecision(_FakeDecisionPort):
-            def decide(self, request: BrowserAgentDecisionRequest) -> BrowserAction:
-                time.sleep(0.03)
-                return super().decide(request)
-
-        decision_port = _LateDecision([ClickElement(1, "e1")])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-            budget=BrowserAgentLoopBudget(max_seconds=0.01),
-        )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.BUDGET_EXHAUSTED)
-        self.assertEqual(result.failure_code, "agent-action-timeout")
-        self.assertEqual(action_port.executed, [])
-
-    def test_zero_network_navigation_budget_denies_agent_admission(self) -> None:
-        observation = _observation()
-        observation = replace(
-            observation,
-            remaining_budget=replace(
-                observation.remaining_budget,
-                remaining_steps=0,
-                remaining_navigations=0,
-            ),
-        )
-        controller, action_port, decision_port = self._controller(
-            [ClickElement(1, "e1")],
-            [observation],
-        )
-        result = controller.run("article-token")
-        self.assertEqual(result.disposition, BrowserAgentDisposition.BUDGET_EXHAUSTED)
-        self.assertEqual(result.failure_code, "browser-step-budget")
-        self.assertEqual(decision_port.requests, [])
-        self.assertEqual(action_port.executed, [])
-
-    def test_no_progress_cancel_and_capture_are_bounded(self) -> None:
-        controller, _, _ = self._controller(
-            [ClickElement(1, "e1")],
-            [_observation()],
-            budget=BrowserAgentLoopBudget(max_steps=4, max_repeated_actions=2),
-        )
-        self.assertEqual(
-            controller.run("article-token").disposition,
-            BrowserAgentDisposition.NO_PROGRESS,
-        )
-        cancel = threading.Event()
-        cancel.set()
-        controller, _, _ = self._controller([ClickElement(1, "e1")], [_observation()])
-        self.assertEqual(
-            controller.run("article-token", cancel_event=cancel).disposition,
-            BrowserAgentDisposition.CANCELLED,
-        )
-
-    def test_action_execution_failure_propagates_and_closes_session(self) -> None:
-        class _FailingActionPort(_FakeActionPort):
-            def execute(
-                self,
-                command: BrowserAgentActionCommand,
-                observation: BrowserAgentObservation,
-                *,
-                timeout_seconds: float,
-            ) -> None:
-                self.assert_timeout(timeout_seconds)
-                raise RuntimeError("network-policy-sentinel")
-
-        action_port = _FailingActionPort([_observation()])
-        decision_port = _FakeDecisionPort([ClickElement(1, "e1")])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-        )
+    def test_network_failure_propagates_without_becoming_an_agent_miss(self) -> None:
+        provider = _SequenceProvider([_decision("wait_for_change")])
+        controller, _factory = _controller(provider, _FailingControl(_observation()))
         with self.assertRaisesRegex(RuntimeError, "network-policy-sentinel"):
-            controller.run("article-token")
-        request = decision_port.requests[0]
-        with self.assertRaises(AgentFailure):
-            request.session.complete(build_browser_agent_request(request, model="browser-model"))
+            controller.run(_Session())
+        self.assertIsNone(controller.result)
 
-    def test_rule_controller_only_receives_capability_session(self) -> None:  # noqa: C901
-        called: list[object] = []
-
-        class _Session:
-            def click(self, selector: str) -> bool:
-                called.append(selector)
-                return True
-
-            def open_viewer(self, locator: str) -> None: ...
-
-            def open_verified_locator(self, locator: str) -> None: ...
-
-            def discover_pdf_locators(self) -> tuple[str, ...]:
-                return ()
-
-            def capture_available(self, kind: object) -> bool:
-                return False
-
-            def wait_for_capture(self, kind: object) -> None: ...
-
-            def wait_for_any_capture(self, kinds: tuple[object, ...]) -> None: ...
-
-            def has_selector(self, selector: str) -> bool:
-                return False
-
-            def text(self, selector: str) -> str:
-                return ""
-
-            def observe(self) -> BrowserPageObservation:
-                return BrowserPageObservation("https://publisher.invalid/article", 200)
-
-            def agent_action_port(self) -> BrowserAgentActionPort:
-                raise AssertionError("rule controller must not request the Agent port")
-
+    def test_rule_controller_never_constructs_or_calls_an_agent_runtime(self) -> None:
         class _Execution:
             def run(self, session: object) -> None:
-                session.click("button")  # type: ignore[attr-defined]
+                clicked = session.click("button")  # type: ignore[attr-defined]
+                if clicked is not True:
+                    raise AssertionError("deterministic click did not run")
 
-        RuleBrowserController(_Execution()).run(_Session())
-        self.assertEqual(called, ["button"])
-
-    def test_build_request_requires_screenshot_and_contains_only_bounded_fields(self) -> None:
-        action_port = _FakeActionPort([_observation()])
-        decision_port = _FakeDecisionPort([StopFlow(1)])
-        controller = AgentBrowserController(
-            agent_port=_FakeAgentPort(),
-            decision_port=decision_port,
-            action_port=action_port,
-        )
-        del controller
-        session = open_session(_FakeAgentPort())
-        request = BrowserAgentDecisionRequest(
-            context=BrowserAgentRequestContext(
-                "article-token",
-                1,
-                observation_hash(_observation()),
-                _observation().remaining_budget,
-            ),
-            observation=_observation(),
-            session=session,
-        )
-        built = build_browser_agent_request(request, model="browser-model")
-        self.assertEqual(built.role.value, "browser")
-        self.assertEqual(len(built.image_parts), 1)
-        self.assertEqual(len(built.text_parts), 2)
-        self.assertIn("current article's primary PDF", built.system_text)
-        self.assertNotIn("article-token", built.system_text)
-        self.assertNotIn("article-token", built.user_text)
-        self.assertIn('"origin":"https://publisher.invalid"', built.user_text)
-        self.assertNotIn("?", built.user_text)
-        self.assertNotEqual(built.system_text, built.user_text)
-        session.close()
-
-    def test_agents_decision_port_uses_request_local_session_and_closed_tool(self) -> None:
-        session = open_session(_ToolAgentPort())
-        observation = _observation()
-        request = BrowserAgentDecisionRequest(
-            context=BrowserAgentRequestContext(
-                "article-token",
-                1,
-                observation_hash(observation),
-                observation.remaining_budget,
-            ),
-            observation=observation,
-            session=session,
-        )
-        action = AgentsBrowserAgentDecisionPort(model="browser-model").decide(request)
-        self.assertEqual(action, ClickElement(1, "e1"))
-        self.assertEqual(session.turns, 1)
-        session.close()
-
-    def test_browser_request_keeps_system_and_user_parts_separate_on_all_protocol_wires(
-        self,
-    ) -> None:
-        observation = _observation()
-        article_token = "article-token-secret"
-        session = open_session(_SessionPort())
-        request = BrowserAgentDecisionRequest(
-            context=BrowserAgentRequestContext(
-                article_token,
-                1,
-                observation_hash(observation),
-                observation.remaining_budget,
-            ),
-            observation=observation,
-            session=session,
-        )
-        built = build_browser_agent_request(request, model="browser-model")
-        client = HttpClient(
-            resolver=_NoopResolver(),
-            transport=_NoopTransport(),
-            coordinator=AccessCoordinator(),
-        )
-        adapters = (
-            OpenAIResponsesAdapter(http_client=client, api_key="wire-api-key"),
-            OpenAIChatCompletionsAdapter(http_client=client, api_key="wire-api-key"),
-            AnthropicMessagesAdapter(http_client=client, api_key="wire-api-key"),
-        )
-        try:
-            for adapter in adapters:
-                with self.subTest(protocol=type(adapter).__name__):
-                    body = json.loads(adapter._build_request_body(built))  # type: ignore[attr-defined]
-                    wire = json.dumps(body, ensure_ascii=False, sort_keys=True)
-                    self.assertNotIn(article_token, wire)
-                    self.assertNotIn("?", wire)
-                    if isinstance(adapter, OpenAIResponsesAdapter):
-                        items = body["input"]
-                        self.assertEqual([item["role"] for item in items], ["developer", "user"])
-                        self.assertEqual(items[0]["content"][0]["text"], built.system_text)
-                        self.assertEqual(items[1]["content"][0]["text"], built.user_text)
-                    elif isinstance(adapter, OpenAIChatCompletionsAdapter):
-                        messages = body["messages"]
-                        self.assertEqual([item["role"] for item in messages], ["developer", "user"])
-                        self.assertEqual(messages[0]["content"], built.system_text)
-                        self.assertEqual(messages[1]["content"][0]["text"], built.user_text)
-                    else:
-                        self.assertEqual(body["system"], built.system_text)
-                        messages = body["messages"]
-                        self.assertEqual(messages[0]["role"], "user")
-                        self.assertEqual(messages[0]["content"][0]["text"], built.user_text)
-        finally:
-            session.close()
+        session = _Session()
+        RuleBrowserController(_Execution()).run(session)
+        self.assertEqual(session.clicks, ["button"])
 
 
 if __name__ == "__main__":

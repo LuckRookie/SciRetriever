@@ -27,7 +27,6 @@ from sciretriever.configuration.filesystem import current_uid as _current_uid
 from sciretriever.configuration.filesystem import mode as _mode
 from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.model.configuration import (
-    AgentAuthentication,
     Configuration,
     ConfigurationDiagnostic,
     CoreCredentialService,
@@ -38,6 +37,7 @@ from sciretriever.model.configuration import (
     ProviderCapability,
     ProviderCredentialStatus,
     ProviderName,
+    normalize_model_provider_identity,
 )
 from sciretriever.network.policy import PolicyError, normalize_url_with_configured_port
 
@@ -54,7 +54,6 @@ class _CoreCredentialSpec:
 
 
 _CORE_CREDENTIAL_SPECS: Final[dict[CoreCredentialService, _CoreCredentialSpec]] = {
-    CoreCredentialService.AGENTS: _CoreCredentialSpec("api_key"),
     CoreCredentialService.MINERU: _CoreCredentialSpec("bearer_token"),
     # The reviewed free v146 installer intentionally refuses a Pro key.  We
     # still accept an origin-bound optional value so the interactive manager
@@ -64,6 +63,8 @@ _CORE_CREDENTIAL_SPECS: Final[dict[CoreCredentialService, _CoreCredentialSpec]] 
 }
 _CORE_ORIGIN_FIELD: Final[str] = "origin"
 _CORE_NEXT_ORIGIN_FIELD: Final[str] = "next_origin"
+_MODEL_CREDENTIALS_SECTION: Final[str] = "providers"
+_MODEL_CREDENTIAL_SPEC: Final[_CoreCredentialSpec] = _CoreCredentialSpec("api_key")
 
 
 class _CredentialSpec:
@@ -196,16 +197,21 @@ class CredentialLookup(Protocol):
         origin: str,
     ) -> str | None: ...
 
+    def model_provider_field_names(self, provider: str) -> tuple[str, ...]: ...
+
+    def has_model_provider(self, provider: str) -> bool: ...
+
+    def model_secret_for_origin(self, provider: str, origin: str) -> str | None: ...
+
 
 @runtime_checkable
 class RuntimeSecretLookup(Protocol):
-    """Opaque, capability-selected Parser/Agents secrets for Bootstrap."""
+    """Opaque, capability-selected Parser/model secrets for Bootstrap."""
 
     @property
     def mineru_bearer_token(self) -> str | None: ...
 
-    @property
-    def agents_api_key(self) -> str | None: ...
+    def model_api_key(self, provider: str) -> str | None: ...
 
 
 def credential_path(*, home: str | Path | None = None) -> Path:
@@ -242,6 +248,13 @@ def _core_service_name(value: CoreCredentialService | str) -> CoreCredentialServ
             del error
             _fail("credentials service is unknown")
     _fail("credentials service is unknown")
+
+
+def _model_provider_name(value: object) -> str:
+    try:
+        return normalize_model_provider_identity(value)
+    except (TypeError, ValueError):
+        _fail("credentials model provider is unknown")
 
 
 def _credential_specs(provider: ProviderName) -> tuple[CredentialFieldSpec, ...]:
@@ -458,16 +471,57 @@ def _core_credential_section(
     return values
 
 
+def _model_credential_section(
+    provider_key: object,
+    section: object,
+) -> tuple[str, dict[str, str]]:
+    provider = _model_provider_name(provider_key)
+    if not isinstance(section, dict):
+        _fail("credentials value is invalid")
+    primary = {_MODEL_CREDENTIAL_SPEC.secret_field, _CORE_ORIGIN_FIELD}
+    transition = {_MODEL_CREDENTIAL_SPEC.next_secret_field, _CORE_NEXT_ORIGIN_FIELD}
+    expected = primary | transition
+    values: dict[str, str] = {}
+    for field, value in section.items():
+        if type(field) is not str or field not in expected:
+            _fail("credentials field is unknown")
+        values[field] = _credential_value(value)
+    keys = set(values)
+    if keys != primary and keys != expected:
+        _fail("credentials value is invalid")
+    if values[_CORE_ORIGIN_FIELD] != _canonical_credential_origin(values[_CORE_ORIGIN_FIELD]):
+        _fail("credentials value is invalid")
+    if transition <= keys:
+        if values[_CORE_NEXT_ORIGIN_FIELD] != _canonical_credential_origin(
+            values[_CORE_NEXT_ORIGIN_FIELD]
+        ):
+            _fail("credentials value is invalid")
+        if values[_CORE_NEXT_ORIGIN_FIELD] == values[_CORE_ORIGIN_FIELD]:
+            _fail("credentials value is invalid")
+    return provider, values
+
+
 def _credential_payload(
     raw: bytes,
 ) -> tuple[
     dict[ProviderName, dict[str, str]],
     dict[CoreCredentialService, dict[str, str]],
+    dict[str, dict[str, str]],
 ]:
     payload = _parse_toml(raw, credentials=True)
     parsed: dict[ProviderName, dict[str, str]] = {}
     core: dict[CoreCredentialService, dict[str, str]] = {}
+    models: dict[str, dict[str, str]] = {}
     for section_key, section in payload.items():
+        if section_key == _MODEL_CREDENTIALS_SECTION:
+            if not isinstance(section, dict):
+                _fail("credentials value is invalid")
+            for provider_key, provider_section in section.items():
+                provider, values = _model_credential_section(provider_key, provider_section)
+                if provider in models:
+                    _fail("credentials value is invalid")
+                models[provider] = values
+            continue
         if type(section_key) is str and section_key in {
             item.value for item in CoreCredentialService
         }:
@@ -476,7 +530,7 @@ def _credential_payload(
             continue
         provider, values = _credential_section(section_key, section)
         parsed[provider] = values
-    return parsed, core
+    return parsed, core, models
 
 
 def _read_credentials(
@@ -484,21 +538,22 @@ def _read_credentials(
 ) -> tuple[
     dict[ProviderName, dict[str, str]],
     dict[CoreCredentialService, dict[str, str]],
+    dict[str, dict[str, str]],
     os.stat_result | None,
 ]:
     path = credential_path(home=home)
     directory = path.parent
     metadata = _lstat_directory(directory, missing_ok=True)
     if metadata is None:
-        return {}, {}, None
+        return {}, {}, {}, None
     if metadata.st_uid != _current_uid() or _mode(metadata) != _DIRECTORY_MODE:
         _fail("credentials directory has unsafe ownership or permissions")
     named = _lstat(path, missing_ok=True, credentials=True)
     if named is None:
-        return {}, {}, None
+        return {}, {}, {}, None
     raw, final_metadata = _read_verified(path, credentials=True, secure=True)
-    providers, core = _credential_payload(raw)
-    return providers, core, final_metadata
+    providers, core, models = _credential_payload(raw)
+    return providers, core, models, final_metadata
 
 
 class _SecretFields:
@@ -519,20 +574,27 @@ class _SecretFields:
 class _CredentialBundle:
     """Private short-lived secret container with an opaque representation."""
 
-    __slots__ = ("_core", "_values")
+    __slots__ = ("_core", "_models", "_values")
 
     def __init__(
         self,
         values: Mapping[ProviderName, Mapping[str, str]],
         core: Mapping[CoreCredentialService, Mapping[str, str]] | None = None,
+        models: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self._values = {provider: _SecretFields(fields) for provider, fields in values.items()}
         self._core = {service: _SecretFields(fields) for service, fields in (core or {}).items()}
+        self._models = {
+            service: _SecretFields(fields) for service, fields in (models or {}).items()
+        }
 
     def __repr__(self) -> str:
         providers = tuple(sorted(item.value for item in self._values))
         services = tuple(sorted(item.value for item in self._core))
-        return f"CredentialBundle(providers={providers!r}, services={services!r})"
+        models = tuple(sorted(self._models))
+        return (
+            f"CredentialBundle(providers={providers!r}, services={services!r}, models={models!r})"
+        )
 
     __str__ = __repr__
 
@@ -586,20 +648,37 @@ class _CredentialBundle:
             return fields.get(spec.next_secret_field)
         return None
 
+    def model_provider_field_names(self, provider: str) -> tuple[str, ...]:
+        fields = self._models.get(_model_provider_name(provider))
+        return () if fields is None else ("api_key", "origin")
+
+    def has_model_provider(self, provider: str) -> bool:
+        return _model_provider_name(provider) in self._models
+
+    def model_secret_for_origin(self, provider: str, origin: str) -> str | None:
+        fields = self._models.get(_model_provider_name(provider))
+        if fields is None or type(origin) is not str:
+            return None
+        if fields.get(_CORE_ORIGIN_FIELD) == origin:
+            return fields.get(_MODEL_CREDENTIAL_SPEC.secret_field)
+        if fields.get(_CORE_NEXT_ORIGIN_FIELD) == origin:
+            return fields.get(_MODEL_CREDENTIAL_SPEC.next_secret_field)
+        return None
+
 
 class _RuntimeSecrets:
     """Opaque selected Parser/Agents secrets for one production assembly."""
 
-    __slots__ = ("_agents_api_key", "_mineru_bearer_token")
+    __slots__ = ("_mineru_bearer_token", "_model_api_keys")
 
     def __init__(
         self,
         *,
         mineru_bearer_token: str | None,
-        agents_api_key: str | None,
+        model_api_keys: Mapping[str, str],
     ) -> None:
         self._mineru_bearer_token = mineru_bearer_token
-        self._agents_api_key = agents_api_key
+        self._model_api_keys = MappingProxyType(dict(model_api_keys))
 
     def __repr__(self) -> str:
         return "<RuntimeSecrets>"
@@ -613,9 +692,8 @@ class _RuntimeSecrets:
     def mineru_bearer_token(self) -> str | None:
         return self._mineru_bearer_token
 
-    @property
-    def agents_api_key(self) -> str | None:
-        return self._agents_api_key
+    def model_api_key(self, provider: str) -> str | None:
+        return self._model_api_keys.get(_model_provider_name(provider))
 
 
 def _service_origin(base_url: str | None) -> str:
@@ -671,12 +749,26 @@ def load_runtime_secrets(
     if not isinstance(configuration, Configuration):
         _fail("configuration value is invalid")
     parser = configuration.parsing
-    agents = configuration.agents
     parser_needs_secret = include_parser and parser.connection_mode is ParserConnectionMode.REMOTE
-    agents_needs_secret = include_agents and agents.authentication is AgentAuthentication.API_KEY
+    selected_models = tuple(
+        model
+        for model in (
+            configuration.models.get(configuration.analysis.model),
+            configuration.models.get(configuration.access.model),
+        )
+        if model is not None
+    )
+    selected_providers = {
+        model.provider: configuration.providers.get(model.provider) for model in selected_models
+    }
+    model_providers_needing_secret = {
+        name: provider
+        for name, provider in selected_providers.items()
+        if include_agents and provider is not None and provider.requires_api_key
+    }
     bundle = (
         load_credentials(home=credentials_home)
-        if credentials is None and (parser_needs_secret or agents_needs_secret)
+        if credentials is None and (parser_needs_secret or model_providers_needing_secret)
         else credentials
     )
     if parser_needs_secret:
@@ -689,36 +781,30 @@ def load_runtime_secrets(
         )
     else:
         mineru = None
-    if not include_agents:
-        agents_key = None
-    elif not agents_needs_secret:
-        agents_key = None
-    elif agents.authentication is AgentAuthentication.API_KEY:
-        assert bundle is not None
-        agents_key = _bound_core_secret(
-            bundle,
-            CoreCredentialService.AGENTS,
-            _CORE_CREDENTIAL_SPECS[CoreCredentialService.AGENTS].secret_field,
-            _service_origin(agents.base_url),
-        )
-    else:
-        _fail("configuration value is invalid")
+    model_keys: dict[str, str] = {}
+    for name, provider in model_providers_needing_secret.items():
+        assert bundle is not None and provider is not None
+        secret = bundle.model_secret_for_origin(name, _service_origin(provider.base_url))
+        if secret is None:
+            _fail("configuration value is invalid")
+        model_keys[name] = secret
     return _RuntimeSecrets(
         mineru_bearer_token=mineru,
-        agents_api_key=agents_key,
+        model_api_keys=model_keys,
     )
 
 
 def load_credentials(*, home: str | Path | None = None) -> CredentialLookup:
     """Load the fixed user-level credentials file through a safe descriptor."""
 
-    values, core, _metadata = _read_credentials(home)
+    values, core, models, _metadata = _read_credentials(home)
     # Copy the outer and inner containers so a caller cannot mutate parser
     # state retained by another operation.  Values remain private to this
     # short-lived object and never enter a Pydantic model.
     return _CredentialBundle(
         {provider: dict(fields) for provider, fields in values.items()},
         {service: dict(fields) for service, fields in core.items()},
+        {service: dict(fields) for service, fields in models.items()},
     )
 
 
@@ -738,7 +824,7 @@ def credential_section_exists(
     name = _provider_name(provider)
     if name not in _CREDENTIAL_PROVIDER_NAMES or not _credential_specs(name):
         _fail("credentials provider is unsupported")
-    values, _core, _metadata = _read_credentials(home)
+    values, _core, _models, _metadata = _read_credentials(home)
     return name in values
 
 
@@ -750,8 +836,20 @@ def core_credential_section_exists(
     """Return only whether one core-service secret section exists."""
 
     name = _core_service_name(service)
-    _providers, core, _metadata = _read_credentials(home)
+    _providers, core, _models, _metadata = _read_credentials(home)
     return name in core
+
+
+def model_provider_credential_section_exists(
+    provider: str,
+    *,
+    home: str | Path | None = None,
+) -> bool:
+    """Return only whether one named model Provider key section exists."""
+
+    name = _model_provider_name(provider)
+    _providers, _core, models, _metadata = _read_credentials(home)
+    return name in models
 
 
 def credential_diagnostic(

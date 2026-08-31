@@ -120,8 +120,7 @@ class InstalledExchangeAndManualPdfTests(unittest.TestCase):
         root.mkdir(mode=0o700)
         catalog = root / "catalog.sqlite3"
         artifacts = root / "artifacts"
-        configuration = root / "config.toml"
-        configuration.write_text(
+        configuration = self.install.write_user_configuration(
             "\n".join(
                 (
                     "[paths]",
@@ -130,9 +129,13 @@ class InstalledExchangeAndManualPdfTests(unittest.TestCase):
                     "",
                 )
             ),
-            encoding="utf-8",
         )
-        environment = {"SCIRETRIEVER_CONFIG": os.fspath(configuration)}
+        assert self.install.home is not None
+        self.assertEqual(
+            configuration,
+            self.install.home / ".sciretriever" / "config.toml",
+        )
+        environment: dict[str, str] = {}
 
         inputs = {
             "bibtex": _BIBTEX,

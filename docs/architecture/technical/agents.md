@@ -2,11 +2,11 @@
 
 - 总技术入口：[技术文档索引](../technical.md)
 - 设计责任：[设计文档 5.2](../design.md#52-agents)
-- 架构决策：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)
+- 架构决策：[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](../decisions/0021-provider-model-registry-and-direct-task-selection.md)
 - Analysis 消费方：[Analysis 技术文档](analysis.md)
 - Browser 消费方：[Acquisition 技术文档](acquisition.md)、[Network 技术文档](network.md)
 
-本文定义目标 `src/sciretriever/agents/` 的中性模型 provider、capability、预算、请求级 session、协议 adapter 和稳定失败边界。它不定义文献 prompt、Analysis schema、Publisher 页面规则、Browser 动作含义或业务结果接纳。
+本文定义目标 `src/sciretriever/agents/` 的无状态 Provider-neutral 模型运行时。它只执行一次模型调用，不定义文献 prompt、Analysis workflow、Publisher 页面规则、Browser loop、工具执行或业务结果接纳。
 
 ## 1. 目标结构
 
@@ -14,192 +14,258 @@
 agents/
   __init__.py
   api.py
-  ports.py
-  requests.py
   capabilities.py
-  sessions.py
+  messages.py
+  tools.py
+  calls.py
+  runtime.py
+  ports.py
   failures.py
   providers/
     __init__.py
+    base.py
     openai_responses.py
     openai_chat.py
     anthropic.py
+    models.py
 ```
 
-- `api.py` 提供窄小、稳定的请求与 session 构造面；
-- `ports.py` 声明 provider-neutral 执行 Port，不包含文献或 Browser 业务枚举；
-- `requests.py` 定义有界文本、图像、结构化响应和 tool declaration/decision；
-- `capabilities.py` 定义模型能力与本地 readiness；
-- `sessions.py` 管理 request-local 多 turn 上下文、预算、取消和释放；
-- `failures.py` 将配置、capability、认证、quota、timeout、协议、预算和取消稳定化；
-- `providers/` 只负责具体模型协议、认证和响应边界转换，并通过 Network 发出请求。
+- `api.py` 是消费方唯一公共入口，重导出实际需要的中性类型；
+- `capabilities.py` 定义 model capability、role readiness 与缺口计算；
+- `messages.py` 定义有界文本和图像输入；
+- `tools.py` 定义封闭 tool declaration、tool call 与严格参数校验；
+- `calls.py` 定义 `AgentCall`、structured result、usage、provenance 和单次技术 limits；
+- `runtime.py` 定义 role binding、`readiness(role)` 与 `execute(call)`；
+- `ports.py` 声明 Runtime 到 Provider adapter 的内部 wire port；
+- `failures.py` 定义稳定、脱敏失败；
+- `providers/` 转换具体 wire protocol 并通过 Network HTTP 发出请求；`models.py` 只为显式配置
+  向导读取一页有界、非持久的 Provider 模型目录。
 
-`__init__.py` 只导出消费方实际需要的稳定调用面和失败，不导出具体 provider adapter、vendor 类型或可变全局 registry。模块不建立 service locator、singleton、background worker 或通用 workflow engine。
+目标结构不存在 `requests.py`、`sessions.py`、通用 workflow、registry、background worker 或全局 service locator。
 
-## 2. 中性交换值
+## 2. 公共执行合同
 
-Agents 边界使用不可变、封闭的内部交换值，至少表达：
+```python
+class AgentRuntime:
+    def readiness(self, role: AgentRole) -> AgentCapabilityReadiness: ...
+
+    def execute(
+        self,
+        call: AgentCall,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> AgentStructuredResult | AgentToolCall: ...
+```
+
+`AgentCall` 包含：
+
+- `role`；
+- immutable ordered messages/text parts；
+- required capability 集合；
+- consumer-owned input hash；
+-严格 response schema 或 tool declarations，二者互斥；
+-本次 `max_output_tokens`。
+
+`AgentCall` 不包含 Provider、Base URL、model、credential、AccessScope、session、history、turn、job deadline 或 Analysis/Browser 业务枚举。`cancel_event` 是 `execute` 的执行参数，不成为可复用 Call 状态。
+
+`AgentRuntime` 保存 Analysis/Browser role bindings，并为每个 role 保存对应 Provider adapter；
+两个 binding 解析到同一 Model Provider 时复用同一 adapter，解析到不同 Provider 时分别使用两个
+adapter。每个 binding 包含 role、model、模块派生的 capabilities、Model reasoning effort 与适用单次 limits。消费者不能在
+`AgentCall` 中临时覆盖 model 或 effort。Runtime 在 I/O 前完成：
+
+1. role binding 存在性；
+2. required capability 与声明 capability 匹配；
+3. 图像媒体类型、数量和字节；
+4. context window 与 output reservation；
+5. 单次请求/schema/result limit；
+6. cancel 状态。
+
+验证通过后 Runtime 生成只在 Agents 内部使用的 Provider wire call，绑定 model、reasoning
+effort、HTTP limits 和取消信号，并调用 adapter 一次。
+
+## 3. 中性交换值
 
 ```text
 AgentRole
   analysis | browser
 
 AgentCapability
-  structured_text
-  image_input
-  tool_decision
+  structured_text | image_input | tool_decision
 
 AgentTextPart
   media_type: text/plain | application/json
-  text: bounded str
+  text: bounded UTF-8
 
 AgentImagePart
   media_type: image/png | image/jpeg | image/webp
-  bytes: bounded bytes
-  width/height: positive int
+  data: bounded bytes
+  width / height
 
 AgentToolDeclaration
-  name: bounded stable name
-  input_schema: strict JSON schema subset
-
-AgentToolDecision
-  tool_name: declared name
-  arguments: duplicate-free finite JSON value
+  name
+  description
+  closed strict JSON schema
 
 AgentStructuredResult
-  value: duplicate-free finite JSON value
-  provider/model identity
-  usage/provenance summary
+  canonical strict JSON object
+  AgentProvenance
+
+AgentToolCall
+  one declared tool name
+  canonical strict JSON arguments
+  AgentProvenance
 ```
 
-真实命名可以在实现时收敛，但必须保持以下约束：
+交换值必须拒绝 duplicate JSON key、NaN/Infinity、未知 schema keyword、未关闭 object schema、无界递归、超大文本/图像/结果和未声明 tool。repr 与日志不包含正文、图片或 tool arguments。
 
-- 拒绝未知字段、重复 JSON key、NaN/Infinity、无界递归和超预算字符串/数组；
-- 图像在进入 provider 前已经有媒体类型、尺寸、字节和数量硬上限；
-- tool decision 只能选择本次声明的工具，不能携带 callable、URL client、Page 或 vendor object；
-- vendor SDK response、HTTP response、Cookie、Browser screenshot path、Literature、Publisher 和 Analysis request kind 不越过 Agents 边界；
-- 输入 hash、role、provider/model identity 和安全 usage 可以返回给消费方形成自己的 provenance，但 prompt、原始响应和 reasoning 不进入公共结果。
+这些值只服务当前调用，不进入 `sciretriever.model`，因为它们不是文献数据库或跨运行事实。
 
-这些值属于当前调用，不进入 `sciretriever.model`，因为它们不是文献数据库、跨业务模块事实或公开持久合同。
+## 4. Capability、role binding 与 readiness
 
-## 3. Provider Port 与 capability
-
-provider-neutral Port 对每次请求显式接收：
-
-- role 与所需 capability 集合；
-- 模型选择；
-- 有界输入 parts；
-- 可选严格响应 schema 或 tool declarations，二者不能无合同混用；
-- deadline、最大输出 token、最大响应字节和取消信号；
-- 当前请求级 session state。
-
-模型 capability 至少保存：
+model capability 至少表达：
 
 ```text
-context_window
+context_window_tokens
 max_output_tokens
 structured_output
 image_input
 tool_decision
 supported_image_media_types
-max_image_count / max_image_bytes
+max_image_count
+max_image_bytes
 ```
 
-readiness 分为：
+Analysis role 默认需要 `structured_text`；Browser role 默认需要 `image_input + tool_decision`。调用可以声明该次所需 capability，但不能要求 role binding 未声明的能力。
 
-1. 配置字段完整；
-2. 当前协议 adapter 支持所需 capability；
-3. 选定模型由配置明确声明相应能力和预算；
-4. 用户显式执行的真实 probe 结果。
+`readiness(role)` 纯本地计算并区分：
 
-前三级可以纯本地计算；第四级不持久化。`analysis-ready` 只要求当前 Analysis 请求的 structured-text 合同，`browser-agent-ready` 还要求 image input 与 tool decision，二者不能互相推断。capability 不满足时在任何外部 I/O 前稳定失败，不能偷降级为自由文本或丢弃图片。
+- role 是否配置；
+- protocol 是否支持；
+- model 是否声明；
+- required capability 缺口。
 
-## 4. 请求级 session 与预算
+它不发网络请求，不持久化 probe 结果。Analyze 与 Download 可以选择同一或不同 Model；
+同一 Provider 只构造一套 credential/adapter/quota scope，不同 Provider 各自使用 exact-origin
+credential 与 adapter。用户显式 `config test` 才发送固定最小 probe。
 
-单次 structured request 可以使用无状态 convenience API；Browser 多 turn 通过 request-local session 复用已选 provider/model、角色、预算和有限历史。Session 必须：
+Model effort 的中性值为
+`default / none / minimal / low / medium / high / xhigh / max`。`default` 在三种
+adapter 中都完全省略对应参数；其它七值原样进入 OpenAI Responses 的 `reasoning.effort`、
+OpenAI Chat Completions 的 `reasoning_effort` 或 Anthropic Messages 的
+`output_config.effort`，并进入 provider parameters hash，不做降级或近似映射。交互配置始终提供
+八个中性值；真实模型是否支持由显式 probe 证明。Runtime 不按 model 名称判断支持度，adapter 也
+不能在服务拒绝后静默重试为 default。
 
-- 只属于一项 Analysis 逻辑调用或当前一篇 Browser 文章；
-- 由消费方显式 close，取消和异常也进入相同清理；
-- 对 turn 数、累计输入/输出 token、图像、响应字节和 wall-clock 设置硬预算；
-- 每 turn 重新检查 deadline、capability 和剩余预算；
-- 关闭后拒绝继续调用并释放图像、tool output、模型响应和临时序列化字节；
-- 不跨文章、Publisher、Entry 操作、命令或进程恢复；
-- 不写入 Catalog、ArtifactStore、Profile、普通配置、credentials、Report 或日志。
+## 5. 单次客观技术边界
 
-Provider adapter 不自行扩大预算或自动进行未声明的重试。POST 模型请求只有在当前协议明确提供幂等语义并由调用方提供稳定 idempotency key 时才可重试；否则 transport 不确定性返回稳定失败。Quota 和 rate-limit 反馈进入相同 provider/account/API product 的进程内 AccessScope，Analysis 与 Browser 不能各自建立额度池。
+Agents 保留以下单次限制：
 
-## 5. Provider adapter
+- prompt/input/schema/request/response/result 字节；
+- model context window 与本次 max output；
+-图片媒体、数量和字节；
+- HTTP connect/read/overall timeout；
+- redirect 禁止与非幂等 POST 不自动重试；
+- Network AccessScope quota/rate limit；
+- cancel signal。
 
-目标 adapter 支持当前已经实现的三类协议：
+这些是单次调用或 Provider transport 的客观边界，不是业务作业预算。Agents 不累计多个调用的 token、输入、图片、response、result、wall-clock 或 turn，也不保存历史结果。消费模块需要下一次决定时，根据自己的当前业务状态重新构造一个独立 `AgentCall`。
 
-- OpenAI Responses；
-- OpenAI Chat Completions；
-- Anthropic Messages。
+## 6. Provider Port 与 adapter
 
-每个 adapter 负责：
+内部 Provider Port 接收 Runtime 已绑定 model 的 wire call，只返回一个 structured result 或 tool call。Adapter 负责：
 
-- 把中性 parts、schema 和 tool declarations 转换为当前协议请求；
-- 只向配置绑定的规范 origin 附着 secret，跨 origin redirect 不转发；
-- 在序列化后复检 context、输出预留、图像和响应大小；
-- 将协议结构化输出或 tool decision 严格转换为中性值；
-- 将认证、quota、timeout、拒绝、截断、未知响应和取消转换为稳定失败；
-- 返回安全 provider/model/usage 身份，不返回 SDK object、header 或原始响应。
+- 中性 parts/schema/tools 到当前协议请求的转换；
+- secret 只附着到配置绑定的规范 origin；
+- 通过 Network HTTP、AccessCoordinator、URL/DNS/TLS、timeout 和有界读取执行 POST；
+-严格解析一个完整 structured result 或一个 tool call；
+-认证、quota、timeout、refusal、truncation、model mismatch、协议错误、取消和未知响应的稳定化；
+- provider/model/input/parameter hash 与安全 usage。
 
-协议不支持请求 capability 时必须明确拒绝。Adapter 通过 Network 的安全 HTTP、URL/DNS/TLS、redirect、AccessCoordinator、timeout、有界读取和脱敏边界访问外部服务；不得由 vendor SDK 创建绕过 Network 的隐藏 transport。
+Adapter 不选择 role model，不理解 Literature、Analysis stage、Publisher、Browser Observation 或动作含义，不执行 tool，也不创建隐藏 SDK transport。协议无法满足 capability 时必须在请求前明确失败，不能降级成自由文本。
 
-## 6. Configuration 与 Bootstrap
+## 7. Analysis 消费
 
-普通配置保留一个 Agent provider 边界，并为 `analysis` 与 `browser` 两个角色选择模型和预算。相同 endpoint/credential 可以复用，不满足 Browser capability 时可以为 browser 角色显式选择另一模型，但不能复制 secret 或创建第二套 provider 配置语义。
+Analysis 为每个阶段构造一个独立 `AgentCall`，直接调用 `AgentRuntime.execute`。两阶段 controller、prompt/schema、输入 hash、NoUsableContent、Markdown/Metadata/ReferenceLookup validation 和最终业务 provenance 全部留在 Analysis。
 
-普通配置至少包含：
+第一阶段结果验收后才构造第二阶段 Call。ReferenceLookup 空输入不调用 Runtime。Provider 返回成功不能绕过 Analysis 对结构、source evidence、alignment 与大小的检查。
 
-- protocol；
-- HTTPS Base URL 或允许的 loopback HTTP origin；
-- analysis/browser role model；
-- 模型声明的 context/output/capability；
-- 每角色 token、响应、图像、turn 和 deadline 上限。
+迁移完成后不存在 `AgentSession`、`open_session`、model 参数透传、Analysis 私有 Provider adapter 或新旧双路径。
 
-Secret 只存在于固定 owner-only `credentials.toml`，与规范 service origin 绑定，不读取 Agent 环境变量。`config status` 只展示本地配置和 capability 缺口，不调用模型；`config test` 由用户分别选择 Analysis/Browser role，发送固定极小、无用户文献的 probe，并说明可能消耗额度。
+## 8. Browser 消费
 
-Bootstrap 每个生产对象图只构造一个 Agents provider runtime 和一个共享 Network quota scope，再把 structured-text capability 注入 Analysis、把 image/tool capability 注入已准入的 Browser Agent controller。关闭顺序先停止消费 session，再关闭 provider response/transport；没有 Browser role 配置时不得影响 Analysis 或确定性 Browser。
+Acquisition 根据当前 `BrowserObservation` 构造一个 Browser role `AgentCall`，声明六种封闭工具，执行一次 Runtime 调用，再把 `AgentToolCall` 解析为 Acquisition action。Network 校验并执行动作后返回新的 Observation；循环属于 Acquisition，不属于 Agents。
 
-## 7. 消费方边界
+Rules 模式不调用 Runtime；Agent 模式不先运行确定性点击规则。Challenge 只是 Observation 的一种 page state，不产生专属 Agent Call 类型、session 或 budget。
 
-### 7.1 Analysis
+Agents 不取得 Browser runtime、Page、Context、Profile、Cookie、selector、CDP、任意 URL/JavaScript、capture 或 PDF 发布能力。
 
-Analysis 构造文献 prompt、阶段 schema、输入 hash 和结果验收，通过 Agents structured-text capability 发起请求。Analysis 私有的 metadata/content/reference request kind 不进入 Agents；Agents 的“请求成功”不能替代 NoUsableContent、LiteratureMetadata、Markdown 或 ReferenceLookup 检查。Analysis 形成并拥有最终业务 provenance。
+## 9. Configuration 与 Bootstrap
 
-### 7.2 Browser Acquisition
+Configuration 保存 Model Provider/Model 两个直接注册表：
 
-Acquisition 构造“取得当前文章主 PDF”的目标、允许动作和安全页面摘要。Network 生成有界 observation；Agents 只返回一个封闭 tool decision；Acquisition/Network 在同一文章 flow 中解释并执行。Agent 不取得 Browser runtime 或捕获/发布能力，成功仍只能由 Network 交付 `TemporaryPdf` 后进入 Acquisition 的统一验收。
+- Provider 拥有 name、API、Base URL 与 exact-origin credential scope；
+- Model 以 `provider/model` 为唯一 reference，并拥有 reasoning 与 image；
+- `[analyze].model` 与 `[download].model` 直接引用完整 Model reference；
+- `[providers.<provider>]` credential 与 Provider 的规范 origin 精确绑定。
 
-确定性初始 capture、通用 locator 和 Publisher 静态规则先执行。只有页面非终态、正常未命中、Browser role capability ready 且剩余预算充足时才创建 Agent session；challenge/login/MFA、timeout、quota、runtime failure 和已有 capture 都不进入 Agent fallback。
+交互配置由 `Models` 管理 Provider、Model 和模型 key；`Analyze`、`Download` 只选择 Model 并管理
+各自业务参数。Analyze 的 structured-output/text-only 合同由模块派生；Download 只选择
+`image = true` 的 Model，其 image/tool/PNG/正数 image limits 由模块派生。任一任务切换 Model 都不
+修改 Model 或另一个任务；没有 Profile、Preset、Entry 或 task-level reasoning override。
 
-## 8. 日志、失败和数据边界
+固定的单次 HTTP timeout 以及 prompt/input/schema/request/response/result 字节上限由 Agents
+实现定义，并由 Bootstrap 与模块业务预算组合；它们不是普通 Model 配置字段。
 
-INFO 只记录 role、provider/model identity、所需 capability、成功/失败、usage 类别、延迟和下一动作类别。Debug 可以增加 turn、阶段、输入/输出/图像安全大小、剩余预算和 adapter 状态，但不记录：
+不再保存 session turns、session deadline、Browser job steps、累计 token/image 或 repeated-action budget。
 
-- prompt、schema 内容或模型原文；
-- screenshot、页面文本、元素名称或 tool arguments；
-- reasoning、隐藏状态或 vendor request/response；
-- API key、header、Cookie、完整 URL 或 Profile；
-- Literature 正文和用户语料。
+Bootstrap 先把当前 scope 需要的 Analyze/Download 选择解析为 Model 与 Provider，再按唯一 Provider
+name 构造一或两个 adapter、一个 `AgentRuntime` 和最多两个 role bindings。Analysis 获得
+同一 Runtime；只有选择 Agent Browser controller 时才加载 Download Provider credential、构造其
+adapter，并向 Acquisition 提供 Browser role consumer。未选择的 controller 不进入生产对象图。
 
-稳定失败至少区分配置、认证、capability、输入预算、输出预算、协议、timeout、quota、provider service、取消和 cleanup。Filter 只作最终防线；provider adapter 必须在错误离开 Agents 边界前完成稳定化和脱敏。
+配置向导的 model discovery 是另一条显式、短生命周期读取路径，不进入生产 `AgentRuntime`：
 
-## 9. 验收
+1. Entry 在 `Models → Add` 选定 Provider 后取得其规范 origin 精确绑定 credential；新远程 Provider
+   在同一流程隐藏输入 key，已有 key 直接复用，loopback 不需要 key；
+2. Bootstrap 构造一套共享 Network `HttpClient`，`AgentModelCatalogClient` 对严格解析后的
+   `/models` 执行一次 GET，禁止 redirect、retry 和分页跟随，响应最多 1 MiB、结果最多 100 项；
+3. OpenAI-compatible 结果只形成 model ID；Anthropic-compatible 可形成可选的 display/context/
+   output/image/effort hints；duplicate、错误形状、错误状态和超限响应稳定失败；
+4. typed catalog 返回 Entry 后 Network 立即关闭，catalog 不进入 Configuration、Runtime、日志、
+   Catalog 或其它持久状态。失败或空结果才让向导进入 Manual，不放宽 URL、credential 或 Model 校验。
+
+`config status` 和普通业务对象图不调用该入口。model discovery 不包含 prompt、Literature、PDF、
+页面或模型生成请求，也不能替代 `config test llm/browser-agent` 的真实 capability probe。
+
+## 10. 失败、日志与数据边界
+
+稳定失败至少区分 configuration、credentials、capability、input/context/output/request/response/result limit、timeout、quota/access、refusal、truncated、protocol/model mismatch、tool、structured response、cancelled 和 internal failure。
+
+INFO 只记录 role、provider/model、capabilities、结果类别、usage、延迟和稳定失败。Debug 可以增加输入/图像/schema/tool 数量与 adapter 阶段，但不记录 prompt、schema 内容、模型原文/reasoning、图片、页面正文、元素文本、tool arguments、credential、header、Cookie、完整 URL 或 Profile。
+
+Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 Catalog、ArtifactStore、Report、Profile 或日志持久事实。Analysis 只保存其业务 provenance。
+
+## 11. 验收
 
 直接测试至少覆盖：
 
-- 三类协议的 structured-text fake Network 成功与错误转换；
-- 支持的 image/tool 请求和不支持 capability 的 I/O 前拒绝；
-- duplicate JSON key、非有限数、未知字段、超大文本/图像/响应和未声明工具拒绝；
-- context/output 预算、deadline、取消、quota、不可证明幂等的 POST 不重试；
-- request-local session 多 turn、累计预算、关闭后拒绝和资源释放；
-- analysis-ready 与 browser-agent-ready 独立判断；
-- 相同 provider/account scope 下 Analysis 与 Browser 共享准入；
-- 跨 origin 不转发 secret，日志/失败不泄露 prompt、响应、截图或凭据；
-- 架构测试阻止 Analysis/Acquisition 直接导入 Agents provider adapter 或 vendor SDK；
-- fake runtime 可以驱动单 turn structured result 和多 turn tool decision，不连接真实模型。
+- Provider/Model 解析、同 Provider adapter 复用、不同 Provider adapter 选择，以及 Analyze/Download
+  readiness 独立判断；
+- structured result 与 tool call 的严格成功路径；
+- 三种 Provider protocol fake 的请求、响应和失败映射；
+- 八种 Model reasoning 从 Configuration 经 Bootstrap/Runtime 进入三种 wire 字段，default 省略，
+  七种显式 effort 原样发送且参数 hash 随值改变；
+- 显式模型目录的 GET/header/origin、可选字段、100 项/1 MiB 上限、duplicate/错误状态/错误形状、
+  secret-free 失败和 Network 关闭；
+- capability 缺口和错 role 在 adapter 调用计数为零时失败；
+- duplicate JSON、非有限数、未知字段、超大输入/图片/响应和未声明 tool 拒绝；
+- context/output/request/response/result 与 HTTP timeout 的单次限制；
+- 取消、quota、跨 origin secret 拒绝和 POST 不重试；
+- Analyze/Download 无 task-level model/reasoning/capability override，用户 Model 不保存模块
+  context/output/structured/tool/image limit，且无 Session、history、turn、
+  累计预算或公共 Provider/model 选择面；
+- Analysis 两阶段真实消费；
+- Browser tool decision fake 消费；
+- 架构测试阻止业务模块导入 Provider adapter 或 vendor transport。
 
-Harness、CI、wheel 与安装后验收不读取真实凭据、用户语料、Browser Profile 或外部 LLM。fresh wheel 必须包含 `agents` 的全部 Python 模块而不包含运行内容、截图、模型缓存或 secret。
+Harness、wheel 与安装后验收不访问真实 LLM、凭据、用户语料、Browser Profile 或 Publisher。fresh wheel 必须包含新的 Agents 模块且不包含已删除的 `requests.py`、`sessions.py` 或运行内容。

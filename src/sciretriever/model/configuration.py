@@ -15,7 +15,7 @@ import unicodedata
 from datetime import date
 from enum import Enum
 from typing import Annotated, Literal
-from urllib.parse import unquote_to_bytes, urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit, urlunsplit
 
 from pydantic import (
     BaseModel,
@@ -23,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -91,6 +92,17 @@ def _crossref_access_mode(value: object) -> "CrossrefAccessMode":
         raise ValueError("Crossref access mode is unsupported") from error
 
 
+def _source_mode(value: object) -> "SourceMode":
+    if isinstance(value, SourceMode):
+        return value
+    if type(value) is not str:
+        raise ValueError("source mode must be a string")
+    try:
+        return SourceMode(value)
+    except ValueError as error:
+        raise ValueError("source mode is unsupported") from error
+
+
 def _parser_connection_mode(value: object) -> "ParserConnectionMode":
     if isinstance(value, ParserConnectionMode):
         return value
@@ -100,17 +112,6 @@ def _parser_connection_mode(value: object) -> "ParserConnectionMode":
         return ParserConnectionMode(value)
     except ValueError as error:
         raise ValueError("parser connection mode is unsupported") from error
-
-
-def _agent_provider(value: object) -> "AgentProvider":
-    if isinstance(value, AgentProvider):
-        return value
-    if type(value) is not str:
-        raise ValueError("Agent provider must be a string")
-    try:
-        return AgentProvider(value)
-    except ValueError as error:
-        raise ValueError("Agent provider is unsupported") from error
 
 
 def _agent_protocol(value: object) -> "AgentProtocol":
@@ -124,15 +125,26 @@ def _agent_protocol(value: object) -> "AgentProtocol":
         raise ValueError("Agent protocol is unsupported") from error
 
 
-def _agent_authentication(value: object) -> "AgentAuthentication":
-    if isinstance(value, AgentAuthentication):
+def _agent_reasoning_effort(value: object) -> "AgentReasoningEffort":
+    if isinstance(value, AgentReasoningEffort):
         return value
     if type(value) is not str:
-        raise ValueError("Agent authentication must be a string")
+        raise ValueError("Agent reasoning effort must be a string")
     try:
-        return AgentAuthentication(value)
+        return AgentReasoningEffort(value)
     except ValueError as error:
-        raise ValueError("Agent authentication is unsupported") from error
+        raise ValueError("Agent reasoning effort is unsupported") from error
+
+
+def _browser_controller(value: object) -> "BrowserController":
+    if isinstance(value, BrowserController):
+        return value
+    if type(value) is not str:
+        raise ValueError("Browser controller must be a string")
+    try:
+        return BrowserController(value)
+    except ValueError as error:
+        raise ValueError("Browser controller is unsupported") from error
 
 
 def _agent_model_identity(value: object) -> str:
@@ -242,7 +254,7 @@ def _finite_positive_number(value: object) -> float:
     return candidate
 
 
-def _service_identity(value: object) -> str:
+def _provider_identity(value: object) -> str:
     candidate = _ordinary_parameter(value)
     if (
         not all(
@@ -251,8 +263,48 @@ def _service_identity(value: object) -> str:
         )
         or not candidate[0].isalnum()
     ):
-        raise ValueError("service identity is invalid")
+        raise ValueError("provider identity is invalid")
     return candidate.casefold()
+
+
+def normalize_model_provider_identity(value: object) -> str:
+    """Normalize one stable local model Provider identity."""
+
+    return _provider_identity(value)
+
+
+def _model_reference(value: object) -> str:
+    """Normalize the canonical ``provider/model`` identity used by tasks."""
+
+    if type(value) is not str:
+        raise ValueError("model reference must be a string")
+    candidate = unicodedata.normalize("NFC", value)
+    if not candidate.strip() or any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in candidate
+    ):
+        raise ValueError("model reference must be stable single-line text")
+    try:
+        encoded = candidate.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ValueError("model reference must be valid UTF-8") from None
+    if len(encoded) > 641:
+        raise ValueError("model reference exceeds its 641-byte budget")
+    provider, separator, model = candidate.partition("/")
+    if not separator:
+        raise ValueError("model reference must use provider/model")
+    provider = _provider_identity(provider)
+    model = _agent_model_identity(model)
+    if model != model.strip():
+        raise ValueError("model identity must not have surrounding whitespace")
+    return f"{provider}/{model}"
+
+
+def split_model_reference(value: object) -> tuple[str, str]:
+    """Return the Provider and remote model parts of one canonical reference."""
+
+    reference = _model_reference(value)
+    provider, model = reference.split("/", 1)
+    return provider, model
 
 
 _SERVICE_DNS_LABEL = re.compile(
@@ -377,6 +429,26 @@ def _service_url(value: str) -> tuple[str, str, int, str, bool]:
     return scheme, hostname, port or (443 if scheme == "https" else 80), parsed.path, loopback
 
 
+def _sci_hub_url(value: object) -> str:
+    """Validate one explicit, secret-free Sci-Hub landing Base URL."""
+
+    candidate = _nonblank(value)
+    scheme, hostname, port, path, loopback = _service_url(candidate)
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if (
+        scheme != "https"
+        or loopback
+        or hostname.endswith(".localhost")
+        or address is not None
+        or port != 443
+    ):
+        raise ValueError("Sci-Hub URL must use a hostname-based HTTPS origin")
+    return urlunsplit(("https", hostname, path.rstrip("/"), "", ""))
+
+
 def _contact_email(value: object) -> str:
     candidate = _ordinary_parameter(value)
     local, separator, domain = candidate.partition("@")
@@ -491,19 +563,18 @@ class CrossrefAccessMode(str, Enum):
     POLITE = "polite"
 
 
+class SourceMode(str, Enum):
+    """Whether one capability follows product defaults or an exact list."""
+
+    AUTO = "auto"
+    CUSTOM = "custom"
+
+
 class ParserConnectionMode(str, Enum):
     """The two accepted deployment boundaries for MinerU protocol 2."""
 
     LOOPBACK = "loopback"
     REMOTE = "remote"
-
-
-class AgentProvider(str, Enum):
-    """Configured Agent service family."""
-
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    CUSTOM = "custom"
 
 
 class AgentProtocol(str, Enum):
@@ -514,23 +585,41 @@ class AgentProtocol(str, Enum):
     ANTHROPIC_MESSAGES = "anthropic-messages"
 
 
-class AgentAuthentication(str, Enum):
-    """Explicit authentication choice for the selected Agent service."""
+class AgentReasoningEffort(str, Enum):
+    """Provider-neutral role default for model reasoning depth.
 
-    API_KEY = "api-key"
+    ``PROVIDER_DEFAULT`` deliberately means that the protocol adapter omits
+    its effort field.  The other values are explicit operator choices; model
+    support is verified by an explicit configuration probe rather than by
+    guessing from the model name.
+    """
+
+    PROVIDER_DEFAULT = "default"
     NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
+class BrowserController(str, Enum):
+    """Controller selected for every controlled-Browser acquisition job."""
+
+    RULES = "rules"
+    AGENT = "agent"
 
 
 class CoreCredentialService(str, Enum):
     """Non-Provider secret sections in ``credentials.toml``.
 
-    ``CLOAKBROWSER`` is deliberately separate from Agents/MinerU runtime
+    ``CLOAKBROWSER`` is deliberately separate from the MinerU runtime
     secrets.  The pinned free binary does not consume this optional value;
     Configuration may retain it for a future vendor entitlement without ever
     injecting it into normal Completion or exposing it in status output.
     """
 
-    AGENTS = "agents"
     MINERU = "mineru"
     CLOAKBROWSER = "cloakbrowser"
 
@@ -624,21 +713,22 @@ CrossrefAccessModeValue = Annotated[
     CrossrefAccessMode,
     BeforeValidator(_crossref_access_mode),
 ]
+SourceModeValue = Annotated[SourceMode, BeforeValidator(_source_mode)]
 ParserConnectionModeValue = Annotated[
     ParserConnectionMode,
     BeforeValidator(_parser_connection_mode),
-]
-AgentProviderValue = Annotated[
-    AgentProvider,
-    BeforeValidator(_agent_provider),
 ]
 AgentProtocolValue = Annotated[
     AgentProtocol,
     BeforeValidator(_agent_protocol),
 ]
-AgentAuthenticationValue = Annotated[
-    AgentAuthentication,
-    BeforeValidator(_agent_authentication),
+AgentReasoningEffortValue = Annotated[
+    AgentReasoningEffort,
+    BeforeValidator(_agent_reasoning_effort),
+]
+BrowserControllerValue = Annotated[
+    BrowserController,
+    BeforeValidator(_browser_controller),
 ]
 ProbeOutcomeValue = Annotated[ProbeOutcome, BeforeValidator(_probe_outcome)]
 ConfigurationFingerprint = Annotated[
@@ -659,15 +749,25 @@ OrdinaryProviderParameter = Annotated[
     BeforeValidator(_ordinary_parameter),
     Field(strict=True, min_length=1, max_length=128),
 ]
-ServiceIdentity = Annotated[
+ProviderIdentity = Annotated[
     str,
-    BeforeValidator(_service_identity),
+    BeforeValidator(_provider_identity),
     Field(strict=True, min_length=1, max_length=128),
+]
+ModelReference = Annotated[
+    str,
+    BeforeValidator(_model_reference),
+    Field(strict=True, min_length=3, max_length=641),
 ]
 ContactEmail = Annotated[
     str,
     BeforeValidator(_contact_email),
     Field(strict=True, min_length=3, max_length=128),
+]
+SciHubURL = Annotated[
+    str,
+    BeforeValidator(_sci_hub_url),
+    Field(strict=True, min_length=9, max_length=4096),
 ]
 MetadataProviderTuple = Annotated[
     tuple[ProviderName, ...],
@@ -709,10 +809,6 @@ class PathsConfig(_FrozenModel):
     artifact_root: NonBlankText | None = None
 
 
-class DiscoveryConfig(_FrozenModel):
-    metadata_scan_limit: Annotated[int, Field(strict=True, ge=1)] | None = None
-
-
 class WebOfScienceMetadataConfig(_FrozenModel):
     """Non-secret Web of Science product selection and collection context."""
 
@@ -737,14 +833,22 @@ class CrossrefMetadataConfig(_FrozenModel):
 
 
 class MetadataSourcesConfig(_FrozenModel):
-    """Ordered enabled Metadata providers and their required ordinary inputs."""
+    """Metadata Source selection and its per-Source raw item boundary."""
 
+    mode: SourceModeValue = SourceMode.AUTO
     providers: MetadataProviderTuple = ()
+    limit: Annotated[int, Field(strict=True, ge=1)] = 500
     web_of_science: WebOfScienceMetadataConfig | None = Field(
         default=None,
         alias="web-of-science",
     )
     crossref: CrossrefMetadataConfig | None = None
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> "MetadataSourcesConfig":
+        if self.mode is SourceMode.AUTO and self.providers:
+            raise ValueError("automatic Metadata selection forbids providers")
+        return self
 
 
 class UnpaywallAcquisitionConfig(_FrozenModel):
@@ -753,11 +857,40 @@ class UnpaywallAcquisitionConfig(_FrozenModel):
     contact_email: ContactEmail
 
 
-class AcquisitionSourcesConfig(_FrozenModel):
-    """Ordered enabled Acquisition providers and their ordinary inputs."""
+class SciHubAcquisitionConfig(_FrozenModel):
+    """Ordered operator custom override for bundled Sci-Hub mirror URLs."""
 
+    urls: Annotated[
+        tuple[SciHubURL, ...],
+        Field(strict=True, min_length=1, max_length=8),
+    ]
+
+    @field_validator("urls", mode="before")
+    @classmethod
+    def _normalize_urls(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("urls")
+    @classmethod
+    def _validate_unique_urls(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("Sci-Hub URLs must be unique")
+        return value
+
+
+class AcquisitionSourcesConfig(_FrozenModel):
+    """Acquisition Source selection and its ordinary inputs."""
+
+    mode: SourceModeValue = SourceMode.AUTO
     providers: AcquisitionProviderTuple = ()
     unpaywall: UnpaywallAcquisitionConfig | None = None
+    sci_hub: SciHubAcquisitionConfig | None = Field(default=None, alias="sci-hub")
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> "AcquisitionSourcesConfig":
+        if self.mode is SourceMode.AUTO and self.providers:
+            raise ValueError("automatic Acquisition selection forbids providers")
+        return self
 
 
 class SourcesConfig(_FrozenModel):
@@ -805,85 +938,19 @@ class ParsingConfig(_FrozenModel):
         return self
 
 
-def _validate_agent_protocol_choice(
-    provider: AgentProvider | None,
-    protocol: AgentProtocol | None,
-) -> None:
-    if provider is AgentProvider.OPENAI and protocol not in {
-        None,
-        AgentProtocol.OPENAI_RESPONSES,
-        AgentProtocol.OPENAI_CHAT_COMPLETIONS,
-    }:
-        raise ValueError("OpenAI Agent provider requires an OpenAI protocol")
-    if provider is AgentProvider.ANTHROPIC and protocol not in {
-        None,
-        AgentProtocol.ANTHROPIC_MESSAGES,
-    }:
-        raise ValueError("Anthropic Agent provider requires the Anthropic protocol")
+def _validate_model_provider_url(base_url: str) -> bool:
+    """Validate one Provider endpoint and return whether it needs an API key."""
 
-
-def _validate_official_agent_url(
-    provider: AgentProvider | None,
-    *,
-    scheme: str,
-    hostname: str,
-    port: int,
-    path: str,
-) -> None:
-    if provider is AgentProvider.OPENAI:
-        official = "api.openai.com"
-    elif provider is AgentProvider.ANTHROPIC:
-        official = "api.anthropic.com"
-    else:
-        return
-    if scheme != "https" or hostname != official or port != 443 or path.rstrip("/") != "/v1":
-        label = "OpenAI" if provider is AgentProvider.OPENAI else "Anthropic"
-        raise ValueError(f"{label} provider requires the official Base URL")
-
-
-def _validate_agent_service_choice(
-    *,
-    provider: AgentProvider | None,
-    service_name: str | None,
-    protocol: AgentProtocol | None,
-    base_url: str | None,
-    model: str | None,
-    context_window_tokens: int | None,
-    authentication: AgentAuthentication | None,
-) -> None:
-    custom_values = (protocol, base_url, model, context_window_tokens, authentication)
-    if (
-        provider is AgentProvider.CUSTOM
-        and service_name is None
-        and any(value is not None for value in custom_values)
-    ):
-        raise ValueError("custom Analysis service requires a service name")
-    if provider is not AgentProvider.CUSTOM and service_name is not None:
-        raise ValueError("official Agent providers do not accept a custom service name")
-    if base_url is None:
-        return
-    scheme, hostname, port, path, loopback = _service_url(base_url)
+    scheme, hostname, _port, _path, loopback = _service_url(base_url)
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
         address = None
     if loopback and scheme != "http":
-        raise ValueError("loopback Analysis requires an HTTP Base URL")
-    if not loopback and address is not None:
-        raise ValueError("remote Analysis requires a hostname-based HTTPS Base URL")
-    _validate_official_agent_url(
-        provider,
-        scheme=scheme,
-        hostname=hostname,
-        port=port,
-        path=path,
-    )
-    if authentication is AgentAuthentication.NONE and (
-        provider is not AgentProvider.CUSTOM or not loopback
-    ):
-        raise ValueError("unauthenticated Analysis is limited to a custom loopback service")
-    if loopback and authentication is AgentAuthentication.API_KEY:
-        raise ValueError("loopback Agent service does not send API-key credentials")
+        raise ValueError("loopback model Provider requires an HTTP Base URL")
+    if not loopback and (address is not None or scheme != "https"):
+        raise ValueError("remote model Provider requires a hostname-based HTTPS Base URL")
+    return not loopback
 
 
 def _validate_analysis_budget_choice(
@@ -928,85 +995,183 @@ def _validate_analysis_budget_choice(
             raise ValueError("Analysis chunk budget must fit the context window")
 
 
-class AgentRoleConfig(_FrozenModel):
-    """One role's explicit model capability and bounded request budget."""
+class ModelProviderConfig(_FrozenModel):
+    """One model Provider connection shared by every model under it."""
 
-    model: AgentModelIdentity | None = None
-    context_window_tokens: Annotated[int, Field(strict=True, ge=1_024)] | None = None
-    max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
-    structured_output: Annotated[bool, Field(strict=True)] = False
-    image_input: Annotated[bool, Field(strict=True)] = False
-    tool_decision: Annotated[bool, Field(strict=True)] = False
-    image_media_types: tuple[NonBlankText, ...] = ()
-    image_count: Annotated[int, Field(strict=True, ge=0)] = 0
-    image_bytes: Annotated[int, Field(strict=True, ge=0)] = 0
-    turns: Annotated[int, Field(strict=True, ge=1)] = 1
-    deadline_seconds: Annotated[float, Field(strict=True, gt=0)] = 180.0
+    name: ProviderIdentity
+    api: AgentProtocolValue
+    base_url: NonBlankText
 
-    @field_validator("image_media_types", mode="before")
-    @classmethod
-    def _normalize_media_types(cls, value: object) -> object:
-        if isinstance(value, list):
-            return tuple(value)
+    @model_validator(mode="after")
+    def _validate_endpoint(self) -> "ModelProviderConfig":
+        _validate_model_provider_url(self.base_url)
+        return self
+
+    @property
+    def requires_api_key(self) -> bool:
+        """Return whether this safe endpoint requires an origin-bound key."""
+
+        return _validate_model_provider_url(self.base_url)
+
+
+class ModelConfig(_FrozenModel):
+    """One configured model: identity, reasoning depth, and image input."""
+
+    reference: ModelReference
+    reasoning: AgentReasoningEffortValue = AgentReasoningEffort.PROVIDER_DEFAULT
+    image: Annotated[bool, Field(strict=True)] = False
+
+    @property
+    def provider(self) -> str:
+        return split_model_reference(self.reference)[0]
+
+    @property
+    def model(self) -> str:
+        return split_model_reference(self.reference)[1]
+
+
+def _named_configuration_items(
+    value: object,
+    *,
+    kind: str,
+    identity_field: Literal["name", "reference"],
+) -> tuple[object, ...]:
+    """Convert TOML named tables into immutable named configuration tuples."""
+
+    if isinstance(value, tuple):
         return value
+    if isinstance(value, list):
+        return tuple(value)
+    if not isinstance(value, dict):
+        raise ValueError(f"{kind} must be a table")
+    result: list[dict[str, object]] = []
+    normalized_names: set[str] = set()
+    normalize = _provider_identity if identity_field == "name" else _model_reference
+    for raw_name, raw_item in value.items():
+        name = normalize(raw_name)
+        if name in normalized_names:
+            raise ValueError(f"{kind} names must be unique")
+        if not isinstance(raw_item, dict) or identity_field in raw_item:
+            raise ValueError(f"{kind} value is invalid")
+        normalized_names.add(name)
+        result.append({identity_field: name, **raw_item})
+    return tuple(result)
+
+
+class ModelProvidersConfig(_FrozenModel):
+    """Named model Provider registry serialized directly as `[providers.*]`."""
+
+    values: tuple[ModelProviderConfig, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_registry(cls, value: object) -> object:
+        if isinstance(value, cls):
+            return value
+        if (
+            isinstance(value, dict)
+            and set(value) == {"values"}
+            and isinstance(value["values"], (list, tuple))
+        ):
+            return value
+        return {
+            "values": _named_configuration_items(
+                value,
+                kind="model providers",
+                identity_field="name",
+            )
+        }
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def _normalize_values(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _validate_capability_limits(self) -> "AgentRoleConfig":
-        if (
-            self.context_window_tokens is not None
-            and self.max_output_tokens is not None
-            and self.max_output_tokens > self.context_window_tokens
-        ):
-            raise ValueError("Agent role output limit must fit the context window")
-        if len(self.image_media_types) != len(set(self.image_media_types)) or any(
-            value not in {"image/png", "image/jpeg", "image/webp"}
-            for value in self.image_media_types
-        ):
-            raise ValueError("Agent image media types are invalid")
-        if self.image_input and (self.image_count < 1 or self.image_bytes < 1):
-            raise ValueError("image-input capability requires image limits")
-        if not self.image_input and (
-            self.image_count or self.image_bytes or self.image_media_types
-        ):
-            raise ValueError("image limits require image-input capability")
-        if not self.tool_decision and self.turns != 1:
-            raise ValueError("multi-turn budget requires tool-decision capability")
+    def _validate_unique(self) -> "ModelProvidersConfig":
+        names = tuple(item.name for item in self.values)
+        if len(names) != len(set(names)):
+            raise ValueError("model provider names must be unique")
         return self
 
+    @model_serializer(mode="plain")
+    def _serialize_registry(self) -> dict[str, object]:
+        return {
+            item.name: item.model_dump(mode="json", exclude={"name"}, exclude_none=True)
+            for item in self.values
+        }
 
-class AgentsConfig(_FrozenModel):
-    """Unique provider transport boundary shared by Analysis and Browser roles."""
+    def get(self, name: str | None) -> ModelProviderConfig | None:
+        if name is None:
+            return None
+        try:
+            normalized = _provider_identity(name)
+        except (TypeError, ValueError):
+            return None
+        return next((item for item in self.values if item.name == normalized), None)
 
-    provider: AgentProviderValue | None = None
-    service_name: ServiceIdentity | None = None
-    protocol: AgentProtocolValue | None = None
-    base_url: NonBlankText | None = None
-    authentication: AgentAuthenticationValue | None = None
-    analysis: AgentRoleConfig = AgentRoleConfig()
-    browser: AgentRoleConfig = AgentRoleConfig()
+
+class ModelsConfig(_FrozenModel):
+    """Named model registry serialized directly as `[models.*]`."""
+
+    values: tuple[ModelConfig, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_registry(cls, value: object) -> object:
+        if isinstance(value, cls):
+            return value
+        if (
+            isinstance(value, dict)
+            and set(value) == {"values"}
+            and isinstance(value["values"], (list, tuple))
+        ):
+            return value
+        return {
+            "values": _named_configuration_items(
+                value,
+                kind="models",
+                identity_field="reference",
+            )
+        }
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def _normalize_values(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _validate_protocol_and_service(self) -> "AgentsConfig":
-        _validate_agent_protocol_choice(self.provider, self.protocol)
-        _validate_agent_service_choice(
-            provider=self.provider,
-            service_name=self.service_name,
-            protocol=self.protocol,
-            base_url=self.base_url,
-            model=self.analysis.model or self.browser.model,
-            context_window_tokens=self.analysis.context_window_tokens,
-            authentication=self.authentication,
-        )
-        if (
-            self.provider in {AgentProvider.OPENAI, AgentProvider.ANTHROPIC}
-            and self.authentication is AgentAuthentication.NONE
-        ):
-            raise ValueError("official Agent providers require API-key authentication")
+    def _validate_unique(self) -> "ModelsConfig":
+        references = tuple(item.reference for item in self.values)
+        if len(references) != len(set(references)):
+            raise ValueError("model references must be unique")
         return self
+
+    @model_serializer(mode="plain")
+    def _serialize_registry(self) -> dict[str, object]:
+        return {
+            item.reference: item.model_dump(
+                mode="json",
+                exclude={"reference"},
+                exclude_none=True,
+            )
+            for item in self.values
+        }
+
+    def get(self, reference: str | None) -> ModelConfig | None:
+        if reference is None:
+            return None
+        try:
+            normalized = _model_reference(reference)
+        except (TypeError, ValueError):
+            return None
+        return next((item for item in self.values if item.reference == normalized), None)
 
 
 class AnalysisConfig(_FrozenModel):
-    """Analysis-only document/chunk and stage budget; no provider transport."""
+    """Analyze model selection plus document/chunk and stage budgets."""
+
+    model: ModelReference | None = None
 
     metadata_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
     content_max_output_tokens: Annotated[int, Field(strict=True, ge=1)] | None = None
@@ -1079,10 +1244,12 @@ class BrowserPolicyOverrideConfig(_FrozenModel):
 
 
 class AccessConfig(_FrozenModel):
-    """Secret-free Browser enablement, profile selection, and policy tightening."""
+    """Download Browser selection, enablement, profile, and policy tightening."""
 
+    model: ModelReference | None = None
     browser_enabled: bool = False
     browser_profile: BrowserProfileIdentity | None = None
+    browser_controller: BrowserControllerValue = BrowserController.RULES
     browser_max_concurrency: Annotated[int, Field(strict=True, gt=1)] = 5
     browser_policy_overrides: tuple[BrowserPolicyOverrideConfig, ...] = ()
 
@@ -1102,25 +1269,30 @@ class AccessConfig(_FrozenModel):
 
 
 class Configuration(_FrozenModel):
-    """Ordinary configuration with one shared Agents transport boundary."""
+    """Ordinary configuration with Providers, models, and task selections."""
 
     paths: PathsConfig = PathsConfig()
-    discovery: DiscoveryConfig = DiscoveryConfig()
     sources: SourcesConfig = SourcesConfig()
     assets: AssetsConfig = AssetsConfig()
     parsing: ParsingConfig = ParsingConfig()
-    agents: AgentsConfig = AgentsConfig()
-    analysis: AnalysisConfig = AnalysisConfig()
+    providers: ModelProvidersConfig = ModelProvidersConfig()
+    models: ModelsConfig = ModelsConfig()
+    analysis: AnalysisConfig = Field(default=AnalysisConfig(), alias="analyze")
     execution: ExecutionConfig = ExecutionConfig()
     library: LibraryConfig = LibraryConfig()
-    access: AccessConfig = AccessConfig()
+    access: AccessConfig = Field(default=AccessConfig(), alias="download")
 
     @model_validator(mode="after")
     def _validate_analysis_role_budgets(self) -> "Configuration":
-        role = self.agents.analysis
+        provider_names = frozenset(item.name for item in self.providers.values)
+        if any(item.provider not in provider_names for item in self.models.values):
+            raise ValueError("model references an unknown provider")
         analysis = self.analysis
+        analysis_model = self.models.get(analysis.model)
+        if analysis.model is not None and analysis_model is None:
+            raise ValueError("Analyze references an unknown model")
         _validate_analysis_budget_choice(
-            context_window_tokens=role.context_window_tokens,
+            context_window_tokens=None,
             max_input_bytes=analysis.max_input_bytes,
             max_chunk_bytes=analysis.max_chunk_bytes,
             max_total_llm_requests=analysis.max_total_llm_requests,
@@ -1131,19 +1303,11 @@ class Configuration(_FrozenModel):
                 analysis.reference_max_output_tokens,
             ),
         )
-        stage_outputs = tuple(
-            value
-            for value in (
-                analysis.metadata_max_output_tokens,
-                analysis.content_max_output_tokens,
-                analysis.reference_max_output_tokens,
-            )
-            if value is not None
-        )
-        if role.max_output_tokens is not None and any(
-            value > role.max_output_tokens for value in stage_outputs
-        ):
-            raise ValueError("Analysis stage output must fit the Agent role output limit")
+        download_model = self.models.get(self.access.model)
+        if self.access.model is not None and download_model is None:
+            raise ValueError("Download references an unknown model")
+        if download_model is not None and not download_model.image:
+            raise ValueError("Download requires an image model")
         return self
 
 
@@ -1414,23 +1578,18 @@ class ParsingConfigurationStatus(_FrozenModel):
         return self
 
 
-class AnalysisConfigurationStatus(_FrozenModel):
-    """Local completeness of reference and full-content LLM configuration."""
+class AnalysisRoleConfigurationStatus(_FrozenModel):
+    """Local completeness of the Analysis role and its business limits."""
 
-    api_key_required: bool
-    api_key_configured: bool | None = None
-    credential_origin_matches: bool | None = None
+    provider_configuration_complete: bool = True
+    credential_ready: bool = True
     reference_configuration_complete: bool
     content_configuration_complete: bool
     reference_missing_fields: tuple[NonBlankText, ...] = ()
     content_missing_fields: tuple[NonBlankText, ...] = ()
 
     @model_validator(mode="after")
-    def _validate_analysis_state(self) -> "AnalysisConfigurationStatus":
-        if self.api_key_required != (self.api_key_configured is not None):
-            raise ValueError("analysis secret status is inconsistent")
-        if self.api_key_required != (self.credential_origin_matches is not None):
-            raise ValueError("analysis credential origin status is inconsistent")
+    def _validate_analysis_state(self) -> "AnalysisRoleConfigurationStatus":
         if self.reference_configuration_complete == bool(self.reference_missing_fields):
             raise ValueError("reference analysis completeness is inconsistent")
         if self.content_configuration_complete == bool(self.content_missing_fields):
@@ -1440,13 +1599,80 @@ class AnalysisConfigurationStatus(_FrozenModel):
         return self
 
 
+class BrowserRoleConfigurationStatus(_FrozenModel):
+    """Local completeness of the Browser model/capability binding."""
+
+    provider_configuration_complete: bool = True
+    credential_ready: bool = True
+    configuration_complete: bool
+    missing_fields: tuple[NonBlankText, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_browser_state(self) -> "BrowserRoleConfigurationStatus":
+        if self.configuration_complete == bool(self.missing_fields):
+            raise ValueError("Browser role completeness is inconsistent")
+        return self
+
+
+class AgentsConfigurationStatus(_FrozenModel):
+    """Selected model Provider credentials and independently ready bindings."""
+
+    provider_configuration_complete: bool
+    provider_missing_fields: tuple[NonBlankText, ...] = ()
+    api_key_required: bool
+    api_key_configured: bool | None = None
+    credential_origin_matches: bool | None = None
+    analysis: AnalysisRoleConfigurationStatus
+    browser: BrowserRoleConfigurationStatus
+
+    @model_validator(mode="after")
+    def _validate_agents_state(self) -> "AgentsConfigurationStatus":
+        if self.provider_configuration_complete == bool(self.provider_missing_fields):
+            raise ValueError("model Provider completeness is inconsistent")
+        if self.api_key_required != (self.api_key_configured is not None):
+            raise ValueError("Agents secret status is inconsistent")
+        if self.api_key_required != (self.credential_origin_matches is not None):
+            raise ValueError("Agents credential origin status is inconsistent")
+        return self
+
+    @property
+    def credential_ready(self) -> bool:
+        return not self.api_key_required or (
+            self.api_key_configured is True and self.credential_origin_matches is True
+        )
+
+    @property
+    def analysis_reference_locally_ready(self) -> bool:
+        return (
+            self.analysis.provider_configuration_complete
+            and self.analysis.credential_ready
+            and self.analysis.reference_configuration_complete
+        )
+
+    @property
+    def analysis_content_locally_ready(self) -> bool:
+        return (
+            self.analysis.provider_configuration_complete
+            and self.analysis.credential_ready
+            and self.analysis.content_configuration_complete
+        )
+
+    @property
+    def browser_locally_ready(self) -> bool:
+        return (
+            self.browser.provider_configuration_complete
+            and self.browser.credential_ready
+            and self.browser.configuration_complete
+        )
+
+
 class ConfigurationRuntimeStatus(_FrozenModel):
     """Secret-free local readiness outside the Provider capability matrix."""
 
     storage_configuration_complete: bool
     storage_missing_fields: tuple[NonBlankText, ...] = ()
     parsing: ParsingConfigurationStatus
-    analysis: AnalysisConfigurationStatus
+    agents: AgentsConfigurationStatus
 
     @model_validator(mode="after")
     def _validate_storage_state(self) -> "ConfigurationRuntimeStatus":
@@ -1574,7 +1800,7 @@ class MinerUConfigurationProbeDetails(_FrozenModel):
 class CoreConfigurationProbeResult(_FrozenModel):
     """One non-persistent LLM or MinerU probe with explicit side effects."""
 
-    service: CoreCredentialService
+    service: Literal["agents", "mineru"]
     outcome: ProbeOutcomeValue
     local_ready: bool
     failure_code: StableFailureCode | None = None
@@ -1728,18 +1954,14 @@ class BrowserConfigurationProbeResult(_FrozenModel):
 
 
 def _validate_core_probe_details(
-    service: CoreCredentialService,
+    service: Literal["agents", "mineru"],
     details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails,
 ) -> None:
-    if service is CoreCredentialService.AGENTS:
+    if service == "agents":
         if not isinstance(details, AgentConfigurationProbeDetails):
             raise ValueError("core probe details do not match the service")
-    elif service is CoreCredentialService.MINERU and not isinstance(
-        details, MinerUConfigurationProbeDetails
-    ):
+    elif not isinstance(details, MinerUConfigurationProbeDetails):
         raise ValueError("core probe details do not match the service")
-    elif service is CoreCredentialService.CLOAKBROWSER:
-        raise ValueError("CloakBrowser does not expose a configuration probe")
 
 
 def _validate_passed_core_probe_details(
@@ -1761,15 +1983,13 @@ __all__ = (
     "AcquisitionProviderTuple",
     "AcquisitionSourcesConfig",
     "AnalysisConfig",
-    "AgentAuthentication",
-    "AgentProvider",
     "AgentProtocol",
-    "AgentRoleConfig",
-    "AgentsConfig",
+    "AgentReasoningEffort",
     "AssetsConfig",
     "BrowserAccessKeyValue",
     "BrowserAccessStatus",
     "BrowserConfigurationProbeResult",
+    "BrowserController",
     "BrowserPolicyOverrideConfig",
     "BrowserPolicyStatus",
     "BrowserProbeAvailabilityStatus",
@@ -1797,12 +2017,15 @@ __all__ = (
     "CredentialFieldSpec",
     "CredentialFieldStatus",
     "CredentialStatus",
-    "DiscoveryConfig",
     "ExecutionConfig",
     "LibraryConfig",
     "AgentConfigurationProbeDetails",
     "MetadataProviderTuple",
     "MetadataSourcesConfig",
+    "ModelConfig",
+    "ModelProviderConfig",
+    "ModelProvidersConfig",
+    "ModelsConfig",
     "MinerUConfigurationProbeDetails",
     "OrdinaryProviderParameter",
     "ParsingConfig",
@@ -1812,13 +2035,19 @@ __all__ = (
     "ProviderCapability",
     "ProviderCredentialStatus",
     "ProviderName",
-    "AnalysisConfigurationStatus",
+    "SciHubAcquisitionConfig",
+    "AgentsConfigurationStatus",
+    "AnalysisRoleConfigurationStatus",
+    "BrowserRoleConfigurationStatus",
     "ProbeOutcome",
     "SourcesConfig",
+    "SourceMode",
     "StableFailureCode",
     "UnpaywallAcquisitionConfig",
     "WebOfScienceMetadataConfig",
     "WebOfScienceProduct",
     "normalize_browser_access_key",
     "normalize_browser_profile_identity",
+    "normalize_model_provider_identity",
+    "split_model_reference",
 )

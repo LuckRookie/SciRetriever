@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import threading
-import unicodedata
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from pydantic import ValidationError
 
-from sciretriever.agents import (
-    AgentBudget,
+from sciretriever.agents.api import (
     AgentFailure,
-    AgentPort,
     AgentProvenance,
-    AgentStructuredResponse,
-    open_session,
+    AgentRuntime,
+    AgentStructuredResult,
 )
 from sciretriever.analysis.content import (
     ContentAnalysisInput,
@@ -67,8 +63,6 @@ from sciretriever.model.primitives import (
 from sciretriever.model.provenance import Provenance
 
 _PARAMETER_SCHEMA = "sciretriever-analysis-content-parameters-v1"
-_MAX_PROVIDER_BYTES = 256
-_MAX_MODEL_BYTES = 512
 _CORE_REQUEST_COUNT = 2
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
@@ -83,32 +77,15 @@ def _utc_now() -> UtcTimestamp:
     return UtcTimestamp.model_validate(datetime.now(timezone.utc))
 
 
-def _stable_identity(value: object, *, field_name: str, maximum_bytes: int) -> str:
-    if type(value) is not str:
-        raise TypeError(f"{field_name} must be text")
-    candidate = unicodedata.normalize("NFC", value.strip())
-    try:
-        encoded = candidate.encode("utf-8", errors="strict")
-    except UnicodeEncodeError:
-        raise ValueError(f"{field_name} must be valid UTF-8") from None
-    if (
-        not candidate
-        or len(encoded) > maximum_bytes
-        or any(ord(character) < 32 or ord(character) == 127 for character in candidate)
-    ):
-        raise ValueError(f"{field_name} must be stable bounded text")
-    return candidate
-
-
 def _runtime_value(value: object) -> object:
     """Prevent static annotations from replacing intentional runtime checks."""
 
     return value
 
 
-def _checked_agents(value: object) -> AgentPort:
-    if not isinstance(value, AgentPort):
-        raise TypeError("agent must implement AgentPort")
+def _checked_runtime(value: object) -> AgentRuntime:
+    if not isinstance(value, AgentRuntime):
+        raise TypeError("runtime must be an AgentRuntime")
     return value
 
 
@@ -150,34 +127,29 @@ class AnalysisService:
         "_artifact_publisher",
         "_artifact_reader",
         "_clock",
-        "_content_agent_budget",
         "_content_max_output_tokens",
         "_current_inputs",
         "_limits",
-        "_agents",
         "_metadata_max_output_tokens",
         "_metadata_stage",
-        "_model",
         "_provenance_id_factory",
-        "_provider_name",
+        "_runtime",
     )
 
     def __init__(  # noqa: C901
         self,
         *,
-        agents: AgentPort,
+        runtime: AgentRuntime,
         artifact_reader: AnalysisArtifactReadPort,
         current_inputs: AnalysisCurrentInputPort,
         artifact_publisher: AnalysisArtifactPublicationPort,
-        model: str,
         metadata_max_output_tokens: int,
         content_max_output_tokens: int,
         limits: ContentAnalysisLimits,
-        agent_budget: AgentBudget | None = None,
         provenance_id_factory: ProvenanceIdFactory = _new_provenance_id,
         clock: Clock = _utc_now,
     ) -> None:
-        checked_agents = _checked_agents(agents)
+        checked_runtime = _checked_runtime(runtime)
         checked_artifact_reader = _checked_artifact_reader(artifact_reader)
         checked_current_inputs = _checked_current_inputs(current_inputs)
         checked_artifact_publisher = _checked_artifact_publisher(artifact_publisher)
@@ -186,60 +158,23 @@ class AnalysisService:
             raise ValueError("metadata_max_output_tokens must be a positive integer")
         if type(content_max_output_tokens) is not int or content_max_output_tokens < 1:
             raise ValueError("content_max_output_tokens must be a positive integer")
-        selected_agent_budget = (
-            AgentBudget(
-                max_output_tokens=max(
-                    metadata_max_output_tokens,
-                    content_max_output_tokens,
-                )
-            )
-            if agent_budget is None
-            else agent_budget
-        )
-        if not isinstance(selected_agent_budget, AgentBudget):
-            raise TypeError("agent_budget must be an AgentBudget")
-        if max(metadata_max_output_tokens, content_max_output_tokens) > (
-            selected_agent_budget.max_output_tokens
-        ):
-            raise ValueError("Analysis stage output must fit the Agent budget")
         if not callable(provenance_id_factory):
             raise TypeError("provenance_id_factory must be callable")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        checked_model = _stable_identity(
-            model,
-            field_name="model",
-            maximum_bytes=_MAX_MODEL_BYTES,
-        )
-        try:
-            checked_provider = _stable_identity(
-                checked_agents.provider_name,
-                field_name="provider_name",
-                maximum_bytes=_MAX_PROVIDER_BYTES,
-            )
-        except Exception:
-            raise TypeError("Agent provider_name must be stable bounded text") from None
 
-        self._agents = checked_agents
+        self._runtime = checked_runtime
         self._artifact_reader = checked_artifact_reader
         self._current_inputs = checked_current_inputs
         self._artifact_publisher = checked_artifact_publisher
-        self._model = checked_model
-        self._provider_name = checked_provider
         self._metadata_max_output_tokens = metadata_max_output_tokens
         self._content_max_output_tokens = content_max_output_tokens
-        self._content_agent_budget = replace(
-            selected_agent_budget,
-            max_output_tokens=content_max_output_tokens,
-        )
         self._limits = checked_limits
         self._provenance_id_factory = provenance_id_factory
         self._clock = clock
         self._metadata_stage = MetadataAnalysisStage(
-            agents=checked_agents,
-            model=checked_model,
+            runtime=checked_runtime,
             max_output_tokens=metadata_max_output_tokens,
-            agent_budget=selected_agent_budget,
         )
 
     def __repr__(self) -> str:
@@ -274,7 +209,6 @@ class AnalysisService:
         try:
             final_metadata_sha256 = metadata_input_sha256(final_metadata)
             content_call = build_content_analysis_call(
-                model=self._model,
                 parser_result=analysis_input.parser_result,
                 parser_markdown=parser_markdown,
                 final_metadata=final_metadata,
@@ -433,31 +367,23 @@ class AnalysisService:
     def _validate_metadata_receipt(self, receipt: MetadataAnalysisReceipt) -> None:
         aligned = (
             receipt.request.kind is AnalysisRequestKind.METADATA
-            and receipt.request.model == self._model
             and receipt.request.max_output_tokens == self._metadata_max_output_tokens
-            and receipt.provenance.provider == self._provider_name
-            and receipt.provenance.model == self._model
             and receipt.provenance.input_sha256 == receipt.request.input_sha256
         )
         if not aligned:
             raise content_analysis_failure("analysis-content-contract")
 
-    def _complete_content_call(self, call: AnalysisCall) -> AgentStructuredResponse:
+    def _complete_content_call(self, call: AnalysisCall) -> AgentStructuredResult:
         if (
             call.request.kind is not AnalysisRequestKind.CONTENT
-            or call.request.model != self._model
             or call.request.max_output_tokens != self._content_max_output_tokens
         ):
             raise content_analysis_failure("analysis-content-contract")
         try:
-            request = call.to_agent_request(budget=self._content_agent_budget)
-            with open_session(
-                self._agents,
-                max_turns=1,
+            response = self._runtime.execute(
+                call.to_agent_call(),
                 cancel_event=call.cancel_event,
-                budget=self._content_agent_budget,
-            ) as session:
-                response = session.complete(request)
+            )
         except AgentFailure as error:
             raise content_analysis_failure(
                 "analysis-content-llm",
@@ -465,28 +391,12 @@ class AnalysisService:
             ) from None
         except Exception:
             raise content_analysis_failure("analysis-content-llm") from None
-        if not isinstance(response, AgentStructuredResponse):
+        if not isinstance(response, AgentStructuredResult):
             raise content_analysis_failure(
                 "analysis-content-llm",
                 retryable=False,
             )
-        try:
-            response_value = _runtime_value(response)
-            current_provider = _stable_identity(
-                self._agents.provider_name,
-                field_name="provider_name",
-                maximum_bytes=_MAX_PROVIDER_BYTES,
-            )
-            aligned = (
-                isinstance(response_value, AgentStructuredResponse)
-                and current_provider == self._provider_name
-                and response_value.provenance.provider == self._provider_name
-                and response_value.provenance.model == self._model
-                and response_value.provenance.input_sha256 == call.request.input_sha256
-            )
-        except Exception:
-            aligned = False
-        if not aligned:
+        if response.provenance.input_sha256 != call.request.input_sha256:
             raise content_analysis_failure(
                 "analysis-content-llm",
                 retryable=False,
@@ -530,6 +440,13 @@ class AnalysisService:
         content_provenance: AgentProvenance,
     ) -> LiteratureContentProposal:
         try:
+            if (
+                metadata_receipt.provenance.provider != content_provenance.provider
+                or metadata_receipt.provenance.model != content_provenance.model
+            ):
+                raise ValueError("Analysis stage provenance identities do not align")
+            provider = content_provenance.provider
+            model = content_provenance.model
             checked_sections = tuple(sections)
             provenance_id_value = _runtime_value(self._provenance_id_factory())
             observed_at_value = _runtime_value(self._clock())
@@ -538,8 +455,8 @@ class AnalysisService:
             if not isinstance(observed_at_value, UtcTimestamp):
                 raise TypeError("clock must return UtcTimestamp")
             parameter_manifest = {
-                "model": self._model,
-                "provider": self._provider_name,
+                "model": model,
+                "provider": provider,
                 "schema": _PARAMETER_SCHEMA,
                 "stages": [
                     {
@@ -559,7 +476,7 @@ class AnalysisService:
             analysis_provenance = Provenance(
                 provenance_id=provenance_id_value,
                 source_kind=SourceKind.ANALYSIS,
-                source_name=f"{self._provider_name}/{self._model}",
+                source_name=f"{provider}/{model}",
                 source_record_id=None,
                 observed_at=observed_at_value,
                 input_sha256=analysis_input_sha256(

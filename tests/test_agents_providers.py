@@ -9,17 +9,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from sciretriever.agents import (
-    AgentBudget,
+from sciretriever.agents.api import (
+    AgentCall,
+    AgentCallLimits,
     AgentCapability,
     AgentFailure,
-    AgentPort,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
     AgentRole,
-    AgentStructuredResponse,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
     AgentTextPart,
 )
+from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
 from sciretriever.agents.providers.base import (
     ANTHROPIC_ACCESS_SCOPE,
@@ -38,6 +41,7 @@ from sciretriever.analysis.ports import (
     canonical_json_bytes,
 )
 from sciretriever.model.access import Header, TransportRequest
+from sciretriever.model.configuration import AgentReasoningEffort
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.parsing import (
     ParserArtifactRef,
@@ -148,13 +152,13 @@ class _RecordingCoordinator(AccessCoordinator):
 
 class _MetadataCallCapture:
     def __init__(self) -> None:
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
 
     @property
     def provider_name(self) -> str:
         return "metadata-schema-capture"
 
-    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
         self.calls.append(call)
         if call.response_schema is None:
             raise AssertionError("metadata stage did not declare a schema")
@@ -164,7 +168,7 @@ class _MetadataCallCapture:
             if "oneOf" in schema
             else '{"metadata":null,"outcome":"no_usable_content"}'
         )
-        return AgentStructuredResponse(
+        return AgentStructuredResult(
             result=result,
             provenance=AgentProvenance(
                 provider=self.provider_name,
@@ -230,15 +234,15 @@ def _call(
     structured_input: str = _INPUT,
     response_schema: str = _SCHEMA,
     max_output_tokens: int = 64,
+    reasoning_effort: AgentReasoningEffort = AgentReasoningEffort.PROVIDER_DEFAULT,
     cancel_event: threading.Event | None = None,
-) -> AgentRequest:
+) -> AgentProviderCall:
     # ``kind`` and ``prompt_version`` are deliberately Analysis-private and
     # must not enter the neutral Agents request or provider provenance.
     del kind, prompt_version
-    return AgentRequest(
+    consumer_call = AgentCall(
         role=AgentRole.ANALYSIS,
-        capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
-        model=model,
+        required_capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
         input_sha256=sha256_digest(structured_input.encode("utf-8")),
         text_parts=(
             AgentTextPart(media_type="text/plain", text=prompt),
@@ -246,6 +250,18 @@ def _call(
         ),
         response_schema=response_schema,
         max_output_tokens=max_output_tokens,
+    )
+    return AgentProviderCall(
+        role=consumer_call.role,
+        capabilities=consumer_call.required_capabilities,
+        model=model,
+        input_sha256=consumer_call.input_sha256,
+        text_parts=consumer_call.text_parts,
+        image_parts=consumer_call.image_parts,
+        response_schema=consumer_call.response_schema,
+        tools=consumer_call.tools,
+        max_output_tokens=consumer_call.max_output_tokens,
+        reasoning_effort=reasoning_effort,
         cancel_event=cancel_event,
     )
 
@@ -274,7 +290,7 @@ def _body(transport: _FakeTransport, index: int = 0) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-def _real_metadata_stage_call(model: str) -> AgentRequest:
+def _real_metadata_stage_call(model: str) -> AgentProviderCall:
     markdown_bytes = b"# Fixture title\n\nCover page only"
     source_sha256 = sha256_digest(b"fixture source PDF")
     parameters_sha256 = sha256_digest(b"fixture parser parameters")
@@ -325,8 +341,18 @@ def _real_metadata_stage_call(model: str) -> AgentRequest:
     )
     capture = _MetadataCallCapture()
     stage = MetadataAnalysisStage(
-        agents=cast(AgentPort, capture),
-        model=model,
+        runtime=AgentRuntime(
+            adapter=cast(AgentProviderPort, capture),
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=model,
+                capabilities=AgentModelCapabilities(
+                    context_window_tokens=4_096,
+                    max_output_tokens=128,
+                    structured_output=True,
+                ),
+            ),
+        ),
         max_output_tokens=64,
     )
 
@@ -351,9 +377,9 @@ class AgentsProviderTests(unittest.TestCase):
         )
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        self.assertIsInstance(adapter, AgentPort)
+        self.assertIsInstance(adapter, AgentProviderPort)
         results = [
-            adapter.complete(_call(_OPENAI_MODEL, kind=kind))
+            adapter.execute(_call(_OPENAI_MODEL, kind=kind))
             for kind in (
                 AnalysisRequestKind.METADATA,
                 AnalysisRequestKind.CONTENT,
@@ -361,15 +387,15 @@ class AgentsProviderTests(unittest.TestCase):
             )
         ]
 
-        self.assertTrue(all(isinstance(value, AgentStructuredResponse) for value in results))
+        self.assertTrue(all(isinstance(value, AgentStructuredResult) for value in results))
         self.assertEqual(len(transport.calls), 3)
         self.assertEqual(
             len({str(value.provenance.parameters_sha256) for value in results}),
             1,
         )
-        self.assertTrue(all(isinstance(value, AgentStructuredResponse) for value in results))
+        self.assertTrue(all(isinstance(value, AgentStructuredResult) for value in results))
         structured_results = [
-            value for value in results if isinstance(value, AgentStructuredResponse)
+            value for value in results if isinstance(value, AgentStructuredResult)
         ]
         self.assertEqual(
             [value.result for value in structured_results],
@@ -380,7 +406,7 @@ class AgentsProviderTests(unittest.TestCase):
         client, transport, _, resolver = _client([_response(_fixture("openai", "success"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        result = adapter.complete(_call(_OPENAI_MODEL))
+        result = adapter.execute(_call(_OPENAI_MODEL))
 
         request = _safe_request(transport)
         body = _body(transport)
@@ -410,11 +436,11 @@ class AgentsProviderTests(unittest.TestCase):
         client, transport, _, resolver = _client([_response(_fixture("anthropic", "success"))])
         adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
-        result = adapter.complete(_call(_ANTHROPIC_MODEL))
+        result = adapter.execute(_call(_ANTHROPIC_MODEL))
 
         request = _safe_request(transport)
         body = _body(transport)
-        self.assertIsInstance(adapter, AgentPort)
+        self.assertIsInstance(adapter, AgentProviderPort)
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.url, "https://api.anthropic.com/v1/messages")
         self.assertEqual(_destination(transport).origin.text, "https://api.anthropic.com")
@@ -435,6 +461,70 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertEqual(content[0]["text"], _INPUT)
         self.assertEqual(result.provenance.provider, "anthropic")
         self.assertEqual(result.provenance.model, _ANTHROPIC_MODEL)
+
+    def test_role_reasoning_effort_is_encoded_by_each_protocol_and_hashed(self) -> None:
+        chat_response = {
+            "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 23, "completion_tokens": 11},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"outcome":"usable","title":"Fixture"}',
+                    },
+                }
+            ],
+        }
+        cases = (
+            (
+                OpenAIResponsesAdapter,
+                _OPENAI_MODEL,
+                _fixture("openai", "success"),
+                lambda body: cast(dict[str, object], body.get("reasoning")).get("effort"),
+            ),
+            (
+                OpenAIChatCompletionsAdapter,
+                _OPENAI_MODEL,
+                json.dumps(chat_response).encode("utf-8"),
+                lambda body: body.get("reasoning_effort"),
+            ),
+            (
+                AnthropicMessagesAdapter,
+                _ANTHROPIC_MODEL,
+                _fixture("anthropic", "success"),
+                lambda body: cast(dict[str, object], body.get("output_config")).get("effort"),
+            ),
+        )
+        explicit_efforts = tuple(
+            effort
+            for effort in AgentReasoningEffort
+            if effort is not AgentReasoningEffort.PROVIDER_DEFAULT
+        )
+        for adapter_type, model, response, effort_value in cases:
+            with self.subTest(adapter=adapter_type.__name__):
+                client, transport, _, _ = _client(
+                    [_response(response) for _value in range(1 + len(explicit_efforts))]
+                )
+                adapter = adapter_type(http_client=client, api_key=_API_KEY)
+
+                default_result = adapter.execute(_call(model))
+                default_body = _body(transport, 0)
+                self.assertNotIn("reasoning", default_body)
+                self.assertNotIn("reasoning_effort", default_body)
+                if adapter_type is AnthropicMessagesAdapter:
+                    default_output = cast(dict[str, object], default_body["output_config"])
+                    self.assertNotIn("effort", default_output)
+                for index, effort in enumerate(explicit_efforts, start=1):
+                    with self.subTest(effort=effort.value):
+                        explicit_result = adapter.execute(_call(model, reasoning_effort=effort))
+                        explicit_body = _body(transport, index)
+                        self.assertEqual(effort_value(explicit_body), effort.value)
+                        self.assertNotEqual(
+                            default_result.provenance.parameters_sha256,
+                            explicit_result.provenance.parameters_sha256,
+                        )
 
     def test_chat_completions_uses_strict_schema_and_parses_one_assistant_choice(self) -> None:
         response = {
@@ -460,7 +550,7 @@ class AgentsProviderTests(unittest.TestCase):
             api_key=_API_KEY,
         )
 
-        result = adapter.complete(_call(_OPENAI_MODEL))
+        result = adapter.execute(_call(_OPENAI_MODEL))
 
         request = _safe_request(transport)
         body = _body(transport)
@@ -495,10 +585,10 @@ class AgentsProviderTests(unittest.TestCase):
             provider_name="local-llm",
         )
 
-        result = adapter.complete(_call(_OPENAI_MODEL))
+        result = adapter.execute(_call(_OPENAI_MODEL))
 
-        self.assertIsInstance(result, AgentStructuredResponse)
-        assert isinstance(result, AgentStructuredResponse)
+        self.assertIsInstance(result, AgentStructuredResult)
+        assert isinstance(result, AgentStructuredResult)
         self.assertEqual(result.result, '{"ok":true}')
         request = _safe_request(transport)
         self.assertEqual(request.url, "http://127.0.0.1:1234/v1/chat/completions")
@@ -525,10 +615,10 @@ class AgentsProviderTests(unittest.TestCase):
             provider_name="local-anthropic",
         )
 
-        result = adapter.complete(_call(_ANTHROPIC_MODEL))
+        result = adapter.execute(_call(_ANTHROPIC_MODEL))
 
-        self.assertIsInstance(result, AgentStructuredResponse)
-        assert isinstance(result, AgentStructuredResponse)
+        self.assertIsInstance(result, AgentStructuredResult)
+        assert isinstance(result, AgentStructuredResult)
         self.assertEqual(result.result, '{"ok":true}')
         request = _safe_request(transport)
         self.assertEqual(request.url, "http://127.0.0.1:1234/v1/messages")
@@ -540,10 +630,10 @@ class AgentsProviderTests(unittest.TestCase):
         adapter = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=AgentBudget(context_window_tokens=64, max_output_tokens=64),
+            limits=AgentCallLimits(context_window_tokens=64, max_output_tokens=64),
         )
 
-        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
 
         self.assertEqual(failure.failure.code, "agent-context-budget")
         self.assertEqual(transport.calls, [])
@@ -557,7 +647,7 @@ class AgentsProviderTests(unittest.TestCase):
             provider_name="operator-service",
         )
 
-        adapter.complete(_call(_OPENAI_MODEL))
+        adapter.execute(_call(_OPENAI_MODEL))
 
         request = _safe_request(transport)
         self.assertEqual(request.url, "https://llm.example.invalid:8443/v1/responses")
@@ -571,7 +661,7 @@ class AgentsProviderTests(unittest.TestCase):
         OpenAIResponsesAdapter(
             http_client=openai_client,
             api_key=_API_KEY,
-        ).complete(openai_call)
+        ).execute(openai_call)
         openai_format = cast(
             dict[str, object],
             cast(dict[str, object], _body(openai_transport)["text"])["format"],
@@ -584,7 +674,7 @@ class AgentsProviderTests(unittest.TestCase):
         AnthropicMessagesAdapter(
             http_client=anthropic_client,
             api_key=_API_KEY,
-        ).complete(anthropic_call)
+        ).execute(anthropic_call)
         anthropic_format = cast(
             dict[str, object],
             cast(
@@ -623,7 +713,7 @@ class AgentsProviderTests(unittest.TestCase):
             _call(_OPENAI_MODEL, max_output_tokens=66),
         )
 
-        hashes = [str(adapter.complete(value).provenance.parameters_sha256) for value in calls]
+        hashes = [str(adapter.execute(value).provenance.parameters_sha256) for value in calls]
 
         self.assertEqual(hashes[0], hashes[1])
         self.assertEqual(len(set(hashes[0:1] + hashes[2:])), 6)
@@ -643,9 +733,9 @@ class AgentsProviderTests(unittest.TestCase):
         )
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        original = adapter.complete(_call(_OPENAI_MODEL, response_schema=_SCHEMA))
-        equivalent = adapter.complete(_call(_OPENAI_MODEL, response_schema=equivalent_schema))
-        changed = adapter.complete(_call(_OPENAI_MODEL, response_schema=changed_schema))
+        original = adapter.execute(_call(_OPENAI_MODEL, response_schema=_SCHEMA))
+        equivalent = adapter.execute(_call(_OPENAI_MODEL, response_schema=equivalent_schema))
+        changed = adapter.execute(_call(_OPENAI_MODEL, response_schema=changed_schema))
 
         self.assertNotEqual(_SCHEMA, equivalent_schema)
         self.assertEqual(_safe_request(transport, 0).body, _safe_request(transport, 1).body)
@@ -663,7 +753,6 @@ class AgentsProviderTests(unittest.TestCase):
         request = AnalysisRequest(
             kind=AnalysisRequestKind.METADATA,
             input_sha256=sha256_digest(b"different"),
-            model=_OPENAI_MODEL,
             max_output_tokens=64,
         )
         cases = (
@@ -689,7 +778,7 @@ class AgentsProviderTests(unittest.TestCase):
 
     def test_deep_call_input_and_schema_are_stably_rejected_without_leaking(self) -> None:
         deep_json = _deep_json_object()
-        cases: tuple[tuple[str, Callable[[], AgentRequest]], ...] = (
+        cases: tuple[tuple[str, Callable[[], AgentProviderCall]], ...] = (
             ("input", lambda: _call(_OPENAI_MODEL, structured_input=deep_json)),
             ("schema", lambda: _call(_OPENAI_MODEL, response_schema=deep_json)),
         )
@@ -704,7 +793,7 @@ class AgentsProviderTests(unittest.TestCase):
         client, _, _, _ = _client([_response(_deep_json_object().encode("utf-8"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
 
         self.assertEqual(failure.failure.code, "agent-protocol")
         self.assertNotIn(_DEEP_SENTINEL, repr(failure))
@@ -715,7 +804,7 @@ class AgentsProviderTests(unittest.TestCase):
         client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
 
         self.assertEqual(failure.failure.code, "agent-structured-response")
         self.assertNotIn(_DEEP_SENTINEL, repr(failure))
@@ -731,27 +820,27 @@ class AgentsProviderTests(unittest.TestCase):
         cases = (
             (
                 "agent-input-budget",
-                AgentBudget(max_prompt_bytes=4),
+                AgentCallLimits(max_prompt_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
                 "agent-input-budget",
-                AgentBudget(max_input_bytes=4),
+                AgentCallLimits(max_input_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
                 "agent-input-budget",
-                AgentBudget(max_schema_bytes=4),
+                AgentCallLimits(max_schema_bytes=4),
                 _call(_OPENAI_MODEL),
             ),
             (
                 "agent-request-budget",
-                AgentBudget(max_request_bytes=128),
+                AgentCallLimits(max_request_bytes=128),
                 _call(_OPENAI_MODEL),
             ),
             (
                 "agent-output-budget",
-                AgentBudget(max_output_tokens=63),
+                AgentCallLimits(max_output_tokens=63),
                 _call(_OPENAI_MODEL),
             ),
         )
@@ -763,7 +852,7 @@ class AgentsProviderTests(unittest.TestCase):
                     api_key=_API_KEY,
                     limits=limits,
                 )
-                failure = self._failure(lambda: adapter.complete(call))
+                failure = self._failure(lambda: adapter.execute(call))
                 self.assertEqual(failure.failure.code, code)
                 self.assertEqual(transport.calls, [])
 
@@ -772,9 +861,9 @@ class AgentsProviderTests(unittest.TestCase):
         response_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=AgentBudget(max_response_bytes=32),
+            limits=AgentCallLimits(max_response_bytes=32),
         )
-        failure = self._failure(lambda: response_limited.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: response_limited.execute(_call(_OPENAI_MODEL)))
         self.assertEqual(failure.failure.code, "agent-response-budget")
         self.assertEqual(len(transport.calls), 1)
 
@@ -785,9 +874,9 @@ class AgentsProviderTests(unittest.TestCase):
         result_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
-            limits=AgentBudget(max_result_bytes=32),
+            limits=AgentCallLimits(max_result_bytes=32),
         )
-        failure = self._failure(lambda: result_limited.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: result_limited.execute(_call(_OPENAI_MODEL)))
         self.assertEqual(failure.failure.code, "agent-result-budget")
 
     def test_http_statuses_are_stable_and_429_feedback_is_atomic(self) -> None:
@@ -805,7 +894,7 @@ class AgentsProviderTests(unittest.TestCase):
                     [_response(b"RESPONSE-PRIVATE-SENTINEL", status=status, headers=headers)]
                 )
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-                failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertEqual(len(transport.calls), 1)
                 self.assertNotIn("RESPONSE-PRIVATE-SENTINEL", repr(failure))
@@ -826,7 +915,7 @@ class AgentsProviderTests(unittest.TestCase):
         )
         client, transport, _, _ = _client([redirect, _response(_fixture("openai", "success"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
         self.assertEqual(failure.failure.code, "agent-access")
         self.assertEqual(len(transport.calls), 1)
 
@@ -834,7 +923,7 @@ class AgentsProviderTests(unittest.TestCase):
             [OSError("TRANSPORT-PRIVATE-SENTINEL"), _response(_fixture("openai", "success"))]
         )
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-        failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
         self.assertEqual(failure.failure.code, "agent-access")
         self.assertEqual(len(transport.calls), 1)
         self.assertNotIn("TRANSPORT-PRIVATE-SENTINEL", repr(failure))
@@ -856,7 +945,7 @@ class AgentsProviderTests(unittest.TestCase):
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-                failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
 
@@ -871,7 +960,7 @@ class AgentsProviderTests(unittest.TestCase):
                 client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
-                failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
 
                 self.assertEqual(failure.failure.code, "agent-protocol")
 
@@ -894,7 +983,7 @@ class AgentsProviderTests(unittest.TestCase):
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
                 adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
-                failure = self._failure(lambda: adapter.complete(_call(_ANTHROPIC_MODEL)))
+                failure = self._failure(lambda: adapter.execute(_call(_ANTHROPIC_MODEL)))
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
 
@@ -925,7 +1014,7 @@ class AgentsProviderTests(unittest.TestCase):
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-                failure = self._failure(lambda: adapter.complete(_call(_OPENAI_MODEL)))
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
 
     def test_adapter_validates_only_json_object_syntax_not_analysis_business_fields(self) -> None:
@@ -935,10 +1024,10 @@ class AgentsProviderTests(unittest.TestCase):
         client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
         adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
-        result = adapter.complete(_call(_ANTHROPIC_MODEL))
+        result = adapter.execute(_call(_ANTHROPIC_MODEL))
 
-        self.assertIsInstance(result, AgentStructuredResponse)
-        assert isinstance(result, AgentStructuredResponse)
+        self.assertIsInstance(result, AgentStructuredResult)
+        assert isinstance(result, AgentStructuredResult)
         self.assertEqual(result.result, raw_result)
         self.assertEqual(result.provenance.input_sha256, _call(_ANTHROPIC_MODEL).input_sha256)
 
@@ -946,7 +1035,7 @@ class AgentsProviderTests(unittest.TestCase):
         call = _call(_OPENAI_MODEL)
         client, _, _, _ = _client([_response(b'{"private":"RESPONSE-PRIVATE-SENTINEL"}')])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
-        failure = self._failure(lambda: adapter.complete(call))
+        failure = self._failure(lambda: adapter.execute(call))
         rendered = "\n".join((repr(adapter), repr(call), str(failure), repr(failure)))
         for sentinel in (
             _API_KEY,

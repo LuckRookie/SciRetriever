@@ -4,7 +4,7 @@ import json
 import threading
 import unittest
 
-from sciretriever.agents import AgentProvenance, AgentStructuredResponse
+from sciretriever.agents.api import AgentProvenance, AgentStructuredResult
 from sciretriever.analysis.markdown import (
     ContentMarkdownDraft,
     build_content_analysis_call,
@@ -145,8 +145,8 @@ def _minimal_draft(*, references: str = "未提供") -> str:
 """
 
 
-def _response(call_input_sha256: Sha256, result: object) -> AgentStructuredResponse:
-    return AgentStructuredResponse(
+def _response(call_input_sha256: Sha256, result: object) -> AgentStructuredResult:
+    return AgentStructuredResult(
         result=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
         provenance=AgentProvenance(
             provider="fixture-provider",
@@ -183,7 +183,6 @@ class AnalysisMarkdownTests(unittest.TestCase):
         cancel_event = threading.Event()
 
         call = build_content_analysis_call(
-            model=_MODEL,
             parser_result=parser_result,
             parser_markdown=parser_markdown,
             final_metadata=final_metadata,
@@ -192,7 +191,7 @@ class AnalysisMarkdownTests(unittest.TestCase):
         )
 
         self.assertIs(call.request.kind, AnalysisRequestKind.CONTENT)
-        self.assertEqual(call.request.model, _MODEL)
+        self.assertNotIn("model", call.request.__dataclass_fields__)
         self.assertEqual(call.request.max_output_tokens, 4096)
         self.assertIs(call.cancel_event, cancel_event)
         structured_input = json.loads(call.structured_input)
@@ -230,7 +229,6 @@ class AnalysisMarkdownTests(unittest.TestCase):
         for mismatched in cases:
             with self.subTest(mismatched=mismatched), self.assertRaises(ValueError) as caught:
                 build_content_analysis_call(
-                    model=_MODEL,
                     parser_result=parser_result,
                     parser_markdown=mismatched,
                     final_metadata=_metadata(),
@@ -463,7 +461,6 @@ and the formula $E=mc^2$.
     def test_closed_response_contains_only_the_markdown_draft(self) -> None:
         parser_markdown = "# Parsed paper\n"
         call = build_content_analysis_call(
-            model=_MODEL,
             parser_result=_parser_result(parser_markdown),
             parser_markdown=parser_markdown,
             final_metadata=_metadata(),

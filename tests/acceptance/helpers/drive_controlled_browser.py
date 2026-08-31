@@ -134,6 +134,7 @@ class _Page:
         self.url = ""
         self.closed = False
         self.clicked: list[str] = []
+        self.control_generation = 0
 
     def goto(self, url: str, *, timeout: int) -> None:
         del timeout
@@ -164,6 +165,55 @@ class _Page:
         del timeout
         self.clicked.append(selector)
         self.context.emit_download(self)
+
+    def control_snapshot(
+        self,
+        *,
+        timeout: int,
+        include_screenshot: bool,
+        static_selector: str | None = None,
+    ) -> dict[str, object]:
+        if timeout <= 0:
+            raise RuntimeError("controlled snapshot timeout must be positive")
+        title = f"Controlled publisher fixture {self.control_generation}"
+        return {
+            "width": 1280,
+            "height": 720,
+            "title": title,
+            "surfaces": ((0, None, "page", self.url, title, 0, 0, 1280, 720, 0, 0, 0, 720, None),),
+            "elements": ((1, 0, "link", "PDF", True, True, 20, 20, 180, 40),),
+            "static_element_key": (1 if static_selector == "a[data-action='pdf']" else None),
+            "screenshot": (
+                f"controlled-screenshot-{self.control_generation}".encode()
+                if include_screenshot
+                else None
+            ),
+            "screenshot_media_type": "image/png" if include_screenshot else None,
+        }
+
+    def control_click_element(
+        self,
+        element_key: int,
+        *,
+        expected_role: str,
+        expected_name: str,
+        expected_enabled: bool,
+        expected_surface_key: int,
+        timeout: int,
+    ) -> bool:
+        if (
+            element_key != 1
+            or expected_role != "link"
+            or expected_name != "PDF"
+            or not expected_enabled
+            or expected_surface_key != 0
+            or timeout <= 0
+        ):
+            raise RuntimeError("controlled element binding changed")
+        self.clicked.append("a[data-action='pdf']")
+        self.control_generation += 1
+        self.context.emit_download(self)
+        return True
 
     def close(self) -> None:
         self.closed = True
@@ -316,7 +366,6 @@ rule = BrowserSiteRule(
             selector="a[data-action='pdf']",
         ),
     ),
-    max_actions=1,
     capture_url_prefixes=("https://downloads.publisher.test/article.pdf",),
     page_markers=(
         BrowserPageMarker(

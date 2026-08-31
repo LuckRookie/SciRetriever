@@ -123,9 +123,9 @@ Acquisition 优先解释明确 AssetHint、来源稳定定位、Provider record 
 
 自动 PDF 获取严格按 Public、Authorized Provider API、Controlled Browser 升级；Planner 可以删除不适用 route，但不能自动提前 Browser。公开协议和 API 按对应官方 quota scope、并发、间隔、window、周期额度与 `Retry-After` 执行。Browser 按 `browser_rate_limit_group` 调度，不同独立风险组可以并行，同一组固定一个活动文章流程并按 Provider policy 限速串行；不再用统一固定数字冒充所有供应商政策。普通 HTTP、API 和 Browser 都经过当前进程共享的 Network 准入，具体易变数值由 Provider Notes 维护，长期边界见 [ADR 0012](decisions/0012-process-local-provider-access-scheduling.md)与 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md)。
 
-受控 Browser 以 [ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md) 的 CloakBrowser patched Chromium 作为唯一目标生产 runtime，同时继续使用 Playwright API 作为内部控制协议。一个长期 Profile 必须复用固定设备身份、一个有头 process/context 和服务器原始出口；不同 Publisher 风险组的并行、组内限速串行、CONNECT、origin/DNS/host admission、资源预算和统一 PDF 验收不因 runtime 切换而放宽。经证据确认的 challenge dependency 只能在发起 Publisher、frame ancestry 和当前文章预算内加载；自动 settle、明确人工交互、本地资源阻断和普通拒绝分别表达。CAPTCHA、登录、机构选择和 MFA 仍不由自动流程处理。
+受控 Browser 以 [ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md) 的 CloakBrowser patched Chromium 作为唯一目标生产 runtime，同时继续使用 Playwright API 作为内部控制协议。一个长期 Profile 必须复用固定设备身份、一个有头 process/context 和服务器原始出口；不同 Publisher 风险组的并行、组内限速串行、CONNECT、origin/DNS/host admission、单次资源上限和统一 PDF 验收不因 runtime 切换而放宽。经证据确认的 challenge dependency 只能在发起 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 与普通页面使用同一 Observation、动作和 capture 合同，本地资源阻断不能冒充页面拒绝或 Agent 失败。Browser Agent 可以在当前文章获准的页面 surface 中操作可见控件，但不能借此取得任意 Browser/URL/脚本、切换身份或出口、外包验证、自动登录、选择机构或处理 MFA。
 
-模型调用的中性 provider、capability、预算、取消和请求级 session 由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 的 Agents 公用基础拥有。Analysis 继续拥有文献 prompt、两阶段顺序、schema 和结果验收；Acquisition 继续拥有 Browser 目标、允许动作和页面结果解释；Network 唯一执行 Browser 动作。确定性 locator 和 Publisher 规则先于 Agent fallback，Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力，也不形成跨文章 memory 或持久化页面状态。
+模型调用的中性 role、message、capability/readiness、单次技术边界、取消、协议转换和稳定失败由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 的无状态 Agents 公用基础拥有。Analysis 继续拥有文献 prompt、两阶段顺序、schema 和结果验收；Acquisition 继续拥有 Browser 目标、controller、允许动作、语义进展和页面结果解释；Network 唯一生成 Browser Observation、执行动作、capture 和 cleanup。受控 Browser 作业开始前固定选择 Rules 或 Agent，二者不形成 fallback；Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力，也不形成跨调用 memory 或持久化页面状态。
 
 等待队列、permit、窗口计数、`next_allowed_at`、`blocked_until` 和当次 `Retry-After` 是当前进程的内存运行状态，不是文献事实，不保存到 Catalog、ArtifactStore、provenance 或独立协调文件，也不参与状态推导。进程结束后这些动态状态自然清空；静态访问政策和 operator 收紧值仍由配置表达。
 
@@ -178,8 +178,8 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 - [ ] 文献内容处理链是否优先保护来源元数据和原始 PDF，同时把 ParserResult 与 LiteratureContent 作为可重建当前结果而非历史资产？
 - [ ] 所有外部访问是否经过当前进程的 provider/channel/host 共享准入，网页独占与冷却是否覆盖普通 HTTP 和浏览器，API 是否遵守对应供应商规则？
 - [ ] 生产 Browser 是否只使用一个固定身份 CloakBrowser Profile/process/context，且没有 stock runtime fallback、随机设备身份、环境代理或绕过 CONNECT/Network guard 的第二执行路径？
-- [ ] Challenge 必需资源是否只在已核实 Publisher、frame ancestry 和当前文章预算内加载；本地阻断、自动 settle、人工交互与普通拒绝是否分别表达，且没有自动处理 CAPTCHA/MFA？
-- [ ] Analysis 与 Browser 是否共用中性的 Agents provider/capability/budget/session 基础，同时分别保留业务 prompt、动作语义和结果验收；Agent 是否只能返回封闭决定并由同一 Browser session 执行？
+- [ ] Challenge 必需资源是否只在已核实 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 是否使用统一 Observation/Action，且本地阻断没有冒充页面拒绝或 Agent 失败？
+- [ ] Analysis 与 Browser 是否共用无状态单次 Agents Runtime，同时分别保留业务 workflow、prompt、动作语义和结果验收；Browser 作业是否只构造一个 controller，并由 Network 执行全部封闭动作？
 - [ ] Provider secret 是否只来自固定 owner-only 凭据文件并保持在适配边界；status/test 是否不泄漏或持久化 secret/测试结果，离线门禁是否没有真实联网？
 - [ ] 限速是否在当前进程的模块、用户操作和文献目标之间共享，且全部动态状态只留在内存，没有污染业务 Model、Catalog、ArtifactStore、provenance 或 Literature 状态？
 - [ ] 外部 provider 和 parser 输出是否在边界验证并转换为中性合同？

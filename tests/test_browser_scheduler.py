@@ -329,7 +329,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         self.assertIs(at_deadline[0].disposition, BrowserScheduledDisposition.EXECUTED)
         self.assertEqual(calls, ["w1", "w4"])
 
-    def test_action_required_circuit_stops_same_group_and_other_group_continues(self) -> None:
+    def test_ip_block_circuit_stops_same_group_and_other_group_continues(self) -> None:
         from sciretriever.network.browser_scheduler import BrowserGroupScheduler
 
         scheduler = BrowserGroupScheduler(clock=_AdvancingClock(), max_concurrency=2)
@@ -340,7 +340,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
             with lock:
                 calls.append(attempt.attempt_key)
             feedback = (
-                BrowserGroupFeedback.CHALLENGE_REQUIRED
+                BrowserGroupFeedback.IP_BLOCKED
                 if attempt.attempt_key == "w1"
                 else BrowserGroupFeedback.SUCCESS
             )
@@ -348,7 +348,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
                 attempt.attempt_key,
                 (
                     BrowserAttemptDisposition.FAILED
-                    if feedback is BrowserGroupFeedback.CHALLENGE_REQUIRED
+                    if feedback is BrowserGroupFeedback.IP_BLOCKED
                     else BrowserAttemptDisposition.COMPLETED
                 ),
                 feedback,
@@ -369,7 +369,7 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         self.assertIsNotNone(runtime_state)
         if runtime_state is None:
             self.fail("open circuit did not expose its safe runtime state")
-        self.assertIs(runtime_state.circuit_reason, BrowserCircuitReason.CHALLENGE_REQUIRED)
+        self.assertIs(runtime_state.circuit_reason, BrowserCircuitReason.IP_BLOCKED)
         self.assertIs(results[2].disposition, BrowserScheduledDisposition.EXECUTED)
 
         new_route = scheduler.execute((self._attempt("w3", "wiley"),), run)
@@ -388,7 +388,6 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         expected = {
             BrowserGroupFeedback.LOGIN_REQUIRED: BrowserCircuitReason.LOGIN_REQUIRED,
             BrowserGroupFeedback.MFA_REQUIRED: BrowserCircuitReason.MFA_REQUIRED,
-            BrowserGroupFeedback.CHALLENGE_REQUIRED: BrowserCircuitReason.CHALLENGE_REQUIRED,
             BrowserGroupFeedback.IP_BLOCKED: BrowserCircuitReason.IP_BLOCKED,
             BrowserGroupFeedback.ACCOUNT_WARNING: BrowserCircuitReason.ACCOUNT_WARNING,
             BrowserGroupFeedback.CLEANUP_FAILURE: BrowserCircuitReason.CLEANUP_FAILURE,

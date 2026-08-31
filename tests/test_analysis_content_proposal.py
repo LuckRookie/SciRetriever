@@ -8,12 +8,16 @@ from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, closing
 from typing import BinaryIO, cast
 
-from sciretriever.agents import (
+from sciretriever.agents.api import (
     AgentFailure,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
 )
+from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.analysis.content import (
     ContentAnalysisFailure,
     ContentAnalysisLimits,
@@ -216,19 +220,19 @@ def _analysis_input(markdown: str | None = None) -> ContentAnalysisInput:
 class _FakeLLM:
     def __init__(
         self,
-        actions: Iterable[str | BaseException | Callable[[AgentRequest], object]],
+        actions: Iterable[str | BaseException | Callable[[AgentProviderCall], object]],
         *,
         provider_name: str = _PROVIDER,
     ) -> None:
         self.actions = list(actions)
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
         self._provider_name = provider_name
 
     @property
     def provider_name(self) -> str:
         return self._provider_name
 
-    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
+    def execute(self, request: AgentProviderCall) -> AgentStructuredResult:
         call = request
         self.calls.append(call)
         action = self.actions.pop(0)
@@ -236,24 +240,24 @@ class _FakeLLM:
             raise action
         if callable(action):
             result = action(call)
-            if not isinstance(result, AgentStructuredResponse):
+            if not isinstance(result, AgentStructuredResult):
                 raise TypeError("fake action returned a private invalid value")
             return result
-        stage = "content" if "final_metadata" in call.structured_input else "metadata"
+        stage = "content" if "final_metadata" in _structured_input(call) else "metadata"
         parameter_bytes = f"{stage}-parameters".encode()
         return _response(call, action, parameters_sha256=sha256_digest(parameter_bytes))
 
 
 def _response(
-    call: AgentRequest,
+    call: AgentProviderCall,
     result: str,
     *,
     provider: str = _PROVIDER,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
     parameters_sha256: Sha256 | None = None,
-) -> AgentStructuredResponse:
-    return AgentStructuredResponse(
+) -> AgentStructuredResult:
+    return AgentStructuredResult(
         result=result,
         provenance=AgentProvenance(
             provider=provider,
@@ -263,6 +267,25 @@ def _response(
                 sha256_digest(b"fixture parameters")
                 if parameters_sha256 is None
                 else parameters_sha256
+            ),
+        ),
+    )
+
+
+def _structured_input(call: AgentProviderCall) -> str:
+    return call.text_parts[-1].text
+
+
+def _runtime(adapter: _FakeLLM) -> AgentRuntime:
+    return AgentRuntime(
+        adapter=cast(AgentProviderPort, adapter),
+        analysis=AgentRoleBinding(
+            role=AgentRole.ANALYSIS,
+            model=_MODEL,
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=2_000_000,
+                max_output_tokens=65_536,
+                structured_output=True,
             ),
         ),
     )
@@ -357,11 +380,10 @@ def _service(
     verifier = _CurrentInputs() if current_inputs is None else current_inputs
     artifact_publisher = _Publisher() if publisher is None else publisher
     service = AnalysisService(
-        agents=llm,
+        runtime=_runtime(llm),
         artifact_reader=artifact_reader,
         current_inputs=verifier,
         artifact_publisher=artifact_publisher,
-        model=_MODEL,
         metadata_max_output_tokens=metadata_max_output_tokens,
         content_max_output_tokens=content_max_output_tokens,
         limits=_limits() if limits is None else limits,
@@ -393,15 +415,15 @@ class AnalysisContentProposalTests(unittest.TestCase):
 
         self.assertIsInstance(result, LiteratureContentProposal)
         assert isinstance(result, LiteratureContentProposal)
-        self.assertIn("parser", llm.calls[0].structured_input)
-        self.assertIn("final_metadata", llm.calls[1].structured_input)
+        self.assertIn("parser", _structured_input(llm.calls[0]))
+        self.assertIn("final_metadata", _structured_input(llm.calls[1]))
         self.assertTrue(all(call.cancel_event is cancel_event for call in llm.calls))
         self.assertEqual(reader.calls, [stage_input.parser_result.markdown])
         self.assertEqual(len(verifier.calls), 2)
         expected_identity = stage_input.input_identity()
         self.assertEqual(verifier.calls, [expected_identity, expected_identity])
 
-        content_input = json.loads(llm.calls[1].structured_input)
+        content_input = json.loads(_structured_input(llm.calls[1]))
         self.assertEqual(content_input["final_metadata"], _metadata().model_dump(mode="json"))
         self.assertEqual(
             content_input["parser_result"],
@@ -566,8 +588,8 @@ class AnalysisContentProposalTests(unittest.TestCase):
         def forged(
             result: str,
             **updates: object,
-        ) -> Callable[[AgentRequest], AgentStructuredResponse]:
-            def action(call: AgentRequest) -> AgentStructuredResponse:
+        ) -> Callable[[AgentProviderCall], AgentStructuredResult]:
+            def action(call: AgentProviderCall) -> AgentStructuredResult:
                 return _response(call, result, **updates)  # type: ignore[arg-type]
 
             return action

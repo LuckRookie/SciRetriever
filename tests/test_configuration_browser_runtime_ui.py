@@ -6,11 +6,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import sciretriever.configuration as configuration_boundary
-import sciretriever.entry.cli.main as cli
+import sciretriever.entry.cli.config_center.browser as browser_ui
 from sciretriever.configuration.cloak_runtime import (
     CLOAKBROWSER_BROWSER_VERSION,
     CloakRuntimeStatus,
 )
+from sciretriever.entry.cli.config_ui import ConfigConsole
 from sciretriever.model.configuration import (
     AccessConfig,
     Configuration,
@@ -38,7 +39,7 @@ class ConfigurationBrowserRuntimeUiTests(unittest.TestCase):
             ):
                 status = configuration_boundary.browser_access_status(
                     Configuration(
-                        access=AccessConfig(
+                        download=AccessConfig(
                             browser_enabled=True,
                             browser_profile="fixture",
                         )
@@ -104,10 +105,10 @@ class ConfigurationBrowserRuntimeUiTests(unittest.TestCase):
             signature_verified=True,
         )
         with (
-            patch.object(cli, "CloakRuntimeManager", return_value=manager),
-            patch.object(cli, "_confirm", side_effect=(True, True)),
+            patch.object(browser_ui, "CloakRuntimeManager", return_value=manager),
+            patch.object(browser_ui, "confirm", side_effect=(True, True)),
         ):
-            cli._cloak_install_or_update("install", cli.ConfigConsole("mono"))
+            browser_ui._install_or_update("install", ConfigConsole("mono"))
         manager.install.assert_called_once_with(CLOAKBROWSER_BROWSER_VERSION)
         self.assertNotIn("license_key", manager.install.call_args.kwargs)
 
@@ -115,10 +116,10 @@ class ConfigurationBrowserRuntimeUiTests(unittest.TestCase):
         manager = Mock()
         manager.status.return_value = CloakRuntimeStatus(presence="missing", ready=False)
         with (
-            patch.object(cli, "CloakRuntimeManager", return_value=manager),
-            patch.object(cli, "_confirm", return_value=False),
+            patch.object(browser_ui, "CloakRuntimeManager", return_value=manager),
+            patch.object(browser_ui, "confirm", return_value=False),
         ):
-            cli._cloak_install_or_update("install", cli.ConfigConsole("mono"))
+            browser_ui._install_or_update("install", ConfigConsole("mono"))
         manager.install.assert_not_called()
         manager.update.assert_not_called()
 

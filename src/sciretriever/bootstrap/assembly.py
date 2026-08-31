@@ -13,7 +13,8 @@ import logging
 from pathlib import Path
 from typing import cast
 
-from sciretriever.agents import AgentPort, AgentRole
+from sciretriever.acquisition.browser_control import BrowserControllerKind
+from sciretriever.agents.api import AgentRole, AgentRuntime
 from sciretriever.bootstrap.browser import (
     PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
     _new_acquisition_execution_runtime,
@@ -36,9 +37,7 @@ from sciretriever.bootstrap.graphs import (
     _TopicDiscoveryEntry,
 )
 from sciretriever.bootstrap.services import (
-    _agent_provider_limits,
     _analysis_limits,
-    _browser_agent_declared,
     _browser_agent_dependency,
     _build_agents_runtime,
     _build_metadata_components,
@@ -48,6 +47,7 @@ from sciretriever.bootstrap.services import (
     _production_dependencies,
     _raise_production_assembly_error,
     _require_analysis_configuration,
+    _require_browser_agent_configuration,
     _require_parser_configuration,
     _require_paths_configuration,
     _require_reference_analysis_configuration,
@@ -69,11 +69,14 @@ from sciretriever.bootstrap.storage import (
 from sciretriever.configuration import (
     ConfigurationError,
     CredentialLookup,
+    acquisition_source_providers,
+    configurable_credential_providers,
     load_credentials,
     load_runtime_secrets,
+    metadata_source_providers,
 )
 from sciretriever.model.configuration import (
-    AgentAuthentication,
+    BrowserController,
     Configuration,
     ParserConnectionMode,
 )
@@ -208,18 +211,17 @@ def build_object_graph(  # noqa: C901, PLR0915
     )
     if not isinstance(credential_snapshot, CredentialLookup):
         raise BootstrapError("configuration-invalid")
-    # Construct the single shared Agents runtime before Acquisition so the
-    # optional Browser-role capability can be injected by identity into every
-    # production Browser route.  Analysis remains required for this complete
-    # graph; Browser is an optional role on the same runtime.
+    # Construct the single shared Agents runtime before Acquisition. Analysis
+    # is required by this complete graph; the Browser binding is required only
+    # when the frozen controller choice is Agent.
     agent = external_dependencies.agents_factory(http_client, coordinator)
-    if not isinstance(agent, AgentPort):
+    if not isinstance(agent, AgentRuntime):
         raise BootstrapError("analysis-not-ready")
-    browser_agent = _browser_agent_dependency(
-        configuration,
-        agent,
-        model=external_dependencies.agents_browser_model,
-        budget=external_dependencies.agents_browser_budget,
+    browser_controller = BrowserControllerKind(configuration.access.browser_controller.value)
+    browser_agent = (
+        _browser_agent_dependency(agent)
+        if browser_controller is BrowserControllerKind.AGENT
+        else None
     )
     metadata_registry = build_metadata_registry(
         configuration,
@@ -244,6 +246,7 @@ def build_object_graph(  # noqa: C901, PLR0915
             credentials=credential_snapshot,
             configured_sci_hub_resolver=external_dependencies.configured_sci_hub_resolver,  # type: ignore[arg-type]
             browser_client=browser_client,
+            browser_controller=browser_controller,
             browser_agent=browser_agent,
         ),
     )
@@ -342,25 +345,21 @@ def build_object_graph(  # noqa: C901, PLR0915
             max_total_output_tokens=external_dependencies.analysis_max_total_output_tokens,
         )
         analysis_service = AnalysisService(
-            agents=agent,
+            runtime=agent,
             artifact_reader=AnalysisArtifactReader(engine, verified_reader),
             current_inputs=SqliteAnalysisCurrentInputs(engine),
             artifact_publisher=AnalysisArtifactPublisher(artifact_store),
-            model=external_dependencies.agents_analysis_model,
             metadata_max_output_tokens=external_dependencies.metadata_max_output_tokens,
             content_max_output_tokens=external_dependencies.content_max_output_tokens,
             limits=limits,
-            agent_budget=external_dependencies.agents_analysis_budget,
             provenance_id_factory=_new_provenance_id,
             clock=clock.now,
         )
         analysis_api = AnalysisApi(
             content_service=analysis_service,
             reference_lookup_stage=ReferenceLookupStage(
-                agents=agent,
-                model=external_dependencies.agents_analysis_model,
+                runtime=agent,
                 max_output_tokens=external_dependencies.reference_max_output_tokens,
-                agent_budget=external_dependencies.agents_analysis_budget,
             ),
         )
 
@@ -557,18 +556,38 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         ProductionEntryScope.CITATION_DISCOVERY,
         ProductionEntryScope.CONTENT_COMPLETION,
     }
-    needs_optional_browser_agent = scope in {
-        ProductionEntryScope.ASSET_COMPLETION,
-        ProductionEntryScope.CONTENT_COMPLETION,
-    } and _browser_agent_declared(configuration)
+    needs_browser_agent = (
+        scope
+        in {
+            ProductionEntryScope.ASSET_COMPLETION,
+            ProductionEntryScope.CONTENT_COMPLETION,
+        }
+        and configuration.access.browser_controller is BrowserController.AGENT
+    )
+    metadata_providers = metadata_source_providers(configuration)
+    acquisition_providers = acquisition_source_providers(configuration)
+    credential_providers = frozenset(configurable_credential_providers())
     needs_provider_credentials = needs_metadata or (
-        needs_acquisition and bool(configuration.sources.acquisition.providers)
+        needs_acquisition
+        and any(provider in credential_providers for provider in acquisition_providers)
+    )
+    selected_model_references = tuple(
+        reference
+        for enabled, reference in (
+            (needs_analysis, configuration.analysis.model),
+            (needs_browser_agent, configuration.access.model),
+        )
+        if enabled and reference is not None
+    )
+    selected_model_providers = tuple(
+        configuration.providers.get(model.provider)
+        for reference in selected_model_references
+        if (model := configuration.models.get(reference)) is not None
     )
     needs_runtime_credentials = (
         needs_parser and configuration.parsing.connection_mode is ParserConnectionMode.REMOTE
-    ) or (
-        (needs_analysis or needs_optional_browser_agent)
-        and configuration.agents.authentication is AgentAuthentication.API_KEY
+    ) or any(
+        provider is not None and provider.requires_api_key for provider in selected_model_providers
     )
     needs_credentials = needs_provider_credentials or needs_runtime_credentials
     _require_paths_configuration(configuration)
@@ -578,7 +597,9 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         _require_reference_analysis_configuration(configuration)
     elif needs_analysis:
         _require_analysis_configuration(configuration)
-    if needs_metadata and not configuration.sources.metadata.providers:
+    if needs_browser_agent:
+        _require_browser_agent_configuration(configuration)
+    if needs_metadata and not metadata_providers:
         raise BootstrapError("metadata-not-ready")
 
     credentials = load_credentials(home=credentials_home) if needs_credentials else None
@@ -587,21 +608,14 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
             configuration,
             credentials=credentials,
             include_parser=needs_parser,
-            include_agents=needs_analysis or needs_optional_browser_agent,
+            include_agents=needs_analysis or needs_browser_agent,
         )
     except ConfigurationError:
-        # An optional Browser role may have a declared model but no
-        # origin-bound credential.  Treat that exact readiness gap as an
-        # unavailable optional capability; required Analysis/Parser secrets
-        # continue to fail closed through the original ConfigurationError.
-        if not needs_optional_browser_agent or needs_analysis:
-            raise
-        secrets = load_runtime_secrets(
-            configuration,
-            credentials=credentials,
-            include_parser=needs_parser,
-            include_agents=False,
-        )
+        if needs_analysis:
+            raise BootstrapError("analysis-not-ready") from None
+        if needs_browser_agent:
+            raise BootstrapError("browser-agent-not-ready") from None
+        raise
     coordinator, resolver, http_client = (
         _new_shared_network()
         if (needs_metadata or needs_acquisition or needs_parser or needs_analysis)
@@ -619,7 +633,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         if needs_acquisition and coordinator is not None and resolver is not None
         else None
     )
-    agent: AgentPort | None = None
+    agent: AgentRuntime | None = None
     browser_agent = None
     if coordinator is not None and http_client is not None:
         if scope is ProductionEntryScope.CITATION_DISCOVERY:
@@ -631,36 +645,27 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 required_roles=frozenset({AgentRole.ANALYSIS}),
             )
         elif scope is ProductionEntryScope.CONTENT_COMPLETION:
-            # One runtime owns both roles when Browser capability is declared;
-            # an incomplete optional role remains absent without weakening the
-            # required Analysis readiness.
+            required_roles = {AgentRole.ANALYSIS}
+            if needs_browser_agent:
+                required_roles.add(AgentRole.BROWSER)
             agent = _build_agents_runtime(
                 configuration,
                 secrets,
                 http_client,
                 coordinator,
-                required_roles=frozenset({AgentRole.ANALYSIS}),
-                optional_roles=frozenset({AgentRole.BROWSER}),
+                required_roles=frozenset(required_roles),
             )
-            browser_agent = _browser_agent_dependency(configuration, agent)
-        elif scope is ProductionEntryScope.ASSET_COMPLETION and _browser_agent_declared(
-            configuration
-        ):
-            try:
-                agent = _build_agents_runtime(
-                    configuration,
-                    secrets,
-                    http_client,
-                    coordinator,
-                    required_roles=frozenset(),
-                    optional_roles=frozenset({AgentRole.BROWSER}),
-                )
-            except BootstrapError as error:
-                if error.code != "browser-agent-not-ready":
-                    raise
-                agent = None
-            if agent is not None:
-                browser_agent = _browser_agent_dependency(configuration, agent)
+            if needs_browser_agent:
+                browser_agent = _browser_agent_dependency(agent)
+        elif scope is ProductionEntryScope.ASSET_COMPLETION and needs_browser_agent:
+            agent = _build_agents_runtime(
+                configuration,
+                secrets,
+                http_client,
+                coordinator,
+                required_roles=frozenset({AgentRole.BROWSER}),
+            )
+            browser_agent = _browser_agent_dependency(agent)
     if needs_acquisition:
         assert coordinator is not None and http_client is not None
         assert acquisition_runtime is not None
@@ -675,6 +680,9 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 browser_session_broker=acquisition_runtime.browser_session_broker,
                 credentials=credentials,
                 browser_client=acquisition_runtime.browser_client,
+                browser_controller=BrowserControllerKind(
+                    configuration.access.browser_controller.value
+                ),
                 browser_agent=browser_agent,
             ),
         )
@@ -719,9 +727,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 recovery=storage.discovery_repository,
                 observation_id_factory=_new_observation_id,
                 provenance_id_factory=_new_provenance_id,
-                provider_precedence=tuple(
-                    item.value for item in configuration.sources.metadata.providers
-                ),
+                provider_precedence=tuple(item.value for item in metadata_providers),
             )
             graph = BibliographyExchangeObjectGraph(
                 configuration=configuration,
@@ -760,10 +766,8 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 assert agent is not None
                 analysis_api = AnalysisApi.for_reference_lookup(
                     ReferenceLookupStage(
-                        agents=agent,
-                        model=configuration.agents.analysis.model or "",
+                        runtime=agent,
                         max_output_tokens=configuration.analysis.reference_max_output_tokens or 0,
-                        agent_budget=_agent_provider_limits(configuration),
                     )
                 )
                 operation = CitationDiscoveryOperation(
@@ -835,7 +839,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 )
                 analysis_api = AnalysisApi(
                     content_service=AnalysisService(
-                        agents=agent,
+                        runtime=agent,
                         artifact_reader=AnalysisArtifactReader(
                             engine, storage.foundation.verified_reader
                         ),
@@ -843,21 +847,17 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                         artifact_publisher=AnalysisArtifactPublisher(
                             storage.foundation.artifact_store
                         ),
-                        model=configuration.agents.analysis.model or "",
                         metadata_max_output_tokens=configuration.analysis.metadata_max_output_tokens
                         or 0,
                         content_max_output_tokens=configuration.analysis.content_max_output_tokens
                         or 0,
                         limits=_analysis_limits(configuration),
-                        agent_budget=_agent_provider_limits(configuration),
                         provenance_id_factory=_new_provenance_id,
                         clock=clock.now,
                     ),
                     reference_lookup_stage=ReferenceLookupStage(
-                        agents=agent,
-                        model=configuration.agents.analysis.model or "",
+                        runtime=agent,
                         max_output_tokens=configuration.analysis.reference_max_output_tokens or 0,
-                        agent_budget=_agent_provider_limits(configuration),
                     ),
                 )
                 completion = DatabaseCompletionOperation(

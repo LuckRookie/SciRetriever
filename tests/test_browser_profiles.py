@@ -18,10 +18,11 @@ from sciretriever.configuration import (
     ConfigurationError,
     browser_profile_path,
     browser_profile_status,
+    configuration_path,
     configure_browser_access_profile,
     credential_path,
     initialize_browser_profile,
-    load_editable_configuration,
+    load_editable_user_configuration,
     remove_browser_profile,
     resolve_browser_profile,
     set_credentials,
@@ -60,6 +61,13 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
 
     def _initialize(self, identity: str = _PROFILE_IDENTITY) -> BrowserProfileHandle:
         return initialize_browser_profile(identity, home=self.home)
+
+    def _write_configuration(self, payload: bytes) -> Path:
+        path = configuration_path(home=self.home)
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        path.write_bytes(payload)
+        path.chmod(0o600)
+        return path
 
     def test_identity_maps_only_to_the_fixed_user_profile_directory(self) -> None:
         expected = self.home / ".sciretriever" / "browser-profiles" / _PROFILE_IDENTITY
@@ -407,8 +415,7 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertTrue(remove_browser_profile(_PROFILE_IDENTITY, home=self.home))
 
     def test_profile_removal_deletes_only_the_selected_validated_session(self) -> None:
-        config_path = self.home / "config.toml"
-        config_path.write_text("[execution]\nmax_concurrency = 3\n", encoding="utf-8")
+        config_path = self._write_configuration(b"[execution]\nmax_concurrency = 3\n")
         credentials = set_credentials(
             "web-of-science",
             {"api_key": "removal-secret-sentinel"},
@@ -455,10 +462,8 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertFalse(any(item.name.startswith(".removing-") for item in storage.iterdir()))
 
     def test_access_selection_initializes_profile_and_preserves_other_configuration(self) -> None:
-        config_path = self.home / "config.toml"
-        config_path.write_text(
-            "# keep this comment\n[execution]\nmax_concurrency = 7\n",
-            encoding="utf-8",
+        config_path = self._write_configuration(
+            b"# keep this comment\n[execution]\nmax_concurrency = 7\n",
         )
         candidate = AccessConfig(
             browser_enabled=True,
@@ -467,7 +472,6 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         )
 
         configured = configure_browser_access_profile(
-            config_path,
             candidate,
             home=self.home,
         )
@@ -476,7 +480,7 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertEqual(configured.access.browser_profile, "institutional-access")
         self.assertEqual(configured.execution.max_concurrency, 7)
         self.assertIn("# keep this comment", config_path.read_text(encoding="utf-8"))
-        reloaded = load_editable_configuration(config_path)
+        reloaded = load_editable_user_configuration(home=self.home)
         self.assertEqual(reloaded, configured)
         self.assertEqual(
             browser_profile_status("institutional-access", home=self.home).presence,
@@ -485,9 +489,8 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertFalse(credential_path(home=self.home).exists())
 
     def test_cancelled_or_failed_access_selection_has_no_published_side_effect(self) -> None:
-        config_path = self.home / "config.toml"
         original = b"# unchanged\n[execution]\nmax_concurrency = 5\n"
-        config_path.write_bytes(original)
+        config_path = self._write_configuration(original)
         candidate = AccessConfig(
             browser_enabled=True,
             browser_profile="institutional-access",
@@ -497,13 +500,12 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConfigurationError, "cancelled"):
             configure_browser_access_profile(
-                config_path,
                 candidate,
                 home=self.home,
                 cancel_event=cancelled,
             )
         self.assertEqual(config_path.read_bytes(), original)
-        self.assertFalse((self.home / ".sciretriever").exists())
+        self.assertFalse((self.home / ".sciretriever" / "browser-profiles").exists())
 
         def fail_after_profile(stage: str) -> None:
             if stage == "profile-initialized":
@@ -511,7 +513,6 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConfigurationError, "interrupted"):
             configure_browser_access_profile(
-                config_path,
                 candidate,
                 home=self.home,
                 failpoint=fail_after_profile,
@@ -524,9 +525,8 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         self.assertFalse(credential_path(home=self.home).exists())
 
     def test_failed_access_selection_never_removes_an_existing_profile(self) -> None:
-        config_path = self.home / "config.toml"
         original = b"# unchanged\n[execution]\nmax_concurrency = 5\n"
-        config_path.write_bytes(original)
+        config_path = self._write_configuration(original)
         profile = self._initialize().runtime_directory()
         existing_session = profile / "existing-session.db"
         existing_session.write_bytes(b"opaque-existing-session")
@@ -542,7 +542,6 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConfigurationError, "interrupted"):
             configure_browser_access_profile(
-                config_path,
                 candidate,
                 home=self.home,
                 failpoint=fail_after_profile,

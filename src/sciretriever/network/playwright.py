@@ -671,12 +671,12 @@ class _Page:
         "_closed",
         "_navigation_url",
         "_native_listeners",
-        # Request-local Browser Agent element bindings.  These remain on the
-        # private adapter side of Network: integer keys are opaque to the
-        # Agent and never expose a CSS selector or vendor handle.
-        "_agent_key_counter",
-        "_agent_marker_key",
-        "_agent_locators",
+        # Request-local unified Browser control bindings.  Integer keys and
+        # vendor handles remain private to the Network adapter.
+        "_control_key_counter",
+        "_control_marker_key",
+        "_control_element_locators",
+        "_control_surface_centers",
     )
 
     def __init__(self, context: _Context, article: _ArticleContext, raw: object) -> None:
@@ -687,13 +687,17 @@ class _Page:
         self._closed = False
         self._navigation_url: str | None = None
         self._native_listeners: dict[str, Callable[[object], object]] = {}
-        self._agent_key_counter = 1
+        self._control_key_counter = 1_000_000
         # A fresh, page-local Symbol.for key keeps the marker opaque to the
         # Browser Agent and practically unguessable to page scripts.  The
         # marker is still treated as untrusted: click revalidates it and all
         # accessible facts immediately before the humanized Locator action.
-        self._agent_marker_key = secrets.token_hex(32)
-        self._agent_locators: dict[int, tuple[object, str, str, bool, bool]] = {}
+        self._control_marker_key = secrets.token_hex(32)
+        self._control_element_locators: dict[
+            int,
+            tuple[object, int, str, str, bool],
+        ] = {}
+        self._control_surface_centers: dict[int, tuple[float, float]] = {}
 
     @property
     def article_token(self) -> object:
@@ -981,140 +985,485 @@ class _Page:
             self._navigation_url = current_url
         return True
 
-    def agent_snapshot(self, *, timeout: int) -> dict[str, object]:  # noqa: C901
-        """Return bounded neutral facts for the request-local Browser Agent.
+    def control_snapshot(  # noqa: C901, PLR0912, PLR0915
+        self,
+        *,
+        timeout: int,
+        include_screenshot: bool,
+        static_selector: str | None = None,
+    ) -> dict[str, object]:
+        """Return one bounded page/frame/Shadow/viewer control snapshot."""
 
-        The adapter deliberately returns only opaque integer keys and bounded
-        role/name/state facts.  CSS selectors, HTML, cookies and vendor
-        handles stay inside this method and are never exposed to the Network
-        observation model.  Each matching DOM node receives an opaque,
-        request-local marker in the vendor page realm; the marker survives a
-        harmless DOM reordering but disappears when the node is replaced, so
-        a later click cannot silently fall through to a different ``nth``
-        element.  The marker key is never returned across the Network seam.
-        """
-
-        if type(timeout) is not int or timeout <= 0:
+        if (
+            type(timeout) is not int
+            or timeout <= 0
+            or type(include_screenshot) is not bool
+            or (
+                static_selector is not None
+                and (
+                    type(static_selector) is not str
+                    or not static_selector
+                    or len(static_selector) > 1024
+                    or any(ord(character) < 32 for character in static_selector)
+                )
+            )
+        ):
             raise _runtime_error()
-        marker_key = self._agent_marker_key
-        script = """
-        (seed) => {
-          const selector = "a,button,[role='button'],input[type='button']," +
-            "input[type='submit'],summary";
-          const nodes = Array.from(document.querySelectorAll(selector)).slice(0, 64);
-          const marker = Symbol.for("__MARKER__");
-          let next = Number(seed);
-          return nodes.map((node, key) => {
-            let token = node[marker];
-            if (!Number.isSafeInteger(token) || token < 1) {
-              token = next++;
-              node[marker] = token;
-            }
+        marker = self._control_marker_key
+        default_selector = (
+            "a,button,[role='button'],input[type='button'],input[type='submit'],"
+            "summary,[tabindex],embed,object,iframe"
+        )
+        scan_selector = (
+            default_selector if static_selector is None else f"{default_selector},{static_selector}"
+        )
+        scan_script = """
+        (args) => {
+          const elementMarker = Symbol.for(args.marker + "-element");
+          const shadowMarker = Symbol.for(args.marker + "-shadow");
+          const viewerMarker = Symbol.for(args.marker + "-viewer");
+          let next = Number(args.seed);
+          const surfaces = [];
+          const elements = [];
+          const boundedName = (node, role) => {
+            const raw = node.getAttribute("aria-label") ||
+              node.getAttribute("title") || node.value || node.innerText ||
+              node.textContent || role;
+            return String(raw).trim().slice(0, 256) || role;
+          };
+          const facts = (node) => {
             const style = window.getComputedStyle(node);
             const rect = node.getBoundingClientRect();
             const visible = !!(rect.width > 0 && rect.height > 0 &&
-              style.visibility !== 'hidden' && style.display !== 'none');
-            const disabled = node.hasAttribute('disabled') ||
-              node.getAttribute('aria-disabled') === 'true';
-            const role = node.getAttribute('role') ||
-              (node.tagName.toLowerCase() === 'a' ? 'link' : 'button');
-            const rawName = node.getAttribute('aria-label') ||
-              node.getAttribute('title') || node.value || node.innerText ||
-              node.textContent || role;
-            const name = String(rawName).trim().slice(0, 256) || role;
-            return {key: token, role: String(role).slice(0, 64), name, visible,
-              enabled: !disabled};
-          });
+              rect.bottom >= 0 && rect.right >= 0 &&
+              rect.top <= window.innerHeight && rect.left <= window.innerWidth &&
+              style.visibility !== "hidden" && style.display !== "none");
+            const disabled = node.hasAttribute("disabled") ||
+              node.getAttribute("aria-disabled") === "true";
+            const role = node.getAttribute("role") ||
+              (node.tagName.toLowerCase() === "a" ? "link" :
+               ["embed", "object", "iframe"].includes(node.tagName.toLowerCase())
+                 ? "document" : "button");
+            return {rect, visible, enabled: !disabled, role: String(role).slice(0, 64),
+              name: boundedName(node, role)};
+          };
+          const keyFor = (node, symbol) => {
+            let key = node[symbol];
+            if (!Number.isSafeInteger(key) || key < 1) {
+              key = next++;
+              node[symbol] = key;
+            }
+            return key;
+          };
+          const visit = (root, parentSurface) => {
+            Array.from(root.querySelectorAll(args.selector)).forEach((node) => {
+              const value = facts(node);
+              const tag = node.tagName.toLowerCase();
+              const source = String(node.getAttribute("src") ||
+                node.getAttribute("data") || "").toLowerCase();
+              const mediaType = String(node.getAttribute("type") || "").toLowerCase();
+              const viewer = ["embed", "object", "iframe"].includes(tag) &&
+                (mediaType.includes("pdf") || source.includes(".pdf") ||
+                 source.includes("/pdf") || source.includes("viewer"));
+              let surface = parentSurface;
+              if (viewer && value.visible) {
+                surface = keyFor(node, viewerMarker);
+                surfaces.push({
+                  key: surface, parent: parentSurface, kind: "viewer",
+                  x: value.rect.x, y: value.rect.y,
+                  width: value.rect.width, height: value.rect.height,
+                });
+              }
+              const key = keyFor(node, elementMarker);
+              elements.push({
+                key, surface, role: value.role, name: value.name,
+                visible: value.visible, enabled: value.enabled,
+                x: value.rect.x, y: value.rect.y,
+                width: value.rect.width, height: value.rect.height,
+              });
+            });
+            Array.from(root.querySelectorAll("*")).forEach((host) => {
+              if (!host.shadowRoot) return;
+              const value = facts(host);
+              if (!value.visible) return;
+              const surface = keyFor(host, shadowMarker);
+              surfaces.push({
+                key: surface, parent: parentSurface, kind: "shadow",
+                x: value.rect.x, y: value.rect.y,
+                width: value.rect.width, height: value.rect.height,
+              });
+              visit(host.shadowRoot, surface);
+            });
+          };
+          visit(document, null);
+          const root = document.scrollingElement || document.documentElement;
+          return {
+            title: String(document.title || "").slice(0, 512),
+            scrollX: Number(window.scrollX || 0),
+            scrollY: Number(window.scrollY || 0),
+            maximumX: Math.max(0, Number(root.scrollWidth || 0) - window.innerWidth),
+            maximumY: Math.max(0, Number(root.scrollHeight || 0) - window.innerHeight),
+            surfaces, elements, next,
+          };
         }
-        """.replace("__MARKER__", marker_key)
+        """
 
-        def read() -> dict[str, object]:
+        def read() -> dict[str, object]:  # noqa: C901, PLR0912, PLR0915
             try:
-                seed = self._agent_key_counter
-                raw_elements = _required_callable(self.raw, "evaluate")(script, seed)
-                if not isinstance(raw_elements, list):
-                    raise _runtime_error()
-                # Reserve a fresh range for new DOM nodes.  Existing nodes
-                # keep their marker, so unchanged observations preserve their
-                # revision while replacements naturally receive new keys.
-                self._agent_key_counter += len(raw_elements) + 1
-                # Bind the Locators before returning from the same engine
-                # command as the marker assignment.  This closes the small
-                # race in which a framework could reorder nodes between two
-                # independent engine calls.
-                locator = _required_callable(self.raw, "locator")(
-                    "a,button,[role='button'],input[type='button'],input[type='submit'],summary"
-                )
-                mapping: dict[int, tuple[object, str, str, bool, bool]] = {}
-                for index, item in enumerate(raw_elements):
-                    if not isinstance(item, dict):
-                        raise _runtime_error()
-                    key = item.get("key")
-                    role = item.get("role")
-                    name = item.get("name")
-                    visible = item.get("visible")
-                    enabled = item.get("enabled")
-                    if (
-                        type(key) is not int
-                        or key < 1
-                        or type(role) is not str
-                        or type(name) is not str
-                        or type(visible) is not bool
-                        or type(enabled) is not bool
-                    ):
-                        raise _runtime_error()
-                    item_locator = _required_callable(locator, "nth")(index)
-                    if key in mapping:
-                        raise _runtime_error()
-                    mapping[key] = (item_locator, role, name, visible, enabled)
-                self._agent_locators = mapping
                 viewport = _optional_value(self.raw, "viewport_size")
                 if not isinstance(viewport, dict):
                     viewport = _required_callable(self.raw, "evaluate")(
                         "() => ({width: window.innerWidth, height: window.innerHeight})"
                     )
-                screenshot_method = _required_callable(self.raw, "screenshot")
-                try:
-                    screenshot = screenshot_method(
-                        type="jpeg",
-                        quality=70,
-                        animations="disabled",
-                        timeout=timeout,
-                        full_page=False,
-                    )
-                except TypeError:
-                    screenshot = screenshot_method(type="jpeg", quality=70)
-                return {
-                    "width": viewport.get("width") if isinstance(viewport, dict) else None,
-                    "height": viewport.get("height") if isinstance(viewport, dict) else None,
-                    "screenshot": screenshot,
-                    "screenshot_media_type": "image/jpeg",
-                    "elements": tuple(
-                        (
-                            item.get("key"),
-                            item.get("role"),
-                            item.get("name"),
-                            item.get("visible"),
-                            item.get("enabled"),
+                width = viewport.get("width") if isinstance(viewport, dict) else None
+                height = viewport.get("height") if isinstance(viewport, dict) else None
+                if type(width) is not int or type(height) is not int:
+                    raise _runtime_error()
+                root_url = _query_free_http_url(_string_value(self.raw, "url"))
+                if root_url is None:
+                    root_url = _query_free_http_url(self._navigation_url)
+                if root_url is None:
+                    raise _runtime_error()
+
+                raw_frames = _optional_value(self.raw, "frames")
+                frames = (
+                    tuple(raw_frames)
+                    if isinstance(raw_frames, list) and raw_frames
+                    else (self.raw,)
+                )
+                main_frame = _optional_value(self.raw, "main_frame")
+                if main_frame is None:
+                    main_frame = frames[0]
+                frame_key_by_identity = {
+                    id(frame): 0 if frame is main_frame else 100_000 + index
+                    for index, frame in enumerate(frames, start=1)
+                }
+                surfaces: list[tuple[object, ...]] = []
+                elements: list[tuple[object, ...]] = []
+                element_locators: dict[
+                    int,
+                    tuple[object, int, str, str, bool],
+                ] = {}
+                surface_centers: dict[int, tuple[float, float]] = {}
+                page_title = ""
+                next_key = self._control_key_counter
+                static_element_key: int | None = None
+
+                def clipped_bounds(
+                    x_value: object,
+                    y_value: object,
+                    width_value: object,
+                    height_value: object,
+                ) -> tuple[float, float, float, float] | None:
+                    if any(
+                        isinstance(value, bool) or not isinstance(value, (int, float))
+                        for value in (x_value, y_value, width_value, height_value)
+                    ):
+                        return None
+                    x = float(cast(int | float, x_value))
+                    y = float(cast(int | float, y_value))
+                    item_width = float(cast(int | float, width_value))
+                    item_height = float(cast(int | float, height_value))
+                    if (
+                        not all(
+                            value == value and value not in {float("inf"), float("-inf")}
+                            for value in (x, y, item_width, item_height)
                         )
-                        for item in raw_elements
-                        if isinstance(item, dict)
-                    ),
+                        or item_width <= 0
+                        or item_height <= 0
+                    ):
+                        return None
+                    left = max(0.0, min(float(width), x))
+                    top = max(0.0, min(float(height), y))
+                    right = max(left, min(float(width), x + item_width))
+                    bottom = max(top, min(float(height), y + item_height))
+                    if right <= left or bottom <= top:
+                        return None
+                    return left, top, right - left, bottom - top
+
+                for frame in frames[:32]:
+                    frame_key = frame_key_by_identity[id(frame)]
+                    parent = _optional_value(frame, "parent_frame")
+                    parent_key = (
+                        None if frame is main_frame else frame_key_by_identity.get(id(parent), 0)
+                    )
+                    frame_url = _query_free_http_url(_optional_value(frame, "url"))
+                    if frame_url is None:
+                        frame_url = root_url
+                    if frame is main_frame:
+                        frame_bounds = (0.0, 0.0, float(width), float(height))
+                    else:
+                        frame_element = _optional_value(frame, "frame_element")
+                        frame_box = (
+                            None
+                            if frame_element is None
+                            else _optional_value(frame_element, "bounding_box")
+                        )
+                        if not isinstance(frame_box, dict):
+                            continue
+                        frame_bounds = clipped_bounds(
+                            frame_box.get("x"),
+                            frame_box.get("y"),
+                            frame_box.get("width"),
+                            frame_box.get("height"),
+                        )
+                        if frame_bounds is None:
+                            continue
+                    evaluator = _required_callable(frame, "evaluate")
+                    result = evaluator(
+                        scan_script,
+                        {
+                            "marker": marker,
+                            "seed": next_key,
+                            "selector": scan_selector,
+                        },
+                    )
+                    if not isinstance(result, dict):
+                        raise _runtime_error()
+                    title = result.get("title")
+                    if type(title) is not str:
+                        raise _runtime_error()
+                    if frame is main_frame:
+                        page_title = title
+                    scroll_x = result.get("scrollX")
+                    scroll_y = result.get("scrollY")
+                    maximum_x = result.get("maximumX")
+                    maximum_y = result.get("maximumY")
+                    next_value = result.get("next")
+                    raw_surfaces = result.get("surfaces")
+                    raw_elements = result.get("elements")
+                    if (
+                        type(next_value) is not int
+                        or next_value < next_key
+                        or not isinstance(raw_surfaces, list)
+                        or not isinstance(raw_elements, list)
+                    ):
+                        raise _runtime_error()
+                    next_key = next_value
+                    kind = (
+                        "page"
+                        if frame is main_frame
+                        else "viewer"
+                        if frame_url.casefold().endswith(".pdf")
+                        or "/pdf" in urlsplit(frame_url).path.casefold()
+                        else "frame"
+                    )
+                    frame_x, frame_y, frame_width, frame_height = frame_bounds
+                    surfaces.append(
+                        (
+                            frame_key,
+                            parent_key,
+                            kind,
+                            frame_url,
+                            title,
+                            frame_x,
+                            frame_y,
+                            frame_width,
+                            frame_height,
+                            scroll_x,
+                            scroll_y,
+                            maximum_x,
+                            maximum_y,
+                            None,
+                        )
+                    )
+                    surface_centers[frame_key] = (
+                        frame_x + frame_width / 2,
+                        frame_y + frame_height / 2,
+                    )
+                    surface_parent_by_key: dict[int, int] = {}
+                    for raw_surface in raw_surfaces:
+                        if not isinstance(raw_surface, dict):
+                            raise _runtime_error()
+                        key = raw_surface.get("key")
+                        raw_parent = raw_surface.get("parent")
+                        raw_kind = raw_surface.get("kind")
+                        if (
+                            type(key) is not int
+                            or key < 1
+                            or raw_parent is not None
+                            and (type(raw_parent) is not int or raw_parent < 1)
+                            or raw_kind not in {"shadow", "viewer"}
+                        ):
+                            raise _runtime_error()
+                        parent_surface = frame_key if raw_parent is None else raw_parent
+                        bounds = clipped_bounds(
+                            frame_x + float(cast(Any, raw_surface.get("x"))),
+                            frame_y + float(cast(Any, raw_surface.get("y"))),
+                            raw_surface.get("width"),
+                            raw_surface.get("height"),
+                        )
+                        if bounds is None:
+                            continue
+                        item_x, item_y, item_width, item_height = bounds
+                        surface_parent_by_key[key] = parent_surface
+                        surfaces.append(
+                            (
+                                key,
+                                parent_surface,
+                                raw_kind,
+                                frame_url,
+                                title,
+                                item_x,
+                                item_y,
+                                item_width,
+                                item_height,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                None,
+                            )
+                        )
+                        surface_centers[key] = (
+                            item_x + item_width / 2,
+                            item_y + item_height / 2,
+                        )
+
+                    locator = _required_callable(frame, "locator")(scan_selector)
+                    all_locators = _optional_value(locator, "all")
+                    if not isinstance(all_locators, list):
+                        count = _required_callable(locator, "count")()
+                        if type(count) is not int or count < 0:
+                            raise _runtime_error()
+                        all_locators = [
+                            _required_callable(locator, "nth")(index)
+                            for index in range(min(count, 256 - len(elements)))
+                        ]
+                    locator_by_marker: dict[int, object] = {}
+                    marker_script = "(node, key) => node[Symbol.for(key + '-element')] || null"
+                    for item_locator in all_locators[: 256 - len(elements)]:
+                        key = _required_callable(item_locator, "evaluate")(
+                            marker_script,
+                            marker,
+                        )
+                        if type(key) is int and key > 0:
+                            locator_by_marker[key] = item_locator
+                    static_marker_keys: set[int] = set()
+                    if static_selector is not None:
+                        static_locator = _required_callable(frame, "locator")(static_selector)
+                        static_locators = _optional_value(static_locator, "all")
+                        if not isinstance(static_locators, list):
+                            static_count = _required_callable(static_locator, "count")()
+                            if type(static_count) is not int or static_count < 0:
+                                raise _runtime_error()
+                            static_locators = [
+                                _required_callable(static_locator, "nth")(index)
+                                for index in range(min(static_count, 256))
+                            ]
+                        for item_locator in static_locators[:256]:
+                            key = _required_callable(item_locator, "evaluate")(
+                                marker_script,
+                                marker,
+                            )
+                            if type(key) is int and key > 0:
+                                static_marker_keys.add(key)
+
+                    for raw_element in raw_elements:
+                        if not isinstance(raw_element, dict):
+                            raise _runtime_error()
+                        key = raw_element.get("key")
+                        raw_surface = raw_element.get("surface")
+                        role = raw_element.get("role")
+                        name = raw_element.get("name")
+                        visible = raw_element.get("visible")
+                        enabled = raw_element.get("enabled")
+                        if (
+                            type(key) is not int
+                            or key < 1
+                            or raw_surface is not None
+                            and (type(raw_surface) is not int or raw_surface < 1)
+                            or type(role) is not str
+                            or type(name) is not str
+                            or type(visible) is not bool
+                            or type(enabled) is not bool
+                        ):
+                            raise _runtime_error()
+                        bounds = clipped_bounds(
+                            frame_x + float(cast(Any, raw_element.get("x"))),
+                            frame_y + float(cast(Any, raw_element.get("y"))),
+                            raw_element.get("width"),
+                            raw_element.get("height"),
+                        )
+                        if bounds is None:
+                            visible = False
+                            bounds = (0.0, 0.0, 1.0, 1.0)
+                        surface_key = frame_key if raw_surface is None else raw_surface
+                        item_x, item_y, item_width, item_height = bounds
+                        elements.append(
+                            (
+                                key,
+                                surface_key,
+                                role,
+                                name,
+                                visible,
+                                enabled,
+                                item_x,
+                                item_y,
+                                item_width,
+                                item_height,
+                            )
+                        )
+                        item_locator = locator_by_marker.get(key)
+                        if item_locator is not None:
+                            element_locators[key] = (
+                                item_locator,
+                                surface_key,
+                                role,
+                                name,
+                                enabled,
+                            )
+                        if (
+                            static_element_key is None
+                            and visible
+                            and key in static_marker_keys
+                            and item_locator is not None
+                        ):
+                            static_element_key = key
+                if not surfaces or len(surfaces) > 128 or len(elements) > 256:
+                    raise _runtime_error()
+                self._control_key_counter = next_key
+                self._control_element_locators = element_locators
+                self._control_surface_centers = surface_centers
+
+                screenshot: object = None
+                media_type: object = None
+                if include_screenshot:
+                    screenshot_method = _required_callable(self.raw, "screenshot")
+                    try:
+                        screenshot = screenshot_method(
+                            type="jpeg",
+                            quality=70,
+                            animations="disabled",
+                            timeout=timeout,
+                            full_page=False,
+                        )
+                    except TypeError:
+                        screenshot = screenshot_method(type="jpeg", quality=70)
+                    media_type = "image/jpeg"
+                return {
+                    "width": width,
+                    "height": height,
+                    "title": page_title,
+                    "screenshot": screenshot,
+                    "screenshot_media_type": media_type,
+                    "surfaces": tuple(surfaces),
+                    "elements": tuple(elements),
+                    "static_element_key": static_element_key,
                 }
             except BaseException:
                 raise _runtime_error() from None
 
         return self.engine.call(read)
 
-    def agent_click(
+    def control_click_element(
         self,
         key: int,
         *,
         expected_role: str,
         expected_name: str,
-        expected_visible: bool,
         expected_enabled: bool,
-        expected_locator: str,
+        expected_surface_key: int,
         timeout: int,
     ) -> bool:
         if (
@@ -1122,9 +1471,9 @@ class _Page:
             or key < 1
             or type(expected_role) is not str
             or type(expected_name) is not str
-            or type(expected_visible) is not bool
             or type(expected_enabled) is not bool
-            or type(expected_locator) is not str
+            or type(expected_surface_key) is not int
+            or expected_surface_key < 0
             or type(timeout) is not int
             or timeout <= 0
         ):
@@ -1132,53 +1481,52 @@ class _Page:
 
         def click() -> bool:
             try:
-                bound = self._agent_locators.get(key)
+                bound = self._control_element_locators.get(key)
                 if bound is None:
                     raise _runtime_error()
-                locator, role, name, visible, enabled = bound
+                locator, surface_key, role, name, enabled = bound
                 if (
-                    role != expected_role
+                    surface_key != expected_surface_key
+                    or role != expected_role
                     or name != expected_name
-                    or visible != expected_visible
-                    or enabled != expected_enabled
+                    or enabled is not expected_enabled
                 ):
                     raise _runtime_error()
-                current = _query_free_http_url(_string_value(self.raw, "url"))
-                if current is None or current != expected_locator:
-                    raise _runtime_error()
-                # Re-resolve and validate the marker, accessible facts and
-                # visibility immediately before the vendor click.  A stale
-                # Locator (for example after a framework rerender) therefore
-                # becomes a deterministic runtime failure rather than a click
-                # on whichever node now occupies the old nth position.
                 verify_script = """
-                    (node) => {
-                      const marker = Symbol.for("__MARKER__");
-                      const style = window.getComputedStyle(node);
-                      const rect = node.getBoundingClientRect();
-                      const visible = !!(rect.width > 0 && rect.height > 0 &&
-                        style.visibility !== 'hidden' && style.display !== 'none');
-                      const disabled = node.hasAttribute('disabled') ||
-                        node.getAttribute('aria-disabled') === 'true';
-                      const role = node.getAttribute('role') ||
-                        (node.tagName.toLowerCase() === 'a' ? 'link' : 'button');
-                      const rawName = node.getAttribute('aria-label') ||
-                        node.getAttribute('title') || node.value || node.innerText ||
-                        node.textContent || role;
-                      const name = String(rawName).trim().slice(0, 256) || role;
-                      return {
-                        marker: node[marker], role: String(role).slice(0, 64), name,
-                        visible, enabled: !disabled,
-                      };
-                    }
-                    """.replace("__MARKER__", self._agent_marker_key)
-                facts = _required_callable(locator, "evaluate")(verify_script)
+                (node, args) => {
+                  const marker = Symbol.for(args.marker + "-element");
+                  const style = window.getComputedStyle(node);
+                  const rect = node.getBoundingClientRect();
+                  const visible = !!(rect.width > 0 && rect.height > 0 &&
+                    rect.bottom >= 0 && rect.right >= 0 &&
+                    rect.top <= window.innerHeight && rect.left <= window.innerWidth &&
+                    style.visibility !== "hidden" && style.display !== "none");
+                  const disabled = node.hasAttribute("disabled") ||
+                    node.getAttribute("aria-disabled") === "true";
+                  const role = node.getAttribute("role") ||
+                    (node.tagName.toLowerCase() === "a" ? "link" :
+                     ["embed", "object", "iframe"].includes(node.tagName.toLowerCase())
+                       ? "document" : "button");
+                  const rawName = node.getAttribute("aria-label") ||
+                    node.getAttribute("title") || node.value || node.innerText ||
+                    node.textContent || role;
+                  return {
+                    marker: node[marker], role: String(role).slice(0, 64),
+                    name: String(rawName).trim().slice(0, 256) || role,
+                    visible, enabled: !disabled,
+                  };
+                }
+                """
+                facts = _required_callable(locator, "evaluate")(
+                    verify_script,
+                    {"marker": self._control_marker_key},
+                )
                 if (
                     not isinstance(facts, dict)
                     or facts.get("marker") != key
                     or facts.get("role") != expected_role
                     or facts.get("name") != expected_name
-                    or facts.get("visible") is not expected_visible
+                    or facts.get("visible") is not True
                     or facts.get("enabled") is not expected_enabled
                 ):
                     raise _runtime_error()
@@ -1188,15 +1536,49 @@ class _Page:
                 )
                 return True
             except BaseException as error:
-                if _is_playwright_timeout(error):
+                if _is_playwright_timeout(error) or _is_cloak_actionability_error(error):
                     return False
                 raise _runtime_error() from None
 
         return self.engine.call(click)
 
-    def agent_scroll(self, delta_y: int, *, timeout: int) -> None:
+    def control_click_point(self, x: float, y: float, *, timeout: int) -> bool:
         if (
-            type(delta_y) is not int
+            isinstance(x, bool)
+            or not isinstance(x, (int, float))
+            or isinstance(y, bool)
+            or not isinstance(y, (int, float))
+            or type(timeout) is not int
+            or timeout <= 0
+        ):
+            raise _runtime_error()
+
+        def click() -> bool:
+            try:
+                mouse = getattr(self.raw, "mouse", None)
+                if mouse is None:
+                    raise _runtime_error()
+                _required_callable(mouse, "move")(float(x), float(y))
+                _required_callable(mouse, "click")(float(x), float(y))
+                return True
+            except BaseException as error:
+                if _is_playwright_timeout(error) or _is_cloak_actionability_error(error):
+                    return False
+                raise _runtime_error() from None
+
+        return self.engine.call(click)
+
+    def control_scroll_surface(
+        self,
+        surface_key: int,
+        delta_y: int,
+        *,
+        timeout: int,
+    ) -> None:
+        if (
+            type(surface_key) is not int
+            or surface_key < 0
+            or type(delta_y) is not int
             or delta_y == 0
             or abs(delta_y) > 2_000
             or type(timeout) is not int
@@ -1206,38 +1588,80 @@ class _Page:
 
         def scroll() -> None:
             try:
-                # CloakBrowser is launched with ``humanize=True``.  Route
-                # Agent scroll through the same native mouse/wheel path used
-                # by that humanized runtime; direct JavaScript scrolling
-                # would bypass the closed interaction seam and create a
-                # detectable second control path.
+                center = self._control_surface_centers.get(surface_key)
                 mouse = getattr(self.raw, "mouse", None)
-                if mouse is None:
+                if center is None or mouse is None:
                     raise _runtime_error()
+                _required_callable(mouse, "move")(*center)
                 _required_callable(mouse, "wheel")(0, delta_y)
-                # Native wheel delivery may return just before the page's
-                # scroll listener and layout pass run.  Give the browser a
-                # small bounded settle window so the next neutral observation
-                # cannot race a pending visibility/reorder mutation.  This is
-                # still an adapter-owned native wait; no JavaScript or page
-                # selector crosses the Browser Agent seam.
-                settle = min(timeout, 100)
                 wait_for_timeout = getattr(self.raw, "wait_for_timeout", None)
-                if settle > 0 and callable(wait_for_timeout):
-                    wait_for_timeout(settle)
+                if callable(wait_for_timeout):
+                    wait_for_timeout(min(timeout, 100))
             except BaseException:
                 raise _runtime_error() from None
 
         self.engine.call(scroll)
 
-    def agent_wait(self, seconds: float, *, timeout: int) -> None:
-        if seconds < 0.05 or seconds > 10.0 or type(timeout) is not int or timeout <= 0:
+    def control_go_back(self, *, timeout: int) -> bool:
+        if type(timeout) is not int or timeout <= 0:
             raise _runtime_error()
-        wait_for_timeout = getattr(self.raw, "wait_for_timeout", None)
-        if not callable(wait_for_timeout):
-            raise _runtime_error()
+
+        def go_back() -> bool:
+            before = _string_value(self.raw, "url")
+            operation = _required_callable(self.raw, "go_back")
+            try:
+                operation(timeout=timeout, wait_until="commit")
+            except TypeError:
+                operation(timeout=timeout)
+            except BaseException as error:
+                if _is_playwright_timeout(error):
+                    return False
+                raise
+            after = _string_value(self.raw, "url")
+            if urlsplit(after).scheme.casefold() in {"http", "https"}:
+                self._navigation_url = after
+            return after != before
+
         try:
-            self.engine.call(lambda: wait_for_timeout(int(seconds * 1000)))
+            return self.engine.call(go_back)
+        except BaseException:
+            raise _runtime_error() from None
+
+    def control_wait_for_change(self, *, timeout: int) -> bool:
+        if type(timeout) is not int or timeout <= 0:
+            raise _runtime_error()
+        fingerprint_script = (
+            "() => [location.href, document.title, window.scrollX, window.scrollY, "
+            "document.body ? document.body.childElementCount : 0].join('\\u0000')"
+        )
+
+        def wait() -> bool:
+            before = _required_callable(self.raw, "evaluate")(fingerprint_script)
+            if type(before) is not str:
+                raise _runtime_error()
+            waiter = getattr(self.raw, "wait_for_function", None)
+            if not callable(waiter):
+                fallback = getattr(self.raw, "wait_for_timeout", None)
+                if not callable(fallback):
+                    raise _runtime_error()
+                fallback(min(timeout, 100))
+                after = _required_callable(self.raw, "evaluate")(fingerprint_script)
+                return type(after) is str and after != before
+            condition = (
+                "(before) => [location.href, document.title, window.scrollX, "
+                "window.scrollY, document.body ? document.body.childElementCount : 0]"
+                ".join('\\u0000') !== before"
+            )
+            try:
+                waiter(condition, arg=before, timeout=timeout)
+                return True
+            except BaseException as error:
+                if _is_playwright_timeout(error):
+                    return False
+                raise
+
+        try:
+            return self.engine.call(wait)
         except BaseException:
             raise _runtime_error() from None
 
@@ -1265,7 +1689,8 @@ class _Page:
             for event, listener in tuple(self._native_listeners.items()):
                 remove_listener(event, listener)
         self._native_listeners.clear()
-        self._agent_locators.clear()
+        self._control_element_locators.clear()
+        self._control_surface_centers.clear()
         cast(Any, self.raw).close()
         self._closed = True
 

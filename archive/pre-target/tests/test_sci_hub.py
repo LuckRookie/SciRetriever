@@ -1,3 +1,5 @@
+"""Archived Sci-Hub resolver tests."""
+
 from pathlib import Path
 import sys
 from unittest import TestCase

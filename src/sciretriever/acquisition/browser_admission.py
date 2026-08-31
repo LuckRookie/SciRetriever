@@ -86,7 +86,6 @@ class BrowserGroupReadiness(str, Enum):
     SESSION_MISSING = "session-missing"
     LOGIN_REQUIRED = "login-required"
     MFA_REQUIRED = "mfa-required"
-    CHALLENGE_REQUIRED = "challenge-required"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
@@ -618,7 +617,6 @@ def _runtime_readiness(
     return {
         BrowserCircuitReason.LOGIN_REQUIRED: BrowserGroupReadiness.LOGIN_REQUIRED,
         BrowserCircuitReason.MFA_REQUIRED: BrowserGroupReadiness.MFA_REQUIRED,
-        BrowserCircuitReason.CHALLENGE_REQUIRED: BrowserGroupReadiness.CHALLENGE_REQUIRED,
         BrowserCircuitReason.IP_BLOCKED: BrowserGroupReadiness.IP_BLOCKED,
         BrowserCircuitReason.ACCOUNT_WARNING: BrowserGroupReadiness.ACCOUNT_WARNING,
         BrowserCircuitReason.CLEANUP_FAILURE: BrowserGroupReadiness.RUNTIME_FAILED,

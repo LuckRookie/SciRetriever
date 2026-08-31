@@ -68,6 +68,45 @@ STORAGE_CONCRETE_PREFIXES = (
 REVOKED_EXACT_NAMES = frozenset({"Work", "DurableExchange", "durable_exchange", "sqlalchemy"})
 REVOKED_NAME_PREFIXES = ("WorkVersion", "Collection", "BatchRun", "DocumentPackage")
 
+ANALYSIS_REVOKED_AGENT_NAMES = frozenset(
+    {
+        "AgentBudget",
+        "AgentPort",
+        "AgentRequest",
+        "AgentSession",
+        "open_session",
+        "to_agent_request",
+    }
+)
+
+REVOKED_BROWSER_CONTROL_NAMES = frozenset(
+    {
+        "AgentsBrowserAgentDecisionPort",
+        "BrowserAgentActionCommand",
+        "BrowserAgentActionPort",
+        "BrowserAgentDecisionPort",
+        "BrowserAgentLoopBudget",
+        "BrowserAgentObservation",
+        "BrowserBudget",
+        "BrowserChallengeFactsProvider",
+        "BrowserChallengeLifecycle",
+        "BrowserChallengeObservation",
+        "BrowserChallengeResourceFacts",
+        "BrowserChallengeState",
+        "BrowserChallengeStateMachine",
+        "BrowserObservationBudget",
+        "BrowserFlowDisposition",
+        "BrowserGroupEffect",
+        "BrowserRunState",
+        "BrowserRunStateMachine",
+        "BrowserStateDecision",
+        "decision_for_browser_state",
+        "CHALLENGE_REQUIRED",
+        "BUDGET_EXHAUSTED",
+        "max_actions",
+    }
+)
+
 
 def _import_probe(module_name: str) -> subprocess.CompletedProcess[str]:
     """Import one module in a clean interpreter with only the source tree."""
@@ -91,6 +130,15 @@ def _import_names(path: Path) -> tuple[str, ...]:
         elif isinstance(node, ast.ImportFrom):
             names.append(node.module or "")
     return tuple(names)
+
+
+def _python_identifiers(path: Path) -> frozenset[str]:
+    source = path.read_text(encoding="utf-8")
+    return frozenset(
+        token.string
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        if token.type == tokenize.NAME
+    )
 
 
 def _is_revoked_identifier(name: str) -> bool:
@@ -233,6 +281,186 @@ def _contract_surface_violations(source: str, *, filename: str) -> tuple[str, ..
 
 
 class ArchitectureCutoverTests(unittest.TestCase):
+    def test_agents_api_is_the_stateless_narrow_waist(self) -> None:
+        agents_root = SOURCE_ROOT / "agents"
+        for name in (
+            "api.py",
+            "capabilities.py",
+            "messages.py",
+            "tools.py",
+            "calls.py",
+            "runtime.py",
+            "ports.py",
+            "failures.py",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue((agents_root / name).is_file())
+
+        api_path = agents_root / "api.py"
+        imported = _import_names(api_path)
+        self.assertFalse(
+            any(
+                module.endswith((".requests", ".sessions")) or ".providers" in module
+                for module in imported
+            )
+        )
+        api_source = api_path.read_text(encoding="utf-8")
+        for legacy_name in (
+            "AgentBudget",
+            "AgentRequest",
+            "AgentSession",
+            "AgentPort",
+            "open_session",
+        ):
+            with self.subTest(legacy_name=legacy_name):
+                self.assertNotIn(f'"{legacy_name}"', api_source)
+
+    def test_analysis_uses_only_the_stateless_agents_api(self) -> None:
+        analysis_root = SOURCE_ROOT / "analysis"
+        for path in sorted(analysis_root.rglob("*.py")):
+            imported = _import_names(path)
+            agent_imports = tuple(
+                module
+                for module in imported
+                if module == "sciretriever.agents" or module.startswith("sciretriever.agents.")
+            )
+            forbidden_imports = tuple(
+                module for module in imported if module.startswith("sciretriever.network")
+            )
+            legacy_names = ANALYSIS_REVOKED_AGENT_NAMES.intersection(_python_identifiers(path))
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertEqual(set(agent_imports) - {"sciretriever.agents.api"}, set())
+                self.assertEqual(forbidden_imports, ())
+                self.assertEqual(legacy_names, frozenset())
+
+        ports_path = analysis_root / "ports.py"
+        ports_tree = ast.parse(ports_path.read_text(encoding="utf-8"), filename=str(ports_path))
+        request_class = next(
+            node
+            for node in ports_tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "AnalysisRequest"
+        )
+        request_fields = tuple(
+            node.target.id
+            for node in request_class.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        )
+        self.assertEqual(request_fields, ("kind", "input_sha256", "max_output_tokens"))
+
+    def test_legacy_agent_request_and_session_surface_is_absent(self) -> None:
+        agents_root = SOURCE_ROOT / "agents"
+        for name in ("requests.py", "sessions.py"):
+            with self.subTest(name=name):
+                self.assertFalse((agents_root / name).exists())
+
+        revoked = frozenset(
+            {
+                "AgentBudget",
+                "AgentPort",
+                "AgentReadiness",
+                "AgentRequest",
+                "AgentSession",
+                "AgentStructuredResponse",
+                "AgentToolDecision",
+                "open_session",
+            }
+        )
+        for path in sorted(agents_root.rglob("*.py")):
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertEqual(revoked.intersection(_python_identifiers(path)), frozenset())
+                self.assertFalse(
+                    any(
+                        module.endswith((".requests", ".sessions"))
+                        for module in _import_names(path)
+                    )
+                )
+
+        for module in (
+            "sciretriever.agents.requests",
+            "sciretriever.agents.sessions",
+        ):
+            with self.subTest(module=module):
+                self.assertNotEqual(_import_probe(module).returncode, 0)
+
+    def test_legacy_browser_budget_and_challenge_control_types_are_absent(self) -> None:
+        self.assertFalse((SOURCE_ROOT / "acquisition" / "browser_state.py").exists())
+        for package in ("acquisition", "network", "model", "configuration", "bootstrap"):
+            for path in sorted((SOURCE_ROOT / package).rglob("*.py")):
+                with self.subTest(path=path.relative_to(ROOT)):
+                    self.assertEqual(
+                        REVOKED_BROWSER_CONTROL_NAMES.intersection(_python_identifiers(path)),
+                        frozenset(),
+                    )
+
+    def test_agents_acquisition_and_network_keep_their_execution_owners(self) -> None:
+        agents_forbidden = (
+            "acquisition",
+            "analysis",
+            "bootstrap",
+            "configuration",
+            "entry",
+            "literature",
+            "metadata",
+            "parsing",
+            "storage",
+        )
+        for path in sorted((SOURCE_ROOT / "agents").rglob("*.py")):
+            imported = _import_names(path)
+            violations = tuple(
+                module
+                for module in imported
+                if any(
+                    module == f"sciretriever.{package}"
+                    or module.startswith(f"sciretriever.{package}.")
+                    for package in agents_forbidden
+                )
+            )
+            with self.subTest(owner="agents", path=path.relative_to(ROOT)):
+                self.assertEqual(violations, ())
+
+        vendor_modules = (
+            "cloakbrowser",
+            "playwright",
+            "sciretriever.network.cloakbrowser",
+            "sciretriever.network.playwright",
+        )
+        vendor_identifiers = frozenset({"BrowserContext", "CDPSession", "Page", "Playwright"})
+        for path in sorted((SOURCE_ROOT / "acquisition").rglob("*.py")):
+            imported = _import_names(path)
+            with self.subTest(owner="acquisition", path=path.relative_to(ROOT)):
+                self.assertFalse(
+                    any(
+                        module == prefix or module.startswith(f"{prefix}.")
+                        for module in imported
+                        for prefix in vendor_modules
+                    )
+                )
+                self.assertEqual(
+                    vendor_identifiers.intersection(_python_identifiers(path)),
+                    frozenset(),
+                )
+
+        allowed_network_model_modules = frozenset(
+            {"sciretriever.model.access", "sciretriever.model.primitives"}
+        )
+        for path in sorted((SOURCE_ROOT / "network").rglob("*.py")):
+            imported = _import_names(path)
+            business_imports = tuple(
+                module
+                for module in imported
+                if (
+                    module.startswith("sciretriever.model.")
+                    and module not in allowed_network_model_modules
+                )
+                or any(
+                    module == f"sciretriever.{package}"
+                    or module.startswith(f"sciretriever.{package}.")
+                    for package in FUNCTIONAL_PACKAGES
+                )
+            )
+            with self.subTest(owner="network", path=path.relative_to(ROOT)):
+                self.assertEqual(business_imports, ())
+
     def test_configuration_and_bootstrap_use_one_package_each(self) -> None:
         for name in ("configuration", "bootstrap"):
             with self.subTest(name=name):

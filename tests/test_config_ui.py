@@ -11,7 +11,9 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from sciretriever.entry.cli.config_ui import (
+    ConfigActionKind,
     ConfigConsole,
+    ConfigOption,
     ConfigStatusPresenter,
     ConfigTheme,
     TerminalChoice,
@@ -158,17 +160,57 @@ def _status_payload() -> dict[str, object]:
                 "origin_matches": None,
             },
         },
-        "analysis": {
+        "models": {
+            "providers": [
+                {
+                    "name": "openai",
+                    "api": "openai-responses",
+                    "base_url": "https://api.openai.com/v1",
+                    "key": {
+                        "required": True,
+                        "configured": True,
+                        "origin_matches": True,
+                    },
+                }
+            ],
+            "models": [
+                {
+                    "reference": "openai/gpt-summary",
+                    "provider": "openai",
+                    "model": "gpt-summary",
+                    "reasoning": "max",
+                    "image": False,
+                },
+                {
+                    "reference": "openai/gpt-browser",
+                    "provider": "openai",
+                    "model": "gpt-browser",
+                    "reasoning": "high",
+                    "image": True,
+                },
+            ],
+        },
+        "analyze": {
+            "model": "openai/gpt-summary",
             "reference_locally_ready": True,
-            "provider": "openai",
-            "protocol": "openai-responses",
-            "base_url": "https://api.openai.com/v1",
-            "model": "gpt-test",
-            "context_window_tokens": 128_000,
-            "api_key": {
-                "required": True,
-                "configured": True,
-                "origin_matches": True,
+            "selected_model": {
+                "reference": "openai/gpt-summary",
+                "provider": "openai",
+                "model": "gpt-summary",
+                "reasoning": "max",
+                "image": False,
+            },
+        },
+        "download": {
+            "model": "openai/gpt-browser",
+            "model_locally_ready": True,
+            "controller": "agent",
+            "selected_model": {
+                "reference": "openai/gpt-browser",
+                "provider": "openai",
+                "model": "gpt-browser",
+                "reasoning": "high",
+                "image": True,
             },
         },
         "execution": {"max_concurrency": 4},
@@ -216,11 +258,18 @@ class ConfigPresentationTests(unittest.TestCase):
             console = ConfigConsole("dark")
             console.header(config_path="/tmp/config.toml", credentials_path="credentials.toml")
             console.home(
-                llm_state="Ready",
-                llm_detail="OpenAI Responses",
-                mineru_state="Incomplete",
-                mineru_detail="Not configured",
-                providers=(("Wiley", "Authorized PDF", "Configured"),),
+                models_state="Ready",
+                models_detail="1 Service · 2 Profiles",
+                search_state="Ready",
+                search_detail="2 sources",
+                download_state="Ready",
+                download_detail="browser · agent",
+                parse_state="Incomplete",
+                parse_detail="Not configured",
+                analyze_state="Ready",
+                analyze_detail="summary",
+                browser_state="Incomplete",
+                browser_detail="Profile not selected",
             )
             console.access(
                 api_routes=(("Wiley", "Ready", "No local action"),),
@@ -232,46 +281,94 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         rendered = stderr.getvalue()
         self.assertIn("SciRetriever · Configuration", rendered)
-        self.assertIn("CORE SERVICES", rendered)
-        self.assertIn("Provider Access", rendered)
+        self.assertIn("CONFIGURATION AREAS", rendered)
+        self.assertIn("Models", rendered)
+        self.assertIn("Search", rendered)
+        self.assertIn("Download", rendered)
+        self.assertIn("Parse", rendered)
+        self.assertIn("Analyze", rendered)
         self.assertIn("Controlled Browser", rendered)
         self.assertIn("Proposed ordinary configuration", rendered)
         self.assertIn("changes", rendered)
         self.assertNotIn("\x1b[", rendered)
         self.assertNotIn(_SECRET, rendered)
 
-    def test_home_renders_unified_agents_browser_local_summary(self) -> None:
+    def test_model_setup_steps_and_review_are_compact_and_secret_free(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            console = ConfigConsole("mono", width=72)
+            console.setup_step(1, 8, "PROVIDER", "Choose the shared endpoint.")
+            console.section(
+                "Models · example/gpt-fixture",
+                "API openai-responses · URL https://gateway.example.invalid/v1\n"
+                "reasoning max · image yes",
+            )
+
+        rendered = stderr.getvalue()
+        semantic_text = " ".join(rendered.split())
+        for value in (
+            "01/08",
+            "PROVIDER",
+            "Models · example/gpt-fixture",
+            "openai-responses",
+            "gpt-fixture",
+            "reasoning max",
+            "image yes",
+        ):
+            self.assertIn(value, semantic_text)
+        self.assertNotIn("Profile", rendered)
+        self.assertNotIn("Service", rendered)
+        self.assertNotIn("Preset", rendered)
+        self.assertNotIn("context_window_tokens", rendered)
+        self.assertNotIn("structured_output", rendered)
+        self.assertNotIn("max_chunk_bytes", rendered)
+        self.assertNotIn("image_bytes", rendered)
+        self.assertNotIn(_SECRET, rendered)
+
+    def test_home_renders_layered_configuration_areas_without_role_duplication(self) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             ConfigConsole("mono", width=80).home(
-                llm_state="Incomplete",
-                llm_detail="not configured",
-                mineru_state="Incomplete",
-                mineru_detail="not configured",
-                providers=(),
-                agent_provider=("openai · openai-responses", "Ready"),
-                analysis_role=("model gpt-test · structured text yes", "Ready"),
-                browser_role=("model not set · image no · tool no", "Not configured"),
-                cloak_binary=("missing · version not installed · explicit install only", "Review"),
-                selected_profile=(
-                    "institutional-access · presence missing · opaque identity",
-                    "missing",
-                ),
-                browser_enabled=("automatic Browser admission is disabled", "Disabled"),
+                models_state="Incomplete",
+                models_detail="1 Provider · no Models",
+                search_state="Ready",
+                search_detail="3 metadata sources · keys stay with Search",
+                download_state="Review",
+                download_detail="rules · Browser Profile not selected",
+                parse_state="Incomplete",
+                parse_detail="not configured",
+                analyze_state="Incomplete",
+                analyze_detail="model not selected",
+                browser_state="Incomplete",
+                browser_detail="Profile not selected",
             )
         rendered = stderr.getvalue()
+        semantic_text = " ".join(rendered.split())
         for value in (
-            "AGENTS & BROWSER",
+            "CONFIGURATION AREAS",
+            "Models",
+            "Search",
+            "Download",
+            "Parse",
+            "Analyze",
+            "Browser",
+            "Status",
+            "Theme",
+            "keys stay",
+            "with Search",
+        ):
+            self.assertIn(value, semantic_text)
+        for value in (
+            "Providers & API Keys",
+            "MinerU Parser",
+            "Literature Sources / Access",
+            "Browser Runtime",
+            "Diagnostics / Status",
+            "Appearance",
             "Agent provider",
             "Analysis role",
-            "Browser role",
-            "Cloak binary",
-            "Selected Profile",
-            "Browser enabled",
-            "explicit install only",
-            "opaque identity",
         ):
-            self.assertIn(value, rendered)
+            self.assertNotIn(value, rendered)
         self.assertNotIn("fingerprint_seed", rendered)
         self.assertNotIn("browser-profiles/", rendered)
         self.assertNotIn(_SECRET, rendered)
@@ -288,10 +385,19 @@ class ConfigPresentationTests(unittest.TestCase):
             ).status(_status_payload())
         self.assertEqual(stderr.getvalue(), "")
         rendered = stdout.getvalue()
+        semantic_text = " ".join(rendered.replace("│", " ").split())
         for text in (
-            "Core services",
-            "LLM Analysis",
-            "MinerU Parser",
+            "Models, Analyze, Download and Parse",
+            "Provider · openai",
+            "Model · openai/gpt-…",
+            "model: gpt-summary",
+            "model: gpt-browser",
+            "Analyze",
+            "Download · Model",
+            "reasoning max",
+            "reasoning high",
+            "Analyze selects one configured Model",
+            "Parse",
             "Metadata APIs",
             "Authorized primary-PDF APIs",
             "PDF acquisition routes",
@@ -306,7 +412,7 @@ class ConfigPresentationTests(unittest.TestCase):
             "checked-per-article",
             "not evaluated",
         ):
-            self.assertIn(text, rendered)
+            self.assertIn(text, semantic_text)
         self.assertNotIn("\x1b[", rendered)
         self.assertNotIn(_SECRET, rendered)
 
@@ -489,7 +595,7 @@ class ConfigPresentationTests(unittest.TestCase):
             }
         )
         rendered = output.getvalue()
-        self.assertIn("Browser Agent", rendered)
+        self.assertIn("Browser model", rendered)
         self.assertIn("synthetic-image + closed-tool", rendered)
         self.assertIn("Literature/PDF/page content", rendered)
         self.assertIn("may consume quota", rendered)
@@ -498,12 +604,32 @@ class ConfigPresentationTests(unittest.TestCase):
 
 
 class TerminalChoiceTests(unittest.TestCase):
+    def test_options_are_single_word_and_keep_color_independent_action_markers(self) -> None:
+        cases = (
+            (ConfigActionKind.CONFIGURE, "◆"),
+            (ConfigActionKind.INSPECT, "◇"),
+            (ConfigActionKind.TEST, "▶"),
+            (ConfigActionKind.DANGER, "!"),
+            (ConfigActionKind.NAVIGATE, "←"),
+        )
+        for kind, marker in cases:
+            with self.subTest(kind=kind.value):
+                item = ConfigOption("value", "Setup", kind)
+                self.assertEqual(item.marker, marker)
+                self.assertTrue(item.plain_label.startswith(marker))
+        self.assertEqual(
+            ConfigOption("quit", "Quit", ConfigActionKind.NAVIGATE).marker,
+            "×",
+        )
+        with self.assertRaisesRegex(ValueError, "one word"):
+            ConfigOption("invalid", "Two words")
+
     def test_shortcut_uses_public_prompt_session_and_returns_mapped_value(self) -> None:
         with create_pipe_input() as pipe:
             pipe.send_text("a")
             result = TerminalChoice[str](
                 message="Open a configuration area",
-                options=(("access", "Provider Access"), ("quit", "Quit")),
+                options=(ConfigOption("access", "Access"), ConfigOption("quit", "Quit")),
                 shortcuts={"a": "access", "q": "quit"},
                 input_factory=lambda: pipe,
                 output_factory=DummyOutput,
@@ -515,7 +641,7 @@ class TerminalChoiceTests(unittest.TestCase):
             pipe.send_bytes(b"\x1b[B\r")
             result = TerminalChoice[str](
                 message="Choose",
-                options=(("first", "First"), ("second", "Second")),
+                options=(ConfigOption("first", "First"), ConfigOption("second", "Second")),
                 input_factory=lambda: pipe,
                 output_factory=DummyOutput,
             ).prompt()
@@ -527,10 +653,37 @@ class TerminalChoiceTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 TerminalChoice[str](
                     message="Choose",
-                    options=(("first", "First"),),
+                    options=(ConfigOption("first", "First"),),
                     input_factory=lambda: pipe,
                     output_factory=DummyOutput,
                 ).prompt()
+
+    def test_left_arrow_returns_the_configured_back_value(self) -> None:
+        with create_pipe_input() as pipe:
+            pipe.send_bytes(b"\x1b[D")
+            result = TerminalChoice[str](
+                message="Choose",
+                options=(
+                    ConfigOption("first", "First"),
+                    ConfigOption("back", "Back", ConfigActionKind.NAVIGATE),
+                ),
+                back_value="back",
+                input_factory=lambda: pipe,
+                output_factory=DummyOutput,
+            ).prompt()
+        self.assertEqual(result, "back")
+
+    def test_search_filters_a_long_choice_list_before_selection(self) -> None:
+        with create_pipe_input() as pipe:
+            pipe.send_text("/second\r\r")
+            result = TerminalChoice[str](
+                message="Choose a model",
+                options=(ConfigOption("first", "First"), ConfigOption("second", "Second")),
+                searchable=True,
+                input_factory=lambda: pipe,
+                output_factory=DummyOutput,
+            ).prompt()
+        self.assertEqual(result, "second")
 
     def test_terminal_detection_requires_input_and_error_ttys(self) -> None:
         stdin = Mock()

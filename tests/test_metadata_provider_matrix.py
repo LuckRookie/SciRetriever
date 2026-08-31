@@ -107,15 +107,13 @@ def _configuration(
     mailto: str | None = "fixture-contact@example.invalid",
     scan_limit: int | None = 37,
 ) -> Configuration:
-    lines: list[str] = []
+    lines: list[str] = [
+        "[sources.metadata]",
+        'mode = "custom"',
+        "providers = [" + ", ".join(f'"{provider}"' for provider in providers) + "]",
+    ]
     if scan_limit is not None:
-        lines.extend(("[discovery]", f"metadata_scan_limit = {scan_limit}"))
-    lines.extend(
-        (
-            "[sources.metadata]",
-            "providers = [" + ", ".join(f'"{provider}"' for provider in providers) + "]",
-        )
-    )
+        lines.append(f"limit = {scan_limit}")
     if product is not None or database is not None or edition is not None:
         lines.append("[sources.metadata.web-of-science]")
         if product is not None:
@@ -183,7 +181,7 @@ class OrdinaryMetadataConfigurationTests(unittest.TestCase):
         value = _configuration()
         metadata = value.sources.metadata
         self.assertEqual(tuple(item.value for item in metadata.providers), _ALL_PROVIDERS)
-        self.assertEqual(value.discovery.metadata_scan_limit, 37)
+        self.assertEqual(metadata.limit, 37)
         self.assertEqual(
             metadata.web_of_science.product,
             WebOfScienceProduct.EXPANDED,
@@ -206,37 +204,39 @@ class OrdinaryMetadataConfigurationTests(unittest.TestCase):
 
     def test_unknown_duplicate_unbounded_and_illegal_combinations_fail_closed(self) -> None:
         invalid = (
-            '[sources.metadata]\nproviders = ["unknown"]\n',
-            '[sources.metadata]\nproviders = ["crossref", "crossref"]\n',
-            "[discovery]\nmetadata_scan_limit = 0\n",
-            "[discovery]\nmetadata_scan_limit = 1.5\n",
+            '[sources.metadata]\nmode = "custom"\nproviders = ["unknown"]\n',
+            ('[sources.metadata]\nmode = "custom"\nproviders = ["crossref", "crossref"]\n'),
+            "[sources.metadata]\nlimit = 0\n",
+            "[sources.metadata]\nlimit = 1.5\n",
             (
-                '[sources.metadata]\nproviders = ["crossref"]\n'
+                '[sources.metadata]\nmode = "custom"\nproviders = ["crossref"]\n'
                 '[sources.metadata.crossref]\nmode = "polite"\n'
             ),
             (
-                '[sources.metadata]\nproviders = ["crossref"]\n'
+                '[sources.metadata]\nmode = "custom"\nproviders = ["crossref"]\n'
                 '[sources.metadata.crossref]\nmode = "anonymous"\n'
                 'mailto = "fixture@example.invalid"\n'
             ),
             (
-                '[sources.metadata]\nproviders = ["crossref"]\n'
+                '[sources.metadata]\nmode = "custom"\nproviders = ["crossref"]\n'
                 '[sources.metadata.crossref]\nmode = "plus"\n'
             ),
-            ('[sources.metadata]\nproviders = ["crossref"]\nlookup = true\n'),
+            ('[sources.metadata]\nmode = "custom"\nproviders = ["crossref"]\nlookup = true\n'),
             (
-                '[sources.metadata]\nproviders = ["crossref"]\n'
+                '[sources.metadata]\nmode = "custom"\nproviders = ["crossref"]\n'
                 'endpoint = "https://example.invalid"\n'
             ),
             (
-                '[sources.metadata]\nproviders = ["web-of-science"]\n'
+                '[sources.metadata]\nmode = "custom"\n'
+                'providers = ["web-of-science"]\n'
                 "[sources.metadata.web-of-science]\n"
                 'product = "starter"\n'
                 'database = "WOS"\n'
                 f'api_key = "{_SECRET}"\n'
             ),
             (
-                '[sources.metadata]\nproviders = ["web-of-science"]\n'
+                '[sources.metadata]\nmode = "custom"\n'
+                'providers = ["web-of-science"]\n'
                 "[sources.metadata.web-of-science]\n"
                 'product = "starter"\n'
                 'database = "WOS\\nunsafe"\n'
@@ -376,7 +376,7 @@ class MetadataProviderMatrixTests(unittest.TestCase):
         for rendered in (repr(registry), repr(registry.citation_limits)):
             self.assertNotIn(_SECRET, rendered)
 
-    def test_opencitations_only_requires_and_receives_citation_scan_limit(self) -> None:
+    def test_opencitations_receives_configured_or_default_citation_scan_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             credentials = load_credentials(home=Path(temporary))
             dependencies, client = _dependencies()
@@ -394,28 +394,31 @@ class MetadataProviderMatrixTests(unittest.TestCase):
                 credentials,
                 dependencies,
             )
-            with self.assertRaises(MetadataRegistryError) as caught:
-                build_metadata_registry(
-                    _configuration(
-                        providers=("opencitations",),
-                        product=None,
-                        database=None,
-                        edition=None,
-                        crossref_mode=None,
-                        mailto=None,
-                        scan_limit=None,
-                    ),
-                    credentials,
-                    dependencies,
-                )
+            default_registry = build_metadata_registry(
+                _configuration(
+                    providers=("opencitations",),
+                    product=None,
+                    database=None,
+                    edition=None,
+                    crossref_mode=None,
+                    mailto=None,
+                    scan_limit=None,
+                ),
+                credentials,
+                dependencies,
+            )
 
         self.assertEqual(registry.topic_limits, ())
         self.assertEqual(
             tuple((item.provider_name, item.scan_limit) for item in registry.citation_limits),
             (("opencitations", 11),),
         )
-        self.assertEqual(caught.exception.code, "missing-scan-limit")
-        self.assertNotIn(_SECRET, repr(caught.exception))
+        self.assertEqual(
+            tuple(
+                (item.provider_name, item.scan_limit) for item in default_registry.citation_limits
+            ),
+            (("opencitations", 500),),
+        )
 
     def test_production_types_parameters_credentials_and_shared_network_are_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -611,29 +614,6 @@ class MetadataReadinessFailureTests(unittest.TestCase):
                     mailto=None,
                 ),
                 "missing-required-credential",
-            ),
-            (
-                _configuration(
-                    providers=("crossref",),
-                    product=None,
-                    database=None,
-                    edition=None,
-                    crossref_mode=None,
-                    mailto=None,
-                ),
-                "missing-ordinary-parameter",
-            ),
-            (
-                _configuration(
-                    providers=("crossref",),
-                    product=None,
-                    database=None,
-                    edition=None,
-                    scan_limit=None,
-                    crossref_mode="anonymous",
-                    mailto=None,
-                ),
-                "missing-scan-limit",
             ),
         )
         for config, expected_code in cases:

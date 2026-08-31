@@ -19,11 +19,13 @@ artifact_root = {json.dumps(os.fspath(root / "artifacts"))}
 
 root = Path(os.environ["SCIRETRIEVER_ACCEPTANCE_ROOT"]) / "local-console"
 root.mkdir(mode=0o700)
-configuration = root / "config.toml"
+configuration = Path.home() / ".sciretriever" / "config.toml"
+configuration.parent.mkdir(mode=0o700, exist_ok=True)
+configuration.parent.chmod(0o700)
 configuration.write_text(_configuration(root), encoding="utf-8")
+configuration.chmod(0o600)
 console = Path(sys.executable).with_name("sciretriever")
 environment = dict(os.environ)
-environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
 completed = subprocess.run(
     (os.fspath(console), "literature", "search", "--json"),
     cwd=root,

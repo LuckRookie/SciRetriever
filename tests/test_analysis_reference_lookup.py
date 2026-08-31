@@ -6,14 +6,17 @@ import unittest
 from collections.abc import Callable, Iterable
 from typing import cast
 
-from sciretriever.agents import (
+from sciretriever.agents.api import (
     AgentFailure,
-    AgentPort,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
 )
 from sciretriever.agents.failures import agent_failure
+from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.ports import (
     ContentAnalysisInput,
@@ -55,14 +58,14 @@ def _payload(*lookups: dict[str, object]) -> str:
 
 
 def _response_for(
-    call: AgentRequest,
+    call: AgentProviderCall,
     result: str,
     *,
     provider: str = _PROVIDER,
     model: str | None = None,
     input_sha256: Sha256 | None = None,
-) -> AgentStructuredResponse:
-    return AgentStructuredResponse(
+) -> AgentStructuredResult:
+    return AgentStructuredResult(
         result=result,
         provenance=AgentProvenance(
             provider=provider,
@@ -79,23 +82,23 @@ class _FakeLLM:
         actions: Iterable[
             str
             | BaseException
-            | AgentStructuredResponse
-            | Callable[[AgentRequest], AgentStructuredResponse]
+            | AgentStructuredResult
+            | Callable[[AgentProviderCall], AgentStructuredResult]
         ],
     ) -> None:
         self.actions = list(actions)
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
 
     @property
     def provider_name(self) -> str:
         return _PROVIDER
 
-    def complete(self, call: AgentRequest) -> AgentStructuredResponse:
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
         self.calls.append(call)
         action = self.actions.pop(0)
         if isinstance(action, BaseException):
             raise action
-        if isinstance(action, AgentStructuredResponse):
+        if isinstance(action, AgentStructuredResult):
             return action
         if callable(action):
             return action(call)
@@ -111,11 +114,25 @@ def _stage(
     budget: ReferenceLookupBudget | None = None,
 ) -> ReferenceLookupStage:
     return ReferenceLookupStage(
-        agents=cast(AgentPort, llm),
-        model=_MODEL,
+        runtime=AgentRuntime(
+            adapter=cast(AgentProviderPort, llm),
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=AgentModelCapabilities(
+                    context_window_tokens=2_000_000,
+                    max_output_tokens=65_536,
+                    structured_output=True,
+                ),
+            ),
+        ),
         max_output_tokens=2_048,
         budget=ReferenceLookupBudget() if budget is None else budget,
     )
+
+
+def _structured_input(call: AgentProviderCall) -> str:
+    return call.text_parts[-1].text
 
 
 class AnalysisReferenceLookupTests(unittest.TestCase):
@@ -185,9 +202,9 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         self.assertIs(call.cancel_event, cancel_event)
         self.assertEqual(
             call.input_sha256,
-            sha256_digest(call.structured_input.encode("utf-8")),
+            sha256_digest(_structured_input(call).encode("utf-8")),
         )
-        private_input = json.loads(call.structured_input)
+        private_input = json.loads(_structured_input(call))
         self.assertEqual(
             private_input,
             {
@@ -541,7 +558,7 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         )
         cases: tuple[
             tuple[
-                str | BaseException | Callable[[AgentRequest], AgentStructuredResponse],
+                str | BaseException | Callable[[AgentProviderCall], AgentStructuredResult],
                 bool,
             ],
             ...,

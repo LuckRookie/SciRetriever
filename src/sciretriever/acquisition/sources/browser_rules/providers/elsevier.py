@@ -28,7 +28,6 @@ ELSEVIER_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     actions=pdf_actions(
         "a.pdf-download-btn-link, a[href$='/pdfft'], a[href*='/pdfft?'], button[aria-label*='PDF']"
     ),
-    max_actions=2,
     page_markers=publisher_page_markers(
         "sciencedirect",
         entitled_selectors=(

@@ -9,7 +9,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Final
 
-from sciretriever.agents import AgentStructuredResponse
+from sciretriever.agents.api import AgentStructuredResult
 from sciretriever.analysis.markdown_rules import (
     FINAL_FIXED_TITLES,
     FIXED_SECTION_TITLES,
@@ -243,7 +243,6 @@ class _DraftParser:
 
 def build_content_analysis_call(
     *,
-    model: str,
     parser_result: ParserResult,
     parser_markdown: str,
     final_metadata: LiteratureMetadata,
@@ -267,7 +266,6 @@ def build_content_analysis_call(
         request=AnalysisRequest(
             kind=AnalysisRequestKind.CONTENT,
             input_sha256=sha256_digest(structured_input.encode("utf-8")),
-            model=model,
             max_output_tokens=max_output_tokens,
         ),
         prompt_version=_CONTENT_PROMPT_VERSION,
@@ -279,15 +277,15 @@ def build_content_analysis_call(
 
 
 def parse_content_markdown_response(
-    response: AgentStructuredResponse,
+    response: AgentStructuredResult,
     *,
     parser_result: ParserResult,
     parser_markdown: str,
 ) -> ContentMarkdownDraft:
     """Parse the closed provider-neutral response into sections and references."""
 
-    if not isinstance(response, AgentStructuredResponse):
-        raise TypeError("response must be an AgentStructuredResponse")
+    if not isinstance(response, AgentStructuredResult):
+        raise TypeError("response must be an AgentStructuredResult")
     try:
         result = parse_strict_json_object(response.result)
     except (TypeError, ValueError):

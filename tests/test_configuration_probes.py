@@ -16,6 +16,7 @@ from sciretriever.configuration import (
     parse_configuration,
     run_configuration_probes,
     set_core_credentials,
+    set_model_provider_credentials,
 )
 from sciretriever.model.configuration import (
     Configuration,
@@ -36,15 +37,17 @@ def _configuration(
     metadata: tuple[str, ...] = (),
     acquisition: tuple[str, ...] = (),
     unpaywall: bool = False,
+    sci_hub_urls: tuple[str, ...] | None = None,
 ) -> Configuration:
     lines = [
-        "[discovery]",
-        "metadata_scan_limit = 10",
         "[sources.metadata]",
+        'mode = "custom"',
         "providers = [" + ", ".join(f'"{item}"' for item in metadata) + "]",
+        "limit = 10",
         "[sources.metadata.crossref]",
         'mode = "anonymous"',
         "[sources.acquisition]",
+        'mode = "custom"',
         "providers = [" + ", ".join(f'"{item}"' for item in acquisition) + "]",
     ]
     if unpaywall:
@@ -52,6 +55,13 @@ def _configuration(
             (
                 "[sources.acquisition.unpaywall]",
                 'contact_email = "reader@example.invalid"',
+            )
+        )
+    if sci_hub_urls is not None:
+        lines.extend(
+            (
+                "[sources.acquisition.sci-hub]",
+                "urls = [" + ", ".join(f'"{url}"' for url in sci_hub_urls) + "]",
             )
         )
     return parse_configuration("\n".join(lines) + "\n")
@@ -99,17 +109,6 @@ class _FakeProbe:
         if not isinstance(result, ConfigurationProbeResult):
             raise TypeError("fixture result is invalid")
         return result
-
-
-class _ConfiguredResolver:
-    def resolve(
-        self,
-        identifiers: object,
-        *,
-        cancel_event: object | None = None,
-    ) -> tuple[str, ...]:
-        del identifiers, cancel_event
-        return ()
 
 
 class AcquisitionConfigurationStatusTests(unittest.TestCase):
@@ -198,9 +197,9 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
         sci_hub = acquisition[ProviderName.SCI_HUB]
         self.assertTrue(sci_hub.production_available)
         self.assertTrue(sci_hub.ordinary_parameters_ready)
-        self.assertFalse(sci_hub.local_ready)
+        self.assertTrue(sci_hub.local_ready)
         self.assertIs(sci_hub.credential.status, CredentialStatus.NOT_REQUIRED)
-        self.assertEqual(sci_hub.failure_code, "missing-configured-resolver")
+        self.assertIsNone(sci_hub.failure_code)
 
         wiley = acquisition[ProviderName.WILEY]
         self.assertTrue(wiley.production_available)
@@ -213,16 +212,16 @@ class AcquisitionConfigurationStatusTests(unittest.TestCase):
         )
         self.assertEqual(wiley.failure_code, "missing-required-credential")
 
-    def test_unpaywall_and_configured_locator_can_be_locally_ready_without_a_probe(self) -> None:
+    def test_unpaywall_and_sci_hub_urls_can_be_locally_ready_without_a_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             credentials = load_credentials(home=Path(temporary))
             status = configuration_status(
                 _configuration(
                     acquisition=("unpaywall", "sci-hub"),
                     unpaywall=True,
+                    sci_hub_urls=("https://mirror-one.example",),
                 ),  # type: ignore[arg-type]
                 credentials=credentials,
-                configured_sci_hub_resolver=_ConfiguredResolver(),
             )
         selected = {
             item.provider: item
@@ -248,17 +247,14 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
             model_identity = "mineru-vlm"
             remote_upload_authorized = true
 
-            [agents]
-            provider = "openai"
-            protocol = "openai-responses"
+            [providers.openai]
+            api = "openai-responses"
             base_url = "https://api.openai.com/v1"
-            authentication = "api-key"
-            [agents.analysis]
-            model = "analysis-model"
-            context_window_tokens = 128000
-            max_output_tokens = 200
-            structured_output = true
-            [analysis]
+            [models."openai/analysis-model"]
+            reasoning = "default"
+            image = false
+            [analyze]
+            model = "openai/analysis-model"
             metadata_max_output_tokens = 100
             content_max_output_tokens = 200
             reference_max_output_tokens = 50
@@ -277,8 +273,8 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
                 origin="https://mineru.example.invalid",
                 home=home,
             )
-            credentials = set_core_credentials(
-                "agents",
+            credentials = set_model_provider_credentials(
+                "openai",
                 secret=_SENTINEL,
                 origin="https://api.openai.com",
                 home=home,
@@ -291,11 +287,13 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
         self.assertTrue(status.parsing.configuration_complete)
         self.assertTrue(status.parsing.bearer_token_required)
         self.assertTrue(status.parsing.bearer_token_configured)
-        self.assertTrue(status.analysis.reference_configuration_complete)
-        self.assertTrue(status.analysis.content_configuration_complete)
-        self.assertTrue(status.analysis.api_key_required)
-        self.assertTrue(status.analysis.api_key_configured)
-        self.assertTrue(status.analysis.credential_origin_matches)
+        self.assertTrue(status.agents.provider_configuration_complete)
+        self.assertTrue(status.agents.analysis.reference_configuration_complete)
+        self.assertTrue(status.agents.analysis.content_configuration_complete)
+        self.assertFalse(status.agents.browser.configuration_complete)
+        self.assertTrue(status.agents.api_key_required)
+        self.assertTrue(status.agents.api_key_configured)
+        self.assertTrue(status.agents.credential_origin_matches)
         self.assertNotIn(_SENTINEL, status.model_dump_json())
 
     def test_incomplete_local_configuration_lists_exact_missing_fields(self) -> None:
@@ -315,47 +313,56 @@ class RuntimeConfigurationStatusTests(unittest.TestCase):
             ("base_url", "connection_mode", "model_identity"),
         )
         self.assertEqual(
-            status.analysis.reference_missing_fields,
+            status.agents.provider_missing_fields,
+            ("model",),
+        )
+        self.assertEqual(
+            status.agents.analysis.reference_missing_fields,
             (
-                "provider",
-                "protocol",
-                "base_url",
                 "model",
-                "context_window_tokens",
-                "max_output_tokens",
-                "structured_output",
-                "authentication",
                 "reference_max_output_tokens",
             ),
         )
-        self.assertIn("max_total_llm_requests", status.analysis.content_missing_fields)
-        self.assertIsNone(status.analysis.api_key_configured)
+        self.assertIn(
+            "max_total_llm_requests",
+            status.agents.analysis.content_missing_fields,
+        )
+        self.assertEqual(
+            status.agents.browser.missing_fields,
+            ("model", "image"),
+        )
+        self.assertIsNone(status.agents.api_key_configured)
 
-    def test_analysis_readiness_requires_declared_structured_output_capability(self) -> None:
-        configuration = parse_configuration(
+    def test_analyze_contract_does_not_require_user_declared_capabilities(self) -> None:
+        configured = parse_configuration(
             """
-            [agents]
-            provider = "custom"
-            service_name = "fixture-service"
-            protocol = "openai-responses"
+            [providers.fixture]
+            api = "openai-responses"
             base_url = "http://127.0.0.1:8765/v1"
-            authentication = "none"
-            [agents.analysis]
-            model = "fixture-model"
-            context_window_tokens = 128000
-            max_output_tokens = 64
-            [analysis]
+            [models."fixture/fixture-model"]
+            reasoning = "default"
+            image = false
+            [analyze]
+            model = "fixture/fixture-model"
             reference_max_output_tokens = 64
             """
         )
+        self.assertEqual(configured.analysis.model, "fixture/fixture-model")
 
-        status = configuration_runtime_status(configuration)
-
-        self.assertFalse(status.analysis.reference_configuration_complete)
-        self.assertEqual(
-            status.analysis.reference_missing_fields,
-            ("structured_output",),
-        )
+    def test_download_rejects_a_model_without_image_support(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            parse_configuration(
+                """
+                [providers.fixture]
+                api = "openai-responses"
+                base_url = "http://127.0.0.1:8765/v1"
+                [models."fixture/fixture-model"]
+                reasoning = "default"
+                image = false
+                [download]
+                model = "fixture/fixture-model"
+                """
+            )
 
 
 class ConfigurationProbeSessionTests(unittest.TestCase):
@@ -511,10 +518,10 @@ class ConfigurationProbeSessionTests(unittest.TestCase):
         changed_enabled = _configuration(metadata=("arxiv",))
         changed_ordinary = parse_configuration(
             """
-            [discovery]
-            metadata_scan_limit = 11
             [sources.metadata]
+            mode = "custom"
             providers = ["crossref"]
+            limit = 11
             [sources.metadata.crossref]
             mode = "anonymous"
             """

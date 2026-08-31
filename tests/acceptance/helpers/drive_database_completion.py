@@ -55,12 +55,16 @@ from sciretriever.acquisition.routes import (
 )
 from sciretriever.acquisition.routing import AcquisitionRequest
 from sciretriever.acquisition.tiered_service import TieredAcquisitionService
-from sciretriever.agents import (
+from sciretriever.agents.api import (
     AgentFailure,
+    AgentModelCapabilities,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentStructuredResult,
 )
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.analysis.api import AnalysisApi
 from sciretriever.analysis.content import ContentAnalysisLimits
 from sciretriever.analysis.references import ReferenceLookupStage
@@ -388,17 +392,21 @@ class _Parser:
         )
 
 
-def _request_stage(call: AgentRequest) -> str:
-    if "final_metadata" in call.structured_input:
+def _structured_input(call: AgentProviderCall) -> str:
+    return call.text_parts[-1].text
+
+
+def _request_stage(call: AgentProviderCall) -> str:
+    if "final_metadata" in _structured_input(call):
         return "content"
-    if "references" in call.structured_input:
+    if "references" in _structured_input(call):
         return "reference"
     return "metadata"
 
 
 class _LLM:
     def __init__(self) -> None:
-        self.calls: list[AgentRequest] = []
+        self.calls: list[AgentProviderCall] = []
         self.no_usable_once_titles: set[str] = set()
         self.fail_metadata_once_titles: set[str] = set()
         self.metadata_attempts: Counter[str] = Counter()
@@ -407,10 +415,10 @@ class _LLM:
     def provider_name(self) -> str:
         return _LLM_PROVIDER
 
-    def complete(self, request: AgentRequest) -> AgentStructuredResponse:
-        self.calls.append(request)
-        structured = json.loads(request.structured_input)
-        stage = _request_stage(request)
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
+        self.calls.append(call)
+        structured = json.loads(_structured_input(call))
+        stage = _request_stage(call)
         if stage == "metadata":
             initial = LiteratureMetadata.model_validate(structured["initial_metadata"])
             title = initial.title or ""
@@ -444,12 +452,12 @@ class _LLM:
             )
         else:
             raise AssertionError("database completion must not run reference lookup")
-        return AgentStructuredResponse(
+        return AgentStructuredResult(
             result=result,
             provenance=AgentProvenance(
                 provider=self.provider_name,
-                model=request.model,
-                input_sha256=request.input_sha256,
+                model=call.model,
+                input_sha256=call.input_sha256,
                 parameters_sha256=sha256_digest(f"{stage}-parameters".encode()),
             ),
         )
@@ -500,11 +508,9 @@ artifact_root = {json.dumps(os.fspath(artifacts))}
 def _console_detail(
     *,
     root: Path,
-    configuration: Path,
     literature_id: LiteratureId,
 ) -> dict[str, object]:
     environment = dict(os.environ)
-    environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
     completed = subprocess.run(
         (
             os.fspath(Path(sys.executable).with_name("sciretriever")),
@@ -530,13 +536,11 @@ def _console_detail(
 def _console_export(
     *,
     root: Path,
-    configuration: Path,
     action: str,
     literature_id: LiteratureId,
     target: Path,
 ) -> dict[str, object]:
     environment = dict(os.environ)
-    environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
     completed = subprocess.run(
         (
             os.fspath(Path(sys.executable).with_name("sciretriever")),
@@ -627,6 +631,18 @@ source.candidates_by_title = {
 }
 parser = _Parser(pdf_by_candidate)
 llm = _LLM()
+agent_runtime = AgentRuntime(
+    adapter=llm,
+    analysis=AgentRoleBinding(
+        role=AgentRole.ANALYSIS,
+        model=_LLM_MODEL,
+        capabilities=AgentModelCapabilities(
+            context_window_tokens=2_000_000,
+            max_output_tokens=65_536,
+            structured_output=True,
+        ),
+    ),
+)
 llm.no_usable_once_titles.add(replacement_literature.metadata.title or "")
 
 acquisition_publication = SqliteAcquisitionPublication(
@@ -678,11 +694,10 @@ parsing = ParsingApi(
 )
 analysis = AnalysisApi(
     content_service=AnalysisService(
-        agents=llm,
+        runtime=agent_runtime,
         artifact_reader=AnalysisArtifactReader(engine, verified_reader),
         current_inputs=SqliteAnalysisCurrentInputs(engine),
         artifact_publisher=AnalysisArtifactPublisher(artifact_store),
-        model=_LLM_MODEL,
         metadata_max_output_tokens=2_048,
         content_max_output_tokens=4_096,
         limits=ContentAnalysisLimits(
@@ -696,8 +711,7 @@ analysis = AnalysisApi(
         clock=lambda: _TIME,
     ),
     reference_lookup_stage=ReferenceLookupStage(
-        agents=llm,
-        model=_LLM_MODEL,
+        runtime=agent_runtime,
         max_output_tokens=2_048,
     ),
 )
@@ -930,51 +944,46 @@ partial_counts_after_second = {
     "source_request_count": len(source.requests),
 }
 
-configuration = root / "config.toml"
+configuration = Path.home() / ".sciretriever" / "config.toml"
+configuration.parent.mkdir(mode=0o700, exist_ok=True)
+configuration.parent.chmod(0o700)
 configuration.write_text(_configuration(catalog, artifacts), encoding="utf-8")
+configuration.chmod(0o600)
 console_details = {
     "exhaustion_retry": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=exhaustion_literature.literature_id,
     ),
     "llm_failure": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=llm_failure_literature.literature_id,
     ),
     "parser_failure": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=parser_failure_literature.literature_id,
     ),
     "partial_success": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=partial_success_literature.literature_id,
     ),
     "replacement": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=replacement_literature.literature_id,
     ),
     "success": _console_detail(
         root=root,
-        configuration=configuration,
         literature_id=success_literature.literature_id,
     ),
 }
 console_exports = {
     "content": _console_export(
         root=root,
-        configuration=configuration,
         action="content",
         literature_id=success_literature.literature_id,
         target=root / "console-success.md",
     ),
     "pdf": _console_export(
         root=root,
-        configuration=configuration,
         action="pdf",
         literature_id=success_literature.literature_id,
         target=root / "console-success.pdf",
@@ -1001,7 +1010,7 @@ with engine.read_snapshot() as connection:
 
 llm_kinds_by_title: dict[str, list[str]] = {}
 for call in llm.calls:
-    structured = json.loads(call.structured_input)
+    structured = json.loads(_structured_input(call))
     stage = _request_stage(call)
     if stage == "metadata":
         title = structured["initial_metadata"]["title"]

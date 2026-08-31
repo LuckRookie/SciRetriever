@@ -28,18 +28,24 @@ from sciretriever.configuration import (
     remove_credentials,
     set_core_credentials,
     set_credentials,
+    set_model_provider_credentials,
     tightened_browser_group_policies,
 )
 from sciretriever.configuration.file_store import _MAX_CREDENTIALS_BYTES
 from sciretriever.model.configuration import (
     AccessConfig,
-    AgentRoleConfig,
-    AgentsConfig,
+    AgentProtocol,
+    AgentReasoningEffort,
     AnalysisConfig,
+    BrowserController,
     BrowserPolicyOverrideConfig,
     Configuration,
     CoreCredentialService,
     CredentialStatus,
+    ModelConfig,
+    ModelProviderConfig,
+    ModelProvidersConfig,
+    ModelsConfig,
     ParsingConfig,
     ProviderCapability,
 )
@@ -49,17 +55,117 @@ SENTINEL = "CONFIGURATION-SECRET-SENTINEL"
 
 
 class ConfigurationModelBoundaryTests(unittest.TestCase):
+    def test_sci_hub_uses_one_ordered_closed_multi_mirror_configuration(self) -> None:
+        selected = parse_configuration(
+            "[sources.acquisition]\n"
+            'mode = "custom"\n'
+            'providers = ["sci-hub"]\n'
+            "[sources.acquisition.sci-hub]\n"
+            'urls = ["https://MIRROR-ONE.example:443/base/", '
+            '"https://mirror-two.example"]\n'
+        )
+        settings = selected.sources.acquisition.sci_hub
+        self.assertIsNotNone(settings)
+        assert settings is not None
+        self.assertEqual(
+            settings.urls,
+            (
+                "https://mirror-one.example/base",
+                "https://mirror-two.example",
+            ),
+        )
+        self.assertEqual(
+            selected.model_dump(mode="json", by_alias=True)["sources"]["acquisition"]["sci-hub"],
+            {"urls": list(settings.urls)},
+        )
+
+        invalid = (
+            "urls = []\n",
+            'urls = ["http://mirror.example"]\n',
+            'urls = ["https://127.0.0.1"]\n',
+            'urls = ["https://localhost"]\n',
+            'urls = ["https://mirror.localhost"]\n',
+            'urls = ["https://user:secret@mirror.example"]\n',
+            'urls = ["https://mirror.example/path?token=secret"]\n',
+            'urls = ["https://mirror.example/path#fragment"]\n',
+            'urls = ["https://mirror.example:8443"]\n',
+            'urls = ["https://MIRROR.example/", "https://mirror.example"]\n',
+            'urls = ["https://one.example", "https://two.example", '
+            '"https://three.example", "https://four.example", "https://five.example", '
+            '"https://six.example", "https://seven.example", "https://eight.example", '
+            '"https://nine.example"]\n',
+            'url = "https://mirror.example"\n',
+            'urls = ["https://mirror.example"]\nselector = "forbidden"\n',
+        )
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ConfigurationError):
+                parse_configuration("[sources.acquisition.sci-hub]\n" + fields)
+
+    def test_reasoning_is_owned_by_each_configured_model(self) -> None:
+        self.assertIs(
+            ModelConfig(reference="fixture/model").reasoning,
+            AgentReasoningEffort.PROVIDER_DEFAULT,
+        )
+        for effort in AgentReasoningEffort:
+            with self.subTest(effort=effort.value):
+                selected = parse_configuration(
+                    "[providers.openai]\n"
+                    'api = "openai-responses"\n'
+                    'base_url = "https://api.openai.com/v1"\n'
+                    '[models."openai/fixture-model"]\n'
+                    f'reasoning = "{effort.value}"\n'
+                    "image = false\n"
+                    "[analyze]\n"
+                    'model = "openai/fixture-model"\n'
+                )
+                model = selected.models.get("openai/fixture-model")
+                self.assertIsNotNone(model)
+                assert model is not None
+                self.assertIs(model.reasoning, effort)
+        for value in ("ultra", "", 1, True):
+            with self.subTest(value=value), self.assertRaises(ConfigurationError):
+                parse_configuration(
+                    "[providers.openai]\n"
+                    'api = "openai-responses"\n'
+                    'base_url = "https://api.openai.com/v1"\n'
+                    '[models."openai/fixture-model"]\n'
+                    f"reasoning = {value!r}\n"
+                )
+
+    def test_browser_controller_defaults_to_rules_and_rejects_unknown_values(self) -> None:
+        self.assertIs(Configuration().access.browser_controller, BrowserController.RULES)
+        self.assertIs(
+            parse_configuration(
+                '[download]\nbrowser_controller = "agent"\n'
+            ).access.browser_controller,
+            BrowserController.AGENT,
+        )
+        self.assertEqual(
+            set(AccessConfig.model_fields),
+            {
+                "browser_enabled",
+                "model",
+                "browser_profile",
+                "browser_controller",
+                "browser_max_concurrency",
+                "browser_policy_overrides",
+            },
+        )
+        for value in ("fallback", "", 1, True):
+            with self.subTest(value=value), self.assertRaises(ConfigurationError):
+                parse_configuration(f"[download]\nbrowser_controller = {value!r}\n")
+
     def test_browser_cross_publisher_concurrency_is_unbounded_above_one(self) -> None:
         self.assertEqual(Configuration().access.browser_max_concurrency, 5)
         self.assertEqual(
             parse_configuration(
-                "[access]\nbrowser_max_concurrency = 2\n"
+                "[download]\nbrowser_max_concurrency = 2\n"
             ).access.browser_max_concurrency,
             2,
         )
         self.assertEqual(
             parse_configuration(
-                "[access]\nbrowser_max_concurrency = 128\n"
+                "[download]\nbrowser_max_concurrency = 128\n"
             ).access.browser_max_concurrency,
             128,
         )
@@ -71,7 +177,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
     def test_browser_access_selects_an_opaque_profile_without_session_material(self) -> None:
         selected = parse_configuration(
             """
-            [access]
+            [download]
             browser_enabled = true
             browser_profile = "fixture-profile"
             browser_max_concurrency = 3
@@ -84,7 +190,9 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             set(AccessConfig.model_fields),
             {
                 "browser_enabled",
+                "model",
                 "browser_profile",
+                "browser_controller",
                 "browser_max_concurrency",
                 "browser_policy_overrides",
             },
@@ -94,15 +202,15 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             self.assertNotIn(forbidden.casefold(), rendered.casefold())
 
         invalid = (
-            '[access]\nbrowser_profile = "/tmp/browser-profile"\n',
-            '[access]\nbrowser_profile = "../browser-profile"\n',
-            '[access]\nbrowser_profile = "https://publisher.example"\n',
-            '[access]\nbrowser_profile = "publisher-token"\n',
-            '[access]\nbrowser_profile = "a50e8400-e29b-41d4-a716-446655440000"\n',
-            "[access]\nbrowser_max_concurrency = 1\n",
-            "[access]\nbrowser_max_concurrency = 0\n",
-            f'[access]\ncookie = "{SENTINEL}"\n',
-            '[access]\nbrowser_profile_path = "/tmp/profile"\n',
+            '[download]\nbrowser_profile = "/tmp/browser-profile"\n',
+            '[download]\nbrowser_profile = "../browser-profile"\n',
+            '[download]\nbrowser_profile = "https://publisher.example"\n',
+            '[download]\nbrowser_profile = "publisher-token"\n',
+            '[download]\nbrowser_profile = "a50e8400-e29b-41d4-a716-446655440000"\n',
+            "[download]\nbrowser_max_concurrency = 1\n",
+            "[download]\nbrowser_max_concurrency = 0\n",
+            f'[download]\ncookie = "{SENTINEL}"\n',
+            '[download]\nbrowser_profile_path = "/tmp/profile"\n',
         )
         for payload in invalid:
             with self.subTest(payload=payload):
@@ -114,21 +222,23 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         self,
     ) -> None:
         selected = parse_configuration(
-            '[access]\nbrowser_enabled = true\nbrowser_profile = "fixture-profile"\n'
+            '[download]\nbrowser_enabled = true\nbrowser_profile = "fixture-profile"\n'
         )
         self.assertEqual(
             len(configuration.eligible_production_browser_access_keys(selected.access)),
             9,
         )
         with self.assertRaises(ConfigurationError) as caught:
-            parse_configuration('[access]\nbrowser_machine_access_grants = ["acs-publications"]\n')
+            parse_configuration(
+                '[download]\nbrowser_machine_access_grants = ["acs-publications"]\n'
+            )
         self.assertEqual(str(caught.exception), "configuration value is invalid")
 
     def test_browser_policy_override_shape_rejects_unknown_duplicate_and_unbounded_values(
         self,
     ) -> None:
         unknown = (
-            "[access]\n"
+            "[download]\n"
             "browser_policy_overrides = ["
             '{ rate_limit_group = "unknown-group", minimum_start_interval = 30.0 }'
             "]\n"
@@ -138,53 +248,53 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "browser policy group is unknown")
 
         invalid = (
-            ('[access]\nbrowser_policy_overrides = [{ rate_limit_group = "fixture-group" }]\n'),
+            ('[download]\nbrowser_policy_overrides = [{ rate_limit_group = "fixture-group" }]\n'),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", minimum_start_interval = 10.0 }, '
                 '{ rate_limit_group = "fixture-group", failure_cooldown = 10.0 }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", max_concurrency = 2 }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", minimum_start_interval = -1.0 }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", window_seconds = 60.0 }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", maximum_starts_per_window = 1 }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", window_seconds = inf, '
                 "maximum_starts_per_window = 1 }"
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", rate_limit_cooldown = nan }'
                 "]\n"
             ),
             (
-                "[access]\n"
+                "[download]\n"
                 "browser_policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", runtime_failure_threshold = 0 }'
                 "]\n"
@@ -322,16 +432,14 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             connection_mode = "remote"
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = true
-            [agents]
-            provider = "openai"
-            protocol = "openai-responses"
+            [providers.openai]
+            api = "openai-responses"
             base_url = "https://api.openai.com/v1"
-            authentication = "api-key"
-            [agents.analysis]
-            model = "fixture-model"
-            context_window_tokens = 128000
-            max_output_tokens = 1024
-            structured_output = true
+            [models."openai/fixture-model"]
+            reasoning = "default"
+            image = false
+            [analyze]
+            model = "openai/fixture-model"
             """
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -343,8 +451,8 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 origin="https://mineru.example.invalid",
                 home=home,
             )
-            set_core_credentials(
-                CoreCredentialService.AGENTS,
+            set_model_provider_credentials(
+                "openai",
                 secret=f"analysis-{SENTINEL}",
                 origin="https://api.openai.com",
                 home=home,
@@ -369,16 +477,14 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             connection_mode = "remote"
             model_identity = "mineru-3.4.4-vlm"
             remote_upload_authorized = true
-            [agents]
-            provider = "openai"
-            protocol = "openai-responses"
+            [providers.openai]
+            api = "openai-responses"
             base_url = "https://api.openai.com/v1"
-            authentication = "api-key"
-            [agents.analysis]
-            model = "fixture-model"
-            context_window_tokens = 128000
-            max_output_tokens = 1024
-            structured_output = true
+            [models."openai/fixture-model"]
+            reasoning = "default"
+            image = false
+            [analyze]
+            model = "openai/fixture-model"
             """
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -389,8 +495,8 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 origin="https://mineru.example.invalid",
                 home=home,
             )
-            credentials = set_core_credentials(
-                "agents",
+            credentials = set_model_provider_credentials(
+                "openai",
                 secret="analysis-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -409,21 +515,21 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                         include_agents=include_agents,
                     )
                     self.assertEqual(runtime.mineru_bearer_token, expected_parser)
-                    self.assertEqual(runtime.agents_api_key, expected_agents)
+                    self.assertEqual(runtime.model_api_key("openai"), expected_agents)
 
-    def test_only_ten_empty_responsibility_groups_are_ordinary_configuration(self) -> None:
+    def test_only_ten_responsibility_groups_are_ordinary_configuration(self) -> None:
         configuration_model = parse_configuration(
             """
             [paths]
-            [discovery]
             [sources]
             [assets]
             [parsing]
-            [agents]
-            [analysis]
+            [providers]
+            [models]
+            [analyze]
             [execution]
             [library]
-            [access]
+            [download]
             """
         )
         self.assertIsInstance(configuration_model, Configuration)
@@ -431,11 +537,11 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             set(Configuration.model_fields),
             {
                 "paths",
-                "discovery",
                 "sources",
                 "assets",
                 "parsing",
-                "agents",
+                "providers",
+                "models",
                 "analysis",
                 "execution",
                 "library",
@@ -450,7 +556,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             "[collection]\n",
             "[paths]\nunknown = 1\n",
             "schema_version = 2\n",
-            '[analysis]\nsecret_ref = "env:SECRET"\n',
+            '[analyze]\nsecret_ref = "env:SECRET"\n',
             "[paths]\na = 1\na = 2\n",
         )
         for payload in invalid:
@@ -459,20 +565,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     parse_configuration(payload)
                 self.assertNotIn(SENTINEL, str(caught.exception))
 
-    def test_agent_service_urls_and_analysis_budget_combinations_fail_before_runtime(self) -> None:
-        valid_transport = {
-            "provider": "custom",
-            "service_name": "fixture-service",
-            "protocol": "openai-responses",
-            "base_url": "https://llm.example.invalid/v1",
-            "authentication": "api-key",
-        }
-        role = AgentRoleConfig(
-            model="fixture-model",
-            context_window_tokens=128_000,
-            max_output_tokens=4_096,
-            structured_output=True,
-        )
+    def test_model_provider_urls_and_analysis_budgets_fail_before_runtime(self) -> None:
         valid_analysis = {
             "metadata_max_output_tokens": 512,
             "content_max_output_tokens": 2_048,
@@ -496,8 +589,10 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for base_url in invalid_urls:
             with self.subTest(base_url=base_url), self.assertRaises(ValidationError):
-                AgentsConfig.model_validate(
-                    {**valid_transport, "base_url": base_url, "analysis": role}
+                ModelProviderConfig(
+                    name="fixture-provider",
+                    api=AgentProtocol.OPENAI_RESPONSES,
+                    base_url=base_url,
                 )
 
         invalid_budgets = (
@@ -508,31 +603,33 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         )
         for changes in invalid_budgets:
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
-                AnalysisConfig(**{**valid_analysis, **changes})
+                AnalysisConfig.model_validate({**valid_analysis, **changes})
         with self.assertRaises(ValidationError):
             Configuration(
-                agents=AgentsConfig.model_validate(
-                    {
-                        **valid_transport,
-                        "analysis": AgentRoleConfig(
-                            model="fixture-model",
-                            context_window_tokens=1_024,
-                            max_output_tokens=1_024,
-                            structured_output=True,
+                providers=ModelProvidersConfig(
+                    values=(
+                        ModelProviderConfig(
+                            name="fixture-provider",
+                            api=AgentProtocol.OPENAI_RESPONSES,
+                            base_url="https://llm.example.invalid/v1",
                         ),
-                    }
+                    )
                 ),
-                analysis=AnalysisConfig(
-                    reference_max_output_tokens=1_024,
-                    max_input_bytes=1_024,
-                    max_chunk_bytes=1_024,
+                models=ModelsConfig(
+                    values=(
+                        ModelConfig(
+                            reference="fixture-provider/fixture-model",
+                            image=False,
+                        ),
+                    )
                 ),
+                download=AccessConfig(model="fixture-provider/fixture-model"),
             )
 
     def test_agent_model_identity_fails_before_readiness_or_runtime(self) -> None:
         decomposed = "fixture-e\u0301-model"
         self.assertEqual(
-            AgentRoleConfig(model=decomposed).model,
+            ModelConfig(reference=f"fixture/{decomposed}").model,
             "fixture-\u00e9-model",
         )
 
@@ -542,54 +639,42 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             "\u754c" * 171,
         ):
             with self.subTest(invalid=invalid[:16]), self.assertRaises(ValidationError):
-                AgentRoleConfig(model=invalid)
+                ModelConfig(reference=f"fixture/{invalid}")
 
         exact_byte_limit = "\u754c" * 170 + "ab"
         self.assertEqual(
-            AgentRoleConfig(model=exact_byte_limit).model,
+            ModelConfig(reference=f"fixture/{exact_byte_limit}").model,
             exact_byte_limit,
         )
         with self.assertRaises(ConfigurationError):
-            parse_configuration('[agents.analysis]\nmodel = "fixture\\nforged"\n')
+            parse_configuration(
+                '[providers.fixture]\napi = "openai-responses"\n'
+                'base_url = "https://llm.example.invalid/v1"\n'
+                '[models."fixture/fixture\\nforged"]\n'
+            )
 
-    def test_official_llm_and_mineru_urls_match_adapter_endpoint_policy(self) -> None:
-        official_cases = (
+    def test_model_provider_and_mineru_urls_match_adapter_endpoint_policy(self) -> None:
+        accepted_providers = (
             {
-                "provider": "openai",
-                "protocol": "openai-responses",
+                "name": "openai",
+                "api": "openai-responses",
                 "base_url": "https://api.openai.com:8443/v1",
-                "model": "fixture-model",
-                "context_window_tokens": 128_000,
-                "authentication": "api-key",
             },
             {
-                "provider": "anthropic",
-                "protocol": "anthropic-messages",
+                "name": "anthropic",
+                "api": "anthropic-messages",
                 "base_url": "https://api.anthropic.com/v1/extra",
-                "model": "fixture-model",
-                "context_window_tokens": 128_000,
-                "authentication": "api-key",
             },
             {
-                "provider": "custom",
-                "service_name": "local",
-                "protocol": "anthropic-messages",
-                "base_url": "https://127.0.0.1:1234/v1",
-                "model": "fixture-model",
-                "context_window_tokens": 32_768,
-                "authentication": "none",
+                "name": "local",
+                "api": "anthropic-messages",
+                "base_url": "http://127.0.0.1:1234/v1",
             },
         )
-        for payload in official_cases:
-            with self.subTest(payload=payload), self.assertRaises(ValidationError):
-                transport = dict(payload)
-                role = AgentRoleConfig(
-                    model=cast(str, transport.pop("model")),
-                    context_window_tokens=cast(int, transport.pop("context_window_tokens")),
-                    max_output_tokens=1,
-                    structured_output=True,
-                )
-                AgentsConfig(**transport, analysis=role)
+        for payload in accepted_providers:
+            with self.subTest(payload=payload):
+                provider = ModelProviderConfig.model_validate(payload)
+                self.assertEqual(provider.requires_api_key, provider.name != "local")
 
         parser_cases = (
             {
@@ -936,6 +1021,7 @@ class CredentialFileSecurityTests(unittest.TestCase):
                 "[web-of-science]\napi_key = 1\n",
                 '[web-of-science]\napi_key = "a"\napi_key = "b"\n',
                 '[wiley]\napi_key = "value"\n',
+                '[agents]\napi_key = "value"\norigin = "https://api.openai.com"\n',
             ):
                 path.write_text(payload, encoding="utf-8")
                 os.chmod(path, 0o600)
@@ -943,41 +1029,6 @@ class CredentialFileSecurityTests(unittest.TestCase):
                     with self.assertRaises(ConfigurationError) as caught:
                         load_credentials(home=home)
                     self.assertNotIn(SENTINEL, str(caught.exception))
-
-    def test_core_recovery_fields_are_private_and_incomplete_groups_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            valid_transition = (
-                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
-                'next_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n'
-            )
-            credentials = load_credentials(home=home)  # missing remains a valid empty snapshot
-            self.assertEqual(credentials.core_field_names("agents"), ())
-            path = self._write(home, valid_transition.encode("utf-8"))
-            credentials = load_credentials(home=home)
-            self.assertEqual(credentials.core_field_names("agents"), ("api_key", "origin"))
-            self.assertEqual(
-                credentials.core_secret_for_origin("agents", "https://llm.example.invalid"),
-                "new",
-            )
-            self.assertNotIn("next_", repr(credentials))
-            self.assertNotIn("old", repr(credentials))
-            self.assertNotIn("new", repr(credentials))
-
-            invalid = (
-                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
-                'next_api_key = "new"\n',
-                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
-                'next_origin = "https://llm.example.invalid"\n',
-                '[agents]\nnext_api_key = "new"\nnext_origin = "https://llm.example.invalid"\n',
-                '[agents]\napi_key = "old"\norigin = "https://api.openai.com"\n'
-                'next_api_key = "new"\nnext_origin = "https://api.openai.com"\n',
-            )
-            for payload in invalid:
-                path.write_text(payload, encoding="utf-8")
-                os.chmod(path, 0o600)
-                with self.subTest(payload=payload), self.assertRaises(ConfigurationError):
-                    load_credentials(home=home)
 
 
 class CredentialPublicationTests(unittest.TestCase):

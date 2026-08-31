@@ -21,7 +21,6 @@ SCIENCE_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     web_scope_provider_name="science-aaas",
     actions=pdf_actions("a[href*='/doi/epdf/'], a[href*='/doi/pdf/'], a[data-test='pdf-link']"),
     doi_pdf_url_template="https://www.science.org/doi/epdf/{doi}",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "science",
         entitled_selectors=(

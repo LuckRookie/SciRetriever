@@ -23,6 +23,7 @@ from sciretriever.acquisition.ports import (
     AcquisitionExhaustionPublicationCommand,
     AcquisitionExpectedFacts,
     AcquisitionFailure,
+    AcquisitionSourceFailure,
     CandidateKeyTracker,
     PrimaryPdfPreparation,
     TemporaryPdf,
@@ -34,7 +35,9 @@ from sciretriever.acquisition.routing import (
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.sources.configured_sci_hub import (
+    BUILTIN_SCI_HUB_MIRROR_URLS,
     ConfiguredLocatorResolver,
+    ConfiguredSciHubLandingResolver,
     ConfiguredSciHubPdfSource,
     configured_sci_hub_route_status,
 )
@@ -153,12 +156,14 @@ class _Fetcher:
         source_record_id: str | None = None,
         on_delivery: Callable[[], None] | None = None,
         additional_candidate_keys: tuple[str, ...] = (),
+        failures_by_locator: dict[str, AcquisitionFailure] | None = None,
     ) -> None:
         self.failure = failure
         self.output_source_name = source_name
         self.source_record_id = source_record_id
         self.on_delivery = on_delivery
         self.additional_candidate_keys = additional_candidate_keys
+        self.failures_by_locator = {} if failures_by_locator is None else failures_by_locator
         self.calls: list[dict[str, object]] = []
         self.contents: list[_Content] = []
         self.close_count = 0
@@ -187,8 +192,9 @@ class _Fetcher:
                 "fetch_key_was_claimed": candidate_keys.contains(candidate_key),
             }
         )
-        if self.failure is not None:
-            raise self.failure
+        failure = self.failures_by_locator.get(locator, self.failure)
+        if failure is not None:
+            raise failure
         return self._deliver(
             locator=locator,
             candidate_key=candidate_key,
@@ -259,6 +265,111 @@ def _rendered_failure(error: AcquisitionFailure) -> str:
 
 
 class ConfiguredSciHubContractTests(unittest.TestCase):
+    def test_builtin_mirror_set_is_ordered_and_forms_safe_doi_landings(self) -> None:
+        self.assertEqual(
+            BUILTIN_SCI_HUB_MIRROR_URLS,
+            ("https://sci-hub.ru", "https://sci-hub.kr"),
+        )
+        resolver = ConfiguredSciHubLandingResolver(BUILTIN_SCI_HUB_MIRROR_URLS)
+
+        self.assertEqual(
+            resolver.resolve((Identifier(namespace="doi", value="10.1234/fixture"),)),
+            (
+                "https://sci-hub.ru/10.1234/fixture",
+                "https://sci-hub.kr/10.1234/fixture",
+            ),
+        )
+
+    def test_builtin_resolver_emits_ordered_canonical_mirror_landings_for_doi(self) -> None:
+        resolver = ConfiguredSciHubLandingResolver(
+            (
+                "https://MIRROR-ONE.example:443/base/",
+                "https://mirror-two.example",
+                "https://mirror-one.example/base",
+            )
+        )
+
+        self.assertEqual(
+            resolver.resolve(
+                (
+                    Identifier(namespace="pmid", value="12345"),
+                    Identifier(namespace="doi", value="10.1234/path?download#part"),
+                )
+            ),
+            (
+                "https://mirror-one.example/base/10.1234/path%3Fdownload%23part",
+                "https://mirror-two.example/10.1234/path%3Fdownload%23part",
+            ),
+        )
+        self.assertEqual(
+            resolver.resolve((Identifier(namespace="pmid", value="12345"),)),
+            (),
+        )
+        rendered = repr(resolver)
+        self.assertIn("mirrors=2", rendered)
+        self.assertNotIn("mirror-one", rendered)
+        self.assertNotIn("mirror-two", rendered)
+
+    def test_builtin_resolver_rejects_unsafe_mirrors_and_honours_cancellation(self) -> None:
+        invalid: tuple[object, ...] = (
+            (),
+            ["https://mirror.example"],
+            ("http://mirror.example",),
+            ("https://127.0.0.1",),
+            ("https://localhost",),
+            ("https://mirror.localhost",),
+            ("https://user:secret@mirror.example",),
+            ("https://mirror.example?token=secret",),
+            ("https://mirror.example/path#fragment",),
+            ("https://mirror.example:8443",),
+        )
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ConfiguredSciHubLandingResolver(cast(tuple[str, ...], value))
+
+        cancel_event = threading.Event()
+        cancel_event.set()
+        with self.assertRaises(AcquisitionFailure) as raised:
+            ConfiguredSciHubLandingResolver(("https://mirror.example",)).resolve(
+                (Identifier(namespace="doi", value="10.1234/fixture"),),
+                cancel_event=cancel_event,
+            )
+        self.assertEqual(
+            raised.exception.failure.code,
+            "acquisition-configured-sci-hub-cancelled",
+        )
+
+    def test_mirror_source_continues_in_order_after_one_source_failure(self) -> None:
+        request = _request()
+        first = "https://mirror-one.example/10.1234/configured-fixture"
+        second = "https://mirror-two.example/base/10.1234/configured-fixture"
+        failure = AcquisitionSourceFailure(
+            StableFailure(
+                code="acquisition-public-locator-network-failed",
+                reason="The first mirror failed.",
+                action="Try the next configured mirror.",
+                retryable=True,
+            )
+        )
+        fetcher = _Fetcher(failures_by_locator={first: failure})
+        source = _source(
+            ConfiguredSciHubLandingResolver(
+                ("https://mirror-one.example", "https://mirror-two.example/base")
+            ),
+            fetcher,
+        )
+
+        iterator = iter(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+        delivery = next(iterator)
+        close = getattr(iterator, "close", None)
+        self.assertTrue(callable(close))
+        cast(Callable[[], object], close)()
+
+        self.assertEqual([call["locator"] for call in fetcher.calls], [first, second])
+        self.assertEqual(delivery.candidate.source_name, "sci-hub")
+        self.assertIsNone(delivery.safe_source_url)
+        delivery.content.discard()
+
     def test_public_route_and_missing_resolver_status_are_explicit(self) -> None:
         request = _request()
         no_identifier_request = _request(())

@@ -67,7 +67,11 @@ def _validate_regular_file(
     if secure and (
         metadata.st_uid != _current_uid() or _mode(metadata) != _FILE_MODE or metadata.st_nlink != 1
     ):
-        _fail("credentials file has unsafe ownership or permissions")
+        _fail(
+            "credentials file has unsafe ownership or permissions"
+            if credentials
+            else "configuration file has unsafe ownership or permissions"
+        )
 
 
 def _open_verified(path: Path, *, credentials: bool, secure: bool) -> tuple[int, os.stat_result]:
@@ -179,38 +183,100 @@ def _read_verified(path: Path, *, credentials: bool, secure: bool) -> tuple[byte
 
 
 def _secure_directory(path: Path, *, create: bool) -> Path:
-    metadata = _lstat_directory(path, missing_ok=True)
+    return _secure_private_directory(path, create=create, credentials=True)
+
+
+def _secure_configuration_directory(path: Path, *, create: bool) -> Path:
+    return _secure_private_directory(path, create=create, credentials=False)
+
+
+def _secure_private_directory(
+    path: Path,
+    *,
+    create: bool,
+    credentials: bool,
+) -> Path:
+    metadata = _lstat_directory(path, missing_ok=True, credentials=credentials)
     if metadata is None and not create:
-        _fail("credentials directory is unavailable")
+        _fail(
+            "credentials directory is unavailable"
+            if credentials
+            else "configuration directory is unavailable"
+        )
     if metadata is None:
         try:
             path.mkdir(mode=_DIRECTORY_MODE, parents=False, exist_ok=False)
         except FileExistsError:
-            metadata = _lstat_directory(path, missing_ok=False)
+            metadata = _lstat_directory(
+                path,
+                missing_ok=False,
+                credentials=credentials,
+            )
         except OSError:
-            _fail("credentials directory is unavailable")
+            _fail(
+                "credentials directory is unavailable"
+                if credentials
+                else "configuration directory is unavailable"
+            )
         else:
-            metadata = _lstat_directory(path, missing_ok=False)
+            metadata = _lstat_directory(
+                path,
+                missing_ok=False,
+                credentials=credentials,
+            )
     if metadata is None:  # pragma: no cover - defensive.
-        _fail("credentials directory is unavailable")
+        _fail(
+            "credentials directory is unavailable"
+            if credentials
+            else "configuration directory is unavailable"
+        )
     if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-        _fail("credentials directory is not a regular directory")
+        _fail(
+            "credentials directory is not a regular directory"
+            if credentials
+            else "configuration directory is not a regular directory"
+        )
     if metadata.st_uid != _current_uid() or _mode(metadata) != _DIRECTORY_MODE:
-        _fail("credentials directory has unsafe ownership or permissions")
+        _fail(
+            "credentials directory has unsafe ownership or permissions"
+            if credentials
+            else "configuration directory has unsafe ownership or permissions"
+        )
     return path
 
 
-def _lstat_directory(path: Path, *, missing_ok: bool) -> os.stat_result | None:
+def _lstat_directory(
+    path: Path,
+    *,
+    missing_ok: bool,
+    credentials: bool = True,
+) -> os.stat_result | None:
     try:
         metadata = os.lstat(path)
     except FileNotFoundError:
         if missing_ok:
             return None
-        _fail("credentials directory is unavailable")
+        _fail(
+            "credentials directory is unavailable"
+            if credentials
+            else "configuration directory is unavailable"
+        )
     except OSError:
-        _fail("credentials directory is unavailable")
+        _fail(
+            "credentials directory is unavailable"
+            if credentials
+            else "configuration directory is unavailable"
+        )
     if stat.S_ISLNK(metadata.st_mode):
-        _fail("credentials directory is a symbolic link")
+        _fail(
+            "credentials directory is a symbolic link"
+            if credentials
+            else "configuration directory is a symbolic link"
+        )
     if not stat.S_ISDIR(metadata.st_mode):
-        _fail("credentials directory is not a regular directory")
+        _fail(
+            "credentials directory is not a regular directory"
+            if credentials
+            else "configuration directory is not a regular directory"
+        )
     return metadata

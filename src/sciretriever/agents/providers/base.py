@@ -16,19 +16,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from sciretriever.agents.failures import AgentFailure, agent_failure
-from sciretriever.agents.requests import (
-    AgentBudget,
-    AgentCapability,
-    AgentImagePart,
+from sciretriever.agents.calls import (
+    AgentCallLimits,
     AgentProvenance,
-    AgentRequest,
-    AgentStructuredResponse,
-    AgentToolDecision,
+    AgentResult,
+    AgentStructuredResult,
     AgentUsage,
+)
+from sciretriever.agents.capabilities import AgentCapability
+from sciretriever.agents.failures import AgentFailure, agent_failure
+from sciretriever.agents.messages import AgentImagePart, utf8_size
+from sciretriever.agents.ports import AgentProviderCall
+from sciretriever.agents.tools import (
+    AgentToolCall,
     canonical_json_bytes,
     parse_strict_json_object,
-    utf8_size,
     validate_tool_arguments,
 )
 from sciretriever.logging.api import get_logger
@@ -109,7 +111,7 @@ class ProviderHttpAdapterBase:
         *,
         http_client: HttpClient,
         api_key: str | None,
-        limits: AgentBudget,
+        limits: AgentCallLimits,
         access_policy: AccessPolicy | None,
         provider_name: str,
         endpoint: str,
@@ -121,8 +123,8 @@ class ProviderHttpAdapterBase:
     ) -> None:
         if not isinstance(http_client, HttpClient):
             raise TypeError("http_client must be an HttpClient")
-        if not isinstance(limits, AgentBudget):
-            raise TypeError("limits must be AgentBudget")
+        if not isinstance(limits, AgentCallLimits):
+            raise TypeError("limits must be AgentCallLimits")
         if access_policy is not None and not isinstance(access_policy, AccessPolicy):
             raise TypeError("access_policy must be an AccessPolicy or None")
         self._http_client = http_client
@@ -154,9 +156,11 @@ class ProviderHttpAdapterBase:
     def provider_name(self) -> str:
         return self._provider_name
 
-    def complete(self, call: AgentRequest) -> AgentStructuredResponse | AgentToolDecision:
-        if not isinstance(call, AgentRequest):
-            raise TypeError("request must be an AgentRequest")
+    def execute(self, call: AgentProviderCall) -> AgentResult:
+        """Execute exactly one Runtime-bound call through this Provider protocol."""
+
+        if not isinstance(call, AgentProviderCall):
+            raise TypeError("call must be an AgentProviderCall")
         started = time.monotonic()
         try:
             self._check_capabilities(call)
@@ -208,7 +212,7 @@ class ProviderHttpAdapterBase:
             )
             raise
         usage = response.provenance.usage
-        result_kind = "tool" if isinstance(response, AgentToolDecision) else "structured"
+        result_kind = "tool" if isinstance(response, AgentToolCall) else "structured"
         _LOGGER.info(
             "agent.call.result role=%s provider=%s model=%s capabilities=%s "
             "result=%s input_tokens=%d output_tokens=%d response_bytes=%d latency_ms=%d",
@@ -225,7 +229,7 @@ class ProviderHttpAdapterBase:
         return response
 
     @staticmethod
-    def _check_capabilities(call: AgentRequest) -> None:
+    def _check_capabilities(call: AgentProviderCall) -> None:
         if AgentCapability.STRUCTURED_TEXT not in call.capabilities and (
             AgentCapability.TOOL_DECISION not in call.capabilities
         ):
@@ -242,9 +246,9 @@ class ProviderHttpAdapterBase:
     def _response(
         self,
         body: bytes,
-        call: AgentRequest,
-        limits: AgentBudget,
-    ) -> AgentStructuredResponse | AgentToolDecision:
+        call: AgentProviderCall,
+        limits: AgentCallLimits,
+    ) -> AgentResult:
         parsed = self._parse_result(body, call)
         if not isinstance(parsed, _ParsedResult):
             raise TypeError("provider response parser returned an unsupported value")
@@ -267,10 +271,10 @@ class ProviderHttpAdapterBase:
     @staticmethod
     def _tool_response(
         parsed: _ParsedResult,
-        call: AgentRequest,
+        call: AgentProviderCall,
         provenance: AgentProvenance,
-        limits: AgentBudget,
-    ) -> AgentToolDecision:
+        limits: AgentCallLimits,
+    ) -> AgentToolCall:
         if parsed.tool_name is None or parsed.tool_arguments is None:
             raise provider_failure("tool")
         declaration = next(
@@ -286,7 +290,7 @@ class ProviderHttpAdapterBase:
             raise provider_failure("tool") from None
         try:
             validate_tool_arguments(declaration, parsed.tool_arguments)
-            return AgentToolDecision(
+            return AgentToolCall(
                 tool_name=parsed.tool_name,
                 arguments=parsed.tool_arguments,
                 provenance=provenance,
@@ -298,8 +302,8 @@ class ProviderHttpAdapterBase:
         self,
         parsed: _ParsedResult,
         provenance: AgentProvenance,
-        limits: AgentBudget,
-    ) -> AgentStructuredResponse:
+        limits: AgentCallLimits,
+    ) -> AgentStructuredResult:
         if parsed.text is None or parsed.tool_name is not None:
             raise provider_failure("structured-response")
         try:
@@ -310,15 +314,15 @@ class ProviderHttpAdapterBase:
             raise provider_failure("result-budget")
         try:
             parse_strict_json_object(parsed.text)
-            return AgentStructuredResponse(result=parsed.text, provenance=provenance)
+            return AgentStructuredResult(result=parsed.text, provenance=provenance)
         except (TypeError, ValueError):
             raise provider_failure("structured-response") from None
 
     def _request(
         self,
-        call: AgentRequest,
+        call: AgentProviderCall,
         body: bytes,
-        limits: AgentBudget,
+        limits: AgentCallLimits,
     ) -> TransportResponse:
         result = self._http_client.request(
             self._access_scope,
@@ -354,26 +358,27 @@ class ProviderHttpAdapterBase:
         _raise_http_status(result.status)
         return result
 
-    def _effective_limits(self, call: AgentRequest) -> AgentBudget:
-        """Apply the stricter of adapter and request-local budgets.
+    def _effective_limits(self, call: AgentProviderCall) -> AgentCallLimits:
+        """Apply the stricter of adapter and Runtime-bound single-call limits.
 
         The adapter limits protect the configured provider lane while every
-        request may impose a smaller role/article budget.  Taking the minimum
+        call may impose smaller role-specific limits.  Taking the minimum
         at the boundary prevents a permissive adapter default from defeating a
-        caller's bounded request contract.
+        Runtime-bound call contract.
         """
 
-        return AgentBudget.stricter(self._limits, call.budget)
+        return AgentCallLimits.stricter(self._limits, call.limits)
 
-    def _check_call_budgets(self, call: AgentRequest, limits: AgentBudget) -> None:
+    def _check_call_budgets(
+        self,
+        call: AgentProviderCall,
+        limits: AgentCallLimits,
+    ) -> None:
         if utf8_size(call.prompt) > limits.max_prompt_bytes:
             raise provider_failure("input-budget")
         input_bytes = sum(utf8_size(part.text) for part in call.text_parts)
         input_bytes += sum(len(part.data) for part in call.image_parts)
         input_bytes += len(_tools_bytes(call))
-        previous = history_text(call)
-        if previous is not None:
-            input_bytes += utf8_size(previous)
         if input_bytes > limits.max_input_bytes:
             raise provider_failure("input-budget")
         if (
@@ -389,7 +394,11 @@ class ProviderHttpAdapterBase:
         if request_tokens + call.max_output_tokens > limits.context_window_tokens:
             raise provider_failure("context-budget")
 
-    def _parameter_bytes(self, call: AgentRequest, limits: AgentBudget) -> bytes:
+    def _parameter_bytes(
+        self,
+        call: AgentProviderCall,
+        limits: AgentCallLimits,
+    ) -> bytes:
         effective_schema = canonical_json_bytes(
             parse_strict_json_object(call.response_schema or "{}")
         )
@@ -403,8 +412,8 @@ class ProviderHttpAdapterBase:
                 "response_schema_sha256": str(sha256_digest(effective_schema)),
                 "parts_sha256": str(sha256_digest(_parts_bytes(call))),
                 "tools_sha256": str(sha256_digest(_tools_bytes(call))),
-                "history_sha256": str(sha256_digest((history_text(call) or "").encode("utf-8"))),
                 "max_output_tokens": call.max_output_tokens,
+                "reasoning_effort": call.reasoning_effort.value,
                 "provider_parameters": self._provider_parameters(),
                 "endpoint_sha256": str(sha256_digest(self._endpoint.encode("utf-8"))),
                 "context_window_tokens": limits.context_window_tokens,
@@ -417,10 +426,10 @@ class ProviderHttpAdapterBase:
     def _credential_headers(self) -> tuple[tuple[str, str], ...]:
         raise NotImplementedError
 
-    def _build_request_body(self, call: AgentRequest) -> bytes:
+    def _build_request_body(self, call: AgentProviderCall) -> bytes:
         raise NotImplementedError
 
-    def _parse_result(self, body: bytes, call: AgentRequest) -> _ParsedResult:
+    def _parse_result(self, body: bytes, call: AgentProviderCall) -> _ParsedResult:
         raise NotImplementedError
 
     def _provider_parameters(self) -> dict[str, object]:
@@ -456,7 +465,7 @@ def image_data_url(part: AgentImagePart) -> str:
     return f"data:{part.media_type};base64,{encoded}"
 
 
-def openai_responses_input_parts(call: AgentRequest) -> list[dict[str, object]]:
+def openai_responses_input_parts(call: AgentProviderCall) -> list[dict[str, object]]:
     """Convert neutral text/image parts to Responses content blocks."""
 
     parts: list[dict[str, object]] = []
@@ -468,21 +477,15 @@ def openai_responses_input_parts(call: AgentRequest) -> list[dict[str, object]]:
         parts.append({"type": "input_text", "text": part.text})
     for image in call.image_parts:
         parts.append({"type": "input_image", "image_url": image_data_url(image)})
-    history = history_text(call)
-    if history is not None:
-        parts.insert(0, {"type": "input_text", "text": history})
     if not parts:
         raise provider_failure("input-budget")
     return parts
 
 
-def openai_chat_input_parts(call: AgentRequest) -> list[dict[str, object]]:
+def openai_chat_input_parts(call: AgentProviderCall) -> list[dict[str, object]]:
     """Convert neutral text/image parts to Chat Completions content blocks."""
 
     parts: list[dict[str, object]] = []
-    history = history_text(call)
-    if history is not None:
-        parts.append({"type": "text", "text": history})
     for part in call.text_parts[1:]:
         parts.append({"type": "text", "text": part.text})
     for image in call.image_parts:
@@ -492,13 +495,10 @@ def openai_chat_input_parts(call: AgentRequest) -> list[dict[str, object]]:
     return parts
 
 
-def anthropic_input_parts(call: AgentRequest) -> list[dict[str, object]]:
+def anthropic_input_parts(call: AgentProviderCall) -> list[dict[str, object]]:
     """Convert neutral text/image parts to Anthropic content blocks."""
 
     parts: list[dict[str, object]] = []
-    history = history_text(call)
-    if history is not None:
-        parts.append({"type": "text", "text": history})
     # ``call.prompt`` is encoded in Anthropic's top-level system field.  Do not
     # repeat it in the user message.
     for part in call.text_parts[1:]:
@@ -520,7 +520,11 @@ def anthropic_input_parts(call: AgentRequest) -> list[dict[str, object]]:
     return parts
 
 
-def tool_declarations(call: AgentRequest, *, anthropic: bool = False) -> list[dict[str, object]]:
+def tool_declarations(
+    call: AgentProviderCall,
+    *,
+    anthropic: bool = False,
+) -> list[dict[str, object]]:
     """Encode only closed, validated tool declarations."""
 
     result: list[dict[str, object]] = []
@@ -547,30 +551,7 @@ def tool_declarations(call: AgentRequest, *, anthropic: bool = False) -> list[di
     return result
 
 
-def history_text(call: AgentRequest) -> str | None:
-    """Bounded, provider-neutral previous-result context for multi-turn calls."""
-
-    if not call.history:
-        return None
-    values: list[dict[str, object]] = []
-    for index, result in enumerate(call.history):
-        if isinstance(result, AgentStructuredResponse):
-            payload: object = parse_strict_json_object(result.result)
-        elif isinstance(result, AgentToolDecision):
-            payload = {
-                "tool_name": result.tool_name,
-                "arguments": parse_strict_json_object(result.arguments),
-            }
-        else:
-            raise provider_failure("protocol")
-        values.append({"turn": index + 1, "result": payload})
-    encoded = canonical_json_bytes({"previous_turns": values}).decode("utf-8")
-    if utf8_size(encoded) > call.budget.max_input_bytes:
-        raise provider_failure("input-budget")
-    return f"Previous bounded Agent turns (JSON): {encoded}"
-
-
-def _parts_bytes(call: AgentRequest) -> bytes:
+def _parts_bytes(call: AgentProviderCall) -> bytes:
     values: list[dict[str, object]] = [
         {"media_type": part.media_type, "text": part.text} for part in call.text_parts
     ]
@@ -586,21 +567,18 @@ def _parts_bytes(call: AgentRequest) -> bytes:
     return canonical_json_bytes(values)
 
 
-def _capability_names(call: AgentRequest) -> str:
+def _capability_names(call: AgentProviderCall) -> str:
     return ",".join(sorted(value.value for value in call.capabilities))
 
 
-def _request_input_bytes(call: AgentRequest) -> int:
+def _request_input_bytes(call: AgentProviderCall) -> int:
     total = sum(utf8_size(part.text) for part in call.text_parts)
     total += sum(len(image.data) for image in call.image_parts)
     total += len(_tools_bytes(call))
-    previous = history_text(call)
-    if previous is not None:
-        total += utf8_size(previous)
     return total
 
 
-def _tools_bytes(call: AgentRequest) -> bytes:
+def _tools_bytes(call: AgentProviderCall) -> bytes:
     return canonical_json_bytes(
         [
             {
@@ -628,7 +606,11 @@ def usage_from_payload(payload: object) -> AgentUsage:
     return AgentUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
-def _validate_usage(usage: AgentUsage, call: AgentRequest, limits: AgentBudget) -> None:
+def _validate_usage(
+    usage: AgentUsage,
+    call: AgentProviderCall,
+    limits: AgentCallLimits,
+) -> None:
     if not isinstance(usage, AgentUsage):
         raise provider_failure("protocol")
     if usage.output_tokens > call.max_output_tokens or usage.output_tokens > (
@@ -754,7 +736,6 @@ __all__ = (
     "OPENAI_BASELINE_ACCESS_POLICY",
     "agent_http_connection",
     "anthropic_input_parts",
-    "history_text",
     "image_data_url",
     "openai_chat_input_parts",
     "openai_responses_input_parts",

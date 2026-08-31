@@ -1,50 +1,72 @@
 # SciRetriever 当前普通运行配置示例。
 #
-# 本文件只保存非敏感运行参数。Provider、LLM 和远程 MinerU secret
+# 推荐通过 `sciretriever config` 管理；如果选择直接编辑，请先确认
+# ~/.sciretriever/config.toml 尚不存在，再把本模板复制到该固定位置，并将
+# ~/.sciretriever 设为 0700、config.toml 设为 0600。当前目录中的同名文件
+# 不会被程序自动发现。
+#
+# 本文件只保存非敏感运行参数。文献 Provider、Model Provider 和远程 MinerU secret
 # 都通过裸 `sciretriever config` 交互中心写入固定的
 # ~/.sciretriever/credentials.toml；不要把 secret 写在本文件中。
 #
-# 默认保持纯本地模式：可以进行书目导入导出、本地查询和手动 PDF 接纳，
-# 不会访问任何外部 Provider。需要外部能力时，按下方注释示例显式启用。
+# 本地导入导出、查询和手动 PDF 接纳始终不会访问外部 Provider。明确执行
+# Discovery/Completion 时，Source 默认使用当前版本维护的 Auto 集合；需要冻结集合或
+# 关闭某类命名 Provider 时切换为 Custom。
 
 [paths]
 catalog_path = "/absolute/private/path/catalog.sqlite3"
 artifact_root = "/absolute/private/path/artifacts"
 
-[discovery]
-# 启用 Metadata Provider 后，该值限制每个 Provider 在一次 DiscoveryRun
-# 中扫描的原始 item 数量，不是最终接纳结果数量。
-metadata_scan_limit = 100
-
 [sources.metadata]
-providers = []
-# 无凭据的基础示例：
+mode = "auto"
+# 分别限制每个参与 Source 在一次 DiscoveryRun 中扫描的过滤前原始 item；
+# 不是所有 Source 共享的总量、最终接纳数量或 HTTP 请求次数。
+limit = 500
+# 需要冻结精确集合与顺序时改为：
+# mode = "custom"
 # providers = ["crossref", "arxiv"]
+# Custom 空列表可以显式关闭 Metadata Provider。
+# providers = []
 
-# 当上方启用 crossref 时，必须显式选择访问池：
+# Crossref 未配置子表时使用 anonymous；需要 polite pool 时配置：
 # [sources.metadata.crossref]
-# mode = "anonymous"
-# polite 模式还需要非敏感联系邮箱：
 # mode = "polite"
 # mailto = "operator@example.org"
 
 [sources.acquisition]
-providers = []
-# 公开 PDF 路径示例：
+mode = "auto"
+# Auto 命名 Source 是 arXiv 与 Europe PMC；已有 direct/landing AssetHint 无论
+# 哪种模式都会被消费。需要其它精确来源时改为 Custom，例如：
+# mode = "custom"
 # providers = ["arxiv", "europe-pmc", "unpaywall"]
+# Custom 空列表只保留固有 hint 路线和独立 Browser 配置。
+# providers = []
+# Sci-Hub 默认关闭；先切换 Custom，再把 "sci-hub" 加入同一有序数组，便会
+# 使用当前版本 builtin mirror set。下方普通 URL 列表是可选 custom override。
 # 公开路径之后再尝试 CORE/Elsevier/Wiley 授权主 PDF API：
 # providers = ["arxiv", "europe-pmc", "unpaywall", "core", "elsevier", "wiley"]
-# CORE 与 Elsevier 还要求在 `sciretriever config` 的 Provider 区配置
-# api_key；Wiley 要求在同一区域配置 tdm_api_token。Elsevier 可选
+# CORE 与 Elsevier 还要求在 `sciretriever config` 的对应
+# `Download → Sources → <source> → Key` 配置 api_key；Wiley 在其 Source 页配置
+# tdm_api_token。Elsevier 可选
 # institution_token。secret 都不能写在本文件中。Springer 当前全文产品
 # 是 JATS/XML，不是主 PDF API；Wiley 仅对 DOI 安全落地到 Wiley Online
 # Library 的文献适用。
 # 9 条受控 Browser 规则由产品内置，不写进 Provider 列表；只有下方
-# `[access]` 显式启用后，才会在 Public/API 正常结束后逐文章尝试。
+# `[download]` 显式启用后，才会在 Public/API 正常结束后逐文章尝试。
 
 # 当上方启用 unpaywall 时，必须提供非敏感联系邮箱：
 # [sources.acquisition.unpaywall]
 # contact_email = "operator@example.org"
+
+# 可选 custom `urls` 完整覆盖 builtin；删除整个 table 可恢复跟随 builtin。
+# Sci-Hub 只对有 DOI 的 Literature 适用；有效镜像按顺序逐个尝试，不并发、
+# 不自动发现，也不使用 API Key、Cookie、代理或 selector。每项必须是
+# hostname-based HTTPS 默认端口。operator 须自行确认授权、法律与服务条款。
+# [sources.acquisition.sci-hub]
+# urls = [
+#   "https://mirror-one.example",
+#   "https://mirror-two.example/base",
+# ]
 
 [assets]
 
@@ -55,38 +77,30 @@ providers = []
 # model_identity = "mineru-3.4.4-vlm"
 # remote_upload_authorized = false
 
-[agents]
-# Analysis 使用共享 Agents provider。推荐直接运行 `sciretriever config`
-# 使用 Guided setup；API key 进入 credentials.toml 的 [agents]，不写在这里。
-# provider = "openai"
-# protocol = "openai-responses"
+[providers]
+# 推荐使用 `Models → Add` 配置 Model，并在 `Models → Providers` 管理 Provider/Key。
+# API key 进入 credentials.toml 的 `[providers.<provider>]`，不写在这里。
+# 直接编辑时，一套 OpenAI 示例形状如下：
+#
+# [providers.openai]
+# api = "openai-responses"
 # base_url = "https://api.openai.com/v1"
-# authentication = "api-key"
 
-[agents.analysis]
-# model = "operator-selected-model"
-# context_window_tokens = 2000000
-# max_output_tokens = 8192
-# structured_output = true
-# deadline_seconds = 180.0
+[models]
+# [models."openai/operator-selected-model"]
+# reasoning = "max" # default | none | minimal | low | medium | high | xhigh | max
+# image = false
+#
+# [models."openai/operator-selected-browser-model"]
+# reasoning = "high"
+# image = true
 
-[agents.browser]
-# Browser Agent 是确定性 Publisher 规则之后的可选 fallback，复用上方
-# 唯一 Agents endpoint 与 credential，但必须单独声明图像和工具能力。
-# model = "operator-selected-vision-model"
-# context_window_tokens = 32768
-# max_output_tokens = 2048
-# structured_output = false
-# image_input = true
-# tool_decision = true
-# image_media_types = ["image/png", "image/jpeg", "image/webp"]
-# image_count = 1
-# image_bytes = 4194304
-# turns = 4
-# deadline_seconds = 180.0
-
-[analysis]
-# `complete content` 还需要全部 Analysis 业务预算参数。
+[analyze]
+# `model` 是完整的 `provider/model` reference；reasoning 保留在 Model 中。
+# strict structured output、text-only 与 no-tool 合同由 Analyze 派生。
+# model = "openai/operator-selected-model"
+# `Analyze → Setup` 会在业务预算缺失时生成产品安全初值，并在同一流程允许
+# 选择预算预设或逐项调优。`complete content` 需要下面全部业务预算参数。
 # metadata_max_output_tokens = 1024
 # content_max_output_tokens = 4096
 # reference_max_output_tokens = 1024
@@ -102,7 +116,12 @@ max_concurrency = 4
 [library]
 max_input_bytes = 67108864
 
-[access]
+[download]
+# `model` 同样引用完整 Model。Agent controller 只允许选择 `image = true` 的
+# Model；tool decision、image/png、单图和字节限制由 Download 派生。Rules 不调用该模型。
+# model = "openai/operator-selected-browser-model"
 browser_enabled = false
+# 作业开始前固定选择确定性规则或从第一次 Observation 起由 Agent 选择封闭动作。
+browser_controller = "rules"
 browser_max_concurrency = 5
 browser_policy_overrides = []

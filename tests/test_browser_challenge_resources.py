@@ -26,7 +26,6 @@ def _rule(*, profile: BrowserChallengeResourceProfile | None) -> BrowserSiteRule
         landing_origin="https://publisher.test",
         allowed_origins=("https://publisher.test",),
         web_scope_provider_name="fixture-publisher",
-        max_actions=0,
         challenge_resource_profile=profile,
     )
 
@@ -117,7 +116,7 @@ class BrowserChallengeResourceProfileTests(unittest.TestCase):
         guard.check_request(image)
 
         self.assertEqual(profile.match_reason(image), BrowserChallengeResourceMatch.ADMITTED)
-        self.assertEqual(guard.challenge_resource_facts().admitted_count, 1)
+        self.assertEqual(guard.challenge_resource_counts(), (1, 0))
 
     def test_challenge_image_expansion_remains_fail_closed(self) -> None:
         profile = cloudflare_challenge_profile()
@@ -291,7 +290,7 @@ class BrowserChallengeResourceProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(rebound, ["https://publisher.test/abstract/one"])
-        self.assertEqual(guard.challenge_resource_facts().admitted_count, 1)
+        self.assertEqual(guard.challenge_resource_counts(), (1, 0))
         self.assertTrue(
             rule.matches_article_landing(
                 "https://publisher.test/abstract/one",
@@ -440,7 +439,6 @@ class BrowserChallengeResourceProfileTests(unittest.TestCase):
                     "https://challenges.cloudflare.com",
                 ),
                 web_scope_provider_name="fixture-publisher",
-                max_actions=0,
                 challenge_resource_profile=_profile(),
             )
         catalog = BrowserRuleCatalog((_rule(profile=None),))

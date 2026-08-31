@@ -108,8 +108,8 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 | 核心功能 | Parsing | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果 |
 | 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索 |
 | 公用基础 | Model | 定义除 Logging 外各模块交换的领域中立数据合同 |
-| 公用基础 | Agents | 为 Analysis 与受控 Browser 提供中性 provider、模型 capability、请求预算、取消、请求级 session 和严格结构化/tool decision；不拥有消费模块的 prompt、工具含义或结果验收 |
-| 公用基础 | 网络基础设施 | 统一提供安全 HTTP、受控浏览器、资源预算和脱敏 |
+| 公用基础 | Agents | 为 Analysis 与受控 Browser 提供无状态、Provider-neutral 的单次模型执行、role binding、capability/readiness、取消、严格结构化/tool decision 和稳定失败；不拥有消费模块 workflow、工具执行或事实写入 |
+| 公用基础 | 网络基础设施 | 统一提供安全 HTTP、受控浏览器、单次资源上限和脱敏；唯一生成 Browser Observation、执行动作、capture 与 cleanup |
 | 公用基础 | 存储 | 保存 DiscoveryRun、文献当前关系事实、自动 PDF 获取耗尽事实和不可变文件，提供一致查询与事务边界；不保存批量运行现场或报告 |
 | 公用基础 | Logging | 统一 logger 获取、生产进程配置、stderr 输出、formatter 和最终脱敏防线；不形成 Report 或业务事件系统 |
 
@@ -129,7 +129,7 @@ sciretriever/
   analysis/           # LLM 分析与总结
 
   model/              # 统一数据合同
-  agents/             # 中性模型 provider、capability、预算与请求级 session
+  agents/             # 无状态单次模型执行、role binding 与 provider protocol
   network/            # 网络基础设施
   storage/            # 数据库、文件和本机写入互斥
   logging/            # logger 获取、进程配置与最终脱敏防线
@@ -170,7 +170,7 @@ sciretriever/
 
 目标生产范围覆盖 [ADR 0014](decisions/0014-capability-scoped-providers-and-local-credentials.md) 已确认的 Provider 能力，并由 [ADR 0015](decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 约束原文访问计划。“能力已实现”“用户启用”“普通参数/凭据/政策就绪”“当前 Literature 适用”和“当前 route 实际需要”必须分别判断。领域发现调用全部已启用且就绪的 Metadata search adapter；Acquisition 先形成访问方 Resolution 和分层 Plan，只执行其中适用且需要的 route。全面接入不会把每次运行变成对全部服务的无条件调用。
 
-普通配置由 `sciretriever.configuration` 解析；Provider、Agents 模型服务与远程 MinerU 密钥只来自 `~/.sciretriever/credentials.toml`，用户可以直接编辑，也可以通过同一 CLI 配置边界安全修改。核心服务 secret 与规范 origin 精确绑定；loopback 服务不读取不需要的 secret。模型 endpoint/凭据可以由 analysis/browser 角色复用，但 capability 与预算分别判断；密钥存在、认证成功与具体全文 entitlement 是不同事实。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和测试边界见 [配置与凭据技术文档](technical/configuration.md)。
+普通配置由 `sciretriever.configuration` 解析，正常生产只读取固定的 `~/.sciretriever/config.toml`；工作目录和环境变量不参与配置选择。裸 `sciretriever config` 管理并在首次确认编辑时创建同一文件，用户也可以直接编辑。文献 Provider、Model Provider 与远程 MinerU 密钥只来自独立的 `~/.sciretriever/credentials.toml`。两个文件共用 owner-only 用户目录但不合并 schema 或责任；路径规则、安全读取和原子发布只由 Configuration 拥有，Entry/Bootstrap 不选择第二份配置。secret 与规范 origin 精确绑定；HTTP loopback 服务不读取不需要的 secret。`Models` 保存 Provider 与 `provider/model` Model 注册表：Provider 只拥有 API 和 Base URL，Model 只拥有 reasoning 与 image。`Analyze` 和 `Download` 直接选择 Model 并保存各自业务参数，不修改 Model 或互相联动；context/output、strict output、tool decision 和图片格式/数量/大小由消费模块派生。两个任务选择同一 Provider 时复用 adapter/凭据，选择不同 Provider 时分别装配；密钥存在、认证成功、Download Model 就绪、Browser runtime 就绪与具体全文 entitlement 始终是不同事实。`config status` 只计算本地事实；新增 Model 时 key 就绪后自动通过共享 Network 读取一次有界、非持久模型目录，只有失败或无结果才回到 Manual。该 observation 不能替代显式最小模型 probe，也不进入文献数据库或长期运行对象图。普通配置与凭据只接受唯一当前 schema；malformed、未知 section/key、无效值以及旧 `[agents]`、`[models.services.*]`、`[models.profiles.*]`、`[models.entries.*]` 和旧 `[models.*]` 凭据都在配置首页前严格失败且不写文件，不提供 Reset、迁移、恢复或 fallback。Secret、凭据状态和连通性测试不属于文献数据库；精确文件、命令和 operator 手工修复边界见 [ADR 0018](decisions/0018-fixed-user-configuration-home.md)、[ADR 0021](decisions/0021-provider-model-registry-and-direct-task-selection.md)与[配置与凭据技术文档](technical/configuration.md)。
 
 Publisher access Profile 使用 `production-ready`、`fixture-verified` 和 `unsupported` 三种准入状态，
 Public、授权 API 与 Browser capability 另行表达。一个只完成授权 API 的 Profile 可以是
@@ -223,15 +223,18 @@ DiscoveryRun 的结束点是发现结果已经经 Metadata 中性转换和 Liter
 
 ```text
 领域 DiscoveryRun 输入
-  -> 调用本次选择、已启用且 readiness 通过的全部元数据搜索能力
-  -> 每个供应商分别运行到结果耗尽或达到整个 Run 的原始 scan limit
+  -> 解析 Metadata Auto 或 Custom 的本次有效 Source 顺序
+  -> 调用有效选择中 readiness 通过的全部元数据搜索能力
+  -> 每个供应商分别运行到结果耗尽或达到自己的逐 Source 原始 limit
   -> 各供应商结果转换为中性元数据 observation
   -> 文献管理执行身份判断和版本区分
   -> 形成或补充当前统一元数据
   -> 保存来源 observation、统一文献、DiscoveryRun 结果与发现原因
 ```
 
-每个供应商独立返回结果并具有自己的 `scan_limit`。过滤和去重前的每条原始 item 都消耗上限，因此无标题/DOI、重复或最终未接纳的 item 不能让 Provider 无限分页。自然耗尽和达到上限都是正常完成；单个供应商失败只影响该来源，其它来源的成功结果继续进入文献管理。已接纳结果可以逐条提交，不等待全部 Provider 结束。具有标题或 DOI 的不完整记录可以先入库，后续运行继续补充；标题和 DOI 都缺失的记录不能形成数据库中的文献，但仍消耗扫描额度。
+Source 选择只在本地解析。Auto 使用当前版本维护的默认安全有序集合；Custom 使用用户保存的精确集合与顺序并允许为空。Auto catalog 不根据 Key、启动时网络探测或临时 outage 改写；升级可以维护默认集合，需要冻结跨版本行为时使用 Custom。当前 Metadata Auto 为 Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、DataCite、CORE 与 OpenCitations，其中 OpenCitations 不参加主题搜索。Crossref 未配置普通参数时使用 anonymous pool。
+
+每个供应商独立返回结果并共享同一个配置形状、但各自获得完整的逐 Source `limit`；默认值是 500。过滤和去重前的每条原始 item 都消耗本 Source 上限，因此无标题/DOI、重复或最终未接纳的 item 不能让 Provider 无限分页。它不是多个来源共享的总量或 HTTP 请求次数。自然耗尽和达到上限都是正常完成；单个供应商失败只影响该来源，其它来源的成功结果继续进入文献管理。已接纳结果可以逐条提交，不等待全部 Provider 结束。具有标题或 DOI 的不完整记录可以先入库，后续运行继续补充；标题和 DOI 都缺失的记录不能形成数据库中的文献，但仍消耗扫描额度。
 
 Web of Science、Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、Elsevier/Scopus、Springer Nature、DataCite 和 CORE 的目标生产 adapter 各自直接在其官方覆盖范围内执行领域查询；OpenCitations Meta 当前只参与稳定标识符 lookup 和引用能力，不伪装成领域搜索。Entry 不先判断出版社：Springer Nature 只返回自身覆盖内容、Scopus 可以返回多家出版社文献，都是 Provider 自己的正常检索语义。明确启用但缺少生产 adapter、必需凭据或 AccessPolicy 时在运行开始前形成配置错误，不能静默跳过或记录为零结果。
 
@@ -274,12 +277,17 @@ Browser。Browser 使用当前机器正常网络出口和一个 operator-managed
 对象图内让所有 `browser_session_key` Publisher lane 共享一个有头 CloakBrowser Chromium process/persistent
 context，并为每篇文章隔离 article token、page、handler 和临时下载目录；无 GUI Linux 由 Xvfb
 提供虚拟显示，broker 关闭或进程退出后清理 runtime 临时资源但保留 Profile。Permit 覆盖一篇
-文章从 canonical landing、授权标记、有限页面动作、popup/viewer、response/download 到资源清理
-的完整流程。Challenge dependency 只在已核实 Publisher、frame ancestry 与当前文章预算内加载；
-自动 settle/clear、本地资源阻断、明确人工交互和普通拒绝分别表达。登录、MFA、明确人工 challenge、
-无 entitlement、rate limit、IP block 或账号警告只暂停/熔断对应组。第一版不提供用户可见 Browser
-认证、机构选择、MFA 或 CAPTCHA 交互；自动流程不填写凭据、不选择机构、不读取 Cookie/登录结果、
-不处理或绕过 MFA/CAPTCHA，也不执行任意规则脚本。
+文章从 canonical landing、授权标记、页面动作、popup/viewer、response/download 到资源清理
+的完整流程。Challenge dependency 只在已核实 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载。
+
+Controlled Browser 作业开始前从普通配置冻结 `rules` 或 `agent` controller。Rules 只运行初始 capture、
+通用 PDF locator 和 Publisher 确定性页面规则；Agent 从第一次统一 Observation 起选择六种封闭动作，
+不先运行确定性点击规则。两种 controller 共用 Publisher knowledge、CloakBrowser/Profile、Network guard、
+capture 和 PDF 验收，且不会因 miss、timeout、Challenge 或失败相互切换。Challenge 只是统一
+`page_state`，没有专属 target、动作、controller、预算或 interaction 状态机；页面清除后继续普通
+capture，停止时仍未清除则形成稳定未解决结果。产品不提供用户可见 Browser 认证、机构选择或 MFA；
+自动流程不填写凭据、不选择机构、不读取 Cookie/登录结果，也不能使用外部 solver、注入 token 或
+切换代理/IP/Profile。
 固定设备身份由 CloakBrowser runtime 管理，不是 Publisher 动作。Publisher 请求由 Chromium 原生网络栈完成；每次 navigation、popup、viewer、response
 和 download 在继续访问前同时通过 PublisherAccessProfile guard 与 Network 通用安全准入。
 
@@ -361,7 +369,7 @@ export    -> metadata | pdf | content
 config    -> 裸命令交互管理 | status | test
 ```
 
-`literature` 只读取本地数据库；手动 PDF 属于 `import pdf`，不是 Literature 查询动作；PDF 与轻结构化文档分别通过 `export pdf` 和 `export content` 导出。裸 `config` 交互中心统一管理 LLM/MinerU 普通配置以及同一用户级文件中的 Provider、LLM、MinerU 凭据；`config status/test` 呈现安全本地状态或执行显式最小只读 Provider/LLM/MinerU 诊断，不访问文献数据库。CLI 不建立 `config set/remove`、`exchange`、`bibliography`、`artifact` 或内部 Metadata/Acquisition/Parsing/Analysis 模块一级命令。具体参数只能把外部输入映射到已经确定的中性合同，不能改变模块业务含义。
+`literature` 只读取本地数据库；手动 PDF 属于 `import pdf`，不是 Literature 查询动作；PDF 与轻结构化文档分别通过 `export pdf` 和 `export content` 导出。裸 `config` 交互中心使用单词级 `Models / Search / Download / Parse / Analyze / Browser / Status / Theme / Quit` 一级选项：Models 拥有 Provider、Model 与模型 key；Search/Download 在具体 Source 对象页就近拥有普通参数、key 与 test；Parse 用 Setup 连续配置 MinerU；Analyze/Browser 用 Setup 选择 Model 和业务参数，Browser 另行拥有 Profile 与 Runtime。普通配置与同一用户级凭据文件仍保持分离。`config status/test` 呈现安全本地状态或执行显式最小 Provider/Analyze/Browser Model/MinerU 诊断，不访问文献数据库。`Models → Add` 在 key 就绪后自动执行一次不含文献内容的有界目录 GET，失败才进入 Manual；首页、status 和普通业务命令不读取目录。CLI 不建立 `config set/remove`、`exchange`、`bibliography`、`artifact` 或内部 Metadata/Acquisition/Parsing/Analysis 模块一级命令。具体参数只能把外部输入映射到已经确定的中性合同，不能改变模块业务含义。
 
 入口未来可以增加 GUI 或其它形式，但不会改变这些用户操作的业务边界。当前公开入口和已经实现的命令仍只由 README 与用户指南说明；目标命令在安装入口与离线测试完成前不能写成已发布行为。
 
@@ -430,14 +438,16 @@ Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文
 - 根据 AssetHint、来源稳定定位、Provider record identity 或必要时 DOI 安全解析后的实际 landing origin 形成访问方 Resolution，不把 metadata 来源机构、publisher 自由文本或单独 DOI prefix 当作原文归属；
 - 形成按公开来源、官方授权 API 和受控 Browser 分组的确定性 Plan，省略确定不适用 route 但不提前 Browser；
 - 在公开层优先尝试供应商明确返回的直接主 PDF 线索，再尝试公开全文服务、OA locator 和普通 HTTP landing page；
+- 对默认关闭、由 operator 显式启用的 Sci-Hub Source，从随版本维护的 bundled mirror set 或 operator custom override 只用 canonical DOI 构造有序 landing locator；custom 完整覆盖 bundled，不自动发现或并发请求镜像，不引入 Key、Cookie、代理或绕过能力，并让全部 landing/PDF 继续经过统一 Network 与基本检查；
+- 本地解析 Acquisition Auto 或 Custom：Auto 只增加 arXiv 与 Europe PMC 两个零配置命名协议，Custom 精确使用用户列表；两种模式都固有地消费已有且安全验证通过的 direct/landing `AssetHint`，都不会因 Key 存在自动启用授权 API、Sci-Hub 或 Browser；
 - 接受 Entry 的 cohort 层级调用，为 API/DOI/页面产生的安全 route hint 重新规划，并保证同一 Literature 不跨层竞速；
 - 把 API capability 明确区分为 metadata/search、locator/resolution、entitlement、structured full text、direct PDF 和 multi-step PDF object retrieval，只有实际 PDF 字节形成临时候选；
 - 为 Browser route 声明封闭页面规则、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 与政策证据；
-- 以 `BrowserFlowController` 组织页面流程：初始 capture、通用 PDF locator 和 Publisher 静态规则优先，只有页面仍为非终态且正常未命中时才允许有界 Agent fallback；
-- 解释 Network 提供的有界页面/资源事实，区分 challenge resource loading/settling/cleared、明确人工交互、本地资源阻断、普通拒绝、paywall、login 和 entitlement；
+- 在作业开始前按冻结配置只构造 `RuleBrowserController` 或 `AgentBrowserController`；Rules 使用确定性发现/页面动作，Agent 从第一次统一 Observation 起决策，两者不相互 fallback；
+- 解释 Network 提供的统一 page/surface/revision/screenshot/element/capture/receipt，区分 Challenge、本地资源阻断、普通拒绝、paywall、login、entitlement 和 capture；
 - 对每个候选执行统一基本检查；
 - 对手动提供的文件复制内部副本并执行同一基本检查，不移动、修改或删除用户原文件；
-- 一个候选正常未命中或未通过基本检查时继续其它候选；timeout、临时服务错误、`429`/quota、Browser action-required、Network/API/权限/配置错误和取消不能被解释为正常耗尽或无条件升级；
+- 一个候选正常未命中或未通过基本检查时继续其它候选；timeout、临时服务错误、`429`/quota、Browser 页面未解决、Network/API/权限/配置错误和取消不能被解释为正常耗尽或无条件升级；
 - 为通过检查的 PDF 形成 hash、来源和 Literature 关系；
 - 保证同一 `Literature` 只有一个当前主 PDF 驱动后续处理；
 - 在内容被明确判定无效时撤销当前关系并删除对应资产和中间结果，使 Entry 能继续其它候选。
@@ -456,7 +466,7 @@ Acquisition 模块根据具体 `Literature` 的统一元数据自动寻找主文
 
 层级表示 Acquisition 选择的风险上下文，不等于网络限速范围。公开 `AssetHint` 指向出版社网页时，普通 HTTP 使用该访问方的网页与 host scope；官方 API 使用按真实 quota identity 形成的独立 API scope；Browser 额外使用 Profile 的 risk group 和 session key。Acquisition 不以固定 sleep 计算等待，也不把网页繁忙解释为来源正常未命中，所有真实请求在当前进程共享的 Network permit 下执行。用户配置了密钥只表示 adapter 可以尝试认证；认证成功仍不能代替对当前 Literature 的内容 entitlement 判断。
 
-Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获得当前主 PDF”。单个候选未通过文件检查时删除临时文件，不创建 `Asset`/`LiteratureAsset`、不保存候选级原因并继续下一候选；没有候选、正常未命中、Browser 流程正常结束但没有下载、非 PDF 或损坏 PDF，在全部适用 routes 都正常结束且没有 deferred/action-required/未解决 failure 后归入无字段的 `NoPrimaryPdf`，并只保存该具体 Literature 已自动耗尽这一最小事实。临时网络/API 错误、`Retry-After`/quota、Browser 登录/MFA/challenge、权限/配置错误、用户中断、数据库、文件系统或关系提交错误直接形成本次失败，不能虚构“没有获得”或需要人工 PDF。唯一的 `primary-pdf` 关系就是该 Literature 的当前主 PDF，不再维护平行 `is_current` 状态。
+Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获得当前主 PDF”。单个候选未通过文件检查时删除临时文件，不创建 `Asset`/`LiteratureAsset`、不保存候选级原因并继续下一候选；没有候选、正常未命中、Browser controller 明确正常停止但没有下载、非 PDF 或损坏 PDF，在全部适用 routes 都正常结束且没有 deferred 或未解决 failure 后归入无字段的 `NoPrimaryPdf`，并只保存该具体 Literature 已自动耗尽这一最小事实。临时网络/API 错误、`Retry-After`/quota、Browser 登录/MFA、Challenge 未解决、权限/配置错误、用户中断、数据库、文件系统或关系提交错误直接形成本次失败，不能虚构“没有获得”或需要人工 PDF。唯一的 `primary-pdf` 关系就是该 Literature 的当前主 PDF，不再维护平行 `is_current` 状态。
 
 上述二值结果只属于自动获取。手动 PDF 是单独操作：有效文件发布后返回已经接纳的 Asset 与 LiteratureAsset，无效文件形成输入验证错误；它既不产生 `NoPrimaryPdf`，也不增加自动获取的第三种结果或第四种 `AcquisitionPath`。
 
@@ -596,11 +606,11 @@ Vendor、HTTP、浏览器、SQL、MinerU 私有响应和模型协议私有响应
 
 ### 5.2 Agents
 
-Agents 是 Analysis 与受控 Browser 的公用模型调用基础，只拥有中性的 provider/model identity、capability、输入/输出边界、预算、取消、请求级 session、协议转换和稳定失败。它至少区分 structured text、image input 与 tool decision；某个模型可以满足 Analysis 而不满足 Browser Agent，readiness 不能只按 provider 名称推断。
+Agents 是 Analysis 与受控 Browser 的公用无状态模型调用基础，只拥有中性 role/message/schema/tool、Bootstrap 从任务所选 Model 与其 Provider 解析出的 role binding、capability/readiness、单次 context/output/request/response/result 边界、取消、协议转换、usage 和稳定失败。Configuration 中的 Model 只拥有远端 identity、reasoning 与 image；Provider 只拥有 API、Base URL 与 exact-origin credential scope。Analysis 的 strict structured text 和 Download 的 image/tool/PNG 合同及安全 limits 由各消费模块与 Bootstrap 派生，消费者不能覆盖 Provider、Base URL、model、reasoning effort 或 credential。一个 text Model 可以供 Analysis 使用但不能被 Download 选择；真实支持仍由显式 probe 证明，不能只按 Provider 或 model 名称推断。Provider 模型目录 adapter 只服务新增 Model 时的短生命周期自动读取，不成为运行时 registry 或能力真相。
 
-Analysis 和 Acquisition 分别构造业务目标、prompt/schema、允许动作并验收结果。Browser Agent 只能根据 Network 生成的有界 observation 返回 `ClickElement`、`ScrollPage`、`WaitForPage` 或 `StopFlow`；Network 在同一 CloakBrowser context、同一文章 permit 和同一资源预算中执行。Agents 不获得 Literature、Publisher rule、Page、Context、CDP、Cookie、Profile、任意 URL/selector/JavaScript、文件系统或事实写入能力。
+Analysis 自己按顺序执行两个独立 `AgentRuntime.execute` 并验收文献结果；Acquisition 自己拥有 Browser controller、语义进展和 route outcome。Browser Agent 只能根据 Network 生成的统一 Observation 返回 `ClickElement`、`ClickPoint`、`ScrollSurface`、`GoBack`、`WaitForChange` 或 `Stop`；Network 在同一 CloakBrowser context 和同一文章 permit 中验证 revision/surface/viewport 并执行动作。Agents 不获得 Literature、Publisher rule、Page、Context、CDP、Cookie、Profile、任意 URL/selector/JavaScript、文件系统或事实写入能力。
 
-Agents session 只存在于一次 Analysis 请求或当前文章 Browser flow；关闭、取消或 deadline 后释放文本、图像、tool output 和模型响应，不跨文章、Publisher、命令或进程恢复，也不进入 Catalog、ArtifactStore、Profile、Report 或日志。具体 API、适配器和验证见 [Agents 技术文档](technical/agents.md)。
+Agents 不保存 session、history、turn、跨调用 memory 或累计作业预算；单次结果返回后只由消费模块保留完成业务验收所需的中性值。Browser Observation、截图、动作和模型原文不进入 Catalog、ArtifactStore、Profile、Report、provenance 或日志。具体 API、适配器和验证见 [Agents 技术文档](technical/agents.md)。
 
 ### 5.3 网络基础设施
 
@@ -619,10 +629,11 @@ Agents session 只存在于一次 Analysis 请求或当前文章 Browser flow；
 - 一个 operator-managed 固定身份 Profile、共享有头 CloakBrowser Chromium process/context、无 GUI Linux 的
   native Linux 设备身份、Xvfb 显示、Publisher lane 调度、文章级 page/handler 隔离、Chromium 原生网络/下载、多路 PDF
   捕获和确定性清理；
-- 经 Publisher Profile 明确声明的 challenge dependency 受限加载、局部 settle 和有界页面观察/动作执行；
+- 经 Publisher Profile 明确声明的 challenge dependency 受限加载，并为普通页面与 Challenge 统一生成 revision/surface/screenshot/element/capture/receipt；
+- 唯一执行 `ClickElement`、`ClickPoint`、`ScrollSurface`、`GoBack`、`WaitForChange` 和 `Stop` 的 Browser 动作及其 revision/surface/viewport 校验；
 - 在每次 Browser navigation、popup、viewer、response 和 download 实际访问前，同时执行 Profile guard 与通用安全准入；
 - URL、header、query、错误和凭据脱敏；
-- 响应大小、导航次数和访问预算。
+- 单次响应大小、导航/动作超时和字节上限。
 
 网络基础设施不理解 Crossref、arXiv、出版商、MinerU 或某个 LLM 的业务协议，也不判断记录身份、PDF 归属、正文/补充材料或文献状态。供应商分页、配额含义、页面步骤和 Browser 状态 marker 属于相应 adapter/Profile；adapter 负责解释和声明政策，Network 负责在当前进程的全部调用方之间执行。等待队列、permit、窗口计数、session health、circuit 和截止时间只存在于当前进程内存，不属于由 Catalog 与 ArtifactStore 组成的文献数据库，也不携带 DOI、Literature、候选、完整 URL、Cookie 或凭据。Network 不持久化动态限速状态，不提供跨进程或跨重启的访问协调。
 
@@ -683,7 +694,7 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 
 Logging 是公用基础模块，拥有独立的 `sciretriever/logging/` 目录和 `api.py` 公开边界。它统一提供命名 logger，配置 `sciretriever` logger 层级、stderr handler、formatter 和最终脱敏 Filter，并承载当前进程中的操作开始、阶段推进、局部失败、限速等待、目标完成和受控停止信息，为用户提供实时反馈、为实现者提供安全诊断。
 
-正常模式只呈现操作、Provider、由 Entry 汇总的 tier/Browser escalation、目标与风险组进度、等待/暂停、交付/耗尽和稳定失败，不逐条重复 route/candidate miss、capture 或 cleanup。Debug 在同一人类可读布局上增加安全步骤；每个可能终止或继续获取链的 route 终态必须说明 `disposition` 与 `next`，关键操作、Provider、tier、route、target、API lookup/download 和 Browser article/session 步骤可以附带单调时钟诊断耗时。Metadata 的 raw item 在 Debug 中明确分为 accepted、empty 或 rejected。所有这些字段仍只是可丢失诊断，不形成统一业务事件合同。
+正常模式只呈现操作、Provider、由 Entry 汇总的 tier/Browser escalation、目标与风险组进度、等待/暂停、交付/耗尽和稳定失败，不逐条重复 route/candidate miss、capture 或 cleanup。Debug 在同一人类可读布局上增加安全步骤；每个可能终止或继续获取链的 route 终态必须说明 `disposition` 与 `next`，关键操作、Provider、tier、route、target、API lookup/download 和 Browser article/controller/action 步骤可以附带单调时钟诊断耗时。Metadata 的 raw item 在 Debug 中明确分为 accepted、empty 或 rejected。所有这些字段仍只是可丢失诊断，不形成统一业务事件合同。
 
 Logging 不拥有业务结果：各模块先形成 typed result 或稳定 failure，Entry 据此累计 Report，同时选择少量进度信息进入日志；日志缺失、过滤或输出失败不能改变数据库提交、Report、退出结果和后续选择。项目不建立全局可变 Observer、事件总线、LogEvent Model、Logging Port 或日志 repository。
 
@@ -958,7 +969,7 @@ published
   > other
 ```
 
-每个候选从自己的第一个缺失步骤继续；其中缺 PDF 的候选参加当前有界 cohort 的层级获取，已有 PDF 的候选直接进入后续步骤。只有 Acquisition 的全部适用 routes 正常结束、不存在 deferred/action-required/未解决 failure 并形成耗尽事实，或者 Analysis 明确 `NoUsableContent` 且该版本其它 PDF 候选已经耗尽时，才继续下一 Literature。Network/Storage 系统错误、Parser 失败、LLM 失败、Browser action-required、取消或无法判断只进入本次报告，不触发跨版本回退。成功的 PDF、ParserResult 和 LiteratureContent 始终归实际成功的具体 Literature；MetaLiterature 只通过成员 current facts 推导是否已有可用版本，不保存状态。
+每个候选从自己的第一个缺失步骤继续；其中缺 PDF 的候选参加当前有界 cohort 的层级获取，已有 PDF 的候选直接进入后续步骤。只有 Acquisition 的全部适用 routes 正常结束、不存在 deferred/未解决 failure 并形成耗尽事实，或者 Analysis 明确 `NoUsableContent` 且该版本其它 PDF 候选已经耗尽时，才继续下一 Literature。Network/Storage 系统错误、Parser 失败、LLM 失败、Browser 页面未解决、取消或无法判断只进入本次报告，不触发跨版本回退。成功的 PDF、ParserResult 和 LiteratureContent 始终归实际成功的具体 Literature；MetaLiterature 只通过成员 current facts 推导是否已有可用版本，不保存状态。
 
 `AllPendingSelector` 默认排除需要 PDF 且已经具有自动获取耗尽事实的具体 Literature；当一个 MetaLiterature 的所有可用版本都已耗尽时，整个 MetaLiterature 不进入自动补全目标，而由 `needs_manual_pdf` 查询交给用户处理。用户以 `LiteratureSelector` 明确选择这个具体 Literature 并发起需要 PDF 的目标时构成明确重试，开始前清除耗尽事实；宽范围 selector 不自动清除。
 

@@ -22,7 +22,6 @@ IOPSCIENCE_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
         "a[href$='/pdf'], a[href*='/article/'][href*='/pdf'], a[data-test='pdf-download']"
     ),
     doi_pdf_url_template="https://iopscience.iop.org/article/{doi}/pdf",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "iopscience",
         entitled_selectors=(

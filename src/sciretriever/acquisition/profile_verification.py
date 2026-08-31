@@ -42,7 +42,7 @@ _REQUIRED_BROWSER_MARKER_GROUPS: Final[tuple[frozenset[BrowserPageMarkerKind], .
     frozenset(
         {
             BrowserPageMarkerKind.MFA_REQUIRED,
-            BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+            BrowserPageMarkerKind.CHALLENGE,
             BrowserPageMarkerKind.RATE_LIMITED,
             BrowserPageMarkerKind.IP_BLOCKED,
             BrowserPageMarkerKind.ACCOUNT_WARNING,

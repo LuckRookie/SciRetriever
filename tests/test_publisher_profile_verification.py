@@ -161,8 +161,8 @@ def _browser_rule() -> BrowserSiteRule:
                 css_selectors=("#paywall",),
             ),
             BrowserPageMarker(
-                marker_id="challenge-required",
-                kind=BrowserPageMarkerKind.CHALLENGE_REQUIRED,
+                marker_id="challenge",
+                kind=BrowserPageMarkerKind.CHALLENGE,
                 css_selectors=("#challenge-required",),
             ),
         ),

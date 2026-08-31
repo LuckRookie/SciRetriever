@@ -15,7 +15,7 @@ from sciretriever.configuration import (
     configuration_status,
     load_credentials,
     parse_configuration,
-    set_core_credentials,
+    set_model_provider_credentials,
 )
 from sciretriever.model.access import Header, TransportRequest
 from sciretriever.model.configuration import (
@@ -113,17 +113,14 @@ def _response(payload: object, *, status: int = 200) -> _RawResponse:
 def _analysis_configuration(protocol: str = "openai-responses") -> Configuration:
     return parse_configuration(
         f"""
-        [agents]
-        provider = "openai"
-        protocol = "{protocol}"
+        [providers.main]
+        api = "{protocol}"
         base_url = "https://api.openai.com/v1"
-        authentication = "api-key"
-        [agents.analysis]
-        model = "probe-model"
-        context_window_tokens = 128000
-        structured_output = true
-        max_output_tokens = 64
-        [analysis]
+        [models."main/probe-model"]
+        reasoning = "default"
+        image = false
+        [analyze]
+        model = "main/probe-model"
         metadata_max_output_tokens = 64
         content_max_output_tokens = 64
         reference_max_output_tokens = 64
@@ -139,27 +136,17 @@ def _analysis_configuration(protocol: str = "openai-responses") -> Configuration
 def _browser_agent_configuration() -> Configuration:
     return parse_configuration(
         """
-        [agents]
-        provider = "openai"
-        protocol = "openai-responses"
+        [providers.main]
+        api = "openai-responses"
         base_url = "https://api.openai.com/v1"
-        authentication = "api-key"
-        [agents.analysis]
-        model = "analysis-probe-model"
-        context_window_tokens = 128000
-        structured_output = true
-        max_output_tokens = 64
-        [agents.browser]
-        model = "browser-probe-model"
-        context_window_tokens = 128000
-        max_output_tokens = 64
-        image_input = true
-        tool_decision = true
-        image_media_types = ["image/png"]
-        image_count = 1
-        image_bytes = 1024
-        turns = 1
-        [analysis]
+        [models."main/analysis-probe-model"]
+        reasoning = "default"
+        image = false
+        [models."main/browser-probe-model"]
+        reasoning = "default"
+        image = true
+        [analyze]
+        model = "main/analysis-probe-model"
         metadata_max_output_tokens = 64
         content_max_output_tokens = 64
         reference_max_output_tokens = 64
@@ -168,6 +155,9 @@ def _browser_agent_configuration() -> Configuration:
         max_chunk_count = 1
         max_total_llm_requests = 3
         max_total_output_tokens = 192
+        [download]
+        model = "main/browser-probe-model"
+        browser_controller = "agent"
         """
     )
 
@@ -175,21 +165,15 @@ def _browser_agent_configuration() -> Configuration:
 def _browser_agent_only_configuration() -> Configuration:
     return parse_configuration(
         """
-        [agents]
-        provider = "openai"
-        protocol = "openai-responses"
+        [providers.main]
+        api = "openai-responses"
         base_url = "https://api.openai.com/v1"
-        authentication = "api-key"
-        [agents.browser]
-        model = "browser-probe-model"
-        context_window_tokens = 128000
-        max_output_tokens = 64
-        image_input = true
-        tool_decision = true
-        image_media_types = ["image/png"]
-        image_count = 1
-        image_bytes = 1024
-        turns = 1
+        [models."main/browser-probe-model"]
+        reasoning = "default"
+        image = true
+        [download]
+        model = "main/browser-probe-model"
+        browser_controller = "agent"
         """
     )
 
@@ -277,8 +261,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            set_core_credentials(
-                "agents",
+            set_model_provider_credentials(
+                "main",
                 secret="probe-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -312,8 +296,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            set_core_credentials(
-                "agents",
+            set_model_provider_credentials(
+                "main",
                 secret="probe-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -392,8 +376,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                 tempfile.TemporaryDirectory() as temporary,
             ):
                 home = Path(temporary)
-                set_core_credentials(
-                    "agents",
+                set_model_provider_credentials(
+                    "main",
                     secret="probe-secret",
                     origin="https://api.openai.com",
                     home=home,
@@ -415,8 +399,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            set_core_credentials(
-                "agents",
+            set_model_provider_credentials(
+                "main",
                 secret="probe-secret",
                 origin="https://api.openai.com",
                 home=home,
@@ -507,8 +491,8 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                 tempfile.TemporaryDirectory() as temporary,
             ):
                 home = Path(temporary)
-                set_core_credentials(
-                    "agents",
+                set_model_provider_credentials(
+                    "main",
                     secret="probe-secret",
                     origin="https://api.openai.com",
                     home=home,

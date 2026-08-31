@@ -32,6 +32,7 @@ from sciretriever.acquisition.rules import (
     ReadablePdfSource,
 )
 from sciretriever.acquisition.sources import (
+    BUILTIN_SCI_HUB_MIRROR_URLS,
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
     PRODUCTION_BROWSER_RULE_CATALOG,
 )
@@ -223,6 +224,7 @@ class AcquisitionApi:
 
 __all__ = (
     "AUTHORIZED_PDF_API_PROVIDER_KEYS",
+    "BUILTIN_SCI_HUB_MIRROR_URLS",
     "CONTROLLED_BROWSER_PRODUCTION_AVAILABLE",
     "CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT",
     "AcquisitionApi",

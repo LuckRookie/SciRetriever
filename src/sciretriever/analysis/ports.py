@@ -16,10 +16,9 @@ from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import BinaryIO, NoReturn, Protocol, cast, runtime_checkable
 
-from sciretriever.agents import (
-    AgentBudget,
+from sciretriever.agents.api import (
+    AgentCall,
     AgentCapability,
-    AgentRequest,
     AgentRole,
     AgentTextPart,
 )
@@ -136,7 +135,6 @@ class AnalysisRequestKind(str, Enum):
 class AnalysisRequest:
     kind: AnalysisRequestKind
     input_sha256: Sha256
-    model: str
     max_output_tokens: int
 
     def __post_init__(self) -> None:
@@ -144,8 +142,6 @@ class AnalysisRequest:
             raise TypeError("kind must be AnalysisRequestKind")
         if not isinstance(self.input_sha256, Sha256):
             raise TypeError("input_sha256 must be Sha256")
-        if type(self.model) is not str or not self.model.strip() or utf8_size(self.model) > 512:
-            raise ValueError("model must be bounded nonblank text")
         if type(self.max_output_tokens) is not int or self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be positive")
 
@@ -186,24 +182,18 @@ class AnalysisCall:
         parse_strict_json_object(self.response_schema)
         if sha256_digest(self.structured_input.encode("utf-8")) != self.request.input_sha256:
             raise ValueError("structured input hash does not match the neutral request")
-        if self.cancel_event is not None and not (
-            hasattr(self.cancel_event, "is_set") and callable(self.cancel_event.is_set)
-        ):
-            raise TypeError("cancel_event must expose is_set()")
+        if self.cancel_event is not None and not isinstance(self.cancel_event, threading.Event):
+            raise TypeError("cancel_event must be a threading.Event")
 
     def __repr__(self) -> str:
         return f"<AnalysisCall kind={self.request.kind.value}>"
 
-    def to_agent_request(self, *, budget: AgentBudget) -> AgentRequest:
-        """Convert a private business call to the neutral provider contract."""
+    def to_agent_call(self) -> AgentCall:
+        """Convert one private business call to the stateless Agents contract."""
 
-        if not isinstance(budget, AgentBudget):
-            raise TypeError("budget must be an AgentBudget")
-
-        return AgentRequest(
+        return AgentCall(
             role=AgentRole.ANALYSIS,
-            capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
-            model=self.request.model,
+            required_capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
             input_sha256=self.request.input_sha256,
             text_parts=(
                 AgentTextPart(media_type="text/plain", text=self.prompt),
@@ -211,8 +201,6 @@ class AnalysisCall:
             ),
             response_schema=self.response_schema,
             max_output_tokens=self.request.max_output_tokens,
-            budget=budget,
-            cancel_event=self.cancel_event,
         )
 
 

@@ -34,6 +34,7 @@ from sciretriever.acquisition.authorized import (
     AuthorizedProviderClient,
     authorized_route_status,
 )
+from sciretriever.acquisition.browser_control import BrowserControllerKind
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -62,10 +63,12 @@ from sciretriever.acquisition.routing import (
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.sources import (
+    BUILTIN_SCI_HUB_MIRROR_URLS,
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
     PRODUCTION_BROWSER_RULE_CATALOG,
     ArxivPdfSource,
     ConfiguredLocatorResolver,
+    ConfiguredSciHubLandingResolver,
     ConfiguredSciHubPdfSource,
     ControlledBrowserPdfSource,
     DirectPdfSource,
@@ -98,8 +101,9 @@ from sciretriever.acquisition.sources.unpaywall import (
 from sciretriever.acquisition.sources.unpaywall import (
     BASELINE_ACCESS_POLICY as UNPAYWALL_ACCESS_POLICY,
 )
-from sciretriever.agents import AgentBudget, AgentPort
+from sciretriever.agents.api import AgentRole, AgentRuntime
 from sciretriever.configuration import CredentialLookup
+from sciretriever.configuration.source_selection import acquisition_source_providers
 from sciretriever.model.access import BrowserRequest, BrowserResult
 from sciretriever.model.acquisition import (
     AcquisitionPath,
@@ -116,11 +120,11 @@ from sciretriever.network.admission import (
     AccessScope,
 )
 from sciretriever.network.browser import (
-    BrowserBudget,
     BrowserCaptureGuard,
     BrowserClient,
     BrowserDestinationGuard,
     BrowserFlowController,
+    BrowserOperationLimits,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
@@ -346,25 +350,33 @@ class AcquisitionProviderStatus:
 
 @dataclass(frozen=True, slots=True)
 class BrowserAgentDependency:
-    """Optional Browser-role capability shared by every production route.
+    """One ready shared stateless Runtime for Agent-controlled Browser routes."""
 
-    The dependency is intentionally one value rather than three independent
-    optional constructor arguments.  A present value is therefore always
-    complete and can be passed by identity to every ``ControlledBrowserPdfSource``
-    in one registry.
-    """
-
-    port: AgentPort = field(repr=False)
-    model: str
-    budget: AgentBudget = field(repr=False)
+    runtime: AgentRuntime = field(repr=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.port, AgentPort):
-            raise TypeError("port must implement AgentPort")
-        if type(self.model) is not str or not self.model.strip():
-            raise ValueError("model must be nonblank text")
-        if not isinstance(self.budget, AgentBudget):
-            raise TypeError("budget must be an AgentBudget")
+        if not isinstance(self.runtime, AgentRuntime):
+            raise TypeError("runtime must be AgentRuntime")
+        if not self.runtime.readiness(AgentRole.BROWSER).ready:
+            raise ValueError("runtime Browser role must be ready")
+
+
+def _validate_browser_assembly_dependencies(
+    *,
+    browser_client: BrowserClient | None,
+    browser_controller: BrowserControllerKind,
+    browser_agent: BrowserAgentDependency | None,
+) -> None:
+    if browser_client is not None and not isinstance(browser_client, BrowserClient):
+        raise TypeError("browser_client must be a BrowserClient or None")
+    if not isinstance(browser_controller, BrowserControllerKind):
+        raise TypeError("browser_controller must be BrowserControllerKind")
+    if browser_agent is not None and not isinstance(browser_agent, BrowserAgentDependency):
+        raise TypeError("browser_agent must be a BrowserAgentDependency or None")
+    if browser_controller is BrowserControllerKind.AGENT and browser_agent is None:
+        raise ValueError("Agent Browser controller requires a ready AgentRuntime")
+    if browser_controller is BrowserControllerKind.RULES and browser_agent is not None:
+        raise ValueError("Rules Browser controller must not receive an AgentRuntime")
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +396,7 @@ class AcquisitionAssemblyDependencies:
         repr=False,
     )
     browser_client: BrowserClient | None = field(default=None, repr=False)
+    browser_controller: BrowserControllerKind = BrowserControllerKind.RULES
     browser_agent: BrowserAgentDependency | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -404,16 +417,11 @@ class AcquisitionAssemblyDependencies:
             threading.Event,
         ):
             raise TypeError("cancel_event must be a threading.Event or None")
-        if self.browser_client is not None and not isinstance(
-            self.browser_client,
-            BrowserClient,
-        ):
-            raise TypeError("browser_client must be a BrowserClient or None")
-        if self.browser_agent is not None and not isinstance(
-            self.browser_agent,
-            BrowserAgentDependency,
-        ):
-            raise TypeError("browser_agent must be a BrowserAgentDependency or None")
+        _validate_browser_assembly_dependencies(
+            browser_client=self.browser_client,
+            browser_controller=self.browser_controller,
+            browser_agent=self.browser_agent,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,6 +593,8 @@ def _readiness_failure(
         if configuration.sources.acquisition.unpaywall is None:
             return "missing-ordinary-parameter"
     if provider_name == ProviderName.SCI_HUB.value:
+        if configured_resolver is None:
+            return "missing-ordinary-parameter"
         try:
             status = configured_sci_hub_route_status(configured_resolver)
         except (TypeError, ValueError):
@@ -593,8 +603,29 @@ def _readiness_failure(
                 provider_name,
             ) from None
         if status.readiness is not RouteReadiness.READY:
-            return "missing-configured-resolver"
+            return "missing-ordinary-parameter"
     return None
+
+
+def _configured_sci_hub_resolver(
+    configuration: Configuration,
+    injected: ConfiguredLocatorResolver | None,
+) -> ConfiguredLocatorResolver | None:
+    """Select injected, custom, then bundled mirrors without performing I/O."""
+
+    if not isinstance(configuration, Configuration):
+        raise AcquisitionRegistryError("configuration-invalid")
+    if injected is not None:
+        return injected
+    settings = configuration.sources.acquisition.sci_hub
+    urls = BUILTIN_SCI_HUB_MIRROR_URLS if settings is None else settings.urls
+    try:
+        return ConfiguredSciHubLandingResolver(urls)
+    except (TypeError, ValueError):
+        raise AcquisitionRegistryError(
+            "ordinary-parameter-invalid",
+            ProviderName.SCI_HUB.value,
+        ) from None
 
 
 def acquisition_provider_statuses(
@@ -606,7 +637,11 @@ def acquisition_provider_statuses(
 
     if not isinstance(configuration, Configuration):
         raise AcquisitionRegistryError("configuration-invalid")
-    enabled = frozenset(provider.value for provider in configuration.sources.acquisition.providers)
+    sci_hub_resolver = _configured_sci_hub_resolver(
+        configuration,
+        configured_sci_hub_resolver,
+    )
+    enabled = frozenset(provider.value for provider in acquisition_source_providers(configuration))
     statuses = tuple(
         AcquisitionProviderStatus(
             provider_name=provider_name,
@@ -616,7 +651,7 @@ def acquisition_provider_statuses(
                 failure_code := _readiness_failure(
                     provider_name,
                     configuration,
-                    configured_sci_hub_resolver,
+                    sci_hub_resolver,
                 )
             )
             is None,
@@ -934,7 +969,7 @@ class _SessionBoundBrowserRunner:
         capture_guard: BrowserCaptureGuard | None = None,
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
-        budget: BrowserBudget | None = None,
+        limits: BrowserOperationLimits | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BrowserResult:
@@ -948,7 +983,7 @@ class _SessionBoundBrowserRunner:
             navigation_only=navigation_only,
             discard_unapproved_subresources=discard_unapproved_subresources,
             session_key=self._session_key,
-            budget=budget,
+            limits=limits,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
         )
@@ -967,6 +1002,7 @@ def _public_protocol_source(
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
     locator_fetcher: PublicLocatorFetcher,
+    configured_sci_hub_resolver: ConfiguredLocatorResolver | None,
 ) -> PdfRouteAdapter:
     common = {
         "http_client": dependencies.http_client,
@@ -997,7 +1033,7 @@ def _public_protocol_source(
         )
     if provider_name == ProviderName.SCI_HUB.value:
         return ConfiguredSciHubPdfSource(
-            resolver=dependencies.configured_sci_hub_resolver,
+            resolver=configured_sci_hub_resolver,
             locator_fetcher=locator_fetcher,
             cancel_event=dependencies.cancel_event,
         )
@@ -1155,10 +1191,8 @@ def _validate_dependencies(dependencies: AcquisitionAssemblyDependencies) -> Non
         getattr(browser, "_session_broker", None) is not dependencies.browser_session_broker
     ):
         raise AcquisitionRegistryError("network-bypass", "controlled-browser")
-    # Browser Agent is an optional, already-assembled capability.  Its value
-    # object validates the all-or-none port/model/budget contract at the
-    # Bootstrap boundary; registry validation keeps this boundary explicit so
-    # malformed dependency values fail before any route adapter is created.
+    # Browser control is frozen at assembly.  The unselected controller and its
+    # dependencies must be absent from the production route graph.
     if dependencies.browser_agent is not None and not isinstance(
         dependencies.browser_agent,
         BrowserAgentDependency,
@@ -1176,7 +1210,7 @@ def _route_requirements(
     if source_name == ProviderName.UNPAYWALL.value:
         return ("doi",), (), False
     if source_name == ProviderName.SCI_HUB.value:
-        return (), (), True
+        return ("doi",), (), False
     if source_name == ProviderName.CORE.value:
         return (), ("core",), False
     if source_name == ProviderName.ELSEVIER.value:
@@ -1375,16 +1409,11 @@ def _assemble_browser_routes(
                 cancel_event=dependencies.cancel_event,
                 provenance_id_factory=dependencies.provenance_id_factory,
                 clock=dependencies.clock,
-                browser_agent_port=(
-                    None if dependencies.browser_agent is None else dependencies.browser_agent.port
-                ),
-                browser_agent_model=(
-                    None if dependencies.browser_agent is None else dependencies.browser_agent.model
-                ),
-                browser_agent_budget=(
+                browser_controller=dependencies.browser_controller,
+                agent_runtime=(
                     None
                     if dependencies.browser_agent is None
-                    else dependencies.browser_agent.budget
+                    else dependencies.browser_agent.runtime
                 ),
             )
         route_bindings.append(
@@ -1404,12 +1433,16 @@ def build_acquisition_registry(
     if not isinstance(dependencies, AcquisitionAssemblyDependencies):
         raise AcquisitionRegistryError("dependencies-invalid")
     _validate_dependencies(dependencies)
+    sci_hub_resolver = _configured_sci_hub_resolver(
+        configuration,
+        dependencies.configured_sci_hub_resolver,
+    )
     statuses = acquisition_provider_statuses(
         configuration,
-        configured_sci_hub_resolver=dependencies.configured_sci_hub_resolver,
+        configured_sci_hub_resolver=sci_hub_resolver,
     )
     status_by_name = {status.provider_name: status for status in statuses}
-    selected = tuple(provider.value for provider in configuration.sources.acquisition.providers)
+    selected = tuple(provider.value for provider in acquisition_source_providers(configuration))
 
     locator_fetcher = PublicLocatorFetcher(
         http_client=dependencies.http_client,
@@ -1455,6 +1488,7 @@ def build_acquisition_registry(
                     configuration,
                     dependencies,
                     locator_fetcher,
+                    sci_hub_resolver,
                 )
                 _validate_source(source, provider_name, dependencies, locator_fetcher)
                 route_bindings.append(

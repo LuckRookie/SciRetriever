@@ -2,56 +2,98 @@
 
 SciRetriever 把配置分成两条互不替代的边界：
 
-- 普通运行设置写在一个用户选择的 TOML 文件中；
-- Provider、LLM 与远程 MinerU 的 secret 统一写在固定的
+- 普通运行设置固定写在 `~/.sciretriever/config.toml`；
+- 文献 Provider、Model Provider 与远程 MinerU 的 secret 统一写在固定的
   `~/.sciretriever/credentials.toml`。
 
 普通配置和凭据都由根级 `sciretriever.configuration` 读取，根级
 `sciretriever.bootstrap` 再按当前命令需要的能力组装生产对象。普通配置模型严格、
 不可变、拒绝未知字段，而且不包含任何 secret。当前没有文件级版本字段、普通配置内的
-凭据组或凭据引用、runtime factory，也不保留旧配置兼容层。LLM/MinerU secret
-环境变量不属于当前合同，不读取、不回退，也不自动迁移。
+凭据组或凭据引用、runtime factory，也不保留旧配置生产兼容层。旧普通配置路径和
+LLM/MinerU secret 环境变量都不属于当前合同，不读取、不回退，也不迁移；旧 singleton Agents
+schema 不能映射为当前配置。裸 `config` 只接受唯一当前 schema，不提供 Reset、迁移、恢复或
+fallback。
 
-## 1. 选择普通配置文件
+## 1. 固定用户配置文件
 
-安装后的 `sciretriever` 命令按以下顺序选择普通配置文件：
+安装后的所有正常命令只读取：
 
-1. 程序内调用显式传入的路径；当前终端 CLI 没有对应的全局路径选项；
-2. `SCIRETRIEVER_CONFIG` 环境变量指向的路径；
-3. 当前工作目录中已经存在的 `config.toml`。
+```text
+~/.sciretriever/config.toml
+```
 
-三处都没有时稳定失败；程序不会退回隐式配置文件或在当前目录自动生成一份。
-即使只执行 `config status` 或 `config test`，也必须先选中一个普通配置文件。
+Configuration 是该路径规则的唯一 owner。CLI 不提供 `--config`，不读取配置路径环境变量，
+也不检查当前工作目录或项目根的 `config.toml`。因此从不同目录运行会得到同一配置身份。
+固定文件缺失时，业务命令、`config status` 和 `config test` 会给出初始化提示，不会猜测或
+回退到旧位置。
+
+推荐执行 `sciretriever config` 进入统一配置中心。打开后不做修改可以安全退出；第一次确认
+普通配置修改时，Configuration 会创建 `~/.sciretriever/` 和 `config.toml`。用户也可以直接
+创建或编辑同一个文件，例如从公开模板开始：
+
+```bash
+mkdir -p ~/.sciretriever
+chmod 700 ~/.sciretriever
+cp -n example/config.example.toml ~/.sciretriever/config.toml
+chmod 600 ~/.sciretriever/config.toml
+```
+
+上面的 `cp -n` 在目标已存在时不会覆盖；已有配置必须先比较再人工合并，不能直接
+覆盖。普通配置、凭据和 Browser 状态共用的 `~/.sciretriever/` 必须是当前用户拥有、权限
+精确为 `0700` 的真实非符号链接目录。普通配置文件必须是当前用户拥有、权限精确为 `0600`、
+单硬链接的普通非符号链接文件。
 
 普通配置文件必须是 UTF-8 TOML、普通非符号链接文件，且不超过 1 MiB。读取通过
 一个有界文件描述符完成并复核文件身份，路径或内容在读取期间发生替换时会
-fail closed。普通配置文件本身没有凭据文件那套 `0600` 强制要求，但其中不应写入
-任何 secret。
+fail closed。普通配置不是 secret，但其中仍不得写入任何 secret；严格权限用于保护与凭据、
+Browser Profile 共用的用户目录边界。
 
-一个零字节文件是合法 TOML，并等价于九个空配置组；这只证明结构可解析。空配置
-没有 Storage 路径、Metadata 扫描上限、Parser 或 Analysis 参数，也没有启用任何
-Provider。`config status` 仍可据此输出本地 capability 矩阵，但所有当前业务 Entry scope
+旧的当前目录文件或旧环境变量曾指向的文件不会被自动读取、复制、移动或删除。人工迁移时：
+
+1. 先检查 `~/.sciretriever/config.toml` 是否已经存在；
+2. 目标不存在时，把旧文件复制到固定位置；目标存在时，在编辑器中人工比较并合并；
+3. 将目录设为 `0700`、目标文件设为 `0600`；
+4. 运行 `sciretriever config status` 验证结构与本地 readiness；
+5. 确认迁移成功后，再由用户自行决定是否保留旧文件。SciRetriever 不会删除它。
+
+一个零字节文件是合法 TOML，并等价于十个使用字段默认值的配置组；这只证明结构可解析。
+空配置具有 Metadata/Acquisition Auto 选择和默认逐 Source `limit = 500`，但没有 Storage 路径、
+Parser 或 Analysis 参数。`config status` 仍可据此输出本地 capability 矩阵，但所有当前业务 Entry scope
 都会先返回 `paths-not-ready`，不会把空结构解释成完整默认运行环境。
 
-## 2. 普通配置的九组合同
+若固定 `config.toml` 是 malformed TOML、包含未知 section/key，或字段值不符合当前 schema，
+裸 `sciretriever config` 会在首页前返回退出码 4，并显示不含配置值的固定原因；它不显示菜单，
+也不写入文件。旧 `[agents]`、`[analysis]`、`[access]`、`[models.services.*]`、
+`[models.profiles.*]` 与 `[models.entries.*]` 和未知普通 section 一样处理；旧 credentials
+`[agents]`、`[models.*]` 与未知凭据 section 一样处理。文件过大、符号链接、非普通文件、不安全
+所有权/权限、目录问题和读取竞争也会严格拒绝。operator 必须在配置中心之外手工编辑或替换精确
+文件，删除旧 section 并保持本节的权限要求，然后从 `Models → Add` 与
+`Models → Providers → Key` 按当前 schema 重新配置。SciRetriever 不转换、备份、自动删除或
+回退旧内容。缺失的 `config.toml` 仍可打开
+配置中心，并在第一次确认修改时通过正常原子发布创建。
+其它 `config` 页面或 `status/test` 失败时，CLI 只显示 Configuration 已列入安全清单的固定原因；
+任意原始异常文本、配置值、路径参数或 secret 仍统一压成 `configuration operation failed`。文献业务
+命令继续使用泛化配置错误，不把配置中心的诊断细节扩散到其它输出合同。
 
-普通配置只接受以下九个顶层组；九组都可省略，并由严格模型补成空组或字段默认值：
+## 2. 普通配置的十组合同
+
+普通配置只接受以下十个顶层组；各组都可省略，并由严格模型补成空组或字段默认值：
 
 ```text
 paths
-discovery
 sources
 assets
 parsing
-analysis
+providers
+models
+analyze
 execution
 library
-access
+download
 ```
 
 未知顶层组、未知字段、错误类型、未知枚举、重复 Provider、重复 TOML key 和旧字段都会
-被拒绝。`providers` 数组可以为空；它表示当前未启用对应 Provider，而不是使用一组
-隐式 Provider。
+被拒绝。旧 `[discovery]` 不兼容读取或迁移。
 
 ### `[paths]`
 
@@ -72,28 +114,47 @@ access
 应使用明确的绝对路径，避免让相对路径随启动工作目录改变含义。凭据文件是独立的 secret
 边界，仍适用本手册第 3 节的严格 owner 与 `0700`/`0600` 要求。
 
-### `[discovery]`
-
-| 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- |
-| `metadata_scan_limit` | 大于等于 1 的整数或省略 | 未配置 | 每个 Metadata Provider 在一次 DiscoveryRun 中扫描的原始 item 上限。 |
-
-只要启用的 Metadata 能力包含主题搜索或引用查询，构造 Discovery scope 就要求该值
-存在。它是逐 Provider、整次 Run 的上限，不是多个来源共享的总量。
-
 ### `[sources]`
 
-`sources` 分成两个互不混用的能力集合：
+`sources` 分成两个互不混用的能力集合，默认都使用 Auto：
 
 ```toml
 [sources.metadata]
-providers = []
+mode = "auto"
+limit = 500
 
 [sources.acquisition]
-providers = []
+mode = "auto"
 ```
 
-两个 `providers` 字段都是按顺序、不可重复的 Provider key 数组；默认均为空。
+| 位置 | 字段 | 类型 | 默认值 | 用途 |
+| --- | --- | --- | --- | --- |
+| `sources.metadata` | `mode` | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。 |
+| `sources.metadata` | `providers` | 有序、不可重复数组 | 空 | 仅 Custom 使用；允许空列表。 |
+| `sources.metadata` | `limit` | 大于等于 1 的整数 | `500` | 分别应用到每个 Metadata Source 的过滤前原始 item 上限。 |
+| `sources.acquisition` | `mode` | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。 |
+| `sources.acquisition` | `providers` | 有序、不可重复数组 | 空 | 仅 Custom 使用；允许空列表。 |
+
+Auto 禁止同时保存非空 `providers`，有效集合由当前版本在本地确定，不根据凭据、Network probe
+或临时服务状态变化。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。
+升级可以维护 Auto catalog，Custom 不随 catalog 改变。不存在 preset、include/exclude 或按 Key
+自动启用。
+
+当前 Metadata Auto 有序集合是：
+
+```text
+crossref, semantic-scholar, arxiv, openalex,
+europe-pmc, datacite, core, opencitations
+```
+
+OpenCitations 不参加主题搜索，因此默认 `limit = 500` 时主题搜索的理论 raw-item ceiling 是
+`7 × 500 = 3500`。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
+
+当前 Acquisition Auto 的命名 Source 是 `arxiv, europe-pmc`。所有模式都会消费已经保存且安全
+验证通过的 direct/landing `AssetHint`；Crossref、Semantic Scholar、OpenAlex、DataCite 等提供的
+公开 hint 不需要再启用同名下载服务。Sci-Hub、Unpaywall、授权 PDF API 和 Browser 不进入 Auto。
+
+选择 Custom 时，两个 `providers` 字段都是按顺序、不可重复的 Provider key 数组。
 Metadata 的允许值为：
 
 ```text
@@ -122,14 +183,14 @@ Provider。
 | `database` | 非空字符串 | 必需 | 普通产品参数，不属于凭据。 |
 | `edition` | 非空字符串或省略 | 未配置 | 可选普通产品参数。 |
 
-启用 `web-of-science` 时还必须配置 `discovery.metadata_scan_limit`，并在固定凭据文件中
+启用 `web-of-science` 时还必须保留有效的 `sources.metadata.limit`，并在固定凭据文件中
 提供 `api_key`。
 
 #### `[sources.metadata.crossref]`
 
 | 字段 | 类型 | 默认值 | 约束 |
 | --- | --- | --- | --- |
-| `mode` | `anonymous` 或 `polite` | 必需 | 显式选择 public 或 polite pool。 |
+| `mode` | `anonymous` 或 `polite` | 未写入时 `anonymous` | 选择 public 或 polite pool。 |
 | `mailto` | ASCII 联系邮箱或省略 | 未配置 | `polite` 必需，`anonymous` 禁止。 |
 
 `mailto` 是公开联系身份，不是 secret，因此不进入 `credentials.toml`。
@@ -139,6 +200,37 @@ Provider。
 | 字段 | 类型 | 默认值 | 约束 |
 | --- | --- | --- | --- |
 | `contact_email` | ASCII 联系邮箱 | 必需 | 启用 Unpaywall 时必需，属于普通配置。 |
+
+#### `[sources.acquisition.sci-hub]`
+
+```toml
+[sources.acquisition]
+mode = "custom"
+providers = ["sci-hub"]
+
+[sources.acquisition.sci-hub]
+urls = [
+  "https://mirror-one.example",
+  "https://mirror-two.example/base",
+]
+```
+
+| 字段 | 类型 | 默认值 | 约束 |
+| --- | --- | --- | --- |
+| `urls` | 一到八项字符串数组 | 不写入时使用当前版本 builtin | 可选 custom override；完整覆盖 builtin；有序、规范化后不可重复；只接受 hostname-based HTTPS 默认端口，不接受 userinfo、query、fragment、IP literal、loopback 或不安全路径。 |
+
+Sci-Hub Source 默认关闭。显式启用且没有 `[sources.acquisition.sci-hub]` 时使用当前版本 bundled
+mirror set；custom `urls` 一旦存在就完整覆盖 builtin，升级不会改写它。operator 仍须自行确认
+适用法律、机构政策、内容许可与服务条款。有效列表顺序就是尝试顺序：系统不会并发或自动发现
+镜像，也不会配置 API key、Cookie、session、代理、selector 或脚本。resolver 只对具有规范 DOI
+的 Literature 适用；实际 landing/PDF 仍经过共享 Network、有限静态 PDF locator 解析和统一 PDF
+字节检查。Challenge、登录页或普通 HTML 不能冒充 PDF。
+
+交互入口是 `Download → Sources → sci-hub`。未启用时显示 `Enable / Mirrors / Back`，Enable 直接
+使用当前有效列表；已启用时显示 `Mirrors / Disable / Back`。镜像编辑器使用
+`Add / Remove / Save / Reset / Back`：Save 形成 custom override，Reset 删除 custom 并重新跟随
+builtin，禁用保留 custom。整个流程不会询问 API Key。程序集成方仍可显式注入
+`ConfiguredLocatorResolver`，优先级高于 custom 与 builtin，但这不是第二套用户配置 schema。
 
 当前自动 PDF 获取先消费所有已保存的 direct-file/landing-page `AssetHint`，再按配置顺序
 运行 arXiv、Europe PMC、Unpaywall 等独立公开协议；公开阶段全部耗尽后，才进入已配置的
@@ -162,10 +254,11 @@ Object Retrieval 获取 PDF；若 FULL XML 没有可用 MAIN object 或无法安
 强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota 或服务错误不会被
 fallback 绕过；XML、任意 object、supplement 和有效 key 本身都不冒充主 PDF 或文章
 entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
-`unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 只有在 operator 通过
-Python 组装边界注入受支持的中性 locator resolver 时才 ready。受控 Browser 的组件已
+`unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 在启用时由 stock
+production 从 custom `urls` 或当前版本 builtin 自动构造 DOI locator resolver，不会要求终端用户
+填写 URL 或注入对象。受控 Browser 的组件已
 实现，当前内置 9 条 production 站点规则；规则、origin、selector、risk/session group 和
-限速政策不是普通 TOML 字段。普通配置只通过 `[access]` 选择固定身份 Profile、显式启用
+限速政策不是普通 TOML 字段。普通配置只通过 `[download]` 选择固定身份 Profile、显式启用
 Browser、设置跨 Publisher 本机并发上限，并可用封闭 override 把既有政策收得更严格。
 
 ### `[assets]`
@@ -198,52 +291,60 @@ token 与远程上传授权；remote 模式要求 `https`、非 IP/非 `localhos
 规范化结果。SciRetriever 只作为 client 使用 operator 管理的 MinerU，不负责安装、
 启动、停止或升级该服务。
 
-### `[agents]`、`[agents.analysis]` 与 `[agents.browser]`
+### `[providers.<name>]` 与 `[models."<provider>/<model>"]`
+
+模型配置固定分为 Model Provider 与 Model 两层，任务选择位于各自模块：
+
+```toml
+[providers.openai]
+api = "openai-responses"
+base_url = "https://api.openai.com/v1"
+
+[models."openai/operator-selected-model"]
+reasoning = "max"
+image = false
+```
+
+Model Provider 字段为：
 
 | 字段 | 类型 | 默认值 | 用途 |
 | --- | --- | --- | --- |
-| `[agents].provider` | `openai`、`anthropic`、`custom` 或省略 | 未配置 | 选择共享的 Agent 服务。 |
-| `[agents].service_name` | 安全服务标识或省略 | 未配置 | `custom` 必需；官方服务禁止。 |
-| `[agents].protocol` | `openai-responses`、`openai-chat-completions`、`anthropic-messages` 或省略 | 未配置 | 明确选择共享 wire protocol。 |
-| `[agents].base_url` | 非空字符串或省略 | 未配置 | 官方服务固定到官方 `/v1`；自定义服务使用安全 URL。 |
-| `[agents].authentication` | `api-key`、`none` 或省略 | 未配置 | 远程使用 API key；只有自定义 HTTP loopback 可无认证。 |
-| `[agents.analysis].model` | NFC 单行 UTF-8 字符串（最多 512 bytes）或省略 | 未配置 | Analysis role 使用的模型标识。 |
-| `[agents.analysis].context_window_tokens` | 大于等于 1024 的整数或省略 | 未配置 | 已核实的模型 context window。 |
-| `[agents.analysis].max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 模型单次响应的硬上限。 |
-| `[agents.analysis].structured_output` | Boolean | `false` | Analysis role 必须显式声明严格结构化输出能力。 |
-| `[agents.analysis].deadline_seconds` | 大于 0 的有限数 | `180.0` | 单次 Analysis Agent 调用的总 deadline。 |
-| `[agents.browser].model` | NFC 单行 UTF-8 字符串（最多 512 bytes）或省略 | 未配置 | 可选 Browser Agent role 使用的视觉/工具模型；不配置时只运行确定性规则。 |
-| `[agents.browser].context_window_tokens` | 大于等于 1024 的整数或省略 | 未配置 | Browser role 已核实的模型 context window。 |
-| `[agents.browser].max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 单次 Browser Agent 决定的输出上限。 |
-| `[agents.browser].structured_output` | Boolean | `false` | Browser 使用封闭 tool decision，当前不要求 Analysis 式 structured text。 |
-| `[agents.browser].image_input` | Boolean | `false` | Browser Agent 就绪时必须为 `true`。 |
-| `[agents.browser].tool_decision` | Boolean | `false` | Browser Agent 就绪时必须为 `true`；只暴露 Click/Scroll/Wait/Stop。 |
-| `[agents.browser].image_media_types` | 字符串数组 | `[]` | 只允许 `image/png`、`image/jpeg`、`image/webp`，不得重复。 |
-| `[agents.browser].image_count` | 大于等于 0 的整数 | `0` | 每 turn 图像数上限；启用图像时必须至少为 1。 |
-| `[agents.browser].image_bytes` | 大于等于 0 的整数 | `0` | 每 turn 图像总字节上限；启用图像时必须大于 0。 |
-| `[agents.browser].turns` | 大于等于 1 的整数 | `1` | 当前文章 request-local Agent session 的最大 turn 数；多 turn 要求 tool decision。 |
-| `[agents.browser].deadline_seconds` | 大于 0 的有限数 | `180.0` | 单次 Browser Agent provider 调用的总 deadline。 |
+| `api` | `openai-responses`、`openai-chat-completions` 或 `anthropic-messages` | 必需 | 明确 wire API。 |
+| `base_url` | 非空安全 URL | 必需 | Provider 的模型目录与调用 Base URL。 |
 
-`[agents]` 是 Analysis 与受控 Browser Agent 共用的唯一 endpoint、协议和凭据边界；角色只能
-选择模型和各自能力预算，不能复制 Base URL 或 secret。Analysis 生产路径消费
-`[agents.analysis]`。`[agents.browser]` 是可选项：模型与完整图像/tool 预算存在时，只有在初始
-capture、页面终态、通用 locator 和 Publisher 确定性规则都正常未命中后才可能调用；缺少它不
-阻断确定性 Browser。challenge、登录、MFA、timeout、quota 或 runtime failure 等终态不会调用
-Agent 生成替代流量。
+Provider name 来自 `[providers.<name>]` 的子表名，只允许以字母或数字开头的 ASCII 字母、数字、
+`-`、`_`、`.`，读取时统一小写。远程 Provider 必须使用 hostname-based HTTPS，并从凭据文件中
+取得与规范 origin 精确绑定的 API key；HTTP loopback Provider 不使用 key。URL credential、
+query、fragment、不规范主机、远程 IP literal 和 HTTPS loopback 都会被拒绝。
 
-官方 OpenAI 只允许 `https://api.openai.com/v1` 与两种 OpenAI 协议，官方 Anthropic
-只允许 `https://api.anthropic.com/v1` 与 Messages 协议。自定义远程服务必须是
-hostname-based HTTPS 且使用 API key；自定义 loopback 必须是 HTTP，且只能选择
-`authentication = "none"`。URL 拒绝 userinfo、query、fragment、IP literal remote、
-路径跳转、编码分隔符和非规范端口文本。
-
-### `[analysis]`
-
-`[analysis]` 只保存文献分析自身的 chunk、阶段和总量预算，不拥有 provider、协议、
-endpoint、认证或模型选择。
+Model 的唯一身份就是 TOML 子表名中的完整 `provider/model` reference；第一个 `/` 之前必须对应
+已经存在的 Provider，之后是最多 512 bytes 的 NFC、单行 UTF-8 远端 model identity。Model 只
+接受两个字段：
 
 | 字段 | 类型 | 默认值 | 用途 |
 | --- | --- | --- | --- |
+| `reasoning` | `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` | `default` | 该 Model 的思考程度。 |
+| `image` | Boolean | `false` | 该 Model 是否能读取图片；Download 只允许选择 `true`。 |
+
+`default` 让 adapter 完全省略 wire reasoning 字段；其它值按适用 API 精确编码，不降级、近似映射
+或失败后重试 default。Model 不保存 context window、max output、structured output、tool
+decision、图片 MIME、数量或字节上限。这些是消费模块的调用合同：Analyze 派生 strict structured
+output、text-only、no-tool 和业务预算，Download 派生 PNG、单图、tool decision 与内部安全上限。
+模型目录也只提供 model ID；`image` 与具体 reasoning 支持由用户依据 Provider 文档确认，并通过
+显式 probe 验证，不能根据 model 名称猜测。
+
+Provider 被任一 Model 引用时不能删除；Model 被 Analyze 或 Download 选择时也不能删除。一个
+`provider/model` 只有一份配置；需要改变思考程度时直接编辑该 Model，而不是创建本地别名、预设
+或 Profile。
+
+### `[analyze]`
+
+`[analyze]` 直接选择一个完整 Model reference，并保存文献分析自身的 chunk、阶段和总量预算；
+它不拥有或覆盖 Provider、远端 model、reasoning 或 image。
+
+| 字段 | 类型 | 默认值 | 用途 |
+| --- | --- | --- | --- |
+| `model` | `provider/model` 或省略 | 未配置 | Analyze 使用的 Model。 |
 | `metadata_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | metadata 阶段输出上限。 |
 | `content_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | content 阶段输出上限。 |
 | `reference_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 引用 lookup 输出上限。 |
@@ -253,13 +354,11 @@ endpoint、认证或模型选择。
 | `max_total_llm_requests` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总 LLM 请求上限。 |
 | `max_total_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总输出 token 上限。 |
 
-引用发现需要完整的 `[agents]`、Analysis role 的模型/context/最大输出/结构化能力，以及
-`reference_max_output_tokens`；`content` 补全还要求全部 `[analysis]` 预算字段。
-
-`[agents.analysis].context_window_tokens` 不是展示字段：程序用保守的 UTF-8 字节上界检查 chunk 输入和
-最大输出预留是否能同时装入 context。单阶段输出、两阶段总输出、chunk/总输入和总请求数
-也必须相互一致；每个阶段输出还必须不超过 `[agents.analysis].max_output_tokens`。交互向导的 Conservative、Balanced、Large context 只是输入便利，最终
-写入的是每个明确数值，不保存 preset 名称。
+引用发现需要选中的 Model、其 Provider/exact-origin key 与 `reference_max_output_tokens`；
+`content` 补全还要求全部业务预算字段。程序用 Analysis/Bootstrap 派生的保守 UTF-8 字节与单次
+output 边界检查输入；这些边界不是 Model 用户字段。`Analyze → Setup` 会在业务预算缺失时生成
+安全初值，已有完整值原样保留，并在同一流程提供 Conservative、Balanced、Large 与逐项 Custom；
+最终写入明确数值，不保存 preset name。
 
 ### `[execution]`
 
@@ -273,22 +372,26 @@ endpoint、认证或模型选择。
 | --- | --- | --- | --- |
 | `max_input_bytes` | 整数 | `67108864` | 范围 1024 到 1073741824；限制一次书目导入输入。 |
 
-### `[access]`
+### `[download]`
 
 当前保存 Browser-last 能力的非 secret 本地选择：
 
 ```toml
-[access]
+[download]
+# model = "openai/operator-selected-browser-model"
 browser_enabled = false
 # browser_profile = "institutional-access"
+browser_controller = "rules"
 browser_max_concurrency = 5
 browser_policy_overrides = []
 ```
 
 | 字段 | 类型 | 默认值 | 约束 |
 | --- | --- | --- | --- |
+| `model` | `provider/model` 或省略 | 未配置 | Download Agent 使用的 Model；必须配置 `image = true`。Rules controller 不调用该模型。 |
 | `browser_enabled` | 布尔值 | `false` | 持久 Profile Browser 总开关；启用时必须同时选择并初始化 `browser_profile`，且只启用已经通过 production 准入的规则。 |
 | `browser_profile` | 字符串或省略 | 省略 | 一个不含敏感信息的 Profile identity，不是路径、账号、机构名、URL、UUID、Token 或 Cookie 标签；由 `sciretriever config` 选择和初始化。 |
+| `browser_controller` | `rules` 或 `agent` | `rules` | 一项下载作业开始前冻结的互斥 controller；Rules 不调用模型，Agent 从第一次 Observation 起选择封闭动作，二者不互相 fallback。 |
 | `browser_max_concurrency` | 整数 | `5` | 必须是大于 1 的整数，不设上限；只限制同时活动的不同供应商 Browser lane，不改变同一供应商风险组固定串行。 |
 | `browser_policy_overrides` | inline table 数组 | `[]` | 只能收紧已有 production `rate_limit_group`；未知、重复或放宽的 group 会拒绝。 |
 
@@ -313,6 +416,8 @@ patched Chromium process/context，不会启动多个 Browser。
 逐文章区分正文捕获、付费墙、通用拒绝、challenge 与限流，也不会改写固定 origin、selector、
 risk/session group、限速或 Network 安全规则。
 
+Download 选择完整 Model reference，不覆盖 Model 的 Provider、reasoning 或 image，也不改变
+Analyze。tool decision、`image/png`、图片数量/字节与单次调用上限由 Download/Bootstrap 派生。
 当前 Browser 使用本机正常网络出口和一个 operator-managed 持久 Profile，固定以
 `headless = false` 启动一个 Chrome process/persistent context；无 GUI Linux 使用 Xvfb 虚拟显示。
 Publisher 请求由 Chrome 原生网络栈完成，本机 CONNECT proxy 只执行已审核 hostname/port 到精确
@@ -324,13 +429,14 @@ local storage、登录名、机构身份或代理设置；这些认证内容也�
 
 ## 3. 统一凭据文件
 
-Provider、LLM 与远程 MinerU secret 只有一个生产来源：
+文献 Provider、Model Provider 与远程 MinerU secret 只有一个生产来源：
 
 ```text
 ~/.sciretriever/credentials.toml
 ```
 
-该文件不随普通配置路径变化，也不能通过 CLI 选择另一份。目录必须是当前用户拥有、
+该文件与普通配置共处同一个固定用户目录，但保持独立文件、独立 schema 和独立发布责任，
+也不能通过 CLI 选择另一份。目录必须是当前用户拥有、
 非符号链接的真实目录，精确权限为 `0700`；文件必须是当前用户拥有、非符号链接、
 `0600`、单硬链接的普通文件，且不超过 1 MiB。目录或文件缺失表示当前没有任何
 凭据；存在但 owner、权限、类型、链接、TOML 或字段合同不安全时会 fail closed。
@@ -374,7 +480,7 @@ api_key = "<secret>"
 [wiley]
 tdm_api_token = "<secret>"
 
-[agents]
+[providers.openai]
 api_key = "<secret>"
 origin = "https://api.openai.com"
 
@@ -383,9 +489,11 @@ bearer_token = "<secret>"
 origin = "https://mineru.example.invalid"
 ```
 
-`[agents]` 与 `[mineru]` 的 secret 必须与保存时的规范 origin 精确绑定。Bootstrap 只会把
-secret 发送给普通配置当前引用的同一 origin；修改 Base URL 后，旧 secret 不会被发送到
-新服务，跨 origin redirect 也不携带它。loopback LLM/MinerU 不保存或读取核心 secret。
+`[providers.<provider>]` 与 `[mineru]` 的 secret 必须与保存时的规范 origin 精确绑定。Model
+Provider section name 必须对应普通配置中的 `[providers.<provider>]`；同一 Provider 下的多个
+Model 复用该 key。Bootstrap 只为当前任务实际选择的 Model Provider 读取 key，并只发送给同一
+origin。修改 Base URL 后，旧 secret 不会被发送到新 Provider，跨 origin redirect 也不携带它。
+loopback Model Provider/MinerU 不保存或读取对应 secret。
 
 交互中心同时修改普通配置与核心 secret 时，会先在两个目标目录落盘并完整复验 staging，
 再发布可同时服务旧/新 origin 的过渡凭据、发布新普通配置，最后清理旧 secret。保留字段
@@ -406,28 +514,86 @@ Catalog、ArtifactStore、provenance、Report、日志、URL、异常或 CLI 输
 ```text
 sciretriever config [--theme auto|dark|light|mono]
 sciretriever config status [--json] [--theme auto|dark|light|mono]
-sciretriever config test <provider|llm|mineru> [--json]
+sciretriever config test <provider|llm|browser-agent|mineru> [--json]
 sciretriever config test --browser <publisher-access-key> [--json]
 sciretriever config test --all [--json]
 ```
 
 ### 裸 `config` 交互管理器
 
-执行 `sciretriever config` 即进入统一配置中心，首页固定分为 `CORE SERVICES` 和
-`LITERATURE PROVIDERS`。LLM 与 MinerU 分别提供 setup/edit、test、reset 和返回；Provider
-提供设置/更新、移除和返回；独立的 Provider Access 区管理 authorized primary-PDF API 与
-Browser session。TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、Enter、
-`A/L/M/T/Q` 快捷键与隐藏输入；重定向输入或基础终端使用确定性编号菜单。主题支持
-`auto/dark/light/mono`，`NO_COLOR` 始终强制单色。交互内容只写 stderr，stdout 为空；
-Ctrl+C/EOF 取消不会写文件。公开子命令只有 `status` 和 `test`，旧 `config set/remove`
-作为无效输入拒绝。
+执行 `sciretriever config` 即进入统一配置中心。首页固定为单词级：
 
-LLM Guided setup 提供官方 OpenAI Responses、官方 Anthropic Messages 和自定义兼容服务；
-自定义服务再选择三种协议与认证。向导收集模型、已核实 context window 和预算。远程 API
-key 使用隐藏输入并绑定规范 origin。MinerU Guided setup 只配置当前真实的 3.4.4 /
-protocol 2 / `vlm-engine` 后端，不提供虚假 backend 选项；remote 模式在保存前明确提示源
-PDF 会离开本机并要求确认，再收集 origin-bound bearer token。Reset 同时清空对应普通
-section 与核心 credential，不留下“已启用但无凭据”的中间状态。
+```text
+Models / Search / Download / Parse / Analyze / Browser / Status / Theme / Quit
+```
+
+首页只读取本地状态并明确显示不发网络请求；外部测试位于对应 owner 页的 `Test` 或公开
+`config test` 命令，只能由用户显式触发。
+
+TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、Enter、Esc/左方向键返回、
+`M/S/D/P/A/B/I/T/Q` 首页快捷键与隐藏输入；模型和 Literature Provider 等长列表还支持 `/`
+搜索。重定向输入或基础终端使用确定性编号菜单。主题支持 `auto/dark/light/mono`，`NO_COLOR`
+始终强制单色。交互内容只写 stderr，stdout 为空；Ctrl+C/EOF 取消不会写文件。公开子命令只有
+`status` 和 `test`，旧 `config set/remove` 作为无效输入拒绝。
+
+所有普通设置操作都更新固定的 `~/.sciretriever/config.toml`；文献 Provider、Model Provider、
+MinerU 和可选 CloakBrowser secret 操作只更新同目录下的 `credentials.toml`。两者不会被合并。配置
+中心支持当前 Model、Source、Browser、Parser、Analyze 与凭据用例；其它普通字段仍可直接编辑固定
+配置文件。直接编辑后必须保留本手册第 1 节的权限与严格 TOML/schema 合同。
+
+`Models` 页固定为 `Add / <Model> / Providers / Back`；具体 Model 页为 `Edit / Remove / Back`。
+`Providers` 页固定为 `Add / <Provider> / Back`；具体 Provider 页为
+`Edit / Key / Test / Remove / Back`。Provider 只管理 name、API、Base URL 与 exact-origin Key；
+Model 只管理完整 `provider/model` reference、reasoning 与 image。远程 Key 使用隐藏输入，从不回显
+mask、长度、前后缀、hash 或 fingerprint。任务必须在自己的页面显式选择 Model。
+
+`Models → Add` 的顺序固定为：选择已有 Provider 或 `New`；新增时选择内置入口或 Custom URL，
+确认 API；远程 Provider 在同一流程隐藏输入 Key；Key 就绪后自动通过共享 Network 对当前 Base URL
+执行一次有界模型目录读取；选择 model；选择 Reasoning 与 Image；最后一次确认并原子保存 Provider、
+Model 和必要凭据。loopback Provider 不询问 Key。使用已有远程 Provider 时会复用与当前 origin
+匹配的 Key，缺少时在该流程补录。
+
+目录请求禁止 redirect，只读取第一页最多 100 项并受响应字节与超时边界约束；结果只采信安全的
+model ID，不持久化 catalog、context、capability 或测试状态。认证、timeout、HTTP、格式、大小
+失败，目录为空或不能安全解析时显示脱敏原因，然后才出现 `Manual` 输入；正常目录成功时不额外
+展示手工分支。`config status`、首页、普通命令和进入 Models 本身都不会读取模型目录。Provider
+`Test` 也显式读取同一有界目录，只报告安全数量。Analyze 与 Browser 的最小 Model probe 位于各自
+owner 页，不在 Model 对象页重复出现。
+
+Model Edit 只修改 reasoning/image，不改变唯一 reference；Provider Edit 修改 URL/API 并安全处理
+origin-bound Key。Provider 被 Model 引用时不能删除，Model 被 Analyze/Browser 选择时不能删除。
+旧 `[agents]`、`[analysis]`、`[access]`、`[models.services.*]`、`[models.profiles.*]`、
+`[models.entries.*]` 和旧 credentials `[agents]`、`[models.*]` 会在首页前作为未知 schema 直接
+拒绝，不会自动映射、迁移或恢复。operator 手工移除旧 section 后，所需 Key 必须在
+`Models → Providers → Key` 中按 Model Provider 重新保存。
+
+Model reasoning 接受 `default/none/minimal/low/medium/high/xhigh/max`。`default` 省略 wire 字段；
+Analyze/Browser 没有 task-level reasoning 或 capability override。
+
+其它 owner 页固定为：
+
+```text
+Search:   Sources / Limit / Back
+Download: Sources / Back
+Parse:    Setup / Test / Reset / Back
+Analyze:  Setup / Test / Reset / Back
+Browser:  Setup / Profiles / Runtime / Test / Reset / Back
+```
+
+Search/Download 的 Sources 使用 Auto/Custom 两层。Auto → Custom 会冻结当前有效集合与顺序；
+Custom → Auto 会删除固定 providers 并重新跟随版本 catalog。Search 的 Limit 修改唯一逐 Source
+raw-item 上限。选中具体 Source 后，对象页按能力提供 `Setup`、`Key`、`Test`、`Enable` 或
+`Disable`；Search Auto 的 Crossref anonymous/polite 也在 Crossref 的 `Setup` 中配置。凭据和普通
+参数不会改变有效集合。Sci-Hub 只提供 `Mirrors`，不会询问 Key。
+
+`Analyze → Setup` 选择全部已配置 Model 并连续确认八项业务预算；首次选择 Model 时缺失预算会使用
+产品固定安全初值，已有完整预算保持不变。`Browser → Setup` 在选择 Agent controller 时只列出
+`image = true` 的 Model，并连续确认 Profile 与并发 cap。两者都只更新完整 Model reference，不
+修改 Model 或另一个任务。
+
+`Parse → Setup` 连续配置当前真实的 MinerU 3.4.4 / protocol 2 / `vlm-engine` 部署。loopback 不询问
+token；remote 在同一流程先明确授权源 PDF 离开本机，再收集 exact-origin bearer token。Reset
+原子清空对应普通 section 与 token，不留下半配置状态。
 
 设置或更新动作按当前可执行 capability 的 credential spec，用不回显输入收集必需和可选
 字段；secret 不能通过普通 option、位置参数或 URL 传入。尚不受支持的 capability 所声明字段
@@ -443,8 +609,8 @@ stderr 询问是否整体替换；必需字段留空会重新询问；某个全�
 
 ```text
 sciretriever config
-# 选择 Wiley Online Library
-# 再选择 Set or update credentials
+# Download → Sources → wiley
+# wiley → Key → Set
 ```
 
 向导会给出 Wiley 官方 token 入口 `https://static.wiley.com/tdm/`，并提示在普通配置中把
@@ -455,15 +621,17 @@ Wiley 是否接受 token、token 是否符合 Wiley 当前签发格式、当前�
 移除动作只删除所选 Provider section并原子发布，其它 section 保留；存在 section 时必须
 确认，未配置时明确提示且不写文件。它不修改普通配置，也不删除已经接纳的文献事实或资产。
 
-Provider Access 区把 CORE、Elsevier、Wiley 的 authorized primary-PDF API 本地 readiness 与
-Controlled Browser 分开显示。Browser 菜单只管理自动路线：
+Download 区只管理 CORE、Elsevier、Wiley 等 PDF Source；其普通设置、Key 和 Test 都在对应 Source
+对象页。独立的 `Browser` 一级页管理受控 Browser 路线：
 
 1. 选择或初始化一个 Browser Profile，并一次生成固定 identity manifest；
 2. 永久删除选中的本地 Profile、identity manifest 及其中由 Chromium 管理的状态；
 3. 禁用自动 Browser access，同时保留 Profile、并发上限、policy override 和 Provider API credential；
-4. 设置跨 Publisher 的 Browser 并发 cap；只接受大于 `1` 的整数，不设置上限。
+4. 在作业开始前选择互斥的 `rules` 或 `agent` controller；Agent 模式还需 Browser Model probe
+   通过，运行中不会先跑 Rules 或失败后切回 Rules；
+5. 设置跨 Publisher 的 Browser 并发 cap；只接受大于 `1` 的整数，不设置上限。
 
-首页独立的 CloakBrowser runtime 区显示 wrapper、Playwright API、binary presence/version/signature
+`Browser → Runtime` 显示 CloakBrowser wrapper、Playwright API、binary presence/version/signature
 和回退版本，并提供显式安装、更新、回退以及可选 Pro credential 的预留管理。当前固定
 older-free v146 不消费该 credential，status 明确标记
 `reserved-not-used-by-pinned-free-binary`。安装/更新是会联网和写盘的独立动作，执行前需要
@@ -475,20 +643,25 @@ runtime root 中的 license/Pro/update 状态。
 Profile identity 只是 `config.toml` 中不含敏感信息的选择名；真实 Chromium 数据和 owner-only
 identity manifest 进入固定私有目录。manifest 固化 native Linux persona、locale、timezone、
 screen、Browser version policy 和 seed 派生身份；seed、Profile 路径与站点状态不会进入普通配置、
-status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[access]` 或启动
+status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[download]` 或启动
 Browser。自动 Browser 使用当前机器正常网络出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。
 第一版不提供可见 Browser 登录、机构选择、MFA、Cookie 导入导出或 CAPTCHA 交互入口。
 SciRetriever 不导航登录页、不填写凭据、不选择机构、不读取 Cookie 或登录结果，也不处理或绕过
 MFA/CAPTCHA。当前 production Browser route count 和 local eligible count 都是 9；route 已安装、
 Profile/identity 就绪、总开关与 runtime ready 都不能证明机构 IP 或具体文章具有 entitlement。
 
+所有菜单动作都同时使用颜色和单色可见标记区分：`◆` 配置、`◇` 查看、`▶` 测试、`!` 危险、
+`←` 返回、`×` 退出。颜色不可用时仍能从标记理解动作性质。
+
 ### `config status`
 
 `status` 读取普通配置和统一凭据文件，只做本地静态检查；不构造 Catalog、ArtifactStore
-或 Network，也不发请求。默认用紧凑 Panel/Table 分开显示 Core services、Metadata APIs、
+或 Network，也不发请求。默认用紧凑 Panel/Table 分开显示 Model Providers/Models、Analyze、
+Download、Parse、Metadata APIs、
 authorized primary-PDF APIs、PDF acquisition routes、Controlled Browser 与
 Storage/execution；`--json` 使用稳定分组结构供
-脚本消费且永不包含 ANSI。PDF Acquisition 依次展示：
+脚本消费且永不包含 ANSI。JSON 顶层稳定分为
+`models/analyze/download/parsing/providers/storage/execution/library`。PDF Acquisition 依次展示：
 
 - `Public sources`：共享的已保存 direct/landing hints，以及 arXiv、Europe PMC、
   Unpaywall、operator locator 等独立公开服务的本地就绪状态；
@@ -499,9 +672,9 @@ Storage/execution；`--json` 使用稳定分组结构供
   production route、默认 9/9 条 local eligible、总开关、共享 process/context、Publisher lane、
   未评估的文章 entitlement、policy evidence、显式 probe 和下一动作。
 
-Metadata 人类表格只逐项展开已经启用或已有凭据的 Provider，其余禁用能力以数量摘要收起；
-完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，固定单列 CORE、
-Elsevier、Wiley 和当前不支持直接主 PDF 的 Springer API。当前 production Browser route 为
+Metadata 人类表格只逐项展开当前有效或已有凭据的 Provider，其余禁用能力以数量摘要收起；
+完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，只展开当前有效
+Acquisition Source 中的 CORE、Elsevier、Wiley 或当前不支持直接主 PDF 的 Springer API。当前 production Browser route 为
 ACS Publications、AIP Publishing、Elsevier / ScienceDirect、IOPscience、Oxford Academic、
 RSC Publishing、Science / AAAS、Springer Nature Link 与 Wiley Online Library；Browser 分区
 始终显示这 9 条 route，再根据总开关、Profile/identity manifest、Cloak wrapper、Playwright API、
@@ -513,9 +686,9 @@ RSC Publishing、Science / AAAS、Springer Nature Link 与 Wiley Online Library�
 JSON 的 Provider 分区保留完整矩阵，并为每个已接受 Provider 报告以下层：
 
 - `production_available`：该 capability 是否有当前可执行生产实现；
-- `enabled`：是否列在普通配置对应 `providers` 数组中；
-- `ordinary_parameters_ready`：Provider 专属产品选择、联系身份等普通参数是否齐备；
-  Discovery 的 `metadata_scan_limit` 由具体运行 scope 另行检查；
+- `enabled`：是否属于 Auto/Custom 解析后的当前有效集合；
+- `ordinary_parameters_ready`：Provider 专属产品选择、联系身份等普通参数是否齐备；Metadata 的
+  正数逐 Source `limit` 已由普通配置模型保证；
 - `credential.status`：凭据是 `not-required`、`configured`、`partial`、`missing`、
   `optional-missing` 还是 `unsupported`；
 - `access_policy_ready`：固定 Network 访问合同是否存在；
@@ -529,6 +702,8 @@ fingerprint。`enabled = false` 不会改写其它 readiness 层：status 是完
 
 Browser JSON 位于 `providers.controlled_browser`，稳定区分：
 
+- `controller`、`controller_ready` 与 `controller_required_model`：明确当前是 `rules` 还是
+  `agent`、对应本地配置是否就绪，以及 Agent controller 要求哪个完整 Model reference；
 - `mode = headed-fixed-profile` 与 `article_entitlement = checked-per-article`：`headed` 只表示
   使用完整窗口栈和 Xvfb，不表示存在用户可见登录窗口；文章权限仍在运行时逐篇判断；
 - `profile.selected`、`profile.presence`、`fixed_identity_manifest` 与 `identity_schema`：只报告
@@ -548,10 +723,14 @@ Browser JSON 位于 `providers.controlled_browser`，稳定区分：
 Profile 目录内容。
 JSON 和人类输出都不包含 ANSI 以外的隐藏控制数据、secret 掩码/hash/fingerprint 或原始异常。
 
-Storage 分区显示 Catalog/ArtifactStore 是否配置及其当前非 secret 路径。MinerU 分区
+Storage 分区显示 Catalog/ArtifactStore 是否配置及其当前非 secret 路径。Parse 分区
 显示固定实现身份、`base_url`、连接模式、模型身份、远程上传授权、缺失普通字段，以及
-远程 bearer token 是否必需/存在/origin 匹配；LLM 分区显示 provider、protocol、Base URL、
-model、context、认证、API key presence/origin 匹配、引用/完整内容 readiness 和预算。未启用但已有凭据的 Provider
+远程 bearer token 是否必需/存在/origin 匹配；Models 分区逐项显示 Model Provider 的 API、Base
+URL 与 API key presence/origin match，以及 Model 的完整 reference、reasoning 与 image。
+Analyze/Download JSON 分区只显示所选 Model、业务参数和 readiness，
+并提示 `config test llm` 或 `config test browser-agent` 才能验证本地声明；底层 `download` 分区对应
+交互配置中心的 Browser owner，还显示当前 controller、所需 Model 和 controller readiness。
+未启用但已有凭据的 Provider
 仍会显示，便于发现遗留或预配置凭据。这里的 `ready` 只表示本地配置完整，不代表外部
 服务或认证已经成功；任何 secret 值都不会显示或进入 JSON。
 
@@ -566,11 +745,14 @@ Acquisition 没有独立于具体 Literature 的官方最小 probe，因此不�
 
 `test llm` 固定发送 `{"probe":"sciretriever-configuration"}` 这一条极小严格 schema
 请求，并要求可解析的 `{"ok":true}`；它不发送用户 Literature/PDF 内容，但可能消耗少量
-额度，人类模式执行前会确认。`test mineru` 只执行 `GET health`，验证 healthy、release
+额度，人类模式执行前会确认。该请求使用 Analyze 当前 Model。`test browser-agent` 使用 Browser
+当前 Model、一张程序生成的 1×1 PNG 和一个固定停止工具验证图像输入与严格 tool decision；它不发送 Literature、PDF、
+页面正文或真实 Browser screenshot，也不会启动 Browser 或访问 Publisher。`test mineru` 只执行 `GET health`，验证 healthy、release
 3.4.4、protocol 2 与 `vlm-engine` profile，不提交 task、不轮询、不取 archive、不上传 PDF。
-`test --all` 依次汇总已启用 Provider、LLM 和 MinerU；一个失败不阻断其它结果，任一
-failed/skipped 使整体退出码为 3。人类模式统一确认网络/额度副作用；JSON 模式是明确的
-脚本调用，不交互确认。
+`test --all` 依次汇总已启用 Provider、Analyze Model 和 MinerU；当前 controller 为 `agent`
+时还会执行 Browser Model probe，当前 controller 为 `rules` 时不会调用未使用的 Browser Model。
+一个失败不阻断其它结果；必需 probe 的 failed/skipped 使整体退出码为 3。人类模式统一确认
+网络/额度副作用；JSON 模式是明确的脚本调用，不交互确认。
 
 Browser probe 必须单独、显式指定一个 Publisher access key：
 
@@ -585,8 +767,12 @@ provider risk-group scheduler；一次 probe 最多导航一次。结果分开�
 `persisted = false`。当前支持的目标是：
 
 ```text
+sciretriever config test --browser acs-publications
+sciretriever config test --browser aip-publishing
 sciretriever config test --browser elsevier-sciencedirect
+sciretriever config test --browser iopscience
 sciretriever config test --browser oxford-academic
+sciretriever config test --browser rsc-publishing
 sciretriever config test --browser science-aaas
 sciretriever config test --browser springerlink
 sciretriever config test --browser wiley-online-library
@@ -618,9 +804,9 @@ production capability 存在
   -> 才执行真实 Provider/Source 调用
 ```
 
-领域发现要求非空的 Metadata Provider 选择、`paths` 和
-`discovery.metadata_scan_limit`；实际只有已启用、就绪且具有 topic-search 的 adapter
-参加主题搜索，配置时应至少选择一个这样的 Provider。引用发现还需要引用 Analysis 的
+领域发现要求非空的有效 Metadata Source 选择和 `paths`；默认 Auto 已提供当前版本安全集合，
+Custom 空列表则明确不具备该能力。实际只有有效、就绪且具有 topic-search 的 adapter 参加主题
+搜索，每个 adapter 独立获得 `sources.metadata.limit`。引用发现还需要引用 Analysis 的
 完整服务参数与对应凭据。PDF 补全需要 `paths`，并会在构造期拒绝任何已启用
 但不就绪的 Acquisition Provider；内容补全还需要完整 Parser、Analysis 配置与相应
 凭据。纯本地查询、三种书目交换、手动 PDF 只需要安全 Storage 路径。
@@ -633,8 +819,8 @@ production capability 存在
 ## 7. 普通配置示意
 
 仓库中的 [`example/config.example.toml`](../../example/config.example.toml) 提供同一合同的
-可复制、默认不启用外部 Provider 的完整注释示例。下面片段展示一个纯本地
-Library/书目交换基础和一组可选的外部能力参数。请把
+可复制的完整注释示例。下面片段展示一个本地 Library/书目交换基础和默认 Source 选择；纯本地
+命令不会因为 Auto 而联网，只有明确发起 Discovery/Completion 才使用对应外部能力。请把
 Storage 路径、模型身份、Provider 选择与安全授权换成自己的实际设置；不要把 secret
 写入此文件。
 
@@ -643,20 +829,12 @@ Storage 路径、模型身份、Provider 选择与安全授权换成自己的实
 catalog_path = "/absolute/private/path/catalog.sqlite3"
 artifact_root = "/absolute/private/path/artifacts"
 
-[discovery]
-metadata_scan_limit = 100
-
 [sources.metadata]
-providers = ["crossref", "arxiv"]
-
-[sources.metadata.crossref]
-mode = "anonymous"
+mode = "auto"
+limit = 500
 
 [sources.acquisition]
-providers = ["arxiv", "unpaywall", "core"]
-
-[sources.acquisition.unpaywall]
-contact_email = "operator@example.org"
+mode = "auto"
 
 [parsing]
 base_url = "http://127.0.0.1:8000"
@@ -664,20 +842,16 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[agents]
-provider = "openai"
-protocol = "openai-responses"
+[providers.openai]
+api = "openai-responses"
 base_url = "https://api.openai.com/v1"
-authentication = "api-key"
 
-[agents.analysis]
-model = "operator-selected-model"
-context_window_tokens = 300000
-max_output_tokens = 4096
-structured_output = true
-deadline_seconds = 180.0
+[models."openai/operator-selected-model"]
+reasoning = "max"
+image = false
 
-[analysis]
+[analyze]
+model = "openai/operator-selected-model"
 metadata_max_output_tokens = 1024
 content_max_output_tokens = 4096
 reference_max_output_tokens = 1024
@@ -694,13 +868,17 @@ max_concurrency = 4
 max_input_bytes = 67108864
 
 [assets]
-[access]
+
+[download]
+browser_controller = "rules"
 ```
 
 这份文件在结构上合法，但外部能力是否可运行仍取决于统一凭据文件、
 当前生产 capability 与 Network policy。`config status --json` 可做不联网的本地检查；
 只有用户明确需要验证真实服务时才执行 `config test`。
 
-上例中的 CORE 还要求另行执行 `sciretriever config`，选择 CORE 后设置 `api_key` 并写入
-固定凭据文件；不能把 key 写进这份普通配置。启用 CORE 只注册授权 API Source，不保证任意文献
-都有 CORE `work:`/`output:` 身份或具体下载 entitlement。
+上例中的 OpenAI Model Provider 还要求 `Models → Providers → Key` 写入
+`[providers.openai]` exact-origin key；CORE 要求在 `Download → Sources → core → Key` 写入
+`api_key`。
+两类 key 都不能写进普通配置。启用 CORE 只注册
+授权 API Source，不保证任意文献都有 CORE `work:`/`output:` 身份或具体下载 entitlement。

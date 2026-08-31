@@ -176,18 +176,20 @@ DOI landing alias，不会因为 resolver 第一跳进入 advanced 主机而跳�
 规则从 `/doi/pdfdirect/`、`/doi/pdf/` 或 `/doi/epdf/` 的 response、download、popup、viewer 或
 verified locator 中等待任一正文 capture，并排除 supporting information、excluded 和
 wrong-article。规则包含 entitlement/paywall、login、MFA/challenge、rate/IP/account-warning
-等封闭页面状态；自动 Cloudflare challenge 只在有界 settle 内等待自然完成，明确人工控件只
-识别后停止且不尝试点击或绕过，裸 403 则单独记录为 access denied。
+等封闭页面状态；Challenge 由作业开始前选定的 Rules 或 Agent controller 按统一页面合同继续
+处理，登录/MFA 页面仍识别后停止，裸 403 则单独记录为 access denied。
 
 Revision 3 的新增证据日期为 2026-08-21，只为 Wiley 规则声明受限的 Cloudflare dependency：
 精确 origin `https://challenges.cloudflare.com`、path prefix
 `/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
 `document`、`fetch`、`xhr` 和 `image`。它不加入 Wiley 的普通
 `allowed_origins`；只有当前 Wiley Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
-可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。运行时分别报告
-`resource-blocked`、`settling`、`cleared`、`interaction-required`、`settle-timeout` 和普通
-HTTP 403；只有自动 `cleared` 才返回正文流程，第一版不点击 CAPTCHA/Turnstile。该封闭规则和
-本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。这里记录的
+`resource-blocked`、`settling`、`cleared`、`interaction-required` 与 `settle-timeout` 是
+2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。当前 Rules 只执行
+已审查动作，Agent 可以使用统一元素/坐标点击；controller 停止时仍为 Challenge 形成文章级
+`challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则和本地 fixture 只证明程序
+没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
 
 2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
 均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、

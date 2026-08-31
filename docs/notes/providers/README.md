@@ -51,7 +51,7 @@ Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publish
 | OpenCitations | 仅稳定标识符 metadata lookup 和可选引用能力；当前不参加主题搜索 | 不作为原文来源 |
 | Unpaywall | 不参加 Metadata 领域搜索 | DOI/title OA locator |
 | Wiley | 不参加 Metadata 领域搜索 | 适用且已授权的 Wiley 内容能力 |
-| Configured Sci-Hub | 不参加 Metadata 能力 | operator 明确配置且获准的 locator |
+| Configured Sci-Hub | 不参加 Metadata 能力 | 默认关闭；operator 显式启用的 bundled 或 custom locator |
 
 领域 DiscoveryRun 只调用本次普通配置已启用、生产 search adapter 已实现且 readiness 通过的 Metadata 能力，不按 publisher 预先分流。Acquisition 还要针对具体 Literature 依据 AssetHint、稳定来源定位、Provider record identity 和 DOI 安全解析后的 landing origin 判断 Source 适用性。配置 key 被接受不等于每种外部路径都有生产 adapter；具体边界见下节。
 
@@ -69,7 +69,7 @@ Acquisition 当前生产映射如下：
 | 机制 | 当前实现 |
 |---|---|
 | 通用公开 hints | 已实现；消费所有已保存且重新通过安全检查的 direct-file/landing-page AssetHint，不把 `direct` 当作 Provider |
-| 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 只接受 operator 注入的获准 locator resolver |
+| 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 默认关闭，启用后从当前版本 bundled 或 operator custom override 构造 DOI resolver，也允许 Python 显式注入 override |
 | 授权主 PDF API | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
 | Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
 | 受控 Browser | 共享 foundation、正式有头 Playwright adapter、Xvfb/Chrome 原生网络、配置入口与真实 Chromium 离线 QA 已完成；九家 production route 均已进入 registry；文章流采用 capture/page-state → 通用 PDF 发现 → Provider 专属动作，并支持 response、native download、popup/viewer 与已核实 locator；本地 client/readiness 由总开关、Playwright、Chrome/Chromium 和 headed display 动态决定 |
@@ -137,7 +137,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - 多个 locator/observation 保留来源、观察时间、输入标识、hash 与 lineage；后值不能静默覆盖前值。
 - 测试和 Harness 只用 fake/fixture，不连接真实供应商、生产数据库或用户语料。
 - `config status` 只做本地字段/readiness 检查；`config test` 只能由用户显式执行并经过同一 Network 准入，不保存结果或时间，不创建文献事实。Harness、CI 与离线验收不得读取真实凭据或执行真实 probe。
-- Configured Sci-Hub 绝不在仓库记录 endpoint、镜像发现、session/profile、cookie、凭据或绕过访问控制方法。
+- Configured Sci-Hub 的当前版本 bundled endpoint、根页面核验日期和受限 observation 记录在专属 Provider Note；产品不自动发现镜像，也不配置 session/profile、Cookie、凭据、代理或绕过访问控制方法。Harness 与离线测试只使用保留域名和 fake/fixture，不刷新外部事实。
 
 ## 8. 通用排障顺序
 

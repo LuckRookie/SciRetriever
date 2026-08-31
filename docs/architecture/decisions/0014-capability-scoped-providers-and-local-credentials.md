@@ -2,11 +2,12 @@
 
 - Status: Accepted
 - Date: 2026-08-10
+- Last amended: 2026-08-28
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
-- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Metadata 技术文档](../technical/metadata.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0022](0022-default-safe-source-selection-and-per-source-limits.md)
+- Related: [ADR 0018](0018-fixed-user-configuration-home.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Metadata 技术文档](../technical/metadata.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
 
@@ -27,11 +28,16 @@ SciRetriever 需要尽可能完整地接入已经确认可用的外部文献服�
 
 当前目标对已经确认具备领域检索能力的 Web of Science、Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、Elsevier/Scopus、Springer Nature、DataCite 和 CORE 提供生产 Metadata adapter。OpenCitations Meta 只按当前官方能力提供稳定标识符精确 lookup，并与其引用能力一起归 Metadata；在没有官方领域关键词搜索合同前不参加主题 DiscoveryRun。
 
-当前目标对能够提供 PDF 字节、PDF locator、落地页或受控内容路径的 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite 和 CORE 提供对应 Acquisition 能力；operator 明确配置且获准使用的 Sci-Hub locator 继续遵守既有安全边界。Web of Science 和 OpenCitations 当前不作为原文来源。某个 metadata adapter 已经产生可用 `AssetHint` 时，可以由通用公开 route 消费，不要求为了名称对称再复制一套只转发同一 URL 的 adapter。
+当前目标对能够提供 PDF 字节、PDF locator、落地页或受控内容路径的 arXiv、Crossref、Semantic Scholar、OpenAlex、Europe PMC、Unpaywall、Elsevier、Springer Nature、Wiley、DataCite 和 CORE 提供对应 Acquisition 能力。Sci-Hub Source 默认关闭；operator 显式启用后使用随版本维护的 bundled mirror set，也可以用一到八个获准 HTTPS URL 完整覆盖 bundled 列表，全部 locator 继续遵守既有安全边界。Web of Science 和 OpenCitations 当前不作为原文来源。某个 metadata adapter 已经产生可用 `AssetHint` 时，可以由通用公开 route 消费，不要求为了名称对称再复制一套只转发同一 URL 的 adapter。
 
 外部能力与政策会变化。新增、替换或撤下 Provider 只要仍落在这两个能力集合、使用相同中性合同并更新 Provider Notes，就不需要新增产品模块；不能因为目标矩阵存在就把尚未实现的 adapter 写成当前能力。
 
 ### 2. 领域发现调用全部已启用且就绪的搜索能力
+
+> [ADR 0022](0022-default-safe-source-selection-and-per-source-limits.md) 将“用户启用”具体化为
+> capability-scoped `Auto / Custom`：Auto 使用版本内置的默认安全集合，Custom 精确冻结用户列表；
+> 原 `[discovery].metadata_scan_limit` 已移动为具有默认值的 `sources.metadata.limit`。本节的
+> readiness、逐 Source 原始 item 计数和部分成功决定不变。
 
 一次领域 DiscoveryRun 调用本次启用、生产 adapter 存在且 readiness 通过的全部 Metadata search 能力；各 Provider 仍分别遵守整个 Run 的原始 `scan_limit`。Provider 自己的覆盖范围决定结果，Springer Nature 只返回其覆盖内容、Scopus 可以返回多家出版社文献，都不要求 Entry 预先识别 publisher。
 
@@ -53,6 +59,12 @@ Readiness 按本次实际 plan 区分项目支持、用户启用、静态配置�
 
 ### 4. 唯一本地凭据文件
 
+> [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md) 已从当前凭据 schema 删除单例
+> `[agents]`，模型 key 由按 Model Provider 命名的 `[providers.<provider>]` section 取代；旧
+> `[agents]` 与 `[models.*]` 凭据现在作为未知 section 直接拒绝，不迁移、不恢复。下文对单例 `[agents]` 的描述只
+> 保留原始决策的历史语境；Provider 与 MinerU 的 capability owner、owner-only 文件、origin
+> 绑定、安全发布和 secret 不进入普通配置的决定不变。
+
 生产只从用户主目录下的固定文件读取 Provider、共享 Agents 与远程 MinerU 密钥：
 
 ```text
@@ -67,26 +79,35 @@ Agents/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secr
 
 ### 5. CLI 配置、状态与连通性测试
 
+> [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md) 将本节旧的全局
+> `Providers & API Keys`/role 页面修订为单词级 `Models / Search / Download / Parse / Analyze /
+> Browser / Status / Theme / Quit` 首页，并采用 Model Provider、完整 `provider/model` Model 与任务
+> 直接选择；模型 key 在 Provider 对象页管理，文献来源的普通设置/key/test 在具体 Source 对象页
+> 管理，MinerU 由 Parse Setup 管理。纯本地 status、只有显式动作才联网以及最小 probe 不形成文献
+> 事实的决定不变。
+
 目标 CLI 增加第六个一级命令 `config`：
 
 ```text
 sciretriever config
 sciretriever config status
-sciretriever config test <provider|llm|mineru>
+sciretriever config test <provider|llm|browser-agent|mineru>
+sciretriever config test --browser <publisher-access-key>
 sciretriever config test --all
 ```
 
-裸 `config` 打开统一交互配置中心，首页分为 LLM Analysis、MinerU Parser 与 Literature
-Providers。核心服务向导同时管理普通配置、origin-bound secret、test 与 reset；Provider
-区域继续提供设置/更新、移除、返回和退出动作。设置动作使用不回显的交互输入收集当前可执行
-adapter 声明的必需和可选凭据；真实密钥不得作为普通命令参数。`config` 公开子命令只保留
-`status` 和 `test`，旧 `set/remove` 路径必须拒绝。TTY 界面支持主题与键盘导航，非 TTY
-保留确定性纯文本流程，`NO_COLOR` 强制单色。
+裸 `config` 打开统一交互配置中心，首页分为 `Models`、`Providers & API Keys`、MinerU、
+Literature Sources/Access、Browser Runtime、Diagnostics/Status 与 Appearance。共享模型 connection
+和 API key 分开管理；Models 只修改 Analysis/Browser role，不接收 secret。Provider 区继续提供
+设置/更新、移除、返回和退出动作。设置动作使用不回显的交互输入收集当前可执行 adapter 声明的
+必需和可选凭据；真实密钥不得作为普通命令参数。`config` 公开子命令只保留 `status` 和 `test`，
+旧 `set/remove` 路径必须拒绝。TTY 界面支持主题、键盘导航、返回和长列表搜索，非 TTY 保留
+确定性纯文本流程，`NO_COLOR` 强制单色。首页和 status 纯本地；外部测试集中为显式动作。
 `status` 是纯本地检查，只显示凭据不需要、
 已配置、部分配置、缺失、可选缺失或 adapter 尚不支持等安全状态以及各字段是否存在，绝不
 显示、掩码显示或导出密钥值。
 
-`test` 是用户明确发起的最小只读网络操作。Provider probe 通过 ADR 0012 的 Network 准入调用官方允许的最小 endpoint；LLM probe 只发送固定的极小严格 schema 内容，不发送用户文献；MinerU probe 只检查 health/release/protocol/profile，不上传 PDF。`--all` 汇总已启用 Provider、LLM 与 MinerU，一个失败不阻断其它结果。测试不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，不下载并接纳 PDF，也不保存最后结果或时间。
+`test` 是用户明确发起的最小只读网络操作。Provider probe 通过 ADR 0012 的 Network 准入调用官方允许的最小 endpoint；Analysis model probe 只发送固定的极小严格 schema 内容，Browser model probe 只发送合成图片与封闭 generic tool，二者都不发送用户文献或真实页面；MinerU probe 只检查 health/release/protocol/profile，不上传 PDF。`--all` 汇总已启用 Provider、Analysis、MinerU，并只在已选择 Agent controller 时加入 Browser model，一个失败不阻断其它结果。测试不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，不下载并接纳 PDF，也不保存最后结果或时间。
 
 全文测试最多证明凭据和内容服务的当前最小 readiness，不能证明任意文献 entitlement。测试错误在输出前稳定化和脱敏；请求仍受供应商限速、额度、`Retry-After`、安全 URL 和响应预算约束。测试、状态和凭据管理不读取或写入文献数据库。
 

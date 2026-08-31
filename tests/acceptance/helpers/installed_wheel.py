@@ -194,6 +194,20 @@ class InstalledWheel:
             installed.append(target.resolve(strict=True))
         return tuple(installed)
 
+    def write_user_configuration(self, payload: str | bytes) -> Path:
+        """Publish one test-owned config at the installed user's fixed path."""
+
+        directory = self._required(self.home) / ".sciretriever"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+        target = directory / "config.toml"
+        raw = payload.encode("utf-8") if isinstance(payload, str) else payload
+        if not isinstance(raw, bytes):
+            raise TypeError("configuration payload must be text or bytes")
+        target.write_bytes(raw)
+        target.chmod(0o600)
+        return target.resolve(strict=True)
+
     def isolated_environment(
         self,
         extra: Mapping[str, str] | None = None,

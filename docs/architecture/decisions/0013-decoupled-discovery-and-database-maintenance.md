@@ -5,7 +5,7 @@
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
-- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Entry 技术文档](../technical/entry.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Storage 技术文档](../technical/storage.md)
 
 ## 背景

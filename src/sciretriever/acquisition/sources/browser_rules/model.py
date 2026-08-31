@@ -47,7 +47,6 @@ _FORBIDDEN_SELECTOR_MARKERS: Final[tuple[str, ...]] = (
 )
 _MAX_MARKERS: Final[int] = 8
 _MAX_PAGE_MARKERS: Final[int] = 32
-_MAX_ACTIONS: Final[int] = 8
 _DEFAULT_CAPTURE_PRIORITY: Final[tuple[BrowserCaptureKind, ...]] = (
     BrowserCaptureKind.VERIFIED_LOCATOR,
     BrowserCaptureKind.DOWNLOAD,
@@ -477,7 +476,7 @@ class BrowserPageMarkerKind(str, Enum):
     NOT_ENTITLED = "not-entitled"
     PAYWALL = "paywall"
     ACCESS_DENIED = "access-denied"
-    CHALLENGE_REQUIRED = "challenge-required"
+    CHALLENGE = "challenge"
     RATE_LIMITED = "rate-limited"
     IP_BLOCKED = "ip-blocked"
     ACCOUNT_WARNING = "account-warning"
@@ -609,7 +608,6 @@ class BrowserSiteRule:
     actions: tuple[BrowserRuleAction, ...] = field(default=(), repr=False)
     actions_require_entitlement: bool = False
     doi_pdf_url_template: str | None = field(default=None, repr=False)
-    max_actions: int = _MAX_ACTIONS
     page_markers: tuple[BrowserPageMarker, ...] = field(default=(), repr=False)
     capture_url_prefixes: tuple[str, ...] = field(default=(), repr=False)
     capture_origin_roots: tuple[str, ...] = field(default=(), repr=False)
@@ -684,12 +682,6 @@ class BrowserSiteRule:
             not isinstance(action, BrowserRuleAction) for action in self.actions
         ):
             raise TypeError("actions must contain BrowserRuleAction values")
-        if type(self.max_actions) is not int:
-            raise TypeError("max_actions must be an integer")
-        if not 0 <= self.max_actions <= _MAX_ACTIONS:
-            raise ValueError("max_actions exceeds the closed Browser action budget")
-        if len(self.actions) > self.max_actions:
-            raise ValueError("actions exceeds the rule's maximum action count")
         if any(
             action.locator is not None
             and _normalized_url(action.locator).origin.text not in self.allowed_origins
@@ -901,7 +893,6 @@ class BrowserSiteRule:
             *self.landing_origin_aliases,
             *self.allowed_origins,
             self.web_scope_provider_name,
-            str(self.max_actions),
             str(len(self.actions)),
             str(self.actions_require_entitlement).lower(),
             *(field for action in self.actions for field in action.fingerprint_fields),

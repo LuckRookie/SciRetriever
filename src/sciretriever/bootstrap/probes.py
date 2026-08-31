@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from sciretriever.acquisition.sources.configured_sci_hub import ConfiguredLocatorResolver
 from sciretriever.bootstrap.browser import (
@@ -29,27 +29,30 @@ from sciretriever.configuration import (
     eligible_production_browser_access_keys,
     load_credentials,
     load_runtime_secrets,
+    resolve_task_model,
     run_browser_configuration_probe,
     run_configuration_probes,
 )
 from sciretriever.model.configuration import (
     AgentConfigurationProbeDetails,
+    AgentProtocol,
     BrowserAccessStatus,
     BrowserConfigurationProbeResult,
     Configuration,
     ConfigurationProbeSummary,
     ConfigurationStatus,
     CoreConfigurationProbeResult,
-    CoreCredentialService,
     MinerUConfigurationProbeDetails,
     ParserConnectionMode,
     ProbeOutcome,
     ProviderName,
+    normalize_model_provider_identity,
 )
 from sciretriever.network.admission import AccessCoordinator
 from sciretriever.network.http import HttpClient
 
 if TYPE_CHECKING:
+    from sciretriever.agents.providers.models import AgentModelCatalog
     from sciretriever.metadata.registry import MetadataProbeRegistry
     from sciretriever.network.browser_sessions import BrowserSessionBroker
 
@@ -105,16 +108,13 @@ class ProductionConfigurationProbeSession:
     def run_agents(self) -> CoreConfigurationProbeResult:
         """Run one minimal strict Agents request without user Literature content."""
 
-        from sciretriever.agents import (
-            AgentBudget,
+        from sciretriever.agents.api import (
+            AgentCall,
             AgentCapability,
             AgentFailure,
-            AgentRequest,
             AgentRole,
-            AgentStructuredResponse,
+            AgentStructuredResult,
             AgentTextPart,
-            open_session,
-            parse_strict_json_object,
         )
         from sciretriever.model.primitives import sha256_digest
 
@@ -122,13 +122,7 @@ class ProductionConfigurationProbeSession:
             self.configuration,
             credentials=self.credentials,
         )
-        locally_ready = runtime.analysis.reference_configuration_complete and (
-            not runtime.analysis.api_key_required
-            or (
-                runtime.analysis.api_key_configured is True
-                and runtime.analysis.credential_origin_matches is True
-            )
-        )
+        locally_ready = runtime.agents.analysis_reference_locally_ready
         if not locally_ready:
             return _core_probe_payload(
                 "agents",
@@ -137,13 +131,14 @@ class ProductionConfigurationProbeSession:
                 failure_code="analysis-not-ready",
             )
         try:
+            provider, model = resolve_task_model(self.configuration, task="analyze")
             secrets = load_runtime_secrets(
                 self.configuration,
                 credentials=self.credentials,
                 include_parser=False,
                 include_agents=True,
             )
-            adapter = _build_agents_runtime(
+            runtime_adapter = _build_agents_runtime(
                 self.configuration,
                 secrets,
                 self.http_client,
@@ -152,13 +147,12 @@ class ProductionConfigurationProbeSession:
             )
             structured_input = '{"probe":"sciretriever-configuration"}'
             max_output_tokens = min(
-                self.configuration.agents.analysis.max_output_tokens or 16,
+                self.configuration.analysis.reference_max_output_tokens or 16,
                 64,
             )
-            request = AgentRequest(
+            request = AgentCall(
                 role=AgentRole.ANALYSIS,
-                capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
-                model=self.configuration.agents.analysis.model or "",
+                required_capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
                 input_sha256=sha256_digest(structured_input.encode("utf-8")),
                 text_parts=(
                     AgentTextPart(
@@ -175,19 +169,16 @@ class ProductionConfigurationProbeSession:
                     '"const":true}},"required":["ok"],"additionalProperties":false}'
                 ),
                 max_output_tokens=max_output_tokens,
-                budget=AgentBudget(max_output_tokens=max_output_tokens),
             )
-            with open_session(adapter, max_turns=1, budget=request.budget) as session:
-                response = session.complete(request)
-            if not isinstance(response, AgentStructuredResponse):
+            response = runtime_adapter.execute(request)
+            if not isinstance(response, AgentStructuredResult):
                 return _core_probe_payload(
                     "agents",
                     outcome="failed",
                     local_ready=True,
                     failure_code="analysis-llm-probe-contract",
                 )
-            result = parse_strict_json_object(response.result)
-            if result != {"ok": True}:
+            if response.value != {"ok": True}:
                 return _core_probe_payload(
                     "agents",
                     outcome="failed",
@@ -215,12 +206,8 @@ class ProductionConfigurationProbeSession:
             failure_code=None,
             details={
                 "strict_response_parseable": True,
-                "model": self.configuration.agents.analysis.model,
-                "protocol": (
-                    None
-                    if self.configuration.agents.protocol is None
-                    else self.configuration.agents.protocol.value
-                ),
+                "model": model.model,
+                "protocol": provider.api.value,
             },
         )
 
@@ -237,23 +224,18 @@ class ProductionConfigurationProbeSession:
 
         from base64 import b64decode
 
-        from sciretriever.agents import (
-            AgentBudget,
+        from sciretriever.agents.api import (
+            AgentCall,
             AgentCapability,
             AgentFailure,
             AgentImagePart,
-            AgentRequest,
             AgentRole,
             AgentTextPart,
-            AgentToolDecision,
+            AgentToolCall,
             AgentToolDeclaration,
-            open_session,
-            parse_strict_json_object,
         )
         from sciretriever.model.primitives import sha256_digest
 
-        agents = self.configuration.agents
-        role = agents.browser
         details = _browser_agent_probe_details(self.configuration)
         # Fixed 1x1 transparent PNG.  It is synthetic configuration input,
         # never a page screenshot or a user document.
@@ -262,32 +244,12 @@ class ProductionConfigurationProbeSession:
             "+A8AAQUBAScY42YAAAAASUVORK5CYII="
         )
         try:
+            _provider, model = resolve_task_model(self.configuration, task="download")
             runtime_status = configuration_runtime_status(
                 self.configuration,
                 credentials=self.credentials,
             )
-            role_ready = (
-                role.model is not None
-                and role.context_window_tokens is not None
-                and role.max_output_tokens is not None
-                and role.image_input
-                and role.tool_decision
-                and role.image_count >= 1
-                and role.image_bytes >= len(image)
-                and "image/png" in role.image_media_types
-            )
-            transport_ready = (
-                agents.provider is not None
-                and agents.protocol is not None
-                and agents.base_url is not None
-                and agents.authentication is not None
-            )
-            credential_ready = True
-            if agents.authentication is not None and agents.authentication.value == "api-key":
-                credential_ready = (
-                    runtime_status.analysis.api_key_configured is True
-                    and runtime_status.analysis.credential_origin_matches is True
-                )
+            role_ready = runtime_status.agents.browser_locally_ready and model.image
         except (ConfigurationError, TypeError, ValueError):
             return _core_probe_payload(
                 "agents",
@@ -297,7 +259,7 @@ class ProductionConfigurationProbeSession:
                 details=details,
             )
 
-        if not (role_ready and transport_ready and credential_ready):
+        if not role_ready:
             return _core_probe_payload(
                 "agents",
                 outcome="skipped",
@@ -320,26 +282,12 @@ class ProductionConfigurationProbeSession:
                 '"const":true}},"required":["ok"],"additionalProperties":false}'
             ),
         )
-        max_output_tokens = min(role.max_output_tokens or 1, 64)
-        budget = AgentBudget(
-            max_prompt_bytes=4_096,
-            max_input_bytes=4_096,
-            max_schema_bytes=8_192,
-            max_request_bytes=32_768,
-            max_response_bytes=64_000,
-            max_result_bytes=1_024,
-            max_output_tokens=max_output_tokens,
-            context_window_tokens=min(role.context_window_tokens or 1_024, 2_048),
-            connect_timeout_seconds=min(role.deadline_seconds, 10.0),
-            read_timeout_seconds=min(role.deadline_seconds, 20.0),
-            overall_timeout_seconds=min(role.deadline_seconds, 30.0),
-            max_redirects=0,
-            max_retries=0,
-        )
-        request = AgentRequest(
+        max_output_tokens = 64
+        request = AgentCall(
             role=AgentRole.BROWSER,
-            capabilities=frozenset({AgentCapability.IMAGE_INPUT, AgentCapability.TOOL_DECISION}),
-            model=role.model or "",
+            required_capabilities=frozenset(
+                {AgentCapability.IMAGE_INPUT, AgentCapability.TOOL_DECISION}
+            ),
             input_sha256=sha256_digest(user_text.encode("utf-8") + image),
             text_parts=(
                 AgentTextPart(media_type="text/plain", text=system_text),
@@ -348,7 +296,6 @@ class ProductionConfigurationProbeSession:
             image_parts=(AgentImagePart(media_type="image/png", data=image, width=1, height=1),),
             tools=(stop_tool,),
             max_output_tokens=max_output_tokens,
-            budget=budget,
         )
         try:
             secrets = load_runtime_secrets(
@@ -357,16 +304,15 @@ class ProductionConfigurationProbeSession:
                 include_parser=False,
                 include_agents=True,
             )
-            adapter = _build_agents_runtime(
+            runtime_adapter = _build_agents_runtime(
                 self.configuration,
                 secrets,
                 self.http_client,
                 self.access_coordinator,
                 required_roles=frozenset({AgentRole.BROWSER}),
             )
-            with open_session(adapter, max_turns=1, budget=budget) as session:
-                response = session.complete(request)
-            if not isinstance(response, AgentToolDecision):
+            response = runtime_adapter.execute(request)
+            if not isinstance(response, AgentToolCall):
                 return _core_probe_payload(
                     "agents",
                     outcome="failed",
@@ -374,9 +320,7 @@ class ProductionConfigurationProbeSession:
                     failure_code="browser-agent-probe-contract",
                     details=details,
                 )
-            if response.tool_name != stop_tool.name or parse_strict_json_object(
-                response.arguments
-            ) != {"ok": True}:
+            if response.tool_name != stop_tool.name or response.value != {"ok": True}:
                 return _core_probe_payload(
                     "agents",
                     outcome="failed",
@@ -411,7 +355,7 @@ class ProductionConfigurationProbeSession:
             details={
                 **details,
                 "tool_decision_parseable": True,
-                "model": role.model,
+                "model": model.model,
             },
         )
 
@@ -489,23 +433,54 @@ class ProductionConfigurationProbeSession:
         )
 
 
+def fetch_agent_models(
+    *,
+    provider_name: str,
+    api: AgentProtocol,
+    base_url: str,
+    api_key: str | None,
+) -> AgentModelCatalog:
+    """Fetch one bounded, non-persistent model page for the setup wizard.
+
+    The caller must obtain explicit user intent before invoking this function.
+    ``api_key`` remains request-local and is bound to ``base_url`` by the same
+    Agents/Network policy used for model calls.
+    """
+
+    from sciretriever.agents.providers.models import AgentModelCatalogClient
+
+    name = normalize_model_provider_identity(provider_name)
+    if not isinstance(api, AgentProtocol):
+        raise TypeError("api must be an AgentProtocol")
+    _coordinator, _resolver, http_client = _new_shared_network()
+    try:
+        return AgentModelCatalogClient(
+            http_client=http_client,
+            protocol=api,
+            base_url=base_url,
+            api_key=api_key,
+            provider_name=name,
+        ).list_models()
+    finally:
+        http_client.close()
+
+
 def _core_probe_payload(
-    service: str,
+    service: Literal["agents", "mineru"],
     *,
     outcome: str,
     local_ready: bool,
     failure_code: str | None,
     details: dict[str, object] | None = None,
 ) -> CoreConfigurationProbeResult:
-    service_name = CoreCredentialService(service)
     detail_payload = {} if details is None else details
     checked_details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails
-    if service_name is CoreCredentialService.AGENTS:
+    if service == "agents":
         checked_details = AgentConfigurationProbeDetails.model_validate(detail_payload)
     else:
         checked_details = MinerUConfigurationProbeDetails.model_validate(detail_payload)
     return CoreConfigurationProbeResult(
-        service=service_name,
+        service=service,
         outcome=ProbeOutcome(outcome),
         local_ready=local_ready,
         failure_code=failure_code,
@@ -520,7 +495,10 @@ def _browser_agent_probe_details(
 ) -> dict[str, object]:
     """Return the stable, secret-free Browser Agent probe disclosure."""
 
-    protocol = configuration.agents.protocol
+    try:
+        provider, model = resolve_task_model(configuration, task="download")
+    except (TypeError, ValueError):
+        provider, model = None, None
     return {
         "role": "browser-agent",
         "request_kind": "browser-agent-tool",
@@ -534,8 +512,8 @@ def _browser_agent_probe_details(
         "tool_decision": True,
         "image_count": 1,
         "tool_count": 1,
-        "model": configuration.agents.browser.model,
-        "protocol": None if protocol is None else protocol.value,
+        "model": None if model is None else model.model,
+        "protocol": None if provider is None else provider.api.value,
     }
 
 
@@ -616,4 +594,5 @@ def build_production_configuration_probe_session(
 __all__ = (
     "ProductionConfigurationProbeSession",
     "build_production_configuration_probe_session",
+    "fetch_agent_models",
 )

@@ -21,7 +21,6 @@ OXFORD_ACADEMIC_BROWSER_RULE: Final[BrowserSiteRule] = BrowserSiteRule(
     web_scope_provider_name="oxford-academic",
     actions=pdf_actions("a[href*='/doi/pdf/'], a[href*='/doi/epdf/'], a[href*='/article-pdf/']"),
     doi_pdf_url_template="https://academic.oup.com/doi/pdf/{doi}",
-    max_actions=2,
     page_markers=publisher_page_markers(
         "oxford",
         entitled_selectors=(

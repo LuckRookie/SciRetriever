@@ -708,7 +708,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         )
         self.assertEqual(second.browser_admission.summary.groups[0].readiness, "rate-limited")
 
-    def test_browser_challenge_opens_only_its_group_circuit(self) -> None:
+    def test_browser_challenge_unresolved_remains_article_local(self) -> None:
         executor = _executor("wiley", "elsevier", max_concurrency=2)
         items = tuple(
             AcquisitionWorkItem(work_key=key, plan=_plan(key, group=group))
@@ -726,33 +726,27 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             if item.work_key == "w1":
                 return RouteExecutionResult.action_required(
                     StableFailure(
-                        code="acquisition-browser-challenge-required",
-                        reason="The fixture provider requires a challenge review.",
-                        action="Review the fixture provider outside automation.",
-                        retryable=False,
+                        code="acquisition-browser-challenge-unresolved",
+                        reason="The fixture challenge remained after controller stop.",
+                        action="Retry this article or use another approved source.",
+                        retryable=True,
                     )
                 )
             return RouteExecutionResult.normal_miss()
 
         result = executor.execute(items, execute)
 
-        self.assertEqual(set(browser_calls), {"w1", "e1"})
+        self.assertEqual(set(browser_calls), {"w1", "w2", "e1"})
         self.assertEqual(
             tuple(item.disposition for item in result.items),
             (
                 WorkItemDisposition.ACTION_REQUIRED,
-                WorkItemDisposition.ACTION_REQUIRED,
+                WorkItemDisposition.EXHAUSTED,
                 WorkItemDisposition.EXHAUSTED,
             ),
         )
-        self.assertNotIn("browser:w2", result.items[1].attempted_route_keys)
-        self.assertIsNotNone(result.items[1].failure)
-        if result.items[1].failure is None:
-            self.fail("queued circuit item did not retain a stable failure")
-        self.assertEqual(
-            result.items[1].failure.code,
-            "acquisition-browser-group-challenge-required",
-        )
+        self.assertIn("browser:w2", result.items[1].attempted_route_keys)
+        self.assertIsNone(result.items[1].failure)
 
     def test_browser_cleanup_failure_stops_same_group_without_exhaustion(self) -> None:
         executor = _executor("wiley", "elsevier", max_concurrency=2)

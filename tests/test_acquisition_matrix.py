@@ -15,6 +15,7 @@ from sciretriever.acquisition.authorized import (
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
     AuthorizedPdfSource,
 )
+from sciretriever.acquisition.browser_control import BrowserControllerKind
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import CandidateKeyTracker
 from sciretriever.acquisition.registry import (
@@ -25,6 +26,7 @@ from sciretriever.acquisition.registry import (
     AcquisitionProviderStatus,
     AcquisitionRegistry,
     AcquisitionRegistryError,
+    BrowserAgentDependency,
     acquisition_provider_statuses,
     build_acquisition_registry,
     production_web_access_profile_resolver,
@@ -45,6 +47,15 @@ from sciretriever.acquisition.sources import (
     PublicLocatorFetcher,
     UnpaywallPdfSource,
 )
+from sciretriever.agents.api import (
+    AgentCallLimits,
+    AgentModelCapabilities,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentToolCall,
+)
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.configuration import (
     ConfigurationError,
     CredentialLookup,
@@ -128,6 +139,42 @@ class _NeverTransport:
         pass
 
 
+class _NeverAgentAdapter:
+    provider_name = "fixture-never-agent"
+
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:
+        del call
+        raise AssertionError("registry assembly must not call the Browser Agent")
+
+
+def _browser_agent_runtime() -> AgentRuntime:
+    return AgentRuntime(
+        adapter=_NeverAgentAdapter(),
+        browser=AgentRoleBinding(
+            role=AgentRole.BROWSER,
+            model="fixture-browser-model",
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=32_768,
+                max_output_tokens=512,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset({"image/png"}),
+                max_image_count=1,
+                max_image_bytes=2 * 1024 * 1024,
+            ),
+            limits=AgentCallLimits(
+                max_prompt_bytes=131_072,
+                max_input_bytes=2 * 1024 * 1024,
+                max_request_bytes=3 * 1024 * 1024,
+                max_response_bytes=1 * 1024 * 1024,
+                max_result_bytes=1 * 1024 * 1024,
+                max_output_tokens=512,
+                context_window_tokens=32_768,
+            ),
+        ),
+    )
+
+
 class _ConfiguredLocatorResolver:
     def __init__(self) -> None:
         self.calls = 0
@@ -147,10 +194,12 @@ def _configuration(
     providers: tuple[str, ...] = (),
     *,
     unpaywall_email: str | None = None,
+    sci_hub_urls: tuple[str, ...] | None = None,
     browser_enabled: bool = False,
 ) -> Any:
     lines = (
         "[sources.acquisition]",
+        'mode = "custom"',
         "providers = [" + ", ".join(f'"{provider}"' for provider in providers) + "]",
     )
     payload = list(lines)
@@ -161,10 +210,17 @@ def _configuration(
                 f'contact_email = "{unpaywall_email}"',
             )
         )
+    if sci_hub_urls is not None:
+        payload.extend(
+            (
+                "[sources.acquisition.sci-hub]",
+                "urls = [" + ", ".join(f'"{url}"' for url in sci_hub_urls) + "]",
+            )
+        )
     if browser_enabled:
         payload.extend(
             (
-                "[access]",
+                "[download]",
                 f"browser_enabled = {'true' if browser_enabled else 'false'}",
                 'browser_profile = "fixture-profile"',
             )
@@ -319,22 +375,22 @@ class OrdinaryAcquisitionConfigurationTests(unittest.TestCase):
 
     def test_unknown_non_acquisition_duplicate_and_private_fields_fail_closed(self) -> None:
         invalid = (
-            '[sources.acquisition]\nproviders = ["web-of-science"]\n',
-            '[sources.acquisition]\nproviders = ["opencitations"]\n',
-            '[sources.acquisition]\nproviders = ["direct"]\n',
-            '[sources.acquisition]\nproviders = ["controlled-browser"]\n',
-            '[sources.acquisition]\nproviders = ["unknown"]\n',
-            '[sources.acquisition]\nproviders = ["arxiv", "arxiv"]\n',
+            '[sources.acquisition]\nmode = "custom"\nproviders = ["web-of-science"]\n',
+            '[sources.acquisition]\nmode = "custom"\nproviders = ["opencitations"]\n',
+            '[sources.acquisition]\nmode = "custom"\nproviders = ["direct"]\n',
+            ('[sources.acquisition]\nmode = "custom"\nproviders = ["controlled-browser"]\n'),
+            '[sources.acquisition]\nmode = "custom"\nproviders = ["unknown"]\n',
+            ('[sources.acquisition]\nmode = "custom"\nproviders = ["arxiv", "arxiv"]\n'),
             (
-                '[sources.acquisition]\nproviders = ["unpaywall"]\n'
+                '[sources.acquisition]\nmode = "custom"\nproviders = ["unpaywall"]\n'
                 '[sources.acquisition.unpaywall]\ncontact_email = "not-an-email"\n'
             ),
             (
-                '[sources.acquisition]\nproviders = ["sci-hub"]\n'
+                '[sources.acquisition]\nmode = "custom"\nproviders = ["sci-hub"]\n'
                 '[sources.acquisition.sci-hub]\nendpoint = "https://example.invalid"\n'
             ),
             (
-                '[sources.acquisition]\nproviders = ["unpaywall"]\n'
+                '[sources.acquisition]\nmode = "custom"\nproviders = ["unpaywall"]\n'
                 '[sources.acquisition.unpaywall]\ncontact_email = "fixture@example.invalid"\n'
                 'session = "forbidden"\n'
             ),
@@ -541,8 +597,8 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
         by_name = {status.provider_name: status for status in missing}
         self.assertFalse(by_name["unpaywall"].ready)
         self.assertEqual(by_name["unpaywall"].failure_code, "missing-ordinary-parameter")
-        self.assertFalse(by_name["sci-hub"].ready)
-        self.assertEqual(by_name["sci-hub"].failure_code, "missing-configured-resolver")
+        self.assertTrue(by_name["sci-hub"].ready)
+        self.assertIsNone(by_name["sci-hub"].failure_code)
         self.assertTrue(by_name["wiley"].ready)
         self.assertTrue(
             any(
@@ -583,6 +639,18 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
         self.assertTrue(ready_by_name["unpaywall"].ready)
         self.assertTrue(ready_by_name["sci-hub"].ready)
         self.assertTrue(ready_by_name["wiley"].ready)
+
+        configured = acquisition_provider_statuses(
+            _configuration(
+                ("sci-hub",),
+                sci_hub_urls=("https://mirror-one.example", "https://mirror-two.example"),
+            )
+        )
+        configured_sci_hub = next(
+            status for status in configured if status.provider_name == "sci-hub"
+        )
+        self.assertTrue(configured_sci_hub.ready)
+        self.assertIsNone(configured_sci_hub.failure_code)
 
     def test_matrix_validator_rejects_order_duplicates_and_contract_tampering(self) -> None:
         statuses = acquisition_provider_statuses(_configuration(()))
@@ -939,6 +1007,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         configuration = _configuration(
             ("crossref", "arxiv", "unpaywall", "sci-hub", "europe-pmc"),
             unpaywall_email="researcher@example.invalid",
+            sci_hub_urls=("https://configured-but-overridden.example",),
         )
         registry = build_acquisition_registry(configuration, dependencies)
 
@@ -994,6 +1063,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertIsInstance(by_name["arxiv"], ArxivPdfSource)
         self.assertIsInstance(by_name["unpaywall"], UnpaywallPdfSource)
         self.assertIsInstance(by_name["sci-hub"], ConfiguredSciHubPdfSource)
+        self.assertIs(getattr(by_name["sci-hub"], "_resolver"), configured_resolver)
         self.assertIsInstance(by_name["europe-pmc"], EuropePmcPdfSource)
         doi_landing_resolver = getattr(cast(Any, registry.planner), "_doi_landing")
         self.assertIs(getattr(doi_landing_resolver, "_http_client"), client)
@@ -1022,6 +1092,80 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             getattr(by_name["europe-pmc"], "_access_scope"),
             AccessScope("europe-pmc", "api"),
         )
+
+    def test_stock_registry_builds_doi_only_sci_hub_resolver_from_urls_without_io(self) -> None:
+        dependencies, _client = _dependencies()
+        registry = build_acquisition_registry(
+            _configuration(
+                ("sci-hub",),
+                sci_hub_urls=(
+                    "https://mirror-one.example",
+                    "https://mirror-two.example/base",
+                ),
+            ),
+            dependencies,
+        )
+
+        binding = registry.route_registry.binding_for("public:sci-hub")
+        self.assertIs(binding.spec.readiness, RouteReadiness.READY)
+        self.assertEqual(binding.spec.required_identifier_namespaces, ("doi",))
+        self.assertFalse(binding.spec.requires_any_identifier)
+        self.assertIsInstance(binding.adapter, ConfiguredSciHubPdfSource)
+        source = cast(ConfiguredSciHubPdfSource, binding.adapter)
+        resolver = getattr(source, "_resolver")
+        self.assertEqual(
+            resolver.resolve((Identifier(namespace="doi", value="10.1234/fixture"),)),
+            (
+                "https://mirror-one.example/10.1234/fixture",
+                "https://mirror-two.example/base/10.1234/fixture",
+            ),
+        )
+        self.assertEqual(
+            resolver.resolve((Identifier(namespace="pmid", value="12345"),)),
+            (),
+        )
+
+    def test_stock_registry_uses_builtin_sci_hub_mirrors_without_custom_configuration(
+        self,
+    ) -> None:
+        dependencies, _client = _dependencies()
+        registry = build_acquisition_registry(_configuration(("sci-hub",)), dependencies)
+
+        binding = registry.route_registry.binding_for("public:sci-hub")
+        self.assertIs(binding.spec.readiness, RouteReadiness.READY)
+        self.assertIsInstance(binding.adapter, ConfiguredSciHubPdfSource)
+        source = cast(ConfiguredSciHubPdfSource, binding.adapter)
+        resolver = getattr(source, "_resolver")
+        self.assertEqual(
+            resolver.resolve((Identifier(namespace="doi", value="10.1234/fixture"),)),
+            (
+                "https://sci-hub.ru/10.1234/fixture",
+                "https://sci-hub.kr/10.1234/fixture",
+            ),
+        )
+
+        disabled = build_acquisition_registry(_configuration(()), dependencies)
+        self.assertNotIn(
+            "public:sci-hub",
+            tuple(binding.spec.route_key for binding in disabled.route_registry.bindings),
+        )
+
+    def test_injected_sci_hub_resolver_overrides_custom_and_builtin_mirrors(self) -> None:
+        injected = _ConfiguredLocatorResolver()
+        dependencies, _client = _dependencies(configured_resolver=injected)
+        registry = build_acquisition_registry(
+            _configuration(
+                ("sci-hub",),
+                sci_hub_urls=("https://mirror-one.example",),
+            ),
+            dependencies,
+        )
+
+        source = cast(
+            ConfiguredSciHubPdfSource,
+            registry.route_registry.binding_for("public:sci-hub").adapter,
+        )
+        self.assertIs(getattr(source, "_resolver"), injected)
 
     def test_direct_prefix_consumes_saved_hints_independent_of_current_provider_selection(
         self,
@@ -1076,7 +1220,6 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         )
         for providers, route_key in (
             (("unpaywall",), "public:unpaywall"),
-            (("sci-hub",), "public:sci-hub"),
             (("wiley",), "api:wiley-tdm-v1"),
         ):
             with self.subTest(providers=providers, route_key=route_key):
@@ -1172,6 +1315,46 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 replace(dependencies, browser_client=private_broker_browser),
             )
         self.assertEqual(caught.exception.code, "network-bypass")
+
+    def test_browser_controller_selection_freezes_one_shared_agent_runtime(self) -> None:
+        dependencies, _client = _dependencies()
+        browser = BrowserClient(
+            factory=lambda: object(),
+            resolver=_NeverResolver(),
+            coordinator=dependencies.access_coordinator,
+            session_broker=dependencies.browser_session_broker,
+            clock=lambda: 100.0,
+        )
+        runtime = _browser_agent_runtime()
+        agent_dependency = BrowserAgentDependency(runtime=runtime)
+
+        with self.assertRaisesRegex(ValueError, "Rules Browser controller"):
+            replace(dependencies, browser_agent=agent_dependency)
+        with self.assertRaisesRegex(ValueError, "requires a ready AgentRuntime"):
+            replace(
+                dependencies,
+                browser_controller=BrowserControllerKind.AGENT,
+            )
+
+        registry = build_acquisition_registry(
+            _configuration(("crossref",), browser_enabled=True),
+            replace(
+                dependencies,
+                browser_client=browser,
+                browser_controller=BrowserControllerKind.AGENT,
+                browser_agent=agent_dependency,
+            ),
+        )
+
+        for route_key in _BROWSER_ROUTE_KEYS:
+            adapter = registry.route_registry.binding_for(route_key).adapter
+            self.assertIsNotNone(adapter)
+            assert adapter is not None
+            self.assertIs(
+                getattr(adapter, "browser_controller"),
+                BrowserControllerKind.AGENT,
+            )
+            self.assertIs(getattr(adapter, "_agent_runtime"), runtime)
 
     def test_two_registries_share_the_process_http_client_and_coordinator(self) -> None:
         dependencies, client = _dependencies()

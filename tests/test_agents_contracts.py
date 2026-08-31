@@ -4,12 +4,12 @@ import unittest
 
 from pydantic import BaseModel, ValidationError
 
-from sciretriever.agents import (
+from sciretriever.agents.api import (
+    AgentCall,
     AgentCapability,
     AgentProvenance,
-    AgentRequest,
     AgentRole,
-    AgentStructuredResponse,
+    AgentStructuredResult,
     AgentTextPart,
 )
 from sciretriever.model.access import (
@@ -488,11 +488,10 @@ class AgentsModelTests(unittest.TestCase):
             parameters_sha256=_HASH,
         )
 
-    def _request(self) -> AgentRequest:
-        return AgentRequest(
+    def _call(self) -> AgentCall:
+        return AgentCall(
             role=AgentRole.ANALYSIS,
-            capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
-            model="fixture-model",
+            required_capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
             input_sha256=_HASH,
             text_parts=(
                 AgentTextPart(media_type="text/plain", text="instruction"),
@@ -503,22 +502,21 @@ class AgentsModelTests(unittest.TestCase):
         )
 
     def test_agents_contracts_are_neutral_bounded_and_round_trip(self) -> None:
-        request = self._request()
-        response = AgentStructuredResponse(
+        call = self._call()
+        response = AgentStructuredResult(
             result='{"outcome":"usable"}',
             provenance=self._provenance(),
         )
-        self.assertEqual(request.role, AgentRole.ANALYSIS)
-        self.assertEqual(request.structured_input, '{"document":"fixture"}')
+        self.assertEqual(call.role, AgentRole.ANALYSIS)
+        self.assertEqual(call.text_parts[-1].text, '{"document":"fixture"}')
         self.assertEqual(response.value, {"outcome": "usable"})
         self.assertEqual(response.provenance.provider, "fixture-provider")
 
     def test_agents_contracts_reject_business_kind_vendor_objects_and_secret_fields(self) -> None:
         with self.assertRaises((TypeError, ValueError)):
-            AgentRequest(
+            AgentCall(
                 role=AgentRole.ANALYSIS,
-                capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
-                model="fixture-model",
+                required_capabilities=frozenset({AgentCapability.STRUCTURED_TEXT}),
                 input_sha256=_HASH,
                 text_parts=(AgentTextPart(media_type="text/plain", text="instruction"),),
                 response_schema='{"type":"object","additionalProperties":false}',
@@ -526,8 +524,8 @@ class AgentsModelTests(unittest.TestCase):
                 kind="metadata",  # type: ignore[call-arg]
             )
         with self.assertRaises(ValueError):
-            AgentStructuredResponse(result='{"x":1,"x":2}', provenance=self._provenance())
-        self.assertNotIn("ACCESS-SECRET-SENTINEL", repr(self._request()))
+            AgentStructuredResult(result='{"x":1,"x":2}', provenance=self._provenance())
+        self.assertNotIn("ACCESS-SECRET-SENTINEL", repr(self._call()))
 
     def test_agents_provenance_has_only_neutral_identity_and_usage(self) -> None:
         self.assertEqual(
@@ -535,7 +533,7 @@ class AgentsModelTests(unittest.TestCase):
             {"provider", "model", "input_sha256", "parameters_sha256", "usage"},
         )
         self.assertEqual(
-            set(AgentStructuredResponse.__dataclass_fields__),
+            set(AgentStructuredResult.__dataclass_fields__),
             {"result", "provenance"},
         )
 

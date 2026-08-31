@@ -199,7 +199,7 @@ observation/result 的既有先后顺序，再按供应商返回顺序切成最�
 物理提交粒度，不合并 observation、端点、provenance 或后续待扩展单位，也不把整次 Provider
 的无界关系集合放入一个长事务。
 
-领域 DiscoveryRun 由 Entry 调用本次全部已启用且 readiness 通过的 Metadata Search Provider。明确启用但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过、匿名回退或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
+领域 DiscoveryRun 由 Entry 调用本次有效选择且 readiness 通过的全部 Metadata Search Provider。有效选择由纯本地 resolver 从 Auto 或 Custom 得到：Auto 是当前版本维护的默认安全集合，Custom 是用户精确顺序并允许为空；Key 和在线状态都不改变集合。明确选择但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过、凭据驱动启用或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
 
 Metadata 不判断一条 Provider 结果是否与用户领域语义相关，不调用 LLM 或 embedding，也不按搜索分数、标题关键词、摘要、连续低收益或其它主题启发式过滤和提前停止。非空标题或 DOI 任一存在就是当前最低入库边界；有实际内容但偏题的 Literature 仍可正常进入后续处理，不属于 `NoUsableContent`。
 
@@ -225,7 +225,7 @@ Scopus Search 的 offset 与 cursor 是两种分页合同：cursor 响应必须�
 adapter 会将它与本地已接收计数严格核对。Debug 只记录受控 envelope、字段存在位、disposition
 和中性 failure kind，不记录字段值、cursor、query 或响应正文。
 
-普通配置向 `sciretriever.bootstrap` 提供稳定 Provider key、能力启用状态、产品/database/edition、scan limit、非 secret 运行身份和 AccessPolicy；Provider secret 只由 `sciretriever.configuration` 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
+普通配置向 `sciretriever.bootstrap` 提供 Source mode、Custom Provider 顺序、产品/database/edition、逐 Source `limit`、非 secret 运行身份和 AccessPolicy；`configuration/source_selection.py` 只用版本常量解析 Auto，不访问 Network 或 credentials。当前 Metadata Auto 是 Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、DataCite、CORE 与 OpenCitations；Crossref 无子表时使用 anonymous，OpenCitations 不参加 topic search。Provider secret 只由 `sciretriever.configuration` 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
 
 `config status` 只读取 capability spec、普通配置和凭据字段存在性，不调用 Metadata API 或 Network。用户显式执行的 `config test` 可以复用 adapter 声明的最小 probe，但它通过 Bootstrap 的配置测试边界和统一 Network 执行，不伪装成 Metadata Search/Lookup，不产生 MetadataObservation、ProviderRelationObservation、DiscoveryRun、Report 或持久化结果。
 
@@ -239,9 +239,9 @@ Metadata 形成中性 observation 后，通过自己拥有的 publication Port �
 
 直接测试至少覆盖：
 
-- 目标领域搜索 Provider 矩阵按“项目目标、生产实现、用户启用、readiness”分层选择；OpenCitations 只参加精确 lookup/引用，不参加主题搜索；
+- 目标领域搜索 Provider 矩阵按“项目目标、Auto/Custom 有效选择、生产实现、readiness”分层选择；默认 Auto 集合与 Custom 精确/空列表均可离线确定，Key 不改变选择；OpenCitations 只参加精确 lookup/引用，不参加主题搜索；
 - 领域发现无需也不能按 publisher 预选 Provider，全部已启用且就绪的 search adapter 各自在自己的覆盖范围内执行；明确启用但 adapter、必需普通参数/凭据或 AccessPolicy 缺失时开始前失败；
-- 领域 DiscoveryRun 的每个启用 Provider 在整个 Run 内分别遵守自己的原始 scan limit，过滤、缺少标题/DOI、重复和未接纳 item 都消耗上限；结果耗尽或达到上限后正常停止，Provider cursor、过程计数、搜索分数、未接纳候选和请求/响应不进入 Model 或 Storage；
+- 领域 DiscoveryRun 把 `sources.metadata.limit` 分别应用给每个参与 Provider，过滤、缺少标题/DOI、重复和未接纳 item 都消耗本 Source 上限；默认是 500，结果耗尽或达到上限后正常停止，Provider cursor、过程计数、搜索分数、未接纳候选和请求/响应不进入 Model 或 Storage；
 - 接纳一条领域结果不会自动触发该 Literature 的全 Provider 精确补查、PDF、Parsing 或 Analysis，Metadata API 不接收 Collection 或 Batch 状态；
 - 新的 MetadataObservation 成功接纳时，在同一逻辑提交中清除对应 Literature 的自动 PDF 获取耗尽事实；重复幂等提交不制造 observation 或额外状态；
 - Metadata 不使用 LLM、embedding、score 阈值、标题关键词、摘要分类或低收益启发式判断领域相关性；偏题但有实际内容不被解释成 NoUsableContent；

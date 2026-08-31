@@ -255,10 +255,12 @@ if len(page.items) != 1:
     raise RuntimeError("topic discovery did not produce one concrete Literature")
 detail = literature.read_detail(page.items[0].literature.literature_id)
 
-configuration = root / "config.toml"
+configuration = Path.home() / ".sciretriever" / "config.toml"
+configuration.parent.mkdir(mode=0o700, exist_ok=True)
+configuration.parent.chmod(0o700)
 configuration.write_text(_configuration(catalog, artifacts), encoding="utf-8")
+configuration.chmod(0o600)
 environment = dict(os.environ)
-environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
 console = Path(sys.executable).with_name("sciretriever")
 completed = subprocess.run(
     (

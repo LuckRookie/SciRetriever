@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tests.acceptance.helpers.installed_wheel import REPOSITORY_ROOT, InstalledWheel
@@ -32,6 +36,43 @@ FORBIDDEN_COMMANDS = frozenset(
         "storage",
     }
 )
+
+
+class _ModelCatalogHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path != "/v1/models":
+            self.send_error(404)
+            return
+        payload = json.dumps(
+            {
+                "object": "list",
+                "data": [
+                    {"id": "acceptance-analysis"},
+                    {"id": "acceptance-browser"},
+                ],
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+@contextmanager
+def _model_catalog_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ModelCatalogHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5.0)
 
 
 def _positional_commands(help_text: str) -> set[str]:
@@ -173,7 +214,11 @@ class InstalledCliSurfaceTests(unittest.TestCase):
             (
                 "topic",
                 ("discover", "topic", "controlled offline query", "--json"),
-                "",
+                """
+[sources.metadata]
+mode = "custom"
+providers = []
+""",
                 "metadata-not-ready",
             ),
             (
@@ -186,17 +231,18 @@ class InstalledCliSurfaceTests(unittest.TestCase):
                     "--json",
                 ),
                 """
-[agents]
-provider = "openai"
-protocol = "openai-responses"
+[sources.metadata]
+mode = "custom"
+providers = []
+
+[providers.openai]
+api = "openai-responses"
 base_url = "https://api.openai.com/v1"
-authentication = "api-key"
-[agents.analysis]
-model = "controlled-offline-model"
-context_window_tokens = 128000
-max_output_tokens = 64
-structured_output = true
-[analysis]
+[models."openai/controlled-offline-model"]
+reasoning = "default"
+image = false
+[analyze]
+model = "openai/controlled-offline-model"
 reference_max_output_tokens = 64
 """,
                 "metadata-not-ready",
@@ -214,8 +260,7 @@ reference_max_output_tokens = 64
                 work.mkdir(mode=0o700)
                 catalog = work / "catalog.sqlite3"
                 artifacts = work / "artifacts"
-                configuration = work / "config.toml"
-                configuration.write_text(
+                self.install.write_user_configuration(
                     "\n".join(
                         (
                             "[paths]",
@@ -224,12 +269,9 @@ reference_max_output_tokens = 64
                             extra_configuration,
                         )
                     ),
-                    encoding="utf-8",
                 )
-                configuration.chmod(0o600)
                 result = self.install.run_console(
                     arguments,
-                    environment={"SCIRETRIEVER_CONFIG": os.fspath(configuration)},
                     cwd=work,
                 )
                 self.assertEqual(result.returncode, 4)
@@ -250,23 +292,20 @@ reference_max_output_tokens = 64
         work.mkdir(mode=0o700)
         catalog = work / "catalog.sqlite3"
         artifacts = work / "artifacts"
-        configuration = work / "config.toml"
-        configuration.write_text(
+        self.install.write_user_configuration(
             "\n".join(
                 (
                     "[paths]",
                     f"catalog_path = {json.dumps(os.fspath(catalog))}",
                     f"artifact_root = {json.dumps(os.fspath(artifacts))}",
                     "[sources.acquisition]",
+                    'mode = "custom"',
                     'providers = ["wiley"]',
                 )
             ),
-            encoding="utf-8",
         )
-        configuration.chmod(0o600)
         result = self.install.run_console(
             ("complete", "pdf", "--all-pending", "--json"),
-            environment={"SCIRETRIEVER_CONFIG": os.fspath(configuration)},
             cwd=work,
         )
         self.assertEqual(result.returncode, 0, result.stderr_text)
@@ -280,12 +319,9 @@ reference_max_output_tokens = 64
         assert root is not None
         work = root / "config-test-unready"
         work.mkdir(mode=0o700)
-        configuration = work / "config.toml"
-        configuration.write_text("", encoding="utf-8")
-        configuration.chmod(0o600)
+        self.install.write_user_configuration("")
         result = self.install.run_console(
             ("config", "test", "web-of-science", "--json"),
-            environment={"SCIRETRIEVER_CONFIG": os.fspath(configuration)},
             cwd=work,
         )
         self.assertEqual(result.returncode, 3)
@@ -312,14 +348,250 @@ reference_max_output_tokens = 64
         self.assertFalse((work / "catalog.sqlite3").exists())
         self.assertFalse((work / "artifacts").exists())
 
+    def test_config_manager_creates_the_fixed_user_configuration_on_first_edit(self) -> None:
+        root = self.install.root
+        assert root is not None
+        fresh_home = root / "fresh-config-home"
+        fresh_home.mkdir(mode=0o700)
+        work = root / "fresh-config-work"
+        work.mkdir(mode=0o700)
+        configuration = fresh_home / ".sciretriever" / "config.toml"
+        self.assertFalse(configuration.exists())
+
+        result = self.install.run_console(
+            ("config",),
+            stdin=b"s\n2\n600\ny\n3\nq\n",
+            environment={"HOME": os.fspath(fresh_home)},
+            cwd=work,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr_text)
+        self.assertEqual(result.stdout, b"")
+        self.assertTrue(configuration.is_file())
+        self.assertEqual(stat.S_IMODE(configuration.parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(configuration.stat().st_mode), 0o600)
+        self.assertIn("limit = 600", configuration.read_text(encoding="utf-8"))
+        self.assertIn(b"Search Limit was saved.", result.stderr)
+
+    def test_installed_config_manager_rejects_obsolete_config_without_writing(self) -> None:
+        root = self.install.root
+        assert root is not None
+        fresh_home = root / "incompatible-config-home"
+        private = fresh_home / ".sciretriever"
+        private.mkdir(mode=0o700, parents=True)
+        configuration = private / "config.toml"
+        configuration.write_bytes(b"[agents]\n")
+        configuration.chmod(0o600)
+        credentials = private / "credentials.toml"
+        secret = b"installed-legacy-secret-sentinel"
+        credentials_payload = (
+            b'[agents]\napi_key = "' + secret + b'"\norigin = "https://api.openai.com"\n'
+        )
+        credentials.write_bytes(credentials_payload)
+        credentials.chmod(0o600)
+
+        result = self.install.run_console(
+            ("config", "--theme", "mono"),
+            stdin=b"",
+            environment={"HOME": os.fspath(fresh_home)},
+            cwd=root,
+        )
+
+        self.assertEqual(result.returncode, 4, result.stderr_text)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(configuration.read_bytes(), b"[agents]\n")
+        self.assertEqual(credentials.read_bytes(), credentials_payload)
+        self.assertIn(b"configuration section is unknown", result.stderr)
+        self.assertNotIn(b"Reset", result.stderr)
+        self.assertNotIn(b"SciRetriever configuration center", result.stderr)
+        self.assertNotIn(secret, result.stderr)
+
+        configuration.write_bytes(b"")
+        credentials_result = self.install.run_console(
+            ("config", "--theme", "mono"),
+            stdin=b"",
+            environment={"HOME": os.fspath(fresh_home)},
+            cwd=root,
+        )
+
+        self.assertEqual(credentials_result.returncode, 4, credentials_result.stderr_text)
+        self.assertEqual(credentials_result.stdout, b"")
+        self.assertEqual(configuration.read_bytes(), b"")
+        self.assertEqual(credentials.read_bytes(), credentials_payload)
+        self.assertIn(b"credentials provider is unknown", credentials_result.stderr)
+        self.assertNotIn(b"SciRetriever configuration center", credentials_result.stderr)
+        self.assertNotIn(secret, credentials_result.stderr)
+
+    def test_installed_setup_discovers_and_selects_direct_models_from_a_fake_provider(
+        self,
+    ) -> None:
+        root = self.install.root
+        assert root is not None
+        fresh_home = root / "fresh-llm-setup-home"
+        fresh_home.mkdir(mode=0o700)
+        work = root / "fresh-llm-setup-work"
+        work.mkdir(mode=0o700)
+        environment = {"HOME": os.fspath(fresh_home)}
+
+        with _model_catalog_server() as base_url:
+            configured = self.install.run_console(
+                ("config",),
+                stdin=(
+                    "m\n"
+                    "1\n"
+                    "1\n"
+                    "4\n"
+                    f"{base_url}\n"
+                    "2\n"
+                    "1\n"
+                    "8\n"
+                    "2\n"
+                    "y\n"
+                    "1\n"
+                    "1\n"
+                    "2\n"
+                    "7\n"
+                    "1\n"
+                    "y\n"
+                    "5\n"
+                    "a\n"
+                    "1\n"
+                    "1\n"
+                    "2\n"
+                    "y\n"
+                    "4\n"
+                    "b\n"
+                    "1\n"
+                    "3\n"
+                    "1\n"
+                    "\n"
+                    "\n"
+                    "y\n"
+                    "y\n"
+                    "6\n"
+                    "q\n"
+                ).encode(),
+                environment=environment,
+                cwd=work,
+            )
+
+        self.assertEqual(configured.returncode, 0, configured.stderr_text)
+        self.assertEqual(configured.stdout, b"")
+        self.assertEqual(configured.stderr.count(b"Reading the Provider model list"), 2)
+        self.assertIn(b"Model 'local/acceptance-analysis' was saved", configured.stderr)
+        self.assertIn(b"Model 'local/acceptance-browser' was saved", configured.stderr)
+        self.assertIn(b"Analyze now uses 'local/acceptance-analysis'", configured.stderr)
+        self.assertIn(b"Browser Setup and the local Profile were saved", configured.stderr)
+        configuration = fresh_home / ".sciretriever" / "config.toml"
+        credentials = fresh_home / ".sciretriever" / "credentials.toml"
+        self.assertTrue(configuration.is_file())
+        self.assertFalse(credentials.exists())
+        rendered = configuration.read_text(encoding="utf-8")
+        self.assertIn("[providers.local]", rendered)
+        self.assertIn('api = "openai-chat-completions"', rendered)
+        self.assertIn('[models."local/acceptance-analysis"]', rendered)
+        self.assertIn('[models."local/acceptance-browser"]', rendered)
+        self.assertEqual(rendered.count('reasoning = "max"'), 1)
+        self.assertEqual(rendered.count('reasoning = "xhigh"'), 1)
+        self.assertIn("[analyze]", rendered)
+        self.assertIn('model = "local/acceptance-analysis"', rendered)
+        self.assertIn("[download]", rendered)
+        self.assertIn('model = "local/acceptance-browser"', rendered)
+        self.assertEqual(rendered.count("image = true"), 1)
+        for removed in (
+            "profiles",
+            "services",
+            "context_window_tokens",
+            "\nmax_output_tokens =",
+            "structured_output",
+            "tool_decision",
+            "image_count",
+            "image_bytes",
+        ):
+            self.assertNotIn(removed, rendered)
+
+        status = self.install.run_console(
+            ("config", "status", "--json"),
+            environment=environment,
+            cwd=work,
+        )
+        self.assertEqual(status.returncode, 0, status.stderr_text)
+        self.assertEqual(status.stderr, b"")
+        payload = json.loads(status.stdout)
+        self.assertEqual(
+            payload["analyze"]["selected_model"]["reasoning"],
+            "max",
+        )
+        self.assertFalse(payload["analyze"]["selected_model"]["image"])
+        self.assertEqual(
+            payload["download"]["selected_model"]["model"],
+            "acceptance-browser",
+        )
+        self.assertEqual(payload["download"]["selected_model"]["reasoning"], "xhigh")
+        self.assertTrue(payload["download"]["selected_model"]["image"])
+        self.assertFalse((work / "catalog.sqlite3").exists())
+        self.assertFalse((work / "artifacts").exists())
+
+    def test_business_command_ignores_legacy_environment_and_cwd_configuration(self) -> None:
+        root = self.install.root
+        assert root is not None
+        work = root / "fixed-configuration-selection"
+        work.mkdir(mode=0o700)
+        catalog = {
+            name: work / f"catalog-{name}.sqlite3" for name in ("fixed", "cwd", "environment")
+        }
+        artifacts = {name: work / f"artifacts-{name}" for name in ("fixed", "cwd", "environment")}
+
+        def payload(name: str) -> str:
+            return "\n".join(
+                (
+                    "[paths]",
+                    f"catalog_path = {json.dumps(os.fspath(catalog[name]))}",
+                    f"artifact_root = {json.dumps(os.fspath(artifacts[name]))}",
+                    "",
+                )
+            )
+
+        self.install.write_user_configuration(payload("fixed"))
+        cwd_configuration = work / "config.toml"
+        cwd_configuration.write_text(payload("cwd"), encoding="utf-8")
+        cwd_configuration.chmod(0o600)
+        environment_configuration = work / "legacy-environment-config.toml"
+        environment_configuration.write_text(payload("environment"), encoding="utf-8")
+        environment_configuration.chmod(0o600)
+
+        result = self.install.run_console(
+            ("literature", "search", "--json"),
+            environment={
+                "SCIRETRIEVER_CONFIG": os.fspath(environment_configuration),
+            },
+            cwd=work,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr_text)
+        self.assertEqual(result.stderr, b"")
+        self.assertIsInstance(json.loads(result.stdout), dict)
+        self.assertTrue(catalog["fixed"].is_file())
+        self.assertFalse(catalog["cwd"].exists())
+        self.assertFalse(catalog["environment"].exists())
+
     def test_config_manager_status_and_remove_use_only_the_temporary_home(self) -> None:
         environment = self.install.isolated_environment()
         home = Path(environment["HOME"]).resolve(strict=True)
         work = Path(environment["SCIRETRIEVER_ACCEPTANCE_ROOT"]) / "config-console"
         work.mkdir(mode=0o700)
-        configuration = work / "config.toml"
-        configuration.write_text("", encoding="utf-8")
-        configuration.chmod(0o600)
+        configuration = self.install.write_user_configuration(
+            """
+[sources.metadata]
+mode = "custom"
+providers = ["web-of-science"]
+
+[sources.metadata.web-of-science]
+product = "starter"
+database = "WOS"
+"""
+        )
+        self.assertEqual(configuration, home / ".sciretriever" / "config.toml")
         credentials = home / ".sciretriever" / "credentials.toml"
         catalog = work / "catalog.sqlite3"
         artifacts = work / "artifacts"
@@ -327,7 +599,7 @@ reference_max_output_tokens = 64
 
         created = self.install.run_console(
             ("config",),
-            stdin=("p\n1\n1\n" + secret + "\nq\nq\n").encode(),
+            stdin=("s\n1\n2\n2\n1\n" + secret + "\n3\n5\n13\n3\nq\n").encode(),
             environment=environment,
             cwd=work,
         )
@@ -335,14 +607,18 @@ reference_max_output_tokens = 64
         self.assertEqual(created.stdout, b"")
         self.assertNotIn(secret.encode(), created.stdout + created.stderr)
         self.assertIn(b"SciRetriever configuration center", created.stderr)
-        self.assertIn(b"LLM Analysis", created.stderr)
-        self.assertIn(b"MinerU Parser", created.stderr)
-        self.assertIn(b"Web of Science [web-of-science]", created.stderr)
-        self.assertIn(b"Set or update credentials", created.stderr)
-        self.assertIn(b"Remove credentials", created.stderr)
+        self.assertIn(b"Models", created.stderr)
+        self.assertIn(b"Search", created.stderr)
+        self.assertIn(b"Download", created.stderr)
+        self.assertIn(b"Parse", created.stderr)
+        self.assertIn(b"Analyze", created.stderr)
+        self.assertIn(b"Browser", created.stderr)
+        self.assertNotIn(b"Providers & API Keys", created.stderr)
+        self.assertNotIn(b"MinerU Parser", created.stderr)
+        self.assertIn("Source · web-of-science · Key".encode(), created.stderr)
+        self.assertIn(b"The key belongs to this Source", created.stderr)
         self.assertIn(b"https://developer.clarivate.com/", created.stderr)
         self.assertIn(b"were saved", created.stderr)
-        self.assertIn(b"Next steps:", created.stderr)
         self.assertTrue(credentials.is_file())
         self.assertEqual(stat.S_IMODE(credentials.parent.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(credentials.stat().st_mode), 0o600)
@@ -365,9 +641,10 @@ reference_max_output_tokens = 64
             {
                 "storage",
                 "providers",
+                "models",
+                "analyze",
+                "download",
                 "parsing",
-                "agents",
-                "analysis",
                 "execution",
                 "library",
             },
@@ -476,28 +753,12 @@ reference_max_output_tokens = 64
             "browser-disabled",
         )
         self.assertFalse(status_payload["parsing"]["locally_ready"])
-        self.assertFalse(status_payload["agents"]["content_locally_ready"])
-        self.assertEqual(
-            set(status_payload["agents"]["analysis_role"]),
-            {
-                "model",
-                "context_window_tokens",
-                "max_output_tokens",
-                "structured_output",
-                "image_input",
-                "tool_decision",
-                "locally_ready",
-                "required_capability",
-            },
-        )
-        self.assertEqual(
-            status_payload["agents"]["analysis_role"]["required_capability"],
-            "structured-text",
-        )
-        self.assertEqual(
-            status_payload["agents"]["browser_role"]["required_capabilities"],
-            ["image-input", "tool-decision"],
-        )
+        self.assertEqual(status_payload["models"], {"providers": [], "models": []})
+        self.assertIsNone(status_payload["analyze"]["model"])
+        self.assertIsNone(status_payload["analyze"]["selected_model"])
+        self.assertFalse(status_payload["analyze"]["content_locally_ready"])
+        self.assertIsNone(status_payload["download"]["model"])
+        self.assertIsNone(status_payload["download"]["selected_model"])
         self.assertFalse(catalog.exists())
         self.assertFalse(artifacts.exists())
         assert home is not None
@@ -539,26 +800,26 @@ reference_max_output_tokens = 64
 
         removed = self.install.run_console(
             ("config",),
-            stdin=b"p\n1\n2\ny\nq\nq\n",
+            stdin=b"s\n1\n2\n2\n2\ny\n3\n5\n13\n3\nq\n",
             environment=environment,
             cwd=work,
         )
         self.assertEqual(removed.returncode, 0, removed.stderr_text)
         self.assertEqual(removed.stdout, b"")
         self.assertIn(b"Remove credentials for web-of-science?", removed.stderr)
-        self.assertIn(b"were removed", removed.stderr)
+        self.assertIn(b"Source credentials were removed", removed.stderr)
         self.assertNotIn(secret.encode(), removed.stdout + removed.stderr)
         self.assertNotIn(secret.encode(), credentials.read_bytes())
 
         missing = self.install.run_console(
             ("config",),
-            stdin=b"p\n1\n2\nq\nq\n",
+            stdin=b"s\n1\n2\n2\n2\n3\n5\n13\n3\nq\n",
             environment=environment,
             cwd=work,
         )
         self.assertEqual(missing.returncode, 0, missing.stderr_text)
         self.assertEqual(missing.stdout, b"")
-        self.assertIn(b"is not configured; nothing changed", missing.stderr)
+        self.assertIn(b"No credential is saved for this Source", missing.stderr)
         self.assertNotIn(b"Remove credentials for web-of-science?", missing.stderr)
         self.assertFalse(catalog.exists())
         self.assertFalse(artifacts.exists())
@@ -577,16 +838,14 @@ reference_max_output_tokens = 64
             assert install.root is not None
             work = install.root / "config-core-services"
             work.mkdir(mode=0o700)
-            configuration = work / "config.toml"
-            configuration.write_text(_core_service_configuration(), encoding="utf-8")
-            configuration.chmod(0o600)
-            environment["SCIRETRIEVER_CONFIG"] = os.fspath(configuration)
+            install.write_user_configuration(_core_service_configuration())
             credentials_directory = home / ".sciretriever"
-            credentials_directory.mkdir(mode=0o700)
+            credentials_directory.mkdir(mode=0o700, exist_ok=True)
+            credentials_directory.chmod(0o700)
             credentials = credentials_directory / "credentials.toml"
             secret = "installed-core-secret-sentinel"
             credentials.write_text(
-                f'[agents]\napi_key = "{secret}"\norigin = "https://api.openai.com"\n',
+                f'[providers.openai]\napi_key = "{secret}"\norigin = "https://api.openai.com"\n',
                 encoding="utf-8",
             )
             credentials.chmod(0o600)
@@ -601,11 +860,14 @@ reference_max_output_tokens = 64
             self.assertNotIn(b"\x1b[", status_json.stdout)
             self.assertNotIn(secret.encode(), status_json.stdout)
             status_payload = json.loads(status_json.stdout)
-            self.assertTrue(status_payload["agents"]["reference_locally_ready"])
+            self.assertTrue(status_payload["analyze"]["reference_locally_ready"])
             self.assertEqual(
-                status_payload["agents"]["api_key"],
+                status_payload["analyze"]["selected_model"]["reasoning"],
+                "medium",
+            )
+            self.assertEqual(
+                status_payload["models"]["providers"][0]["key"],
                 {
-                    "source": "credentials.toml",
                     "required": True,
                     "configured": True,
                     "origin_matches": True,
@@ -623,8 +885,9 @@ reference_max_output_tokens = 64
             self.assertEqual(status_human.stderr, b"")
             self.assertNotIn(b"\x1b[", status_human.stdout)
             self.assertNotIn(secret.encode(), status_human.stdout)
-            self.assertIn(b"LLM Analysis", status_human.stdout)
-            self.assertIn(b"MinerU Parser", status_human.stdout)
+            self.assertIn(b"Models, Analyze, Download and Parse", status_human.stdout)
+            self.assertIn(b"reasoning medium", status_human.stdout)
+            self.assertIn(b"Parse", status_human.stdout)
 
             llm = install.run_console(
                 ("config", "test", "llm", "--json"),
@@ -697,9 +960,11 @@ reference_max_output_tokens = 64
 def _core_service_configuration() -> str:
     return """
 [sources.metadata]
+mode = "custom"
 providers = []
 
 [sources.acquisition]
+mode = "custom"
 providers = []
 
 [parsing]
@@ -708,17 +973,14 @@ connection_mode = "loopback"
 model_identity = "mineru-3.4.4-vlm"
 remote_upload_authorized = false
 
-[agents]
-provider = "openai"
-protocol = "openai-responses"
+[providers.openai]
+api = "openai-responses"
 base_url = "https://api.openai.com/v1"
-authentication = "api-key"
-[agents.analysis]
-model = "acceptance-model"
-context_window_tokens = 2000000
-max_output_tokens = 4096
-structured_output = true
-[analysis]
+[models."openai/acceptance-model"]
+reasoning = "medium"
+image = false
+[analyze]
+model = "openai/acceptance-model"
 metadata_max_output_tokens = 1024
 content_max_output_tokens = 4096
 reference_max_output_tokens = 1024

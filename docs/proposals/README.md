@@ -23,4 +23,4 @@ created = "YYYY-MM-DD"
 
 提案一旦确认方向、完成实施、被拒绝或被替代，应及时移入 `docs/archive/<日期-主题>/`，不得继续留在本目录。被接受的长期决策必须先同步到 `docs/architecture/` 或 ADR；当前用户行为必须同步到项目 `README` 和用户教程。
 
-实施计划由 OMO 写入 `.omo/plans/`，不放在 `docs/`，也不归档为项目文档。
+获准实施后，需要跨阶段恢复的实施计划写入 [`../plans/`](../plans/)；Proposal 不兼任执行台账。

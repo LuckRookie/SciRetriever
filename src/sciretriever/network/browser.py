@@ -34,6 +34,7 @@ from sciretriever.model.access import (
     BrowserRequest,
     BrowserResult,
 )
+from sciretriever.model.primitives import sha256_digest
 
 from .admission import (
     AccessCancelled,
@@ -45,16 +46,31 @@ from .admission import (
     HostPermit,
 )
 from .browser_control import (
-    BrowserAgentActionCommand,
-    BrowserAgentActionKind,
-    BrowserAgentActionPort,
-    BrowserAgentObservation,
+    BrowserAction,
+    BrowserActionKind,
+    BrowserActionOutcome,
+    BrowserActionReceipt,
+    BrowserAgentStatus,
+    BrowserBounds,
     BrowserCaptureState,
+    BrowserControlSession,
     BrowserElement,
     BrowserElementState,
-    BrowserObservationBudget,
+    BrowserObservation,
     BrowserObservationLedger,
+    BrowserPageState,
+    BrowserScreenshot,
+    BrowserScrollState,
+    BrowserSurface,
+    BrowserSurfaceKind,
     BrowserViewport,
+    ClickElement,
+    ClickPoint,
+    GoBack,
+    ScrollSurface,
+    Stop,
+    WaitForChange,
+    semantic_page_fingerprint,
 )
 from .browser_sessions import (
     BrowserSessionBroker,
@@ -78,16 +94,9 @@ BrowserFactory: TypeAlias = Callable[..., object]
 
 _DEFAULT_TIMEOUT_SECONDS: Final[float] = 60.0
 _DEFAULT_MAX_RESPONSE_BYTES: Final[int] = 16 * 1024 * 1024
-_DEFAULT_MAX_NAVIGATIONS: Final[int] = 16
-_DEFAULT_MAX_REQUESTS: Final[int] = 256
-_DEFAULT_MAX_POPUPS: Final[int] = 8
-_DEFAULT_MAX_DOWNLOADS: Final[int] = 4
-_DEFAULT_MAX_CAPTURES: Final[int] = 4
-_DEFAULT_MAX_BYTES_PER_DOWNLOAD: Final[int] = 64 * 1024 * 1024
-_DEFAULT_MAX_TOTAL_BYTES: Final[int] = 128 * 1024 * 1024
-_DEFAULT_MAX_ACTION_WAIT_SECONDS: Final[float] = 10.0
-_DEFAULT_MAX_CAPTURE_WAIT_SECONDS: Final[float] = 10.0
-_DEFAULT_MAX_TOTAL_SECONDS: Final[float] = 60.0
+_DEFAULT_MAX_CAPTURE_BYTES: Final[int] = 64 * 1024 * 1024
+_DEFAULT_ACTION_TIMEOUT_SECONDS: Final[float] = 10.0
+_DEFAULT_CAPTURE_WAIT_TIMEOUT_SECONDS: Final[float] = 10.0
 _DEFAULT_CLEANUP_TIMEOUT_SECONDS: Final[float] = 5.0
 _MARKER_LOOKUP_TIMEOUT_MILLISECONDS: Final[int] = 250
 _MAX_DISCOVERED_PDF_LOCATORS: Final[int] = 16
@@ -106,6 +115,14 @@ _CHALLENGE_MARKERS = (
     "security check",
 )
 _LOGGER = get_logger(__name__)
+
+
+def _control_id(prefix: str, *parts: object) -> str:
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(str(part).encode("utf-8"))
+        digest.update(b"\0")
+    return f"{prefix}{digest.hexdigest()[:24]}"
 
 
 class BrowserError(RuntimeError):
@@ -211,63 +228,6 @@ class BrowserRequestObservation:
             raise TypeError("capture_kind must be a BrowserCaptureKind or None")
 
 
-@dataclass(frozen=True, slots=True, repr=False)
-class BrowserChallengeResourceFacts:
-    """Payload-free resource facts for one Browser challenge dependency.
-
-    Network records only aggregate counts.  It deliberately does not expose
-    the challenge URL, response body, headers, token or a Browser vendor
-    object.  Acquisition can use these facts to distinguish a local policy
-    block from a challenge that is still settling, while Publisher rules keep
-    ownership of the actual page classification.
-    """
-
-    admitted_count: int = 0
-    blocked_count: int = 0
-    pending_count: int = 0
-
-    def __post_init__(self) -> None:
-        for name in ("admitted_count", "blocked_count", "pending_count"):
-            value = getattr(self, name)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer")
-
-    @property
-    def resource_blocked(self) -> bool:
-        return self.blocked_count > 0
-
-    @property
-    def loading(self) -> bool:
-        return self.pending_count > 0
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class BrowserChallengeObservation:
-    """One bounded snapshot used by the Acquisition challenge lifecycle."""
-
-    page: BrowserPageObservation
-    resources: BrowserChallengeResourceFacts
-    capture_count: int = 0
-    settled: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.page, BrowserPageObservation):
-            raise TypeError("page must be a BrowserPageObservation")
-        if not isinstance(self.resources, BrowserChallengeResourceFacts):
-            raise TypeError("resources must be BrowserChallengeResourceFacts")
-        if type(self.capture_count) is not int or self.capture_count < 0:
-            raise ValueError("capture_count must be a non-negative integer")
-        if type(self.settled) is not bool:
-            raise TypeError("settled must be a bool")
-
-
-@runtime_checkable
-class BrowserChallengeFactsProvider(Protocol):
-    """Optional neutral hook implemented by a rule guard/runtime state."""
-
-    def challenge_resource_facts(self) -> BrowserChallengeResourceFacts: ...
-
-
 @runtime_checkable
 class BrowserRequestGuard(Protocol):
     """Optional rule hook for context-sensitive dependency admission."""
@@ -336,7 +296,7 @@ class BrowserFlowSession(Protocol):
 
     def observe(self) -> BrowserPageObservation: ...
 
-    def agent_action_port(self) -> BrowserAgentActionPort: ...
+    def control_session(self) -> BrowserControlSession: ...
 
 
 @runtime_checkable
@@ -381,38 +341,17 @@ class BrowserPageObservation:
 
 
 @dataclass(frozen=True, slots=True)
-class BrowserBudget:
-    """Hard per-flow Browser resource limits."""
+class BrowserOperationLimits:
+    """Objective limits applied independently to one Browser operation."""
 
-    max_navigations: int = _DEFAULT_MAX_NAVIGATIONS
-    max_requests: int = _DEFAULT_MAX_REQUESTS
-    max_popups: int = _DEFAULT_MAX_POPUPS
-    max_downloads: int = _DEFAULT_MAX_DOWNLOADS
-    max_captures: int = _DEFAULT_MAX_CAPTURES
-    max_bytes_per_download: int = _DEFAULT_MAX_BYTES_PER_DOWNLOAD
-    max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES
-    max_action_wait_seconds: float = _DEFAULT_MAX_ACTION_WAIT_SECONDS
-    max_capture_wait_seconds: float = _DEFAULT_MAX_CAPTURE_WAIT_SECONDS
-    max_total_seconds: float = _DEFAULT_MAX_TOTAL_SECONDS
+    max_capture_bytes: int = _DEFAULT_MAX_CAPTURE_BYTES
+    action_timeout_seconds: float = _DEFAULT_ACTION_TIMEOUT_SECONDS
+    capture_wait_timeout_seconds: float = _DEFAULT_CAPTURE_WAIT_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
-        for name in (
-            "max_navigations",
-            "max_requests",
-            "max_popups",
-            "max_downloads",
-            "max_captures",
-            "max_bytes_per_download",
-            "max_total_bytes",
-        ):
-            value = getattr(self, name)
-            if type(value) is not int or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
-        for name in (
-            "max_action_wait_seconds",
-            "max_capture_wait_seconds",
-            "max_total_seconds",
-        ):
+        if type(self.max_capture_bytes) is not int or self.max_capture_bytes <= 0:
+            raise ValueError("max_capture_bytes must be a positive integer")
+        for name in ("action_timeout_seconds", "capture_wait_timeout_seconds"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise TypeError(f"{name} must be a number")
@@ -433,19 +372,53 @@ class _Usage:
 
 
 @dataclass(slots=True)
-class _AgentPageState:
-    """Operation-local Browser Agent page ledger.
+class _ControlState:
+    """Operation-local unified Browser control ledger.
 
-    Only the opaque element mapping and bounded neutral snapshot are retained;
-    Playwright handles and selectors remain in the private page adapter.  The
-    mapping is invalidated whenever the bounded DOM fingerprint changes.
+    Vendor page/surface/element keys remain private to Network.  Only opaque
+    request-local ids and the current neutral snapshot cross the control seam.
     """
 
-    page_token: str
+    article_token: str
     ledger: BrowserObservationLedger = field(default_factory=BrowserObservationLedger)
     fingerprint: bytes | None = None
-    element_keys: dict[str, int] = field(default_factory=dict)
-    observation: BrowserAgentObservation | None = None
+    page_keys: dict[str, object] = field(default_factory=dict)
+    surface_keys: dict[str, tuple[object, int]] = field(default_factory=dict)
+    element_keys: dict[str, tuple[object, int]] = field(default_factory=dict)
+    rule_element_selectors: dict[str, str] = field(default_factory=dict)
+    observation: BrowserObservation | None = None
+    agent_status: BrowserAgentStatus = BrowserAgentStatus.RUNNING
+    last_receipt: BrowserActionReceipt | None = None
+
+    def clear(self) -> None:
+        """Release every neutral snapshot and private vendor binding."""
+
+        self.ledger.invalidate()
+        self.fingerprint = None
+        self.page_keys.clear()
+        self.surface_keys.clear()
+        self.element_keys.clear()
+        self.rule_element_selectors.clear()
+        self.observation = None
+        self.last_receipt = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ControlSurfaceFact:
+    key: int
+    parent_key: int | None
+    kind: BrowserSurfaceKind
+    origin: str
+    path: str
+    title: str
+    x: float
+    y: float
+    width: float
+    height: float
+    scroll_x: float
+    scroll_y: float
+    maximum_x: float
+    maximum_y: float
 
 
 class _Abort(Exception):
@@ -605,9 +578,8 @@ def _failure(code: str) -> AccessFailure:
         "policy": ("browser destination was rejected", "check the configured web policy", False),
         "admission": ("browser access admission failed", "retry after access is available", True),
         "cancelled": ("browser operation was cancelled", "retry the operation", True),
-        "timeout": ("browser operation timed out", "retry with a larger time budget", True),
-        "budget": ("browser resource budget was exceeded", "reduce the page scope", False),
-        "oversize": ("browser download exceeded its byte budget", "use a smaller resource", False),
+        "timeout": ("browser operation timed out", "retry after checking the operation", True),
+        "oversize": ("browser capture exceeded its byte limit", "use a smaller resource", False),
         "challenge": (
             "browser access challenge was not supported",
             "use an approved source",
@@ -755,12 +727,10 @@ class _FlowState:
         "capture_guard",
         "navigation_only",
         "discard_unapproved_subresources",
-        "budget",
+        "limits",
         "clock",
-        "started_at",
-        "deadline",
+        "operation_timeout_seconds",
         "cancel_event",
-        "max_bytes_per_download",
         "cleanup_timeout_seconds",
         "usage",
         "policy_rejection",
@@ -792,7 +762,7 @@ class _FlowState:
         "verified_locators",
         "captures",
         "capture_digests",
-        "agent_pages",
+        "control",
         "error",
     )
 
@@ -806,11 +776,10 @@ class _FlowState:
         capture_guard: BrowserCaptureGuard | None,
         navigation_only: bool,
         discard_unapproved_subresources: bool,
-        budget: BrowserBudget,
+        limits: BrowserOperationLimits,
         clock: Clock,
-        deadline: float,
+        operation_timeout_seconds: float,
         cancel_event: threading.Event | None,
-        max_bytes_per_download: int,
         cleanup_timeout_seconds: float,
     ) -> None:
         self.scope_permit = scope_permit
@@ -821,12 +790,10 @@ class _FlowState:
         self.capture_guard = capture_guard
         self.navigation_only = navigation_only
         self.discard_unapproved_subresources = discard_unapproved_subresources
-        self.budget = budget
+        self.limits = limits
         self.clock = clock
-        self.started_at = clock()
-        self.deadline = deadline
+        self.operation_timeout_seconds = operation_timeout_seconds
         self.cancel_event = cancel_event
-        self.max_bytes_per_download = max_bytes_per_download
         self.cleanup_timeout_seconds = cleanup_timeout_seconds
         self.usage = _Usage()
         self.policy_rejection = False
@@ -858,7 +825,8 @@ class _FlowState:
         self.verified_locators: set[str] = set()
         self.captures: list[BrowserCapture] = []
         self.capture_digests: set[bytes] = set()
-        self.agent_pages: dict[int, _AgentPageState] = {}
+        article_digest = hashlib.sha256(f"{id(self)}".encode("ascii")).hexdigest()[:24]
+        self.control = _ControlState(article_token=f"a{article_digest}")
         self.error: _Abort | None = None
 
     def check(self) -> None:
@@ -869,15 +837,10 @@ class _FlowState:
                 raise _Abort("cancelled")
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise _Abort("cancelled")
-        if self.clock() >= self.deadline:
-            raise _Abort("timeout")
 
-    def remaining_milliseconds(self) -> int:
+    def operation_timeout_milliseconds(self) -> int:
         self.check()
-        remaining = self.deadline - self.clock()
-        if remaining <= 0:
-            raise _Abort("timeout")
-        return max(1, int(remaining * 1000))
+        return max(1, int(self.operation_timeout_seconds * 1000))
 
     def fail(self, code: str) -> None:
         with self.condition:
@@ -948,6 +911,7 @@ class _FlowState:
             self.pages.clear()
             self.downloads.clear()
             self.streams.clear()
+            self.control.clear()
             return pages, downloads, streams
 
     def claim_cleanup(self, value: object) -> bool:
@@ -970,7 +934,7 @@ class _FlowState:
             self.condition.notify_all()
 
     def wait_for_tasks(self, deadline: float) -> bool:
-        """Wait within the local cleanup budget; never use Provider clocks."""
+        """Wait within the local cleanup timeout; never use Provider clocks."""
 
         while True:
             with self.condition:
@@ -988,7 +952,7 @@ class _FlowState:
                 self.mark_cleanup_failure()
                 return False
             # A vendor task may not signal this condition directly, so poll a
-            # short bounded interval while retaining one total cleanup budget.
+            # short bounded interval while retaining one cleanup timeout.
             time.sleep(min(remaining, 0.01))
 
     def begin_cleanup(self) -> bool:
@@ -1014,7 +978,7 @@ class _FlowState:
                 self.condition.wait(timeout=min(remaining, 0.01))
             return not self.cleanup_failed
 
-    def consume(
+    def record_usage(
         self,
         *,
         navigations: int = 0,
@@ -1032,25 +996,6 @@ class _FlowState:
             self.usage.downloads += downloads
             self.usage.captures += captures
             self.usage.total_bytes += total_bytes
-            limits = (
-                ("navigations", self.usage.navigations, self.budget.max_navigations, "budget"),
-                ("requests", self.usage.requests, self.budget.max_requests, "budget"),
-                ("popups", self.usage.popups, self.budget.max_popups, "budget"),
-                ("downloads", self.usage.downloads, self.budget.max_downloads, "budget"),
-                ("captures", self.usage.captures, self.budget.max_captures, "budget"),
-                ("total-bytes", self.usage.total_bytes, self.budget.max_total_bytes, "oversize"),
-            )
-            for resource, used, limit, code in limits:
-                if used <= limit:
-                    continue
-                _LOGGER.debug(
-                    "event=browser-budget-exceeded resource=%s used=%d limit=%d code=%s",
-                    resource,
-                    used,
-                    limit,
-                    code,
-                )
-                raise _Abort(code)
 
     def record_request(self, *, admitted: bool) -> None:
         """Record safe aggregate route facts without retaining locators."""
@@ -1084,101 +1029,6 @@ class _FlowState:
             if self.policy_rejection_after_operation:
                 raise _Abort("policy")
 
-    def challenge_resource_facts(self) -> BrowserChallengeResourceFacts:
-        """Return aggregate challenge-resource facts from the closed guard.
-
-        The guard is intentionally optional: ordinary Browser rules do not
-        declare a challenge dependency and therefore expose an empty fact
-        set.  A malformed optional hook is a runtime contract failure rather
-        than a reason to guess that resources were safe.
-        """
-
-        guard = self.destination_guard
-        provider = guard if isinstance(guard, BrowserChallengeFactsProvider) else None
-        if provider is None:
-            return BrowserChallengeResourceFacts(
-                pending_count=self._pending_request_count(),
-            )
-        try:
-            facts = provider.challenge_resource_facts()
-        except Exception as error:
-            raise _Abort("runtime") from error
-        if not isinstance(facts, BrowserChallengeResourceFacts):
-            raise _Abort("runtime")
-        pending = self._pending_request_count()
-        return BrowserChallengeResourceFacts(
-            admitted_count=facts.admitted_count,
-            blocked_count=facts.blocked_count,
-            pending_count=pending,
-        )
-
-    def _pending_request_count(self) -> int:
-        with self.lock:
-            return len(self.request_leases)
-
-    def challenge_observation(self, page: object) -> BrowserChallengeObservation:
-        """Build a safe, request-local challenge snapshot for Acquisition."""
-
-        locator = _text_attribute(page, "url")
-        if locator is None or _is_internal_url(locator):
-            raise _Abort("runtime")
-        policy_locator = _policy_url(locator)
-        try:
-            normalized = normalize_url(
-                policy_locator,
-                allowed_schemes=self.destination_policy.allowed_schemes,
-                allowed_ports=self.destination_policy.allowed_ports,
-            )
-        except (PolicyError, TypeError, ValueError) as error:
-            raise _Abort("policy") from error
-        self.guard(normalized.url, BrowserDestinationKind.RESPONSE)
-        page_observation = BrowserPageObservation(
-            locator=normalized.url,
-            status_code=self.page_statuses.get(id(page)),
-        )
-        resources = self.challenge_resource_facts()
-        with self.lock:
-            captures = len(self.captures)
-        return BrowserChallengeObservation(
-            page=page_observation,
-            resources=resources,
-            capture_count=captures,
-            settled=resources.pending_count == 0,
-        )
-
-    def wait_for_challenge_settle(
-        self,
-        page: object,
-        timeout_seconds: float,
-    ) -> BrowserChallengeObservation:
-        """Wait for a short quiet window without sleeping past the article budget."""
-
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
-            raise _Abort("policy")
-        timeout = float(timeout_seconds)
-        if timeout <= 0 or timeout != timeout or timeout == float("inf"):
-            raise _Abort("policy")
-        started = self.clock()
-        deadline = min(self.deadline, started + timeout)
-        stable_polls = 0
-        latest: BrowserChallengeObservation | None = None
-        while True:
-            self.check()
-            latest = self.challenge_observation(page)
-            if latest.resources.resource_blocked:
-                return latest
-            if latest.settled:
-                stable_polls += 1
-                if stable_polls >= 2:
-                    return latest
-            else:
-                stable_polls = 0
-            remaining = deadline - self.clock()
-            if remaining <= 0:
-                return latest
-            with self.condition:
-                self.condition.wait(timeout=min(remaining, 0.05))
-
     def allows_capture(
         self,
         locator: str,
@@ -1205,7 +1055,7 @@ class _FlowState:
             raise _Abort("runtime")
         if not isinstance(body, bytes) or not isinstance(media_type, str):
             raise _Abort("runtime")
-        self.consume(total_bytes=len(body))
+        self.record_usage(total_bytes=len(body))
         digest = hashlib.sha256(body).digest()
         capture = BrowserCapture(
             kind=kind,
@@ -1219,8 +1069,6 @@ class _FlowState:
         with self.condition:
             if digest in self.capture_digests:
                 return
-            if self.usage.captures >= self.budget.max_captures:
-                raise _Abort("budget")
             self.usage.captures += 1
             self.capture_digests.add(digest)
             self.captures.append(capture)
@@ -1240,13 +1088,10 @@ class _FlowState:
         ):
             raise _Abort("policy")
         started_at = self.clock()
-        settle_deadline = min(
-            self.deadline,
-            started_at + self.budget.max_capture_wait_seconds,
-        )
+        settle_deadline = started_at + self.limits.capture_wait_timeout_seconds
         _LOGGER.debug(
             "event=browser-capture-wait-started max_wait_seconds=%.3f",
-            self.budget.max_capture_wait_seconds,
+            self.limits.capture_wait_timeout_seconds,
         )
         with self.condition:
             while not any(capture.kind in kinds for capture in self.captures):
@@ -1276,6 +1121,7 @@ class _FlowState:
 
         if type(prior_capture_count) is not int or prior_capture_count < 0:
             raise _Abort("runtime")
+        wait_deadline = self.clock() + self.operation_timeout_seconds
         with self.condition:
             while True:
                 if self.error is not None:
@@ -1287,7 +1133,7 @@ class _FlowState:
                 if not navigation_active:
                     return
                 self.check()
-                remaining = self.deadline - self.clock()
+                remaining = wait_deadline - self.clock()
                 if remaining <= 0:
                     raise _Abort("timeout")
                 self.condition.wait(timeout=min(remaining, 0.25))
@@ -1465,7 +1311,7 @@ class _FlowState:
                 destination.hostname,
                 host_policy=self.host_policy,
                 cancel_event=self.cancel_event,
-                timeout=max(self.deadline - self.clock(), 0.001),
+                timeout=self.operation_timeout_seconds,
             )
         except AccessCancelled as error:
             code = "cancelled"
@@ -1494,6 +1340,7 @@ class _FlowState:
         self,
         hostname: str,
     ) -> tuple[_ArticleHostLease, HostPermit | None]:
+        wait_deadline = self.clock() + self.operation_timeout_seconds
         with self.condition:
             while True:
                 self.check()
@@ -1510,7 +1357,7 @@ class _FlowState:
                     raise _Abort(lease.error_code)
                 if not lease.acquiring:
                     raise _Abort("cleanup")
-                remaining = self.deadline - self.clock()
+                remaining = wait_deadline - self.clock()
                 if remaining <= 0:
                     raise _Abort("timeout")
                 self.condition.wait(timeout=min(remaining, 0.25))
@@ -1678,8 +1525,6 @@ class _FlowState:
         lease: _RequestLease,
     ) -> None:
         with self.lock:
-            if len(self.pending_local_downloads) >= self.budget.max_downloads:
-                raise _Abort("budget")
             self.pending_local_downloads.append(
                 _PendingLocalDownload(
                     destination=destination,
@@ -1814,25 +1659,9 @@ class _FlowState:
                 self.mark_cleanup_failure()
         return failed
 
-    def check_challenge(self, page: object, response: object | None = None) -> None:
-        """Honor only an explicit runtime abort, not generic page text.
 
-        Page challenge/paywall/login classification belongs to Acquisition's
-        reviewed Publisher markers.  Scanning title/body here used to abort a
-        page before its approved challenge resources could settle and also
-        misclassified ordinary ``access denied`` pages.  The explicit
-        ``challenge`` flag is retained as a narrow vendor/runtime fail-closed
-        signal for legacy adapters and offline fixtures.
-        """
-
-        del response
-        challenge = _attribute(page, "challenge")
-        if challenge is True:
-            raise _Abort("challenge")
-
-
-class _BrowserAgentActionPort:
-    """Request-local neutral Agent action port over one private page lane."""
+class _BrowserControlSession:
+    """Request-local neutral control capability over one private article."""
 
     __slots__ = ("_client", "_state", "_page")
 
@@ -1841,20 +1670,24 @@ class _BrowserAgentActionPort:
         self._state = state
         self._page = page
 
-    def observe(self) -> BrowserAgentObservation:
-        return self._client._client_agent_observe(self._state, self._page)
+    def observe(self, *, page_state: BrowserPageState) -> BrowserObservation:
+        return self._client._client_control_observe(
+            self._state,
+            self._page,
+            page_state=page_state,
+        )
 
     def execute(
         self,
-        command: BrowserAgentActionCommand,
-        observation: BrowserAgentObservation,
+        action: BrowserAction,
+        observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> None:
-        self._client._client_agent_execute(
+    ) -> BrowserActionReceipt:
+        return self._client._client_control_execute(
             self._state,
             self._page,
-            command,
+            action,
             observation,
             timeout_seconds=timeout_seconds,
         )
@@ -1865,7 +1698,7 @@ class _BrowserSession:
 
     The flow receives operations, never a page/context/process/route or event
     object.  Operation implementations stay in this module so every action
-    reuses the same timeout, cancellation, budget, policy and admission
+    reuses the same operation limits, cancellation, policy and admission
     boundary.  The callable slots intentionally hold closures instead of
     vendor objects, keeping the public flow surface narrow.
     """
@@ -1884,9 +1717,7 @@ class _BrowserSession:
         "_capture_available_operation",
         "_wait_for_capture_operation",
         "_wait_for_any_capture_operation",
-        "_challenge_observation_operation",
-        "_wait_for_challenge_settle_operation",
-        "_agent_action_port_operation",
+        "_control_session_operation",
     )
 
     def __init__(self, client: BrowserClient, state: _FlowState, page: object) -> None:
@@ -1911,12 +1742,7 @@ class _BrowserSession:
         self._capture_available_operation = lambda kind: state.capture_available(kind)
         self._wait_for_capture_operation = lambda kind: state.wait_for_capture(kind)
         self._wait_for_any_capture_operation = lambda kinds: state.wait_for_any_capture(kinds)
-        self._challenge_observation_operation = lambda: state.challenge_observation(page)
-        self._wait_for_challenge_settle_operation = lambda timeout: state.wait_for_challenge_settle(
-            page,
-            timeout,
-        )
-        self._agent_action_port_operation = lambda: _BrowserAgentActionPort(client, state, page)
+        self._control_session_operation = lambda: _BrowserControlSession(client, state, page)
 
     def navigate(self, url: str) -> None:
         self._navigate_operation(url)
@@ -1957,20 +1783,10 @@ class _BrowserSession:
     def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
         self._wait_for_any_capture_operation(kinds)
 
-    def challenge_observation(self) -> BrowserChallengeObservation:
-        """Return one bounded challenge/resource snapshot for this page."""
+    def control_session(self) -> BrowserControlSession:
+        """Return one request-local neutral Browser control capability."""
 
-        return self._challenge_observation_operation()
-
-    def wait_for_challenge_settle(self, timeout_seconds: float) -> BrowserChallengeObservation:
-        """Wait for a bounded quiet window and return its final snapshot."""
-
-        return self._wait_for_challenge_settle_operation(timeout_seconds)
-
-    def agent_action_port(self) -> BrowserAgentActionPort:
-        """Return one request-local neutral Agent page capability."""
-
-        return self._agent_action_port_operation()
+        return self._control_session_operation()
 
 
 class BrowserClient:
@@ -1986,7 +1802,7 @@ class BrowserClient:
         "_clock",
         "_timeout_seconds",
         "_cleanup_timeout_seconds",
-        "_budget",
+        "_limits",
     )
 
     def __init__(
@@ -2000,7 +1816,7 @@ class BrowserClient:
         session_broker: BrowserSessionBroker | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         cleanup_timeout_seconds: float = _DEFAULT_CLEANUP_TIMEOUT_SECONDS,
-        budget: BrowserBudget | None = None,
+        limits: BrowserOperationLimits | None = None,
         clock: Clock | None = None,
     ) -> None:
         if not callable(factory):
@@ -2016,8 +1832,8 @@ class BrowserClient:
             cleanup_timeout_seconds,
             field_name="cleanup_timeout_seconds",
         )
-        if budget is not None and not isinstance(budget, BrowserBudget):
-            raise TypeError("budget must be a BrowserBudget")
+        if limits is not None and not isinstance(limits, BrowserOperationLimits):
+            raise TypeError("limits must be BrowserOperationLimits")
         if session_broker is not None and not isinstance(
             session_broker,
             BrowserSessionBroker,
@@ -2034,11 +1850,11 @@ class BrowserClient:
         self._clock = clock or time.monotonic
         self._timeout_seconds = timeout
         self._cleanup_timeout_seconds = cleanup_timeout
-        self._budget = budget or BrowserBudget()
+        self._limits = limits or BrowserOperationLimits()
 
     @property
-    def budget(self) -> BrowserBudget:
-        return self._budget
+    def limits(self) -> BrowserOperationLimits:
+        return self._limits
 
     # Keep setup, execution, and teardown together so every return path shares
     # the same cleanup and permit-release boundary.
@@ -2054,7 +1870,7 @@ class BrowserClient:
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
         session_key: str | None = None,
-        budget: BrowserBudget | None = None,
+        limits: BrowserOperationLimits | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BrowserResult:
@@ -2076,7 +1892,7 @@ class BrowserClient:
             effective_timeout = min(float(effective_timeout), request_timeout)
             if effective_timeout <= 0:
                 raise _Abort("timeout")
-            effective_budget = self._effective_budget(budget, request_max_bytes)
+            effective_limits = self._effective_limits(limits, request_max_bytes)
             if cancel_event is not None and not hasattr(cancel_event, "is_set"):
                 raise _Abort("policy")
             if destination_guard is not None and not isinstance(
@@ -2109,8 +1925,6 @@ class BrowserClient:
         except Exception:
             return _failure("policy")
 
-        started = self._clock()
-        deadline = started + min(effective_timeout, effective_budget.max_total_seconds)
         try:
             # Validate the initial destination before acquiring a permit, but
             # do not invoke the factory or navigate until scope admission is held.
@@ -2134,7 +1948,7 @@ class BrowserClient:
                     scope,
                     policy,
                     cancel_event=cancel_event,
-                    timeout=max(deadline - self._clock(), 0.001),
+                    timeout=effective_timeout,
                 )
             except AccessCancelled:
                 return _failure("cancelled")
@@ -2152,11 +1966,10 @@ class BrowserClient:
                 capture_guard,
                 navigation_only,
                 discard_unapproved_subresources,
-                effective_budget,
+                effective_limits,
                 self._clock,
-                deadline,
+                effective_timeout,
                 cancel_event,
-                effective_budget.max_bytes_per_download,
                 self._cleanup_timeout_seconds,
             )
             state.destinations[initial.hostname] = initial
@@ -2237,7 +2050,7 @@ class BrowserClient:
                             route_handler=self._route_handler(state),
                             event_handlers=self._event_handlers(state),
                             cancel_event=cancel_event,
-                            timeout=max(deadline - self._clock(), 0.001),
+                            timeout=effective_timeout,
                         ),
                         abort=lambda: None,
                         late_cleanup=self._discard_late_session_lease,
@@ -2281,7 +2094,6 @@ class BrowserClient:
                 if controller_result is not None:
                     raise _Abort("runtime")
             state.check()
-            state.check_challenge(page)
             if state.error is not None:
                 raise state.error
             if state.policy_rejection:
@@ -2403,24 +2215,17 @@ class BrowserClient:
         return request, self._timeout_seconds, _DEFAULT_MAX_RESPONSE_BYTES
 
     @staticmethod
-    def _effective_budget(
-        budget: BrowserBudget | None,
+    def _effective_limits(
+        limits: BrowserOperationLimits | None,
         request_max_bytes: int,
-    ) -> BrowserBudget:
-        selected = BrowserBudget() if budget is None else budget
-        if not isinstance(selected, BrowserBudget):
+    ) -> BrowserOperationLimits:
+        selected = BrowserOperationLimits() if limits is None else limits
+        if not isinstance(selected, BrowserOperationLimits):
             raise _Abort("policy")
-        return BrowserBudget(
-            max_navigations=selected.max_navigations,
-            max_requests=selected.max_requests,
-            max_popups=selected.max_popups,
-            max_downloads=selected.max_downloads,
-            max_captures=selected.max_captures,
-            max_bytes_per_download=min(selected.max_bytes_per_download, request_max_bytes),
-            max_total_bytes=selected.max_total_bytes,
-            max_action_wait_seconds=selected.max_action_wait_seconds,
-            max_capture_wait_seconds=selected.max_capture_wait_seconds,
-            max_total_seconds=selected.max_total_seconds,
+        return BrowserOperationLimits(
+            max_capture_bytes=min(selected.max_capture_bytes, request_max_bytes),
+            action_timeout_seconds=selected.action_timeout_seconds,
+            capture_wait_timeout_seconds=selected.capture_wait_timeout_seconds,
         )
 
     @staticmethod
@@ -2461,7 +2266,7 @@ class BrowserClient:
         Page/context/process close belongs to the deterministic teardown phase
         and must be attempted at most once.  This method therefore uses only a
         non-owning interrupt surface; teardown escalates to close and waits for
-        every outstanding vendor task within the local cleanup budget.
+        every outstanding vendor task within the local cleanup timeout.
         """
 
         for target in (page, context, process_runtime):
@@ -2767,7 +2572,7 @@ class BrowserClient:
                 if not self._abort_route(route):
                     state.mark_cleanup_failure()
                 return
-            state.consume(requests=1)
+            state.record_usage(requests=1)
             try:
                 destination = state.resolve_request(url, navigation=navigation)
             except _Abort as error:
@@ -2860,7 +2665,7 @@ class BrowserClient:
     ) -> None:
         current_navigation = state.navigations.get(id(page)) if navigation else None
         if navigation and (current_navigation is None or not current_navigation.budget_counted):
-            state.consume(navigations=1)
+            state.record_usage(navigations=1)
             if current_navigation is not None:
                 current_navigation.budget_counted = True
         if navigation and page is not None:
@@ -3290,7 +3095,7 @@ class BrowserClient:
     def _handle_popup(self, state: _FlowState, page: object) -> None:
         try:
             if state.register_popup(page):
-                state.consume(popups=1)
+                state.record_usage(popups=1)
         except _Abort as error:
             state.fail(error.code)
             if state.claim_cleanup(page) and not self._close_object(page):
@@ -3306,7 +3111,7 @@ class BrowserClient:
         try:
             if not state.own_download(download):
                 raise _Abort("cleanup")
-            state.consume(downloads=1)
+            state.record_usage(downloads=1)
             stage = "capture-plan"
             plan = self._download_capture_plan(state, download)
             if plan is None:
@@ -3542,7 +3347,7 @@ class BrowserClient:
     @staticmethod
     def _response_bytes(state: _FlowState, response: object) -> bytes:
         declared = _attribute(response, "size")
-        if isinstance(declared, int) and declared > state.max_bytes_per_download:
+        if isinstance(declared, int) and declared > state.limits.max_capture_bytes:
             raise _Abort("oversize")
         reader = getattr(response, "body", None)
         if not callable(reader):
@@ -3554,13 +3359,13 @@ class BrowserClient:
         try:
             value = reader()
         except TypeError:
-            value = reader(state.max_bytes_per_download + 1)
+            value = reader(state.limits.max_capture_bytes + 1)
         return BrowserClient._bounded_body_value(state, value)
 
     @staticmethod
     def _download_bytes(state: _FlowState, download: object) -> bytes:
         declared = _attribute(download, "size")
-        if isinstance(declared, int) and declared > state.max_bytes_per_download:
+        if isinstance(declared, int) and declared > state.limits.max_capture_bytes:
             raise _Abort("oversize")
         reader = getattr(download, "content", None)
         if not callable(reader):
@@ -3570,7 +3375,7 @@ class BrowserClient:
         try:
             value = reader()
         except TypeError:
-            value = reader(state.max_bytes_per_download + 1)
+            value = reader(state.limits.max_capture_bytes + 1)
         return BrowserClient._bounded_body_value(state, value)
 
     @staticmethod
@@ -3598,7 +3403,7 @@ class BrowserClient:
         body: object = None
         read_error: Exception | None = None
         try:
-            body = reader(state.max_bytes_per_download + 1)
+            body = reader(state.limits.max_capture_bytes + 1)
         except Exception as error:
             read_error = error
         finally:
@@ -3616,7 +3421,7 @@ class BrowserClient:
 
     @staticmethod
     def _checked_body_bytes(state: _FlowState, body: bytes) -> bytes:
-        if len(body) > state.max_bytes_per_download:
+        if len(body) > state.limits.max_capture_bytes:
             raise _Abort("oversize")
         return body
 
@@ -3627,7 +3432,7 @@ class BrowserClient:
             runtime_url = _runtime_url(url, state.destination_policy)
             if _policy_url(runtime_url) != destination.url.url:
                 raise _Abort("policy")
-            state.consume(navigations=1)
+            state.record_usage(navigations=1)
             with state.lock:
                 prior_capture_count = len(state.captures)
             state.acquire_host(destination)
@@ -3683,7 +3488,7 @@ class BrowserClient:
                 state,
                 lambda: goto(
                     runtime_url,
-                    timeout=state.remaining_milliseconds(),
+                    timeout=state.operation_timeout_milliseconds(),
                 ),
                 abort=lambda: self._abort_runtime(page, None, state.runtime),
             )
@@ -3734,7 +3539,7 @@ class BrowserClient:
             if popup is None:
                 raise _Abort("runtime")
             if state.register_popup(popup):
-                state.consume(popups=1)
+                state.record_usage(popups=1)
             state.detach_navigation(popup)
             self._validate_page_location(state, popup)
             return popup
@@ -3846,11 +3651,11 @@ class BrowserClient:
             raise _Abort("policy")
         return value
 
-    def _client_click(self, state: _FlowState, page: object, selector: str) -> bool:
-        selector = self._selector(selector)
-        click = getattr(page, "click", None)
-        if not callable(click):
-            raise _Abort("runtime")
+    def _begin_control_click_navigation(
+        self,
+        state: _FlowState,
+        page: object,
+    ) -> None:
         current_url = _text_attribute(page, "url")
         if current_url is None or _is_internal_url(current_url):
             raise _Abort("runtime")
@@ -3877,40 +3682,67 @@ class BrowserClient:
             # so every explicit 3xx hop belongs to that single budgeted
             # navigation instead of being counted as a new user action.
             # Non-navigating buttons leave ``budget_counted`` false and do not
-            # consume navigation budget.
+            # increment the navigation diagnostic counter.
             state.navigations[id(page)] = _Navigation(
                 page,
                 current_destination,
                 budget_counted=False,
             )
+
+    def _client_click(self, state: _FlowState, page: object, selector: str) -> bool:
+        """Resolve one reviewed selector into the unified action executor."""
+
+        selector = self._selector(selector)
         started_at = state.clock()
-        maximum_wait_milliseconds = min(
-            state.remaining_milliseconds(),
-            max(1, int(state.budget.max_action_wait_seconds * 1000)),
+        maximum_wait_seconds = min(
+            state.operation_timeout_milliseconds() / 1000,
+            state.limits.action_timeout_seconds,
         )
         _LOGGER.debug(
             "event=browser-click-started max_wait_seconds=%.3f",
-            state.budget.max_action_wait_seconds,
+            state.limits.action_timeout_seconds,
         )
-        try:
-            raw_clicked = self._run_cancellable(
-                state,
-                lambda: click(selector, timeout=maximum_wait_milliseconds),
-                abort=lambda: self._abort_runtime(page, None, state.runtime),
+        observation = self._client_control_observe(
+            state,
+            page,
+            page_state=BrowserPageState.NORMAL,
+            static_selector=selector,
+        )
+        element_id = next(iter(state.control.rule_element_selectors), None)
+        if element_id is None:
+            clicked = False
+        else:
+            element = next(
+                (
+                    candidate
+                    for candidate in observation.elements
+                    if candidate.element_id == element_id
+                ),
+                None,
             )
-            if raw_clicked is not None and type(raw_clicked) is not bool:
-                raise _Abort("runtime")
-            clicked = raw_clicked is not False
-            if clicked:
-                self._validate_page_location(state, page)
-            _LOGGER.debug(
-                "event=browser-click-finished outcome=%s elapsed_ms=%d",
-                "performed" if clicked else "not-actionable",
-                max(int((state.clock() - started_at) * 1000), 0),
-            )
-            return clicked
-        finally:
-            state.detach_navigation(page)
+            if element is None or not element.enabled:
+                clicked = False
+            else:
+                receipt = self._client_control_execute(
+                    state,
+                    page,
+                    ClickElement(
+                        observation.article_token,
+                        observation.page_id,
+                        element.surface_id,
+                        observation.revision,
+                        element.element_id,
+                    ),
+                    observation,
+                    timeout_seconds=maximum_wait_seconds,
+                )
+                clicked = receipt.outcome is not BrowserActionOutcome.NO_CHANGE
+        _LOGGER.debug(
+            "event=browser-click-finished outcome=%s elapsed_ms=%d",
+            "performed" if clicked else "not-actionable",
+            max(int((state.clock() - started_at) * 1000), 0),
+        )
+        return clicked
 
     @staticmethod
     def _validate_page_location(state: _FlowState, page: object) -> ResolvedDestination:
@@ -3943,7 +3775,7 @@ class BrowserClient:
             raise _Abort("runtime")
         self._run_cancellable(
             state,
-            lambda: fill(selector, value, timeout=state.remaining_milliseconds()),
+            lambda: fill(selector, value, timeout=state.operation_timeout_milliseconds()),
             abort=lambda: self._abort_runtime(page, None, state.runtime),
         )
 
@@ -3957,7 +3789,7 @@ class BrowserClient:
             lambda: has_selector(
                 selector,
                 timeout=min(
-                    state.remaining_milliseconds(),
+                    state.operation_timeout_milliseconds(),
                     _MARKER_LOOKUP_TIMEOUT_MILLISECONDS,
                 ),
             ),
@@ -3980,7 +3812,7 @@ class BrowserClient:
             lambda: text_content(
                 selector,
                 timeout=min(
-                    state.remaining_milliseconds(),
+                    state.operation_timeout_milliseconds(),
                     _MARKER_LOOKUP_TIMEOUT_MILLISECONDS,
                 ),
             ),
@@ -4018,293 +3850,665 @@ class BrowserClient:
             status_code=state.page_statuses.get(id(page)),
         )
 
-    def _client_agent_observe(  # noqa: C901
+    def _client_control_observe(  # noqa: C901, PLR0912, PLR0915
         self,
         state: _FlowState,
         page: object,
-    ) -> BrowserAgentObservation:
-        """Create one bounded request-local observation for the Agent seam."""
+        *,
+        page_state: BrowserPageState,
+        static_selector: str | None = None,
+    ) -> BrowserObservation:
+        """Create one unified article-owned Browser observation."""
 
-        state.check()
-        page_snapshot = getattr(page, "agent_snapshot", None)
-        if not callable(page_snapshot):
-            raise _Abort("runtime")
-        snapshot = self._run_cancellable(
-            state,
-            lambda: page_snapshot(timeout=state.remaining_milliseconds()),
-            abort=lambda: self._abort_runtime(page, None, state.runtime),
-        )
-        if not isinstance(snapshot, dict):
-            raise _Abort("runtime")
-        locator = _text_attribute(page, "url")
-        if locator is None or _is_internal_url(locator):
-            raise _Abort("runtime")
-        try:
-            normalized = normalize_url(
-                _policy_url(locator),
-                allowed_schemes=self._destination_policy.allowed_schemes,
-                allowed_ports=self._destination_policy.allowed_ports,
-            )
-            destination = self._validate_page_location(state, page)
-        except (PolicyError, TypeError, ValueError) as error:
-            raise _Abort("policy") from error
-        if destination.url.url != normalized.url:
+        if not isinstance(page_state, BrowserPageState):
             raise _Abort("policy")
-
-        width = snapshot.get("width")
-        height = snapshot.get("height")
-        screenshot = snapshot.get("screenshot")
-        screenshot_media_type = snapshot.get("screenshot_media_type")
-        raw_elements = snapshot.get("elements")
-        if (
-            type(width) is not int
-            or type(height) is not int
-            or width < 1
-            or height < 1
-            or width > 16_384
-            or height > 16_384
-            or type(screenshot) is not bytes
-            or not screenshot
-            or len(screenshot) > _MAX_AGENT_SCREENSHOT_BYTES
-            or screenshot_media_type not in {"image/png", "image/jpeg", "image/webp"}
-            or not isinstance(raw_elements, tuple)
-            or len(raw_elements) > _MAX_AGENT_ELEMENTS
-        ):
+        if static_selector is not None:
+            static_selector = self._selector(static_selector)
+        state.check()
+        with state.lock:
+            pages = tuple(state.pages)
+            captures = bool(state.captures)
+            candidate = bool(
+                state.pending_response_downloads or state.pending_local_downloads or state.downloads
+            )
+        if not pages or all(candidate_page is not page for candidate_page in pages):
             raise _Abort("runtime")
-        facts: list[tuple[int, str, str, bool, bool]] = []
-        for item in raw_elements:
-            if not isinstance(item, tuple) or len(item) != 5:
+        selected_page = pages[-1]
+        control = state.control
+        page_keys: dict[str, object] = {}
+        surface_keys: dict[str, tuple[object, int]] = {}
+        element_keys: dict[str, tuple[object, int]] = {}
+        surfaces: list[BrowserSurface] = []
+        elements: list[BrowserElement] = []
+        selected_screenshot: bytes | None = None
+        selected_media_type: str | None = None
+        selected_viewport: BrowserViewport | None = None
+        selected_root_surface_id: str | None = None
+        selected_static_element_id: str | None = None
+
+        for candidate_page in pages:
+            snapshot_method = getattr(candidate_page, "control_snapshot", None)
+            if not callable(snapshot_method):
                 raise _Abort("runtime")
-            key, role, name, visible, enabled = item
+            snapshot = self._run_cancellable(
+                state,
+                lambda candidate_page=candidate_page, snapshot_method=snapshot_method: (
+                    snapshot_method(
+                        timeout=state.operation_timeout_milliseconds(),
+                        include_screenshot=candidate_page is selected_page,
+                        static_selector=(
+                            static_selector if candidate_page is selected_page else None
+                        ),
+                    )
+                ),
+                abort=lambda candidate_page=candidate_page: self._abort_runtime(
+                    candidate_page,
+                    None,
+                    state.runtime,
+                ),
+            )
+            if not isinstance(snapshot, dict):
+                raise _Abort("runtime")
+            width = snapshot.get("width")
+            height = snapshot.get("height")
+            raw_title = snapshot.get("title")
+            raw_surfaces = snapshot.get("surfaces")
+            raw_elements = snapshot.get("elements")
+            raw_static_element_key = snapshot.get("static_element_key")
+            screenshot = snapshot.get("screenshot")
+            media_type = snapshot.get("screenshot_media_type")
             if (
-                type(key) is not int
-                or key < 0
-                or type(role) is not str
-                or type(name) is not str
-                or type(visible) is not bool
-                or type(enabled) is not bool
+                type(width) is not int
+                or type(height) is not int
+                or not 1 <= width <= 16_384
+                or not 1 <= height <= 16_384
+                or type(raw_title) is not str
+                or not isinstance(raw_surfaces, tuple)
+                or not raw_surfaces
+                or len(raw_surfaces) > 128
+                or not isinstance(raw_elements, tuple)
+                or len(raw_elements) > 256
+                or (
+                    raw_static_element_key is not None
+                    and (type(raw_static_element_key) is not int or raw_static_element_key < 1)
+                )
+                or (candidate_page is not selected_page and raw_static_element_key is not None)
+                or (static_selector is None and raw_static_element_key is not None)
             ):
                 raise _Abort("runtime")
-            facts.append((key, role, name, visible, enabled))
-        status_code = state.page_statuses.get(id(page))
-        fingerprint = hashlib.sha256()
-        fingerprint.update(normalized.url.encode("utf-8"))
-        fingerprint.update(str(status_code).encode("ascii"))
-        for key, role, name, visible, enabled in facts:
-            fingerprint.update(repr((key, role, name, visible, enabled)).encode("utf-8"))
-        page_state = state.agent_pages.get(id(page))
-        if page_state is None:
-            token_digest = hashlib.sha256(f"{id(page)}".encode("ascii")).hexdigest()[:24]
-            page_state = _AgentPageState(page_token=f"p{token_digest}")
-            state.agent_pages[id(page)] = page_state
-        fingerprint_bytes = fingerprint.digest()
-        changed = (
-            page_state.observation is None
-            or page_state.fingerprint != fingerprint_bytes
-            or page_state.ledger.current is None
-        )
-        budget = self._agent_observation_budget(state, screenshot)
-        if changed:
-            elements: list[BrowserElement] = []
-            mapping: dict[str, int] = {}
-            # Publish a provisional snapshot first so IDs bind to the actual
-            # ledger revision while keeping selectors/handles private.
-            provisional = BrowserAgentObservation(
-                revision=1,
-                page_token=page_state.page_token,
-                locator=normalized.url,
-                status_code=status_code,
-                viewport=BrowserViewport(width=width, height=height),
-                screenshot=screenshot,
-                screenshot_media_type=screenshot_media_type,
-                elements=(),
-                capture_state=(
-                    BrowserCaptureState.CAPTURED if state.captures else BrowserCaptureState.NONE
-                ),
-                remaining_budget=budget,
-            )
-            revision = page_state.ledger.publish(provisional).revision
-            for index, (key, role, name, visible, enabled) in enumerate(facts):
-                element_id = (
-                    "e"
-                    + hashlib.sha256(
-                        f"{page_state.page_token}:{revision}:{index}:{key}".encode("ascii")
-                    ).hexdigest()[:16]
+            if candidate_page is selected_page:
+                if (
+                    type(screenshot) is not bytes
+                    or not screenshot
+                    or len(screenshot) > _MAX_AGENT_SCREENSHOT_BYTES
+                    or media_type not in {"image/png", "image/jpeg", "image/webp"}
+                ):
+                    raise _Abort("runtime")
+                selected_screenshot = screenshot
+                selected_media_type = media_type
+                selected_viewport = BrowserViewport(width=width, height=height)
+            elif screenshot is not None or media_type is not None:
+                raise _Abort("runtime")
+
+            page_id = _control_id("p", id(candidate_page))
+            if page_id in page_keys:
+                raise _Abort("runtime")
+            page_keys[page_id] = candidate_page
+            surface_id_by_key: dict[int, str] = {}
+            surface_fact_by_key: dict[int, _ControlSurfaceFact] = {}
+            root_keys: list[int] = []
+            for raw_surface in raw_surfaces:
+                if not isinstance(raw_surface, tuple) or len(raw_surface) != 14:
+                    raise _Abort("runtime")
+                (
+                    key,
+                    parent_key,
+                    kind_value,
+                    locator,
+                    title,
+                    x,
+                    y,
+                    surface_width,
+                    surface_height,
+                    scroll_x,
+                    scroll_y,
+                    maximum_x,
+                    maximum_y,
+                    reserved,
+                ) = raw_surface
+                if (
+                    type(key) is not int
+                    or key < 0
+                    or (parent_key is not None and (type(parent_key) is not int or parent_key < 0))
+                    or type(kind_value) is not str
+                    or type(locator) is not str
+                    or type(title) is not str
+                    or reserved is not None
+                    or key in surface_fact_by_key
+                ):
+                    raise _Abort("runtime")
+                try:
+                    kind = BrowserSurfaceKind(kind_value)
+                    normalized = normalize_url(
+                        _policy_url(locator),
+                        allowed_schemes=self._destination_policy.allowed_schemes,
+                        allowed_ports=self._destination_policy.allowed_ports,
+                    )
+                    state.guard(normalized.url, BrowserDestinationKind.RESPONSE)
+                except (PolicyError, TypeError, ValueError) as error:
+                    raise _Abort("policy") from error
+                if parent_key is None:
+                    root_keys.append(key)
+                    kind = (
+                        BrowserSurfaceKind.POPUP
+                        if any(candidate_page is popup for popup in state.popups)
+                        else BrowserSurfaceKind.PAGE
+                    )
+                elif kind in {BrowserSurfaceKind.PAGE, BrowserSurfaceKind.POPUP}:
+                    raise _Abort("runtime")
+                surface_id = _control_id("s", page_id, key)
+                checked_key = cast(int, key)
+                checked_parent = cast(int | None, parent_key)
+                surface_id_by_key[checked_key] = surface_id
+                surface_fact_by_key[checked_key] = _ControlSurfaceFact(
+                    key=checked_key,
+                    parent_key=checked_parent,
+                    kind=kind,
+                    origin=normalized.origin.text,
+                    path=normalized.path,
+                    title=cast(str, title),
+                    x=cast(float, x),
+                    y=cast(float, y),
+                    width=cast(float, surface_width),
+                    height=cast(float, surface_height),
+                    scroll_x=cast(float, scroll_x),
+                    scroll_y=cast(float, scroll_y),
+                    maximum_x=cast(float, maximum_x),
+                    maximum_y=cast(float, maximum_y),
                 )
-                element_state = (
-                    BrowserElementState.VISIBLE_ENABLED
-                    if visible and enabled
-                    else BrowserElementState.VISIBLE_DISABLED
-                    if visible
-                    else BrowserElementState.HIDDEN_ENABLED
-                    if enabled
-                    else BrowserElementState.HIDDEN_DISABLED
-                )
-                elements.append(
-                    BrowserElement(
+            if len(root_keys) != 1:
+                raise _Abort("runtime")
+            if any(
+                fact.parent_key is not None and fact.parent_key not in surface_fact_by_key
+                for fact in surface_fact_by_key.values()
+            ):
+                raise _Abort("runtime")
+
+            viewport = BrowserViewport(width=width, height=height)
+            for fact in surface_fact_by_key.values():
+                try:
+                    surface = BrowserSurface(
+                        surface_id=surface_id_by_key[fact.key],
+                        page_id=page_id,
+                        kind=fact.kind,
+                        parent_surface_id=(
+                            None if fact.parent_key is None else surface_id_by_key[fact.parent_key]
+                        ),
+                        origin=fact.origin,
+                        path=fact.path,
+                        title=fact.title if fact.title else raw_title,
+                        viewport=viewport,
+                        bounds=BrowserBounds(
+                            x=fact.x,
+                            y=fact.y,
+                            width=fact.width,
+                            height=fact.height,
+                        ),
+                        scroll=BrowserScrollState(
+                            x=fact.scroll_x,
+                            y=fact.scroll_y,
+                            maximum_x=fact.maximum_x,
+                            maximum_y=fact.maximum_y,
+                        ),
+                    )
+                except (TypeError, ValueError) as error:
+                    raise _Abort("runtime") from error
+                surfaces.append(surface)
+                surface_keys[surface.surface_id] = (candidate_page, fact.key)
+            if candidate_page is selected_page:
+                selected_root_surface_id = surface_id_by_key[root_keys[0]]
+
+            element_id_by_key: dict[int, str] = {}
+            for raw_element in raw_elements:
+                if not isinstance(raw_element, tuple) or len(raw_element) != 10:
+                    raise _Abort("runtime")
+                (
+                    element_key,
+                    surface_key,
+                    role,
+                    name,
+                    visible,
+                    enabled,
+                    x,
+                    y,
+                    element_width,
+                    element_height,
+                ) = raw_element
+                if (
+                    type(element_key) is not int
+                    or element_key < 1
+                    or type(surface_key) is not int
+                    or surface_key not in surface_id_by_key
+                    or type(role) is not str
+                    or type(name) is not str
+                    or type(visible) is not bool
+                    or type(enabled) is not bool
+                ):
+                    raise _Abort("runtime")
+                if not visible:
+                    continue
+                element_id = _control_id("e", page_id, surface_key, element_key)
+                if element_id in element_keys:
+                    raise _Abort("runtime")
+                try:
+                    element = BrowserElement(
                         element_id=element_id,
+                        surface_id=surface_id_by_key[surface_key],
                         role=role,
                         name=name,
-                        state=element_state,
+                        state=(
+                            BrowserElementState.ENABLED if enabled else BrowserElementState.DISABLED
+                        ),
+                        bounds=BrowserBounds(
+                            x=x,
+                            y=y,
+                            width=element_width,
+                            height=element_height,
+                        ),
                     )
-                )
-                mapping[element_id] = key
-            observation = BrowserAgentObservation(
-                revision=revision,
-                page_token=page_state.page_token,
-                locator=normalized.url,
-                status_code=status_code,
-                viewport=BrowserViewport(width=width, height=height),
-                screenshot=screenshot,
-                screenshot_media_type=screenshot_media_type,
-                elements=tuple(elements),
-                capture_state=(
-                    BrowserCaptureState.CAPTURED if state.captures else BrowserCaptureState.NONE
-                ),
-                remaining_budget=budget,
-            )
-            # Keep the ledger's current revision while storing the complete
-            # element set; no selector or page object is retained here.
-            page_state.ledger.replace_current(observation)
-            page_state.element_keys = mapping
-            page_state.fingerprint = fingerprint_bytes
-            page_state.observation = observation
-            return observation
-        assert page_state.observation is not None
-        observation = replace(
-            page_state.observation,
-            status_code=status_code,
-            screenshot=screenshot,
-            screenshot_media_type=screenshot_media_type,
-            capture_state=(
-                BrowserCaptureState.CAPTURED if state.captures else BrowserCaptureState.NONE
-            ),
-            remaining_budget=budget,
+                except (TypeError, ValueError) as error:
+                    raise _Abort("runtime") from error
+                elements.append(element)
+                element_keys[element_id] = (candidate_page, element_key)
+                element_id_by_key[element_key] = element_id
+            if raw_static_element_key is not None:
+                selected_static_element_id = element_id_by_key.get(raw_static_element_key)
+                if selected_static_element_id is None:
+                    raise _Abort("runtime")
+
+        if (
+            selected_screenshot is None
+            or selected_media_type is None
+            or selected_viewport is None
+            or selected_root_surface_id is None
+        ):
+            raise _Abort("runtime")
+        selected_page_id = next(
+            page_id
+            for page_id, candidate_page in page_keys.items()
+            if candidate_page is selected_page
         )
-        page_state.observation = observation
-        page_state.ledger.replace_current(observation)
+        capture_state = (
+            BrowserCaptureState.CAPTURED
+            if captures
+            else BrowserCaptureState.CANDIDATE
+            if candidate
+            else BrowserCaptureState.NONE
+        )
+        current = control.ledger.current
+        provisional_revision = 1 if current is None else current.revision + 1
+        screenshot_sha256 = sha256_digest(selected_screenshot)
+        screenshot_value = BrowserScreenshot(
+            screenshot_id=_control_id(
+                "i",
+                selected_page_id,
+                selected_root_surface_id,
+                screenshot_sha256.root,
+            ),
+            article_token=control.article_token,
+            page_id=selected_page_id,
+            surface_id=selected_root_surface_id,
+            revision=provisional_revision,
+            viewport=selected_viewport,
+            media_type=selected_media_type,
+            sha256=screenshot_sha256,
+            content=selected_screenshot,
+        )
+        provisional = BrowserObservation(
+            article_token=control.article_token,
+            revision=provisional_revision,
+            page_id=selected_page_id,
+            surfaces=tuple(surfaces),
+            elements=tuple(elements),
+            screenshot=screenshot_value,
+            page_state=page_state,
+            agent_status=control.agent_status,
+            capture_state=capture_state,
+            last_receipt=control.last_receipt,
+        )
+        fingerprint = bytes.fromhex(semantic_page_fingerprint(provisional).root)
+        changed = (
+            control.observation is None
+            or control.fingerprint != fingerprint
+            or control.ledger.current is None
+        )
+        if changed:
+            observation = control.ledger.publish(provisional)
+        else:
+            assert current is not None
+            observation = replace(
+                provisional,
+                revision=current.revision,
+                screenshot=replace(screenshot_value, revision=current.revision),
+            )
+            control.ledger.replace_current(observation)
+        control.page_keys = page_keys
+        control.surface_keys = surface_keys
+        control.element_keys = element_keys
+        control.rule_element_selectors = (
+            {}
+            if selected_static_element_id is None
+            else {selected_static_element_id: cast(str, static_selector)}
+        )
+        control.fingerprint = fingerprint
+        control.observation = observation
         return observation
 
-    @staticmethod
-    def _agent_observation_budget(
-        state: _FlowState,
-        screenshot: bytes,
-    ) -> BrowserObservationBudget:
-        remaining_seconds = max(state.deadline - state.clock(), 0.0)
-        with state.lock:
-            remaining_navigations = max(
-                state.budget.max_navigations - state.usage.navigations,
-                0,
-            )
-        # Agent action steps intentionally share the Network navigation budget:
-        # clicks/scrolls/waits are allowed only while the flow still has
-        # navigation headroom.  A zero navigation remainder therefore denies
-        # the whole Agent turn before any model decision is requested.
-        return BrowserObservationBudget(
-            remaining_steps=remaining_navigations,
-            remaining_seconds=remaining_seconds,
-            remaining_image_bytes=max(_MAX_AGENT_SCREENSHOT_BYTES - len(screenshot), 0),
-            remaining_navigations=remaining_navigations,
-        )
-
-    def _client_agent_execute(  # noqa: C901
+    def _client_control_execute(  # noqa: C901, PLR0912, PLR0915
         self,
         state: _FlowState,
         page: object,
-        command: BrowserAgentActionCommand,
-        observation: BrowserAgentObservation,
+        action: BrowserAction,
+        observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> None:
-        """Revalidate and execute one closed Agent action on the same page."""
+    ) -> BrowserActionReceipt:
+        """Validate and execute one closed action on the current article."""
 
-        if not isinstance(observation, BrowserAgentObservation):
+        if not isinstance(
+            action,
+            (ClickElement, ClickPoint, ScrollSurface, GoBack, WaitForChange, Stop),
+        ):
+            raise _Abort("policy")
+        if not isinstance(observation, BrowserObservation):
             raise _Abort("policy")
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
-            or timeout_seconds <= 0
-            or timeout_seconds > _DEFAULT_MAX_ACTION_WAIT_SECONDS
+            or not 0 < timeout_seconds <= state.limits.action_timeout_seconds
         ):
             raise _Abort("policy")
-        current = self._client_agent_observe(state, page)
+        control = state.control
+        # Reject every action fact that is already decidable from the current
+        # request-local ledger before refreshing the vendor page.  A stale
+        # revision, unknown target, disabled element, wrong screenshot or
+        # out-of-bounds coordinate is caller input, not a reason to perform a
+        # Playwright snapshot.  The later refresh remains necessary to catch a
+        # real page change that happened after the observation was delivered.
+        try:
+            ledger_current = control.ledger.require_current(observation)
+            if (
+                action.article_token != ledger_current.article_token
+                or action.revision != ledger_current.revision
+                or action.page_id not in control.page_keys
+            ):
+                raise _Abort("policy")
+            selected_binding = control.page_keys[action.page_id]
+            if ledger_current.capture_state is not BrowserCaptureState.NONE:
+                raise _Abort("runtime")
+            if isinstance(action, ClickElement):
+                ledger_element = control.ledger.element(ledger_current, action.element_id)
+                element_binding = control.element_keys.get(action.element_id)
+                surface_binding = control.surface_keys.get(action.surface_id)
+                if (
+                    not ledger_element.enabled
+                    or ledger_element.surface_id != action.surface_id
+                    or element_binding is None
+                    or surface_binding is None
+                    or element_binding[0] is not selected_binding
+                    or surface_binding[0] is not selected_binding
+                ):
+                    raise _Abort("policy")
+            elif isinstance(action, ClickPoint):
+                if (
+                    action.page_id != ledger_current.screenshot.page_id
+                    or action.screenshot_id != ledger_current.screenshot.screenshot_id
+                ):
+                    raise _Abort("policy")
+                ledger_surface = control.ledger.surface(ledger_current, action.surface_id)
+                if (
+                    ledger_surface.page_id != ledger_current.screenshot.page_id
+                    or not ledger_surface.bounds.contains(action.x, action.y)
+                    or action.x > ledger_current.viewport.width
+                    or action.y > ledger_current.viewport.height
+                ):
+                    raise _Abort("policy")
+            elif isinstance(action, ScrollSurface):
+                ledger_surface = control.ledger.surface(ledger_current, action.surface_id)
+                surface_binding = control.surface_keys.get(action.surface_id)
+                if (
+                    ledger_surface.page_id != action.page_id
+                    or surface_binding is None
+                    or surface_binding[0] is not selected_binding
+                ):
+                    raise _Abort("policy")
+        except _Abort:
+            raise
+        except (TypeError, ValueError) as error:
+            raise _Abort("policy") from error
+        static_selector = (
+            control.rule_element_selectors.get(action.element_id)
+            if isinstance(action, ClickElement)
+            else None
+        )
+        current = self._client_control_observe(
+            state,
+            page,
+            page_state=observation.page_state,
+            static_selector=static_selector,
+        )
         if (
-            current.revision != observation.revision
-            or current.page_token != observation.page_token
-            or current.locator != observation.locator
+            current.article_token != observation.article_token
+            or current.revision != observation.revision
+            or current.page_id != observation.page_id
+            or semantic_page_fingerprint(current) != semantic_page_fingerprint(observation)
+            or action.article_token != current.article_token
+            or action.revision != current.revision
+            or action.page_id not in control.page_keys
         ):
-            raise _Abort("runtime")
-        # Capture may arrive during the final observation/action hand-off.
-        # Once Network sees any capture, reject the late command before the
-        # vendor click/scroll/wait is invoked.
+            raise _Abort("policy")
         if current.capture_state is not BrowserCaptureState.NONE:
             raise _Abort("runtime")
-        if not isinstance(command, BrowserAgentActionCommand):
-            raise _Abort("policy")
-        if command.revision != current.revision:
-            raise _Abort("policy")
+        selected_page = control.page_keys[action.page_id]
         milliseconds = max(1, int(timeout_seconds * 1000))
-        page_state = state.agent_pages.get(id(page))
-        if page_state is None:
-            raise _Abort("runtime")
-        if command.kind is BrowserAgentActionKind.STOP_FLOW:
-            return
-        if command.kind is BrowserAgentActionKind.CLICK_ELEMENT:
-            element_id = command.element_id
-            if element_id is None:
-                raise _Abort("policy")
-            key = page_state.element_keys.get(element_id)
-            if key is None:
-                raise _Abort("policy")
-            element = page_state.ledger.element(current.revision, element_id)
-            if not element.visible or not element.enabled:
-                raise _Abort("policy")
-            operation = getattr(page, "agent_click", None)
-            if not callable(operation):
-                raise _Abort("runtime")
-            page_state.ledger.invalidate()
-            self._run_cancellable(
-                state,
-                lambda: operation(
-                    key,
-                    expected_role=element.role,
-                    expected_name=element.name,
-                    expected_visible=element.visible,
-                    expected_enabled=element.enabled,
-                    expected_locator=current.locator,
-                    timeout=milliseconds,
-                ),
-                abort=lambda: self._abort_runtime(page, None, state.runtime),
+        started_ns = time.monotonic_ns()
+
+        if isinstance(action, Stop):
+            control.agent_status = BrowserAgentStatus.STOPPED
+            receipt = BrowserActionReceipt(
+                action_kind=BrowserActionKind.STOP,
+                outcome=BrowserActionOutcome.APPLIED,
+                article_token=current.article_token,
+                page_id=action.page_id,
+                surface_id=None,
+                before_revision=current.revision,
+                after_revision=current.revision,
+                elapsed_milliseconds=0,
             )
-            return
-        if command.kind is BrowserAgentActionKind.SCROLL_PAGE:
-            delta_y = command.delta_y
-            if delta_y is None:
-                raise _Abort("policy")
-            operation = getattr(page, "agent_scroll", None)
-            if not callable(operation):
-                raise _Abort("runtime")
-            page_state.ledger.invalidate()
-            self._run_cancellable(
-                state,
-                lambda: operation(delta_y, timeout=milliseconds),
-                abort=lambda: self._abort_runtime(page, None, state.runtime),
+            control.last_receipt = receipt
+            control.observation = replace(
+                current,
+                agent_status=BrowserAgentStatus.STOPPED,
+                last_receipt=receipt,
             )
-            return
-        if command.kind is BrowserAgentActionKind.WAIT_FOR_PAGE:
-            seconds = command.seconds
-            if seconds is None or seconds > timeout_seconds:
-                raise _Abort("policy")
-            operation = getattr(page, "agent_wait", None)
-            if not callable(operation):
-                raise _Abort("runtime")
-            self._run_cancellable(
-                state,
-                lambda: operation(float(seconds), timeout=milliseconds),
-                abort=lambda: self._abort_runtime(page, None, state.runtime),
-            )
-            return
-        raise _Abort("policy")
+            control.ledger.replace_current(control.observation)
+            return receipt
+
+        operation_result = True
+        navigation = False
+        click_action = isinstance(action, (ClickElement, ClickPoint))
+        if click_action:
+            self._begin_control_click_navigation(state, selected_page)
+        try:
+            if isinstance(action, ClickElement):
+                element = control.ledger.element(current, action.element_id)
+                if not element.enabled or element.surface_id != action.surface_id:
+                    raise _Abort("policy")
+                binding = control.element_keys.get(action.element_id)
+                surface_binding = control.surface_keys.get(action.surface_id)
+                if (
+                    binding is None
+                    or surface_binding is None
+                    or binding[0] is not selected_page
+                    or surface_binding[0] is not selected_page
+                ):
+                    raise _Abort("policy")
+                operation = getattr(selected_page, "control_click_element", None)
+                if not callable(operation):
+                    raise _Abort("runtime")
+                operation_result = self._run_cancellable(
+                    state,
+                    lambda: operation(
+                        binding[1],
+                        expected_role=element.role,
+                        expected_name=element.name,
+                        expected_enabled=element.enabled,
+                        expected_surface_key=surface_binding[1],
+                        timeout=milliseconds,
+                    ),
+                    abort=lambda: self._abort_runtime(
+                        selected_page,
+                        None,
+                        state.runtime,
+                    ),
+                )
+                if type(operation_result) is not bool:
+                    raise _Abort("runtime")
+                if operation_result:
+                    self._validate_page_location(state, selected_page)
+            elif isinstance(action, ClickPoint):
+                if (
+                    action.page_id != current.screenshot.page_id
+                    or action.screenshot_id != current.screenshot.screenshot_id
+                ):
+                    raise _Abort("policy")
+                surface = control.ledger.surface(current, action.surface_id)
+                if (
+                    surface.page_id != current.screenshot.page_id
+                    or not surface.bounds.contains(action.x, action.y)
+                    or action.x > current.viewport.width
+                    or action.y > current.viewport.height
+                ):
+                    raise _Abort("policy")
+                operation = getattr(selected_page, "control_click_point", None)
+                if not callable(operation):
+                    raise _Abort("runtime")
+                operation_result = self._run_cancellable(
+                    state,
+                    lambda: operation(action.x, action.y, timeout=milliseconds),
+                    abort=lambda: self._abort_runtime(
+                        selected_page,
+                        None,
+                        state.runtime,
+                    ),
+                )
+                if type(operation_result) is not bool:
+                    raise _Abort("runtime")
+                if operation_result:
+                    self._validate_page_location(state, selected_page)
+            elif isinstance(action, ScrollSurface):
+                surface = control.ledger.surface(current, action.surface_id)
+                if surface.page_id != action.page_id:
+                    raise _Abort("policy")
+                surface_binding = control.surface_keys.get(action.surface_id)
+                if surface_binding is None or surface_binding[0] is not selected_page:
+                    raise _Abort("policy")
+                operation = getattr(selected_page, "control_scroll_surface", None)
+                if not callable(operation):
+                    raise _Abort("runtime")
+                self._run_cancellable(
+                    state,
+                    lambda: operation(
+                        surface_binding[1],
+                        action.delta_y,
+                        timeout=milliseconds,
+                    ),
+                    abort=lambda: self._abort_runtime(
+                        selected_page,
+                        None,
+                        state.runtime,
+                    ),
+                )
+            elif isinstance(action, GoBack):
+                operation = getattr(selected_page, "control_go_back", None)
+                if not callable(operation):
+                    raise _Abort("runtime")
+                operation_result = self._run_cancellable(
+                    state,
+                    lambda: operation(timeout=milliseconds),
+                    abort=lambda: self._abort_runtime(
+                        selected_page,
+                        None,
+                        state.runtime,
+                    ),
+                )
+                if type(operation_result) is not bool:
+                    raise _Abort("runtime")
+                navigation = operation_result
+            elif isinstance(action, WaitForChange):
+                operation = getattr(selected_page, "control_wait_for_change", None)
+                if not callable(operation):
+                    raise _Abort("runtime")
+                operation_result = self._run_cancellable(
+                    state,
+                    lambda: operation(timeout=milliseconds),
+                    abort=lambda: self._abort_runtime(
+                        selected_page,
+                        None,
+                        state.runtime,
+                    ),
+                )
+                if type(operation_result) is not bool:
+                    raise _Abort("runtime")
+        except _Abort:
+            control.agent_status = BrowserAgentStatus.FAILED
+            control.ledger.invalidate()
+            control.observation = None
+            raise
+        except BaseException as error:
+            control.agent_status = BrowserAgentStatus.FAILED
+            control.ledger.invalidate()
+            control.observation = None
+            raise _Abort("runtime") from error
+        finally:
+            if click_action:
+                with state.lock:
+                    click_navigation = state.navigations.get(id(selected_page))
+                    navigation = bool(
+                        click_navigation is not None and click_navigation.budget_counted
+                    )
+                state.detach_navigation(selected_page)
+
+        with state.lock:
+            captured = bool(state.captures)
+        outcome = (
+            BrowserActionOutcome.CAPTURE
+            if captured
+            else BrowserActionOutcome.NAVIGATION
+            if navigation
+            else BrowserActionOutcome.APPLIED
+            if operation_result
+            else BrowserActionOutcome.NO_CHANGE
+        )
+        elapsed = max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+        receipt = BrowserActionReceipt(
+            action_kind=action.kind,
+            outcome=outcome,
+            article_token=current.article_token,
+            page_id=action.page_id,
+            surface_id=action.surface_id,
+            before_revision=current.revision,
+            after_revision=None,
+            elapsed_milliseconds=elapsed,
+        )
+        control.last_receipt = receipt
+        if outcome is not BrowserActionOutcome.NO_CHANGE:
+            control.ledger.invalidate()
+            control.observation = None
+        else:
+            control.observation = replace(current, last_receipt=receipt)
+            control.ledger.replace_current(control.observation)
+        return receipt
 
     def _cleanup_state(
         self,
@@ -4506,11 +4710,8 @@ class BrowserClient:
 
 
 __all__ = (
-    "BrowserBudget",
+    "BrowserOperationLimits",
     "BrowserCaptureGuard",
-    "BrowserChallengeFactsProvider",
-    "BrowserChallengeObservation",
-    "BrowserChallengeResourceFacts",
     "BrowserClient",
     "BrowserConnectionOriginGuard",
     "BrowserDestinationGuard",

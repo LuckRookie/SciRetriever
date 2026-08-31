@@ -84,10 +84,12 @@ Revision 3 的新增证据日期为 2026-08-21，只为 AIP 规则声明受限�
 `/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
 `document`、`fetch`、`xhr` 和 `image`。它不加入 AIP 的普通
 `allowed_origins`；只有当前 AIP Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
-可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。运行时分别报告
-`resource-blocked`、`settling`、`cleared`、`interaction-required`、`settle-timeout` 和普通
-HTTP 403；只有自动 `cleared` 才返回正文流程，第一版不点击 CAPTCHA/Turnstile。该封闭规则和
-本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。这里记录的
+`resource-blocked`、`settling`、`cleared`、`interaction-required` 与 `settle-timeout` 是
+2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。当前运行只把它分类为
+统一 `page_state=CHALLENGE`：Rules 执行已审查动作，Agent 可以使用统一元素/坐标点击；controller
+停止时仍未清除则形成文章级 `challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则
+和本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
 
 2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
 均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、

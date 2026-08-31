@@ -25,6 +25,10 @@ from sciretriever.acquisition.routing import (
     build_acquisition_evidence,
 )
 from sciretriever.acquisition.rules import PdfValidationError, validate_pdf
+from sciretriever.acquisition.sources.configured_sci_hub import (
+    ConfiguredSciHubLandingResolver,
+    ConfiguredSciHubPdfSource,
+)
 from sciretriever.acquisition.sources.direct import (
     DirectPdfSource,
     PublicLocatorFetcher,
@@ -380,6 +384,74 @@ def _request_url(call: dict[str, object]) -> str:
 
 
 class AcquisitionDirectSourceTests(unittest.TestCase):
+    def test_sci_hub_mirrors_share_static_landing_rules_and_fail_over_in_order(
+        self,
+    ) -> None:
+        doi = "10.1234/mirror-fixture"
+        page = b'<embed type="application/pdf" src="/paper.pdf">'
+        pdf = _valid_pdf()
+        responses = (
+            _raw(404),
+            _raw(body=page, media_type="text/html"),
+            _raw(body=pdf, media_type="application/pdf"),
+        )
+        client, transport, _resolver, coordinator = _http_environment(
+            responses,
+            {
+                "mirror-one.example": (_PUBLIC_IP,),
+                "mirror-two.example": (_PUBLIC_IP,),
+            },
+        )
+        request = _request(
+            literature=_literature(
+                identifiers=(Identifier(namespace="doi", value=doi),),
+            )
+        )
+        source = ConfiguredSciHubPdfSource(
+            resolver=ConfiguredSciHubLandingResolver(
+                (
+                    "https://mirror-one.example",
+                    "https://mirror-two.example/base",
+                )
+            ),
+            locator_fetcher=_fetcher(client),
+        )
+
+        deliveries = list(
+            source._deliveries(
+                request,
+                _evidence(request),
+                CandidateKeyTracker(),
+            )
+        )
+
+        self.assertEqual(
+            [_request_url(call) for call in transport.calls],
+            [
+                f"https://mirror-one.example/{doi}",
+                f"https://mirror-two.example/base/{doi}",
+                "https://mirror-two.example/paper.pdf",
+            ],
+        )
+        self.assertEqual(len(deliveries), 2)
+        landing, downloaded_pdf = deliveries
+        self.assertEqual(_payload(landing), page)
+        self.assertEqual(_payload(downloaded_pdf), pdf)
+        self.assertEqual(downloaded_pdf.candidate.source_name, "sci-hub")
+        self.assertEqual(downloaded_pdf.provenance.source_name, "sci-hub")
+        self.assertIsNone(downloaded_pdf.provenance.source_record_id)
+        self.assertIsNone(downloaded_pdf.safe_source_url)
+        rendered_provenance = downloaded_pdf.provenance.model_dump_json()
+        for hostname in ("mirror-one.example", "mirror-two.example"):
+            self.assertNotIn(hostname, rendered_provenance)
+        self.assertEqual(
+            [scope.provider_name for scope, _policy in coordinator.scopes[:2]],
+            ["mirror-one.example", "mirror-two.example"],
+        )
+        self.assertTrue(all(response.closed for response in responses))
+        for delivery in deliveries:
+            delivery.content.discard()
+
     def test_web_access_profile_resolver_is_local_and_unknown_hosts_use_safe_default(
         self,
     ) -> None:
