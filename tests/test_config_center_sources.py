@@ -55,6 +55,46 @@ class SourcePageTests(unittest.TestCase):
             ],
         )
 
+    def test_source_menu_describes_purpose_activity_and_capability_key_contract(self) -> None:
+        console = Mock()
+        configuration = Configuration()
+        credentials = Mock()
+        credentials.has_provider.return_value = False
+        credentials.field_names.return_value = ()
+        with (
+            patch.object(
+                sources,
+                "load_editable_user_configuration",
+                return_value=configuration,
+            ),
+            patch.object(
+                sources,
+                "metadata_source_providers",
+                return_value=(ProviderName.CROSSREF, ProviderName.CORE),
+            ),
+            patch.object(sources, "load_credentials", return_value=credentials),
+            patch.object(sources, "select_value", return_value="back") as select,
+        ):
+            sources._manage_sources("search", console)
+
+        options = {item.label: item for item in select.call_args.args[1]}
+        self.assertIn("Freeze 2 active Sources", options["Custom"].description)
+        self.assertEqual(
+            options["crossref"].description,
+            "Active · No API key · DOI metadata discovery through the public or polite pool",
+        )
+        self.assertIn("CORE API metadata", options["core"].description)
+        self.assertIn("API key optional · not configured", options["core"].description)
+        self.assertEqual(options["Back"].description, "Return to Search")
+        self.assertEqual(
+            sources._source_credential_description(
+                "download",
+                ProviderName.CORE,
+                credentials,
+            ),
+            "API key required · missing",
+        )
+
     def test_custom_freezes_effective_sources_and_auto_clears_explicit_list(self) -> None:
         console = Mock()
         automatic = Configuration()

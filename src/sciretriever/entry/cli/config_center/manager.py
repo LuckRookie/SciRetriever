@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 
 from sciretriever.configuration import (
     CloakRuntimeManager,
@@ -26,6 +27,7 @@ from sciretriever.entry.cli.config_center.status import show_local_status
 from sciretriever.entry.cli.config_ui import (
     ConfigActionKind,
     ConfigConsole,
+    ConfigOption,
     ConfigTheme,
     TerminalChoice,
     interactive_terminal,
@@ -104,6 +106,13 @@ def configuration_home_rows(
         configuration.access.browser_controller is BrowserController.RULES
         or runtime.agents.browser_locally_ready
     )
+    parser_ready = runtime.parsing.configuration_complete and (
+        not runtime.parsing.bearer_token_required
+        or (
+            runtime.parsing.bearer_token_configured is True
+            and runtime.parsing.credential_origin_matches is True
+        )
+    )
     return {
         "models": (
             f"{model_count} Models · {provider_count} Providers",
@@ -119,10 +128,10 @@ def configuration_home_rows(
             "Ready" if acquisition_count else "Incomplete",
         ),
         "parse": (
-            "MinerU 3.4.4 · protocol 2"
+            "MinerU 3.4.4 · protocol 2 · vlm-engine"
             if configuration.parsing.base_url is not None
             else "not configured",
-            "Ready" if runtime.parsing.configuration_complete else "Incomplete",
+            "Ready" if parser_ready else "Incomplete",
         ),
         "analyze": (
             "not selected"
@@ -149,41 +158,79 @@ def configuration_home_rows(
     }
 
 
-def _render_home(
-    console: ConfigConsole,
-    configuration: Configuration,
-    runtime: ConfigurationRuntimeStatus,
-    browser: BrowserAccessStatus,
-    cloak: object,
-) -> None:
-    rows = configuration_home_rows(configuration, runtime, browser, cloak)
-    parser = configuration.parsing
-    parser_ready = runtime.parsing.configuration_complete and (
-        not runtime.parsing.bearer_token_required
-        or (
-            runtime.parsing.bearer_token_configured is True
-            and runtime.parsing.credential_origin_matches is True
-        )
-    )
-    console.home(
-        models_state=rows["models"][1],
-        models_detail=rows["models"][0],
-        search_state=rows["search"][1],
-        search_detail=rows["search"][0],
-        download_state=rows["download"][1],
-        download_detail=rows["download"][0],
-        parse_state="Ready" if parser_ready else "Incomplete",
-        parse_detail=(
-            "MinerU 3.4.4 · protocol 2 · vlm-engine"
-            if parser.base_url is not None
-            else "Not configured"
+def _configuration_area_options(
+    rows: Mapping[str, tuple[str, str]] | None,
+    *,
+    theme: ConfigTheme,
+) -> tuple[ConfigOption[str], ...]:
+    """Build the home navigation with status visible on every selectable row."""
+
+    fallback = {
+        "models": "Configure Providers, Models, reasoning and image capability",
+        "search": "Choose metadata Sources and the per-Source scan limit",
+        "download": "Choose named PDF acquisition Sources",
+        "parse": "Configure the MinerU parser service",
+        "analyze": "Choose the Model used for Markdown analysis",
+        "browser": "Configure controlled Browser access and its controller",
+    }
+
+    def description(area: str) -> str:
+        if rows is None:
+            return fallback[area]
+        detail, state = rows[area]
+        segments = detail.split(" · ")
+        if segments[0].casefold() == state.casefold():
+            detail = " · ".join(segments[1:])
+        return state if not detail else f"{state} · {detail}"
+
+    return (
+        option("models", "Models", description=description("models")),
+        option("search", "Search", description=description("search")),
+        option("download", "Download", description=description("download")),
+        option("parse", "Parse", description=description("parse")),
+        option("analyze", "Analyze", description=description("analyze")),
+        option("browser", "Browser", description=description("browser")),
+        option(
+            "status",
+            "Status",
+            kind=ConfigActionKind.INSPECT,
+            description="View local readiness · no external requests",
         ),
-        analyze_state=rows["analyze"][1],
-        analyze_detail=rows["analyze"][0],
-        browser_state=rows["browser"][1],
-        browser_detail=rows["browser"][0],
-        status_detail="Local status only · external Tests stay with their owner",
-        theme_detail=console.palette.name.value.title(),
+        option(
+            "theme",
+            "Theme",
+            description=f"{theme.value.title()} palette · local appearance only",
+        ),
+        option(
+            "quit",
+            "Quit",
+            kind=ConfigActionKind.NAVIGATE,
+            description="Close the configuration center",
+        ),
+    )
+
+
+def _plain_area_menu(options: Sequence[ConfigOption[str]]) -> str:
+    shortcuts = {
+        "models": "M",
+        "search": "S",
+        "download": "D",
+        "parse": "P",
+        "analyze": "A",
+        "browser": "B",
+        "status": "I",
+        "theme": "T",
+        "quit": "Q",
+    }
+    left = tuple(f"{item.marker} {shortcuts[item.value]}. {item.label}" for item in options)
+    width = max(len(value) for value in left)
+    rows = tuple(
+        f"  {value.ljust(width)}   {item.description}"
+        for value, item in zip(left, options, strict=True)
+    )
+    return (
+        "SciRetriever configuration center\n"
+        "Local status only · no network requests\n\n" + "\n".join(rows)
     )
 
 
@@ -224,27 +271,18 @@ def _run_plain(theme: str) -> int:
     active_theme = theme
     while True:
         console = ConfigConsole(ConfigTheme.MONO)
+        rows: dict[str, tuple[str, str]] | None = None
         try:
             configuration, runtime = _configuration_summary()
             browser = browser_access_status(configuration)
             cloak = CloakRuntimeManager().status()
-            _render_home(console, configuration, runtime, browser, cloak)
+            rows = configuration_home_rows(configuration, runtime, browser, cloak)
         except ConfigurationError:
             raise
         except (OSError, TypeError, ValueError):
             pass
         console.message(
-            "SciRetriever configuration center\n"
-            "Local status only · no network requests\n\n"
-            "  ◆ M. Models\n"
-            "  ◆ S. Search\n"
-            "  ◆ D. Download\n"
-            "  ◆ P. Parse\n"
-            "  ◆ A. Analyze\n"
-            "  ◆ B. Browser\n"
-            "  ◇ I. Status\n"
-            "  ◆ T. Theme\n"
-            "  × Q. Quit"
+            _plain_area_menu(_configuration_area_options(rows, theme=console.palette.name))
         )
         answer = read_line("Choose M, S, D, P, A, B, I, T, or Q: ")
         if answer is None:
@@ -269,20 +307,10 @@ def _run_rich(theme: str) -> int:
             config_path=os.fspath(configuration_path()),
             credentials_path=os.fspath(credential_path()),
         )
-        _render_home(console, configuration, runtime, browser, cloak)
-        selected = TerminalChoice[object](
+        rows = configuration_home_rows(configuration, runtime, browser, cloak)
+        selected = TerminalChoice[str](
             message="Open a configuration area",
-            options=[
-                option("models", "Models"),
-                option("search", "Search"),
-                option("download", "Download"),
-                option("parse", "Parse"),
-                option("analyze", "Analyze"),
-                option("browser", "Browser"),
-                option("status", "Status", kind=ConfigActionKind.INSPECT),
-                option("theme", "Theme"),
-                option("quit", "Quit", kind=ConfigActionKind.NAVIGATE),
-            ],
+            options=_configuration_area_options(rows, theme=console.palette.name),
             theme=active_theme,
             shortcuts={
                 "a": "analyze",

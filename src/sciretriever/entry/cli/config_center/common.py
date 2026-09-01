@@ -6,6 +6,8 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import Literal, TypeVar
 
+from prompt_toolkit.utils import get_cwidth
+
 from sciretriever.configuration import configuration_diff
 from sciretriever.entry.cli.config_ui import (
     ConfigActionKind,
@@ -24,10 +26,16 @@ def option(
     label: str | None = None,
     *,
     kind: ConfigActionKind = ConfigActionKind.CONFIGURE,
+    description: str = "",
 ) -> ConfigOption[_T]:
     """Build one single-word option without losing its interaction meaning."""
 
-    return ConfigOption(value=value, label=str(value) if label is None else label, kind=kind)
+    return ConfigOption(
+        value=value,
+        label=str(value) if label is None else label,
+        kind=kind,
+        description=description,
+    )
 
 
 def confirm(prompt: str) -> bool:
@@ -61,7 +69,13 @@ def select_value(
         raise ValueError("selection default is not an available value")
     if interactive_terminal():
         choice_options: list[ConfigOption[str | None]] = [
-            ConfigOption(value=item.value, label=item.label, kind=item.kind) for item in values
+            ConfigOption(
+                value=item.value,
+                label=item.label,
+                kind=item.kind,
+                description=item.description,
+            )
+            for item in values
         ]
         choice_options.append(
             ConfigOption(
@@ -80,9 +94,10 @@ def select_value(
         ).prompt()
     console.message(prompt, kind="muted")
     default_index: int | None = None
+    label_width = max(get_cwidth(item.plain_label) for item in values)
     for index, item in enumerate(values, start=1):
         marker = " [default]" if item.value == default else ""
-        sys.stderr.write(f"  {index}. {item.plain_label}{marker}\n")
+        sys.stderr.write(f"  {index}. {item.plain_row(label_width=label_width)}{marker}\n")
         if item.value == default:
             default_index = index
     suffix = f" [{default_index}]" if default_index is not None else ""

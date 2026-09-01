@@ -433,6 +433,12 @@ Enter、Esc/左方向键返回、首页快捷键和隐藏输入；长 Model/Prov
 mono；状态不能只靠颜色表达。所有交互、确认和 setup 结果写 stderr，stdout 为空；Ctrl+C/EOF
 取消不产生写入。旧 `config set/remove` 保持无效。
 
+`ConfigOption.label` 保持单词级稳定选择合同，`description` 是同一行右侧的只读展示合同。共享
+TerminalChoice 统一对齐说明列、按终端宽度截断，并允许长列表同时按 label 或 description 搜索；
+非 TTY 编号菜单输出同一说明。首页 description 来自本次已读取的本地状态快照，展示各 area 的
+Ready/Incomplete/Off 与关键选择，不发起额外 probe。该可操作列表是 area 状态的唯一首页表示，
+不再在其前面渲染重复的静态 summary table；顶部只显示配置文件位置和 local/no-network 边界。
+
 `Models` 与 Provider 使用对象页：
 
 ```text
@@ -475,7 +481,10 @@ Sources。两者的 Sources 都只有 Auto/Custom 两层；Auto 页可以切换 
 或逐项修改精确列表。Auto → Custom 冻结当时的有效集合和顺序，Custom → Auto 清空固定列表。
 选中具体 Source 后，对象页按该 Source 的能力就近提供 `Setup`、`Key`、`Test`、`Enable` 或
 `Disable`；Key 与普通参数不会自行启用 Source。Search Auto 仍可配置 Crossref anonymous/polite。
-Sci-Hub 的 `Mirrors` 只在 Sci-Hub 对象页出现，修改镜像不会启用 Sci-Hub。
+每个 Sources 选择行的 description 由 Source 用途、当前 Active/Off 状态和 capability-scoped
+credential status 组成；因此同一 CORE Source 在 Metadata 显示可选 API key，在 Acquisition
+显示必需 API key。读取只经过 secret-opaque credential presence 接口。Sci-Hub 的 `Mirrors` 只在
+Sci-Hub 对象页出现，修改镜像不会启用 Sci-Hub。
 
 `Parse → Setup` 连续配置 MinerU Service、远程 PDF upload 授权和所需 exact-origin bearer token；
 loopback 不询问 token，remote 必须在同一流程明确确认 Upload。`Analyze → Setup` 连续选择 Model 与

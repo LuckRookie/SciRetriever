@@ -17,6 +17,7 @@ from prompt_toolkit.output import Output, create_output
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 from prompt_toolkit.shortcuts.prompt import prompt as prompt_text
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -26,6 +27,23 @@ from rich.text import Text
 _T = TypeVar("_T")
 _NO_BACK = object()
 _SEARCH_CHOICE = object()
+
+
+def _truncate_display(value: str, width: int) -> str:
+    if get_cwidth(value) <= width:
+        return value
+    if width <= 1:
+        return ""
+    available = width - 1
+    result: list[str] = []
+    consumed = 0
+    for character in value:
+        character_width = get_cwidth(character)
+        if consumed + character_width > available:
+            break
+        result.append(character)
+        consumed += character_width
+    return "".join(result).rstrip() + "…"
 
 
 class ConfigTheme(str, Enum):
@@ -52,10 +70,17 @@ class ConfigOption(Generic[_T]):
     value: _T
     label: str
     kind: ConfigActionKind = ConfigActionKind.CONFIGURE
+    description: str = ""
 
     def __post_init__(self) -> None:
         if not self.label or any(character.isspace() for character in self.label):
             raise ValueError("configuration option label must be one word")
+        if type(self.description) is not str:
+            raise TypeError("configuration option description must be text")
+        if self.description != self.description.strip() or any(
+            character in self.description for character in "\r\n"
+        ):
+            raise ValueError("configuration option description must be one trimmed line")
 
     @property
     def marker(self) -> str:
@@ -73,8 +98,35 @@ class ConfigOption(Generic[_T]):
     def plain_label(self) -> str:
         return f"{self.marker} {self.label}"
 
-    def prompt_label(self) -> FormattedText:
-        return FormattedText([(f"class:action.{self.kind.value}", self.plain_label)])
+    def plain_row(self, *, label_width: int) -> str:
+        """Return one aligned row for the deterministic non-TTY menu."""
+
+        if not self.description:
+            return self.plain_label
+        label_display_width = get_cwidth(self.plain_label)
+        padding = " " * (max(label_width, label_display_width) - label_display_width + 3)
+        return f"{self.plain_label}{padding}{self.description}"
+
+    def prompt_label(
+        self,
+        *,
+        label_width: int,
+        description_width: int | None = None,
+    ) -> FormattedText:
+        fragments = [(f"class:action.{self.kind.value}", self.plain_label)]
+        if not self.description or description_width == 0:
+            return FormattedText(fragments)
+        description = (
+            self.description
+            if description_width is None
+            else _truncate_display(self.description, description_width)
+        )
+        if not description:
+            return FormattedText(fragments)
+        label_display_width = get_cwidth(self.plain_label)
+        padding = " " * (max(label_width, label_display_width) - label_display_width + 3)
+        fragments.append(("class:option.description", f"{padding}{description}"))
+        return FormattedText(fragments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,62 +252,17 @@ class ConfigConsole:
         body = Table.grid(padding=(0, 1))
         body.add_column(style=self.palette.muted, no_wrap=True)
         body.add_column(overflow="fold")
-        body.add_row("Project", config_path)
+        body.add_row("Config", config_path)
         body.add_row("Secrets", credentials_path)
-        body.add_row("Theme", self.palette.name.value.title())
-        body.add_row("Network", "Local status only · no network requests")
         self.console.print(
             Panel(
                 body,
                 title="SciRetriever · Configuration",
+                subtitle=Text("LOCAL · NO NETWORK REQUESTS", style=self.palette.muted),
                 border_style=self.palette.border,
                 box=box.ROUNDED,
                 padding=(0, 1),
             )
-        )
-
-    def home(
-        self,
-        *,
-        models_state: str,
-        models_detail: str,
-        search_state: str,
-        search_detail: str,
-        download_state: str,
-        download_detail: str,
-        parse_state: str,
-        parse_detail: str,
-        analyze_state: str,
-        analyze_detail: str,
-        browser_state: str,
-        browser_detail: str,
-        status_detail: str = "Local readiness; no network requests",
-        theme_detail: str = "Auto",
-    ) -> None:
-        areas = self._home_table()
-        for shortcut, label, detail, state in (
-            ("[M]", "Models", models_detail, models_state),
-            ("[S]", "Search", search_detail, search_state),
-            ("[D]", "Download", download_detail, download_state),
-            ("[P]", "Parse", parse_detail, parse_state),
-            ("[A]", "Analyze", analyze_detail, analyze_state),
-            ("[B]", "Browser", browser_detail, browser_state),
-            ("[I]", "Status", status_detail, "Local"),
-            ("[T]", "Theme", theme_detail, "Local"),
-        ):
-            areas.add_row(
-                shortcut,
-                label,
-                detail,
-                _state_text(state, self.palette),
-            )
-        self.console.print(Text("CONFIGURATION AREAS", style=self.palette.heading))
-        self.console.print(areas)
-        self.console.print(
-            "[dim]↑↓ Move · Enter Open · M Models · S Search · D Download · P Parse · "
-            "A Analyze · B Browser · I Status · T Theme · Q Quit[/dim]"
-            if not self.palette.no_color
-            else "Move: arrows  Open: Enter  Shortcuts: M/S/D/P/A/B/I/T/Q"
         )
 
     def access(
@@ -298,14 +305,6 @@ class ConfigConsole:
                 style=self.palette.muted,
             )
         )
-
-    def _home_table(self) -> Table:
-        table = Table(box=None, pad_edge=False, expand=True, show_header=False)
-        table.add_column(width=5, style=self.palette.accent)
-        table.add_column(ratio=2)
-        table.add_column(ratio=3, style=self.palette.muted)
-        table.add_column(width=16, justify="right")
-        return table
 
     def section(self, title: str, subtitle: str | None = None) -> None:
         text = Text(title, style=self.palette.heading)
@@ -1135,6 +1134,7 @@ class TerminalChoice(Generic[_T]):
         try:
             with create_app_session(input=input_stream, output=output_stream):
                 visible_options = list(self.options)
+                label_width = max(get_cwidth(option.plain_label) for option in self.options)
                 while True:
                     bindings = KeyBindings()
                     for key, value in self.shortcuts.items():
@@ -1151,10 +1151,21 @@ class TerminalChoice(Generic[_T]):
                         toolbar += " · / search"
                     toolbar += " · Ctrl+C cancel · ◆ set · ◇ view · ▶ test · ! danger · ← control"
                     visible_values = {option.value for option in visible_options}
+                    description_width = max(
+                        0,
+                        output_stream.get_size().columns - label_width - 8,
+                    )
                     chooser = ChoiceInput[object](
                         message=self.message,
                         options=[
-                            (option.value, option.prompt_label()) for option in visible_options
+                            (
+                                option.value,
+                                option.prompt_label(
+                                    label_width=label_width,
+                                    description_width=description_width,
+                                ),
+                            )
+                            for option in visible_options
                         ],
                         default=self.default if self.default in visible_values else None,
                         symbol="›",
@@ -1169,7 +1180,10 @@ class TerminalChoice(Generic[_T]):
                         return cast(_T, result)
                     query = prompt_text("Search: ").strip().casefold()
                     filtered = [
-                        option for option in self.options if query in option.label.casefold()
+                        option
+                        for option in self.options
+                        if query in option.label.casefold()
+                        or query in option.description.casefold()
                     ]
                     visible_options = filtered or list(self.options)
         finally:
@@ -1193,6 +1207,7 @@ def _prompt_style(theme: ConfigTheme) -> Style:
                 "action.test": "bold",
                 "action.danger": "bold",
                 "action.navigate": "dim",
+                "option.description": "dim",
                 "bottom-toolbar": "reverse",
             }
         )
@@ -1205,6 +1220,7 @@ def _prompt_style(theme: ConfigTheme) -> Style:
                 "action.test": "fg:#af5f00",
                 "action.danger": "bold fg:#af0000",
                 "action.navigate": "fg:#666666",
+                "option.description": "fg:#666666",
                 "input-selection": "fg:#1c1c1c",
                 "bottom-toolbar": "fg:#4e4e4e bg:#eeeeee",
             }
@@ -1217,6 +1233,7 @@ def _prompt_style(theme: ConfigTheme) -> Style:
             "action.test": "fg:#ffd75f",
             "action.danger": "bold fg:#ff5f5f",
             "action.navigate": "fg:#a8a8a8",
+            "option.description": "fg:#a8a8a8",
             "input-selection": "fg:#eeeeee",
             "bottom-toolbar": "fg:#bcbcbc bg:#262626",
         }

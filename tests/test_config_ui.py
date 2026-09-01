@@ -257,20 +257,6 @@ class ConfigPresentationTests(unittest.TestCase):
         ):
             console = ConfigConsole("dark")
             console.header(config_path="/tmp/config.toml", credentials_path="credentials.toml")
-            console.home(
-                models_state="Ready",
-                models_detail="1 Service · 2 Profiles",
-                search_state="Ready",
-                search_detail="2 sources",
-                download_state="Ready",
-                download_detail="browser · agent",
-                parse_state="Incomplete",
-                parse_detail="Not configured",
-                analyze_state="Ready",
-                analyze_detail="summary",
-                browser_state="Incomplete",
-                browser_detail="Profile not selected",
-            )
             console.access(
                 api_routes=(("Wiley", "Ready", "No local action"),),
                 browser_state="Unavailable",
@@ -281,12 +267,7 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         rendered = stderr.getvalue()
         self.assertIn("SciRetriever · Configuration", rendered)
-        self.assertIn("CONFIGURATION AREAS", rendered)
-        self.assertIn("Models", rendered)
-        self.assertIn("Search", rendered)
-        self.assertIn("Download", rendered)
-        self.assertIn("Parse", rendered)
-        self.assertIn("Analyze", rendered)
+        self.assertIn("LOCAL · NO NETWORK REQUESTS", rendered)
         self.assertIn("Controlled Browser", rendered)
         self.assertIn("Proposed ordinary configuration", rendered)
         self.assertIn("changes", rendered)
@@ -325,25 +306,24 @@ class ConfigPresentationTests(unittest.TestCase):
         self.assertNotIn("image_bytes", rendered)
         self.assertNotIn(_SECRET, rendered)
 
-    def test_home_renders_layered_configuration_areas_without_role_duplication(self) -> None:
+    def test_header_keeps_context_without_duplicating_configuration_navigation(self) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            ConfigConsole("mono", width=80).home(
-                models_state="Incomplete",
-                models_detail="1 Provider · no Models",
-                search_state="Ready",
-                search_detail="3 metadata sources · keys stay with Search",
-                download_state="Review",
-                download_detail="rules · Browser Profile not selected",
-                parse_state="Incomplete",
-                parse_detail="not configured",
-                analyze_state="Incomplete",
-                analyze_detail="model not selected",
-                browser_state="Incomplete",
-                browser_detail="Profile not selected",
+            ConfigConsole("mono", width=80).header(
+                config_path="/tmp/config.toml",
+                credentials_path="/tmp/credentials.toml",
             )
         rendered = stderr.getvalue()
         semantic_text = " ".join(rendered.split())
+        for value in (
+            "SciRetriever · Configuration",
+            "Config",
+            "/tmp/config.toml",
+            "Secrets",
+            "/tmp/credentials.toml",
+            "LOCAL · NO NETWORK REQUESTS",
+        ):
+            self.assertIn(value, semantic_text)
         for value in (
             "CONFIGURATION AREAS",
             "Models",
@@ -354,19 +334,6 @@ class ConfigPresentationTests(unittest.TestCase):
             "Browser",
             "Status",
             "Theme",
-            "keys stay",
-            "with Search",
-        ):
-            self.assertIn(value, semantic_text)
-        for value in (
-            "Providers & API Keys",
-            "MinerU Parser",
-            "Literature Sources / Access",
-            "Browser Runtime",
-            "Diagnostics / Status",
-            "Appearance",
-            "Agent provider",
-            "Analysis role",
         ):
             self.assertNotIn(value, rendered)
         self.assertNotIn("fingerprint_seed", rendered)
@@ -624,6 +591,24 @@ class TerminalChoiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one word"):
             ConfigOption("invalid", "Two words")
 
+    def test_option_description_is_aligned_separately_from_its_single_word_label(self) -> None:
+        item = ConfigOption(
+            "core",
+            "core",
+            description="Active · CORE API · API key optional",
+        )
+
+        self.assertEqual(
+            item.plain_row(label_width=12),
+            "◆ core         Active · CORE API · API key optional",
+        )
+        fragments = list(item.prompt_label(label_width=12, description_width=80))
+        self.assertEqual(fragments[0], ("class:action.configure", "◆ core"))
+        self.assertEqual(fragments[1][0], "class:option.description")
+        self.assertTrue(fragments[1][1].endswith("API key optional"))
+        with self.assertRaisesRegex(ValueError, "one trimmed line"):
+            ConfigOption("invalid", "Invalid", description="two\nlines")
+
     def test_shortcut_uses_public_prompt_session_and_returns_mapped_value(self) -> None:
         with create_pipe_input() as pipe:
             pipe.send_text("a")
@@ -675,10 +660,13 @@ class TerminalChoiceTests(unittest.TestCase):
 
     def test_search_filters_a_long_choice_list_before_selection(self) -> None:
         with create_pipe_input() as pipe:
-            pipe.send_text("/second\r\r")
+            pipe.send_text("/citation\r\r")
             result = TerminalChoice[str](
                 message="Choose a model",
-                options=(ConfigOption("first", "First"), ConfigOption("second", "Second")),
+                options=(
+                    ConfigOption("first", "First", description="Metadata"),
+                    ConfigOption("second", "Second", description="Citation API"),
+                ),
                 searchable=True,
                 input_factory=lambda: pipe,
                 output_factory=DummyOutput,

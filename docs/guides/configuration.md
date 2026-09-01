@@ -530,6 +530,12 @@ Models / Search / Download / Parse / Analyze / Browser / Status / Theme / Quit
 首页只读取本地状态并明确显示不发网络请求；外部测试位于对应 owner 页的 `Test` 或公开
 `config test` 命令，只能由用户显式触发。
 
+菜单左列继续只使用单词级责任名称和动作标记，右列显示不改变选项值的解释与本地状态。首页的
+右列直接预览各 area 的 Ready/Incomplete/Off 状态及关键选择；`Status`、`Theme` 和 `Quit` 显示
+各自作用。选择列表是 area 状态与导航的唯一表示，前面不会再打印一份重复的静态
+`CONFIGURATION AREAS` 表格。顶部 Panel 只保留普通配置/凭据文件位置和 `LOCAL · NO NETWORK
+REQUESTS` 边界。说明过长时按当前终端宽度安全截断，不改变左列标签、快捷键或所选值。
+
 TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、Enter、Esc/左方向键返回、
 `M/S/D/P/A/B/I/T/Q` 首页快捷键与隐藏输入；模型和 Literature Provider 等长列表还支持 `/`
 搜索。重定向输入或基础终端使用确定性编号菜单。主题支持 `auto/dark/light/mono`，`NO_COLOR`
@@ -584,7 +590,9 @@ Search/Download 的 Sources 使用 Auto/Custom 两层。Auto → Custom 会冻�
 Custom → Auto 会删除固定 providers 并重新跟随版本 catalog。Search 的 Limit 修改唯一逐 Source
 raw-item 上限。选中具体 Source 后，对象页按能力提供 `Setup`、`Key`、`Test`、`Enable` 或
 `Disable`；Search Auto 的 Crossref anonymous/polite 也在 Crossref 的 `Setup` 中配置。凭据和普通
-参数不会改变有效集合。Sci-Hub 只提供 `Mirrors`，不会询问 Key。
+参数不会改变有效集合。Sources 选择列表的右列同时显示 Active/Off、用途以及当前能力的凭据合同
+和本地存在状态；例如 CORE 在 Search 显示 API key 可选，在 Download 显示 API key 必需。这里
+只读取 secret 是否存在，绝不显示值、长度或特征。Sci-Hub 只提供 `Mirrors`，不会询问 Key。
 
 `Analyze → Setup` 选择全部已配置 Model 并连续确认八项业务预算；首次选择 Model 时缺失预算会使用
 产品固定安全初值，已有完整预算保持不变。`Browser → Setup` 在选择 Agent controller 时只列出

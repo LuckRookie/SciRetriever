@@ -9,8 +9,11 @@ from pydantic import ValidationError
 from sciretriever.acquisition.api import BUILTIN_SCI_HUB_MIRROR_URLS
 from sciretriever.bootstrap import build_production_configuration_probe_session
 from sciretriever.configuration import (
+    CredentialLookup,
     acquisition_source_providers,
     configurable_credential_providers,
+    credential_status_for,
+    load_credentials,
     load_editable_user_configuration,
     load_user_configuration,
     metadata_source_providers,
@@ -36,9 +39,12 @@ from sciretriever.entry.cli.config_ui import (
 from sciretriever.model.configuration import (
     AcquisitionSourcesConfig,
     Configuration,
+    CredentialStatus,
     CrossrefAccessMode,
     CrossrefMetadataConfig,
     MetadataSourcesConfig,
+    ProviderCapability,
+    ProviderCredentialStatus,
     ProviderName,
     SciHubAcquisitionConfig,
     SourceMode,
@@ -87,11 +93,69 @@ _SOURCE_PURPOSES: dict[ProviderName, str] = {
     ProviderName.SPRINGER: "Springer Nature metadata; direct primary-PDF API is unavailable.",
     ProviderName.WILEY: "Entitlement-bound Wiley TDM primary-PDF access.",
     ProviderName.DATACITE: "DOI metadata and saved landing/direct-file hints.",
-    ProviderName.CORE: "Open metadata and credentialed full-text PDF access.",
+    ProviderName.CORE: "CORE API metadata and credentialed full-text PDF access.",
     ProviderName.OPENCITATIONS: "Identifier lookup and citation relations.",
     ProviderName.UNPAYWALL: "OA location discovery using an operator contact email.",
     ProviderName.SCI_HUB: "Operator-enabled mirror lookup outside the default-safe catalog.",
 }
+
+
+def _credential_label(status: ProviderCredentialStatus) -> str:
+    names = {field.name for field in status.fields}
+    if "api_key" in names:
+        return "API key"
+    if "tdm_api_token" in names:
+        return "TDM token"
+    if "access_token" in names:
+        return "Access token"
+    return "Credential"
+
+
+def _source_credential_description(
+    capability: Literal["search", "download"],
+    provider: ProviderName,
+    credentials: CredentialLookup,
+) -> str:
+    provider_capability = (
+        ProviderCapability.METADATA if capability == "search" else ProviderCapability.ACQUISITION
+    )
+    status = credential_status_for(
+        provider,
+        provider_capability,
+        credentials=credentials,
+        supported_capabilities=(provider_capability,),
+    )
+    if status.status is CredentialStatus.NOT_REQUIRED:
+        return "No API key"
+    if status.status is CredentialStatus.UNSUPPORTED:
+        return "Direct API unavailable"
+
+    label = _credential_label(status)
+    required = tuple(field for field in status.fields if field.required)
+    if status.status is CredentialStatus.MISSING:
+        return f"{label} required · missing"
+    if status.status is CredentialStatus.PARTIAL:
+        return f"{label} incomplete"
+    if status.status is CredentialStatus.OPTIONAL_MISSING:
+        if required:
+            return f"{label} configured · optional credential not set"
+        return f"{label} optional · not configured"
+    if required:
+        return f"{label} configured"
+    return f"{label} optional · configured"
+
+
+def _source_option_description(
+    capability: Literal["search", "download"],
+    provider: ProviderName,
+    *,
+    enabled: bool,
+    credentials: CredentialLookup,
+) -> str:
+    activity = "Active" if enabled else "Off"
+    purpose = _SOURCE_PURPOSES[provider].removesuffix(".")
+    credential = _source_credential_description(capability, provider, credentials)
+    return f"{activity} · {credential} · {purpose}"
 
 
 def _configure_web_of_science(
@@ -658,6 +722,7 @@ def _manage_sources(
         )
         candidates = _METADATA_SOURCES if capability == "search" else _ACQUISITION_SOURCES
         visible = effective if current.mode is SourceMode.AUTO else candidates
+        credentials = load_credentials(home=None)
         console.page(
             f"{capability.title()} · Sources",
             "Auto follows the version-maintained default-safe catalog. Custom freezes an exact "
@@ -677,9 +742,31 @@ def _manage_sources(
             option(
                 "custom" if current.mode is SourceMode.AUTO else "auto",
                 "Custom" if current.mode is SourceMode.AUTO else "Auto",
+                description=(
+                    f"Freeze {len(effective)} active Sources as an editable ordered list"
+                    if current.mode is SourceMode.AUTO
+                    else "Use the version-maintained default-safe Source catalog"
+                ),
             ),
-            *(option(f"source:{provider.value}", provider.value) for provider in visible),
-            option("back", "Back", kind=ConfigActionKind.NAVIGATE),
+            *(
+                option(
+                    f"source:{provider.value}",
+                    provider.value,
+                    description=_source_option_description(
+                        capability,
+                        provider,
+                        enabled=provider in effective,
+                        credentials=credentials,
+                    ),
+                )
+                for provider in visible
+            ),
+            option(
+                "back",
+                "Back",
+                kind=ConfigActionKind.NAVIGATE,
+                description=f"Return to {capability.title()}",
+            ),
         ]
         selected = select_value(
             "Sources",

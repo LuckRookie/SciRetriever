@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from sciretriever.entry.cli.config_center import manager
-from sciretriever.entry.cli.config_ui import ConfigActionKind, TerminalChoice
+from sciretriever.entry.cli.config_ui import ConfigActionKind, ConfigTheme, TerminalChoice
 from sciretriever.model.configuration import BrowserProfilePresence, Configuration
 
 
@@ -60,12 +60,21 @@ class ConfigurationManagerTests(unittest.TestCase):
 
     def test_rich_home_exposes_exact_single_word_areas_and_semantic_controls(self) -> None:
         console = Mock()
+        console.palette.name = ConfigTheme.MONO
+        rows = {
+            "models": ("1 Model · 1 Provider", "Ready"),
+            "search": ("auto · 8 Sources · Limit 500 / Source", "Ready"),
+            "download": ("auto · 2 Sources", "Ready"),
+            "parse": ("not configured", "Incomplete"),
+            "analyze": ("not selected", "Incomplete"),
+            "browser": ("off · rules · no Model", "Off"),
+        }
         with (
             patch.object(manager, "ConfigConsole", return_value=console),
             patch.object(manager, "_configuration_summary", return_value=(Configuration(), Mock())),
             patch.object(manager, "browser_access_status", return_value=Mock()),
             patch.object(manager, "CloakRuntimeManager") as runtime_manager,
-            patch.object(manager, "_render_home"),
+            patch.object(manager, "configuration_home_rows", return_value=rows),
             patch.object(TerminalChoice, "__init__", return_value=None) as initialize,
             patch.object(TerminalChoice, "prompt", return_value="quit"),
         ):
@@ -73,6 +82,7 @@ class ConfigurationManagerTests(unittest.TestCase):
             result = manager._run_rich("mono")
 
         self.assertEqual(result, 0)
+        console.header.assert_called_once()
         options = initialize.call_args.kwargs["options"]
         self.assertEqual(
             [item.label for item in options],
@@ -89,6 +99,15 @@ class ConfigurationManagerTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(" " not in item.label for item in options))
+        self.assertTrue(all(item.description for item in options))
+        self.assertEqual(options[0].description, "Ready · 1 Model · 1 Provider")
+        self.assertEqual(
+            options[3].description,
+            "Incomplete · not configured",
+        )
+        self.assertIn("no external requests", options[6].description)
+        self.assertEqual(options[5].description, "Off · rules · no Model")
+        self.assertEqual(options[7].description, "Mono palette · local appearance only")
         self.assertIs(options[6].kind, ConfigActionKind.INSPECT)
         self.assertIs(options[-1].kind, ConfigActionKind.NAVIGATE)
 
