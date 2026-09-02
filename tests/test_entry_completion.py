@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import logging
 import threading
 import unittest
 from collections.abc import Generator
@@ -1956,17 +1957,33 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertEqual(len(report.goal_reached), 1)
 
         wide = _World((_current(1, 1, exhausted=True),))
-        report = _operation(wide)(
-            BatchRequest(
-                selector=MetaLiteratureSelector(
-                    kind="meta-literatures",
-                    meta_literature_ids=(_meta_id(1),),
-                ),
-                goal="ASSET_READY",
+        with self.assertLogs("sciretriever.entry.completion", level="INFO") as captured:
+            report = _operation(wide)(
+                BatchRequest(
+                    selector=MetaLiteratureSelector(
+                        kind="meta-literatures",
+                        meta_literature_ids=(_meta_id(1),),
+                    ),
+                    goal="ASSET_READY",
+                )
             )
-        )
         self.assertEqual(wide.clear_calls, [])
         self.assertEqual(report.needs_manual_pdf[0].literature_ids, (_literature_id(1),))
+        target = next(
+            record
+            for record in captured.records
+            if "outcome=needs-manual-pdf" in record.getMessage()
+        )
+        summary = next(
+            record
+            for record in captured.records
+            if "event=completion-finished" in record.getMessage()
+        )
+        self.assertEqual(target.levelno, logging.WARNING)
+        self.assertIn("reason=Automatic PDF acquisition was exhausted", target.getMessage())
+        self.assertIn("action=Import a PDF manually", target.getMessage())
+        self.assertEqual(summary.levelno, logging.WARNING)
+        self.assertIn("outcome=action-required", summary.getMessage())
 
     def test_no_usable_content_cleanup_continues_candidates_and_records_once(self) -> None:
         world = _World((_current(1, 1),))
@@ -2195,6 +2212,25 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertRegex(output, r"event=completion-target-finished .*elapsed_ms=\d+")
         self.assertRegex(output, r"event=completion-target-failed .*elapsed_ms=\d+")
         self.assertRegex(output, r"event=completion-finished .*elapsed_ms=\d+")
+        target_starts = [
+            record
+            for record in captured.records
+            if "event=completion-target-started" in record.getMessage()
+        ]
+        target_failures = [
+            record
+            for record in captured.records
+            if "event=completion-target-failed" in record.getMessage()
+        ]
+        final_summaries = [
+            record
+            for record in captured.records
+            if "event=completion-finished" in record.getMessage()
+        ]
+        self.assertEqual([record.levelno for record in target_starts], [logging.INFO] * 2)
+        self.assertEqual([record.levelno for record in target_failures], [logging.WARNING])
+        self.assertEqual([record.levelno for record in final_summaries], [logging.WARNING])
+        self.assertIn("outcome=action-required", final_summaries[0].getMessage())
         for forbidden in (
             "https://private.invalid",
             "Cookie",
@@ -2224,7 +2260,8 @@ class DatabaseCompletionTests(unittest.TestCase):
             goal="CONTENT_READY",
         )
 
-        first = _operation(world, max_concurrency=3)(request)
+        with self.assertLogs("sciretriever.entry", level="DEBUG") as captured:
+            first = _operation(world, max_concurrency=3)(request)
         self.assertEqual(first.end.kind, "finished")
         self.assertEqual(
             {item.literature_id for item in first.failed},
@@ -2238,6 +2275,21 @@ class DatabaseCompletionTests(unittest.TestCase):
         self.assertIsNone(world.values[parser_failed_id].current.current_parser_result)
         self.assertIsNotNone(world.values[llm_failed_id].current.current_parser_result)
         self.assertIsNotNone(world.values[successful_id].current.current_content)
+        output = "\n".join(captured.output)
+        self.assertIn("event=completion-stage-started", output)
+        self.assertIn("stage=parsing", output)
+        self.assertIn("stage=analysis", output)
+        self.assertIn("code=parser-once", output)
+        self.assertIn("code=llm-once", output)
+        self.assertIn("reason=The offline completion fixture stopped this stage.", output)
+        self.assertIn("action=Refresh the fixture facts and retry this target.", output)
+        stage_steps = [
+            record
+            for record in captured.records
+            if "event=completion-stage-" in record.getMessage()
+        ]
+        self.assertTrue(stage_steps)
+        self.assertTrue(all(record.levelno == logging.DEBUG for record in stage_steps))
 
         parser_calls_before = len(world.parser_calls)
         analysis_calls_before = len(world.analysis_calls)

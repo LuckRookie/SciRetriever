@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-28
+- Last amended: 2026-09-01
 - Supersedes: [ADR 0020](0020-reusable-model-profiles-and-task-bindings.md)
 - Superseded by: none
 - Amends: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0018](0018-fixed-user-configuration-home.md)
@@ -16,7 +17,7 @@ Model Service 与可复用 Model Profile，并要求 Profile 保存 context/outp
 格式/数量/大小和 tool decision 等字段。实际配置流程证明这种形状把三类不同事实混在了一起：
 
 1. endpoint、wire API 与凭据作用域是 Provider 连接事实；
-2. 远端 model identity、用户选择的思考程度和是否允许图片输入是 Model 事实；
+2. 远端 model identity、用户选择的思考程度、是否允许图片输入和是否使用流式响应是 Model 事实；
 3. 严格结构化输出、工具集合、图片格式/数量、输入输出预算和验收规则是 Analyze 或 Download 的
    调用合同。
 
@@ -66,7 +67,7 @@ origin = "https://models.example.com"
 普通配置与凭据使用同一 Provider name，但文件、schema 和发布事务仍然分离。status 只显示 key
 是否 required/configured/origin-matched，不显示 secret、mask、长度、hash 或其它特征。
 
-### 2. Model 只拥有身份、思考程度和图片输入选择
+### 2. Model 只拥有身份、思考程度、图片输入和流式响应选择
 
 Model 注册表直接以完整 `provider/model` 为唯一身份：
 
@@ -74,16 +75,18 @@ Model 注册表直接以完整 `provider/model` 为唯一身份：
 [models."example/gpt-5.6-luna"]
 reasoning = "max"
 image = true
+stream = true
 ```
 
 每个 Model 只拥有：
 
 - `reference = provider/model`；
 - `reasoning`；
-- `image`。
+- `image`；
+- `stream`。
 
 `reference` 必须引用已经存在的 Provider。相同 `provider/model` 只有一个当前配置，不再增加本地
-Profile、Preset、Entry 或 alias。修改 reasoning/image 就是修改该 Model；删除仍被 Analyze 或
+Profile、Preset、Entry 或 alias。修改 reasoning/image/stream 就是修改该 Model；删除仍被 Analyze 或
 Download 选择的 Model 必须失败，删除仍有 Model 引用的 Provider 也必须失败。
 
 reasoning 的中性值固定为：
@@ -95,6 +98,12 @@ default / none / minimal / low / medium / high / xhigh / max
 `default` 表示 wire adapter 完全省略 reasoning effort 字段；其它值按适用协议精确编码。配置和
 adapter 不根据 Provider 或 model 名称静默降级、映射或猜测支持程度；真实支持情况由显式 Model
 probe 验证。`image` 只表示该 Model 可被需要图片输入的模块选择，不承载 MIME、数量或字节上限。
+
+`stream` 默认 `true`，并由三种当前协议共同遵守：OpenAI Responses、OpenAI Chat Completions 与
+Anthropic Messages 都明确发送流式请求，由 Agents 私有 adapter 在有界响应内重建一个完整结果。
+用户可在具体 Model 将其设为 `false`，此时同一 adapter 明确请求并解析非流式 JSON。Analyze 与
+Browser 只继承所选 Model 的值，不能覆盖；adapter 不自动协商，也不能在流式失败后补发非流式
+请求或在非流式失败后补发流式请求。
 
 ### 3. Analyze 与 Browser 直接选择 Model
 
@@ -112,7 +121,7 @@ Analyze 只拥有 Model 选择和文献分析的阶段 output、输入、chunk�
 Browser 只拥有 controller Model 选择以及 Browser 开关、Rules/Agent controller、固定 Browser
 identity、本机并发 cap 和 policy 收紧。普通配置出于 Acquisition 运行合同仍把这些字段持久化在
 `[download]`，但配置 UX 和用户责任名称统一称为 Browser；Download 一级页只管理 PDF Source。
-二者不保存 Provider、API、Base URL、key 或 reasoning override，切换一个任务的 Model 不修改 Model，
+二者不保存 Provider、API、Base URL、key、reasoning 或 stream override，切换一个任务的 Model 不修改 Model，
 也不修改另一个任务。
 
 Analyze 可以选择任意已配置 Model；其严格结构化文本合同由 Analysis 与 Bootstrap 派生并通过
@@ -133,15 +142,16 @@ Analyze 调用固定派生为 strict structured output、文本输入、无工�
 有界 PNG 图片、一个封闭工具集合、必须返回 tool decision；图片格式、数量、字节、单次 output
 与操作级步数/时间/重复动作限制分别由 Agents、Acquisition 和 Network 的所属合同管理。
 
-用户声明的 Model 不能放宽这些合同。adapter 或远端模型不满足时，显式 `config test llm` 或
-`config test browser-agent` 返回稳定失败；系统不能通过向配置暴露更多 capability 开关绕过失败。
+用户声明的 Model 不能放宽这些合同。adapter 或远端模型不满足时，显式
+`config test analyze`、`config test browser model` 或具体 Model probe 返回稳定失败；系统不能
+通过向配置暴露更多 capability 开关绕过失败。
 
 ### 5. 新增 Model 时自动读取模型目录
 
 `Models → Add` 使用一个连续流程：
 
 ```text
-Provider → URL → API → Key → Model → Reasoning → Image → Save
+Provider → URL → API → Key → Model → Reasoning → Image → Stream → Save
 ```
 
 用户可以选择已有 Provider 或 `New`。内置 Provider 选择只提供已知 URL/API 初值，不增加另一套
@@ -165,19 +175,19 @@ Model、Provider 与各 owner 的对象操作保持单词级：
 
 ```text
 Models:    Add / <Model> / Providers / Back
-Model:     Edit / Remove / Back
+Model:     Edit / Test / Remove / Back
 Providers: Add / <Provider> / Back
 Provider:  Edit / Key / Test / Remove / Back
 
-Search:    Sources / Limit / Back
-Download:  Sources / Back
+Search:    Sources / Limit / Test / Back
+Download:  Sources / Test / Back
 Parse:     Setup / Test / Reset / Back
 Analyze:   Setup / Test / Reset / Back
-Browser:   Setup / Profiles / Runtime / Test / Reset / Back
+Browser:   Setup / Profiles / Runtime / Test(Model/Site) / Reset / Back
 ```
 
-选中具体 Model 后，`Edit` 只编辑 reasoning 与 image；Provider endpoint/API/key 进入具体 Provider
-对象页。Search 与 Download 选中具体 Source 后，就近显示它实际支持的 `Setup`、`Key`、`Test`、
+选中具体 Model 后，`Edit` 只编辑 reasoning、image 与 stream；Provider endpoint/API/key 进入具体 Provider
+对象页，`Test` 验证该精确 Model 且不改变任务选择。Search 与 Download 选中具体 Source 后，就近显示它实际支持的 `Setup`、`Key`、`Test`、
 `Enable` 或 `Disable`；Sci-Hub 的 `Mirrors` 只属于 Sci-Hub Source。Parse、Analyze 与 Browser 的
 `Setup` 分别连续完成本 owner 的必要选择。文献 Provider、MinerU 与模型 Provider 凭据不能混成
 全局 key 页面；Browser 的 Model 选择也不能重新配置 Provider 或 Model。
@@ -186,8 +196,8 @@ Browser:   Setup / Profiles / Runtime / Test / Reset / Back
 
 Bootstrap 将任务选择解析为 `Model → Provider`，按 Provider name 构造并共享 exact-origin
 credential、wire adapter 与 quota scope，再为当前 scope 形成 Analysis 或 Browser binding。binding
-携带远端 model、Model reasoning 以及模块派生的 capability/limits；消费者不能覆盖连接、model、
-reasoning 或 credential。
+携带远端 model、Model reasoning/stream 以及模块派生的 capability/limits；消费者不能覆盖连接、
+model、reasoning、stream 或 credential。
 
 同一 Provider 下的 Analyze/Download Model 复用 adapter；不同 Provider 分别构造。只有当前 Entry
 scope 实际需要的 binding 才装配，缺少 Provider、key、Model、image 能力或业务预算在外部 I/O 前
@@ -213,7 +223,7 @@ scope 实际需要的 binding 才装配，缺少 Provider、key、Model、image 
 
 ### 正面
 
-- 用户只配置确实知道且需要选择的 Provider、Model、reasoning 和 image，首次配置不再被内部技术
+- 用户只配置确实知道且需要选择的 Provider、Model、reasoning、image 和 stream，首次配置不再被内部技术
   预算阻塞；
 - Provider、Model 与模块调用合同各有唯一 owner，Analyze/Download 不再与 Profile capability
   重复声明；
@@ -228,6 +238,8 @@ scope 实际需要的 binding 才装配，缺少 Provider、key、Model、image 
   model identity；
 - `image = true` 是 operator 的选择，不是远端能力证明；真实 strict output、图片与 tool 支持仍需
   显式 probe；
+- `stream = true` 是跨协议默认值，但兼容服务是否正确实现对应 SSE 仍需显式 probe；关闭它会改变
+  请求/响应模式，但不会改变 Model identity 或任务选择；
 - 模块固定合同可能拒绝某些只能通过特殊 vendor 参数工作的模型；当前不为这种未证明需求扩大
   公共配置，出现真实消费者后再新增 ADR。
 
@@ -256,11 +268,12 @@ scope 实际需要的 binding 才装配，缺少 Provider、key、Model、image 
 ## 验证要求
 
 - Configuration round-trip 必须证明 Provider 与 Model 注册表、完整 reference、八种 reasoning、
-  image 门槛和旧 schema 严格拒绝；
+  image 门槛、stream 默认/显式关闭和旧 schema 严格拒绝；
 - credential 测试必须证明 Provider name + exact origin 绑定、同流程原子更新、endpoint 变更恢复和
   secret 不出现在普通配置/status/log；
 - CLI/TUI 测试必须证明单词级菜单、同流程隐藏 key、自动 `/models`、失败后 Manual、取消无部分
   写入、Analyze/Download 直接选择以及 Download 过滤 text-only Model；
 - Bootstrap/Agents probe 必须证明 Analyze 的 strict structured output 合同与 Download 的
-  image/tool 合同由模块派生，`default` 省略 wire 字段，显式 reasoning 不静默降级；
+  image/tool 合同由模块派生，`default` 省略 wire 字段，显式 reasoning 不静默降级，三协议严格
+  继承 Model stream 且失败后不切换模式；
 - Harness 与安装后验收必须使用 fake/fixture，不读取用户配置、真实凭据或真实 Provider。

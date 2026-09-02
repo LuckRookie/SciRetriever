@@ -442,6 +442,7 @@ def _build_agents_runtime(  # noqa: C901
                 model=model.model,
                 capabilities=capabilities,
                 reasoning_effort=model.reasoning,
+                stream=model.stream,
                 limits=limits,
             )
 

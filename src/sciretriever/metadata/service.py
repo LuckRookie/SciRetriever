@@ -240,7 +240,7 @@ class MetadataService:
                     rejected_record_count += 1
                     if first_record_failure is None:
                         first_record_failure = error.failure
-                    _LOGGER.warning(
+                    _LOGGER.debug(
                         "event=metadata-record-rejected provider=%s raw_item_ordinal=%d "
                         "code=%s retryable=%s reason=%s action=%s",
                         provider_name,

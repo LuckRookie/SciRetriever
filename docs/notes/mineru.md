@@ -51,7 +51,7 @@ client 校验 health、release、protocol、task ID、状态和响应预算；�
 对齐。公共结果只保留 parser-neutral Markdown、实际引用资源、输入/result hash 和 provenance；
 原始归档、私有 JSON、未引用图片和调试输出在尝试结束后清理。
 
-`config test mineru` 是独立的 health-only 诊断：它只执行 `GET /health` 并验证 healthy、
+`config test parse` 是独立的 health-only 诊断：它只执行 `GET /health` 并验证 healthy、
 release `3.4.4`、protocol `2` 和固定 profile；不会 submit、poll、fetch archive、上传 PDF，
 也不会写 Catalog、Report 或最后测试状态。
 

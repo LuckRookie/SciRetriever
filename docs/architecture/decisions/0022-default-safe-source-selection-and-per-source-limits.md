@@ -93,7 +93,8 @@ item 上限是 `7 × 500 = 3500`，但 Provider 可以更早自然耗尽或失�
 
 ### 4. 配置中心与状态使用有效选择
 
-配置中心的 Search 页面固定为 `Sources / Limit / Back`，Download 页面固定为 `Sources / Back`。
+配置中心的 Search 页面固定为 `Sources / Limit / Test / Back`，Download 页面固定为
+`Sources / Test / Back`。
 Sources 页只用单词级 `Auto / Custom / Back` 及具体 Source 名称表达对象：Auto 切到 Custom 时
 冻结当前有效集合；Custom 切回 Auto 时删除固定 `providers` 并重新跟随当前版本 catalog。选中
 具体 Source 后，就近显示它实际拥有的 `Setup`、`Key`、`Test`、`Enable` 或 `Disable`；Search Auto

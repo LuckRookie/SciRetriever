@@ -393,7 +393,7 @@ class TieredCohortExecutor:
             cancel_event,
         )
         cohort_started_ns = time.monotonic_ns()
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-cohort-started target_count=%d",
             len(items),
         )
@@ -795,7 +795,7 @@ class TieredCohortExecutor:
             item = items_by_key[attempt.attempt_key]
             pending_route = self._pending_browser_route(item)
             started_ns = time.monotonic_ns()
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=acquisition-browser-group-item-started work_key=%s "
                 "provider_group=%s route_key=%s",
                 item.work_key,
@@ -812,7 +812,7 @@ class TieredCohortExecutor:
                 WorkItemDisposition.ACTION_REQUIRED,
                 WorkItemDisposition.FAILED,
             }
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=acquisition-browser-group-item-finished work_key=%s "
                 "provider_group=%s outcome=%s elapsed_ms=%d",
                 item.work_key,
@@ -1236,7 +1236,7 @@ def _log_route_result(
         )
         return
     if result.outcome is RouteOutcome.PDF_DELIVERED:
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-route-delivered work_key=%s tier=%s route_key=%s "
             "provider_group=%s outcome=pdf-delivered disposition=delivered next=stop "
             "elapsed_ms=%d",
@@ -1272,7 +1272,7 @@ def _log_failure(
     next_step: str = "stop",
     elapsed_ms: int | None = None,
 ) -> None:
-    _LOGGER.warning(
+    _LOGGER.debug(
         "event=%s work_key=%s tier=%s route_key=%s provider_group=%s "
         "disposition=%s next=%s elapsed_ms=%s code=%s retryable=%s reason=%s action=%s",
         event,
@@ -1379,7 +1379,7 @@ def _log_cohort_finished(
         disposition: sum(item.disposition is disposition for item in items)
         for disposition in WorkItemDisposition
     }
-    _LOGGER.info(
+    _LOGGER.debug(
         "event=acquisition-cohort-finished target_count=%d delivered=%d exhausted=%d "
         "deferred=%d action_required=%d failed=%d elapsed_ms=%d",
         len(items),

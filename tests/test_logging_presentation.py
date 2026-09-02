@@ -56,27 +56,21 @@ class LoggingPresentationTests(unittest.TestCase):
 
         output = stderr.getvalue()
         lines = output.splitlines()
-        self.assertEqual(len(lines), 3)
         self.assertRegex(
             lines[0],
             re.compile(
                 r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} "
-                r"WARN\s+completion\s+✗ target failed "
-                r"\[completion-target-failed\] "
+                r"WARN\s+completion\s+✗ target failed"
             ),
         )
-        self.assertLess(lines[0].index("progress=4/10"), lines[0].index("stage=acquisition"))
-        self.assertLess(lines[0].index("stage=acquisition"), lines[0].index("code="))
-        self.assertLess(lines[0].index("code="), lines[0].index("retryable=true"))
-        self.assertIn("@ entry.completion:", lines[0])
-        self.assertEqual(
-            lines[1],
-            "    reason  A route failed without ending the operation.",
-        )
-        self.assertEqual(
-            lines[2],
-            "    action  Continue with the next applicable route.",
-        )
+        self.assertLess(output.index("progress=4/10"), output.index("stage=acquisition"))
+        self.assertLess(output.index("stage=acquisition"), output.index("code="))
+        self.assertLess(output.index("code="), output.index("retryable=true"))
+        self.assertIn("[completion-target-failed]", output)
+        self.assertIn("    reason  A route failed without ending the operation.", output)
+        self.assertIn("    action  Continue with the next applicable route.", output)
+        self.assertIn("    details literature-id=safe-literature", output)
+        self.assertIn("    source  @ entry.completion:", output)
         self.assertNotIn("sciretriever.entry.completion", output)
         self.assertNotIn("\x1b[", output)
 
@@ -106,6 +100,25 @@ class LoggingPresentationTests(unittest.TestCase):
         self.assertIn("rejected=0", output)
         self.assertIn("elapsed=3.309s", output)
         self.assertNotIn("@ metadata.service:", output)
+
+    def test_agents_component_and_action_required_outcomes_are_not_shown_as_success(self) -> None:
+        stderr = io.StringIO()
+        agents_logger = get_logger("sciretriever.agents")
+        completion_logger = get_logger("sciretriever.entry.completion")
+
+        with redirect_stderr(stderr):
+            configure_logging(level=logging.DEBUG)
+            agents_logger.debug(
+                "event=agent-call-finished role=analysis provider=fixture "
+                "wire_model=fixture-model stream=on outcome=failed"
+            )
+            completion_logger.warning(
+                "event=completion-target-finished progress=1/1 outcome=needs-manual-pdf"
+            )
+
+        output = stderr.getvalue()
+        self.assertRegex(output, r"DEBUG\s+agents\s+✗ call finished")
+        self.assertRegex(output, r"WARN\s+completion\s+… target finished")
 
     def test_tty_uses_color_and_no_color_disables_it(self) -> None:
         logger = get_logger("sciretriever.network.http")
@@ -161,14 +174,14 @@ class LoggingPresentationTests(unittest.TestCase):
         output = stderr.getvalue()
         first_line = output.splitlines()[0]
         self.assertIn("✗ article finished", first_line)
-        self.assertLess(
-            first_line.index("provider-group=springer"),
-            first_line.index("attempt-key="),
-        )
-        self.assertLess(first_line.index("session-key=springer"), first_line.index("disposition="))
-        self.assertLess(first_line.index("disposition=failed"), first_line.index("attempted=true"))
-        self.assertIn("queue-wait=0.250s", first_line)
-        self.assertIn("elapsed=1.500s", first_line)
+        self.assertIn("provider-group=springer", first_line)
+        self.assertIn("disposition=failed", first_line)
+        self.assertLess(output.index("provider-group=springer"), output.index("attempt-key="))
+        self.assertLess(output.index("attempt-key="), output.index("session-key=springer"))
+        self.assertLess(output.index("session-key=springer"), output.index("attempted=true"))
+        self.assertIn("queue-wait=0.250s", output)
+        self.assertIn("elapsed=1.500s", output)
+        self.assertIn("    details attempt-key=", output)
 
     def test_discovery_rejection_keeps_literature_decision_reason_readable(self) -> None:
         stderr = io.StringIO()
@@ -182,13 +195,14 @@ class LoggingPresentationTests(unittest.TestCase):
                 "decision_reason=metadata-title-or-doi-required"
             )
 
-        first_line = stderr.getvalue().splitlines()[0]
+        output = stderr.getvalue()
+        first_line = output.splitlines()[0]
         self.assertIn("DEBUG", first_line)
         self.assertIn("discovery", first_line)
-        self.assertIn("[discovery-observation-rejected]", first_line)
+        self.assertIn("[discovery-observation-rejected]", output)
         self.assertIn("provider=europe-pmc", first_line)
-        self.assertIn("decision-reason=metadata-title-or-doi-required", first_line)
-        self.assertLess(first_line.index("provider="), first_line.index("decision-reason="))
+        self.assertIn("decision-reason=metadata-title-or-doi-required", output)
+        self.assertLess(output.index("provider="), output.index("decision-reason="))
         self.assertNotIn("reason  ", first_line)
 
     def test_elsevier_status_only_diagnostic_is_structured_and_body_free(self) -> None:
@@ -204,19 +218,19 @@ class LoggingPresentationTests(unittest.TestCase):
                 "envelope=http-status disposition=failure failure_kind=entitlement"
             )
 
-        first_line = stderr.getvalue().splitlines()[0]
-        self.assertIn("[elsevier-authorized-response-classified]", first_line)
-        self.assertIn("http-status=403", first_line)
-        self.assertIn("http-status-class=client-error", first_line)
-        self.assertIn("representation=missing", first_line)
-        self.assertIn("failure-kind=entitlement", first_line)
-        self.assertLess(first_line.index("stage=lookup"), first_line.index("provider-group="))
-        self.assertLess(first_line.index("route-key="), first_line.index("http-status=403"))
-        self.assertLess(first_line.index("http-status=403"), first_line.index("representation="))
-        self.assertLess(first_line.index("representation="), first_line.index("envelope="))
-        self.assertLess(first_line.index("disposition=failure"), first_line.index("failure-kind="))
-        self.assertNotIn("body", first_line)
-        self.assertNotIn("vendor", first_line)
+        output = stderr.getvalue()
+        self.assertIn("[elsevier-authorized-response-classified]", output)
+        self.assertIn("http-status=403", output)
+        self.assertIn("http-status-class=client-error", output)
+        self.assertIn("representation=missing", output)
+        self.assertIn("failure-kind=entitlement", output)
+        self.assertLess(output.index("stage=lookup"), output.index("provider-group="))
+        self.assertLess(output.index("route-key="), output.index("http-status=403"))
+        self.assertLess(output.index("http-status=403"), output.index("representation="))
+        self.assertLess(output.index("representation="), output.index("envelope="))
+        self.assertLess(output.index("disposition=failure"), output.index("failure-kind="))
+        self.assertNotIn("body", output)
+        self.assertNotIn("vendor", output)
 
     def test_concurrent_event_records_remain_one_complete_line_each(self) -> None:
         stderr = io.StringIO()
@@ -237,12 +251,62 @@ class LoggingPresentationTests(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=8) as executor:
                 tuple(executor.map(emit, range(1, 33)))
 
-        lines = stderr.getvalue().splitlines()
-        self.assertEqual(len(lines), 32)
-        self.assertTrue(all(line.count("[metadata-item-disposition]") == 1 for line in lines))
-        self.assertTrue(all("raw-item=" in line for line in lines))
-        self.assertTrue(all("observation-delta=1" in line for line in lines))
-        self.assertTrue(all("relation-delta=2" in line for line in lines))
+        blocks = tuple(
+            block
+            for block in re.split(r"(?=^\d{4}-\d{2}-\d{2} )", stderr.getvalue(), flags=re.M)
+            if block
+        )
+        self.assertEqual(len(blocks), 32)
+        self.assertTrue(all(block.count("[metadata-item-disposition]") == 1 for block in blocks))
+        self.assertTrue(all("raw-item=" in block for block in blocks))
+        self.assertTrue(all("observation-delta=1" in block for block in blocks))
+        self.assertTrue(all("relation-delta=2" in block for block in blocks))
+
+    def test_static_layout_folds_at_terminal_width_without_losing_event_or_fields(self) -> None:
+        logger = get_logger("sciretriever.entry.completion")
+        for width in (80, 120, 160):
+            with self.subTest(width=width):
+                stderr = _TtyBuffer()
+                with patch.dict(
+                    os.environ,
+                    {"COLUMNS": str(width), "NO_COLOR": "1", "TERM": "xterm-256color"},
+                    clear=False,
+                ):
+                    with redirect_stderr(stderr):
+                        configure_logging(level=logging.DEBUG)
+                        logger.warning(
+                            "event=completion-target-failed progress=17/100 "
+                            "target_kind=meta-literature target_id=safe-target "
+                            "stage=analysis code=analysis-agent-response-invalid "
+                            "retryable=false reason=%s action=%s",
+                            "The returned structured result did not satisfy the expected contract.",
+                            "Check the selected Model capability and retry the failed target.",
+                        )
+
+                output = stderr.getvalue()
+                self.assertIn("[completion-target-failed]", output)
+                self.assertIn("code=analysis-agent-response-invalid", output)
+                self.assertIn("reason", output)
+                self.assertIn("action", output)
+                self.assertTrue(all(len(line) <= width for line in output.splitlines()))
+
+    def test_non_tty_layout_folds_long_unbroken_safe_values(self) -> None:
+        stderr = io.StringIO()
+        logger = get_logger("sciretriever.logging.presentation")
+        long_value = "safe" * 80
+
+        with redirect_stderr(stderr):
+            configure_logging(level=logging.INFO)
+            logger.warning(
+                "event=configuration-check-failed code=configuration-invalid "
+                "retryable=false reason=%s action=Review the configuration.",
+                long_value,
+            )
+
+        output = stderr.getvalue()
+        self.assertIn("[configuration-check-failed]", output)
+        self.assertIn(long_value[:40], output)
+        self.assertTrue(all(len(line) <= 120 for line in output.splitlines()))
 
 
 if __name__ == "__main__":

@@ -218,19 +218,62 @@ class MinerUProtocol2Error(RuntimeError):
             "archive-invalid",
         }
     )
+    _ACCESS_CODES = frozenset(
+        {
+            "admission",
+            "budget",
+            "cancelled",
+            "closed",
+            "oversize",
+            "policy",
+            "redirect-limit",
+            "response",
+            "timeout",
+            "tls",
+            "transport",
+        }
+    )
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        http_status: int | None = None,
+        access_code: str | None = None,
+    ) -> None:
         if code not in self._CODES:
             raise ValueError("unknown MinerU protocol-2 error code")
+        if http_status is not None and (
+            type(http_status) is not int or not 100 <= http_status <= 599
+        ):
+            raise ValueError("MinerU failure HTTP status is invalid")
+        normalized_access_code = (
+            access_code.replace("_", "-") if type(access_code) is str else access_code
+        )
+        if normalized_access_code is not None and normalized_access_code not in self._ACCESS_CODES:
+            raise ValueError("MinerU failure access code is invalid")
+        if http_status is not None and access_code is not None:
+            raise ValueError("MinerU failure evidence is inconsistent")
         self.code = code
+        self.http_status = http_status
+        self.access_code = normalized_access_code
         super().__init__(f"MinerU protocol-2 request failed ({code})")
 
     def __repr__(self) -> str:
         return f"MinerUProtocol2Error(code={self.code!r})"
 
 
-def _protocol2_fail(code: str) -> NoReturn:
-    raise MinerUProtocol2Error(code) from None
+def _protocol2_fail(
+    code: str,
+    *,
+    http_status: int | None = None,
+    access_code: str | None = None,
+) -> NoReturn:
+    raise MinerUProtocol2Error(
+        code,
+        http_status=http_status,
+        access_code=access_code,
+    ) from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +568,12 @@ class MinerUProtocol2ServiceClient:
             f"credentialed={self._bearer_token is not None}>"
         )
 
+    @property
+    def health_endpoint(self) -> str:
+        """Return the exact secret-free endpoint used by the health probe."""
+
+        return f"{self._base_url}/health"
+
     def health(
         self,
         *,
@@ -538,7 +587,7 @@ class MinerUProtocol2ServiceClient:
             cancel_event=cancel_event,
         )
         if response.status != 200:
-            _protocol2_fail("status-invalid")
+            _protocol2_fail("status-invalid", http_status=response.status)
         value = _protocol2_json_object(response)
         if set(value) != {"status", "version", "protocol_version"}:
             _protocol2_fail("protocol-invalid")
@@ -562,7 +611,7 @@ class MinerUProtocol2ServiceClient:
         timeout_seconds: float = 10.0,
         cancel_event: threading.Event | None = None,
     ) -> MinerUHealth:
-        """Run the bounded health-only contract used by ``config test mineru``."""
+        """Run the bounded health-only contract used by ``config test parse``."""
 
         return self.health(
             timeout_seconds=timeout_seconds,
@@ -735,8 +784,8 @@ class MinerUProtocol2ServiceClient:
             _protocol2_fail("access-failed")
         if isinstance(result, AccessFailure):
             if result.code in {"oversize", "budget"}:
-                _protocol2_fail("response-budget")
-            _protocol2_fail("access-failed")
+                _protocol2_fail("response-budget", access_code=result.code)
+            _protocol2_fail("access-failed", access_code=result.code)
         if not isinstance(result, TransportResponse):
             _protocol2_fail("protocol-invalid")
         return result

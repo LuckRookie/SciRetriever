@@ -320,7 +320,7 @@ class CliCommandTreeTests(unittest.TestCase):
 
     def test_all_fixed_leaf_paths_have_help_without_bootstrapping(self) -> None:
         module = _cli_module()
-        config_commands = importlib.import_module("sciretriever.entry.cli.config_center.commands")
+        config_probes = importlib.import_module("sciretriever.entry.cli.config_center.probes")
         with (
             patch.object(
                 module,
@@ -328,7 +328,7 @@ class CliCommandTreeTests(unittest.TestCase):
                 side_effect=AssertionError("help must not bootstrap Storage"),
             ),
             patch.object(
-                config_commands,
+                config_probes,
                 "build_production_configuration_probe_session",
                 side_effect=AssertionError("help must not build a probe session"),
             ),
@@ -340,6 +340,53 @@ class CliCommandTreeTests(unittest.TestCase):
                         self.assertEqual(code, 0)
                         self.assertNotEqual(stdout, "")
                         self.assertEqual(stderr, "")
+
+    def test_configuration_test_help_tree_is_owner_scoped(self) -> None:
+        paths = (
+            ("config", "test", "provider", "--help"),
+            ("config", "test", "model", "--help"),
+            ("config", "test", "search", "--help"),
+            ("config", "test", "download", "--help"),
+            ("config", "test", "parse", "--help"),
+            ("config", "test", "analyze", "--help"),
+            ("config", "test", "browser", "--help"),
+            ("config", "test", "browser", "model", "--help"),
+            ("config", "test", "browser", "site", "--help"),
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                code, stdout, stderr = _invoke(*path)
+                self.assertEqual(code, 0)
+                self.assertNotEqual(stdout, "")
+                self.assertEqual(stderr, "")
+
+    def test_retired_and_incomplete_configuration_test_paths_are_usage_errors(self) -> None:
+        paths = (
+            ("config", "test"),
+            ("config", "test", "llm"),
+            ("config", "test", "mineru"),
+            ("config", "test", "browser-agent"),
+            ("config", "test", "--browser", "springerlink"),
+            ("config", "test", "provider"),
+            ("config", "test", "model"),
+            ("config", "test", "search"),
+            ("config", "test", "download"),
+            ("config", "test", "browser", "site"),
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                code, stdout, stderr = _invoke(*path)
+                self.assertEqual(code, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("invalid command input", stderr)
+
+    def test_configuration_test_leaf_options_do_not_overwrite_parent_choices(self) -> None:
+        parser = _cli_module()._build_parser()
+        arguments = parser.parse_args(("config", "--theme", "dark", "test", "--json", "parse"))
+
+        self.assertEqual(arguments.theme, "dark")
+        self.assertTrue(arguments.json)
+        self.assertEqual(arguments.test_owner, "parse")
 
     def test_unknown_and_retired_paths_are_usage_errors(self) -> None:
         for path in (

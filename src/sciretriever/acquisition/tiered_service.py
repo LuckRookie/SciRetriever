@@ -779,7 +779,7 @@ class TieredAcquisitionService:
             or result.relation.literature_id != payload.literature_id
         ):
             raise AcquisitionFailure(_contract_failure())
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-publication-finished literature_id=%s candidate_id=%s "
             "outcome=primary-pdf-committed",
             payload.literature_id,
@@ -799,7 +799,7 @@ class TieredAcquisitionService:
             or exhaustion.literature_id != payload.literature_id
         ):
             raise AcquisitionFailure(_contract_failure())
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=acquisition-publication-finished literature_id=%s outcome=normally-exhausted",
             payload.literature_id,
         )

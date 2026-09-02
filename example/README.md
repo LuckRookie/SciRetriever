@@ -39,10 +39,11 @@ sciretriever config status
 
 1. 打开 `Models → Add`，选择已有 Provider 或 `New`。新增远程 Provider 时确认 URL/API，并在同一
    流程隐藏输入 Key；Key 就绪后程序自动读取一次模型目录。只有目录失败、为空或无法安全解析时
-   才出现 `Manual`。随后选择 Reasoning 与 Image 并保存完整 `provider/model` Model。Provider 与
+   才出现 `Manual`。随后选择 Reasoning、Image 与 Stream 并保存完整 `provider/model` Model。
+   Stream 默认开启，也可按具体 Model 关闭。Provider 与
    Key 的独立管理入口是 `Models → Providers`。
 2. 打开 `Analyze → Setup` 直接选择一个 Model 并确认文献分析预算。Analyze 只保存完整 Model
-   reference；reasoning 属于 Model，strict structured output/text-only/no-tool 由模块派生。
+   reference；reasoning/stream 属于 Model，strict structured output/text-only/no-tool 由模块派生。
 3. 打开 `Parse → Setup`。本机 operator-managed MinerU 选择 loopback；远程服务在同一流程明确授权
    PDF 上传，并配置与该 origin 绑定的 bearer token。
 4. 若使用 Agent 下载 PDF，在 `Browser → Setup` 选择 `agent` 和一个 `image = true` 的 Model，并

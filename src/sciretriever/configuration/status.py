@@ -565,6 +565,68 @@ def run_configuration_probes(
     return ConfigurationProbeSummary(results=tuple(results))
 
 
+def run_acquisition_configuration_probes(
+    configuration: Configuration,
+    *,
+    provider: ProviderName | str | None = None,
+    test_all: bool = False,
+    credentials_home: str | Path | None = None,
+    configured_sci_hub_resolver: object | None = None,
+    status_snapshot: ConfigurationStatus | None = None,
+) -> ConfigurationProbeSummary:
+    """Report explicitly selected Acquisition Sources that lack a safe probe.
+
+    Acquisition readiness is content-specific.  Until an adapter owns an
+    officially specified, literature-independent probe, configuration tests
+    must say that the external capability was not probed instead of invoking
+    Metadata or downloading an arbitrary PDF.
+    """
+
+    if type(test_all) is not bool or (provider is None) == (not test_all):
+        _fail("configuration value is invalid")
+    selected_provider = None if provider is None else _provider_name(provider)
+    if status_snapshot is not None and (
+        credentials_home is not None or configured_sci_hub_resolver is not None
+    ):
+        _fail("configuration value is invalid")
+    if status_snapshot is not None and not isinstance(status_snapshot, ConfigurationStatus):
+        _fail("configuration value is invalid")
+    local = (
+        configuration_status(
+            configuration,
+            credentials_home=credentials_home,
+            configured_sci_hub_resolver=configured_sci_hub_resolver,
+        )
+        if status_snapshot is None
+        else _validated_status_snapshot(configuration, status_snapshot)
+    )
+    selected = tuple(
+        status
+        for status in local.capabilities
+        if status.capability is ProviderCapability.ACQUISITION
+        and (
+            (test_all and status.enabled)
+            or (selected_provider is not None and status.provider is selected_provider)
+        )
+    )
+    return ConfigurationProbeSummary(
+        results=tuple(
+            ConfigurationProbeResult(
+                provider=status.provider,
+                capability=status.capability,
+                outcome=ProbeOutcome.SKIPPED,
+                local_ready=False,
+                failure_code=(
+                    status.failure_code
+                    if not status.local_ready
+                    else "acquisition-probe-unavailable"
+                ),
+            )
+            for status in selected
+        )
+    )
+
+
 @runtime_checkable
 class BrowserConfigurationProbePort(Protocol):
     """Explicit single-target Browser probe seam.

@@ -14,6 +14,7 @@ from sciretriever.configuration import (
     configuration_status,
     load_credentials,
     parse_configuration,
+    run_acquisition_configuration_probes,
     run_configuration_probes,
     set_core_credentials,
     set_model_provider_credentials,
@@ -417,6 +418,58 @@ class ConfigurationProbeSessionTests(unittest.TestCase):
         )
         self.assertEqual(all_summary.results, ())
         self.assertEqual(all_probe.calls, [])
+
+    def test_acquisition_named_disabled_reports_no_safe_external_probe(self) -> None:
+        ordinary, snapshot = self._snapshot()
+        summary = run_acquisition_configuration_probes(
+            ordinary,
+            provider=ProviderName.CROSSREF,
+            status_snapshot=snapshot,
+        )
+
+        self.assertFalse(summary.passed)
+        self.assertEqual(len(summary.results), 1)
+        result = summary.results[0]
+        self.assertIs(result.provider, ProviderName.CROSSREF)
+        self.assertIs(result.capability, ProviderCapability.ACQUISITION)
+        self.assertIs(result.outcome, ProbeOutcome.SKIPPED)
+        self.assertEqual(result.failure_code, "acquisition-probe-unavailable")
+        self.assertEqual(result.acquisition_entitlement, "not-proven")
+
+    def test_acquisition_all_selects_enabled_sources_and_preserves_local_failures(self) -> None:
+        ordinary = _configuration(acquisition=("crossref", "core"))
+        with tempfile.TemporaryDirectory() as temporary:
+            credentials = load_credentials(home=Path(temporary))
+            snapshot = configuration_status(ordinary, credentials=credentials)
+
+        summary = run_acquisition_configuration_probes(
+            ordinary,
+            test_all=True,
+            status_snapshot=snapshot,
+        )
+
+        self.assertEqual(
+            tuple((item.provider, item.failure_code) for item in summary.results),
+            (
+                (ProviderName.CROSSREF, "acquisition-probe-unavailable"),
+                (ProviderName.CORE, "missing-required-credential"),
+            ),
+        )
+        self.assertTrue(all(item.outcome is ProbeOutcome.SKIPPED for item in summary.results))
+
+    def test_acquisition_probe_selection_rejects_ambiguous_scope(self) -> None:
+        ordinary, snapshot = self._snapshot()
+        invalid = (
+            {"provider": None, "test_all": False},
+            {"provider": ProviderName.CROSSREF, "test_all": True},
+        )
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(ConfigurationError):
+                run_acquisition_configuration_probes(
+                    ordinary,
+                    status_snapshot=snapshot,
+                    **values,  # type: ignore[arg-type]
+                )
 
     def test_supported_but_unready_registration_is_skipped_without_calling_probe(self) -> None:
         ordinary, snapshot = self._snapshot(metadata=("web-of-science",))

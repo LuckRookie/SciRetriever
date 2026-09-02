@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
 import threading
 import unittest
@@ -1486,11 +1487,30 @@ class ControlledBrowserApplicabilityTests(unittest.TestCase):
                     agent_runtime=_agent_runtime(agent),
                 )
                 request = _request(observations=(_observation(51, (_landing_hint(),)),))
-                with self.assertRaises(AcquisitionSourceFailure) as caught:
-                    list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+                with self.assertLogs(
+                    "sciretriever.acquisition.sources.browser",
+                    level="INFO",
+                ) as logs:
+                    with self.assertRaises(AcquisitionSourceFailure) as caught:
+                        list(
+                            source._deliveries(
+                                request,
+                                _evidence(request),
+                                CandidateKeyTracker(),
+                            )
+                        )
                 self.assertEqual(caught.exception.failure.code, failure_code)
                 self.assertEqual(agent.turns, expected_turns)
                 self.assertEqual(len(action_port.executed), expected_turns)
+                rendered = "\n".join(logs.output)
+                self.assertIn("event=browser-agent-finished", rendered)
+                self.assertIn(f"failure_code={failure_code}", rendered)
+                self.assertIn("event=browser-flow-finished", rendered)
+                self.assertIn(f"code={failure_code}", rendered)
+                self.assertIn(caught.exception.failure.reason, rendered)
+                self.assertIn(caught.exception.failure.action, rendered)
+                self.assertTrue(all(record.levelno == logging.WARNING for record in logs.records))
+                self.assertNotIn(marker, rendered)
 
     def test_agent_mode_does_not_require_rules_entitlement_before_first_call(self) -> None:
         agent = _FixtureAgentPort(actions=("stop",))

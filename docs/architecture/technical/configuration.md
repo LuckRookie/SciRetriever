@@ -129,15 +129,17 @@ Provider 启用顺序、产品选择、contact identity、访问池、Storage �
 
 ```text
 providers.<name>.api / base_url
-models."<provider>/<model>".reasoning / image
+models."<provider>/<model>".reasoning / image / stream
 ```
 
 Model Provider 是可复用 transport 与 exact-origin credential scope，只拥有本地 name、API 协议和
-Base URL。Model 以完整 `provider/model` 为唯一身份，只拥有 reasoning 与 image；必须引用已经存在
+Base URL。Model 以完整 `provider/model` 为唯一身份，只拥有 reasoning、image 与 stream；必须引用已经存在
 的 Provider。被 Analyze/Browser 引用的 Model 不能删除，仍有 Model 引用的 Provider 不能删除。
 配置不建立 Model Profile、Preset、Entry、alias 或 task-level reasoning override。
 
-支持的 wire API 是 OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages。远程
+支持的 wire API 是 OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages。三种协议
+都继承具体 Model 的 `stream`：默认 `true` 并由 Agents 在内部消费有界 SSE；显式 `false` 时只
+请求和解析非流式 JSON。Analyze/Browser 不增加 override，失败后也不自动切换模式。远程
 Provider 必须使用 hostname-based HTTPS 并要求 API key；HTTP 只允许 loopback 且不读取 key。URL
 统一拒绝 userinfo、query、fragment、remote IP literal、dot segments、编码分隔符和非规范端口
 文本。官方 Provider 选择只为配置向导提供 URL/API 初值，不形成另一套持久 preset。固定的单次
@@ -155,7 +157,7 @@ model = "openai/gpt-5.4"
 ```
 
 `[analyze]` 另外只保留文献两阶段 output、输入与 chunk 等业务预算；`[download]` 另外只保留
-Acquisition/Browser 业务设置。两者不保存 Provider、key、远端 model 或 reasoning override。
+Acquisition/Browser 业务设置。两者不保存 Provider、key、远端 model、reasoning 或 stream override。
 Analyze 可以引用任意已配置 Model，其 strict structured output/text-only/no-tool 合同由模块派生；
 `[download]` 中的 Browser 选择只允许引用 `image = true` 的 Model，其 PNG/image/tool 合同由模块
 派生。Rules controller 不要求 Browser Model，也不构造 Browser Agent consumer。
@@ -166,7 +168,8 @@ UTF-8 和超过 512 bytes 的值；Provider name 最长 128 bytes，完整 refer
 `default/none/minimal/low/medium/high/xhigh/max`；`default` 让 adapter 省略 wire effort，其它值
 按协议精确编码，不从 Provider/model 名称猜测或静默降级。context/output、structured output、
 tool decision、图片 MIME/数量/大小、session turns、Browser deadline 和累计作业预算都不进入
-Model 配置，由当前消费模块和 Bootstrap 的安全合同拥有。
+Model 配置，由当前消费模块和 Bootstrap 的安全合同拥有。stream 是调用传输行为，不是 capability；
+它由 Model 拥有并进入请求参数 hash。
 
 旧 `[agents]`、`[agents.analysis]`、`[agents.browser]`、`[models.services.*]`、
 `[models.profiles.*]`、`[models.entries.*]`、`[analysis]` 与 `[access]` 不进入普通生产
@@ -416,8 +419,16 @@ TOML/Pydantic 复验、原子 replace；任一步失败保留原文件并清理 
 ```text
 sciretriever config [--theme auto|dark|light|mono]
 sciretriever config status [--json] [--theme auto|dark|light|mono]
-sciretriever config test <provider|llm|browser-agent|mineru> [--json]
-sciretriever config test --browser <publisher-access-key> [--json]
+sciretriever config test provider <name> [--json]
+sciretriever config test model <provider/model> [--image] [--json]
+sciretriever config test search <source> [--json]
+sciretriever config test search --all [--json]
+sciretriever config test download <source> [--json]
+sciretriever config test download --all [--json]
+sciretriever config test parse [--json]
+sciretriever config test analyze [--json]
+sciretriever config test browser model [--json]
+sciretriever config test browser site <publisher-access-key> [--json]
 sciretriever config test --all [--json]
 ```
 
@@ -433,6 +444,11 @@ Enter、Esc/左方向键返回、首页快捷键和隐藏输入；长 Model/Prov
 mono；状态不能只靠颜色表达。所有交互、确认和 setup 结果写 stderr，stdout 为空；Ctrl+C/EOF
 取消不产生写入。旧 `config set/remove` 保持无效。
 
+共享选择器为所有二级及更深菜单自动追加 `Quit`，并与页面显式的 `Back`
+保持不同控制流：`Back`、Esc 和左方向键只返回上一级，`Quit` 直接退出整个配置中心。
+`Cancel`、Ctrl+C 与输入 EOF 仍是操作取消/中断语义，不得复用为菜单导航。非 TTY 选择器等价提供
+`b/back` 和 `q/quit`。
+
 `ConfigOption.label` 保持单词级稳定选择合同，`description` 是同一行右侧的只读展示合同。共享
 TerminalChoice 统一对齐说明列、按终端宽度截断，并允许长列表同时按 label 或 description 搜索；
 非 TTY 编号菜单输出同一说明。首页 description 来自本次已读取的本地状态快照，展示各 area 的
@@ -443,7 +459,7 @@ Ready/Incomplete/Off 与关键选择，不发起额外 probe。该可操作列�
 
 ```text
 Models:    Add / <Model> / Providers / Back
-Model:     Edit / Remove / Back
+Model:     Edit / Test / Remove / Back
 Providers: Add / <Provider> / Back
 Provider:  Edit / Key / Test / Remove / Back
 ```
@@ -453,7 +469,7 @@ Provider:  Edit / Key / Test / Remove / Back
 Provider 添加、替换或移除 key，并只显示 Saved/Missing/Not required。仍有 Model 引用时不能删除
 Provider。
 
-`Models → Add` 使用 `Provider → URL → API → Key → Model → Reasoning → Image → Save` 的连续
+`Models → Add` 使用 `Provider → URL → API → Key → Model → Reasoning → Image → Stream → Save` 的连续
 流程：选择已有 Provider 或 New；新远程 Provider 在同一流程隐藏输入 key，已有 exact-origin key
 直接复用，loopback 不询问 key。key 就绪后自动调用 Bootstrap 的 `fetch_agent_models`；经共享
 Network 对规范 `/models` 执行一次无 redirect、无 retry、最多 1 MiB/100 项的 GET，返回非持久
@@ -461,7 +477,7 @@ typed observation 后立即关闭 client。目录只用于选择 Model ID；所�
 空目录或协议无可用结果时才提示 `Manual`。取消不保存部分 Provider、Model 或 key；首页、Status、
 打开 Models 和普通业务命令的目录调用计数为零。
 
-具体 Model 对象页的 `Edit` 只修改 reasoning 与 image。reasoning schema 接受
+具体 Model 对象页的 `Edit` 只修改 reasoning、image 与 stream，`Test` 验证该精确 Model 而不改变任务选择。reasoning schema 接受
 `default/none/minimal/low/medium/high/xhigh/max`；`default` 完全省略 wire 字段，其它值由 adapter
 按协议精确编码，不降级或映射。Provider 目录中的 context/output/image/effort 提示不写入 Model，
 也不成为 capability 证明。`Remove` 只删除未被 Analyze/Browser 引用的 Model。
@@ -469,8 +485,8 @@ typed observation 后立即关闭 client。目录只用于选择 Model ID；所�
 其余 owner 页固定为：
 
 ```text
-Search:   Sources / Limit / Back
-Download: Sources / Back
+Search:   Sources / Limit / Test / Back
+Download: Sources / Test / Back
 Parse:    Setup / Test / Reset / Back
 Analyze:  Setup / Test / Reset / Back
 Browser:  Setup / Profiles / Runtime / Test / Reset / Back
@@ -492,7 +508,7 @@ loopback 不询问 token，remote 必须在同一流程明确确认 Upload。`An
 Model、固定 Browser identity Profile 与本机并发 cap；`Profiles` 和 `Runtime` 分别管理本地身份与
 CloakBrowser 生命周期，`Test` 再区分合成 Model probe 和实际 Browser 最小站点 probe。
 
-Analyze/Browser 的 `Setup` 只把完整 Model reference 写入各自任务配置；reasoning 与 image 保留在
+Analyze/Browser 的 `Setup` 只把完整 Model reference 写入各自任务配置；reasoning、image 与 stream 保留在
 Model 中，Provider 连接保留在 Provider 中。Analyze 选择不改变 Browser，Browser 选择不改变
 Analyze。首次选择 Analyze Model 时生成产品内部安全业务预算；不会从模型目录 metadata 推导。
 Browser 只列出 `image = true` 的 Model；strict output、tool、PNG 与图片大小合同由模块派生。底层
@@ -526,7 +542,7 @@ binary 网络动作和删除都先确认，取消不修改配置、不创建/删
 Browser 如实显示当前 production Browser route count 与本地 automatic eligible count 均为 9，并
 分开呈现 route 已安装、Browser 总开关、本地 runtime 就绪和文章 entitlement 运行时检查。完整
 route/policy/action-required 状态由 Status 提供；模型合成 probe 与实际 Browser 最小站点 probe 只
-在 `Browser → Test → Model/Browser` 由用户显式执行。
+在 `Browser → Test → Model/Site` 由用户显式执行。
 
 ## 7. status 与 probe
 
@@ -535,7 +551,7 @@ presence view，不构造 Storage、Catalog、ArtifactStore 或 Network。人类
 展示：
 
 - Model Providers 的 name/API/endpoint 与 credential presence/origin match，以及全部 Models 的
-  完整 reference、reasoning 与 image；Analyze/Browser 各自选择的 Model 和静态 readiness，当前
+  完整 reference、reasoning、image 与 stream；Analyze/Browser 各自选择的 Model 和静态 readiness，当前
   `browser_controller` 及其所需 Browser Model readiness；
 - MinerU mode/endpoint/固定实现身份、credential presence/origin match 与 readiness；
 - Metadata API 与 authorized primary-PDF API 的独立 enabled、字段
@@ -599,8 +615,10 @@ JSON 不含 ANSI、Profile 路径/内容、configuration fingerprint、Cookie �
 明确表示权限仍须由实际文章响应判断。
 
 `config test` 构造独立的 `ProductionConfigurationProbeSession`，复用生产 adapter 和共享
-Network，但不构造 Storage。Provider probe 使用官方最小只读请求；模型 probe 使用 Analyze 或
-Browser 当前选择的 Model。Analyze 固定发送：
+Network，但不构造 Storage。TUI 与结构化 CLI 先形成同一个 `ConfigurationTestRequest`，再由共享
+dispatcher 选择 owner；两条入口不能各自实现测试语义。Model Provider probe 只读取一次有界目录，
+目录成功不成为具体 Model capability 证明。精确 Model Text/Image probe 使用临时任务选择调用生产
+Agents runtime，保留该 Model 的 reasoning 与 stream，但不修改或持久化 Analyze/Browser 选择。Analyze 固定发送：
 
 ```json
 {"probe":"sciretriever-configuration"}
@@ -608,21 +626,28 @@ Browser 当前选择的 Model。Analyze 固定发送：
 
 并要求严格响应 `{"ok":true}`。Browser Model 发送一张程序生成的极小无文字图片和一项固定工具
 声明，要求返回该工具决定；二者都不发送用户 Literature、页面或 screenshot，但可能消耗少量额度。
-MinerU probe 只调用 `GET health`，验证 healthy、release 3.4.4、protocol 2 和 profile；不
-submit、poll、fetch archive 或上传 PDF。`--all` 始终汇总已启用 Provider、Analysis LLM 和 MinerU；
-当前选择 `agent` Browser controller 时还执行一次 Browser Model 的合成图片/tool probe，选择
-`rules` 时不调用未使用的 Browser Model。一个
-失败不阻断其它结果，failed/skipped 使退出码为 3。人类模式在 LLM/`--all` 前确认副作用；
-JSON 模式视为脚本显式授权。
+Search probe 只走 Metadata registry 的官方最小只读请求；精确 Source 即使 disabled 也可选择，
+`--all` 只选 enabled Source。Download 不通过 Metadata registry 冒充 Acquisition 成功：当前没有
+安全、与 Literature 无关的 Acquisition probe，本地就绪 Source 返回
+`acquisition-probe-unavailable`，本地不就绪 Source 保留 readiness failure code；两者都不发
+外部 Download 请求、不访问 Sci-Hub、不下载任意 PDF，`article_entitlement` 保持 `not-proven`。
 
-普通 Provider API probe 不隐式启动 Browser。Browser runtime/target probe 必须由用户
-显式选择具体 Publisher access key：
+MinerU probe 只调用 `GET health`，验证 healthy、release 3.4.4、protocol 2 和 profile；不
+submit、poll、fetch archive 或上传 PDF。`--all` 汇总 enabled Search、Download 的可见限制、Analyze
+和 Parse；当前选择 `agent` Browser controller 时还执行一次 Browser Model 的合成图片/tool probe，
+选择 `rules` 时不调用未使用的 Browser Model。它不读取 Provider 目录、不测试任意未选 Model、
+不启动 Browser Site、不下载或上传 PDF。Download unavailable 不参与全局 passed 判定；其它已选择
+Probe 的 failed/skipped 使退出码为 3。人类模式在实际外部调用前确认副作用；JSON 模式视为脚本
+显式授权。
+
+普通 Model/Search/Download/Parse/Analyze probe 不隐式启动 Browser。Browser runtime/target probe
+必须由用户显式选择具体 Publisher access key：
 
 ```text
-sciretriever config test --browser <publisher-access-key> [--json]
+sciretriever config test browser site <publisher-access-key> [--json]
 ```
 
-该选择与位置 Provider、`--all` 互斥，一次只允许一个 production-approved 最小目标；人类
+该选择与其它 owner、`--all` 互斥，一次只允许一个 production-approved 最小目标；人类
 模式再次确认将启动受控有头 CloakBrowser；无 GUI Linux 使用 Xvfb，JSON 调用本身视为显式授权。
 probe 使用与自动获取相同的 risk-group scheduler、production rule/controller、目标 origin 和
 规则审查过的 challenge dependency，并用 deny-all capture guard 在读取前拒绝 PDF/body。passed
@@ -665,15 +690,29 @@ probe 的访问面，不改变普通文章 Browser flow。
 现场范围需要用户另行授权。
 
 核心 probe 返回 `CoreConfigurationProbeResult`，details 分别为
-`LLMConfigurationProbeDetails` 和 `MinerUConfigurationProbeDetails`，共同固定
-`persisted = false`。任何 probe 都不创建 DiscoveryRun、Literature、MetadataObservation、
+`AgentConfigurationProbeDetails`、`ModelConfigurationProbeDetails`、
+`ModelProviderConfigurationProbeDetails` 和 `MinerUConfigurationProbeDetails`，共同固定
+`persisted = false`。实际发出请求时，details 还保存经过普通配置与 Network URL 规则验证的
+`request_method/request_url`；Agent task probe 同时保存完整 `model_reference`、本地 `provider` 与实际进入
+wire payload 的 `model`。失败可以额外携带只包含
+三位 `http_status`、闭合 Network `access_code` 和闭合 Provider `remote_error` 的
+`failure_evidence`。CLI 的共享 diagnosis builder 把同一 payload 投影为 `request/reason/action`，
+因此 TUI 与 `--json` 不会各自猜测原因。人类表格只显示 `Test / Request / Result`：Test 把 wire Model
+与本地 Provider 分行显示，不把 `provider/model` reference 冒充发送值；Request 显示实际 method、
+endpoint 和该 Model 本次 stream on/off；Result 为结果、
+一句原因和失败时的一项下一步，不显示内部 failure code 或检查清单。响应 body、任意 Provider
+message、header、query、credential 和异常不进入这些字段；404 没有 `model-not-found` 等闭合证据时
+只能解释为 Model 或 endpoint 二者之一不存在。任何 probe 都不创建 DiscoveryRun、Literature、MetadataObservation、
 Asset、Catalog、Report 或测试历史，也不把认证通过解释成具体文献全文 entitlement。
+
+配置 Probe 只证明最小 readiness。正式能力由 Entry 业务路径验收：Search 使用 `discover topic`，
+PDF 获取使用 `complete pdf`，Parse/Analyze 的真实内容链路使用 `complete content`。
 
 ## 8. 离线验证要求
 
 直接测试覆盖 Source Auto/Custom、版本默认 catalog、Custom 空/精确顺序、Auto 禁止固定
 providers、默认及自定义逐 Source limit、旧 discovery schema 拒绝、严格 Provider/Model registry、Analyze/Browser 直接引用与 image 门槛、八级 Model
-reasoning、旧 singleton/Service/Profile/Entry 普通配置与 credentials `[agents]`/`[models.*]` 在菜单前严格拒绝且零写入、多 Provider adapter 选择、Agents role capability/单次
+reasoning、Model stream 默认开启/显式关闭与三协议传播、旧 singleton/Service/Profile/Entry 普通配置与 credentials `[agents]`/`[models.*]` 在菜单前严格拒绝且零写入、多 Provider adapter 选择、Agents role capability/单次
 limits、URL/limit 组合、origin 错配、权限/符号链接、round-trip、staging 失败、跨文件每个中断点、
 三种 LLM protocol、认证 redirect、MinerU health-only、Browser
 Profile 安全树/固定 identity manifest/独占 lease/显式删除、Cloak binary install/update/rollback、

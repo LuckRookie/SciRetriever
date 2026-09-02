@@ -97,6 +97,15 @@ def _add_json(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Write one JSON result to stdout.")
 
 
+def _add_nested_json(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Write one JSON result to stdout.",
+    )
+
+
 def _add_nested_debug(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--debug",
@@ -111,6 +120,15 @@ def _add_theme(parser: argparse.ArgumentParser) -> None:
         "--theme",
         choices=tuple(item.value for item in ConfigTheme),
         default=ConfigTheme.AUTO.value,
+        help="Terminal theme for human-readable output.",
+    )
+
+
+def _add_nested_theme(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--theme",
+        choices=tuple(item.value for item in ConfigTheme),
+        default=argparse.SUPPRESS,
         help="Terminal theme for human-readable output.",
     )
 
@@ -304,18 +322,73 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     setattr(config, "_sciretriever_subcommands", config_commands)
     status_parser = _leaf(config, "status", "Show local configuration readiness.")
-    _add_theme(status_parser)
-    test_parser = _leaf(config, "test", "Run an explicit minimal read-only service probe.")
-    _add_theme(test_parser)
-    selection = test_parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("provider", nargs="?")
-    selection.add_argument("--all", action="store_true", dest="test_all")
-    selection.add_argument(
-        "--browser",
-        dest="browser_access_key",
-        metavar="ACCESS_KEY",
-        help="Probe one approved Publisher Browser target explicitly.",
+    _add_nested_theme(status_parser)
+    test_parser = config_commands.add_parser(
+        "test",
+        help="Run an explicit owner-scoped configuration probe.",
+        description="Run an explicit owner-scoped configuration probe.",
     )
+    _add_json(test_parser)
+    _add_nested_debug(test_parser)
+    _add_nested_theme(test_parser)
+    test_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="test_global_all",
+        help="Run every active safe configuration probe.",
+    )
+    test_targets = test_parser.add_subparsers(dest="test_owner", metavar="TARGET")
+
+    def test_target(name: str, help_text: str) -> argparse.ArgumentParser:
+        target = test_targets.add_parser(name, help=help_text, description=help_text)
+        _add_nested_json(target)
+        _add_nested_debug(target)
+        _add_nested_theme(target)
+        return target
+
+    provider_test = test_target("provider", "Probe one Model Provider catalog.")
+    provider_test.add_argument("target")
+    model_test = test_target("model", "Probe one exact reusable Model.")
+    model_test.add_argument("target")
+    model_test.add_argument(
+        "--image",
+        action="store_true",
+        dest="test_image",
+        help="Use one synthetic image instead of the text probe.",
+    )
+    for owner in ("search", "download"):
+        source_test = test_target(owner, f"Probe {owner.title()} Sources.")
+        source_selection = source_test.add_mutually_exclusive_group(required=True)
+        source_selection.add_argument("target", nargs="?", metavar="SOURCE")
+        source_selection.add_argument("--all", action="store_true", dest="test_area_all")
+    test_target("parse", "Probe the configured MinerU service.")
+    test_target("analyze", "Probe the selected Analyze Model contract.")
+
+    browser_test = test_targets.add_parser(
+        "browser",
+        help="Probe the Browser Model or one approved site.",
+        description="Probe the Browser Model or one approved site.",
+    )
+    browser_targets = browser_test.add_subparsers(
+        dest="browser_test_target",
+        metavar="TARGET",
+        required=True,
+    )
+    browser_model_test = browser_targets.add_parser(
+        "model",
+        help="Probe the selected Browser Model contract.",
+    )
+    _add_nested_json(browser_model_test)
+    _add_nested_debug(browser_model_test)
+    _add_nested_theme(browser_model_test)
+    browser_site_test = browser_targets.add_parser(
+        "site",
+        help="Probe one approved minimal Publisher site target.",
+    )
+    browser_site_test.add_argument("target", metavar="ACCESS_KEY")
+    _add_nested_json(browser_site_test)
+    _add_nested_debug(browser_site_test)
+    _add_nested_theme(browser_site_test)
     return parser
 
 
@@ -844,19 +917,32 @@ def _write_configuration_failure(arguments: argparse.Namespace, error: Configura
         sys.stderr.write("configuration operation failed.\n")
 
 
+def _validate_parsed_arguments(
+    parser: argparse.ArgumentParser,
+    arguments: argparse.Namespace,
+) -> None:
+    if (
+        arguments.command == "export"
+        and arguments.action in {"pdf", "content"}
+        and arguments.output == "-"
+        and arguments.json
+    ):
+        parser.error("--json cannot be combined with raw artifact stdout")
+    if arguments.command != "config" or arguments.action != "test":
+        return
+    global_all = bool(getattr(arguments, "test_global_all", False))
+    owner_selected = getattr(arguments, "test_owner", None) is not None
+    if global_all == owner_selected:
+        parser.error("select one configuration test target")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse one foreground invocation and return its stable process code."""
 
     parser = _build_parser()
     try:
         arguments = parser.parse_args(None if argv is None else list(argv))
-        if (
-            arguments.command == "export"
-            and arguments.action in {"pdf", "content"}
-            and arguments.output == "-"
-            and arguments.json
-        ):
-            parser.error("--json cannot be combined with raw artifact stdout")
+        _validate_parsed_arguments(parser, arguments)
     except SystemExit as error:
         return error.code if isinstance(error.code, int) else 2
     try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import pickle
 import threading
 import unittest
@@ -1075,7 +1076,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         refreshed = _plan("refreshed", tiers=(), extra_routes=(seed, derived))
         item = AcquisitionWorkItem(work_key="a", plan=initial)
 
-        with self.assertLogs("sciretriever.acquisition.cohort", level="INFO") as captured:
+        with self.assertLogs("sciretriever.acquisition.cohort", level="DEBUG") as captured:
             result = TieredCohortExecutor().execute(
                 (item,),
                 lambda _item, _route: RouteExecutionResult.normal_miss(),
@@ -1094,7 +1095,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         self.assertIn("event=acquisition-plan-failed", output)
         self.assertIn("tier=public", output)
 
-    def test_info_logging_keeps_results_and_failures_without_debug_route_noise(self) -> None:
+    def test_cohort_keeps_route_diagnostics_at_debug_for_entry_owned_info(self) -> None:
         items = (
             AcquisitionWorkItem(work_key="deferred", plan=_plan("deferred")),
             AcquisitionWorkItem(
@@ -1126,7 +1127,7 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
                 return RouteExecutionResult.delivered(_temporary(99, AcquisitionPath.PUBLIC))
             return RouteExecutionResult.normal_miss()
 
-        with self.assertLogs("sciretriever.acquisition.cohort", level="INFO") as captured:
+        with self.assertLogs("sciretriever.acquisition.cohort", level="DEBUG") as captured:
             result = _executor("publisher-a", "publisher-b").execute(items, execute)
 
         output = "\n".join(captured.output)
@@ -1145,11 +1146,12 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         self.assertIn("code=acquisition-authorized-quota", output)
         self.assertIn(quota_failure.reason, output)
         self.assertIn(quota_failure.action, output)
-        self.assertNotIn("event=acquisition-route-missed", output)
-        self.assertNotIn("event=acquisition-tier-started", output)
-        self.assertNotIn("event=acquisition-tier-finished", output)
-        self.assertNotIn("event=acquisition-tier-group-progress", output)
-        self.assertNotIn("plan_revision=", output)
+        self.assertIn("event=acquisition-route-missed", output)
+        self.assertIn("event=acquisition-tier-started", output)
+        self.assertIn("event=acquisition-tier-finished", output)
+        self.assertIn("event=acquisition-tier-group-progress", output)
+        self.assertIn("plan_revision=", output)
+        self.assertTrue(all(record.levelno == logging.DEBUG for record in captured.records))
         delivered = result.items[2].temporary_pdf
         self.assertIsNotNone(delivered)
         assert delivered is not None

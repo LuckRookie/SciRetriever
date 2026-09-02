@@ -571,7 +571,7 @@ def _logged_discovery_report(
     if isinstance(report.end, FailedReportEnd):
         failure = report.end.failure
         _LOGGER.error(
-            "event=discovery-failed discovery_run_id=%s status=%s code=%s "
+            "event=discovery-failed outcome=failed discovery_run_id=%s status=%s code=%s "
             "elapsed_ms=%d retryable=%s reason=%s action=%s",
             report.discovery_run_id,
             report.run_status,
@@ -583,15 +583,22 @@ def _logged_discovery_report(
         )
     elif isinstance(report.end, InterruptedReportEnd):
         _LOGGER.warning(
-            "event=discovery-interrupted discovery_run_id=%s result_count=%d elapsed_ms=%d",
+            "event=discovery-interrupted outcome=interrupted discovery_run_id=%s "
+            "result_count=%d elapsed_ms=%d "
+            "reason=The discovery operation was interrupted. "
+            "action=Retry the discovery when the operation can continue.",
             report.discovery_run_id,
             report.discovery_result_count,
             elapsed_ms,
         )
     else:
-        _LOGGER.info(
-            "event=discovery-finished discovery_run_id=%s status=%s provider_count=%d "
+        completed = report.run_status == "COMPLETED"
+        log = _LOGGER.info if completed else _LOGGER.warning
+        log(
+            "event=discovery-finished outcome=%s discovery_run_id=%s status=%s "
+            "provider_count=%d "
             "result_count=%d new_literature_count=%d new_observation_count=%d elapsed_ms=%d",
+            "completed" if completed else "action-required",
             report.discovery_run_id,
             report.run_status,
             len(report.providers),

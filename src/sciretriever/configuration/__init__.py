@@ -90,6 +90,7 @@ from sciretriever.configuration.status import (
     ConfigurationProbePort,
     configuration_runtime_status,
     configuration_status,
+    run_acquisition_configuration_probes,
     run_browser_configuration_probe,
     run_configuration_probes,
 )
@@ -198,6 +199,7 @@ __all__ = (
     "remove_model_provider_credentials",
     "resolve_browser_profile",
     "resolve_task_model",
+    "run_acquisition_configuration_probes",
     "run_browser_configuration_probe",
     "run_configuration_probes",
     "set_core_credentials",

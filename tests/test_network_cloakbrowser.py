@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -710,6 +711,12 @@ class CloakBrowserAdapterTests(unittest.TestCase):
             self.assertIn("identity_stable=true", output)
             self.assertIn("event=browser-cloak-cleanup", output)
             self.assertIn("cleanup=completed", output)
+            ready = next(
+                record
+                for record in logs.records
+                if "event=browser-cloak-runtime-ready" in record.getMessage()
+            )
+            self.assertEqual(ready.levelno, logging.DEBUG)
             self.assertNotIn("1729", output)
             self.assertNotIn(os.fspath(root), output)
 

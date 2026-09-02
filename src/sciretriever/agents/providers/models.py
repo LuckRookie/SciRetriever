@@ -171,13 +171,17 @@ class AgentModelCatalogClient:
         )
         if isinstance(result, AccessFailure):
             if result.code == "oversize":
-                raise provider_failure("response-budget")
+                raise provider_failure("response-budget", access_code=result.code)
             if result.code == "timeout":
-                raise provider_failure("timeout")
-            raise provider_failure("access", retryable=result.retryable)
+                raise provider_failure("timeout", access_code=result.code)
+            raise provider_failure(
+                "access",
+                retryable=result.retryable,
+                access_code=result.code,
+            )
         if not isinstance(result, TransportResponse):
             raise TypeError("HttpClient returned an unsupported result")
-        _raise_http_status(result.status)
+        _raise_http_status(result.status, result.body)
         return (
             _anthropic_catalog(result.body)
             if self._protocol is AgentProtocol.ANTHROPIC_MESSAGES

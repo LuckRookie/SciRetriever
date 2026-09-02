@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-26
+- Last amended: 2026-09-01
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
@@ -199,7 +200,10 @@ Model Requests 或等价的低层单次请求 API，只委托 message/schema/too
 - 每次 `AgentRuntime.execute` 只有消费者声明的一次模型调用，不保存 session、history、turn、
   memory 或 checkpoint；
 - Provider/SDK 自动 retry 关闭，不能隐藏额外模型调用或成本；
-- 初始实现不启用 streaming；
+- OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages 默认按 Model 的
+  `stream = true` 发送流式请求并消费有界 SSE；具体 Model 可以明确关闭 stream，此时只解析
+  非流式 JSON。adapter 或 SDK 必须在私有边界内重建唯一完整结果，`AgentRuntime`、Analysis 和
+  Browser 不接收 token/event stream，也不能在任一模式失败后自动切换模式补发请求；
 - framework 不自动执行 tool。Analysis structured output 和 Browser 六动作决定都作为数据返回，
   仍由消费模块验证并执行；
 - PydanticAI、OpenAI、Anthropic、DeepSeek、`httpx` 或其它 SDK 类型不能进入 Model、Entry、
@@ -230,6 +234,9 @@ bridge 必须：
 - 识别允许的认证 header，将其从普通 header 中分离，并通过 Network 的 origin-bound
   credential 通道发送；未知认证 header、Cookie 或跨 origin credential fail closed；
 - 强制 SDK 和请求级自动 retry 为零，redirect 为零；
+- 三种协议的 SSE 必须继续受单次响应字节、read/overall timeout 和取消约束；协议各自的终止
+  事件、completed output item/delta、usage、refusal、incomplete、error 和截断只在 Agents
+  adapter 内转换，不能把 SDK stream/event 类型暴露给消费者；
 - 让 Network 执行 DNS/origin/host 准入、AccessCoordinator、timeout、取消、response byte
   limit、quota/`Retry-After` 和日志脱敏；
 - 在有界响应已经由 Network 接收后才构造 SDK response，不允许 SDK 先无界读取或另起 transport；
@@ -382,6 +389,7 @@ User
 - 引入 LangGraph 或其它 durable workflow/checkpoint/HITL runtime；
 - framework 开始拥有 Analysis/Acquisition workflow、自动执行 Browser tool 或绕过业务验收；
 - SDK 无法通过公开 transport hook 满足 Network gate 而决定长期保留自研 wire adapter；
-- 允许 SDK 自动 retry、redirect、streaming、telemetry 或第二条外部联网路径；
+- 允许 SDK 自动 retry、redirect、telemetry 或第二条外部联网路径，或者把任一协议 streaming
+  暴露为消费者状态、运行时自动协商或失败后的第二次模型请求；
 - 改变 `AgentRuntime` 的无状态单次调用窄腰，或把 Provider/SDK 类型暴露给业务消费者；
 - 破坏现有 `BatchGoal`、持久数据、artifact 或稳定 Entry 调用方的兼容性。

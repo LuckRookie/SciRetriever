@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import unittest
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
@@ -539,6 +540,13 @@ class TopicDiscoveryTests(unittest.TestCase):
         )
         self.assertIn("event=discovery-finished", output)
         self.assertRegex(output, r"event=discovery-finished .*elapsed_ms=\d+")
+        final = next(
+            record
+            for record in captured.records
+            if "event=discovery-finished" in record.getMessage()
+        )
+        self.assertEqual(final.levelno, logging.INFO)
+        self.assertIn("outcome=completed", final.getMessage())
 
     def test_rejected_observation_debug_log_includes_stable_decision_reason(self) -> None:
         reason = "metadata-title-or-doi-required"
@@ -592,18 +600,26 @@ class TopicDiscoveryTests(unittest.TestCase):
                         for name, outcome in zip(("a", "b"), outcomes, strict=True)
                     ]
                 )
-                report = operation(
-                    TopicDiscoveryInput(
-                        kind="topic",
-                        query="q",
-                        providers=(
-                            ProviderDiscoveryLimit(provider_name="a", scan_limit=1),
-                            ProviderDiscoveryLimit(provider_name="b", scan_limit=1),
-                        ),
+                with self.assertLogs("sciretriever.entry.discovery", level="INFO") as captured:
+                    report = operation(
+                        TopicDiscoveryInput(
+                            kind="topic",
+                            query="q",
+                            providers=(
+                                ProviderDiscoveryLimit(provider_name="a", scan_limit=1),
+                                ProviderDiscoveryLimit(provider_name="b", scan_limit=1),
+                            ),
+                        )
                     )
-                )
                 self.assertEqual(report.run_status, expected)
                 self.assertEqual(repository.finalized, [expected])
+                final = next(
+                    record
+                    for record in captured.records
+                    if "event=discovery-finished" in record.getMessage()
+                )
+                self.assertEqual(final.levelno, logging.WARNING)
+                self.assertIn("outcome=action-required", final.getMessage())
 
     def test_interrupted_invocation_commits_returned_facts_without_source_result(self) -> None:
         observation = _observation(9, "a", "10.1000/interrupted")

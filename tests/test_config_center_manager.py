@@ -35,6 +35,19 @@ def _configuration() -> Configuration:
 
 
 class ConfigurationManagerTests(unittest.TestCase):
+    def test_submenu_quit_closes_the_configuration_center(self) -> None:
+        with (
+            patch.object(manager, "interactive_terminal", return_value=True),
+            patch.object(
+                manager,
+                "_run_rich",
+                side_effect=manager.ConfigurationCenterQuit,
+            ),
+        ):
+            result = manager.run_config_manager("mono")
+
+        self.assertEqual(result, 0)
+
     def test_home_rows_assign_model_use_to_browser_not_download(self) -> None:
         configuration = _configuration()
         runtime = Mock()

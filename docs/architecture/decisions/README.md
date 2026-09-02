@@ -34,9 +34,9 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 | [ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页资源边界](0016-cloakbrowser-fixed-identity-runtime.md) | Accepted，2026-08-26 修订 | CloakBrowser 单生产 runtime、固定 Profile 设备身份、Linux/Xvfb persona、binary/Profile 生命周期、受限 challenge dependency、统一 Challenge 页面合同与无兼容层切换门 | 具体 binary 版本、单个 Provider marker、实际 entitlement、登录/机构选择/MFA |
 | [ADR 0017：无状态共享 Agents 与受控 Browser Controller](0017-shared-agents-and-controlled-browser-agent.md) | Accepted，按 ADR 0019/0021 于 2026-08-28 修订 | Provider-neutral 无状态单次 Agents Runtime、独立 Analysis/Browser role、消费模块 controller 所有权、Rules/Agent 作业级二选一、统一 Browser Observation、六种封闭动作和自然终态 | Model Provider/Model 配置所有权、具体 SDK/transport、文献 prompt/schema、Publisher 规则、任意 Browser/CDP 接管、长期 Agent memory |
 | [ADR 0018：固定用户级普通配置文件](0018-fixed-user-configuration-home.md) | Accepted | 唯一 `~/.sciretriever/config.toml`、Configuration 路径所有权、CLI/人工编辑、安全发布与旧配置人工迁移 | 普通配置字段、secret schema、项目级配置继承、当前实现状态 |
-| [ADR 0019：Agent 可编排应用边界与 SDK 驱动模型运行时](0019-agent-operable-application-and-sdk-model-runtime.md) | Accepted | 外部 Agent 控制面、Entry/MCP/Skill 边界、第三种解析目标、PydanticAI Direct 首选实现、SDK Network transport gate 与 LangGraph 延后条件 | 具体 MCP schema、SDK 版本、远程多租户服务、当前实现状态 |
+| [ADR 0019：Agent 可编排应用边界与 SDK 驱动模型运行时](0019-agent-operable-application-and-sdk-model-runtime.md) | Accepted，2026-09-01 修订 | 外部 Agent 控制面、Entry/MCP/Skill 边界、第三种解析目标、PydanticAI Direct 首选实现、三协议有界流式重建、SDK Network transport gate 与 LangGraph 延后条件 | 具体 MCP schema、SDK 版本、远程多租户服务、当前实现状态 |
 | [ADR 0020：可复用 Model Profile 与任务级绑定](0020-reusable-model-profiles-and-task-bindings.md) | Superseded by ADR 0021 | 已撤销的 Model Service/Profile 配置合同 | 当前 Provider/Model 注册表与任务直接选择 |
-| [ADR 0021：Provider、Model 注册表与任务直接选择](0021-provider-model-registry-and-direct-task-selection.md) | Accepted | Provider 的 API/endpoint/exact-origin key、`provider/model` Model 的 reasoning/image、Analyze/Download 直接选择、模块派生 capability/limits、自动有界模型目录与无旧 schema 兼容层 | 模型协议或 SDK 具体实现、Analysis/Browser workflow、长期 Agent 状态、远端 capability 自动证明 |
+| [ADR 0021：Provider、Model 注册表与任务直接选择](0021-provider-model-registry-and-direct-task-selection.md) | Accepted，2026-09-01 修订 | Provider 的 API/endpoint/exact-origin key、`provider/model` Model 的 reasoning/image/stream、Analyze/Download 直接选择、模块派生 capability/limits、自动有界模型目录与无旧 schema 兼容层 | 模型协议或 SDK 具体实现、Analysis/Browser workflow、长期 Agent 状态、远端 capability 自动证明 |
 | [ADR 0022：默认安全 Source 选择与逐 Source 扫描上限](0022-default-safe-source-selection-and-per-source-limits.md) | Accepted | Metadata/Acquisition 的 Auto/Custom、版本内置默认安全集合、Custom 精确顺序、逐 Source raw-item limit、有效 Source resolver 与旧 discovery schema 删除 | Provider adapter 协议、在线可用性、凭据内容、具体 Literature route 适用性、Browser enablement |
 
 ## 阅读方法
@@ -63,7 +63,7 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
    - 唯一用户级普通配置文件、配置路径所有权和旧配置迁移：ADR 0018。
    - 外部 Agent 编排、Entry/MCP/Skill、解析目标、SDK 驱动模型运行时和 Network transport gate：ADR 0019。
    - ADR 0020 只用于理解已撤销的 Model Service/Profile 配置合同。
-   - Provider/Model 注册表、Model 自有 reasoning/image、Analyze/Download 直接选择、模块派生调用合同、自动模型目录与旧 schema 严格拒绝：ADR 0021。
+   - Provider/Model 注册表、Model 自有 reasoning/image/stream、Analyze/Download 直接选择、模块派生调用合同、自动模型目录与旧 schema 严格拒绝：ADR 0021。
    - Source Auto/Custom、默认安全 catalog、Custom 冻结列表、逐 Source metadata limit 与旧 `[discovery]` 删除：ADR 0022。
 4. 讨论代码组织、持久化、外部访问和具体运行机制时再读[技术文档](../technical.md)。
 

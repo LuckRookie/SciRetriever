@@ -327,7 +327,7 @@ task-level model、reasoning 或 capability override。远程 Provider 必须使
 Agents adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
 跨 origin redirect 不携带认证。
 
-`config test llm` 复用这里的生产 adapter，但只发送固定的极小 strict-schema probe，不发送
+`config test analyze` 复用这里的生产 adapter，但只发送固定的极小 strict-schema probe，不发送
 用户 Literature 或 PDF 内容、不构造 Storage、不持久化结果。它可能消耗少量额度，因而
 人类 CLI 在执行前确认；详情通过中性 `CoreConfigurationProbeResult` 返回。
 

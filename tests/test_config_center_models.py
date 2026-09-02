@@ -78,7 +78,7 @@ class ModelPageTests(unittest.TestCase):
                 "_select_reasoning",
                 return_value=AgentReasoningEffort.MAX,
             ),
-            patch.object(models, "ask_boolean", return_value=True),
+            patch.object(models, "ask_boolean", side_effect=(True, False)) as ask_boolean,
             patch.object(models, "confirm_changes", return_value=True),
             patch.object(models, "update_model_provider_configuration") as update,
         ):
@@ -93,6 +93,11 @@ class ModelPageTests(unittest.TestCase):
         self.assertEqual(model.reference, "openai/gpt-fixture")
         self.assertIs(model.reasoning, AgentReasoningEffort.MAX)
         self.assertTrue(model.image)
+        self.assertFalse(model.stream)
+        self.assertEqual(
+            [(call.args[0], call.kwargs["default"]) for call in ask_boolean.call_args_list],
+            [("Image", False), ("Stream", True)],
+        )
 
     def test_models_and_provider_pages_use_owner_scoped_single_word_actions(self) -> None:
         configuration = Configuration.model_validate(
@@ -127,6 +132,8 @@ class ModelPageTests(unittest.TestCase):
         ):
             models.manage_models(console)
             model_options = select.call_args.args[1]
+            models._manage_model("openai/gpt-fixture", console)
+            model_actions = select.call_args.args[1]
             models._manage_provider("openai", console)
             provider_options = select.call_args.args[1]
 
@@ -135,12 +142,106 @@ class ModelPageTests(unittest.TestCase):
             ["Add", "openai/gpt-fixture", "Providers", "Back"],
         )
         self.assertEqual(
+            [item.label for item in model_actions],
+            ["Edit", "Test", "Remove", "Back"],
+        )
+        self.assertEqual(
             [item.label for item in provider_options],
             ["Edit", "Key", "Test", "Remove", "Back"],
         )
+        self.assertIs(model_actions[1].kind, ConfigActionKind.TEST)
         self.assertIs(provider_options[2].kind, ConfigActionKind.TEST)
         self.assertIs(provider_options[3].kind, ConfigActionKind.DANGER)
         self.assertIs(provider_options[4].kind, ConfigActionKind.NAVIGATE)
+
+    def test_edit_model_can_disable_stream_without_changing_provider(self) -> None:
+        configuration = Configuration.model_validate(
+            {
+                "providers": {
+                    "values": [
+                        {
+                            "name": "openai",
+                            "api": "openai-responses",
+                            "base_url": "https://api.openai.com/v1",
+                        }
+                    ]
+                },
+                "models": {
+                    "values": [
+                        {
+                            "reference": "openai/gpt-fixture",
+                            "reasoning": "high",
+                            "image": True,
+                        }
+                    ]
+                },
+            }
+        )
+        console = Mock()
+        with (
+            patch.object(
+                models,
+                "load_editable_user_configuration",
+                return_value=configuration,
+            ),
+            patch.object(
+                models,
+                "_select_reasoning",
+                return_value=AgentReasoningEffort.HIGH,
+            ),
+            patch.object(models, "ask_boolean", side_effect=(True, False)) as ask_boolean,
+            patch.object(models, "confirm_changes", return_value=True),
+            patch.object(models, "update_configuration_sections") as update,
+        ):
+            models._edit_model("openai/gpt-fixture", console)
+
+        replacement = update.call_args.kwargs["models"].values[0]
+        self.assertFalse(replacement.stream)
+        self.assertEqual(replacement.provider, "openai")
+        self.assertEqual(
+            [(call.args[0], call.kwargs["default"]) for call in ask_boolean.call_args_list],
+            [("Image", True), ("Stream", True)],
+        )
+
+    def test_model_test_selects_text_or_image_without_changing_task_bindings(self) -> None:
+        console = Mock()
+        with (
+            patch.object(models, "select_value", return_value="image") as select,
+            patch.object(models, "run_interactive_test") as run,
+        ):
+            models._test_model("openai/gpt-fixture", image=True, console=console)
+
+        self.assertEqual(
+            [item.label for item in select.call_args.args[1]],
+            ["Text", "Image", "Back"],
+        )
+        request = run.call_args.args[0]
+        self.assertEqual((request.owner, request.target), ("model", "openai/gpt-fixture"))
+        self.assertTrue(request.image_input)
+
+    def test_provider_test_uses_the_shared_owner_scoped_probe(self) -> None:
+        configuration = Configuration.model_validate(
+            {
+                "providers": {
+                    "values": [
+                        {
+                            "name": "openai",
+                            "api": "openai-responses",
+                            "base_url": "https://api.openai.com/v1",
+                        }
+                    ]
+                }
+            }
+        )
+        console = Mock()
+        with (
+            patch.object(models, "load_editable_user_configuration", return_value=configuration),
+            patch.object(models, "run_interactive_test") as run,
+        ):
+            models._test_provider("openai", console)
+
+        request = run.call_args.args[0]
+        self.assertEqual((request.owner, request.target), ("provider", "openai"))
 
 
 if __name__ == "__main__":

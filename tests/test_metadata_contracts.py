@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -429,6 +430,18 @@ class MetadataCapabilityContractTests(unittest.TestCase):
         self.assertIn("code=item-conversion-failed", output)
         self.assertIn("rejected_record_count=1", output)
         self.assertNotIn("vendor-response-must-not-leak", output)
+        record_rejections = [
+            record
+            for record in captured.records
+            if "event=metadata-record-rejected" in record.getMessage()
+        ]
+        provider_failures = [
+            record
+            for record in captured.records
+            if "event=metadata-provider-failed" in record.getMessage()
+        ]
+        self.assertEqual([record.levelno for record in record_rejections], [logging.DEBUG])
+        self.assertEqual([record.levelno for record in provider_failures], [logging.WARNING])
 
     def test_debug_logging_accounts_for_every_raw_item_disposition(self) -> None:
         def convert(raw: _VendorItem) -> NeutralMetadataItem:

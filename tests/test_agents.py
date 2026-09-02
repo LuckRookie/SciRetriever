@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import unittest
 from typing import cast
@@ -55,8 +56,9 @@ class _RawResponse:
 
 
 class _Transport:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, *, status: int = 200) -> None:
         self.body = body
+        self.status = status
         self.calls: list[dict[str, object]] = []
 
     def send(
@@ -83,7 +85,7 @@ class _Transport:
                 "cancel_event": cancel_event,
             }
         )
-        return _RawResponse(self.body)
+        return _RawResponse(self.body, self.status)
 
 
 class _Resolver:
@@ -92,8 +94,8 @@ class _Resolver:
         return ("93.184.216.34",)
 
 
-def _client(body: bytes) -> tuple[HttpClient, _Transport]:
-    transport = _Transport(body)
+def _client(body: bytes, *, status: int = 200) -> tuple[HttpClient, _Transport]:
+    transport = _Transport(body, status=status)
     return (
         HttpClient(
             resolver=_Resolver(),
@@ -113,6 +115,7 @@ def _text_request(
     tools: tuple[AgentToolDeclaration, ...] = (),
     limits: AgentCallLimits | None = None,
     max_output_tokens: int = 32,
+    stream: bool = True,
 ) -> AgentProviderCall:
     if capabilities is None:
         capabilities = frozenset({AgentCapability.STRUCTURED_TEXT})
@@ -129,27 +132,56 @@ def _text_request(
         response_schema=response_schema,
         tools=tools,
         max_output_tokens=max_output_tokens,
+        stream=stream,
         limits=AgentCallLimits() if limits is None else limits,
     )
 
 
+def _structured_payload() -> dict[str, object]:
+    return {
+        "object": "response",
+        "status": "completed",
+        "model": _MODEL,
+        "usage": {"input_tokens": 4, "output_tokens": 1},
+        "output": [
+            {
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": '{"ok":true}'}],
+            }
+        ],
+    }
+
+
 def _structured_wire() -> bytes:
-    return json.dumps(
-        {
-            "object": "response",
-            "status": "completed",
-            "model": _MODEL,
-            "usage": {"input_tokens": 4, "output_tokens": 1},
-            "output": [
-                {
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": '{"ok":true}'}],
-                }
-            ],
-        }
-    ).encode()
+    return _responses_stream(_structured_payload())
+
+
+def _responses_stream(payload: dict[str, object]) -> bytes:
+    terminal = cast(dict[str, object], json.loads(json.dumps(payload)))
+    blocks: list[bytes] = []
+    output = terminal.get("output")
+    if isinstance(output, list):
+        for index, item in enumerate(output):
+            event = {
+                "type": "response.output_item.done",
+                "output_index": index,
+                "item": item,
+            }
+            blocks.append(
+                b"event: response.output_item.done\ndata: "
+                + json.dumps(event, separators=(",", ":")).encode()
+                + b"\n\n"
+            )
+        terminal["output"] = []
+    completed = {"type": "response.completed", "response": terminal}
+    blocks.append(
+        b"event: response.completed\ndata: "
+        + json.dumps(completed, separators=(",", ":")).encode()
+        + b"\n\n"
+    )
+    return b"".join(blocks)
 
 
 def _chat_wire() -> bytes:
@@ -495,16 +527,22 @@ class AgentRuntimeTests(unittest.TestCase):
             ),
         )
 
-        with self.assertLogs("sciretriever.agents", level="INFO") as logs:
+        with self.assertLogs("sciretriever.agents", level="DEBUG") as logs:
             with self.assertRaises(AgentFailure):
                 runtime.execute(_runtime_text_call())
 
         rendered = "\n".join(logs.output)
+        self.assertIn("event=agent-call-preflight-failed", rendered)
         self.assertIn("role=analysis", rendered)
-        self.assertIn("provider=fixture", rendered)
-        self.assertIn(f"model={_MODEL}", rendered)
-        self.assertIn("result=failure", rendered)
-        self.assertIn("failure=agent-request-budget", rendered)
+        self.assertIn("provider=fixture-agent", rendered)
+        self.assertIn(f"wire_model={_MODEL}", rendered)
+        self.assertIn("stream=on", rendered)
+        self.assertIn("reasoning_effort=default", rendered)
+        self.assertIn("outcome=failed", rendered)
+        self.assertIn("code=agent-request-budget", rendered)
+        self.assertIn("reason=The serialized Agent request exceeded", rendered)
+        self.assertIn("action=Reduce the bounded Agent request.", rendered)
+        self.assertEqual([record.levelno for record in logs.records], [logging.DEBUG])
         self.assertEqual(port.calls, [])
 
     def test_protocol_model_and_image_limits_fail_before_adapter_io(self) -> None:
@@ -544,6 +582,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 role=AgentRole.ANALYSIS,
                 model=_MODEL,
                 capabilities=self._analysis_capabilities(),
+                stream=False,
             ),
         )
         cancel_event = threading.Event()
@@ -553,7 +592,16 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIsInstance(result, AgentStructuredResult)
         self.assertEqual(len(port.calls), 1)
         self.assertEqual(port.calls[0].model, _MODEL)
+        self.assertFalse(port.calls[0].stream)
         self.assertIs(port.calls[0].cancel_event, cancel_event)
+
+        self.assertTrue(
+            AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=self._analysis_capabilities(),
+            ).stream
+        )
 
         cancelled = threading.Event()
         cancelled.set()
@@ -746,6 +794,7 @@ class AgentProviderWireTests(unittest.TestCase):
                             max_image_count=1,
                             max_image_bytes=64,
                         ),
+                        stream=adapter_type is OpenAIResponsesAdapter,
                     ),
                 )
                 runtime.execute(call)
@@ -836,7 +885,12 @@ class AgentProviderWireTests(unittest.TestCase):
         )
         for adapter_type, payload in payloads:
             with self.subTest(adapter=adapter_type.__name__):
-                client, _ = _client(json.dumps(payload).encode())
+                wire = (
+                    _responses_stream(payload)
+                    if adapter_type is OpenAIResponsesAdapter
+                    else json.dumps(payload).encode()
+                )
+                client, _ = _client(wire)
                 runtime = AgentRuntime(
                     adapter=adapter_type(http_client=client, api_key=_KEY),
                     browser=AgentRoleBinding(
@@ -851,6 +905,7 @@ class AgentProviderWireTests(unittest.TestCase):
                             max_image_count=1,
                             max_image_bytes=64,
                         ),
+                        stream=adapter_type is OpenAIResponsesAdapter,
                     ),
                 )
                 result = runtime.execute(call)
@@ -880,7 +935,7 @@ class AgentProviderWireTests(unittest.TestCase):
                 }
             )
         )
-        client, _ = _client(json.dumps(bad_tool).encode())
+        client, _ = _client(_responses_stream(bad_tool))
         declaration = AgentToolDeclaration(name="click", input_schema=_TOOL_SCHEMA)
         with self.assertRaises(AgentFailure) as caught:
             OpenAIResponsesAdapter(http_client=client, api_key=_KEY).execute(
@@ -939,7 +994,7 @@ class AgentProviderWireTests(unittest.TestCase):
                         }
                     ],
                 }
-                client, _ = _client(json.dumps(payload).encode())
+                client, _ = _client(_responses_stream(payload))
                 with self.assertRaises(AgentFailure) as caught:
                     OpenAIResponsesAdapter(http_client=client, api_key=_KEY).execute(request)
                 self.assertEqual(caught.exception.failure.code, "agent-tool")
@@ -958,7 +1013,7 @@ class AgentProviderWireTests(unittest.TestCase):
             "usage": {"input_tokens": 4, "output_tokens": 1},
             "output": [{"type": "function_call", "name": "click", "arguments": "{}"}],
         }
-        client, transport = _client(json.dumps(payload).encode())
+        client, transport = _client(_responses_stream(payload))
 
         OpenAIResponsesAdapter(http_client=client, api_key=_KEY).execute(request)
 
@@ -971,7 +1026,7 @@ class AgentProviderWireTests(unittest.TestCase):
         self.assertNotIn("Browser", description)
 
     def test_missing_usage_is_a_protocol_failure_for_every_adapter(self) -> None:
-        response_payload = json.loads(_structured_wire())
+        response_payload = _structured_payload()
         response_payload.pop("usage")
         chat_payload = json.loads(_chat_wire())
         chat_payload.pop("usage")
@@ -988,9 +1043,16 @@ class AgentProviderWireTests(unittest.TestCase):
             (AnthropicMessagesAdapter, anthropic_payload),
         ):
             with self.subTest(adapter=adapter_type.__name__):
-                client, _ = _client(json.dumps(payload).encode())
+                wire = (
+                    _responses_stream(payload)
+                    if adapter_type is OpenAIResponsesAdapter
+                    else json.dumps(payload).encode()
+                )
+                client, _ = _client(wire)
                 with self.assertRaises(AgentFailure) as caught:
-                    adapter_type(http_client=client, api_key=_KEY).execute(_text_request())
+                    adapter_type(http_client=client, api_key=_KEY).execute(
+                        _text_request(stream=adapter_type is OpenAIResponsesAdapter)
+                    )
                 self.assertEqual(caught.exception.failure.code, "agent-protocol")
 
     def test_tool_mode_rejects_any_extra_assistant_content(self) -> None:
@@ -1060,22 +1122,101 @@ class AgentProviderWireTests(unittest.TestCase):
         )
         for adapter_type, payload in payloads:
             with self.subTest(adapter=adapter_type.__name__):
-                client, _ = _client(json.dumps(payload).encode())
+                wire = (
+                    _responses_stream(payload)
+                    if adapter_type is OpenAIResponsesAdapter
+                    else json.dumps(payload).encode()
+                )
+                client, _ = _client(wire)
                 with self.assertRaises(AgentFailure) as caught:
-                    adapter_type(http_client=client, api_key=_KEY).execute(request)
+                    adapter_type(http_client=client, api_key=_KEY).execute(
+                        _text_request(
+                            capabilities=request.capabilities,
+                            response_schema=request.response_schema,
+                            tools=request.tools,
+                            stream=adapter_type is OpenAIResponsesAdapter,
+                        )
+                    )
                 self.assertEqual(caught.exception.failure.code, "agent-tool")
+
+    def test_provider_logs_safe_stream_request_and_terminal_result_diagnostics(self) -> None:
+        for stream in (True, False):
+            with self.subTest(stream=stream):
+                body = (
+                    _structured_wire()
+                    if stream
+                    else json.dumps(_structured_payload()).encode("utf-8")
+                )
+                client, _transport = _client(body)
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_KEY)
+
+                with self.assertLogs("sciretriever.agents", level="DEBUG") as captured:
+                    result = adapter.execute(_text_request(stream=stream))
+
+                self.assertIsInstance(result, AgentStructuredResult)
+                rendered = "\n".join(captured.output)
+                self.assertEqual(rendered.count("event=agent-call-started"), 1)
+                self.assertEqual(rendered.count("event=agent-call-finished"), 1)
+                self.assertIn("provider=openai", rendered)
+                self.assertIn(f"wire_model={_MODEL}", rendered)
+                self.assertIn("protocol=responses-v1", rendered)
+                self.assertIn(f"stream={'on' if stream else 'off'}", rendered)
+                self.assertIn("reasoning_effort=default", rendered)
+                self.assertIn("outcome=success", rendered)
+                self.assertIn("result=structured", rendered)
+                self.assertIn("input_tokens=4", rendered)
+                self.assertIn("output_tokens=1", rendered)
+                self.assertTrue(all(record.levelno == logging.DEBUG for record in captured.records))
+                self.assertNotIn(_KEY, rendered)
+                self.assertNotIn("System instruction", rendered)
+                self.assertNotIn('{"input":"fixture"}', rendered)
+
+    def test_provider_failure_log_keeps_safe_remote_evidence_without_response_text(self) -> None:
+        response_text = "provider-private-message-must-not-leak"
+        body = json.dumps(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "message": response_text,
+                }
+            }
+        ).encode("utf-8")
+        client, _transport = _client(body, status=400)
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_KEY)
+
+        with self.assertLogs("sciretriever.agents", level="DEBUG") as captured:
+            with self.assertRaises(AgentFailure):
+                adapter.execute(_text_request())
+
+        rendered = "\n".join(captured.output)
+        terminal = [
+            message for message in captured.output if "event=agent-call-finished" in message
+        ]
+        self.assertEqual(len(terminal), 1)
+        self.assertIn("outcome=failed", terminal[0])
+        self.assertIn("code=agent-request-rejected", terminal[0])
+        self.assertIn("retryable=false", terminal[0])
+        self.assertIn("http_status=400", terminal[0])
+        self.assertIn("remote_error=model-rejected", terminal[0])
+        self.assertIn("reason=The Agent provider rejected", terminal[0])
+        self.assertIn("action=Review the model identity", terminal[0])
+        self.assertNotIn(response_text, rendered)
+        self.assertNotIn(_KEY, rendered)
 
     def test_pre_transport_budget_failure_still_emits_one_terminal_result_log(self) -> None:
         client, transport = _client(_structured_wire())
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_KEY)
 
-        with self.assertLogs("sciretriever.agents", level="INFO") as captured:
+        with self.assertLogs("sciretriever.agents", level="DEBUG") as captured:
             with self.assertRaises(AgentFailure):
                 adapter.execute(_text_request(limits=AgentCallLimits(max_prompt_bytes=4)))
 
-        terminal = [message for message in captured.output if "agent.call.result" in message]
+        terminal = [
+            message for message in captured.output if "event=agent-call-finished" in message
+        ]
         self.assertEqual(len(terminal), 1)
-        self.assertIn("failure=agent-input-budget", terminal[0])
+        self.assertIn("code=agent-input-budget", terminal[0])
         self.assertEqual(transport.calls, [])
 
 

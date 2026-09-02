@@ -104,13 +104,13 @@ class RuleBrowserController:
     def run(self, session: BrowserFlowSession) -> None:
         if not isinstance(session, BrowserFlowSession):
             raise TypeError("session must implement BrowserFlowSession")
-        _LOGGER.info("event=browser-controller-start controller=rules")
+        _LOGGER.debug("event=browser-controller-start controller=rules")
         try:
             self.execution.run(session)
         except BaseException:
-            _LOGGER.info("event=browser-controller-result controller=rules result=failure")
+            _LOGGER.debug("event=browser-controller-result controller=rules result=failure")
             raise
-        _LOGGER.info("event=browser-controller-result controller=rules result=completed")
+        _LOGGER.debug("event=browser-controller-result controller=rules result=completed")
 
 
 @runtime_checkable
@@ -638,16 +638,18 @@ class AgentBrowserController:
         control = self._control_factory.open(session)
         if not isinstance(control, BrowserAgentControlSession):
             raise TypeError("control factory returned an invalid control session")
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=browser-controller-start controller=agent role=browser provider=%s",
             self._runtime.provider_name,
         )
         try:
             self._result = self._run_loop(control)
         except BaseException:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=browser-agent-result controller=agent role=browser provider=%s "
-                "result=failure failure=browser-agent-internal",
+                "outcome=failed code=browser-agent-internal retryable=false "
+                "reason=The Browser Agent controller encountered an internal error. "
+                "action=Review the Debug transcript and controller implementation.",
                 self._runtime.provider_name,
             )
             raise
@@ -672,18 +674,32 @@ class AgentBrowserController:
         )
 
     def _finish(self, result: BrowserAgentResult) -> BrowserAgentResult:
-        failure_code = "none" if result.failure is None else result.failure.code
         page_state = "none" if result.page_state is None else result.page_state.value
-        _LOGGER.info(
-            "event=browser-agent-result controller=agent role=browser provider=%s result=%s "
-            "page_state=%s capture_state=%s action_count=%d failure=%s",
-            self._runtime.provider_name,
-            result.disposition.value,
-            page_state,
-            result.capture_state.value,
-            result.action_count,
-            failure_code,
-        )
+        if result.failure is None:
+            _LOGGER.debug(
+                "event=browser-agent-result controller=agent role=browser provider=%s "
+                "outcome=%s page_state=%s capture_state=%s action_count=%d",
+                self._runtime.provider_name,
+                result.disposition.value,
+                page_state,
+                result.capture_state.value,
+                result.action_count,
+            )
+        else:
+            _LOGGER.debug(
+                "event=browser-agent-result controller=agent role=browser provider=%s "
+                "outcome=%s page_state=%s capture_state=%s action_count=%d "
+                "code=%s retryable=%s reason=%s action=%s",
+                self._runtime.provider_name,
+                result.disposition.value,
+                page_state,
+                result.capture_state.value,
+                result.action_count,
+                result.failure.code,
+                str(result.failure.retryable).lower(),
+                result.failure.reason,
+                result.failure.action,
+            )
         return result
 
     def _log_action_decision(
@@ -704,7 +720,7 @@ class AgentBrowserController:
 
     def _log_action_receipt(self, receipt: BrowserActionReceipt) -> None:
         failure_code = "none" if receipt.failure_code is None else receipt.failure_code
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=browser-agent-action-result controller=agent role=browser provider=%s "
             "action=%s result=%s failure=%s",
             self._runtime.provider_name,

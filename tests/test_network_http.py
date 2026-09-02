@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import logging
 import pickle
 import socket
 import ssl
@@ -465,6 +466,7 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertIn("status=200 response_bytes=7", output)
         self.assertRegex(output, r"elapsed_ms=\d+")
         self.assertNotIn("private-path-must-not-log", output)
+        self.assertTrue(all(record.levelno == logging.DEBUG for record in captured.records))
 
         failed_client = self._client(
             _FakeTransport([OSError("PRIVATE-TRANSPORT-SENTINEL")]),
@@ -485,6 +487,12 @@ class NetworkHttpTests(unittest.TestCase):
         self.assertRegex(failure_output, r"elapsed_ms=\d+")
         self.assertNotIn("PRIVATE-TRANSPORT-SENTINEL", failure_output)
         self.assertNotIn("another-private-path", failure_output)
+        terminal = next(
+            record
+            for record in failed_logs.records
+            if "event=network-request-failed" in record.getMessage()
+        )
+        self.assertEqual(terminal.levelno, logging.WARNING)
 
         credential_client = self._client(
             _FakeTransport([_response(body=b"credentialed")]),

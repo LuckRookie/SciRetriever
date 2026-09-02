@@ -321,7 +321,7 @@ reference_max_output_tokens = 64
         work.mkdir(mode=0o700)
         self.install.write_user_configuration("")
         result = self.install.run_console(
-            ("config", "test", "web-of-science", "--json"),
+            ("config", "test", "search", "web-of-science", "--json"),
             cwd=work,
         )
         self.assertEqual(result.returncode, 3)
@@ -341,6 +341,14 @@ reference_max_output_tokens = 64
                         "minimal_response_parseable": None,
                         "acquisition_entitlement": "not-proven",
                         "failure_code": "missing-ordinary-parameter",
+                        "diagnosis": {
+                            "request": "Not sent",
+                            "reason": (
+                                "The request was not sent because local configuration "
+                                "is incomplete."
+                            ),
+                            "action": "Complete this area's required settings and retry.",
+                        },
                     }
                 ]
             },
@@ -446,11 +454,13 @@ reference_max_output_tokens = 64
                     "1\n"
                     "8\n"
                     "2\n"
+                    "1\n"
                     "y\n"
                     "1\n"
                     "1\n"
                     "2\n"
                     "7\n"
+                    "1\n"
                     "1\n"
                     "y\n"
                     "5\n"
@@ -493,6 +503,7 @@ reference_max_output_tokens = 64
         self.assertIn('[models."local/acceptance-browser"]', rendered)
         self.assertEqual(rendered.count('reasoning = "max"'), 1)
         self.assertEqual(rendered.count('reasoning = "xhigh"'), 1)
+        self.assertEqual(rendered.count("stream = true"), 2)
         self.assertIn("[analyze]", rendered)
         self.assertIn('model = "local/acceptance-analysis"', rendered)
         self.assertIn("[download]", rendered)
@@ -776,7 +787,8 @@ database = "WOS"
             (
                 "config",
                 "test",
-                "--browser",
+                "browser",
+                "site",
                 "springerlink",
                 "--json",
             ),
@@ -889,34 +901,37 @@ database = "WOS"
             self.assertIn(b"reasoning medium", status_human.stdout)
             self.assertIn(b"Parse", status_human.stdout)
 
-            llm = install.run_console(
-                ("config", "test", "llm", "--json"),
+            analyze = install.run_console(
+                ("config", "test", "analyze", "--json"),
                 environment=environment,
                 cwd=work,
             )
-            self.assertEqual(llm.returncode, 0, llm.stderr_text)
-            self.assertNotIn(secret.encode(), llm.stderr)
-            self.assertNotIn(b"Traceback", llm.stderr)
-            self.assertNotIn(secret.encode(), llm.stdout)
-            llm_payload = json.loads(llm.stdout)
-            self.assertEqual(llm_payload["outcome"], "passed")
-            self.assertEqual(llm_payload["details"]["request_kind"], "minimal-schema")
-            self.assertFalse(llm_payload["details"]["sends_user_literature"])
-            self.assertFalse(llm_payload["persisted"])
+            self.assertEqual(analyze.returncode, 0, analyze.stderr_text)
+            self.assertNotIn(secret.encode(), analyze.stderr)
+            self.assertNotIn(b"Traceback", analyze.stderr)
+            self.assertNotIn(secret.encode(), analyze.stdout)
+            analyze_payload = json.loads(analyze.stdout)
+            self.assertEqual(analyze_payload["outcome"], "passed")
+            self.assertEqual(
+                analyze_payload["details"]["request_kind"],
+                "minimal-schema",
+            )
+            self.assertFalse(analyze_payload["details"]["sends_user_literature"])
+            self.assertFalse(analyze_payload["persisted"])
 
-            mineru = install.run_console(
-                ("config", "test", "mineru", "--json"),
+            parse = install.run_console(
+                ("config", "test", "parse", "--json"),
                 environment=environment,
                 cwd=work,
             )
-            self.assertEqual(mineru.returncode, 0, mineru.stderr_text)
-            self.assertNotIn(secret.encode(), mineru.stderr)
-            self.assertNotIn(b"Traceback", mineru.stderr)
-            mineru_payload = json.loads(mineru.stdout)
-            self.assertEqual(mineru_payload["outcome"], "passed")
-            self.assertEqual(mineru_payload["details"]["request_kind"], "health-only")
-            self.assertFalse(mineru_payload["details"]["uploaded_pdf"])
-            self.assertFalse(mineru_payload["persisted"])
+            self.assertEqual(parse.returncode, 0, parse.stderr_text)
+            self.assertNotIn(secret.encode(), parse.stderr)
+            self.assertNotIn(b"Traceback", parse.stderr)
+            parse_payload = json.loads(parse.stdout)
+            self.assertEqual(parse_payload["outcome"], "passed")
+            self.assertEqual(parse_payload["details"]["request_kind"], "health-only")
+            self.assertFalse(parse_payload["details"]["uploaded_pdf"])
+            self.assertFalse(parse_payload["persisted"])
 
             all_probes = install.run_console(
                 ("config", "test", "--all", "--json"),
@@ -928,9 +943,10 @@ database = "WOS"
             self.assertNotIn(secret.encode(), all_probes.stderr)
             self.assertNotIn(b"Traceback", all_probes.stderr)
             all_payload = json.loads(all_probes.stdout)
-            self.assertEqual(all_payload["providers"], {"results": []})
-            self.assertEqual(all_payload["llm"]["outcome"], "passed")
-            self.assertEqual(all_payload["mineru"]["outcome"], "passed")
+            self.assertEqual(all_payload["search"], {"results": []})
+            self.assertEqual(all_payload["download"], {"results": []})
+            self.assertEqual(all_payload["analyze"]["outcome"], "passed")
+            self.assertEqual(all_payload["parse"]["outcome"], "passed")
 
             requests = [
                 json.loads(line)

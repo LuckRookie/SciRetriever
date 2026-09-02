@@ -527,9 +527,9 @@ class ConfigPresentationTests(unittest.TestCase):
         )
         rendered = output.getvalue()
         self.assertIn("Browser · springerlink", rendered)
-        self.assertIn("runtime target reached", rendered)
-        self.assertIn("institution-IP/article", rendered)
-        self.assertIn("article entitlement remains not proven", rendered)
+        self.assertIn("One approved Browser navigation", rendered)
+        self.assertIn("Browser launched and reached", rendered)
+        self.assertNotIn("entitlement", rendered)
         self.assertNotIn("browser-session-not-authenticated", rendered)
         self.assertNotIn(_SECRET, rendered)
         self.assertNotIn("\x1b[", rendered)
@@ -562,12 +562,198 @@ class ConfigPresentationTests(unittest.TestCase):
             }
         )
         rendered = output.getvalue()
-        self.assertIn("Browser model", rendered)
-        self.assertIn("synthetic-image + closed-tool", rendered)
-        self.assertIn("Literature/PDF/page content", rendered)
-        self.assertIn("may consume quota", rendered)
+        self.assertIn("Browser · not selected", rendered)
+        self.assertIn("Not sent", rendered)
+        self.assertIn("not locally ready for image input", rendered)
+        self.assertIn("image-capable Model", rendered)
         self.assertNotIn(_SECRET, rendered)
         self.assertNotIn("\x1b[", rendered)
+
+    def test_provider_and_exact_model_probe_presentations_keep_their_distinct_meaning(
+        self,
+    ) -> None:
+        payloads = (
+            (
+                {
+                    "service": "agents",
+                    "outcome": "passed",
+                    "local_ready": True,
+                    "failure_code": None,
+                    "details": {
+                        "request_kind": "model-catalog",
+                        "provider": "main",
+                        "protocol": "openai-responses",
+                        "request_method": "GET",
+                        "request_url": "https://models.example/v1/models",
+                        "catalog_count": 2,
+                        "catalog_truncated": False,
+                        "may_consume_quota": True,
+                    },
+                },
+                (
+                    "Provider · main",
+                    "GET https://models.example/v1/models",
+                    "2 Model IDs were",
+                    "parsed.",
+                ),
+            ),
+            (
+                {
+                    "service": "agents",
+                    "outcome": "passed",
+                    "local_ready": True,
+                    "failure_code": None,
+                    "details": {
+                        "request_kind": "model-text",
+                        "reference": "main/probe-model",
+                        "provider": "main",
+                        "model": "probe-model",
+                        "protocol": "openai-responses",
+                        "reasoning": "max",
+                        "image_input": False,
+                        "request_method": "POST",
+                        "request_url": "https://models.example/v1/responses",
+                        "response_parseable": True,
+                    },
+                },
+                (
+                    "Model · probe-model",
+                    "Provider · main",
+                    "POST https://models.example/v1/responses",
+                    "returned a valid strict response",
+                ),
+            ),
+        )
+        for payload, expected in payloads:
+            with self.subTest(expected=expected):
+                output = io.StringIO()
+                ConfigStatusPresenter(
+                    "mono",
+                    file=output,
+                    force_terminal=False,
+                    width=120,
+                ).probes(payload)
+                rendered = output.getvalue()
+                normalized = " ".join(rendered.replace("│", " ").split())
+                for value in expected:
+                    self.assertIn(value, normalized)
+                if expected[0] == "Model · probe-model":
+                    self.assertNotIn("Model · main/probe-model", normalized)
+                self.assertNotIn(_SECRET, rendered)
+
+    def test_download_probe_presentation_does_not_claim_a_pdf_or_entitlement(self) -> None:
+        output = io.StringIO()
+        ConfigStatusPresenter(
+            "mono",
+            file=output,
+            force_terminal=False,
+            width=120,
+        ).probes(
+            {
+                "results": [
+                    {
+                        "provider": "crossref",
+                        "capability": "acquisition",
+                        "outcome": "skipped",
+                        "local_ready": False,
+                        "failure_code": "acquisition-probe-unavailable",
+                    }
+                ]
+            }
+        )
+        rendered = output.getvalue()
+        normalized = " ".join(rendered.split())
+        self.assertIn("Download · crossref", rendered)
+        self.assertIn("No safe config-only Download request", normalized)
+        self.assertIn("complete pdf", normalized)
+        self.assertNotIn("acquisition-probe-unavailable", rendered)
+
+    def test_global_probe_presentation_recognizes_the_owner_scoped_groups(self) -> None:
+        output = io.StringIO()
+        ConfigStatusPresenter(
+            "mono",
+            file=output,
+            force_terminal=False,
+            width=120,
+        ).probes(
+            {
+                "search": {
+                    "results": [
+                        {
+                            "provider": "crossref",
+                            "capability": "metadata",
+                            "outcome": "passed",
+                            "failure_code": None,
+                        }
+                    ]
+                },
+                "download": {"results": []},
+                "analyze": {
+                    "service": "agents",
+                    "outcome": "passed",
+                    "details": {"role": "analysis"},
+                },
+                "parse": {
+                    "service": "mineru",
+                    "outcome": "passed",
+                    "details": {"request_kind": "health-only"},
+                },
+            }
+        )
+        rendered = output.getvalue()
+        self.assertIn("Search · crossref", rendered)
+        self.assertIn("Analyze · not selected", rendered)
+        self.assertIn("MinerU", rendered)
+        self.assertNotIn("Browser ·", rendered)
+
+    def test_failed_model_probe_shows_model_url_reason_and_next_check_without_raw_body(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        ConfigStatusPresenter(
+            "mono",
+            file=output,
+            force_terminal=False,
+            width=140,
+        ).probes(
+            {
+                "service": "agents",
+                "outcome": "failed",
+                "local_ready": True,
+                "failure_code": "agent-not-found",
+                "failure_evidence": {
+                    "http_status": 404,
+                    "access_code": None,
+                    "remote_error": None,
+                },
+                "details": {
+                    "request_kind": "model-text",
+                    "reference": "qiuzk/gpt-5.6-luna",
+                    "provider": "qiuzk",
+                    "model": "gpt-5.6-luna",
+                    "protocol": "openai-responses",
+                    "reasoning": "max",
+                    "stream": True,
+                    "image_input": False,
+                    "request_method": "POST",
+                    "request_url": "https://qiuzk.example/v1/responses",
+                },
+            }
+        )
+
+        rendered = " ".join(output.getvalue().replace("│", " ").split())
+        self.assertIn("Model · gpt-5.6-luna", rendered)
+        self.assertIn("Provider · qiuzk", rendered)
+        self.assertNotIn("Model · qiuzk/gpt-5.6-luna", rendered)
+        self.assertIn("POST https://qiuzk.example/v1/responses", rendered)
+        self.assertIn("Stream · on", rendered)
+        self.assertIn("Failed", rendered)
+        self.assertIn("HTTP 404", rendered)
+        self.assertIn("Model or API endpoint was", rendered)
+        self.assertIn("not found", rendered)
+        self.assertIn("exact Model name first", rendered)
+        self.assertNotIn("agent-not-found", rendered)
+        self.assertNotIn("PRIVATE-RESPONSE-SENTINEL", rendered)
 
 
 class TerminalChoiceTests(unittest.TestCase):

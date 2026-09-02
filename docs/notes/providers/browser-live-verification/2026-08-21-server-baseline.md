@@ -96,7 +96,7 @@ failed
 
 ## 5. 相邻基线缺口
 
-- `config test --browser springerlink` 曾因合法最终页面跳离起始 origin 报不可达，而同一环境的真实
+- `config test browser site springerlink` 曾因合法最终页面跳离起始 origin 报不可达，而同一环境的真实
   Springer 文章成功；probe 存在假阴性，后续必须按 rule 允许的最终 origin 判断。
 - Completion Report 含目标失败时进程仍可能退出 0；这只是被观察到的当前行为，不是已接受的最终
   CLI 合同，必须另行固定完全成功、局部/全部失败、取消、配置和系统错误的退出码组合。

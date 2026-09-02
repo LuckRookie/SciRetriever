@@ -41,6 +41,7 @@ class AgentRoleBinding:
     model: str
     capabilities: AgentModelCapabilities
     reasoning_effort: AgentReasoningEffort = AgentReasoningEffort.PROVIDER_DEFAULT
+    stream: bool = True
     limits: AgentCallLimits = AgentCallLimits()
 
     def __post_init__(self) -> None:
@@ -51,6 +52,8 @@ class AgentRoleBinding:
             raise TypeError("role capabilities must be AgentModelCapabilities")
         if not isinstance(self.reasoning_effort, AgentReasoningEffort):
             raise TypeError("reasoning_effort must be an AgentReasoningEffort")
+        if type(self.stream) is not bool:
+            raise TypeError("stream must be bool")
         if not isinstance(self.limits, AgentCallLimits):
             raise TypeError("role limits must be AgentCallLimits")
 
@@ -162,7 +165,7 @@ class AgentRuntime:
         try:
             self._validate_call(call, binding)
         except AgentFailure as error:
-            self._log_preflight_failure(call, error.failure.code)
+            self._log_preflight_failure(call, error)
             raise
         provider_call = AgentProviderCall(
             role=call.role,
@@ -175,6 +178,7 @@ class AgentRuntime:
             tools=call.tools,
             max_output_tokens=call.max_output_tokens,
             reasoning_effort=binding.reasoning_effort,
+            stream=binding.stream,
             limits=binding.limits,
             cancel_event=cancel_event,
         )
@@ -281,20 +285,27 @@ class AgentRuntime:
 
     def _raise_preflight(self, call: AgentCall, kind: str) -> None:
         error = agent_failure(kind)
-        self._log_preflight_failure(call, error.failure.code)
+        self._log_preflight_failure(call, error)
         raise error
 
-    def _log_preflight_failure(self, call: AgentCall, code: str) -> None:
+    def _log_preflight_failure(self, call: AgentCall, error: AgentFailure) -> None:
         binding = self._binding(call.role)
         adapter = self._adapter(call.role)
-        _LOGGER.info(
-            "agent.call.result role=%s provider=%s model=%s capabilities=%s "
-            "result=failure failure=%s",
+        failure = error.failure
+        _LOGGER.debug(
+            "event=agent-call-preflight-failed role=%s provider=%s wire_model=%s "
+            "stream=%s capabilities=%s reasoning_effort=%s outcome=failed "
+            "code=%s retryable=%s reason=%s action=%s",
             call.role.value,
             "unbound" if adapter is None else adapter.provider_name,
             "unbound" if binding is None else binding.model,
+            "unbound" if binding is None else "on" if binding.stream else "off",
             ",".join(sorted(value.value for value in call.required_capabilities)),
-            code,
+            "unbound" if binding is None else binding.reasoning_effort.value,
+            failure.code,
+            str(failure.retryable).lower(),
+            failure.reason,
+            failure.action,
         )
 
 

@@ -958,7 +958,7 @@ class _CompletionScheduler:
             return NotStartedCompletionTarget(target=execution.target)
         self._target_started_ns[index] = time.monotonic_ns()
         target_kind, target_id = _completion_target_identity(execution.target)
-        _LOGGER.debug(
+        _LOGGER.info(
             "event=completion-target-started progress=%d/%d target_kind=%s target_id=%s",
             self._index_offset + index + 1,
             self._total_target_count,
@@ -1528,7 +1528,9 @@ def _log_completion_target_result(
         target_kind, target_id = _completion_target_identity(result.target)
         _LOGGER.warning(
             "event=completion-target-finished progress=%d/%d outcome=not-started "
-            "target_kind=%s target_id=%s elapsed_ms=%s",
+            "target_kind=%s target_id=%s elapsed_ms=%s "
+            "reason=The operation ended before this target started. "
+            "action=Retry this target when the operation can continue.",
             index + 1,
             total,
             target_kind,
@@ -1552,9 +1554,11 @@ def _log_completion_target_result(
         )
         return
     if isinstance(outcome, NeedsManualPdfTarget):
-        _LOGGER.info(
+        _LOGGER.warning(
             "event=completion-target-finished progress=%d/%d outcome=needs-manual-pdf "
-            "target_kind=%s target_id=%s literature_ids=%s elapsed_ms=%s",
+            "target_kind=%s target_id=%s literature_ids=%s elapsed_ms=%s "
+            "reason=Automatic PDF acquisition was exhausted for this target. "
+            "action=Import a PDF manually for one of the listed literature records.",
             index + 1,
             total,
             target_kind,
@@ -1585,7 +1589,9 @@ def _log_completion_target_result(
     if isinstance(outcome, InterruptedCompletionTarget):
         _LOGGER.warning(
             "event=completion-target-finished progress=%d/%d outcome=interrupted "
-            "target_kind=%s target_id=%s literature_id=%s elapsed_ms=%s",
+            "target_kind=%s target_id=%s literature_id=%s elapsed_ms=%s "
+            "reason=The operation was interrupted while processing this target. "
+            "action=Retry this target when the operation can continue.",
             index + 1,
             total,
             target_kind,
@@ -1710,12 +1716,18 @@ def _logged_completion_report(
             failure.action,
         )
         return report
-    message = (
-        "event=completion-interrupted"
-        if isinstance(report.end, InterruptedReportEnd)
-        else "event=completion-finished"
+    interrupted = isinstance(report.end, InterruptedReportEnd)
+    action_required = bool(
+        report.needs_manual_pdf or report.failed or report.interrupted or report.not_started
     )
-    log = _LOGGER.warning if isinstance(report.end, InterruptedReportEnd) else _LOGGER.info
+    message = (
+        "event=completion-interrupted outcome=interrupted"
+        if interrupted
+        else "event=completion-finished outcome=action-required"
+        if action_required
+        else "event=completion-finished outcome=completed"
+    )
+    log = _LOGGER.warning if interrupted or action_required else _LOGGER.info
     log(
         "%s goal=%s goal_reached=%d needs_manual_pdf=%d failed=%d interrupted=%d "
         "not_started=%d no_usable_content=%d elapsed_ms=%d",

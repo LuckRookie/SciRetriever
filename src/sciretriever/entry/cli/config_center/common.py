@@ -19,6 +19,11 @@ from sciretriever.entry.cli.config_ui import (
 from sciretriever.model.configuration import Configuration
 
 _T = TypeVar("_T")
+_QUIT_SELECTION = object()
+
+
+class ConfigurationCenterQuit(Exception):
+    """Signal that the user chose to close the whole configuration center."""
 
 
 def option(
@@ -36,6 +41,87 @@ def option(
         kind=kind,
         description=description,
     )
+
+
+def _selection_options(
+    values: Sequence[ConfigOption[str]],
+) -> list[ConfigOption[object]]:
+    options: list[ConfigOption[object]] = [
+        ConfigOption(
+            value=item.value,
+            label=item.label,
+            kind=item.kind,
+            description=item.description,
+        )
+        for item in values
+    ]
+    options.append(
+        ConfigOption(
+            value=_QUIT_SELECTION,
+            label="Quit",
+            kind=ConfigActionKind.NAVIGATE,
+            description="Close the configuration center",
+        )
+    )
+    return options
+
+
+def _resolve_selection(selected: object) -> str | None:
+    if selected is _QUIT_SELECTION:
+        raise ConfigurationCenterQuit
+    if selected is None or isinstance(selected, str):
+        return selected
+    raise RuntimeError("configuration selection returned an unknown control value")
+
+
+def _select_rich_value(
+    prompt: str,
+    values: Sequence[ConfigOption[str]],
+    *,
+    console: ConfigConsole,
+    default: str | None,
+    searchable: bool,
+) -> str | None:
+    selected = TerminalChoice[object](
+        message=prompt,
+        options=_selection_options(values),
+        default=default,
+        theme=console.palette.name,
+        shortcuts={"q": _QUIT_SELECTION},
+        back_value=None,
+        searchable=searchable,
+    ).prompt()
+    return _resolve_selection(selected)
+
+
+def _select_plain_value(
+    prompt: str,
+    values: Sequence[ConfigOption[str]],
+    *,
+    console: ConfigConsole,
+    default: str | None,
+) -> str | None:
+    console.message(prompt, kind="muted")
+    choice_options = _selection_options(values)
+    default_index: int | None = None
+    label_width = max(get_cwidth(item.plain_label) for item in choice_options)
+    for index, item in enumerate(choice_options, start=1):
+        marker = " [default]" if item.value == default else ""
+        sys.stderr.write(f"  {index}. {item.plain_row(label_width=label_width)}{marker}\n")
+        if item.value == default:
+            default_index = index
+    suffix = f" [{default_index}]" if default_index is not None else ""
+    answer = read_line(f"Choose a number{suffix} (b to back, q to quit): ")
+    if answer is None or answer.casefold() in {"b", "back"}:
+        return None
+    if answer.casefold() in {"q", "quit"}:
+        raise ConfigurationCenterQuit
+    if not answer and default is not None:
+        return default
+    if answer.isdecimal() and 1 <= int(answer) <= len(choice_options):
+        return _resolve_selection(choice_options[int(answer) - 1].value)
+    console.message("Invalid selection; no configuration was changed.", kind="warning")
+    return None
 
 
 def confirm(prompt: str) -> bool:
@@ -68,48 +154,14 @@ def select_value(
     if default is not None and default not in {item.value for item in values}:
         raise ValueError("selection default is not an available value")
     if interactive_terminal():
-        choice_options: list[ConfigOption[str | None]] = [
-            ConfigOption(
-                value=item.value,
-                label=item.label,
-                kind=item.kind,
-                description=item.description,
-            )
-            for item in values
-        ]
-        choice_options.append(
-            ConfigOption(
-                value=None,
-                label="Cancel",
-                kind=ConfigActionKind.NAVIGATE,
-            )
-        )
-        return TerminalChoice[str | None](
-            message=prompt,
-            options=choice_options,
+        return _select_rich_value(
+            prompt,
+            values,
+            console=console,
             default=default,
-            theme=console.palette.name,
-            back_value=None,
             searchable=searchable,
-        ).prompt()
-    console.message(prompt, kind="muted")
-    default_index: int | None = None
-    label_width = max(get_cwidth(item.plain_label) for item in values)
-    for index, item in enumerate(values, start=1):
-        marker = " [default]" if item.value == default else ""
-        sys.stderr.write(f"  {index}. {item.plain_row(label_width=label_width)}{marker}\n")
-        if item.value == default:
-            default_index = index
-    suffix = f" [{default_index}]" if default_index is not None else ""
-    answer = read_line(f"Choose a number{suffix} (b to cancel): ")
-    if answer is None or answer.casefold() in {"b", "back", "q", "quit"}:
-        return None
-    if not answer and default is not None:
-        return default
-    if answer.isdecimal() and 1 <= int(answer) <= len(values):
-        return values[int(answer) - 1].value
-    console.message("Invalid selection; no configuration was changed.", kind="warning")
-    return None
+        )
+    return _select_plain_value(prompt, values, console=console, default=default)
 
 
 def ask_text(label: str, *, default: str | None = None) -> str | None:
@@ -178,6 +230,7 @@ def confirm_changes(
 
 
 __all__ = (
+    "ConfigurationCenterQuit",
     "ask_boolean",
     "ask_positive_integer",
     "ask_text",

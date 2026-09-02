@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from sciretriever.acquisition.api import CONTROLLED_BROWSER_PRODUCTION_AVAILABLE
 from sciretriever.bootstrap import (
     PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
-    build_production_configuration_probe_session,
 )
 from sciretriever.configuration import (
     CLOAKBROWSER_BROWSER_VERSION,
@@ -22,7 +21,6 @@ from sciretriever.configuration import (
     configure_browser_access_profile,
     load_credentials,
     load_editable_user_configuration,
-    load_user_configuration,
     remove_browser_profile,
     remove_core_credentials,
     set_core_credentials,
@@ -37,11 +35,13 @@ from sciretriever.entry.cli.config_center.common import (
     select_value,
 )
 from sciretriever.entry.cli.config_center.models import choose_model
-from sciretriever.entry.cli.config_center.probes import run_core_test
+from sciretriever.entry.cli.config_center.probes import (
+    ConfigurationTestRequest,
+    run_interactive_test,
+)
 from sciretriever.entry.cli.config_ui import (
     ConfigActionKind,
     ConfigConsole,
-    ConfigStatusPresenter,
 )
 from sciretriever.model.configuration import (
     AccessConfig,
@@ -461,25 +461,17 @@ def _run_browser_test(console: ConfigConsole) -> None:
     )
     if selected is None:
         return
-    if not confirm(
-        "This launches one headed controlled Browser and visits the selected approved minimal "
-        "target. Continue? [y/N] "
-    ):
-        return
-    configuration = load_user_configuration()
-    session = build_production_configuration_probe_session(configuration)
-    try:
-        result = session.run_browser(selected)
-    finally:
-        session.close()
-    ConfigStatusPresenter(console.palette.name).probes(result.model_dump(mode="json"))
+    run_interactive_test(
+        ConfigurationTestRequest(owner="browser-site", target=selected),
+        console,
+    )
 
 
 def _manage_tests(console: ConfigConsole) -> None:
     console.page(
         "Browser · Test",
         "Model verifies the selected Agent Model with a synthetic 1×1 image and closed tool. "
-        "Browser launches the headed Runtime and visits one explicitly selected approved target.",
+        "Site launches the headed Runtime and visits one explicitly selected approved target.",
         notes=(
             "Model may consume quota but sends no Literature or real screenshot.",
             "Browser may create ordinary site state in the selected persistent Profile.",
@@ -489,15 +481,15 @@ def _manage_tests(console: ConfigConsole) -> None:
         "Test",
         [
             option("model", "Model", kind=ConfigActionKind.TEST),
-            option("browser", "Browser", kind=ConfigActionKind.TEST),
+            option("site", "Site", kind=ConfigActionKind.TEST),
             option("back", "Back", kind=ConfigActionKind.NAVIGATE),
         ],
         console=console,
         default="back",
     )
     if action == "model":
-        run_core_test("browser-agent")
-    elif action == "browser":
+        run_interactive_test(ConfigurationTestRequest(owner="browser-model"), console)
+    elif action == "site":
         _run_browser_test(console)
 
 

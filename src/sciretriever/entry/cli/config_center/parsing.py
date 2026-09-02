@@ -21,7 +21,10 @@ from sciretriever.entry.cli.config_center.common import (
     option,
     select_value,
 )
-from sciretriever.entry.cli.config_center.probes import run_core_test
+from sciretriever.entry.cli.config_center.probes import (
+    ConfigurationTestRequest,
+    run_interactive_test,
+)
 from sciretriever.entry.cli.config_ui import ConfigActionKind, ConfigConsole
 from sciretriever.model.configuration import (
     Configuration,
@@ -236,7 +239,7 @@ def manage_parse(console: ConfigConsole) -> None:
         if action == "setup":
             _setup(console)
         elif action == "test":
-            run_core_test("mineru")
+            run_interactive_test(ConfigurationTestRequest(owner="parse"), console)
         elif action == "reset":
             _reset(console)
 

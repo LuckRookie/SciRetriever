@@ -14,6 +14,7 @@ from sciretriever.agents.providers.base import (
     tool_declarations,
     usage_from_payload,
 )
+from sciretriever.agents.providers.sse import parse_sse_events
 from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json_object
 from sciretriever.model.access import Header
 from sciretriever.model.configuration import AgentReasoningEffort
@@ -57,9 +58,12 @@ class OpenAIChatCompletionsAdapter(ProviderHttpAdapterBase):
             protocol_revision=_PROTOCOL_REVISION,
         )
 
-    def _safe_headers(self) -> tuple[Header, ...]:
+    def _safe_headers(self, call: AgentProviderCall) -> tuple[Header, ...]:
         return (
-            Header(name="Accept", value="application/json"),
+            Header(
+                name="Accept",
+                value="text/event-stream" if call.stream else "application/json",
+            ),
             Header(name="Content-Type", value="application/json"),
         )
 
@@ -74,7 +78,10 @@ class OpenAIChatCompletionsAdapter(ProviderHttpAdapterBase):
                 {"role": "user", "content": openai_chat_input_parts(call)},
             ],
             "max_completion_tokens": call.max_output_tokens,
+            "stream": call.stream,
         }
+        if call.stream:
+            body["stream_options"] = {"include_usage": True}
         if call.response_schema is not None:
             body["response_format"] = {
                 "type": "json_schema",
@@ -103,7 +110,7 @@ class OpenAIChatCompletionsAdapter(ProviderHttpAdapterBase):
         return canonical_json_bytes(body)
 
     def _parse_result(self, body: bytes, call: AgentProviderCall) -> _ParsedResult:
-        root = _chat_root(body, call)
+        root = _chat_stream_root(body, call) if call.stream else _chat_root(body, call)
         usage = usage_from_payload(root.get("usage"))
         choice = _single_chat_choice(root)
         finish_reason = choice.get("finish_reason")
@@ -115,6 +122,7 @@ class OpenAIChatCompletionsAdapter(ProviderHttpAdapterBase):
     def _provider_parameters(self) -> dict[str, object]:
         return {
             "instruction_role": "developer",
+            "response_mode": "model-selected",
             "structured_output": "response-format-json-schema-strict",
         }
 
@@ -131,6 +139,172 @@ def _chat_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:
     if type(model) is not str or model != call.model:
         raise provider_failure("model-mismatch")
     return root
+
+
+def _chat_stream_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:  # noqa: C901
+    """Rebuild one complete Chat Completions envelope from bounded SSE."""
+
+    events, done_seen = parse_sse_events(body, allow_done=True)
+    if not done_seen:
+        raise provider_failure("protocol")
+    content_parts: list[str] = []
+    refusal_parts: list[str] = []
+    tool_name_parts: list[str] = []
+    tool_argument_parts: list[str] = []
+    tool_seen = False
+    role_seen = False
+    finish_reason: str | None = None
+    usage_payload: dict[str, object] | None = None
+
+    for event in events:
+        if finish_reason is not None:
+            # Only the final usage-only chunk may follow the finished choice.
+            try:
+                terminal_payload = parse_strict_json_object(event.data)
+            except (TypeError, ValueError):
+                raise provider_failure("protocol") from None
+            _validate_chat_stream_event(event.event, terminal_payload, call)
+            if terminal_payload.get("choices") != [] or usage_payload is not None:
+                raise provider_failure("protocol")
+            usage_value = terminal_payload.get("usage")
+            usage_from_payload(usage_value)
+            assert isinstance(usage_value, dict)
+            usage_payload = usage_value
+            continue
+
+        try:
+            payload = parse_strict_json_object(event.data)
+        except (TypeError, ValueError):
+            raise provider_failure("protocol") from None
+        _validate_chat_stream_event(event.event, payload, call)
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            raise provider_failure("protocol")
+        usage_value = payload.get("usage")
+        if usage_value is not None:
+            if usage_payload is not None:
+                raise provider_failure("protocol")
+            usage_from_payload(usage_value)
+            assert isinstance(usage_value, dict)
+            usage_payload = usage_value
+        if not choices:
+            # A usage-only chunk is terminal metadata and cannot precede the
+            # choice's finish reason.
+            raise provider_failure("protocol")
+        if len(choices) != 1 or not isinstance(choices[0], dict):
+            raise provider_failure("protocol")
+        choice = choices[0]
+        if choice.get("index") != 0:
+            raise provider_failure("protocol")
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            raise provider_failure("protocol")
+        role = delta.get("role")
+        if role is not None:
+            if role != "assistant" or role_seen:
+                raise provider_failure("protocol")
+            role_seen = True
+        _append_optional_fragment(delta, "content", content_parts)
+        _append_optional_fragment(delta, "refusal", refusal_parts)
+        if "tool_calls" in delta:
+            tool_seen = _append_chat_tool_delta(
+                delta.get("tool_calls"),
+                tool_name_parts,
+                tool_argument_parts,
+                seen=tool_seen,
+            )
+        reason = choice.get("finish_reason")
+        if reason is not None:
+            if type(reason) is not str or not reason:
+                raise provider_failure("protocol")
+            finish_reason = reason
+
+    if finish_reason is None or usage_payload is None:
+        raise provider_failure("protocol")
+    if tool_seen and not call.tools:
+        raise provider_failure("protocol")
+    message: dict[str, object] = {
+        "role": "assistant",
+        "content": "".join(content_parts) if content_parts else None,
+    }
+    if refusal_parts:
+        message["refusal"] = "".join(refusal_parts)
+    if tool_seen:
+        message["tool_calls"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "".join(tool_name_parts),
+                    "arguments": "".join(tool_argument_parts),
+                },
+            }
+        ]
+    return {
+        "model": call.model,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": finish_reason,
+                "message": message,
+            }
+        ],
+        "usage": usage_payload,
+    }
+
+
+def _validate_chat_stream_event(
+    event_name: str | None,
+    payload: dict[str, object],
+    call: AgentProviderCall,
+) -> None:
+    object_name = payload.get("object")
+    if object_name != "chat.completion.chunk":
+        raise provider_failure("protocol")
+    if event_name is not None and event_name != object_name:
+        raise provider_failure("protocol")
+    if payload.get("model") != call.model:
+        raise provider_failure("model-mismatch")
+
+
+def _append_optional_fragment(
+    payload: dict[str, object],
+    name: str,
+    destination: list[str],
+) -> None:
+    if name not in payload or payload[name] is None:
+        return
+    value = payload[name]
+    if type(value) is not str:
+        raise provider_failure("protocol")
+    destination.append(value)
+
+
+def _append_chat_tool_delta(
+    value: object,
+    names: list[str],
+    arguments: list[str],
+    *,
+    seen: bool,
+) -> bool:
+    if not isinstance(value, list):
+        raise provider_failure("protocol")
+    if not value:
+        return seen
+    if len(value) != 1 or not isinstance(value[0], dict):
+        raise provider_failure("tool")
+    item = value[0]
+    if item.get("index") != 0:
+        raise provider_failure("tool")
+    if "type" in item and item["type"] != "function":
+        raise provider_failure("tool")
+    if "id" in item and type(item["id"]) is not str:
+        raise provider_failure("tool")
+    function = item.get("function")
+    if not isinstance(function, dict):
+        raise provider_failure("tool")
+    _append_optional_fragment(function, "name", names)
+    _append_optional_fragment(function, "arguments", arguments)
+    return True
 
 
 def _single_chat_choice(root: dict[str, object]) -> dict[str, object]:

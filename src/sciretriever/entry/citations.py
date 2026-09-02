@@ -9,6 +9,7 @@ after Literature confirms that the directed Reference has support.
 
 from __future__ import annotations
 
+import time
 import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -219,6 +220,7 @@ class CitationDiscoveryOperation:
     def __call__(self, request: CitationDiscoveryInput) -> DiscoveryReport:
         if not isinstance(request, CitationDiscoveryInput):
             raise TypeError("request must be a CitationDiscoveryInput")
+        diagnostic_started_ns = time.monotonic_ns()
         run_id = self._run_id_factory()
         started_at = self._clock.now()
         if not isinstance(run_id, DiscoveryRunId):
@@ -274,6 +276,7 @@ class CitationDiscoveryOperation:
                     states=states,
                     stats=stats,
                     end=FinishedReportEnd(kind="finished"),
+                    started_ns=diagnostic_started_ns,
                 )
         except (_ControlledInterruption, KeyboardInterrupt):
             if not created:
@@ -287,6 +290,7 @@ class CitationDiscoveryOperation:
                 stats=stats,
                 end=InterruptedReportEnd(kind="interrupted"),
                 unfinished=True,
+                started_ns=diagnostic_started_ns,
             )
         except WriteAdmissionFailure as error:
             if not created:
@@ -297,6 +301,7 @@ class CitationDiscoveryOperation:
                     stats=stats,
                     end=FailedReportEnd(kind="failed", failure=error.failure),
                     unfinished=True,
+                    started_ns=diagnostic_started_ns,
                 )
             return self._report(
                 run_id=run_id,
@@ -304,6 +309,7 @@ class CitationDiscoveryOperation:
                 states=states,
                 stats=stats,
                 end=FailedReportEnd(kind="failed", failure=error.failure),
+                started_ns=diagnostic_started_ns,
             )
         except Exception:
             if not created:
@@ -318,6 +324,7 @@ class CitationDiscoveryOperation:
                 stats=stats,
                 end=FailedReportEnd(kind="failed", failure=failure),
                 unfinished=True,
+                started_ns=diagnostic_started_ns,
             )
 
     def _execute(  # noqa: C901
@@ -1064,6 +1071,7 @@ class CitationDiscoveryOperation:
         states: dict[str, _ProviderState],
         stats: _RunStats,
         end: FinishedReportEnd | InterruptedReportEnd | FailedReportEnd,
+        started_ns: int,
         unfinished: bool = False,
     ) -> DiscoveryReport:
         providers = tuple(
@@ -1093,7 +1101,7 @@ class CitationDiscoveryOperation:
             new_literature_count=stats.new_literature_count,
             new_metadata_observation_count=stats.new_metadata_observation_count,
         )
-        _log_citation_report(report)
+        _log_citation_report(report, started_ns=started_ns)
         return report
 
     def _check_cancelled(self) -> None:
@@ -1274,14 +1282,16 @@ def _log_citation_provider_failure(provider_name: str, failure: StableFailure) -
     )
 
 
-def _log_citation_report(report: DiscoveryReport) -> None:
+def _log_citation_report(report: DiscoveryReport, *, started_ns: int) -> None:
+    elapsed_ms = max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
     if isinstance(report.end, FailedReportEnd):
         failure = report.end.failure
         _LOGGER.error(
-            "event=citation-discovery-failed discovery_run_id=%s status=%s code=%s "
-            "retryable=%s reason=%s action=%s",
+            "event=citation-discovery-failed outcome=failed discovery_run_id=%s "
+            "status=%s elapsed_ms=%d code=%s retryable=%s reason=%s action=%s",
             report.discovery_run_id,
             report.run_status,
+            elapsed_ms,
             failure.code,
             str(failure.retryable).lower(),
             failure.reason,
@@ -1289,19 +1299,27 @@ def _log_citation_report(report: DiscoveryReport) -> None:
         )
     elif isinstance(report.end, InterruptedReportEnd):
         _LOGGER.warning(
-            "event=citation-discovery-interrupted discovery_run_id=%s result_count=%d",
+            "event=citation-discovery-interrupted outcome=interrupted discovery_run_id=%s "
+            "result_count=%d elapsed_ms=%d "
+            "reason=The citation discovery operation was interrupted. "
+            "action=Retry citation discovery when the operation can continue.",
             report.discovery_run_id,
             report.discovery_result_count,
+            elapsed_ms,
         )
     else:
-        _LOGGER.info(
-            "event=citation-discovery-finished discovery_run_id=%s status=%s "
-            "provider_count=%d result_count=%d new_literature_count=%d",
+        completed = report.run_status == "COMPLETED"
+        log = _LOGGER.info if completed else _LOGGER.warning
+        log(
+            "event=citation-discovery-finished outcome=%s discovery_run_id=%s status=%s "
+            "provider_count=%d result_count=%d new_literature_count=%d elapsed_ms=%d",
+            "completed" if completed else "action-required",
             report.discovery_run_id,
             report.run_status,
             len(report.providers),
             report.discovery_result_count,
             report.new_literature_count,
+            elapsed_ms,
         )
 
 

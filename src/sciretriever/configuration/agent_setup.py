@@ -60,6 +60,7 @@ def build_model_configuration(
     model: str,
     reasoning: AgentReasoningEffort,
     image: bool,
+    stream: bool = True,
 ) -> ModelConfig:
     """Build one configured model without a local alias or preset."""
 
@@ -67,6 +68,7 @@ def build_model_configuration(
         reference=f"{provider}/{model}",
         reasoning=reasoning,
         image=image,
+        stream=stream,
     )
 
 

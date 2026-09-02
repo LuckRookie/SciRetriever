@@ -93,7 +93,7 @@ search-results {
 不同 `view`、记录类型和 entitlement 返回字段不同，adapter 不能依赖单一公开样例中的完整度。
 `dc:creator` 的单一字符串也不能替代有序结构化 authorship。
 
-`verified`，2026-08-18：一次由用户明确授权的最小只读 `config test elsevier` 使用 cursor
+`verified`，2026-08-18：一次由用户明确授权的最小只读 `config test search elsevier` 使用 cursor
 和 `COMPLETE` view，受控结构遥测显示 HTTP 200 顶层为 `search-results`，total、page count、
 cursor 与 entry 均存在，但公开 offset 样例中的 `opensearch:startIndex` 缺失；Network、认证和
 Search product 均已通过，原 adapter 因把该 offset 字段误作 cursor 必填而返回

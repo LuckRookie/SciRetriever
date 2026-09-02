@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import pickle
 import threading
 import unittest
@@ -261,12 +262,25 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
                 BrowserGroupFeedback.SUCCESS,
             )
 
-        with self.assertRaises(BrowserSchedulingCancelled):
-            scheduler.execute(
-                (self._attempt("w2", "wiley"),),
-                should_not_run,
-                cancel_event=cancelled,
-            )
+        with self.assertLogs("sciretriever.network.browser_scheduler", level="DEBUG") as logs:
+            with self.assertRaises(BrowserSchedulingCancelled):
+                scheduler.execute(
+                    (self._attempt("w2", "wiley"),),
+                    should_not_run,
+                    cancel_event=cancelled,
+                )
+
+        interrupted = next(
+            record
+            for record in logs.records
+            if "event=browser-scheduler-interrupted" in record.getMessage()
+        )
+        self.assertEqual(interrupted.levelno, logging.WARNING)
+        self.assertIn("code=browser-scheduling-cancelled", interrupted.getMessage())
+        self.assertIn(
+            "reason=The controlled Browser queue was cancelled.",
+            interrupted.getMessage(),
+        )
 
         self.assertFalse(second_entered)
         self.assertFalse(release.is_set())
@@ -552,6 +566,27 @@ class BrowserGroupSchedulerContractTests(unittest.TestCase):
         self.assertIn("resource=global-permit outcome=released", output)
         self.assertIn("resource=group-permit outcome=released", output)
         self.assertIn("provider_group=wiley", output)
+        lifecycle_events = {
+            "browser-scheduler-started",
+            "browser-provider-group-started",
+            "browser-provider-group-finished",
+            "browser-scheduler-finished",
+        }
+        lifecycle_records = [
+            record
+            for record in captured.records
+            if any(f"event={event}" in record.getMessage() for event in lifecycle_events)
+        ]
+        user_state_records = [
+            record
+            for record in captured.records
+            if "event=browser-provider-group-waiting" in record.getMessage()
+            or "event=browser-provider-group-paused" in record.getMessage()
+        ]
+        self.assertTrue(lifecycle_records)
+        self.assertTrue(all(record.levelno == logging.DEBUG for record in lifecycle_records))
+        self.assertTrue(user_state_records)
+        self.assertTrue(all(record.levelno == logging.INFO for record in user_state_records))
 
     def test_runtime_state_and_scheduler_refuse_serialization(self) -> None:
         from sciretriever.network.browser_scheduler import BrowserGroupScheduler

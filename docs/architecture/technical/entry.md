@@ -138,8 +138,16 @@ sciretriever export content
 
 sciretriever config
 sciretriever config status
-sciretriever config test <provider|llm|browser-agent|mineru>
-sciretriever config test --browser <publisher-access-key>
+sciretriever config test provider <name>
+sciretriever config test model <provider/model> [--image]
+sciretriever config test search <source>
+sciretriever config test search --all
+sciretriever config test download <source>
+sciretriever config test download --all
+sciretriever config test parse
+sciretriever config test analyze
+sciretriever config test browser model
+sciretriever config test browser site <publisher-access-key>
 sciretriever config test --all
 ```
 
@@ -170,9 +178,12 @@ sciretriever config test --all
   `status/test`，旧 `set/remove` 路径拒绝。
   `config status` 只做本地状态检查，分别呈现 Model Providers/Models、credential presence、
   Analyze/Browser Model readiness、当前 controller 和 Cloak
-  wrapper/binary/version/identity manifest，不启动模型或 Browser；`config test` 是用户显式发起
-  并经过统一 Network 的最小只读 Provider/Analyze/Browser model/MinerU probe，或显式单目标
-  Cloak Browser probe。这些动作都不读取或写入文献数据库，也不形成五类 Entry Report。
+  wrapper/binary/version/identity manifest，不启动模型或 Browser；`config test` 是用户显式发起的
+  owner-scoped 配置诊断。Provider 目录、精确 Model、Search Source、Download probe availability、
+  Parse、Analyze、Browser Model 与显式单目标 Browser Site 共用一个无 Storage Probe dispatcher。
+  Download 不借用 Metadata 或下载任意 PDF；Browser Site 不进入 `--all`。这些动作都不读取或写入
+  文献数据库，也不形成五类 Entry Report；真实能力仍由 `discover topic`、`complete pdf` 与
+  `complete content` 承担。
 
 这里不建立 `exchange` 一级组，也不使用容易被理解为参考文献列表的 `bibliography` 命令名；书目信息文件统一称为 `metadata`。`metadata`、`acquisition`、`parsing`、`analysis`、`storage` 和 `artifact` 都不是当前一级命令：前五个是内部责任名称，通用 artifact 能力保留在 Python API，CLI 只暴露用户实际需要的 PDF 与 content。`config` 表达用户配置动作，不把 Configuration 提升为新的文献业务模块。
 

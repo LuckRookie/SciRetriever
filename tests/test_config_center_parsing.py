@@ -99,6 +99,22 @@ class ParsePageTests(unittest.TestCase):
         self.assertIs(options[3].kind, ConfigActionKind.NAVIGATE)
         self.assertIn("never uploads a PDF", console.page.call_args.kwargs["notes"][0])
 
+    def test_parse_test_uses_the_shared_owner_scoped_probe(self) -> None:
+        console = Mock()
+        with (
+            patch.object(
+                parsing,
+                "load_editable_user_configuration",
+                side_effect=(Configuration(), Configuration()),
+            ),
+            patch.object(parsing, "_key_state", return_value="not required"),
+            patch.object(parsing, "select_value", side_effect=("test", "back")),
+            patch.object(parsing, "run_interactive_test") as run,
+        ):
+            parsing.manage_parse(console)
+
+        self.assertEqual(run.call_args.args[0].owner, "parse")
+
 
 if __name__ == "__main__":
     unittest.main()

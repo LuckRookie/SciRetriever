@@ -38,8 +38,9 @@ agents/
 - `runtime.py` 定义 role binding、`readiness(role)` 与 `execute(call)`；
 - `ports.py` 声明 Runtime 到 Provider adapter 的内部 wire port；
 - `failures.py` 定义稳定、脱敏失败；
-- `providers/` 转换具体 wire protocol 并通过 Network HTTP 发出请求；`models.py` 只为显式配置
-  向导读取一页有界、非持久的 Provider 模型目录。
+- `providers/` 转换具体 wire protocol 并通过 Network HTTP 发出请求；`sse.py` 只负责共享的
+  有界 SSE framing，三个协议 adapter 各自解释事件；`models.py` 只为显式配置向导读取一页
+  有界、非持久的 Provider 模型目录。
 
 目标结构不存在 `requests.py`、`sessions.py`、通用 workflow、registry、background worker 或全局 service locator。
 
@@ -70,8 +71,9 @@ class AgentRuntime:
 
 `AgentRuntime` 保存 Analysis/Browser role bindings，并为每个 role 保存对应 Provider adapter；
 两个 binding 解析到同一 Model Provider 时复用同一 adapter，解析到不同 Provider 时分别使用两个
-adapter。每个 binding 包含 role、model、模块派生的 capabilities、Model reasoning effort 与适用单次 limits。消费者不能在
-`AgentCall` 中临时覆盖 model 或 effort。Runtime 在 I/O 前完成：
+adapter。每个 binding 包含 role、model、模块派生的 capabilities、Model reasoning effort、Model
+stream 与适用单次 limits。消费者不能在 `AgentCall` 中临时覆盖 model、effort 或 stream。Runtime
+在 I/O 前完成：
 
 1. role binding 存在性；
 2. required capability 与声明 capability 匹配；
@@ -81,7 +83,7 @@ adapter。每个 binding 包含 role、model、模块派生的 capabilities、Mo
 6. cancel 状态。
 
 验证通过后 Runtime 生成只在 Agents 内部使用的 Provider wire call，绑定 model、reasoning
-effort、HTTP limits 和取消信号，并调用 adapter 一次。
+effort、stream、HTTP limits 和取消信号，并调用 adapter 一次。
 
 ## 3. 中性交换值
 
@@ -156,6 +158,10 @@ OpenAI Chat Completions 的 `reasoning_effort` 或 Anthropic Messages 的
 八个中性值；真实模型是否支持由显式 probe 证明。Runtime 不按 model 名称判断支持度，adapter 也
 不能在服务拒绝后静默重试为 default。
 
+Model stream 是严格 Boolean，默认 `true`。Configuration → Bootstrap role binding → Provider wire
+call 只传播所选 Model 的值；Analysis/Browser 没有覆盖入口。stream 也进入 provider parameters
+hash，确保同一输入的流式与非流式调用具有不同 provenance 参数身份。
+
 ## 5. 单次客观技术边界
 
 Agents 保留以下单次限制：
@@ -165,6 +171,7 @@ Agents 保留以下单次限制：
 -图片媒体、数量和字节；
 - HTTP connect/read/overall timeout；
 - redirect 禁止与非幂等 POST 不自动重试；
+- 三种协议的原始 SSE 字节与重建结果分别受 response/result limit 约束；
 - Network AccessScope quota/rate limit；
 - cancel signal。
 
@@ -178,6 +185,14 @@ Agents 保留以下单次限制：
 - secret 只附着到配置绑定的规范 origin；
 - 通过 Network HTTP、AccessCoordinator、URL/DNS/TLS、timeout 和有界读取执行 POST；
 -严格解析一个完整 structured result 或一个 tool call；
+- 三种协议都按 Model stream 明确选择请求与解析路径：`true` 发送 SSE 请求，`false` 发送并只解析
+  JSON；任一路径失败后不切换模式或补发第二个 POST；
+- OpenAI Responses 从有界 SSE 的 completed output item 或 `output_text.done` 重建结果，要求唯一
+  terminal response，并验证 model、usage、incomplete/refusal/error；
+  `response.completed.output` 为空时不能丢失已经完成的输出 item；
+- OpenAI Chat Completions 重建 assistant content 或单一 function tool call，要求唯一 finish reason、
+  terminal usage chunk 与 `[DONE]`；Anthropic Messages 按 message/content-block/delta/stop 顺序重建
+  文本或单一 tool use，并合并起始 input usage 与终止 output usage；
 -认证、quota、timeout、refusal、truncation、model mismatch、协议错误、取消和未知响应的稳定化；
 - provider/model/input/parameter hash 与安全 usage。
 
@@ -204,14 +219,14 @@ Agents 不取得 Browser runtime、Page、Context、Profile、Cookie、selector�
 Configuration 保存 Model Provider/Model 两个直接注册表：
 
 - Provider 拥有 name、API、Base URL 与 exact-origin credential scope；
-- Model 以 `provider/model` 为唯一 reference，并拥有 reasoning 与 image；
+- Model 以 `provider/model` 为唯一 reference，并拥有 reasoning、image 与 stream；
 - `[analyze].model` 与 `[download].model` 直接引用完整 Model reference；
 - `[providers.<provider>]` credential 与 Provider 的规范 origin 精确绑定。
 
 交互配置由 `Models` 管理 Provider、Model 和模型 key；`Analyze`、`Download` 只选择 Model 并管理
 各自业务参数。Analyze 的 structured-output/text-only 合同由模块派生；Download 只选择
 `image = true` 的 Model，其 image/tool/PNG/正数 image limits 由模块派生。任一任务切换 Model 都不
-修改 Model 或另一个任务；没有 Profile、Preset、Entry 或 task-level reasoning override。
+修改 Model 或另一个任务；没有 Profile、Preset、Entry 或 task-level reasoning/stream override。
 
 固定的单次 HTTP timeout 以及 prompt/input/schema/request/response/result 字节上限由 Agents
 实现定义，并由 Bootstrap 与模块业务预算组合；它们不是普通 Model 配置字段。
@@ -235,13 +250,14 @@ adapter，并向 Acquisition 提供 Browser role consumer。未选择的 control
    Catalog 或其它持久状态。失败或空结果才让向导进入 Manual，不放宽 URL、credential 或 Model 校验。
 
 `config status` 和普通业务对象图不调用该入口。model discovery 不包含 prompt、Literature、PDF、
-页面或模型生成请求，也不能替代 `config test llm/browser-agent` 的真实 capability probe。
+页面或模型生成请求，也不能替代 `config test analyze` / `config test browser model` 的真实
+capability probe。
 
 ## 10. 失败、日志与数据边界
 
-稳定失败至少区分 configuration、credentials、capability、input/context/output/request/response/result limit、timeout、quota/access、refusal、truncated、protocol/model mismatch、tool、structured response、cancelled 和 internal failure。
+稳定失败至少区分 configuration、credentials、capability、input/context/output/request/response/result limit、timeout、authentication/authorization、quota/access、request rejected、endpoint/not found、remote service、refusal、truncated、protocol/model mismatch、tool、structured response、cancelled 和 internal failure。Provider HTTP 失败可以在当次配置 Probe 中附带三位 status，并只从有界 JSON 的已知 `error.code/type/param` 映射 `model-not-found`、reasoning/structured-output/image/tool unsupported 等闭合类别；不得保存任意 message 或未知字段。Network 失败只投影闭合 access code。
 
-INFO 只记录 role、provider/model、capabilities、结果类别、usage、延迟和稳定失败。Debug 可以增加输入/图像/schema/tool 数量与 adapter 阶段，但不记录 prompt、schema 内容、模型原文/reasoning、图片、页面正文、元素文本、tool arguments、credential、header、Cookie、完整 URL 或 Profile。
+INFO 只记录 role、provider/model、capabilities、结果类别、usage、延迟和稳定失败。Debug 可以增加输入/图像/schema/tool 数量与 adapter 阶段，但不记录 prompt、schema 内容、模型原文/reasoning、图片、页面正文、元素文本、tool arguments、credential、header、Cookie、完整 URL 或 Profile。这里对日志隐藏完整 URL；用户明确执行的配置 Probe 结果可以显示配置模型已经验证且无 query/credential 的实际 API endpoint。
 
 Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 Catalog、ArtifactStore、Report、Profile 或日志持久事实。Analysis 只保存其业务 provenance。
 
@@ -253,6 +269,9 @@ Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 C
   readiness 独立判断；
 - structured result 与 tool call 的严格成功路径；
 - 三种 Provider protocol fake 的请求、响应和失败映射；
+- 三种协议默认携带 `stream = true`/`Accept: text/event-stream`，Model 显式关闭时携带
+  `stream = false`/`Accept: application/json`；覆盖各自文本/tool 重建、usage、重复或缺失终止、
+  错误 event、SSE 超限、参数 hash 分离和 POST 不自动切换模式重发；
 - 八种 Model reasoning 从 Configuration 经 Bootstrap/Runtime 进入三种 wire 字段，default 省略，
   七种显式 effort 原样发送且参数 hash 随值改变；
 - 显式模型目录的 GET/header/origin、可选字段、100 项/1 MiB 上限、duplicate/错误状态/错误形状、
@@ -261,7 +280,7 @@ Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 C
 - duplicate JSON、非有限数、未知字段、超大输入/图片/响应和未声明 tool 拒绝；
 - context/output/request/response/result 与 HTTP timeout 的单次限制；
 - 取消、quota、跨 origin secret 拒绝和 POST 不重试；
-- Analyze/Download 无 task-level model/reasoning/capability override，用户 Model 不保存模块
+- Analyze/Download 无 task-level model/reasoning/stream/capability override，用户 Model 不保存模块
   context/output/structured/tool/image limit，且无 Session、history、turn、
   累计预算或公共 Provider/model 选择面；
 - Analysis 两阶段真实消费；

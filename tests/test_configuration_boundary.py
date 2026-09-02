@@ -102,10 +102,9 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 parse_configuration("[sources.acquisition.sci-hub]\n" + fields)
 
     def test_reasoning_is_owned_by_each_configured_model(self) -> None:
-        self.assertIs(
-            ModelConfig(reference="fixture/model").reasoning,
-            AgentReasoningEffort.PROVIDER_DEFAULT,
-        )
+        default_model = ModelConfig(reference="fixture/model")
+        self.assertIs(default_model.reasoning, AgentReasoningEffort.PROVIDER_DEFAULT)
+        self.assertTrue(default_model.stream)
         for effort in AgentReasoningEffort:
             with self.subTest(effort=effort.value):
                 selected = parse_configuration(
@@ -122,6 +121,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 self.assertIsNotNone(model)
                 assert model is not None
                 self.assertIs(model.reasoning, effort)
+                self.assertTrue(model.stream)
         for value in ("ultra", "", 1, True):
             with self.subTest(value=value), self.assertRaises(ConfigurationError):
                 parse_configuration(
@@ -130,6 +130,15 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     'base_url = "https://api.openai.com/v1"\n'
                     '[models."openai/fixture-model"]\n'
                     f"reasoning = {value!r}\n"
+                )
+        for value in ("true", 1, 0, "off"):
+            with self.subTest(stream=value), self.assertRaises(ConfigurationError):
+                parse_configuration(
+                    "[providers.openai]\n"
+                    'api = "openai-responses"\n'
+                    'base_url = "https://api.openai.com/v1"\n'
+                    '[models."openai/fixture-model"]\n'
+                    f"stream = {value!r}\n"
                 )
 
     def test_browser_controller_defaults_to_rules_and_rejects_unknown_values(self) -> None:

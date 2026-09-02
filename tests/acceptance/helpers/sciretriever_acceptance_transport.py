@@ -117,6 +117,37 @@ def _json_response(payload: object, *, status: int = 200) -> _Response:
     )
 
 
+def _responses_sse_response(payload: dict[str, object]) -> _Response:
+    terminal = json.loads(json.dumps(payload))
+    output = terminal.get("output")
+    if not isinstance(output, list):
+        raise RuntimeError("Responses fixture output is invalid")
+    blocks: list[bytes] = []
+    for index, item in enumerate(output):
+        event = {
+            "type": "response.output_item.done",
+            "output_index": index,
+            "item": item,
+        }
+        blocks.append(
+            b"event: response.output_item.done\ndata: "
+            + json.dumps(event, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+            + b"\n\n"
+        )
+    terminal["output"] = []
+    completed = {"type": "response.completed", "response": terminal}
+    blocks.append(
+        b"event: response.completed\ndata: "
+        + json.dumps(completed, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        + b"\n\n"
+    )
+    return _Response(
+        status=200,
+        headers=(("Content-Type", "text/event-stream"),),
+        body=b"".join(blocks),
+    )
+
+
 def _semantic_paper(
     paper_id: str,
     *,
@@ -274,6 +305,8 @@ def _openai_response(body: bytes | None) -> _Response:
     if body is None:
         raise RuntimeError("OpenAI fixture received no request body")
     request = json.loads(body)
+    if request.get("stream") is not True:
+        raise RuntimeError("OpenAI Responses acceptance request must enable streaming")
     model = request["model"]
     structured_input = json.loads(request["input"][1]["content"][0]["text"])
     if structured_input == {"probe": "sciretriever-configuration"}:
@@ -324,7 +357,7 @@ def _openai_response(body: bytes | None) -> _Response:
         }
     else:
         raise RuntimeError("unexpected Analysis structured input")
-    return _json_response(
+    return _responses_sse_response(
         {
             "id": "resp_acceptance",
             "object": "response",

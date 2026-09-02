@@ -711,7 +711,7 @@ unsupported
 
 真实 API key、token、metric、Cookie、浏览器 session、凭据文件原文和任何可以辨识 secret 的值、掩码、长度、hash、前后缀或 fingerprint 都不能进入 Pydantic。Model 也不承担读取 `~/.sciretriever/credentials.toml`、检查 owner/权限、隐藏交互、原子写入或调用 Provider；这些都是 configuration/CLI/adapter 边界行为。
 
-若 `config status` 或 `config test` 提供 JSON，结构化结果只组合非 secret 普通配置、稳定 Provider key、capability、安全状态、统一凭据 presence/origin-match、通过/失败/跳过结果和稳定 failure code。`ConfigurationRuntimeStatus` 分组表达 Storage、MinerU 与 Analysis 本地完整性；`CoreConfigurationProbeResult` 以中性 typed details 明确 LLM 是 minimal-schema、MinerU 是 health-only，并固定 `persisted = false`。它们不包含 secret 值或其可辨识特征、原始网络异常、响应正文、测试时间、Literature 身份、DiscoveryRun 或 Report；结果只是本次非持久化配置诊断，不成为 Entry 处理 Report 或数据库 Model。认证接受与具体文献全文 entitlement 必须分别表达，不能由 Model 字段合并成一个“可下载”布尔值。
+若 `config status` 或 `config test` 提供 JSON，结构化结果只组合非 secret 普通配置、稳定 Provider key、capability、安全状态、统一凭据 presence/origin-match、通过/失败/跳过结果和稳定 failure code。`ConfigurationRuntimeStatus` 分组表达 Storage、MinerU 与 Analysis 本地完整性；`CoreConfigurationProbeResult` 以中性 typed details 分别表达任务 Model、精确 Model、Model Provider 目录和 MinerU health-only probe，并固定 `persisted = false`。`ConfigurationProbeSummary` 同时承载 Search Metadata 结果和 Download 的 `acquisition-probe-unavailable` 限制，不把未执行外部 Acquisition probe 解释为通过。它们不包含 secret 值或其可辨识特征、原始网络异常、响应正文、测试时间、Literature 身份、DiscoveryRun 或 Report；结果只是本次非持久化配置诊断，不成为 Entry 处理 Report 或数据库 Model。认证接受与具体文献全文 entitlement 必须分别表达，不能由 Model 字段合并成一个“可下载”布尔值。
 
 ## 3. Pydantic 约束
 

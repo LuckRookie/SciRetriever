@@ -500,7 +500,7 @@ class BrowserGroupScheduler:
         if not attempts:
             return ()
         scheduler_started_ns = time.monotonic_ns()
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=browser-scheduler-started provider_group_count=%d attempt_count=%d",
             len(groups),
             len(attempts),
@@ -516,7 +516,7 @@ class BrowserGroupScheduler:
                 BrowserScheduledDisposition.DEFERRED: 0,
                 BrowserScheduledDisposition.ACTION_REQUIRED: 0,
             }
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=browser-provider-group-started provider_group=%s attempt_count=%d",
                 group,
                 len(indexed),
@@ -540,7 +540,7 @@ class BrowserGroupScheduler:
                 )
                 raise
             else:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "event=browser-provider-group-finished provider_group=%s attempt_count=%d "
                     "attempted=%d deferred=%d action_required=%d elapsed_ms=%d",
                     group,
@@ -560,7 +560,7 @@ class BrowserGroupScheduler:
                 for future in futures:
                     future.result()
         except BrowserSchedulingCancelled:
-            _LOGGER.info(
+            _LOGGER.warning(
                 "event=browser-scheduler-interrupted provider_group_count=%d "
                 "attempt_count=%d elapsed_ms=%d code=browser-scheduling-cancelled "
                 "retryable=true reason=The controlled Browser queue was cancelled. "
@@ -583,7 +583,7 @@ class BrowserGroupScheduler:
             raise
         if any(result is missing for result in results):
             raise RuntimeError("Browser scheduler did not complete every attempt")
-        _LOGGER.info(
+        _LOGGER.debug(
             "event=browser-scheduler-finished provider_group_count=%d attempt_count=%d "
             "elapsed_ms=%d",
             len(groups),

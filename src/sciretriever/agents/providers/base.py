@@ -24,7 +24,11 @@ from sciretriever.agents.calls import (
     AgentUsage,
 )
 from sciretriever.agents.capabilities import AgentCapability
-from sciretriever.agents.failures import AgentFailure, agent_failure
+from sciretriever.agents.failures import (
+    AgentFailure,
+    AgentRemoteErrorKind,
+    agent_failure,
+)
 from sciretriever.agents.messages import AgentImagePart, utf8_size
 from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.agents.tools import (
@@ -45,6 +49,7 @@ from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import (
     AddressClass,
     DestinationPolicy,
+    NormalizedURL,
     Origin,
     PolicyError,
     normalize_url_with_configured_port,
@@ -70,6 +75,7 @@ ANTHROPIC_CREDENTIAL_ORIGIN = Origin("https", "api.anthropic.com", 443)
 
 provider_failure = agent_failure
 _LOGGER = get_logger("sciretriever.agents")
+_MAX_ERROR_CLASSIFICATION_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,13 +173,17 @@ class ProviderHttpAdapterBase:
             limits = self._effective_limits(call)
             self._check_call_budgets(call, limits)
             _LOGGER.debug(
-                "agent.call.start role=%s provider=%s model=%s capabilities=%s "
+                "event=agent-call-started role=%s provider=%s wire_model=%s "
+                "protocol=%s stream=%s capabilities=%s reasoning_effort=%s "
                 "input_bytes=%d schema_bytes=%d tool_count=%d image_count=%d "
                 "max_output_tokens=%d timeout_seconds=%.3f",
                 call.role.value,
                 self._provider_name,
                 call.model,
+                self._protocol_revision,
+                _stream_label(call.stream),
                 _capability_names(call),
+                call.reasoning_effort.value,
                 _request_input_bytes(call),
                 utf8_size(call.response_schema or ""),
                 len(call.tools),
@@ -189,37 +199,39 @@ class ProviderHttpAdapterBase:
             result = self._request(call, body, limits)
             response = self._response(result.body, call, limits)
         except AgentFailure as error:
-            _LOGGER.info(
-                "agent.call.result role=%s provider=%s model=%s capabilities=%s "
-                "result=failure failure=%s latency_ms=%d",
-                call.role.value,
-                self._provider_name,
-                call.model,
-                _capability_names(call),
-                error.failure.code,
-                int((time.monotonic() - started) * 1000),
-            )
+            self._log_failure(call, error, started)
             raise
         except Exception:
-            _LOGGER.info(
-                "agent.call.result role=%s provider=%s model=%s capabilities=%s "
-                "result=failure failure=agent-internal latency_ms=%d",
+            _LOGGER.debug(
+                "event=agent-call-finished role=%s provider=%s wire_model=%s "
+                "protocol=%s stream=%s capabilities=%s reasoning_effort=%s "
+                "outcome=failed code=agent-internal retryable=false elapsed_ms=%d "
+                "reason=The Agent adapter encountered an internal error. "
+                "action=Review the Debug transcript and adapter implementation.",
                 call.role.value,
                 self._provider_name,
                 call.model,
+                self._protocol_revision,
+                _stream_label(call.stream),
                 _capability_names(call),
+                call.reasoning_effort.value,
                 int((time.monotonic() - started) * 1000),
             )
             raise
         usage = response.provenance.usage
         result_kind = "tool" if isinstance(response, AgentToolCall) else "structured"
-        _LOGGER.info(
-            "agent.call.result role=%s provider=%s model=%s capabilities=%s "
-            "result=%s input_tokens=%d output_tokens=%d response_bytes=%d latency_ms=%d",
+        _LOGGER.debug(
+            "event=agent-call-finished role=%s provider=%s wire_model=%s "
+            "protocol=%s stream=%s capabilities=%s reasoning_effort=%s "
+            "outcome=success result=%s input_tokens=%d output_tokens=%d "
+            "response_bytes=%d elapsed_ms=%d",
             call.role.value,
             self._provider_name,
             call.model,
+            self._protocol_revision,
+            _stream_label(call.stream),
             _capability_names(call),
+            call.reasoning_effort.value,
             result_kind,
             usage.input_tokens,
             usage.output_tokens,
@@ -227,6 +239,45 @@ class ProviderHttpAdapterBase:
             int((time.monotonic() - started) * 1000),
         )
         return response
+
+    def _log_failure(
+        self,
+        call: AgentProviderCall,
+        error: AgentFailure,
+        started: float,
+    ) -> None:
+        evidence_format = ""
+        evidence_values: list[object] = []
+        if error.http_status is not None:
+            evidence_format += " http_status=%d"
+            evidence_values.append(error.http_status)
+        if error.access_code is not None:
+            evidence_format += " access_code=%s"
+            evidence_values.append(error.access_code)
+        if error.remote_error is not None:
+            evidence_format += " remote_error=%s"
+            evidence_values.append(error.remote_error)
+        failure = error.failure
+        _LOGGER.debug(
+            "event=agent-call-finished role=%s provider=%s wire_model=%s "
+            "protocol=%s stream=%s capabilities=%s reasoning_effort=%s "
+            "outcome=failed code=%s retryable=%s"
+            + evidence_format
+            + " elapsed_ms=%d reason=%s action=%s",
+            call.role.value,
+            self._provider_name,
+            call.model,
+            self._protocol_revision,
+            _stream_label(call.stream),
+            _capability_names(call),
+            call.reasoning_effort.value,
+            failure.code,
+            str(failure.retryable).lower(),
+            *evidence_values,
+            int((time.monotonic() - started) * 1000),
+            failure.reason,
+            failure.action,
+        )
 
     @staticmethod
     def _check_capabilities(call: AgentProviderCall) -> None:
@@ -329,7 +380,7 @@ class ProviderHttpAdapterBase:
             self._endpoint,
             self._access_policy,
             method="POST",
-            headers=self._safe_headers(),
+            headers=self._safe_headers(call),
             credential_headers=self._credential_headers(),
             credential_allowed_origins=(
                 () if self._credential_origin is None else (self._credential_origin,)
@@ -347,15 +398,19 @@ class ProviderHttpAdapterBase:
         )
         if isinstance(result, AccessFailure):
             if result.code == "oversize":
-                raise provider_failure("response-budget")
+                raise provider_failure("response-budget", access_code=result.code)
             if result.code == "timeout":
-                raise provider_failure("timeout")
+                raise provider_failure("timeout", access_code=result.code)
             if result.code == "cancelled":
-                raise provider_failure("cancelled")
-            raise provider_failure("access", retryable=result.retryable)
+                raise provider_failure("cancelled", access_code=result.code)
+            raise provider_failure(
+                "access",
+                retryable=result.retryable,
+                access_code=result.code,
+            )
         if not isinstance(result, TransportResponse):
             raise TypeError("HttpClient returned an unsupported result")
-        _raise_http_status(result.status)
+        _raise_http_status(result.status, result.body)
         return result
 
     def _effective_limits(self, call: AgentProviderCall) -> AgentCallLimits:
@@ -414,13 +469,14 @@ class ProviderHttpAdapterBase:
                 "tools_sha256": str(sha256_digest(_tools_bytes(call))),
                 "max_output_tokens": call.max_output_tokens,
                 "reasoning_effort": call.reasoning_effort.value,
+                "stream": call.stream,
                 "provider_parameters": self._provider_parameters(),
                 "endpoint_sha256": str(sha256_digest(self._endpoint.encode("utf-8"))),
                 "context_window_tokens": limits.context_window_tokens,
             }
         )
 
-    def _safe_headers(self) -> tuple[Header, ...]:
+    def _safe_headers(self, call: AgentProviderCall) -> tuple[Header, ...]:
         raise NotImplementedError
 
     def _credential_headers(self) -> tuple[tuple[str, str], ...]:
@@ -571,6 +627,10 @@ def _capability_names(call: AgentProviderCall) -> str:
     return ",".join(sorted(value.value for value in call.capabilities))
 
 
+def _stream_label(enabled: bool) -> str:
+    return "on" if enabled else "off"
+
+
 def _request_input_bytes(call: AgentProviderCall) -> int:
     total = sum(utf8_size(part.text) for part in call.text_parts)
     total += sum(len(image.data) for image in call.image_parts)
@@ -627,14 +687,11 @@ def _conservative_token_estimate(byte_count: int) -> int:
     return byte_count
 
 
-def agent_http_connection(
+def _normalized_agent_endpoint(
     *,
     base_url: str,
     endpoint_suffix: str,
-    api_key: str | None,
-) -> tuple[str, Origin | None, DestinationPolicy]:
-    """Build one exact LLM endpoint and its fail-closed destination policy."""
-
+) -> tuple[NormalizedURL, NormalizedURL]:
     if type(endpoint_suffix) is not str or not endpoint_suffix.startswith("/"):
         raise provider_failure("protocol")
     try:
@@ -656,6 +713,31 @@ def agent_http_connection(
         raise provider_failure("protocol") from None
     if endpoint.origin != base.origin or endpoint.query:
         raise provider_failure("protocol")
+    return base, endpoint
+
+
+def agent_request_endpoint(*, base_url: str, endpoint_suffix: str) -> str:
+    """Return the exact secret-free endpoint used by an Agent request."""
+
+    _base, endpoint = _normalized_agent_endpoint(
+        base_url=base_url,
+        endpoint_suffix=endpoint_suffix,
+    )
+    return endpoint.url
+
+
+def agent_http_connection(
+    *,
+    base_url: str,
+    endpoint_suffix: str,
+    api_key: str | None,
+) -> tuple[str, Origin | None, DestinationPolicy]:
+    """Build one exact LLM endpoint and its fail-closed destination policy."""
+
+    base, endpoint = _normalized_agent_endpoint(
+        base_url=base_url,
+        endpoint_suffix=endpoint_suffix,
+    )
     try:
         address = ipaddress.ip_address(base.hostname)
     except ValueError:
@@ -715,18 +797,106 @@ def _retry_after_delay(value: str) -> float | None:
     return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
 
 
-def _raise_http_status(status: int) -> None:
+def _remote_error_kind(status: int, body: bytes) -> AgentRemoteErrorKind | None:
+    """Classify only bounded, known error fields without retaining provider text."""
+
+    if not body or len(body) > _MAX_ERROR_CLASSIFICATION_BYTES:
+        return None
+    try:
+        root = parse_strict_json_object(body)
+    except (TypeError, ValueError):
+        return None
+    error = root.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    error_type = error.get("type")
+    parameter = error.get("param")
+    known_values = {
+        value.casefold().replace("-", "_")
+        for value in (code, error_type)
+        if type(value) is str and len(value) <= 128
+    }
+    normalized_parameter = (
+        parameter.casefold().replace("-", "_")
+        if type(parameter) is str and len(parameter) <= 128
+        else None
+    )
+    code_kinds: dict[str, AgentRemoteErrorKind] = {
+        "image_not_supported": "image-unsupported",
+        "model_not_found": "model-not-found",
+        "reasoning_not_supported": "reasoning-unsupported",
+        "response_format_not_supported": "structured-output-unsupported",
+        "structured_output_not_supported": "structured-output-unsupported",
+        "tool_not_supported": "tool-unsupported",
+        "tools_not_supported": "tool-unsupported",
+        "unknown_model": "model-not-found",
+        "unsupported_reasoning": "reasoning-unsupported",
+        "unsupported_response_format": "structured-output-unsupported",
+        "vision_not_supported": "image-unsupported",
+    }
+    for value in known_values:
+        classified = code_kinds.get(value)
+        if classified is not None:
+            return classified
+    if normalized_parameter == "model":
+        return "model-not-found" if status == 404 else "model-rejected"
+    parameter_kinds: dict[str, AgentRemoteErrorKind] = {
+        "functions": "tool-unsupported",
+        "image": "image-unsupported",
+        "image_url": "image-unsupported",
+        "input_image": "image-unsupported",
+        "reasoning": "reasoning-unsupported",
+        "reasoning.effort": "reasoning-unsupported",
+        "reasoning_effort": "reasoning-unsupported",
+        "response_format": "structured-output-unsupported",
+        "text.format": "structured-output-unsupported",
+        "text_format": "structured-output-unsupported",
+        "tool_choice": "tool-unsupported",
+        "tools": "tool-unsupported",
+    }
+    if normalized_parameter is not None and normalized_parameter in parameter_kinds:
+        return parameter_kinds[normalized_parameter]
+    if known_values & {
+        "bad_request",
+        "invalid_request",
+        "invalid_request_error",
+        "unprocessable_entity",
+    }:
+        return "request-rejected"
+    return None
+
+
+def _raise_http_status(status: int, body: bytes = b"") -> None:
     if status == 200:
         return
-    if status == 401:
-        raise provider_failure("authentication")
-    if status == 403:
-        raise provider_failure("authorization")
-    if status == 408:
-        raise provider_failure("timeout")
-    if status == 429:
-        raise provider_failure("quota")
-    raise provider_failure("http-status", retryable=status >= 500)
+    remote_error = _remote_error_kind(status, body) if status in {400, 404, 422} else None
+    kind = {
+        400: "request-rejected",
+        401: "authentication",
+        403: "authorization",
+        404: "not-found",
+        405: "endpoint",
+        408: "timeout",
+        422: "request-rejected",
+        429: "quota",
+    }.get(status)
+    if kind is None and 300 <= status <= 399:
+        kind = "redirect"
+    if kind is None and 500 <= status <= 599:
+        kind = "remote-service"
+    if kind is not None:
+        raise provider_failure(
+            kind,
+            http_status=status,
+            remote_error=remote_error,
+        )
+    raise provider_failure(
+        "http-status",
+        retryable=False,
+        http_status=status,
+        remote_error=remote_error,
+    )
 
 
 __all__ = (
@@ -735,6 +905,7 @@ __all__ = (
     "OPENAI_ACCESS_SCOPE",
     "OPENAI_BASELINE_ACCESS_POLICY",
     "agent_http_connection",
+    "agent_request_endpoint",
     "anthropic_input_parts",
     "image_data_url",
     "openai_chat_input_parts",

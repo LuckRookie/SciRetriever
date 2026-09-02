@@ -6,7 +6,7 @@ import logging
 import sys
 from typing import TextIO, cast
 
-from .presentation import DiagnosticFormatter, stream_supports_color
+from .presentation import DiagnosticFormatter, stream_output_width, stream_supports_color
 from .redaction import RedactionFilter
 
 _PROJECT_LOGGER_NAME = "sciretriever"
@@ -55,6 +55,7 @@ def _make_formatter(*, stream: TextIO, level: int) -> DiagnosticFormatter:
     return DiagnosticFormatter(
         debug=level <= logging.DEBUG,
         color=stream_supports_color(stream),
+        width=stream_output_width(stream),
     )
 
 

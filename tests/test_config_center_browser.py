@@ -102,6 +102,25 @@ class BrowserPageTests(unittest.TestCase):
         self.assertIn("does not launch Chromium", notes)
         self.assertIn("never inferred from Profile presence", notes)
 
+    def test_test_page_separates_model_contract_from_explicit_site_navigation(self) -> None:
+        console = Mock()
+        with patch.object(browser, "select_value", return_value="back") as select:
+            browser._manage_tests(console)
+
+        options = select.call_args.args[1]
+        self.assertEqual([item.label for item in options], ["Model", "Site", "Back"])
+        self.assertTrue(all(item.kind is ConfigActionKind.TEST for item in options[:2]))
+        description = console.page.call_args.args[1]
+        self.assertIn("synthetic 1×1 image", description)
+        self.assertIn("Site launches", description)
+
+        with (
+            patch.object(browser, "select_value", return_value="model"),
+            patch.object(browser, "run_interactive_test") as run,
+        ):
+            browser._manage_tests(console)
+        self.assertEqual(run.call_args.args[0].owner, "browser-model")
+
     def test_reset_retains_profile_and_runtime_owned_state(self) -> None:
         before = Configuration.model_validate(
             {

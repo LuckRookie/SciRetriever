@@ -56,7 +56,7 @@ Operator-managed MinerU 的 submit、poll、resume task 和归档下载仍属于
 当前 production adapter 锁定 MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive
 backend `vlm` 与 parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 connection mode、
 Base URL、model identity 与 remote upload consent；remote bearer token 从统一凭据文件读取并
-与规范 origin 精确绑定，loopback 不读取 token。`config test mineru` 复用同一 production
+与规范 origin 精确绑定，loopback 不读取 token。`config test parse` 复用同一 production
 client 但只执行 health/release/protocol/profile 检查，不提交 task 或上传 PDF。
 
 ## 3. Adapter 转换

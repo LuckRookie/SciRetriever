@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import unittest
 from collections.abc import Callable
@@ -524,7 +525,7 @@ class BrowserAgentControllerTests(unittest.TestCase):
             "event=browser-agent-result",
             "page_state=normal",
             "action=click-element",
-            "result=capture-available",
+            "outcome=capture-available",
             "before_fingerprint=",
             "action_fingerprint=",
             "screenshot_bytes=",
@@ -541,20 +542,24 @@ class BrowserAgentControllerTests(unittest.TestCase):
         ):
             self.assertNotIn(sensitive, rendered)
 
-    def test_info_logs_stable_agent_failure_without_tool_or_page_payload(self) -> None:
+    def test_debug_logs_stable_agent_failure_without_tool_or_page_payload(self) -> None:
         controller, _factory = _controller(
             _FailingProvider([_decision("wait_for_change")]),
             _Control(_observation()),
         )
 
-        with self.assertLogs("sciretriever.acquisition.browser_control", level="INFO") as logs:
+        with self.assertLogs("sciretriever.acquisition.browser_control", level="DEBUG") as logs:
             controller.run(_Session())
 
         rendered = "\n".join(logs.output)
         self.assertIn("role=browser", rendered)
         self.assertIn("provider=fixture-agent", rendered)
-        self.assertIn("result=failed", rendered)
-        self.assertIn("failure=agent-quota", rendered)
+        self.assertIn("outcome=failed", rendered)
+        self.assertIn("code=agent-quota", rendered)
+        self.assertIn("retryable=true", rendered)
+        self.assertIn("reason=The Agent provider throttled", rendered)
+        self.assertIn("action=Retry after the shared access policy", rendered)
+        self.assertTrue(all(record.levelno == logging.DEBUG for record in logs.records))
         self.assertNotIn("Download PDF", rendered)
         self.assertNotIn("wait_for_change", rendered)
 

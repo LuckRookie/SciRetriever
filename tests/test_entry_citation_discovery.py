@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import unittest
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -1373,15 +1374,16 @@ class CitationDiscoveryTests(unittest.TestCase):
             metadata=metadata,
         )
 
-        report = operation(
-            self._request(
-                (seed.literature_id,),
-                providers=(
-                    ProviderDiscoveryLimit(provider_name="alpha", scan_limit=2),
-                    ProviderDiscoveryLimit(provider_name="beta", scan_limit=2),
-                ),
+        with self.assertLogs("sciretriever.entry.citations", level="INFO") as captured:
+            report = operation(
+                self._request(
+                    (seed.literature_id,),
+                    providers=(
+                        ProviderDiscoveryLimit(provider_name="alpha", scan_limit=2),
+                        ProviderDiscoveryLimit(provider_name="beta", scan_limit=2),
+                    ),
+                )
             )
-        )
 
         self.assertEqual(report.run_status, "PARTIAL")
         self.assertEqual(repository.finalized, ["PARTIAL"])
@@ -1393,6 +1395,14 @@ class CitationDiscoveryTests(unittest.TestCase):
             [(item.provider_name, item.outcome) for item in report.providers],
             [("alpha", "FAILED"), ("beta", "EXHAUSTED")],
         )
+        final = next(
+            record
+            for record in captured.records
+            if "event=citation-discovery-finished" in record.getMessage()
+        )
+        self.assertEqual(final.levelno, logging.WARNING)
+        self.assertIn("outcome=action-required", final.getMessage())
+        self.assertRegex(final.getMessage(), r"elapsed_ms=\d+")
 
     def test_cancellation_after_run_creation_is_interrupted_without_source_results(self) -> None:
         seed = _literature(15)

@@ -14,6 +14,7 @@ from sciretriever.agents.providers.base import (
     tool_declarations,
     usage_from_payload,
 )
+from sciretriever.agents.providers.sse import parse_sse_events
 from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json_object
 from sciretriever.model.access import Header
 from sciretriever.model.configuration import AgentReasoningEffort
@@ -59,9 +60,12 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
             protocol_revision=_PROTOCOL_REVISION,
         )
 
-    def _safe_headers(self) -> tuple[Header, ...]:
+    def _safe_headers(self, call: AgentProviderCall) -> tuple[Header, ...]:
         return (
-            Header(name="Accept", value="application/json"),
+            Header(
+                name="Accept",
+                value="text/event-stream" if call.stream else "application/json",
+            ),
             Header(name="Content-Type", value="application/json"),
         )
 
@@ -79,6 +83,7 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
                 {"role": "user", "content": openai_responses_input_parts(call)},
             ],
             "max_output_tokens": call.max_output_tokens,
+            "stream": call.stream,
         }
         if call.response_schema is not None:
             body["text"] = {
@@ -128,15 +133,30 @@ class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
     def _provider_parameters(self) -> dict[str, object]:
         return {
             "instruction_role": "developer",
+            "response_mode": "model-selected",
             "structured_output": "json-schema-strict",
         }
 
 
 def _response_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:
-    try:
-        root = parse_strict_json_object(body)
-    except (TypeError, ValueError):
-        raise provider_failure("protocol") from None
+    if call.stream:
+        root = _stream_response(body)
+    else:
+        try:
+            root = parse_strict_json_object(body)
+        except (TypeError, ValueError):
+            raise provider_failure("protocol") from None
+    return _validate_response_root(root, call)
+
+
+def _validate_response_root(
+    root: dict[str, object],
+    call: AgentProviderCall,
+) -> dict[str, object]:
+    """Validate the terminal Responses object reconstructed from SSE."""
+
+    if not isinstance(root, dict):
+        raise provider_failure("protocol")
     if root.get("object") != "response":
         raise provider_failure("protocol")
     status = root.get("status")
@@ -150,6 +170,133 @@ def _response_root(body: bytes, call: AgentProviderCall) -> dict[str, object]:
     if root.get("model") != call.model:
         raise provider_failure("model-mismatch")
     return root
+
+
+def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
+    """Reconstruct one terminal Responses object from a bounded SSE body.
+
+    Network has already bounded and fully read the response bytes.  The
+    adapter deliberately consumes only terminal response data and completed
+    output items; token deltas never cross the provider boundary.  Some
+    OpenAI-compatible gateways leave ``response.completed.response.output``
+    empty, so completed output-item events are the authoritative fallback.
+    """
+
+    output_items: dict[int, dict[str, object]] = {}
+    completed_text: dict[tuple[int, int], str] = {}
+    terminal: dict[str, object] | None = None
+
+    events, done_seen = parse_sse_events(body, allow_done=True)
+    for event in events:
+        event_name, data = event.event, event.data
+        if terminal is not None:
+            raise provider_failure("protocol")
+        try:
+            payload = parse_strict_json_object(data)
+        except (TypeError, ValueError):
+            raise provider_failure("protocol") from None
+        payload_type = payload.get("type")
+        if type(payload_type) is not str:
+            raise provider_failure("protocol")
+        if event_name is not None and event_name != payload_type:
+            raise provider_failure("protocol")
+        event_type = payload_type
+
+        if event_type == "response.output_item.done":
+            index = _event_index(payload.get("output_index"))
+            item = payload.get("item")
+            if index in output_items or not isinstance(item, dict):
+                raise provider_failure("protocol")
+            # Re-encode and parse to apply the same finite/depth/key checks to
+            # nested item data that a complete JSON response receives.
+            try:
+                output_items[index] = parse_strict_json_object(canonical_json_bytes(item))
+            except (TypeError, ValueError):
+                raise provider_failure("protocol") from None
+            continue
+
+        if event_type == "response.output_text.done":
+            output_index = _event_index(payload.get("output_index"))
+            content_index = _event_index(payload.get("content_index"))
+            value = payload.get("text")
+            key = (output_index, content_index)
+            if type(value) is not str or key in completed_text:
+                raise provider_failure("protocol")
+            completed_text[key] = value
+            continue
+
+        if event_type in {
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+        }:
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                raise provider_failure("protocol")
+            try:
+                terminal = parse_strict_json_object(canonical_json_bytes(response))
+            except (TypeError, ValueError):
+                raise provider_failure("protocol") from None
+            continue
+
+        if event_type == "error":
+            raise provider_failure("remote-service")
+
+        if event_type.startswith("response."):
+            # Responses streams include lifecycle and delta events such as
+            # ``response.created``, ``response.output_item.added`` and
+            # ``response.output_text.delta`` before their authoritative
+            # ``*.done``/terminal events.  They are still strictly framed and
+            # JSON-decoded above, but do not need to be accumulated: the
+            # bounded completed item/text and terminal response carry the
+            # complete value consumed by SciRetriever.
+            continue
+
+        raise provider_failure("protocol")
+
+    if terminal is None:
+        raise provider_failure("protocol")
+    if done_seen and not events:
+        raise provider_failure("protocol")
+
+    terminal_output = terminal.get("output")
+    if not isinstance(terminal_output, list):
+        raise provider_failure("protocol")
+    completed_items = [output_items[index] for index in sorted(output_items)]
+    if terminal_output and completed_items:
+        try:
+            if canonical_json_bytes(terminal_output) != canonical_json_bytes(completed_items):
+                raise provider_failure("protocol")
+        except (TypeError, ValueError):
+            raise provider_failure("protocol") from None
+    elif not terminal_output and completed_items:
+        terminal = {**terminal, "output": completed_items}
+    elif not terminal_output and completed_text:
+        if set(completed_text) != {(0, 0)}:
+            raise provider_failure("protocol")
+        terminal = {
+            **terminal,
+            "output": [
+                {
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": completed_text[(0, 0)],
+                        }
+                    ],
+                }
+            ],
+        }
+    return terminal
+
+
+def _event_index(value: object) -> int:
+    if type(value) is not int or value < 0 or value > 1_000_000:
+        raise provider_failure("protocol")
+    return value
 
 
 def _single_message(output: object) -> dict[str, object]:

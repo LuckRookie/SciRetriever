@@ -19,7 +19,12 @@ from sciretriever.configuration import (
 )
 from sciretriever.entry.cli.config_center.analysis import manage_analyze
 from sciretriever.entry.cli.config_center.browser import manage_browser
-from sciretriever.entry.cli.config_center.common import option, read_line, select_value
+from sciretriever.entry.cli.config_center.common import (
+    ConfigurationCenterQuit,
+    option,
+    read_line,
+    select_value,
+)
 from sciretriever.entry.cli.config_center.models import manage_models
 from sciretriever.entry.cli.config_center.parsing import manage_parse
 from sciretriever.entry.cli.config_center.sources import manage_download, manage_search
@@ -330,7 +335,10 @@ def _run_rich(theme: str) -> int:
 
 
 def run_config_manager(theme: str = ConfigTheme.AUTO.value) -> int:
-    return _run_rich(theme) if interactive_terminal() else _run_plain(theme)
+    try:
+        return _run_rich(theme) if interactive_terminal() else _run_plain(theme)
+    except ConfigurationCenterQuit:
+        return 0
 
 
 __all__ = ("configuration_home_rows", "run_config_manager")

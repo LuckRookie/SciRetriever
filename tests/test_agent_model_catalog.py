@@ -259,7 +259,7 @@ class AgentModelCatalogTests(unittest.TestCase):
         self.assertNotIn(_SECRET, repr(caught.exception))
 
     def test_catalog_does_not_follow_redirects_and_stabilizes_authentication(self) -> None:
-        for status, expected in ((302, "agent-http-status"), (401, "agent-authentication")):
+        for status, expected in ((302, "agent-redirect"), (401, "agent-authentication")):
             with self.subTest(status=status):
                 client, transport = _client(b"PRIVATE-RESPONSE-SENTINEL", status=status)
                 catalog_client = AgentModelCatalogClient(
@@ -272,6 +272,7 @@ class AgentModelCatalogTests(unittest.TestCase):
                 with self.assertRaises(AgentFailure) as caught:
                     catalog_client.list_models()
                 self.assertEqual(caught.exception.failure.code, expected)
+                self.assertEqual(caught.exception.http_status, status)
                 self.assertEqual(len(transport.calls), 1)
                 self.assertNotIn("PRIVATE-RESPONSE-SENTINEL", repr(caught.exception))
 

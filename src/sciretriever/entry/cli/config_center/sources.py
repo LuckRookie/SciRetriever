@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import ValidationError
 
 from sciretriever.acquisition.api import BUILTIN_SCI_HUB_MIRROR_URLS
-from sciretriever.bootstrap import build_production_configuration_probe_session
 from sciretriever.configuration import (
     CredentialLookup,
     acquisition_source_providers,
@@ -15,7 +14,6 @@ from sciretriever.configuration import (
     credential_status_for,
     load_credentials,
     load_editable_user_configuration,
-    load_user_configuration,
     metadata_source_providers,
     update_configuration_sections,
 )
@@ -26,6 +24,10 @@ from sciretriever.entry.cli.config_center.common import (
     option,
     select_value,
 )
+from sciretriever.entry.cli.config_center.probes import (
+    ConfigurationTestRequest,
+    run_interactive_test,
+)
 from sciretriever.entry.cli.config_center.source_credentials import (
     credential_state,
     manage_source_key,
@@ -34,7 +36,6 @@ from sciretriever.entry.cli.config_ui import (
     ConfigActionKind,
     ConfigConsole,
     ConfigOption,
-    ConfigStatusPresenter,
 )
 from sciretriever.model.configuration import (
     AcquisitionSourcesConfig,
@@ -463,6 +464,7 @@ def _manage_sci_hub_source(console: ConfigConsole) -> None:
                     kind=(ConfigActionKind.DANGER if enabled else ConfigActionKind.CONFIGURE),
                 ),
                 option("mirrors", "Mirrors"),
+                option("test", "Test", kind=ConfigActionKind.TEST),
                 option("back", "Back", kind=ConfigActionKind.NAVIGATE),
             ],
             console=console,
@@ -470,6 +472,9 @@ def _manage_sci_hub_source(console: ConfigConsole) -> None:
         )
         if action in {None, "back"}:
             return
+        if action == "test":
+            _run_source_test("download", ProviderName.SCI_HUB, console)
+            continue
         if action in {"enable", "disable"}:
             desired = action == "enable"
             if not confirm(f"{action.title()} sci-hub for Download? [y/N] "):
@@ -587,18 +592,15 @@ def _set_source_mode(
         console.message(f"{capability.title()} Sources now use {mode.value}.", kind="success")
 
 
-def _run_source_test(provider: ProviderName, console: ConfigConsole) -> None:
-    if not confirm(
-        f"Run one read-only {provider.value} metadata probe? It may consume quota. [y/N] "
-    ):
-        return
-    configuration = load_user_configuration()
-    session = build_production_configuration_probe_session(configuration)
-    try:
-        result = session.run(provider=provider)
-    finally:
-        session.close()
-    ConfigStatusPresenter(console.palette.name).probes(result.model_dump(mode="json"))
+def _run_source_test(
+    capability: Literal["search", "download"],
+    provider: ProviderName,
+    console: ConfigConsole,
+) -> None:
+    run_interactive_test(
+        ConfigurationTestRequest(owner=capability, target=provider.value),
+        console,
+    )
 
 
 def _source_has_settings(capability: str, provider: ProviderName) -> bool:
@@ -622,8 +624,7 @@ def _source_actions(
         actions.append(option("setup", "Setup"))
     if provider in configurable_keys:
         actions.append(option("key", "Key"))
-    if capability == "search" and enabled:
-        actions.append(option("test", "Test", kind=ConfigActionKind.TEST))
+    actions.append(option("test", "Test", kind=ConfigActionKind.TEST))
     if mode is SourceMode.CUSTOM:
         actions.append(
             option(
@@ -647,7 +648,7 @@ def _perform_source_action(
     elif action == "key":
         manage_source_key(provider, console)
     elif action == "test":
-        _run_source_test(provider, console)
+        _run_source_test(capability, provider, console)
     elif capability == "search":
         _toggle_metadata_source(provider, console)
     else:
@@ -687,8 +688,8 @@ def _manage_source(
             ),
             notes=(
                 "Test performs an external read-only metadata request and may consume quota."
-                if capability == "search" and enabled
-                else "Keys and ordinary settings never enable this Source by themselves.",
+                if capability == "search"
+                else "Test never downloads a PDF; article entitlement remains unproven.",
             ),
         )
         actions = _source_actions(
@@ -826,6 +827,61 @@ def _set_metadata_source_limit(console: ConfigConsole) -> None:
         console.message("Search Limit was saved.", kind="success")
 
 
+def _manage_source_tests(
+    capability: Literal["search", "download"],
+    console: ConfigConsole,
+) -> None:
+    candidates = _METADATA_SOURCES if capability == "search" else _ACQUISITION_SOURCES
+    action = select_value(
+        "Test",
+        [
+            option(
+                "all",
+                "All",
+                kind=ConfigActionKind.TEST,
+                description=f"Test every active {capability.title()} Source",
+            ),
+            option(
+                "source",
+                "Source",
+                kind=ConfigActionKind.TEST,
+                description=f"Choose one {capability.title()} Source, enabled or disabled",
+            ),
+            option("back", "Back", kind=ConfigActionKind.NAVIGATE),
+        ],
+        console=console,
+        default="back",
+    )
+    if action in {None, "back"}:
+        return
+    if action == "all":
+        run_interactive_test(
+            ConfigurationTestRequest(owner=capability, all_targets=True),
+            console,
+        )
+        return
+    selected = select_value(
+        "Source",
+        [
+            *(
+                option(
+                    provider.value,
+                    provider.value,
+                    kind=ConfigActionKind.TEST,
+                    description=_SOURCE_PURPOSES[provider].removesuffix("."),
+                )
+                for provider in candidates
+            ),
+            option("back", "Back", kind=ConfigActionKind.NAVIGATE),
+        ],
+        console=console,
+        default="back",
+        searchable=True,
+    )
+    if selected not in {None, "back"}:
+        _run_source_test(capability, ProviderName(selected), console)
+
+
 def manage_search(console: ConfigConsole) -> None:
     while True:
         configuration = load_editable_user_configuration()
@@ -846,6 +902,7 @@ def manage_search(console: ConfigConsole) -> None:
             [
                 option("sources", "Sources"),
                 option("limit", "Limit"),
+                option("test", "Test", kind=ConfigActionKind.TEST),
                 option("back", "Back", kind=ConfigActionKind.NAVIGATE),
             ],
             console=console,
@@ -857,6 +914,8 @@ def manage_search(console: ConfigConsole) -> None:
             _manage_sources("search", console)
         elif action == "limit":
             _set_metadata_source_limit(console)
+        elif action == "test":
+            _manage_source_tests("search", console)
 
 
 def manage_download(console: ConfigConsole) -> None:
@@ -880,6 +939,7 @@ def manage_download(console: ConfigConsole) -> None:
             "Download",
             [
                 option("sources", "Sources"),
+                option("test", "Test", kind=ConfigActionKind.TEST),
                 option("back", "Back", kind=ConfigActionKind.NAVIGATE),
             ],
             console=console,
@@ -887,7 +947,10 @@ def manage_download(console: ConfigConsole) -> None:
         )
         if action in {None, "back"}:
             return
-        _manage_sources("download", console)
+        if action == "sources":
+            _manage_sources("download", console)
+        elif action == "test":
+            _manage_source_tests("download", console)
 
 
 __all__ = ("manage_download", "manage_search")

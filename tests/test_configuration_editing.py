@@ -389,6 +389,26 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             )
             self.assertEqual(updated, load_user_configuration(home=root))
 
+    def test_model_stream_false_is_published_and_round_trips_in_user_toml(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            models = _models()
+            selected = models.values[0].model_copy(update={"stream": False})
+
+            updated = update_configuration_sections(
+                providers=_providers(),
+                models=ModelsConfig(values=(selected,)),
+                home=root,
+            )
+
+            rendered = configuration_path(home=root).read_text(encoding="utf-8")
+            self.assertIn("stream = false", rendered)
+            saved = updated.models.get("main/fixture-model")
+            self.assertIsNotNone(saved)
+            assert saved is not None
+            self.assertFalse(saved.stream)
+            self.assertEqual(updated, load_user_configuration(home=root))
+
     def test_precommit_failure_retains_original_bytes_and_cleans_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

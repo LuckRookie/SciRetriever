@@ -560,12 +560,13 @@ network.browser           -> network.policy + network.admission
 `config status` 是纯本地 configuration/readiness 检查，不得调用 Network。LLM 向导只有在用户
 明确选择“获取可用模型”后，才通过 Bootstrap 与共享 HTTP 对 candidate origin 执行一次有界、
 无 redirect/retry 的 `GET /models`；credential 仍只附着到该规范 origin，结果不持久化，失败回到
-手工输入。用户显式执行 `config test <provider|llm|browser-agent|mineru>` 或
-`config test --all` 时，Bootstrap 组装的 probe 必须像普通 adapter 一样经过共享 Coordinator、
+手工输入。用户显式执行 owner-scoped `config test provider/model/search/parse/analyze/browser` 或
+`config test --all` 时，Bootstrap 组装的实际外部 probe 必须像普通 adapter 一样经过共享 Coordinator、
 安全 HTTP、URL/DNS/redirect、timeout、响应预算、quota、`Retry-After` 和脱敏。Provider probe
 只做官方允许的最小只读请求，Analysis probe 只发送固定最小 schema 内容，Browser Agent probe
-只发送合成图片与封闭工具，MinerU probe 只做 health 且不上传 PDF；Network 不因它是配置测试
-而绕过限速，也不把认证成功解释为任意 Literature 的全文 entitlement。
+只发送合成图片与封闭工具，MinerU probe 只做 health 且不上传 PDF；Download 没有安全的独立
+外部 probe 时在 Configuration 边界直接报告 unavailable，不向 Network 伪造请求。Network 不因
+它是配置测试而绕过限速，也不把认证成功解释为任意 Literature 的全文 entitlement。
 
 Network 只返回本次中性、脱敏的 probe 结果。配置测试不创建 DiscoveryRun、MetadataObservation、ProviderRelationObservation、Asset、Report、Catalog/ArtifactStore 事实或持久日志，也不保存最后测试时间、连接状态、permit 或服务健康状态。
 

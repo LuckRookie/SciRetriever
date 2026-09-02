@@ -1068,7 +1068,7 @@ def _log_browser_terminal(
 ) -> None:
     """Explain one classified Browser stop without logging page contents."""
 
-    _LOGGER.info(
+    _LOGGER.warning(
         "event=browser-flow-finished browser_rule_id=%s stage=page-state "
         "outcome=%s disposition=failure code=%s retryable=%s elapsed_ms=%d "
         "reason=%s action=%s",
@@ -1964,8 +1964,19 @@ class ControlledBrowserPdfSource:
             elif page_state is BrowserPageState.FAILED and facts.failure is None:
                 facts.fail(_contract_failure())
 
-        reason, next_action = _agent_terminal_text(result.disposition)
-        _LOGGER.info(
+        if facts.failure is None:
+            failure_code = "none"
+            reason, next_action = _agent_terminal_text(result.disposition)
+        else:
+            failure_code = facts.failure.code
+            reason = facts.failure.reason
+            next_action = facts.failure.action
+        log = (
+            _LOGGER.info
+            if result.disposition is BrowserAgentDisposition.CAPTURE_AVAILABLE
+            else _LOGGER.warning
+        )
+        log(
             "event=browser-agent-finished browser_rule_id=%s stage=agent "
             "agent_invoked=true outcome=%s disposition=%s action_count=%d "
             "page_state=%s capture=%s action_kind=%s failure_code=%s "
@@ -1977,7 +1988,7 @@ class ControlledBrowserPdfSource:
             "none" if result.page_state is None else result.page_state.value,
             result.capture_state.value,
             "none" if result.last_action is None else result.last_action.kind.value,
-            "none" if result.failure is None else result.failure.code,
+            failure_code,
             reason,
             next_action,
         )

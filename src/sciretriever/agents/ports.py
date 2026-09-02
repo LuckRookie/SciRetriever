@@ -29,6 +29,7 @@ class AgentProviderCall:
     tools: tuple[AgentToolDeclaration, ...] = ()
     max_output_tokens: int = 1
     reasoning_effort: AgentReasoningEffort = AgentReasoningEffort.PROVIDER_DEFAULT
+    stream: bool = True
     limits: AgentCallLimits = AgentCallLimits()
     cancel_event: threading.Event | None = field(default=None, repr=False)
 
@@ -58,6 +59,8 @@ class AgentProviderCall:
             raise ValueError("max_output_tokens must be positive")
         if not isinstance(self.reasoning_effort, AgentReasoningEffort):
             raise TypeError("reasoning_effort must be an AgentReasoningEffort")
+        if type(self.stream) is not bool:
+            raise TypeError("stream must be bool")
         if not isinstance(self.limits, AgentCallLimits):
             raise TypeError("limits must be AgentCallLimits")
         if self.cancel_event is not None and not callable(

@@ -24,6 +24,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from sciretriever.entry.cli.config_probe_diagnostics import (
+    diagnosed_probe_payload,
+    diagnosis_lines,
+)
+
 _T = TypeVar("_T")
 _NO_BACK = object()
 _SEARCH_CHOICE = object()
@@ -424,34 +429,27 @@ class ConfigStatusPresenter:
         self.console.print(self._local_runtime(payload))
 
     def probes(self, payload: Mapping[str, object]) -> None:
+        payload = diagnosed_probe_payload(payload)
         table = Table(
-            title="Configuration probes",
+            title="Configuration test",
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
         )
-        table.add_column("Target", style=self.palette.accent, no_wrap=True)
-        table.add_column("Outcome", no_wrap=True)
-        table.add_column("What was checked", overflow="fold")
-        table.add_column("Failure", overflow="fold")
-        for target, outcome, detail, failure in _probe_rows(payload):
+        table.add_column("Test", style=self.palette.accent, no_wrap=True)
+        table.add_column("Request", overflow="fold")
+        table.add_column("Result", overflow="fold")
+        for target, outcome, request, result in _probe_rows(payload):
             table.add_row(
                 target,
-                _state_text(outcome, self.palette),
-                detail,
-                failure or "—",
+                request,
+                Text.assemble(
+                    _state_text(outcome.title(), self.palette),
+                    "\n",
+                    result,
+                ),
             )
         self.console.print(table)
-        self.console.print(
-            Text(
-                "Analysis model: minimal strict schema request; may consume quota; no "
-                "Literature content. "
-                "MinerU: GET health only; no PDF upload. Browser: one explicitly selected "
-                "approved minimal target; article entitlement remains not proven. Results are "
-                "not persisted.",
-                style=self.palette.muted,
-            )
-        )
 
     def _core_services(self, payload: Mapping[str, object]) -> Table:
         parsing = _mapping(payload["parsing"])
@@ -505,7 +503,8 @@ class ConfigStatusPresenter:
                 f"provider: {_shown(model.get('provider'))}\n"
                 f"model: {_shown(model.get('model'))}\n"
                 f"reasoning: {_shown(model.get('reasoning'))} · "
-                f"image: {'yes' if model.get('image') is True else 'no'}",
+                f"image: {'yes' if model.get('image') is True else 'no'} · "
+                f"stream: {'on' if model.get('stream') is not False else 'off'}",
             )
 
         analyze_model = _mapping(analyze.get("selected_model"))
@@ -1022,71 +1021,88 @@ def _provider_next_action(item: Mapping[str, object]) -> str:
     return f"Resolve local readiness: {item.get('failure_code') or 'not-ready'}."
 
 
-def _provider_probe_rows(payload: Mapping[str, object]) -> list[tuple[str, str, str, str]]:
+def _source_probe_rows(payload: Mapping[str, object]) -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
     for item in _mapping_sequence(payload.get("results")):
-        target = f"{item.get('provider', 'provider')} · {item.get('capability', 'service')}"
+        capability = str(item.get("capability", "metadata"))
+        owner = "Download" if capability == "acquisition" else "Search"
+        target = f"{owner} · {item.get('provider', 'Source')}"
         outcome = str(item.get("outcome", "failed"))
-        detail = "minimal read-only Provider request"
-        rows.append((target, outcome, detail, str(item.get("failure_code") or "")))
+        request, reason, action = diagnosis_lines(item)
+        rows.append((target, outcome, request, _diagnosis_result(reason, action)))
     return rows
+
+
+def _agent_probe_target(owner: str, details: Mapping[str, object]) -> str:
+    """Name the wire Model separately from its local Provider reference."""
+
+    provider = details.get("provider")
+    model = details.get("model")
+    reference = details.get("reference") or details.get("model_reference")
+    if type(reference) is str and "/" in reference:
+        reference_provider, reference_model = reference.split("/", 1)
+        if type(provider) is not str or not provider:
+            provider = reference_provider
+        if type(model) is not str or not model:
+            model = reference_model
+    model_text = model if type(model) is str and model else "not selected"
+    target = f"{owner} · {model_text}"
+    if type(provider) is str and provider:
+        target += f"\nProvider · {provider}"
+    return target
 
 
 def _core_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
     service = str(payload.get("service", "service"))
     is_agents = service in {"agents", "llm"}
     details = _mapping(payload.get("details"))
+    request_kind = details.get("request_kind")
     role = details.get("role")
-    if is_agents and role == "browser-agent":
-        detail = (
-            "one synthetic-image + closed-tool request; no Literature/PDF/page content; "
-            "may consume quota"
-        )
-        target = "Browser model"
+    if is_agents and request_kind == "model-catalog":
+        target = f"Provider · {details.get('provider', 'unknown')}"
+    elif is_agents and request_kind in {"model-text", "model-image"}:
+        target = _agent_probe_target("Model", details)
+    elif is_agents and role == "browser-agent":
+        target = _agent_probe_target("Browser", details)
     elif is_agents:
-        detail = "minimal strict schema request; no Literature content"
-        target = "Analysis model"
+        target = _agent_probe_target("Analyze", details)
     else:
-        detail = "health/release/protocol/profile only; no PDF upload"
-        target = service.title()
+        target = "MinerU" if service == "mineru" else service.title()
+    request, reason, action = diagnosis_lines(payload)
     return (
         target,
         str(payload.get("outcome", "failed")),
-        detail,
-        str(payload.get("failure_code") or ""),
+        request,
+        _diagnosis_result(reason, action),
     )
 
 
 def _browser_probe_row(payload: Mapping[str, object]) -> tuple[str, str, str, str]:
-    launched = payload.get("browser_launched")
-    target_reached = payload.get("minimal_target_reached")
-    if launched is True and target_reached is True:
-        runtime_detail = "runtime target reached"
-    elif launched is True and target_reached is False:
-        runtime_detail = "runtime launched; target not reached"
-    elif launched is False:
-        runtime_detail = "runtime not launched"
-    else:
-        runtime_detail = "runtime not assessed"
+    request, reason, action = diagnosis_lines(payload)
     return (
         f"Browser · {payload.get('access_key', 'publisher')}",
         str(payload.get("outcome", "failed")),
-        f"{runtime_detail}; institution-IP/article entitlement not assessed",
-        str(payload.get("failure_code") or ""),
+        request,
+        _diagnosis_result(reason, action),
     )
 
 
+def _diagnosis_result(reason: str, action: str | None) -> str:
+    return reason if action is None else f"{reason}\nNext: {action}"
+
+
 def _probe_rows(payload: Mapping[str, object]) -> tuple[tuple[str, str, str, str], ...]:
-    if "providers" in payload:
-        rows = _provider_probe_rows(_mapping(payload["providers"]))
-        rows.append(_core_probe_row(_mapping(payload.get("llm", payload.get("agents")))))
-        browser_agent = payload.get("browser-agent", payload.get("browser_agent"))
-        if isinstance(browser_agent, Mapping):
-            rows.append(_core_probe_row(browser_agent))
-        rows.append(_core_probe_row(_mapping(payload.get("mineru"))))
+    if {"search", "download", "analyze", "parse"}.issubset(payload):
+        rows = _source_probe_rows(_mapping(payload["search"]))
+        rows.extend(_source_probe_rows(_mapping(payload["download"])))
+        rows.append(_core_probe_row(_mapping(payload["analyze"])))
+        rows.append(_core_probe_row(_mapping(payload["parse"])))
+        browser = payload.get("browser")
+        if isinstance(browser, Mapping):
+            rows.append(_core_probe_row(browser))
         return tuple(rows)
     if "results" in payload:
-        return tuple(_provider_probe_rows(payload))
+        return tuple(_source_probe_rows(payload))
     if "access_key" in payload:
         return (_browser_probe_row(payload),)
     return (_core_probe_row(payload),)

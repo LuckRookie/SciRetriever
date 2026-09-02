@@ -75,6 +75,21 @@ class AnalyzePageTests(unittest.TestCase):
         description = console.page.call_args.args[1]
         self.assertIn("Provider connection, key, reasoning", description)
 
+    def test_analyze_test_uses_the_shared_owner_scoped_probe(self) -> None:
+        console = Mock()
+        with (
+            patch.object(
+                analysis,
+                "load_editable_user_configuration",
+                side_effect=(_configured_model(), _configured_model()),
+            ),
+            patch.object(analysis, "select_value", side_effect=("test", "back")),
+            patch.object(analysis, "run_interactive_test") as run,
+        ):
+            analysis.manage_analyze(console)
+
+        self.assertEqual(run.call_args.args[0].owner, "analyze")
+
 
 if __name__ == "__main__":
     unittest.main()

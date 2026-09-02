@@ -90,13 +90,15 @@ mode = "auto"
 # [models."openai/operator-selected-model"]
 # reasoning = "max" # default | none | minimal | low | medium | high | xhigh | max
 # image = false
+# stream = true # 三种 API 均默认开启；按 Model 设为 false 可使用非流式 JSON
 #
 # [models."openai/operator-selected-browser-model"]
 # reasoning = "high"
 # image = true
+# stream = true
 
 [analyze]
-# `model` 是完整的 `provider/model` reference；reasoning 保留在 Model 中。
+# `model` 是完整的 `provider/model` reference；reasoning/stream 保留在 Model 中。
 # strict structured output、text-only 与 no-tool 合同由 Analyze 派生。
 # model = "openai/operator-selected-model"
 # `Analyze → Setup` 会在业务预算缺失时生成产品安全初值，并在同一流程允许

@@ -225,15 +225,15 @@ Cloak wrapper、Playwright API、binary/version/signature、headed display/Xvfb�
 需要诊断 runtime 与首页可达性时，每次显式选择一个目标：
 
 ```bash
-sciretriever config test --browser acs-publications
-sciretriever config test --browser aip-publishing
-sciretriever config test --browser elsevier-sciencedirect
-sciretriever config test --browser iopscience
-sciretriever config test --browser oxford-academic
-sciretriever config test --browser rsc-publishing
-sciretriever config test --browser science-aaas
-sciretriever config test --browser springerlink
-sciretriever config test --browser wiley-online-library
+sciretriever config test browser site acs-publications
+sciretriever config test browser site aip-publishing
+sciretriever config test browser site elsevier-sciencedirect
+sciretriever config test browser site iopscience
+sciretriever config test browser site oxford-academic
+sciretriever config test browser site rsc-publishing
+sciretriever config test browser site science-aaas
+sciretriever config test browser site springerlink
+sciretriever config test browser site wiley-online-library
 ```
 
 Browser 启用且 runtime 就绪后，九家都可以成为单目标 probe；目标流程可达不代表文章有权限，

@@ -37,6 +37,10 @@ from sciretriever.entry.cli.config_center.common import (
     option,
     select_value,
 )
+from sciretriever.entry.cli.config_center.probes import (
+    ConfigurationTestRequest,
+    run_interactive_test,
+)
 from sciretriever.entry.cli.config_ui import ConfigActionKind, ConfigConsole
 from sciretriever.model.configuration import (
     AgentProtocol,
@@ -330,12 +334,16 @@ def _add_model(console: ConfigConsole) -> None:  # noqa: C901
     image = ask_boolean("Image", console=console, default=False)
     if image is None:
         return
+    stream = ask_boolean("Stream", console=console, default=True)
+    if stream is None:
+        return
     try:
         model = build_model_configuration(
             provider=provider.name,
             model=summary.model,
             reasoning=reasoning,
             image=image,
+            stream=stream,
         )
         if before.models.get(model.reference) is not None:
             console.message("That Model already exists; use Edit.", kind="warning")
@@ -358,6 +366,7 @@ def _add_model(console: ConfigConsole) -> None:  # noqa: C901
             ("URL", provider.base_url),
             ("Reasoning", model.reasoning.value),
             ("Images", "yes" if model.image else "no"),
+            ("Stream", "on" if model.stream else "off"),
         ),
     )
     if not confirm_changes(
@@ -415,11 +424,16 @@ def _edit_model(reference: str, console: ConfigConsole) -> None:
     image = ask_boolean("Image", console=console, default=selected.image)
     if image is None:
         return
+    stream = ask_boolean("Stream", console=console, default=selected.stream)
+    if stream is None:
+        return
     provider = before.providers.get(selected.provider)
     if provider is None:
         console.message("The Model Provider is missing.", kind="warning")
         return
-    replacement = selected.model_copy(update={"reasoning": reasoning, "image": image})
+    replacement = selected.model_copy(
+        update={"reasoning": reasoning, "image": image, "stream": stream}
+    )
     try:
         registry = upsert_model(before, provider=provider, model=replacement)
         after = _with_registry(
@@ -562,30 +576,31 @@ def _manage_provider_key(name: str, console: ConfigConsole) -> None:
 
 def _test_provider(name: str, console: ConfigConsole) -> None:
     configuration = load_editable_user_configuration()
-    provider = configuration.providers.get(name)
-    if provider is None:
+    if configuration.providers.get(name) is None:
         console.message("The Provider no longer exists.", kind="warning")
         return
-    api_key, key_ready, _entered = _provider_key(provider, console, prompt_missing=False)
-    if not key_ready:
+    run_interactive_test(
+        ConfigurationTestRequest(owner="provider", target=name),
+        console,
+    )
+
+
+def _test_model(reference: str, *, image: bool, console: ConfigConsole) -> None:
+    options = [option("text", "Text", kind=ConfigActionKind.TEST)]
+    if image:
+        options.append(option("image", "Image", kind=ConfigActionKind.TEST))
+    options.append(option("back", "Back", kind=ConfigActionKind.NAVIGATE))
+    action = select_value("Test", options, console=console, default="back")
+    if action in {None, "back"}:
         return
-    if not confirm("Read this Provider's bounded model catalog now? It may consume quota. [y/N] "):
-        return
-    console.message("Reading the Provider model list…", kind="muted")
-    try:
-        catalog = fetch_agent_models(
-            provider_name=provider.name,
-            api=provider.api,
-            base_url=provider.base_url,
-            api_key=api_key,
-        )
-    except AgentFailure as error:
-        console.message(_catalog_failure_message(error.failure.code), kind="warning")
-        return
-    except (BootstrapError, ConfigurationError, OSError, TypeError, ValueError):
-        console.message("The Provider test failed safely.", kind="warning")
-        return
-    console.message(f"Provider returned {len(catalog.models)} models.", kind="success")
+    run_interactive_test(
+        ConfigurationTestRequest(
+            owner="model",
+            target=reference,
+            image_input=action == "image",
+        ),
+        console,
+    )
 
 
 def _remove_provider(name: str, console: ConfigConsole) -> None:
@@ -708,13 +723,14 @@ def _manage_model(reference: str, console: ConfigConsole) -> None:
         )
         console.page(
             f"Models · {model.reference}",
-            "This Model owns the reasoning effort and image capability used by every consumer. "
-            "Role-specific live tests stay in Analyze or Browser because their request "
-            "contracts differ.",
+            "This Model owns reasoning, image capability and streaming used by every consumer. "
+            "Test verifies this exact Model and reasoning without changing Analyze or Browser. "
+            "Role-specific contracts remain in their owner pages.",
             facts=(
                 ("Provider", model.provider),
                 ("Reasoning", model.reasoning.value),
                 ("Images", "yes" if model.image else "no"),
+                ("Stream", "on" if model.stream else "off"),
                 ("Used by", ", ".join(selected_by) or "none"),
             ),
         )
@@ -722,6 +738,7 @@ def _manage_model(reference: str, console: ConfigConsole) -> None:
             "Model",
             [
                 option("edit", "Edit"),
+                option("test", "Test", kind=ConfigActionKind.TEST),
                 option("remove", "Remove", kind=ConfigActionKind.DANGER),
                 option("back", "Back", kind=ConfigActionKind.NAVIGATE),
             ],
@@ -732,6 +749,8 @@ def _manage_model(reference: str, console: ConfigConsole) -> None:
             return
         if action == "edit":
             _edit_model(reference, console)
+        elif action == "test":
+            _test_model(reference, image=model.image, console=console)
         elif action == "remove":
             _remove_model(reference, console)
 
@@ -741,8 +760,8 @@ def manage_models(console: ConfigConsole) -> None:
         configuration = load_editable_user_configuration()
         console.page(
             "Models",
-            "Define a reusable Model once, including its Provider, reasoning effort and image "
-            "support. Analyze and Browser select the Model reference without overriding it.",
+            "Define a reusable Model once, including its Provider, reasoning, image and stream "
+            "settings. Analyze and Browser select the Model reference without overriding it.",
             facts=(
                 ("Models", len(configuration.models.values)),
                 ("Providers", len(configuration.providers.values)),

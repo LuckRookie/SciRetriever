@@ -23,8 +23,14 @@ class SourcePageTests(unittest.TestCase):
             sources.manage_download(console)
             download_options = select.call_args.args[1]
 
-        self.assertEqual([item.label for item in search_options], ["Sources", "Limit", "Back"])
-        self.assertEqual([item.label for item in download_options], ["Sources", "Back"])
+        self.assertEqual(
+            [item.label for item in search_options],
+            ["Sources", "Limit", "Test", "Back"],
+        )
+        self.assertEqual(
+            [item.label for item in download_options],
+            ["Sources", "Test", "Back"],
+        )
         self.assertTrue(all(" " not in item.label for item in (*search_options, *download_options)))
         self.assertIs(search_options[-1].kind, ConfigActionKind.NAVIGATE)
         self.assertIs(download_options[-1].kind, ConfigActionKind.NAVIGATE)
@@ -40,6 +46,17 @@ class SourcePageTests(unittest.TestCase):
             mode=SourceMode.CUSTOM,
         )
 
+        disabled_download = sources._source_actions(
+            "download",
+            ProviderName.CROSSREF,
+            configurable_keys=frozenset(),
+            enabled=False,
+            mode=SourceMode.CUSTOM,
+        )
+        self.assertEqual(
+            [item.label for item in disabled_download],
+            ["Test", "Enable", "Back"],
+        )
         self.assertEqual(
             [item.label for item in actions],
             ["Setup", "Key", "Test", "Disable", "Back"],
@@ -53,6 +70,36 @@ class SourcePageTests(unittest.TestCase):
                 ConfigActionKind.DANGER,
                 ConfigActionKind.NAVIGATE,
             ],
+        )
+
+    def test_area_test_can_run_all_or_choose_an_enabled_or_disabled_source(self) -> None:
+        console = Mock()
+        with (
+            patch.object(sources, "select_value", return_value="all"),
+            patch.object(sources, "run_interactive_test") as run,
+        ):
+            sources._manage_source_tests("search", console)
+
+        request = run.call_args.args[0]
+        self.assertEqual(
+            (request.owner, request.target, request.all_targets),
+            ("search", None, True),
+        )
+
+        with (
+            patch.object(
+                sources,
+                "select_value",
+                side_effect=("source", ProviderName.CROSSREF.value),
+            ),
+            patch.object(sources, "run_interactive_test") as run,
+        ):
+            sources._manage_source_tests("download", console)
+
+        request = run.call_args.args[0]
+        self.assertEqual(
+            (request.owner, request.target, request.all_targets),
+            ("download", "crossref", False),
         )
 
     def test_source_menu_describes_purpose_activity_and_capability_key_contract(self) -> None:

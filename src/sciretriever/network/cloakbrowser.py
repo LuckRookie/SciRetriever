@@ -567,7 +567,7 @@ class _CloakEngine:
             self._proxy = proxy
             self._display = display
             self._context = context
-            _LOGGER.info(
+            _LOGGER.debug(
                 "event=browser-cloak-runtime-ready stage=launch adapter=cloakbrowser "
                 "runtime_version=%s runtime_ready=true identity_stable=true "
                 "process_reused=false context_reused=false outcome=ready reason=%s action=%s",

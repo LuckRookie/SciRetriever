@@ -429,6 +429,14 @@ def _service_url(value: str) -> tuple[str, str, int, str, bool]:
     return scheme, hostname, port or (443 if scheme == "https" else 80), parsed.path, loopback
 
 
+def _probe_request_url(value: object) -> str:
+    """Accept only a secret-free request URL with no query or user information."""
+
+    candidate = _nonblank(value)
+    _service_url(candidate)
+    return candidate
+
+
 def _sci_hub_url(value: object) -> str:
     """Validate one explicit, secret-free Sci-Hub landing Base URL."""
 
@@ -744,6 +752,11 @@ StableFailureCode = Annotated[
         pattern=r"^[a-z][a-z0-9-]{0,127}$",
     ),
 ]
+ProbeRequestURL = Annotated[
+    str,
+    BeforeValidator(_probe_request_url),
+    Field(strict=True, min_length=1, max_length=4096),
+]
 OrdinaryProviderParameter = Annotated[
     str,
     BeforeValidator(_ordinary_parameter),
@@ -1015,11 +1028,12 @@ class ModelProviderConfig(_FrozenModel):
 
 
 class ModelConfig(_FrozenModel):
-    """One configured model: identity, reasoning depth, and image input."""
+    """One configured model and the invocation behavior inherited by its users."""
 
     reference: ModelReference
     reasoning: AgentReasoningEffortValue = AgentReasoningEffort.PROVIDER_DEFAULT
     image: Annotated[bool, Field(strict=True)] = False
+    stream: Annotated[bool, Field(strict=True)] = True
 
     @property
     def provider(self) -> str:
@@ -1758,11 +1772,18 @@ class AgentConfigurationProbeDetails(_FrozenModel):
     tool_decision: bool = False
     image_count: Annotated[int, Field(strict=True, ge=0)] = 0
     tool_count: Annotated[int, Field(strict=True, ge=0)] = 0
+    model_reference: ModelReference | None = None
+    provider: ProviderIdentity | None = None
     model: NonBlankText | None = None
     protocol: AgentProtocolValue | None = None
+    stream: Annotated[bool, Field(strict=True)] | None = None
+    request_method: Literal["POST"] | None = None
+    request_url: ProbeRequestURL | None = None
 
     @model_validator(mode="after")
     def _validate_probe_role(self) -> "AgentConfigurationProbeDetails":
+        if (self.request_method is None) != (self.request_url is None):
+            raise ValueError("Agent probe request identity is incomplete")
         if self.role == "analysis":
             if (
                 self.request_kind != "minimal-schema"
@@ -1786,6 +1807,51 @@ class AgentConfigurationProbeDetails(_FrozenModel):
         return self
 
 
+class ModelProviderConfigurationProbeDetails(_FrozenModel):
+    """Stable disclosure of one bounded Model Provider catalog probe."""
+
+    request_kind: Literal["model-catalog"] = "model-catalog"
+    provider: NonBlankText
+    protocol: AgentProtocolValue
+    request_method: Literal["GET"] = "GET"
+    request_url: ProbeRequestURL
+    catalog_count: Annotated[int, Field(strict=True, ge=0)] | None = None
+    catalog_truncated: bool | None = None
+    may_consume_quota: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _validate_catalog_observation(self) -> "ModelProviderConfigurationProbeDetails":
+        if (self.catalog_count is None) != (self.catalog_truncated is None):
+            raise ValueError("Model Provider catalog observation is inconsistent")
+        return self
+
+
+class ModelConfigurationProbeDetails(_FrozenModel):
+    """Stable disclosure of one exact reusable Model probe."""
+
+    request_kind: Literal["model-text", "model-image"]
+    reference: ModelReference
+    provider: ProviderIdentity
+    model: AgentModelIdentity
+    protocol: AgentProtocolValue
+    reasoning: AgentReasoningEffortValue
+    stream: Annotated[bool, Field(strict=True)]
+    image_input: bool
+    request_method: Literal["POST"] = "POST"
+    request_url: ProbeRequestURL
+    response_parseable: bool | None = None
+    sends_user_literature: Literal[False] = False
+    sends_page_content: Literal[False] = False
+    sends_pdf: Literal[False] = False
+    may_consume_quota: Literal[True] = True
+
+    @model_validator(mode="after")
+    def _validate_model_probe_kind(self) -> "ModelConfigurationProbeDetails":
+        if self.image_input != (self.request_kind == "model-image"):
+            raise ValueError("Model probe image contract is inconsistent")
+        return self
+
+
 class MinerUConfigurationProbeDetails(_FrozenModel):
     """Stable disclosure of the health-only MinerU probe contract."""
 
@@ -1795,6 +1861,43 @@ class MinerUConfigurationProbeDetails(_FrozenModel):
     release: NonBlankText | None = None
     api_protocol: Annotated[int, Field(strict=True, ge=1)] | None = None
     profile: Literal["vlm-engine"] = "vlm-engine"
+    request_method: Literal["GET"] | None = None
+    request_url: ProbeRequestURL | None = None
+
+    @model_validator(mode="after")
+    def _validate_request_identity(self) -> "MinerUConfigurationProbeDetails":
+        if (self.request_method is None) != (self.request_url is None):
+            raise ValueError("MinerU probe request identity is incomplete")
+        return self
+
+
+class CoreConfigurationProbeFailureEvidence(_FrozenModel):
+    """Small, redacted evidence used to explain one failed external probe."""
+
+    http_status: Annotated[int, Field(strict=True, ge=100, le=599)] | None = None
+    access_code: StableFailureCode | None = None
+    remote_error: (
+        Literal[
+            "image-unsupported",
+            "model-not-found",
+            "model-rejected",
+            "reasoning-unsupported",
+            "request-rejected",
+            "structured-output-unsupported",
+            "tool-unsupported",
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def _validate_failure_evidence(self) -> "CoreConfigurationProbeFailureEvidence":
+        if self.http_status is None and self.access_code is None:
+            raise ValueError("core probe failure evidence is empty")
+        if self.http_status is not None and self.access_code is not None:
+            raise ValueError("core probe failure evidence is inconsistent")
+        if self.remote_error is not None and self.http_status is None:
+            raise ValueError("remote error evidence requires an HTTP status")
+        return self
 
 
 class CoreConfigurationProbeResult(_FrozenModel):
@@ -1804,20 +1907,26 @@ class CoreConfigurationProbeResult(_FrozenModel):
     outcome: ProbeOutcomeValue
     local_ready: bool
     failure_code: StableFailureCode | None = None
-    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails
+    details: (
+        AgentConfigurationProbeDetails
+        | ModelConfigurationProbeDetails
+        | ModelProviderConfigurationProbeDetails
+        | MinerUConfigurationProbeDetails
+    )
+    failure_evidence: CoreConfigurationProbeFailureEvidence | None = None
     persisted: Literal[False] = False
 
     @model_validator(mode="after")
     def _validate_core_probe_shape(self) -> "CoreConfigurationProbeResult":
         _validate_core_probe_details(self.service, self.details)
         if self.outcome is ProbeOutcome.SKIPPED:
-            if self.local_ready or self.failure_code is None:
+            if self.local_ready or self.failure_code is None or self.failure_evidence is not None:
                 raise ValueError("skipped core probe result is inconsistent")
             return self
         if not self.local_ready:
             raise ValueError("executed core probe result is inconsistent")
         if self.outcome is ProbeOutcome.PASSED:
-            if self.failure_code is not None:
+            if self.failure_code is not None or self.failure_evidence is not None:
                 raise ValueError("passed core probe result is inconsistent")
             _validate_passed_core_probe_details(self.details)
             return self
@@ -1955,17 +2064,34 @@ class BrowserConfigurationProbeResult(_FrozenModel):
 
 def _validate_core_probe_details(
     service: Literal["agents", "mineru"],
-    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+    details: (
+        AgentConfigurationProbeDetails
+        | ModelConfigurationProbeDetails
+        | ModelProviderConfigurationProbeDetails
+        | MinerUConfigurationProbeDetails
+    ),
 ) -> None:
     if service == "agents":
-        if not isinstance(details, AgentConfigurationProbeDetails):
+        if not isinstance(
+            details,
+            (
+                AgentConfigurationProbeDetails,
+                ModelConfigurationProbeDetails,
+                ModelProviderConfigurationProbeDetails,
+            ),
+        ):
             raise ValueError("core probe details do not match the service")
     elif not isinstance(details, MinerUConfigurationProbeDetails):
         raise ValueError("core probe details do not match the service")
 
 
 def _validate_passed_core_probe_details(
-    details: AgentConfigurationProbeDetails | MinerUConfigurationProbeDetails,
+    details: (
+        AgentConfigurationProbeDetails
+        | ModelConfigurationProbeDetails
+        | ModelProviderConfigurationProbeDetails
+        | MinerUConfigurationProbeDetails
+    ),
 ) -> None:
     if isinstance(details, AgentConfigurationProbeDetails):
         if details.role == "analysis":
@@ -1973,6 +2099,14 @@ def _validate_passed_core_probe_details(
                 raise ValueError("passed Analysis probe result is inconsistent")
         elif details.tool_decision_parseable is not True:
             raise ValueError("passed Browser Agent probe result is inconsistent")
+        return
+    if isinstance(details, ModelConfigurationProbeDetails):
+        if details.response_parseable is not True:
+            raise ValueError("passed Model probe result is inconsistent")
+        return
+    if isinstance(details, ModelProviderConfigurationProbeDetails):
+        if details.catalog_count is None or details.catalog_truncated is None:
+            raise ValueError("passed Model Provider probe result is inconsistent")
         return
     if details.health != "healthy" or details.release != "3.4.4" or details.api_protocol != 2:
         raise ValueError("passed MinerU probe result is inconsistent")
@@ -2007,6 +2141,7 @@ __all__ = (
     "ConfigurationFingerprint",
     "ConfigurationProbeResult",
     "ConfigurationProbeSummary",
+    "CoreConfigurationProbeFailureEvidence",
     "CoreConfigurationProbeResult",
     "ConfigurationRuntimeStatus",
     "ConfigurationStatus",
@@ -2023,7 +2158,9 @@ __all__ = (
     "MetadataProviderTuple",
     "MetadataSourcesConfig",
     "ModelConfig",
+    "ModelConfigurationProbeDetails",
     "ModelProviderConfig",
+    "ModelProviderConfigurationProbeDetails",
     "ModelProvidersConfig",
     "ModelsConfig",
     "MinerUConfigurationProbeDetails",

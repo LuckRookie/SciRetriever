@@ -14,6 +14,7 @@ from sciretriever.agents.api import (
     AgentCallLimits,
     AgentCapability,
     AgentFailure,
+    AgentImagePart,
     AgentModelCapabilities,
     AgentProvenance,
     AgentRole,
@@ -21,6 +22,8 @@ from sciretriever.agents.api import (
     AgentRuntime,
     AgentStructuredResult,
     AgentTextPart,
+    AgentToolCall,
+    AgentToolDeclaration,
 )
 from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
@@ -183,6 +186,216 @@ def _fixture(provider: str, name: str) -> bytes:
     return (_FIXTURES / provider / f"{name}.json").read_bytes()
 
 
+def _sse_event(event: str | None, data: object) -> bytes:
+    if isinstance(data, bytes):
+        encoded = data
+    elif isinstance(data, str):
+        encoded = data.encode("utf-8")
+    else:
+        encoded = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    prefix = b"" if event is None else f"event: {event}\n".encode("ascii")
+    return prefix + b"data: " + encoded + b"\n\n"
+
+
+def _responses_stream(payload: dict[str, object]) -> bytes:
+    """Build a Responses SSE body whose terminal output is intentionally empty."""
+
+    terminal = cast(dict[str, object], json.loads(json.dumps(payload)))
+    blocks: list[bytes] = []
+    output = terminal.get("output")
+    if isinstance(output, list):
+        for index, item in enumerate(output):
+            blocks.append(
+                _sse_event(
+                    "response.output_item.done",
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": item,
+                    },
+                )
+            )
+        terminal["output"] = []
+    status = terminal.get("status")
+    event = (
+        {
+            "completed": "response.completed",
+            "failed": "response.failed",
+            "incomplete": "response.incomplete",
+        }.get(status)
+        if type(status) is str
+        else None
+    )
+    if event is None:
+        event = "response.completed"
+    blocks.append(_sse_event(event, {"type": event, "response": terminal}))
+    return b"".join(blocks)
+
+
+def _openai_fixture(name: str) -> bytes:
+    return _responses_stream(cast(dict[str, object], json.loads(_fixture("openai", name))))
+
+
+def _chat_stream(payload: dict[str, object]) -> bytes:
+    """Build the standard Chat chunk sequence including terminal usage and DONE."""
+
+    model = payload["model"]
+    usage = payload["usage"]
+    choices = cast(list[dict[str, object]], payload["choices"])
+    choice = choices[0]
+    message = cast(dict[str, object], choice["message"])
+
+    def chunk(delta: dict[str, object], finish_reason: object = None) -> bytes:
+        return _sse_event(
+            None,
+            {
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "usage": None,
+            },
+        )
+
+    blocks = [chunk({"role": "assistant"})]
+    content = message.get("content")
+    if type(content) is str and content:
+        midpoint = max(1, len(content) // 2)
+        blocks.extend(
+            (chunk({"content": content[:midpoint]}), chunk({"content": content[midpoint:]}))
+        )
+    refusal = message.get("refusal")
+    if type(refusal) is str and refusal:
+        blocks.append(chunk({"refusal": refusal}))
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        tool_call = cast(dict[str, object], tool_calls[0])
+        function = cast(dict[str, object], tool_call["function"])
+        blocks.append(
+            chunk(
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_fixture",
+                            "type": "function",
+                            "function": {
+                                "name": function["name"],
+                                "arguments": function["arguments"],
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+    blocks.append(chunk({}, choice.get("finish_reason")))
+    blocks.append(
+        _sse_event(
+            None,
+            {
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [],
+                "usage": usage,
+            },
+        )
+    )
+    blocks.append(_sse_event(None, "[DONE]"))
+    return b"".join(blocks)
+
+
+def _anthropic_stream(payload: dict[str, object]) -> bytes:
+    """Build one complete Anthropic event sequence from a full Message."""
+
+    usage = cast(dict[str, object], payload["usage"])
+    blocks = [
+        _sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "type": "message",
+                    "role": "assistant",
+                    "model": payload["model"],
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {
+                        "input_tokens": usage["input_tokens"],
+                        "output_tokens": 0,
+                    },
+                },
+            },
+        )
+    ]
+    content = cast(list[dict[str, object]], payload["content"])
+    for index, item in enumerate(content):
+        item_type = item.get("type")
+        if item_type == "text":
+            start = {"type": "text", "text": ""}
+            delta = {"type": "text_delta", "text": item["text"]}
+        elif item_type == "tool_use":
+            start = {
+                "type": "tool_use",
+                "id": item.get("id", "toolu_fixture"),
+                "name": item["name"],
+                "input": {},
+            }
+            delta = {
+                "type": "input_json_delta",
+                "partial_json": json.dumps(item["input"], separators=(",", ":")),
+            }
+        else:
+            start = item
+            delta = {"type": "unsupported_delta"}
+        blocks.extend(
+            (
+                _sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": start,
+                    },
+                ),
+                _sse_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": delta,
+                    },
+                ),
+                _sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": index},
+                ),
+            )
+        )
+    blocks.extend(
+        (
+            _sse_event(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": payload["stop_reason"]},
+                    "usage": {"output_tokens": usage["output_tokens"]},
+                },
+            ),
+            _sse_event("message_stop", {"type": "message_stop"}),
+        )
+    )
+    return b"".join(blocks)
+
+
+def _anthropic_fixture(name: str) -> bytes:
+    return _anthropic_stream(cast(dict[str, object], json.loads(_fixture("anthropic", name))))
+
+
 def _deep_json_object() -> str:
     return (
         '{"child":' * _DEEP_JSON_DEPTH
@@ -235,6 +448,7 @@ def _call(
     response_schema: str = _SCHEMA,
     max_output_tokens: int = 64,
     reasoning_effort: AgentReasoningEffort = AgentReasoningEffort.PROVIDER_DEFAULT,
+    stream: bool = True,
     cancel_event: threading.Event | None = None,
 ) -> AgentProviderCall:
     # ``kind`` and ``prompt_version`` are deliberately Analysis-private and
@@ -262,7 +476,32 @@ def _call(
         tools=consumer_call.tools,
         max_output_tokens=consumer_call.max_output_tokens,
         reasoning_effort=reasoning_effort,
+        stream=stream,
         cancel_event=cancel_event,
+    )
+
+
+def _tool_call(model: str, *, stream: bool = True) -> AgentProviderCall:
+    return AgentProviderCall(
+        role=AgentRole.BROWSER,
+        capabilities=frozenset({AgentCapability.IMAGE_INPUT, AgentCapability.TOOL_DECISION}),
+        model=model,
+        input_sha256=sha256_digest(b"tool fixture"),
+        text_parts=(
+            AgentTextPart(media_type="text/plain", text="Choose one tool."),
+            AgentTextPart(media_type="application/json", text='{"page":"fixture"}'),
+        ),
+        image_parts=(AgentImagePart(media_type="image/png", data=b"PNG", width=1, height=1),),
+        tools=(
+            AgentToolDeclaration(
+                name="click",
+                input_schema=(
+                    '{"type":"object","properties":{},"required":[],"additionalProperties":false}'
+                ),
+            ),
+        ),
+        max_output_tokens=64,
+        stream=stream,
     )
 
 
@@ -372,9 +611,7 @@ class AgentsProviderTests(unittest.TestCase):
         return caught.exception
 
     def test_neutral_port_accepts_analysis_turns_without_business_kind(self) -> None:
-        client, transport, _, _ = _client(
-            [_response(_fixture("openai", "success")) for _ in range(3)]
-        )
+        client, transport, _, _ = _client([_response(_openai_fixture("success")) for _ in range(3)])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         self.assertIsInstance(adapter, AgentProviderPort)
@@ -403,7 +640,7 @@ class AgentsProviderTests(unittest.TestCase):
         )
 
     def test_openai_uses_responses_protocol_and_private_origin_bound_credential(self) -> None:
-        client, transport, _, resolver = _client([_response(_fixture("openai", "success"))])
+        client, transport, _, resolver = _client([_response(_openai_fixture("success"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         result = adapter.execute(_call(_OPENAI_MODEL))
@@ -423,6 +660,8 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertIn(("Authorization", f"Bearer {_API_KEY}"), wire_headers)
         self.assertEqual(body["model"], _OPENAI_MODEL)
         self.assertEqual(body["max_output_tokens"], 64)
+        self.assertIs(body["stream"], True)
+        self.assertIn(Header(name="Accept", value="text/event-stream"), request.headers)
         input_items = cast(list[dict[str, object]], body["input"])
         self.assertEqual([item["role"] for item in input_items], ["developer", "user"])
         developer_content = cast(list[dict[str, object]], input_items[0]["content"])
@@ -433,7 +672,7 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertEqual(result.provenance.model, _OPENAI_MODEL)
 
     def test_anthropic_uses_messages_protocol_and_private_origin_bound_credential(self) -> None:
-        client, transport, _, resolver = _client([_response(_fixture("anthropic", "success"))])
+        client, transport, _, resolver = _client([_response(_anthropic_fixture("success"))])
         adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
         result = adapter.execute(_call(_ANTHROPIC_MODEL))
@@ -454,6 +693,8 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertEqual(body["model"], _ANTHROPIC_MODEL)
         self.assertEqual(body["max_tokens"], 64)
         self.assertEqual(body["system"], _PROMPT)
+        self.assertIs(body["stream"], True)
+        self.assertIn(Header(name="Accept", value="text/event-stream"), request.headers)
         messages = cast(list[dict[str, object]], body["messages"])
         self.assertEqual(messages[0]["role"], "user")
         content = cast(list[dict[str, object]], messages[0]["content"])
@@ -481,19 +722,19 @@ class AgentsProviderTests(unittest.TestCase):
             (
                 OpenAIResponsesAdapter,
                 _OPENAI_MODEL,
-                _fixture("openai", "success"),
+                _openai_fixture("success"),
                 lambda body: cast(dict[str, object], body.get("reasoning")).get("effort"),
             ),
             (
                 OpenAIChatCompletionsAdapter,
                 _OPENAI_MODEL,
-                json.dumps(chat_response).encode("utf-8"),
+                _chat_stream(chat_response),
                 lambda body: body.get("reasoning_effort"),
             ),
             (
                 AnthropicMessagesAdapter,
                 _ANTHROPIC_MODEL,
-                _fixture("anthropic", "success"),
+                _anthropic_fixture("success"),
                 lambda body: cast(dict[str, object], body.get("output_config")).get("effort"),
             ),
         )
@@ -544,7 +785,7 @@ class AgentsProviderTests(unittest.TestCase):
                 }
             ],
         }
-        client, transport, _, _ = _client([_response(json.dumps(response).encode("utf-8"))])
+        client, transport, _, _ = _client([_response(_chat_stream(response))])
         adapter = OpenAIChatCompletionsAdapter(
             http_client=client,
             api_key=_API_KEY,
@@ -562,7 +803,196 @@ class AgentsProviderTests(unittest.TestCase):
         schema = cast(dict[str, object], response_format["json_schema"])
         self.assertTrue(schema["strict"])
         self.assertEqual(body["max_completion_tokens"], 64)
+        self.assertIs(body["stream"], True)
+        self.assertEqual(body["stream_options"], {"include_usage": True})
+        self.assertIn(Header(name="Accept", value="text/event-stream"), request.headers)
         self.assertEqual(result.provenance.provider, "openai")
+
+    def test_each_protocol_honors_model_stream_and_hashes_the_selected_mode(self) -> None:
+        chat = {
+            "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 23, "completion_tokens": 11},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"outcome":"usable","title":"Fixture"}',
+                    },
+                }
+            ],
+        }
+        anthropic = cast(dict[str, object], json.loads(_fixture("anthropic", "success")))
+        cases = (
+            (
+                OpenAIResponsesAdapter,
+                _OPENAI_MODEL,
+                _openai_fixture("success"),
+                _fixture("openai", "success"),
+            ),
+            (
+                OpenAIChatCompletionsAdapter,
+                _OPENAI_MODEL,
+                _chat_stream(chat),
+                json.dumps(chat).encode("utf-8"),
+            ),
+            (
+                AnthropicMessagesAdapter,
+                _ANTHROPIC_MODEL,
+                _anthropic_stream(anthropic),
+                json.dumps(anthropic).encode("utf-8"),
+            ),
+        )
+        for adapter_type, model, streamed, plain in cases:
+            with self.subTest(adapter=adapter_type.__name__):
+                client, transport, _, _ = _client([_response(streamed), _response(plain)])
+                adapter = adapter_type(http_client=client, api_key=_API_KEY)
+
+                streamed_result = adapter.execute(_call(model))
+                plain_result = adapter.execute(_call(model, stream=False))
+
+                self.assertEqual(len(transport.calls), 2)
+                self.assertIs(_body(transport, 0)["stream"], True)
+                self.assertIs(_body(transport, 1)["stream"], False)
+                self.assertIn(
+                    Header(name="Accept", value="text/event-stream"),
+                    _safe_request(transport, 0).headers,
+                )
+                self.assertIn(
+                    Header(name="Accept", value="application/json"),
+                    _safe_request(transport, 1).headers,
+                )
+                if adapter_type is OpenAIChatCompletionsAdapter:
+                    self.assertEqual(
+                        _body(transport, 0)["stream_options"],
+                        {"include_usage": True},
+                    )
+                    self.assertNotIn("stream_options", _body(transport, 1))
+                self.assertNotEqual(
+                    streamed_result.provenance.parameters_sha256,
+                    plain_result.provenance.parameters_sha256,
+                )
+
+    def test_stream_protocol_failure_never_retries_as_non_stream(self) -> None:
+        chat = {
+            "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 4, "completion_tokens": 1},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"ok":true}'},
+                }
+            ],
+        }
+        cases = (
+            (OpenAIResponsesAdapter, _OPENAI_MODEL, _fixture("openai", "success")),
+            (
+                OpenAIChatCompletionsAdapter,
+                _OPENAI_MODEL,
+                json.dumps(chat).encode("utf-8"),
+            ),
+            (
+                AnthropicMessagesAdapter,
+                _ANTHROPIC_MODEL,
+                _fixture("anthropic", "success"),
+            ),
+        )
+        for adapter_type, model, non_stream_response in cases:
+            with self.subTest(adapter=adapter_type.__name__):
+                client, transport, _, _ = _client(
+                    [_response(non_stream_response), _response(non_stream_response)]
+                )
+                adapter = adapter_type(http_client=client, api_key=_API_KEY)
+
+                failure = self._failure(lambda: adapter.execute(_call(model)))
+
+                self.assertEqual(failure.failure.code, "agent-protocol")
+                self.assertEqual(len(transport.calls), 1)
+
+    def test_chat_and_anthropic_streams_reconstruct_one_declared_tool(self) -> None:
+        chat = {
+            "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "click", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+        anthropic = {
+            "type": "message",
+            "role": "assistant",
+            "model": _ANTHROPIC_MODEL,
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+            "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "name": "click", "input": {}}],
+        }
+        for adapter_type, model, body in (
+            (OpenAIChatCompletionsAdapter, _OPENAI_MODEL, _chat_stream(chat)),
+            (AnthropicMessagesAdapter, _ANTHROPIC_MODEL, _anthropic_stream(anthropic)),
+        ):
+            with self.subTest(adapter=adapter_type.__name__):
+                client, _, _, _ = _client([_response(body)])
+
+                result = adapter_type(http_client=client, api_key=_API_KEY).execute(
+                    _tool_call(model)
+                )
+
+                self.assertIsInstance(result, AgentToolCall)
+                assert isinstance(result, AgentToolCall)
+                self.assertEqual((result.tool_name, result.arguments), ("click", "{}"))
+
+    def test_chat_and_anthropic_streams_require_one_terminal_sequence(self) -> None:
+        chat = {
+            "model": _OPENAI_MODEL,
+            "usage": {"prompt_tokens": 4, "completion_tokens": 1},
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"ok":true}'},
+                }
+            ],
+        }
+        chat_done = _sse_event(None, "[DONE]")
+        chat_stream = _chat_stream(chat)
+        anthropic = cast(dict[str, object], json.loads(_fixture("anthropic", "success")))
+        message_stop = _sse_event("message_stop", {"type": "message_stop"})
+        anthropic_stream = _anthropic_stream(anthropic)
+        cases = (
+            (OpenAIChatCompletionsAdapter, _OPENAI_MODEL, chat_stream[: -len(chat_done)]),
+            (OpenAIChatCompletionsAdapter, _OPENAI_MODEL, chat_stream + chat_done),
+            (
+                AnthropicMessagesAdapter,
+                _ANTHROPIC_MODEL,
+                anthropic_stream[: -len(message_stop)],
+            ),
+            (
+                AnthropicMessagesAdapter,
+                _ANTHROPIC_MODEL,
+                anthropic_stream + message_stop,
+            ),
+        )
+        for adapter_type, model, body in cases:
+            with self.subTest(adapter=adapter_type.__name__, body_size=len(body)):
+                client, _, _, _ = _client([_response(body)])
+                failure = self._failure(
+                    lambda: adapter_type(http_client=client, api_key=_API_KEY).execute(_call(model))
+                )
+                self.assertEqual(failure.failure.code, "agent-protocol")
 
     def test_custom_loopback_chat_service_never_requires_or_sends_a_credential(self) -> None:
         response = {
@@ -576,7 +1006,7 @@ class AgentsProviderTests(unittest.TestCase):
                 }
             ],
         }
-        client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
+        client, transport, _, resolver = _client([_response(_chat_stream(response))])
         resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
         adapter = OpenAIChatCompletionsAdapter(
             http_client=client,
@@ -606,7 +1036,7 @@ class AgentsProviderTests(unittest.TestCase):
             "stop_reason": "end_turn",
             "content": [{"type": "text", "text": '{"ok":true}'}],
         }
-        client, transport, _, resolver = _client([_response(json.dumps(response).encode("utf-8"))])
+        client, transport, _, resolver = _client([_response(_anthropic_stream(response))])
         resolver.resolve = lambda hostname: ("127.0.0.1",)  # type: ignore[method-assign]
         adapter = AnthropicMessagesAdapter(
             http_client=client,
@@ -639,7 +1069,7 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
 
     def test_custom_remote_endpoint_is_exact_and_credential_bound_to_its_origin(self) -> None:
-        client, transport, _, _ = _client([_response(_fixture("openai", "success"))])
+        client, transport, _, _ = _client([_response(_openai_fixture("success"))])
         adapter = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
@@ -657,7 +1087,7 @@ class AgentsProviderTests(unittest.TestCase):
         self,
     ) -> None:
         openai_call = _real_metadata_stage_call(_OPENAI_MODEL)
-        openai_client, openai_transport, _, _ = _client([_response(_fixture("openai", "success"))])
+        openai_client, openai_transport, _, _ = _client([_response(_openai_fixture("success"))])
         OpenAIResponsesAdapter(
             http_client=openai_client,
             api_key=_API_KEY,
@@ -669,7 +1099,7 @@ class AgentsProviderTests(unittest.TestCase):
 
         anthropic_call = _real_metadata_stage_call(_ANTHROPIC_MODEL)
         anthropic_client, anthropic_transport, _, _ = _client(
-            [_response(_fixture("anthropic", "success"))]
+            [_response(_anthropic_fixture("success"))]
         )
         AnthropicMessagesAdapter(
             http_client=anthropic_client,
@@ -701,7 +1131,7 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertEqual(anthropic_format["schema"], expected)
 
     def test_provenance_hash_is_stable_and_binds_every_effective_parameter(self) -> None:
-        client, _, _, _ = _client([_response(_fixture("openai", "success")) for _ in range(7)])
+        client, _, _, _ = _client([_response(_openai_fixture("success")) for _ in range(7)])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         calls = (
             _call(_OPENAI_MODEL),
@@ -728,9 +1158,7 @@ class AgentsProviderTests(unittest.TestCase):
             '{"type":"object","properties":{"outcome":{"type":"string"}},'
             '"required":["outcome"],"additionalProperties":false}'
         )
-        client, transport, _, _ = _client(
-            [_response(_fixture("openai", "success")) for _ in range(3)]
-        )
+        client, transport, _, _ = _client([_response(_openai_fixture("success")) for _ in range(3)])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         original = adapter.execute(_call(_OPENAI_MODEL, response_schema=_SCHEMA))
@@ -790,7 +1218,9 @@ class AgentsProviderTests(unittest.TestCase):
                 self.assertNotIn(_DEEP_SENTINEL, repr(caught.exception))
 
     def test_deep_provider_envelope_is_a_stable_protocol_failure(self) -> None:
-        client, _, _, _ = _client([_response(_deep_json_object().encode("utf-8"))])
+        client, _, _, _ = _client(
+            [_response(_sse_event("response.completed", _deep_json_object()))]
+        )
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
@@ -801,7 +1231,7 @@ class AgentsProviderTests(unittest.TestCase):
     def test_deep_provider_result_is_a_stable_structured_response_failure(self) -> None:
         envelope = json.loads(_fixture("openai", "success"))
         envelope["output"][0]["content"][0]["text"] = _deep_json_object()
-        client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
+        client, _, _, _ = _client([_response(_responses_stream(envelope))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
         failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
@@ -857,7 +1287,7 @@ class AgentsProviderTests(unittest.TestCase):
                 self.assertEqual(transport.calls, [])
 
     def test_response_and_result_budgets_are_independent(self) -> None:
-        client, transport, _, _ = _client([_response(_fixture("openai", "success"))])
+        client, transport, _, _ = _client([_response(_openai_fixture("success"))])
         response_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
@@ -870,7 +1300,7 @@ class AgentsProviderTests(unittest.TestCase):
         result_text = '{"value":"' + ("x" * 128) + '"}'
         envelope = json.loads(_fixture("openai", "success"))
         envelope["output"][0]["content"][0]["text"] = result_text
-        client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
+        client, _, _, _ = _client([_response(_responses_stream(envelope))])
         result_limited = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
@@ -881,11 +1311,15 @@ class AgentsProviderTests(unittest.TestCase):
 
     def test_http_statuses_are_stable_and_429_feedback_is_atomic(self) -> None:
         matrix = {
+            400: "agent-request-rejected",
             401: "agent-authentication",
             403: "agent-authorization",
+            404: "agent-not-found",
+            405: "agent-endpoint",
             408: "agent-timeout",
+            422: "agent-request-rejected",
             429: "agent-quota",
-            500: "agent-http-status",
+            500: "agent-remote-service",
         }
         for status, code in matrix.items():
             with self.subTest(status=status):
@@ -896,6 +1330,8 @@ class AgentsProviderTests(unittest.TestCase):
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, code)
+                self.assertEqual(failure.http_status, status)
+                self.assertIsNone(failure.access_code)
                 self.assertEqual(len(transport.calls), 1)
                 self.assertNotIn("RESPONSE-PRIVATE-SENTINEL", repr(failure))
                 if status == 429:
@@ -907,20 +1343,57 @@ class AgentsProviderTests(unittest.TestCase):
                 else:
                     self.assertEqual(coordinator.feedback, [])
 
+    def test_known_remote_error_fields_classify_model_and_capability_without_body_leak(
+        self,
+    ) -> None:
+        cases = (
+            (404, {"code": "model_not_found", "param": "model"}, "model-not-found"),
+            (
+                400,
+                {"type": "invalid_request_error", "param": "reasoning.effort"},
+                "reasoning-unsupported",
+            ),
+            (
+                422,
+                {"code": "unsupported_response_format", "param": "response_format"},
+                "structured-output-unsupported",
+            ),
+        )
+        for status, fields, expected in cases:
+            with self.subTest(status=status, expected=expected):
+                body = json.dumps(
+                    {
+                        "error": {
+                            **fields,
+                            "message": "RESPONSE-PRIVATE-SENTINEL",
+                        }
+                    }
+                ).encode("utf-8")
+                client, _transport, _coordinator, _resolver = _client(
+                    [_response(body, status=status)]
+                )
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
+
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
+
+                self.assertEqual(failure.remote_error, expected)
+                self.assertEqual(failure.http_status, status)
+                self.assertNotIn("RESPONSE-PRIVATE-SENTINEL", repr(failure))
+
     def test_redirects_and_post_transport_errors_never_retry(self) -> None:
         redirect = _response(
             b"redirect body",
             status=307,
             headers=(Header(name="Location", value="https://example.org/elsewhere"),),
         )
-        client, transport, _, _ = _client([redirect, _response(_fixture("openai", "success"))])
+        client, transport, _, _ = _client([redirect, _response(_openai_fixture("success"))])
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
         self.assertEqual(failure.failure.code, "agent-access")
         self.assertEqual(len(transport.calls), 1)
 
         client, transport, _, _ = _client(
-            [OSError("TRANSPORT-PRIVATE-SENTINEL"), _response(_fixture("openai", "success"))]
+            [OSError("TRANSPORT-PRIVATE-SENTINEL"), _response(_openai_fixture("success"))]
         )
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
         failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
@@ -932,12 +1405,12 @@ class AgentsProviderTests(unittest.TestCase):
         mismatch = json.loads(_fixture("openai", "success"))
         mismatch["model"] = "unexpected-model"
         cases = (
-            ("refusal", _fixture("openai", "refusal"), "agent-refusal"),
-            ("truncated", _fixture("openai", "truncated"), "agent-truncated"),
-            ("unknown", _fixture("openai", "unknown-shape"), "agent-protocol"),
+            ("refusal", _openai_fixture("refusal"), "agent-refusal"),
+            ("truncated", _openai_fixture("truncated"), "agent-truncated"),
+            ("unknown", _openai_fixture("unknown-shape"), "agent-protocol"),
             (
                 "mismatch",
-                json.dumps(mismatch).encode("utf-8"),
+                _responses_stream(mismatch),
                 "agent-model-mismatch",
             ),
         )
@@ -949,6 +1422,58 @@ class AgentsProviderTests(unittest.TestCase):
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
 
+    def test_chat_stream_refusal_truncation_and_model_mismatch_are_distinct(self) -> None:
+        def envelope(
+            *,
+            model: str = _OPENAI_MODEL,
+            finish_reason: str = "stop",
+            content: str | None = '{"outcome":"usable"}',
+            refusal: str | None = None,
+        ) -> dict[str, object]:
+            message: dict[str, object] = {
+                "role": "assistant",
+                "content": content,
+            }
+            if refusal is not None:
+                message["refusal"] = refusal
+            return {
+                "model": model,
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1},
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": finish_reason,
+                        "message": message,
+                    }
+                ],
+            }
+
+        cases = (
+            (
+                "refusal",
+                envelope(content=None, refusal="fixture refusal text"),
+                "agent-refusal",
+            ),
+            ("truncated", envelope(finish_reason="length"), "agent-truncated"),
+            (
+                "mismatch",
+                envelope(model="unexpected-model"),
+                "agent-model-mismatch",
+            ),
+        )
+        for name, payload, code in cases:
+            with self.subTest(name=name):
+                client, _, _, _ = _client([_response(_chat_stream(payload))])
+                adapter = OpenAIChatCompletionsAdapter(
+                    http_client=client,
+                    api_key=_API_KEY,
+                )
+
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
+
+                self.assertEqual(failure.failure.code, code)
+                self.assertNotIn("fixture refusal text", repr(failure))
+
     def test_openai_requires_the_exact_responses_envelope_identity(self) -> None:
         for object_value in (None, "chat.completion"):
             with self.subTest(object_value=object_value):
@@ -957,11 +1482,100 @@ class AgentsProviderTests(unittest.TestCase):
                     del envelope["object"]
                 else:
                     envelope["object"] = object_value
-                client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
+                client, _, _, _ = _client([_response(_responses_stream(envelope))])
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
 
                 failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
 
+                self.assertEqual(failure.failure.code, "agent-protocol")
+
+    def test_openai_stream_reconstructs_text_done_and_rejects_ambiguous_framing(self) -> None:
+        terminal = cast(dict[str, object], json.loads(_fixture("openai", "success")))
+        terminal["output"] = []
+        lifecycle = b"".join(
+            (
+                _sse_event(
+                    "response.created",
+                    {
+                        "type": "response.created",
+                        "response": {
+                            "object": "response",
+                            "status": "in_progress",
+                            "model": _OPENAI_MODEL,
+                            "output": [],
+                        },
+                    },
+                ),
+                _sse_event(
+                    "response.in_progress",
+                    {
+                        "type": "response.in_progress",
+                        "response": {
+                            "object": "response",
+                            "status": "in_progress",
+                            "model": _OPENAI_MODEL,
+                            "output": [],
+                        },
+                    },
+                ),
+                _sse_event(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {
+                            "type": "message",
+                            "status": "in_progress",
+                            "role": "assistant",
+                            "content": [],
+                        },
+                    },
+                ),
+                _sse_event(
+                    "response.output_text.delta",
+                    {
+                        "type": "response.output_text.delta",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": '{"outcome":"usable",',
+                    },
+                ),
+            )
+        )
+        text_done = _sse_event(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "output_index": 0,
+                "content_index": 0,
+                "text": '{"outcome":"usable","title":"Fixture"}',
+            },
+        )
+        completed = _sse_event(
+            "response.completed",
+            {"type": "response.completed", "response": terminal},
+        )
+        client, _, _, _ = _client(
+            [_response(lifecycle + text_done + completed + _sse_event(None, "[DONE]"))]
+        )
+        result = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY).execute(
+            _call(_OPENAI_MODEL)
+        )
+        self.assertIsInstance(result, AgentStructuredResult)
+
+        malformed = (
+            text_done,
+            completed + completed,
+            _sse_event(
+                "response.completed",
+                {"type": "response.output_text.done", "response": terminal},
+            ),
+        )
+        for body in malformed:
+            with self.subTest(body_size=len(body)):
+                client, _, _, _ = _client([_response(body)])
+                adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
+                failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, "agent-protocol")
 
     def test_anthropic_refusal_truncation_unknown_shape_and_model_mismatch_are_distinct(
@@ -970,20 +1584,23 @@ class AgentsProviderTests(unittest.TestCase):
         mismatch = json.loads(_fixture("anthropic", "success"))
         mismatch["model"] = "unexpected-model"
         cases = (
-            ("refusal", _fixture("anthropic", "refusal"), "agent-refusal"),
-            ("truncated", _fixture("anthropic", "truncated"), "agent-truncated"),
-            ("unknown", _fixture("anthropic", "unknown-shape"), "agent-protocol"),
+            ("refusal", _anthropic_fixture("refusal"), "agent-refusal", True),
+            ("truncated", _anthropic_fixture("truncated"), "agent-truncated", True),
+            ("unknown", _fixture("anthropic", "unknown-shape"), "agent-protocol", False),
             (
                 "mismatch",
-                json.dumps(mismatch).encode("utf-8"),
+                _anthropic_stream(mismatch),
                 "agent-model-mismatch",
+                True,
             ),
         )
-        for name, body, code in cases:
+        for name, body, code, stream in cases:
             with self.subTest(name=name):
                 client, _, _, _ = _client([_response(body)])
                 adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
-                failure = self._failure(lambda: adapter.execute(_call(_ANTHROPIC_MODEL)))
+                failure = self._failure(
+                    lambda: adapter.execute(_call(_ANTHROPIC_MODEL, stream=stream))
+                )
                 self.assertEqual(failure.failure.code, code)
                 self.assertNotIn("fixture refusal text", repr(failure))
 
@@ -996,17 +1613,21 @@ class AgentsProviderTests(unittest.TestCase):
             ("non-utf8", b"\xff", "agent-protocol"),
             (
                 "duplicate-envelope",
-                b'{"status":"completed","status":"failed"}',
+                _sse_event(
+                    "response.completed",
+                    '{"type":"response.completed","response":'
+                    '{"object":"response","status":"completed","status":"failed"}}',
+                ),
                 "agent-protocol",
             ),
             (
                 "duplicate-result",
-                json.dumps(invalid_result).encode("utf-8"),
+                _responses_stream(invalid_result),
                 "agent-structured-response",
             ),
             (
                 "non-unicode-result",
-                json.dumps(invalid_unicode_result).encode("utf-8"),
+                _responses_stream(invalid_unicode_result),
                 "agent-structured-response",
             ),
         )
@@ -1021,7 +1642,7 @@ class AgentsProviderTests(unittest.TestCase):
         envelope = json.loads(_fixture("anthropic", "success"))
         raw_result = '{"future_business_shape":{"kept":"opaque"}}'
         envelope["content"][0]["text"] = raw_result
-        client, _, _, _ = _client([_response(json.dumps(envelope).encode("utf-8"))])
+        client, _, _, _ = _client([_response(_anthropic_stream(envelope))])
         adapter = AnthropicMessagesAdapter(http_client=client, api_key=_API_KEY)
 
         result = adapter.execute(_call(_ANTHROPIC_MODEL))

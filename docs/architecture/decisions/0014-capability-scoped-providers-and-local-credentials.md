@@ -91,8 +91,16 @@ Agents/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secr
 ```text
 sciretriever config
 sciretriever config status
-sciretriever config test <provider|llm|browser-agent|mineru>
-sciretriever config test --browser <publisher-access-key>
+sciretriever config test provider <name>
+sciretriever config test model <provider/model> [--image]
+sciretriever config test search <source>
+sciretriever config test search --all
+sciretriever config test download <source>
+sciretriever config test download --all
+sciretriever config test parse
+sciretriever config test analyze
+sciretriever config test browser model
+sciretriever config test browser site <publisher-access-key>
 sciretriever config test --all
 ```
 
@@ -107,7 +115,11 @@ Literature Sources/Access、Browser Runtime、Diagnostics/Status 与 Appearance�
 已配置、部分配置、缺失、可选缺失或 adapter 尚不支持等安全状态以及各字段是否存在，绝不
 显示、掩码显示或导出密钥值。
 
-`test` 是用户明确发起的最小只读网络操作。Provider probe 通过 ADR 0012 的 Network 准入调用官方允许的最小 endpoint；Analysis model probe 只发送固定的极小严格 schema 内容，Browser model probe 只发送合成图片与封闭 generic tool，二者都不发送用户文献或真实页面；MinerU probe 只检查 health/release/protocol/profile，不上传 PDF。`--all` 汇总已启用 Provider、Analysis、MinerU，并只在已选择 Agent controller 时加入 Browser model，一个失败不阻断其它结果。测试不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，不下载并接纳 PDF，也不保存最后结果或时间。
+`test` 是用户明确发起的 owner-scoped 最小配置诊断，TUI 与结构化 CLI 共享同一个无 Storage Probe 服务。Model Provider probe 通过 ADR 0012 的 Network 准入读取一次有界目录，只证明目录 endpoint 当前可用；具体 Model 的 Text probe 发送固定极小 strict-schema 请求，Image probe 发送一张合成图片与一个封闭 generic tool，均使用该 Model 自己的 reasoning 且不改变 Analyze/Browser 选择。Search probe 调用具体 Metadata Source 的官方最小只读 endpoint；Analyze 与 Browser Model 分别验证当前所选任务合同；MinerU 只检查 health/release/protocol/profile，不上传 PDF；Browser Site 只访问用户明确选择的 production-approved 最小目标。
+
+Probe 的人类输出使用紧凑的 `Test / Request / Result` 语义：Model/Analyze/Browser Model 必须把实际进入 wire payload 的 `model` 与本地 Provider 分行显示，不能把内部 `provider/model` reference 标成已发送 Model；结构化 details 继续同时保留 reference、Provider 与 wire Model。Agent、Provider catalog 与 MinerU 必须显示本次实际使用的无 query、无凭据 method/endpoint；失败显示一个准确的稳定原因和一个下一步，不把内部 code 当作主要解释。Agent/Network 边界只保留数值 HTTP status、闭合 access code，以及由已知结构化 `error.code/type/param` 映射的闭合类别；不保留或回显任意 Provider message、响应正文、header、Key 或原始异常。只有 404 而无更强结构化证据时，结果必须保留“Model 或 API endpoint 不存在”的歧义。
+
+Download Source readiness 依赖具体文献、资产线索和 entitlement。没有官方、安全且与文献无关的 Acquisition probe 时，`config test download` 必须返回稳定的 `acquisition-probe-unavailable`，不借用 Metadata probe，也不下载任意 PDF。`config test --all` 汇总启用的 Search Source、Download 的可见限制、Analyze、Parse，并只在已选择 Agent controller 时加入 Browser Model；它不读取 Model Provider 目录、不测试任意未选 Model、不启动 Browser Site、不下载或上传 PDF。Download 的 unavailable 项不会把其它已经执行并通过的安全 Probe 误判为失败。任何配置测试都不创建 DiscoveryRun、Literature、MetadataObservation、Asset、Report 或数据库事实，也不保存最后结果或时间。真正能力通过 `discover topic`、`complete pdf` 和 `complete content` 验证。
 
 全文测试最多证明凭据和内容服务的当前最小 readiness，不能证明任意文献 entitlement。测试错误在输出前稳定化和脱敏；请求仍受供应商限速、额度、`Retry-After`、安全 URL 和响应预算约束。测试、状态和凭据管理不读取或写入文献数据库。
 
