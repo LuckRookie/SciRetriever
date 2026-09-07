@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, NoReturn, cast
 from uuid import uuid4
 
+from sciretriever.acquisition.browser_control import BROWSER_AGENT_MAX_OUTPUT_TOKENS
 from sciretriever.agents.api import (
     AgentCallLimits,
     AgentFailure,
@@ -21,7 +22,6 @@ from sciretriever.configuration import CredentialLookup, RuntimeSecretLookup
 from sciretriever.configuration.agent_setup import resolve_task_model
 from sciretriever.model.configuration import (
     AgentProtocol,
-    BrowserController,
     Configuration,
     ModelConfig,
     ParserConnectionMode,
@@ -35,6 +35,7 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
 )
 from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.browser_control import BROWSER_OBSERVATION_MEDIA_TYPE
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import ResolverLike
 from sciretriever.parsing.ports import ParserPort
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
 
 
 _AGENT_MAX_INPUT_BYTES = 8_388_608
-_BROWSER_AGENT_MAX_OUTPUT_TOKENS = 256
+_AGENT_CONTEXT_WINDOW_TOKENS = 1_000_000
 _BROWSER_AGENT_MAX_IMAGE_BYTES = 4_194_304
 
 
@@ -139,7 +140,7 @@ def _require_browser_agent_configuration(configuration: Configuration) -> None:
     """Require the selected Browser role without changing Analysis readiness."""
 
     try:
-        _provider, browser = resolve_task_model(configuration, task="download")
+        _provider, browser = resolve_task_model(configuration, task="browser")
     except (TypeError, ValueError):
         raise BootstrapError("browser-agent-not-ready") from None
     if not browser.image:
@@ -150,7 +151,7 @@ def _required_production_configuration(configuration: Configuration) -> None:
     _require_paths_configuration(configuration)
     _require_parser_configuration(configuration)
     _require_analysis_configuration(configuration)
-    if configuration.access.browser_controller is BrowserController.AGENT:
+    if configuration.browser.enabled:
         _require_browser_agent_configuration(configuration)
 
 
@@ -188,13 +189,13 @@ def _agent_provider_limits(
     )
     output_by_role = {
         AgentRole.ANALYSIS: max(analysis_outputs),
-        AgentRole.BROWSER: _BROWSER_AGENT_MAX_OUTPUT_TOKENS,
+        AgentRole.BROWSER: BROWSER_AGENT_MAX_OUTPUT_TOKENS,
     }
     max_output_tokens = max(output_by_role[role] for role in selected_roles)
     return AgentCallLimits(
         max_input_bytes=_AGENT_MAX_INPUT_BYTES,
         max_output_tokens=max_output_tokens,
-        context_window_tokens=_AGENT_MAX_INPUT_BYTES + max_output_tokens,
+        context_window_tokens=_AGENT_CONTEXT_WINDOW_TOKENS,
     )
 
 
@@ -242,7 +243,7 @@ def _production_dependencies(
         coordinator: AccessCoordinator,
     ) -> AgentRuntime:
         required_roles = {AgentRole.ANALYSIS}
-        if configuration.access.browser_controller is BrowserController.AGENT:
+        if configuration.browser.enabled:
             required_roles.add(AgentRole.BROWSER)
         return _build_agents_runtime(
             configuration,
@@ -387,7 +388,7 @@ def _build_agents_runtime(  # noqa: C901
         resolved = {
             role: resolve_task_model(
                 configuration,
-                task="analyze" if role is AgentRole.ANALYSIS else "download",
+                task="analyze" if role is AgentRole.ANALYSIS else "browser",
             )
             for role in selected_roles
         }
@@ -432,7 +433,9 @@ def _build_agents_runtime(  # noqa: C901
                 image_input=browser and model.image,
                 tool_decision=browser,
                 supported_image_media_types=(
-                    frozenset({"image/png"}) if browser and model.image else frozenset()
+                    frozenset({BROWSER_OBSERVATION_MEDIA_TYPE})
+                    if browser and model.image
+                    else frozenset()
                 ),
                 max_image_count=1 if browser and model.image else 0,
                 max_image_bytes=_BROWSER_AGENT_MAX_IMAGE_BYTES if browser and model.image else 0,

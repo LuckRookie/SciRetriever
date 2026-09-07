@@ -455,11 +455,11 @@ class ConfigStatusPresenter:
         parsing = _mapping(payload["parsing"])
         models = _mapping(payload.get("models"))
         analyze = _mapping(payload.get("analyze"))
-        download = _mapping(payload.get("download"))
+        browser = _mapping(payload.get("browser"))
         parser_secret = _mapping(parsing["bearer_token"])
         implementation = _mapping(parsing["implementation"])
         table = Table(
-            title="Models, Analyze, Download and Parse",
+            title="Models, Analyze, Browser and Parse",
             box=box.ROUNDED,
             border_style=self.palette.border,
             expand=True,
@@ -520,17 +520,17 @@ class ConfigStatusPresenter:
             "Analyze selects one configured Model",
         )
 
-        download_model = _mapping(download.get("selected_model"))
+        browser_model = _mapping(browser.get("selected_model"))
         table.add_row(
             _layer_state(
-                "Download · Model",
-                "ready" if download.get("model_locally_ready") is True else "optional",
+                "Browser · Model",
+                "ready" if browser.get("model_locally_ready") is True else "needs setup",
                 self.palette,
             ),
-            f"model: {_shown(download.get('model'))}\n"
-            f"remote: {_shown(download_model.get('model'))} · "
-            f"reasoning {_shown(download_model.get('reasoning'))}\n"
-            f"controller: {_shown(download.get('controller'))}",
+            f"model: {_shown(browser.get('model'))}\n"
+            f"remote: {_shown(browser_model.get('model'))} · "
+            f"reasoning {_shown(browser_model.get('reasoning'))}\n"
+            "Browser always uses the generic Agent controller",
         )
 
         parser_identity = (
@@ -645,7 +645,7 @@ class ConfigStatusPresenter:
             if item.get("enabled") is True
             and _mapping(item["authorized_api"])["unsupported"] is True
         ]
-        browser = _mapping(providers["controlled_browser"])
+        browser = _mapping(payload["browser"])
         table = Table(
             title="PDF acquisition routes · attempted in order",
             box=box.ROUNDED,
@@ -664,7 +664,6 @@ class ConfigStatusPresenter:
         table.add_row("2 · Authorized API", detail)
         route_count = browser.get("production_route_count", 0)
         automatic_route_count = browser.get("automatic_route_count", 0)
-        controller = str(browser.get("controller", "rules"))
         route_word = "route" if route_count == 1 else "routes"
         if browser.get("automatic_acquisition_available") is True:
             browser_support = (
@@ -677,12 +676,11 @@ class ConfigStatusPresenter:
             )
         else:
             browser_support = "unavailable · no production routes"
-        table.add_row("3 · Controlled browser", f"{browser_support} · controller {controller}")
+        table.add_row("3 · Controlled browser", f"{browser_support} · generic Agent")
         return table
 
     def _controlled_browser(self, payload: Mapping[str, object]) -> Table:
-        providers = _mapping(payload["providers"])
-        browser = _mapping(providers["controlled_browser"])
+        browser = _mapping(payload["browser"])
         runtime = _mapping(browser["runtime"])
         profile = _mapping(browser["profile"])
         session = _mapping(browser["session"])
@@ -749,7 +747,7 @@ class ConfigStatusPresenter:
                 "available" if routes else "unavailable",
                 self.palette,
             ),
-            route_names or "none; unsupported site rules are not executable",
+            route_names or "none; the generic Browser route is not installed",
         )
         automatic_route_count = browser.get("automatic_route_count", 0)
         table.add_row(
@@ -769,20 +767,14 @@ class ConfigStatusPresenter:
             ),
             f"local cross-group concurrency cap {browser.get('local_max_concurrency')}",
         )
-        controller = str(browser.get("controller", "rules"))
-        controller_ready = browser.get("controller_ready") is True
         table.add_row(
             _layer_state(
                 "Browser controller",
-                "ready" if controller_ready else "needs setup",
+                "ready" if browser.get("model_locally_ready") is True else "needs setup",
                 self.palette,
             ),
-            f"{controller} · frozen before each job · Rules and Agent are mutually exclusive · "
-            + (
-                "no Agent role is required"
-                if browser.get("controller_required_role") is None
-                else "requires the ready Browser model role"
-            ),
+            "generic Agent · one configured image-capable Browser model · "
+            "the controller is frozen before each job",
         )
         table.add_row(
             _layer_state("Access mode", "fixed profile", self.palette),

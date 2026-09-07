@@ -47,8 +47,8 @@ from sciretriever.configuration.file_store import (
 from sciretriever.configuration.filesystem import safe_path as _safe_path
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
-    AccessConfig,
     AnalysisConfig,
+    BrowserConfig,
     BrowserProfilePresence,
     Configuration,
     ModelProvidersConfig,
@@ -87,9 +87,9 @@ _CONFIGURATION_SECTIONS: Final[frozenset[str]] = frozenset(
         "providers",
         "models",
         "analyze",
+        "browser",
         "execution",
         "library",
-        "download",
     }
 )
 
@@ -105,8 +105,8 @@ def _parse_configuration_payload(raw: bytes) -> Configuration:
         # not rendered, but use a stable boundary error nevertheless.
         del error
         _fail("configuration value is invalid")
-    if value.access.browser_policy_overrides:
-        configured_browser_group_policies(value.access)
+    if value.browser.policy_overrides:
+        configured_browser_group_policies(value.browser)
     return value
 
 
@@ -188,7 +188,7 @@ def configuration_diff(
     before: Configuration,
     after: Configuration,
     *,
-    sections: tuple[str, ...] = ("providers", "models", "analyze", "parsing"),
+    sections: tuple[str, ...] = ("providers", "models", "analyze", "browser", "parsing"),
 ) -> tuple[ConfigurationChange, ...]:
     """Return a stable, non-secret ordinary-configuration field diff."""
 
@@ -196,14 +196,14 @@ def configuration_diff(
         _fail("configuration value is invalid")
     if not isinstance(sections, tuple) or any(
         type(section) is not str
-        or section not in {"sources", "download", "providers", "models", "analyze", "parsing"}
+        or section not in {"sources", "providers", "models", "analyze", "browser", "parsing"}
         for section in sections
     ):
         _fail("configuration value is invalid")
     before_payload = before.model_dump(mode="json")
     after_payload = after.model_dump(mode="json")
     changes: list[ConfigurationChange] = []
-    field_by_section = {"download": "access", "analyze": "analysis"}
+    field_by_section = {"analyze": "analysis"}
     for section in sections:
         field = field_by_section.get(section, section)
         old = before_payload[field]
@@ -474,7 +474,7 @@ def update_configuration_sections(
     models: ModelsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
-    access: AccessConfig | None = None,
+    browser: BrowserConfig | None = None,
     home: str | Path | None = None,
     failpoint: Callable[[str], None] | None = None,
 ) -> Configuration:
@@ -487,7 +487,7 @@ def update_configuration_sections(
         and models is None
         and analysis is None
         and parsing is None
-        and access is None
+        and browser is None
     ):
         _fail("configuration value is invalid")
     if sources is not None and not isinstance(sources, SourcesConfig):
@@ -500,7 +500,7 @@ def update_configuration_sections(
         _fail("configuration value is invalid")
     if parsing is not None and not isinstance(parsing, ParsingConfig):
         _fail("configuration value is invalid")
-    if access is not None and not isinstance(access, AccessConfig):
+    if browser is not None and not isinstance(browser, BrowserConfig):
         _fail("configuration value is invalid")
     payload, expected, configuration = _configuration_update_payload(
         selected,
@@ -509,14 +509,14 @@ def update_configuration_sections(
         analysis=analysis,
         models=models,
         parsing=parsing,
-        access=access,
+        browser=browser,
     )
     _publish_configuration(selected, payload, expected, failpoint)
     return configuration
 
 
 def configure_browser_access_profile(
-    access: AccessConfig,
+    browser: BrowserConfig,
     *,
     home: str | Path | None = None,
     cancel_event: BrowserProfileCancellation | None = None,
@@ -531,18 +531,18 @@ def configure_browser_access_profile(
     """
 
     selected = configuration_path(home=home)
-    if not isinstance(access, AccessConfig):
+    if not isinstance(browser, BrowserConfig):
         _fail("configuration value is invalid")
-    if not access.browser_enabled or access.browser_profile is None:
+    if not browser.enabled or browser.profile is None:
         _fail("enabled Browser access requires a selected profile")
     if cancel_event is not None and not isinstance(cancel_event, BrowserProfileCancellation):
         _fail("configuration value is invalid")
     _check_browser_profile_cancel(cancel_event)
     payload, expected, configuration = _configuration_update_payload(
         selected,
-        access=access,
+        browser=browser,
     )
-    presence = browser_profile_status(access.browser_profile, home=home).presence
+    presence = browser_profile_status(browser.profile, home=home).presence
     if presence is BrowserProfilePresence.ATTENTION:
         _fail("browser profile requires operator attention")
     created = presence is BrowserProfilePresence.MISSING
@@ -550,7 +550,7 @@ def configure_browser_access_profile(
     profile_initialized = False
     try:
         initialize_browser_profile(
-            access.browser_profile,
+            browser.profile,
             home=home,
             cancel_event=cancel_event,
         )
@@ -564,7 +564,7 @@ def configure_browser_access_profile(
     except BaseException:
         if created and profile_initialized:
             try:
-                remove_browser_profile(access.browser_profile, home=home)
+                remove_browser_profile(browser.profile, home=home)
             except ConfigurationError:
                 _fail("browser access configuration rollback failed")
         raise
@@ -584,7 +584,7 @@ def _configuration_update_payload(
     models: ModelsConfig | None = None,
     analysis: AnalysisConfig | None = None,
     parsing: ParsingConfig | None = None,
-    access: AccessConfig | None = None,
+    browser: BrowserConfig | None = None,
 ) -> tuple[bytes, os.stat_result | None, Configuration]:
     raw, expected = _read_private_configuration_path(path, missing_ok=True)
     document = _configuration_document(raw)
@@ -598,8 +598,8 @@ def _configuration_update_payload(
         _replace_document_section(document, "analyze", analysis)
     if parsing is not None:
         _replace_document_section(document, "parsing", parsing)
-    if access is not None:
-        _replace_document_section(document, "download", access)
+    if browser is not None:
+        _replace_document_section(document, "browser", browser)
     try:
         payload = tomlkit.dumps(document).encode("utf-8")
     except (TOMLKitError, UnicodeEncodeError, ValueError, TypeError):

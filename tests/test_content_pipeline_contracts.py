@@ -343,7 +343,7 @@ class _FakeLLM:
 def _llm_failure() -> AgentFailure:
     return AgentFailure(
         StableFailure(
-            code="offline-llm-failure",
+            code="agent-timeout",
             reason="The offline fake language-model call failed.",
             action="Retry with a healthy fake provider.",
             retryable=True,
@@ -1131,7 +1131,7 @@ class ContentPipelineContractTests(unittest.TestCase):
         with self.assertRaises(ReferenceLookupFailure) as raised:
             analysis_api.extract_reference_lookups(before_facts.current_content.references)
 
-        self.assertEqual(raised.exception.failure.code, "analysis-reference-llm")
+        self.assertEqual(raised.exception.failure.code, "agent-timeout")
         self.assertEqual([_request_stage(call) for call in llm.calls], ["reference"])
         self.assertEqual(environment.authoritative_snapshot(), before_snapshot)
         self.assertEqual(

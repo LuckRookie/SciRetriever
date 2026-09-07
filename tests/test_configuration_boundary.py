@@ -33,11 +33,10 @@ from sciretriever.configuration import (
 )
 from sciretriever.configuration.file_store import _MAX_CREDENTIALS_BYTES
 from sciretriever.model.configuration import (
-    AccessConfig,
     AgentProtocol,
     AgentReasoningEffort,
     AnalysisConfig,
-    BrowserController,
+    BrowserConfig,
     BrowserPolicyOverrideConfig,
     Configuration,
     CoreCredentialService,
@@ -141,85 +140,81 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     f"stream = {value!r}\n"
                 )
 
-    def test_browser_controller_defaults_to_rules_and_rejects_unknown_values(self) -> None:
-        self.assertIs(Configuration().access.browser_controller, BrowserController.RULES)
-        self.assertIs(
-            parse_configuration(
-                '[download]\nbrowser_controller = "agent"\n'
-            ).access.browser_controller,
-            BrowserController.AGENT,
-        )
+    def test_browser_configuration_is_independent_and_rejects_legacy_keys(self) -> None:
+        self.assertEqual(Configuration().browser, BrowserConfig())
         self.assertEqual(
-            set(AccessConfig.model_fields),
+            set(BrowserConfig.model_fields),
             {
-                "browser_enabled",
                 "model",
-                "browser_profile",
-                "browser_controller",
-                "browser_max_concurrency",
-                "browser_policy_overrides",
+                "enabled",
+                "profile",
+                "max_concurrency",
+                "policy_overrides",
             },
         )
-        for value in ("fallback", "", 1, True):
-            with self.subTest(value=value), self.assertRaises(ConfigurationError):
-                parse_configuration(f"[download]\nbrowser_controller = {value!r}\n")
+        legacy = (
+            '[download]\nbrowser_controller = "agent"\n',
+            "[download]\nbrowser_enabled = true\n",
+            '[download]\nbrowser_profile = "fixture-profile"\n',
+            "[download]\nbrowser_max_concurrency = 2\n",
+            "[download]\nbrowser_policy_overrides = []\n",
+            '[browser]\ncontroller = "agent"\n',
+        )
+        for payload in legacy:
+            with self.subTest(payload=payload), self.assertRaises(ConfigurationError):
+                parse_configuration(payload)
 
     def test_browser_cross_publisher_concurrency_is_unbounded_above_one(self) -> None:
-        self.assertEqual(Configuration().access.browser_max_concurrency, 5)
+        self.assertEqual(Configuration().browser.max_concurrency, 5)
         self.assertEqual(
-            parse_configuration(
-                "[download]\nbrowser_max_concurrency = 2\n"
-            ).access.browser_max_concurrency,
+            parse_configuration("[browser]\nmax_concurrency = 2\n").browser.max_concurrency,
             2,
         )
         self.assertEqual(
-            parse_configuration(
-                "[download]\nbrowser_max_concurrency = 128\n"
-            ).access.browser_max_concurrency,
+            parse_configuration("[browser]\nmax_concurrency = 128\n").browser.max_concurrency,
             128,
         )
 
         for value in (1, 0, -1, True, 2.5):
             with self.subTest(value=value), self.assertRaises(ValidationError):
-                AccessConfig(browser_max_concurrency=value)  # type: ignore[arg-type]
+                BrowserConfig(max_concurrency=value)  # type: ignore[arg-type]
 
     def test_browser_access_selects_an_opaque_profile_without_session_material(self) -> None:
         selected = parse_configuration(
             """
-            [download]
-            browser_enabled = true
-            browser_profile = "fixture-profile"
-            browser_max_concurrency = 3
+            [browser]
+            enabled = true
+            profile = "fixture-profile"
+            max_concurrency = 3
             """
         )
-        self.assertTrue(selected.access.browser_enabled)
-        self.assertEqual(selected.access.browser_max_concurrency, 3)
-        self.assertEqual(selected.access.browser_policy_overrides, ())
+        self.assertTrue(selected.browser.enabled)
+        self.assertEqual(selected.browser.max_concurrency, 3)
+        self.assertEqual(selected.browser.policy_overrides, ())
         self.assertEqual(
-            set(AccessConfig.model_fields),
+            set(BrowserConfig.model_fields),
             {
-                "browser_enabled",
                 "model",
-                "browser_profile",
-                "browser_controller",
-                "browser_max_concurrency",
-                "browser_policy_overrides",
+                "enabled",
+                "profile",
+                "max_concurrency",
+                "policy_overrides",
             },
         )
-        rendered = selected.access.model_dump_json()
+        rendered = selected.browser.model_dump_json()
         for forbidden in ("cookie", "local_storage", "profile_path", SENTINEL):
             self.assertNotIn(forbidden.casefold(), rendered.casefold())
 
         invalid = (
-            '[download]\nbrowser_profile = "/tmp/browser-profile"\n',
-            '[download]\nbrowser_profile = "../browser-profile"\n',
-            '[download]\nbrowser_profile = "https://publisher.example"\n',
-            '[download]\nbrowser_profile = "publisher-token"\n',
-            '[download]\nbrowser_profile = "a50e8400-e29b-41d4-a716-446655440000"\n',
-            "[download]\nbrowser_max_concurrency = 1\n",
-            "[download]\nbrowser_max_concurrency = 0\n",
-            f'[download]\ncookie = "{SENTINEL}"\n',
-            '[download]\nbrowser_profile_path = "/tmp/profile"\n',
+            '[browser]\nprofile = "/tmp/browser-profile"\n',
+            '[browser]\nprofile = "../browser-profile"\n',
+            '[browser]\nprofile = "https://publisher.example"\n',
+            '[browser]\nprofile = "publisher-token"\n',
+            '[browser]\nprofile = "a50e8400-e29b-41d4-a716-446655440000"\n',
+            "[browser]\nmax_concurrency = 1\n",
+            "[browser]\nmax_concurrency = 0\n",
+            f'[browser]\ncookie = "{SENTINEL}"\n',
+            '[browser]\nprofile_path = "/tmp/profile"\n',
         )
         for payload in invalid:
             with self.subTest(payload=payload):
@@ -227,28 +222,26 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                     parse_configuration(payload)
                 self.assertNotIn(SENTINEL, str(caught.exception))
 
-    def test_all_production_browser_routes_are_profile_eligible_without_local_grants(
+    def test_all_production_browser_probe_targets_are_eligible_without_local_grants(
         self,
     ) -> None:
-        selected = parse_configuration(
-            '[download]\nbrowser_enabled = true\nbrowser_profile = "fixture-profile"\n'
-        )
+        selected = parse_configuration('[browser]\nenabled = true\nprofile = "fixture-profile"\n')
         self.assertEqual(
-            len(configuration.eligible_production_browser_access_keys(selected.access)),
+            len(configuration.eligible_production_browser_access_keys(selected.browser)),
             9,
         )
         with self.assertRaises(ConfigurationError) as caught:
             parse_configuration(
                 '[download]\nbrowser_machine_access_grants = ["acs-publications"]\n'
             )
-        self.assertEqual(str(caught.exception), "configuration value is invalid")
+        self.assertEqual(str(caught.exception), "configuration section is unknown")
 
     def test_browser_policy_override_shape_rejects_unknown_duplicate_and_unbounded_values(
         self,
     ) -> None:
         unknown = (
-            "[download]\n"
-            "browser_policy_overrides = ["
+            "[browser]\n"
+            "policy_overrides = ["
             '{ rate_limit_group = "unknown-group", minimum_start_interval = 30.0 }'
             "]\n"
         )
@@ -257,54 +250,54 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "browser policy group is unknown")
 
         invalid = (
-            ('[download]\nbrowser_policy_overrides = [{ rate_limit_group = "fixture-group" }]\n'),
+            ('[browser]\npolicy_overrides = [{ rate_limit_group = "fixture-group" }]\n'),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", minimum_start_interval = 10.0 }, '
                 '{ rate_limit_group = "fixture-group", failure_cooldown = 10.0 }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", max_concurrency = 2 }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", minimum_start_interval = -1.0 }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", window_seconds = 60.0 }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", maximum_starts_per_window = 1 }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", window_seconds = inf, '
                 "maximum_starts_per_window = 1 }"
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", rate_limit_cooldown = nan }'
                 "]\n"
             ),
             (
-                "[download]\n"
-                "browser_policy_overrides = ["
+                "[browser]\n"
+                "policy_overrides = ["
                 '{ rate_limit_group = "fixture-group", runtime_failure_threshold = 0 }'
                 "]\n"
             ),
@@ -332,8 +325,8 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             rate_limit_cooldown=90.0,
             runtime_failure_threshold=2,
         )
-        access = AccessConfig(
-            browser_policy_overrides=(
+        access = BrowserConfig(
+            policy_overrides=(
                 BrowserPolicyOverrideConfig(
                     rate_limit_group="fixture-publisher",
                     max_concurrency=1,
@@ -403,7 +396,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             with self.subTest(override=override):
                 with self.assertRaises(ConfigurationError) as caught:
                     tightened_browser_group_policies(
-                        AccessConfig(browser_policy_overrides=(override,)),
+                        BrowserConfig(policy_overrides=(override,)),
                         {baseline.rate_limit_group: baseline},
                     )
                 self.assertEqual(
@@ -419,8 +412,8 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             runtime_failure_threshold=3,
         )
         introduced = tightened_browser_group_policies(
-            AccessConfig(
-                browser_policy_overrides=(
+            BrowserConfig(
+                policy_overrides=(
                     BrowserPolicyOverrideConfig(
                         rate_limit_group=no_window.rate_limit_group,
                         maximum_starts_per_window=2,
@@ -538,7 +531,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
             [analyze]
             [execution]
             [library]
-            [download]
+            [browser]
             """
         )
         self.assertIsInstance(configuration_model, Configuration)
@@ -554,7 +547,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                 "analysis",
                 "execution",
                 "library",
-                "access",
+                "browser",
             },
         )
         self.assertNotIn("credentials", Configuration.model_fields)
@@ -632,7 +625,7 @@ class ConfigurationModelBoundaryTests(unittest.TestCase):
                         ),
                     )
                 ),
-                download=AccessConfig(model="fixture-provider/fixture-model"),
+                browser=BrowserConfig(model="fixture-provider/fixture-model"),
             )
 
     def test_agent_model_identity_fails_before_readiness_or_runtime(self) -> None:

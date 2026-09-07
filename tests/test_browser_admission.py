@@ -13,6 +13,7 @@ from sciretriever.acquisition.browser_admission import (
     BrowserGroupReadiness,
 )
 from sciretriever.acquisition.planning import RouteReadiness
+from sciretriever.model.report import StableFailure
 from sciretriever.network.browser_scheduler import (
     BrowserCircuitReason,
     BrowserGroupPolicy,
@@ -23,21 +24,21 @@ from sciretriever.network.browser_scheduler import (
 def _candidate(
     work_key: str = "paper-1",
     *,
-    group: str = "wiley",
+    group: str = "browser-generic",
     readiness: RouteReadiness = RouteReadiness.READY,
-    resolution_confirmed: bool = True,
+    failure: StableFailure | None = None,
 ) -> BrowserAdmissionCandidate:
     return BrowserAdmissionCandidate(
         work_key=work_key,
-        route_key="browser:publisher",
+        route_key="browser:generic",
         rate_limit_group=group,
         readiness=readiness,
-        resolution_confirmed=resolution_confirmed,
+        failure=failure,
     )
 
 
 def _group(
-    group: str = "wiley",
+    group: str = "browser-generic",
     *,
     readiness: BrowserGroupReadiness = BrowserGroupReadiness.READY,
     interval: float = 12.0,
@@ -137,10 +138,36 @@ class BrowserAdmissionTests(unittest.TestCase):
                     self.fail("failure outcome did not carry a stable failure")
                 self.assertEqual(failure.code, code)
 
-    def test_unconfirmed_resolution_and_unsupported_route_are_rejected(self) -> None:
+    def test_route_failure_is_preserved_by_browser_admission(self) -> None:
+        runtime_failure = StableFailure(
+            code="browser-cloak-binary-unavailable",
+            reason="The pinned CloakBrowser binary is not present in the local runtime cache.",
+            action="Install the pinned CloakBrowser binary from the configuration center.",
+            retryable=False,
+        )
+
+        decision = (
+            _controller(_group())
+            .evaluate(
+                (
+                    _candidate(
+                        readiness=RouteReadiness.UNCONFIGURED,
+                        failure=runtime_failure,
+                    ),
+                )
+            )
+            .decisions[0]
+        )
+
+        self.assertIs(
+            decision.disposition,
+            BrowserAdmissionDisposition.ACTION_REQUIRED,
+        )
+        self.assertEqual(decision.failure, runtime_failure)
+
+    def test_disabled_and_unsupported_routes_are_rejected(self) -> None:
         controller = _controller(_group())
         for candidate in (
-            _candidate(resolution_confirmed=False),
             _candidate(readiness=RouteReadiness.DISABLED),
             _candidate(readiness=RouteReadiness.UNSUPPORTED),
         ):
@@ -191,7 +218,7 @@ class BrowserAdmissionTests(unittest.TestCase):
     def test_dynamic_cooldown_and_circuit_override_ready_group_in_summary(self) -> None:
         controller = _controller(_group(earliest=3.0))
         blocked = BrowserGroupRuntimeSnapshot(
-            rate_limit_group="wiley",
+            rate_limit_group="browser-generic",
             policy_revision="fixture-v1",
             observed_at=10.0,
             blocked_until=25.0,
@@ -209,7 +236,7 @@ class BrowserAdmissionTests(unittest.TestCase):
         self.assertEqual(deferred.summary.groups[0].deferred_count, 1)
 
         circuit = BrowserGroupRuntimeSnapshot(
-            rate_limit_group="wiley",
+            rate_limit_group="browser-generic",
             policy_revision="fixture-v1",
             observed_at=10.0,
             blocked_until=25.0,
@@ -249,25 +276,24 @@ class BrowserAdmissionTests(unittest.TestCase):
             "acquisition-browser-group-unavailable",
         )
 
-    def test_summary_is_sorted_deterministic_and_redacted(self) -> None:
+    def test_generic_group_summary_is_deterministic_and_redacted(self) -> None:
         result = _controller(
-            _group("wiley", interval=10.0, earliest=5.0),
-            _group("elsevier", interval=30.0, earliest=7.0),
+            _group(interval=10.0, earliest=5.0),
         ).evaluate(
             (
-                _candidate("paper-cookie-token-profile", group="wiley"),
-                _candidate("paper-2", group="elsevier"),
-                _candidate("paper-3", group="wiley"),
+                _candidate("paper-cookie-token-profile"),
+                _candidate("paper-2"),
+                _candidate("paper-3"),
             )
         )
 
         self.assertEqual(
             tuple(group.rate_limit_group for group in result.summary.groups),
-            ("elsevier", "wiley"),
+            ("browser-generic",),
         )
         self.assertEqual(
-            result.summary.groups[1].conservative_minimum_duration_seconds,
-            15.0,
+            result.summary.groups[0].conservative_minimum_duration_seconds,
+            25.0,
         )
         rendered_json = json.dumps(result.summary.to_json_value(), sort_keys=True)
         rendered_text = result.summary.render_text()
@@ -277,7 +303,7 @@ class BrowserAdmissionTests(unittest.TestCase):
         )
         for private_value in (
             "paper-cookie-token-profile",
-            "browser:publisher",
+            "browser:generic",
             "https://publisher.invalid/signed.pdf",
             "session-cookie-value",
             "css-selector",

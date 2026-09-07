@@ -19,8 +19,9 @@ from sciretriever.acquisition.access_profiles import (
 from sciretriever.acquisition.ports import AcquisitionRequest
 from sciretriever.acquisition.routing import AcquisitionEvidence
 from sciretriever.model.access import has_sensitive_query_parameter
-from sciretriever.model.acquisition import AcquisitionPath
+from sciretriever.model.acquisition import AcquisitionPath, AssetHintKind
 from sciretriever.model.literature import Identifier
+from sciretriever.model.report import StableFailure
 
 _CONTROL_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
 _STABLE_NAME: Final[re.Pattern[str]] = re.compile(
@@ -450,6 +451,10 @@ class RouteSpec:
     required_identifier_namespaces: tuple[str, ...] = ()
     required_provider_record_names: tuple[str, ...] = ()
     requires_any_identifier: bool = False
+    # A route may retain the precise reason it is not executable.  Keeping the
+    # failure on the immutable route spec lets planning/admission/reporting
+    # preserve bootstrap diagnostics without probing or re-deriving them.
+    failure: StableFailure | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "route_key", _route_key(self.route_key))
@@ -459,6 +464,10 @@ class RouteSpec:
             raise TypeError("capability must be RouteCapability")
         if not isinstance(self.readiness, RouteReadiness):
             raise TypeError("readiness must be RouteReadiness")
+        if self.failure is not None and not isinstance(self.failure, StableFailure):
+            raise TypeError("failure must be StableFailure or None")
+        if self.readiness is RouteReadiness.READY and self.failure is not None:
+            raise ValueError("a ready route cannot carry a failure")
         if self.profile_access_key is not None:
             object.__setattr__(
                 self,
@@ -585,8 +594,6 @@ class AcquisitionPlanBuilder:
                 if profile is None:
                     raise ValueError("resolved profile is absent from the catalog")
                 _validate_profile_route(profile, route)
-            elif route.tier is AcquisitionPath.CONTROLLED_BROWSER:
-                raise ValueError("generic Browser routes are forbidden")
             selected.append((index, route))
         routes = tuple(
             route
@@ -614,6 +621,14 @@ class AcquisitionPlanBuilder:
                         route.required_identifier_namespaces,
                         route.required_provider_record_names,
                         route.requires_any_identifier,
+                        None
+                        if route.failure is None
+                        else (
+                            route.failure.code,
+                            route.failure.reason,
+                            route.failure.action,
+                            route.failure.retryable,
+                        ),
                     )
                     for route in routes
                 ),
@@ -806,12 +821,18 @@ class ProgressiveAcquisitionPlanner:
         request: AcquisitionRequest,
         resolution: PublisherAccessResolution,
     ) -> DoiResolutionState:
-        needs_provider_resolution = any(
-            route.profile_access_key is not None
+        needs_landing_resolution = any(
+            (
+                route.profile_access_key is not None
+                or (
+                    route.tier is AcquisitionPath.CONTROLLED_BROWSER
+                    and route.capability is RouteCapability.BROWSER_PDF
+                )
+            )
             and route.readiness not in {RouteReadiness.DISABLED, RouteReadiness.UNSUPPORTED}
             for route in self._route_specs
         )
-        if resolution.is_strong or not needs_provider_resolution or _single_doi(request) is None:
+        if resolution.is_strong or not needs_landing_resolution or _single_doi(request) is None:
             return DoiResolutionState.NOT_NEEDED
         return DoiResolutionState.ELIGIBLE
 
@@ -849,14 +870,22 @@ def _validate_profile_route(profile: PublisherAccessProfile, route: RouteSpec) -
     elif route.tier is AcquisitionPath.AUTHORIZED_PROVIDER_API:
         allowed = profile.api_route_keys
     else:
-        allowed = () if profile.browser_route_key is None else (profile.browser_route_key,)
-        if route.risk_group != profile.browser_rate_limit_group:
-            raise ValueError("Browser route risk group disagrees with its profile")
+        raise ValueError("generic Browser routes cannot declare a Publisher access profile")
     if route.route_key not in allowed:
         raise ValueError("route is not declared by its access profile")
 
 
 def _route_applies(route: RouteSpec, evidence: AcquisitionEvidence) -> bool:
+    if route.tier is AcquisitionPath.CONTROLLED_BROWSER and route.profile_access_key is None:
+        has_browser_start = any(
+            observed.hint.kind in {AssetHintKind.LANDING_PAGE, AssetHintKind.DIRECT_FILE}
+            for observed in evidence.asset_hints
+        )
+        has_resolvable_doi = evidence.resolved_landing_origin is not None and any(
+            identifier.namespace == "doi" for identifier in evidence.identifiers
+        )
+        if not has_browser_start and not has_resolvable_doi:
+            return False
     if route.requires_any_identifier and not evidence.identifiers:
         return False
     identifier_match = any(

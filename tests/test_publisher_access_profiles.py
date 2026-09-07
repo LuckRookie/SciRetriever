@@ -16,7 +16,6 @@ from sciretriever.acquisition.access_profiles import (
     PublisherAccessProfileCatalog,
     normalize_profile_origin,
 )
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 
 def _profile(
@@ -24,7 +23,6 @@ def _profile(
     access_key: str = "wiley-online-library",
     origin: str = "https://onlinelibrary.wiley.com",
     policy_revision: str = "2026-08-15",
-    rule_revision: int = 1,
     status: ProfileProductionStatus = ProfileProductionStatus.FIXTURE_VERIFIED,
     evidence: PolicyEvidence = PolicyEvidence.PROJECT_CONSERVATIVE,
 ) -> PublisherAccessProfile:
@@ -39,12 +37,7 @@ def _profile(
         weak_publisher_names=(access_key,),
         public_route_keys=(f"public:{access_key}",),
         api_route_keys=(f"api:{access_key}",),
-        browser_route_key=f"browser:{access_key}",
-        browser_allowed_origins=(origin,),
-        browser_rate_limit_group=access_key,
-        browser_session_key=access_key,
-        browser_rule_id=access_key,
-        browser_rule_revision=rule_revision,
+        browser_probe_enabled=True,
         policy_evidence=evidence,
         policy_revision=policy_revision,
         production_status=status,
@@ -58,17 +51,6 @@ def _profile(
             evidence_revision=f"{access_key}-fixture-v1",
             notes_reference=f"docs/notes/providers/{access_key}.md",
             fixture_reference=f"tests/fixtures/acquisition/profiles/{access_key}.json",
-        ),
-        browser_policy=BrowserGroupPolicy(
-            rate_limit_group=access_key,
-            policy_revision=policy_revision,
-            minimum_start_interval=10.0,
-            rate_limit_cooldown=60.0,
-            runtime_failure_threshold=3,
-            maximum_starts_per_window=4,
-            window_seconds=120.0,
-            cooldown_after_completion=2.0,
-            failure_cooldown=30.0,
         ),
     )
 
@@ -117,48 +99,22 @@ class PublisherAccessProfileTests(unittest.TestCase):
     def test_profile_is_frozen_hashable_deterministic_and_secret_free(self) -> None:
         first = _profile()
         second = _profile()
-        revised = _profile(rule_revision=2)
-        first_policy = first.browser_policy
-        self.assertIsNotNone(first_policy)
-        assert first_policy is not None
-        revised_policy = dataclasses.replace(
-            first,
-            browser_policy=dataclasses.replace(
-                first_policy,
-                minimum_start_interval=20.0,
-            ),
-        )
+        revised = _profile(policy_revision="2026-08-16")
+        without_probe = dataclasses.replace(first, browser_probe_enabled=False)
         self.assertEqual(first, second)
         self.assertEqual(first.revision_hash, second.revision_hash)
         self.assertNotEqual(first.revision_hash, revised.revision_hash)
-        self.assertNotEqual(first.revision_hash, revised_policy.revision_hash)
+        self.assertNotEqual(first.revision_hash, without_probe.revision_hash)
         self.assertEqual(len({first, second}), 1)
         self.assertNotIn("token", repr(first).casefold())
         with self.assertRaises(dataclasses.FrozenInstanceError):
             first.access_key = "changed"  # type: ignore[misc]
 
-    def test_browser_profile_shape_and_production_evidence_fail_closed(self) -> None:
+    def test_browser_probe_shape_and_production_evidence_fail_closed(self) -> None:
+        with self.assertRaises(TypeError):
+            dataclasses.replace(_profile(), browser_probe_enabled="yes")  # type: ignore[arg-type]
         with self.assertRaises(ValueError):
-            dataclasses.replace(_profile(), browser_session_key=None)
-        with self.assertRaises(ValueError):
-            dataclasses.replace(_profile(), browser_route_key=None)
-        with self.assertRaises(ValueError):
-            dataclasses.replace(_profile(), browser_policy=None)
-        with self.assertRaises(ValueError):
-            dataclasses.replace(_profile(), browser_rule_id=None)
-        with self.assertRaises(ValueError):
-            dataclasses.replace(_profile(), browser_rule_revision=0)
-        with self.assertRaises(ValueError):
-            dataclasses.replace(
-                _profile(),
-                browser_policy=BrowserGroupPolicy(
-                    rate_limit_group="another-provider",
-                    policy_revision="2026-08-15",
-                    minimum_start_interval=10.0,
-                    rate_limit_cooldown=60.0,
-                    runtime_failure_threshold=3,
-                ),
-            )
+            dataclasses.replace(_profile(), landing_origins=())
         with self.assertRaises(ValueError):
             _profile(
                 status=ProfileProductionStatus.PRODUCTION_READY,
@@ -173,19 +129,20 @@ class PublisherAccessProfileTests(unittest.TestCase):
             "browser_machine_access_grant_required",
             {field.name for field in dataclasses.fields(production)},
         )
-        with self.assertRaises(ValueError):
-            dataclasses.replace(
-                production,
-                browser_policy=BrowserGroupPolicy(
-                    rate_limit_group="wiley-online-library",
-                    policy_revision="2026-08-15",
-                    minimum_start_interval=0.0,
-                    rate_limit_cooldown=60.0,
-                    runtime_failure_threshold=3,
-                ),
-            )
+        fields = {field.name for field in dataclasses.fields(production)}
+        self.assertNotIn("browser_route_key", fields)
+        self.assertNotIn("browser_allowed_origins", fields)
+        self.assertNotIn("browser_policy", fields)
         with self.assertRaises(ValueError):
             _profile(status=ProfileProductionStatus.UNSUPPORTED)
+        unsupported = dataclasses.replace(
+            _profile(),
+            browser_probe_enabled=False,
+            public_route_keys=(),
+            api_route_keys=(),
+            production_status=ProfileProductionStatus.UNSUPPORTED,
+        )
+        self.assertIs(unsupported.production_status, ProfileProductionStatus.UNSUPPORTED)
 
     def test_evidence_package_and_verification_states_are_closed(self) -> None:
         self.assertEqual(

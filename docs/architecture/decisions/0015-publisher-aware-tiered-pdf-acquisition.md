@@ -5,10 +5,14 @@
 - Last amended: 2026-08-26
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
-- Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
+- Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Network 技术文档](../technical/network.md)、[Entry 技术文档](../technical/entry.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
+
+> **2026-09-06 修订：** ADR 0023 删除了下文的 Publisher-specific Browser route/rule、
+> risk/session group 与 Rules/Agent 二选一。仍有效的是三级风险升级、一个 operator-managed
+> Profile、Network 安全边界和 operation-local 失败语义；当前 Browser 设计以 ADR 0023 为准。
 
 SciRetriever 面向用户指定领域批量补全文献。公开仓储和官方 API 通常有明确的批量访问合同与相对宽松的并发/额度；Browser 页面流程则面向交互式访问，成本更高，也更容易触发 challenge、限流或 IP 限制。因此现有“公开来源、授权 Provider API、受控 Browser”三级顺序是风险控制边界，不能因为 Browser 能处理出版社页面就改成默认 Browser-first。
 
@@ -152,13 +156,14 @@ Publisher 请求由 Browser 原生完成 TLS、HTTP、Cookie、redirect、页面
 
 `PublisherAccessProfile` 必须在每次 navigation、popup、viewer、response 和 download 的可观察边界实施封闭 origin/target guard，并同时通过 Network 的通用 URL、DNS、redirect、credential forwarding、host admission、单次 timeout 和单项字节上限。host admission 的所有权单位是“当前文章访问到的 hostname”：第一次准入时取得实际 permit，同篇文章后续已批准请求复用，直到整篇清理后统一释放；其它 API/Browser 流程仍不能并发抢占该 host。它不能退化成每个 CSS/JS 都在 Playwright 单一事件线程中重新等待 permit，否则第二个 route callback 会阻止第一个 response event 派发而使页面自锁。规则明确允许的同源或批准 origin 页面子资源可以执行；未批准的第三方非关键子资源在 DNS 前丢弃而不拖垮正文流程，顶层 navigation、popup 和 PDF capture 仍 fail closed。页面脚本触发的显式 request 重新进入 route 审查，未暴露 route 的 native redirect 只能使用上一段规定的封闭关联。未知站点没有 generic arbitrary-site Browser fallback。
 
-Controlled Browser 作业开始前从普通配置冻结一个 controller，整项作业不再切换：
-
-- `rules` 只执行 `RuleBrowserController`。它可以先检查初始 capture 和页面状态，再从当前 DOM 的 citation metadata、正文/PDF 链接和 iframe/embed/object 中做通用 PDF 发现，并执行 Provider 专属静态动作；
-- `agent` 只执行 `AgentBrowserController`。它从第一次统一 `BrowserObservation` 起选择封闭动作，不先执行上述通用 locator 或 Provider 确定性点击规则；
-- miss、timeout、Challenge 或其它失败都不会令一个 controller fallback 到另一个 controller。
-
-两种 controller 共享同一 `PublisherAccessProfile`、CloakBrowser/Profile、Publisher permit、Network guard、页面 capture 与 PDF 验收。每个单次点击、navigation、capture settle 或 wait 都有客观 action timeout；不存在整篇 Browser 作业 deadline、固定动作步数、累计 token/image 或重复动作次数预算。Rules catalog 可以为自己的有限确定性候选声明静态顺序，但不能把正常未命中伪装成 runtime failure。补充材料、appendix、supporting information 和已知错文 locator 在规则或 capture 边界排除。短期签名 query 只保留在当前 Browser operation 内并交给 Browser 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除 query 的 locator。
+ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserController`。它从第一次统一
+`BrowserObservation` 起选择封闭动作；不存在确定性规则 controller、Publisher selector/locator 程序
+或失败 fallback。controller 与 CloakBrowser/Profile、Network guard、页面 capture 和 PDF 验收协作。
+每个单次点击、navigation、capture settle 或 wait 都有客观 action timeout，并另设不可由普通用户配置的
+32 次模型 decision safety fuse；不存在累计 token/image 业务预算。补充材料、appendix、supporting
+information 和错文由 Acquisition 的统一 PDF 归属验收排除。短期签名 query 只保留在当前 Browser
+operation 内并交给 Browser 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除
+query 的 locator。
 
 Browser 可以从受控 download event、PDF response、允许的 popup/viewer 或已核实官方 locator 交付 `TemporaryPdf`。顶层 PDF 由 Chrome 的 PDF 下载偏好和 native download manager 处理；Network 仍以对应已审核 request lease 关联下载并执行单项字节上限。正文与 supplementary material 必须按稳定文章 ID、origin 和 Profile 规则区分；下载事件、扩展名或媒体类型仍不能替代统一 PDF reader/页面树检查。
 
@@ -168,7 +173,7 @@ Browser 可以从受控 download event、PDF response、允许的 popup/viewer �
 
 以下状态不得通过自动切换 Browser 制造替代流量：timeout、临时传输或服务失败、`429`、有效 `Retry-After`、quota exhausted、未到 reset boundary。它们形成延期或稳定失败，并更新共享 scope。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
 
-Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。Challenge 只是统一 Observation 的 `page_state=CHALLENGE`，不是文章默认终态，也不拥有 interaction-required/active/exhausted 生命周期、专属 target、controller 或预算。Rules controller 只能执行已审查规则；Agent controller 使用与普通页面相同的六种封闭动作。页面自动或经动作清除 Challenge 后继续 capture、entitlement 与 PDF 检查；controller 停止且页面仍为 Challenge 时，Acquisition 可以形成稳定 `challenge-unresolved` 结果。本地资源策略缺口必须报告为 Network 资源阻断，不能冒充用户无权限或 Agent 失败。
+Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。Challenge 只是统一 Observation 的 `page_state=CHALLENGE`，不是文章默认终态，也不拥有 interaction-required/active/exhausted 生命周期、专属 target、controller 或预算。通用 Agent controller 使用与普通页面相同的六种封闭动作。页面自动或经动作清除 Challenge 后继续 capture、entitlement 与 PDF 检查；controller 停止且页面仍为 Challenge 时，Acquisition 可以形成稳定 `challenge-unresolved` 结果。本地资源策略缺口必须报告为 Network 资源阻断，不能冒充用户无权限或 Agent 失败。
 
 裸 HTTP `403` 在没有更具体页面证据时稳定分类为文章级 `ACCESS_DENIED`，停止当前尝试但不据此推断“无订阅权限”、Challenge 或打开整个 Publisher circuit。只有明确 paywall/购买访问页面才分类为 `NOT_ENTITLED`；只有 Publisher profile 通过经审查 marker/resource/frame 事实识别出 Challenge 或 IP block 时才进入对应页面状态。登录、机构选择和 MFA 是自动流程识别后停止的页面状态。自动策略只能保持或降低速率，不能因连续成功自动提速，也不能通过新 Literature、重试或备用入口绕过 circuit。
 

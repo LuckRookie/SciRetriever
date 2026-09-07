@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；AIP Publishing 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://pubs.aip.org`
-- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 API route
+- 当前仓库接入状态：`production-ready` Profile；无专属 Public 或授权 API route；Profile 只启用首页可达性 probe，真实文章统一使用 `browser:generic`
 
 ## 1. 官方入口与证据
 
@@ -53,7 +53,7 @@ Profile 本身不根据 OA 标签合成 `/doi/pdf/` 或 `/doi/epdf/` 地址。
 可信公开 hint 或将来的授权接口交付 PDF，也只有与目标文章身份一致、通过统一 PDF 验证的
 正文才能成为 `primary-pdf`；supplementary material/file 只能作为 supplement。
 
-## 4. 平台、Browser 与风险组结论
+## 4. 平台与 Browser 结论
 
 ScanSci 记录过以下待核实形状：
 
@@ -74,47 +74,31 @@ AIP 官方站点公开内容的 CSP 曾出现 `aipprc.silverchair.com`，当前�
 当前 `robots.txt` 对下载、citation、登录、Shibboleth 和搜索等路径包含明确禁止项，例如
 `/DownloadFile/`、`/Citation/Download`、`/signin.aspx`、`/Shibboleth.sso/` 和
 `/search-results`。文章页面没有全部被 robots 禁止，也不能反过来覆盖 Terms 对自动工具的
-明确禁止。当前已经建立技术规则 `aip-publishing-pdf@3`，用合成 fixture 验证 AIP 自有
-origin、强 DOI 归属、primary/supplement/wrong-article 分类、封闭页面状态，以及独立
-`aip-publishing` risk/session group、组内并发 1 和 30 秒审慎 fixture 基线。这些内容只证明
-技术分类和安全结构，不授权真实站点执行，也不与 IOP、APS 或任何共享技术平台建立 group。
+明确禁止。
 
-Revision 3 的新增证据日期为 2026-08-21，只为 AIP 规则声明受限的 Cloudflare dependency：
-精确 origin `https://challenges.cloudflare.com`、path prefix
-`/cdn-cgi/challenge-platform/` 与 `/turnstile/v0/`，且资源类型只允许 `script`、
-`document`、`fetch`、`xhr` 和 `image`。它不加入 AIP 的普通
-`allowed_origins`；只有当前 AIP Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
-可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。这里记录的
-`resource-blocked`、`settling`、`cleared`、`interaction-required` 与 `settle-timeout` 是
-2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。当前运行只把它分类为
-统一 `page_state=CHALLENGE`：Rules 执行已审查动作，Agent 可以使用统一元素/坐标点击；controller
-停止时仍未清除则形成文章级 `challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则
-和本地 fixture 只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+当前实现没有 AIP 专属 Browser route、rule、selector 或调度组。可信 AIP landing/asset hint 或
+安全 DOI resolve 形成文章起点后统一进入 `browser:generic`；Agent 根据稳定页面观察选择封闭
+动作，Network 负责页面稳定与 capture，Acquisition 再用目标 DOI、标题、作者、起点 lineage 和
+PDF 字节区分正文、supplement 与 wrong-article。Profile 的 `browser_probe_enabled = true` 只
+允许配置中心打开 AIP 首页检查 runtime/目标可达，不下载正文或证明 entitlement。
 
-2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
-均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
-Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
-权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+2026-08-21 的 `aip-publishing-pdf@3`、独立 lane、Cloudflare dependency 和 Challenge
+子生命周期 fixture，以及 2026-08-22 stock/Cloak 固定样本，均是旧规则执行器的历史证据。该
+样本在有界窗口形成 `settle-timeout` 且未捕获 PDF；它只能说明当时本地没有阻断已审查的
+Turnstile 资源，不能证明当前通用 Agent、组织授权、当前 IP 或文章 entitlement。
 
-CBA72 将 AIP 的本次服务器现场准入记为 `deferred`。这不降低其 `production-ready` 工程状态、
-不删除生产 rule，也不等于其它机构/Profile 全局 unsupported；它只表示固定代表样本停在持续
-自动验证且没有可验证 PDF，后续仍须逐文章判断并保留该稳定失败。
-
-由于普通 Terms 明确限制 automated program/tool/process，operator 必须先确认其组织授权和实际
-用途符合 AIP 条款。技术规则进入 production catalog；显式启用受控 Browser 后，只允许
-`aip-publishing` 组内串行、30 秒审慎间隔的逐文章机构 IP 尝试。总开关不是许可证明，也不会把
-AIP 与其它技术平台合并为共享风险组，或放宽固定规则和安全边界；裸 403、challenge、付费墙和
-正文捕获分别形成不同结果。
+由于普通 Terms 明确限制 automated program/tool/process，operator 必须确认其组织授权和实际
+用途符合 AIP 条款。显式启用通用 Browser 不是许可证明；裸 403、challenge、付费墙和正文
+capture 继续作为不同页面/运行结果表达。
 
 ## 5. 当前实现边界
 
-secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，
-技术规则位于 `src/sciretriever/acquisition/sources/browser_rules/providers/aip.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/aip-publishing.json`。Fixture 证明弱/强 DOI 证据边界、无
-公共机器访问 API、自动站点访问限制、平台技术名称不形成共享组，以及正文/supplement 排除；
-不保存真实 DOI、正文、Cookie、账号、机构或 Browser profile。
+secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一
+Profile fixture 为 `tests/fixtures/acquisition/profiles/aip-publishing.json`。Fixture 证明弱/强
+DOI 证据边界、无公共机器访问 API、自动站点访问限制和首页 probe；不再保存页面规则、调度组或
+文章下载准入，也不保存真实 DOI、正文、Cookie、账号、机构或 Browser profile。
 
-Browser 总开关关闭时 route 不构造可执行 adapter；启用后仍需 runtime 就绪、同组调度准入和
-逐文章 entitlement 检查。该开关不新增 AIP credential section，也不证明当前文章 entitlement。
-现有通用 Public Source 仍可消费上游明确提供且通过安全复核的单篇 locator；本轮
-没有执行真实 AIP 文章 probe 或正文下载。
+Browser 总开关关闭时通用 route 不构造可执行 adapter；启用后仍需合法文章起点和 runtime
+就绪。该开关不新增 AIP credential section，也不证明当前文章 entitlement。现有通用 Public
+Source 仍可消费上游明确提供且通过安全复核的单篇 locator；本轮没有执行真实 AIP 文章 probe 或
+正文下载。

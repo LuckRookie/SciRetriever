@@ -23,6 +23,7 @@ from sciretriever.agents.api import (
     AgentRuntime,
     AgentStructuredResult,
 )
+from sciretriever.analysis.failures import analysis_internal_failure
 from sciretriever.analysis.ports import (
     AnalysisCall,
     AnalysisRequest,
@@ -261,25 +262,14 @@ class ReferenceLookupStage:
                 cancel_event=call.cancel_event,
             )
         except AgentFailure as error:
-            if error.failure.code == "agent-structured-response":
-                raise ReferenceLookupFailure(
-                    _failure_for("analysis-reference-structure", retryable=False)
-                ) from None
-            raise ReferenceLookupFailure(
-                _failure_for(
-                    "analysis-reference-llm",
-                    retryable=error.failure.retryable,
-                )
-            ) from None
+            raise ReferenceLookupFailure(error.failure) from None
         except Exception:
-            raise ReferenceLookupFailure(
-                _failure_for("analysis-reference-llm", retryable=True)
-            ) from None
+            raise ReferenceLookupFailure(analysis_internal_failure()) from None
 
         if not isinstance(response, AgentStructuredResult):
-            raise ReferenceLookupFailure(_failure_for("analysis-reference-llm", retryable=False))
+            raise ReferenceLookupFailure(analysis_internal_failure())
         if response.provenance.input_sha256 != call.request.input_sha256:
-            raise ReferenceLookupFailure(_failure_for("analysis-reference-llm", retryable=False))
+            raise ReferenceLookupFailure(analysis_internal_failure())
         return response
 
 
@@ -632,10 +622,6 @@ def _failure_for(code: str, *, retryable: bool) -> StableFailure:
         "analysis-reference-budget": (
             "The reference lookup exceeded its configured resource budget.",
             "Submit a smaller bounded reference batch before retrying.",
-        ),
-        "analysis-reference-llm": (
-            "The reference lookup language-model call did not return an aligned result.",
-            "Check the configured Analysis provider and retry the selected references.",
         ),
         "analysis-reference-structure": (
             "The reference lookup result violated the closed structure.",

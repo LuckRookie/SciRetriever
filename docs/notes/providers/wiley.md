@@ -4,7 +4,7 @@
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Acquisition `wiley`
 - 供应商角色：在 operator 已取得 Wiley TDM token、运行环境位于可授权公网 IP 范围且具体文章有 entitlement 时提供主文 PDF；不是 SciRetriever Metadata 或引用 Provider
-- 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；使用所选持久 Profile 的 Wiley Browser route `browser:wiley-online-library` 已进入生产 registry
+- 当前仓库接入状态：Wiley Online Library TDM API 已作为第二阶段授权 PDF Source 接入；Wiley Profile 只提供访问画像与首页 probe，第三阶段真实文章与其它站点共用 `browser:generic`
 
 ## 1. 官方来源与证据等级
 
@@ -166,18 +166,20 @@ body，以及从单次成功推导的长期授权/OA/版权结论。Wiley TDM PD
 
 ## 7. Browser 画像审查结论
 
-本轮按统一 Profile 门审查了 Wiley Online Library Browser 路径，结论是：Wiley TDM v1 API 与
-Browser capability 均为 `production-ready`。该状态只表示当前 route/rule/policy、离线 fixture、
-生产对象图和安全测试闭环，不表示当前 IP、机构协议或任意文章 entitlement 已在线证明。
+本轮按统一 Profile 门审查了 Wiley Online Library，结论是：Wiley TDM v1 API 与 Profile 均为
+`production-ready`。Profile 状态只表示授权 API、访问画像、evidence fixture 与首页 probe 合同
+闭环，不表示当前 IP、机构协议或任意文章 entitlement 已在线证明，也不表示 Wiley 拥有专属
+Browser route。
 
-生产规则 `wiley-online-library-pdf@3` 只接受强 DOI/WOL landing，精确允许
-`https://onlinelibrary.wiley.com` 与 `https://advanced.onlinelibrary.wiley.com`；后者是经审查的
-DOI landing alias，不会因为 resolver 第一跳进入 advanced 主机而跳过 Wiley Browser route。
-规则从 `/doi/pdfdirect/`、`/doi/pdf/` 或 `/doi/epdf/` 的 response、download、popup、viewer 或
-verified locator 中等待任一正文 capture，并排除 supporting information、excluded 和
-wrong-article。规则包含 entitlement/paywall、login、MFA/challenge、rate/IP/account-warning
-等封闭页面状态；Challenge 由作业开始前选定的 Rules 或 Agent controller 按统一页面合同继续
-处理，登录/MFA 页面仍识别后停止，裸 403 则单独记录为 access denied。
+当前 Browser 从可信 WOL/advanced landing/asset hint 或安全 DOI resolve 形成文章起点，统一进入
+`browser:generic`。Agent 根据稳定页面观察选择封闭动作，Network 处理 response、download、
+popup/viewer capture，Acquisition 再用目标 DOI、标题、作者、起点 lineage 与 PDF 字节排除
+supporting information、excluded 和 wrong-article。裸 403、明确 challenge、paywall、登录/MFA
+由通用页面观察和终态区分。
+
+以下 Revision 3、`wiley-online-library-pdf@*`、Wiley lane 和 Challenge 子生命周期描述均是
+2026-08-21 至 2026-08-22 旧规则执行器的历史证据；它们不是当前 runtime 合同，不能证明
+`browser:generic` 的成功率。
 
 Revision 3 的新增证据日期为 2026-08-21，只为 Wiley 规则声明受限的 Cloudflare dependency：
 精确 origin `https://challenges.cloudflare.com`、path prefix
@@ -186,10 +188,9 @@ Revision 3 的新增证据日期为 2026-08-21，只为 Wiley 规则声明受限
 `allowed_origins`；只有当前 Wiley Publisher 页面或其 frame ancestry 能给出发起与用途证明时才
 可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture source。这里记录的
 `resource-blocked`、`settling`、`cleared`、`interaction-required` 与 `settle-timeout` 是
-2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。当前 Rules 只执行
-已审查动作，Agent 可以使用统一元素/坐标点击；controller 停止时仍为 Challenge 形成文章级
-`challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则和本地 fixture 只证明程序
-没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。旧 controller
+停止时仍为 Challenge 会形成文章级 `challenge-unresolved`。该 fixture 只证明旧程序没有自行
+挡住必要资源，不证明当前通用 Agent、当前 IP、机构合同或文章 entitlement。
 
 2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
 均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
@@ -197,20 +198,20 @@ Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它�
 权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
 
 CBA72 将 Wiley Browser 的本次服务器现场准入记为 `deferred`。这不降低
-`wiley-online-library` 的 `production-ready` 工程状态，不删除生产 Browser rule，也不影响
-独立的 TDM API route；它只表示固定代表样本停在持续自动验证且没有可验证 PDF。
+`wiley-online-library` 的 `production-ready` Profile 状态，也不影响独立的 TDM API route；它
+只表示固定代表样本在旧规则执行器中停在持续自动验证且没有可验证 PDF。
 
 ScanSci PDF revision `5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5` 提供了
 `/doi/pdfdirect/`、`/doi/pdf/`、`/doi/epdf/`、若干 supplement marker，以及一次转到
 `advanced.onlinelibrary.wiley.com` 的历史运行线索；但其 verification record 同时依赖
 CARSI Cookie、个人机构 Browser profile 和仓库中不存在的本地 source run。它不能证明这些
 origin、模板、marker 或成功结论在 SciRetriever 中仍成立，详见
-[ScanSci 迁移审计](../scansci-migration-audit.md)。当前常量是经独立 Profile/rule/fixture 审查后
-形成的 SciRetriever 合同，不继承上游 CARSI Cookie、Profile 数据或 success verdict。
+[ScanSci 迁移审计](../scansci-migration-audit.md)。当前实现不继承这些 URL/marker，也不继承上游
+CARSI Cookie、Profile 数据或 success verdict；这些历史观察只可用于通用 fixture 设计。
 
-Browser 使用当前机器正常网络出口，以及共享 persistent Profile/context 中独立的 `wiley`
-lane；组内并发 1、项目审慎最小文章启动间隔 20 秒，不猜测 Atypon 共享风险域。自动流程不导入或
-读取 Cookie、不填写凭据；第一版不提供可见 Browser 认证入口。TDM API 的认证、quota、service
+Browser 使用当前机器正常网络出口和共享 persistent Profile/context，所有文章共用
+`browser-generic` policy，不再建立 Wiley lane。自动流程不导入或读取 Cookie、不填写凭据；
+第一版不提供可见 Browser 认证入口。TDM API 的认证、quota、service
 或 network failure 仍按第二层
 失败合同处理，不能靠 Browser 绕行；只有 API 正常未命中或无该文章 entitlement，且其它
 Browser admission 条件成立时才可能升级。
@@ -221,15 +222,15 @@ Browser admission 条件成立时才可能升级。
 header、opaque DOI 编码、到 `alm.wiley.com` 的 guarded 单跳 redirect、跨 origin token
 剥离、AccessPolicy、HTTP 状态映射、单 DOI 与精确 landing/asset-origin target 绑定、
 Registry/Bootstrap/config status 接线，以及离线 endpoint/凭据泄漏/跨 origin/阶段顺序/PDF
-验证测试。生产 Browser rule 另覆盖 DOI/landing 归属、批准的 WOL/advanced origin、封闭页面
-状态、正文/supplement/错文分类、组内调度、article lane 隔离与临时下载工作区清理。没有新增
-`wiley-tdm` 依赖，直接复用共享 Network。
+验证测试。生产 Browser 另由共享 `browser:generic` 覆盖稳定 Observation、封闭动作、capture、
+article-local 隔离与临时下载工作区清理；Wiley 候选和其它站点一样由 Acquisition 的统一 PDF
+字节与文章归属门验收。没有新增 `wiley-tdm` 依赖，直接复用共享 Network。
 
 仍未闭合的外部事实是：官方客户端未详细规定 `401/429` 及其它错误 body、token 有效期/
 自动过期策略、专用 quota response header、ALM locator 的长期版本保证，以及非
 IP-based TDM API 支持。更新这些事实前应再次核对 Wiley 官方材料；真实 Provider 探测
 只能由用户明确发起，仓库测试继续使用离线 fake。2026-08-19 本轮没有读取 token、调用真实
-Wiley API、访问真实文章或下载真实 PDF。Production Planner 同时认识
-`api:wiley-tdm-v1` 与 `browser:wiley-online-library`，但仍严格保持 Public → API → Browser，且
-Browser 使用所选持久 Profile 与当前机器正常网络出口。Profile 是否存在、是否保存过登录状态、
-机构 IP 和当前文章 entitlement 是分立事实，仍在真实页面逐文章判断。
+Wiley API、访问真实文章或下载真实 PDF。Production Planner 认识 `api:wiley-tdm-v1` 与唯一
+`browser:generic`，并严格保持 Public → API → Browser；Browser 使用所选持久 Profile 与当前机器
+正常网络出口。Profile 是否存在、是否保存过登录状态、机构 IP 和当前文章 entitlement 是分立
+事实，仍在真实页面逐文章判断。

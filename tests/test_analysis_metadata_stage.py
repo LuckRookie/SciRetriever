@@ -492,7 +492,12 @@ class AnalysisMetadataStageTests(unittest.TestCase):
                 failure = self._failure(
                     lambda: _stage(llm).analyze(_stage_input("![page](resources/page.png)"))
                 )
-                self.assertEqual(failure.failure.code, "analysis-metadata-structure")
+                expected_code = (
+                    "agent-structured-response"
+                    if name == "malformed"
+                    else "analysis-metadata-structure"
+                )
+                self.assertEqual(failure.failure.code, expected_code)
                 self.assertNotIsInstance(failure, NoUsableContent)
 
     def test_provider_and_untrusted_port_failures_are_redacted_analysis_failures(self) -> None:
@@ -504,17 +509,17 @@ class AnalysisMetadataStageTests(unittest.TestCase):
                 retryable=False,
             )
         )
-        cases: tuple[tuple[BaseException, bool], ...] = (
-            (provider_failure, False),
-            (RuntimeError(_PRIVATE_RESPONSE_SENTINEL), True),
+        cases: tuple[tuple[BaseException, str, bool], ...] = (
+            (provider_failure, "agent-refusal", False),
+            (RuntimeError(_PRIVATE_RESPONSE_SENTINEL), "agent-internal", False),
         )
-        for error, retryable in cases:
+        for error, expected_code, retryable in cases:
             with self.subTest(error=type(error).__name__):
                 llm = _FakeLLM([error])
                 failure = self._failure(
                     lambda: _stage(llm).analyze(_stage_input(_valid_markdown()))
                 )
-                self.assertEqual(failure.failure.code, "analysis-metadata-llm")
+                self.assertEqual(failure.failure.code, expected_code)
                 self.assertEqual(failure.failure.retryable, retryable)
                 self.assertNotIn(_PRIVATE_RESPONSE_SENTINEL, repr(failure))
                 self.assertNotIn(_PRIVATE_MARKDOWN_SENTINEL, repr(failure))
@@ -951,21 +956,36 @@ Computing Institute<sup>2</sup>
 
     def test_response_provenance_must_align_with_the_exact_metadata_request(self) -> None:
         actions = (
-            lambda call: _llm_response(
-                call,
-                _usable(_final_metadata()),
-                input_sha256=Sha256("e" * 64),
+            (
+                lambda call: _llm_response(
+                    call,
+                    _usable(_final_metadata()),
+                    input_sha256=Sha256("e" * 64),
+                ),
+                "agent-protocol",
             ),
-            lambda call: _llm_response(
-                call,
-                _usable(_final_metadata()),
-                model="different-model",
+            (
+                lambda call: _llm_response(
+                    call,
+                    _usable(_final_metadata()),
+                    model="different-model",
+                ),
+                "agent-model-mismatch",
             ),
         )
-        for action in actions:
+        for action, expected_code in actions:
             llm = _FakeLLM([action])
             failure = self._failure(lambda: _stage(llm).analyze(_stage_input(_valid_markdown())))
-            self.assertEqual(failure.failure.code, "analysis-metadata-llm")
+            self.assertEqual(failure.failure.code, expected_code)
+
+    def test_agent_cancellation_becomes_the_content_operation_cancellation_code(self) -> None:
+        llm = _FakeLLM([agent_failure("cancelled")])
+
+        failure = self._failure(lambda: _stage(llm).analyze(_stage_input(_valid_markdown())))
+
+        self.assertEqual(failure.failure.code, "analysis-content-cancelled")
+        self.assertTrue(failure.failure.retryable)
+        self.assertEqual(len(llm.calls), 1)
 
 
 if __name__ == "__main__":

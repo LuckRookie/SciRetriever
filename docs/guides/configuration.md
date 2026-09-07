@@ -89,7 +89,7 @@ models
 analyze
 execution
 library
-download
+browser
 ```
 
 未知顶层组、未知字段、错误类型、未知枚举、重复 Provider、重复 TOML key 和旧字段都会
@@ -256,10 +256,10 @@ fallback 绕过；XML、任意 object、supplement 和有效 key 本身都不冒
 entitlement。Springer Full Text 当前是 JATS/XML，授权主 PDF API 仍为
 `unsupported`。已有通用 AssetHint 路由的 Provider 仍可贡献公开线索。Sci-Hub 在启用时由 stock
 production 从 custom `urls` 或当前版本 builtin 自动构造 DOI locator resolver，不会要求终端用户
-填写 URL 或注入对象。受控 Browser 的组件已
-实现，当前内置 9 条 production 站点规则；规则、origin、selector、risk/session group 和
-限速政策不是普通 TOML 字段。普通配置只通过 `[download]` 选择固定身份 Profile、显式启用
-Browser、设置跨 Publisher 本机并发上限，并可用封闭 override 把既有政策收得更严格。
+填写 URL 或注入对象。受控 Browser 只有一条 `browser:generic` production route 和一个
+`browser-generic` 调度组；它不内置 Publisher 点击规则，也不要求起点属于预先列出的出版社。
+普通配置通过独立 `[browser]` 选择 Agent Model 与固定身份 Profile、显式启用 Browser、设置本机
+资源上限，并可用封闭 override 把通用调度政策收得更严格。
 
 ### `[assets]`
 
@@ -333,11 +333,12 @@ Model 的唯一身份就是 TOML 子表名中的完整 `provider/model` referenc
 `stream = false` 时只请求和解析非流式 JSON。两种模式失败后都不会切换模式补发请求。
 Model 不保存 context window、max output、structured output、tool
 decision、图片 MIME、数量或字节上限。这些是消费模块的调用合同：Analyze 派生 strict structured
-output、text-only、no-tool 和业务预算，Download 派生 PNG、单图、tool decision 与内部安全上限。
+output、text-only、no-tool 和业务预算，Download 派生当前生产 Observation 的 `image/jpeg`、单图、tool
+decision 与内部安全上限。
 模型目录也只提供 model ID；`image` 与具体 reasoning 支持由用户依据 Provider 文档确认，并通过
 显式 probe 验证，不能根据 model 名称猜测。
 
-Provider 被任一 Model 引用时不能删除；Model 被 Analyze 或 Download 选择时也不能删除。一个
+Provider 被任一 Model 引用时不能删除；Model 被 Analyze 或 Browser 选择时也不能删除。一个
 `provider/model` 只有一份配置；需要改变思考程度时直接编辑该 Model，而不是创建本地别名、预设
 或 Profile。
 
@@ -376,52 +377,45 @@ output 边界检查输入；这些边界不是 Model 用户字段。`Analyze →
 | --- | --- | --- | --- |
 | `max_input_bytes` | 整数 | `67108864` | 范围 1024 到 1073741824；限制一次书目导入输入。 |
 
-### `[download]`
+### `[browser]`
 
 当前保存 Browser-last 能力的非 secret 本地选择：
 
 ```toml
-[download]
+[browser]
 # model = "openai/operator-selected-browser-model"
-browser_enabled = false
-# browser_profile = "institutional-access"
-browser_controller = "rules"
-browser_max_concurrency = 5
-browser_policy_overrides = []
+enabled = false
+# profile = "institutional-access"
+max_concurrency = 5
+policy_overrides = []
 ```
 
 | 字段 | 类型 | 默认值 | 约束 |
 | --- | --- | --- | --- |
-| `model` | `provider/model` 或省略 | 未配置 | Download Agent 使用的 Model；必须配置 `image = true`。Rules controller 不调用该模型。 |
-| `browser_enabled` | 布尔值 | `false` | 持久 Profile Browser 总开关；启用时必须同时选择并初始化 `browser_profile`，且只启用已经通过 production 准入的规则。 |
-| `browser_profile` | 字符串或省略 | 省略 | 一个不含敏感信息的 Profile identity，不是路径、账号、机构名、URL、UUID、Token 或 Cookie 标签；由 `sciretriever config` 选择和初始化。 |
-| `browser_controller` | `rules` 或 `agent` | `rules` | 一项下载作业开始前冻结的互斥 controller；Rules 不调用模型，Agent 从第一次 Observation 起选择封闭动作，二者不互相 fallback。 |
-| `browser_max_concurrency` | 整数 | `5` | 必须是大于 1 的整数，不设上限；只限制同时活动的不同供应商 Browser lane，不改变同一供应商风险组固定串行。 |
-| `browser_policy_overrides` | inline table 数组 | `[]` | 只能收紧已有 production `rate_limit_group`；未知、重复或放宽的 group 会拒绝。 |
+| `model` | `provider/model` 或省略 | 未配置 | Browser Agent 使用的 Model；必须配置 `image = true`。 |
+| `enabled` | 布尔值 | `false` | Browser 总开关；启用时必须同时选择并初始化 `profile`。 |
+| `profile` | 字符串或省略 | 省略 | 一个不含敏感信息的 Profile identity，不是路径、账号、机构名、URL、UUID、Token 或 Cookie 标签；由 `sciretriever config` 选择和初始化。 |
+| `max_concurrency` | 整数 | `5` | 必须是大于 1 的整数，不设上限；只保护本机 Browser 资源，不改变 `browser-generic` 固定串行。 |
+| `policy_overrides` | inline table 数组 | `[]` | 只能收紧 `browser-generic`；未知、重复或放宽的 group 会拒绝。 |
 
 单项 policy override 可以收紧组内并发、文章启动间隔、窗口计数/时长、完成/失败/限速冷却和
 runtime failure threshold。并发、窗口计数和 failure threshold 只能减小；interval、window
 duration 和 cooldown 只能增大。窗口计数与时长必须成对出现，负数、零值非法位置、`inf`、
-`nan` 和空 override 都会拒绝。普通配置不能改写 Profile 的 group、session key、origin、
-selector、rule revision 或官方 `Retry-After` 语义。
+`nan` 和空 override 都会拒绝。普通配置不能改写通用 group、policy revision、起点、页面动作、
+PDF 验收或官方 `Retry-After` 语义。
 
-当前 9 个 production Browser group 为 `acs-publications`、`aip-publishing`、`elsevier`、
-`iopscience`、`oxford-academic`、`rsc-publishing`、`science-aaas`、`springerlink` 和 `wiley`，
-对应的最小文章启动间隔分别为 30、30、20、30、30、30、30、10 和 20 秒。
-`browser_policy_overrides` 可以分别收紧这些 group 的间隔、窗口、cooldown 或其它封闭策略，
-不能放宽。总开关不会把 fixture-verified/unsupported Profile 变为可执行能力。自动 Completion
-只在总开关、选中的固定身份 Profile、CloakBrowser wrapper、Playwright API、经核实 binary 与 headed display
-各自适用且就绪时使用对应 production route。当前 `9` 个 production group 只是 catalog 规模，
-不是 `browser_max_concurrency` 的最大值；较大的配置值只允许更多不同 Publisher lane 共享同一
-patched Chromium process/context，不会启动多个 Browser。
+`policy_overrides` 中的每项必须写 `rate_limit_group = "browser-generic"`。当前基线固定为并发 1、
+最小启动间隔 1 秒、每小时最多 120 次启动、限流冷却 60 秒、普通失败冷却 5 秒和连续 3 次
+runtime failure 熔断；override 只能进一步收紧这些值。较大的 `max_concurrency` 不会启动多个
+Browser，也不会让 `browser-generic` 同时处理多篇文章。
 
-配置不接受逐 Publisher 的本地许可占位字段。`browser_enabled = true` 只启用已经通过 production
-准入的封闭 route，并不会证明组织合同、机构 IP、Profile 已登录或具体文章权限；这些 route 仍
-逐文章区分正文捕获、付费墙、通用拒绝、challenge 与限流，也不会改写固定 origin、selector、
-risk/session group、限速或 Network 安全规则。
+配置不接受逐 Publisher 的本地许可、route、selector 或规则字段。`enabled = true` 启用唯一通用
+route，但不会证明组织合同、机构 IP、Profile 已登录或具体文章权限；每篇文章仍区分正文捕获、
+付费墙、通用拒绝、challenge、限流、错误文章、补充材料和证据不足。
 
-Download 选择完整 Model reference，不覆盖 Model 的 Provider、reasoning、image 或 stream，也不改变
-Analyze。tool decision、`image/png`、图片数量/字节与单次调用上限由 Download/Bootstrap 派生。
+Browser 选择完整 Model reference，不覆盖 Model 的 Provider、reasoning、image 或 stream，也不改变
+Analyze。tool decision、当前生产 Observation 的 `image/jpeg`、图片数量/字节与单次调用上限由
+Acquisition/Bootstrap 派生。
 当前 Browser 使用本机正常网络出口和一个 operator-managed 持久 Profile，固定以
 `headless = false` 启动一个 Chrome process/persistent context；无 GUI Linux 使用 Xvfb 虚拟显示。
 Publisher 请求由 Chrome 原生网络栈完成，本机 CONNECT proxy 只执行已审核 hostname/port 到精确
@@ -616,8 +610,8 @@ raw-item 上限。选中具体 Source 后，对象页按能力提供 `Setup`、`
 Key；该 Test 不访问镜像或下载 PDF。
 
 `Analyze → Setup` 选择全部已配置 Model 并连续确认八项业务预算；首次选择 Model 时缺失预算会使用
-产品固定安全初值，已有完整预算保持不变。`Browser → Setup` 在选择 Agent controller 时只列出
-`image = true` 的 Model，并连续确认 Profile 与并发 cap。两者都只更新完整 Model reference，不
+产品固定安全初值，已有完整预算保持不变。`Browser → Setup` 只列出 `image = true` 的 Model，并
+连续确认 Profile 与本机资源 cap。两者都只更新完整 Model reference，不
 修改 Model 或另一个任务。
 
 `Parse → Setup` 连续配置当前真实的 MinerU 3.4.4 / protocol 2 / `vlm-engine` 部署。loopback 不询问
@@ -656,9 +650,8 @@ Download 区只管理 CORE、Elsevier、Wiley 等 PDF Source；其普通设置�
 1. 选择或初始化一个 Browser Profile，并一次生成固定 identity manifest；
 2. 永久删除选中的本地 Profile、identity manifest 及其中由 Chromium 管理的状态；
 3. 禁用自动 Browser access，同时保留 Profile、并发上限、policy override 和 Provider API credential；
-4. 在作业开始前选择互斥的 `rules` 或 `agent` controller；Agent 模式还需 Browser Model probe
-   通过，运行中不会先跑 Rules 或失败后切回 Rules；
-5. 设置跨 Publisher 的 Browser 并发 cap；只接受大于 `1` 的整数，不设置上限。
+4. 选择唯一 Agent controller 使用的图片 Model；Browser Model probe 可在真实下载前单独验证；
+5. 设置本机 Browser 资源 cap；只接受大于 `1` 的整数，不设置上限，通用执行组仍固定串行。
 
 `Browser → Runtime` 显示 CloakBrowser wrapper、Playwright API、binary presence/version/signature
 和回退版本，并提供显式安装、更新、回退以及可选 Pro credential 的预留管理。当前固定
@@ -672,12 +665,14 @@ runtime root 中的 license/Pro/update 状态。
 Profile identity 只是 `config.toml` 中不含敏感信息的选择名；真实 Chromium 数据和 owner-only
 identity manifest 进入固定私有目录。manifest 固化 native Linux persona、locale、timezone、
 screen、Browser version policy 和 seed 派生身份；seed、Profile 路径与站点状态不会进入普通配置、
-status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[download]` 或启动
+status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[browser]` 或启动
 Browser。自动 Browser 使用当前机器正常网络出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。
-第一版不提供可见 Browser 登录、机构选择、MFA、Cookie 导入导出或 CAPTCHA 交互入口。
+第一版不提供可见 Browser 登录、机构选择、MFA 或 Cookie 导入导出入口。
 SciRetriever 不导航登录页、不填写凭据、不选择机构、不读取 Cookie 或登录结果，也不处理或绕过
-MFA/CAPTCHA。当前 production Browser route count 和 local eligible count 都是 9；route 已安装、
-Profile/identity 就绪、总开关与 runtime ready 都不能证明机构 IP 或具体文章具有 entitlement。
+MFA。页面 Challenge 与普通文章页使用同一 Observation/Action 合同。当前 production Browser route
+只有 `browser:generic`；Publisher access key 仅用于用户显式发起可达性 probe，不再决定下载 route。
+route 已安装、Profile/identity 就绪、总开关与 runtime ready 都不能证明机构 IP 或具体文章具有
+entitlement。
 
 所有菜单动作都同时使用颜色和单色可见标记区分：`◆` 配置、`◇` 查看、`▶` 测试、`!` 危险、
 `←` 返回、`×` 退出。颜色不可用时仍能从标记理解动作性质。
@@ -697,20 +692,19 @@ Storage/execution；`--json` 使用稳定分组结构供
 - `Authorized Provider APIs`：逐 Provider 显示是否已有可执行主 PDF API、当前限制和
   所需凭据字段；
 - `Controlled browser`：显示持久固定身份 Profile、选中的 opaque identity 及其存在/安全状态、
-  Cloak wrapper/Playwright API/binary/version/signature/Xvfb、本地 runtime readiness、9 条
-  production route、默认 9/9 条 local eligible、总开关、共享 process/context、Publisher lane、
-  未评估的文章 entitlement、policy evidence、显式 probe 和下一动作。
+  Cloak wrapper/Playwright API/binary/version/signature/Xvfb、本地 runtime readiness、唯一
+  `browser:generic` route、总开关、共享 process/context、`browser-generic` policy、未评估的文章
+  entitlement、可选 Publisher reachability probe 和下一动作。
 
 Metadata 人类表格只逐项展开当前有效或已有凭据的 Provider，其余禁用能力以数量摘要收起；
 完整 capability matrix 仍保留在 JSON。授权 PDF API 不与 Metadata 合并，只展开当前有效
-Acquisition Source 中的 CORE、Elsevier、Wiley 或当前不支持直接主 PDF 的 Springer API。当前 production Browser route 为
-ACS Publications、AIP Publishing、Elsevier / ScienceDirect、IOPscience、Oxford Academic、
-RSC Publishing、Science / AAAS、Springer Nature Link 与 Wiley Online Library；Browser 分区
-始终显示这 9 条 route，再根据总开关、Profile/identity manifest、Cloak wrapper、Playwright API、
+Acquisition Source 中的 CORE、Elsevier、Wiley 或当前不支持直接主 PDF 的 Springer API。Browser
+分区只显示 `browser:generic`，再根据总开关、Profile/identity manifest、Cloak wrapper、Playwright API、
 经核实 binary 与 headed display 的实际静态状态给出 `browser-disabled`、`browser-profile-not-selected`、
 `browser-profile-missing`、runtime 未就绪原因或 ready。
-`browser-production-route-unavailable` 只是将来 production catalog 真的变为空时的 fail-closed
-分支，不是当前默认状态。未获 production 验证的其它站点仍不会成为自动路线。
+`browser-production-route-unavailable` 只是通用 route 未安装时的 fail-closed 分支，不是当前默认
+状态。合法文章起点不需要匹配 Publisher 下载规则；Network admission 与 Acquisition 的 PDF
+文章归属验收仍然必须通过。
 
 JSON 的 Provider 分区保留完整矩阵，并为每个已接受 Provider 报告以下层：
 
@@ -729,10 +723,10 @@ fingerprint。`enabled = false` 不会改写其它 readiness 层：status 是完
 运行只注册已启用且就绪的能力。`configured` 只说明本地必需/可选字段存在，不表示
 认证已成功；Acquisition 的 `local_ready` 也不表示当前具体 Literature 有全文授权。
 
-Browser JSON 位于 `providers.controlled_browser`，稳定区分：
+Browser JSON 位于顶层 `browser`，稳定区分：
 
-- `controller`、`controller_ready` 与 `controller_required_model`：明确当前是 `rules` 还是
-  `agent`、对应本地配置是否就绪，以及 Agent controller 要求哪个完整 Model reference；
+- `model`、`selected_model` 与 `model_locally_ready`：明确 Agent 使用的完整 Model reference、Model
+  配置和本地 readiness；
 - `mode = headed-fixed-profile` 与 `article_entitlement = checked-per-article`：`headed` 只表示
   使用完整窗口栈和 Xvfb，不表示存在用户可见登录窗口；文章权限仍在运行时逐篇判断；
 - `profile.selected`、`profile.presence`、`fixed_identity_manifest` 与 `identity_schema`：只报告
@@ -744,8 +738,8 @@ Browser JSON 位于 `providers.controlled_browser`，稳定区分：
   display（Linux 上为 Xvfb）是否可用；`launch_assessed` 始终为 `false`，因为 status 只检查本地
   文件，不启动 Browser。CloakBrowser 是唯一生产 runtime；JSON 不提供引擎选择、stock fallback
   或迁移期 `cutover_pending` 字段；
-- `routes`：只有通过 production verification 的 Browser route 及其 risk group、官方/项目
-  保守 policy revision、验证日期、Notes 引用和有效限速；不含 origin、selector 或页面规则；
+- `routes`：当前只有 `browser:generic`，并显示 `browser-generic` 的项目保守 policy revision、
+  验证日期、Notes 引用和有效限速；不含 origin、selector 或页面规则；
 - `probe` 与 `action_required`：可显式探测的精确 access key，以及稳定 code/reason/action。
 
 `status` 不启动 Browser，也不读取或枚举 Cookie、local storage、origin history、站点登录信息或
@@ -756,9 +750,9 @@ Storage 分区显示 Catalog/ArtifactStore 是否配置及其当前非 secret �
 显示固定实现身份、`base_url`、连接模式、模型身份、远程上传授权、缺失普通字段，以及
 远程 bearer token 是否必需/存在/origin 匹配；Models 分区逐项显示 Model Provider 的 API、Base
 URL 与 API key presence/origin match，以及 Model 的完整 reference、reasoning、image 与 stream。
-Analyze/Download JSON 分区只显示所选 Model、业务参数和 readiness，
-并提示 `config test analyze` 或 `config test browser model` 才能验证本地声明；底层 `download` 分区对应
-交互配置中心的 Browser owner，还显示当前 controller、所需 Model 和 controller readiness。
+Analyze/Browser JSON 分区显示各自所选 Model、业务参数和 readiness，并提示
+`config test analyze` 或 `config test browser model` 才能验证本地声明；`download` 分区只显示
+Acquisition Source 选择，不再承载 Browser 配置。
 未启用但已有凭据的 Provider
 仍会显示，便于发现遗留或预配置凭据。这里的 `ready` 只表示本地配置完整，不代表外部
 服务或认证已经成功；任何 secret 值都不会显示或进入 JSON。
@@ -786,7 +780,7 @@ sciretriever config test --all [--json]
 - `provider <name>` 对已经配置的 Model Provider 执行一次有界、无 redirect/retry 的模型目录
   GET，只报告数量与是否截断；目录成功不证明某个 Model 支持 reasoning、strict output、图片或工具。
 - `model <provider/model>` 对精确 Model 发送固定极小 strict-schema Text 请求；`--image` 改为一张
-  程序生成的 1×1 PNG 与一个封闭停止工具，仅允许 `image = true` 的 Model。两者使用 Model 保存的
+  程序生成的 1×1 `image/jpeg` 与一个封闭停止工具，仅允许 `image = true` 的 Model。两者使用 Model 保存的
   reasoning 与 stream，不改变 Analyze/Browser 选择，也不发送用户 Literature、PDF、页面或真实 screenshot。
 - `search <source>` 即使 Source 当前未启用也可执行其 Metadata 最小只读 probe；`search --all`
   只选择当前启用的 Search Source。本地不就绪项返回 `skipped`，一个失败不阻断其它 Source。
@@ -803,8 +797,8 @@ sciretriever config test --all [--json]
   risk-group scheduler，一次最多导航一次；结果始终保留 `article_entitlement = not-proven` 与
   `persisted = false`。
 
-`config test --all` 汇总当前启用的 Search Source、Download 的可见限制、Analyze 和 Parse；只有
-当前 controller 为 `agent` 时才加入 Browser Model。它不读取 Model Provider 目录、不测试任意
+`config test --all` 汇总当前启用的 Search Source、Download 的可见限制、Analyze 和 Parse；Browser
+已启用时加入 Browser Model。它不读取 Model Provider 目录、不测试任意
 未选 Model、不启动 Browser Site、不下载 PDF，也不上传 PDF。Download 的
 `acquisition-probe-unavailable` 只作为未探测限制展示，不会把其它已经执行并通过的安全 Probe
 误判为失败；其它必需 probe 的 failed/skipped 使整体退出码为 3。人类模式在会联网或消耗额度的
@@ -824,10 +818,10 @@ sciretriever config test browser site springerlink
 sciretriever config test browser site wiley-online-library
 ```
 
-它只打开所选 production rule 的首页，检查 runtime 与目标可达性。它不访问任意文章、不下载
-PDF，也不评估当前机构 IP 或具体文章 entitlement，不持久化结果。未支持的 access key 不会导航
-或猜 URL。开关、Playwright 或 Chromium 未就绪时以稳定原因 `skipped`；只有本地就绪时才会
-启动 probe。
+它只打开所选 Profile 已核实的首页，检查 runtime 与目标可达性。它不调用 Browser Model，不
+使用 Publisher 页面规则，不访问任意文章、不下载 PDF，也不评估当前机构 IP 或具体文章
+entitlement，不持久化结果。未支持的 access key 不会导航或猜 URL。开关、Playwright 或
+CloakBrowser binary 未就绪时以稳定原因 `skipped`；只有本地就绪时才会启动 probe。
 
 以上是唯一会主动发起网络请求的配置测试。请求经过共享 DNS/TLS/redirect/origin/限速、
 响应预算与脱敏边界。
@@ -927,8 +921,8 @@ max_input_bytes = 67108864
 
 [assets]
 
-[download]
-browser_controller = "rules"
+[browser]
+enabled = false
 ```
 
 这份文件在结构上合法，但外部能力是否可运行仍取决于统一凭据文件、

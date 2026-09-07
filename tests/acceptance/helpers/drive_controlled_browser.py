@@ -1,8 +1,8 @@
 """Exercise installed BrowserClient and controlled Browser PDF Source together.
 
 The Browser runtime and controlled site are test-owned in-memory components.
-Network destination policy, DNS/admission handling, Browser lifecycle, rule
-execution, routing evidence, and Source delivery all come from the installed
+Network destination policy, DNS/admission handling, Browser lifecycle, Agent
+action execution, routing evidence, and Source delivery all come from the installed
 wheel.  This is component protocol QA, not production Browser wiring.
 """
 
@@ -26,15 +26,17 @@ from sciretriever.acquisition.sources.browser import (
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
     ControlledBrowserPdfSource,
 )
-from sciretriever.acquisition.sources.browser_rules import (
-    PRODUCTION_BROWSER_RULE_CATALOG,
-    BrowserActionKind,
-    BrowserPageMarker,
-    BrowserPageMarkerKind,
-    BrowserRuleAction,
-    BrowserRuleCatalog,
-    BrowserSiteRule,
+from sciretriever.agents.api import (
+    AgentCallLimits,
+    AgentModelCapabilities,
+    AgentProvenance,
+    AgentRole,
+    AgentRoleBinding,
+    AgentRuntime,
+    AgentToolCall,
+    AgentUsage,
 )
+from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.acquisition import AssetHint, AssetHintKind, AssetRole
 from sciretriever.model.literature import Literature, LiteratureStatus, VersionRole
@@ -51,6 +53,7 @@ from sciretriever.model.primitives import (
 from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessCoordinator
 from sciretriever.network.browser import BrowserClient
+from sciretriever.network.browser_control import BROWSER_OBSERVATION_MEDIA_TYPE
 from sciretriever.network.policy import AddressClass, DestinationPolicy
 
 _TIME = UtcTimestamp("2026-08-12T18:30:00Z")
@@ -150,28 +153,11 @@ class _Page:
     def content(self) -> str:
         return "<html><body><a data-action='pdf'>PDF</a></body></html>"
 
-    def discover_pdf_locators(self) -> tuple[str, ...]:
-        return ()
-
-    def has_selector(self, selector: str, *, timeout: int) -> bool:
-        del timeout
-        return selector == "a[data-action='pdf']"
-
-    def text_content(self, selector: str, *, timeout: int) -> str:
-        del selector, timeout
-        return ""
-
-    def click(self, selector: str, *, timeout: int) -> None:
-        del timeout
-        self.clicked.append(selector)
-        self.context.emit_download(self)
-
     def control_snapshot(
         self,
         *,
         timeout: int,
         include_screenshot: bool,
-        static_selector: str | None = None,
     ) -> dict[str, object]:
         if timeout <= 0:
             raise RuntimeError("controlled snapshot timeout must be positive")
@@ -182,7 +168,6 @@ class _Page:
             "title": title,
             "surfaces": ((0, None, "page", self.url, title, 0, 0, 1280, 720, 0, 0, 0, 720, None),),
             "elements": ((1, 0, "link", "PDF", True, True, 20, 20, 180, 40),),
-            "static_element_key": (1 if static_selector == "a[data-action='pdf']" else None),
             "screenshot": (
                 f"controlled-screenshot-{self.control_generation}".encode()
                 if include_screenshot
@@ -214,6 +199,14 @@ class _Page:
         self.control_generation += 1
         self.context.emit_download(self)
         return True
+
+    def control_is_closed(self) -> bool:
+        return self.closed
+
+    def control_wait_for_change(self, *, timeout: int) -> bool:
+        if timeout <= 0:
+            raise RuntimeError("controlled wait timeout must be positive")
+        return False
 
     def close(self) -> None:
         self.closed = True
@@ -342,6 +335,83 @@ class _Factory:
         return self.process
 
 
+class _Agent:
+    """Choose the visible PDF element from the installed observation contract."""
+
+    provider_name = "installed-fixture-agent"
+
+    def __init__(self) -> None:
+        self._clicked = False
+
+    def execute(self, call: AgentProviderCall) -> AgentToolCall:
+        summary = json.loads(call.text_parts[1].text)
+        if not self._clicked:
+            element = next(
+                value
+                for value in summary["elements"]
+                if value["name"] == "PDF" and value["state"] == "enabled"
+            )
+            tool_name = "click_element"
+            arguments = {
+                "article_token": summary["article_token"],
+                "page_id": summary["page_id"],
+                "revision": summary["revision"],
+                "surface_id": element["surface_id"],
+                "element_id": element["element_id"],
+            }
+            self._clicked = True
+        else:
+            tool_name = "stop"
+            arguments = {
+                "article_token": summary["article_token"],
+                "page_id": summary["page_id"],
+                "revision": summary["revision"],
+                "reason": "normal-miss",
+            }
+        encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+        return AgentToolCall(
+            tool_name=tool_name,
+            arguments=encoded,
+            provenance=AgentProvenance(
+                provider=self.provider_name,
+                model=call.model,
+                input_sha256=call.input_sha256,
+                parameters_sha256=sha256_digest(b"installed-generic-browser-agent"),
+                usage=AgentUsage(output_tokens=1, response_bytes=len(arguments)),
+            ),
+        )
+
+
+def _agent_runtime() -> AgentRuntime:
+    return AgentRuntime(
+        adapter=_Agent(),
+        browser=AgentRoleBinding(
+            role=AgentRole.BROWSER,
+            model="installed-fixture-model",
+            capabilities=AgentModelCapabilities(
+                context_window_tokens=1_000_000,
+                max_output_tokens=131_072,
+                image_input=True,
+                tool_decision=True,
+                supported_image_media_types=frozenset(
+                    {BROWSER_OBSERVATION_MEDIA_TYPE, "image/png"}
+                ),
+                max_image_count=1,
+                max_image_bytes=2 * 1024 * 1024,
+            ),
+            limits=AgentCallLimits(
+                max_prompt_bytes=131_072,
+                max_input_bytes=2 * 1024 * 1024,
+                max_request_bytes=3 * 1024 * 1024,
+                max_response_bytes=1 * 1024 * 1024,
+                max_result_bytes=1 * 1024 * 1024,
+                max_output_tokens=131_072,
+                context_window_tokens=1_000_000,
+            ),
+        ),
+    )
+
+
 pdf = _pdf()
 resolver = _Resolver()
 factory = _Factory(pdf)
@@ -351,38 +421,9 @@ client = BrowserClient(
     coordinator=AccessCoordinator(),
     destination_policy=DestinationPolicy(allowed_classes=frozenset({AddressClass.PUBLIC})),
 )
-rule = BrowserSiteRule(
-    rule_id="controlled-publisher",
-    revision=1,
-    landing_origin="https://publisher.test",
-    allowed_origins=(
-        "https://publisher.test",
-        "https://downloads.publisher.test",
-    ),
-    web_scope_provider_name="publisher.test",
-    actions=(
-        BrowserRuleAction(
-            kind=BrowserActionKind.CLICK,
-            selector="a[data-action='pdf']",
-        ),
-    ),
-    capture_url_prefixes=("https://downloads.publisher.test/article.pdf",),
-    page_markers=(
-        BrowserPageMarker(
-            marker_id="login-required",
-            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            css_selectors=("#login-required",),
-        ),
-        BrowserPageMarker(
-            marker_id="mfa-required",
-            kind=BrowserPageMarkerKind.MFA_REQUIRED,
-            css_selectors=("#mfa-required",),
-        ),
-    ),
-)
 source = ControlledBrowserPdfSource(
     runner=client,
-    rule_catalog=BrowserRuleCatalog((rule,)),
+    agent_runtime=_agent_runtime(),
     provenance_id_factory=lambda: ProvenanceId(_id(10, 1)),
     clock=lambda: _TIME,
 )
@@ -427,7 +468,7 @@ request = AcquisitionRequest(
 )
 evidence = build_acquisition_evidence(request)
 tracker = CandidateKeyTracker()
-deliveries = list(source._deliveries(request, evidence, tracker))
+deliveries = list(source._deliveries(request, evidence, (), tracker))
 if len(deliveries) != 1:
     raise RuntimeError("controlled Browser did not produce exactly one delivery")
 delivery = deliveries[0]
@@ -452,7 +493,7 @@ payload = {
         "source_name": delivery.candidate.source_name,
     },
     "evidence": {
-        "applicable": bool(source._actions(evidence)),
+        "applicable": bool(source._actions(evidence, ())),
         "priority": [item.value for item in evidence.priority],
         "tried_candidate_keys": sorted(tracker.tried_candidate_keys),
     },
@@ -461,7 +502,7 @@ payload = {
         "source": source_module.__file__,
     },
     "production_boundary": {
-        "catalog_rule_count": len(PRODUCTION_BROWSER_RULE_CATALOG.rules),
+        "browser_strategy": "generic-agent",
         "readiness_code": None
         if CONTROLLED_BROWSER_PRODUCTION_STATUS.failure is None
         else CONTROLLED_BROWSER_PRODUCTION_STATUS.failure.code,

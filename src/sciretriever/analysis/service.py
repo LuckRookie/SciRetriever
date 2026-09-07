@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -16,11 +17,17 @@ from sciretriever.agents.api import (
     AgentStructuredResult,
 )
 from sciretriever.analysis.content import (
+    ContentAnalysisFailure,
     ContentAnalysisInput,
     ContentAnalysisLimits,
     content_analysis_failure,
 )
+from sciretriever.analysis.failures import (
+    analysis_internal_failure,
+    normalize_agent_failure,
+)
 from sciretriever.analysis.markdown import (
+    ContentMarkdownDraft,
     build_content_analysis_call,
     parse_content_markdown_response,
     render_canonical_markdown,
@@ -43,6 +50,7 @@ from sciretriever.analysis.ports import (
     StagedContentMarkdown,
     canonical_json_bytes,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.analysis import (
     ArtifactRef,
     LiteratureContentProposal,
@@ -61,9 +69,11 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.model.provenance import Provenance
+from sciretriever.model.report import StableFailure
 
 _PARAMETER_SCHEMA = "sciretriever-analysis-content-parameters-v1"
 _CORE_REQUEST_COUNT = 2
+_LOGGER = get_logger("sciretriever.analysis")
 
 ProvenanceIdFactory = Callable[[], ProvenanceId]
 Clock = Callable[[], UtcTimestamp]
@@ -219,17 +229,11 @@ class AnalysisService:
             raise content_analysis_failure("analysis-content-contract") from None
 
         self._require_not_cancelled(cancel_event)
-        response = self._complete_content_call(content_call)
-        try:
-            draft = parse_content_markdown_response(
-                response,
-                parser_result=analysis_input.parser_result,
-                parser_markdown=parser_markdown,
-            )
-        except ContentMarkdownError:
-            raise content_analysis_failure("analysis-content-draft") from None
-        except (ValidationError, UnicodeError, TypeError, ValueError, RecursionError):
-            raise content_analysis_failure("analysis-content-draft") from None
+        response, draft = self._execute_content_stage(
+            content_call,
+            parser_result=analysis_input.parser_result,
+            parser_markdown=parser_markdown,
+        )
 
         self._require_not_cancelled(cancel_event)
         self._require_current_input(identity)
@@ -331,11 +335,24 @@ class AnalysisService:
         try:
             matches = self._current_inputs.current_input_matches(identity)
         except Exception:
+            _LOGGER.info(
+                "event=analysis-current-input-checked outcome=failed "
+                "code=analysis-content-input-check retryable=true"
+            )
             raise content_analysis_failure("analysis-content-input-check") from None
         if type(matches) is not bool:
+            _LOGGER.info(
+                "event=analysis-current-input-checked outcome=failed "
+                "code=analysis-content-contract retryable=false"
+            )
             raise content_analysis_failure("analysis-content-contract")
         if not matches:
+            _LOGGER.info(
+                "event=analysis-current-input-checked outcome=stale "
+                "code=analysis-content-input-stale retryable=false"
+            )
             raise content_analysis_failure("analysis-content-input-stale")
+        _LOGGER.debug("event=analysis-current-input-checked outcome=current")
 
     def _execute_metadata_stage(
         self,
@@ -357,12 +374,9 @@ class AnalysisService:
                 cancel_event=cancel_event,
             )
         except MetadataAnalysisFailure as error:
-            raise content_analysis_failure(
-                "analysis-content-metadata-stage",
-                retryable=error.failure.retryable,
-            ) from None
+            raise ContentAnalysisFailure(error.failure) from None
         except Exception:
-            raise content_analysis_failure("analysis-content-metadata-stage") from None
+            raise ContentAnalysisFailure(analysis_internal_failure()) from None
 
     def _validate_metadata_receipt(self, receipt: MetadataAnalysisReceipt) -> None:
         aligned = (
@@ -385,23 +399,54 @@ class AnalysisService:
                 cancel_event=call.cancel_event,
             )
         except AgentFailure as error:
-            raise content_analysis_failure(
-                "analysis-content-llm",
-                retryable=error.failure.retryable,
+            raise ContentAnalysisFailure(
+                normalize_agent_failure(
+                    error.failure,
+                    cancellation_is_content_interruption=True,
+                )
             ) from None
         except Exception:
-            raise content_analysis_failure("analysis-content-llm") from None
+            raise ContentAnalysisFailure(analysis_internal_failure()) from None
         if not isinstance(response, AgentStructuredResult):
-            raise content_analysis_failure(
-                "analysis-content-llm",
-                retryable=False,
-            )
+            raise ContentAnalysisFailure(analysis_internal_failure())
         if response.provenance.input_sha256 != call.request.input_sha256:
-            raise content_analysis_failure(
-                "analysis-content-llm",
-                retryable=False,
-            )
+            raise ContentAnalysisFailure(analysis_internal_failure())
         return response
+
+    def _execute_content_stage(
+        self,
+        call: AnalysisCall,
+        *,
+        parser_result: ParserResult,
+        parser_markdown: str,
+    ) -> tuple[AgentStructuredResult, ContentMarkdownDraft]:
+        started = time.monotonic()
+        _LOGGER.info("event=analysis-stage-started stage=content")
+        try:
+            response = self._complete_content_call(call)
+            try:
+                draft = parse_content_markdown_response(
+                    response,
+                    parser_result=parser_result,
+                    parser_markdown=parser_markdown,
+                )
+            except ContentMarkdownError:
+                raise content_analysis_failure("analysis-content-draft") from None
+            except (ValidationError, UnicodeError, TypeError, ValueError, RecursionError):
+                raise content_analysis_failure("analysis-content-draft") from None
+        except ContentAnalysisFailure as error:
+            _log_stage_failure("content", error.failure, started=started)
+            raise
+        except Exception:
+            failure = analysis_internal_failure()
+            _log_stage_failure("content", failure, started=started)
+            raise ContentAnalysisFailure(failure) from None
+        _LOGGER.info(
+            "event=analysis-stage-finished stage=content outcome=success result=usable "
+            "elapsed_ms=%d",
+            _elapsed_ms(started),
+        )
+        return response, draft
 
     def _render_markdown(
         self,
@@ -510,13 +555,21 @@ class AnalysisService:
             raise content_analysis_failure("analysis-content-contract") from None
 
     def _publish_markdown(self, staged: StagedContentMarkdown) -> None:
+        started = time.monotonic()
+        _LOGGER.info("event=analysis-publication-started artifact=markdown")
         try:
             published = self._artifact_publisher.publish_markdown(staged)
         except Exception:
+            _log_publication_failure(started)
             raise content_analysis_failure("analysis-content-artifact-publication") from None
         published_value = _runtime_value(published)
         if not isinstance(published_value, ArtifactRef) or published_value != staged.artifact:
+            _log_publication_failure(started)
             raise content_analysis_failure("analysis-content-artifact-publication")
+        _LOGGER.info(
+            "event=analysis-publication-finished artifact=markdown outcome=success elapsed_ms=%d",
+            _elapsed_ms(started),
+        )
 
     @staticmethod
     def _require_not_cancelled(cancel_event: threading.Event | None) -> None:
@@ -529,7 +582,33 @@ class AnalysisService:
         if type(cancelled) is not bool:
             raise content_analysis_failure("analysis-content-contract")
         if cancelled:
+            _LOGGER.info(
+                "event=analysis-operation-finished outcome=cancelled "
+                "code=analysis-content-cancelled retryable=true"
+            )
             raise content_analysis_failure("analysis-content-cancelled")
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(int((time.monotonic() - started) * 1000), 0)
+
+
+def _log_stage_failure(stage: str, failure: StableFailure, *, started: float) -> None:
+    _LOGGER.info(
+        "event=analysis-stage-finished stage=%s outcome=failed code=%s retryable=%s elapsed_ms=%d",
+        stage,
+        failure.code,
+        str(failure.retryable).lower(),
+        _elapsed_ms(started),
+    )
+
+
+def _log_publication_failure(started: float) -> None:
+    _LOGGER.info(
+        "event=analysis-publication-finished artifact=markdown outcome=failed "
+        "code=analysis-content-artifact-publication retryable=true elapsed_ms=%d",
+        _elapsed_ms(started),
+    )
 
 
 __all__ = (

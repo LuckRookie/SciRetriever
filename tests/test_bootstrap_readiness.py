@@ -456,7 +456,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
 
         self.assertEqual(budget.max_input_bytes, 8_388_608)
         self.assertEqual(budget.max_output_tokens, 256)
-        self.assertEqual(budget.context_window_tokens, 8_388_864)
+        self.assertEqual(budget.context_window_tokens, 1_000_000)
         self.assertEqual(budget.overall_timeout_seconds, 180.0)
 
     def test_reference_only_analysis_receives_a_usable_agent_input_budget(self) -> None:
@@ -479,7 +479,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         budget = _agent_provider_limits(configuration)
 
         self.assertEqual(budget.max_input_bytes, 8_388_608)
-        self.assertEqual(budget.context_window_tokens, 8_388_864)
+        self.assertEqual(budget.context_window_tokens, 1_000_000)
+
+    def test_browser_agent_receives_the_task_owned_128k_output_budget(self) -> None:
+        from sciretriever.bootstrap.services import _agent_provider_limits
+
+        budget = _agent_provider_limits(
+            parse_configuration(""),
+            required_roles=frozenset({AgentRole.BROWSER}),
+        )
+
+        self.assertEqual(budget.max_output_tokens, 131_072)
+        self.assertEqual(budget.context_window_tokens, 1_000_000)
 
     def test_browser_agent_dependency_is_typed_and_complete(self) -> None:
         from sciretriever.acquisition.registry import BrowserAgentDependency
@@ -614,10 +625,17 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 [execution]
                 max_concurrency = 5
 
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
-                browser_max_concurrency = 3
+                [providers.fixture-agents]
+                api = "openai-responses"
+                base_url = "http://127.0.0.1:8765/v1"
+                [models."fixture-agents/browser-model"]
+                reasoning = "default"
+                image = true
+                [browser]
+                model = "fixture-agents/browser-model"
+                enabled = true
+                profile = "fixture-profile"
+                max_concurrency = 3
                 """
             )
             with (
@@ -682,17 +700,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                         for binding in registry.route_registry.bindings
                         if binding.spec.tier.value == "controlled-browser"
                     ),
-                    (
-                        "browser:acs-publications",
-                        "browser:aip-publishing",
-                        "browser:elsevier-sciencedirect",
-                        "browser:iopscience",
-                        "browser:oxford-academic",
-                        "browser:rsc-publishing",
-                        "browser:science-aaas",
-                        "browser:springerlink",
-                        "browser:wiley-online-library",
-                    ),
+                    ("browser:generic",),
                 )
 
             self.assertEqual(full.acquisition_runtime.cohort_executor._max_concurrency, 4)
@@ -708,7 +716,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 full.acquisition_runtime.browser_admission._configuration.runtime_ready
             )
             full_registry = cast(AcquisitionRegistry, full.acquisition_registry)
-            full_browser = full_registry.route_registry.binding_for("browser:springerlink")
+            full_browser = full_registry.route_registry.binding_for("browser:generic")
             self.assertEqual(full_browser.spec.readiness.value, "disabled")
             self.assertIsNone(full_browser.adapter)
             self.assertEqual(scoped.acquisition_runtime.cohort_executor._max_concurrency, 5)
@@ -724,7 +732,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 scoped.acquisition_runtime.browser_admission._configuration.runtime_ready
             )
             scoped_registry = cast(AcquisitionRegistry, scoped.acquisition_registry)
-            scoped_browser = scoped_registry.route_registry.binding_for("browser:springerlink")
+            scoped_browser = scoped_registry.route_registry.binding_for("browser:generic")
             self.assertEqual(scoped_browser.spec.readiness.value, "ready")
             self.assertIsNotNone(scoped_browser.adapter)
             full.acquisition_runtime.browser_session_broker.close()
@@ -781,11 +789,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     [models."fixture-agents/browser-model"]
                     reasoning = "default"
                     image = {str(browser_image).lower()}
-                    [download]
+                    [browser]
                     model = "fixture-agents/browser-model"
-                    browser_enabled = true
-                    browser_profile = "fixture-profile"
-                    browser_controller = "agent"
+                    enabled = true
+                    profile = "fixture-profile"
                     {analysis}
                     """
                 )
@@ -852,7 +859,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     if binding.adapter is not None
                     and binding.spec.tier.value == "controlled-browser"
                 ]
-                self.assertEqual(len(content_routes), 9)
+                self.assertEqual(len(content_routes), 1)
                 self.assertEqual(
                     {id(getattr(route, "_agent_runtime")) for route in content_routes},
                     {id(runtime)},
@@ -867,7 +874,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     if binding.adapter is not None
                     and binding.spec.tier.value == "controlled-browser"
                 ]
-                self.assertEqual(len(asset_routes), 9)
+                self.assertEqual(len(asset_routes), 1)
                 self.assertEqual(
                     {id(getattr(route, "_agent_runtime")) for route in asset_routes},
                     {id(runtime)},
@@ -2069,8 +2076,8 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 session.access_coordinator,
             )
             self.assertIs(session.http_client._coordinator, session.access_coordinator)
-            self.assertEqual(session.browser_status.production_route_count, 9)
-            self.assertEqual(session.browser_status.automatic_route_count, 9)
+            self.assertEqual(session.browser_status.production_route_count, 1)
+            self.assertEqual(session.browser_status.automatic_route_count, 1)
             self.assertFalse(session.browser_status.automatic_acquisition_available)
             self.assertFalse(session.browser_status.runtime.launch_assessed)
             self.assertEqual(session.browser_status.mode, "headed-fixed-profile")
@@ -2178,7 +2185,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 )
             )
 
-    def test_enabled_production_browser_probe_uses_the_publisher_session_key(self) -> None:
+    def test_enabled_production_browser_probe_uses_the_selected_profile_session_key(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import BrowserClient
@@ -2189,9 +2196,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
                 """
             )
             with _ready_cloak_probe_patches():
@@ -2217,10 +2224,10 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(run_browser.call_count, 1)
             session_key = run_browser.call_args.kwargs["session_key"]
             self.assertIs(type(session_key), str)
-            self.assertEqual(session_key, "springerlink")
+            self.assertEqual(session_key, "fixture-profile")
             self.assertIs(run_browser.call_args.kwargs["navigation_only"], False)
 
-    def test_each_browser_probe_keeps_its_own_policy_session_and_landing_origin(
+    def test_each_browser_probe_uses_generic_policy_and_selected_profile_on_its_landing_origin(
         self,
     ) -> None:
         import sciretriever.bootstrap as bootstrap
@@ -2233,60 +2240,15 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         )
 
         expected = {
-            "acs-publications": (
-                "acs-publications",
-                "acs-publications",
-                "https://pubs.acs.org",
-                30.0,
-            ),
-            "aip-publishing": (
-                "aip-publishing",
-                "aip-publishing",
-                "https://pubs.aip.org",
-                30.0,
-            ),
-            "elsevier-sciencedirect": (
-                "elsevier",
-                "elsevier",
-                "https://www.sciencedirect.com",
-                20.0,
-            ),
-            "iopscience": (
-                "iopscience",
-                "iopscience",
-                "https://iopscience.iop.org",
-                30.0,
-            ),
-            "oxford-academic": (
-                "oxford-academic",
-                "oxford-academic",
-                "https://academic.oup.com",
-                30.0,
-            ),
-            "rsc-publishing": (
-                "rsc-publishing",
-                "rsc-publishing",
-                "https://pubs.rsc.org",
-                30.0,
-            ),
-            "science-aaas": (
-                "science-aaas",
-                "science-aaas",
-                "https://www.science.org",
-                30.0,
-            ),
-            "springerlink": (
-                "springerlink",
-                "springerlink",
-                "https://link.springer.com",
-                10.0,
-            ),
-            "wiley-online-library": (
-                "wiley",
-                "wiley",
-                "https://onlinelibrary.wiley.com",
-                20.0,
-            ),
+            "acs-publications": "https://pubs.acs.org",
+            "aip-publishing": "https://pubs.aip.org",
+            "elsevier-sciencedirect": "https://www.sciencedirect.com",
+            "iopscience": "https://iopscience.iop.org",
+            "oxford-academic": "https://academic.oup.com",
+            "rsc-publishing": "https://pubs.rsc.org",
+            "science-aaas": "https://www.science.org",
+            "springerlink": "https://link.springer.com",
+            "wiley-online-library": "https://onlinelibrary.wiley.com",
         }
         with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probes-") as temporary:
             home = Path(temporary) / "home"
@@ -2294,9 +2256,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
                 """
             )
             with _ready_cloak_probe_patches():
@@ -2305,18 +2267,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     credentials_home=home,
                 )
 
-            self.assertEqual(session.browser_status.production_route_count, 9)
-            self.assertEqual(session.browser_status.automatic_route_count, 9)
+            self.assertEqual(session.browser_status.production_route_count, 1)
+            self.assertEqual(session.browser_status.automatic_route_count, 1)
             self.assertTrue(session.browser_status.automatic_acquisition_available)
             targets = cast(Any, session.browser_probe_port)._targets
             self.assertEqual(set(targets), set(expected))
-            for access_key, (group, session_key, origin, interval) in expected.items():
+            for access_key, origin in expected.items():
                 with self.subTest(access_key=access_key):
                     target = targets[access_key]
-                    self.assertEqual(target.policy.rate_limit_group, group)
-                    self.assertEqual(target.policy.minimum_start_interval, interval)
-                    self.assertEqual(target.session_key, session_key)
-                    self.assertEqual(target.rule.landing_origin, origin)
+                    self.assertEqual(target.policy.rate_limit_group, "browser-generic")
+                    self.assertEqual(target.policy.minimum_start_interval, 1.0)
+                    self.assertEqual(target.session_key, "fixture-profile")
+                    self.assertEqual(target.origin, origin)
 
             no_download = AccessFailure(
                 code="no-download",
@@ -2343,7 +2305,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     locator=request,
                     status_code=200,
                 )
-                cast(Any, kwargs["controller"]).execution.run(flow_session)
+                cast(Any, kwargs["controller"]).run(flow_session)
                 observed.append((scope, request, policy, cast(str, kwargs["session_key"])))
                 return no_download
 
@@ -2363,18 +2325,18 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 all(result.article_entitlement == "not-proven" for result in results.values())
             )
             self.assertIs(unknown.outcome, ProbeOutcome.SKIPPED)
-            self.assertEqual(unknown.failure_code, "browser-production-route-unavailable")
+            self.assertEqual(unknown.failure_code, "browser-probe-unavailable")
             self.assertEqual(run_browser.call_count, len(expected))
             self.assertEqual(
                 observed,
                 [
                     (
-                        AccessScope(group, "web"),
+                        AccessScope(access_key, "web"),
                         f"{origin}/",
                         AccessPolicy(max_concurrency=1),
-                        session_key,
+                        "fixture-profile",
                     )
-                    for group, session_key, origin, _interval in expected.values()
+                    for access_key, origin in expected.items()
                 ],
             )
 
@@ -2383,7 +2345,6 @@ class BootstrapObjectGraphTests(unittest.TestCase):
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import (
             BrowserClient,
-            BrowserDestinationKind,
             BrowserPageObservation,
         )
 
@@ -2393,9 +2354,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
                 """
             )
             with _ready_cloak_probe_patches():
@@ -2411,18 +2372,13 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             )
 
             def redirected_login(*_args: object, **kwargs: Any) -> AccessFailure:
-                destination_guard = cast(Any, kwargs["destination_guard"])
-                destination_guard.check(
-                    "https://idp.springer.com/authorize",
-                    BrowserDestinationKind.NAVIGATION,
-                )
                 controller = cast(Any, kwargs["controller"])
                 flow_session = mock.Mock()
                 flow_session.observe.return_value = BrowserPageObservation(
                     locator="https://idp.springer.com/authorize",
                     status_code=200,
                 )
-                controller.execution.run(flow_session)
+                controller.run(flow_session)
                 return no_download
 
             with mock.patch.object(
@@ -2439,7 +2395,7 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             self.assertEqual(result.article_entitlement, "not-proven")
             self.assertEqual(result.navigation_count, 1)
 
-    def test_wiley_probe_accepts_reviewed_landing_origin_alias(self) -> None:
+    def test_generic_probe_requires_the_exact_configured_target_origin(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import (
@@ -2454,9 +2410,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
                 """
             )
             with _ready_cloak_probe_patches():
@@ -2483,24 +2439,23 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                     locator="https://advanced.onlinelibrary.wiley.com/doi/10.1000/fixture",
                     status_code=200,
                 )
-                controller.execution.run(flow_session)
+                controller.run(flow_session)
                 return no_download
 
             with mock.patch.object(BrowserClient, "run", side_effect=reached_alias):
                 result = session.run_browser("wiley-online-library")
 
-            self.assertIs(result.outcome, ProbeOutcome.PASSED)
-            self.assertTrue(result.minimal_target_reached)
+            self.assertIs(result.outcome, ProbeOutcome.FAILED)
+            self.assertEqual(result.failure_code, "browser-probe-target-unreachable")
+            self.assertFalse(result.minimal_target_reached)
             self.assertEqual(result.navigation_count, 1)
 
-    def test_wiley_probe_uses_reviewed_challenge_dependency_facts(self) -> None:
+    def test_generic_probe_does_not_declare_publisher_challenge_dependencies(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.model.access import AccessFailure
         from sciretriever.network.browser import (
             BrowserClient,
-            BrowserDestinationKind,
             BrowserPageObservation,
-            BrowserRequestObservation,
         )
 
         with tempfile.TemporaryDirectory(
@@ -2511,9 +2466,9 @@ class BootstrapObjectGraphTests(unittest.TestCase):
             initialize_browser_profile("fixture-profile", home=home)
             configuration = parse_configuration(
                 """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
                 """
             )
             with _ready_cloak_probe_patches():
@@ -2528,108 +2483,8 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 retryable=False,
             )
 
-            def reached_with_challenge(*_args: object, **kwargs: Any) -> AccessFailure:
-                destination_guard = cast(Any, kwargs["destination_guard"])
-                destination_guard.check(
-                    "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/v1",
-                    BrowserDestinationKind.REQUEST,
-                )
-                destination_guard.check_request(
-                    BrowserRequestObservation(
-                        locator="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/v1",
-                        kind=BrowserDestinationKind.REQUEST,
-                        resource_type="script",
-                        is_navigation=False,
-                        is_top_frame=False,
-                        frame_depth=1,
-                        frame_ancestry=("https://onlinelibrary.wiley.com/",),
-                        top_frame_locator="https://onlinelibrary.wiley.com/",
-                    )
-                )
-                cast(Any, kwargs["controller"]).execution.run(
-                    mock.Mock(
-                        observe=mock.Mock(
-                            return_value=BrowserPageObservation(
-                                locator="https://advanced.onlinelibrary.wiley.com/doi/10.1000/fixture",
-                                status_code=200,
-                            )
-                        )
-                    )
-                )
-                return no_download
-
-            with mock.patch.object(BrowserClient, "run", side_effect=reached_with_challenge):
-                result = session.run_browser("wiley-online-library")
-
-        self.assertIs(result.outcome, ProbeOutcome.PASSED)
-        self.assertTrue(result.challenge_dependency_declared)
-        self.assertEqual(result.challenge_resource_admitted_count, 1)
-        self.assertEqual(result.challenge_resource_blocked_count, 0)
-        self.assertFalse(result.persisted)
-        payload = result.model_dump(mode="json")
-        self.assertEqual(payload["challenge_dependency_declared"], True)
-        self.assertEqual(payload["challenge_resource_admitted_count"], 1)
-        self.assertEqual(payload["challenge_resource_blocked_count"], 0)
-        self.assertNotIn("cloudflare", str(payload).casefold())
-
-    def test_wiley_probe_rejects_unreviewed_challenge_and_login_origins(self) -> None:
-        import sciretriever.bootstrap as bootstrap
-        from sciretriever.model.access import AccessFailure
-        from sciretriever.network.browser import (
-            BrowserClient,
-            BrowserDestinationKind,
-            BrowserPageObservation,
-            BrowserRequestObservation,
-        )
-
-        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-guard-") as temporary:
-            home = Path(temporary) / "home"
-            home.mkdir(mode=0o700)
-            initialize_browser_profile("fixture-profile", home=home)
-            configuration = parse_configuration(
-                """
-                [download]
-                browser_enabled = true
-                browser_profile = "fixture-profile"
-                """
-            )
-            with _ready_cloak_probe_patches():
-                session = bootstrap.build_production_configuration_probe_session(
-                    configuration,
-                    credentials_home=home,
-                )
-            no_download = AccessFailure(
-                code="no-download",
-                reason="The fixture Browser produced no download.",
-                action="Inspect the fixture Browser state.",
-                retryable=False,
-            )
-
-            def rejected_challenge(*_args: object, **kwargs: Any) -> AccessFailure:
-                destination_guard = cast(Any, kwargs["destination_guard"])
-                with self.assertRaises(ValueError):
-                    destination_guard.check(
-                        "https://idp.wiley.com/login",
-                        BrowserDestinationKind.NAVIGATION,
-                    )
-                destination_guard.check(
-                    "https://challenges.cloudflare.com/other/not-reviewed",
-                    BrowserDestinationKind.REQUEST,
-                )
-                with self.assertRaises(ValueError):
-                    destination_guard.check_request(
-                        BrowserRequestObservation(
-                            locator="https://challenges.cloudflare.com/other/not-reviewed",
-                            kind=BrowserDestinationKind.REQUEST,
-                            resource_type="script",
-                            is_navigation=False,
-                            is_top_frame=False,
-                            frame_depth=1,
-                            frame_ancestry=("https://onlinelibrary.wiley.com/",),
-                            top_frame_locator="https://onlinelibrary.wiley.com/",
-                        )
-                    )
-                cast(Any, kwargs["controller"]).execution.run(
+            def reached_target(*_args: object, **kwargs: Any) -> AccessFailure:
+                cast(Any, kwargs["controller"]).run(
                     mock.Mock(
                         observe=mock.Mock(
                             return_value=BrowserPageObservation(
@@ -2641,16 +2496,74 @@ class BootstrapObjectGraphTests(unittest.TestCase):
                 )
                 return no_download
 
-            with mock.patch.object(BrowserClient, "run", side_effect=rejected_challenge):
+            with mock.patch.object(BrowserClient, "run", side_effect=reached_target):
                 result = session.run_browser("wiley-online-library")
 
-        self.assertIs(result.outcome, ProbeOutcome.FAILED)
-        self.assertEqual(result.failure_code, "browser-probe-challenge-resource-blocked")
+        self.assertIs(result.outcome, ProbeOutcome.PASSED)
+        self.assertFalse(result.challenge_dependency_declared)
+        self.assertEqual(result.challenge_resource_admitted_count, 0)
+        self.assertEqual(result.challenge_resource_blocked_count, 0)
+        self.assertFalse(result.persisted)
+
+    def test_generic_probe_guard_allows_safe_cross_origin_navigation(self) -> None:
+        import sciretriever.bootstrap as bootstrap
+        from sciretriever.model.access import AccessFailure
+        from sciretriever.network.browser import (
+            BrowserClient,
+            BrowserDestinationKind,
+            BrowserPageObservation,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sciretriever-browser-probe-guard-") as temporary:
+            home = Path(temporary) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            configuration = parse_configuration(
+                """
+                [browser]
+                enabled = true
+                profile = "fixture-profile"
+                """
+            )
+            with _ready_cloak_probe_patches():
+                session = bootstrap.build_production_configuration_probe_session(
+                    configuration,
+                    credentials_home=home,
+                )
+            no_download = AccessFailure(
+                code="no-download",
+                reason="The fixture Browser produced no download.",
+                action="Inspect the fixture Browser state.",
+                retryable=False,
+            )
+
+            def reached_after_cross_origin(*_args: object, **kwargs: Any) -> AccessFailure:
+                destination_guard = cast(Any, kwargs["destination_guard"])
+                destination_guard.check(
+                    "https://idp.wiley.com/login",
+                    BrowserDestinationKind.NAVIGATION,
+                )
+                cast(Any, kwargs["controller"]).run(
+                    mock.Mock(
+                        observe=mock.Mock(
+                            return_value=BrowserPageObservation(
+                                locator="https://onlinelibrary.wiley.com/",
+                                status_code=200,
+                            )
+                        )
+                    )
+                )
+                return no_download
+
+            with mock.patch.object(BrowserClient, "run", side_effect=reached_after_cross_origin):
+                result = session.run_browser("wiley-online-library")
+
+        self.assertIs(result.outcome, ProbeOutcome.PASSED)
         self.assertTrue(result.browser_launched)
         self.assertTrue(result.minimal_target_reached)
-        self.assertTrue(result.challenge_dependency_declared)
+        self.assertFalse(result.challenge_dependency_declared)
         self.assertEqual(result.challenge_resource_admitted_count, 0)
-        self.assertEqual(result.challenge_resource_blocked_count, 1)
+        self.assertEqual(result.challenge_resource_blocked_count, 0)
         self.assertEqual(result.navigation_count, 1)
 
 

@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；IOPscience 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://iopscience.iop.org`
-- 当前仓库接入状态：`production-ready`；Browser rule 已进入生产 catalog，总开关启用且 runtime 就绪后逐文章检查机构 IP 访问；无专属 Public 或授权 API route
+- 当前仓库接入状态：`production-ready` Profile；无专属 Public 或授权 API route；Profile 只启用首页可达性 probe，真实文章统一使用 `browser:generic`
 
 ## 1. 官方入口与证据
 
@@ -54,31 +54,32 @@ IOP policy 明确把 full text 与 supplementary data 分开。即使约定交�
 - 匿名 IOPscience 请求在当前环境进入 PerfDrive CAPTCHA，本轮没有绕过；
 - ScanSci 的特定高校成功不能推广到其它用户或长期平台合同。
 
-仓库已经建立技术规则 `iopscience-pdf@2`，用合成 fixture 验证 IOPscience 精确 origin、强 DOI
-归属、primary/supplement/wrong-article 分类、封闭页面状态，以及独立 `iopscience` risk/session
-group、组内并发 1 和 30 秒审慎基线。规则与生产对象图已达到工程准入要求并进入 production
-catalog；operator 显式启用受控 Browser 后，route 才能执行逐文章机构 IP 尝试。该总开关不能
-证明组织授权或文章 entitlement，operator 仍须确认使用符合 IOP 条款。IOP 不会因与 AIP/APS
-同属物理出版领域而共享风险组；约定 SFTP/XML/PDF 交付协议也不会被冒充成 Browser 成功证据。
+当前实现没有 IOP 专属 Browser route、rule、selector 或调度组。可信 IOP landing/asset hint 或
+安全 DOI resolve 形成文章起点后统一进入 `browser:generic`；Agent 根据稳定页面观察选择封闭
+动作，Network 负责页面稳定与 capture，Acquisition 再用目标 DOI、标题、作者、起点 lineage 和
+PDF 字节区分正文、supplement 与 wrong-article。Profile 的 `browser_probe_enabled = true` 只
+允许配置中心打开 IOP 首页检查 runtime/目标可达，不下载正文或证明 entitlement。operator 显式
+启用 Browser 仍须确认使用符合 IOP 条款；约定 SFTP/XML/PDF 交付协议也不能冒充 Browser 成功
+证据。
 
 ## 5. 当前实现边界
 
-secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，技术
-规则位于 `src/sciretriever/acquisition/sources/browser_rules/providers/iop.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/iopscience.json`。Fixture 证明弱/强 DOI 证据边界、约定交付
-与公共 API 的分离、正文/supplement 归属和页面状态；不保存真实
-DOI、正文、Cookie、账号、机构或通信内容。
+secret-free production Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一
+Profile fixture 为 `tests/fixtures/acquisition/profiles/iopscience.json`。Fixture 证明弱/强 DOI
+证据边界、约定交付与公共 API 的分离、首页 probe 和外部政策证据；不再保存页面规则、调度组或
+文章下载准入，也不保存真实 DOI、正文、Cookie、账号、机构或通信内容。
 
 现有 Metadata/OA 来源若明确提供安全 IOP PDF/landing `AssetHint`，仍可由通用第一层在用户授权
 边界内尝试，并接受实际字节、PDF reader、页面树、来源依据和不可变发布检查。Browser 总开关
-关闭时 Profile 不构造可执行 Browser adapter；启用后也只使用审核过的 `/article/{doi}/pdf`
-流程、固定调度和逐文章检查，不联系其它 IOP 服务、不新增 credential section，也不证明当前
-文章 entitlement。
+关闭时通用 route 不构造可执行 Browser adapter；启用后仍只从合法文章起点开始并经过通用
+Network guard 和 Acquisition 文章归属验收，不联系其它 IOP 服务、不新增 credential section，
+也不证明当前文章 entitlement。
 本轮没有执行真实 IOP 文章 probe 或正文下载。
 
 ## 6. 2026-08-22 Cloak 切换门现场证据
 
-固定单篇、stock/Cloak 交替且同 Publisher 启动间隔至少 30 秒的真实 A/B 中，两套引擎都没有
+以下内容是旧规则执行器的历史现场证据，不是当前 `browser:generic` 的成功率。固定单篇、
+stock/Cloak 交替且同 Publisher 启动间隔至少 30 秒的真实 A/B 中，两套引擎都没有
 取得 PDF：stock 形成 `no-download`；Cloak 观察到 IOP 顶层流程三次转向
 `validate.perfdrive.com` 后，因该 origin 不属于已审核 IOP 规则而 fail closed 为 `policy`。
 定向诊断只保留 hostname、导航形状和有界结果，没有记录完整 URL、path/query、页面正文、
@@ -89,6 +90,6 @@ process/context 仍可被后续 Publisher 复用。
 文章 entitlement：同轮 stock 同样没有交付，差异只是 Cloak 对未审核顶层 challenge 导航明确
 拒绝。SciRetriever 不把 PerfDrive origin 临时加入普通 `allowed_origins`，不自动点击或破解
 CAPTCHA，也不以放宽 top-frame/文章绑定换取成功。CBA72 的本次服务器现场准入已将 IOP 记为
-`deferred`，直到有独立的、受限 PerfDrive 生命周期合同或新的无 challenge 成功证据；这不删除
-`production-ready` 工程 rule，也不等于其它机构/Profile 全局 unsupported。离线
-IOP PDF response/download fixture 继续证明已审核成功链没有被删除。
+`deferred`；它不改变 `production-ready` Profile 状态，也不等于其它机构/Profile 全局
+unsupported。旧 IOP PDF response/download fixture 只作为通用 capture、错误分类与文章身份回归
+用例的来源，不再是生产页面规则。

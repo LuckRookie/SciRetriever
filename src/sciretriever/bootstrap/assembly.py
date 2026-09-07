@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from typing import cast
 
-from sciretriever.acquisition.browser_control import BrowserControllerKind
 from sciretriever.agents.api import AgentRole, AgentRuntime
 from sciretriever.bootstrap.browser import (
     PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS,
@@ -75,11 +74,7 @@ from sciretriever.configuration import (
     load_runtime_secrets,
     metadata_source_providers,
 )
-from sciretriever.model.configuration import (
-    BrowserController,
-    Configuration,
-    ParserConnectionMode,
-)
+from sciretriever.model.configuration import Configuration, ParserConnectionMode
 from sciretriever.parsing.ports import ParserPort
 
 
@@ -99,6 +94,18 @@ def _validate_low_level_inputs(
     except TypeError:
         raise BootstrapError("paths-not-ready") from None
     return catalog, artifacts
+
+
+def _configure_agent_debug_images(
+    runtime: AgentRuntime,
+    *,
+    logging_level: int,
+) -> AgentRuntime:
+    """Attach process-local image diagnostics only for an explicit Debug run."""
+
+    if logging_level <= logging.DEBUG:
+        return runtime.with_debug_image_recording()
+    return runtime
 
 
 def build_object_graph(  # noqa: C901, PLR0915
@@ -212,17 +219,12 @@ def build_object_graph(  # noqa: C901, PLR0915
     if not isinstance(credential_snapshot, CredentialLookup):
         raise BootstrapError("configuration-invalid")
     # Construct the single shared Agents runtime before Acquisition. Analysis
-    # is required by this complete graph; the Browser binding is required only
-    # when the frozen controller choice is Agent.
+    # is required by this complete graph; Browser has one Agent-controlled path.
     agent = external_dependencies.agents_factory(http_client, coordinator)
     if not isinstance(agent, AgentRuntime):
         raise BootstrapError("analysis-not-ready")
-    browser_controller = BrowserControllerKind(configuration.access.browser_controller.value)
-    browser_agent = (
-        _browser_agent_dependency(agent)
-        if browser_controller is BrowserControllerKind.AGENT
-        else None
-    )
+    agent = _configure_agent_debug_images(agent, logging_level=logging_level)
+    browser_agent = _browser_agent_dependency(agent) if configuration.browser.enabled else None
     metadata_registry = build_metadata_registry(
         configuration,
         credential_snapshot,
@@ -246,8 +248,8 @@ def build_object_graph(  # noqa: C901, PLR0915
             credentials=credential_snapshot,
             configured_sci_hub_resolver=external_dependencies.configured_sci_hub_resolver,  # type: ignore[arg-type]
             browser_client=browser_client,
-            browser_controller=browser_controller,
             browser_agent=browser_agent,
+            browser_runtime_failure=acquisition_runtime.browser_runtime_failure,
         ),
     )
     parser = external_dependencies.parser_factory(http_client, coordinator)
@@ -556,14 +558,10 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         ProductionEntryScope.CITATION_DISCOVERY,
         ProductionEntryScope.CONTENT_COMPLETION,
     }
-    needs_browser_agent = (
-        scope
-        in {
-            ProductionEntryScope.ASSET_COMPLETION,
-            ProductionEntryScope.CONTENT_COMPLETION,
-        }
-        and configuration.access.browser_controller is BrowserController.AGENT
-    )
+    needs_browser_agent = configuration.browser.enabled and scope in {
+        ProductionEntryScope.ASSET_COMPLETION,
+        ProductionEntryScope.CONTENT_COMPLETION,
+    }
     metadata_providers = metadata_source_providers(configuration)
     acquisition_providers = acquisition_source_providers(configuration)
     credential_providers = frozenset(configurable_credential_providers())
@@ -575,7 +573,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
         reference
         for enabled, reference in (
             (needs_analysis, configuration.analysis.model),
-            (needs_browser_agent, configuration.access.model),
+            (needs_browser_agent, configuration.browser.model),
         )
         if enabled and reference is not None
     )
@@ -644,6 +642,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 coordinator,
                 required_roles=frozenset({AgentRole.ANALYSIS}),
             )
+            agent = _configure_agent_debug_images(agent, logging_level=logging_level)
         elif scope is ProductionEntryScope.CONTENT_COMPLETION:
             required_roles = {AgentRole.ANALYSIS}
             if needs_browser_agent:
@@ -655,6 +654,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 coordinator,
                 required_roles=frozenset(required_roles),
             )
+            agent = _configure_agent_debug_images(agent, logging_level=logging_level)
             if needs_browser_agent:
                 browser_agent = _browser_agent_dependency(agent)
         elif scope is ProductionEntryScope.ASSET_COMPLETION and needs_browser_agent:
@@ -665,6 +665,7 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 coordinator,
                 required_roles=frozenset({AgentRole.BROWSER}),
             )
+            agent = _configure_agent_debug_images(agent, logging_level=logging_level)
             browser_agent = _browser_agent_dependency(agent)
     if needs_acquisition:
         assert coordinator is not None and http_client is not None
@@ -680,10 +681,8 @@ def _build_scoped_production_graph(  # noqa: C901, PLR0915
                 browser_session_broker=acquisition_runtime.browser_session_broker,
                 credentials=credentials,
                 browser_client=acquisition_runtime.browser_client,
-                browser_controller=BrowserControllerKind(
-                    configuration.access.browser_controller.value
-                ),
                 browser_agent=browser_agent,
+                browser_runtime_failure=acquisition_runtime.browser_runtime_failure,
             ),
         )
 

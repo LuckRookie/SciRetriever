@@ -251,6 +251,12 @@ _FAILURES: dict[str, tuple[str, str, str, bool]] = {
         "Restart the current operation.",
         False,
     ),
+    "internal": (
+        "agent-internal",
+        "The Agent adapter encountered an internal error.",
+        "Review the Debug transcript and adapter implementation.",
+        False,
+    ),
 }
 
 

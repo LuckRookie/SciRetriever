@@ -206,7 +206,7 @@ _ConfigurationSection = Literal[
     "providers",
     "models",
     "analyze",
-    "download",
+    "browser",
     "parsing",
 ]
 

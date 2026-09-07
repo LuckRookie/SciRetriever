@@ -13,10 +13,10 @@ from typing import Literal
 from pydantic import ValidationError
 
 from sciretriever.model.configuration import (
-    AccessConfig,
     AgentProtocol,
     AgentReasoningEffort,
     AnalysisConfig,
+    BrowserConfig,
     Configuration,
     ModelConfig,
     ModelProviderConfig,
@@ -126,7 +126,7 @@ def remove_model(current: Configuration, *, reference: str) -> ModelsConfig:
 
     if not isinstance(current, Configuration):
         raise TypeError("current must be a Configuration")
-    if reference in {current.analysis.model, current.access.model}:
+    if reference in {current.analysis.model, current.browser.model}:
         raise ValueError("model is still selected by a module")
     values = tuple(item for item in current.models.values if item.reference != reference)
     if len(values) == len(current.models.values):
@@ -188,17 +188,17 @@ def select_analysis_model(
     )
 
 
-def select_download_model(current: Configuration, *, reference: str) -> AccessConfig:
+def select_browser_model(current: Configuration, *, reference: str) -> BrowserConfig:
     """Select one image-capable model without changing Analyze."""
 
     if not isinstance(current, Configuration):
         raise TypeError("current must be a Configuration")
     model = current.models.get(reference)
     if model is None or not model.image:
-        raise ValueError("Download requires a configured image model")
-    selected = current.access.model_copy(update={"model": model.reference})
+        raise ValueError("Browser requires a configured image model")
+    selected = current.browser.model_copy(update={"model": model.reference})
     payload = current.model_dump(mode="python")
-    payload["access"] = selected
+    payload["browser"] = selected
     Configuration.model_validate(payload)
     return selected
 
@@ -206,13 +206,13 @@ def select_download_model(current: Configuration, *, reference: str) -> AccessCo
 def resolve_task_model(
     configuration: Configuration,
     *,
-    task: Literal["analyze", "download"],
+    task: Literal["analyze", "browser"],
 ) -> tuple[ModelProviderConfig, ModelConfig]:
     """Resolve one module selection to its Provider and configured model."""
 
     if not isinstance(configuration, Configuration):
         raise TypeError("configuration must be a Configuration")
-    reference = configuration.analysis.model if task == "analyze" else configuration.access.model
+    reference = configuration.analysis.model if task == "analyze" else configuration.browser.model
     model = configuration.models.get(reference)
     if model is None:
         raise ValueError(f"{task} model is not configured")
@@ -265,7 +265,7 @@ __all__ = (
     "remove_model_provider",
     "resolve_task_model",
     "select_analysis_model",
-    "select_download_model",
+    "select_browser_model",
     "upsert_model",
     "upsert_model_provider",
 )

@@ -208,9 +208,8 @@ def _browser_agent_configuration() -> Configuration:
         max_chunk_count = 1
         max_total_llm_requests = 3
         max_total_output_tokens = 192
-        [download]
+        [browser]
         model = "main/browser-probe-model"
-        browser_controller = "agent"
         """
     )
 
@@ -224,9 +223,8 @@ def _browser_agent_only_configuration() -> Configuration:
         [models."main/browser-probe-model"]
         reasoning = "default"
         image = true
-        [download]
+        [browser]
         model = "main/browser-probe-model"
-        browser_controller = "agent"
         """
     )
 
@@ -397,7 +395,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
             result = _session(configuration, home, transport).run_model("main/text-probe-model")
 
         self.assertIsNone(configuration.analysis.model)
-        self.assertIsNone(configuration.access.model)
+        self.assertIsNone(configuration.browser.model)
         self.assertIs(result.outcome, ProbeOutcome.PASSED)
         self.assertIsInstance(result.details, ModelConfigurationProbeDetails)
         details = cast(ModelConfigurationProbeDetails, result.details)
@@ -488,7 +486,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
                 image_input=True,
             )
 
-        self.assertIsNone(configuration.access.model)
+        self.assertIsNone(configuration.browser.model)
         self.assertIs(result.outcome, ProbeOutcome.PASSED)
         self.assertIsInstance(result.details, ModelConfigurationProbeDetails)
         details = cast(ModelConfigurationProbeDetails, result.details)
@@ -673,6 +671,7 @@ class CoreConfigurationProbeTests(unittest.TestCase):
         serialized = json.dumps(body, separators=(",", ":"))
         self.assertIn("probe_stop", serialized)
         self.assertIn("synthetic", serialized)
+        self.assertIn("data:image/jpeg;base64,", serialized)
         self.assertNotIn("Literature", serialized)
         self.assertNotIn("PDF", serialized)
         self.assertNotIn("page content", serialized)

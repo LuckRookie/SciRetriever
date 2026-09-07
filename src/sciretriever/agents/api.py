@@ -13,12 +13,12 @@ from .capabilities import (
     AgentCapabilityReadiness,
     AgentModelCapabilities,
     AgentRole,
-    browser_observation_input_ready,
 )
+from .debug import AgentDebugImageRecorder
 from .failures import AgentFailure
 from .messages import AgentImagePart, AgentTextPart
 from .providers.models import AgentModelCatalog, AgentModelSummary
-from .runtime import AgentRoleBinding, AgentRuntime
+from .runtime import AgentRoleBinding, AgentRoleIdentity, AgentRuntime
 from .tools import AgentToolCall, AgentToolDeclaration
 
 __all__ = (
@@ -27,6 +27,7 @@ __all__ = (
     "AgentCapability",
     "AgentCapabilityReadiness",
     "AgentFailure",
+    "AgentDebugImageRecorder",
     "AgentImagePart",
     "AgentModelCapabilities",
     "AgentModelCatalog",
@@ -35,11 +36,11 @@ __all__ = (
     "AgentResult",
     "AgentRole",
     "AgentRoleBinding",
+    "AgentRoleIdentity",
     "AgentRuntime",
     "AgentStructuredResult",
     "AgentTextPart",
     "AgentToolCall",
     "AgentToolDeclaration",
     "AgentUsage",
-    "browser_observation_input_ready",
 )

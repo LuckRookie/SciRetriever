@@ -7,6 +7,7 @@ from typing import cast
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from sciretriever.network.browser_control import BrowserObservationUnavailable
 from sciretriever.network.playwright import (
     PlaywrightRuntimeError,
     _ArticleContext,
@@ -97,11 +98,14 @@ class _ControlFrame:
         self._locators = locators
         self._frame_element = None if frame_bounds is None else _ControlFrameElement(frame_bounds)
         self.selectors: list[str] = []
+        self.evaluate_error: BaseException | None = None
 
     def frame_element(self) -> _ControlFrameElement | None:
         return self._frame_element
 
     def evaluate(self, _script: str, arguments: object) -> dict[str, object]:
+        if self.evaluate_error is not None:
+            raise self.evaluate_error
         if not isinstance(arguments, dict):
             raise AssertionError("unexpected frame evaluation argument")
         seed = arguments.get("seed")
@@ -145,9 +149,11 @@ class _ControlRawPage:
         self.go_back_calls: list[tuple[int, str]] = []
         self.wait_calls: list[tuple[str, str, int]] = []
         self.wait_timeout = False
+        self.wait_error: BaseException | None = None
         self.fingerprint = "initial-fingerprint"
         self.timeout_calls: list[int] = []
         self.close_calls = 0
+        self.is_closed = False
 
     def screenshot(
         self,
@@ -184,6 +190,8 @@ class _ControlRawPage:
         timeout: int,
     ) -> None:
         self.wait_calls.append((condition, arg, timeout))
+        if self.wait_error is not None:
+            raise self.wait_error
         if self.wait_timeout:
             raise PlaywrightTimeoutError("fixture timeout")
 
@@ -323,7 +331,6 @@ class PlaywrightControlAdapterTests(unittest.TestCase):
 
         self.assertIsNone(without_screenshot["screenshot"])
         self.assertIsNone(without_screenshot["screenshot_media_type"])
-        self.assertIsNone(without_screenshot["static_element_key"])
         self.assertEqual(raw.screenshot_calls, [])
         surfaces = cast(tuple[tuple[object, ...], ...], without_screenshot["surfaces"])
         self.assertEqual([surface[0] for surface in surfaces], [0, 1_000_000, 1_000_001, 100_002])
@@ -364,14 +371,6 @@ class PlaywrightControlAdapterTests(unittest.TestCase):
                 }
             ],
         )
-
-        with_static_selector = page.control_snapshot(
-            timeout=655,
-            include_screenshot=False,
-            static_selector="button[data-reviewed='pdf']",
-        )
-        self.assertEqual(with_static_selector["static_element_key"], 1_000_002)
-        self.assertIn("button[data-reviewed='pdf']", raw.main_frame.selectors)
 
     def test_actions_revalidate_identity_and_use_the_bound_page(self) -> None:
         page, raw, _context, button, _viewer, _child_link = self._page()
@@ -425,6 +424,75 @@ class PlaywrightControlAdapterTests(unittest.TestCase):
         raw.wait_timeout = True
         self.assertFalse(page.control_wait_for_change(timeout=706))
         self.assertEqual(raw.wait_calls[-1][1:], ("initial-fingerprint", 706))
+
+    def test_element_text_and_aria_fallback_roles_are_normalized_consistently(self) -> None:
+        page, raw, _context, button, _viewer, _child_link = self._page()
+        raw_name = "  Download\n\x00 PDF  " + "文" * 100
+        button.role = "button switch"
+        button.name = raw_name
+        elements = cast(list[dict[str, object]], raw.main_frame._scan["elements"])
+        elements[0]["role"] = button.role
+        elements[0]["name"] = raw_name
+
+        snapshot = page.control_snapshot(timeout=300, include_screenshot=False)
+
+        exposed = cast(tuple[tuple[object, ...], ...], snapshot["elements"])[0]
+        self.assertEqual(exposed[2], "button")
+        normalized_name = cast(str, exposed[3])
+        self.assertTrue(normalized_name.startswith("Download PDF "))
+        self.assertNotIn("\n", normalized_name)
+        self.assertNotIn("\x00", normalized_name)
+        self.assertLessEqual(len(normalized_name.encode("utf-8")), 256)
+        self.assertTrue(
+            page.control_click_element(
+                1_000_002,
+                expected_role="button",
+                expected_name=normalized_name,
+                expected_enabled=True,
+                expected_surface_key=1_000_000,
+                timeout=700,
+            )
+        )
+        self.assertIn(("click", (700, True)), button.actions)
+
+    def test_document_and_frame_replacement_are_retryable_observation_transitions(self) -> None:
+        for message in (
+            "Execution context was destroyed, most likely because of a navigation",
+            "Frame was detached",
+        ):
+            with self.subTest(message=message):
+                page, raw, _context, _button, _viewer, _child_link = self._page()
+                raw.wait_error = RuntimeError(message)
+
+                with self.assertRaises(BrowserObservationUnavailable):
+                    page.control_wait_for_change(timeout=200)
+
+        page, raw, _context, _button, _viewer, _child_link = self._page()
+        raw.main_frame.evaluate_error = RuntimeError(
+            "Execution context was destroyed, most likely because of a navigation"
+        )
+        with self.assertRaises(BrowserObservationUnavailable):
+            page.control_snapshot(timeout=200, include_screenshot=True)
+
+    def test_snapshot_failure_reports_safe_internal_stage(self) -> None:
+        page, raw, _context, _button, _viewer, _child_link = self._page()
+        raw.main_frame.evaluate_error = RuntimeError("private-page-sentinel")
+
+        with self.assertLogs("sciretriever.network.playwright", level="DEBUG") as logs:
+            with self.assertRaises(PlaywrightRuntimeError):
+                page.control_snapshot(timeout=200, include_screenshot=True)
+
+        rendered = "\n".join(logs.output)
+        self.assertIn("operation=snapshot", rendered)
+        self.assertIn("stage=frame-evaluate", rendered)
+        self.assertIn("failure_category=other", rendered)
+        self.assertNotIn("private-page-sentinel", rendered)
+
+    def test_closed_page_is_visible_to_the_article_session_without_vendor_payload(self) -> None:
+        page, raw, _context, _button, _viewer, _child_link = self._page()
+        raw.is_closed = True
+
+        self.assertTrue(page.control_is_closed())
 
     def test_close_releases_all_request_local_vendor_bindings(self) -> None:
         page, raw, context, _button, _viewer, _child_link = self._page()

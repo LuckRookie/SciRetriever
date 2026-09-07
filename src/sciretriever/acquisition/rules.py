@@ -49,7 +49,6 @@ PdfByteSource: TypeAlias = bytes | BoundedByteStream | ReadablePdfSource | Itera
 class PdfValidationCode(str, Enum):
     """Stable, non-sensitive identifiers for expected PDF rejections."""
 
-    ASSOCIATION_NOT_ESTABLISHED = "association-not-established"
     BYTE_BUDGET_EXCEEDED = "byte-budget-exceeded"
     EMPTY = "empty"
     ENCRYPTED = "encrypted"
@@ -63,7 +62,6 @@ class PdfValidationCode(str, Enum):
 
 
 _VALIDATION_MESSAGES: Final[dict[PdfValidationCode, str]] = {
-    PdfValidationCode.ASSOCIATION_NOT_ESTABLISHED: "PDF candidate association is not established",
     PdfValidationCode.BYTE_BUDGET_EXCEEDED: "PDF byte budget exceeded",
     PdfValidationCode.EMPTY: "PDF bytes are empty",
     PdfValidationCode.ENCRYPTED: "PDF requires an unavailable password",
@@ -485,24 +483,21 @@ def validate_pdf(
     source: object,
     *,
     staging: PdfValidationStagingPort,
-    candidate_belongs_to_literature: bool,
     max_bytes: int = DEFAULT_MAX_PDF_BYTES,
     declared_media_type: str | None = None,
     cancel_event: CancellationEvent | None = None,
 ) -> ValidatedPdf:
     """Copy and validate a candidate PDF under a deterministic byte budget.
 
-    ``candidate_belongs_to_literature`` has no default so the automatic or
-    manual caller must explicitly prove that it has already established the
-    association.  ``declared_media_type`` is accepted only to make its
-    non-authoritative status obvious; it never changes validation.
+    Article association is deliberately outside this file-fact gate and is
+    owned by the automatic or manual Acquisition caller. ``declared_media_type``
+    is accepted only to make its non-authoritative status obvious; it never
+    changes validation.
     """
 
     del declared_media_type
     if not isinstance(staging, PdfValidationStagingPort):
         raise TypeError("staging must implement PdfValidationStagingPort")
-    if candidate_belongs_to_literature is not True:
-        raise PdfValidationError(PdfValidationCode.ASSOCIATION_NOT_ESTABLISHED)
     if type(max_bytes) is not int or max_bytes <= 0:
         raise PdfValidationError(PdfValidationCode.INVALID_BUDGET)
     _cancel_if_requested(cancel_event)

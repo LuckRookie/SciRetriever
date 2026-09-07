@@ -254,8 +254,6 @@ class BrowserCaptureKind(str, Enum):
     DOWNLOAD = "download"
     RESPONSE = "response"
     POPUP = "popup"
-    VIEWER = "viewer"
-    VERIFIED_LOCATOR = "verified-locator"
 
 
 class BrowserCapture(_AccessModel):

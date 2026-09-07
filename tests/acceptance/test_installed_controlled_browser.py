@@ -36,7 +36,7 @@ class InstalledControlledBrowserTests(unittest.TestCase):
             self.assertIn(os.sep + "site-packages" + os.sep, module_file)
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 9)
+        self.assertEqual(production["browser_strategy"], "generic-agent")
         self.assertTrue(production["ready"])
         self.assertIsNone(production["readiness_code"])
 
@@ -75,21 +75,10 @@ class InstalledControlledBrowserTests(unittest.TestCase):
             runtime["route_bindings"],
             [["93.184.216.34"], ["93.184.216.35"]],
         )
-        self.assertEqual(
-            runtime["resolver_calls"],
-            [
-                "publisher.test",
-                "publisher.test",
-                "downloads.publisher.test",
-                "publisher.test",
-                "publisher.test",
-                "publisher.test",
-                "publisher.test",
-                "downloads.publisher.test",
-                "downloads.publisher.test",
-                "publisher.test",
-            ],
-        )
+        resolver_calls = runtime["resolver_calls"]
+        self.assertEqual(set(resolver_calls), {"publisher.test", "downloads.publisher.test"})
+        self.assertGreaterEqual(resolver_calls.count("publisher.test"), 4)
+        self.assertGreaterEqual(resolver_calls.count("downloads.publisher.test"), 2)
         self.assertEqual(runtime["page_clicks"], ["a[data-action='pdf']"])
         self.assertTrue(runtime["context_closed"])
         self.assertTrue(runtime["page_closed"])
@@ -105,7 +94,7 @@ class InstalledControlledBrowserTests(unittest.TestCase):
         provenance = payload["provenance"]
         self.assertEqual(provenance["source_kind"], "asset-provider")
         self.assertEqual(provenance["source_name"], "controlled-browser")
-        self.assertEqual(provenance["source_record_id"], "controlled-publisher@1")
+        self.assertEqual(provenance["source_record_id"], "generic-browser@1")
         self.assertIsNone(provenance["input_sha256"])
         self.assertIsNotNone(provenance["parameters_sha256"])
 

@@ -24,7 +24,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -37,14 +37,7 @@
       "known_contract": "authorization-key-to-token-to-article-request"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-api-terms-direct-automated-content-access-to-api",
-        "registered-rate-limits-not-publicly-enumerated",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-rule",
-        "institution-specific-upstream-sso-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

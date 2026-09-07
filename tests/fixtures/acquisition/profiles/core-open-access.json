@@ -24,7 +24,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": ["api:core"],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "ownership_cases": [
     {"case_id": "authorized-primary-pdf", "expected": "primary"},

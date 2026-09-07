@@ -11,10 +11,14 @@ shape consumed by ``network.browser`` and ``network.browser_sessions``.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import importlib.util
 import os
 import queue
 import re
+import stat
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -31,6 +35,7 @@ from .browser_connect import (
     acquire_headed_display,
     xvfb_executable_available,
 )
+from .browser_control import BrowserObservationUnavailable
 from .browser_runtime import (
     configure_pdf_download_preference as _configure_pdf_download_preference,
 )
@@ -53,6 +58,10 @@ _MAX_ARTICLE_BYTES: Final[int] = 128 * 1024 * 1024
 _CLOAK_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9]+(?:\.[0-9]+){3,4}$")
 _DEFAULT_BROWSER_VERSION: Final[str] = "146.0.7680.177.5"
 _DEFAULT_SCREEN: Final[tuple[int, int]] = (1920, 1080)
+# Linux clone ABI value. Python 3.10 does not expose ``os.CLONE_FS``.
+_CLONE_FS: Final[int] = 0x00000200
+_PRIVATE_RUNTIME_UMASK: Final[int] = 0o077
+_VENDOR_WELCOME_MARKER: Final[str] = ".welcome_shown"
 _DEFAULT_LANGUAGES: Final[tuple[str, ...]] = (
     "en-US",
     "en",
@@ -104,6 +113,29 @@ def _runtime_error() -> CloakBrowserRuntimeError:
     return CloakBrowserRuntimeError("controlled CloakBrowser runtime failed")
 
 
+def _isolate_runtime_filesystem_context() -> None:
+    """Give the engine thread a private fs context and owner-only umask.
+
+    Chromium inherits this thread's umask when the wrapper starts its child
+    process. ``CLONE_FS`` isolation keeps the change away from Acquisition,
+    Storage, and user-output threads in the same Python process.
+    """
+
+    if not sys.platform.startswith("linux"):
+        raise _runtime_error()
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        function = libc.unshare
+        function.argtypes = [ctypes.c_int]
+        function.restype = ctypes.c_int
+        if function(_CLONE_FS) != 0:
+            error_number = ctypes.get_errno() or errno.EIO
+            raise OSError(error_number, os.strerror(error_number))
+        os.umask(_PRIVATE_RUNTIME_UMASK)
+    except (AttributeError, OSError):
+        raise _runtime_error() from None
+
+
 def _required_callable(value: object, name: str) -> Callable[..., object]:
     candidate = getattr(value, name, None)
     if not callable(candidate):
@@ -123,6 +155,75 @@ def _clean_environment(source: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _safe_vendor_marker(metadata: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and metadata.st_uid == os.geteuid()
+        and metadata.st_nlink == 1
+    )
+
+
+def _open_vendor_welcome_marker(marker: Path) -> int:
+    try:
+        try:
+            prior = os.lstat(marker)
+        except FileNotFoundError:
+            prior = None
+        if prior is not None and not _safe_vendor_marker(prior):
+            raise _runtime_error()
+        flags = os.O_WRONLY | os.O_CREAT
+        if prior is None:
+            flags |= os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(marker, flags, 0o600)
+        current = os.fstat(descriptor)
+        same_file = prior is None or (current.st_dev, current.st_ino) == (
+            prior.st_dev,
+            prior.st_ino,
+        )
+        if not _safe_vendor_marker(current) or not same_file:
+            os.close(descriptor)
+            raise _runtime_error()
+        return descriptor
+    except CloakBrowserRuntimeError:
+        raise
+    except (OSError, OverflowError, ValueError):
+        raise _runtime_error() from None
+
+
+def _prime_vendor_welcome_marker(cache_directory: Path) -> None:
+    """Suppress the pinned wrapper's banner inside its sterile launch cache.
+
+    CloakBrowser 0.5.8 writes a welcome advertisement directly to process
+    stderr whenever this private marker is absent or stale.  Each production
+    lease intentionally receives a new cache, so letting the wrapper create
+    the marker would expose the banner on every process launch.  The marker is
+    non-authoritative vendor state: it lives only in Configuration's temporary
+    cache and does not contain or select a license, binary, Profile or update.
+    """
+
+    marker = cache_directory / _VENDOR_WELCOME_MARKER
+    payload = str(int(time.time())).encode("ascii")
+    descriptor = -1
+    try:
+        descriptor = _open_vendor_welcome_marker(marker)
+        os.fchmod(descriptor, 0o600)
+        os.ftruncate(descriptor, 0)
+        if os.write(descriptor, payload) != len(payload):
+            raise _runtime_error()
+    except CloakBrowserRuntimeError:
+        raise
+    except (OSError, OverflowError, ValueError):
+        raise _runtime_error() from None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 @contextmanager
 def _vendor_environment(cache_directory: Path) -> Any:
     """Hide forbidden environment controls while a vendor launch is built.
@@ -139,6 +240,7 @@ def _vendor_environment(cache_directory: Path) -> Any:
     if not isinstance(cache_directory, Path):
         raise _runtime_error()
     with _ENV_LOCK:
+        _prime_vendor_welcome_marker(cache_directory)
         removed: dict[str, str] = {}
         for key in tuple(os.environ):
             if key in _PROXY_ENV_NAMES or key.startswith("CLOAKBROWSER_"):
@@ -494,6 +596,8 @@ class _CloakEngine:
                 raise _runtime_error()
             try:
                 return operation()
+            except BrowserObservationUnavailable:
+                raise
             except CloakBrowserRuntimeError:
                 raise
             except TimeoutError:
@@ -516,10 +620,13 @@ class _CloakEngine:
             self.interrupt()
             raise _runtime_error()
         if command.failure:
-            if isinstance(command.failure[0], TimeoutError):
+            failure = command.failure[0]
+            if isinstance(failure, BrowserObservationUnavailable):
+                raise failure
+            if isinstance(failure, TimeoutError):
                 raise TimeoutError from None
-            if isinstance(command.failure[0], CloakBrowserRuntimeError):
-                raise command.failure[0]
+            if isinstance(failure, CloakBrowserRuntimeError):
+                raise failure
             raise _runtime_error()
         if not command.result:
             raise _runtime_error()
@@ -701,6 +808,7 @@ class _CloakEngine:
         # This thread does not start a second Playwright manager. The wrapper
         # call owns manager start and context.close owns manager stop.
         try:
+            _isolate_runtime_filesystem_context()
             self._ready.set()
             while True:
                 try:
@@ -723,6 +831,9 @@ class _CloakEngine:
                 self._failure = error
             self._fail_pending(error)
         finally:
+            # Wake ``start`` promptly when filesystem isolation failed before
+            # the ordinary ready point.
+            self._ready.set()
             self._stop_runtime()
 
     def _fail_pending(self, error: BaseException) -> None:

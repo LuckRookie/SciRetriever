@@ -33,7 +33,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": ["api:wiley-tdm-v1"],
-    "browser_route": "browser:wiley-online-library"
+    "browser_probe_enabled": true
   },
   "route_verification": {
     "authorized_api": {
@@ -42,19 +42,8 @@
       "priority": "after-public-before-browser"
     },
     "browser": {
-      "state": "production-ready",
-      "rule_id": "wiley-online-library-pdf",
-      "rule_revision": 2,
-      "allowed_origins": [
-        "https://onlinelibrary.wiley.com",
-        "https://advanced.onlinelibrary.wiley.com"
-      ],
-      "rate_limit_group": "wiley",
-      "session_group": "wiley",
-      "article_start_interval_seconds": 20,
-      "primary_contract": "doi-bound-pdfdirect-pdf-or-epdf-response",
-      "supplement_contract": "supplement-markers-are-never-primary",
-      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
+      "state": "probe-enabled",
+      "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
     }
   },
   "ownership_cases": [

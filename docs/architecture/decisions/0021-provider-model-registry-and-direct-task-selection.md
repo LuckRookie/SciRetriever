@@ -2,11 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-08-28
-- Last amended: 2026-09-01
+- Last amended: 2026-09-02
 - Supersedes: [ADR 0020](0020-reusable-model-profiles-and-task-bindings.md)
 - Superseded by: none
 - Amends: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0018](0018-fixed-user-configuration-home.md)
-- Amended by: none
+- Amended by: [ADR 0023](0023-generic-browser-agent-executor.md)
 - Related: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[Configuration 技术文档](../technical/configuration.md)、[Agents 技术文档](../technical/agents.md)
 
 ## 背景
@@ -139,8 +139,10 @@ Analyze 可以选择任意已配置 Model；其严格结构化文本合同由 An
 
 Analyze 调用固定派生为 strict structured output、文本输入、无工具；各阶段 output 和总调用预算
 来自 `AnalysisConfig`，单次 runtime 边界由 Bootstrap 保守形成。Download Agent 固定派生为一张
-有界 PNG 图片、一个封闭工具集合、必须返回 tool decision；图片格式、数量、字节、单次 output
-与操作级步数/时间/重复动作限制分别由 Agents、Acquisition 和 Network 的所属合同管理。
+有界 `image/jpeg` 图片、一个封闭工具集合、必须返回 tool decision；图片格式、数量、字节、单次 output
+与每次 action/settle/capture 的客观 timeout/字节限制分别由 Agents、Acquisition 和 Network 的所属
+合同管理。Browser 不恢复用户可配置的作业步数、总时间或重复动作预算；ADR 0017 规定的固定
+controller safety fuse 只是防实现缺陷无限运行的系统边界，不是 Model 配置或业务预算。
 
 用户声明的 Model 不能放宽这些合同。adapter 或远端模型不满足时，显式
 `config test analyze`、`config test browser model` 或具体 Model probe 返回稳定失败；系统不能

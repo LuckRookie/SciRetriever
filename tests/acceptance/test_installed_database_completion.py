@@ -197,7 +197,7 @@ class InstalledDatabaseCompletionTests(unittest.TestCase):
         self.assertEqual(first_failures[partial_ids["llm_failure"]]["stage"], "analysis")
         self.assertEqual(
             first_failures[partial_ids["llm_failure"]]["failure"]["code"],
-            "analysis-content-metadata-stage",
+            "acceptance-llm-failed-once",
         )
         self.assertTrue(all(item["failure"]["retryable"] for item in first_failures.values()))
         self.assertEqual(

@@ -12,10 +12,12 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import time
 from dataclasses import dataclass, replace
 from enum import Enum, unique
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
+from sciretriever.model.access import AccessFailure
 from sciretriever.model.primitives import Sha256, sha256_digest
 
 from .policy import PolicyError, normalize_url_with_configured_port
@@ -33,6 +35,22 @@ _MAX_SCREENSHOT_BYTES: Final[int] = 2 * 1024 * 1024
 _MAX_SURFACES: Final[int] = 128
 _MAX_ELEMENTS: Final[int] = 256
 _MAX_SCROLL_PIXELS: Final[int] = 2_000
+BROWSER_OBSERVATION_MEDIA_TYPE: Final[str] = "image/jpeg"
+
+
+class BrowserObservationUnavailable(RuntimeError):
+    """A document/page transition temporarily prevented a coherent snapshot.
+
+    Concrete Browser adapters may raise this payload-free signal only for a
+    transition that the article-local Network settle loop can safely observe
+    again.  It must never carry a vendor exception, URL, selector, or page
+    content across the adapter boundary.
+    """
+
+    __slots__ = ()
+
+    def __init__(self) -> None:
+        super().__init__("controlled Browser observation is transitioning")
 
 
 def _article_token(value: object) -> str:
@@ -169,10 +187,10 @@ class BrowserActionKind(str, Enum):
 
 @unique
 class BrowserActionOutcome(str, Enum):
+    """Outcome of dispatching one closed action, before page settlement."""
+
     APPLIED = "applied"
     NO_CHANGE = "no-change"
-    NAVIGATION = "navigation"
-    CAPTURE = "capture"
     FAILURE = "failure"
 
 
@@ -547,13 +565,9 @@ class BrowserObservation:
         if self.last_receipt is not None:
             if not isinstance(self.last_receipt, BrowserActionReceipt):
                 raise TypeError("last_receipt must be BrowserActionReceipt or None")
-            if (
-                self.last_receipt.article_token != self.article_token
-                or self.last_receipt.page_id not in roots_by_page
-                or (
-                    self.last_receipt.after_revision is not None
-                    and self.last_receipt.after_revision > self.revision
-                )
+            if self.last_receipt.article_token != self.article_token or (
+                self.last_receipt.after_revision is not None
+                and self.last_receipt.after_revision > self.revision
             ):
                 raise ValueError("last receipt is not aligned with the observation")
 
@@ -601,6 +615,166 @@ class BrowserObservation:
 
     def __reduce__(self) -> str | tuple[object, ...]:
         raise TypeError("BrowserObservation cannot be serialized")
+
+
+@unique
+class BrowserTransitionKind(str, Enum):
+    """Closed outcomes of validating, dispatching, and settling one action."""
+
+    STALE = "stale"
+    SETTLED = "settled"
+    CAPTURED = "captured"
+    CANDIDATE_TIMEOUT = "candidate-timeout"
+    STOPPED = "stopped"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+def _transition_receipt(
+    receipt: BrowserActionReceipt | None,
+    observation: BrowserObservation | None,
+) -> None:
+    if receipt is not None and not isinstance(receipt, BrowserActionReceipt):
+        raise TypeError("receipt must be BrowserActionReceipt or None")
+    if observation is not None and not isinstance(observation, BrowserObservation):
+        raise TypeError("observation must be BrowserObservation or None")
+    if receipt is not None and observation is not None:
+        if (
+            receipt.article_token != observation.article_token
+            or receipt.after_revision is None
+            or receipt.after_revision > observation.revision
+        ):
+            raise ValueError("transition receipt is not aligned with its observation")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserStaleTransition:
+    """The exact observation changed before dispatch; no vendor action ran."""
+
+    observation: BrowserObservation
+
+    def __post_init__(self) -> None:
+        _transition_receipt(None, self.observation)
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.STALE
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserSettledTransition:
+    """One dispatched action reached a bounded, observable settle point."""
+
+    observation: BrowserObservation
+    changed: bool
+    receipt: BrowserActionReceipt | None = None
+
+    def __post_init__(self) -> None:
+        _transition_receipt(self.receipt, self.observation)
+        if type(self.changed) is not bool:
+            raise TypeError("changed must be a bool")
+        if self.observation.capture_state is not BrowserCaptureState.NONE:
+            raise ValueError("settled transition cannot retain capture progress")
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.SETTLED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserCapturedTransition:
+    """Network completed at least one bounded capture for this article flow."""
+
+    observation: BrowserObservation
+    receipt: BrowserActionReceipt | None = None
+
+    def __post_init__(self) -> None:
+        _transition_receipt(self.receipt, self.observation)
+        if self.observation.capture_state is not BrowserCaptureState.CAPTURED:
+            raise ValueError("captured transition requires a captured observation")
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.CAPTURED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserCandidateTimeoutTransition:
+    """A tentative capture did not complete or clear within its bounded wait."""
+
+    observation: BrowserObservation
+    receipt: BrowserActionReceipt | None = None
+
+    def __post_init__(self) -> None:
+        _transition_receipt(self.receipt, self.observation)
+        if self.observation.capture_state is not BrowserCaptureState.CANDIDATE:
+            raise ValueError("candidate timeout requires a candidate observation")
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.CANDIDATE_TIMEOUT
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserStoppedTransition:
+    """The Agent selected Stop; Network performed no vendor action."""
+
+    receipt: BrowserActionReceipt
+    observation: BrowserObservation
+
+    def __post_init__(self) -> None:
+        _transition_receipt(self.receipt, self.observation)
+        if self.receipt.action_kind is not BrowserActionKind.STOP:
+            raise ValueError("stopped transition requires a Stop receipt")
+        if self.observation.agent_status is not BrowserAgentStatus.STOPPED:
+            raise ValueError("stopped transition requires a stopped observation")
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.STOPPED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserCancelledTransition:
+    """The user cancelled before a settled result crossed the boundary."""
+
+    observation: BrowserObservation | None = None
+
+    def __post_init__(self) -> None:
+        _transition_receipt(None, self.observation)
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.CANCELLED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserFailedTransition:
+    """Network converted an action/runtime failure into a stable safe result."""
+
+    failure: AccessFailure
+    observation: BrowserObservation | None = None
+    receipt: BrowserActionReceipt | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.failure, AccessFailure):
+            raise TypeError("failure must be AccessFailure")
+        _transition_receipt(self.receipt, self.observation)
+
+    @property
+    def kind(self) -> BrowserTransitionKind:
+        return BrowserTransitionKind.FAILED
+
+
+BrowserTransition: TypeAlias = (
+    BrowserStaleTransition
+    | BrowserSettledTransition
+    | BrowserCapturedTransition
+    | BrowserCandidateTimeoutTransition
+    | BrowserStoppedTransition
+    | BrowserCancelledTransition
+    | BrowserFailedTransition
+)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -750,11 +924,37 @@ def _set_action_identity(action: ClickElement | ClickPoint | ScrollSurface) -> N
     object.__setattr__(action, "revision", _revision(action.revision))
 
 
-@runtime_checkable
-class BrowserControlSession(Protocol):
-    """One article-local observation and action executor capability."""
+@dataclass(frozen=True, slots=True)
+class BrowserStepAssessment:
+    """Acquisition-owned page facts aligned with one Network observation."""
 
-    def observe(self, *, page_state: BrowserPageState) -> BrowserObservation: ...
+    page_state: BrowserPageState
+    matches_observation: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.page_state, BrowserPageState):
+            raise TypeError("page_state must be BrowserPageState")
+        if type(self.matches_observation) is not bool:
+            raise TypeError("matches_observation must be a bool")
+
+
+@runtime_checkable
+class BrowserStepPolicy(Protocol):
+    """Classify one stable, neutral snapshot without owning its lifecycle."""
+
+    def assess(self, observation: BrowserObservation) -> BrowserStepAssessment: ...
+
+
+@runtime_checkable
+class BrowserStepDriver(Protocol):
+    """Network-private transition driver consumed by the atomic step session."""
+
+    def begin(
+        self,
+        *,
+        page_state: BrowserPageState,
+        timeout_seconds: float,
+    ) -> BrowserObservation | BrowserTransition: ...
 
     def execute(
         self,
@@ -762,105 +962,839 @@ class BrowserControlSession(Protocol):
         observation: BrowserObservation,
         *,
         timeout_seconds: float,
-    ) -> BrowserActionReceipt: ...
+    ) -> BrowserTransition: ...
+
+    def settle(
+        self,
+        observation: BrowserObservation,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserTransition: ...
 
 
-def observation_hash(observation: BrowserObservation) -> Sha256:
-    """Bind one model decision to the exact bounded observation bytes."""
+@unique
+class BrowserStepKind(str, Enum):
+    """Stable outcomes allowed to cross the atomic Browser step boundary."""
+
+    READY = "ready"
+    CAPTURED = "captured"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@unique
+class BrowserBlockedReason(str, Enum):
+    """Payload-free natural stops, distinct from runtime or policy failures.
+
+    The repeated-transition values are retained as readable result vocabulary
+    for older serialized diagnostics, but the autonomous step session no
+    longer manufactures them from an unchanged observation.  A no-change
+    action is a normal settled step; the controller's bounded action/model
+    budget is the only progress guard.
+    """
+
+    STOPPED = "stopped"
+    CANDIDATE_TIMEOUT = "candidate-timeout"
+    LOGIN_REQUIRED = "login-required"
+    MFA_REQUIRED = "mfa-required"
+    NOT_ENTITLED = "not-entitled"
+    ACCESS_DENIED = "access-denied"
+    NOT_FOUND = "not-found"
+    PAGE_FAILED = "page-failed"
+    REPEATED_SELF_TRANSITION = "repeated-self-transition"
+    REPEATED_CYCLE_EDGE = "repeated-cycle-edge"
+
+
+def _step_receipt(
+    receipt: BrowserActionReceipt | None,
+    observation: BrowserObservation | None,
+) -> None:
+    _transition_receipt(receipt, observation)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserReady:
+    """One stable observation and no unresolved capture candidate.
+
+    ``page_state`` is descriptive input for the Agent, not an automatic
+    terminal decision.  A login, entitlement, not-found or challenge page can
+    still expose a visible control that the Agent may safely inspect or use;
+    only the Agent's explicit ``Stop`` (or a hard runtime/timeout boundary)
+    ends the session.
+    """
+
+    observation: BrowserObservation
+    receipt: BrowserActionReceipt | None = None
+    semantic_changed: bool = False
+
+    def __post_init__(self) -> None:
+        _step_receipt(self.receipt, self.observation)
+        if self.observation.capture_state is not BrowserCaptureState.NONE:
+            raise ValueError("ready step cannot retain capture progress")
+        if type(self.semantic_changed) is not bool:
+            raise TypeError("semantic_changed must be a bool")
+
+    @property
+    def kind(self) -> BrowserStepKind:
+        return BrowserStepKind.READY
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserCaptured:
+    """Network completed at least one capture for the current article."""
+
+    observation: BrowserObservation
+    receipt: BrowserActionReceipt | None = None
+    semantic_changed: bool = False
+
+    def __post_init__(self) -> None:
+        _step_receipt(self.receipt, self.observation)
+        if self.observation.capture_state is not BrowserCaptureState.CAPTURED:
+            raise ValueError("captured step requires a captured observation")
+        if type(self.semantic_changed) is not bool:
+            raise TypeError("semantic_changed must be a bool")
+
+    @property
+    def kind(self) -> BrowserStepKind:
+        return BrowserStepKind.CAPTURED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserBlocked:
+    """The settled page or controller reached one natural bounded stop."""
+
+    reason: BrowserBlockedReason
+    observation: BrowserObservation
+    receipt: BrowserActionReceipt | None = None
+    semantic_changed: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, BrowserBlockedReason):
+            raise TypeError("reason must be BrowserBlockedReason")
+        _step_receipt(self.receipt, self.observation)
+        if type(self.semantic_changed) is not bool:
+            raise TypeError("semantic_changed must be a bool")
+        expected_page_states: dict[BrowserBlockedReason, BrowserPageState] = {
+            BrowserBlockedReason.LOGIN_REQUIRED: BrowserPageState.LOGIN_REQUIRED,
+            BrowserBlockedReason.MFA_REQUIRED: BrowserPageState.MFA_REQUIRED,
+            BrowserBlockedReason.NOT_ENTITLED: BrowserPageState.NOT_ENTITLED,
+            BrowserBlockedReason.ACCESS_DENIED: BrowserPageState.ACCESS_DENIED,
+            BrowserBlockedReason.NOT_FOUND: BrowserPageState.NOT_FOUND,
+            BrowserBlockedReason.PAGE_FAILED: BrowserPageState.FAILED,
+        }
+        expected = expected_page_states.get(self.reason)
+        if expected is not None and self.observation.page_state is not expected:
+            raise ValueError("blocked reason does not match the page state")
+        if (
+            self.reason is BrowserBlockedReason.CANDIDATE_TIMEOUT
+            and self.observation.capture_state is not BrowserCaptureState.CANDIDATE
+        ):
+            raise ValueError("candidate timeout requires a candidate observation")
+        if self.reason is not BrowserBlockedReason.CANDIDATE_TIMEOUT and (
+            self.observation.capture_state is not BrowserCaptureState.NONE
+        ):
+            raise ValueError("blocked step cannot retain capture progress")
+
+    @property
+    def kind(self) -> BrowserStepKind:
+        return BrowserStepKind.BLOCKED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserFailed:
+    """Network or the injected policy failed before a stable result."""
+
+    failure: AccessFailure
+    observation: BrowserObservation | None = None
+    receipt: BrowserActionReceipt | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.failure, AccessFailure):
+            raise TypeError("failure must be AccessFailure")
+        _step_receipt(self.receipt, self.observation)
+
+    @property
+    def kind(self) -> BrowserStepKind:
+        return BrowserStepKind.FAILED
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BrowserCancelled:
+    """The user cancelled before another stable result crossed the boundary."""
+
+    observation: BrowserObservation | None = None
+
+    def __post_init__(self) -> None:
+        _step_receipt(None, self.observation)
+
+    @property
+    def kind(self) -> BrowserStepKind:
+        return BrowserStepKind.CANCELLED
+
+
+BrowserStep: TypeAlias = (
+    BrowserReady | BrowserCaptured | BrowserBlocked | BrowserFailed | BrowserCancelled
+)
+
+
+def _step_failure(kind: str) -> AccessFailure:
+    values: dict[str, tuple[str, str, str, bool]] = {
+        "readiness": (
+            "acquisition-browser-readiness-timeout",
+            "The Browser page did not reach one stable actionable observation.",
+            "Retry after the Publisher page and Browser runtime become stable.",
+            True,
+        ),
+        "policy": (
+            "acquisition-browser-step-policy-failed",
+            "The Browser page policy could not classify the stable observation.",
+            "Review the Acquisition page classifier and Browser Debug transcript.",
+            False,
+        ),
+    }
+    code, reason, action, retryable = values.get(kind, values["policy"])
+    return AccessFailure(code=code, reason=reason, action=action, retryable=retryable)
+
+
+# Retained as a vocabulary map for consumers that classify a completed page
+# outside the autonomous step session.  ``BrowserStepSession`` deliberately
+# does not consult it: descriptive page states are delivered to the Agent,
+# which owns the explicit stop decision.
+_BLOCK_REASON_BY_PAGE_STATE: Final[dict[BrowserPageState, BrowserBlockedReason]] = {
+    BrowserPageState.LOGIN_REQUIRED: BrowserBlockedReason.LOGIN_REQUIRED,
+    BrowserPageState.MFA_REQUIRED: BrowserBlockedReason.MFA_REQUIRED,
+    BrowserPageState.NOT_ENTITLED: BrowserBlockedReason.NOT_ENTITLED,
+    BrowserPageState.ACCESS_DENIED: BrowserBlockedReason.ACCESS_DENIED,
+    BrowserPageState.NOT_FOUND: BrowserBlockedReason.NOT_FOUND,
+    BrowserPageState.FAILED: BrowserBlockedReason.PAGE_FAILED,
+}
+
+
+class BrowserStepSession:
+    """Atomic article-local Browser session over one private transition driver.
+
+    A caller may start once and may apply an action only while the last result
+    is :class:`BrowserReady`.  Every call absorbs stale snapshots, Publisher
+    classification races, page replacement, quiet settlement and capture
+    candidates before returning one stable result.
+    """
+
+    __slots__ = (
+        "_driver",
+        "_policy",
+        "_ready",
+        "_started",
+        "_terminal",
+        "_timeout_seconds",
+    )
+
+    def __init__(
+        self,
+        *,
+        driver: BrowserStepDriver,
+        policy: BrowserStepPolicy,
+        timeout_seconds: float,
+    ) -> None:
+        if not isinstance(driver, BrowserStepDriver):
+            raise TypeError("driver must implement BrowserStepDriver")
+        if not isinstance(policy, BrowserStepPolicy):
+            raise TypeError("policy must implement BrowserStepPolicy")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+            raise TypeError("timeout_seconds must be numeric")
+        selected_timeout = float(timeout_seconds)
+        if not math.isfinite(selected_timeout) or selected_timeout <= 0:
+            raise ValueError("timeout_seconds must be finite and positive")
+        self._driver = driver
+        self._policy = policy
+        self._timeout_seconds = selected_timeout
+        self._started = False
+        self._terminal = False
+        self._ready: BrowserObservation | None = None
+
+    def start(self) -> BrowserStep:
+        """Return the first stable step; this method is single-use."""
+
+        if self._started:
+            raise RuntimeError("BrowserStepSession.start() is single-use")
+        self._started = True
+        deadline = time.monotonic() + self._timeout_seconds
+        initial = self._driver.begin(
+            page_state=BrowserPageState.NORMAL,
+            timeout_seconds=self._timeout_seconds,
+        )
+        if isinstance(initial, BrowserObservation):
+            primed = self._prime_initial_observation(
+                initial,
+                deadline=deadline,
+            )
+            if isinstance(primed, BrowserFailed):
+                return self._finish(primed)
+            classified, assessment = primed
+            transition = self._driver.settle(
+                classified,
+                timeout_seconds=self._remaining(deadline),
+            )
+            pending_assessment = (
+                (classified, assessment)
+                if assessment is not None and assessment.matches_observation
+                else None
+            )
+        else:
+            transition = initial
+            pending_assessment = None
+        return self._resolve(
+            transition,
+            deadline=deadline,
+            baseline=None,
+            pending_assessment=pending_assessment,
+        )
+
+    def _prime_initial_observation(
+        self,
+        observation: BrowserObservation,
+        *,
+        deadline: float,
+    ) -> tuple[BrowserObservation, BrowserStepAssessment | None] | BrowserFailed:
+        """Attach operation policy before the first capture/quiet wait."""
+
+        try:
+            assessment = self._policy.assess(observation)
+        except BrowserObservationUnavailable:
+            # The settle engine will reacquire a coherent successor and the
+            # normal resolve loop will classify it before exposing Ready.
+            return observation, None
+        except Exception:
+            return BrowserFailed(
+                failure=_step_failure("policy"),
+                observation=observation,
+            )
+        if not isinstance(assessment, BrowserStepAssessment):
+            return BrowserFailed(
+                failure=_step_failure("policy"),
+                observation=observation,
+            )
+        if time.monotonic() >= deadline:
+            return BrowserFailed(
+                failure=_step_failure("readiness"),
+                observation=observation,
+            )
+        return replace(observation, page_state=assessment.page_state), assessment
+
+    def apply(self, action: BrowserAction) -> BrowserStep:
+        """Validate, dispatch at most once, and return the next stable step."""
+
+        if not self._started:
+            raise RuntimeError("BrowserStepSession.start() must run before apply()")
+        if self._terminal or self._ready is None:
+            raise RuntimeError("BrowserStepSession cannot continue after a terminal result")
+        if not isinstance(
+            action,
+            (ClickElement, ClickPoint, ScrollSurface, GoBack, WaitForChange, Stop),
+        ):
+            raise TypeError("action must be a closed Browser action")
+
+        deadline = time.monotonic() + self._timeout_seconds
+        previous = self._ready
+        refresh = self._driver.settle(
+            previous,
+            timeout_seconds=self._remaining(deadline),
+        )
+        refreshed = self._resolve(refresh, deadline=deadline, baseline=previous)
+        if not isinstance(refreshed, BrowserReady):
+            return refreshed
+        current = refreshed.observation
+        if execution_binding_fingerprint(current) != execution_binding_fingerprint(previous):
+            # A model or deterministic chooser acted on an observation that
+            # changed while it was deciding.  No vendor action ran; the caller
+            # receives the replacement Ready and must choose again.
+            return refreshed
+
+        transition = self._driver.execute(
+            action,
+            current,
+            timeout_seconds=self._remaining(deadline),
+        )
+        result = self._resolve(transition, deadline=deadline, baseline=current)
+        return result
+
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # The caller converts this bounded internal signal to one stable
+            # failure; it never becomes a sleep/retry instruction upstream.
+            return 0.000_001
+        return remaining
+
+    def _resolve(
+        self,
+        transition: BrowserTransition,
+        *,
+        deadline: float,
+        baseline: BrowserObservation | None,
+        pending_assessment: tuple[BrowserObservation, BrowserStepAssessment] | None = None,
+    ) -> BrowserStep:
+        receipt: BrowserActionReceipt | None = getattr(transition, "receipt", None)
+        current_transition = transition
+        stale_fingerprint: str | None = None
+        while True:
+            current_receipt = getattr(current_transition, "receipt", None)
+            if receipt is None and isinstance(current_receipt, BrowserActionReceipt):
+                receipt = current_receipt
+            terminal = self._terminal_transition(
+                current_transition,
+                receipt=receipt,
+                baseline=baseline,
+            )
+            if terminal is not None:
+                return self._finish(terminal)
+            if isinstance(current_transition, BrowserStaleTransition):
+                fingerprint = stable_semantic_page_fingerprint(current_transition.observation).root
+                if fingerprint == stale_fingerprint:
+                    return self._finish(
+                        BrowserFailed(
+                            failure=_step_failure("readiness"),
+                            observation=current_transition.observation,
+                            receipt=receipt,
+                        )
+                    )
+                stale_fingerprint = fingerprint
+                if time.monotonic() >= deadline:
+                    return self._finish(
+                        BrowserFailed(
+                            failure=_step_failure("readiness"),
+                            observation=current_transition.observation,
+                            receipt=receipt,
+                        )
+                    )
+                current_transition = self._driver.settle(
+                    current_transition.observation,
+                    timeout_seconds=self._remaining(deadline),
+                )
+                continue
+            if not isinstance(current_transition, BrowserSettledTransition):
+                return self._finish(BrowserFailed(failure=_step_failure("policy")))
+
+            stale_fingerprint = None
+            settled = self._settled_successor(
+                current_transition,
+                deadline=deadline,
+                baseline=baseline,
+                receipt=receipt,
+                pending_assessment=pending_assessment,
+            )
+            if isinstance(settled, tuple):
+                current_transition, pending_assessment = settled
+                continue
+            return self._finish(settled)
+
+    def _terminal_transition(
+        self,
+        transition: BrowserTransition,
+        *,
+        receipt: BrowserActionReceipt | None,
+        baseline: BrowserObservation | None,
+    ) -> BrowserStep | None:
+        if isinstance(transition, BrowserCapturedTransition):
+            return BrowserCaptured(
+                observation=transition.observation,
+                receipt=receipt,
+                semantic_changed=self._semantic_changed(baseline, transition.observation),
+            )
+        if isinstance(transition, BrowserCandidateTimeoutTransition):
+            # A candidate is an internal Browser capture concern.  A delayed
+            # or unreadable response must not terminate Agent exploration: a
+            # later native download event may still provide the bytes, or the
+            # Agent may discover another visible download path.  Hide the
+            # pending state from the next action while Network keeps it
+            # operation-local for the final outcome.
+            ready_observation = replace(
+                transition.observation,
+                capture_state=BrowserCaptureState.NONE,
+            )
+            return BrowserReady(
+                observation=ready_observation,
+                receipt=receipt,
+                semantic_changed=self._semantic_changed(baseline, ready_observation),
+            )
+        if isinstance(transition, BrowserStoppedTransition):
+            return BrowserBlocked(
+                reason=BrowserBlockedReason.STOPPED,
+                observation=transition.observation,
+                receipt=receipt,
+                semantic_changed=self._semantic_changed(baseline, transition.observation),
+            )
+        if isinstance(transition, BrowserCancelledTransition):
+            return BrowserCancelled(transition.observation)
+        if not isinstance(transition, BrowserFailedTransition):
+            return None
+        page_terminal = self._terminal_after_failure(
+            transition,
+            receipt=receipt,
+            baseline=baseline,
+        )
+        return page_terminal or BrowserFailed(
+            failure=transition.failure,
+            observation=transition.observation,
+            receipt=receipt,
+        )
+
+    def _settled_successor(
+        self,
+        transition: BrowserSettledTransition,
+        *,
+        deadline: float,
+        baseline: BrowserObservation | None,
+        receipt: BrowserActionReceipt | None,
+        pending_assessment: tuple[BrowserObservation, BrowserStepAssessment] | None,
+    ) -> (
+        BrowserStep
+        | tuple[
+            BrowserTransition,
+            tuple[BrowserObservation, BrowserStepAssessment] | None,
+        ]
+    ):
+        observation = transition.observation
+        assessment = self._reuse_assessment(pending_assessment, observation)
+        if assessment is None:
+            assessed = self._assess_policy(
+                observation,
+                deadline=deadline,
+                receipt=receipt,
+            )
+            if isinstance(assessed, BrowserFailed):
+                return assessed
+            if assessed is None:
+                return (
+                    self._driver.settle(
+                        observation,
+                        timeout_seconds=self._remaining(deadline),
+                    ),
+                    None,
+                )
+            assessment = assessed
+        classified = replace(observation, page_state=assessment.page_state)
+        if not assessment.matches_observation:
+            if time.monotonic() >= deadline:
+                return BrowserFailed(
+                    failure=_step_failure("readiness"),
+                    observation=classified,
+                    receipt=receipt,
+                )
+            # The policy could not bind its classification to this exact
+            # observation, so reacquire before exposing it to the Agent.
+            successor = self._driver.settle(
+                classified,
+                timeout_seconds=self._remaining(deadline),
+            )
+            return successor, None
+        # ``page_state`` is descriptive Agent context, not a Browser state
+        # transition.  Do not spend another settle cycle merely to attach a
+        # challenge/login/access label to an otherwise coherent snapshot.
+        return BrowserReady(
+            observation=classified,
+            receipt=receipt,
+            semantic_changed=self._semantic_changed(baseline, classified),
+        )
+
+    def _assess_policy(
+        self,
+        observation: BrowserObservation,
+        *,
+        deadline: float,
+        receipt: BrowserActionReceipt | None,
+    ) -> BrowserStepAssessment | BrowserFailed | None:
+        try:
+            assessment = self._policy.assess(observation)
+        except BrowserObservationUnavailable:
+            if time.monotonic() < deadline:
+                return None
+            return BrowserFailed(
+                failure=_step_failure("readiness"),
+                observation=observation,
+                receipt=receipt,
+            )
+        except Exception:
+            return BrowserFailed(
+                failure=_step_failure("policy"),
+                observation=observation,
+                receipt=receipt,
+            )
+        if isinstance(assessment, BrowserStepAssessment):
+            return assessment
+        return BrowserFailed(
+            failure=_step_failure("policy"),
+            observation=observation,
+            receipt=receipt,
+        )
+
+    @staticmethod
+    def _reuse_assessment(
+        pending: tuple[BrowserObservation, BrowserStepAssessment] | None,
+        observation: BrowserObservation,
+    ) -> BrowserStepAssessment | None:
+        if pending is None:
+            return None
+        expected, assessment = pending
+        if stable_semantic_page_fingerprint(expected) != stable_semantic_page_fingerprint(
+            observation
+        ):
+            return None
+        return assessment
+
+    def _terminal_after_failure(
+        self,
+        transition: BrowserFailedTransition,
+        *,
+        receipt: BrowserActionReceipt | None,
+        baseline: BrowserObservation | None,
+    ) -> BrowserBlocked | None:
+        observation = transition.observation
+        if (
+            transition.failure.code != "acquisition-browser-agent-action-failed"
+            or observation is None
+        ):
+            return None
+        try:
+            assessment = self._policy.assess(observation)
+        except Exception:
+            return None
+        if not isinstance(assessment, BrowserStepAssessment):
+            return None
+        # A page classifier can describe a login, entitlement or not-found
+        # state after a vendor action, but that description is not a terminal
+        # decision.  The Agent must receive the stable observation and choose
+        # whether to continue or explicitly stop.
+        del receipt, baseline, assessment
+        return None
+
+    @staticmethod
+    def _semantic_changed(
+        before: BrowserObservation | None,
+        after: BrowserObservation,
+    ) -> bool:
+        return before is not None and (
+            stable_semantic_page_fingerprint(before) != stable_semantic_page_fingerprint(after)
+        )
+
+    def _finish(self, result: BrowserStep) -> BrowserStep:
+        if isinstance(result, BrowserReady):
+            self._ready = result.observation
+            return result
+        self._ready = None
+        self._terminal = True
+        return result
+
+
+def execution_binding_fingerprint(observation: BrowserObservation) -> Sha256:
+    """Bind a model decision to every exact request-local observation fact."""
 
     if not isinstance(observation, BrowserObservation):
         raise TypeError("observation must be BrowserObservation")
     digest = hashlib.sha256()
-    digest.update(semantic_page_fingerprint(observation).root.encode("ascii"))
-    digest.update(b"\0")
-    digest.update(str(observation.revision).encode("ascii"))
-    digest.update(b"\0")
-    digest.update(observation.screenshot.screenshot_id.encode("ascii"))
-    digest.update(b"\0")
-    digest.update(observation.screenshot.sha256.root.encode("ascii"))
-    return Sha256(digest.hexdigest())
-
-
-def semantic_page_fingerprint(observation: BrowserObservation) -> Sha256:
-    """Hash semantic page/surface/actionability facts, excluding revision and pixels."""
-
-    if not isinstance(observation, BrowserObservation):
-        raise TypeError("observation must be BrowserObservation")
-    digest = hashlib.sha256()
-    for value in (
+    exact_values: list[object] = [
         observation.article_token,
+        observation.revision,
         observation.page_id,
         observation.page_state.value,
         observation.agent_status.value,
         observation.capture_state.value,
-    ):
+        observation.screenshot.screenshot_id,
+        observation.screenshot.surface_id,
+        observation.screenshot.media_type,
+        observation.screenshot.sha256.root,
+        observation.screenshot.viewport.width,
+        observation.screenshot.viewport.height,
+    ]
+    for surface in observation.surfaces:
+        exact_values.extend(
+            (
+                surface.surface_id,
+                surface.page_id,
+                surface.kind.value,
+                surface.parent_surface_id or "",
+                surface.origin,
+                surface.path,
+                surface.title,
+                surface.bounds.x,
+                surface.bounds.y,
+                surface.bounds.width,
+                surface.bounds.height,
+                surface.scroll.x,
+                surface.scroll.y,
+                surface.scroll.maximum_x,
+                surface.scroll.maximum_y,
+            )
+        )
+    for element in observation.elements:
+        exact_values.extend(
+            (
+                element.element_id,
+                element.surface_id,
+                element.role,
+                element.name,
+                element.state.value,
+                element.bounds.x,
+                element.bounds.y,
+                element.bounds.width,
+                element.bounds.height,
+            )
+        )
+    receipt = observation.last_receipt
+    if receipt is not None:
+        exact_values.extend(
+            (
+                receipt.action_kind.value,
+                receipt.outcome.value,
+                receipt.article_token,
+                receipt.page_id,
+                receipt.surface_id or "",
+                receipt.before_revision,
+                receipt.after_revision or 0,
+                receipt.failure_code or "",
+            )
+        )
+    for value in exact_values:
+        digest.update(str(value).encode("utf-8"))
+        digest.update(b"\0")
+    return Sha256(digest.hexdigest())
+
+
+def _normalized_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _position_bucket(value: float, extent: float, *, buckets: int = 32) -> int:
+    if extent <= 0:
+        return 0
+    ratio = min(max(value / extent, 0.0), 1.0)
+    return min(int(ratio * buckets), buckets - 1)
+
+
+def _surface_semantic_key(surface: BrowserSurface) -> tuple[object, ...]:
+    return (
+        surface.kind.value,
+        surface.origin,
+        surface.path,
+        _normalized_text(surface.title),
+        _position_bucket(surface.bounds.x, surface.viewport.width),
+        _position_bucket(surface.bounds.y, surface.viewport.height),
+        _position_bucket(surface.bounds.width, surface.viewport.width),
+        _position_bucket(surface.bounds.height, surface.viewport.height),
+        _position_bucket(surface.scroll.x, max(surface.scroll.maximum_x, 1.0), buckets=16),
+        _position_bucket(surface.scroll.y, max(surface.scroll.maximum_y, 1.0), buckets=16),
+    )
+
+
+def stable_semantic_page_fingerprint(observation: BrowserObservation) -> Sha256:
+    """Hash stable page/actionability facts, excluding request-local bindings."""
+
+    if not isinstance(observation, BrowserObservation):
+        raise TypeError("observation must be BrowserObservation")
+    digest = hashlib.sha256()
+    for value in (observation.page_state.value,):
         digest.update(value.encode("utf-8"))
         digest.update(b"\0")
-    for surface in observation.surfaces:
-        values = (
-            surface.surface_id,
-            surface.page_id,
-            surface.kind.value,
-            surface.parent_surface_id or "",
-            surface.origin,
-            surface.path,
-            surface.title,
-            format(surface.bounds.x, ".17g"),
-            format(surface.bounds.y, ".17g"),
-            format(surface.bounds.width, ".17g"),
-            format(surface.bounds.height, ".17g"),
-            format(surface.scroll.x, ".17g"),
-            format(surface.scroll.y, ".17g"),
-            format(surface.scroll.maximum_x, ".17g"),
-            format(surface.scroll.maximum_y, ".17g"),
-        )
+    surface_keys = {
+        surface.surface_id: _surface_semantic_key(surface) for surface in observation.surfaces
+    }
+    for values in sorted(surface_keys.values(), key=repr):
         for value in values:
-            digest.update(value.encode("utf-8"))
+            digest.update(repr(value).encode("utf-8"))
             digest.update(b"\0")
+    element_values: list[tuple[object, ...]] = []
     for element in observation.elements:
-        for value in (
-            element.element_id,
-            element.surface_id,
-            element.role,
-            element.name,
-            element.state.value,
-            format(element.bounds.x, ".17g"),
-            format(element.bounds.y, ".17g"),
-            format(element.bounds.width, ".17g"),
-            format(element.bounds.height, ".17g"),
-        ):
-            digest.update(value.encode("utf-8"))
+        surface = next(
+            value for value in observation.surfaces if value.surface_id == element.surface_id
+        )
+        element_values.append(
+            (
+                surface_keys[element.surface_id],
+                element.role,
+                _normalized_text(element.name),
+                element.state.value,
+                _position_bucket(element.bounds.x, surface.viewport.width),
+                _position_bucket(element.bounds.y, surface.viewport.height),
+                _position_bucket(element.bounds.width, surface.viewport.width),
+                _position_bucket(element.bounds.height, surface.viewport.height),
+            )
+        )
+    for values in sorted(element_values, key=repr):
+        for value in values:
+            digest.update(repr(value).encode("utf-8"))
             digest.update(b"\0")
     return Sha256(digest.hexdigest())
 
 
-def action_fingerprint(action: BrowserAction) -> Sha256:
-    """Hash one closed action without including a model or vendor fact."""
+def stable_action_intent_fingerprint(
+    action: BrowserAction,
+    observation: BrowserObservation,
+) -> Sha256:
+    """Hash an action's stable intent without revision or opaque target ids."""
 
+    if not isinstance(observation, BrowserObservation):
+        raise TypeError("observation must be BrowserObservation")
     if not isinstance(
         action, (ClickElement, ClickPoint, ScrollSurface, GoBack, WaitForChange, Stop)
     ):
         raise TypeError("action must be a closed Browser action")
     values: tuple[object, ...]
     if isinstance(action, ClickElement):
-        values = (action.kind.value, action.page_id, action.surface_id, action.element_id)
-    elif isinstance(action, ClickPoint):
+        element = next(
+            (value for value in observation.elements if value.element_id == action.element_id),
+            None,
+        )
+        surface = next(
+            (value for value in observation.surfaces if value.surface_id == action.surface_id),
+            None,
+        )
+        if element is None or surface is None or element.surface_id != surface.surface_id:
+            raise ValueError("click element intent is not bound to the observation")
         values = (
             action.kind.value,
-            action.page_id,
-            action.surface_id,
-            action.screenshot_id,
-            action.x,
-            action.y,
+            _surface_semantic_key(surface),
+            element.role,
+            _normalized_text(element.name),
+            element.state.value,
+            _position_bucket(element.bounds.x, surface.viewport.width),
+            _position_bucket(element.bounds.y, surface.viewport.height),
+        )
+    elif isinstance(action, ClickPoint):
+        surface = next(
+            (value for value in observation.surfaces if value.surface_id == action.surface_id),
+            None,
+        )
+        if surface is None or not surface.bounds.contains(action.x, action.y):
+            raise ValueError("click point intent is not bound to the observation")
+        values = (
+            action.kind.value,
+            _surface_semantic_key(surface),
+            _position_bucket(action.x - surface.bounds.x, surface.bounds.width),
+            _position_bucket(action.y - surface.bounds.y, surface.bounds.height),
         )
     elif isinstance(action, ScrollSurface):
-        values = (action.kind.value, action.page_id, action.surface_id, action.delta_y)
+        surface = next(
+            (value for value in observation.surfaces if value.surface_id == action.surface_id),
+            None,
+        )
+        if surface is None:
+            raise ValueError("scroll intent is not bound to the observation")
+        magnitude = abs(action.delta_y)
+        magnitude_class = (
+            "small" if magnitude <= 400 else "medium" if magnitude <= 1_000 else "large"
+        )
+        values = (
+            action.kind.value,
+            _surface_semantic_key(surface),
+            "down" if action.delta_y > 0 else "up",
+            magnitude_class,
+        )
     elif isinstance(action, Stop):
-        values = (action.kind.value, action.page_id, action.reason or "")
+        values = (action.kind.value, action.reason or "")
     else:
-        values = (action.kind.value, action.page_id)
-    payload = "\0".join(str(value) for value in values).encode("utf-8")
-    return sha256_digest(payload)
+        values = (action.kind.value,)
+    return sha256_digest(repr(values).encode("utf-8"))
 
 
 class BrowserObservationLedger:
@@ -896,6 +1830,25 @@ class BrowserObservationLedger:
         self._current = observation
         return observation
 
+    def restore_current(self, observation: BrowserObservation) -> BrowserObservation:
+        """Restore a coherent snapshot after a vendor action invalidated it.
+
+        Network may complete a capture while the action ledger is invalidated
+        and a fresh vendor snapshot is temporarily unavailable. The last
+        coherent observation is still sufficient for a subsequent closed
+        action, so restoring it must not allocate a new revision or require a
+        second Browser call.
+        """
+
+        if not isinstance(observation, BrowserObservation):
+            raise TypeError("Browser observation must be current")
+        current = self._current
+        if current is not None and current.revision != observation.revision:
+            raise ValueError("Browser observation revision is stale")
+        self._current = observation
+        self._next_revision = max(self._next_revision, observation.revision + 1)
+        return observation
+
     def require_current(self, observation: BrowserObservation) -> BrowserObservation:
         current = self._current
         if (
@@ -904,7 +1857,7 @@ class BrowserObservationLedger:
             or observation.revision != current.revision
             or observation.article_token != current.article_token
             or observation.page_id != current.page_id
-            or observation_hash(observation) != observation_hash(current)
+            or execution_binding_fingerprint(observation) != execution_binding_fingerprint(current)
         ):
             raise ValueError("Browser observation is not current")
         return current
@@ -927,21 +1880,32 @@ class BrowserObservationLedger:
 
 
 __all__ = (
+    "BROWSER_OBSERVATION_MEDIA_TYPE",
     "BrowserAction",
     "BrowserActionKind",
     "BrowserActionOutcome",
     "BrowserActionReceipt",
     "BrowserAgentStatus",
+    "BrowserBlocked",
+    "BrowserBlockedReason",
     "BrowserBounds",
+    "BrowserCancelled",
+    "BrowserCaptured",
     "BrowserCaptureState",
-    "BrowserControlSession",
     "BrowserElement",
     "BrowserElementState",
+    "BrowserFailed",
     "BrowserObservation",
-    "BrowserObservationLedger",
+    "BrowserObservationUnavailable",
     "BrowserPageState",
+    "BrowserReady",
     "BrowserScreenshot",
     "BrowserScrollState",
+    "BrowserStep",
+    "BrowserStepAssessment",
+    "BrowserStepKind",
+    "BrowserStepPolicy",
+    "BrowserStepSession",
     "BrowserSurface",
     "BrowserSurfaceKind",
     "BrowserViewport",
@@ -951,7 +1915,7 @@ __all__ = (
     "ScrollSurface",
     "Stop",
     "WaitForChange",
-    "action_fingerprint",
-    "observation_hash",
-    "semantic_page_fingerprint",
+    "execution_binding_fingerprint",
+    "stable_action_intent_fingerprint",
+    "stable_semantic_page_fingerprint",
 )

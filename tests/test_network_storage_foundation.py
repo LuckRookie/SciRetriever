@@ -531,9 +531,9 @@ class MisownedAnalysisArtifactPort(Protocol):
                 self.assertNotIn(term, source, relative)
             tree = ast.parse(source, filename=relative)
             declared_ports = _declared_port_classes(tree)
-            # Network owns BrowserControlSession as a capability protocol; its
-            # name deliberately does not present the seam as a business Port.
-            # No business or storage Ports are permitted in Network/Storage.
+            # Network's atomic Browser step session is a technical capability,
+            # not a business Port. No business or storage Ports are permitted
+            # in Network/Storage.
             allowed_network_ports = allowed_network_ports_by_module.get(relative, ())
             self.assertEqual(
                 tuple(name for name in declared_ports if name not in allowed_network_ports),
@@ -747,7 +747,6 @@ class MisownedAnalysisArtifactPort(Protocol):
         resolver = _FakeResolver(
             {
                 "landing.test": ("93.184.216.34",),
-                "popup.test": ("93.184.216.35",),
                 "download.test": ("93.184.216.36",),
             }
         )
@@ -758,20 +757,17 @@ class MisownedAnalysisArtifactPort(Protocol):
         scenarios: tuple[tuple[str, Callable[[object], object], str], ...] = (
             (
                 "success",
-                lambda session: getattr(session, "open_popup")("https://popup.test/popup"),
+                lambda session: None,
                 "success",
             ),
             (
                 "failure",
-                lambda session: (
-                    getattr(session, "open_popup")("https://popup.test/popup"),
-                    (_ for _ in ()).throw(RuntimeError("runtime-secret")),
-                ),
+                lambda session: (_ for _ in ()).throw(RuntimeError("runtime-secret")),
                 "runtime",
             ),
             (
                 "timeout",
-                lambda session: getattr(session, "open_popup")("https://popup.test/popup"),
+                lambda session: (_ for _ in ()).throw(TimeoutError("runtime-secret")),
                 "timeout",
             ),
             (
@@ -788,7 +784,6 @@ class MisownedAnalysisArtifactPort(Protocol):
                     if label == "success"
                     else None
                 ),
-                popup_error=(TimeoutError("runtime-secret") if label == "timeout" else None),
             )
             browser = BrowserClient(
                 factory=factory,
@@ -808,7 +803,7 @@ class MisownedAnalysisArtifactPort(Protocol):
                 cancel_event.clear()
 
                 def cancel_flow(session: object, event: threading.Event = cancel_event) -> object:
-                    getattr(session, "open_popup")("https://popup.test/popup")
+                    del session
                     event.set()
                     return None
 

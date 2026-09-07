@@ -63,9 +63,17 @@ configuration = parse_configuration(
     + f"catalog_path = {str(root / 'catalog.sqlite3')!r}\\n"
     + f"artifact_root = {str(root / 'artifacts')!r}\\n"
     + "[execution]\\nmax_concurrency = 5\\n"
-    + "[download]\\nbrowser_enabled = true\\n"
-    + 'browser_profile = "fixture-profile"\\n'
-    + "browser_max_concurrency = 3\\n"
+    + "[providers.fixture-agents]\\n"
+    + 'api = "openai-responses"\\n'
+    + 'base_url = "http://127.0.0.1:8765/v1"\\n'
+    + '[models."fixture-agents/browser-model"]\\n'
+    + 'reasoning = "default"\\n'
+    + "image = true\\n"
+    + "[browser]\\n"
+    + 'model = "fixture-agents/browser-model"\\n'
+    + "enabled = true\\n"
+    + 'profile = "fixture-profile"\\n'
+    + "max_concurrency = 3\\n"
 )
 
 class _FakeCloakRuntimeStatus:

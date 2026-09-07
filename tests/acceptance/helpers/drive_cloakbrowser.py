@@ -24,7 +24,6 @@ import sciretriever.network.browser as browser_module
 import sciretriever.network.cloakbrowser as adapter_module
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.sources.browser import CONTROLLED_BROWSER_PRODUCTION_STATUS
-from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 from sciretriever.configuration import initialize_browser_profile
 from sciretriever.configuration.cloak_runtime import CloakRuntimeManager
 from sciretriever.model.access import (
@@ -35,8 +34,17 @@ from sciretriever.model.access import (
 )
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
+    BrowserCaptureDecision,
+    BrowserCaptureEvidence,
     BrowserClient,
     BrowserDestinationKind,
+    BrowserFlowSession,
+)
+from sciretriever.network.browser_control import (
+    BrowserObservation,
+    BrowserReady,
+    BrowserStepAssessment,
+    ClickElement,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.cloakbrowser import (
@@ -57,9 +65,37 @@ class _FlowController:
             raise TypeError("flow must be callable")
         self._flow = flow
 
-    def run(self, session: object) -> None:
+    def run(self, session: BrowserFlowSession) -> None:
         result = self._flow(session)
         del result
+
+
+class _NormalPagePolicy:
+    def assess(self, observation: BrowserObservation) -> BrowserStepAssessment:
+        return BrowserStepAssessment(observation.page_state, True)
+
+
+def _click_named_element(session: BrowserFlowSession, name: str) -> object:
+    """Select one visible fixture control through the generic step contract."""
+
+    steps = session.browser_steps(policy=_NormalPagePolicy(), timeout_seconds=5.0)
+    initial = steps.start()
+    if not isinstance(initial, BrowserReady):
+        raise RuntimeError("installed Browser fixture did not become ready")
+    observation = initial.observation
+    element = next((item for item in observation.elements if item.name == name), None)
+    if element is None:
+        raise RuntimeError(f"installed Browser fixture element is unavailable: {name}")
+    surface = next(item for item in observation.surfaces if item.surface_id == element.surface_id)
+    return steps.apply(
+        ClickElement(
+            observation.article_token,
+            surface.page_id,
+            surface.surface_id,
+            observation.revision,
+            element.element_id,
+        )
+    )
 
 
 class _Resolver:
@@ -83,13 +119,18 @@ class _DestinationGuard:
             raise ValueError("fixture destination escaped its reviewed origin")
 
 
-class _CaptureGuard:
+class _CapturePolicy:
     def __init__(self, pdf_url: str, kind: BrowserCaptureKind) -> None:
         self._pdf_url = pdf_url
         self._kind = kind
 
-    def allows(self, url: str, kind: BrowserCaptureKind, media_type: str) -> bool:
-        return url == self._pdf_url and kind is self._kind and media_type == "application/pdf"
+    def decide(self, evidence: BrowserCaptureEvidence) -> BrowserCaptureDecision:
+        accepted = (
+            evidence.locator == self._pdf_url
+            and evidence.kind is self._kind
+            and evidence.media_type == "application/pdf"
+        )
+        return BrowserCaptureDecision.ACCEPT if accepted else BrowserCaptureDecision.REJECT
 
 
 class _ServerState:
@@ -306,25 +347,18 @@ def main() -> None:
         flows = (
             (
                 article_url,
-                lambda session: (
-                    session.click("button[data-action='pdf']"),
-                    session.wait_for_capture(BrowserCaptureKind.RESPONSE),
-                ),
+                _FlowController(lambda session: _click_named_element(session, "PDF")),
                 BrowserCaptureKind.RESPONSE,
+                False,
             ),
             (
                 pdf_url,
-                lambda session: (
-                    session.text("[data-test='missing-entitlement']"),
-                    session.text("[data-test='missing-paywall']"),
-                    session.text("#missing-challenge"),
-                    session.text("[data-test='missing-account-warning']"),
-                    session.wait_for_capture(BrowserCaptureKind.DOWNLOAD),
-                ),
+                None,
                 BrowserCaptureKind.DOWNLOAD,
+                True,
             ),
         )
-        for index, (target, flow, capture_kind) in enumerate(flows):
+        for index, (target, controller, capture_kind, navigation_only) in enumerate(flows):
             started = time.monotonic()
             result = client.run(
                 AccessScope("publisher-fixture", "web"),
@@ -334,9 +368,10 @@ def main() -> None:
                     max_response_bytes=8 * 1024 * 1024,
                 ),
                 AccessPolicy(max_concurrency=1),
-                controller=_FlowController(flow),
+                controller=controller,
                 destination_guard=destination_guard,
-                capture_guard=_CaptureGuard(pdf_url, capture_kind),
+                capture_policy=_CapturePolicy(pdf_url, capture_kind),
+                navigation_only=navigation_only,
                 session_key="publisher-fixture",
             )
             if index == 1:
@@ -405,7 +440,7 @@ def main() -> None:
                 ),
             },
             "production_boundary": {
-                "catalog_rule_count": len(PRODUCTION_BROWSER_RULE_CATALOG.rules),
+                "browser_strategy": "generic-agent",
                 "ready": (CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY),
                 "readiness_code": (
                     None

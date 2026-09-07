@@ -984,7 +984,6 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             validated = validate_pdf(
                 source,
                 staging=_PDF_VALIDATION_STAGING,
-                candidate_belongs_to_literature=True,
                 declared_media_type=landing_body.candidate.declared_media_type,
             )
         validated.close()
@@ -1019,7 +1018,6 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
                 validate_pdf(
                     source,
                     staging=_PDF_VALIDATION_STAGING,
-                    candidate_belongs_to_literature=True,
                     declared_media_type=landing_body.candidate.declared_media_type,
                 )
         self.assertTrue(caught.exception.is_candidate_rejection)
@@ -1031,7 +1029,6 @@ class AcquisitionDirectSourceTests(unittest.TestCase):
             validated = validate_pdf(
                 source,
                 staging=_PDF_VALIDATION_STAGING,
-                candidate_belongs_to_literature=True,
             )
         validated.close()
         discovered_pdf.content.discard()
@@ -1580,6 +1577,41 @@ class DoiLandingResolverTests(unittest.TestCase):
         self.assertNotIn("publisher.test", resolver.calls)
         self.assertIn("10.1234%2Fexample", _request_url(transport.calls[0]))
         self.assertTrue(first.closed)
+
+    def test_http_publisher_location_is_upgraded_without_a_plaintext_request(self) -> None:
+        first = _raw(302, location="http://publisher.test/articles/example?view=html")
+        client, transport, resolver, _coordinator = _http_environment(
+            [first],
+            {"doi.org": (_PUBLIC_IP,)},
+        )
+
+        result = DoiLandingResolver(http_client=client).resolve(
+            Identifier(namespace="doi", value="10.1234/example")
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(
+            result.canonical_landing_url,
+            "https://publisher.test/articles/example?view=html",
+        )
+        self.assertEqual(result.origin, "https://publisher.test")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertNotIn("publisher.test", resolver.calls)
+
+    def test_http_publisher_location_upgrade_retains_normal_url_rejections(self) -> None:
+        doi = Identifier(namespace="doi", value="10.1234/example")
+        for location in (
+            "http://user:password@publisher.test/article",
+            "http://publisher.test:80/article",
+        ):
+            with self.subTest(location=location):
+                client, _transport, _resolver, _coordinator = _http_environment(
+                    [_raw(302, location=location)],
+                    {"doi.org": (_PUBLIC_IP,)},
+                )
+                with self.assertRaises(AcquisitionFailure):
+                    DoiLandingResolver(http_client=client).resolve(doi)
 
     def test_redirect_without_a_location_is_a_stable_failure(self) -> None:
         client, _transport, _resolver, _coordinator = _http_environment(

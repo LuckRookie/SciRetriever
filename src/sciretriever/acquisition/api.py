@@ -34,7 +34,6 @@ from sciretriever.acquisition.rules import (
 from sciretriever.acquisition.sources import (
     BUILTIN_SCI_HUB_MIRROR_URLS,
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
-    PRODUCTION_BROWSER_RULE_CATALOG,
 )
 from sciretriever.model.acquisition import AcquisitionResult
 from sciretriever.model.primitives import LiteratureId
@@ -49,7 +48,7 @@ UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS: Final[frozenset[str]] = (
 CONTROLLED_BROWSER_PRODUCTION_AVAILABLE: Final[bool] = (
     CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is RouteReadiness.READY
 )
-CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT: Final[int] = len(PRODUCTION_BROWSER_RULE_CATALOG.rules)
+CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT: Final[int] = 1
 
 
 class PreparedAcquisition:

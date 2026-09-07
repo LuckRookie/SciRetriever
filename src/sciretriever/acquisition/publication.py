@@ -13,6 +13,7 @@ from collections.abc import Callable
 from uuid import uuid4
 
 import sciretriever.acquisition.ports as acquisition_ports
+from sciretriever.acquisition.pdf_identity import browser_pdf_belongs_to_literature
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
@@ -29,7 +30,7 @@ from sciretriever.acquisition.rules import (
     ValidatedPdf,
     validate_pdf,
 )
-from sciretriever.model.acquisition import AcquiredPrimaryPdf
+from sciretriever.model.acquisition import AcquiredPrimaryPdf, AcquisitionPath
 from sciretriever.model.primitives import (
     AssetId,
     LiteratureAssetId,
@@ -314,6 +315,7 @@ class PrimaryPdfPublisher:
             with source_context as source:
                 validated = self._validate_candidate(
                     source,
+                    request,
                     temporary_pdf,
                     cancel_event=(cancel_event if cancel_event is not None else self._cancel_event),
                 )
@@ -335,6 +337,7 @@ class PrimaryPdfPublisher:
     def _validate_candidate(
         self,
         source: object,
+        request: AcquisitionRequest,
         temporary_pdf: TemporaryPdf,
         *,
         cancel_event: CancellationEvent | None,
@@ -342,14 +345,25 @@ class PrimaryPdfPublisher:
         """Interpret rejection only when it comes from the A2 validator call."""
 
         try:
-            return validate_pdf(
+            validated = validate_pdf(
                 source,
                 staging=self._staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=self._max_pdf_bytes,
                 declared_media_type=temporary_pdf.candidate.declared_media_type,
                 cancel_event=cancel_event,
             )
+            if temporary_pdf.candidate.acquisition_path is not AcquisitionPath.CONTROLLED_BROWSER:
+                return validated
+            association = temporary_pdf.browser_association
+            if association is None or not browser_pdf_belongs_to_literature(
+                request,
+                association,
+                validated,
+                cancel_event=cancel_event,
+            ):
+                validated.close()
+                return None
+            return validated
         except PdfValidationError as error:
             if error.is_candidate_rejection:
                 return None

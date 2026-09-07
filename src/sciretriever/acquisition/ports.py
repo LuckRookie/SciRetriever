@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from sciretriever.model.access import has_sensitive_query_parameter
 from sciretriever.model.acquisition import (
     AcquiredPrimaryPdf,
+    AcquisitionPath,
     Asset,
     AssetRole,
     AutomaticPdfAcquisitionExhaustion,
@@ -385,6 +386,57 @@ class ValidatedPrimaryPdfCommitPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserPdfAssociationEvidence:
+    """Network-correlated Browser lineage used only by Acquisition validation.
+
+    These facts prove how one capture belongs to the current Browser operation;
+    they do not by themselves prove that its bytes are the requested article.
+    URLs are safe, query-free locators and no vendor object crosses this port.
+    """
+
+    start_locator: str
+    start_kind: str
+    capture_locator: str
+    capture_kind: str
+    correlation: str
+    request_navigation: bool
+    from_exact_start: bool
+    redirect_depth: int
+    native_download: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "start_locator", _safe_source_url(self.start_locator))
+        object.__setattr__(self, "capture_locator", _safe_source_url(self.capture_locator))
+        if self.start_kind not in {"direct-file", "doi-resolver", "landing"}:
+            raise ValueError("Browser association start kind is invalid")
+        if self.capture_kind not in {
+            "download",
+            "popup",
+            "response",
+        }:
+            raise ValueError("Browser association capture kind is invalid")
+        if self.correlation not in {"direct-request", "redirect-descendant"}:
+            raise ValueError("Browser association correlation is invalid")
+        if any(
+            type(value) is not bool
+            for value in (
+                self.request_navigation,
+                self.from_exact_start,
+                self.native_download,
+            )
+        ):
+            raise TypeError("Browser association flags must be bools")
+        if self.from_exact_start and not self.request_navigation:
+            raise ValueError("exact-start Browser evidence requires navigation")
+        if type(self.redirect_depth) is not int or not 0 <= self.redirect_depth <= 32:
+            raise ValueError("Browser association redirect depth is invalid")
+        if self.correlation == "direct-request" and self.redirect_depth != 0:
+            raise ValueError("direct Browser evidence cannot contain redirect depth")
+        if self.correlation == "redirect-descendant" and self.redirect_depth < 1:
+            raise ValueError("redirect Browser evidence requires a positive depth")
+
+
+@dataclass(frozen=True, slots=True)
 class TemporaryPdf:
     """Package-internal neutral delivery produced by a configured PDF Source."""
 
@@ -392,6 +444,7 @@ class TemporaryPdf:
     content: TemporaryPdfContent
     safe_source_url: str | None
     provenance: Provenance
+    browser_association: BrowserPdfAssociationEvidence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate, PdfCandidate):
@@ -406,6 +459,11 @@ class TemporaryPdf:
             raise ValueError("temporary PDF provenance must use source kind asset-provider")
         if self.provenance.source_name != self.candidate.source_name:
             raise ValueError("temporary PDF provenance must match the candidate source")
+        if self.candidate.acquisition_path is AcquisitionPath.CONTROLLED_BROWSER:
+            if not isinstance(self.browser_association, BrowserPdfAssociationEvidence):
+                raise ValueError("Browser temporary PDF requires association evidence")
+        elif self.browser_association is not None:
+            raise ValueError("only Browser temporary PDFs may carry Browser association evidence")
 
 
 class CandidateKeyTracker:
@@ -491,6 +549,7 @@ __all__ = (
     "AcquisitionExhaustionPublicationPort",
     "AcquisitionFailure",
     "AcquisitionSourceFailure",
+    "BrowserPdfAssociationEvidence",
     "CancellationEvent",
     "CandidateKeyTracker",
     "PdfValidationStage",

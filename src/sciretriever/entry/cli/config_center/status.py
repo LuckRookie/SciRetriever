@@ -27,7 +27,6 @@ from sciretriever.configuration import (
 from sciretriever.entry.cli.config_ui import ConfigStatusPresenter
 from sciretriever.model.configuration import (
     BrowserAccessStatus,
-    BrowserController,
     Configuration,
     ConfigurationCapabilityStatus,
     ConfigurationRuntimeStatus,
@@ -209,7 +208,7 @@ def status_payload(
     parser = configuration.parsing
     analysis = configuration.analysis
     analysis_model = configuration.models.get(analysis.model)
-    browser_model = configuration.models.get(configuration.access.model)
+    browser_model = configuration.models.get(configuration.browser.model)
     parser_secret_ready = not runtime.parsing.bearer_token_required or (
         runtime.parsing.bearer_token_configured is True
         and runtime.parsing.credential_origin_matches is True
@@ -217,16 +216,10 @@ def status_payload(
     parser_ready = runtime.parsing.configuration_complete and parser_secret_ready
     controlled_browser = {
         **browser.model_dump(mode="json"),
-        "controller": configuration.access.browser_controller.value,
-        "controller_ready": (
-            configuration.access.browser_controller is BrowserController.RULES
-            or runtime.agents.browser_locally_ready
-        ),
-        "controller_required_model": (
-            None
-            if configuration.access.browser_controller is BrowserController.RULES
-            else configuration.access.model
-        ),
+        "model": configuration.browser.model,
+        "selected_model": _model_payload(browser_model),
+        "model_locally_ready": runtime.agents.browser_locally_ready,
+        "model_missing_fields": runtime.agents.browser.missing_fields,
         "article_entitlement_assessment": "not-evaluated",
         "article_entitlement_evaluated": False,
         "cloakbrowser_license": {
@@ -259,7 +252,6 @@ def status_payload(
                 for item in capabilities
                 if item.capability is ProviderCapability.ACQUISITION
             ],
-            "controlled_browser": controlled_browser,
         },
         "models": {
             "providers": [
@@ -296,13 +288,14 @@ def status_payload(
             },
         },
         "download": {
-            "model": configuration.access.model,
-            "selected_model": _model_payload(browser_model),
-            "model_locally_ready": runtime.agents.browser_locally_ready,
-            "model_missing_fields": runtime.agents.browser.missing_fields,
-            "controller": configuration.access.browser_controller.value,
-            "browser": controlled_browser,
+            "mode": configuration.sources.acquisition.mode.value,
+            "sources": tuple(
+                item.provider.value
+                for item in capabilities
+                if item.capability is ProviderCapability.ACQUISITION and item.enabled
+            ),
         },
+        "browser": controlled_browser,
         "parsing": {
             "locally_ready": parser_ready,
             "configuration_complete": runtime.parsing.configuration_complete,

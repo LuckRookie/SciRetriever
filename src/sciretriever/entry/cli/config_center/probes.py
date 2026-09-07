@@ -16,7 +16,6 @@ from sciretriever.entry.cli.config_probe_diagnostics import diagnosed_probe_payl
 from sciretriever.entry.cli.config_ui import ConfigConsole, ConfigStatusPresenter
 from sciretriever.model.configuration import (
     BrowserConfigurationProbeResult,
-    BrowserController,
     Configuration,
     ConfigurationProbeSummary,
     CoreConfigurationProbeResult,
@@ -243,7 +242,7 @@ def _run_all(
         "parse": parse.model_dump(mode="json"),
     }
     required = [analyze, parse]
-    if session.configuration.access.browser_controller is BrowserController.AGENT:
+    if session.configuration.browser.enabled:
         browser = session.run_browser_agent()
         payload["browser"] = browser.model_dump(mode="json")
         required.append(browser)

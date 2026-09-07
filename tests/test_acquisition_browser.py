@@ -1,51 +1,29 @@
 from __future__ import annotations
 
-import inspect
 import json
-import logging
-import re
 import threading
 import unittest
-from collections.abc import Callable, Iterable
-from contextlib import AbstractContextManager
 from dataclasses import replace
-from pathlib import Path
-from typing import BinaryIO, cast
+from typing import cast
 
-from sciretriever.acquisition.browser_control import BrowserControllerKind
-from sciretriever.acquisition.planning import RouteReadiness
+from sciretriever.acquisition.outcomes import RouteOutcome
+from sciretriever.acquisition.planning import AccessRouteHint, AccessRouteHintKind
 from sciretriever.acquisition.ports import (
     AcquisitionExpectedFacts,
     AcquisitionFailure,
+    AcquisitionRequest,
     AcquisitionSourceFailure,
     CandidateKeyTracker,
-    TemporaryPdf,
 )
-from sciretriever.acquisition.routing import (
-    AcquisitionEvidence,
-    AcquisitionRequest,
-    build_acquisition_evidence,
-)
+from sciretriever.acquisition.routes import RouteExecutionContext
+from sciretriever.acquisition.routing import build_acquisition_evidence
 from sciretriever.acquisition.sources.browser import (
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
-    BrowserFlowSession,
-    BrowserRunner,
     ControlledBrowserPdfSource,
+    GenericBrowserDestinationGuard,
+    _GenericStepPolicy,
+    build_generic_browser_destination_guard,
 )
-from sciretriever.acquisition.sources.browser_rules import (
-    BROWSER_RULE_VERIFICATION_CATALOG,
-    PRODUCTION_BROWSER_RULE_CATALOG,
-    BrowserActionKind,
-    BrowserArticleIdentityKind,
-    BrowserCaptureDisposition,
-    BrowserChallengeResourceProfile,
-    BrowserPageMarker,
-    BrowserPageMarkerKind,
-    BrowserRuleAction,
-    BrowserRuleCatalog,
-    BrowserSiteRule,
-)
-from sciretriever.acquisition.sources.direct import WebAccessProfileResolver
 from sciretriever.agents.api import (
     AgentCallLimits,
     AgentModelCapabilities,
@@ -74,6 +52,8 @@ from sciretriever.model.acquisition import (
     AssetRole,
 )
 from sciretriever.model.literature import (
+    Author,
+    AuthorKind,
     Identifier,
     Literature,
     LiteratureStatus,
@@ -93,229 +73,65 @@ from sciretriever.model.primitives import (
 from sciretriever.model.provenance import Provenance
 from sciretriever.network.admission import AccessPolicy, AccessScope
 from sciretriever.network.browser import (
-    BrowserCaptureGuard,
-    BrowserClient,
+    BrowserCaptureCorrelation,
+    BrowserCaptureEvidence,
+    BrowserCapturePolicy,
     BrowserDestinationGuard,
     BrowserDestinationKind,
     BrowserFlowController,
+    BrowserFlowSession,
     BrowserOperationLimits,
     BrowserPageObservation,
 )
 from sciretriever.network.browser_control import (
+    BROWSER_OBSERVATION_MEDIA_TYPE,
     BrowserAction,
     BrowserActionOutcome,
     BrowserActionReceipt,
     BrowserAgentStatus,
     BrowserBounds,
+    BrowserCandidateTimeoutTransition,
+    BrowserCapturedTransition,
     BrowserCaptureState,
-    BrowserControlSession,
     BrowserElement,
     BrowserElementState,
     BrowserObservation,
     BrowserPageState,
     BrowserScreenshot,
     BrowserScrollState,
+    BrowserSettledTransition,
+    BrowserStepDriver,
+    BrowserStepPolicy,
+    BrowserStepSession,
+    BrowserStoppedTransition,
     BrowserSurface,
     BrowserSurfaceKind,
+    BrowserTransition,
     BrowserViewport,
+    Stop,
 )
-from sciretriever.network.policy import normalize_url
 
-_TIME = UtcTimestamp("2026-08-11T12:00:00Z")
-_FIXTURES = Path(__file__).parent / "fixtures" / "acquisition" / "browser"
-_CANDIDATE_KEY = re.compile(r"controlled-browser:[0-9a-f]{64}\Z")
-
-
-def _browser_client_runner_contract(client: BrowserClient) -> BrowserRunner:
-    """Static assertion that A8 does not depend on Network's private session type."""
-
-    return client
+_TIME = UtcTimestamp("2026-09-05T00:00:00Z")
+_DOI = "10.1000/generic-browser"
+_PDF = b"%PDF-1.7\nfixture-main-pdf"
 
 
 def _id(index: int) -> str:
-    return f"{index:08x}-e89b-12d3-a456-426614174000"
+    return f"{index:08x}-e89b-42d3-a456-426614174000"
 
 
-class _IdFactory:
-    def __init__(self, start: int = 1000) -> None:
-        self._next = start
-
-    def __call__(self) -> ProvenanceId:
-        value = ProvenanceId(_id(self._next))
-        self._next += 1
-        return value
-
-
-def _page_states() -> dict[str, dict[str, str]]:
-    with (_FIXTURES / "page-states.json").open(encoding="utf-8") as stream:
-        value = json.load(stream)
-    if not isinstance(value, dict):
-        raise AssertionError("browser fixture must contain an object")
-    result: dict[str, dict[str, str]] = {}
-    for state_name, raw_markers in value.items():
-        if not isinstance(state_name, str) or not isinstance(raw_markers, dict):
-            raise AssertionError("browser fixture state is invalid")
-        markers: dict[str, str] = {}
-        for selector, text in raw_markers.items():
-            if not isinstance(selector, str) or not isinstance(text, str):
-                raise AssertionError("browser fixture marker is invalid")
-            markers[selector] = text
-        result[state_name] = markers
-    return result
-
-
-def _access_page_states() -> dict[str, tuple[dict[str, str], BrowserPageObservation]]:
-    with (_FIXTURES / "access-page-states.json").open(encoding="utf-8") as stream:
-        value = json.load(stream)
-    if not isinstance(value, dict):
-        raise AssertionError("Browser access fixture must contain an object")
-    result: dict[str, tuple[dict[str, str], BrowserPageObservation]] = {}
-    for state_name, raw_state in value.items():
-        if not isinstance(state_name, str) or not isinstance(raw_state, dict):
-            raise AssertionError("Browser access fixture state is invalid")
-        if set(raw_state) != {"locator", "status_code", "markers"}:
-            raise AssertionError("Browser access fixture state is incomplete")
-        locator = raw_state["locator"]
-        status_code = raw_state["status_code"]
-        raw_markers = raw_state["markers"]
-        if (
-            not isinstance(locator, str)
-            or type(status_code) is not int
-            or not isinstance(raw_markers, dict)
-        ):
-            raise AssertionError("Browser access fixture observation is invalid")
-        markers: dict[str, str] = {}
-        for selector, marker_text in raw_markers.items():
-            if not isinstance(selector, str) or not isinstance(marker_text, str):
-                raise AssertionError("Browser access fixture marker is invalid")
-            markers[selector] = marker_text
-        result[state_name] = (
-            markers,
-            BrowserPageObservation(locator=locator, status_code=status_code),
-        )
-    return result
-
-
-def _access_page_markers() -> tuple[BrowserPageMarker, ...]:
-    return (
-        BrowserPageMarker(
-            marker_id="authenticated",
-            kind=BrowserPageMarkerKind.AUTHENTICATED,
-            css_selectors=("#authenticated",),
-        ),
-        BrowserPageMarker(
-            marker_id="article-entitled",
-            kind=BrowserPageMarkerKind.ENTITLED,
-            css_selectors=("#article-entitled",),
-        ),
-        BrowserPageMarker(
-            marker_id="login-required",
-            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            css_selectors=("#login-required",),
-            url_prefixes=("https://publisher.test/account/login",),
-        ),
-        BrowserPageMarker(
-            marker_id="mfa-required",
-            kind=BrowserPageMarkerKind.MFA_REQUIRED,
-            css_selectors=("#mfa-required",),
-            url_prefixes=("https://publisher.test/account/mfa",),
-        ),
-        BrowserPageMarker(
-            marker_id="not-entitled",
-            kind=BrowserPageMarkerKind.NOT_ENTITLED,
-            response_statuses=(403,),
-        ),
-        BrowserPageMarker(
-            marker_id="paywall",
-            kind=BrowserPageMarkerKind.PAYWALL,
-            response_statuses=(402,),
-        ),
-        BrowserPageMarker(
-            marker_id="challenge",
-            kind=BrowserPageMarkerKind.CHALLENGE,
-            css_selectors=("#access-challenge",),
-        ),
-        BrowserPageMarker(
-            marker_id="rate-limited",
-            kind=BrowserPageMarkerKind.RATE_LIMITED,
-            response_statuses=(429,),
-        ),
-        BrowserPageMarker(
-            marker_id="ip-blocked",
-            kind=BrowserPageMarkerKind.IP_BLOCKED,
-            response_statuses=(451,),
-        ),
-        BrowserPageMarker(
-            marker_id="account-warning",
-            kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
-            css_selectors=("#account-warning",),
-        ),
-        BrowserPageMarker(
-            marker_id="not-found",
-            kind=BrowserPageMarkerKind.NOT_FOUND,
-            response_statuses=(404,),
-        ),
-    )
-
-
-def _failure(code: str) -> AccessFailure:
-    return AccessFailure(
-        code=code,
-        reason="The fake Browser operation did not complete.",
-        action="Use the next deterministic test action.",
-        retryable=code not in {"policy", "oversize", "challenge"},
-    )
-
-
-def _download(
-    body: bytes = b"browser bytes",
+def _observation(
     *,
-    final_locator: str = "https://publisher.test/article.pdf",
-    media_type: str = "application/pdf",
-) -> BrowserCaptureBatch:
-    return BrowserCaptureBatch(
-        captures=(
-            BrowserCapture(
-                kind=BrowserCaptureKind.DOWNLOAD,
-                stream=BoundedByteStream(
-                    chunks=(body,),
-                    media_type=media_type,
-                    final_locator=final_locator,
-                    size=len(body),
-                ),
-            ),
-        )
-    )
-
-
-def _capture_batch(
-    *values: tuple[bytes, BrowserCaptureKind, str, str],
-) -> BrowserCaptureBatch:
-    return BrowserCaptureBatch(
-        captures=tuple(
-            BrowserCapture(
-                kind=kind,
-                stream=BoundedByteStream(
-                    chunks=(body,),
-                    media_type=media_type,
-                    final_locator=locator,
-                    size=len(body),
-                ),
-            )
-            for body, kind, locator, media_type in values
-        )
-    )
-
-
-def _agent_observation(
     revision: int = 1,
-    *,
+    page_state: BrowserPageState = BrowserPageState.NORMAL,
     capture_state: BrowserCaptureState = BrowserCaptureState.NONE,
+    agent_status: BrowserAgentStatus = BrowserAgentStatus.RUNNING,
+    surface_title: str = "Generic Browser article",
 ) -> BrowserObservation:
     viewport = BrowserViewport(width=1280, height=720)
-    screenshot = b"agent-fixture"
+    screenshot = f"browser-screen-{revision}".encode()
     return BrowserObservation(
-        article_token="fixture-agent",
+        article_token="article-fixture",
         revision=revision,
         page_id="p00000001",
         surfaces=(
@@ -324,12 +140,12 @@ def _agent_observation(
                 page_id="p00000001",
                 kind=BrowserSurfaceKind.PAGE,
                 parent_surface_id=None,
-                origin="https://publisher.test",
-                path="/article",
-                title="Article",
+                origin="https://publisher.invalid",
+                path="/article/generic-browser",
+                title=surface_title,
                 viewport=viewport,
-                bounds=BrowserBounds(0, 0, 1280, 720),
-                scroll=BrowserScrollState(0, 0, 0, 1440),
+                bounds=BrowserBounds(x=0, y=0, width=1280, height=720),
+                scroll=BrowserScrollState(x=0, y=0, maximum_x=0, maximum_y=1400),
             ),
         ),
         elements=(
@@ -337,124 +153,79 @@ def _agent_observation(
                 element_id="e00000001",
                 surface_id="s00000001",
                 role="button",
-                name="Agent action",
+                name="Download PDF",
                 state=BrowserElementState.ENABLED,
-                bounds=BrowserBounds(20, 20, 180, 40),
+                bounds=BrowserBounds(x=20, y=20, width=180, height=40),
             ),
         ),
         screenshot=BrowserScreenshot(
-            screenshot_id="i00000001",
-            article_token="fixture-agent",
+            screenshot_id=f"i{revision:08x}",
+            article_token="article-fixture",
             page_id="p00000001",
             surface_id="s00000001",
             revision=revision,
             viewport=viewport,
-            media_type="image/png",
+            media_type=BROWSER_OBSERVATION_MEDIA_TYPE,
             sha256=sha256_digest(screenshot),
             content=screenshot,
         ),
-        page_state=BrowserPageState.NORMAL,
-        agent_status=BrowserAgentStatus.RUNNING,
+        page_state=page_state,
+        agent_status=agent_status,
         capture_state=capture_state,
     )
 
 
-class _FakeControlSession:
-    def __init__(self, *, on_execute: Callable[[], None] | None = None) -> None:
-        self.observation = _agent_observation()
-        self.executed: list[BrowserAction] = []
-        self.on_execute = on_execute
-
-    def observe(self, *, page_state: BrowserPageState) -> BrowserObservation:
-        if not isinstance(page_state, BrowserPageState):
-            raise AssertionError("control observation page state is invalid")
-        return replace(self.observation, page_state=page_state)
-
-    def execute(
-        self,
-        action: BrowserAction,
-        observation: BrowserObservation,
-        *,
-        timeout_seconds: float,
-    ) -> BrowserActionReceipt:
-        if observation.revision != self.observation.revision:
-            raise AssertionError("Agent action used a stale fixture observation")
-        if timeout_seconds <= 0:
-            raise AssertionError("Agent action timeout was not positive")
-        self.executed.append(action)
-        if self.on_execute is not None:
-            self.on_execute()
-        return BrowserActionReceipt(
-            action_kind=action.kind,
-            outcome=BrowserActionOutcome.APPLIED,
-            article_token=observation.article_token,
-            page_id=action.page_id,
-            surface_id=action.surface_id,
-            before_revision=observation.revision,
-            after_revision=None,
-            elapsed_milliseconds=1,
-        )
-
-
-class _FixtureAgentPort:
+class _AgentProvider:
     provider_name = "fixture-browser-agent"
 
-    def __init__(self, *, actions: tuple[str, ...]) -> None:
-        if not actions or any(action not in {"click", "stop"} for action in actions):
-            raise ValueError("fixture Agent action is unsupported")
-        self.actions = actions
+    def __init__(self, action: str = "click_element", *, stop_reason: str = "normal-miss") -> None:
+        self.action = action
+        self.stop_reason = stop_reason
         self.calls: list[AgentProviderCall] = []
-
-    @property
-    def turns(self) -> int:
-        return len(self.calls)
 
     def execute(self, call: AgentProviderCall) -> AgentToolCall:
         self.calls.append(call)
         summary = json.loads(call.text_parts[1].text)
-        action = self.actions[min(self.turns - 1, len(self.actions) - 1)]
         arguments: dict[str, object] = {
             "article_token": summary["article_token"],
             "page_id": summary["page_id"],
             "revision": summary["revision"],
         }
-        if action == "click":
-            tool_name = "click_element"
+        if self.action == "click_element":
             arguments.update(
                 {
                     "surface_id": "s00000001",
                     "element_id": "e00000001",
                 }
             )
-        else:
-            tool_name = "stop"
-            arguments["reason"] = "normal-miss"
+        elif self.action == "stop":
+            arguments["reason"] = self.stop_reason
         encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
         return AgentToolCall(
-            tool_name=tool_name,
+            tool_name=self.action,
             arguments=encoded,
             provenance=AgentProvenance(
                 provider=self.provider_name,
                 model=call.model,
                 input_sha256=call.input_sha256,
-                parameters_sha256=call.input_sha256,
+                parameters_sha256=sha256_digest(b"browser-test-parameters"),
                 usage=AgentUsage(output_tokens=1, response_bytes=len(encoded)),
             ),
         )
 
 
-def _agent_runtime(agent: _FixtureAgentPort) -> AgentRuntime:
+def _runtime(provider: _AgentProvider) -> AgentRuntime:
     return AgentRuntime(
-        adapter=agent,
+        adapter=provider,
         browser=AgentRoleBinding(
             role=AgentRole.BROWSER,
             model="fixture-browser-model",
             capabilities=AgentModelCapabilities(
-                context_window_tokens=32_768,
-                max_output_tokens=512,
+                context_window_tokens=1_000_000,
+                max_output_tokens=131_072,
                 image_input=True,
                 tool_decision=True,
-                supported_image_media_types=frozenset({"image/png"}),
+                supported_image_media_types=frozenset({BROWSER_OBSERVATION_MEDIA_TYPE}),
                 max_image_count=1,
                 max_image_bytes=2 * 1024 * 1024,
             ),
@@ -464,129 +235,161 @@ def _agent_runtime(agent: _FixtureAgentPort) -> AgentRuntime:
                 max_request_bytes=3 * 1024 * 1024,
                 max_response_bytes=1 * 1024 * 1024,
                 max_result_bytes=1 * 1024 * 1024,
-                max_output_tokens=512,
-                context_window_tokens=32_768,
+                max_output_tokens=131_072,
+                context_window_tokens=1_000_000,
             ),
         ),
     )
 
 
-class _FakeSession:
+class _Driver:
     def __init__(
         self,
-        marker_text: dict[str, str] | None = None,
-        observation: BrowserPageObservation | None = None,
-        available_captures: frozenset[BrowserCaptureKind] = frozenset(),
-        discovered_pdf_locators: tuple[str, ...] = (),
-        click_succeeds: bool = True,
-        control_session: BrowserControlSession | None = None,
-        capture_after_click: bool = False,
-        capture_after_verified_locator: bool = False,
+        *,
+        terminal: str = "captured",
+        page_state: BrowserPageState = BrowserPageState.NORMAL,
     ) -> None:
-        self.marker_text = {} if marker_text is None else marker_text
-        self.observation = observation or BrowserPageObservation(
-            locator="https://publisher.test/article",
-            status_code=200,
+        self.terminal = terminal
+        self.current = _observation(page_state=page_state)
+        self.actions: list[BrowserAction] = []
+
+    def begin(
+        self,
+        *,
+        page_state: BrowserPageState,
+        timeout_seconds: float,
+    ) -> BrowserObservation:
+        del page_state
+        if timeout_seconds <= 0:
+            raise AssertionError("Browser timeout must be positive")
+        return self.current
+
+    def settle(
+        self,
+        observation: BrowserObservation,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserTransition:
+        if timeout_seconds <= 0:
+            raise AssertionError("Browser timeout must be positive")
+        return BrowserSettledTransition(observation=observation, changed=False)
+
+    def execute(
+        self,
+        action: BrowserAction,
+        observation: BrowserObservation,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserTransition:
+        if timeout_seconds <= 0:
+            raise AssertionError("Browser timeout must be positive")
+        self.actions.append(action)
+        if isinstance(action, Stop):
+            stopped = replace(observation, agent_status=BrowserAgentStatus.STOPPED)
+            return BrowserStoppedTransition(
+                receipt=_receipt(action, observation, stopped),
+                observation=stopped,
+            )
+        if self.terminal == "candidate-timeout":
+            candidate = _observation(revision=2, capture_state=BrowserCaptureState.CANDIDATE)
+            return BrowserCandidateTimeoutTransition(
+                observation=candidate,
+                receipt=_receipt(action, observation, candidate),
+            )
+        captured = _observation(revision=2, capture_state=BrowserCaptureState.CAPTURED)
+        return BrowserCapturedTransition(
+            observation=captured,
+            receipt=_receipt(action, observation, captured),
         )
-        self.text_calls: list[str] = []
-        self.clicks: list[str] = []
-        self.viewer_opens: list[str] = []
-        self.verified_locator_opens: list[str] = []
-        self.capture_waits: list[BrowserCaptureKind] = []
-        self.capture_wait_sets: list[tuple[BrowserCaptureKind, ...]] = []
-        self.available_captures = available_captures
-        self.discovered_pdf_locators = discovered_pdf_locators
-        self.discovery_calls = 0
-        self.fill_calls: list[tuple[str, str]] = []
-        self.click_succeeds = click_succeeds
-        self._control_session = control_session
-        self.capture_after_click = capture_after_click
-        self.capture_after_verified_locator = capture_after_verified_locator
 
-    def text(self, selector: str) -> str:
-        self.text_calls.append(selector)
-        return self.marker_text.get(selector, "")
 
-    def has_selector(self, selector: str) -> bool:
-        self.text_calls.append(selector)
-        return selector in self.marker_text
+def _receipt(
+    action: BrowserAction,
+    before: BrowserObservation,
+    after: BrowserObservation,
+) -> BrowserActionReceipt:
+    return BrowserActionReceipt(
+        action_kind=action.kind,
+        outcome=BrowserActionOutcome.APPLIED,
+        article_token=before.article_token,
+        page_id=before.page_id,
+        surface_id=action.surface_id,
+        before_revision=before.revision,
+        after_revision=after.revision,
+        elapsed_milliseconds=1,
+    )
+
+
+class _FlowSession:
+    def __init__(self, driver: _Driver) -> None:
+        self.driver = driver
+
+    def browser_steps(
+        self,
+        policy: BrowserStepPolicy,
+        *,
+        timeout_seconds: float,
+    ) -> BrowserStepSession:
+        return BrowserStepSession(
+            driver=cast(BrowserStepDriver, self.driver),
+            policy=policy,
+            timeout_seconds=timeout_seconds,
+        )
 
     def click(self, selector: str) -> bool:
-        self.clicks.append(selector)
-        if self.click_succeeds and self.capture_after_click:
-            self.available_captures = frozenset(
-                (*self.available_captures, BrowserCaptureKind.DOWNLOAD)
-            )
-        return self.click_succeeds
+        del selector
+        raise AssertionError("generic Agent control does not use selectors")
 
     def open_viewer(self, locator: str) -> None:
-        self.viewer_opens.append(locator)
+        del locator
+        raise AssertionError("generic Agent control does not inject locators")
 
     def open_verified_locator(self, locator: str) -> None:
-        self.verified_locator_opens.append(locator)
-        if self.capture_after_verified_locator:
-            self.available_captures = frozenset(
-                (*self.available_captures, BrowserCaptureKind.RESPONSE)
-            )
+        del locator
+        raise AssertionError("generic Agent control does not inject locators")
 
     def discover_pdf_locators(self) -> tuple[str, ...]:
-        self.discovery_calls += 1
-        return self.discovered_pdf_locators
+        return ()
 
     def capture_available(self, kind: BrowserCaptureKind) -> bool:
-        return kind in self.available_captures
+        del kind
+        return False
 
     def wait_for_capture(self, kind: BrowserCaptureKind) -> None:
-        self.capture_waits.append(kind)
+        del kind
 
     def wait_for_any_capture(self, kinds: tuple[BrowserCaptureKind, ...]) -> None:
-        self.capture_wait_sets.append(kinds)
+        del kinds
+
+    def has_selector(self, selector: str) -> bool:
+        del selector
+        return False
+
+    def text(self, selector: str) -> str:
+        del selector
+        return ""
 
     def observe(self) -> BrowserPageObservation:
-        return self.observation
-
-    # This deliberately exists on the fake so tests can prove A8 never uses a
-    # login-filling capability even when a vendor object happened to expose it.
-    def fill(self, selector: str, value: str) -> None:
-        self.fill_calls.append((selector, value))
-
-    def control_session(self) -> BrowserControlSession:
-        if self._control_session is None:
-            raise AssertionError("deterministic Browser rule must not request control")
-        return self._control_session
+        return BrowserPageObservation("https://publisher.invalid/article/generic-browser", 200)
 
 
-RunHook = Callable[[AccessScope, BrowserRequest, AccessPolicy, BrowserOperationLimits], None]
-
-
-class _FakeRunner:
+class _Runner:
     def __init__(
         self,
-        results: Iterable[BrowserResult | BaseException | object],
+        result: BrowserResult,
         *,
-        marker_states: Iterable[dict[str, str]] = (),
-        page_observations: Iterable[BrowserPageObservation] = (),
-        initial_captures_available: bool = False,
-        discovered_pdf_locators: Iterable[tuple[str, ...]] = (),
-        click_succeeds: bool = True,
-        control_session: BrowserControlSession | None = None,
-        capture_after_click: bool = False,
-        capture_after_verified_locator: bool = False,
-        on_run: RunHook | None = None,
+        terminal: str = "captured",
+        page_state: BrowserPageState = BrowserPageState.NORMAL,
+        fail: bool = False,
+        run_controller: bool = True,
     ) -> None:
-        self.results = list(results)
-        self.marker_states = list(marker_states)
-        self.page_observations = list(page_observations)
-        self.initial_captures_available = initial_captures_available
-        self.discovered_pdf_locators = list(discovered_pdf_locators)
-        self.click_succeeds = click_succeeds
-        self.control_session = control_session
-        self.capture_after_click = capture_after_click
-        self.capture_after_verified_locator = capture_after_verified_locator
-        self.on_run = on_run
-        self.calls: list[dict[str, object]] = []
-        self.sessions: list[_FakeSession] = []
-        self.completed = 0
+        self.result = result
+        self.driver = _Driver(terminal=terminal, page_state=page_state)
+        self.fail = fail
+        self.run_controller = run_controller
+        self.calls: list[tuple[AccessScope, BrowserRequest, AccessPolicy]] = []
+        self.destination_guard: BrowserDestinationGuard | None = None
+        self.capture_policy: BrowserCapturePolicy | None = None
 
     def run(
         self,
@@ -596,232 +399,113 @@ class _FakeRunner:
         *,
         controller: BrowserFlowController | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
-        capture_guard: BrowserCaptureGuard | None = None,
+        capture_policy: BrowserCapturePolicy | None = None,
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
         limits: BrowserOperationLimits | None = None,
         timeout_seconds: float | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BrowserResult:
+        del limits, timeout_seconds, cancel_event
+        if self.fail:
+            raise RuntimeError("browser fixture failure")
         if not isinstance(request, BrowserRequest):
-            raise AssertionError("A8 must use a bounded BrowserRequest")
-        if limits is None:
-            raise AssertionError("A8 must supply Browser operation limits")
-        self.calls.append(
-            {
-                "scope": scope,
-                "request": request,
-                "policy": policy,
-                "destination_guard": destination_guard,
-                "capture_guard": capture_guard,
-                "navigation_only": navigation_only,
-                "discard_unapproved_subresources": discard_unapproved_subresources,
-                "limits": limits,
-                "timeout_seconds": timeout_seconds,
-                "cancel_event": cancel_event,
-            }
-        )
-        if self.on_run is not None:
-            self.on_run(scope, request, policy, limits)
-        marker_state = self.marker_states.pop(0) if self.marker_states else {}
-        observation = (
-            self.page_observations.pop(0)
-            if self.page_observations
-            else BrowserPageObservation(
-                locator="https://publisher.test/article",
-                status_code=200,
-            )
-        )
-        pending_result = self.results[0] if self.results else None
-        available_captures = (
-            frozenset(capture.kind for capture in pending_result.captures)
-            if self.initial_captures_available and isinstance(pending_result, BrowserCaptureBatch)
-            else frozenset()
-        )
-        discovered = self.discovered_pdf_locators.pop(0) if self.discovered_pdf_locators else ()
-        session = _FakeSession(
-            marker_state,
-            observation,
-            available_captures,
-            discovered,
-            self.click_succeeds,
-            self.control_session,
-            self.capture_after_click,
-            self.capture_after_verified_locator,
-        )
-        self.sessions.append(session)
-        try:
-            if controller is not None:
-                controller.run(session)
-            if not self.results:
-                raise AssertionError("unexpected Browser invocation")
-            result = self.results.pop(0)
-            if isinstance(result, BaseException):
-                raise result
-            return cast(BrowserResult, result)
-        finally:
-            # The fake has no vendor resources.  This flag models the runner's
-            # guarantee that its flow lifetime ended before returning.
-            self.completed += 1
-
-
-def _rule(
-    *,
-    rule_id: str = "fixture-publisher",
-    revision: int = 1,
-    landing_origin: str = "https://publisher.test",
-    allowed_origins: tuple[str, ...] = (
-        "https://publisher.test",
-        "https://downloads.publisher.test",
-    ),
-    web_scope_provider_name: str = "publisher.test",
-    actions: tuple[BrowserRuleAction, ...] | None = None,
-    actions_require_entitlement: bool = False,
-    login_markers: tuple[str, ...] = ("#login-required",),
-    mfa_markers: tuple[str, ...] = ("#mfa-required",),
-    page_markers: tuple[BrowserPageMarker, ...] | None = None,
-    capture_url_prefixes: tuple[str, ...] | None = None,
-    article_identity_kinds: tuple[BrowserArticleIdentityKind, ...] = (
-        BrowserArticleIdentityKind.LANDING_PATH_STEM,
-    ),
-    article_id_namespaces: tuple[str, ...] = (),
-    supplement_url_prefixes: tuple[str, ...] = (),
-    supplement_selectors: tuple[str, ...] = (),
-    supplement_filename_markers: tuple[str, ...] = (),
-    excluded_url_prefixes: tuple[str, ...] = (),
-    excluded_filename_markers: tuple[str, ...] = (),
-    capture_priority: tuple[BrowserCaptureKind, ...] = (
-        BrowserCaptureKind.VERIFIED_LOCATOR,
-        BrowserCaptureKind.DOWNLOAD,
-        BrowserCaptureKind.RESPONSE,
-        BrowserCaptureKind.VIEWER,
-        BrowserCaptureKind.POPUP,
-    ),
-    challenge_resource_profile: BrowserChallengeResourceProfile | None = None,
-) -> BrowserSiteRule:
-    markers = (
-        tuple(
-            marker
-            for marker in (
-                (
-                    BrowserPageMarker(
-                        marker_id="login-required",
-                        kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                        css_selectors=login_markers,
+            raise AssertionError("generic Browser must use a bounded request")
+        if controller is None or destination_guard is None or capture_policy is None:
+            raise AssertionError("generic Browser requires controller and Network policies")
+        if navigation_only or not discard_unapproved_subresources:
+            raise AssertionError("generic Browser operation flags are incorrect")
+        self.calls.append((scope, request, policy))
+        self.destination_guard = destination_guard
+        self.capture_policy = capture_policy
+        if self.run_controller:
+            controller.run(cast(BrowserFlowSession, _FlowSession(self.driver)))
+        if isinstance(self.result, BrowserCaptureBatch):
+            for capture in self.result.captures:
+                capture_policy.decide(
+                    BrowserCaptureEvidence(
+                        locator=capture.stream.final_locator,
+                        kind=capture.kind,
+                        media_type=capture.stream.media_type,
+                        correlation=BrowserCaptureCorrelation.DIRECT_REQUEST,
+                        request_navigation=True,
+                        from_exact_start=capture.stream.final_locator == request.url,
+                        redirect_depth=0,
+                        native_download=capture.kind is BrowserCaptureKind.DOWNLOAD,
                     )
-                    if login_markers
-                    else None
-                ),
-                (
-                    BrowserPageMarker(
-                        marker_id="mfa-required",
-                        kind=BrowserPageMarkerKind.MFA_REQUIRED,
-                        css_selectors=mfa_markers,
-                    )
-                    if mfa_markers
-                    else None
-                ),
-            )
-            if marker is not None
-        )
-        if page_markers is None
-        else page_markers
-    )
-    prefixes = (
-        tuple(
-            prefix
-            for origin in allowed_origins
-            for prefix in (f"{origin}/article.pdf", f"{origin}/file")
-        )
-        if capture_url_prefixes is None
-        else capture_url_prefixes
-    )
-    selected_actions = (
-        (
-            BrowserRuleAction(
-                kind=BrowserActionKind.CLICK,
-                selector="a[data-action='pdf']",
-            ),
-        )
-        if actions is None
-        else actions
-    )
-    return BrowserSiteRule(
-        rule_id=rule_id,
-        revision=revision,
-        landing_origin=landing_origin,
-        allowed_origins=allowed_origins,
-        web_scope_provider_name=web_scope_provider_name,
-        actions=selected_actions,
-        actions_require_entitlement=actions_require_entitlement,
-        page_markers=markers,
-        capture_url_prefixes=prefixes,
-        article_identity_kinds=article_identity_kinds,
-        article_id_namespaces=article_id_namespaces,
-        supplement_url_prefixes=supplement_url_prefixes,
-        supplement_selectors=supplement_selectors,
-        supplement_filename_markers=supplement_filename_markers,
-        excluded_url_prefixes=excluded_url_prefixes,
-        excluded_filename_markers=excluded_filename_markers,
-        capture_priority=capture_priority,
-        challenge_resource_profile=challenge_resource_profile,
-    )
+                )
+        return self.result
 
 
-def _literature(
+def _capture(
     *,
-    identifiers: tuple[Identifier, ...] = (),
-    publisher: str | None = None,
-) -> Literature:
-    return Literature(
-        literature_id=LiteratureId(_id(1)),
-        meta_literature_id=MetaLiteratureId(_id(2)),
-        version_role=VersionRole.PUBLISHED,
-        metadata=LiteratureMetadata(
-            title="Controlled Browser fixture",
-            identifiers=identifiers,
-            publisher=publisher,
+    kind: BrowserCaptureKind = BrowserCaptureKind.DOWNLOAD,
+    body: bytes = _PDF,
+    media_type: str = "application/pdf",
+    locator: str = "https://publisher.invalid/article/generic-browser.pdf",
+) -> BrowserCapture:
+    return BrowserCapture(
+        kind=kind,
+        stream=BoundedByteStream(
+            chunks=(body,),
+            media_type=media_type,
+            final_locator=locator,
+            size=len(body),
         ),
-        status=LiteratureStatus.UNREVIEWED,
     )
 
 
-def _observation(
-    index: int,
-    hints: tuple[AssetHint, ...] = (),
-    *,
-    provider_name: str = "fixture-metadata",
-) -> MetadataObservation:
-    return MetadataObservation(
-        observation_id=ObservationId(_id(index)),
-        provenance=Provenance(
-            provenance_id=ProvenanceId(_id(index + 100)),
-            source_kind=SourceKind.METADATA_PROVIDER,
-            source_name=provider_name,
-            source_record_id=f"record-{index}",
-            observed_at=_TIME,
-            input_sha256=Sha256("a" * 64),
-            parameters_sha256=None,
-        ),
-        metadata=LiteratureMetadata(title="Observed Browser fixture"),
-        asset_hints=hints,
+def _failure(code: str = "no-download") -> AccessFailure:
+    return AccessFailure(
+        code=code,
+        reason="The Browser fixture did not return a PDF.",
+        action="Try another source.",
+        retryable=False,
     )
 
 
 def _request(
     *,
-    observations: tuple[MetadataObservation, ...] = (),
-    literature: Literature | None = None,
+    hint: AssetHint | None = None,
     resolved_landing_origin: str | None = None,
 ) -> AcquisitionRequest:
-    target = literature or _literature()
+    metadata = LiteratureMetadata(
+        title="Generic Browser article",
+        authors=(Author(kind=AuthorKind.PERSON, display_name="Ada Lovelace"),),
+        identifiers=(Identifier(namespace="doi", value=_DOI),),
+    )
+    literature = Literature(
+        literature_id=LiteratureId(_id(1)),
+        meta_literature_id=MetaLiteratureId(_id(2)),
+        version_role=VersionRole.PUBLISHED,
+        metadata=metadata,
+        status=LiteratureStatus.UNREVIEWED,
+    )
+    observations: tuple[MetadataObservation, ...] = ()
+    if hint is not None:
+        observations = (
+            MetadataObservation(
+                observation_id=ObservationId(_id(3)),
+                provenance=Provenance(
+                    provenance_id=ProvenanceId(_id(4)),
+                    source_kind=SourceKind.METADATA_PROVIDER,
+                    source_name="fixture-metadata",
+                    source_record_id="fixture-record",
+                    observed_at=_TIME,
+                    input_sha256=Sha256("a" * 64),
+                    parameters_sha256=None,
+                ),
+                metadata=metadata,
+                asset_hints=(hint,),
+            ),
+        )
     return AcquisitionRequest(
-        literature=target,
+        literature=literature,
         expected_facts=AcquisitionExpectedFacts(
-            literature_id=target.literature_id,
-            meta_literature_id=target.meta_literature_id,
+            literature_id=literature.literature_id,
+            meta_literature_id=literature.meta_literature_id,
             metadata_revision=1,
-            metadata_sha256=metadata_sha256(target.metadata),
+            metadata_sha256=metadata_sha256(metadata),
             expected_no_primary_pdf=True,
         ),
         observations=observations,
@@ -829,2171 +513,310 @@ def _request(
     )
 
 
-def _landing_hint(
-    url: str = "https://publisher.test/article",
+def _context(
+    request: AcquisitionRequest,
     *,
-    kind: AssetHintKind = AssetHintKind.LANDING_PAGE,
-    role: AssetRole | None = None,
-) -> AssetHint:
-    return AssetHint(url=url, kind=kind, asset_role=role)
-
-
-def _evidence(request: AcquisitionRequest) -> AcquisitionEvidence:
-    return build_acquisition_evidence(request)
-
-
-def _source(
-    runner: _FakeRunner,
-    *,
-    rule: BrowserSiteRule | None = None,
-    profile_resolver: WebAccessProfileResolver | None = None,
-    policy: AccessPolicy | None = None,
-    cancel_event: threading.Event | None = None,
-    browser_controller: BrowserControllerKind = BrowserControllerKind.RULES,
-    agent_runtime: AgentRuntime | None = None,
-) -> ControlledBrowserPdfSource:
-    return ControlledBrowserPdfSource(
-        runner=runner,
-        rule_catalog=BrowserRuleCatalog((_rule() if rule is None else rule,)),
-        web_access_profile_resolver=profile_resolver,
-        access_policy=policy,
-        cancel_event=cancel_event,
-        provenance_id_factory=_IdFactory(),
-        clock=lambda: _TIME,
-        browser_controller=browser_controller,
-        agent_runtime=agent_runtime,
+    route_hints: tuple[AccessRouteHint, ...] = (),
+) -> RouteExecutionContext:
+    return RouteExecutionContext(
+        request=request,
+        evidence=build_acquisition_evidence(request),
+        route_hints=route_hints,
+        candidate_keys=CandidateKeyTracker(),
     )
 
 
-def _production_rule(rule_id: str) -> BrowserSiteRule:
-    return next(rule for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules if rule.rule_id == rule_id)
+class GenericBrowserSourceTests(unittest.TestCase):
+    def test_generic_step_policy_classifies_a_visible_challenge(self) -> None:
+        assessment = _GenericStepPolicy().assess(
+            _observation(surface_title="Just a moment — verify you are human")
+        )
 
+        self.assertIs(assessment.page_state, BrowserPageState.CHALLENGE)
 
-def _payload(temporary_pdf: TemporaryPdf) -> bytes:
-    context = temporary_pdf.content.open()
-    if not isinstance(context, AbstractContextManager):
-        raise AssertionError("temporary content did not return a context manager")
-    with context as stream:
-        return cast(BinaryIO, stream).read()
-
-
-class BrowserRuleContractTests(unittest.TestCase):
-    def test_production_catalog_installs_only_policy_admitted_rules(self) -> None:
-        self.assertEqual(
-            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            (
-                "acs-publications-pdf",
-                "aip-publishing-pdf",
-                "sciencedirect-pdf",
-                "iopscience-pdf",
-                "oxford-academic-pdf",
-                "rsc-publishing-pdf",
-                "science-aaas-pdf",
-                "springerlink-pdf",
-                "wiley-online-library-pdf",
+    def test_generic_destination_guard_accepts_only_safe_https_destinations(self) -> None:
+        guard = build_generic_browser_destination_guard(
+            "https://doi.org/10.1234/generic-browser",
+            article_origins=(
+                "https://publisher.invalid",
+                "https://assets.invalid",
+                "https://publisher.invalid",
             ),
         )
-        self.assertEqual(len(BROWSER_RULE_VERIFICATION_CATALOG.rules), 9)
+        self.assertIsInstance(guard, GenericBrowserDestinationGuard)
         self.assertEqual(
-            BROWSER_RULE_VERIFICATION_CATALOG.rules,
-            PRODUCTION_BROWSER_RULE_CATALOG.rules,
-        )
-
-        rule = _production_rule("springerlink-pdf")
-        self.assertEqual(rule.rule_id, "springerlink-pdf")
-        self.assertEqual(rule.revision, 5)
-        self.assertTrue(rule.actions_require_entitlement)
-        self.assertEqual(rule.landing_origin, "https://link.springer.com")
-        self.assertEqual(
-            rule.allowed_origins,
+            guard.connection_origins(),
             (
-                "https://link.springer.com",
-                "https://static-content.springer.com",
-                "https://idp.springer.com",
-                "https://wayf.springernature.com",
+                "https://doi.org",
+                "https://publisher.invalid",
+                "https://assets.invalid",
             ),
         )
-        self.assertEqual(rule.web_scope_provider_name, "springerlink")
-        self.assertIs(
-            CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
-            RouteReadiness.READY,
-        )
-        self.assertIsNone(CONTROLLED_BROWSER_PRODUCTION_STATUS.failure)
-        self.assertEqual(
-            rule.doi_pdf_locator((Identifier(namespace="doi", value="10.1007/example-article"),)),
-            "https://link.springer.com/content/pdf/10.1007/example-article.pdf",
-        )
+        guard.check("https://assets.invalid/article.pdf", BrowserDestinationKind.DOWNLOAD)
+        with self.assertRaises(ValueError):
+            guard.check("http://assets.invalid/article.pdf", BrowserDestinationKind.DOWNLOAD)
+        with self.assertRaises(ValueError):
+            build_generic_browser_destination_guard(
+                "https://doi.org/10.1234/generic-browser",
+                article_origins=("https://publisher.invalid/article",),
+            )
 
-        runner = _FakeRunner([])
-        source = ControlledBrowserPdfSource(runner=runner)
+    def test_landing_hint_enters_agent_and_article_goal_reaches_the_model(self) -> None:
+        provider = _AgentProvider()
+        runner = _Runner(BrowserCaptureBatch(captures=(_capture(),)))
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
         request = _request(
-            observations=(_observation(10, (_landing_hint(),)),),
-        )
-        self.assertEqual(source._actions(_evidence(request)), ())
-        self.assertEqual(runner.calls, [])
-
-    def test_springerlink_rule_allows_only_the_reviewed_idp_login_target(self) -> None:
-        rule = _production_rule("springerlink-pdf")
-        self.assertTrue(rule.allows_url("https://idp.springer.com/authorize"))
-        self.assertFalse(rule.allows_url("https://idp.springer.com.evil.invalid/authorize"))
-        self.assertFalse(rule.allows_url("https://login.springer.com/authorize"))
-
-        login_marker = next(
-            marker
-            for marker in rule.page_markers
-            if marker.kind is BrowserPageMarkerKind.LOGIN_REQUIRED
-        )
-        self.assertTrue(
-            login_marker.matches_observation(
-                BrowserPageObservation(
-                    locator="https://idp.springer.com/authorize",
-                    status_code=200,
-                )
-            )
-        )
-        self.assertFalse(
-            login_marker.matches_observation(
-                BrowserPageObservation(
-                    locator="https://idp.springer.com.evil.invalid/authorize",
-                    status_code=200,
-                )
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
+                asset_role=AssetRole.PRIMARY_PDF,
             )
         )
 
-    def test_elsevier_and_wiley_doi_aliases_produce_provider_specific_actions(self) -> None:
-        cases = (
-            (
-                _production_rule("sciencedirect-pdf"),
-                "https://linkinghub.elsevier.com/retrieve/pii/S0013468626000012",
-                "10.1016/j.fixture.2026.00001",
-            ),
-            (
-                _production_rule("wiley-online-library-pdf"),
-                "https://advanced.onlinelibrary.wiley.com/doi/10.1002/aenm.202601234",
-                "10.1002/aenm.202601234",
-            ),
-        )
-        for rule, landing_url, doi in cases:
-            with self.subTest(rule_id=rule.rule_id):
-                request = _request(
-                    observations=(_observation(11, (_landing_hint(landing_url),)),),
-                    literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
-                )
-                actions = _source(_FakeRunner([]), rule=rule)._actions(_evidence(request))
-                self.assertEqual(len(actions), 1)
-                self.assertIs(actions[0].rule, rule)
-                self.assertEqual(actions[0].landing_url, landing_url)
-                self.assertTrue(rule.allows_url(actions[0].start_url))
+        results = tuple(source.execute(_context(request)))
 
-    def test_rule_uses_exact_https_dns_origins_and_canonical_tokens(self) -> None:
-        rule = _rule(
-            rule_id="FIXTURE-PUBLISHER",
-            landing_origin="https://PUBLISHER.test:443",
-            allowed_origins=(
-                "https://PUBLISHER.test:443",
-                "https://downloads.publisher.test",
-            ),
-            web_scope_provider_name="PUBLISHER.TEST",
-        )
-
-        self.assertEqual(rule.rule_id, "fixture-publisher")
-        self.assertEqual(rule.landing_origin, "https://publisher.test")
-        self.assertEqual(rule.web_scope_provider_name, "publisher.test")
-        self.assertTrue(rule.matches_origin("https://PUBLISHER.test:443/"))
-        self.assertFalse(rule.matches_origin("https://sub.publisher.test"))
-        self.assertTrue(rule.allows_url("https://downloads.publisher.test/file.pdf"))
-        self.assertFalse(rule.allows_url("https://other.test/file.pdf"))
-
-        invalid_origins = (
-            "http://publisher.test",
-            "https://*.publisher.test",
-            "https://publisher.test/article",
-            "https://publisher.test?rule=1",
-            "https://127.0.0.1",
-            "https://user@publisher.test",
-        )
-        for origin in invalid_origins:
-            with self.subTest(origin=origin), self.assertRaises(ValueError):
-                _rule(landing_origin=origin)
-
-    def test_rule_preserves_one_explicit_nondefault_https_port(self) -> None:
-        origin = "https://Publisher.test:38443"
-        rule = _rule(
-            landing_origin=origin,
-            allowed_origins=(origin,),
-        )
-
-        self.assertEqual(rule.landing_origin, "https://publisher.test:38443")
-        self.assertTrue(rule.matches_origin("https://PUBLISHER.test:38443/"))
-        self.assertFalse(rule.matches_origin("https://publisher.test"))
-        self.assertFalse(rule.matches_origin("https://publisher.test:38444"))
-        self.assertTrue(rule.allows_url("https://publisher.test:38443/article.pdf"))
-        self.assertFalse(rule.allows_url("https://publisher.test/article.pdf"))
-
-    def test_rule_language_is_a_finite_static_action_sequence_without_job_cap(self) -> None:
-        observe = _rule(actions=())
-        self.assertEqual(observe.actions, ())
-
-        for selector in (
-            "javascript:download()",
-            "xpath=//a",
-            "text=Download",
-            "a >> button",
-            "https://rules.test/selector",
-            "a{color:red}",
-        ):
-            with self.subTest(selector=selector), self.assertRaises(ValueError):
-                BrowserRuleAction(kind=BrowserActionKind.CLICK, selector=selector)
-        with self.assertRaises(TypeError):
-            BrowserRuleAction(kind=cast(BrowserActionKind, "script"))
-        with self.assertRaises(ValueError):
-            BrowserRuleAction(kind=BrowserActionKind.CLICK)
-        with self.assertRaises(ValueError):
-            BrowserRuleAction(
-                kind=BrowserActionKind.CLICK,
-                selector="#download",
-                locator="https://publisher.test/article.pdf",
-            )
-        with self.assertRaises(ValueError):
-            BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_CAPTURE)
-        with self.assertRaises(ValueError):
-            BrowserRuleAction(
-                kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
-                locator="https://publisher.test/article.pdf?token=dynamic",
-            )
-
-        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#download")
-        self.assertEqual(len(_rule(actions=(click,) * 9).actions), 9)
-        with self.assertRaises(TypeError):
-            _rule(actions=cast(tuple[BrowserRuleAction, ...], (object(),)))
-
-        outside_locator = BrowserRuleAction(
-            kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
-            locator="https://outside.test/article.pdf",
-        )
-        with self.assertRaises(ValueError):
-            _rule(actions=(outside_locator,))
-        unreviewed_locator = BrowserRuleAction(
-            kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
-            locator="https://publisher.test/unreviewed.pdf",
-        )
-        with self.assertRaises(ValueError):
-            _rule(actions=(unreviewed_locator,))
-        with self.assertRaises(ValueError):
-            _rule(login_markers=("#same",), mfa_markers=("#same",))
-
-    def test_document_rules_classify_primary_supplement_excluded_and_wrong_article(
-        self,
-    ) -> None:
-        rule = _rule(
-            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
-            supplement_url_prefixes=("https://downloads.publisher.test/pdf/supplements",),
-            supplement_filename_markers=("supporting-info",),
-            excluded_url_prefixes=("https://downloads.publisher.test/pdf/front-matter",),
-            excluded_filename_markers=("advertisement",),
-        )
-
-        def classify(locator: str) -> BrowserCaptureDisposition:
-            return rule.classify_capture(
-                locator,
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-                landing_url="https://publisher.test/article-123",
-                identifiers=(),
-            )
-
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/article-123.pdf"),
-            BrowserCaptureDisposition.PRIMARY,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf"),
-            BrowserCaptureDisposition.SUPPLEMENT,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/article-123-supporting-info.pdf"),
-            BrowserCaptureDisposition.SUPPLEMENT,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/front-matter/issue.pdf"),
-            BrowserCaptureDisposition.EXCLUDED,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/issue-advertisement.pdf"),
-            BrowserCaptureDisposition.EXCLUDED,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/pdf/article-999.pdf"),
-            BrowserCaptureDisposition.WRONG_ARTICLE,
-        )
-        self.assertIs(
-            classify("https://downloads.publisher.test/unreviewed/article-123.pdf"),
-            BrowserCaptureDisposition.REJECTED,
-        )
-
-    def test_article_identity_rules_use_canonical_paths_and_stable_identifiers(self) -> None:
-        exact_rule = _rule(
-            capture_url_prefixes=("https://publisher.test/article-123",),
-            article_identity_kinds=(BrowserArticleIdentityKind.EXACT_LANDING,),
-        )
-        self.assertIs(
-            exact_rule.classify_capture(
-                "https://publisher.test/article-123",
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-                landing_url="https://publisher.test/article-123",
-                identifiers=(),
-            ),
-            BrowserCaptureDisposition.PRIMARY,
-        )
-
-        identifier_rule = _rule(
-            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
-            article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
-            article_id_namespaces=("doi", "pii"),
-        )
-        identifiers = (
-            Identifier(namespace="doi", value="10.1234/alpha"),
-            Identifier(namespace="pii", value="S123456789"),
-        )
-        for locator in (
-            "https://downloads.publisher.test/pdf/10.1234/alpha.pdf",
-            "https://downloads.publisher.test/pdf/S123456789.pdf",
-        ):
-            with self.subTest(locator=locator):
-                self.assertIs(
-                    identifier_rule.classify_capture(
-                        locator,
-                        BrowserCaptureKind.DOWNLOAD,
-                        "application/pdf",
-                        landing_url=None,
-                        identifiers=identifiers,
-                    ),
-                    BrowserCaptureDisposition.PRIMARY,
-                )
-        self.assertIs(
-            identifier_rule.classify_capture(
-                "https://downloads.publisher.test/pdf/S000000000.pdf",
-                BrowserCaptureKind.DOWNLOAD,
-                "application/pdf",
-                landing_url=None,
-                identifiers=identifiers,
-            ),
-            BrowserCaptureDisposition.WRONG_ARTICLE,
-        )
-
-    def test_document_exclusion_contract_is_closed_and_unambiguous(self) -> None:
-        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#supplement")
-        with self.assertRaises(ValueError):
-            _rule(actions=(click,), supplement_selectors=("#supplement",))
-        with self.assertRaises(ValueError):
-            _rule(article_identity_kinds=())
-        with self.assertRaises(ValueError):
-            _rule(article_id_namespaces=("doi",))
-        with self.assertRaises(ValueError):
-            _rule(
-                article_identity_kinds=(BrowserArticleIdentityKind.IDENTIFIER_IN_PATH,),
-            )
-        with self.assertRaises(TypeError):
-            _rule(
-                article_identity_kinds=cast(
-                    tuple[BrowserArticleIdentityKind, ...],
-                    ("dynamic",),
-                ),
-            )
-        for field in ("url", "filename"):
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                if field == "url":
-                    _rule(
-                        supplement_url_prefixes=("https://downloads.publisher.test/file/supp",),
-                        excluded_url_prefixes=("https://downloads.publisher.test/file/supp",),
-                    )
-                else:
-                    _rule(
-                        supplement_filename_markers=("supp",),
-                        excluded_filename_markers=("supp",),
-                    )
-        with self.assertRaises(ValueError):
-            _rule(
-                supplement_url_prefixes=("https://outside.test/supplement",),
-            )
-        with self.assertRaises(ValueError):
-            _rule(supplement_filename_markers=("supporting information",))
-        with self.assertRaises(ValueError):
-            _rule(
-                capture_priority=(
-                    BrowserCaptureKind.DOWNLOAD,
-                    BrowserCaptureKind.RESPONSE,
-                )
-            )
-
-    def test_page_markers_are_bounded_static_and_rule_origin_scoped(self) -> None:
-        marker = BrowserPageMarker(
-            marker_id="login-required",
-            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            css_selectors=("form[data-login]",),
-            url_prefixes=("https://publisher.test/account/login",),
-            response_statuses=(401,),
-        )
-        rule = _rule(page_markers=(marker,))
-        self.assertEqual(rule.page_markers, (marker,))
-        self.assertNotIn("form[data-login]", repr(rule))
-
-        invalid_markers: tuple[Callable[[], BrowserPageMarker], ...] = (
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                css_selectors=("javascript:login()",),
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                url_prefixes=("http://publisher.test/account/login",),
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                url_prefixes=("https://publisher.test",),
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                url_prefixes=("https://publisher.test/account/login?next=article",),
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                response_statuses=(cast(int, True),),
-            ),
-            lambda: BrowserPageMarker(
-                marker_id="invalid-marker",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                response_statuses=(99,),
-            ),
-        )
-        for index, construct in enumerate(invalid_markers):
-            with self.subTest(index=index), self.assertRaises((TypeError, ValueError)):
-                construct()
-
-        outside = BrowserPageMarker(
-            marker_id="outside-origin",
-            kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-            url_prefixes=("https://outside.test/account/login",),
-        )
-        with self.assertRaises(ValueError):
-            _rule(page_markers=(outside,))
-
-        duplicate_status = (
-            BrowserPageMarker(
-                marker_id="first-status",
-                kind=BrowserPageMarkerKind.LOGIN_REQUIRED,
-                response_statuses=(401,),
-            ),
-            BrowserPageMarker(
-                marker_id="second-status",
-                kind=BrowserPageMarkerKind.CHALLENGE,
-                response_statuses=(401,),
-            ),
-        )
-        with self.assertRaises(ValueError):
-            _rule(page_markers=duplicate_status)
-
-    def test_rule_fingerprint_and_catalog_identity_are_stable(self) -> None:
-        first = _rule()
-        same = _rule()
-        revised = _rule(revision=2)
-        self.assertEqual(first.fingerprint, same.fingerprint)
-        self.assertNotEqual(first.fingerprint, revised.fingerprint)
-        wait = BrowserRuleAction(
-            kind=BrowserActionKind.WAIT_FOR_CAPTURE,
-            capture_kind=BrowserCaptureKind.DOWNLOAD,
-        )
-        click = BrowserRuleAction(kind=BrowserActionKind.CLICK, selector="#download")
-        self.assertNotEqual(
-            _rule(actions=(click, wait)).fingerprint,
-            _rule(actions=(wait, click)).fingerprint,
-        )
-        entitled_marker = BrowserPageMarker(
-            marker_id="article-entitled",
-            kind=BrowserPageMarkerKind.ENTITLED,
-            css_selectors=("#article-entitled",),
-        )
-        gated = _rule(
-            actions=(click, wait),
-            actions_require_entitlement=True,
-            page_markers=(entitled_marker,),
-        )
-        self.assertNotEqual(gated.fingerprint, _rule(actions=(click, wait)).fingerprint)
-        with self.assertRaisesRegex(ValueError, "entitlement-gated actions"):
-            _rule(
-                actions=(click, wait),
-                actions_require_entitlement=True,
-                page_markers=(),
-            )
-        with self.assertRaisesRegex(ValueError, "entitlement-gated actions"):
-            _rule(
-                actions=(),
-                actions_require_entitlement=True,
-                page_markers=(entitled_marker,),
-            )
-        self.assertNotIn("#download", repr(_rule(actions=(click, wait))))
+        self.assertEqual(CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness.value, "ready")
+        self.assertEqual(tuple(result.outcome for result in results), (RouteOutcome.PDF_DELIVERED,))
+        delivery = results[0].temporary_pdf
+        self.assertIsNotNone(delivery)
+        assert delivery is not None
+        self.assertEqual(delivery.candidate.acquisition_path, AcquisitionPath.CONTROLLED_BROWSER)
+        self.assertEqual(delivery.candidate.source_name, "controlled-browser")
         self.assertEqual(
-            BrowserRuleCatalog((first,)).match_origin("https://publisher.test"),
-            first,
+            delivery.safe_source_url, "https://publisher.invalid/article/generic-browser.pdf"
         )
-
-        with self.assertRaises(ValueError):
-            BrowserRuleCatalog((first, _rule(revision=2)))
-        with self.assertRaises(ValueError):
-            BrowserRuleCatalog(
-                (
-                    first,
-                    _rule(
-                        rule_id="other-rule",
-                        revision=2,
-                        landing_origin="https://publisher.test",
-                    ),
-                )
-            )
-
-    def test_structural_ports_never_name_vendor_or_login_mutation_operations(self) -> None:
-        self.assertTrue(isinstance(_FakeRunner([]), BrowserRunner))
-        self.assertTrue(isinstance(_FakeSession(), BrowserFlowSession))
-        session_methods = {
-            name
-            for name, value in inspect.getmembers(BrowserFlowSession)
-            if inspect.isfunction(value) and not name.startswith("_")
-        }
+        self.assertEqual(len(provider.calls), 1)
+        summary = json.loads(provider.calls[0].text_parts[1].text)
         self.assertEqual(
-            session_methods,
+            summary["article_goal"],
             {
-                "control_session",
-                "click",
-                "capture_available",
-                "discover_pdf_locators",
-                "has_selector",
-                "observe",
-                "open_verified_locator",
-                "open_viewer",
-                "text",
-                "wait_for_capture",
-                "wait_for_any_capture",
+                "doi": _DOI,
+                "title": "Generic Browser article",
+                "authors": ["Ada Lovelace"],
+                "landing_origins": ["https://publisher.invalid"],
+                "asset_origins": [],
             },
         )
-        self.assertFalse(
-            session_methods
-            & {
-                "fill",
-                "navigate",
-                "open_popup",
-                "page",
-                "context",
-                "profile",
-                "cookie",
-                "script",
-                "evaluate",
-            }
-        )
+        self.assertEqual(len(runner.driver.actions), 1)
+        delivery.content.discard()
 
+    def test_doi_fallback_uses_the_resolver_but_retains_the_landing_scope(self) -> None:
+        provider = _AgentProvider()
+        runner = _Runner(BrowserCaptureBatch(captures=(_capture(),)))
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
+        request = _request(resolved_landing_origin="https://publisher.invalid")
 
-class ControlledBrowserApplicabilityTests(unittest.TestCase):
-    def test_rules_and_agent_modes_never_fallback_into_each_other(self) -> None:
-        request = _request(observations=(_observation(50, (_landing_hint(),)),))
-        evidence = _evidence(request)
+        results = tuple(source.execute(_context(request)))
 
-        rules_runner = _FakeRunner([_failure("no-download")])
-        rules_source = _source(rules_runner)
+        self.assertEqual(results[0].outcome, RouteOutcome.PDF_DELIVERED)
+        scope, browser_request, _policy = runner.calls[0]
+        self.assertEqual(scope, AccessScope("publisher.invalid", "web"))
+        self.assertEqual(browser_request.url, f"https://doi.org/{_DOI}")
+        assert isinstance(runner.destination_guard, GenericBrowserDestinationGuard)
         self.assertEqual(
-            list(rules_source._deliveries(request, evidence, CandidateKeyTracker())),
-            [],
+            runner.destination_guard.connection_origins(),
+            ("https://doi.org", "https://publisher.invalid"),
         )
-        self.assertIs(rules_source.browser_controller, BrowserControllerKind.RULES)
-        self.assertEqual(rules_runner.sessions[0].discovery_calls, 1)
-        self.assertEqual(rules_runner.sessions[0].clicks, ["a[data-action='pdf']"])
+        results[0].temporary_pdf.content.discard()  # type: ignore[union-attr]
 
-        agent = _FixtureAgentPort(actions=("stop",))
-        action_port = _FakeControlSession()
-        agent_runner = _FakeRunner(
-            [_failure("no-download")],
-            discovered_pdf_locators=(("https://publisher.test/article.pdf",),),
-            control_session=action_port,
-            capture_after_click=True,
-            capture_after_verified_locator=True,
-        )
-        agent_source = _source(
-            agent_runner,
-            browser_controller=BrowserControllerKind.AGENT,
-            agent_runtime=_agent_runtime(agent),
-        )
-        self.assertEqual(
-            list(agent_source._deliveries(request, evidence, CandidateKeyTracker())),
-            [],
-        )
-        self.assertIs(agent_source.browser_controller, BrowserControllerKind.AGENT)
-        self.assertEqual(agent.turns, 1)
-        self.assertEqual(agent_runner.sessions[0].discovery_calls, 0)
-        self.assertEqual(agent_runner.sessions[0].verified_locator_opens, [])
-        self.assertEqual(agent_runner.sessions[0].clicks, [])
-        self.assertEqual(len(action_port.executed), 1)
-        self.assertEqual(action_port.executed[0].kind.value, "stop")
-
-    def test_agent_terminal_page_and_challenge_use_natural_outcomes(self) -> None:
-        cases = (
-            (
-                "login",
-                "#login-required",
-                _rule(),
-                "acquisition-browser-login-required",
-                ("click",),
-                1,
-            ),
-            (
-                "challenge",
-                "#access-challenge",
-                _rule(
-                    page_markers=(
-                        BrowserPageMarker(
-                            marker_id="challenge",
-                            kind=BrowserPageMarkerKind.CHALLENGE,
-                            css_selectors=("#access-challenge",),
-                        ),
-                    )
-                ),
-                "acquisition-browser-challenge-unresolved",
-                ("click", "stop"),
-                2,
-            ),
-        )
-        for name, marker, rule, failure_code, actions, expected_turns in cases:
-            with self.subTest(state=name):
-                markers: dict[str, str] = {}
-                action_port = _FakeControlSession(
-                    on_execute=lambda: markers.__setitem__(marker, "")
-                )
-                runner = _FakeRunner(
-                    [_failure("no-download")],
-                    marker_states=(markers,),
-                    control_session=action_port,
-                )
-                agent = _FixtureAgentPort(actions=actions)
-                source = _source(
-                    runner,
-                    rule=rule,
-                    browser_controller=BrowserControllerKind.AGENT,
-                    agent_runtime=_agent_runtime(agent),
-                )
-                request = _request(observations=(_observation(51, (_landing_hint(),)),))
-                with self.assertLogs(
-                    "sciretriever.acquisition.sources.browser",
-                    level="INFO",
-                ) as logs:
-                    with self.assertRaises(AcquisitionSourceFailure) as caught:
-                        list(
-                            source._deliveries(
-                                request,
-                                _evidence(request),
-                                CandidateKeyTracker(),
-                            )
-                        )
-                self.assertEqual(caught.exception.failure.code, failure_code)
-                self.assertEqual(agent.turns, expected_turns)
-                self.assertEqual(len(action_port.executed), expected_turns)
-                rendered = "\n".join(logs.output)
-                self.assertIn("event=browser-agent-finished", rendered)
-                self.assertIn(f"failure_code={failure_code}", rendered)
-                self.assertIn("event=browser-flow-finished", rendered)
-                self.assertIn(f"code={failure_code}", rendered)
-                self.assertIn(caught.exception.failure.reason, rendered)
-                self.assertIn(caught.exception.failure.action, rendered)
-                self.assertTrue(all(record.levelno == logging.WARNING for record in logs.records))
-                self.assertNotIn(marker, rendered)
-
-    def test_agent_mode_does_not_require_rules_entitlement_before_first_call(self) -> None:
-        agent = _FixtureAgentPort(actions=("stop",))
-        action_port = _FakeControlSession()
-        runner = _FakeRunner(
-            [_failure("no-download")],
-            control_session=action_port,
-        )
-        source = _source(
-            runner,
-            rule=_production_rule("springerlink-pdf"),
-            browser_controller=BrowserControllerKind.AGENT,
-            agent_runtime=_agent_runtime(agent),
-        )
-        request = _request(
-            observations=(_observation(52, (_landing_hint("https://link.springer.com/article"),)),)
-        )
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-        self.assertEqual(agent.turns, 1)
-        self.assertEqual(runner.sessions[0].clicks, [])
-        self.assertEqual(runner.sessions[0].discovery_calls, 0)
-        self.assertEqual(len(action_port.executed), 1)
-
-    def test_authenticated_nonterminal_page_still_admits_normal_miss_agent(self) -> None:
-        agent = _FixtureAgentPort(actions=("stop",))
-        action_port = _FakeControlSession()
-        runner = _FakeRunner(
-            [_failure("no-download")],
-            marker_states=({"#authenticated": ""},),
-            control_session=action_port,
-        )
-        rule = _rule(
-            page_markers=(
-                BrowserPageMarker(
-                    marker_id="authenticated",
-                    kind=BrowserPageMarkerKind.AUTHENTICATED,
-                    css_selectors=("#authenticated",),
-                ),
-            )
-        )
-        source = _source(
-            runner,
-            rule=rule,
-            browser_controller=BrowserControllerKind.AGENT,
-            agent_runtime=_agent_runtime(agent),
-        )
-        request = _request(observations=(_observation(53, (_landing_hint(),)),))
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-        self.assertEqual(agent.turns, 1)
-        self.assertEqual(runner.sessions[0].clicks, [])
-        self.assertEqual(runner.sessions[0].discovery_calls, 0)
-        self.assertEqual(len(action_port.executed), 1)
-
-    def test_nondefault_port_hint_and_download_remain_exact_rule_scoped(self) -> None:
-        origin = "https://publisher.test:38443"
-        rule = _rule(landing_origin=origin, allowed_origins=(origin,))
-        runner = _FakeRunner(
-            [
-                _download(
-                    b"exact-port",
-                    final_locator=f"{origin}/article.pdf",
-                )
-            ]
-        )
-        source = _source(runner, rule=rule)
-        request = _request(
-            observations=(
-                _observation(
-                    9,
-                    (_landing_hint(f"{origin}/article", role=AssetRole.PRIMARY_PDF),),
-                ),
-            )
+    def test_canonical_landing_hint_starts_browser_on_the_resolved_page(self) -> None:
+        provider = _AgentProvider()
+        runner = _Runner(BrowserCaptureBatch(captures=(_capture(),)))
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
+        request = _request(resolved_landing_origin="https://publisher.invalid")
+        hint = AccessRouteHint(
+            kind=AccessRouteHintKind.CANONICAL_LANDING,
+            value="https://publisher.invalid/article/generic-browser",
+            source_route_key="public:doi-landing",
+            profile_access_key="publisher-invalid",
         )
 
-        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
+        results = tuple(source.execute(_context(request, route_hints=(hint,))))
 
-        self.assertEqual(len(deliveries), 1)
-        self.assertEqual(deliveries[0].safe_source_url, f"{origin}/article.pdf")
-        sent_request = runner.calls[0]["request"]
-        self.assertIsInstance(sent_request, BrowserRequest)
-        self.assertEqual(cast(BrowserRequest, sent_request).url, f"{origin}/article")
-
-        wrong_port_runner = _FakeRunner(
-            [_download(final_locator="https://publisher.test:38444/article.pdf")]
-        )
-        wrong_port_source = _source(wrong_port_runner, rule=rule)
-        with self.assertRaises(AcquisitionFailure) as caught:
-            list(
-                wrong_port_source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            )
-        self.assertEqual(caught.exception.failure.code, "acquisition-browser-policy-failed")
-
-    def test_only_primary_or_unspecified_landing_hints_on_an_exact_rule_apply(self) -> None:
-        runner = _FakeRunner([])
-        source = _source(runner)
-        applicable_hints = (
-            _landing_hint(),
-            _landing_hint(
-                "https://publisher.test/primary",
-                role=AssetRole.PRIMARY_PDF,
-            ),
-        )
-        for index, hint in enumerate(applicable_hints, start=10):
-            with self.subTest(hint=hint):
-                request = _request(observations=(_observation(index, (hint,)),))
-                self.assertTrue(source._actions(_evidence(request)))
-
-        excluded_hints = (
-            _landing_hint(kind=AssetHintKind.DIRECT_FILE),
-            _landing_hint(role=AssetRole.SUPPLEMENTARY_PDF),
-            _landing_hint(role=AssetRole.XML),
-            _landing_hint(role=AssetRole.HTML),
-            _landing_hint("https://unknown.test/article"),
-        )
-        for index, hint in enumerate(excluded_hints, start=20):
-            with self.subTest(hint=hint):
-                request = _request(observations=(_observation(index, (hint,)),))
-                self.assertFalse(source._actions(_evidence(request)))
-        self.assertEqual(runner.calls, [])
-
-    def test_doi_requires_matching_resolved_origin_while_weak_evidence_never_applies(self) -> None:
-        runner = _FakeRunner([])
-        source = _source(runner)
-        doi_literature = _literature(
-            identifiers=(Identifier(namespace="doi", value="10.1234/browser"),),
-            publisher="Publisher text is not routing authority",
-        )
-
-        weak = _request(
-            literature=doi_literature,
-            observations=(_observation(30, provider_name="publisher.test"),),
-        )
-        self.assertFalse(source._actions(_evidence(weak)))
-
-        origin_without_doi = _request(resolved_landing_origin="https://publisher.test")
-        self.assertFalse(source._actions(_evidence(origin_without_doi)))
-
-        mismatched = _request(
-            literature=doi_literature,
-            resolved_landing_origin="https://unknown.test",
-        )
-        self.assertFalse(source._actions(_evidence(mismatched)))
-
-        strong = _request(
-            literature=doi_literature,
-            resolved_landing_origin="https://publisher.test",
-        )
-        self.assertTrue(source._actions(_evidence(strong)))
-        self.assertEqual(runner.calls, [])
-
-    def test_production_springerlink_uses_reviewed_doi_pdf_before_page_actions(
-        self,
-    ) -> None:
-        doi = "10.1007/browser-article"
-        landing = f"https://link.springer.com/article/{doi}"
-        pdf = f"https://link.springer.com/content/pdf/{doi}.pdf"
-        runner = _FakeRunner(
-            [
-                _capture_batch(
-                    (
-                        b"springer browser pdf",
-                        BrowserCaptureKind.RESPONSE,
-                        pdf,
-                        "application/pdf",
-                    )
-                )
-            ],
-            # Presence, not element text, proves this reviewed static link.
-            marker_states=({"a[href*='/content/pdf/']": ""},),
-            initial_captures_available=True,
-        )
-        source = _source(runner, rule=_production_rule("springerlink-pdf"))
-        request = _request(
-            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
-            observations=(_observation(31, (_landing_hint(landing),)),),
-        )
-
-        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
-
-        self.assertEqual(len(deliveries), 1)
-        call = runner.calls[0]
-        browser_request = call["request"]
-        self.assertIsInstance(browser_request, BrowserRequest)
-        assert isinstance(browser_request, BrowserRequest)
-        self.assertEqual(browser_request.url, pdf)
-        self.assertIs(call["navigation_only"], False)
-        self.assertIs(call["discard_unapproved_subresources"], True)
-        session = runner.sessions[0]
-        self.assertEqual(session.clicks, [])
-        self.assertEqual(session.capture_waits, [])
-        deliveries[0].content.discard()
-
-    def test_springerlink_encoded_doi_asset_path_with_one_doi_forms_browser_action(
-        self,
-    ) -> None:
-        doi = "10.1007/browser-direct-asset"
-        encoded_doi = doi.replace("/", "%2F")
-        runner = _FakeRunner([_failure("no-download")])
-        source = _source(runner, rule=_production_rule("springerlink-pdf"))
-        request = _request(
-            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
-            observations=(
-                _observation(
-                    32,
-                    (
-                        _landing_hint(
-                            f"https://link.springer.com/content/pdf/{encoded_doi}.pdf",
-                            kind=AssetHintKind.DIRECT_FILE,
-                            role=AssetRole.PRIMARY_PDF,
-                        ),
-                    ),
-                ),
-            ),
-        )
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-
-        self.assertEqual(len(runner.calls), 1)
-        browser_request = runner.calls[0]["request"]
-        self.assertIsInstance(browser_request, BrowserRequest)
-        assert isinstance(browser_request, BrowserRequest)
+        self.assertEqual(results[0].outcome, RouteOutcome.PDF_DELIVERED)
+        _scope, browser_request, _policy = runner.calls[0]
         self.assertEqual(
             browser_request.url,
-            "https://link.springer.com/content/pdf/10.1007/browser-direct-asset.pdf",
-        )
-        self.assertEqual(runner.sessions[0].clicks, [])
-        self.assertEqual(runner.sessions[0].capture_waits, [])
-
-    def test_springerlink_direct_asset_origin_requires_exact_origin_and_one_doi(self) -> None:
-        rule = _production_rule("springerlink-pdf")
-        source = _source(_FakeRunner([]), rule=rule)
-        valid_hint = _landing_hint(
-            "https://link.springer.com/content/pdf/10.1007/browser-evidence.pdf",
-            kind=AssetHintKind.DIRECT_FILE,
-            role=AssetRole.PRIMARY_PDF,
-        )
-        cases = (
-            (
-                "missing-doi",
-                _literature(),
-                (_observation(33, (valid_hint,)),),
-            ),
-            (
-                "multiple-dois",
-                _literature(
-                    identifiers=(
-                        Identifier(namespace="doi", value="10.1007/browser-first"),
-                        Identifier(namespace="doi", value="10.1007/browser-second"),
-                    )
-                ),
-                (_observation(34, (valid_hint,)),),
-            ),
-            (
-                "wrong-origin",
-                _literature(
-                    identifiers=(Identifier(namespace="doi", value="10.1007/browser-wrong"),)
-                ),
-                (
-                    _observation(
-                        35,
-                        (
-                            _landing_hint(
-                                "https://example.invalid/content/pdf/10.1007/browser-wrong.pdf",
-                                kind=AssetHintKind.DIRECT_FILE,
-                                role=AssetRole.PRIMARY_PDF,
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-            (
-                "weak-only",
-                _literature(
-                    identifiers=(Identifier(namespace="doi", value="10.1007/browser-weak"),),
-                    publisher="Springer Nature",
-                ),
-                (_observation(36, provider_name="springerlink"),),
-            ),
-        )
-        for name, literature, observations in cases:
-            with self.subTest(case=name):
-                request = _request(literature=literature, observations=observations)
-                self.assertEqual(source._actions(_evidence(request)), ())
-
-    def test_springerlink_initial_pdf_capture_skips_entitlement_click_and_wait(self) -> None:
-        doi = "10.1007/browser-captured"
-        pdf = f"https://link.springer.com/content/pdf/{doi}.pdf"
-        runner = _FakeRunner(
-            [
-                _capture_batch(
-                    (
-                        b"springer direct pdf",
-                        BrowserCaptureKind.RESPONSE,
-                        pdf,
-                        "application/pdf",
-                    )
-                )
-            ],
-            initial_captures_available=True,
-        )
-        source = _source(runner, rule=_production_rule("springerlink-pdf"))
-        request = _request(
-            literature=_literature(identifiers=(Identifier(namespace="doi", value=doi),)),
-            observations=(
-                _observation(
-                    37,
-                    (
-                        _landing_hint(
-                            pdf,
-                            kind=AssetHintKind.DIRECT_FILE,
-                            role=AssetRole.PRIMARY_PDF,
-                        ),
-                    ),
-                ),
-            ),
-        )
-
-        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
-
-        self.assertEqual(len(deliveries), 1)
-        self.assertEqual(runner.sessions[0].clicks, [])
-        self.assertEqual(runner.sessions[0].capture_waits, [])
-        deliveries[0].content.discard()
-
-    def test_sciencedirect_binds_final_pii_landing_and_redacts_capture_query(self) -> None:
-        doi = "10.1016/j.fixture.2026.123456"
-        pii = "S0123456789012345"
-        landing = f"https://www.sciencedirect.com/science/article/pii/{pii}"
-        captured_pdf = (
-            f"https://pdf.sciencedirectassets.com/271074/1-s2.0-{pii}-main.pdf?download=true"
-        )
-        runner = _FakeRunner(
-            [
-                _capture_batch(
-                    (
-                        b"elsevier browser pdf",
-                        BrowserCaptureKind.RESPONSE,
-                        captured_pdf,
-                        "application/pdf",
-                    )
-                )
-            ],
-            page_observations=(BrowserPageObservation(locator=landing, status_code=200),),
-            initial_captures_available=False,
-        )
-        rule = _production_rule("sciencedirect-pdf")
-        source = _source(runner, rule=rule)
-        request = _request(
-            literature=_literature(
-                identifiers=(
-                    Identifier(namespace="doi", value=doi),
-                    Identifier(namespace="pii", value=pii),
-                )
-            ),
-            resolved_landing_origin="https://www.sciencedirect.com",
-        )
-
-        deliveries = list(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
-
-        self.assertEqual(len(deliveries), 1)
-        self.assertEqual(
-            deliveries[0].safe_source_url,
-            (f"https://pdf.sciencedirectassets.com/271074/1-s2.0-{pii}-main.pdf"),
-        )
-        call = runner.calls[0]
-        capture_guard = call["capture_guard"]
-        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
-        assert isinstance(capture_guard, BrowserCaptureGuard)
-        self.assertTrue(
-            capture_guard.allows(
-                captured_pdf,
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        self.assertFalse(
-            capture_guard.allows(
-                captured_pdf.replace(pii, "S9999999999999999"),
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        self.assertFalse(call["navigation_only"])
-        self.assertTrue(call["discard_unapproved_subresources"])
-        deliveries[0].content.discard()
-
-    def test_evidence_from_another_request_fails_before_browser_io(self) -> None:
-        runner = _FakeRunner([])
-        source = _source(runner)
-        first = _request(observations=(_observation(40, (_landing_hint(),)),))
-        other = _request(
-            observations=(
-                _observation(
-                    41,
-                    (_landing_hint("https://unknown.test/other"),),
-                ),
-            )
-        )
-
-        with self.assertRaises(AcquisitionFailure) as caught:
-            source._deliveries(first, _evidence(other), CandidateKeyTracker())
-        self.assertEqual(caught.exception.failure.code, "acquisition-browser-contract")
-        self.assertEqual(runner.calls, [])
-
-    def test_scope_mapping_must_match_rule_and_reuses_a5_profile_seam(self) -> None:
-        provider_rule = _rule(web_scope_provider_name="fixture-publisher")
-        default_source = _source(_FakeRunner([]), rule=provider_rule)
-        default_scope, _default_policy = default_source._web_access_profile_resolver.resolve(
-            normalize_url("https://publisher.test/article")
-        )
-        self.assertEqual(default_scope, AccessScope("fixture-publisher", "web"))
-        with self.assertRaises(ValueError):
-            _source(
-                _FakeRunner([]),
-                rule=provider_rule,
-                profile_resolver=WebAccessProfileResolver(),
-            )
-
-        profile_policy = AccessPolicy(
-            max_concurrency=8,
-            min_start_interval=3.0,
-            cooldown_after_completion=2.0,
-        )
-        profile_resolver = WebAccessProfileResolver(
-            {
-                "publisher.test": (
-                    AccessScope("fixture-publisher", "web"),
-                    profile_policy,
-                )
-            }
-        )
-        runner = _FakeRunner([_failure("no-download")])
-        source = _source(
-            runner,
-            rule=provider_rule,
-            profile_resolver=profile_resolver,
-            policy=AccessPolicy(
-                max_concurrency=99,
-                min_start_interval=7.0,
-                cooldown_after_completion=1.0,
-            ),
-        )
-        request = _request(observations=(_observation(42, (_landing_hint(),)),))
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-        call = runner.calls[0]
-        self.assertEqual(call["scope"], AccessScope("fixture-publisher", "web"))
-        policy = call["policy"]
-        self.assertIsInstance(policy, AccessPolicy)
-        assert isinstance(policy, AccessPolicy)
-        self.assertEqual(policy.max_concurrency, 1)
-        self.assertEqual(policy.min_start_interval, 7.0)
-        self.assertEqual(policy.cooldown_after_completion, 2.0)
-
-
-class ControlledBrowserAcquisitionTests(unittest.TestCase):
-    def test_claim_precedes_run_and_download_is_a_neutral_unvalidated_temporary_pdf(
-        self,
-    ) -> None:
-        tracker = CandidateKeyTracker()
-
-        def assert_claimed(
-            _scope: AccessScope,
-            _request_value: BrowserRequest,
-            _policy: AccessPolicy,
-            _limits: BrowserOperationLimits,
-        ) -> None:
-            self.assertEqual(len(tracker.tried_candidate_keys), 1)
-
-        runner = _FakeRunner(
-            [
-                _download(
-                    b"<html>not a PDF</html>",
-                    final_locator="https://downloads.publisher.test/file/article.pdf?view=full",
-                )
-            ],
-            on_run=assert_claimed,
-        )
-        source = _source(runner)
-        request = _request(
-            observations=(
-                _observation(
-                    50,
-                    (_landing_hint("https://publisher.test/article?view=full"),),
-                ),
-            )
-        )
-
-        deliveries = list(source._deliveries(request, _evidence(request), tracker))
-
-        self.assertEqual(len(deliveries), 1)
-        delivery = deliveries[0]
-        self.assertEqual(_payload(delivery), b"<html>not a PDF</html>")
-        self.assertEqual(delivery.candidate.declared_media_type, "application/pdf")
-        self.assertIs(delivery.candidate.acquisition_path, AcquisitionPath.CONTROLLED_BROWSER)
-        self.assertEqual(delivery.candidate.source_name, "controlled-browser")
-        self.assertRegex(delivery.candidate.candidate_key, _CANDIDATE_KEY)
-        for private_value in (
-            "publisher.test",
-            "view=full",
-            "data-action",
-            "article",
-            "browser bytes",
-        ):
-            self.assertNotIn(private_value, delivery.candidate.candidate_key)
-        self.assertIn(delivery.candidate.candidate_key, tracker.tried_candidate_keys)
-        self.assertEqual(
-            delivery.safe_source_url,
-            "https://downloads.publisher.test/file/article.pdf",
-        )
-        self.assertEqual(delivery.provenance.source_record_id, "fixture-publisher@1")
-        self.assertEqual(delivery.provenance.parameters_sha256, _rule().fingerprint)
-        self.assertIsNone(delivery.provenance.input_sha256)
-        delivery.content.discard()
-
-    def test_multiple_capture_mechanisms_become_independent_temporary_candidates(self) -> None:
-        runner = _FakeRunner(
-            [
-                _capture_batch(
-                    (
-                        b"%PDF-download",
-                        BrowserCaptureKind.DOWNLOAD,
-                        "https://publisher.test/article.pdf",
-                        "application/pdf",
-                    ),
-                    (
-                        b"%PDF-response",
-                        BrowserCaptureKind.RESPONSE,
-                        "https://downloads.publisher.test/file/article.pdf",
-                        "application/pdf",
-                    ),
-                    (
-                        b"%PDF-viewer",
-                        BrowserCaptureKind.VIEWER,
-                        "https://downloads.publisher.test/file/article/viewer",
-                        "application/pdf",
-                    ),
-                    (
-                        b"%PDF-official",
-                        BrowserCaptureKind.VERIFIED_LOCATOR,
-                        "https://downloads.publisher.test/file/article/object",
-                        "application/octet-stream",
-                    ),
-                )
-            ]
-        )
-        source = _source(runner)
-        request = _request(observations=(_observation(501, (_landing_hint(),)),))
-        tracker = CandidateKeyTracker()
-
-        deliveries = list(source._deliveries(request, _evidence(request), tracker))
-
-        self.assertEqual(len(deliveries), 4)
-        self.assertEqual(
-            tuple(_payload(delivery) for delivery in deliveries),
-            (
-                b"%PDF-official",
-                b"%PDF-download",
-                b"%PDF-response",
-                b"%PDF-viewer",
-            ),
-        )
-        self.assertEqual(len({delivery.candidate.candidate_key for delivery in deliveries}), 4)
-        self.assertEqual(len(tracker.tried_candidate_keys), 5)
-        capture_guard = runner.calls[0]["capture_guard"]
-        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
-        assert isinstance(capture_guard, BrowserCaptureGuard)
-        self.assertTrue(
-            capture_guard.allows(
-                "https://downloads.publisher.test/file/article/object",
-                BrowserCaptureKind.VERIFIED_LOCATOR,
-                "application/octet-stream",
-            )
-        )
-        self.assertFalse(
-            capture_guard.allows(
-                "https://downloads.publisher.test/unreviewed.pdf",
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        self.assertFalse(
-            capture_guard.allows(
-                "https://downloads.publisher.test/file/article.pdf",
-                BrowserCaptureKind.RESPONSE,
-                "text/html",
-            )
-        )
-        for delivery in deliveries:
-            delivery.content.discard()
-
-    def test_main_pdf_priority_excludes_supplements_front_matter_and_wrong_articles(
-        self,
-    ) -> None:
-        rule = _rule(
-            capture_url_prefixes=("https://downloads.publisher.test/pdf",),
-            supplement_url_prefixes=("https://downloads.publisher.test/pdf/supplements",),
-            supplement_filename_markers=("supporting-info",),
-            excluded_url_prefixes=("https://downloads.publisher.test/pdf/front-matter",),
-            excluded_filename_markers=("advertisement",),
-        )
-        batch = _capture_batch(
-            (
-                b"%PDF-response-main",
-                BrowserCaptureKind.RESPONSE,
-                "https://downloads.publisher.test/pdf/article-123.pdf",
-                "application/pdf",
-            ),
-            (
-                b"%PDF-supplement",
-                BrowserCaptureKind.DOWNLOAD,
-                "https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf",
-                "application/pdf",
-            ),
-            (
-                b"%PDF-front-matter",
-                BrowserCaptureKind.POPUP,
-                "https://downloads.publisher.test/pdf/front-matter/issue.pdf",
-                "application/pdf",
-            ),
-            (
-                b"%PDF-wrong-article",
-                BrowserCaptureKind.VIEWER,
-                "https://downloads.publisher.test/pdf/article-999.pdf",
-                "application/pdf",
-            ),
-            (
-                b"%PDF-official-main",
-                BrowserCaptureKind.VERIFIED_LOCATOR,
-                "https://downloads.publisher.test/pdf/article-123/official",
-                "application/pdf",
-            ),
-        )
-        request = _request(
-            observations=(
-                _observation(
-                    502,
-                    (_landing_hint("https://publisher.test/article-123"),),
-                ),
-            )
-        )
-        tracker = CandidateKeyTracker()
-        runner = _FakeRunner([batch])
-        source = _source(runner, rule=rule)
-
-        deliveries = list(source._deliveries(request, _evidence(request), tracker))
-
-        self.assertEqual(
-            tuple(_payload(delivery) for delivery in deliveries),
-            (b"%PDF-official-main", b"%PDF-response-main"),
-        )
-        self.assertEqual(
-            tuple(delivery.safe_source_url for delivery in deliveries),
-            (
-                "https://downloads.publisher.test/pdf/article-123/official",
-                "https://downloads.publisher.test/pdf/article-123.pdf",
-            ),
-        )
-        self.assertEqual(len(tracker.tried_candidate_keys), 3)
-        capture_guard = runner.calls[0]["capture_guard"]
-        self.assertIsInstance(capture_guard, BrowserCaptureGuard)
-        assert isinstance(capture_guard, BrowserCaptureGuard)
-        self.assertTrue(
-            capture_guard.allows(
-                "https://downloads.publisher.test/pdf/article-123.pdf",
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        self.assertFalse(
-            capture_guard.allows(
-                "https://downloads.publisher.test/pdf/supplements/article-123-s1.pdf",
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        self.assertFalse(
-            capture_guard.allows(
-                "https://downloads.publisher.test/pdf/article-999.pdf",
-                BrowserCaptureKind.RESPONSE,
-                "application/pdf",
-            )
-        )
-        for delivery in deliveries:
-            delivery.content.discard()
-
-        supplement_only_tracker = CandidateKeyTracker()
-        supplement_only = _source(
-            _FakeRunner(
-                [
-                    _capture_batch(
-                        (
-                            b"%PDF-only-supplement",
-                            BrowserCaptureKind.DOWNLOAD,
-                            "https://downloads.publisher.test/pdf/article-123-supporting-info.pdf",
-                            "application/pdf",
-                        )
-                    )
-                ]
-            ),
-            rule=rule,
-        )
-        self.assertEqual(
-            list(
-                supplement_only._deliveries(
-                    request,
-                    _evidence(request),
-                    supplement_only_tracker,
-                )
-            ),
-            [],
-        )
-        self.assertEqual(len(supplement_only_tracker.tried_candidate_keys), 1)
-
-    def test_excluded_and_duplicate_actions_do_not_run_browser_twice(self) -> None:
-        first_runner = _FakeRunner([_download()])
-        first_source = _source(first_runner)
-        duplicate_hints = (
-            _landing_hint("https://publisher.test/article"),
-            _landing_hint("https://PUBLISHER.test:443/article"),
-        )
-        request = _request(observations=(_observation(51, duplicate_hints),))
-        first_tracker = CandidateKeyTracker()
-        first = list(first_source._deliveries(request, _evidence(request), first_tracker))
-        self.assertEqual(len(first), 1)
-        self.assertEqual(len(first_runner.calls), 1)
-        tried_keys = first_tracker.tried_candidate_keys
-        self.assertEqual(len(tried_keys), 2)
-        first[0].content.discard()
-
-        excluded_runner = _FakeRunner([])
-        excluded_source = _source(excluded_runner)
-        excluded = list(
-            excluded_source._deliveries(
-                request,
-                _evidence(request),
-                CandidateKeyTracker(tried_keys),
-            )
-        )
-        self.assertEqual(excluded, [])
-        self.assertEqual(excluded_runner.calls, [])
-
-    def test_stronger_landing_hint_prevents_replaying_the_same_rule_via_doi(self) -> None:
-        runner = _FakeRunner([_failure("no-download")])
-        source = _source(runner)
-        request = _request(
-            observations=(_observation(511, (_landing_hint(),)),),
-            literature=_literature(
-                identifiers=(Identifier(namespace="doi", value="10.1234/browser"),),
-            ),
-            resolved_landing_origin="https://publisher.test",
-        )
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
+            "https://publisher.invalid/article/generic-browser",
         )
         self.assertEqual(len(runner.calls), 1)
-        browser_request = runner.calls[0]["request"]
-        self.assertIsInstance(browser_request, BrowserRequest)
-        assert isinstance(browser_request, BrowserRequest)
-        self.assertEqual(browser_request.url, "https://publisher.test/article")
+        results[0].temporary_pdf.content.discard()  # type: ignore[union-attr]
 
-    def test_empty_actions_use_only_the_closed_session_capabilities(self) -> None:
-        observe_runner = _FakeRunner([_failure("no-download")])
-        observe_rule = _rule(actions=())
-        observe_source = _source(observe_runner, rule=observe_rule)
-        request = _request(observations=(_observation(52, (_landing_hint(),)),))
-        self.assertEqual(
-            list(
-                observe_source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            ),
-            [],
-        )
-        self.assertEqual(observe_runner.sessions[0].clicks, [])
-
-    def test_generic_pdf_discovery_precedes_provider_actions_and_is_bounded(self) -> None:
-        locators = tuple(
-            f"https://downloads.publisher.test/article.pdf?signature=sentinel-{index}"
-            for index in range(6)
-        )
-        runner = _FakeRunner(
-            [_failure("no-download")],
-            discovered_pdf_locators=(locators,),
-        )
-        source = _source(runner)
-        request = _request(observations=(_observation(521, (_landing_hint(),)),))
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-
-        session = runner.sessions[0]
-        self.assertEqual(session.discovery_calls, 1)
-        self.assertEqual(session.verified_locator_opens, list(locators[:4]))
-        self.assertEqual(session.clicks, ["a[data-action='pdf']"])
-
-    def test_capture_priority_is_checked_even_when_rule_actions_are_empty(self) -> None:
-        session = _FakeSession(
-            available_captures=frozenset({BrowserCaptureKind.RESPONSE}),
-        )
-        rule = _rule(actions=())
-
-        self.assertTrue(ControlledBrowserPdfSource._expected_capture_available(session, rule))
-
-    def test_ordered_actions_use_only_the_closed_session_capabilities(self) -> None:
-        request = _request(observations=(_observation(52, (_landing_hint(),)),))
-        actions = (
-            BrowserRuleAction(
-                kind=BrowserActionKind.CLICK,
-                selector="a[data-action='pdf']",
-            ),
-            BrowserRuleAction(
-                kind=BrowserActionKind.OPEN_VIEWER,
-                locator="https://downloads.publisher.test/file/article/viewer",
-            ),
-            BrowserRuleAction(
-                kind=BrowserActionKind.OPEN_VERIFIED_LOCATOR,
-                locator="https://downloads.publisher.test/file/article/object",
-            ),
-            BrowserRuleAction(
-                kind=BrowserActionKind.WAIT_FOR_CAPTURE,
-                capture_kind=BrowserCaptureKind.VERIFIED_LOCATOR,
-            ),
-        )
-        action_runner = _FakeRunner([_download()])
-        action_source = _source(action_runner, rule=_rule(actions=actions))
-        deliveries = list(
-            action_source._deliveries(
-                request,
-                _evidence(request),
-                CandidateKeyTracker(),
+    def test_capture_mechanisms_are_ordered_and_non_pdf_delivery_is_rejected(self) -> None:
+        provider = _AgentProvider()
+        captures = BrowserCaptureBatch(
+            captures=(
+                _capture(kind=BrowserCaptureKind.POPUP, body=b"popup"),
+                _capture(
+                    kind=BrowserCaptureKind.DOWNLOAD,
+                    body=b"download",
+                    locator="https://assets.invalid/download.pdf",
+                ),
+                _capture(
+                    kind=BrowserCaptureKind.RESPONSE,
+                    body=b"html",
+                    media_type="text/html",
+                    locator="https://publisher.invalid/article/body",
+                ),
             )
         )
-        session = action_runner.sessions[0]
-        self.assertEqual(session.clicks, ["a[data-action='pdf']"])
-        self.assertEqual(
-            session.viewer_opens,
-            ["https://downloads.publisher.test/file/article/viewer"],
-        )
-        self.assertEqual(
-            session.verified_locator_opens,
-            ["https://downloads.publisher.test/file/article/object"],
-        )
-        self.assertEqual(session.capture_waits, [BrowserCaptureKind.VERIFIED_LOCATOR])
-        self.assertEqual(session.fill_calls, [])
-        deliveries[0].content.discard()
-
-    def test_non_actionable_click_skips_the_dependent_capture_wait(self) -> None:
-        selector = "a[data-action='pdf']"
-        actions = (
-            BrowserRuleAction(
-                kind=BrowserActionKind.CLICK,
-                selector=selector,
-            ),
-            BrowserRuleAction(kind=BrowserActionKind.WAIT_FOR_ANY_CAPTURE),
-        )
-        runner = _FakeRunner(
-            [_failure("no-download")],
-            click_succeeds=False,
-        )
-        source = _source(runner, rule=_rule(actions=actions))
-        request = _request(observations=(_observation(523, (_landing_hint(),)),))
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-
-        session = runner.sessions[0]
-        self.assertEqual(session.clicks, [selector])
-        self.assertEqual(session.capture_wait_sets, [])
-
-    def test_doi_flow_starts_at_canonical_resolver_but_uses_landing_web_scope(self) -> None:
-        runner = _FakeRunner([_failure("no-download")])
-        source = _source(runner)
+        runner = _Runner(captures)
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
         request = _request(
-            literature=_literature(
-                identifiers=(Identifier(namespace="doi", value="10.1234/alpha(1)"),),
-            ),
-            resolved_landing_origin="https://publisher.test",
-        )
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-
-        call = runner.calls[0]
-        self.assertEqual(call["scope"], AccessScope("publisher.test", "web"))
-        browser_request = call["request"]
-        self.assertIsInstance(browser_request, BrowserRequest)
-        assert isinstance(browser_request, BrowserRequest)
-        self.assertEqual(browser_request.url, "https://doi.org/10.1234/alpha%281%29")
-
-        guard = call["destination_guard"]
-        self.assertIsInstance(guard, BrowserDestinationGuard)
-        assert isinstance(guard, BrowserDestinationGuard)
-        guard.check(browser_request.url, BrowserDestinationKind.INITIAL_NAVIGATION)
-        guard.check(browser_request.url, BrowserDestinationKind.NAVIGATION)
-        guard.check(browser_request.url, BrowserDestinationKind.RESPONSE)
-        guard.check(
-            "https://publisher.test/article",
-            BrowserDestinationKind.NAVIGATION,
-        )
-        guard.check(
-            "https://downloads.publisher.test/article.pdf",
-            BrowserDestinationKind.DOWNLOAD,
-        )
-        with self.assertRaises(ValueError):
-            guard.check(browser_request.url, BrowserDestinationKind.REQUEST)
-        with self.assertRaises(ValueError):
-            guard.check(
-                "https://public-but-forbidden.test/article.pdf",
-                BrowserDestinationKind.DOWNLOAD,
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
             )
-
-    def test_no_download_is_normal_but_every_other_browser_failure_is_system_failure(
-        self,
-    ) -> None:
-        request = _request(observations=(_observation(53, (_landing_hint(),)),))
-
-        no_download = _source(_FakeRunner([_failure("no-download")]))
-        self.assertEqual(
-            list(
-                no_download._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            ),
-            [],
         )
 
-        for code in (
-            "policy",
-            "admission",
-            "cancelled",
-            "timeout",
-            "oversize",
-            "challenge",
-            "cleanup",
-            "runtime",
-        ):
-            with self.subTest(code=code):
-                source = _source(_FakeRunner([_failure(code)]))
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
+        results = tuple(source.execute(_context(request)))
+
+        self.assertEqual(len(results), 2)
+        bodies: list[bytes] = []
+        for result in results:
+            self.assertEqual(result.outcome, RouteOutcome.PDF_DELIVERED)
+            assert result.temporary_pdf is not None
+            with result.temporary_pdf.content.open() as stream:
+                bodies.append(stream.read())
+            result.temporary_pdf.content.discard()
+        self.assertEqual(bodies, [b"download", b"popup"])
+
+    def test_supplement_hint_and_empty_evidence_do_not_start_the_browser(self) -> None:
+        provider = _AgentProvider()
+        runner = _Runner(BrowserCaptureBatch(captures=(_capture(),)))
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
+        supplement = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/supplement.pdf",
+                kind=AssetHintKind.DIRECT_FILE,
+                asset_role=AssetRole.SUPPLEMENTARY_PDF,
+            )
+        )
+        without_action = _request()
+
+        for request in (supplement, without_action):
+            with self.subTest(request=request):
+                result = tuple(source.execute(_context(request)))
                 self.assertEqual(
-                    caught.exception.failure.code,
-                    (
-                        "acquisition-browser-challenge-unresolved"
-                        if code == "challenge"
-                        else f"acquisition-browser-{code}-failed"
-                    ),
+                    tuple(item.outcome for item in result),
+                    (RouteOutcome.NORMAL_MISS,),
                 )
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(provider.calls, [])
 
-    def test_runtime_result_states_have_stable_route_escalation(self) -> None:
-        request = _request(observations=(_observation(531, (_landing_hint(),)),))
-        for code in ("not-found", "not-entitled"):
-            with self.subTest(code=code):
-                source = _source(_FakeRunner([_failure(code)]))
-                self.assertEqual(
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    ),
-                    [],
-                )
+    def test_stop_is_a_normal_miss_and_pending_candidate_does_not_end_agent_early(self) -> None:
+        request = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
+            )
+        )
+        stop_provider = _AgentProvider("stop")
+        stop_source = ControlledBrowserPdfSource(
+            runner=_Runner(_failure(), terminal="stopped"),
+            agent_runtime=_runtime(stop_provider),
+        )
+        self.assertEqual(
+            tuple(item.outcome for item in stop_source.execute(_context(request))),
+            (RouteOutcome.NORMAL_MISS,),
+        )
 
-        for code, expected_code in (
-            ("rate-limit", "acquisition-browser-rate-limited"),
-            ("rate-limited", "acquisition-browser-rate-limited"),
-            ("ip-blocked", "acquisition-browser-ip-blocked"),
-        ):
-            with self.subTest(code=code):
-                source = _source(_FakeRunner([_failure(code)]))
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
-                self.assertEqual(caught.exception.failure.code, expected_code)
+        timeout_source = ControlledBrowserPdfSource(
+            runner=_Runner(_failure(), terminal="candidate-timeout"),
+            agent_runtime=_runtime(_AgentProvider()),
+        )
+        with self.assertRaises(AcquisitionSourceFailure) as caught:
+            tuple(timeout_source.execute(_context(request)))
+        self.assertEqual(caught.exception.failure.code, "controller-safety-limit")
 
-    def test_login_and_mfa_markers_are_explicit_failures_without_fill_or_click(self) -> None:
-        states = _page_states()
-        request = _request(observations=(_observation(54, (_landing_hint(),)),))
-        for state_name, expected_code in (
-            ("login", "acquisition-browser-login-required"),
-            ("mfa", "acquisition-browser-mfa-required"),
-            ("login-and-mfa", "acquisition-browser-page-state-conflict"),
-        ):
-            with self.subTest(state=state_name):
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(states[state_name],),
-                )
-                source = _source(runner)
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
-                self.assertEqual(caught.exception.failure.code, expected_code)
-                self.assertEqual(runner.sessions[0].clicks, [])
-                self.assertEqual(runner.sessions[0].fill_calls, [])
-                self.assertEqual(runner.completed, 1)
-
-    def test_page_marker_matrix_separates_authentication_and_article_entitlement(self) -> None:
-        states = _access_page_states()
-        request = _request(observations=(_observation(541, (_landing_hint(),)),))
-        rule = _rule(page_markers=_access_page_markers())
-
-        for state_name in (
-            "ordinary",
-            "authenticated",
-            "entitled",
-            "authenticated-and-entitled",
-        ):
-            with self.subTest(state=state_name):
-                markers, observation = states[state_name]
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(markers,),
-                    page_observations=(observation,),
-                )
-                source = _source(runner, rule=rule)
-                deliveries = list(
-                    source._deliveries(
-                        request,
-                        _evidence(request),
-                        CandidateKeyTracker(),
-                    )
-                )
-                self.assertEqual(len(deliveries), 1)
-                self.assertEqual(runner.sessions[0].clicks, ["a[data-action='pdf']"])
-                self.assertEqual(runner.sessions[0].fill_calls, [])
-
-        for state_name in (
-            "not-entitled",
-            "paywall",
-            "not-found",
-            "authenticated-but-not-entitled",
-        ):
-            with self.subTest(state=state_name):
-                markers, observation = states[state_name]
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(markers,),
-                    page_observations=(observation,),
-                )
-                source = _source(runner, rule=rule)
-                self.assertEqual(
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    ),
-                    [],
-                )
-                self.assertEqual(runner.sessions[0].clicks, [])
-
-    def test_page_marker_terminal_states_have_one_safe_escalation(self) -> None:
-        states = _access_page_states()
-        request = _request(observations=(_observation(542, (_landing_hint(),)),))
-        rule = _rule(page_markers=_access_page_markers())
+    def test_agent_stop_preserves_specific_visible_page_reason(self) -> None:
+        request = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
+            )
+        )
         expected = {
+            "challenge-unresolved": "acquisition-browser-challenge-unresolved",
             "login-required": "acquisition-browser-login-required",
             "mfa-required": "acquisition-browser-mfa-required",
-            "rate-limited": "acquisition-browser-rate-limited",
-            "ip-blocked": "acquisition-browser-ip-blocked",
-            "account-warning": "acquisition-browser-account-warning",
+            "not-entitled": "acquisition-browser-not-entitled",
+            "access-denied": "acquisition-browser-access-denied",
+            "not-found": "acquisition-browser-not-found",
         }
-
-        for state_name, expected_code in expected.items():
-            with self.subTest(state=state_name):
-                markers, observation = states[state_name]
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(markers,),
-                    page_observations=(observation,),
+        for stop_reason, failure_code in expected.items():
+            with self.subTest(stop_reason=stop_reason):
+                source = ControlledBrowserPdfSource(
+                    runner=_Runner(_failure(), terminal="stopped"),
+                    agent_runtime=_runtime(_AgentProvider("stop", stop_reason=stop_reason)),
                 )
-                source = _source(runner, rule=rule)
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
-                self.assertEqual(caught.exception.failure.code, expected_code)
-                self.assertEqual(runner.sessions[0].clicks, [])
-                self.assertEqual(runner.sessions[0].fill_calls, [])
+                with self.assertRaises(AcquisitionSourceFailure) as caught:
+                    tuple(source.execute(_context(request)))
+                self.assertEqual(caught.exception.failure.code, failure_code)
 
-        challenge_markers, challenge_observation = states["challenge"]
-        challenge_runner = _FakeRunner(
-            [_download()],
-            marker_states=(challenge_markers,),
-            page_observations=(challenge_observation,),
-        )
-        with self.assertRaises(AcquisitionFailure) as challenge_caught:
-            list(
-                _source(challenge_runner, rule=rule)._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            )
-        self.assertEqual(
-            challenge_caught.exception.failure.code,
-            "acquisition-browser-challenge-unresolved",
-        )
-        self.assertEqual(
-            challenge_runner.sessions[0].clicks,
-            ["a[data-action='pdf']"],
-        )
-        self.assertEqual(challenge_runner.sessions[0].fill_calls, [])
-
-    def test_provider_rule_can_classify_a_reviewed_403_as_account_warning(self) -> None:
-        request = _request(observations=(_observation(544, (_landing_hint(),)),))
-        rule = _rule(
-            page_markers=(
-                BrowserPageMarker(
-                    marker_id="provider-account-warning",
-                    kind=BrowserPageMarkerKind.ACCOUNT_WARNING,
-                    response_statuses=(403,),
-                ),
+    def test_cancellation_is_operation_wide_and_runtime_failure_is_source_scoped(self) -> None:
+        request = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
             )
         )
-        runner = _FakeRunner(
-            [_download()],
-            page_observations=(
-                BrowserPageObservation(
-                    locator="https://publisher.test/article",
-                    status_code=403,
-                ),
-            ),
-        )
-
-        with self.assertRaises(AcquisitionFailure) as caught:
-            list(
-                _source(runner, rule=rule)._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            )
-
-        self.assertEqual(
-            caught.exception.failure.code,
-            "acquisition-browser-account-warning",
-        )
-        self.assertEqual(runner.sessions[0].clicks, [])
-
-    def test_bare_403_challenge_and_paywall_have_distinct_results(self) -> None:
-        rule = _rule(
-            page_markers=(
-                BrowserPageMarker(
-                    marker_id="provider-paywall",
-                    kind=BrowserPageMarkerKind.PAYWALL,
-                    css_selectors=("#provider-paywall",),
-                ),
-                BrowserPageMarker(
-                    marker_id="provider-challenge",
-                    kind=BrowserPageMarkerKind.CHALLENGE,
-                    text_markers=(("title", "just a moment"),),
-                ),
-                BrowserPageMarker(
-                    marker_id="provider-access-denied",
-                    kind=BrowserPageMarkerKind.ACCESS_DENIED,
-                    response_statuses=(403,),
-                ),
-            )
-        )
-        request = _request(observations=(_observation(545, (_landing_hint(),)),))
-        observation = BrowserPageObservation(
-            locator="https://publisher.test/article",
-            status_code=403,
-        )
-
-        for marker_text, expected_code in (
-            ({}, "acquisition-browser-access-denied"),
-            ({"title": "Just a Moment..."}, "acquisition-browser-challenge-unresolved"),
-        ):
-            with self.subTest(expected_code=expected_code):
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(marker_text,),
-                    page_observations=(observation,),
-                )
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        _source(runner, rule=rule)._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
-                self.assertEqual(caught.exception.failure.code, expected_code)
-                self.assertEqual(
-                    runner.sessions[0].clicks,
-                    []
-                    if expected_code == "acquisition-browser-access-denied"
-                    else ["a[data-action='pdf']"],
-                )
-
-        paywall_runner = _FakeRunner(
-            [_download()],
-            marker_states=({"#provider-paywall": "Purchase access"},),
-            page_observations=(observation,),
-        )
-        self.assertEqual(
-            list(
-                _source(paywall_runner, rule=rule)._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            ),
-            [],
-        )
-        self.assertEqual(paywall_runner.sessions[0].clicks, [])
-
-    def test_conflicting_page_markers_fail_closed_with_safe_diagnosis(self) -> None:
-        states = _access_page_states()
-        request = _request(observations=(_observation(543, (_landing_hint(),)),))
-        rule = _rule(page_markers=_access_page_markers())
-        for state_name in (
-            "login-and-mfa-conflict",
-            "authentication-conflict",
-            "entitlement-conflict",
-        ):
-            with self.subTest(state=state_name):
-                markers, observation = states[state_name]
-                runner = _FakeRunner(
-                    [_download()],
-                    marker_states=(markers,),
-                    page_observations=(observation,),
-                )
-                source = _source(runner, rule=rule)
-                with self.assertRaises(AcquisitionFailure) as caught:
-                    list(
-                        source._deliveries(
-                            request,
-                            _evidence(request),
-                            CandidateKeyTracker(),
-                        )
-                    )
-                failure = caught.exception.failure
-                self.assertEqual(failure.code, "acquisition-browser-page-state-conflict")
-                self.assertNotIn("publisher.test", repr(failure))
-                self.assertNotIn("#", repr(failure))
-                self.assertEqual(runner.sessions[0].clicks, [])
-                self.assertEqual(runner.sessions[0].fill_calls, [])
-
-    def test_operation_limits_cancel_and_policy_are_always_conservative(self) -> None:
         cancelled = threading.Event()
-        operator_policy = AccessPolicy(
-            max_concurrency=9,
-            min_start_interval=5.0,
-            cooldown_after_completion=1.0,
-        )
-        runner = _FakeRunner([_failure("no-download")])
-        source = _source(
-            runner,
-            policy=operator_policy,
+        cancelled.set()
+        cancelled_source = ControlledBrowserPdfSource(
+            runner=_Runner(_failure()),
+            agent_runtime=_runtime(_AgentProvider()),
             cancel_event=cancelled,
         )
-        request = _request(observations=(_observation(55, (_landing_hint(),)),))
-
-        self.assertEqual(
-            list(source._deliveries(request, _evidence(request), CandidateKeyTracker())),
-            [],
-        )
-
-        call = runner.calls[0]
-        limits = call["limits"]
-        self.assertEqual(limits, source.browser_operation_limits)
-        assert isinstance(limits, BrowserOperationLimits)
-        self.assertEqual(limits.max_capture_bytes, 64 * 1024 * 1024)
-        self.assertEqual(limits.action_timeout_seconds, 10.0)
-        self.assertEqual(limits.capture_wait_timeout_seconds, 10.0)
-        self.assertIs(call["navigation_only"], False)
-        self.assertIs(call["discard_unapproved_subresources"], True)
-        self.assertEqual(call["cancel_event"], cancelled)
-        policy = call["policy"]
-        assert isinstance(policy, AccessPolicy)
-        self.assertEqual(policy.max_concurrency, 1)
-        self.assertEqual(policy.min_start_interval, 5.0)
-        self.assertEqual(policy.cooldown_after_completion, 1.0)
-
-    def test_final_download_origin_remains_a_defence_in_depth_check(self) -> None:
-        request = _request(observations=(_observation(56, (_landing_hint(),)),))
-        allowed_runner = _FakeRunner(
-            [
-                _download(
-                    final_locator="https://downloads.publisher.test/article.pdf",
-                )
-            ]
-        )
-        allowed_source = _source(allowed_runner)
-        allowed = list(
-            allowed_source._deliveries(
-                request,
-                _evidence(request),
-                CandidateKeyTracker(),
-            )
-        )
-        self.assertEqual(len(allowed), 1)
-        allowed[0].content.discard()
-
-        forbidden_runner = _FakeRunner(
-            [_download(final_locator="https://public-but-forbidden.test/article.pdf")]
-        )
-        forbidden_source = _source(forbidden_runner)
         with self.assertRaises(AcquisitionFailure) as caught:
-            list(
-                forbidden_source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
-            )
-        self.assertEqual(caught.exception.failure.code, "acquisition-browser-policy-failed")
-        # The fake does not execute Network's per-hop guard.  The Source still
-        # refuses publication if a nonconforming runner returns an invalid locator.
-        self.assertEqual(len(forbidden_runner.calls), 1)
-        self.assertEqual(forbidden_runner.completed, 1)
+            tuple(cancelled_source.execute(_context(request)))
+        self.assertEqual(caught.exception.failure.code, "acquisition-browser-cancelled")
 
-    def test_runtime_exception_and_unexpected_result_are_stable_contract_failures(self) -> None:
-        request = _request(observations=(_observation(57, (_landing_hint(),)),))
-        exception_secret = "token=PRIVATE-EXCEPTION-SENTINEL"
-        exception_url = "https://publisher.test/article?signature=PRIVATE-SIGNATURE"
-        exception_source = _source(
-            _FakeRunner([RuntimeError(f"{exception_secret} {exception_url}")])
+        failed_source = ControlledBrowserPdfSource(
+            runner=_Runner(_failure(), fail=True),
+            agent_runtime=_runtime(_AgentProvider()),
         )
-        with self.assertLogs(
-            "sciretriever.acquisition.sources.browser",
-            level="DEBUG",
-        ) as captured:
-            with self.assertRaises(AcquisitionFailure) as exception_caught:
-                list(
-                    exception_source._deliveries(
-                        request,
-                        _evidence(request),
-                        CandidateKeyTracker(),
-                    )
-                )
-        self.assertEqual(
-            exception_caught.exception.failure.code,
-            "acquisition-browser-runtime-failed",
-        )
-        output = "\n".join(captured.output)
-        self.assertIn("event=browser-candidate-failed", output)
-        self.assertIn("code=acquisition-browser-runtime-failed", output)
-        self.assertNotIn(exception_secret, output)
-        self.assertNotIn(exception_url, output)
-        self.assertNotIn("PRIVATE-EXCEPTION-SENTINEL", output)
-        self.assertNotIn("PRIVATE-SIGNATURE", output)
-        self.assertNotIn("sentinel", repr(exception_caught.exception.failure).casefold())
+        with self.assertRaises(AcquisitionSourceFailure) as caught:
+            tuple(failed_source.execute(_context(request)))
+        self.assertEqual(caught.exception.failure.code, "acquisition-browser-runtime-failed")
 
-        contract_source = _source(_FakeRunner([object()]))
-        with self.assertRaises(AcquisitionFailure) as contract_caught:
-            list(
-                contract_source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
+    def test_network_failure_before_first_observation_is_not_a_contract_failure(self) -> None:
+        request = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
             )
-        self.assertEqual(contract_caught.exception.failure.code, "acquisition-browser-contract")
-
-    def test_debug_logging_records_browser_states_without_page_or_rule_secrets(self) -> None:
-        markers, observation = _access_page_states()["authenticated-and-entitled"]
-        runner = _FakeRunner(
-            [_download(b"PRIVATE-PDF-BYTES")],
-            marker_states=(markers,),
-            page_observations=(observation,),
         )
-        rule = _rule(page_markers=_access_page_markers())
-        source = _source(runner, rule=rule)
-        request = _request(observations=(_observation(571, (_landing_hint(),)),))
+        source = ControlledBrowserPdfSource(
+            runner=_Runner(_failure("policy"), run_controller=False),
+            agent_runtime=_runtime(_AgentProvider()),
+        )
 
-        with self.assertLogs(
-            "sciretriever.acquisition.sources.browser",
-            level="DEBUG",
-        ) as captured:
-            deliveries = list(
-                source._deliveries(
-                    request,
-                    _evidence(request),
-                    CandidateKeyTracker(),
-                )
+        with self.assertRaises(AcquisitionSourceFailure) as caught:
+            tuple(source.execute(_context(request)))
+
+        self.assertEqual(caught.exception.failure.code, "policy")
+
+    def test_candidate_claim_prevents_replaying_the_same_article_action(self) -> None:
+        provider = _AgentProvider()
+        runner = _Runner(BrowserCaptureBatch(captures=(_capture(),)))
+        source = ControlledBrowserPdfSource(runner=runner, agent_runtime=_runtime(provider))
+        request = _request(
+            hint=AssetHint(
+                url="https://publisher.invalid/article/generic-browser",
+                kind=AssetHintKind.LANDING_PAGE,
             )
+        )
+        context = _context(request)
 
-        output = "\n".join(captured.output)
-        self.assertEqual(len(deliveries), 1)
-        self.assertIn("event=browser-source-started", output)
-        self.assertIn("action_count=1 eligible=true disposition=eligible", output)
-        self.assertIn("event=browser-candidate-started", output)
-        self.assertIn("attempted=true", output)
-        self.assertIn("event=browser-page-state-check-finished", output)
-        self.assertIn("page_state=normal authenticated=true entitled=true", output)
-        self.assertIn("event=browser-rule-action browser_rule_action=click", output)
-        self.assertIn("event=browser-capture-classified", output)
-        self.assertIn("event=browser-candidate-finished", output)
-        self.assertIn("page_state=normal result=capture", output)
-        self.assertIn("disposition=delivered next=route-consumer delivered=1", output)
-        self.assertIn("event=browser-source-finished", output)
-        self.assertIn("action_count=1 attempted=1 delivered=1 failed=0 outcome=delivered", output)
-        self.assertRegex(output, r"elapsed_ms=\d+")
-        for forbidden in (
-            "a[data-action='pdf']",
-            "#authenticated",
-            "#article-entitled",
-            "https://publisher.test/article",
-            "PRIVATE-PDF-BYTES",
-        ):
-            self.assertNotIn(forbidden, output)
-        deliveries[0].content.discard()
+        first = tuple(source.execute(context))
+        second = tuple(source.execute(context))
 
-    def test_generator_close_and_explicit_discard_release_temporary_bytes(self) -> None:
-        runner = _FakeRunner([_download(b"temporary")])
-        source = _source(runner)
-        request = _request(observations=(_observation(58, (_landing_hint(),)),))
-        with self.assertLogs(
-            "sciretriever.acquisition.sources.browser",
-            level="DEBUG",
-        ) as captured:
-            iterator = iter(source._deliveries(request, _evidence(request), CandidateKeyTracker()))
-            delivery = next(iterator)
-            self.assertEqual(_payload(delivery), b"temporary")
-
-            close = getattr(iterator, "close", None)
-            self.assertTrue(callable(close))
-            assert callable(close)
-            close()
-
-        output = "\n".join(captured.output)
-        self.assertIn("resource=temporary-capture outcome=discarded", output)
-        self.assertIn("attempted=1 delivered=1 failed=0 outcome=delivered", output)
-        with self.assertRaises(RuntimeError):
-            delivery.content.open()
-        delivery.content.discard()
-        delivery.content.discard()
+        self.assertEqual(first[0].outcome, RouteOutcome.PDF_DELIVERED)
+        self.assertEqual(second[0].outcome, RouteOutcome.NORMAL_MISS)
+        self.assertEqual(len(runner.calls), 1)
+        assert first[0].temporary_pdf is not None
+        first[0].temporary_pdf.content.discard()
 
 
 if __name__ == "__main__":

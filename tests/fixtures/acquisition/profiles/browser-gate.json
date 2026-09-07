@@ -20,15 +20,13 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": "browser:fixture-publisher"
+    "browser_probe_enabled": true
   },
-  "browser": {
-    "rule_id": "fixture-publisher",
-    "rule_revision": 1,
-    "rate_limit_group": "fixture-publisher",
-    "session_group": "fixture-publisher",
-    "page_states": ["entitled", "login-required", "paywall", "challenge"],
-    "capture_cases": [
+  "browser_probe": {
+    "state": "probe-enabled",
+    "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
+  },
+  "pdf_association_cases": [
       {
         "case_id": "primary",
         "locator": "https://publisher.test/pdf/article-1.pdf",
@@ -53,8 +51,7 @@
         "landing_url": "https://publisher.test/article/article-1",
         "expected": "excluded"
       }
-    ]
-  },
+  ],
   "ownership_cases": [
     {"case_id": "primary", "expected": "primary"},
     {"case_id": "supplement", "expected": "supplement"}

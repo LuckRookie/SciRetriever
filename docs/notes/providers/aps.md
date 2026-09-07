@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；APS 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：canonical `https://journals.aps.org`；legacy redirect origin `https://link.aps.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public 或授权 API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方入口与本轮证据边界
 
@@ -64,7 +64,7 @@ journals.aps.org/<journal>/abstract/{doi} -> <journal>/pdf/{doi}
 OpenAthens/WebVPN/CARSI 未授权样本 PDF、`/login_inst_user` 及不要误点 `Accepted` 导航。这些
 只是上游环境的历史线索：SciRetriever 不复制特定高校身份、Cookie、CARSI、URL 改写或 verdict。
 
-当前 Browser route 不满足准入门：
+当前证据不足以建立 APS 专属 Browser 页面程序或首页 probe：
 
 - 官方访问条款正文未能匿名核实，不能确认自动 Browser 权利；
 - 首页、条款和信息页当前受到 Cloudflare challenge，且没有安全的绕过授权；

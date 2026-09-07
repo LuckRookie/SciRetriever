@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 
 _START_TIMEOUT_SECONDS: Final[float] = 15.0
 _CONNECT_TIMEOUT_SECONDS: Final[float] = 15.0
+_CONNECT_AUTHORIZATION_WAIT_SECONDS: Final[float] = _CONNECT_TIMEOUT_SECONDS
 _CLIENT_HEADER_LIMIT: Final[int] = 64 * 1024
 _RELAY_CHUNK_BYTES: Final[int] = 64 * 1024
 _THREAD_JOIN_SECONDS: Final[float] = 5.0
@@ -318,6 +319,7 @@ class BrowserConnectProxy:
         "_thread",
         "_stop",
         "_lock",
+        "_authorization_changed",
         "_authorizations",
         "_connections",
         "_workers",
@@ -343,6 +345,7 @@ class BrowserConnectProxy:
         self._listener = listener
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._authorization_changed = threading.Condition(self._lock)
         self._authorizations: dict[tuple[str, str, int], _Authorization] = {}
         self._connections: dict[socket.socket, _TrackedConnection] = {}
         self._workers: set[threading.Thread] = set()
@@ -381,7 +384,7 @@ class BrowserConnectProxy:
         token = self._lane_token(lane_token)
         binding = _binding(value)
         key = (binding.scheme, binding.hostname, binding.port)
-        with self._lock:
+        with self._authorization_changed:
             if self._closed or token not in self._lanes:
                 raise _transport_error()
             authorization = self._authorizations.get(key)
@@ -395,11 +398,12 @@ class BrowserConnectProxy:
             for tracked in self._connections.values():
                 if tracked.key == key:
                     tracked.owners.add(token)
+            self._authorization_changed.notify_all()
         return value
 
     def end_lane(self, lane_token: object) -> bool:
         token = self._lane_token(lane_token)
-        with self._lock:
+        with self._authorization_changed:
             if self._closed:
                 return False
             state = self._lanes.pop(token, None)
@@ -416,11 +420,12 @@ class BrowserConnectProxy:
                 if owned and not tracked.owners:
                     stale.append(connection)
             failed = state.failed
+            self._authorization_changed.notify_all()
         self._close_sockets(tuple(stale))
         return not failed
 
     def close(self) -> None:
-        with self._lock:
+        with self._authorization_changed:
             if self._closed:
                 if self._failed:
                     raise _transport_error()
@@ -429,6 +434,7 @@ class BrowserConnectProxy:
             self._authorizations.clear()
             self._lanes.clear()
             connections = tuple(self._connections)
+            self._authorization_changed.notify_all()
         self._stop.set()
         try:
             self._listener.close()
@@ -485,7 +491,7 @@ class BrowserConnectProxy:
             if method == "CONNECT":
                 hostname, port = _parse_authority(target)
                 key = ("https", hostname, port)
-                binding, owners = self._authorized(key)
+                binding, owners = self._authorized(key, wait_for_route=True)
                 upstream = _exact_connection(binding.address, binding.port)
                 self._track(client, key, owners)
                 self._track(upstream, key, owners)
@@ -555,15 +561,27 @@ class BrowserConnectProxy:
     def _authorized(
         self,
         key: tuple[str, str, int],
+        *,
+        wait_for_route: bool = False,
     ) -> tuple[_ProxyBinding, frozenset[object]]:
-        with self._lock:
-            authorization = self._authorizations.get(key)
-            if self._closed or authorization is None:
-                raise _transport_error()
-            owners = frozenset(owner for owner in authorization.owners if owner in self._lanes)
-            if not owners:
-                raise _transport_error()
-            return authorization.binding, owners
+        deadline = time.monotonic() + _CONNECT_AUTHORIZATION_WAIT_SECONDS
+        with self._authorization_changed:
+            while True:
+                authorization = self._authorizations.get(key)
+                if self._closed:
+                    raise _transport_error()
+                if authorization is not None:
+                    owners = frozenset(
+                        owner for owner in authorization.owners if owner in self._lanes
+                    )
+                    if owners:
+                        return authorization.binding, owners
+                if not wait_for_route or not self._lanes:
+                    raise _transport_error()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    raise _transport_error()
+                self._authorization_changed.wait(remaining)
 
     def _relay(self, client: socket.socket, upstream: socket.socket) -> None:
         client.setblocking(False)

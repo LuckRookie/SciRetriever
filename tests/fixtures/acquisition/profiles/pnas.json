@@ -29,7 +29,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -41,18 +41,7 @@
       "payload": "no-reviewed-machine-access-pdf-api"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-terms-and-open-access-pages-unavailable-to-anonymous-review",
-        "official-robots-explicitly-disallow-doi-epdf",
-        "robots-allow-show-xml-not-primary-pdf-automation",
-        "no-published-browser-article-rate-policy",
-        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-rule",
-        "shared-cdn-or-platform-template-is-not-shared-risk-or-session-evidence",
-        "upstream-browser-success-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

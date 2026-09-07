@@ -37,7 +37,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -56,14 +56,7 @@
       "payload": "oai-pmh-provides-metadata-and-full-text-xml-not-pdf"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "open-access-content-does-not-require-browser",
-        "no-reviewed-browser-article-policy",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-rule",
-        "upstream-browser-fallback-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

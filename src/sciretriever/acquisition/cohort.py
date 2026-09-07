@@ -708,7 +708,7 @@ class TieredCohortExecutor:
                     route_key=route.route_key,
                     rate_limit_group=route.risk_group,
                     readiness=route.readiness,
-                    resolution_confirmed=item.plan.resolution.is_strong,
+                    failure=route.failure,
                 )
             )
         runtime_states: list[BrowserGroupRuntimeSnapshot] = []
@@ -868,7 +868,8 @@ def _readiness_outcome(route: RouteSpec) -> RouteExecutionResult | None:
         if route.allows_browser_after_unconfigured:
             return RouteExecutionResult.normal_miss()
         return RouteExecutionResult.action_required(
-            StableFailure(
+            route.failure
+            or StableFailure(
                 code="acquisition-route-unconfigured",
                 reason="An applicable acquisition route is not configured.",
                 action="Configure the route or disable it before retrying.",
@@ -876,7 +877,8 @@ def _readiness_outcome(route: RouteSpec) -> RouteExecutionResult | None:
             )
         )
     return RouteExecutionResult.deferred(
-        StableFailure(
+        route.failure
+        or StableFailure(
             code="acquisition-route-temporarily-unavailable",
             reason="An applicable acquisition route is temporarily unavailable.",
             action="Retry after the route becomes available.",
@@ -1034,7 +1036,17 @@ def _finalize_blocking_low_risk_route_issues(
 def _finalize_route_issue(item: AcquisitionWorkItem) -> None:
     if item.disposition is not WorkItemDisposition.PENDING or not item.route_issues:
         return
-    issue = item.route_issues[0]
+    blocking = tuple(
+        issue
+        for issue in item.route_issues
+        if issue.outcome in {RouteOutcome.DEFERRED, RouteOutcome.ACTION_REQUIRED}
+    )
+    # A blocking route result is more actionable than a route-local failure.
+    # Otherwise the last concrete failure is the deepest route that actually
+    # ran.  A Browser normal miss adds no issue, so the earlier Public/API
+    # failure remains intact; a specific Browser failure becomes the primary
+    # result while every earlier route still has its own debug event.
+    issue = blocking[-1] if blocking else item.route_issues[-1]
     item.failure = issue.failure
     item.disposition = {
         RouteOutcome.DEFERRED: WorkItemDisposition.DEFERRED,

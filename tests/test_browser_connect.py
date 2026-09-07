@@ -22,11 +22,11 @@ class _Binding:
     tls_server_name: str
 
 
-def _binding(address: str = "127.0.0.1") -> _Binding:
+def _binding(address: str = "127.0.0.1", *, port: int = 443) -> _Binding:
     return _Binding(
         scheme="https",
         hostname="publisher.example",
-        port=443,
+        port=port,
         address=address,
         verified_addresses=(address,),
         authority="publisher.example",
@@ -125,6 +125,35 @@ class BrowserConnectProxyLaneTests(unittest.TestCase):
             response = client.recv(4096)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 403 Forbidden"))
+
+    def test_active_lane_connect_waits_for_request_route_authorization(self) -> None:
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        upstream.bind(("127.0.0.1", 0))
+        upstream.listen(1)
+        self.addCleanup(upstream.close)
+        upstream_port = upstream.getsockname()[1]
+        token = object()
+        self.proxy.begin_lane(token)
+        parsed = urlsplit(self.proxy.server_url)
+        self.assertIsNotNone(parsed.port)
+
+        with socket.create_connection(("127.0.0.1", parsed.port or 0), timeout=1.0) as client:
+            client.sendall(
+                f"CONNECT publisher.example:{upstream_port} HTTP/1.1\r\n"
+                f"Host: publisher.example:{upstream_port}\r\n\r\n".encode("ascii")
+            )
+            client.settimeout(0.1)
+            with self.assertRaises(socket.timeout):
+                client.recv(4096)
+
+            self.proxy.authorize(token, _binding(port=upstream_port))
+            client.settimeout(1.0)
+            response = client.recv(4096)
+
+        accepted, _address = upstream.accept()
+        accepted.close()
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 Connection Established"))
+        self.assertTrue(self.proxy.end_lane(token))
 
     def test_close_cleans_listener_connections_and_workers_idempotently(self) -> None:
         token = object()

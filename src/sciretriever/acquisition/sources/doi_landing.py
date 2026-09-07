@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from typing import Final
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from sciretriever.acquisition.planning import DoiLandingResolution
 from sciretriever.acquisition.ports import AcquisitionFailure, AcquisitionSourceFailure
@@ -99,7 +99,19 @@ def _resolution_from_response(result: TransportResponse) -> DoiLandingResolution
         if location is None:
             raise AcquisitionSourceFailure(_status_failure(retryable=False))
         try:
-            canonical = normalize_url(urljoin(result.final_url, location))
+            target = urljoin(result.final_url, location)
+            parsed = urlsplit(target)
+            if parsed.scheme.casefold() == "http":
+                target = urlunsplit(
+                    (
+                        "https",
+                        parsed.netloc,
+                        parsed.path,
+                        parsed.query,
+                        parsed.fragment,
+                    )
+                )
+            canonical = normalize_url(target)
         except (PolicyError, TypeError, ValueError):
             raise AcquisitionSourceFailure(_network_failure(retryable=False)) from None
         if canonical.origin.text in _DOI_RESOLVER_ORIGINS:

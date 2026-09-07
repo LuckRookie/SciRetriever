@@ -45,13 +45,13 @@ Copyright 2024-2026 scansci-pdf contributors
 
 | 抽象理念 | 可接受的 SciRetriever 表达 | 不能继承的上游事实 |
 | --- | --- | --- |
-| Publisher/access platform 识别 | 使用强弱证据形成无副作用 `PublisherAccessResolution` | 不能按 DOI prefix 或 publisher 字符串直接猜生产 route |
-| Publisher Profile | 版本化 origin allowlist、stable ID、capability、policy/session group | 不能把上游 profile、selector 或模板整体复制为已核实 catalog |
-| Browser context reuse | 一个 operator-managed 持久身份 Profile、当前对象图内一个共享有头 process/context、无 GUI Linux 的 Xvfb 与进程内 Publisher-lane broker | 不接受任意外部 Profile 路径或 Cookie 导入，不读取/导出认证内容，不使用跨进程文件队列；跨命令认证状态只由 Chrome 留在本地 Profile |
+| Publisher/access platform 识别 | 使用强弱证据形成无副作用 `PublisherAccessResolution`，只服务 Public/API 与可选首页 probe | 不能按 DOI prefix 或 publisher 字符串决定 `browser:generic` 是否可用 |
+| Publisher Profile | 版本化 stable ID、Public/API capability 与 `browser_probe_enabled` | 不能把上游 profile、selector、origin allowlist、页面模板或调度组复制为 Browser 页面程序 |
+| Browser context reuse | 一个 operator-managed 持久身份 Profile、当前对象图内一个共享有头 process/context、无 GUI Linux 的 Xvfb 与单一 `browser-generic` 调度 | 不接受任意外部 Profile 路径或 Cookie 导入，不读取/导出认证内容，不使用跨进程文件队列；跨命令认证状态只由 Chrome 留在本地 Profile |
 | 页面状态分类 | login、entitlement、paywall、MFA、challenge 的安全有限状态 | 不自动绕过 CAPTCHA、Cloudflare 或 MFA，不自动选择机构 |
 | 多路 PDF 捕获 | 已准入的 download、response、popup、viewer target | 不捕获任意 origin 的 PDF，不执行任意 JavaScript |
 | Verification matrix | 统一证据包、fixture 与明确 production state | 不继承上游 success/failed/unsupported verdict |
-| Health summary | 仅显示生产 route、总开关、Profile identity/presence、Playwright/Chromium readiness 与 action-required 的安全摘要 | 不检查 Chromium Cookie/登录内容，不声称 Profile 已认证、IP 或具体文章 entitlement |
+| Health summary | 仅显示唯一 `browser:generic`、总开关、Model、Profile identity/presence、Playwright/CloakBrowser readiness 与 action-required 的安全摘要 | 不检查 Chromium Cookie/登录内容，不声称 Profile 已认证、IP 或具体文章 entitlement |
 
 ### 3.2 可以评估实质移植，但必须逐项归属
 
@@ -85,7 +85,7 @@ Copyright 2024-2026 scansci-pdf contributors
 - 跨进程文件队列 Browser broker；
 - 固定 PDF 最小字节、页数或正文阈值；
 - `_core/` 的 proprietary Cython 源、预编译扩展或其反向工程结果；
-- 根据 DOI prefix、publisher 文本或未核实历史结果直接猜生产 route。
+- 根据 DOI prefix、publisher 文本或未核实历史结果直接创建文章起点或绕过通用 Browser admission。
 
 ## 4. 上游 verification matrix 的证据边界
 
@@ -95,9 +95,9 @@ Copyright 2024-2026 scansci-pdf contributors
 
 - ScanSci 的成功项不能直接进入 production registry；
 - ScanSci 的失败或 unsupported 项也不能替代 SciRetriever 的独立审查；
-- 只有上游页面画像、没有 SciRetriever 自己的封闭规则与离线执行证据时，最多是 `fixture-verified`，证据不足则为 `unsupported`；
-- production-ready 必须满足 P55 统一接入门，并以官方事实、SciRetriever 离线 fixture、生产对象图和固定风险政策为依据；Browser 总开关只允许已审查 route 做逐文章尝试，不证明组织授权或文章 entitlement；
-- fixture 只能证明规则和安全状态机，不证明用户账号 entitlement、真实站点稳定性或成功率。
+- 只有上游页面画像、没有 SciRetriever 自己的 Profile evidence 时，最多是 `fixture-verified`，证据不足则为 `unsupported`；这只影响访问画像与首页 probe，不阻止合法文章起点进入 `browser:generic`；
+- production-ready Profile 必须满足统一接入门，并以官方事实、SciRetriever 离线 fixture 和生产对象图为依据；Browser 总开关只启用通用 route，不证明组织授权或文章 entitlement；
+- fixture 只能证明通用 Observation/action/capture/identity 合同或 Profile probe，不证明用户账号 entitlement、真实站点稳定性或成功率。
 
 ## 5. 后续迁移登记流程
 

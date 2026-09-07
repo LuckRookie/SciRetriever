@@ -39,7 +39,7 @@ from sciretriever.network.browser_scheduler import (
 from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 
 _ACCESS_KEY = "fixture-publisher"
-_GROUP = "fixture-publisher"
+_GROUP = "browser-generic"
 _BROWSER_VERSION = "146.0.7680.177.5"
 _READY_LOCAL_STATUS = (
     True,
@@ -110,9 +110,9 @@ def _approved_status() -> BrowserAccessStatus:
         runtime_failure_threshold=2,
     )
     route = BrowserRouteStatus(
-        access_key=_ACCESS_KEY,
-        display_name="Fixture Publisher",
-        route_key="browser:fixture-publisher",
+        access_key="generic",
+        display_name="Generic Browser",
+        route_key="browser:generic",
         rate_limit_group=_GROUP,
         policy=policy,
     )
@@ -208,7 +208,7 @@ class _ScheduledFixtureBrowserProbe:
 
 
 class BrowserConfigurationStatusTests(unittest.TestCase):
-    def test_production_status_has_nine_persistent_profile_routes(self) -> None:
+    def test_production_status_has_one_generic_agent_route(self) -> None:
         status = _browser_status(Configuration())
 
         self.assertTrue(status.runtime.cloak_wrapper_available)
@@ -218,35 +218,15 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
         self.assertTrue(status.runtime.fixed_identity_manifest)
         self.assertTrue(status.runtime.headed_display_available)
         self.assertFalse(status.runtime.launch_assessed)
-        self.assertEqual(status.production_route_count, 9)
-        self.assertEqual(status.automatic_route_count, 9)
+        self.assertEqual(status.production_route_count, 1)
+        self.assertEqual(status.automatic_route_count, 1)
         self.assertEqual(
             tuple(route.access_key for route in status.routes),
-            (
-                "acs-publications",
-                "aip-publishing",
-                "elsevier-sciencedirect",
-                "iopscience",
-                "oxford-academic",
-                "rsc-publishing",
-                "science-aaas",
-                "springerlink",
-                "wiley-online-library",
-            ),
+            ("generic",),
         )
         self.assertEqual(
             tuple(route.rate_limit_group for route in status.routes),
-            (
-                "acs-publications",
-                "aip-publishing",
-                "elsevier",
-                "iopscience",
-                "oxford-academic",
-                "rsc-publishing",
-                "science-aaas",
-                "springerlink",
-                "wiley",
-            ),
+            ("browser-generic",),
         )
         self.assertTrue(all(route.automatic_acquisition_eligible for route in status.routes))
         self.assertFalse(status.automatic_acquisition_available)
@@ -265,9 +245,9 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
             status = _browser_status(
                 Configuration.model_validate(
                     {
-                        "access": {
-                            "browser_enabled": True,
-                            "browser_profile": "fixture-profile",
+                        "browser": {
+                            "enabled": True,
+                            "profile": "fixture-profile",
                         }
                     }
                 ),
@@ -281,7 +261,7 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
             ("browser-session-not-assessed",),
         )
         self.assertNotIn("machine_access", rendered.casefold())
-        self.assertNotIn("profile_path", rendered.casefold())
+        self.assertNotIn("browser_profile_path", rendered.casefold())
         self.assertNotIn("cookie", rendered.casefold())
         self.assertEqual(status.profile.selected, "fixture-profile")
         self.assertIs(status.profile.presence, BrowserProfilePresence.CONFIGURED)
@@ -295,9 +275,9 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
             status = _browser_status(
                 Configuration.model_validate(
                     {
-                        "access": {
-                            "browser_enabled": True,
-                            "browser_profile": "fixture-profile",
+                        "browser": {
+                            "enabled": True,
+                            "profile": "fixture-profile",
                         }
                     }
                 ),
@@ -319,9 +299,9 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
             status = _browser_status(
                 Configuration.model_validate(
                     {
-                        "access": {
-                            "browser_enabled": True,
-                            "browser_profile": "fixture-profile",
+                        "browser": {
+                            "enabled": True,
+                            "profile": "fixture-profile",
                         }
                     }
                 ),
@@ -341,8 +321,8 @@ class BrowserConfigurationStatusTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(status.production_route_count, 9)
-        self.assertEqual(status.automatic_route_count, 9)
+        self.assertEqual(status.production_route_count, 1)
+        self.assertEqual(status.automatic_route_count, 1)
         self.assertTrue(status.automatic_acquisition_available)
         self.assertEqual(
             tuple(item.code for item in status.action_required),

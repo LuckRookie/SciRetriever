@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from typing import cast
 
 import sciretriever.agents.api as agents_api
@@ -24,12 +26,14 @@ from sciretriever.agents.api import (
     AgentToolDeclaration,
     AgentUsage,
 )
+from sciretriever.agents.debug import AgentDebugImageRecorder
 from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.agents.providers.anthropic import AnthropicMessagesAdapter
 from sciretriever.agents.providers.openai_chat import OpenAIChatCompletionsAdapter
 from sciretriever.agents.providers.openai_responses import OpenAIResponsesAdapter
 from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json
 from sciretriever.model.access import Header, TransportRequest
+from sciretriever.model.configuration import AgentReasoningEffort
 from sciretriever.model.primitives import Sha256, sha256_digest
 from sciretriever.network.admission import AccessCoordinator
 from sciretriever.network.http import HttpClient
@@ -205,13 +209,22 @@ def _chat_wire() -> bytes:
     ).encode()
 
 
-def _provenance(*, output_tokens: int = 1, response_bytes: int = 1) -> AgentProvenance:
+def _provenance(
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 1,
+    response_bytes: int = 1,
+) -> AgentProvenance:
     return AgentProvenance(
         provider="fixture-agent",
         model=_MODEL,
         input_sha256=_HASH,
         parameters_sha256=sha256_digest(b"fixture-parameters"),
-        usage=AgentUsage(output_tokens=output_tokens, response_bytes=response_bytes),
+        usage=AgentUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            response_bytes=response_bytes,
+        ),
     )
 
 
@@ -241,6 +254,35 @@ class _FakePort:
         if self.result is not None:
             return cast(AgentStructuredResult, self.result)
         return AgentStructuredResult(result='{"ok":true}', provenance=_provenance())
+
+
+class _RolePort:
+    def __init__(self, provider_name: str) -> None:
+        self.provider_name = provider_name
+        self.calls: list[AgentProviderCall] = []
+
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult | AgentToolCall:
+        self.calls.append(call)
+        provenance = AgentProvenance(
+            provider=self.provider_name,
+            model=call.model,
+            input_sha256=call.input_sha256,
+            parameters_sha256=sha256_digest(b"role-port-parameters"),
+            usage=AgentUsage(input_tokens=4, output_tokens=1, response_bytes=16),
+        )
+        if AgentCapability.TOOL_DECISION in call.capabilities:
+            return AgentToolCall(tool_name="click", arguments="{}", provenance=provenance)
+        return AgentStructuredResult(result='{"ok":true}', provenance=provenance)
+
+
+class _ExplodingPort:
+    provider_name = "safe-provider"
+
+    def execute(self, call: AgentProviderCall) -> AgentStructuredResult:
+        del call
+        raise RuntimeError(
+            "adapter-secret https://provider.invalid/private?token=credential-sentinel"
+        )
 
 
 class AgentValueTests(unittest.TestCase):
@@ -375,6 +417,36 @@ class AgentRuntimeTests(unittest.TestCase):
             max_image_bytes=64,
         )
 
+    @staticmethod
+    def _image_call(
+        *,
+        media_type: str = "image/png",
+        data: bytes = b"image-fixture",
+    ) -> AgentCall:
+        return AgentCall(
+            role=AgentRole.ANALYSIS,
+            required_capabilities=frozenset(
+                {AgentCapability.STRUCTURED_TEXT, AgentCapability.IMAGE_INPUT}
+            ),
+            input_sha256=_HASH,
+            text_parts=(AgentTextPart(media_type="text/plain", text="image instruction"),),
+            image_parts=(AgentImagePart(media_type=media_type, data=data, width=32, height=24),),
+            response_schema=_SCHEMA,
+            max_output_tokens=1,
+        )
+
+    @staticmethod
+    def _image_capabilities(media_types: frozenset[str]) -> AgentModelCapabilities:
+        return AgentModelCapabilities(
+            context_window_tokens=4_096,
+            max_output_tokens=128,
+            structured_output=True,
+            image_input=True,
+            supported_image_media_types=media_types,
+            max_image_count=1,
+            max_image_bytes=1_024,
+        )
+
     def test_role_binding_owns_model_identity_while_call_has_no_model(self) -> None:
         decomposed = "fixture-e\u0301-model"
         normalized = "fixture-\u00e9-model"
@@ -436,6 +508,76 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.readiness(AgentRole.ANALYSIS).ready)
         self.assertTrue(runtime.readiness(AgentRole.BROWSER).ready)
 
+    def test_role_identity_and_logs_use_each_roles_actual_provider_and_model(self) -> None:
+        analysis_port = _RolePort("analysis-provider")
+        browser_port = _RolePort("browser-provider")
+        runtime = AgentRuntime(
+            analysis_adapter=analysis_port,
+            browser_adapter=browser_port,
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model="analysis-model",
+                capabilities=self._analysis_capabilities(),
+                reasoning_effort=AgentReasoningEffort.MAX,
+                stream=False,
+            ),
+            browser=AgentRoleBinding(
+                role=AgentRole.BROWSER,
+                model="browser-model",
+                capabilities=self._browser_capabilities(),
+                reasoning_effort=AgentReasoningEffort.HIGH,
+            ),
+        )
+
+        analysis_identity = runtime.identity(AgentRole.ANALYSIS)
+        browser_identity = runtime.identity(AgentRole.BROWSER)
+        self.assertEqual(
+            (analysis_identity.provider, analysis_identity.model),
+            ("analysis-provider", "analysis-model"),
+        )
+        self.assertEqual(
+            (browser_identity.provider, browser_identity.model),
+            ("browser-provider", "browser-model"),
+        )
+
+        browser_call = AgentCall(
+            role=AgentRole.BROWSER,
+            required_capabilities=frozenset(
+                {AgentCapability.IMAGE_INPUT, AgentCapability.TOOL_DECISION}
+            ),
+            input_sha256=_HASH,
+            text_parts=(AgentTextPart(media_type="text/plain", text="decide"),),
+            image_parts=(AgentImagePart(media_type="image/png", data=b"PNG", width=1, height=1),),
+            tools=(AgentToolDeclaration(name="click", input_schema=_TOOL_SCHEMA),),
+            max_output_tokens=1,
+        )
+        with self.assertLogs("sciretriever.agents", level="INFO") as captured:
+            analysis_result = runtime.execute(_runtime_text_call())
+            browser_result = runtime.execute(browser_call)
+
+        self.assertEqual(analysis_result.provenance.provider, "analysis-provider")
+        self.assertEqual(browser_result.provenance.provider, "browser-provider")
+        analysis_lines = [line for line in captured.output if "role=analysis" in line]
+        browser_lines = [line for line in captured.output if "role=browser" in line]
+        self.assertTrue(analysis_lines)
+        self.assertTrue(browser_lines)
+        self.assertTrue(
+            all(
+                "provider=analysis-provider" in line and "wire_model=analysis-model" in line
+                for line in analysis_lines
+            )
+        )
+        self.assertTrue(
+            all(
+                "provider=browser-provider" in line and "wire_model=browser-model" in line
+                for line in browser_lines
+            )
+        )
+        self.assertIn("stream=off", analysis_lines[0])
+        self.assertIn("reasoning_effort=max", analysis_lines[0])
+        self.assertIn("stream=on", browser_lines[0])
+        self.assertIn("reasoning_effort=high", browser_lines[0])
+
     def test_readiness_is_local_and_distinguishes_missing_and_protocol(self) -> None:
         port = _FakePort()
         missing = AgentRuntime(adapter=port)
@@ -447,6 +589,8 @@ class AgentRuntimeTests(unittest.TestCase):
             missing_analysis.missing,
             frozenset({AgentCapability.STRUCTURED_TEXT}),
         )
+        with self.assertRaisesRegex(ValueError, "analysis Agent role is unbound"):
+            missing.identity(AgentRole.ANALYSIS)
 
         undeclared = AgentRuntime(
             adapter=port,
@@ -471,7 +615,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertFalse(disabled_analysis.protocol_supported)
         self.assertEqual(port.calls, [])
 
-    def test_browser_readiness_requires_the_production_observation_media_type(self) -> None:
+    def test_browser_readiness_accepts_a_declared_image_media_type(self) -> None:
         port = _FakePort()
         runtime = AgentRuntime(
             adapter=port,
@@ -492,8 +636,8 @@ class AgentRuntimeTests(unittest.TestCase):
 
         readiness = runtime.readiness(AgentRole.BROWSER)
 
-        self.assertFalse(readiness.ready)
-        self.assertEqual(readiness.missing, frozenset({AgentCapability.IMAGE_INPUT}))
+        self.assertTrue(readiness.ready)
+        self.assertEqual(readiness.missing, frozenset())
         self.assertEqual(port.calls, [])
 
     def test_single_call_limits_and_cancel_type_fail_before_adapter_io(self) -> None:
@@ -569,10 +713,31 @@ class AgentRuntimeTests(unittest.TestCase):
                 ),
             ),
         )
+        result = tiny.execute(_runtime_text_call(max_output_tokens=1))
+        self.assertIsInstance(result, AgentStructuredResult)
+        self.assertEqual(len(port.calls), 1)
+
+        over_context = AgentStructuredResult(
+            result='{"ok":true}',
+            provenance=_provenance(input_tokens=64, output_tokens=1),
+        )
+        checked_port = _FakePort(over_context)
+        checked = AgentRuntime(
+            adapter=checked_port,
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=AgentModelCapabilities(
+                    context_window_tokens=64,
+                    max_output_tokens=1,
+                    structured_output=True,
+                ),
+            ),
+        )
         with self.assertRaises(AgentFailure) as caught:
-            tiny.execute(_runtime_text_call(max_output_tokens=1))
+            checked.execute(_runtime_text_call(max_output_tokens=1))
         self.assertEqual(caught.exception.failure.code, "agent-context-budget")
-        self.assertEqual(port.calls, [])
+        self.assertEqual(len(checked_port.calls), 1)
 
     def test_execute_binds_model_and_cancel_to_one_provider_call(self) -> None:
         port = _FakePort()
@@ -609,6 +774,120 @@ class AgentRuntimeTests(unittest.TestCase):
             runtime.execute(_runtime_text_call(), cancel_event=cancelled)
         self.assertEqual(caught.exception.failure.code, "agent-cancelled")
         self.assertEqual(len(port.calls), 1)
+
+    def test_debug_recorder_saves_exact_runtime_image_bytes_and_manifest(self) -> None:
+        media_types = frozenset({"image/png", "image/jpeg", "image/webp"})
+        with tempfile.TemporaryDirectory(prefix="sciretriever-agent-debug-test-") as temporary:
+            recorder = AgentDebugImageRecorder(temporary)
+            port = _FakePort()
+            runtime = AgentRuntime(
+                adapter=port,
+                analysis=AgentRoleBinding(
+                    role=AgentRole.ANALYSIS,
+                    model=_MODEL,
+                    capabilities=self._image_capabilities(media_types),
+                ),
+                debug_image_recorder=recorder,
+            )
+            payloads = {
+                "image/png": b"PNG-debug-bytes",
+                "image/jpeg": b"JPEG-debug-bytes",
+                "image/webp": b"WEBP-debug-bytes",
+            }
+
+            with self.assertLogs("sciretriever.agents", level="DEBUG") as captured:
+                for media_type, payload in payloads.items():
+                    runtime.execute(self._image_call(media_type=media_type, data=payload))
+
+            rendered_logs = "\n".join(captured.output)
+            self.assertIn("event=agent-debug-image-recorded", rendered_logs)
+            self.assertIn(f"directory_name={Path(temporary).name}", rendered_logs)
+            self.assertNotIn(str(Path(temporary)), rendered_logs)
+
+            directory = recorder.directory
+            manifest = recorder.manifest
+            self.assertIsNotNone(directory)
+            self.assertIsNotNone(manifest)
+            assert directory is not None
+            assert manifest is not None
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+            entries = [
+                json.loads(line)
+                for line in manifest.read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            self.assertEqual(len(entries), len(payloads))
+            for entry in entries:
+                filename = entry["filename"]
+                image_path = directory / filename
+                self.assertEqual(image_path.read_bytes(), payloads[entry["media_type"]])
+                self.assertEqual(image_path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(entry["input_sha256"], _HASH.root)
+                self.assertEqual(
+                    entry["image_sha256"],
+                    sha256_digest(payloads[entry["media_type"]]).root,
+                )
+                self.assertNotIn("model", filename)
+                self.assertNotIn("provider", filename)
+
+    def test_non_debug_runtime_does_not_materialize_image_directory(self) -> None:
+        port = _FakePort()
+        runtime = AgentRuntime(
+            adapter=port,
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=self._image_capabilities(frozenset({"image/png"})),
+            ),
+        )
+        runtime.execute(self._image_call())
+        self.assertEqual(len(port.calls), 1)
+
+    def test_debug_recorder_failure_is_not_an_agent_call_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-agent-debug-test-") as temporary:
+            invalid_directory = Path(temporary) / "not-a-directory"
+            invalid_directory.write_text("fixture", encoding="utf-8")
+            recorder = AgentDebugImageRecorder(invalid_directory)
+            port = _FakePort()
+            runtime = AgentRuntime(
+                adapter=port,
+                analysis=AgentRoleBinding(
+                    role=AgentRole.ANALYSIS,
+                    model=_MODEL,
+                    capabilities=self._image_capabilities(frozenset({"image/png"})),
+                ),
+                debug_image_recorder=recorder,
+            )
+            result = runtime.execute(self._image_call())
+            self.assertIsInstance(result, AgentStructuredResult)
+            self.assertEqual(len(port.calls), 1)
+
+    def test_unexpected_adapter_exception_is_one_redacted_nonretryable_failure(self) -> None:
+        runtime = AgentRuntime(
+            adapter=_ExplodingPort(),
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=self._analysis_capabilities(),
+            ),
+        )
+
+        with self.assertLogs("sciretriever.agents", level="INFO") as captured:
+            with self.assertRaises(AgentFailure) as caught:
+                runtime.execute(_runtime_text_call())
+
+        failure = caught.exception.failure
+        rendered = "\n".join(captured.output)
+        self.assertEqual(failure.code, "agent-internal")
+        self.assertFalse(failure.retryable)
+        self.assertTrue(caught.exception.__suppress_context__)
+        self.assertEqual(rendered.count("event=agent-call-finished"), 1)
+        self.assertIn("provider=safe-provider", rendered)
+        self.assertIn("code=agent-internal", rendered)
+        self.assertNotIn("adapter-secret", rendered)
+        self.assertNotIn("provider.invalid", rendered)
+        self.assertNotIn("credential-sentinel", rendered)
+        self.assertNotIn("adapter-secret", str(caught.exception))
 
     def test_browser_image_media_count_and_bytes_fail_before_adapter_io(self) -> None:
         port = _FakePort()
@@ -914,15 +1193,14 @@ class AgentProviderWireTests(unittest.TestCase):
                 self.assertEqual(result.tool_name, "click")
                 self.assertEqual(result.arguments, "{}")
 
-    def test_request_budget_is_stricter_than_adapter_defaults_and_undeclared_tool_fails(
+    def test_runtime_owns_neutral_budgets_and_adapter_still_rejects_undeclared_tool(
         self,
     ) -> None:
         client, transport = _client(_structured_wire())
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_KEY)
-        with self.assertRaises(AgentFailure) as caught:
-            adapter.execute(_text_request(limits=AgentCallLimits(max_prompt_bytes=4)))
-        self.assertEqual(caught.exception.failure.code, "agent-input-budget")
-        self.assertEqual(transport.calls, [])
+        result = adapter.execute(_text_request(limits=AgentCallLimits(max_prompt_bytes=4)))
+        self.assertIsInstance(result, AgentStructuredResult)
+        self.assertEqual(len(transport.calls), 1)
 
         bad_tool = json.loads(
             json.dumps(
@@ -1204,16 +1482,29 @@ class AgentProviderWireTests(unittest.TestCase):
         self.assertNotIn(response_text, rendered)
         self.assertNotIn(_KEY, rendered)
 
-    def test_pre_transport_budget_failure_still_emits_one_terminal_result_log(self) -> None:
+    def test_runtime_preflight_budget_failure_emits_one_safe_diagnostic(self) -> None:
         client, transport = _client(_structured_wire())
         adapter = OpenAIResponsesAdapter(http_client=client, api_key=_KEY)
+        runtime = AgentRuntime(
+            adapter=adapter,
+            analysis=AgentRoleBinding(
+                role=AgentRole.ANALYSIS,
+                model=_MODEL,
+                capabilities=AgentModelCapabilities(
+                    context_window_tokens=4_096,
+                    max_output_tokens=128,
+                    structured_output=True,
+                ),
+                limits=AgentCallLimits(max_prompt_bytes=4),
+            ),
+        )
 
         with self.assertLogs("sciretriever.agents", level="DEBUG") as captured:
             with self.assertRaises(AgentFailure):
-                adapter.execute(_text_request(limits=AgentCallLimits(max_prompt_bytes=4)))
+                runtime.execute(_runtime_text_call())
 
         terminal = [
-            message for message in captured.output if "event=agent-call-finished" in message
+            message for message in captured.output if "event=agent-call-preflight-failed" in message
         ]
         self.assertEqual(len(terminal), 1)
         self.assertIn("code=agent-input-budget", terminal[0])

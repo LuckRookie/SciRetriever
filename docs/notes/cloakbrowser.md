@@ -160,19 +160,21 @@ PDF 交给原生 download/response 事件。2026-08-22 的 Springer 真实回归
 服务器 attachment 和页面生成的本地 blob download 都只从 Chromium 原生事件捕获，继续经过
 query-free capture guard、请求/字节预算与文章清理，不由 Python 再发一条 PDF HTTP 请求。
 
-截至该日期，离线 unit/实际 fixture 已证明固定 Linux persona、humanized click/Locator seam、
-共享 process/context、CONNECT、Cookie、redirect、iframe、JS fetch、popup、response、blob download、
-native PDF response、预算、timeout、取消和确定性清理。2026-08-22 的固定九家真实串行 A/B 又
+截至该日期，旧 Publisher-specific 执行器的离线 unit/实际 fixture 已证明固定 Linux persona、
+humanized click/Locator seam、共享 process/context、CONNECT、Cookie、redirect、iframe、JS fetch、
+popup、response、blob download、native PDF response、预算、timeout、取消和确定性清理。
+2026-08-22 的固定九家真实串行 A/B 又
 证明：stock 与 Cloak 各自只创建一个 process/context；Springer 两者都取得并验证 PDF；七家
 Cloudflare Publisher 两者都加载 17 个受限资源且本地阻断为 0；IOP 当前两者都未交付，Cloak 对
 未审核 PerfDrive 顶层导航 fail closed 而不破坏共享 runtime。Cloak 的可解释收益是 CBA64 已实测
 的固定 Linux 身份、`webdriver=false`、稳定 Browser surface 和本轮完整 challenge 资源加载，
 不是小样本下载成功率提升。runtime cutover、最终 Full 和使用同一构建产物的 fresh-wheel
-R1-R8 已完成；九家逐家复核将工程规则状态与本次服务器现场结果分开记录。SpringerLink 的
+R1-R8 已完成；九家逐家复核将当时的工程规则状态与服务器现场结果分开记录。SpringerLink 的
 最终现场准入为 `ready`；ACS、AIP、Elsevier、IOP、Oxford、RSC、Science 和 Wiley 为
-`deferred`。`deferred` 不删除已闭环的 production rule，也不冒充全局 unsupported；它只表示
-本轮固定样本没有取得可验证 PDF，必须继续按逐文章 entitlement 和稳定失败语义处理。逐家依据
-见 [Publisher 访问矩阵](providers/publisher-access-matrix.md)。
+`deferred`。这些状态只描述旧执行器的固定样本，不是当前 `browser:generic` 的 route、页面策略
+或成功率证据。当前通用执行器仍复用这里已经证明的 CloakBrowser runtime 基础，但由 Agent 选择
+封闭动作，并由 Acquisition 独立验证 PDF 与目标文章归属。逐家历史依据见
+[Publisher 访问矩阵](providers/publisher-access-matrix.md)。
 
 CloakBrowser 降低自动化表面，但它不保证 Cloudflare 自动完成，也不改变文章 entitlement。
 

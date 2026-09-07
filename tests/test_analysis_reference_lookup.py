@@ -394,22 +394,31 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
             identifiers=[{"namespace": "doi", "value": "10.1000/x", "extra": True}],
         )
         wrong_author = _lookup(0, title="Explicit Title", authors=[7])
-        cases: tuple[object, ...] = (
-            [],
-            {},
-            {"lookups": [valid], "extra": None},
-            {"lookups": valid},
-            {"lookups": [{"reference_index": 0, "title": "Explicit Title"}]},
-            {"lookups": [wrong_identifier]},
-            {"lookups": [wrong_author]},
-            {"lookups": [_lookup(True, title="Explicit Title")]},
-            {"lookups": [_lookup(0, title=cast(str, 42))]},
+        cases: tuple[tuple[object, str], ...] = (
+            ([], "agent-structured-response"),
+            ({}, "analysis-reference-structure"),
+            ({"lookups": [valid], "extra": None}, "analysis-reference-structure"),
+            ({"lookups": valid}, "analysis-reference-structure"),
+            (
+                {"lookups": [{"reference_index": 0, "title": "Explicit Title"}]},
+                "analysis-reference-structure",
+            ),
+            ({"lookups": [wrong_identifier]}, "analysis-reference-structure"),
+            ({"lookups": [wrong_author]}, "analysis-reference-structure"),
+            (
+                {"lookups": [_lookup(True, title="Explicit Title")]},
+                "analysis-reference-structure",
+            ),
+            (
+                {"lookups": [_lookup(0, title=cast(str, 42))]},
+                "analysis-reference-structure",
+            ),
         )
-        for value in cases:
+        for value, expected_code in cases:
             with self.subTest(value_type=type(value).__name__):
                 llm = _FakeLLM([json.dumps(value)])
                 failure = self._failure(lambda: _stage(llm).extract(("Explicit Title",)))
-                self.assertEqual(failure.failure.code, "analysis-reference-structure")
+                self.assertEqual(failure.failure.code, expected_code)
 
     def test_duplicate_keys_nonfinite_values_and_malformed_json_are_rejected(self) -> None:
         cases = (
@@ -421,7 +430,7 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         for response in cases:
             with self.subTest(response=response[:16]):
                 failure = self._failure(lambda: _stage(_FakeLLM([response])).extract(("Title",)))
-                self.assertEqual(failure.failure.code, "analysis-reference-structure")
+                self.assertEqual(failure.failure.code, "agent-structured-response")
                 self.assertNotIn(response, repr(failure))
 
     def test_indices_must_cover_the_input_once_in_stable_order(self) -> None:
@@ -559,18 +568,20 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
         cases: tuple[
             tuple[
                 str | BaseException | Callable[[AgentProviderCall], AgentStructuredResult],
+                str,
                 bool,
             ],
             ...,
         ] = (
-            (provider_failure, False),
-            (RuntimeError(_RESPONSE_SENTINEL), True),
+            (provider_failure, "agent-refusal", False),
+            (RuntimeError(_RESPONSE_SENTINEL), "agent-internal", False),
             (
                 lambda call: _response_for(
                     call,
                     _payload(_lookup(0, title="Explicit Title")),
                     provider="different-provider",
                 ),
+                "agent-protocol",
                 False,
             ),
             (
@@ -579,6 +590,7 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
                     _payload(_lookup(0, title="Explicit Title")),
                     model="different-model",
                 ),
+                "agent-model-mismatch",
                 False,
             ),
             (
@@ -587,17 +599,18 @@ class AnalysisReferenceLookupTests(unittest.TestCase):
                     _payload(_lookup(0, title="Explicit Title")),
                     input_sha256=Sha256("f" * 64),
                 ),
+                "agent-protocol",
                 False,
             ),
         )
-        for action, retryable in cases:
+        for action, expected_code, retryable in cases:
             with self.subTest(action=type(action).__name__):
                 failure = self._failure(
                     lambda: _stage(_FakeLLM([action])).extract(
                         (f"Explicit Title {_REFERENCE_SENTINEL}",)
                     )
                 )
-                self.assertEqual(failure.failure.code, "analysis-reference-llm")
+                self.assertEqual(failure.failure.code, expected_code)
                 self.assertEqual(failure.failure.retryable, retryable)
                 rendered = f"{failure!r}\n{failure}\n{failure.failure!r}"
                 self.assertNotIn(_REFERENCE_SENTINEL, rendered)

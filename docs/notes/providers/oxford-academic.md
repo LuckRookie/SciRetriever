@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；Oxford Academic 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://academic.oup.com`
-- 当前仓库接入状态：`production-ready`；无专属 Public 或授权 API route，已注册使用所选持久 Profile 的 Browser route `browser:oxford-academic`
+- 当前仓库接入状态：`production-ready` Profile；无专属 Public 或授权 API route；Profile 只启用首页可达性 probe，真实文章统一使用 `browser:generic`
 
 ## 1. 官方入口与本轮证据边界
 
@@ -59,13 +59,16 @@ ScanSci 记录过 Oxford journal-specific article path、`/article-pdf/`、`/doi
 该结果依赖上游项目的 Browser profile/Cookie 体系，且单个成功不能证明文章是否 OA、机构 entitlement、
 长期 URL 合同或批量自动访问权。SciRetriever 不复制 Cookie、CARSI、selector、URL 改写或 verdict。
 
-当前生产规则 `oxford-academic-pdf@3` 只接受强 DOI/Oxford landing，精确允许
-`https://academic.oup.com`，从 `/doi/pdf/`、`/doi/epdf/` 或 `/article-pdf/` 的 response/download
-捕获候选，并排除 supplement、chapter/front matter 和 wrong-article。规则包含封闭的
-entitlement/paywall、login、MFA/challenge、rate/IP/account-warning 页面状态；Challenge 由作业
-开始前选定的 Rules 或 Agent controller 按统一页面合同继续处理，登录/MFA 页面仍识别后停止。Browser 使用当前机器网络
-出口，以及共享 persistent Profile/context 中独立的
-`oxford-academic` lane；自动流程不导入或读取 Cookie，也不执行认证。
+当前实现没有 Oxford 专属 Browser route、rule、selector 或调度组。可信 Oxford landing/asset
+hint 或安全 DOI resolve 形成文章起点后统一进入 `browser:generic`；Agent 根据稳定页面观察选择
+封闭动作，Network 负责页面稳定与 capture，Acquisition 再用目标 DOI、标题、作者、起点 lineage
+和 PDF 字节排除 supplement、chapter/front matter 与 wrong-article。Profile 的
+`browser_probe_enabled = true` 只允许配置中心打开 Oxford 首页检查 runtime/目标可达，不下载
+正文或证明 entitlement。自动流程不导入或读取 Cookie，也不执行认证。
+
+以下 Revision 3、`oxford-academic-pdf@*`、Oxford lane 和 Challenge 子生命周期描述均是
+2026-08-21 至 2026-08-22 旧规则执行器的历史证据；它们不是当前 runtime 合同，不能证明
+`browser:generic` 的成功率。
 
 Revision 3 的新增证据日期为 2026-08-21，只为 Oxford Academic 规则声明受限的 Cloudflare
 dependency：精确 origin `https://challenges.cloudflare.com`、path prefix
@@ -75,9 +78,9 @@ dependency：精确 origin `https://challenges.cloudflare.com`、path prefix
 能给出发起与用途证明时才可加载，不能作为初始/任意顶层导航、popup、PDF locator 或 capture
 source。这里记录的 `resource-blocked`、`settling`、`cleared`、`interaction-required` 与
 `settle-timeout` 是 2026-08-21 旧 Challenge 子生命周期的历史 fixture 词汇，不是当前运行合同。
-当前 Rules 只执行已审查动作，Agent 可以使用统一元素/坐标点击；controller 停止时仍为 Challenge
-形成文章级 `challenge-unresolved`，不会打开 Challenge group circuit。该封闭规则和本地 fixture
-只证明程序没有自行挡住必要资源，不证明当前 IP、机构合同或文章 entitlement。
+旧执行器只执行当时已审查的动作，并在 controller 停止时形成文章级
+`challenge-unresolved`。这些 fixture 只证明旧程序没有自行挡住必要资源，不证明当前 IP、机构
+合同、文章 entitlement 或当前通用 Agent 的行为。
 
 2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
 均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
@@ -85,12 +88,12 @@ Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它�
 权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
 
 CBA72 将 Oxford Academic 的本次服务器现场准入记为 `deferred`。这不降低其
-`production-ready` 工程状态、不删除生产 rule，也不等于其它机构/Profile 全局 unsupported；
-它只表示固定代表样本停在持续自动验证且没有可验证 PDF。
+`production-ready` Profile 状态，也不等于其它机构/Profile 全局 unsupported；它只表示固定
+代表样本在旧执行器中停在持续自动验证且没有可验证 PDF。
 
-该 route 的 `production-ready` 表示 Profile/rule/policy、合成 fixture、生产对象图和安全测试
-闭环；不表示当前 IP、机构协议或任意文章 entitlement 已经在线证明。官方未发布数值 pacing 和
-live entitlement 未核实仍作为 evidence gap 保留。
+Profile 的 `production-ready` 表示访问画像、证据 fixture 与首页 probe 合同闭环；不表示
+Oxford 拥有专属 Browser 下载实现，也不表示当前 IP、机构协议或任意文章 entitlement 已经在线
+证明。官方未发布数值 pacing 和 live entitlement 未核实仍作为 evidence gap 保留。
 
 ## 4. 共享平台不等于共享风险域
 
@@ -103,9 +106,9 @@ Oxford Academic 与 AIP Publishing 的 robots 路径、登录/下载端点名称
 - WAF/account-warning、quota 或 Browser article pacing；
 - primary/supplement 归属、产品许可或现场运营策略。
 
-所以两个 Profile 使用独立 `platform_key`、origin 与 risk/session group。Oxford 与 AIP 的
-production route 分别接受总开关、各自调度和逐文章检查；未来证据变化也必须分别评估，不能仅按
-底层技术名称合并或跨 origin 携带 credential。
+所以两个 Profile 使用独立 `platform_key` 与 origin，并分别保留外部政策证据；它们都不拥有
+Browser group 或页面程序。未来证据变化也必须分别评估，不能仅按底层技术名称跨 origin 携带
+credential 或推导 entitlement。
 
 ## 5. 资产归属与当前实现
 
@@ -114,13 +117,13 @@ production route 分别接受总开关、各自调度和逐文章检查；未来
 路径中出现 `article-pdf` 或 DOI suffix 只是一项 locator 线索，不替代实际字节、页面树和文章
 身份验证。
 
-secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，生产规则位于
-`src/sciretriever/acquisition/sources/browser_rules/providers/oxford.py`，唯一 fixture 为
-`tests/fixtures/acquisition/profiles/oxford-academic.json`。Fixture 证明弱/强 DOI 边界、无专属
-API route、共享平台不共享 risk/session、正文/supplement/错文归属、Publisher lane 调度与上游
-Browser success 非授权证据；测试 Profile 只位于系统临时目录，不保存真实 DOI、正文、Cookie、
-账号、机构或 Browser Profile 内容。
+secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，唯一 Profile fixture
+为 `tests/fixtures/acquisition/profiles/oxford-academic.json`。Fixture 证明弱/强 DOI 边界、无
+专属 API route、首页 probe 与上游 Browser success 非授权证据；不再保存页面规则、调度组或
+文章下载准入，测试 Profile 也不保存真实 DOI、正文、Cookie、账号、机构或 Browser Profile
+内容。
 
-Profile 和 `oxford-academic-pdf@3` 已进入 production catalog，但只在 Public/API 正常结束、强
-访问方证据成立、Browser 显式启用且 runtime 就绪时启动。它不新增 Oxford credential section；
-无权限或未命中时仍可由用户独立手动接纳 PDF。
+Profile 已进入 production catalog，但只为访问画像解析和首页 probe 提供事实。真实文章只有在
+Public/API 正常结束、强起点证据成立、Browser 显式启用且 runtime 就绪时进入
+`browser:generic`。它不新增 Oxford credential section；无权限或未命中时仍可由用户独立手动
+接纳 PDF。

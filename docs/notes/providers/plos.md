@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；PLOS 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://journals.plos.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；通用显式 Public hint 会使用 `plos/web` 共享 scope 和 30 秒最小启动间隔，无专属 locator/API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；通用显式 Public hint 会使用 `plos/web` 共享 scope 和 30 秒最小启动间隔，无专属 locator/API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方开放获取与机器入口
 

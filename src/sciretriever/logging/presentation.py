@@ -70,7 +70,6 @@ _FIELD_PRIORITY: Final[dict[str, int]] = {
             "provider_group",
             "browser_rate_limit_group",
             "route_key",
-            "browser_rule_id",
             "work_key",
             "attempt_key",
             "candidate_id",

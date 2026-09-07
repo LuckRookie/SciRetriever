@@ -533,7 +533,6 @@ class AcquisitionPublicationTests(unittest.TestCase):
         validated = validate_pdf(
             io.BytesIO(payload),
             staging=self.environment.pdf_validation_staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         )
         published = self._validated_publisher(id_index=2).publish_validated_primary_pdf(
@@ -559,7 +558,6 @@ class AcquisitionPublicationTests(unittest.TestCase):
         validated = validate_pdf(
             io.BytesIO(payload),
             staging=self.environment.pdf_validation_staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         )
         real_close = validated.close
@@ -596,7 +594,6 @@ class AcquisitionPublicationTests(unittest.TestCase):
         validated = validate_pdf(
             io.BytesIO(payload),
             staging=self.environment.pdf_validation_staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         )
         self.addCleanup(validated.close)

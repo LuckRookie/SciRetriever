@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；IEEE Xplore 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://ieeexplore.ieee.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；已记录 Full-Text Access API 方向，但无可执行授权 PDF API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；已记录 Full-Text Access API 方向，但无可执行授权 PDF API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方入口与证据
 
@@ -49,7 +49,7 @@ viewer:  /stamp/stamp.jsp?...&arnumber={arnumber}
 
 ## 4. Browser 结论
 
-当前没有生产 Browser rule：
+当前证据不足以建立 IEEE 专属 Browser 页面程序或首页 probe：
 
 - 官方自动访问方向是经过许可的 API，而非可自由批量执行的 article Browser；
 - 没有公开的 Browser article interval/window、共享 risk/session group 或 session lifetime；

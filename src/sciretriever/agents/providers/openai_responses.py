@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from typing import Final
+
 from sciretriever.agents.calls import AgentCallLimits
 from sciretriever.agents.ports import AgentProviderCall
 from sciretriever.agents.providers.base import (
@@ -16,6 +19,7 @@ from sciretriever.agents.providers.base import (
 )
 from sciretriever.agents.providers.sse import parse_sse_events
 from sciretriever.agents.tools import canonical_json_bytes, parse_strict_json_object
+from sciretriever.logging.api import get_logger
 from sciretriever.model.access import Header
 from sciretriever.model.configuration import AgentReasoningEffort
 from sciretriever.network.admission import AccessPolicy
@@ -23,6 +27,11 @@ from sciretriever.network.http import HttpClient
 
 _PROVIDER_NAME = "openai"
 _PROTOCOL_REVISION = "responses-v1"
+_SAFE_EVENT_TYPE: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z][a-z0-9_.-]{0,127}$",
+    re.ASCII,
+)
+_LOGGER = get_logger("sciretriever.agents")
 
 
 class OpenAIResponsesAdapter(ProviderHttpAdapterBase):
@@ -156,17 +165,17 @@ def _validate_response_root(
     """Validate the terminal Responses object reconstructed from SSE."""
 
     if not isinstance(root, dict):
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-not-object")
     if root.get("object") != "response":
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-object")
     status = root.get("status")
     if status == "incomplete":
         details = root.get("incomplete_details")
         if isinstance(details, dict) and details.get("reason") == "max_output_tokens":
             raise provider_failure("truncated")
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-incomplete")
     if status != "completed":
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-status")
     if root.get("model") != call.model:
         raise provider_failure("model-mismatch")
     return root
@@ -190,29 +199,29 @@ def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
     for event in events:
         event_name, data = event.event, event.data
         if terminal is not None:
-            raise provider_failure("protocol")
+            raise _protocol_failure("event-after-terminal")
         try:
             payload = parse_strict_json_object(data)
         except (TypeError, ValueError):
-            raise provider_failure("protocol") from None
+            raise _protocol_failure("event-json") from None
         payload_type = payload.get("type")
         if type(payload_type) is not str:
-            raise provider_failure("protocol")
+            raise _protocol_failure("event-type")
         if event_name is not None and event_name != payload_type:
-            raise provider_failure("protocol")
+            raise _protocol_failure("event-name-mismatch")
         event_type = payload_type
 
         if event_type == "response.output_item.done":
             index = _event_index(payload.get("output_index"))
             item = payload.get("item")
             if index in output_items or not isinstance(item, dict):
-                raise provider_failure("protocol")
+                raise _protocol_failure("output-item-done")
             # Re-encode and parse to apply the same finite/depth/key checks to
             # nested item data that a complete JSON response receives.
             try:
                 output_items[index] = parse_strict_json_object(canonical_json_bytes(item))
             except (TypeError, ValueError):
-                raise provider_failure("protocol") from None
+                raise _protocol_failure("output-item-json") from None
             continue
 
         if event_type == "response.output_text.done":
@@ -221,7 +230,7 @@ def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
             value = payload.get("text")
             key = (output_index, content_index)
             if type(value) is not str or key in completed_text:
-                raise provider_failure("protocol")
+                raise _protocol_failure("output-text-done")
             completed_text[key] = value
             continue
 
@@ -232,15 +241,23 @@ def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
         }:
             response = payload.get("response")
             if not isinstance(response, dict):
-                raise provider_failure("protocol")
+                raise _protocol_failure("terminal-response")
             try:
                 terminal = parse_strict_json_object(canonical_json_bytes(response))
             except (TypeError, ValueError):
-                raise provider_failure("protocol") from None
+                raise _protocol_failure("terminal-json") from None
             continue
 
         if event_type == "error":
             raise provider_failure("remote-service")
+
+        if event_type == "keepalive":
+            # Some OpenAI-compatible gateways emit an explicitly typed JSON
+            # keepalive while a long reasoning response is in progress.  It
+            # carries no Responses output and only extends the transport
+            # lifetime; all other non-``response.*`` extensions still fail
+            # closed below.
+            continue
 
         if event_type.startswith("response."):
             # Responses streams include lifecycle and delta events such as
@@ -252,28 +269,28 @@ def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
             # complete value consumed by SciRetriever.
             continue
 
-        raise provider_failure("protocol")
+        raise _protocol_failure("unknown-event", event_type=event_type)
 
     if terminal is None:
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-missing")
     if done_seen and not events:
-        raise provider_failure("protocol")
+        raise _protocol_failure("done-without-events")
 
     terminal_output = terminal.get("output")
     if not isinstance(terminal_output, list):
-        raise provider_failure("protocol")
+        raise _protocol_failure("terminal-output")
     completed_items = [output_items[index] for index in sorted(output_items)]
     if terminal_output and completed_items:
         try:
             if canonical_json_bytes(terminal_output) != canonical_json_bytes(completed_items):
-                raise provider_failure("protocol")
+                raise _protocol_failure("terminal-output-mismatch")
         except (TypeError, ValueError):
-            raise provider_failure("protocol") from None
+            raise _protocol_failure("terminal-output-json") from None
     elif not terminal_output and completed_items:
         terminal = {**terminal, "output": completed_items}
     elif not terminal_output and completed_text:
         if set(completed_text) != {(0, 0)}:
-            raise provider_failure("protocol")
+            raise _protocol_failure("completed-text-shape")
         terminal = {
             **terminal,
             "output": [
@@ -295,8 +312,25 @@ def _stream_response(body: bytes) -> dict[str, object]:  # noqa: C901
 
 def _event_index(value: object) -> int:
     if type(value) is not int or value < 0 or value > 1_000_000:
-        raise provider_failure("protocol")
+        raise _protocol_failure("event-index")
     return value
+
+
+def _protocol_failure(stage: str, *, event_type: str | None = None) -> Exception:
+    """Return a stable failure after recording only a payload-free parse stage."""
+
+    safe_event_type = (
+        event_type
+        if type(event_type) is str and _SAFE_EVENT_TYPE.fullmatch(event_type) is not None
+        else "none"
+    )
+    _LOGGER.debug(
+        "event=agent-protocol-diagnostic protocol=%s stage=%s event_type=%s",
+        _PROTOCOL_REVISION,
+        stage,
+        safe_event_type,
+    )
+    return provider_failure("protocol")
 
 
 def _single_message(output: object) -> dict[str, object]:

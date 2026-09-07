@@ -31,7 +31,6 @@ from sciretriever.acquisition.providers.wiley import (
     WILEY_ACCESS_POLICY,
     WileyAuthorizedPdfClient,
 )
-from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.model.acquisition import AcquisitionPath
 from sciretriever.network.admission import AccessCoordinator, AccessFeedback
@@ -100,24 +99,7 @@ def _response(
 class WileyAuthorizedPdfClientTests(unittest.TestCase):
     def test_profile_exposes_tdm_api_and_independent_browser_fallback(self) -> None:
         self.assertEqual(WILEY_ACCESS_PROFILE.api_route_keys, ("api:wiley-tdm-v1",))
-        self.assertEqual(
-            WILEY_ACCESS_PROFILE.browser_route_key,
-            "browser:wiley-online-library",
-        )
-        self.assertEqual(
-            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            (
-                "acs-publications-pdf",
-                "aip-publishing-pdf",
-                "sciencedirect-pdf",
-                "iopscience-pdf",
-                "oxford-academic-pdf",
-                "rsc-publishing-pdf",
-                "science-aaas-pdf",
-                "springerlink-pdf",
-                "wiley-online-library-pdf",
-            ),
-        )
+        self.assertTrue(WILEY_ACCESS_PROFILE.browser_probe_enabled)
         resolution = PublisherAccessResolver(PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG).resolve(
             (
                 ResolutionEvidence(
@@ -139,15 +121,27 @@ class WileyAuthorizedPdfClientTests(unittest.TestCase):
         plan = builder.build(resolution=resolution, route_specs=(api_route,))
         self.assertEqual(plan.routes, (api_route,))
         browser_route = RouteSpec(
-            route_key="browser:wiley-online-library",
+            route_key="browser:generic",
+            tier=AcquisitionPath.CONTROLLED_BROWSER,
+            capability=RouteCapability.BROWSER_PDF,
+            readiness=RouteReadiness.READY,
+            risk_group="browser-generic",
+        )
+        browser_plan = builder.build(resolution=resolution, route_specs=(browser_route,))
+        self.assertEqual(browser_plan.routes, (browser_route,))
+        publisher_bound_browser = RouteSpec(
+            route_key="browser:publisher-bound",
             tier=AcquisitionPath.CONTROLLED_BROWSER,
             capability=RouteCapability.BROWSER_PDF,
             readiness=RouteReadiness.READY,
             profile_access_key="wiley-online-library",
-            risk_group="wiley-online-library",
+            risk_group="browser-generic",
         )
-        with self.assertRaisesRegex(ValueError, "risk group"):
-            builder.build(resolution=resolution, route_specs=(browser_route,))
+        with self.assertRaisesRegex(ValueError, "generic Browser routes"):
+            builder.build(
+                resolution=resolution,
+                route_specs=(publisher_bound_browser,),
+            )
 
     def test_contract_requires_exact_resolved_wol_doi_evidence(self) -> None:
         self.assertEqual(

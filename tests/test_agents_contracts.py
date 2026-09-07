@@ -115,8 +115,6 @@ class AccessModelTests(unittest.TestCase):
             capture(1, BrowserCaptureKind.DOWNLOAD),
             capture(2, BrowserCaptureKind.RESPONSE),
             capture(3, BrowserCaptureKind.POPUP),
-            capture(4, BrowserCaptureKind.VIEWER),
-            capture(5, BrowserCaptureKind.VERIFIED_LOCATOR),
         )
         batch = BrowserCaptureBatch(captures=captures)
 

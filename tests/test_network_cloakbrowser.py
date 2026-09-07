@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -34,10 +35,13 @@ from sciretriever.model.access import (
 )
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
+    BrowserCaptureDecision,
+    BrowserCaptureEvidence,
     BrowserClient,
     BrowserDestinationKind,
     _ConnectionBinding,
 )
+from sciretriever.network.browser_control import BrowserObservationUnavailable
 from sciretriever.network.browser_sessions import (
     BrowserSessionBroker,
     BrowserSessionError,
@@ -48,6 +52,7 @@ from sciretriever.network.cloakbrowser import (
     CloakBrowserRuntimeError,
     _CloakEngine,
     _CloakProcess,
+    _prime_vendor_welcome_marker,
     cloakbrowser_runtime_availability,
 )
 from sciretriever.network.playwright import (
@@ -63,7 +68,6 @@ from sciretriever.network.policy import AddressClass, DestinationPolicy
 from tests.test_network_browser import (
     _FakeFactory as _BrowserFakeFactory,
 )
-from tests.test_network_browser import _FlowController
 from tests.test_network_browser import (
     _Resolver as _BrowserResolver,
 )
@@ -244,6 +248,17 @@ class _RawPage:
         self.close_calls += 1
 
 
+class _TransitionWaitPage(_RawPage):
+    def evaluate(self, _script: str) -> str:
+        return "fixture-fingerprint"
+
+    def wait_for_function(self, _condition: str, *, arg: str, timeout: int) -> None:
+        del arg, timeout
+        raise PlaywrightError(
+            "Execution context was destroyed, most likely because of a navigation"
+        )
+
+
 class _ClickFailureLocator(_RawLocator):
     def __init__(self, actions: list[tuple[str, object]], failure: BaseException) -> None:
         super().__init__(actions)
@@ -252,6 +267,15 @@ class _ClickFailureLocator(_RawLocator):
     def click(self, *, timeout: int, no_wait_after: bool) -> None:
         self.actions.append(("click", (timeout, no_wait_after)))
         raise self.failure
+
+    def evaluate(self, _script: str, _argument: object) -> object:
+        return {
+            "marker": 1,
+            "role": "button",
+            "name": "Continue",
+            "visible": True,
+            "enabled": True,
+        }
 
 
 class _ClickFailurePage(_RawPage):
@@ -365,20 +389,21 @@ class _SignedQueryDestinationGuard:
         return (self._origin,)
 
 
-class _SignedQueryCaptureGuard:
+class _SignedQueryCapturePolicy:
     """Allow only the query-free top-level PDF capture locator."""
 
     def __init__(self, locator: str) -> None:
         self._locator = locator
         self.calls: list[tuple[str, BrowserCaptureKind, str]] = []
 
-    def allows(self, url: str, kind: BrowserCaptureKind, media_type: str) -> bool:
-        self.calls.append((url, kind, media_type))
-        return (
-            url == self._locator
-            and kind is BrowserCaptureKind.RESPONSE
-            and media_type == "application/pdf"
+    def decide(self, evidence: BrowserCaptureEvidence) -> BrowserCaptureDecision:
+        self.calls.append((evidence.locator, evidence.kind, evidence.media_type))
+        accepted = (
+            evidence.locator == self._locator
+            and evidence.kind is BrowserCaptureKind.RESPONSE
+            and evidence.media_type == "application/pdf"
         )
+        return BrowserCaptureDecision.ACCEPT if accepted else BrowserCaptureDecision.REJECT
 
 
 def _event_handlers() -> Mapping[str, Callable[[object], object]]:
@@ -404,7 +429,30 @@ def _binding() -> _ConnectionBinding:
 class CloakBrowserHumanizedClickTests(unittest.TestCase):
     def _page_for_failure(self, failure: BaseException) -> Any:
         context = cast(Any, SimpleNamespace(engine=_InlineEngine()))
-        return _Page(context, cast(Any, object()), _ClickFailurePage(failure))
+        raw = _ClickFailurePage(failure)
+        page = _Page(context, cast(Any, object()), raw)
+        page._control_element_locators[1] = (
+            _ClickFailureLocator(raw.actions, failure),
+            2,
+            "button",
+            "Continue",
+            True,
+        )
+        return page
+
+    @staticmethod
+    def _click(page: Any) -> bool:
+        return cast(
+            bool,
+            page.control_click_element(
+                1,
+                expected_role="button",
+                expected_name="Continue",
+                expected_enabled=True,
+                expected_surface_key=2,
+                timeout=10_000,
+            ),
+        )
 
     def test_click_maps_stock_timeout_and_pinned_actionability_misses(self) -> None:
         failures = (
@@ -420,23 +468,154 @@ class CloakBrowserHumanizedClickTests(unittest.TestCase):
         for failure in failures:
             with self.subTest(exception_type=type(failure).__name__):
                 page = self._page_for_failure(failure)
-                self.assertFalse(page.click("button", timeout=10_000))
+                self.assertFalse(self._click(page))
+
+    def test_click_treats_dispatch_navigation_errors_as_an_applied_transition(self) -> None:
+        failures = (
+            PlaywrightError("Target page, context or browser has been closed"),
+            PlaywrightError("Execution context was destroyed, most likely because of a navigation"),
+            PlaywrightError("Frame was detached"),
+        )
+        for failure in failures:
+            with self.subTest(exception_type=type(failure).__name__, message=str(failure)):
+                page = self._page_for_failure(failure)
+                self.assertTrue(self._click(page))
 
     def test_click_keeps_unknown_and_contract_failures_fail_closed(self) -> None:
         failures = (
             RuntimeError("unexpected runtime failure"),
-            PlaywrightError("Target page, context or browser has been closed"),
-            PlaywrightError("Execution context was destroyed, most likely because of a navigation"),
             PlaywrightError("Unexpected token in selector"),
         )
         for failure in failures:
             with self.subTest(exception_type=type(failure).__name__):
                 page = self._page_for_failure(failure)
                 with self.assertRaises(PlaywrightRuntimeError):
-                    page.click("button", timeout=10_000)
+                    self._click(page)
 
 
 class CloakBrowserAdapterTests(unittest.TestCase):
+    def test_vendor_welcome_marker_is_private_and_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-test-") as raw:
+            root = Path(raw)
+            _prime_vendor_welcome_marker(root)
+            marker = root / ".welcome_shown"
+            self.assertRegex(marker.read_text(encoding="ascii"), r"^[0-9]+$")
+            self.assertEqual(stat.S_IMODE(marker.stat().st_mode), 0o600)
+
+            marker.unlink()
+            target = root / "outside-marker"
+            target.write_text("unchanged", encoding="ascii")
+            marker.symlink_to(target)
+            with self.assertRaises(CloakBrowserRuntimeError):
+                _prime_vendor_welcome_marker(root)
+            self.assertEqual(target.read_text(encoding="ascii"), "unchanged")
+
+    def test_engine_preserves_only_the_payload_free_observation_transition(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-test-") as raw:
+            root = Path(raw)
+            engine = _CloakEngine(
+                _Profile(root / "profile"),
+                _Runtime(root / "cache"),
+                ignore_https_errors=False,
+                launcher=lambda _directory, **_options: _RawContext(),
+            )
+            engine.start()
+            try:
+
+                def transition() -> None:
+                    raise BrowserObservationUnavailable()
+
+                def private_failure() -> None:
+                    raise RuntimeError("private payload")
+
+                with self.assertRaises(BrowserObservationUnavailable):
+                    engine.call(transition)
+                page = _Page(
+                    cast(Any, SimpleNamespace(engine=engine)),
+                    cast(Any, SimpleNamespace(article_token="fixture-article")),
+                    _TransitionWaitPage(),
+                )
+                with self.assertRaises(BrowserObservationUnavailable):
+                    page.control_wait_for_change(timeout=200)
+                with self.assertRaises(CloakBrowserRuntimeError):
+                    engine.call(private_failure)
+            finally:
+                engine.close()
+
+    def test_engine_umask_is_private_to_browser_runtime_thread(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-test-") as raw:
+            root = Path(raw)
+            engine = _CloakEngine(
+                _Profile(root / "profile"),
+                _Runtime(root / "cache"),
+                ignore_https_errors=False,
+                launcher=lambda _directory, **_options: _RawContext(),
+            )
+            browser_file = root / "browser-created"
+            main_file = root / "main-created"
+
+            def create(path: Path) -> None:
+                descriptor = os.open(
+                    path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o666,
+                )
+                os.close(descriptor)
+
+            previous_umask = os.umask(0o002)
+            started = False
+            try:
+                engine.start()
+                started = True
+                engine.call(lambda: create(browser_file))
+                create(main_file)
+            finally:
+                if started:
+                    engine.close()
+                os.umask(previous_umask)
+
+            self.assertEqual(stat.S_IMODE(browser_file.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(main_file.stat().st_mode), 0o664)
+
+    def test_filesystem_isolation_failure_rejects_engine_start_promptly(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-test-") as raw:
+            root = Path(raw)
+            launch_calls = 0
+
+            def launcher(_directory: str, **_options: object) -> _RawContext:
+                nonlocal launch_calls
+                launch_calls += 1
+                return _RawContext()
+
+            engine = _CloakEngine(
+                _Profile(root / "profile"),
+                _Runtime(root / "cache"),
+                ignore_https_errors=False,
+                launcher=launcher,
+            )
+            with (
+                mock.patch(
+                    "sciretriever.network.cloakbrowser._isolate_runtime_filesystem_context",
+                    side_effect=CloakBrowserRuntimeError("fixture isolation failure"),
+                ),
+                mock.patch(
+                    "sciretriever.network.cloakbrowser._COMMAND_TIMEOUT_SECONDS",
+                    1.0,
+                ),
+            ):
+                started = time.monotonic()
+                with self.assertRaises(CloakBrowserRuntimeError):
+                    engine.start()
+                self.assertLess(time.monotonic() - started, 0.5)
+                engine._thread.join(0.5)
+                self.assertFalse(engine._thread.is_alive())
+                with self.assertRaises(CloakBrowserRuntimeError):
+                    engine.launch_context(raw)
+                with self.assertRaises(CloakBrowserRuntimeError):
+                    engine.close()
+
+            self.assertEqual(launch_calls, 0)
+
     def test_runtime_availability_is_static_and_validates_shape(self) -> None:
         available = CloakBrowserRuntimeAvailability(True, True, True, True, "146.0.7680.177.5")
         self.assertTrue(available.cloak_wrapper_available)
@@ -1069,6 +1248,50 @@ class CloakBrowserAdapterTests(unittest.TestCase):
         self.assertTrue(text_attachment.attachment_download)
         self.assertFalse(text_attachment.download_expected)
 
+    def test_response_body_failure_logs_only_a_closed_stage_and_category(self) -> None:
+        secret = "https://private.invalid/?token=RESPONSE-BODY-SECRET"
+
+        class _RequestStub:
+            def is_navigation_request(self) -> bool:
+                return False
+
+        class _ResponseStub:
+            url = "https://publisher.sciretriever.test/article.pdf"
+            status = 200
+            headers = {"Content-Type": "application/pdf"}
+
+            def body(self) -> bytes:
+                raise RuntimeError(
+                    f"Protocol error (Network.getResponseBody): "
+                    f"No resource with given identifier found {secret}"
+                )
+
+        class _ContextStub:
+            engine = _InlineEngine()
+            _external_pdf_downloads = True
+
+        class _ArticleStub:
+            def consume_article_bytes(self, amount: int) -> bool:
+                del amount
+                return True
+
+        response = _Response(
+            cast(Any, _ContextStub()),
+            cast(Any, _ArticleStub()),
+            _ResponseStub(),
+            cast(Any, _RequestStub()),
+        )
+
+        with self.assertLogs("sciretriever.network.playwright", level="DEBUG") as logs:
+            with self.assertRaises(RuntimeError):
+                response.body()
+
+        rendered = "\n".join(logs.output)
+        self.assertIn("stage=vendor-body", rendered)
+        self.assertIn("failure_category=response-body-unavailable", rendered)
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn("RESPONSE-BODY-SECRET", rendered)
+
     def test_external_pdf_download_capability_controls_inline_top_level_pdf(self) -> None:
         class _RequestStub:
             def is_navigation_request(self) -> bool:
@@ -1130,7 +1353,7 @@ class CloakBrowserAdapterTests(unittest.TestCase):
             ),
         )
         destination_guard = _SignedQueryDestinationGuard("https://download.test")
-        capture_guard = _SignedQueryCaptureGuard(policy_url)
+        capture_policy = _SignedQueryCapturePolicy(policy_url)
 
         with self.assertLogs("sciretriever.network.browser", level="DEBUG") as logs:
             result = client.run(
@@ -1142,11 +1365,8 @@ class CloakBrowserAdapterTests(unittest.TestCase):
                 ),
                 AccessPolicy(max_concurrency=1),
                 destination_guard=destination_guard,
-                capture_guard=capture_guard,
+                capture_policy=capture_policy,
                 navigation_only=True,
-                controller=_FlowController(
-                    lambda session: session.wait_for_capture(BrowserCaptureKind.RESPONSE)
-                ),
             )
 
         self.assertIsInstance(result, BrowserCaptureBatch)
@@ -1160,8 +1380,8 @@ class CloakBrowserAdapterTests(unittest.TestCase):
         self.assertTrue(factory.process.context is not None)
         assert factory.process.context is not None
         self.assertEqual(factory.process.context.pages[0].url, signed_url)
-        self.assertTrue(capture_guard.calls)
-        self.assertTrue(all(call[0] == policy_url for call in capture_guard.calls))
+        self.assertTrue(capture_policy.calls)
+        self.assertTrue(all(call[0] == policy_url for call in capture_policy.calls))
         self.assertTrue(all(not urlsplit(url).query for url, _kind in destination_guard.calls))
         self.assertNotIn(signed_url, repr(result))
         self.assertNotIn(signed_url, "\n".join(logs.output))
@@ -1289,52 +1509,6 @@ class CloakBrowserAdapterTests(unittest.TestCase):
                 broker.close()
 
             self.assertEqual(len(raws), 1)
-            self.assertEqual(len(displays), 1)
-
-    def test_humanized_page_actions_use_the_single_context_page_path(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-test-") as raw:
-            root = Path(raw)
-            profile = _Profile(root / "profile")
-            profile.lease.directory.mkdir()
-            runtime = _Runtime(root / "cache")
-            displays: list[_Display] = []
-            raws: list[_RawContext] = []
-
-            def display_factory() -> _Display:
-                value = _Display()
-                displays.append(value)
-                return value
-
-            def launcher(_user_data_dir: str, **_options: object) -> _RawContext:
-                value = _RawContext()
-                raws.append(value)
-                return value
-
-            with mock.patch(
-                "sciretriever.network.cloakbrowser.acquire_headed_display",
-                side_effect=display_factory,
-            ):
-                factory = CloakBrowserFactory(profile, runtime, launcher=launcher)
-                broker = BrowserSessionBroker()
-                lease = broker.acquire(
-                    "publisher-one",
-                    factory=factory,
-                    downloads_path=raw,
-                    connection_binding=_binding(),
-                    route_handler=_route_handler,
-                    event_handlers=_event_handlers(),
-                    timeout=1.0,
-                )
-                page = cast(Any, lease.context).new_page()
-                page.click("#continue", timeout=250)
-                page.fill("#query", "fixture", timeout=250)
-                raw_page = raws[0].pages[0]
-                self.assertEqual(raw_page.actions[0][0], "filter")
-                self.assertEqual(raw_page.actions[1][0], "click")
-                self.assertEqual(raw_page.actions[2][0], "fill")
-                page.close()
-                lease.release()
-                broker.close()
             self.assertEqual(len(displays), 1)
 
     def test_binary_version_mismatch_rejects_before_wrapper_and_releases_both_leases(self) -> None:

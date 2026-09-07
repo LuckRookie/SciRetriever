@@ -2235,7 +2235,7 @@ class DatabaseCompletionTests(unittest.TestCase):
             "https://private.invalid",
             "Cookie",
             "selector=",
-            "profile_path=",
+            "browser_profile_path=",
             "secret-token",
         ):
             self.assertNotIn(forbidden, output)
@@ -2448,6 +2448,19 @@ class DatabaseCompletionTests(unittest.TestCase):
             AcquisitionFailure(_failure("acquisition-browser-cancelled-failed"))
         ]
         report = _operation(world)(_request((literature_id,), goal="ASSET_READY"))
+
+        self.assertEqual(report.end.kind, "interrupted")
+        self.assertEqual(report.failed, ())
+        self.assertEqual(report.interrupted[0].literature_id, literature_id)
+
+    def test_analysis_cancellation_failure_is_reported_as_interrupted(self) -> None:
+        literature_id = _literature_id(1)
+        world = _World((_current(1, 1, primary=True, parsed=True),))
+        world.analysis_plans[literature_id] = [
+            ContentAnalysisFailure(_failure("analysis-content-cancelled"))
+        ]
+
+        report = _operation(world)(_request((literature_id,), goal="CONTENT_READY"))
 
         self.assertEqual(report.end.kind, "interrupted")
         self.assertEqual(report.failed, ())

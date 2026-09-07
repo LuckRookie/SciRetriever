@@ -34,7 +34,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": "browser:aip-publishing"
+    "browser_probe_enabled": true
   },
   "route_verification": {
     "public": {
@@ -46,19 +46,8 @@
       "payload": "no-reviewed-machine-access-api"
     },
     "browser": {
-            "state": "production-ready",
-      "rule_id": "aip-publishing-pdf",
-      "rule_revision": 2,
-      "allowed_origins": ["https://pubs.aip.org"],
-      "rate_limit_group": "aip-publishing",
-      "session_group": "aip-publishing",
-      "article_start_interval_seconds": 30,
-            "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication",
-            "production_admission": "reviewed-ip-entitled-browser",
-            "conditions": [
-                "article-entitlement-is-checked-per-attempt",
-                "access-denial-or-challenge-stops-the-attempt"
-      ]
+      "state": "probe-enabled",
+      "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
     }
   },
   "ownership_cases": [

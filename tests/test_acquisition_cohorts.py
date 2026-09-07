@@ -7,6 +7,7 @@ import threading
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from io import BytesIO
 from typing import BinaryIO, cast
 
@@ -38,7 +39,7 @@ from sciretriever.acquisition.planning import (
     RouteReadiness,
     RouteSpec,
 )
-from sciretriever.acquisition.ports import TemporaryPdf
+from sciretriever.acquisition.ports import BrowserPdfAssociationEvidence, TemporaryPdf
 from sciretriever.model.acquisition import AcquisitionPath, PdfCandidate
 from sciretriever.model.primitives import ProvenanceId, Sha256, SourceKind, UtcTimestamp
 from sciretriever.model.provenance import Provenance
@@ -184,6 +185,7 @@ class _TemporaryContent:
 
 
 def _temporary(index: int, tier: AcquisitionPath) -> TemporaryPdf:
+    source_url = f"https://fixture.invalid/{index}.pdf"
     return TemporaryPdf(
         candidate=PdfCandidate(
             candidate_key=f"fixture:{index}",
@@ -192,7 +194,7 @@ def _temporary(index: int, tier: AcquisitionPath) -> TemporaryPdf:
             declared_media_type="application/pdf",
         ),
         content=_TemporaryContent(),
-        safe_source_url=f"https://fixture.invalid/{index}.pdf",
+        safe_source_url=source_url,
         provenance=Provenance(
             provenance_id=ProvenanceId(_id(index + 100)),
             source_kind=SourceKind.ASSET_PROVIDER,
@@ -201,6 +203,21 @@ def _temporary(index: int, tier: AcquisitionPath) -> TemporaryPdf:
             observed_at=_TIME,
             input_sha256=_HASH,
             parameters_sha256=None,
+        ),
+        browser_association=(
+            BrowserPdfAssociationEvidence(
+                start_locator=source_url,
+                start_kind="direct-file",
+                capture_locator=source_url,
+                capture_kind="response",
+                correlation="direct-request",
+                request_navigation=True,
+                from_exact_start=True,
+                redirect_depth=0,
+                native_download=False,
+            )
+            if tier is AcquisitionPath.CONTROLLED_BROWSER
+            else None
         ),
     )
 
@@ -394,6 +411,44 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
         self.assertIs(result.items[0].disposition, WorkItemDisposition.FAILED)
         self.assertEqual(result.items[0].failure, failure)
         self.assertFalse(result.items[0].exhausted)
+
+    def test_specific_browser_failure_replaces_an_earlier_public_route_failure(self) -> None:
+        public = _route(AcquisitionPath.PUBLIC, "landing-crossref")
+        browser = _route(AcquisitionPath.CONTROLLED_BROWSER, "publisher-browser")
+        item = AcquisitionWorkItem(
+            work_key="browser-failure-primary",
+            plan=_plan(
+                "browser-failure-primary",
+                tiers=(),
+                extra_routes=(public, browser),
+            ),
+        )
+        public_failure = StableFailure(
+            code="acquisition-public-locator-response-failed",
+            reason="The public locator failed before Browser escalation.",
+            action="Review the public route.",
+            retryable=False,
+        )
+        browser_failure = StableFailure(
+            code="acquisition-browser-agent-action-failed",
+            reason="The controlled Browser action failed after dispatch.",
+            action="Review the Browser runtime and retry the route.",
+            retryable=True,
+        )
+
+        result = _executor("publisher-a").execute(
+            (item,),
+            lambda _item, route: RouteExecutionResult.failed(
+                public_failure if route is public else browser_failure
+            ),
+        )
+
+        self.assertEqual(
+            result.items[0].attempted_route_keys,
+            (public.route_key, browser.route_key),
+        )
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.FAILED)
+        self.assertEqual(result.items[0].failure, browser_failure)
 
     def test_unresolved_low_risk_issue_blocks_browser_only_after_api_pass(self) -> None:
         public = _route(AcquisitionPath.PUBLIC, "public")
@@ -999,6 +1054,41 @@ class TieredAcquisitionCohortTests(unittest.TestCase):
             result.browser_admission.decisions[0].disposition,
             BrowserAdmissionDisposition.REJECTED,
         )
+
+    def test_browser_runtime_failure_reaches_work_item_without_generic_fallback(self) -> None:
+        runtime_failure = StableFailure(
+            code="browser-cloak-binary-unavailable",
+            reason="The pinned CloakBrowser binary is not present in the local runtime cache.",
+            action="Install the pinned CloakBrowser binary from the configuration center.",
+            retryable=False,
+        )
+        browser = replace(
+            _route(AcquisitionPath.CONTROLLED_BROWSER, "publisher-browser"),
+            readiness=RouteReadiness.UNCONFIGURED,
+            failure=runtime_failure,
+        )
+        item = AcquisitionWorkItem(
+            work_key="browser-runtime-failure",
+            plan=_plan(
+                "browser-runtime-failure",
+                tiers=(),
+                extra_routes=(browser,),
+            ),
+        )
+
+        result = _executor("publisher-a").execute(
+            (item,),
+            lambda _item, _route: RouteExecutionResult.normal_miss(),
+        )
+
+        decision = result.browser_admission.decisions[0]
+        self.assertIs(
+            decision.disposition,
+            BrowserAdmissionDisposition.ACTION_REQUIRED,
+        )
+        self.assertEqual(decision.failure, runtime_failure)
+        self.assertIs(result.items[0].disposition, WorkItemDisposition.ACTION_REQUIRED)
+        self.assertEqual(result.items[0].failure, runtime_failure)
 
     def test_unconfirmed_browser_is_action_required_with_a_duration_summary(self) -> None:
         item = AcquisitionWorkItem(work_key="a", plan=_plan("a"))

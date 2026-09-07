@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field, replace
 
 from sciretriever.logging.api import get_logger
 from sciretriever.model.configuration import AgentReasoningEffort
@@ -17,14 +18,13 @@ from .calls import (
     _request_descriptor_bytes,
 )
 from .capabilities import (
-    AgentCapability,
     AgentCapabilityReadiness,
     AgentModelCapabilities,
     AgentRole,
-    browser_observation_input_ready,
     capability_missing,
     required_capabilities,
 )
+from .debug import AgentDebugImageRecorder
 from .failures import AgentFailure, agent_failure
 from .messages import _model_identity, utf8_size
 from .ports import AgentProviderCall, AgentProviderPort
@@ -59,6 +59,29 @@ class AgentRoleBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentRoleIdentity:
+    """Safe identity of the exact Provider/model binding for one role."""
+
+    role: AgentRole
+    provider: str
+    model: str
+    reasoning_effort: AgentReasoningEffort
+    stream: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, AgentRole):
+            raise TypeError("role must be an AgentRole")
+        if type(self.provider) is not str or not self.provider.strip():
+            raise ValueError("provider must be nonblank text")
+        object.__setattr__(self, "provider", self.provider.strip())
+        object.__setattr__(self, "model", _model_identity(self.model))
+        if not isinstance(self.reasoning_effort, AgentReasoningEffort):
+            raise TypeError("reasoning_effort must be an AgentReasoningEffort")
+        if type(self.stream) is not bool:
+            raise TypeError("stream must be bool")
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRuntime:
     """Provider-neutral executor with one adapter selected for each bound role."""
 
@@ -69,8 +92,9 @@ class AgentRuntime:
     browser: AgentRoleBinding | None = None
     configured_roles: frozenset[AgentRole] = frozenset()
     protocol_supported: bool = True
+    debug_image_recorder: AgentDebugImageRecorder | None = field(default=None, repr=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         for adapter in (self.adapter, self.analysis_adapter, self.browser_adapter):
             if adapter is not None and not isinstance(adapter, AgentProviderPort):
                 raise TypeError("adapter must implement AgentProviderPort")
@@ -90,6 +114,11 @@ class AgentRuntime:
             raise TypeError("configured_roles must contain AgentRole values")
         if type(self.protocol_supported) is not bool:
             raise TypeError("protocol_supported must be bool")
+        if self.debug_image_recorder is not None and not isinstance(
+            self.debug_image_recorder,
+            AgentDebugImageRecorder,
+        ):
+            raise TypeError("debug_image_recorder must be AgentDebugImageRecorder or None")
         if self.analysis is not None and self.analysis.role is not AgentRole.ANALYSIS:
             raise ValueError("analysis slot requires an analysis role binding")
         if self.browser is not None and self.browser.role is not AgentRole.BROWSER:
@@ -103,10 +132,35 @@ class AgentRuntime:
             frozenset(self.configured_roles | bound_roles),
         )
 
-    @property
-    def provider_name(self) -> str:
-        adapter = self.adapter
-        return "unbound" if adapter is None else adapter.provider_name
+    def with_debug_image_recording(self) -> AgentRuntime:
+        """Return a runtime that records exact image inputs for this process.
+
+        The runtime is immutable so object-graph assembly can opt in after it
+        has determined that the command is running at Debug level.  Reusing an
+        already-enabled recorder keeps one sequence and directory across all
+        role bindings in the graph.
+        """
+
+        if self.debug_image_recorder is not None:
+            return self
+        return replace(self, debug_image_recorder=AgentDebugImageRecorder())
+
+    def identity(self, role: AgentRole) -> AgentRoleIdentity:
+        """Return the exact role binding; never fall back to another role."""
+
+        if not isinstance(role, AgentRole):
+            raise TypeError("role must be an AgentRole")
+        binding = self._binding(role)
+        adapter = self._adapter(role)
+        if binding is None or adapter is None:
+            raise ValueError(f"{role.value} Agent role is unbound")
+        return AgentRoleIdentity(
+            role=role,
+            provider=adapter.provider_name,
+            model=binding.model,
+            reasoning_effort=binding.reasoning_effort,
+            stream=binding.stream,
+        )
 
     def readiness(self, role: AgentRole) -> AgentCapabilityReadiness:
         """Return pure local readiness for one requested role."""
@@ -123,13 +177,6 @@ class AgentRuntime:
                 missing=required_capabilities(role),
             )
         missing = set(capability_missing(required_capabilities(role), binding.capabilities))
-        if role is AgentRole.BROWSER and not browser_observation_input_ready(
-            image_input=binding.capabilities.image_input,
-            supported_image_media_types=binding.capabilities.supported_image_media_types,
-            max_image_count=binding.capabilities.max_image_count,
-            max_image_bytes=binding.capabilities.max_image_bytes,
-        ):
-            missing.add(AgentCapability.IMAGE_INPUT)
         return AgentCapabilityReadiness(
             role=role,
             configured=True,
@@ -186,8 +233,79 @@ class AgentRuntime:
         if adapter is None:
             self._raise_preflight(call, "capability")
         assert adapter is not None
-        result = adapter.execute(provider_call)
-        self._validate_result(call, binding, adapter, result)
+        recorder = self.debug_image_recorder
+        if recorder is not None:
+            recorder.record(provider_call)
+        return self._execute_provider(call, binding, adapter, provider_call)
+
+    def _execute_provider(
+        self,
+        call: AgentCall,
+        binding: AgentRoleBinding,
+        adapter: AgentProviderPort,
+        provider_call: AgentProviderCall,
+    ) -> AgentResult:
+        """Invoke one adapter and own the role-level terminal transcript."""
+
+        identity = self.identity(call.role)
+        started = time.monotonic()
+        _LOGGER.info(
+            "event=agent-call-started role=%s provider=%s wire_model=%s stream=%s "
+            "reasoning_effort=%s",
+            call.role.value,
+            identity.provider,
+            identity.model,
+            "on" if identity.stream else "off",
+            identity.reasoning_effort.value,
+        )
+        try:
+            result = adapter.execute(provider_call)
+            self._validate_result(call, binding, adapter, result)
+        except AgentFailure as error:
+            failure = error.failure
+            _LOGGER.info(
+                "event=agent-call-finished role=%s provider=%s wire_model=%s "
+                "outcome=failed code=%s retryable=%s elapsed_ms=%d reason=%s action=%s",
+                call.role.value,
+                identity.provider,
+                identity.model,
+                failure.code,
+                str(failure.retryable).lower(),
+                max(int((time.monotonic() - started) * 1000), 0),
+                failure.reason,
+                failure.action,
+            )
+            raise
+        except Exception:
+            error = agent_failure("internal")
+            failure = error.failure
+            _LOGGER.info(
+                "event=agent-call-finished role=%s provider=%s wire_model=%s "
+                "outcome=failed code=%s retryable=false elapsed_ms=%d "
+                "reason=%s action=%s",
+                call.role.value,
+                identity.provider,
+                identity.model,
+                failure.code,
+                max(int((time.monotonic() - started) * 1000), 0),
+                failure.reason,
+                failure.action,
+            )
+            raise error from None
+        usage = result.provenance.usage
+        _LOGGER.info(
+            "event=agent-call-finished role=%s provider=%s wire_model=%s "
+            "outcome=success result=%s input_tokens=%d output_tokens=%d "
+            "response_bytes=%d elapsed_ms=%d",
+            call.role.value,
+            identity.provider,
+            identity.model,
+            "tool" if isinstance(result, AgentToolCall) else "structured",
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.response_bytes,
+            max(int((time.monotonic() - started) * 1000), 0),
+        )
         return result
 
     def _binding(self, role: AgentRole) -> AgentRoleBinding | None:
@@ -218,12 +336,6 @@ class AgentRuntime:
             raise agent_failure("request-budget") from None
         if request_bytes > limits.max_request_bytes:
             raise agent_failure("request-budget")
-        context_limit = min(
-            limits.context_window_tokens,
-            capabilities.context_window_tokens,
-        )
-        if input_bytes + call.max_output_tokens > context_limit:
-            raise agent_failure("context-budget")
         if call.image_parts:
             if len(call.image_parts) > capabilities.max_image_count:
                 raise agent_failure("capability")
@@ -309,4 +421,4 @@ class AgentRuntime:
         )
 
 
-__all__ = ("AgentRoleBinding", "AgentRuntime")
+__all__ = ("AgentRoleBinding", "AgentRoleIdentity", "AgentRuntime")

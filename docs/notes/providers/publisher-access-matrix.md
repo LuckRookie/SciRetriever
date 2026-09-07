@@ -1,7 +1,7 @@
 # Publisher Access Profile 准入与验证矩阵
 
-- 最后核对：2026-08-22
-- 当前 schema：profile evidence fixture v1
+- 最后核对：2026-09-06
+- 当前 schema：profile evidence fixture v1（ADR 0023 语义）
 - 文档性质：Publisher/Access Provider 易变事实、当前实现和验证缺口矩阵
 
 本文记录 `PublisherAccessProfile` 的统一证据包、三态准入和当前仓库矩阵。它不重新定义 [ADR 0015](../../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md) 的三层顺序，也不表示拥有 Profile 就需要 Metadata Provider、API key 或 Browser session。新增或修改 Profile 还必须遵循 [Provider 接入开发手册](../../development/provider-integration.md)。
@@ -12,26 +12,29 @@
 
 | 状态 | 含义 | 能否进入 production profile catalog |
 | --- | --- | --- |
-| `production-ready` | 当前声明的 route 已有官方/审慎政策、完整证据、生产对象图和离线验收；若声明 Browser，还必须有实际 `BrowserSiteRule` 和明确生产准入结论 | 可以；Browser route 只有在总开关、runtime 与调度准入满足后才执行逐文章检查 |
+| `production-ready` | 当前声明的 Public/Authorized API capability 已有完整证据、生产对象图和离线验收，或该 Profile 仅作为已核实访问画像存在 | 可以；是否提供 Browser 首页 probe 由独立 Boolean 声明，不形成下载 route |
 | `fixture-verified` | schema、安全、限速、页面状态和归属规则已由离线 fixture 证明，但官方使用政策或其它生产门槛仍阻止自动执行 | 不可以 |
 | `unsupported` | 已审查但不能满足当前安全、政策、归属或可执行门槛；不声明任何可执行 route | 不可以 |
 
-访问路径不是第四种状态。一个只支持公开或授权 API 的 Profile 可以是 `production-ready`，同时没有 Browser route；`public-api-only` 不再作为验证状态。Capability 列可以把已审查但未满足门槛的 Browser 路径记为 `unsupported`，这表示该 route 不存在，不会把整个已有 API Profile 降成第二个 Profile。尚未完成 P55 证据包的访问方不进入矩阵，不能为了表格覆盖把“未审查”写成 `unsupported`。
+访问路径不是第四种状态。一个只支持公开或授权 API 的 Profile 可以是 `production-ready`；
+`public-api-only` 不再作为验证状态。Browser 下载已经与 Publisher profile 解耦：所有合法文章起点
+使用唯一 `browser:generic`，而 `browser_probe_enabled` 只说明配置中心是否提供该 Publisher 首页的
+显式可达性 probe。尚未完成证据包的访问方不进入矩阵，不能为了表格覆盖把“未审查”写成
+`unsupported`。
 
 `production-ready` 也不表示当前 IP、机构或文章能够下载。凭据字段存在、Provider 接受凭据、
 当前运行环境可启动 Browser、组织授权和具体 Literature entitlement 始终是不同事实。普通配置只用
-`browser_enabled` 显式启用整个受控 Browser 第三层，不保存逐 Publisher 的“机器访问许可”占位
-字段。该开关允许 production rule 做慢速逐文章机构 IP 尝试，但不能证明或扩大组织合同与文章
-权限；实际页面必须区分正文、付费墙、裸 403、challenge、限流和无正文。
+`[browser].enabled` 显式启用整个受控 Browser 第三层，不保存逐 Publisher 的“机器访问许可”占位
+字段。该开关允许通用 Agent 对安全文章起点做逐文章 Profile/IP 尝试，但不能证明或扩大组织合同
+与文章权限；实际页面必须区分正文、付费墙、裸 403、challenge、限流和无正文。
 
-这里的 `PublisherAccessProfile` 是 route、origin、正文归属和 Provider policy 的证据对象；配置
+这里的 `PublisherAccessProfile` 是 access identity、origin、授权 API 与可选首页 probe 的证据对象；配置
 中的 Browser Profile 则是本机身份与 Chrome 认证状态边界，两者不是同一个“Profile”概念。所有
-production Browser route 共用普通配置选中的一个 operator-managed 固定身份 Browser Profile、
-一个 CloakBrowser patched Chromium process 和一个 persistent BrowserContext；固定
+Browser 文章共用普通配置选中的一个 operator-managed 固定身份 Browser Profile、一个
+CloakBrowser patched Chromium process 和一个 persistent BrowserContext；固定
 `headless = false`，无 GUI Linux 使用 Xvfb，Publisher 请求由 Chromium 原生网络栈完成。自动流程
-不填写凭据，不点击或绕过人工 challenge；第一版不提供可见 Browser 认证、机构选择或 MFA。跨 Publisher
-本机 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；本表当前 `9` 条 production route 不是配置
-最大值，同一 risk group 始终保持并发 `1`。
+不填写凭据；第一版不提供可见 Browser 认证、机构选择或 MFA。唯一 `browser-generic` policy 保持
+并发 `1`；普通 `max_concurrency` 只是本机资源 cap。
 
 ## 2. 每个 Profile 的统一证据包
 
@@ -41,35 +44,33 @@ production Browser route 共用普通配置选中的一个 operator-managed 固�
 2. 当前官方资料、访问条款和限速/配额依据的静态 HTTPS 引用；
 3. 核对日期、evidence revision、Provider Notes 和唯一 fixture reference；
 4. landing/asset origins、稳定文章 ID namespace、Provider record identity 与脱敏样例；
-5. public、authorized API、Browser 三种 capability 的实际 route key；
-6. policy evidence/revision、API quota scope，或 Browser rate/session group；
-7. Browser rule id/revision、login/entitlement/paywall/challenge marker；
+5. public、authorized API 的实际 route key，以及 `browser_probe_enabled`；
+6. API policy evidence/revision 与 quota scope；
+7. Browser probe 是否为 reachability-only；
 8. primary、supplement、wrong-article 与 excluded 归属样例；
 9. 当前缺口、未执行的现场验证和明确退役条件。
 
 Evidence URL 不能含 userinfo、query、fragment、IP 地址或非 HTTPS scheme；Notes/fixture 必须是仓库内固定相对引用。Fixture 只保存合成 identity、locator 和状态，不保存真实正文、Cookie、token、账号、机构或 Browser profile。生产运行不读取测试 fixture；fixture reference 是源码、测试和维护证据之间的可审计连接。
 
-## 3. Browser Profile 的额外准入门
+## 3. Browser probe 与通用下载的边界
 
-Profile 不再保存一套与执行无关的 selector 摘要。它只引用 `browser_rule_id` 和正整数 revision；统一 `PublisherAccessVerificationMatrix` 必须把它与真正执行的 `BrowserSiteRule` 对齐：
+Profile 不再保存 Browser rule、selector、risk/session group、页面 marker 或下载准入结论。
+`browser_probe_enabled = true` 只允许 `config test browser site <access-key>` 打开该 Profile 声明的
+最小首页，并用 deny-all capture policy 验证 runtime/目标可达；它不能下载正文、证明登录或文章
+entitlement。
 
-- Profile 只有一个精确 landing origin，且与 rule 相同；
-- Browser allowed origins 与 rule 完全相同；capture/supplement/excluded locator 的 origin 都属于 Profile asset origins；
-- `browser_rate_limit_group` 与实际 web scope 相同，policy revision/group 对齐，`max_concurrency=1` 且至少有一种非零 pacing；
-- identifier-in-path 只能使用 Profile 声明的稳定 namespace；
-- 有明确 primary capture prefix 和 supplement 排除规则；
-- entitlement/authenticated、login-required、paywall/not-entitled、challenge/MFA/rate/account-warning 四类状态各有至少一个封闭 marker；
-- rule 必须被一个且仅一个 Profile 引用，缺失、游离、revision 漂移或不完整均在组装时失败。
-
-Matrix 只把 `production-ready` Profile 和其 rule 派生到生产 catalog。`fixture-verified` rule 可以参加离线验收，但不能因为规则文件存在而被生产 Source 看见；`unsupported` Profile 不能声明 public、API 或 Browser executable route。未知站点没有 generic Browser fallback。
-
-Operator 显式启用 Browser 后，production Profile 仍只能使用固定、受验证的 access key；未知
-站点不会进入通用 fallback。总开关不会改写固定 origin、rule revision、正文归属、risk/session
-group、限速、Network 安全或 challenge 停止条件，也不能替代组织授权与逐文章检查。
+真实文章下载不读取这个 Boolean，也不要求命中本矩阵中的 access key。Acquisition 从已接纳
+AssetHint 或 DOI safe resolve 形成文章起点，Network 负责通用准入和稳定页面动作，Acquisition 再
+用 DOI、标题、作者、起点 lineage 与 PDF 字节独立验收主文献归属。未知 Publisher 只要满足这些
+合同，也可以进入 `browser:generic`；缺少安全起点、归属证据不足、supplement 或错文仍会拒绝。
 
 ## 4. 当前矩阵
 
-| Access key | Platform / product | Public | Authorized API | Browser | Policy / session group | Evidence | 状态 | 当前缺口 |
+下表的 Browser 与 policy 两列保留 2026-08-22 旧规则方案的调查快照，用于解释既有 evidence revision
+和现场记录；它们不是当前 executable route。当前下载统一使用 `browser:generic` / `browser-generic`，
+而当前是否提供首页 probe 以相应 fixture 的 `capabilities.browser_probe_enabled` 为准。
+
+| Access key | Platform / product | Public | Authorized API | Historical Browser evidence | Historical policy / session evidence | Evidence | 状态 | 当前缺口 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `acm-digital-library` | ACM Digital Library Basic / Premium | ACM 论文自 2026-01-01 起 OA；无专属 executable route，明确 ACM PDF/landing hint 仍由通用 Public Source 验证 | `unsupported`；Premium bulk download 是产品功能，没有公开 API 合同 | `unsupported`；无 executable rule | DL policy 禁止 scripts/spiders 自动下载文章；robots 的 `Crawl-delay: 1` 不构成许可或 Browser policy；无 group/session | `acm-dl-automated-access-unsupported-2026-08-15`；2026-08-15 | `unsupported` | Basic 有 PDF 和 basic TDM 但无 bulk download；缺官方自动获取协议、正文/related-artifact 归属和现场页面证据；不采信 ScanSci success verdict |
 | `acs-publications` | ACS Publications article platform | 无专属 route；明确 ACS PDF/landing hint 仍由通用 Public Source 验证 | `unsupported`；ACS TDM 客户交付是 JATS/BITS XML，不是 PDF API | `browser:acs-publications` / `acs-publications-pdf@3`；总开关启用后逐文章机构 IP/Profile 检查 | 共享 persistent Profile/context 中的 `acs-publications` lane；同组串行；审慎最小启动间隔 30s | `acs-persistent-browser-pdf-v4-2026-08-21`；2026-08-19 | `production-ready` | 普通条款限制系统性/聚合下载；operator 须确认组织授权；离线规则与真实 Chromium 本地 HTTPS 验收不证明当前 IP、Profile 已登录或文章 entitlement |
@@ -79,7 +80,7 @@ group、限速、Network 安全或 challenge 停止条件，也不能替代组�
 | `aps-journals` | Physical Review journals platform | 无专属 route；可信 APS PDF/landing hint 仍由通用 Public Source 验证；`link.aps.org` 只作 redirect origin | `unsupported`；未找到可核实公共全文 API | `unsupported`；无 executable rule | robots 允许一般索引但只声明 `use=reference`，禁止 search/account/login；服务端 429/503 不是数值文章 policy；无 group/session | `aps-automated-access-unsupported-2026-08-15`；2026-08-15 | `unsupported` | 条款/平台页当前匿名 403；缺自动 Browser 许可、初始 pacing、页面状态、正文/supplement/accepted-navigation 归属和现场 session 证据；不采信 ScanSci unsupported verdict 或特定高校失败 |
 | `copernicus-publications` | Copernicus Publications OA journals | 无专属 route；精确 PDF/landing hint 仍由通用 Public Source 验证；动态 journal subdomain 不使用 wildcard | `unsupported`；OAI-PMH 提供 metadata/NLM XML，不是 PDF | `unsupported`；OA 内容不需要 Browser | robots 无数值 delay；首页仍展示高负载导致 journal PDF 临时受限的公告；无 Browser group/session | `copernicus-public-route-unregistered-2026-08-15`；2026-08-15 | `unsupported` | 缺稳定机器 PDF 合同和封闭 journal-host catalog；不采信上游 DOI URL 模板/Browser fallback；XML、preprint 与 supplement 不成为主 PDF |
 | `core-open-access` | CORE API v3 | 通用已保存 locator 由独立 Public Source 消费；Profile 无专属 public route | `api:core` | 无 | `core/api` quota scope；无 Browser session | `core-v3-2026-08-15`；2026-08-15 | `production-ready` | Browser 未注册；不宣称真实 key 或单篇 entitlement |
-| `elsevier-sciencedirect` | Elsevier Article Retrieval + Object Retrieval / ScienceDirect | 无专属 public route；已有 landing/direct hint 仍由通用 Public Source 消费 | `api:elsevier-article-object`；FULL XML 的显式 `MAIN web-pdf` attachment EID 优先取 Object PDF，无可用 MAIN object 时以同一强身份协商 Article PDF；可解析错误不绕过 | `browser:elsevier-sciencedirect` / `sciencedirect-pdf@3`；从强 DOI/PII、ScienceDirect 或 `linkinghub.elsevier.com` DOI 第一跳识别正文，批准 ScienceDirect 与 PDF CDN，排除 supplement/错文 | API 使用 `elsevier/api/article-retrieval-object` quota scope；Browser 使用共享 persistent Profile/context 中的 `elsevier` lane，同组串行，审慎最小启动间隔 20s | `elsevier-api-persistent-browser-pdf-v3-2026-08-21`；2026-08-19 | `production-ready` | 离线 fixture 与真实 Chromium 证明规则、动态 redirect、CDN capture 和安全边界；不证明真实 key、当前机构 IP、Profile 已登录、订阅或单篇 entitlement |
+| `elsevier-sciencedirect` | Elsevier Article Retrieval + Object Retrieval / ScienceDirect | 无专属 public route；已有 landing/direct hint 仍由通用 Public Source 消费 | `api:elsevier-article-object`；FULL XML 的显式 `MAIN web-pdf` attachment EID 优先取 Object PDF，无可用 MAIN object 时以同一强身份协商 Article PDF；可解析错误不绕过 | `browser:elsevier-sciencedirect` / `sciencedirect-pdf@4`；从强 DOI/PII、ScienceDirect 或 `linkinghub.elsevier.com` DOI 第一跳识别正文，批准 ScienceDirect 与 PDF CDN，排除 supplement/错文，并识别明确的未订阅正文提示 | API 使用 `elsevier/api/article-retrieval-object` quota scope；Browser 使用共享 persistent Profile/context 中的 `elsevier` lane，同组串行，审慎最小启动间隔 20s | `elsevier-api-persistent-browser-pdf-v3-2026-08-21`；2026-08-19 | `production-ready` | 离线 fixture 与真实 Chromium 证明规则、动态 redirect、CDN capture 和安全边界；不证明真实 key、当前机构 IP、Profile 已登录、订阅或单篇 entitlement |
 | `frontiers` | Frontiers journals platform | 无专属 route；明确 Frontiers PDF/landing hint 仍由通用 Public Source 验证；官方确认全部 article 立即、永久 CC BY OA | `unsupported`；未找到可核实机器 PDF API | `unsupported`；OA 内容不需要 Browser | robots 允许一般索引但没有数值下载 policy；无 group/session | `frontiers-public-route-unregistered-2026-08-15`；2026-08-15 | `unsupported` | 条款静态响应只有应用 shell；缺稳定 per-article PDF 合同和数值 policy；不采信上游 `/articles/{doi}/pdf` 模板或 Browser success |
 | `ieee-xplore` | IEEE Xplore article / Full-Text Access platform | 无专属 route；明确 IEEE PDF/landing hint 仍由通用 Public Source 验证 | `unsupported`；官方 full-text 产品需销售开通的 authorization key/token，但公开 endpoint、媒体类型和 rate limit 不完整 | `unsupported`；无 executable rule | 注册后 API quota 未知；无 Browser group/session | `ieee-access-unsupported-2026-08-15`；2026-08-15 | `unsupported` | 已声明强定位 `ieee-arnumber`，但不猜 DOI suffix；缺可实现 API 合同、页面状态、stamp PDF/supplement 归属和通用 session 证据；不复制特定高校 SSO/2FA 结果 |
 | `iopscience` | IOPscience journals platform | 无专属 route；明确 OA PDF/landing hint 仍由通用 Public Source 验证 | `unsupported`；需事先联系，审查后通过 SFTP/约定方式交付 XML/PDF，不是公共 API | `browser:iopscience` / `iopscience-pdf@2`；总开关启用后逐文章机构 IP/Profile 检查 | 共享 persistent Profile/context 中的 `iopscience` lane；同组串行；审慎最小启动间隔 30s | `iopscience-persistent-browser-pdf-v4-2026-08-21`；2026-08-19 | `production-ready` | 普通 Terms/TDM/robots 有严格限制；operator 须确认组织授权；不复制特定高校 OpenAthens/2FA 数据或结论 |
@@ -102,22 +103,18 @@ normal miss，一个通过当时机构网段交付 primary PDF；同进程双样
 `article_entitlement=not-proven`。历史结果没有被扩写成 Nature、其它 Springer Nature 平台、
 当前 IP、任意 DOI 的 entitlement 或长期下载成功率。
 
-因此当前验证矩阵有 23 项，production profile catalog 有 10 项，production Browser rule catalog 有 9 项。CORE、Elsevier 与 Wiley 实现授权 API route；ACS Publications、AIP Publishing、Elsevier / ScienceDirect、IOPscience、Oxford
-Academic、RSC Publishing、Science / AAAS、Springer Nature Link 与 Wiley Online Library 实现 Browser route。
-9 条 Browser route 在本地均通过 production 工程准入；Browser 总开关和 runtime 就绪后才会
-成为可执行 route，并在真实页面逐文章判断结果。其余已审查 Profile 保留各自有证据的
-`unsupported` 结论。相似平台、共享 CDN、上游成功记录、
-OA 属性、crawler delay、XML 交付或人工单篇访问都不会自动形成 route、共享 risk/session group
-或生产授权。后续访问方只有在各自 Notes、manifest、rule/fixture 和状态结论闭环后才加入本表。
+因此当前验证矩阵有 23 项，production profile catalog 有 10 项。CORE、Elsevier 与 Wiley 实现
+授权 API route；九个 Profile 另外启用了 reachability-only Browser probe。生产 Browser 下载只有
+`browser:generic`，不会从 Profile 派生九条 route。相似平台、共享 CDN、上游成功记录、OA 属性、
+crawler delay、XML 交付或人工单篇访问都不会自动形成授权 API、文章归属证据或生产授权。后续
+访问方只有在各自 Notes、manifest/fixture 和状态结论闭环后才加入本表。
 
-### 4.1 工程状态与最终现场准入是两个维度
+### 4.1 历史现场结果与当前通用执行器
 
-表中 `production-ready` 是代码与证据包的工程状态，决定 Profile/rule 是否可以进入生产对象图；
-它不表示某台机器、机构或文章已经获得全文权限。2026-08-22 的最终现场准入只评价同一服务器
-出口、隔离测试 Profile 和固定代表样本的 CloakBrowser 结果：`ready` 表示该样本捕获并验证了
-正文 PDF，`deferred` 表示规则仍保留但该样本没有越过有界验证或未审查导航，`unsupported`
-表示根本没有经过审查的生产 route。现场 `deferred` 不会把工程 Profile 降成 `unsupported`，
-也不能被解释成其它网络、Profile 或文章必然失败。
+下面是 2026-08-22 旧规则执行器在同一服务器出口、隔离测试 Profile 和固定代表样本上的历史
+结果。`ready` 只表示该样本当时捕获并验证了正文 PDF，`deferred` 表示旧执行器没有在有界流程中
+交付，`unsupported` 表示当时没有规则。这些结果不再决定当前通用下载准入，也不能被解释成其它
+网络、Profile、文章或当前 Agent 必然成功或失败。
 
 | Publisher（Access key） | 工程状态 | 2026-08-22 最终现场准入 | Cloak 证据与边界 |
 | --- | --- | --- | --- |
@@ -131,20 +128,20 @@ OA 属性、crawler delay、XML 交付或人工单篇访问都不会自动形成
 | Springer Nature Link（`springerlink`） | `production-ready` | `ready` | Cloak 原生 response/download 捕获目标正文 PDF，并通过 magic、EOF、标准 reader、页面树和大小预算；只证明该代表样本且不外推 entitlement |
 | Wiley Online Library（`wiley-online-library`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF；该结论不影响独立 TDM API route |
 
-stock 结果只是在一次性 cutover 前使用的同轮基线：它同样只在 SpringerLink 成功，并在七家
+stock 结果只是在旧 CloakBrowser cutover 前使用的同轮基线：它同样只在 SpringerLink 成功，并在七家
 Cloudflare 平台形成相同 settle timeout；IOP 也未交付。最终产品不存在 stock launcher 或双引擎
 开关，以上现场准入、后续运行和配置状态都只对应唯一 CloakBrowser 生产 runtime。这个小样本
-证明的是已知 Springer 成功链无回归、Cloudflare 资源不再被本地策略误拦，以及未知 PerfDrive
-导航继续 fail closed；它没有证明 CloakBrowser 提高总体下载成功率。
+证明的是当时已知 Springer 成功链无回归、Cloudflare 资源未被本地策略误拦，以及未知 PerfDrive
+导航继续 fail closed；它没有证明当前通用 Agent 的总体下载成功率。
 
 ## 5. 离线验收边界
 
 当前统一合同测试会：
 
 - 逐项核对验证矩阵中的每个 Profile 与 evidence manifest 的名称、日期、revision、官方引用、origin、identity 和 capability；
-- 证明缺失、游离、重复引用、revision 漂移、origin/risk scope 不一致或缺少页面/补充材料规则时 fail closed；
-- 用本地 Browser gate fixture 实际分类 primary、supplement、wrong-article 和 excluded capture；
-- 证明 `fixture-verified`/`unsupported` 不进入 production 派生 catalog，并证明总开关关闭或 runtime 未就绪时不会构造可执行 Browser adapter。
+- 证明旧 Browser rule/group 字段不存在，`browser_probe_enabled` 与 route verification 合同一致；
+- 用本地 Browser gate fixture 实际分类 primary、supplement、wrong-article 和 evidence-insufficient；
+- 证明通用 route 不由 Publisher profile 派生，并证明总开关关闭或 Model/Profile/runtime 未就绪时不会构造可执行 Browser adapter。
 
 这些测试不连接真实 Provider，也不读取真实用户 Browser Profile、Cookie、凭据或登录状态；测试
 Profile 只创建在系统临时目录中。它们不证明站点长期稳定、用户权限或下载成功率。真实只读核实

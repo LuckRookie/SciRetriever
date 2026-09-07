@@ -29,6 +29,7 @@ from sciretriever.configuration import (
     configuration_runtime_status,
     configuration_service_origin,
     configuration_status,
+    configured_browser_group_policies,
     eligible_production_browser_access_keys,
     load_credentials,
     load_runtime_secrets,
@@ -38,13 +39,12 @@ from sciretriever.configuration import (
     run_configuration_probes,
 )
 from sciretriever.model.configuration import (
-    AccessConfig,
     AgentConfigurationProbeDetails,
     AgentProtocol,
     AnalysisConfig,
     BrowserAccessStatus,
+    BrowserConfig,
     BrowserConfigurationProbeResult,
-    BrowserController,
     Configuration,
     ConfigurationProbeSummary,
     ConfigurationStatus,
@@ -59,6 +59,7 @@ from sciretriever.model.configuration import (
     normalize_model_provider_identity,
 )
 from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.browser_control import BROWSER_OBSERVATION_MEDIA_TYPE
 from sciretriever.network.http import HttpClient
 
 if TYPE_CHECKING:
@@ -233,12 +234,7 @@ class ProductionConfigurationProbeSession:
             )
         if image_input:
             temporary = self.configuration.model_copy(
-                update={
-                    "access": AccessConfig(
-                        model=model.reference,
-                        browser_controller=BrowserController.AGENT,
-                    )
-                }
+                update={"browser": BrowserConfig(model=model.reference)}
             )
             raw = self._with_configuration(temporary).run_browser_agent()
         else:
@@ -445,14 +441,17 @@ class ProductionConfigurationProbeSession:
         from sciretriever.model.primitives import sha256_digest
 
         details = _browser_agent_probe_details(self.configuration)
-        # Fixed 1x1 transparent PNG.  It is synthetic configuration input,
+        # Fixed 1x1 white JPEG.  It is synthetic configuration input in the
+        # same media format as a production Browser Observation,
         # never a page screenshot or a user document.
         image = b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            "/9j/4AAQSkZJRgABAQAAAAAAAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0N"
+            "Dh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/"
+            "wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAA"
+            "AAAAAAAAAAAAD/2gAIAQEAAD8AZn//2Q=="
         )
         try:
-            _provider, model = resolve_task_model(self.configuration, task="download")
+            _provider, model = resolve_task_model(self.configuration, task="browser")
             runtime_status = configuration_runtime_status(
                 self.configuration,
                 credentials=self.credentials,
@@ -501,7 +500,14 @@ class ProductionConfigurationProbeSession:
                 AgentTextPart(media_type="text/plain", text=system_text),
                 AgentTextPart(media_type="application/json", text=user_text),
             ),
-            image_parts=(AgentImagePart(media_type="image/png", data=image, width=1, height=1),),
+            image_parts=(
+                AgentImagePart(
+                    media_type=BROWSER_OBSERVATION_MEDIA_TYPE,
+                    data=image,
+                    width=1,
+                    height=1,
+                ),
+            ),
             tools=(stop_tool,),
             max_output_tokens=max_output_tokens,
         )
@@ -746,7 +752,7 @@ def _browser_agent_probe_details(
     """Return the stable, secret-free Browser Agent probe disclosure."""
 
     try:
-        provider, model = resolve_task_model(configuration, task="download")
+        provider, model = resolve_task_model(configuration, task="browser")
         request_url = _agent_model_request_url(provider.api, provider.base_url)
     except (AgentFailure, TypeError, ValueError):
         provider, model = None, None
@@ -812,10 +818,12 @@ def build_production_configuration_probe_session(
             browser_runtime.execution.browser_client,
             browser_runtime.execution.browser_scheduler,
             (
-                eligible_production_browser_access_keys(configuration.access)
+                eligible_production_browser_access_keys(configuration.browser)
                 if browser_runtime.ready
                 else frozenset()
             ),
+            session_key=configuration.browser.profile or "browser-profile-missing",
+            policy=configured_browser_group_policies(configuration.browser)["browser-generic"],
         )
         credentials = load_credentials(home=credentials_home)
         status = configuration_status(

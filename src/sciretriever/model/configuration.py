@@ -136,17 +136,6 @@ def _agent_reasoning_effort(value: object) -> "AgentReasoningEffort":
         raise ValueError("Agent reasoning effort is unsupported") from error
 
 
-def _browser_controller(value: object) -> "BrowserController":
-    if isinstance(value, BrowserController):
-        return value
-    if type(value) is not str:
-        raise ValueError("Browser controller must be a string")
-    try:
-        return BrowserController(value)
-    except ValueError as error:
-        raise ValueError("Browser controller is unsupported") from error
-
-
 def _agent_model_identity(value: object) -> str:
     """Normalize the model identity before readiness can accept the role."""
 
@@ -612,13 +601,6 @@ class AgentReasoningEffort(str, Enum):
     MAX = "max"
 
 
-class BrowserController(str, Enum):
-    """Controller selected for every controlled-Browser acquisition job."""
-
-    RULES = "rules"
-    AGENT = "agent"
-
-
 class CoreCredentialService(str, Enum):
     """Non-Provider secret sections in ``credentials.toml``.
 
@@ -733,10 +715,6 @@ AgentProtocolValue = Annotated[
 AgentReasoningEffortValue = Annotated[
     AgentReasoningEffort,
     BeforeValidator(_agent_reasoning_effort),
-]
-BrowserControllerValue = Annotated[
-    BrowserController,
-    BeforeValidator(_browser_controller),
 ]
 ProbeOutcomeValue = Annotated[ProbeOutcome, BeforeValidator(_probe_outcome)]
 ConfigurationFingerprint = Annotated[
@@ -968,7 +946,6 @@ def _validate_model_provider_url(base_url: str) -> bool:
 
 def _validate_analysis_budget_choice(
     *,
-    context_window_tokens: int | None,
     max_input_bytes: int | None,
     max_chunk_bytes: int | None,
     max_total_llm_requests: int | None,
@@ -994,18 +971,6 @@ def _validate_analysis_budget_choice(
             and metadata_output + content_output > max_total_output_tokens
         ):
             raise ValueError("Analysis content stages must fit the total output budget")
-    if context_window_tokens is None:
-        return
-    if any(value >= context_window_tokens for value in configured_outputs):
-        raise ValueError("Analysis output budget must fit the context window")
-    if max_chunk_bytes is not None:
-        # Without a provider tokenizer, one token per UTF-8 byte is the safe
-        # upper bound.  A byte/3 estimate can undercount punctuation-heavy or
-        # non-ASCII input and allow an over-context request.
-        input_tokens = max_chunk_bytes
-        reserve = max(configured_outputs, default=0)
-        if input_tokens + reserve > context_window_tokens:
-            raise ValueError("Analysis chunk budget must fit the context window")
 
 
 class ModelProviderConfig(_FrozenModel):
@@ -1199,7 +1164,6 @@ class AnalysisConfig(_FrozenModel):
     @model_validator(mode="after")
     def _validate_budgets(self) -> "AnalysisConfig":
         _validate_analysis_budget_choice(
-            context_window_tokens=None,
             max_input_bytes=self.max_input_bytes,
             max_chunk_bytes=self.max_chunk_bytes,
             max_total_llm_requests=self.max_total_llm_requests,
@@ -1257,26 +1221,25 @@ class BrowserPolicyOverrideConfig(_FrozenModel):
         return self
 
 
-class AccessConfig(_FrozenModel):
-    """Download Browser selection, enablement, profile, and policy tightening."""
+class BrowserConfig(_FrozenModel):
+    """Independent Browser Agent selection, identity, and policy tightening."""
 
     model: ModelReference | None = None
-    browser_enabled: bool = False
-    browser_profile: BrowserProfileIdentity | None = None
-    browser_controller: BrowserControllerValue = BrowserController.RULES
-    browser_max_concurrency: Annotated[int, Field(strict=True, gt=1)] = 5
-    browser_policy_overrides: tuple[BrowserPolicyOverrideConfig, ...] = ()
+    enabled: bool = False
+    profile: BrowserProfileIdentity | None = None
+    max_concurrency: Annotated[int, Field(strict=True, gt=1)] = 5
+    policy_overrides: tuple[BrowserPolicyOverrideConfig, ...] = ()
 
-    @field_validator("browser_policy_overrides", mode="before")
+    @field_validator("policy_overrides", mode="before")
     @classmethod
     def _normalize_browser_tuples(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _validate_browser_policy_overrides(self) -> "AccessConfig":
-        if self.browser_enabled and self.browser_profile is None:
+    def _validate_browser_policy_overrides(self) -> "BrowserConfig":
+        if self.enabled and self.profile is None:
             raise ValueError("enabled Browser access requires a selected profile")
-        groups = tuple(item.rate_limit_group for item in self.browser_policy_overrides)
+        groups = tuple(item.rate_limit_group for item in self.policy_overrides)
         if len(groups) != len(set(groups)):
             raise ValueError("Browser policy overrides must have unique groups")
         return self
@@ -1292,9 +1255,9 @@ class Configuration(_FrozenModel):
     providers: ModelProvidersConfig = ModelProvidersConfig()
     models: ModelsConfig = ModelsConfig()
     analysis: AnalysisConfig = Field(default=AnalysisConfig(), alias="analyze")
+    browser: BrowserConfig = BrowserConfig()
     execution: ExecutionConfig = ExecutionConfig()
     library: LibraryConfig = LibraryConfig()
-    access: AccessConfig = Field(default=AccessConfig(), alias="download")
 
     @model_validator(mode="after")
     def _validate_analysis_role_budgets(self) -> "Configuration":
@@ -1306,7 +1269,6 @@ class Configuration(_FrozenModel):
         if analysis.model is not None and analysis_model is None:
             raise ValueError("Analyze references an unknown model")
         _validate_analysis_budget_choice(
-            context_window_tokens=None,
             max_input_bytes=analysis.max_input_bytes,
             max_chunk_bytes=analysis.max_chunk_bytes,
             max_total_llm_requests=analysis.max_total_llm_requests,
@@ -1317,11 +1279,11 @@ class Configuration(_FrozenModel):
                 analysis.reference_max_output_tokens,
             ),
         )
-        download_model = self.models.get(self.access.model)
-        if self.access.model is not None and download_model is None:
-            raise ValueError("Download references an unknown model")
-        if download_model is not None and not download_model.image:
-            raise ValueError("Download requires an image model")
+        browser_model = self.models.get(self.browser.model)
+        if self.browser.model is not None and browser_model is None:
+            raise ValueError("Browser references an unknown model")
+        if browser_model is not None and not browser_model.image:
+            raise ValueError("Browser requires an image model")
         return self
 
 
@@ -1547,11 +1509,6 @@ class BrowserAccessStatus(_FrozenModel):
         keys = tuple(route.access_key for route in self.routes)
         if len(keys) != len(set(keys)):
             raise ValueError("Browser production routes must have unique access keys")
-        eligible_keys = {
-            route.access_key for route in self.routes if route.automatic_acquisition_eligible
-        }
-        if set(self.probe.supported_access_keys) - eligible_keys:
-            raise ValueError("Browser probe target is not an eligible production route")
         locally_usable = (
             bool(self.automatic_route_count)
             and self.enabled
@@ -2113,7 +2070,6 @@ def _validate_passed_core_probe_details(
 
 
 __all__ = (
-    "AccessConfig",
     "AcquisitionProviderTuple",
     "AcquisitionSourcesConfig",
     "AnalysisConfig",
@@ -2123,7 +2079,7 @@ __all__ = (
     "BrowserAccessKeyValue",
     "BrowserAccessStatus",
     "BrowserConfigurationProbeResult",
-    "BrowserController",
+    "BrowserConfig",
     "BrowserPolicyOverrideConfig",
     "BrowserPolicyStatus",
     "BrowserProbeAvailabilityStatus",

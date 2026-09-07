@@ -28,7 +28,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -40,13 +40,7 @@
       "payload": "jats-xml-not-pdf"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "site-terms-do-not-authorize-database-population",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-page-rule",
-        "no-evidence-for-shared-rate-or-session-group"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

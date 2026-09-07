@@ -8,11 +8,10 @@ from unittest.mock import Mock, patch
 from sciretriever.configuration import ConfigurationError
 from sciretriever.entry.cli.config_center import probes
 from sciretriever.model.configuration import (
-    AccessConfig,
     AgentConfigurationProbeDetails,
     AgentProtocol,
     AgentReasoningEffort,
-    BrowserController,
+    BrowserConfig,
     Configuration,
     ConfigurationProbeResult,
     ConfigurationProbeSummary,
@@ -321,10 +320,10 @@ class ConfigurationTestExecutionTests(unittest.TestCase):
         self.assertNotIn("browser", payload)
         session.run_browser_agent.assert_not_called()
 
-    def test_global_all_requires_browser_model_only_for_agent_controller(self) -> None:
+    def test_global_all_requires_browser_model_when_browser_is_enabled(self) -> None:
         session = Mock()
         session.configuration = Configuration(
-            download=AccessConfig(browser_controller=BrowserController.AGENT)
+            browser=BrowserConfig(enabled=True, profile="fixture-profile")
         )
         session.run.return_value = _source_pass()
         session.run_acquisition.return_value = _download_unavailable()

@@ -29,7 +29,7 @@ def _configuration() -> Configuration:
                     }
                 ]
             },
-            "access": {"model": "openai/browser-model"},
+            "browser": {"model": "openai/browser-model"},
         }
     )
 
@@ -80,7 +80,7 @@ class ConfigurationManagerTests(unittest.TestCase):
             "download": ("auto · 2 Sources", "Ready"),
             "parse": ("not configured", "Incomplete"),
             "analyze": ("not selected", "Incomplete"),
-            "browser": ("off · rules · no Model", "Off"),
+            "browser": ("off · no Model", "Off"),
         }
         with (
             patch.object(manager, "ConfigConsole", return_value=console),
@@ -119,7 +119,7 @@ class ConfigurationManagerTests(unittest.TestCase):
             "Incomplete · not configured",
         )
         self.assertIn("no external requests", options[6].description)
-        self.assertEqual(options[5].description, "Off · rules · no Model")
+        self.assertEqual(options[5].description, "Off · no Model")
         self.assertEqual(options[7].description, "Mono palette · local appearance only")
         self.assertIs(options[6].kind, ConfigActionKind.INSPECT)
         self.assertIs(options[-1].kind, ConfigActionKind.NAVIGATE)

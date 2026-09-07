@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sciretriever.analysis.failures import analysis_cancelled_failure
 from sciretriever.analysis.ports import ContentAnalysisInput
 from sciretriever.model.report import StableFailure
 
@@ -89,16 +90,6 @@ _FAILURE_MESSAGES: dict[str, tuple[str, str, bool]] = {
         "Refresh the Literature and analyze its current inputs again.",
         False,
     ),
-    "analysis-content-metadata-stage": (
-        "The metadata Analysis stage did not complete successfully.",
-        "Retry Analysis after checking the configured language-model provider.",
-        True,
-    ),
-    "analysis-content-llm": (
-        "The content language-model stage did not return an aligned result.",
-        "Retry Analysis after checking the configured language-model provider.",
-        True,
-    ),
     "analysis-content-draft": (
         "The content language-model result failed the Markdown contract.",
         "Retry Analysis or review the configured content model.",
@@ -119,11 +110,6 @@ _FAILURE_MESSAGES: dict[str, tuple[str, str, bool]] = {
         "Correct the Analysis composition before retrying.",
         False,
     ),
-    "analysis-content-cancelled": (
-        "The content Analysis operation was cancelled.",
-        "Retry the Literature when content Analysis should resume.",
-        True,
-    ),
 }
 
 
@@ -134,6 +120,11 @@ def content_analysis_failure(
 ) -> ContentAnalysisFailure:
     """Create one known stable failure without retaining an underlying error."""
 
+    if code == "analysis-content-cancelled":
+        failure = analysis_cancelled_failure()
+        if retryable is not None:
+            failure = failure.model_copy(update={"retryable": retryable})
+        return ContentAnalysisFailure(failure)
     try:
         reason, action, default_retryable = _FAILURE_MESSAGES[code]
     except KeyError:

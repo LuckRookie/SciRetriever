@@ -5,13 +5,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from sciretriever.bootstrap.browser import _new_browser_runtime
 from sciretriever.configuration import initialize_browser_profile, parse_configuration
 from sciretriever.configuration.cloak_runtime import (
     CLOAKBROWSER_BROWSER_VERSION,
     CloakRuntimeStatus,
 )
-from sciretriever.model.access import AccessFailure
+from sciretriever.model.access import AccessFailure, BrowserCaptureKind
 from sciretriever.model.configuration import Configuration, ProbeOutcome
+from sciretriever.network.admission import AccessCoordinator
+from sciretriever.network.browser import (
+    BrowserCaptureCorrelation,
+    BrowserCaptureDecision,
+    BrowserCaptureEvidence,
+)
 from sciretriever.network.cloakbrowser import CloakBrowserRuntimeAvailability
 
 
@@ -19,9 +26,9 @@ class CloakProbeAssemblyTests(unittest.TestCase):
     def _configuration(self) -> Configuration:
         return parse_configuration(
             """
-            [download]
-            browser_enabled = true
-            browser_profile = "fixture-profile"
+            [browser]
+            enabled = true
+            profile = "fixture-profile"
             """
         )
 
@@ -118,6 +125,51 @@ class CloakProbeAssemblyTests(unittest.TestCase):
             self.assertIs(result.outcome, ProbeOutcome.SKIPPED)
             self.assertEqual(result.navigation_count, 0)
 
+    def test_runtime_failure_is_carried_into_acquisition_execution(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="sciretriever-cloak-runtime-failure-") as raw:
+            home = Path(raw) / "home"
+            home.mkdir(mode=0o700)
+            initialize_browser_profile("fixture-profile", home=home)
+            with (
+                mock.patch(
+                    "sciretriever.bootstrap.browser.CloakRuntimeManager.status",
+                    return_value=CloakRuntimeStatus(presence="missing", ready=False),
+                ),
+                mock.patch(
+                    "sciretriever.bootstrap.browser.cloakbrowser_runtime_availability",
+                    return_value=CloakBrowserRuntimeAvailability(
+                        cloak_wrapper_available=True,
+                        playwright_api_available=True,
+                        binary_executable_available=False,
+                        headed_display_available=True,
+                        browser_version=CLOAKBROWSER_BROWSER_VERSION,
+                    ),
+                ),
+            ):
+                assembly = _new_browser_runtime(
+                    self._configuration(),
+                    access_coordinator=AccessCoordinator(),
+                    resolver=lambda _hostname: (),
+                    browser_profile_home=home,
+                )
+
+            try:
+                self.assertFalse(assembly.ready)
+                self.assertEqual(assembly.failure_code, "browser-cloak-binary-unavailable")
+                self.assertIsNotNone(assembly.failure)
+                self.assertEqual(
+                    assembly.failure,
+                    assembly.execution.browser_runtime_failure,
+                )
+                self.assertEqual(
+                    assembly.execution.browser_runtime_failure.code
+                    if assembly.execution.browser_runtime_failure is not None
+                    else None,
+                    "browser-cloak-binary-unavailable",
+                )
+            finally:
+                assembly.execution.close()
+
     def test_probe_disables_capture_and_allows_only_admitted_subresources(self) -> None:
         import sciretriever.bootstrap as bootstrap
         from sciretriever.network.browser import BrowserClient
@@ -161,10 +213,19 @@ class CloakProbeAssemblyTests(unittest.TestCase):
             kwargs = run.call_args.kwargs
             self.assertFalse(kwargs["navigation_only"])
             self.assertTrue(kwargs["discard_unapproved_subresources"])
-            self.assertFalse(
-                kwargs["capture_guard"].allows(
-                    "https://example.invalid", object(), "application/pdf"
-                )
+            self.assertIs(
+                kwargs["capture_policy"].decide(
+                    BrowserCaptureEvidence(
+                        locator="https://example.invalid/",
+                        kind=BrowserCaptureKind.RESPONSE,
+                        media_type="application/pdf",
+                        correlation=BrowserCaptureCorrelation.DIRECT_REQUEST,
+                        request_navigation=False,
+                        from_exact_start=False,
+                        redirect_depth=0,
+                    )
+                ),
+                BrowserCaptureDecision.REJECT,
             )
 
 

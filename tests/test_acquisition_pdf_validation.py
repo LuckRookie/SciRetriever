@@ -186,7 +186,6 @@ class PdfValidationTests(unittest.TestCase):
             validate_pdf(
                 source,
                 staging=self.staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=max_bytes,
                 declared_media_type=declared_media_type,
             )
@@ -202,7 +201,6 @@ class PdfValidationTests(unittest.TestCase):
                 with validate_pdf(
                     _GuardedReadable(payload),
                     staging=self.staging,
-                    candidate_belongs_to_literature=True,
                     max_bytes=len(payload),
                     declared_media_type=declaration,
                 ) as validated:
@@ -225,7 +223,6 @@ class PdfValidationTests(unittest.TestCase):
         with validate_pdf(
             stream,
             staging=self.staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         ) as validated:
             self.assertEqual(validated.byte_size, stream.size)
@@ -236,7 +233,6 @@ class PdfValidationTests(unittest.TestCase):
         with validate_pdf(
             (payload[:9], payload[9:]),
             staging=self.staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         ) as validated:
             self.assertEqual(validated.byte_size, len(payload))
@@ -291,7 +287,6 @@ class PdfValidationTests(unittest.TestCase):
         with validate_pdf(
             readable,
             staging=self.staging,
-            candidate_belongs_to_literature=True,
             max_bytes=len(payload),
         ) as validated:
             self.assertEqual(validated.byte_size, len(payload))
@@ -325,7 +320,6 @@ class PdfValidationTests(unittest.TestCase):
             validate_pdf(
                 _CancelDuringRead(event, _pdf_bytes()),
                 staging=self.staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=1024 * 1024,
                 cancel_event=event,
             )
@@ -345,7 +339,6 @@ class PdfValidationTests(unittest.TestCase):
                 validate_pdf(
                     _pdf_bytes(),
                     staging=self.staging,
-                    candidate_belongs_to_literature=True,
                     max_bytes=1024 * 1024,
                     cancel_event=event,
                 )
@@ -381,7 +374,6 @@ class PdfValidationTests(unittest.TestCase):
             validate_pdf(
                 b"<html>not a PDF</html>",
                 staging=staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=1024 * 1024,
             )
 
@@ -421,7 +413,6 @@ class PdfValidationTests(unittest.TestCase):
                 validate_pdf(
                     _pdf_bytes(),
                     staging=staging,
-                    candidate_belongs_to_literature=True,
                     max_bytes=1024 * 1024,
                 )
 
@@ -459,7 +450,6 @@ class PdfValidationTests(unittest.TestCase):
             validate_pdf(
                 _CancelDuringRead(event, _pdf_bytes()),
                 staging=staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=1024 * 1024,
                 cancel_event=event,
             )
@@ -468,27 +458,10 @@ class PdfValidationTests(unittest.TestCase):
         self.assertEqual([directory.cleanup_calls for directory in directories], [1])
         self._assert_clean()
 
-    def test_candidate_association_must_be_explicitly_true(self) -> None:
-        for association in (False, None, 1):
-            with self.subTest(association=association):
-                with self.assertRaises(PdfValidationError) as raised:
-                    validate_pdf(
-                        _pdf_bytes(),
-                        staging=self.staging,
-                        candidate_belongs_to_literature=association,  # type: ignore[arg-type]
-                        max_bytes=1024 * 1024,
-                    )
-                self.assertIs(
-                    raised.exception.code,
-                    PdfValidationCode.ASSOCIATION_NOT_ESTABLISHED,
-                )
-                self._assert_clean()
-
     def test_success_context_exit_is_idempotent_and_removes_owner_only_stage(self) -> None:
         validated = validate_pdf(
             _pdf_bytes(),
             staging=self.staging,
-            candidate_belongs_to_literature=True,
             max_bytes=1024 * 1024,
         )
         roots = self._staging_directories()
@@ -520,7 +493,6 @@ class PdfValidationTests(unittest.TestCase):
             with validate_pdf(
                 _pdf_bytes(),
                 staging=self.staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=1024 * 1024,
             ) as validated:
                 with validated.open():

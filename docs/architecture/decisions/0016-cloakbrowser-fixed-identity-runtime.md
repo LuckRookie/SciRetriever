@@ -2,12 +2,16 @@
 
 - Status: Accepted
 - Date: 2026-08-21
-- Last amended: 2026-08-26
+- Last amended: 2026-09-04
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
+- Amended by: [ADR 0023](0023-generic-browser-agent-executor.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Network 技术文档](../technical/network.md)、[Configuration 技术文档](../technical/configuration.md)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
+
+> **2026-09-06 修订：** ADR 0023 删除了 Publisher rule/origin catalog 对 Browser 获取的准入；
+> 本 ADR 的固定身份 runtime、受限网络资源、CloakBrowser 生命周期和清理边界继续有效。
 
 ADR 0015 已经确定 Public → Authorized Provider API → Controlled Browser 的严格风险顺序、一个长期身份 Profile、一个共享 process/context，以及 Publisher 风险组之间并行、组内限速串行。当前 stock Playwright runtime 能执行这些合同，但服务器实测仍暴露 `navigator.webdriver=true`、空 plugin surface 等明显自动化特征；同一长期 Profile 若在每次启动配合随机设备指纹，也会产生“Cookie 和历史不变、设备身份持续变化”的矛盾。
 
@@ -21,7 +25,7 @@ ADR 0015 已经确定 Public → Authorized Provider API → Controlled Browser 
 
 ```text
 Acquisition rule / controlled Agent decision
-  -> SciRetriever BrowserControlSession
+  -> SciRetriever BrowserStepSession (start/apply)
   -> Playwright API
   -> CloakBrowser patched Chromium
 ```
@@ -71,7 +75,7 @@ Challenge 是普通 `BrowserObservation.page_state=CHALLENGE`，不是独立的�
 
 Network 允许已批准 challenge dependency 在当前文章 permit、frame ancestry 和页面生命周期内自然加载，并只报告加载/阻断事实。页面脚本若自动清除 Challenge，下一次 Observation 自然回到普通文章页；资源被本地 origin/CONNECT policy 阻断时形成真实 Network 失败，不能伪装成用户无权限或 Agent 失败。局部资源加载和每次动作使用客观的单次超时，不形成整篇 Browser 作业 deadline 或 Challenge 专属重试预算。
 
-作业开始前已经冻结的 Browser controller 决定页面如何继续：`rules` 只能执行已审查的确定性页面规则，`agent` 从第一次统一 Observation 起选择 ADR 0017 规定的六种封闭动作；二者不会在 Challenge 或其它页面上相互 fallback。Browser Agent 可以使用 `ClickElement`，也可以用绑定当前 article/page/surface/viewport/screenshot/revision 的 `ClickPoint` 操作当前页面可见控件。它不取得 selector、任意或跨 revision 坐标、JavaScript、CDP、Cookie、验证 token、文件系统或新 Browser/context。
+作业开始前冻结唯一的通用 Agent controller；它从第一次统一 Observation 起选择 ADR 0017 规定的六种封闭动作，不存在确定性规则 controller 或失败 fallback。Browser Agent 可以使用 `ClickElement`，也可以用绑定当前 article/page/surface/viewport/screenshot/revision 的 `ClickPoint` 操作当前页面可见控件。它不取得 selector、任意或跨 revision 坐标、JavaScript、CDP、Cookie、验证 token、文件系统或新 Browser/context。
 
 Operator 选择 Agent controller 并发起当前文献获取，即表达了由 Browser Agent 在同一 Profile、原始出口、Publisher permit 和文章页面边界内处理可见 Challenge 的意志，不再为每个 Challenge 请求一次人工确认。系统不把 Challenge 外包给第三方服务，不注入或伪造验证结果，不切换代理/IP/Profile，不自动登录、选择机构或处理 MFA。Challenge 清除不构成 entitlement 证明；Acquisition 仍需完成正文归属、capture 与 PDF 验收。Agent 停止时页面仍为 Challenge，可以稳定解释为 `challenge-unresolved`，无需专属状态机或硬预算。
 
@@ -113,5 +117,5 @@ Operator 选择 Agent controller 并发起当前文献获取，即表达了由 B
 - 恢复公开多引擎选择或长期 stock runtime fallback；
 - 自动登录、Cookie 导入导出、机构选择或 MFA；
 - 让 Challenge 页面动作脱离当前文章、统一 Observation、同一 Publisher permit 或 Network action executor；
-- 允许 Agent、插件或外部 CDP 绕过 SciRetriever BrowserControlSession；
+- 允许 Agent、插件或外部 CDP 绕过 SciRetriever BrowserStepSession 与 Network action executor；
 - 将 fingerprint、challenge 页面、Cookie、Profile 内容或 Agent 页面观察持久化为产品事实。

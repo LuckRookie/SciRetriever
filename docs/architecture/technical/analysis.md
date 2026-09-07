@@ -105,7 +105,13 @@ ContentAnalysisResult =
 
 第二阶段必须实际收到第一阶段确定的完整 `LiteratureMetadata`，不能只收到 metadata hash、供应商初始元数据或再次自行推断的摘要。它不得重新生成标题、作者、关键词、摘要或其它元数据。两次请求是一个 Analysis 业务用例的两个内部阶段，对公开 API 仍只返回 `NoUsableContent` 或一份完整 `LiteratureContentProposal`。
 
-每个阶段只构造一个独立 `AgentCall`，不在 Provider adapter 内隐藏分段、汇总或额外模型调用。Bootstrap 根据 Analysis 自己的业务预算与内部安全上限派生 role binding 的单次 context/output 边界，Runtime 再按本次 output 预留检查输入；超出该调用边界时形成稳定 Analysis 失败并保留 PDF，不截断正文、不发布第一阶段部分结果，也不把分块 workflow 偷渡进 Agents。未来若需要超长文献分块，必须由 Analysis 明确拥有阶段 workflow、合并语义和直接验收。
+每个阶段只构造一个独立 `AgentCall`，不在 Provider adapter 内隐藏分段、汇总或额外模型调用。
+Bootstrap 根据 Analysis 自己的业务预算与内部安全上限派生 role binding 的单次 context/output
+边界；Runtime 在调用前检查 output token 上限与可客观计算的 byte/count limits，不把输入字节
+猜成 token。Provider 返回可信 usage 后，Runtime 才验证实际 input/output token 没有越过 context。
+超出调用边界时形成稳定失败并保留 PDF，不截断正文、不发布第一阶段部分结果，也不把分块
+workflow 偷渡进 Agents。未来若需要超长文献分块，必须由 Analysis 明确拥有阶段 workflow、
+合并语义和直接验收。
 
 ### 4.1 第一阶段的作者处理
 
@@ -324,8 +330,8 @@ context/output 与单次调用限制由 Analysis/Bootstrap 派生，不由用户
 来自 `credentials.toml.[providers.<provider>]` 并与规范 origin 精确绑定。Analysis 不提供
 task-level model、reasoning 或 capability override。远程 Provider 必须使用 hostname-based HTTPS
 与 API key；HTTP loopback Provider 可以无认证。
-Agents adapter 在序列化真实请求后再次检查保守输入 token 估算与输出预留没有越过 context，
-跨 origin redirect 不携带认证。
+Agents adapter 不从 UTF-8 bytes 推断 token；context 只根据 Provider 返回的实际 usage 在 Runtime
+结果边界验证。跨 origin redirect 不携带认证。
 
 `config test analyze` 复用这里的生产 adapter，但只发送固定的极小 strict-schema probe，不发送
 用户 Literature 或 PDF 内容、不构造 Storage、不持久化结果。它可能消耗少量额度，因而
@@ -338,6 +344,18 @@ Timeout、认证失败、限流、拒答、截断、未知结构、Markdown 不�
 - 不形成 `NoUsableContent`；
 - 不长期保存第一阶段 metadata 提案或第二阶段待验收草稿；
 - 后续运行可以重新分析。
+
+失败 owner 保持分层：metadata/content 任一 Agent 调用返回 `agent-cancelled` 时，内容分析统一形成
+`analysis-content-cancelled`，Entry 将最终 disposition 记为 interrupted；authentication、permission、
+quota/rate、timeout/transport、model、refusal、truncation 及 `agent-internal` 等稳定 `agent-*`
+保留原 code、reason、action 与 retryable，不再包装成泛化 `analysis-*-llm`。只有 Analysis 自己的
+input、schema/structure、metadata/content validation、stale、render、artifact read/publication 才形成
+具体 `analysis-*`；未知本地实现异常稳定成为 non-retryable `analysis-internal`。
+
+正常 INFO transcript 由 Analysis 依次记录 metadata stage、content stage 和 Markdown publication
+的 started/finished，由 Agents Runtime 记录每次真实模型调用的 role/provider/wire model、usage、
+elapsed 或稳定失败。第一阶段成功而第二阶段、stale 检查或 publication 失败时，不发布或接纳任何
+第一阶段部分结果。协议、capability 和安全大小等 adapter 细节只进入 Debug。
 
 Secret、完整请求 header、底层 SDK 对象、prompt 原文和未脱敏异常不得进入 Model、provenance、持久化结果或用户输出。
 
@@ -365,6 +383,12 @@ Secret、完整请求 header、底层 SDK 对象、prompt 原文和未脱敏异�
 - `ReferenceLookup` 只提取原文明示线索，不持久化或直接建关系；
 - 超出 Analysis/Bootstrap 派生单次调用边界的文献稳定失败并保留 PDF，不截断输入、隐藏分段或发布部分结果；
 - 两阶段分别构造独立 `AgentCall`，第一阶段未通过业务验收时不执行第二次 Runtime 调用；ReferenceLookup 空输入不调用模型；
+- metadata/content 任一模型阶段取消都形成 `analysis-content-cancelled` 并由 Entry 报告 interrupted，
+  不调用后续阶段或发布内容；
+- 稳定 Provider/Runtime `agent-*` failure 保留 code/retryable，Analysis 本地未知异常形成
+  non-retryable `analysis-internal`，两者不互相冒充；
+- INFO 中 metadata、content、Markdown publication 与 role-level Agent call 各有单一 owner，
+  第二阶段或发布失败时没有部分结果；
 - Analysis 不直接导入 Agents provider adapter/vendor SDK，Agents 不拥有文献 request kind、prompt/schema 或结果验收；
 - vendor 类型、secret、prompt 和未脱敏错误不进入公开 API、Model 或持久化结果。
 

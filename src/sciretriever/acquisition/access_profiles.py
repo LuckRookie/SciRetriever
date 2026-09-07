@@ -1,9 +1,11 @@
 """Secret-free static profiles for publication and access platforms.
 
 Profiles are Acquisition-owned knowledge.  They identify the party that
-serves an article and describe only closed, reviewable capabilities and
-Browser rules.  They are deliberately separate from Metadata Provider names
-and from operation-local Browser runtime material.
+serves an article and describe only closed, reviewable routing facts.  An
+optional Browser probe flag is diagnostic evidence, never an executable page
+program or a prerequisite for generic Browser acquisition.  Profiles are
+deliberately separate from Metadata Provider names and operation-local Browser
+runtime material.
 """
 
 from __future__ import annotations
@@ -18,8 +20,6 @@ from enum import Enum, unique
 from typing import ClassVar, Final
 from urllib.parse import urlsplit
 
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
-
 _CONTROL_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\x00-\x1f\x7f]")
 _STABLE_IDENTITY: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
@@ -32,10 +32,6 @@ _UUID: Final[re.Pattern[str]] = re.compile(
 _DOI_PREFIX: Final[re.Pattern[str]] = re.compile(r"^10\.[0-9]{4,9}$", re.ASCII)
 _ROUTE_KEY: Final[re.Pattern[str]] = re.compile(
     r"^[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)+$",
-    re.ASCII,
-)
-_RULE_ID: Final[re.Pattern[str]] = re.compile(
-    r"^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$",
     re.ASCII,
 )
 _EVIDENCE_REVISION: Final[re.Pattern[str]] = re.compile(
@@ -192,13 +188,6 @@ def _publisher_name(value: object) -> str:
     return _plain_text(value, field_name="publisher name", maximum=160).casefold()
 
 
-def _rule_id(value: object) -> str:
-    candidate = _plain_text(value, field_name="Browser rule id", maximum=128).casefold()
-    if _RULE_ID.fullmatch(candidate) is None:
-        raise ValueError("Browser rule id must be a stable token")
-    return candidate
-
-
 def _evidence_revision(value: object) -> str:
     candidate = _plain_text(value, field_name="evidence revision", maximum=128).casefold()
     if _EVIDENCE_REVISION.fullmatch(candidate) is None:
@@ -337,29 +326,22 @@ class PublisherAccessProfile:
     weak_publisher_names: tuple[str, ...]
     public_route_keys: tuple[str, ...]
     api_route_keys: tuple[str, ...]
-    browser_route_key: str | None
-    browser_allowed_origins: tuple[str, ...]
-    browser_rate_limit_group: str | None
-    browser_session_key: str | None
-    browser_rule_id: str | None
-    browser_rule_revision: int | None
+    browser_probe_enabled: bool
     policy_evidence: PolicyEvidence
     policy_revision: str
     production_status: ProfileProductionStatus
     evidence: PublisherAccessEvidence
-    browser_policy: BrowserGroupPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "access_key", PublisherAccessKey(self.access_key))
         object.__setattr__(self, "platform_key", AccessPlatformKey(self.platform_key))
         self._normalize_match_fields()
         self._normalize_route_fields()
-        self._normalize_browser_fields()
         self._validate_policy_fields()
-        self._validate_browser_contract()
+        self._validate_profile_contract()
 
     def _normalize_match_fields(self) -> None:
-        for field_name in ("landing_origins", "asset_origins", "browser_allowed_origins"):
+        for field_name in ("landing_origins", "asset_origins"):
             object.__setattr__(
                 self,
                 field_name,
@@ -409,28 +391,6 @@ class PublisherAccessProfile:
                     normalize=_route_key,
                 ),
             )
-        if self.browser_route_key is not None:
-            object.__setattr__(self, "browser_route_key", _route_key(self.browser_route_key))
-
-    def _normalize_browser_fields(self) -> None:
-        if self.browser_rate_limit_group is not None:
-            object.__setattr__(
-                self,
-                "browser_rate_limit_group",
-                BrowserRateLimitGroup(self.browser_rate_limit_group),
-            )
-        if self.browser_session_key is not None:
-            object.__setattr__(
-                self,
-                "browser_session_key",
-                BrowserSessionKey(self.browser_session_key),
-            )
-        if self.browser_rule_id is not None:
-            object.__setattr__(self, "browser_rule_id", _rule_id(self.browser_rule_id))
-        if self.browser_rule_revision is not None and (
-            type(self.browser_rule_revision) is not int or self.browser_rule_revision < 1
-        ):
-            raise ValueError("browser_rule_revision must be a positive integer or None")
 
     def _validate_policy_fields(self) -> None:
         if not isinstance(self.policy_evidence, PolicyEvidence):
@@ -439,64 +399,29 @@ class PublisherAccessProfile:
             raise TypeError("production_status must be ProfileProductionStatus")
         if not isinstance(self.evidence, PublisherAccessEvidence):
             raise TypeError("evidence must be PublisherAccessEvidence")
-        if self.browser_policy is not None and not isinstance(
-            self.browser_policy,
-            BrowserGroupPolicy,
-        ):
-            raise TypeError("browser_policy must be BrowserGroupPolicy or None")
+        if type(self.browser_probe_enabled) is not bool:
+            raise TypeError("browser_probe_enabled must be a bool")
         object.__setattr__(
             self,
             "policy_revision",
             _plain_text(self.policy_revision, field_name="policy revision", maximum=64),
         )
 
-    def _validate_browser_contract(self) -> None:
-        browser_values_present = any(
-            (
-                self.browser_allowed_origins,
-                self.browser_rate_limit_group is not None,
-                self.browser_session_key is not None,
-                self.browser_rule_id is not None,
-                self.browser_rule_revision is not None,
-                self.browser_policy is not None,
-            )
-        )
-        if self.browser_route_key is None and browser_values_present:
-            raise ValueError("Browser profile fields require a Browser route")
-        if self.browser_route_key is not None and (
-            not self.browser_allowed_origins
-            or self.browser_rate_limit_group is None
-            or self.browser_session_key is None
-            or self.browser_rule_id is None
-            or self.browser_rule_revision is None
-            or self.browser_policy is None
-        ):
-            raise ValueError(
-                "Browser routes require origins, a rate group, a session key, a rule, and a policy"
-            )
-        if self.browser_policy is not None and (
-            self.browser_policy.rate_limit_group != self.browser_rate_limit_group
-            or self.browser_policy.policy_revision != self.policy_revision
-        ):
-            raise ValueError("Browser policy must match the profile group and revision")
+    def _validate_profile_contract(self) -> None:
+        if self.browser_probe_enabled and not self.landing_origins:
+            raise ValueError("Browser probes require a landing origin")
         if self.production_status is ProfileProductionStatus.PRODUCTION_READY and (
             self.policy_evidence is PolicyEvidence.UNVERIFIED
         ):
             raise ValueError("a production-ready profile needs verified policy evidence")
-        if self.production_status is not ProfileProductionStatus.UNSUPPORTED and not any(
-            (self.public_route_keys, self.api_route_keys, self.browser_route_key is not None)
-        ):
-            raise ValueError("a verified profile needs an executable route")
-        if self.browser_policy is not None and not self.browser_policy.has_pacing:
-            raise ValueError("a Browser profile needs a paced provider policy")
         if self.production_status is ProfileProductionStatus.UNSUPPORTED and any(
             (
                 self.public_route_keys,
                 self.api_route_keys,
-                self.browser_route_key is not None,
+                self.browser_probe_enabled,
             )
         ):
-            raise ValueError("an unsupported profile cannot declare executable routes")
+            raise ValueError("an unsupported profile cannot declare routes or Browser probes")
 
     @property
     def revision_hash(self) -> str:
@@ -512,26 +437,7 @@ class PublisherAccessProfile:
                 self.weak_publisher_names,
                 self.public_route_keys,
                 self.api_route_keys,
-                self.browser_route_key,
-                self.browser_allowed_origins,
-                self.browser_rate_limit_group,
-                self.browser_session_key,
-                self.browser_rule_id,
-                self.browser_rule_revision,
-                None
-                if self.browser_policy is None
-                else (
-                    self.browser_policy.rate_limit_group,
-                    self.browser_policy.policy_revision,
-                    self.browser_policy.minimum_start_interval,
-                    self.browser_policy.rate_limit_cooldown,
-                    self.browser_policy.runtime_failure_threshold,
-                    self.browser_policy.max_concurrency,
-                    self.browser_policy.maximum_starts_per_window,
-                    self.browser_policy.window_seconds,
-                    self.browser_policy.cooldown_after_completion,
-                    self.browser_policy.failure_cooldown,
-                ),
+                self.browser_probe_enabled,
                 self.policy_evidence.value,
                 self.policy_revision,
                 self.production_status.value,

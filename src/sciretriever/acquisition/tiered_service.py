@@ -366,10 +366,11 @@ class TieredAcquisitionService:
         request = item.request
         if request is None:
             return RouteExecutionResult.fatal(_contract_failure())
+        planning_hints = () if item.planning_session is None else item.planning_session.route_hints
         context = RouteExecutionContext(
             request=request,
             evidence=build_acquisition_evidence(request),
-            route_hints=tuple(item.route_hints),
+            route_hints=tuple(dict.fromkeys((*planning_hints, *item.route_hints))),
             candidate_keys=item.candidate_keys,
             cancel_event=cancel_event,
         )
@@ -381,7 +382,7 @@ class TieredAcquisitionService:
             route.route_key,
             adapter.source_name,
             item.plan.revision,
-            len(item.route_hints),
+            len(context.route_hints),
         )
         started_ns = time.monotonic_ns()
         try:

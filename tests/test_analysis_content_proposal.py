@@ -7,9 +7,9 @@ import unittest
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, closing
 from typing import BinaryIO, cast
+from unittest.mock import patch
 
 from sciretriever.agents.api import (
-    AgentFailure,
     AgentModelCapabilities,
     AgentProvenance,
     AgentRole,
@@ -17,6 +17,7 @@ from sciretriever.agents.api import (
     AgentRuntime,
     AgentStructuredResult,
 )
+from sciretriever.agents.failures import agent_failure
 from sciretriever.agents.ports import AgentProviderCall, AgentProviderPort
 from sciretriever.analysis.content import (
     ContentAnalysisFailure,
@@ -56,7 +57,6 @@ from sciretriever.model.primitives import (
     sha256_digest,
 )
 from sciretriever.model.provenance import Provenance
-from sciretriever.model.report import StableFailure
 
 _LITERATURE_ID = LiteratureId("10000001-e89b-12d3-a456-426614174000")
 _ASSET_ID = AssetId("10000002-e89b-12d3-a456-426614174000")
@@ -513,14 +513,7 @@ class AnalysisContentProposalTests(unittest.TestCase):
         self.assertEqual(provenance_factory.calls, 0)
 
     def test_stage_failures_never_return_or_publish_partial_results(self) -> None:
-        provider_failure = AgentFailure(
-            StableFailure(
-                code="fixture-provider-failure",
-                reason="The fixture provider failed.",
-                action="Retry the fixture provider.",
-                retryable=True,
-            )
-        )
+        provider_failure = agent_failure("timeout")
         cases = (
             ("first", (provider_failure,), 1),
             ("second", (_usable_response(), provider_failure), 2),
@@ -540,6 +533,114 @@ class AnalysisContentProposalTests(unittest.TestCase):
                 self.assertEqual(publisher.calls, [])
                 self.assertNotIsInstance(caught.exception, NoUsableContent)
                 self.assertNotIn(_PRIVATE_RESPONSE, repr(caught.exception))
+                if name in {"first", "second"}:
+                    self.assertEqual(caught.exception.failure.code, "agent-timeout")
+                    self.assertTrue(caught.exception.failure.retryable)
+
+    def test_agent_cancellation_in_either_model_stage_interrupts_without_publication(
+        self,
+    ) -> None:
+        cases = (
+            ("metadata", (agent_failure("cancelled"), _content_response()), 1),
+            ("content", (_usable_response(), agent_failure("cancelled")), 2),
+        )
+        for stage, actions, expected_calls in cases:
+            with self.subTest(stage=stage):
+                llm = _FakeLLM(actions)
+                service, _, _, publisher = _service(llm)
+
+                with self.assertRaises(ContentAnalysisFailure) as caught:
+                    service.analyze(_analysis_input())
+
+                self.assertEqual(
+                    caught.exception.failure.code,
+                    "analysis-content-cancelled",
+                )
+                self.assertTrue(caught.exception.failure.retryable)
+                self.assertEqual(len(llm.calls), expected_calls)
+                self.assertEqual(publisher.calls, [])
+
+    def test_provider_failure_family_is_preserved_by_both_model_stages(self) -> None:
+        kinds = (
+            "authentication",
+            "authorization",
+            "quota",
+            "timeout",
+            "not-found",
+            "refusal",
+            "truncated",
+            "internal",
+        )
+        for stage in ("metadata", "content"):
+            for kind in kinds:
+                with self.subTest(stage=stage, kind=kind):
+                    provider_failure = agent_failure(kind)
+                    actions = (
+                        (provider_failure,)
+                        if stage == "metadata"
+                        else (_usable_response(), provider_failure)
+                    )
+                    llm = _FakeLLM(actions)
+                    service, _, _, publisher = _service(llm)
+
+                    with self.assertRaises(ContentAnalysisFailure) as caught:
+                        service.analyze(_analysis_input())
+
+                    self.assertEqual(caught.exception.failure, provider_failure.failure)
+                    self.assertEqual(publisher.calls, [])
+
+    def test_unknown_analysis_exception_is_redacted_nonretryable_internal_failure(self) -> None:
+        llm = _FakeLLM((_usable_response(), _content_response()))
+        service, _, _, publisher = _service(llm)
+
+        with patch(
+            "sciretriever.analysis.service.parse_content_markdown_response",
+            side_effect=RuntimeError(_PRIVATE_RESPONSE),
+        ):
+            with self.assertRaises(ContentAnalysisFailure) as caught:
+                service.analyze(_analysis_input())
+
+        self.assertEqual(caught.exception.failure.code, "analysis-internal")
+        self.assertFalse(caught.exception.failure.retryable)
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(publisher.calls, [])
+        self.assertNotIn(_PRIVATE_RESPONSE, repr(caught.exception))
+
+    def test_analysis_stage_transcript_is_ordered_concise_and_redacted(self) -> None:
+        llm = _FakeLLM((_usable_response(), _content_response()))
+        service, _, _, _ = _service(llm)
+
+        with self.assertLogs("sciretriever.analysis", level="INFO") as captured:
+            service.analyze(_analysis_input())
+
+        rendered = "\n".join(captured.output)
+        expected_events = (
+            "event=analysis-stage-started stage=metadata",
+            "event=analysis-stage-finished stage=metadata outcome=success",
+            "event=analysis-stage-started stage=content",
+            "event=analysis-stage-finished stage=content outcome=success",
+            "event=analysis-publication-started artifact=markdown",
+            "event=analysis-publication-finished artifact=markdown outcome=success",
+        )
+        positions = tuple(rendered.index(event) for event in expected_events)
+        self.assertEqual(positions, tuple(sorted(positions)))
+        self.assertRegex(rendered, r"elapsed_ms=\d+")
+        for private in (_PRIVATE_SOURCE, _PRIVATE_RESPONSE, _PRIVATE_PATH):
+            self.assertNotIn(private, rendered)
+
+        failed_llm = _FakeLLM((_usable_response(), agent_failure("timeout")))
+        failed_service, _, _, publisher = _service(failed_llm)
+        with self.assertLogs("sciretriever.analysis", level="INFO") as failed_logs:
+            with self.assertRaises(ContentAnalysisFailure):
+                failed_service.analyze(_analysis_input())
+        failed_rendered = "\n".join(failed_logs.output)
+        self.assertIn(
+            "event=analysis-stage-finished stage=content outcome=failed "
+            "code=agent-timeout retryable=true",
+            failed_rendered,
+        )
+        self.assertEqual(publisher.calls, [])
+        self.assertNotIn(_PRIVATE_SOURCE, failed_rendered)
 
     def test_verified_artifact_failure_and_byte_mismatch_happen_before_llm(self) -> None:
         cases = (

@@ -45,8 +45,8 @@ from sciretriever.configuration.file_store import (
 )
 from sciretriever.configuration.filesystem import same_metadata as _same_metadata
 from sciretriever.model.configuration import (
-    AccessConfig,
     AnalysisConfig,
+    BrowserConfig,
     Configuration,
     CoreCredentialService,
     ModelProvidersConfig,
@@ -643,7 +643,7 @@ def update_model_provider_configuration(
     secret: str | None,
     origin: str | None,
     analysis: AnalysisConfig | None = None,
-    access: AccessConfig | None = None,
+    browser: BrowserConfig | None = None,
     home: str | Path | None = None,
     failpoint: Callable[[str], None] | None = None,
 ) -> Configuration:
@@ -664,7 +664,7 @@ def update_model_provider_configuration(
         providers=providers,
         models=models,
         analysis=analysis,
-        access=access,
+        browser=browser,
     )
     credentials_target = credential_path(home=home)
     provider_credentials, core, current_models, credentials_expected = _read_credentials(home)

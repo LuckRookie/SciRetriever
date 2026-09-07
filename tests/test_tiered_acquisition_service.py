@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date
 from io import BytesIO
 from typing import BinaryIO
@@ -30,6 +31,8 @@ from sciretriever.acquisition.cohort import (
 )
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
+    AccessRouteHint,
+    AccessRouteHintKind,
     AcquisitionPlanBuilder,
     ProgressiveAcquisitionPlanner,
     PublisherAccessResolver,
@@ -64,7 +67,7 @@ from sciretriever.model.acquisition import (
     NoPrimaryPdf,
     PdfCandidate,
 )
-from sciretriever.model.literature import Literature, LiteratureStatus, VersionRole
+from sciretriever.model.literature import Identifier, Literature, LiteratureStatus, VersionRole
 from sciretriever.model.metadata import LiteratureMetadata
 from sciretriever.model.primitives import (
     AssetId,
@@ -118,7 +121,14 @@ def _request(
         literature_id=LiteratureId(_id(index)),
         meta_literature_id=MetaLiteratureId(_id(index + 1)),
         version_role=VersionRole.PUBLISHED,
-        metadata=LiteratureMetadata(title="A tiered acquisition fixture"),
+        metadata=LiteratureMetadata(
+            title="A tiered acquisition fixture",
+            identifiers=(
+                ()
+                if resolved_landing_origin is None
+                else (Identifier(namespace="doi", value="10.1000/tiered-fixture"),)
+            ),
+        ),
         status=LiteratureStatus.UNREVIEWED,
     )
     return AcquisitionRequest(
@@ -293,8 +303,10 @@ class _RouteAdapter:
         self._temporary_pdfs = temporary_pdfs
         self._fail_close = fail_close
         self.iterators: list[_ResultIterator] = []
+        self.contexts: list[RouteExecutionContext] = []
 
     def execute(self, context: RouteExecutionContext) -> _ResultIterator:
+        self.contexts.append(context)
         results = tuple(
             RouteExecutionResult.delivered(temporary_pdf)
             for temporary_pdf in self._temporary_pdfs
@@ -379,12 +391,7 @@ def _failure_matrix_service(
         weak_publisher_names=(),
         public_route_keys=("public:fixture",),
         api_route_keys=("api:fixture",),
-        browser_route_key="browser:fixture",
-        browser_allowed_origins=("https://publisher.test",),
-        browser_rate_limit_group="fixture-publisher",
-        browser_session_key="fixture-publisher",
-        browser_rule_id="fixture-publisher",
-        browser_rule_revision=1,
+        browser_probe_enabled=True,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
@@ -398,13 +405,6 @@ def _failure_matrix_service(
             evidence_revision="fixture-publisher-v1",
             notes_reference="docs/notes/providers/wiley.md",
             fixture_reference="tests/fixtures/acquisition/profiles/fixture-publisher.json",
-        ),
-        browser_policy=BrowserGroupPolicy(
-            rate_limit_group="fixture-publisher",
-            policy_revision="2026-08-15",
-            minimum_start_interval=1.0,
-            rate_limit_cooldown=60.0,
-            runtime_failure_threshold=3,
         ),
     )
     catalog = PublisherAccessProfileCatalog((profile,))
@@ -421,7 +421,7 @@ def _failure_matrix_service(
             failure=failure,
         ),
         _FailureMatrixRouteAdapter(
-            route_key="browser:fixture",
+            route_key="browser:generic",
             acquisition_path=AcquisitionPath.CONTROLLED_BROWSER,
             trace=trace,
         ),
@@ -442,12 +442,11 @@ def _failure_matrix_service(
             quota_group="fixture-api",
         ),
         RouteSpec(
-            route_key="browser:fixture",
+            route_key="browser:generic",
             tier=AcquisitionPath.CONTROLLED_BROWSER,
             capability=RouteCapability.BROWSER_PDF,
             readiness=RouteReadiness.READY,
-            profile_access_key="fixture-publisher",
-            risk_group="fixture-publisher",
+            risk_group="browser-generic",
         ),
     )
     registry = AcquisitionRouteRegistry(
@@ -482,13 +481,13 @@ def _failure_matrix_service(
                     groups=(
                         BrowserGroupAdmissionState(
                             policy=BrowserGroupPolicy(
-                                rate_limit_group="fixture-publisher",
+                                rate_limit_group="browser-generic",
                                 policy_revision="fixture-v1",
                                 minimum_start_interval=0.0,
                                 rate_limit_cooldown=60.0,
                                 runtime_failure_threshold=3,
                             ),
-                            session_key="fixture-publisher",
+                            session_key="fixture-browser-profile",
                             readiness=BrowserGroupReadiness.READY,
                         ),
                     ),
@@ -506,6 +505,28 @@ def _discard_count(temporary_pdf: TemporaryPdf) -> int:
 
 
 class TieredAcquisitionServiceTests(unittest.TestCase):
+    def test_planner_route_hints_reach_the_selected_adapter(self) -> None:
+        adapter = _RouteAdapter(())
+        service = _service(adapter, _PublicationPort(None), _ExhaustionPort())
+        session = service._planner.start(_request())
+        hint = AccessRouteHint(
+            kind=AccessRouteHintKind.CANONICAL_LANDING,
+            value="https://publisher.test/article",
+            source_route_key="public:doi-landing",
+            profile_access_key="publisher-test",
+        )
+        session = replace(session, route_hints=(hint,))
+        item = AcquisitionWorkItem(
+            work_key="planner-hint",
+            plan=session.plan,
+            request=session.request,
+            planning_session=session,
+        )
+
+        service._execute_route(item, session.plan.routes[0], cancel_event=None)
+
+        self.assertEqual(adapter.contexts[0].route_hints, (hint,))
+
     def test_cohort_observer_receives_the_same_public_receipt_before_return(self) -> None:
         accepted = _temporary(1, "fixture:accepted")
         publication = _PublicationPort("fixture:accepted")
@@ -566,7 +587,7 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
 
         def observe_escalation(summary: object) -> None:
             trace.append("browser-summary")
-            self.assertNotIn("browser:fixture", trace)
+            self.assertNotIn("browser:generic", trace)
             self.assertEqual(len(getattr(summary, "groups")), 1)
 
         cohort = service.prepare_primary_pdf_cohort(
@@ -586,7 +607,7 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
                 "progress:authorized-provider-api:finished",
                 "browser-summary",
                 "progress:controlled-browser:started",
-                "browser:fixture",
+                "browser:generic",
                 "progress:controlled-browser:finished",
             ],
         )
@@ -919,7 +940,7 @@ class TieredAcquisitionServiceTests(unittest.TestCase):
 
                 self.assertEqual(item.disposition, expected_disposition)
                 self.assertEqual(
-                    "browser:fixture" in trace,
+                    "browser:generic" in trace,
                     browser_allowed,
                 )
                 self.assertEqual(

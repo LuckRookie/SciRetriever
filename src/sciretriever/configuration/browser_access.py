@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import importlib.metadata
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from types import MappingProxyType
 
 from sciretriever.model.configuration import (
-    AccessConfig,
     BrowserAccessStatus,
+    BrowserConfig,
     BrowserPolicyOverrideConfig,
     BrowserPolicyStatus,
     BrowserProbeAvailabilityStatus,
@@ -37,6 +38,22 @@ from .cloak_runtime import (
     CloakRuntimeManager,
 )
 from .errors import fail as _fail
+
+_GENERIC_BROWSER_ACCESS_KEY = "generic"
+_GENERIC_BROWSER_ROUTE_KEY = "browser:generic"
+_GENERIC_BROWSER_RATE_LIMIT_GROUP = "browser-generic"
+_GENERIC_BROWSER_POLICY = BrowserGroupPolicy(
+    rate_limit_group=_GENERIC_BROWSER_RATE_LIMIT_GROUP,
+    policy_revision="generic-browser-v1",
+    minimum_start_interval=1.0,
+    rate_limit_cooldown=60.0,
+    runtime_failure_threshold=3,
+    max_concurrency=1,
+    maximum_starts_per_window=120,
+    window_seconds=3600.0,
+    cooldown_after_completion=0.0,
+    failure_cooldown=5.0,
+)
 
 
 def _cloak_local_status(
@@ -189,12 +206,12 @@ def _operator_browser_policy(
 
 
 def tightened_browser_group_policies(
-    access: AccessConfig,
+    access: BrowserConfig,
     baseline_policies: Mapping[str, BrowserGroupPolicy],
 ) -> Mapping[str, BrowserGroupPolicy]:
     """Apply operator Browser limits without permitting a baseline relaxation."""
 
-    if not isinstance(access, AccessConfig) or not isinstance(baseline_policies, Mapping):
+    if not isinstance(access, BrowserConfig) or not isinstance(baseline_policies, Mapping):
         _fail("configuration value is invalid")
     checked: dict[str, BrowserGroupPolicy] = {}
     for group, policy in baseline_policies.items():
@@ -203,7 +220,7 @@ def tightened_browser_group_policies(
         if group != policy.rate_limit_group or group in checked:
             _fail("configuration value is invalid")
         checked[group] = policy
-    for override in access.browser_policy_overrides:
+    for override in access.policy_overrides:
         baseline = checked.get(override.rate_limit_group)
         if baseline is None:
             _fail("browser policy group is unknown")
@@ -212,43 +229,30 @@ def tightened_browser_group_policies(
 
 
 def _production_browser_group_policies() -> Mapping[str, BrowserGroupPolicy]:
-    from sciretriever.acquisition.profile_catalog import (
-        PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
-    )
-
-    policies: dict[str, BrowserGroupPolicy] = {}
-    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
-        policy = profile.browser_policy
-        if policy is None:
-            continue
-        existing = policies.get(policy.rate_limit_group)
-        if existing is not None and existing != policy:
-            _fail("configuration value is invalid")
-        policies[policy.rate_limit_group] = policy
-    return MappingProxyType(policies)
+    return MappingProxyType({_GENERIC_BROWSER_RATE_LIMIT_GROUP: _GENERIC_BROWSER_POLICY})
 
 
 def configured_browser_group_policies(
-    access: AccessConfig,
+    access: BrowserConfig,
 ) -> Mapping[str, BrowserGroupPolicy]:
     """Return production Browser group policies after operator tightening."""
 
     return tightened_browser_group_policies(access, _production_browser_group_policies())
 
 
-def eligible_production_browser_access_keys(access: AccessConfig) -> frozenset[str]:
-    """Return production Browser routes permitted by the ordinary configuration."""
+def eligible_production_browser_access_keys(access: BrowserConfig) -> frozenset[str]:
+    """Return Publisher targets with an explicit reachability probe."""
 
     from sciretriever.acquisition.profile_catalog import (
         PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
     )
 
-    if not isinstance(access, AccessConfig):
+    if not isinstance(access, BrowserConfig):
         _fail("configuration value is invalid")
     return frozenset(
         str(profile.access_key)
         for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
-        if profile.browser_route_key is not None
+        if profile.browser_probe_enabled
     )
 
 
@@ -260,46 +264,31 @@ def _browser_action(
     return (ConfigurationActionRequired(code=code, reason=reason, action=action),)
 
 
-def _production_browser_route_statuses(access: AccessConfig) -> tuple[BrowserRouteStatus, ...]:
-    from sciretriever.acquisition.access_profiles import PolicyEvidence
-    from sciretriever.acquisition.profile_catalog import (
-        PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG,
-    )
-
+def _production_browser_route_statuses(access: BrowserConfig) -> tuple[BrowserRouteStatus, ...]:
     effective_policies = configured_browser_group_policies(access)
-    routes: list[BrowserRouteStatus] = []
-    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
-        if profile.browser_route_key is None:
-            continue
-        group = profile.browser_rate_limit_group
-        if group is None:
-            _fail("configuration value is invalid")
-        policy = effective_policies.get(group)
-        if policy is None or profile.policy_evidence is PolicyEvidence.UNVERIFIED:
-            _fail("configuration value is invalid")
-        routes.append(
-            BrowserRouteStatus(
-                access_key=str(profile.access_key),
-                display_name=profile.evidence.display_name,
-                route_key=profile.browser_route_key,
-                rate_limit_group=str(group),
-                policy=BrowserPolicyStatus(
-                    evidence=profile.policy_evidence.value,
-                    policy_revision=policy.policy_revision,
-                    verification_date=profile.evidence.verification_date,
-                    notes_reference=profile.evidence.notes_reference,
-                    max_concurrency=policy.max_concurrency,
-                    minimum_start_interval=policy.minimum_start_interval,
-                    maximum_starts_per_window=policy.maximum_starts_per_window,
-                    window_seconds=policy.window_seconds,
-                    cooldown_after_completion=policy.cooldown_after_completion,
-                    rate_limit_cooldown=policy.rate_limit_cooldown,
-                    failure_cooldown=policy.failure_cooldown,
-                    runtime_failure_threshold=policy.runtime_failure_threshold,
-                ),
-            )
-        )
-    return tuple(routes)
+    policy = effective_policies[_GENERIC_BROWSER_RATE_LIMIT_GROUP]
+    return (
+        BrowserRouteStatus(
+            access_key=_GENERIC_BROWSER_ACCESS_KEY,
+            display_name="Generic Browser",
+            route_key=_GENERIC_BROWSER_ROUTE_KEY,
+            rate_limit_group=_GENERIC_BROWSER_RATE_LIMIT_GROUP,
+            policy=BrowserPolicyStatus(
+                evidence="project-conservative",
+                policy_revision=policy.policy_revision,
+                verification_date=date(2026, 9, 5),
+                notes_reference="docs/architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md",
+                max_concurrency=policy.max_concurrency,
+                minimum_start_interval=policy.minimum_start_interval,
+                maximum_starts_per_window=policy.maximum_starts_per_window,
+                window_seconds=policy.window_seconds,
+                cooldown_after_completion=policy.cooldown_after_completion,
+                rate_limit_cooldown=policy.rate_limit_cooldown,
+                failure_cooldown=policy.failure_cooldown,
+                runtime_failure_threshold=policy.runtime_failure_threshold,
+            ),
+        ),
+    )
 
 
 def _normalized_browser_probe_keys(
@@ -323,7 +312,7 @@ def _browser_required_action(  # noqa: C901
     binary_presence: bool,
     binary_verified: bool,
     headed_display_available: bool,
-    access: AccessConfig,
+    access: BrowserConfig,
     selected_profile: str | None,
     presence: BrowserProfilePresence,
     identity_presence: str,
@@ -331,10 +320,10 @@ def _browser_required_action(  # noqa: C901
     if not routes_available:
         return _browser_action(
             "browser-production-route-unavailable",
-            "No Publisher Browser route has completed production verification.",
-            "Use Public and authorized API routes; Browser access remains unavailable.",
+            "The generic Browser route is not installed in this build.",
+            "Repair the SciRetriever installation before attempting Browser access.",
         )
-    if not access.browser_enabled:
+    if not access.enabled:
         return _browser_action(
             "browser-disabled",
             "Controlled Browser access is disabled in ordinary configuration.",
@@ -430,18 +419,17 @@ def browser_access_status(  # noqa: C901
         type(key) is not str for key in probe_supported_access_keys
     ):
         _fail("configuration value is invalid")
-    routes = _production_browser_route_statuses(configuration.access)
-    route_keys = frozenset(route.access_key for route in routes)
+    routes = _production_browser_route_statuses(configuration.browser)
+    probe_target_keys = eligible_production_browser_access_keys(configuration.browser)
     eligible_route_keys = frozenset(
         route.access_key for route in routes if route.automatic_acquisition_eligible
     )
     normalized_probe_keys = _normalized_browser_probe_keys(
         probe_supported_access_keys,
-        route_keys,
+        probe_target_keys,
     )
-    normalized_probe_keys = normalized_probe_keys.intersection(eligible_route_keys)
 
-    selected_profile = configuration.access.browser_profile
+    selected_profile = configuration.browser.profile
     presence = browser_profile_status(selected_profile, home=home).presence
     try:
         identity_status = browser_profile_identity_status(selected_profile, home=home)
@@ -483,7 +471,7 @@ def browser_access_status(  # noqa: C901
 
     locally_usable = (
         bool(eligible_route_keys)
-        and configuration.access.browser_enabled
+        and configuration.browser.enabled
         and cloak_wrapper_available
         and playwright_api_available
         and binary_presence
@@ -500,14 +488,14 @@ def browser_access_status(  # noqa: C901
         binary_presence=binary_presence,
         binary_verified=binary_verified,
         headed_display_available=display_available,
-        access=configuration.access,
+        access=configuration.browser,
         selected_profile=selected_profile,
         presence=presence,
         identity_presence=identity_presence,
     )
     return BrowserAccessStatus(
-        enabled=configuration.access.browser_enabled,
-        local_max_concurrency=configuration.access.browser_max_concurrency,
+        enabled=configuration.browser.enabled,
+        local_max_concurrency=configuration.browser.max_concurrency,
         runtime=BrowserRuntimeStatus(
             cloak_wrapper_available=cloak_wrapper_available,
             playwright_api_available=playwright_api_available,

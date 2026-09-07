@@ -78,12 +78,15 @@ stream 与适用单次 limits。消费者不能在 `AgentCall` 中临时覆盖 m
 1. role binding 存在性；
 2. required capability 与声明 capability 匹配；
 3. 图像媒体类型、数量和字节；
-4. context window 与 output reservation；
-5. 单次请求/schema/result limit；
+4. 本次 output token 上限；
+5. prompt/input/schema/request 等可客观计算的字节上限；
 6. cancel 状态。
 
 验证通过后 Runtime 生成只在 Agents 内部使用的 Provider wire call，绑定 model、reasoning
-effort、stream、HTTP limits 和取消信号，并调用 adapter 一次。
+effort、stream、HTTP limits 和取消信号，并调用 adapter 一次。Runtime 不把 UTF-8 byte count
+换算成 token，也不在没有可信 tokenizer 的情况下猜测输入 token；Provider 返回实际 usage 后，
+Runtime 才在结果边界验证 `input_tokens + output_tokens` 没有超过 binding 与 Model capability 的
+context window。
 
 ## 3. 中性交换值
 
@@ -150,6 +153,10 @@ Analysis role 默认需要 `structured_text`；Browser role 默认需要 `image_
 同一 Provider 只构造一套 credential/adapter/quota scope，不同 Provider 各自使用 exact-origin
 credential 与 adapter。用户显式 `config test` 才发送固定最小 probe。
 
+`identity(role)` 同样按 role 解析并返回该 role 实际绑定的 Provider、wire Model、reasoning 与
+stream；Analysis 与 Browser 绑定不同 Provider 时，日志和 provenance 不能回退读取另一个 role
+的 adapter 身份。
+
 Model effort 的中性值为
 `default / none / minimal / low / medium / high / xhigh / max`。`default` 在三种
 adapter 中都完全省略对应参数；其它七值原样进入 OpenAI Responses 的 `reasoning.effort`、
@@ -194,6 +201,8 @@ Agents 保留以下单次限制：
   terminal usage chunk 与 `[DONE]`；Anthropic Messages 按 message/content-block/delta/stop 顺序重建
   文本或单一 tool use，并合并起始 input usage 与终止 output usage；
 -认证、quota、timeout、refusal、truncation、model mismatch、协议错误、取消和未知响应的稳定化；
+- adapter 抛出的未声明实现异常由 Runtime 统一转换为 non-retryable `agent-internal`；已经归一的
+  `AgentFailure` 原样传播，`KeyboardInterrupt`、`SystemExit` 等进程控制异常不作为业务失败吞掉；
 - provider/model/input/parameter hash 与安全 usage。
 
 Adapter 不选择 role model，不理解 Literature、Analysis stage、Publisher、Browser Observation 或动作含义，不执行 tool，也不创建隐藏 SDK transport。协议无法满足 capability 时必须在请求前明确失败，不能降级成自由文本。
@@ -208,9 +217,18 @@ Analysis 为每个阶段构造一个独立 `AgentCall`，直接调用 `AgentRunt
 
 ## 8. Browser 消费
 
-Acquisition 根据当前 `BrowserObservation` 构造一个 Browser role `AgentCall`，声明六种封闭工具，执行一次 Runtime 调用，再把 `AgentToolCall` 解析为 Acquisition action。Network 校验并执行动作后返回新的 Observation；循环属于 Acquisition，不属于 Agents。
+Acquisition 只在 `BrowserStepSession` 返回稳定 `Ready` 时，根据其中的 `BrowserObservation` 构造一个
+Browser role `AgentCall`，声明六种封闭工具并执行一次 Runtime 调用，再把 `AgentToolCall` 解析为一个
+action 交给 `apply`。Network 在该调用内完成 binding、最多一次 dispatch、页面替换和 capture settlement，
+再返回下一项稳定 step；循环属于 Acquisition，不属于 Agents。Agents 看不到 loading/stale 等内部
+过渡过程；pending capture 会先由 Network 完成 bounded settlement，已物化的 capture 在 Agent 已开始
+探索后不会作为 terminal step 暴露，而是保留在本次外层 `BrowserCaptureBatch` 中，最终交给 Acquisition
+验收。
 
-Rules 模式不调用 Runtime；Agent 模式不先运行确定性点击规则。Challenge 只是 Observation 的一种 page state，不产生专属 Agent Call 类型、session 或 budget。
+Browser 只有 Agent controller，不先运行确定性点击规则，也不存在规则 fallback。Challenge、登录、MFA、
+拒绝、未授权、未找到和页面失败都只是 Observation 的 `page_state` 描述，不自动结束 Agent loop，
+也不产生专属 Agent Call 类型、session 或 budget；Agent 必须明确选择 `Stop`，或由 timeout、cancel、
+controller safety fuse 或真正的 Network/runtime failure 结束。
 
 Agents 不取得 Browser runtime、Page、Context、Profile、Cookie、selector、CDP、任意 URL/JavaScript、capture 或 PDF 发布能力。
 
@@ -220,12 +238,12 @@ Configuration 保存 Model Provider/Model 两个直接注册表：
 
 - Provider 拥有 name、API、Base URL 与 exact-origin credential scope；
 - Model 以 `provider/model` 为唯一 reference，并拥有 reasoning、image 与 stream；
-- `[analyze].model` 与 `[download].model` 直接引用完整 Model reference；
+- `[analyze].model` 与 `[browser].model` 直接引用完整 Model reference；
 - `[providers.<provider>]` credential 与 Provider 的规范 origin 精确绑定。
 
 交互配置由 `Models` 管理 Provider、Model 和模型 key；`Analyze`、`Download` 只选择 Model 并管理
 各自业务参数。Analyze 的 structured-output/text-only 合同由模块派生；Download 只选择
-`image = true` 的 Model，其 image/tool/PNG/正数 image limits 由模块派生。任一任务切换 Model 都不
+`image = true` 的 Model，其 image/tool/当前生产 Observation 的 `image/jpeg`/正数 image limits 由模块派生。任一任务切换 Model 都不
 修改 Model 或另一个任务；没有 Profile、Preset、Entry 或 task-level reasoning/stream override。
 
 固定的单次 HTTP timeout 以及 prompt/input/schema/request/response/result 字节上限由 Agents
@@ -257,7 +275,14 @@ capability probe。
 
 稳定失败至少区分 configuration、credentials、capability、input/context/output/request/response/result limit、timeout、authentication/authorization、quota/access、request rejected、endpoint/not found、remote service、refusal、truncated、protocol/model mismatch、tool、structured response、cancelled 和 internal failure。Provider HTTP 失败可以在当次配置 Probe 中附带三位 status，并只从有界 JSON 的已知 `error.code/type/param` 映射 `model-not-found`、reasoning/structured-output/image/tool unsupported 等闭合类别；不得保存任意 message 或未知字段。Network 失败只投影闭合 access code。
 
-INFO 只记录 role、provider/model、capabilities、结果类别、usage、延迟和稳定失败。Debug 可以增加输入/图像/schema/tool 数量与 adapter 阶段，但不记录 prompt、schema 内容、模型原文/reasoning、图片、页面正文、元素文本、tool arguments、credential、header、Cookie、完整 URL 或 Profile。这里对日志隐藏完整 URL；用户明确执行的配置 Probe 结果可以显示配置模型已经验证且无 query/credential 的实际 API endpoint。
+INFO 由 Runtime 记录一次 role-level call start/finish，包含实际 role、provider/wire model、stream、
+reasoning、结果类别、usage、延迟或稳定失败；同一事实不由 adapter 重复汇总。Debug 可以增加
+protocol、capability、输入/图像/schema/tool 的安全大小与 adapter 阶段，但不记录 prompt、schema
+内容、模型原文/reasoning、图片字节、页面正文、元素文本、tool arguments、credential、header、Cookie、
+完整 URL 或 Profile。显式 Debug object graph 可在 Agents 边界启用 `AgentDebugImageRecorder`，将
+Provider adapter 实际收到的图片另存到权限受限的系统临时目录；这不是 LogRecord、Catalog 或
+ArtifactStore，日志只保留目录名与 manifest/image hash。这里对日志隐藏完整 URL；用户明确执行的配置
+Probe 结果可以显示配置模型已经验证且无 query/credential 的实际 API endpoint。
 
 Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 Catalog、ArtifactStore、Report、Profile 或日志持久事实。Analysis 只保存其业务 provenance。
 
@@ -278,8 +303,13 @@ Agent Call/Result、Browser turn 和失败不是 Literature 状态，不进入 C
   secret-free 失败和 Network 关闭；
 - capability 缺口和错 role 在 adapter 调用计数为零时失败；
 - duplicate JSON、非有限数、未知字段、超大输入/图片/响应和未声明 tool 拒绝；
-- context/output/request/response/result 与 HTTP timeout 的单次限制；
+- output/request/response/result、可计算 byte/count 与 HTTP timeout 的单次限制；Provider 实际
+  usage 返回后验证 context，且 input/image bytes 不被当作 token；
+- 双 Provider role 的 `identity(role)`、日志与实际 adapter/model 一致，未知 adapter exception
+  稳定成为 non-retryable `agent-internal`；
 - 取消、quota、跨 origin secret 拒绝和 POST 不重试；
+- 显式 Debug 才保存 Provider-bound image parts 与受限 manifest；普通 Runtime 不创建图片目录，写盘
+  失败只形成 warning，不改变 Agent 调用结果，且日志不泄露绝对路径；
 - Analyze/Download 无 task-level model/reasoning/stream/capability override，用户 Model 不保存模块
   context/output/structured/tool/image limit，且无 Session、history、turn、
   累计预算或公共 Provider/model 选择面；

@@ -35,7 +35,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": ["api:elsevier-article-object"],
-    "browser_route": "browser:elsevier-sciencedirect"
+    "browser_probe_enabled": true
   },
   "route_verification": {
     "authorized_api": {
@@ -44,22 +44,8 @@
       "priority": "after-public-before-browser"
     },
     "browser": {
-      "state": "production-ready",
-      "rule_id": "sciencedirect-pdf",
-      "rule_revision": 2,
-      "allowed_origins": [
-        "https://www.sciencedirect.com",
-        "https://linkinghub.elsevier.com",
-        "https://pdf.sciencedirectassets.com",
-        "https://id.elsevier.com",
-        "https://auth.elsevier.com"
-      ],
-      "rate_limit_group": "elsevier",
-      "session_group": "elsevier",
-      "article_start_interval_seconds": 20,
-      "primary_contract": "pii-bound-main-pdf-response-or-download",
-      "supplement_contract": "mmc-and-supplement-markers-are-never-primary",
-      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
+      "state": "probe-enabled",
+      "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
     }
   },
   "ownership_cases": [

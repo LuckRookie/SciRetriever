@@ -11,6 +11,7 @@ the neutral request identity, aligned provenance hashes, and prompt version.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -21,6 +22,10 @@ from sciretriever.agents.api import (
     AgentProvenance,
     AgentRuntime,
     AgentStructuredResult,
+)
+from sciretriever.analysis.failures import (
+    analysis_internal_failure,
+    normalize_agent_failure,
 )
 from sciretriever.analysis.metadata_rules import (
     MetadataRuleViolation,
@@ -35,6 +40,7 @@ from sciretriever.analysis.ports import (
     canonical_json_bytes,
     parse_strict_json_object,
 )
+from sciretriever.logging.api import get_logger
 from sciretriever.model.analysis import FinalMetadataProposal, NoUsableContent
 from sciretriever.model.metadata import LiteratureMetadata, MetadataObservation
 from sciretriever.model.parsing import ParserResult
@@ -42,6 +48,7 @@ from sciretriever.model.primitives import Sha256, sha256_digest
 from sciretriever.model.report import StableFailure
 
 _PROMPT_VERSION: Final[str] = "analysis-metadata-stage-v1"
+_LOGGER = get_logger("sciretriever.analysis")
 _PROMPT: Final[str] = """You perform only the first SciRetriever Analysis stage.
 
 Judge the actual parsed work, not its topic relevance and never its page count.
@@ -159,6 +166,32 @@ class MetadataAnalysisStage:
     ) -> MetadataAnalysisReceipt:
         """Execute stage one and retain only safe request/provenance identity."""
 
+        started = time.monotonic()
+        _LOGGER.info("event=analysis-stage-started stage=metadata")
+        try:
+            receipt = self._execute_once(stage_input, cancel_event=cancel_event)
+        except MetadataAnalysisFailure as error:
+            _log_stage_failure("metadata", error.failure, started=started)
+            raise
+        except Exception:
+            failure = analysis_internal_failure()
+            _log_stage_failure("metadata", failure, started=started)
+            raise MetadataAnalysisFailure(failure) from None
+        _LOGGER.info(
+            "event=analysis-stage-finished stage=metadata outcome=success result=%s elapsed_ms=%d",
+            ("no-usable-content" if isinstance(receipt.result, NoUsableContent) else "usable"),
+            _elapsed_ms(started),
+        )
+        return receipt
+
+    def _execute_once(
+        self,
+        stage_input: MetadataStageInput,
+        *,
+        cancel_event: threading.Event | None,
+    ) -> MetadataAnalysisReceipt:
+        """Run one metadata stage behind the stable logging/failure boundary."""
+
         markdown = self._validate_input(stage_input)
         call = self._build_call(stage_input, markdown, cancel_event=cancel_event)
         response = self._complete(call)
@@ -269,25 +302,19 @@ class MetadataAnalysisStage:
                 cancel_event=call.cancel_event,
             )
         except AgentFailure as error:
-            if error.failure.code == "agent-structured-response":
-                raise MetadataAnalysisFailure(
-                    _failure_for("analysis-metadata-structure", retryable=False)
-                ) from None
             raise MetadataAnalysisFailure(
-                _failure_for(
-                    "analysis-metadata-llm",
-                    retryable=error.failure.retryable,
+                normalize_agent_failure(
+                    error.failure,
+                    cancellation_is_content_interruption=True,
                 )
             ) from None
         except Exception:
-            raise MetadataAnalysisFailure(
-                _failure_for("analysis-metadata-llm", retryable=True)
-            ) from None
+            raise MetadataAnalysisFailure(analysis_internal_failure()) from None
 
         if not isinstance(response, AgentStructuredResult):
-            raise MetadataAnalysisFailure(_failure_for("analysis-metadata-llm", retryable=False))
+            raise MetadataAnalysisFailure(analysis_internal_failure())
         if response.provenance.input_sha256 != call.request.input_sha256:
-            raise MetadataAnalysisFailure(_failure_for("analysis-metadata-llm", retryable=False))
+            raise MetadataAnalysisFailure(analysis_internal_failure())
         return response
 
     def _parse_response(
@@ -408,10 +435,6 @@ def _failure_for(code: str, *, retryable: bool) -> StableFailure:
             "The first Analysis stage input is not complete and aligned.",
             "Refresh the current Parser result and metadata before retrying.",
         ),
-        "analysis-metadata-llm": (
-            "The metadata language-model call did not return an aligned result.",
-            "Check the configured Analysis provider and retry the target.",
-        ),
         "analysis-metadata-structure": (
             "The metadata language-model result violated the closed structure.",
             "Check the private metadata prompt and model before retrying.",
@@ -434,6 +457,20 @@ def _failure_for(code: str, *, retryable: bool) -> StableFailure:
         reason=reason,
         action=action,
         retryable=retryable,
+    )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(int((time.monotonic() - started) * 1000), 0)
+
+
+def _log_stage_failure(stage: str, failure: StableFailure, *, started: float) -> None:
+    _LOGGER.info(
+        "event=analysis-stage-finished stage=%s outcome=failed code=%s retryable=%s elapsed_ms=%d",
+        stage,
+        failure.code,
+        str(failure.retryable).lower(),
+        _elapsed_ms(started),
     )
 
 

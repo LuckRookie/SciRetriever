@@ -65,8 +65,8 @@
 | quota 共享范围 | 哪些 metadata/reference/asset 调用共享 key、账户、官方额度或响应头 |
 | 官方政策与核对日期 | 链接到对应 Provider Notes；未知不能猜测或冒充官方规则 |
 | API quota policy | quota identity、最大并发、最小间隔、burst/window、周期/日额度、reset、反馈头；Network 共享执行，普通配置只能收紧 |
-| Browser policy | `browser_rate_limit_group`、`browser_session_key`、`max_concurrency=1`、文章 interval/window/cooldown、circuit；不同独立组可并行 |
-| Browser origin/action guard | 每次 navigation/popup/viewer/response/download 前的封闭 allowlist、有限动作、批准页面子资源、第三方丢弃、动态 redirect、正文/补充材料规则与 revision |
+| Browser policy | 全局 `browser-generic`、`max_concurrency=1`、文章 interval/window/cooldown 与 circuit；Publisher adapter 不声明第二个 Browser group |
+| Browser origin/action guard | 每次 navigation/popup/viewer/response/download 前的通用准入、六种有限动作、页面资源/redirect 检查与 capture lineage |
 | metadata fan-out 与 completion-order-independent merge |  |
 | connect/read/operation timeout |  |
 | 最大响应大小 |  |
@@ -78,11 +78,11 @@ Adapter 负责解释供应商政策并声明 scope/policy，不能在自身内�
 
 公开来源也必须声明访问政策。公开 `AssetHint` 指向出版社网页或站内 PDF 时仍使用该出版社的 `web` scope；不同来源 redirect 到同一最终 host 时共享 host budget。授权 API 使用独立 `api` scope，是否与 metadata/reference query 共享由真实 quota 范围决定。
 
-Browser 不使用所有供应商统一的固定间隔。独立 risk group 可以并行，同一 group 只有一个
-文章流程，并按 Profile/Notes 中已核实的政策串行。全局 Browser cap 只保护本机资源；重试、
-popup、多个标签页或备用入口不能拆出新的 group。未知 Provider 不获得 generic Browser
-fallback。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限；当前 route 数量不是配置上限，
-Publisher lane 仅为实际 Browser work 按需进入调度。生产 Browser 使用当前机器正常网络出口、
+Browser 下载统一使用 `browser-generic`，同一时刻只有一个文章流程，并按项目保守 baseline 串行。
+全局 Browser cap 只保护本机资源；重试、popup、多个标签页、Provider 名称或备用入口不能拆出新的
+group。未知 Provider 只要拥有安全 canonical landing 也可进入 generic Browser，这不放宽 Network
+admission 或 PDF 文章归属验收。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限。生产 Browser
+使用当前机器正常网络出口、
 一个 operator-managed 固定身份 Profile、一个共享 CloakBrowser patched Chromium process/context；
 SciRetriever 继续以 Playwright API 控制它，无 GUI Linux 使用 Xvfb。Publisher 请求由 Chromium
 原生网络栈完成；broker 关闭或进程退出后删除临时下载工作区但保留 Profile。普通配置只接受
@@ -97,7 +97,7 @@ Browser 状态。第一版不提供人工 Browser 认证流程。
 - `~/.sciretriever/credentials.toml` 中允许的字段、必需性、owner/权限和 adapter 注入边界：
 - `config status` 的纯本地状态与 `config test` 的最小只读 probe（均不得包含 secret 特征或持久结果）：
 - 当前机器网络出口、持久 Profile identity/presence、共享 Browser runtime/context、Cookie/Profile
-  内容、Publisher lane readiness 与 action-required 的边界：
+  内容、`browser-generic` readiness 与 action-required 的边界：
 - 禁用该能力后的回退：
 
 ## 5. 验证与资产接受
@@ -115,9 +115,9 @@ Browser 状态。第一版不提供人工 Browser 认证流程。
 - route 如何只填补指定 `Literature` 的资产缺口：
 - Resolution/Plan 如何根据 AssetHint、来源稳定定位、Provider record identity 或必要时 DOI landing origin 判断适用，且不会按 publisher/metadata 来源硬编码：
 - API capability、quota identity、官方 policy 和 route hint 如何表达，临时/额度错误为何不能自动升级 Browser：
-- Browser 如何证明显式 request 的 per-hop guard、未暴露 route 的 native redirect 只能复用同页 live 且已批准/预绑定的关联、不同 risk group 并行、同组串行、所有 Publisher lane 共享一个固定身份 Profile/process/context、文章级隔离、受限 challenge dependency、第三方 tracker 在 DNS 前丢弃、作业开始前冻结 Rules 或 Agent controller、统一 Observation/Challenge、六种封闭动作与语义无进展、正文捕获和 supplement 排除：
+- Browser 如何证明显式 request 的 per-hop guard、未暴露 route 的 native redirect 只能复用同页 live 且已批准/预绑定的关联、`browser-generic` 串行、所有文章共享一个固定身份 Profile/process/context、文章级隔离、受限 challenge dependency、第三方 tracker 在 DNS 前丢弃、稳定 Observation/Challenge、六种封闭动作、语义无进展和正文 capture lineage：
 - primary PDF 与 supplemental XML/HTML 的角色验证；XML/HTML 不得提升为 PDF 或独立满足内容分析：
-- 基本检查如何只确认非空 PDF、可读取文件结构、可打开页面结构和候选具有文献来源依据，而不进行固定大小/页数阈值、正文完整性或标题/作者/DOI 身份比对：
+- 基本检查如何确认非空 PDF、可读取文件结构和至少一页页面树；Browser capture 还要如何用 DOI、标题、作者、受控起点与 capture lineage 验证目标文章归属并排除 supplement/错文：
 - 何时允许进入不可变资产接纳：
 - 取消、timeout 和 late response 如何禁止 late acceptance，且不会泄漏 permit 或绕过冷却：
 
@@ -142,13 +142,17 @@ Browser 状态。第一版不提供人工 Browser 认证流程。
 
 ## 7. 离线 fixture 与验收
 
-Browser 规则按供应商分别放在
-`src/sciretriever/acquisition/sources/browser_rules/providers/<provider>.py`；共享规则合同和 helper
-不得混入供应商页面知识。新增文件后仍须在 `catalog.py` 中显式加入 verification catalog，并且
-只有完整准入结论允许它被显式加入 production catalog；禁止通过目录扫描或 import side effect
-自动注册。
+Browser 不新增供应商规则模块。页面策略完全由唯一 `AgentBrowserController` 根据 Network 的稳定
+Observation 决定；Provider 接入只能增加 Public/API adapter、访问画像或 reachability probe，不能
+增加 selector/locator controller、专属 Browser route 或调度组。
 
-PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquisition/profiles/<access-key>.json`，并与源码 `PublisherAccessEvidence.fixture_reference` 一一对应。验证状态只允许 `production-ready`、`fixture-verified`、`unsupported`；public/API-only 是 capability 组合，不是第四个状态。Browser Profile 必须引用真正的 `BrowserSiteRule` id/revision，并由统一矩阵证明 origin、risk scope、policy、页面状态、正文/补充材料归属和 fixture 对齐；测试摘要 selector 不能替代执行规则。
+PublisherAccessProfile 的 evidence manifest 固定放在
+`tests/fixtures/acquisition/profiles/<access-key>.json`，并与源码
+`PublisherAccessEvidence.fixture_reference` 一一对应。验证状态只允许 `production-ready`、
+`fixture-verified`、`unsupported`；public/API-only 是 capability 组合，不是第四个状态。
+`browser_probe_enabled` 只能对应 `reachability-only; generic Browser acquisition is not
+Publisher-gated` 合同。主 PDF、supplement、wrong-article 和 evidence-insufficient 由通用 Browser
+fixture 与 Acquisition identity validator 验证，不进入 Provider 点击规则。
 
 按能力覆盖适用场景，CI 不使用真实凭据、真实受限正文或 live provider：
 
@@ -165,13 +169,13 @@ PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquis
 - 零、单个和多个候选；
 - 首候选失败后其它候选成功；
 - 一个有界 cohort 全部完成 Public 后才启动未解决目标的 Authorized API，API 层结束并通过 admission 后才启动最小 Browser 集合；同一 Literature 不跨层竞速；
-- 两个独立 Browser risk group 实际并行，同一 group 最大并发为 1 且精确满足自身 interval/window/cooldown；
-- navigation、页面 request、popup、viewer、response 和 download 通过 Profile guard 与 Network policy；普通文章只加载规则批准的页面资源，challenge dependency 还必须满足发起页/frame/用途约束，未批准第三方资源在 DNS 前丢弃；点击或页面脚本产生的显式 request 逐项复审，未暴露 route 的 native redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 terminal host admission 同时成立时才能关联；共享 persistent context 中的 Publisher lane reuse/文章隔离、Challenge 自动或经 controller 动作 clear、资源阻断、未解决文章结果、Rules/Agent 作业级互斥、统一 Observation/六动作/语义无进展、单次 operation limits 和 supplement exclusion 使用离线 fixture；
+- 唯一 `browser-generic` 最大并发为 1 且精确满足 interval/window/cooldown；普通资源 cap 不改变这一事实；
+- navigation、页面 request、popup、viewer、response 和 download 通过 Network policy；challenge dependency 还必须满足发起页/frame/用途约束，未批准第三方资源在 DNS 前丢弃；点击或页面脚本产生的显式 request 逐项复审，未暴露 route 的 native redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 terminal host admission 同时成立时才能关联；共享 persistent context 中的通用 session reuse/文章隔离、Challenge 自动或经 Agent 动作 clear、资源阻断、未解决文章结果、统一 Observation/六动作/语义无进展、单次 operation limits、capture lineage 和 PDF identity validation 使用离线 fixture；
 - 重复候选收敛；
 - 429、timeout、redirect、截断、超限和无效内容；
 - 敏感 query/header/cookie 不进入 durable state 或输出；
 - 临时 owner-only `credentials.toml` fixture 覆盖 configured/partial/missing/optional-missing/unsupported，`config status` 不联网且 `config test` 只使用 fake Network、不创建数据库事实；
-- 普通 HTTP/API 按实际 provider/host/quota scope 推进；Browser 不同 risk group 可并行、同组按 Profile policy 串行，同时独立 API 和其它 provider 可以推进；
+- 普通 HTTP/API 按实际 provider/host/quota scope 推进；Browser 在 `browser-generic` 中串行，同时独立 API 和其它 provider 可以推进；
 - 当前进程内 `Retry-After`、quota、取消和 timeout 不会泄漏 permit、丢失有效阻塞或产生 late acceptance；新进程不恢复旧限速状态；
 - provenance、Literature asset link 和 catalog 对账；
 - 只有当前主 PDF 可以驱动 Parsing 与 Analysis，只有 XML/HTML 时必须阻断；PDF 与补充资产冲突时，由 PDF 控制结果并保留 PDF locator；
@@ -198,9 +202,9 @@ PublisherAccessProfile 的 evidence manifest 固定放在 `tests/fixtures/acquis
 - [ ] metadata provider 使用有界并发、独立 timeout 和 completion-order-independent merge；provider precedence/fill-missing 有确定性配置语义。
 - [ ] adapter 已声明不含 secret 的 AccessScope、真实 quota 共享范围、当前政策依据和复核日期；缺失 policy 时不是 production-ready。
 - [ ] API 声明并执行真实 quota identity、并发、interval、window/周期额度、reset 和反馈头；普通配置只能收紧，公开/direct URL 没有绕过 provider/host scope。
-- [ ] Browser Profile 声明 risk/session group、文章 policy 与证据日期；不同独立 group 实际并行，同组 `concurrency=1` 且精确满足 interval/window/cooldown，全局 cap 只保护本机资源。
-- [ ] Publisher Profile 具有唯一 evidence manifest 和三态结论；production catalog 只由 `production-ready` 派生，fixture-verified/unsupported rule 未进入生产对象图；Browser 总开关关闭或 runtime 未就绪时不构造可执行 client，逐文章结果不由本地配置预先宣称。
-- [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Profile guard 与 Network policy；批准页面子资源、受限 challenge dependency、第三方 tracker 丢弃、动态 redirect、一个固定身份 Profile/process/context、Publisher lane reuse/文章隔离、Rules/Agent 作业级互斥、统一 Observation/Challenge、六种封闭动作、语义无进展、文章级 `challenge-unresolved` 且不打开 Challenge group circuit、单次 operation limits、多路正文捕获和 supplement 排除有离线 fixture，seed、Cookie、Profile 内容/路径、Agent 页面内容和临时下载路径不泄露。
+- [ ] Browser 只使用 `browser-generic`，`concurrency=1` 且精确满足 interval/window/cooldown；全局 cap 只保护本机资源，Provider 不能声明第二组。
+- [ ] Publisher Profile 具有唯一 evidence manifest 和三态结论；`browser_probe_enabled` 只控制首页可达性 probe，不生成下载 route；Browser 总开关、Model/Profile/runtime 未就绪时不构造可执行 client，逐文章结果不由本地配置预先宣称。
+- [ ] 每次 Browser navigation/popup/viewer/response/download 在访问前通过 Network policy；受限 challenge dependency、第三方 tracker 丢弃、动态 redirect、一个固定身份 Profile/process/context、通用 session reuse/文章隔离、稳定 Observation/Challenge、六种封闭动作、语义无进展、单次 operation limits、多路正文捕获、PDF identity 和 supplement 排除有离线 fixture，seed、Cookie、Profile 内容/路径、Agent 页面内容和临时下载路径不泄露。
 - [ ] Metadata、reference query 和 asset API 共享真实 quota 时使用同一 scope；adapter/SDK 没有自建局部 limiter 或绕过受控 transport。
 - [ ] 只有供应商明确声明的同文献版本目标进入 `MetadataObservation.version_links`；未解析目标不触发自动补查、占位 Literature 或通用关系。
 - [ ] 当前文献 identifier、Provider record identity 和相关版本 identifier 已按字段语义分流；Provider record ID 没有进入 `LiteratureMetadata.identifiers`，正式记录的相关 arXiv ID 没有冒充当前正式 Literature 的 ID。

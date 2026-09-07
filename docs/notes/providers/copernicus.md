@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；Copernicus Publications 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://publications.copernicus.org` 与各期刊独立的 `*.copernicus.org` 文章站点
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 PDF API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public 或授权 PDF API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方开放获取与入口
 

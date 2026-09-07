@@ -717,7 +717,7 @@ def _manage_model(reference: str, console: ConfigConsole) -> None:
             owner
             for owner, selected in (
                 ("Analyze", configuration.analysis.model),
-                ("Browser", configuration.access.model),
+                ("Browser", configuration.browser.model),
             )
             if selected == model.reference
         )

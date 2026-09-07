@@ -34,7 +34,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -46,16 +46,7 @@
       "payload": "no-reviewed-machine-access-pdf-api"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-terms-open-access-and-subscriber-pages-unavailable-to-anonymous-review",
-        "managed-content-signal-allows-reference-use-not-full-content-use",
-        "no-published-browser-article-rate-policy",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-rule",
-        "shared-acronym-is-not-publisher-identity-evidence",
-        "upstream-ams-verdict-belongs-to-a-different-publisher"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

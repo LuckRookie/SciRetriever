@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；PNAS 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://www.pnas.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public 或授权 API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方入口与本轮证据边界
 
@@ -46,7 +46,7 @@ ScanSci 记录过 `/doi/epdf/`、`/doi/pdf/?download=true`、Institutional Login
 样本的访问类别、长期 entitlement 或平台 vendor 结论，也不复制 Cookie、CARSI、selector、
 URL 模板或 verdict。
 
-当前 Browser route 还缺：
+当前证据不足以建立 PNAS 专属 Browser 页面程序或首页 probe：
 
 - 可读取的官方自动访问条款与数值 article-start pacing；
 - 遵守 ePDF robots 禁止后的封闭 primary PDF action；

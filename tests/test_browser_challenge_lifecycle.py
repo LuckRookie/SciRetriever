@@ -30,8 +30,9 @@ from sciretriever.network.browser_control import (
     ScrollSurface,
     Stop,
     WaitForChange,
-    observation_hash,
-    semantic_page_fingerprint,
+    execution_binding_fingerprint,
+    stable_action_intent_fingerprint,
+    stable_semantic_page_fingerprint,
 )
 
 
@@ -149,6 +150,46 @@ def _observation(
         page_state=page_state,
         agent_status=agent_status,
         capture_state=capture_state,
+    )
+
+
+def _remap_opaque_ids(observation: BrowserObservation) -> BrowserObservation:
+    page_ids = {"p00000001": "p00000011", "p00000002": "p00000012"}
+    surface_ids = {f"s0000000{index}": f"s0000001{index}" for index in range(1, 7)}
+    remapped_surfaces = tuple(
+        replace(
+            surface,
+            surface_id=surface_ids[surface.surface_id],
+            page_id=page_ids[surface.page_id],
+            parent_surface_id=(
+                None
+                if surface.parent_surface_id is None
+                else surface_ids[surface.parent_surface_id]
+            ),
+        )
+        for surface in observation.surfaces
+    )
+    remapped_elements = tuple(
+        replace(
+            element,
+            element_id=f"e0000001{index}",
+            surface_id=surface_ids[element.surface_id],
+        )
+        for index, element in enumerate(observation.elements, start=1)
+    )
+    return replace(
+        observation,
+        article_token="article-remapped",
+        page_id=page_ids[observation.page_id],
+        surfaces=remapped_surfaces,
+        elements=remapped_elements,
+        screenshot=replace(
+            observation.screenshot,
+            screenshot_id="i00000011",
+            article_token="article-remapped",
+            page_id=page_ids[observation.screenshot.page_id],
+            surface_id=surface_ids[observation.screenshot.surface_id],
+        ),
     )
 
 
@@ -286,12 +327,176 @@ class BrowserObservationContractTests(unittest.TestCase):
             screenshot_content=b"different-screenshot",
             screenshot_id="i00000002",
         )
-        self.assertEqual(semantic_page_fingerprint(first), semantic_page_fingerprint(same))
         self.assertEqual(
-            semantic_page_fingerprint(first),
-            semantic_page_fingerprint(changed_pixels),
+            stable_semantic_page_fingerprint(first),
+            stable_semantic_page_fingerprint(same),
         )
-        self.assertNotEqual(observation_hash(first), observation_hash(changed_pixels))
+        self.assertEqual(
+            stable_semantic_page_fingerprint(first),
+            stable_semantic_page_fingerprint(changed_pixels),
+        )
+        self.assertNotEqual(
+            execution_binding_fingerprint(first),
+            execution_binding_fingerprint(changed_pixels),
+        )
+
+    def test_stable_and_exact_fingerprints_separate_semantics_from_bindings(self) -> None:
+        baseline = _observation()
+        transient = _observation(
+            revision=2,
+            screenshot_content=b"new-pixels",
+            screenshot_id="i00000002",
+        )
+        remapped = _remap_opaque_ids(baseline)
+        geometry_jitter = replace(
+            baseline,
+            elements=(
+                replace(
+                    baseline.elements[0],
+                    bounds=replace(baseline.elements[0].bounds, x=101, y=101),
+                ),
+                baseline.elements[1],
+            ),
+        )
+        semantically_same = (transient, remapped, geometry_jitter)
+        for observation in semantically_same:
+            with self.subTest(kind="stable", revision=observation.revision):
+                self.assertEqual(
+                    stable_semantic_page_fingerprint(baseline),
+                    stable_semantic_page_fingerprint(observation),
+                )
+                self.assertNotEqual(
+                    execution_binding_fingerprint(baseline),
+                    execution_binding_fingerprint(observation),
+                )
+
+        changed_location = replace(
+            baseline,
+            surfaces=(
+                *baseline.surfaces[:4],
+                replace(baseline.surfaces[4], path="/different-article"),
+                baseline.surfaces[5],
+            ),
+        )
+        changed_actionability = replace(
+            baseline,
+            elements=(
+                replace(
+                    baseline.elements[0],
+                    state=BrowserElementState.DISABLED,
+                ),
+                baseline.elements[1],
+            ),
+        )
+        changed_structure = replace(
+            baseline,
+            elements=(baseline.elements[0],),
+        )
+        semantic_changes = (
+            replace(baseline, page_state=BrowserPageState.CHALLENGE),
+            changed_location,
+            changed_actionability,
+            changed_structure,
+        )
+        for observation in semantic_changes:
+            with self.subTest(kind="meaningful", state=observation.page_state.value):
+                self.assertNotEqual(
+                    stable_semantic_page_fingerprint(baseline),
+                    stable_semantic_page_fingerprint(observation),
+                )
+                self.assertNotEqual(
+                    execution_binding_fingerprint(baseline),
+                    execution_binding_fingerprint(observation),
+                )
+
+    def test_stable_action_intent_uses_semantics_point_buckets_and_scroll_classes(
+        self,
+    ) -> None:
+        baseline = _observation()
+        transient = _observation(
+            revision=2,
+            screenshot_content=b"new-pixels",
+            screenshot_id="i00000002",
+        )
+        remapped = _remap_opaque_ids(baseline)
+        click = ClickElement(
+            baseline.article_token,
+            "p00000001",
+            "s00000003",
+            baseline.revision,
+            "e00000001",
+        )
+        transient_click = replace(
+            click,
+            revision=transient.revision,
+        )
+        remapped_click = ClickElement(
+            remapped.article_token,
+            "p00000011",
+            "s00000013",
+            remapped.revision,
+            "e00000011",
+        )
+        self.assertEqual(
+            stable_action_intent_fingerprint(click, baseline),
+            stable_action_intent_fingerprint(transient_click, transient),
+        )
+        self.assertEqual(
+            stable_action_intent_fingerprint(click, baseline),
+            stable_action_intent_fingerprint(remapped_click, remapped),
+        )
+
+        renamed = replace(
+            baseline,
+            elements=(
+                replace(baseline.elements[0], name="Verify access"),
+                baseline.elements[1],
+            ),
+        )
+        self.assertNotEqual(
+            stable_action_intent_fingerprint(click, baseline),
+            stable_action_intent_fingerprint(click, renamed),
+        )
+
+        point = ClickPoint(
+            baseline.article_token,
+            baseline.page_id,
+            "s00000006",
+            baseline.revision,
+            baseline.screenshot.screenshot_id,
+            240,
+            220,
+        )
+        nearby_point = replace(point, x=241, y=221)
+        distant_point = replace(point, x=600, y=500)
+        self.assertEqual(
+            stable_action_intent_fingerprint(point, baseline),
+            stable_action_intent_fingerprint(nearby_point, baseline),
+        )
+        self.assertNotEqual(
+            stable_action_intent_fingerprint(point, baseline),
+            stable_action_intent_fingerprint(distant_point, baseline),
+        )
+
+        scroll = ScrollSurface(
+            baseline.article_token,
+            baseline.page_id,
+            "s00000006",
+            baseline.revision,
+            200,
+        )
+        self.assertEqual(
+            stable_action_intent_fingerprint(scroll, baseline),
+            stable_action_intent_fingerprint(replace(scroll, delta_y=400), baseline),
+        )
+        self.assertNotEqual(
+            stable_action_intent_fingerprint(scroll, baseline),
+            stable_action_intent_fingerprint(replace(scroll, delta_y=401), baseline),
+        )
+        self.assertNotEqual(
+            stable_action_intent_fingerprint(scroll, baseline),
+            stable_action_intent_fingerprint(replace(scroll, delta_y=-200), baseline),
+        )
 
     def test_receipt_expresses_every_closed_outcome_without_payload(self) -> None:
         for outcome in BrowserActionOutcome:
@@ -303,7 +508,7 @@ class BrowserObservationContractTests(unittest.TestCase):
                     page_id="p00000002",
                     surface_id="s00000006",
                     before_revision=1,
-                    after_revision=2 if outcome is BrowserActionOutcome.NAVIGATION else None,
+                    after_revision=2,
                     elapsed_milliseconds=5,
                     failure_code=(
                         "browser-action-failed" if outcome is BrowserActionOutcome.FAILURE else None
@@ -374,7 +579,7 @@ class BrowserClosedActionContractTests(unittest.TestCase):
             self.assertNotIn("javascript", parameters)
 
     def test_public_network_surface_has_no_vendor_or_challenge_lifecycle_types(self) -> None:
-        revoked = {
+        removed = {
             "BrowserAgentActionCommand",
             "BrowserAgentActionPort",
             "BrowserAgentObservation",
@@ -384,12 +589,32 @@ class BrowserClosedActionContractTests(unittest.TestCase):
             "BrowserChallengeState",
             "BrowserChallengeStateMachine",
         }
+        transient = {
+            "BrowserControlSession",
+            "BrowserStepDriver",
+            "BrowserTransition",
+            "BrowserTransitionKind",
+        }
         for module in (control_module, browser_module):
             with self.subTest(module=module.__name__):
-                self.assertTrue(revoked.isdisjoint(vars(module)))
+                self.assertTrue(removed.isdisjoint(vars(module)))
         public_names = set(control_module.__all__)
-        self.assertTrue({"BrowserObservation", "BrowserControlSession"} <= public_names)
-        self.assertTrue(revoked.isdisjoint(public_names))
+        self.assertTrue(
+            {
+                "BrowserObservation",
+                "BrowserReady",
+                "BrowserCaptured",
+                "BrowserBlocked",
+                "BrowserFailed",
+                "BrowserCancelled",
+                "BrowserStepPolicy",
+                "BrowserStepSession",
+            }
+            <= public_names
+        )
+        self.assertTrue(removed.isdisjoint(public_names))
+        self.assertTrue(transient.isdisjoint(public_names))
+        self.assertFalse(hasattr(browser_module.BrowserFlowSession, "control_session"))
 
 
 if __name__ == "__main__":

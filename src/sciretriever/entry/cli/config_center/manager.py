@@ -39,7 +39,6 @@ from sciretriever.entry.cli.config_ui import (
 )
 from sciretriever.model.configuration import (
     BrowserAccessStatus,
-    BrowserController,
     BrowserProfilePresence,
     Configuration,
     ConfigurationRuntimeStatus,
@@ -97,7 +96,7 @@ def configuration_home_rows(
     model_count = len(configuration.models.values)
     provider_count = len(configuration.providers.values)
     analysis_model = configuration.models.get(configuration.analysis.model)
-    browser_model = configuration.models.get(configuration.access.model)
+    browser_model = configuration.models.get(configuration.browser.model)
     metadata_count = len(metadata_source_providers(configuration))
     acquisition_count = len(acquisition_source_providers(configuration))
     cloak_version = getattr(cloak, "version", None)
@@ -107,10 +106,7 @@ def configuration_home_rows(
     profile_identity = profile.selected or "not selected"
     profile_ready = profile.presence is BrowserProfilePresence.CONFIGURED
     browser_runtime_ready = cloak_verified and profile_ready
-    controller_ready = (
-        configuration.access.browser_controller is BrowserController.RULES
-        or runtime.agents.browser_locally_ready
-    )
+    agent_ready = runtime.agents.browser_locally_ready
     parser_ready = runtime.parsing.configuration_complete and (
         not runtime.parsing.bearer_token_required
         or (
@@ -145,18 +141,15 @@ def configuration_home_rows(
             "Ready" if runtime.agents.analysis_reference_locally_ready else "Incomplete",
         ),
         "browser": (
-            f"{'enabled' if configuration.access.browser_enabled else 'off'} · "
-            f"{configuration.access.browser_controller.value} · "
+            f"{'enabled' if configuration.browser.enabled else 'off'} · "
             f"{'no Model' if browser_model is None else browser_model.reference} · "
             f"Profile {profile_identity} · {cloak_presence} "
             f"{cloak_version or 'not installed'}",
             (
                 "Ready"
-                if configuration.access.browser_enabled
-                and controller_ready
-                and browser_runtime_ready
+                if configuration.browser.enabled and agent_ready and browser_runtime_ready
                 else "Off"
-                if not configuration.access.browser_enabled
+                if not configuration.browser.enabled
                 else "Incomplete"
             ),
         ),
@@ -176,7 +169,7 @@ def _configuration_area_options(
         "download": "Choose named PDF acquisition Sources",
         "parse": "Configure the MinerU parser service",
         "analyze": "Choose the Model used for Markdown analysis",
-        "browser": "Configure controlled Browser access and its controller",
+        "browser": "Configure the generic Browser Agent, Profile and Runtime",
     }
 
     def description(area: str) -> str:

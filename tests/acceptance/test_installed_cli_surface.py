@@ -472,7 +472,6 @@ reference_max_output_tokens = 64
                     "4\n"
                     "b\n"
                     "1\n"
-                    "3\n"
                     "1\n"
                     "\n"
                     "\n"
@@ -506,7 +505,7 @@ reference_max_output_tokens = 64
         self.assertEqual(rendered.count("stream = true"), 2)
         self.assertIn("[analyze]", rendered)
         self.assertIn('model = "local/acceptance-analysis"', rendered)
-        self.assertIn("[download]", rendered)
+        self.assertIn("[browser]", rendered)
         self.assertIn('model = "local/acceptance-browser"', rendered)
         self.assertEqual(rendered.count("image = true"), 1)
         for removed in (
@@ -535,11 +534,11 @@ reference_max_output_tokens = 64
         )
         self.assertFalse(payload["analyze"]["selected_model"]["image"])
         self.assertEqual(
-            payload["download"]["selected_model"]["model"],
+            payload["browser"]["selected_model"]["model"],
             "acceptance-browser",
         )
-        self.assertEqual(payload["download"]["selected_model"]["reasoning"], "xhigh")
-        self.assertTrue(payload["download"]["selected_model"]["image"])
+        self.assertEqual(payload["browser"]["selected_model"]["reasoning"], "xhigh")
+        self.assertTrue(payload["browser"]["selected_model"]["image"])
         self.assertFalse((work / "catalog.sqlite3").exists())
         self.assertFalse((work / "artifacts").exists())
 
@@ -655,6 +654,7 @@ database = "WOS"
                 "models",
                 "analyze",
                 "download",
+                "browser",
                 "parsing",
                 "execution",
                 "library",
@@ -703,23 +703,13 @@ database = "WOS"
             wiley["authorized_api"]["credentials"]["fields"],
             [{"name": "tdm_api_token", "required": True, "configured": False}],
         )
-        browser = status_payload["providers"]["controlled_browser"]
+        browser = status_payload["browser"]
         self.assertFalse(browser["automatic_acquisition_available"])
-        self.assertEqual(browser["production_route_count"], 9)
-        self.assertEqual(browser["automatic_route_count"], 9)
+        self.assertEqual(browser["production_route_count"], 1)
+        self.assertEqual(browser["automatic_route_count"], 1)
         self.assertEqual(
             [route["access_key"] for route in browser["routes"]],
-            [
-                "acs-publications",
-                "aip-publishing",
-                "elsevier-sciencedirect",
-                "iopscience",
-                "oxford-academic",
-                "rsc-publishing",
-                "science-aaas",
-                "springerlink",
-                "wiley-online-library",
-            ],
+            ["generic"],
         )
         self.assertTrue(browser["runtime"]["cloak_wrapper_available"])
         self.assertTrue(browser["runtime"]["playwright_api_available"])
@@ -768,8 +758,8 @@ database = "WOS"
         self.assertIsNone(status_payload["analyze"]["model"])
         self.assertIsNone(status_payload["analyze"]["selected_model"])
         self.assertFalse(status_payload["analyze"]["content_locally_ready"])
-        self.assertIsNone(status_payload["download"]["model"])
-        self.assertIsNone(status_payload["download"]["selected_model"])
+        self.assertIsNone(status_payload["browser"]["model"])
+        self.assertIsNone(status_payload["browser"]["selected_model"])
         self.assertFalse(catalog.exists())
         self.assertFalse(artifacts.exists())
         assert home is not None
@@ -897,7 +887,7 @@ database = "WOS"
             self.assertEqual(status_human.stderr, b"")
             self.assertNotIn(b"\x1b[", status_human.stdout)
             self.assertNotIn(secret.encode(), status_human.stdout)
-            self.assertIn(b"Models, Analyze, Download and Parse", status_human.stdout)
+            self.assertIn(b"Models, Analyze, Browser and Parse", status_human.stdout)
             self.assertIn(b"reasoning medium", status_human.stdout)
             self.assertIn(b"Parse", status_human.stdout)
 

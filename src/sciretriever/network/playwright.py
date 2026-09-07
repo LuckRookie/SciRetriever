@@ -18,8 +18,10 @@ not discover or launch a stock Chrome/Chromium runtime.
 from __future__ import annotations
 
 import queue
+import re
 import secrets
 import threading
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,7 @@ from urllib.parse import urlsplit, urlunsplit
 from sciretriever.logging.api import get_logger
 
 from .browser_connect import BrowserConnectProxy
+from .browser_control import BROWSER_OBSERVATION_MEDIA_TYPE, BrowserObservationUnavailable
 
 _T = TypeVar("_T")
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 65.0
@@ -37,8 +40,10 @@ _MAX_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
 _MAX_ARTICLE_BYTES: Final[int] = 128 * 1024 * 1024
 _MAX_DISCOVERED_PDF_LOCATORS: Final[int] = 16
 _MAX_DISCOVERED_LOCATOR_LENGTH: Final[int] = 8192
+_MAX_CONTROL_ELEMENT_NAME_BYTES: Final[int] = 256
+_CONTROL_ROLE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,63}$", re.ASCII)
 _CAPTURE_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
-    {"content-type", "content-length", "content-disposition"}
+    {"content-type", "content-length", "content-disposition", "location"}
 )
 _LOGGER = get_logger(__name__)
 
@@ -117,6 +122,33 @@ def _query_free_http_url(value: object) -> str | None:
         return urlunsplit((parsed.scheme.casefold(), parsed.netloc, parsed.path or "/", "", ""))
     except ValueError:
         return None
+
+
+def _control_element_role(value: object) -> str:
+    """Normalize one ARIA fallback-role list to the stable role contract."""
+
+    if type(value) is not str:
+        raise _runtime_error()
+    for candidate in value.casefold().split():
+        if _CONTROL_ROLE.fullmatch(candidate) is not None:
+            return candidate
+    raise _runtime_error()
+
+
+def _control_element_name(value: object, *, fallback: str) -> str:
+    """Normalize human-visible DOM text without leaking it into diagnostics."""
+
+    if type(value) is not str or _CONTROL_ROLE.fullmatch(fallback) is None:
+        raise _runtime_error()
+    visible = "".join(
+        " " if character.isspace() or unicodedata.category(character).startswith("C") else character
+        for character in value
+    )
+    candidate = " ".join(visible.split()) or fallback
+    encoded = candidate.encode("utf-8")
+    if len(encoded) > _MAX_CONTROL_ELEMENT_NAME_BYTES:
+        candidate = encoded[:_MAX_CONTROL_ELEMENT_NAME_BYTES].decode("utf-8", "ignore").rstrip()
+    return candidate or fallback
 
 
 def _frame_observation(raw_request: object) -> tuple[bool, int | None, tuple[str, ...], str | None]:
@@ -200,6 +232,12 @@ def _playwright_error_category(error: BaseException) -> str:
         message = str(error).casefold()
     except BaseException:
         return "unknown"
+    if (
+        "no resource with given identifier" in message
+        or "response body is unavailable" in message
+        or "request content was evicted" in message
+    ):
+        return "response-body-unavailable"
     if "execution context was destroyed" in message or "because of a navigation" in message:
         return "navigation-race"
     if "frame was detached" in message or "cannot find context with specified id" in message:
@@ -211,6 +249,35 @@ def _playwright_error_category(error: BaseException) -> str:
     if "timeout" in message:
         return "vendor-timeout"
     return "other"
+
+
+def _control_observation_error(
+    error: BaseException,
+    *,
+    operation: str,
+    stage: str = "vendor-call",
+    timeout_is_transition: bool = False,
+) -> RuntimeError:
+    category = _playwright_error_category(error)
+    if category in {"navigation-race", "frame-transition", "page-closed"} or (
+        timeout_is_transition and category == "vendor-timeout"
+    ):
+        _LOGGER.debug(
+            "event=browser-control-observation-unavailable operation=%s stage=%s "
+            "failure_category=%s code=transition",
+            operation,
+            stage,
+            category,
+        )
+        return BrowserObservationUnavailable()
+    _LOGGER.debug(
+        "event=browser-control-vendor-failed operation=%s stage=%s "
+        "failure_category=%s code=runtime",
+        operation,
+        stage,
+        category,
+    )
+    return _runtime_error()
 
 
 @dataclass(slots=True)
@@ -381,7 +448,9 @@ def _headers(raw: object) -> tuple[tuple[str, str], ...]:
     # route can then wait on the still-live parent host lease and deadlock the
     # engine thread. Only three capture-classification fields are retained;
     # unrelated multi-value fields such as Set-Cookie must never invalidate a
-    # complete response view.
+    # complete response view. Location remains inside Network and is retained
+    # only so a guarded native redirect can bind its next HTTPS origin before
+    # Chromium opens the corresponding CONNECT tunnel.
     value = _optional_value(raw, "headers")
     if not isinstance(value, Mapping):
         raise _response_view_error("headers")
@@ -466,16 +535,28 @@ class _Response:
         )
 
     def _read_raw_body(self) -> object:
-        return _required_callable(self._body_source, "body")()
+        try:
+            return _required_callable(self._body_source, "body")()
+        except BaseException as error:
+            _LOGGER.debug(
+                "event=browser-response-body-failed stage=vendor-body "
+                "failure_category=%s exception_type=%s code=runtime",
+                _playwright_error_category(error),
+                type(error).__name__,
+            )
+            raise
 
     def body(self) -> bytes:
         declared = self.size
         if declared is not None and declared > _MAX_RESPONSE_BYTES:
+            _LOGGER.debug("event=browser-response-body-failed stage=declared-size code=runtime")
             raise _runtime_error()
         value = self._context.engine.call(self._read_raw_body)
         if not isinstance(value, bytes) or len(value) > _MAX_RESPONSE_BYTES:
+            _LOGGER.debug("event=browser-response-body-failed stage=result-shape code=runtime")
             raise _runtime_error()
         if not self._article.consume_article_bytes(len(value)):
+            _LOGGER.debug("event=browser-response-body-failed stage=article-budget code=runtime")
             raise _runtime_error()
         return value
 
@@ -719,6 +800,18 @@ class _Page:
 
         return self.engine.call(current)
 
+    def control_is_closed(self) -> bool:
+        """Report whether this wrapper can still contribute an observation."""
+
+        try:
+            return bool(
+                self.engine.call(
+                    lambda: self._closed or _optional_value(self.raw, "is_closed") is True
+                )
+            )
+        except BaseException:
+            raise _runtime_error() from None
+
     def goto(self, url: str, *, timeout: int) -> _NavigationResponse:
         return self.engine.call(lambda: self._goto(url, timeout=timeout))
 
@@ -788,9 +881,6 @@ class _Page:
             self._navigation_url = remembered.url
         return remembered
 
-    def open_popup(self, url: str) -> _Page:
-        return self.article.open_page(url)
-
     def title(self) -> str:
         value = self.engine.call(lambda: cast(Any, self.raw).evaluate("() => document.title || ''"))
         if type(value) is not str:
@@ -807,216 +897,22 @@ class _Page:
             raise _runtime_error()
         return value
 
-    def text_content(self, selector: str, *, timeout: int) -> str | None:
-        if type(selector) is not str or type(timeout) is not int or timeout <= 0:
-            raise _runtime_error()
-
-        def read() -> object:
-            stage = "locator"
-            try:
-                locator = _required_callable(self.raw, "locator")(selector)
-                # Marker selectors describe a bounded page fact, not a strict
-                # locator assertion. Real article pages can contain multiple
-                # matching elements (notably HTML ``title`` plus SVG
-                # ``title`` nodes); Playwright's strict text_content call
-                # would turn that ordinary DOM shape into a runtime failure.
-                # DOM order plus the reviewed static selector gives one
-                # deterministic, bounded value.
-                locator = _optional_value(locator, "first")
-                if locator is None:
-                    raise _runtime_error()
-                stage = "text-content"
-                text_content = _required_callable(locator, "text_content")
-                stage = "vendor-call"
-                return text_content(timeout=timeout)
-            except BaseException as error:
-                if _is_playwright_timeout(error):
-                    return None
-                _LOGGER.debug(
-                    "event=browser-native-page-operation-failed "
-                    "operation=text-content stage=%s exception_type=%s "
-                    "failure_category=%s page_closed=%s code=runtime",
-                    stage,
-                    type(error).__name__,
-                    _playwright_error_category(error),
-                    str(_optional_value(self.raw, "is_closed") is True).lower(),
-                )
-                raise
-
-        try:
-            value = self.engine.call(read)
-        except BaseException:
-            raise _runtime_error() from None
-        if value is not None and type(value) is not str:
-            raise _runtime_error()
-        return cast(str | None, value)
-
-    def has_selector(self, selector: str, *, timeout: int) -> bool:
-        if type(selector) is not str or type(timeout) is not int or timeout <= 0:
-            raise _runtime_error()
-
-        def count() -> object:
-            stage = "locator"
-            try:
-                locator = _required_callable(self.raw, "locator")(selector)
-                # ``count`` is a non-waiting DOM-presence query. Playwright's
-                # locator ``wait_for`` can monopolize the single engine thread
-                # while route interception is active even when given a short
-                # vendor timeout, so it is not a safe marker primitive here.
-                stage = "vendor-call"
-                return _required_callable(locator, "count")()
-            except BaseException as error:
-                _LOGGER.debug(
-                    "event=browser-native-page-operation-failed "
-                    "operation=selector-count stage=%s exception_type=%s "
-                    "failure_category=%s page_closed=%s code=runtime",
-                    stage,
-                    type(error).__name__,
-                    _playwright_error_category(error),
-                    str(_optional_value(self.raw, "is_closed") is True).lower(),
-                )
-                raise
-
-        try:
-            value = self.engine.call(count)
-        except BaseException:
-            raise _runtime_error() from None
-        if type(value) is not int or value < 0:
-            raise _runtime_error()
-        return value > 0
-
-    def discover_pdf_locators(self) -> tuple[str, ...]:
-        """Discover bounded browser-resolved PDF entry points without clicking."""
-
-        script = """
-        () => {
-          const values = [];
-          const seen = new Set();
-          const add = (raw) => {
-            if (typeof raw !== 'string' || !raw.trim()) return;
-            try {
-              const value = new URL(raw, document.baseURI).href;
-              const parsed = new URL(value);
-              if (!['http:', 'https:'].includes(parsed.protocol)) return;
-              if (value.length > 8192 || seen.has(value)) return;
-              seen.add(value);
-              values.push(value);
-            } catch (_) {}
-          };
-          document.querySelectorAll(
-            "meta[name='citation_pdf_url'], meta[name='wkhealth_pdf_url'], " +
-            "meta[name='eprints.document_url'], meta[property='citation_pdf_url']"
-          ).forEach((node) => add(node.getAttribute('content')));
-          document.querySelectorAll('a[href], iframe[src], embed[src], object[data]')
-            .forEach((node) => {
-              const raw = node.getAttribute('href') || node.getAttribute('src') ||
-                node.getAttribute('data');
-              const label = [node.textContent, node.getAttribute('aria-label'),
-                node.getAttribute('title'), raw].filter(Boolean).join(' ').toLowerCase();
-              const mediaType = (node.getAttribute('type') || '').toLowerCase();
-              if (/supplement|supporting information|appendix|extended data/.test(label)) return;
-              if (mediaType.includes('pdf') ||
-                  /(^|[\\s_-])(download[\\s_-]*)?pdf($|[\\s_-])|full[\\s_-]*text/.test(label) ||
-                  /\\.pdf(?:$|[?#])|\\/(?:pdf|epdf|pdfdirect|pdfft)(?:$|[/?#])/.test(label)) {
-                add(raw);
-              }
-            });
-          return values.slice(0, 16);
-        }
-        """
-        value = self.engine.call(lambda: _required_callable(self.raw, "evaluate")(script))
-        if not isinstance(value, list) or len(value) > _MAX_DISCOVERED_PDF_LOCATORS:
-            raise _runtime_error()
-        result: list[str] = []
-        for item in value:
-            if type(item) is not str or not item or len(item) > _MAX_DISCOVERED_LOCATOR_LENGTH:
-                raise _runtime_error()
-            result.append(item)
-        return tuple(result)
-
-    def click(self, selector: str, *, timeout: int) -> bool:
-        def click() -> bool:
-            try:
-                locator = _required_callable(self.raw, "locator")(selector)
-                locator = _required_callable(locator, "filter")(visible=True)
-                locator = cast(Any, locator).first
-                _required_callable(locator, "click")(
-                    timeout=timeout,
-                    no_wait_after=True,
-                )
-            except BaseException as error:
-                if _is_playwright_timeout(error):
-                    _LOGGER.debug(
-                        "event=browser-native-click-finished outcome=not-actionable "
-                        "stage=vendor-call exception_type=%s",
-                        type(error).__name__,
-                    )
-                    return False
-                if _is_cloak_actionability_error(error):
-                    _LOGGER.debug(
-                        "event=browser-native-click-finished outcome=not-actionable "
-                        "stage=human-actionability exception_type=%s "
-                        "failure_category=actionability-miss",
-                        type(error).__name__,
-                    )
-                    return False
-                _LOGGER.debug(
-                    "event=browser-native-page-operation-failed operation=click "
-                    "stage=vendor-call exception_type=%s failure_category=%s "
-                    "page_closed=%s code=runtime",
-                    type(error).__name__,
-                    _playwright_error_category(error),
-                    str(_optional_value(self.raw, "is_closed") is True).lower(),
-                )
-                raise
-            return True
-
-        try:
-            clicked = self.engine.call(click)
-        except BaseException:
-            raise _runtime_error() from None
-        if type(clicked) is not bool or not clicked:
-            return False
-        try:
-            current_url = self.url
-        except PlaywrightRuntimeError:
-            return True
-        if urlsplit(current_url).scheme.casefold() in {"http", "https"}:
-            self._navigation_url = current_url
-        return True
-
     def control_snapshot(  # noqa: C901, PLR0912, PLR0915
         self,
         *,
         timeout: int,
         include_screenshot: bool,
-        static_selector: str | None = None,
     ) -> dict[str, object]:
         """Return one bounded page/frame/Shadow/viewer control snapshot."""
 
-        if (
-            type(timeout) is not int
-            or timeout <= 0
-            or type(include_screenshot) is not bool
-            or (
-                static_selector is not None
-                and (
-                    type(static_selector) is not str
-                    or not static_selector
-                    or len(static_selector) > 1024
-                    or any(ord(character) < 32 for character in static_selector)
-                )
-            )
-        ):
+        if type(timeout) is not int or timeout <= 0 or type(include_screenshot) is not bool:
             raise _runtime_error()
         marker = self._control_marker_key
         default_selector = (
             "a,button,[role='button'],input[type='button'],input[type='submit'],"
             "summary,[tabindex],embed,object,iframe"
         )
-        scan_selector = (
-            default_selector if static_selector is None else f"{default_selector},{static_selector}"
-        )
+        scan_selector = default_selector
         scan_script = """
         (args) => {
           const elementMarker = Symbol.for(args.marker + "-element");
@@ -1109,6 +1005,7 @@ class _Page:
         """
 
         def read() -> dict[str, object]:  # noqa: C901, PLR0912, PLR0915
+            stage = "viewport"
             try:
                 viewport = _optional_value(self.raw, "viewport_size")
                 if not isinstance(viewport, dict):
@@ -1119,12 +1016,14 @@ class _Page:
                 height = viewport.get("height") if isinstance(viewport, dict) else None
                 if type(width) is not int or type(height) is not int:
                     raise _runtime_error()
+                stage = "root-locator"
                 root_url = _query_free_http_url(_string_value(self.raw, "url"))
                 if root_url is None:
                     root_url = _query_free_http_url(self._navigation_url)
                 if root_url is None:
                     raise _runtime_error()
 
+                stage = "frame-list"
                 raw_frames = _optional_value(self.raw, "frames")
                 frames = (
                     tuple(raw_frames)
@@ -1147,7 +1046,6 @@ class _Page:
                 surface_centers: dict[int, tuple[float, float]] = {}
                 page_title = ""
                 next_key = self._control_key_counter
-                static_element_key: int | None = None
 
                 def clipped_bounds(
                     x_value: object,
@@ -1182,6 +1080,7 @@ class _Page:
                     return left, top, right - left, bottom - top
 
                 for frame in frames[:32]:
+                    stage = "frame-bounds"
                     frame_key = frame_key_by_identity[id(frame)]
                     parent = _optional_value(frame, "parent_frame")
                     parent_key = (
@@ -1210,6 +1109,7 @@ class _Page:
                         if frame_bounds is None:
                             continue
                     evaluator = _required_callable(frame, "evaluate")
+                    stage = "frame-evaluate"
                     result = evaluator(
                         scan_script,
                         {
@@ -1220,6 +1120,7 @@ class _Page:
                     )
                     if not isinstance(result, dict):
                         raise _runtime_error()
+                    stage = "frame-contract"
                     title = result.get("title")
                     if type(title) is not str:
                         raise _runtime_error()
@@ -1320,6 +1221,7 @@ class _Page:
                             item_y + item_height / 2,
                         )
 
+                    stage = "element-locator"
                     locator = _required_callable(frame, "locator")(scan_selector)
                     all_locators = _optional_value(locator, "all")
                     if not isinstance(all_locators, list):
@@ -1332,6 +1234,7 @@ class _Page:
                         ]
                     locator_by_marker: dict[int, object] = {}
                     marker_script = "(node, key) => node[Symbol.for(key + '-element')] || null"
+                    stage = "element-binding"
                     for item_locator in all_locators[: 256 - len(elements)]:
                         key = _required_callable(item_locator, "evaluate")(
                             marker_script,
@@ -1339,33 +1242,13 @@ class _Page:
                         )
                         if type(key) is int and key > 0:
                             locator_by_marker[key] = item_locator
-                    static_marker_keys: set[int] = set()
-                    if static_selector is not None:
-                        static_locator = _required_callable(frame, "locator")(static_selector)
-                        static_locators = _optional_value(static_locator, "all")
-                        if not isinstance(static_locators, list):
-                            static_count = _required_callable(static_locator, "count")()
-                            if type(static_count) is not int or static_count < 0:
-                                raise _runtime_error()
-                            static_locators = [
-                                _required_callable(static_locator, "nth")(index)
-                                for index in range(min(static_count, 256))
-                            ]
-                        for item_locator in static_locators[:256]:
-                            key = _required_callable(item_locator, "evaluate")(
-                                marker_script,
-                                marker,
-                            )
-                            if type(key) is int and key > 0:
-                                static_marker_keys.add(key)
-
                     for raw_element in raw_elements:
                         if not isinstance(raw_element, dict):
                             raise _runtime_error()
                         key = raw_element.get("key")
                         raw_surface = raw_element.get("surface")
-                        role = raw_element.get("role")
-                        name = raw_element.get("name")
+                        raw_role = raw_element.get("role")
+                        raw_name = raw_element.get("name")
                         visible = raw_element.get("visible")
                         enabled = raw_element.get("enabled")
                         if (
@@ -1373,12 +1256,14 @@ class _Page:
                             or key < 1
                             or raw_surface is not None
                             and (type(raw_surface) is not int or raw_surface < 1)
-                            or type(role) is not str
-                            or type(name) is not str
+                            or type(raw_role) is not str
+                            or type(raw_name) is not str
                             or type(visible) is not bool
                             or type(enabled) is not bool
                         ):
                             raise _runtime_error()
+                        role = _control_element_role(raw_role)
+                        name = _control_element_name(raw_name, fallback=role)
                         bounds = clipped_bounds(
                             frame_x + float(cast(Any, raw_element.get("x"))),
                             frame_y + float(cast(Any, raw_element.get("y"))),
@@ -1413,13 +1298,6 @@ class _Page:
                                 name,
                                 enabled,
                             )
-                        if (
-                            static_element_key is None
-                            and visible
-                            and key in static_marker_keys
-                            and item_locator is not None
-                        ):
-                            static_element_key = key
                 if not surfaces or len(surfaces) > 128 or len(elements) > 256:
                     raise _runtime_error()
                 self._control_key_counter = next_key
@@ -1429,6 +1307,7 @@ class _Page:
                 screenshot: object = None
                 media_type: object = None
                 if include_screenshot:
+                    stage = "screenshot"
                     screenshot_method = _required_callable(self.raw, "screenshot")
                     try:
                         screenshot = screenshot_method(
@@ -1440,7 +1319,7 @@ class _Page:
                         )
                     except TypeError:
                         screenshot = screenshot_method(type="jpeg", quality=70)
-                    media_type = "image/jpeg"
+                    media_type = BROWSER_OBSERVATION_MEDIA_TYPE
                 return {
                     "width": width,
                     "height": height,
@@ -1449,10 +1328,16 @@ class _Page:
                     "screenshot_media_type": media_type,
                     "surfaces": tuple(surfaces),
                     "elements": tuple(elements),
-                    "static_element_key": static_element_key,
                 }
-            except BaseException:
-                raise _runtime_error() from None
+            except BrowserObservationUnavailable:
+                raise
+            except BaseException as error:
+                raise _control_observation_error(
+                    error,
+                    operation="snapshot",
+                    stage=stage,
+                    timeout_is_transition=True,
+                ) from None
 
         return self.engine.call(read)
 
@@ -1480,6 +1365,7 @@ class _Page:
             raise _runtime_error()
 
         def click() -> bool:
+            stage = "binding"
             try:
                 bound = self._control_element_locators.get(key)
                 if bound is None:
@@ -1517,19 +1403,29 @@ class _Page:
                   };
                 }
                 """
+                stage = "identity-check"
                 facts = _required_callable(locator, "evaluate")(
                     verify_script,
                     {"marker": self._control_marker_key},
                 )
+                current_role = (
+                    _control_element_role(facts.get("role")) if isinstance(facts, dict) else None
+                )
+                current_name = (
+                    _control_element_name(facts.get("name"), fallback=current_role)
+                    if isinstance(current_role, str) and isinstance(facts, dict)
+                    else None
+                )
                 if (
                     not isinstance(facts, dict)
                     or facts.get("marker") != key
-                    or facts.get("role") != expected_role
-                    or facts.get("name") != expected_name
+                    or current_role != expected_role
+                    or current_name != expected_name
                     or facts.get("visible") is not True
                     or facts.get("enabled") is not expected_enabled
                 ):
                     raise _runtime_error()
+                stage = "click"
                 _required_callable(locator, "click")(
                     timeout=timeout,
                     no_wait_after=True,
@@ -1538,6 +1434,29 @@ class _Page:
             except BaseException as error:
                 if _is_playwright_timeout(error) or _is_cloak_actionability_error(error):
                     return False
+                category = _playwright_error_category(error)
+                if stage == "click" and category in {
+                    "navigation-race",
+                    "frame-transition",
+                    "page-closed",
+                }:
+                    # The locator identity was revalidated immediately before
+                    # dispatch. A transition error raised by the click itself
+                    # means Chromium has already acted on that click; the
+                    # caller must settle the resulting page/download instead
+                    # of replaying or reporting the action as unexecuted.
+                    _LOGGER.debug(
+                        "event=browser-control-action-transition operation=click-element "
+                        "stage=dispatch failure_category=%s outcome=applied",
+                        category,
+                    )
+                    return True
+                _LOGGER.debug(
+                    "event=browser-control-vendor-failed operation=click-element "
+                    "stage=%s failure_category=%s code=runtime",
+                    stage,
+                    category,
+                )
                 raise _runtime_error() from None
 
         return self.engine.call(click)
@@ -1554,16 +1473,36 @@ class _Page:
             raise _runtime_error()
 
         def click() -> bool:
+            stage = "mouse"
             try:
                 mouse = getattr(self.raw, "mouse", None)
                 if mouse is None:
                     raise _runtime_error()
                 _required_callable(mouse, "move")(float(x), float(y))
+                stage = "click"
                 _required_callable(mouse, "click")(float(x), float(y))
                 return True
             except BaseException as error:
                 if _is_playwright_timeout(error) or _is_cloak_actionability_error(error):
                     return False
+                category = _playwright_error_category(error)
+                if stage == "click" and category in {
+                    "navigation-race",
+                    "frame-transition",
+                    "page-closed",
+                }:
+                    _LOGGER.debug(
+                        "event=browser-control-action-transition operation=click-point "
+                        "stage=dispatch failure_category=%s outcome=applied",
+                        category,
+                    )
+                    return True
+                _LOGGER.debug(
+                    "event=browser-control-vendor-failed operation=click-point "
+                    "stage=%s failure_category=%s code=runtime",
+                    stage,
+                    category,
+                )
                 raise _runtime_error() from None
 
         return self.engine.call(click)
@@ -1636,37 +1575,36 @@ class _Page:
         )
 
         def wait() -> bool:
-            before = _required_callable(self.raw, "evaluate")(fingerprint_script)
-            if type(before) is not str:
-                raise _runtime_error()
-            waiter = getattr(self.raw, "wait_for_function", None)
-            if not callable(waiter):
-                fallback = getattr(self.raw, "wait_for_timeout", None)
-                if not callable(fallback):
-                    raise _runtime_error()
-                fallback(min(timeout, 100))
-                after = _required_callable(self.raw, "evaluate")(fingerprint_script)
-                return type(after) is str and after != before
-            condition = (
-                "(before) => [location.href, document.title, window.scrollX, "
-                "window.scrollY, document.body ? document.body.childElementCount : 0]"
-                ".join('\\u0000') !== before"
-            )
             try:
-                waiter(condition, arg=before, timeout=timeout)
-                return True
-            except BaseException as error:
-                if _is_playwright_timeout(error):
-                    return False
+                before = _required_callable(self.raw, "evaluate")(fingerprint_script)
+                if type(before) is not str:
+                    raise _runtime_error()
+                waiter = getattr(self.raw, "wait_for_function", None)
+                if not callable(waiter):
+                    fallback = getattr(self.raw, "wait_for_timeout", None)
+                    if not callable(fallback):
+                        raise _runtime_error()
+                    fallback(min(timeout, 100))
+                    after = _required_callable(self.raw, "evaluate")(fingerprint_script)
+                    return type(after) is str and after != before
+                condition = (
+                    "(before) => [location.href, document.title, window.scrollX, "
+                    "window.scrollY, document.body ? document.body.childElementCount : 0]"
+                    ".join('\\u0000') !== before"
+                )
+                try:
+                    waiter(condition, arg=before, timeout=timeout)
+                    return True
+                except BaseException as error:
+                    if _is_playwright_timeout(error):
+                        return False
+                    raise
+            except BrowserObservationUnavailable:
                 raise
+            except BaseException as error:
+                raise _control_observation_error(error, operation="change-wait") from None
 
-        try:
-            return self.engine.call(wait)
-        except BaseException:
-            raise _runtime_error() from None
-
-    def fill(self, selector: str, value: str, *, timeout: int) -> None:
-        self.engine.call(lambda: cast(Any, self.raw).fill(selector, value, timeout=timeout))
+        return self.engine.call(wait)
 
     def abort(self) -> None:
         self.article.interrupt_transport()

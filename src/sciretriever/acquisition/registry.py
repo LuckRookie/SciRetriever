@@ -23,10 +23,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Final
 
-from sciretriever.acquisition.access_profiles import (
-    PublisherAccessProfile,
-    PublisherAccessProfileCatalog,
-)
+from sciretriever.acquisition.access_profiles import PublisherAccessProfileCatalog
 from sciretriever.acquisition.authorized import (
     PRODUCTION_AUTHORIZED_PROVIDER_CATALOG,
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
@@ -34,7 +31,6 @@ from sciretriever.acquisition.authorized import (
     AuthorizedProviderClient,
     authorized_route_status,
 )
-from sciretriever.acquisition.browser_control import BrowserControllerKind
 from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import (
     AcquisitionPlanBuilder,
@@ -65,7 +61,6 @@ from sciretriever.acquisition.routing import (
 from sciretriever.acquisition.sources import (
     BUILTIN_SCI_HUB_MIRROR_URLS,
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
-    PRODUCTION_BROWSER_RULE_CATALOG,
     ArxivPdfSource,
     ConfiguredLocatorResolver,
     ConfiguredSciHubLandingResolver,
@@ -84,10 +79,6 @@ from sciretriever.acquisition.sources.arxiv import (
 )
 from sciretriever.acquisition.sources.arxiv import (
     BASELINE_ACCESS_POLICY as ARXIV_ACCESS_POLICY,
-)
-from sciretriever.acquisition.sources.browser_rules import (
-    BrowserRuleCatalog,
-    BrowserSiteRule,
 )
 from sciretriever.acquisition.sources.europe_pmc import (
     ACCESS_SCOPE as EUROPE_PMC_ACCESS_SCOPE,
@@ -114,13 +105,14 @@ from sciretriever.model.acquisition import (
 from sciretriever.model.configuration import Configuration, ProviderName
 from sciretriever.model.metadata import MetadataObservation
 from sciretriever.model.primitives import ProvenanceId, UtcTimestamp
+from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import (
     AccessCoordinator,
     AccessPolicy,
     AccessScope,
 )
 from sciretriever.network.browser import (
-    BrowserCaptureGuard,
+    BrowserCapturePolicy,
     BrowserClient,
     BrowserDestinationGuard,
     BrowserFlowController,
@@ -364,19 +356,14 @@ class BrowserAgentDependency:
 def _validate_browser_assembly_dependencies(
     *,
     browser_client: BrowserClient | None,
-    browser_controller: BrowserControllerKind,
     browser_agent: BrowserAgentDependency | None,
 ) -> None:
     if browser_client is not None and not isinstance(browser_client, BrowserClient):
         raise TypeError("browser_client must be a BrowserClient or None")
-    if not isinstance(browser_controller, BrowserControllerKind):
-        raise TypeError("browser_controller must be BrowserControllerKind")
     if browser_agent is not None and not isinstance(browser_agent, BrowserAgentDependency):
         raise TypeError("browser_agent must be a BrowserAgentDependency or None")
-    if browser_controller is BrowserControllerKind.AGENT and browser_agent is None:
-        raise ValueError("Agent Browser controller requires a ready AgentRuntime")
-    if browser_controller is BrowserControllerKind.RULES and browser_agent is not None:
-        raise ValueError("Rules Browser controller must not receive an AgentRuntime")
+    if browser_client is not None and browser_agent is None:
+        raise ValueError("a ready Browser client requires a ready Browser Agent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,8 +383,8 @@ class AcquisitionAssemblyDependencies:
         repr=False,
     )
     browser_client: BrowserClient | None = field(default=None, repr=False)
-    browser_controller: BrowserControllerKind = BrowserControllerKind.RULES
     browser_agent: BrowserAgentDependency | None = field(default=None, repr=False)
+    browser_runtime_failure: StableFailure | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.http_client, HttpClient):
@@ -417,9 +404,15 @@ class AcquisitionAssemblyDependencies:
             threading.Event,
         ):
             raise TypeError("cancel_event must be a threading.Event or None")
+        if self.browser_runtime_failure is not None and not isinstance(
+            self.browser_runtime_failure,
+            StableFailure,
+        ):
+            raise TypeError("browser_runtime_failure must be StableFailure or None")
+        if self.browser_client is not None and self.browser_runtime_failure is not None:
+            raise ValueError("a ready Browser client cannot carry a runtime failure")
         _validate_browser_assembly_dependencies(
             browser_client=self.browser_client,
-            browser_controller=self.browser_controller,
             browser_agent=self.browser_agent,
         )
 
@@ -699,47 +692,37 @@ def _validate_external_catalogs() -> None:
         raise AcquisitionRegistryError("authorized-catalog-mismatch")
     if UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS != _AUTHORIZED_UNSUPPORTED:
         raise AcquisitionRegistryError("authorized-unsupported-mismatch")
-    expected_profile_routes = {
-        "acs-publications": ((), (), "browser:acs-publications"),
-        "aip-publishing": ((), (), "browser:aip-publishing"),
-        "core-open-access": ((), ("api:core",), None),
+    expected_profile_routes_and_probes = {
+        "acs-publications": ((), (), True),
+        "aip-publishing": ((), (), True),
+        "core-open-access": ((), ("api:core",), False),
         "elsevier-sciencedirect": (
             (),
             ("api:elsevier-article-object",),
-            "browser:elsevier-sciencedirect",
+            True,
         ),
-        "oxford-academic": ((), (), "browser:oxford-academic"),
-        "iopscience": ((), (), "browser:iopscience"),
-        "rsc-publishing": ((), (), "browser:rsc-publishing"),
-        "science-aaas": ((), (), "browser:science-aaas"),
-        "springerlink": ((), (), "browser:springerlink"),
+        "oxford-academic": ((), (), True),
+        "iopscience": ((), (), True),
+        "rsc-publishing": ((), (), True),
+        "science-aaas": ((), (), True),
+        "springerlink": ((), (), True),
         "wiley-online-library": (
             (),
             ("api:wiley-tdm-v1",),
-            "browser:wiley-online-library",
+            True,
         ),
     }
-    actual_profile_routes = {
+    actual_profile_routes_and_probes = {
         profile.access_key: (
             profile.public_route_keys,
             profile.api_route_keys,
-            profile.browser_route_key,
+            profile.browser_probe_enabled,
         )
         for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG
     }
-    if actual_profile_routes != expected_profile_routes:
+    if actual_profile_routes_and_probes != expected_profile_routes_and_probes:
         raise AcquisitionRegistryError("profile-catalog-mismatch")
-    if (
-        PRODUCTION_BROWSER_RULE_CATALOG.rules
-        != PUBLISHER_ACCESS_VERIFICATION_MATRIX.production_browser_rules.rules
-    ):
-        raise AcquisitionRegistryError("browser-catalog-mismatch")
-    expected_browser_readiness = (
-        RouteReadiness.READY
-        if PRODUCTION_BROWSER_RULE_CATALOG.rules
-        else RouteReadiness.UNSUPPORTED
-    )
-    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not expected_browser_readiness:
+    if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not RouteReadiness.READY:
         raise AcquisitionRegistryError("browser-readiness-mismatch")
 
 
@@ -966,7 +949,7 @@ class _SessionBoundBrowserRunner:
         *,
         controller: BrowserFlowController | None = None,
         destination_guard: BrowserDestinationGuard | None = None,
-        capture_guard: BrowserCaptureGuard | None = None,
+        capture_policy: BrowserCapturePolicy | None = None,
         navigation_only: bool = False,
         discard_unapproved_subresources: bool = False,
         limits: BrowserOperationLimits | None = None,
@@ -979,7 +962,7 @@ class _SessionBoundBrowserRunner:
             policy,
             controller=controller,
             destination_guard=destination_guard,
-            capture_guard=capture_guard,
+            capture_policy=capture_policy,
             navigation_only=navigation_only,
             discard_unapproved_subresources=discard_unapproved_subresources,
             session_key=self._session_key,
@@ -1333,54 +1316,35 @@ def _assemble_authorized_routes(
         )
 
 
-def _browser_rule_for_profile(profile: PublisherAccessProfile) -> BrowserSiteRule:
-    matches = tuple(
-        rule
-        for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules
-        if rule.rule_id == profile.browser_rule_id
-        and rule.revision == profile.browser_rule_revision
-    )
-    if len(matches) != 1:
-        raise AcquisitionRegistryError("browser-profile-rule-mismatch")
-    rule = matches[0]
-    if (
-        profile.browser_allowed_origins != rule.allowed_origins
-        or profile.browser_rate_limit_group != rule.web_scope_provider_name
-    ):
-        raise AcquisitionRegistryError("browser-profile-rule-mismatch")
-    return rule
-
-
 def _browser_route_readiness(
     configuration: Configuration,
     dependencies: AcquisitionAssemblyDependencies,
-    profile: PublisherAccessProfile,
 ) -> RouteReadiness:
     if CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness is not RouteReadiness.READY:
         return RouteReadiness.UNSUPPORTED
-    if not configuration.access.browser_enabled:
+    if not configuration.browser.enabled:
         return RouteReadiness.DISABLED
-    if dependencies.browser_client is None:
+    if (
+        dependencies.browser_client is None
+        or dependencies.browser_agent is None
+        or configuration.browser.profile is None
+    ):
         return RouteReadiness.UNCONFIGURED
     return RouteReadiness.READY
 
 
 def _browser_route_spec(
-    profile: PublisherAccessProfile,
     readiness: RouteReadiness,
+    *,
+    failure: StableFailure | None = None,
 ) -> RouteSpec:
-    route_key = profile.browser_route_key
-    risk_group = profile.browser_rate_limit_group
-    if route_key is None or risk_group is None:
-        raise AcquisitionRegistryError("browser-profile-route-mismatch")
     return RouteSpec(
-        route_key=route_key,
+        route_key="browser:generic",
         tier=AcquisitionPath.CONTROLLED_BROWSER,
         capability=RouteCapability.BROWSER_PDF,
         readiness=readiness,
-        profile_access_key=profile.access_key,
-        risk_group=risk_group,
-        required_identifier_namespaces=profile.stable_locator_namespaces,
+        risk_group="browser-generic",
+        failure=failure,
     )
 
 
@@ -1389,39 +1353,36 @@ def _assemble_browser_routes(
     dependencies: AcquisitionAssemblyDependencies,
     route_bindings: list[RouteAdapterBinding],
 ) -> None:
-    for profile in PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG:
-        if profile.browser_route_key is None:
-            continue
-        readiness = _browser_route_readiness(configuration, dependencies, profile)
-        rule = _browser_rule_for_profile(profile)
-        adapter: ControlledBrowserPdfSource | None = None
-        if readiness is RouteReadiness.READY:
-            client = dependencies.browser_client
-            session_key = profile.browser_session_key
-            if client is None or session_key is None:
-                raise AcquisitionRegistryError("browser-runtime-mismatch")
-            adapter = ControlledBrowserPdfSource(
-                runner=_SessionBoundBrowserRunner(client, session_key),
-                route_key=profile.browser_route_key,
-                rule_catalog=BrowserRuleCatalog((rule,)),
-                web_access_profile_resolver=dependencies.web_access_profile_resolver,
-                access_policy=AccessPolicy(max_concurrency=1),
-                cancel_event=dependencies.cancel_event,
-                provenance_id_factory=dependencies.provenance_id_factory,
-                clock=dependencies.clock,
-                browser_controller=dependencies.browser_controller,
-                agent_runtime=(
-                    None
-                    if dependencies.browser_agent is None
-                    else dependencies.browser_agent.runtime
-                ),
-            )
-        route_bindings.append(
-            RouteAdapterBinding(
-                spec=_browser_route_spec(profile, readiness),
-                adapter=adapter,
-            )
+    readiness = _browser_route_readiness(configuration, dependencies)
+    adapter: ControlledBrowserPdfSource | None = None
+    if readiness is RouteReadiness.READY:
+        client = dependencies.browser_client
+        agent = dependencies.browser_agent
+        session_key = configuration.browser.profile
+        if client is None or agent is None or session_key is None:
+            raise AcquisitionRegistryError("browser-runtime-mismatch")
+        adapter = ControlledBrowserPdfSource(
+            runner=_SessionBoundBrowserRunner(client, session_key),
+            agent_runtime=agent.runtime,
+            web_access_profile_resolver=dependencies.web_access_profile_resolver,
+            access_policy=AccessPolicy(max_concurrency=1),
+            cancel_event=dependencies.cancel_event,
+            provenance_id_factory=dependencies.provenance_id_factory,
+            clock=dependencies.clock,
         )
+    route_bindings.append(
+        RouteAdapterBinding(
+            spec=_browser_route_spec(
+                readiness,
+                failure=(
+                    dependencies.browser_runtime_failure
+                    if readiness is RouteReadiness.UNCONFIGURED
+                    else None
+                ),
+            ),
+            adapter=adapter,
+        )
+    )
 
 
 def build_acquisition_registry(

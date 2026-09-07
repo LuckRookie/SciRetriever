@@ -10,7 +10,6 @@ from sciretriever.acquisition.outcomes import RouteExecutionResult
 from sciretriever.acquisition.planning import AcquisitionPlan, RouteSpec
 from sciretriever.model.acquisition import AcquisitionPath
 from sciretriever.network.browser_scheduler import (
-    BrowserGroupPolicy,
     BrowserGroupScheduler,
     BrowserSchedulerCancellation,
 )
@@ -54,15 +53,7 @@ def _profile() -> PublisherAccessProfile:
         weak_publisher_names=("wiley",),
         public_route_keys=("public:direct",),
         api_route_keys=("api:wiley-tdm-v1",),
-        browser_route_key="browser:wiley-online-library",
-        browser_allowed_origins=(
-            "https://onlinelibrary.wiley.com",
-            "https://alm.wiley.com",
-        ),
-        browser_rate_limit_group="wiley-online-library",
-        browser_session_key="wiley-online-library",
-        browser_rule_id="wiley-online-library",
-        browser_rule_revision=1,
+        browser_probe_enabled=True,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
@@ -76,13 +67,6 @@ def _profile() -> PublisherAccessProfile:
             evidence_revision="wiley-fixture-v1",
             notes_reference="docs/notes/providers/wiley.md",
             fixture_reference=("tests/fixtures/acquisition/profiles/wiley-online-library.json"),
-        ),
-        browser_policy=BrowserGroupPolicy(
-            rate_limit_group="wiley-online-library",
-            policy_revision="2026-08-15",
-            minimum_start_interval=10.0,
-            rate_limit_cooldown=60.0,
-            runtime_failure_threshold=3,
         ),
     )
 
@@ -157,12 +141,11 @@ class PublisherPlanningContractTests(unittest.TestCase):
                 readiness=RouteReadiness.UNCONFIGURED,
             ),
             RouteSpec(
-                route_key="browser:wiley-online-library",
+                route_key="browser:generic",
                 tier=AcquisitionPath.CONTROLLED_BROWSER,
                 capability=RouteCapability.BROWSER_PDF,
-                profile_access_key="wiley-online-library",
                 readiness=RouteReadiness.READY,
-                risk_group="wiley-online-library",
+                risk_group="browser-generic",
             ),
             RouteSpec(
                 route_key="public:direct",
@@ -190,7 +173,7 @@ class PublisherPlanningContractTests(unittest.TestCase):
             (
                 "public:direct",
                 "api:wiley-tdm-v1",
-                "browser:wiley-online-library",
+                "browser:generic",
             ),
         )
         self.assertNotIn(

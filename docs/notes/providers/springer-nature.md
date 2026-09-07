@@ -4,7 +4,7 @@
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `springer`；Acquisition `springer`
 - 供应商角色：Springer Nature 元数据，以及 OA/协议授权的 JATS/XML 全文和资产 locator
-- 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；SpringerLink 与 Nature 保持两个独立 Publisher Profile。SpringerLink 的 `browser:springerlink` 与 `springerlink-pdf@5` 已进入生产对象图，Nature Browser 仍为 unsupported；Springer Nature OA/Full Text API 返回 JATS/XML，不是授权主 PDF API
+- 当前仓库接入状态：Meta API v2 专用 Metadata adapter 已进入生产 registry；SpringerLink 与 Nature 保持两个独立 Publisher Profile。Profile 不再派生专属 Browser route；合法文章起点统一使用 `browser:generic`，SpringerLink 只启用首页可达性 probe；Springer Nature OA/Full Text API 返回 JATS/XML，不是授权主 PDF API
 
 ## 1. 官方入口与证据
 
@@ -48,7 +48,11 @@ Springer Nature 的 TDM policy 说明，订阅学术机构的个人研究者可�
 
 Springer Nature Link 的通用条款同时禁止系统性下载、持续自动检索/索引和 web crawling。Nature.com 条款不允许通过复制、下载或保存站点内容建立数据库，除非站点或适用附加条款另有明确许可。因此 SciRetriever 不能只凭集团 TDM 页面或用户能够手工打开一篇 PDF，就把批量 Browser 下载视为默认授权。具体机构协议、账号状态和目标内容 entitlement 仍需由 operator 确认。
 
-当前 SpringerLink Browser policy 使用独立 `springerlink` risk/session group，同组严格串行，每篇文章启动间隔至少 10 秒。该数值比官方 TDM 页面的“最多 1 request/s”严格得多，是项目对 Browser 会话风险的审慎初始值，不声称它是出版商发布的文章间隔。官方 `Retry-After`、429、challenge、IP/account warning 会进一步收紧或暂停该组，普通配置只能把这个 policy 改得更保守。
+当前 Browser 下载统一使用 `browser-generic` policy group，不再为 SpringerLink 建立独立
+risk/session group。旧执行器曾采用每篇文章至少 10 秒的 SpringerLink 审慎间隔；这只是历史项目
+政策，不是出版商发布的文章间隔，也不再是当前 runtime 配置。官方 `Retry-After`、429、challenge
+和 IP/account warning 仍会通过通用 Network admission/circuit 收紧或暂停运行，普通配置只能把
+通用 baseline 改得更保守。
 
 ## 3. 查询、分页与响应顶层
 
@@ -248,7 +252,7 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 - 官网公开样例含 legacy HTTP OpenURL；安全 HTTPS canonical locator 的获取方式需实现时核对。
 - 未找到 Springer Nature 逐边 citation API 或授权 PDF API 的足够依据；JATS/XML 和 metadata PDF locator 不能扩写成已验证 PDF API。SpringerLink 的 `/content/pdf/{doi}.pdf` 是由 persistent Profile-backed Browser 打开的内容平台 locator，不是 API endpoint。
 - Springer Nature Link 与 Nature.com 虽由同一集团运营并使用相近站点基础设施，但当前官方材料没有证明它们共享机构授权、风控、文章速率组或 Browser session；不得因集团名称合并。
-- 生产 adapter 已用本地 HTTPS fixture 和真实 Chromium 验证 DNS/IP 绑定、Host/TLS SNI、批准的 JavaScript、未批准 tracker 丢弃、点击/脚本跨 origin `3xx`、PDF response/attachment、共享 persistent context 中的 Publisher lane reuse/隔离、取消/超时与临时下载工作区/线程清理；这是离线运行合同，不是当前 Profile 登录状态、IP 或 SpringerLink 文章授权证据。
+- 旧 Publisher-specific adapter 已用本地 HTTPS fixture 和真实 Chromium 验证 DNS/IP 绑定、Host/TLS SNI、批准的 JavaScript、未批准 tracker 丢弃、点击/脚本跨 origin `3xx`、PDF response/attachment、共享 persistent context 中的 lane reuse/隔离、取消/超时与临时下载工作区/线程清理；这些是历史工程证据，不是当前 `browser:generic` 的实现合同，也不证明 Profile 登录状态、IP 或 SpringerLink 文章授权。
 - 配置 probe 只打开 SpringerLink 首页验证 runtime/目标可达性。它不访问任意文章、不下载 PDF、不持久化结果，也不评估机构 IP 或任意文章 entitlement。真实文章小样本结果应在受控现场核实记录中单独保存。
 
 ### 10.1 2026-08-16 脱敏首页现场 probe
@@ -341,11 +345,11 @@ CBA72 将 SpringerLink 的本次服务器现场准入记为 `ready`：最终唯�
 - `10.1007` 和 `Springer` 文本只作为弱提示，不把 metadata 来源 `springer` 当成原文访问方强证据；
 - metadata 中明确的安全 PDF/landing locator 仍可由通用第一层按实际字节、PDF reader 和不可变发布边界处理；Profile 本身不声明专属 public route；
 - Open Access/Full Text API 的 JATS/XML 不是 PDF，当前没有授权 PDF API route；
-- production Browser route 为 `browser:springerlink`，rule 为 `springerlink-pdf@5`；它只接受经审查的 SpringerLink landing，或“精确 SpringerLink asset origin + 唯一 DOI”。Provider Hint 只贡献 routing origin，实际 Browser 起点由 rule 的 DOI PDF template 构造；文章流先接收初始 PDF capture，未捕获时才检查封闭页面状态，并在 entitlement marker 存在时点击后等待 response、download、popup、viewer 或 verified locator 中任一正文 capture。direct-PDF 导航触发的延迟 native download 会在 capture 和 request 生命周期完整结算后才允许清理 context，避免 `goto()` 返回与 download 事件之间的竞态。任何实际 capture 仍必须通过媒体类型、PDF reader、页面树、文章归属与补充材料排除检查；
-- 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 返回 `303`，跳转 origin/path 为 `https://idp.springer.com/authorize`。规则只精确加入该官方 IDP origin 和登录 path marker，不允许通配域名；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容。到达该入口只表示 runtime/目标可达，不评估机构 IP 或文章 entitlement；
-- Browser 使用运行机器的正常网络出口，以及共享固定身份 Profile/context 中独立的 `springerlink` lane；无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA；第一版不提供可见 Browser 认证入口。同 `springerlink` group 严格串行，不同 Publisher group 可在全局资源上限内并行；
-- 登录、paywall、challenge、429、403、account warning 和 404 有封闭 marker/状态语义；`static-content.springer.com/esm/` 与 supplement 文件名永不提升为 primary PDF；
-- 状态为 `production-ready`，但该状态只声明 route/rule/policy/离线对象图已闭环；它不声明当前 IP、机构协议或某篇文章有 entitlement。
+- 没有 SpringerLink 专属 Browser route、rule 或 DOI PDF template。可信 landing/asset hint 或安全 DOI resolve 形成起点后统一进入 `browser:generic`；Agent 决定封闭页面动作，Network 负责稳定观察和 capture，Acquisition 独立验证媒体类型、PDF reader、页面树、目标 DOI/标题/作者、起点 lineage 与补充材料排除；
+- 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 当时经 `https://idp.springer.com/authorize` 返回 Link。该记录只为首页 reachability probe 和通用导航回归提供历史证据；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容，到达该入口也不评估机构 IP 或文章 entitlement；
+- Browser 使用运行机器的正常网络出口及共享固定身份 Profile/context，无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA；所有文章共享 `browser-generic` 调度政策，不按 Publisher 建立 lane；
+- 登录、paywall、challenge、429、403、account warning 和 404 由通用页面观察与终态表达；`static-content.springer.com/esm/`、supplement 文件名和错误文章仍不能成为 primary PDF；
+- Profile 状态为 `production-ready`，但只声明访问画像、evidence fixture 与首页 probe 合同闭环；它不声明专属 Browser 下载实现、当前 IP、机构协议或某篇文章有 entitlement。
 
 ### 11.2 Nature Portfolio
 
@@ -354,9 +358,11 @@ CBA72 将 SpringerLink 的本次服务器现场准入记为 `ready`：最终唯�
 - 明确的 Nature PDF/landing AssetHint 仍可走通用第一层，但 `.pdf` 后缀本身不证明媒体类型、正文归属、OA 或 entitlement；
 - Springer Nature JATS/XML API 同样不构成 Nature PDF route；
 - ScanSci 的 `/articles/{doi_suffix}.pdf` 模板和 HTML link 正则只是待核实线索，尚未证明 extended data、supplementary information、wrong-article 和授权页面状态；
-- Nature.com 条款、具体机构许可和 Browser 页面证据未闭合，因此状态为 `unsupported`，无 Browser rule。
+- Nature.com 条款、具体机构许可和 Profile 证据未闭合，因此该访问画像状态为 `unsupported`；这不阻止具有合法 Nature 文章起点的目标进入通用 Browser，但所有候选仍须通过安全准入和文章归属验收。
 
-两个 Profile 共享同一条集团 TDM policy 引用，但只有 SpringerLink 定义了 `springerlink` browser rate/session group；Nature 没有 Browser route、group 或 session key，也不会从 SpringerLink 相互推导。将来若得到 Nature 的单独现场授权，必须独立核实；只有证据证明真实共享 quota 或风控域时才能显式合并 group。
+两个 Profile 共享同一条集团 TDM policy 引用，但都不定义 Browser route、group 或 session key，
+也不会互相推导 entitlement。将来若得到 Nature 的单独现场授权，必须独立核实；外部政策证据用于
+访问判断，不能重新变成 Publisher-specific 页面程序。
 
 ## 12. 当前实现边界
 
@@ -365,10 +371,11 @@ CBA72 将 SpringerLink 的本次服务器现场准入记为 `ready`：最终唯�
 当前 Metadata adapter 不调用 Open Access JATS、Full Text JATS/BITS 或旧主机，也不把 metadata 中的 `format=pdf` locator、XML/JATS 内容、HTTP 200 或有效 key 冒充已授权主 PDF。Acquisition registry 对 `springer` 的 authorized PDF capability 继续明确为 unsupported；安全 locator 仍需经过公开路径的实际字节与 PDF 验证。
 
 统一验证矩阵包含相互独立的 `springerlink` 与 `nature-portfolio` PublisherAccessProfile。前者以
-`springerlink-persistent-browser-pdf-v6-2026-08-21` 进入 production profile/rule catalog；后者
-仍为 unsupported。Bootstrap 只在 Browser 总开关打开、一个固定身份 Browser Profile 已选择并安全存在、
-CloakBrowser wrapper、Playwright API、经核实 binary 和 headed display 都就绪时创建真实
-`BrowserClient`；否则 route 仍保留在 registry 中，但以 `disabled` 或 runtime action-required
-说明本地未就绪的精确原因。
+`springerlink-persistent-browser-pdf-v6-2026-08-21` 的历史 evidence revision 进入 production
+profile catalog 并启用首页 probe；后者仍为 unsupported。Bootstrap 只在 Browser 总开关打开、
+一个固定身份 Browser Profile 已选择并安全存在、Browser Model 就绪、CloakBrowser wrapper、
+Playwright API、经核实 binary 和 headed display 都就绪时创建真实 `BrowserClient` 和唯一
+`browser:generic` route；否则该 route 以 `disabled` 或 runtime action-required 说明本地未就绪
+的精确原因。
 
-2026-08-18 的文章核实同样没有读取真实 key、Cookie 或 profile 内容，也没有把配置状态或任意 HTTP 200 写成普遍授权事实。Meta v2 schema、额度与失败行为由离线 fake/fixture 及另行记录的最小只读 probe 验证。SpringerLink evidence fixture 证明 route/rule/policy 与归属合同，Nature fixture 证明其 unsupported 边界；四样本中的一次真实 PDF 交付和三次 normal miss 也不证明站点长期稳定、当前 IP 或任意文章有 entitlement。
+2026-08-18 的文章核实同样没有读取真实 key、Cookie 或 profile 内容，也没有把配置状态或任意 HTTP 200 写成普遍授权事实。Meta v2 schema、额度与失败行为由离线 fake/fixture 及另行记录的最小只读 probe 验证。SpringerLink evidence fixture 只证明访问画像和 probe，Nature fixture 证明其 unsupported 边界；旧规则四样本中的一次真实 PDF 交付和三次 normal miss 也不证明当前通用 Agent、站点长期稳定、当前 IP 或任意文章有 entitlement。

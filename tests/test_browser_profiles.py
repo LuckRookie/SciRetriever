@@ -28,7 +28,7 @@ from sciretriever.configuration import (
     set_credentials,
 )
 from sciretriever.configuration.browser_profiles import BrowserProfileTransitionError
-from sciretriever.model.configuration import AccessConfig, BrowserProfilePresence
+from sciretriever.model.configuration import BrowserConfig, BrowserProfilePresence
 
 _PROFILE_IDENTITY = "wiley-online-library"
 _CONTENT_SENTINEL = "BROWSER-COOKIE-CONTENT-SENTINEL"
@@ -465,10 +465,10 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         config_path = self._write_configuration(
             b"# keep this comment\n[execution]\nmax_concurrency = 7\n",
         )
-        candidate = AccessConfig(
-            browser_enabled=True,
-            browser_profile="Institutional-Access",
-            browser_max_concurrency=5,
+        candidate = BrowserConfig(
+            enabled=True,
+            profile="Institutional-Access",
+            max_concurrency=5,
         )
 
         configured = configure_browser_access_profile(
@@ -476,8 +476,8 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
             home=self.home,
         )
 
-        self.assertTrue(configured.access.browser_enabled)
-        self.assertEqual(configured.access.browser_profile, "institutional-access")
+        self.assertTrue(configured.browser.enabled)
+        self.assertEqual(configured.browser.profile, "institutional-access")
         self.assertEqual(configured.execution.max_concurrency, 7)
         self.assertIn("# keep this comment", config_path.read_text(encoding="utf-8"))
         reloaded = load_editable_user_configuration(home=self.home)
@@ -491,9 +491,9 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
     def test_cancelled_or_failed_access_selection_has_no_published_side_effect(self) -> None:
         original = b"# unchanged\n[execution]\nmax_concurrency = 5\n"
         config_path = self._write_configuration(original)
-        candidate = AccessConfig(
-            browser_enabled=True,
-            browser_profile="institutional-access",
+        candidate = BrowserConfig(
+            enabled=True,
+            profile="institutional-access",
         )
         cancelled = threading.Event()
         cancelled.set()
@@ -531,9 +531,9 @@ class BrowserProfileBoundaryTests(unittest.TestCase):
         existing_session = profile / "existing-session.db"
         existing_session.write_bytes(b"opaque-existing-session")
         os.chmod(existing_session, 0o600)
-        candidate = AccessConfig(
-            browser_enabled=True,
-            browser_profile=_PROFILE_IDENTITY,
+        candidate = BrowserConfig(
+            enabled=True,
+            profile=_PROFILE_IDENTITY,
         )
 
         def fail_after_profile(stage: str) -> None:

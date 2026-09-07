@@ -52,7 +52,6 @@ from sciretriever.model.primitives import (
 )
 from sciretriever.model.provenance import Provenance
 from sciretriever.model.report import StableFailure
-from sciretriever.network.browser_scheduler import BrowserGroupPolicy
 
 
 def _id(index: int) -> str:
@@ -77,12 +76,7 @@ def _profile(
         weak_publisher_names=(provider_name,),
         public_route_keys=(f"public:{provider_name}",),
         api_route_keys=(f"api:{provider_name}",),
-        browser_route_key=f"browser:{provider_name}",
-        browser_allowed_origins=(origin,),
-        browser_rate_limit_group=access_key,
-        browser_session_key=access_key,
-        browser_rule_id=access_key,
-        browser_rule_revision=1,
+        browser_probe_enabled=True,
         policy_evidence=PolicyEvidence.PROJECT_CONSERVATIVE,
         policy_revision="2026-08-15",
         production_status=ProfileProductionStatus.FIXTURE_VERIFIED,
@@ -96,13 +90,6 @@ def _profile(
             evidence_revision=f"{provider_name}-fixture-v1",
             notes_reference=f"docs/notes/providers/{provider_name}.md",
             fixture_reference=(f"tests/fixtures/acquisition/profiles/{access_key}.json"),
-        ),
-        browser_policy=BrowserGroupPolicy(
-            rate_limit_group=access_key,
-            policy_revision="2026-08-15",
-            minimum_start_interval=10.0,
-            rate_limit_cooldown=60.0,
-            runtime_failure_threshold=3,
         ),
     )
 
@@ -268,12 +255,11 @@ class ProgressivePlanningTests(unittest.TestCase):
                 quota_group="wiley-tdm",
             ),
             RouteSpec(
-                route_key="browser:wiley",
+                route_key="browser:generic",
                 tier=AcquisitionPath.CONTROLLED_BROWSER,
                 capability=RouteCapability.BROWSER_PDF,
                 readiness=RouteReadiness.READY,
-                profile_access_key="wiley-online-library",
-                risk_group="wiley-online-library",
+                risk_group="browser-generic",
             ),
         )
 
@@ -310,7 +296,7 @@ class ProgressivePlanningTests(unittest.TestCase):
         self.assertEqual(resolved.resolution.access_key, "wiley-online-library")
         self.assertEqual(
             tuple(route.route_key for route in resolved.plan.routes),
-            ("public:direct", "api:wiley", "browser:wiley"),
+            ("public:direct", "api:wiley", "browser:generic"),
         )
         self.assertIs(repeated, resolved)
         self.assertEqual(len(doi.calls), 1)
@@ -335,18 +321,45 @@ class ProgressivePlanningTests(unittest.TestCase):
         self.assertEqual(public_only.doi_resolution_state, DoiResolutionState.NOT_NEEDED)
         self.assertEqual(doi.calls, [])
 
+    def test_generic_browser_alone_resolves_a_unique_doi_landing(self) -> None:
+        catalog = _catalog()
+        doi = _DoiResolver(
+            DoiLandingResolution("https://onlinelibrary.wiley.com/doi/10.1002/example")
+        )
+        browser_only = (self._route_specs()[-1],)
+        planner = ProgressiveAcquisitionPlanner(
+            resolver=PublisherAccessResolver(catalog),
+            builder=AcquisitionPlanBuilder(catalog),
+            route_specs=browser_only,
+            doi_landing_resolver=doi,
+        )
+
+        initial = planner.start(_request())
+        resolved = planner.resolve_doi_landing(initial)
+
+        self.assertEqual(initial.doi_resolution_state, DoiResolutionState.ELIGIBLE)
+        self.assertEqual(resolved.doi_resolution_state, DoiResolutionState.COMPLETED)
+        self.assertEqual(
+            resolved.route_hints[0].value,
+            "https://onlinelibrary.wiley.com/doi/10.1002/example",
+        )
+        self.assertEqual(
+            tuple(route.route_key for route in resolved.plan.routes),
+            ("browser:generic",),
+        )
+        self.assertEqual(len(doi.calls), 1)
+
     def test_disabled_or_unsupported_profile_routes_do_not_trigger_doi_io(self) -> None:
         catalog = _catalog()
         doi = _DoiResolver(None)
         unavailable_routes = (
             self._route_specs()[0],
             RouteSpec(
-                route_key="browser:wiley",
+                route_key="browser:generic",
                 tier=AcquisitionPath.CONTROLLED_BROWSER,
                 capability=RouteCapability.BROWSER_PDF,
                 readiness=RouteReadiness.DISABLED,
-                profile_access_key="wiley-online-library",
-                risk_group="wiley-online-library",
+                risk_group="browser-generic",
             ),
             RouteSpec(
                 route_key="api:wiley",

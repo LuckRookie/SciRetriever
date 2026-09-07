@@ -1055,18 +1055,18 @@ class AgentsProviderTests(unittest.TestCase):
         headers = cast(tuple[tuple[str, str], ...], transport.calls[0]["headers"])
         self.assertFalse(any(name.casefold() == "x-api-key" for name, _ in headers))
 
-    def test_context_window_fails_before_transport_with_a_stable_error(self) -> None:
-        client, transport, _, _ = _client([])
+    def test_adapter_does_not_infer_context_tokens_from_utf8_bytes(self) -> None:
+        client, transport, _, _ = _client([_response(_openai_fixture("success"))])
         adapter = OpenAIResponsesAdapter(
             http_client=client,
             api_key=_API_KEY,
             limits=AgentCallLimits(context_window_tokens=64, max_output_tokens=64),
         )
 
-        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
+        result = adapter.execute(_call(_OPENAI_MODEL))
 
-        self.assertEqual(failure.failure.code, "agent-context-budget")
-        self.assertEqual(transport.calls, [])
+        self.assertIsInstance(result, AgentStructuredResult)
+        self.assertEqual(len(transport.calls), 1)
 
     def test_custom_remote_endpoint_is_exact_and_credential_bound_to_its_origin(self) -> None:
         client, transport, _, _ = _client([_response(_openai_fixture("success"))])
@@ -1246,45 +1246,18 @@ class AgentsProviderTests(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, RecursionError)
         self.assertNotIn(_DEEP_SENTINEL, repr(caught.exception))
 
-    def test_request_and_field_budgets_fail_before_transport(self) -> None:
-        cases = (
-            (
-                "agent-input-budget",
-                AgentCallLimits(max_prompt_bytes=4),
-                _call(_OPENAI_MODEL),
-            ),
-            (
-                "agent-input-budget",
-                AgentCallLimits(max_input_bytes=4),
-                _call(_OPENAI_MODEL),
-            ),
-            (
-                "agent-input-budget",
-                AgentCallLimits(max_schema_bytes=4),
-                _call(_OPENAI_MODEL),
-            ),
-            (
-                "agent-request-budget",
-                AgentCallLimits(max_request_bytes=128),
-                _call(_OPENAI_MODEL),
-            ),
-            (
-                "agent-output-budget",
-                AgentCallLimits(max_output_tokens=63),
-                _call(_OPENAI_MODEL),
-            ),
+    def test_wire_request_budget_fails_before_transport(self) -> None:
+        client, transport, _, _ = _client([])
+        adapter = OpenAIResponsesAdapter(
+            http_client=client,
+            api_key=_API_KEY,
+            limits=AgentCallLimits(max_request_bytes=128),
         )
-        for code, limits, call in cases:
-            with self.subTest(code=code):
-                client, transport, _, _ = _client([])
-                adapter = OpenAIResponsesAdapter(
-                    http_client=client,
-                    api_key=_API_KEY,
-                    limits=limits,
-                )
-                failure = self._failure(lambda: adapter.execute(call))
-                self.assertEqual(failure.failure.code, code)
-                self.assertEqual(transport.calls, [])
+
+        failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
+
+        self.assertEqual(failure.failure.code, "agent-request-budget")
+        self.assertEqual(transport.calls, [])
 
     def test_response_and_result_budgets_are_independent(self) -> None:
         client, transport, _, _ = _client([_response(_openai_fixture("success"))])
@@ -1518,6 +1491,7 @@ class AgentsProviderTests(unittest.TestCase):
                         },
                     },
                 ),
+                _sse_event("keepalive", {"type": "keepalive"}),
                 _sse_event(
                     "response.output_item.added",
                     {
@@ -1577,6 +1551,24 @@ class AgentsProviderTests(unittest.TestCase):
                 adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
                 failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
                 self.assertEqual(failure.failure.code, "agent-protocol")
+
+    def test_openai_unknown_stream_event_logs_only_its_safe_type(self) -> None:
+        private_payload = "provider-private-event-payload"
+        body = _sse_event(
+            "heartbeat",
+            {"type": "heartbeat", "payload": private_payload},
+        )
+        client, _, _, _ = _client([_response(body)])
+        adapter = OpenAIResponsesAdapter(http_client=client, api_key=_API_KEY)
+
+        with self.assertLogs("sciretriever.agents", level="DEBUG") as logs:
+            failure = self._failure(lambda: adapter.execute(_call(_OPENAI_MODEL)))
+
+        self.assertEqual(failure.failure.code, "agent-protocol")
+        rendered = "\n".join(logs.output)
+        self.assertIn("stage=unknown-event", rendered)
+        self.assertIn("event_type=heartbeat", rendered)
+        self.assertNotIn(private_payload, rendered)
 
     def test_anthropic_refusal_truncation_unknown_shape_and_model_mismatch_are_distinct(
         self,

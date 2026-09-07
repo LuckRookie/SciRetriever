@@ -44,8 +44,7 @@ from sciretriever.entry.cli.config_ui import (
     ConfigConsole,
 )
 from sciretriever.model.configuration import (
-    AccessConfig,
-    BrowserController,
+    BrowserConfig,
     BrowserProfilePresence,
     Configuration,
     CoreCredentialService,
@@ -64,86 +63,66 @@ def _ask_concurrency(current: int, console: ConfigConsole) -> int | None:
 
 def _disable(console: ConfigConsole) -> None:
     before = load_editable_user_configuration()
-    if not before.access.browser_enabled:
+    if not before.browser.enabled:
         console.message("Browser is already Off; nothing changed.", kind="muted")
         return
-    candidate = before.access.model_copy(update={"browser_enabled": False})
-    after = before.model_copy(update={"access": candidate})
+    candidate = before.browser.model_copy(update={"enabled": False})
+    after = before.model_copy(update={"browser": candidate})
     console.page(
         "Browser · Off",
         "Turning Browser Off stops automatic Browser admission. The selected private Profile, "
         "Model and Runtime are retained for a later Setup.",
-        facts=(("Profile", candidate.browser_profile or "not selected"),),
+        facts=(("Profile", candidate.profile or "not selected"),),
     )
-    if confirm_changes(console, before, after, section="download") and confirm(
+    if confirm_changes(console, before, after, section="browser") and confirm(
         "Turn controlled Browser access Off and retain the local Profile? [y/N] "
     ):
-        update_configuration_sections(access=candidate)
+        update_configuration_sections(browser=candidate)
         console.message("Browser was turned Off; the local Profile was retained.", kind="success")
 
 
 def _setup_candidate(
     before: Configuration,
     console: ConfigConsole,
-) -> tuple[AccessConfig, BrowserProfilePresence, Configuration] | None:
-    current = before.access
+) -> tuple[BrowserConfig, BrowserProfilePresence, Configuration] | None:
+    current = before.browser
     console.page(
         "Browser · Setup",
-        "Choose one mutually exclusive controller. Rules executes reviewed deterministic flows; "
-        "Agent uses one image-capable reusable Model to control the same bounded page actions.",
+        "Choose the image-capable Model and fixed Browser Profile used by the generic Browser "
+        "Agent. The Agent controls every page through the same bounded action contract.",
         facts=(
-            ("State", "enabled" if current.browser_enabled else "off"),
-            ("Controller", current.browser_controller.value),
+            ("State", "enabled" if current.enabled else "off"),
             ("Model", current.model or "not selected"),
-            ("Profile", current.browser_profile or "not selected"),
-            ("Concurrency", current.browser_max_concurrency),
+            ("Profile", current.profile or "not selected"),
+            ("Concurrency", current.max_concurrency),
         ),
-        notes=("Rules and Agent never fall back to each other during a job.",),
+        notes=("Publisher-specific click rules are not used by this Browser path.",),
     )
-    mode = select_value(
-        "Mode",
-        [
-            option("off", "Off", kind=ConfigActionKind.DANGER),
-            option(BrowserController.RULES.value, "Rules"),
-            option(BrowserController.AGENT.value, "Agent"),
-        ],
-        console=console,
-        default=(current.browser_controller.value if current.browser_enabled else "off"),
-    )
-    if mode is None:
+    eligible = tuple(model for model in before.models.values if model.image)
+    selected = choose_model(before, console, candidates=eligible)
+    if selected is None:
+        console.message(
+            "Add an image-capable Model in Models before setting up Browser.",
+            kind="warning",
+        )
         return None
-    if mode == "off":
-        _disable(console)
-        return None
-    controller = BrowserController(mode)
-    model_reference = current.model
-    if controller is BrowserController.AGENT:
-        eligible = tuple(model for model in before.models.values if model.image)
-        selected = choose_model(before, console, candidates=eligible)
-        if selected is None:
-            console.message(
-                "Add an image-capable Model in Models before selecting Agent.",
-                kind="warning",
-            )
-            return None
-        model_reference = selected.reference
-    profile = ask_text("Profile", default=current.browser_profile or "institutional-access")
+    model_reference = selected.reference
+    profile = ask_text("Profile", default=current.profile or "institutional-access")
     if profile is None:
         return None
-    concurrency = _ask_concurrency(current.browser_max_concurrency, console)
+    concurrency = _ask_concurrency(current.max_concurrency, console)
     if concurrency is None:
         return None
     try:
-        candidate = AccessConfig(
+        candidate = BrowserConfig(
             model=model_reference,
-            browser_enabled=True,
-            browser_profile=profile,
-            browser_controller=controller,
-            browser_max_concurrency=concurrency,
-            browser_policy_overrides=current.browser_policy_overrides,
+            enabled=True,
+            profile=profile,
+            max_concurrency=concurrency,
+            policy_overrides=current.policy_overrides,
         )
         after = Configuration.model_validate(
-            {**before.model_dump(mode="python"), "access": candidate}
+            {**before.model_dump(mode="python"), "browser": candidate}
         )
     except (ValidationError, TypeError, ValueError):
         console.message(
@@ -152,8 +131,8 @@ def _setup_candidate(
             kind="warning",
         )
         return None
-    assert candidate.browser_profile is not None
-    presence = browser_profile_status(candidate.browser_profile, home=None).presence
+    assert candidate.profile is not None
+    presence = browser_profile_status(candidate.profile, home=None).presence
     if presence is BrowserProfilePresence.ATTENTION:
         console.message(
             "The selected Profile requires operator inspection; ownership, permissions or "
@@ -170,18 +149,16 @@ def _setup(console: ConfigConsole) -> None:
     if draft is None:
         return
     candidate, presence, after = draft
-    controller = candidate.browser_controller
     model_reference = candidate.model
     console.page(
         "Browser · Review",
-        "Setup saves the controller settings and initializes the selected fixed-identity "
-        "Profile if it does not exist. It does not launch a Browser or visit a Publisher.",
+        "Setup saves the Agent Model and initializes the selected fixed-identity Profile if it "
+        "does not exist. It does not launch a Browser or visit a Publisher.",
         facts=(
-            ("Controller", controller.value),
-            ("Model", model_reference or "not used"),
-            ("Profile", candidate.browser_profile),
+            ("Model", model_reference or "not selected"),
+            ("Profile", candidate.profile),
             ("Profile state", presence.value),
-            ("Concurrency", candidate.browser_max_concurrency),
+            ("Concurrency", candidate.max_concurrency),
         ),
         notes=(
             "The private Profile may later contain Chromium-managed login state.",
@@ -194,7 +171,7 @@ def _setup(console: ConfigConsole) -> None:
             "Completion yet.",
             kind="warning",
         )
-    if not confirm_changes(console, before, after, section="download"):
+    if not confirm_changes(console, before, after, section="browser"):
         return
     if not confirm("Initialize this Profile and save Browser Setup? [y/N] "):
         return
@@ -206,22 +183,20 @@ def _select_profile(console: ConfigConsole) -> None:
     before = load_editable_user_configuration()
     identity = ask_text(
         "Profile",
-        default=before.access.browser_profile or "institutional-access",
+        default=before.browser.profile or "institutional-access",
     )
     if identity is None:
         return
     try:
-        candidate = before.access.model_copy(
-            update={"browser_enabled": True, "browser_profile": identity}
-        )
+        candidate = before.browser.model_copy(update={"enabled": True, "profile": identity})
         after = Configuration.model_validate(
-            {**before.model_dump(mode="python"), "access": candidate}
+            {**before.model_dump(mode="python"), "browser": candidate}
         )
     except (ValidationError, TypeError, ValueError):
         console.message("The Profile identity is invalid.", kind="warning")
         return
-    assert candidate.browser_profile is not None
-    presence = browser_profile_status(candidate.browser_profile, home=None).presence
+    assert candidate.profile is not None
+    presence = browser_profile_status(candidate.profile, home=None).presence
     if presence is BrowserProfilePresence.ATTENTION:
         console.message(
             "The selected Profile requires manual filesystem inspection.", kind="warning"
@@ -230,11 +205,11 @@ def _select_profile(console: ConfigConsole) -> None:
     console.page(
         "Browser · Profiles · Select",
         "Selecting initializes the fixed-identity Profile when missing and enables the current "
-        "Browser controller. It never launches Chromium.",
+        "Browser Agent. It never launches Chromium.",
         facts=(("Profile", identity), ("State", presence.value)),
-        notes=("Use Setup first when changing controller, Model or Concurrency.",),
+        notes=("Use Setup first when changing the Model or Concurrency.",),
     )
-    if not confirm_changes(console, before, after, section="download"):
+    if not confirm_changes(console, before, after, section="browser"):
         return
     if not confirm("Select and initialize this Browser Profile? [y/N] "):
         return
@@ -244,7 +219,7 @@ def _select_profile(console: ConfigConsole) -> None:
 
 def _remove_profile(console: ConfigConsole) -> None:
     configuration = load_editable_user_configuration()
-    identity = configuration.access.browser_profile
+    identity = configuration.browser.profile
     if identity is None:
         console.message("No Browser Profile is selected.", kind="muted")
         return
@@ -275,7 +250,7 @@ def _remove_profile(console: ConfigConsole) -> None:
 def _manage_profiles(console: ConfigConsole) -> None:
     while True:
         configuration = load_editable_user_configuration()
-        identity = configuration.access.browser_profile
+        identity = configuration.browser.profile
         presence = browser_profile_status(identity, home=None).presence
         console.page(
             "Browser · Profiles",
@@ -495,23 +470,23 @@ def _manage_tests(console: ConfigConsole) -> None:
 
 def _reset(console: ConfigConsole) -> None:
     before = load_editable_user_configuration()
-    current = before.access
-    candidate = AccessConfig(browser_profile=current.browser_profile)
+    current = before.browser
+    candidate = BrowserConfig(profile=current.profile)
     if candidate == current:
         console.message("Browser settings already use their defaults.", kind="muted")
         return
-    after = before.model_copy(update={"access": candidate})
+    after = before.model_copy(update={"browser": candidate})
     console.page(
         "Browser · Reset",
-        "Reset clears the Model, controller choice, concurrency override and policy overrides, "
+        "Reset clears the Model, concurrency override and policy overrides, "
         "and turns Browser Off. The selected Profile identity, local Profile bytes, Runtime and "
         "optional Runtime key are retained.",
-        facts=(("Profile retained", current.browser_profile or "none"),),
+        facts=(("Profile retained", current.profile or "none"),),
     )
-    if confirm_changes(console, before, after, section="download") and confirm(
+    if confirm_changes(console, before, after, section="browser") and confirm(
         "Reset Browser settings while retaining the selected local Profile? [y/N] "
     ):
-        update_configuration_sections(access=candidate)
+        update_configuration_sections(browser=candidate)
         console.message(
             "Browser settings were reset; the local Profile was retained.", kind="success"
         )
@@ -520,19 +495,18 @@ def _reset(console: ConfigConsole) -> None:
 def manage_browser(console: ConfigConsole) -> None:
     while True:
         configuration = load_editable_user_configuration()
-        access = configuration.access
+        access = configuration.browser
         model = configuration.models.get(access.model)
         local = browser_access_status(configuration)
         runtime = CloakRuntimeManager().status()
         console.page(
             "Browser",
             "Configure the controlled headed Browser used only after safer Download routes are "
-            "exhausted. Browser owns its controller Model, fixed Profile and Runtime lifecycle.",
+            "exhausted. Browser owns its Agent Model, fixed Profile and Runtime lifecycle.",
             facts=(
-                ("State", "enabled" if access.browser_enabled else "off"),
-                ("Controller", access.browser_controller.value),
+                ("State", "enabled" if access.enabled else "off"),
                 ("Model", "not selected" if model is None else model.reference),
-                ("Profile", access.browser_profile or "not selected"),
+                ("Profile", access.profile or "not selected"),
                 ("Profile state", local.profile.presence.value),
                 ("Runtime", "ready" if runtime.verified else "not ready"),
             ),

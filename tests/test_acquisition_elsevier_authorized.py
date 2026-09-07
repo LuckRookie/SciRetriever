@@ -44,7 +44,6 @@ from sciretriever.acquisition.providers.elsevier import (
 )
 from sciretriever.acquisition.routes import RouteExecutionContext
 from sciretriever.acquisition.routing import AcquisitionRequest, build_acquisition_evidence
-from sciretriever.acquisition.sources.browser_rules import PRODUCTION_BROWSER_RULE_CATALOG
 from sciretriever.literature.content import metadata_sha256
 from sciretriever.model.access import AccessFailure, Header, TransportResponse
 from sciretriever.model.literature import (
@@ -242,25 +241,8 @@ class ElsevierAuthorizedPdfClientTests(unittest.TestCase):
             ELSEVIER_ACCESS_PROFILE.api_route_keys,
             ("api:elsevier-article-object",),
         )
-        self.assertEqual(
-            ELSEVIER_ACCESS_PROFILE.browser_route_key,
-            "browser:elsevier-sciencedirect",
-        )
+        self.assertTrue(ELSEVIER_ACCESS_PROFILE.browser_probe_enabled)
         self.assertEqual(ELSEVIER_ACCESS_PROFILE.provider_record_names, ())
-        self.assertEqual(
-            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            (
-                "acs-publications-pdf",
-                "aip-publishing-pdf",
-                "sciencedirect-pdf",
-                "iopscience-pdf",
-                "oxford-academic-pdf",
-                "rsc-publishing-pdf",
-                "science-aaas-pdf",
-                "springerlink-pdf",
-                "wiley-online-library-pdf",
-            ),
-        )
 
     def test_full_xml_lookup_uses_exact_doi_pii_and_article_eid_endpoints(self) -> None:
         cases = (
@@ -1026,10 +1008,7 @@ class ElsevierAuthorizedSourceTests(unittest.TestCase):
         self.assertTrue(
             all(hint.profile_access_key == "elsevier-sciencedirect" for hint in results[0].hints)
         )
-        self.assertEqual(
-            ELSEVIER_ACCESS_PROFILE.browser_route_key,
-            "browser:elsevier-sciencedirect",
-        )
+        self.assertTrue(ELSEVIER_ACCESS_PROFILE.browser_probe_enabled)
 
     def test_source_falls_back_from_unusable_xml_to_direct_article_pdf(self) -> None:
         http_client = _http_client()

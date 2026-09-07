@@ -9,7 +9,7 @@ from sciretriever.configuration import (
     remove_model_provider,
     resolve_task_model,
     select_analysis_model,
-    select_download_model,
+    select_browser_model,
     upsert_model,
 )
 from sciretriever.model.configuration import (
@@ -79,7 +79,7 @@ class ModelRegistrySetupTests(unittest.TestCase):
         self.assertEqual(selected.analysis.max_chunk_bytes, 1_048_576)
         self.assertEqual(selected.analysis.max_total_llm_requests, 8)
 
-    def test_download_only_selects_an_existing_image_model(self) -> None:
+    def test_browser_only_selects_an_existing_image_model(self) -> None:
         current = _with_models(_analysis_model(), _browser_model())
         analysis = select_analysis_model(
             current,
@@ -91,7 +91,7 @@ class ModelRegistrySetupTests(unittest.TestCase):
             analyze=analysis,
         )
 
-        download = select_download_model(
+        browser = select_browser_model(
             with_analysis,
             reference="openai/gpt-browser-fixture",
         )
@@ -99,12 +99,12 @@ class ModelRegistrySetupTests(unittest.TestCase):
             providers=current.providers,
             models=current.models,
             analyze=analysis,
-            download=download,
+            browser=browser,
         )
-        _provider_value, model = resolve_task_model(configured, task="download")
+        _provider_value, model = resolve_task_model(configured, task="browser")
 
         self.assertEqual(configured.analysis.model, "openai/gpt-fixture")
-        self.assertEqual(download.model, "openai/gpt-browser-fixture")
+        self.assertEqual(browser.model, "openai/gpt-browser-fixture")
         self.assertEqual(model.model, "gpt-browser-fixture")
         self.assertIs(model.reasoning, AgentReasoningEffort.HIGH)
         self.assertTrue(model.image)
@@ -118,12 +118,12 @@ class ModelRegistrySetupTests(unittest.TestCase):
             models=current.models,
             analyze=analysis,
         )
-        download = select_download_model(with_analysis, reference=shared.reference)
+        browser = select_browser_model(with_analysis, reference=shared.reference)
         configured = Configuration(
             providers=current.providers,
             models=current.models,
             analyze=analysis,
-            download=download,
+            browser=browser,
         )
 
         self.assertEqual(
@@ -140,23 +140,23 @@ class ModelRegistrySetupTests(unittest.TestCase):
                 "max_total_output_tokens",
             },
         )
-        self.assertEqual(configured.analysis.model, configured.access.model)
+        self.assertEqual(configured.analysis.model, configured.browser.model)
         self.assertIs(
             resolve_task_model(configured, task="analyze")[1].reasoning,
             AgentReasoningEffort.HIGH,
         )
         self.assertIs(
-            resolve_task_model(configured, task="download")[1].reasoning,
+            resolve_task_model(configured, task="browser")[1].reasoning,
             AgentReasoningEffort.HIGH,
         )
 
-    def test_only_image_support_gates_download_selection(self) -> None:
+    def test_only_image_support_gates_browser_selection(self) -> None:
         text_only = _analysis_model(model="text-only")
         image = _browser_model(model="image")
         current = _with_models(text_only, image)
 
         with self.assertRaisesRegex(ValueError, "image model"):
-            select_download_model(current, reference=text_only.reference)
+            select_browser_model(current, reference=text_only.reference)
         selected = select_analysis_model(current, reference=image.reference)
         self.assertEqual(selected.analysis.model, image.reference)
 
@@ -170,12 +170,12 @@ class ModelRegistrySetupTests(unittest.TestCase):
             models=current.models,
             analyze=analysis,
         )
-        download = select_download_model(with_analysis, reference=browser_model.reference)
+        browser = select_browser_model(with_analysis, reference=browser_model.reference)
         selected = Configuration(
             providers=current.providers,
             models=current.models,
             analyze=analysis,
-            download=download,
+            browser=browser,
         )
 
         with self.assertRaisesRegex(ValueError, "selected by a module"):

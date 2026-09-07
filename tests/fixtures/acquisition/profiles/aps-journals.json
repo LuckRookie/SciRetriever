@@ -33,7 +33,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -46,19 +46,7 @@
       "payload": "no-reviewed-public-full-text-api"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-access-terms-unavailable-to-anonymous-review",
-        "robots-indexing-allowance-is-not-pdf-automation-permission",
-        "managed-content-signal-allows-reference-use-not-full-content-use",
-        "search-account-and-login-paths-disallowed",
-        "no-published-browser-article-rate-policy",
-        "anonymous-platform-and-policy-requests-return-cloudflare-challenge",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-rule",
-        "institution-specific-login-failure-is-not-production-evidence",
-        "upstream-unsupported-verdict-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

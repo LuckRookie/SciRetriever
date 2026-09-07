@@ -13,7 +13,7 @@ from sciretriever.configuration.cloak_runtime import (
 )
 from sciretriever.entry.cli.config_ui import ConfigConsole
 from sciretriever.model.configuration import (
-    AccessConfig,
+    BrowserConfig,
     Configuration,
     CoreCredentialService,
 )
@@ -39,9 +39,9 @@ class ConfigurationBrowserRuntimeUiTests(unittest.TestCase):
             ):
                 status = configuration_boundary.browser_access_status(
                     Configuration(
-                        download=AccessConfig(
-                            browser_enabled=True,
-                            browser_profile="fixture",
+                        browser=BrowserConfig(
+                            enabled=True,
+                            profile="fixture",
                         )
                     ),
                     home=home,
@@ -66,7 +66,7 @@ class ConfigurationBrowserRuntimeUiTests(unittest.TestCase):
         self.assertNotIn("chromium_executable_available", runtime)
         rendered = status.model_dump_json()
         self.assertNotIn("fingerprint_seed", rendered)
-        self.assertNotIn("profile_path", rendered)
+        self.assertNotIn("browser_profile_path", rendered)
         self.assertNotIn("cookie", rendered.casefold())
 
     def test_optional_cloak_key_is_origin_bound_but_never_a_runtime_readiness_claim(self) -> None:

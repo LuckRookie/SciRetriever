@@ -5,11 +5,7 @@ from unittest.mock import Mock, patch
 
 from sciretriever.entry.cli.config_center import browser
 from sciretriever.entry.cli.config_ui import ConfigActionKind
-from sciretriever.model.configuration import (
-    BrowserController,
-    BrowserProfilePresence,
-    Configuration,
-)
+from sciretriever.model.configuration import BrowserProfilePresence, Configuration
 
 
 def _models_configuration() -> Configuration:
@@ -48,25 +44,23 @@ class BrowserPageTests(unittest.TestCase):
         selected = before.models.get("openai/browser-model")
         assert selected is not None
         console = Mock()
-        profile_status = Mock(presence=BrowserProfilePresence.MISSING)
+        browser_profile_status = Mock(presence=BrowserProfilePresence.MISSING)
         with (
-            patch.object(browser, "select_value", return_value="agent"),
             patch.object(browser, "choose_model", return_value=selected) as choose,
             patch.object(browser, "ask_text", return_value="institutional-access"),
             patch.object(browser, "_ask_concurrency", return_value=3),
-            patch.object(browser, "browser_profile_status", return_value=profile_status),
+            patch.object(browser, "browser_profile_status", return_value=browser_profile_status),
         ):
             draft = browser._setup_candidate(before, console)
 
         self.assertIsNotNone(draft)
         assert draft is not None
         candidate, presence, after = draft
-        self.assertIs(candidate.browser_controller, BrowserController.AGENT)
         self.assertEqual(candidate.model, "openai/browser-model")
-        self.assertEqual(candidate.browser_profile, "institutional-access")
-        self.assertEqual(candidate.browser_max_concurrency, 3)
+        self.assertEqual(candidate.profile, "institutional-access")
+        self.assertEqual(candidate.max_concurrency, 3)
         self.assertIs(presence, BrowserProfilePresence.MISSING)
-        self.assertEqual(after.access, candidate)
+        self.assertEqual(after.browser, candidate)
         candidates = choose.call_args.kwargs["candidates"]
         self.assertEqual([item.reference for item in candidates], ["openai/browser-model"])
 
@@ -97,7 +91,7 @@ class BrowserPageTests(unittest.TestCase):
         self.assertIs(options[4].kind, ConfigActionKind.DANGER)
         self.assertIs(options[5].kind, ConfigActionKind.NAVIGATE)
         description = console.page.call_args.args[1]
-        self.assertIn("controller Model, fixed Profile and Runtime", description)
+        self.assertIn("Agent Model, fixed Profile and Runtime", description)
         notes = " ".join(console.page.call_args.kwargs["notes"])
         self.assertIn("does not launch Chromium", notes)
         self.assertIn("never inferred from Profile presence", notes)
@@ -125,12 +119,11 @@ class BrowserPageTests(unittest.TestCase):
         before = Configuration.model_validate(
             {
                 **_models_configuration().model_dump(mode="python"),
-                "access": {
+                "browser": {
                     "model": "openai/browser-model",
-                    "browser_enabled": True,
-                    "browser_profile": "institutional-access",
-                    "browser_controller": "agent",
-                    "browser_max_concurrency": 3,
+                    "enabled": True,
+                    "profile": "institutional-access",
+                    "max_concurrency": 3,
                 },
             }
         )
@@ -143,11 +136,10 @@ class BrowserPageTests(unittest.TestCase):
         ):
             browser._reset(console)
 
-        candidate = update.call_args.kwargs["access"]
-        self.assertEqual(candidate.browser_profile, "institutional-access")
-        self.assertFalse(candidate.browser_enabled)
+        candidate = update.call_args.kwargs["browser"]
+        self.assertEqual(candidate.profile, "institutional-access")
+        self.assertFalse(candidate.enabled)
         self.assertIsNone(candidate.model)
-        self.assertIs(candidate.browser_controller, BrowserController.RULES)
 
 
 if __name__ == "__main__":

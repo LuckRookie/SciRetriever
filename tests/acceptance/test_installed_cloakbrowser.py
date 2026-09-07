@@ -78,7 +78,7 @@ class InstalledCloakBrowserTests(unittest.TestCase):
         self.assertEqual(cleanup["browser_threads_alive"], [])
 
         production = payload["production_boundary"]
-        self.assertEqual(production["catalog_rule_count"], 9)
+        self.assertEqual(production["browser_strategy"], "generic-agent")
         self.assertTrue(production["ready"])
         self.assertIsNone(production["readiness_code"])
 

@@ -23,11 +23,11 @@ from sciretriever.configuration import (
     update_model_provider_configuration,
 )
 from sciretriever.model.configuration import (
-    AccessConfig,
     AcquisitionSourcesConfig,
     AgentProtocol,
     AgentReasoningEffort,
     AnalysisConfig,
+    BrowserConfig,
     BrowserPolicyOverrideConfig,
     CoreCredentialService,
     ModelConfig,
@@ -161,11 +161,11 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             maximum_starts_per_window=4,
             window_seconds=120.0,
         )
-        access = AccessConfig(
-            browser_enabled=True,
-            browser_profile="fixture-profile",
-            browser_max_concurrency=3,
-            browser_policy_overrides=(
+        access = BrowserConfig(
+            enabled=True,
+            profile="fixture-profile",
+            max_concurrency=3,
+            policy_overrides=(
                 BrowserPolicyOverrideConfig(
                     rate_limit_group=baseline.rate_limit_group,
                     minimum_start_interval=20.0,
@@ -182,31 +182,31 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
                 "[paths]\n"
                 "# keep unrelated section comments\n"
                 'catalog_path = "catalog.sqlite3"\n\n'
-                "[download]\n"
+                "[browser]\n"
                 "# keep Browser switch comment\n"
-                "browser_enabled = false\n"
-                "browser_max_concurrency = 2\n",
+                "enabled = false\n"
+                "max_concurrency = 2\n",
             )
 
             with patch(
                 "sciretriever.configuration.browser_access._production_browser_group_policies",
                 return_value={baseline.rate_limit_group: baseline},
             ):
-                updated = update_configuration_sections(access=access, home=root)
+                updated = update_configuration_sections(browser=access, home=root)
                 reloaded = load_user_configuration(home=root)
 
             rendered = path.read_text(encoding="utf-8")
             self.assertIn("# operator heading", rendered)
             self.assertIn("# keep unrelated section comments", rendered)
             self.assertIn("# keep Browser switch comment", rendered)
-            self.assertIn("browser_enabled = true", rendered)
-            self.assertIn('browser_profile = "fixture-profile"', rendered)
-            self.assertIn("browser_max_concurrency = 3", rendered)
+            self.assertIn("enabled = true", rendered)
+            self.assertIn('profile = "fixture-profile"', rendered)
+            self.assertIn("max_concurrency = 3", rendered)
             self.assertNotIn("browser_machine_access_grants", rendered)
             self.assertIn('rate_limit_group = "fixture-publisher"', rendered)
             self.assertIn("minimum_start_interval = 20.0", rendered)
             self.assertEqual(updated, reloaded)
-            self.assertEqual(updated.access, access)
+            self.assertEqual(updated.browser, access)
             self.assertFalse((root / ".sciretriever" / "credentials.toml").exists())
             self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -220,20 +220,20 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             private.mkdir(mode=0o700)
             fixed = private / "config.toml"
             fixed.write_text(
-                "[download]\nbrowser_max_concurrency = 7\n",
+                "[browser]\nmax_concurrency = 7\n",
                 encoding="utf-8",
             )
             fixed.chmod(0o600)
 
             alternate = root / "alternate.toml"
             alternate.write_text(
-                "[download]\nbrowser_max_concurrency = 8\n",
+                "[browser]\nmax_concurrency = 8\n",
                 encoding="utf-8",
             )
             working = root / "working"
             working.mkdir()
             (working / "config.toml").write_text(
-                "[download]\nbrowser_max_concurrency = 9\n",
+                "[browser]\nmax_concurrency = 9\n",
                 encoding="utf-8",
             )
 
@@ -247,7 +247,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
                 selected = load_user_configuration(home=home)
 
             self.assertEqual(configuration_path(home=home), fixed)
-            self.assertEqual(selected.access.browser_max_concurrency, 7)
+            self.assertEqual(selected.browser.max_concurrency, 7)
 
     def test_missing_user_configuration_does_not_fall_back_to_old_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -255,10 +255,10 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             home = root / "home"
             home.mkdir(mode=0o700)
             alternate = root / "alternate.toml"
-            alternate.write_text("[download]\n", encoding="utf-8")
+            alternate.write_text("[browser]\n", encoding="utf-8")
             working = root / "working"
             working.mkdir()
-            (working / "config.toml").write_text("[download]\n", encoding="utf-8")
+            (working / "config.toml").write_text("[browser]\n", encoding="utf-8")
 
             with (
                 patch.dict(
@@ -276,7 +276,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             home.mkdir(mode=0o700)
 
             configured = update_configuration_sections(
-                access=AccessConfig(browser_max_concurrency=6),
+                browser=BrowserConfig(max_concurrency=6),
                 home=home,
             )
 
@@ -296,7 +296,7 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
             unsafe_private.mkdir(mode=0o755)
             unsafe_private.chmod(0o755)
             unsafe_file = unsafe_private / "config.toml"
-            unsafe_file.write_text("[download]\n", encoding="utf-8")
+            unsafe_file.write_text("[browser]\n", encoding="utf-8")
             unsafe_file.chmod(0o600)
             with self.assertRaisesRegex(
                 ConfigurationError,
@@ -323,10 +323,10 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
                 path = configuration_path(home=home)
                 path.parent.mkdir(mode=0o700)
                 outside = Path(temporary) / "outside.toml"
-                outside.write_text("[download]\n", encoding="utf-8")
+                outside.write_text("[browser]\n", encoding="utf-8")
                 outside.chmod(0o600)
                 if kind == "mode":
-                    path.write_text("[download]\n", encoding="utf-8")
+                    path.write_text("[browser]\n", encoding="utf-8")
                     path.chmod(0o644)
                     expected = "configuration file has unsafe ownership or permissions"
                 elif kind == "symlink":
@@ -449,23 +449,23 @@ class OrdinaryConfigurationEditingTests(unittest.TestCase):
         )
         self.assertNotIn(_SECRET, repr(changes))
 
-        access = AccessConfig(
-            browser_enabled=True,
-            browser_profile="fixture-profile",
-            browser_max_concurrency=3,
+        access = BrowserConfig(
+            enabled=True,
+            profile="fixture-profile",
+            max_concurrency=3,
         )
         access_changes = configuration_diff(
             before,
-            before.model_copy(update={"access": access}),
-            sections=("download",),
+            before.model_copy(update={"browser": access}),
+            sections=("browser",),
         )
-        self.assertIn(("download.browser_enabled", False, True), access_changes)
+        self.assertIn(("browser.enabled", False, True), access_changes)
         self.assertNotIn("machine_access", repr(access_changes))
         self.assertIn(
-            ("download.browser_profile", None, "fixture-profile"),
+            ("browser.profile", None, "fixture-profile"),
             access_changes,
         )
-        self.assertIn(("download.browser_max_concurrency", 5, 3), access_changes)
+        self.assertIn(("browser.max_concurrency", 5, 3), access_changes)
         self.assertNotIn(_SECRET, repr(access_changes))
 
 

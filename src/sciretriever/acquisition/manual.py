@@ -168,7 +168,6 @@ class ManualPdfAdmissionService:
             result = validate_pdf(
                 source,
                 staging=self._staging,
-                candidate_belongs_to_literature=True,
                 max_bytes=self._max_pdf_bytes,
                 declared_media_type=None,
                 cancel_event=cancel_event,

@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；American Mathematical Society 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://www.ams.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；无专属 Public 或授权 API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方入口与身份边界
 
@@ -35,7 +35,7 @@ scope 或错误语义，因此 authorized API capability 为 `unsupported`。公
 
 ## 3. Browser 结论
 
-当前没有 AMS Browser rule，原因包括：
+当前证据不足以建立 AMS 专属 Browser 页面程序或首页 probe，原因包括：
 
 - 缺可读取的自动访问条款和数值文章间隔；
 - 缺 login、authenticated/entitled、paywall/not-entitled、challenge/MFA/rate/account-warning

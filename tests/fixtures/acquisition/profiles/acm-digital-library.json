@@ -31,7 +31,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -48,15 +48,7 @@
       "payload": "premium-bulk-download-feature-without-public-api-contract"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "official-usage-policy-prohibits-scripted-article-download",
-        "basic-open-access-pdf-does-not-require-institutional-browser-entitlement",
-        "robots-crawl-delay-is-not-automation-permission",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-related-artifact-rule",
-        "upstream-browser-success-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

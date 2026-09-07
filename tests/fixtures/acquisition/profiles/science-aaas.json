@@ -4,8 +4,8 @@
   "display_name": "Science / AAAS",
   "product_name": "Science journals platform",
   "verification_state": "production-ready",
-  "verification_date": "2026-08-19",
-  "evidence_revision": "science-persistent-browser-pdf-v3-2026-08-21",
+  "verification_date": "2026-09-04",
+  "evidence_revision": "science-persistent-browser-pdf-v4-2026-09-04",
   "notes_reference": "docs/notes/providers/science-aaas.md",
   "official_references": [
     "https://www.science.org/",
@@ -31,7 +31,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": "browser:science-aaas"
+    "browser_probe_enabled": true
   },
   "route_verification": {
     "public": {
@@ -47,16 +47,8 @@
       "payload": "no-reviewed-machine-access-pdf-api"
     },
     "browser": {
-      "state": "production-ready",
-      "rule_id": "science-aaas-pdf",
-      "rule_revision": 2,
-      "allowed_origins": ["https://www.science.org"],
-      "rate_limit_group": "science-aaas",
-      "session_group": "science-aaas",
-      "article_start_interval_seconds": 30,
-      "primary_contract": "doi-bound-article-pdf-response-or-download",
-      "supplement_contract": "supplement-actions-and-markers-are-never-primary",
-      "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication"
+      "state": "probe-enabled",
+      "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
     }
   },
   "ownership_cases": [

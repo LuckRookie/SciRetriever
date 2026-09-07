@@ -12,7 +12,8 @@
 | Provider / platform | `<display-name>` |
 | Provider Notes | `<repository-relative-note>` |
 | Profile evidence revision | `<revision>` |
-| Browser rule id / revision | `<rule-id>` / `<positive-revision>` |
+| Browser executor | `browser:generic` / `AgentBrowserController` |
+| Browser Model | `<provider/model>`；不写凭据或 endpoint query |
 | 代码 commit | `<commit>` |
 | 核实负责人 | `<operator-role>`；不写账号、邮箱或机构身份 |
 | 授权生效 / 到期 | `<UTC-window>` |
@@ -27,8 +28,8 @@ production status。
 
 - [ ] 官方自动访问/TDM/订阅条款已核对并在 Provider Notes 记录日期和 URL。
 - [ ] 当前机器网络出口及拟访问内容的使用权由 operator 自行确认。
-- [ ] Profile 已是 `production-ready`，生产 rule、manifest 和离线 fixture 完整闭环。
-- [ ] Browser policy 数字有 Provider-specific 依据，不使用全局默认间隔。
+- [ ] Canonical landing 与目标 DOI/标题/作者线索已确认；Publisher Profile 状态不作为下载准入。
+- [ ] `browser-generic` baseline、operator 只收紧配置、identity manifest 和离线 fixture 完整闭环。
 - [ ] Local HTTPS/真实 Chromium、页面资源/redirect、validation/publication、取消和清理测试通过。
 - [ ] 已选择并安全初始化持久 Profile；probe 不读取其内容，也不包含登录、机构选择、Cookie 导入、MFA/CAPTCHA、反检测或未知站点步骤。
 - [ ] 样本不需要登录、机构选择、MFA 或人工 challenge；这些交互不属于第一版现场核实范围。
@@ -42,45 +43,44 @@ production status。
 | 匿名样本 | `<sample-01>` |
 | 样本选择依据 | `<owned-or-authorized-access-basis>` |
 | 最大文章数 / 文章流程数 | `<count>` / `<count>` |
-| 最大顶层导航 / rule 动作 | `<count>` / `<count>` |
+| 最大顶层导航 / Agent 动作 | `<count>` / `<count>` |
 | 最大 popup / download | `<count>` / `<count>` |
 | 最大总请求 / 总响应字节 | `<count>` / `<bytes>` |
 | 最大单篇 / 总 wall time | `<seconds>` / `<seconds>` |
 | 重试数 | `<count>`；每次重新排队并服从同一 policy |
 
-## 4. Provider-specific 调度政策
+## 4. 通用 Browser 调度政策
 
 | 字段 | 获准值与证据 |
 | --- | --- |
-| `browser_rate_limit_group` | `<stable-group>` |
-| `browser_session_key` | `<stable-session-key>` |
+| policy group | `browser-generic` |
+| Browser Profile | 普通配置选中的唯一固定身份 Profile |
 | `max_concurrency` | `1` |
-| `minimum_start_interval` | `<seconds-and-evidence>` |
+| `minimum_start_interval` | `<configured-seconds>`；不得小于项目 baseline |
 | `maximum_starts_per_window` / `window_seconds` | `<count>` / `<seconds>` |
 | completion / failure / rate-limit cooldown | `<seconds>` / `<seconds>` / `<seconds>` |
 | runtime failure threshold | `<count>` |
 | `Retry-After` | 始终服从；只能延长阻塞 |
 
-若任一政策值未知，本单不能进入 `authorized-not-started`。
+若任一政策值未知或配置放宽 baseline，本单不能进入 `authorized-not-started`。
 
 ## 5. Origins、页面和正文归属
 
 | 字段 | 获准边界 |
 | --- | --- |
 | Landing origin | `<exact-https-origin>` |
-| Allowed navigation/capture origins | `<closed-origin-set>` |
-| Approved page-resource origins | `<closed-origin-set>` |
-| Stable article identity | `<namespace-and-match-rule>` |
-| Primary capture | `<closed-rule-category>` |
-| Supplement / excluded / wrong article | `<closed-rule-category>` |
-| Entitled markers | `<fixture-marker-ids>` |
-| Login / paywall / not-entitled markers | `<fixture-marker-ids>` |
-| MFA / challenge / rate / IP / account markers | `<fixture-marker-ids>` |
+| Target identity | `<doi-title-author-clues>`；不写真实值 |
+| Start kind | `<landing-page|direct-file>` |
+| Expected navigation/capture origins | `<reviewed-origin-summary>`；仅作核实预期，不成为页面规则 |
+| Expected capture mechanisms | `<response|download|popup-viewer>` |
+| Supplement / excluded / wrong article | `<expected-evidence-and-rejection>` |
+| Login / paywall / not-entitled | `<expected-page-state>` |
+| MFA / challenge / rate / IP / account | `<expected-page-state>` |
 
 不要在本文件写完整文章 URL、selector、页面正文、签名 locator 或真实响应。未批准第三方页面资源
-必须在 DNS 前丢弃；点击或页面脚本产生的显式 request 必须逐项复审，未暴露 route 的 native
-redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 terminal host admission 同时成立
-时才能关联。
+必须在 DNS 前丢弃；点击或页面脚本产生的 request、redirect、popup/viewer 与 capture 都必须绑定
+当前 article session，并通过通用 URL/DNS/host admission。这里的预期不能变成 Publisher-specific
+selector、locator 或 origin allowlist。
 
 ## 6. 仓库外落点与清理选择
 
@@ -108,12 +108,12 @@ redirect 只有同页 live ancestor、批准且预绑定的最终 origin 与 ter
 
 执行前：
 
-- [ ] 再次显示并核对 policy、预算、落点、access key/rule revision 和当前时间窗。
+- [ ] 再次显示并核对 Browser Model、generic policy、预算、落点、匿名样本和当前时间窗。
 - [ ] Public/API 正常结束与 Browser admission 已由受控运行证明。
 - [ ] Cloak wrapper、Playwright API、经核实 binary、fixed identity manifest、headed display/Xvfb、持久 Profile 独占 lease 和临时下载工作区 readiness 已确认。
 
-出现 `429`/quota/`Retry-After`、login、MFA、challenge resource-blocked、所选 controller 结束后
-仍为 `challenge-unresolved`、IP block、account warning、未知 origin、entitlement 不确定、
+出现 `429`/quota/`Retry-After`、login、MFA、challenge resource-blocked、Agent 停止后仍为
+`challenge-unresolved`、IP block、account warning、未知 origin、entitlement 不确定、
 supplement/wrong article、budget、timeout、cleanup/publication/数据完整性
 错误或用户取消时立即停止；不得换入口、换网络、提高频率或扩大样本。
 
@@ -132,7 +132,7 @@ supplement/wrong article、budget、timeout、cleanup/publication/数据完整�
 - [ ] 原始 Cookie、响应、PDF、截图、个人路径、数据库和日志未进入 Git。
 - [ ] 临时下载工作区已删除、Profile lease 已释放且持久 Profile 保留，没有残留 Chromium/Playwright 线程。
 - [ ] 对应 Provider Notes 只增加了脱敏、可审查的事实和日期。
-- [ ] evidence/rule/fixture 与 status 更新经过独立代码/文档审查。
+- [ ] evidence/fixture、generic executor 与 status 更新经过独立代码/文档审查。
 - [ ] 相关定向测试、安装 wheel acceptance、Quick 和 Full 已重新通过。
 - [ ] 现场结果没有被描述成长期 SLA、所有文章 entitlement 或自动 production-ready。
 

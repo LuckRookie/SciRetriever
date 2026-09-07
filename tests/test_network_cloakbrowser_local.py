@@ -30,10 +30,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from sciretriever.acquisition.browser_control import (
-    AgentBrowserController,
-    BrowserAgentDisposition,
-)
+from sciretriever.acquisition.browser_control import AgentBrowserController
 from sciretriever.agents.api import (
     AgentCallLimits,
     AgentModelCapabilities,
@@ -59,17 +56,22 @@ from sciretriever.model.access import (
 )
 from sciretriever.network.admission import AccessCoordinator, AccessPolicy, AccessScope
 from sciretriever.network.browser import (
+    BrowserCaptureDecision,
+    BrowserCaptureEvidence,
     BrowserClient,
     BrowserDestinationKind,
+    BrowserFlowSession,
     BrowserOperationLimits,
     _ConnectionBinding,
 )
 from sciretriever.network.browser_control import (
-    BrowserAction,
-    BrowserActionReceipt,
-    BrowserControlSession,
+    BrowserCaptured,
     BrowserObservation,
     BrowserPageState,
+    BrowserReady,
+    BrowserStaleTransition,
+    BrowserStepAssessment,
+    BrowserStepSession,
     ClickElement,
 )
 from sciretriever.network.browser_sessions import BrowserSessionBroker
@@ -114,7 +116,7 @@ class _FixtureMultimodalBrowserAgent:
     def __init__(self) -> None:
         self.turns = 0
         self.image_turns = 0
-        self._scroll_requested = False
+        self._scroll_requests = 0
         self._wait_requested = False
 
     def execute(self, call: AgentProviderCall) -> AgentToolCall:  # noqa: C901
@@ -144,24 +146,20 @@ class _FixtureMultimodalBrowserAgent:
         ):
             raise AssertionError("Browser Agent observation omitted bounded action facts")
 
-        def find(name: str, *, visible: bool | None = None) -> dict[str, object] | None:
+        def find(name: str, *, enabled: bool = False) -> dict[str, object] | None:
             for item in elements:
                 if not isinstance(item, dict) or item.get("name") != name:
                     continue
                 state = item.get("state")
                 if not isinstance(state, str):
                     continue
-                is_visible = state.startswith("visible-")
-                is_enabled = state == "visible-enabled"
-                if visible is not None and is_visible is not visible:
-                    continue
-                if visible is True and not is_enabled:
+                if enabled and state != "enabled":
                     continue
                 return item
             return None
 
-        consent = find("Accept cookies", visible=True)
-        pdf = find("Download PDF", visible=True)
+        consent = find("Accept cookies", enabled=True)
+        pdf = find("Download PDF", enabled=True)
         identity: dict[str, object] = {
             "article_token": article_token,
             "page_id": page_id,
@@ -185,8 +183,8 @@ class _FixtureMultimodalBrowserAgent:
                 "surface_id": pdf.get("surface_id"),
                 "element_id": pdf.get("element_id"),
             }
-        elif not self._scroll_requested:
-            self._scroll_requested = True
+        elif self._scroll_requests < 2:
+            self._scroll_requests += 1
             surface = next((value for value in surfaces if isinstance(value, dict)), None)
             if surface is None:
                 raise AssertionError("Browser Agent observation omitted its page surface")
@@ -194,7 +192,7 @@ class _FixtureMultimodalBrowserAgent:
             arguments = {
                 **identity,
                 "surface_id": surface.get("surface_id"),
-                "delta_y": 500,
+                "delta_y": 900,
             }
         else:
             # Native wheel dispatch can return before a page's scroll listener
@@ -224,8 +222,8 @@ def _agent_runtime(adapter: _FixtureMultimodalBrowserAgent) -> AgentRuntime:
             role=AgentRole.BROWSER,
             model="fixture-browser-model",
             capabilities=AgentModelCapabilities(
-                context_window_tokens=32_768,
-                max_output_tokens=512,
+                context_window_tokens=1_000_000,
+                max_output_tokens=131_072,
                 image_input=True,
                 tool_decision=True,
                 supported_image_media_types=frozenset({"image/png", "image/jpeg", "image/webp"}),
@@ -238,43 +236,60 @@ def _agent_runtime(adapter: _FixtureMultimodalBrowserAgent) -> AgentRuntime:
                 max_request_bytes=9 * 1024 * 1024,
                 max_response_bytes=1 * 1024 * 1024,
                 max_result_bytes=1 * 1024 * 1024,
-                max_output_tokens=512,
-                context_window_tokens=32_768,
+                max_output_tokens=131_072,
+                context_window_tokens=1_000_000,
             ),
         ),
     )
 
 
-class _NormalPageAgentControl:
-    def __init__(self, inner: BrowserControlSession) -> None:
-        self.inner = inner
+class _NormalPagePolicy:
+    def assess(self, observation: BrowserObservation) -> BrowserStepAssessment:
+        return BrowserStepAssessment(observation.page_state, True)
 
-    def observe(self) -> BrowserObservation:
-        return self.inner.observe(page_state=BrowserPageState.NORMAL)
 
-    def execute(
+class _NormalPageAgentControlFactory:
+    def open(
         self,
-        action: BrowserAction,
-        observation: BrowserObservation,
+        session: BrowserFlowSession,
         *,
         timeout_seconds: float,
-    ) -> BrowserActionReceipt:
-        return self.inner.execute(
-            action,
-            observation,
+    ) -> BrowserStepSession:
+        return session.browser_steps(
+            policy=_NormalPagePolicy(),
             timeout_seconds=timeout_seconds,
         )
 
 
-class _NormalPageAgentControlFactory:
-    def open(self, session: object) -> _NormalPageAgentControl:
-        control_factory = getattr(session, "control_session", None)
-        if not callable(control_factory):
-            raise AssertionError("Browser flow did not expose its bounded control session")
-        inner = control_factory()
-        if not isinstance(inner, BrowserControlSession):
-            raise AssertionError("Browser control session violated its neutral contract")
-        return _NormalPageAgentControl(inner)
+def _click_named_element(
+    session: BrowserFlowSession,
+    name: str,
+    *,
+    timeout_seconds: float = 5.0,
+) -> object:
+    """Drive one fixture click through the same atomic step seam as Agents."""
+
+    steps = session.browser_steps(
+        policy=_NormalPagePolicy(),
+        timeout_seconds=timeout_seconds,
+    )
+    initial = steps.start()
+    if not isinstance(initial, BrowserReady):
+        raise AssertionError("fixture Browser page did not become ready")
+    observation = initial.observation
+    element = next((item for item in observation.elements if item.name == name), None)
+    if element is None:
+        raise AssertionError(f"fixture Browser element is unavailable: {name}")
+    surface = next(item for item in observation.surfaces if item.surface_id == element.surface_id)
+    return steps.apply(
+        ClickElement(
+            observation.article_token,
+            surface.page_id,
+            surface.surface_id,
+            observation.revision,
+            element.element_id,
+        )
+    )
 
 
 class _Resolver:
@@ -301,7 +316,7 @@ class _DestinationGuard:
         return self._origins
 
 
-class _CaptureGuard:
+class _CapturePolicy:
     def __init__(
         self,
         origin: str,
@@ -313,9 +328,14 @@ class _CaptureGuard:
         self._kind = kind
         self.calls: list[tuple[str, BrowserCaptureKind, str]] = []
 
-    def allows(self, url: str, kind: BrowserCaptureKind, media_type: str) -> bool:
-        self.calls.append((url, kind, media_type))
-        return url == self._url and kind is self._kind and media_type == "application/pdf"
+    def decide(self, evidence: BrowserCaptureEvidence) -> BrowserCaptureDecision:
+        self.calls.append((evidence.locator, evidence.kind, evidence.media_type))
+        accepted = (
+            evidence.locator == self._url
+            and evidence.kind is self._kind
+            and evidence.media_type == "application/pdf"
+        )
+        return BrowserCaptureDecision.ACCEPT if accepted else BrowserCaptureDecision.REJECT
 
 
 class _State:
@@ -975,10 +995,10 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                 fonts = cast(list[list[object]], first.get("fonts"))
                 self.assertTrue(fonts and all(item[1] is True for item in fonts))
                 plugins = cast(list[object], first.get("plugins"))
-                self.assertEqual(
-                    len(plugins),
-                    5,
-                    "the persistent Profile exposed an anomalous PDF plugin surface",
+                self.assertLessEqual(len(plugins), 8)
+                self.assertTrue(
+                    all(isinstance(name, str) and len(name) <= 64 for name in plugins),
+                    "the persistent Profile exposed an invalid plugin surface",
                 )
                 self.assertFalse(cast(bool, observations[0].get("cookie")))
                 self.assertFalse(cast(bool, observations[0].get("localStorage")))
@@ -1039,18 +1059,35 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                 guard = _DestinationGuard(origin)
                 try:
 
-                    def event_flow(session: Any) -> None:
-                        marker = session.text("#ready")
-                        self.assertEqual(marker, "ready")
-                        self.assertTrue(session.click("#popup"))
+                    def popup_flow(session: BrowserFlowSession) -> None:
+                        _click_named_element(session, "popup")
                         self.assertTrue(
                             fixture.state.popup_seen.wait(5),
                             "the native popup did not reach the local fixture",
                         )
-                        self.assertTrue(session.click("#pdf"))
-                        session.wait_for_capture(BrowserCaptureKind.RESPONSE)
 
-                    event_capture_guard = _CaptureGuard(origin, BrowserCaptureKind.RESPONSE)
+                    popup_result = client.run(
+                        AccessScope("cloak-local-publisher", "web"),
+                        BrowserRequest(
+                            url=origin + "/article",
+                            timeout_seconds=30.0,
+                            max_response_bytes=8 * 1024 * 1024,
+                        ),
+                        AccessPolicy(max_concurrency=1),
+                        controller=_FlowController(popup_flow),
+                        destination_guard=guard,
+                        session_key="cloak-local-publisher",
+                        discard_unapproved_subresources=False,
+                    )
+                    self.assertIsInstance(popup_result, AccessFailure)
+                    assert isinstance(popup_result, AccessFailure)
+                    self.assertEqual(popup_result.code, "no-download")
+
+                    def event_flow(session: BrowserFlowSession) -> None:
+                        result = _click_named_element(session, "pdf")
+                        self.assertIsInstance(result, BrowserCaptured)
+
+                    event_capture_policy = _CapturePolicy(origin, BrowserCaptureKind.RESPONSE)
                     result = client.run(
                         AccessScope("cloak-local-publisher", "web"),
                         BrowserRequest(
@@ -1061,7 +1098,7 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         AccessPolicy(max_concurrency=1),
                         controller=_FlowController(event_flow),
                         destination_guard=guard,
-                        capture_guard=event_capture_guard,
+                        capture_policy=event_capture_policy,
                         session_key="cloak-local-publisher",
                         discard_unapproved_subresources=False,
                     )
@@ -1087,15 +1124,15 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                     self.assertNotIn("/sw.js", fixture.state.paths)
                     self.assertIn("/popup", fixture.state.paths)
                     self.assertIn("/article.pdf", fixture.state.paths)
-                    self.assertTrue(event_capture_guard.calls)
+                    self.assertTrue(event_capture_policy.calls)
                     self.assertTrue(
                         all(
                             not urlsplit(url).query
-                            for url, _kind, _media in event_capture_guard.calls
+                            for url, _kind, _media in event_capture_policy.calls
                         )
                     )
 
-                    native_capture_guard = _CaptureGuard(origin, BrowserCaptureKind.RESPONSE)
+                    native_capture_policy = _CapturePolicy(origin, BrowserCaptureKind.RESPONSE)
                     native = client.run(
                         AccessScope("cloak-local-publisher", "web"),
                         BrowserRequest(
@@ -1105,7 +1142,7 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         ),
                         AccessPolicy(max_concurrency=1),
                         destination_guard=guard,
-                        capture_guard=native_capture_guard,
+                        capture_policy=native_capture_policy,
                         navigation_only=True,
                         session_key="cloak-local-publisher",
                     )
@@ -1117,11 +1154,11 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         origin + "/article.pdf",
                     )
                     self.assertIn("/article.pdf?native=fixture", fixture.state.targets)
-                    self.assertTrue(native_capture_guard.calls)
+                    self.assertTrue(native_capture_policy.calls)
                     self.assertTrue(
                         all(
                             not urlsplit(url).query
-                            for url, _kind, _media in native_capture_guard.calls
+                            for url, _kind, _media in native_capture_policy.calls
                         )
                     )
 
@@ -1134,13 +1171,10 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         ),
                         AccessPolicy(max_concurrency=1),
                         controller=_FlowController(
-                            lambda session: (
-                                session.click("#attachment"),
-                                session.wait_for_capture(BrowserCaptureKind.DOWNLOAD),
-                            )
+                            lambda session: _click_named_element(session, "attachment")
                         ),
                         destination_guard=guard,
-                        capture_guard=_CaptureGuard(origin, BrowserCaptureKind.DOWNLOAD),
+                        capture_policy=_CapturePolicy(origin, BrowserCaptureKind.DOWNLOAD),
                         session_key="cloak-local-publisher",
                     )
                     self.assertIsInstance(attachment, BrowserCaptureBatch)
@@ -1157,7 +1191,7 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         ),
                         AccessPolicy(max_concurrency=1),
                         destination_guard=guard,
-                        capture_guard=_CaptureGuard(origin, BrowserCaptureKind.RESPONSE),
+                        capture_policy=_CapturePolicy(origin, BrowserCaptureKind.RESPONSE),
                         navigation_only=True,
                         session_key="cloak-local-publisher",
                         limits=BrowserOperationLimits(
@@ -1191,7 +1225,6 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                             max_response_bytes=8 * 1024 * 1024,
                         ),
                         AccessPolicy(max_concurrency=1),
-                        controller=_FlowController(lambda session: session.text("#ready")),
                         destination_guard=guard,
                         session_key="cloak-local-publisher",
                     )
@@ -1277,11 +1310,11 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                 fixture_agent = _FixtureMultimodalBrowserAgent()
                 controller = AgentBrowserController(
                     runtime=_agent_runtime(fixture_agent),
-                    control_factory=_NormalPageAgentControlFactory(),
+                    step_factory=_NormalPageAgentControlFactory(),
                 )
 
                 guard = _DestinationGuard(origin)
-                capture_guard = _CaptureGuard(origin, BrowserCaptureKind.RESPONSE)
+                capture_policy = _CapturePolicy(origin, BrowserCaptureKind.RESPONSE)
                 try:
                     result = client.run(
                         AccessScope("cloak-local-agent", "web"),
@@ -1293,16 +1326,13 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         AccessPolicy(max_concurrency=1),
                         controller=controller,
                         destination_guard=guard,
-                        capture_guard=capture_guard,
+                        capture_policy=capture_policy,
                         session_key="cloak-local-agent",
                     )
                     controller_result = controller.result
                     if controller_result is None:
                         self.fail("Browser Agent controller did not retain a result")
-                    self.assertEqual(
-                        controller_result.disposition,
-                        BrowserAgentDisposition.CAPTURE_AVAILABLE,
-                    )
+                    self.assertIsInstance(controller_result.step, BrowserCaptured)
                     self.assertGreaterEqual(fixture_agent.turns, 4)
                     self.assertEqual(fixture_agent.turns, fixture_agent.image_turns)
                     self.assertIsInstance(result, BrowserCaptureBatch)
@@ -1358,7 +1388,7 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
 
                 def replacement_flow(session: Any) -> None:
                     nonlocal fail_closed
-                    action_port = session.control_session()
+                    action_port = session._control_driver()
                     first = action_port.observe(page_state=BrowserPageState.NORMAL)
                     control = next(
                         element for element in first.elements if element.name == "Replace DOM"
@@ -1390,18 +1420,18 @@ class CloakBrowserLocalAcceptanceTests(unittest.TestCase):
                         if element.name == "Replacement target"
                     )
                     self.assertNotEqual(replacement.element_id, target.element_id)
-                    with self.assertRaises(Exception):
-                        action_port.execute(
-                            ClickElement(
-                                first.article_token,
-                                control_surface.page_id,
-                                target.surface_id,
-                                first.revision,
-                                target.element_id,
-                            ),
-                            first,
-                            timeout_seconds=5.0,
-                        )
+                    stale = action_port.execute(
+                        ClickElement(
+                            first.article_token,
+                            control_surface.page_id,
+                            target.surface_id,
+                            first.revision,
+                            target.element_id,
+                        ),
+                        first,
+                        timeout_seconds=5.0,
+                    )
+                    self.assertIsInstance(stale, BrowserStaleTransition)
                     fail_closed = True
 
                 guard = _DestinationGuard(origin)

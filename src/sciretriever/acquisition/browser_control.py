@@ -1,10 +1,8 @@
-"""Acquisition-owned controlled Browser controller contracts.
+"""Acquisition-owned generic Browser Agent controller contracts.
 
-Rules and Agent modes are selected before an article Browser flow starts.  A
-Rules controller executes one finite, reviewed Publisher program and never
-constructs a model call.  An Agent controller observes the current article,
-asks the shared stateless Agents runtime for exactly one closed action, and
-hands that action back to Network for validation and execution.
+The controller observes the current article, asks the shared stateless Agents
+runtime for exactly one closed action, and hands that action back to Network
+for validation and execution.
 
 No Browser vendor object, selector, arbitrary URL, Profile, Cookie, CDP handle,
 filesystem capability, or PDF publishing capability crosses this boundary.
@@ -17,8 +15,7 @@ import math
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum, unique
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol, TypeAlias, runtime_checkable
 
 from sciretriever.agents.api import (
     AgentCall,
@@ -32,34 +29,104 @@ from sciretriever.agents.api import (
     AgentToolDeclaration,
 )
 from sciretriever.logging.api import get_logger
+from sciretriever.model.access import AccessFailure
+from sciretriever.model.primitives import sha256_digest
 from sciretriever.model.report import StableFailure
 from sciretriever.network.browser import BrowserFlowSession
 from sciretriever.network.browser_control import (
     BrowserAction,
-    BrowserActionOutcome,
-    BrowserActionReceipt,
+    BrowserBlocked,
+    BrowserBlockedReason,
+    BrowserCancelled,
+    BrowserCaptured,
     BrowserCaptureState,
+    BrowserFailed,
     BrowserObservation,
     BrowserPageState,
+    BrowserReady,
+    BrowserStep,
+    BrowserStepSession,
     ClickElement,
     ClickPoint,
     GoBack,
     ScrollSurface,
     Stop,
     WaitForChange,
-    action_fingerprint,
-    observation_hash,
-    semantic_page_fingerprint,
+    execution_binding_fingerprint,
+    stable_action_intent_fingerprint,
+    stable_semantic_page_fingerprint,
 )
 
-_BROWSER_AGENT_MAX_OUTPUT_TOKENS: Final[int] = 256
+# One Browser decision may spend reasoning tokens before returning its small
+# closed tool payload.  Keep this task-owned per-call budget separate from the
+# model configuration and reuse it when Bootstrap declares the role capacity.
+BROWSER_AGENT_MAX_OUTPUT_TOKENS: Final[int] = 131_072
 _BROWSER_ACTION_TIMEOUT_SECONDS: Final[float] = 10.0
+_BROWSER_AGENT_MAX_MODEL_CALLS: Final[int] = 32
+_BROWSER_AGENT_MAX_TRANSIENT_CALL_RETRIES: Final[int] = 2
+_TRANSIENT_BROWSER_AGENT_FAILURES: Final[frozenset[str]] = frozenset(
+    {
+        "agent-access",
+        "agent-http-status",
+        "agent-remote-service",
+        "agent-timeout",
+    }
+)
 _LOGGER = get_logger(__name__)
 _STOP_REASONS: Final[tuple[str, ...]] = (
     "normal-miss",
     "not-actionable",
-    "no-progress",
+    "challenge-unresolved",
+    "login-required",
+    "mfa-required",
+    "not-entitled",
+    "access-denied",
+    "not-found",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserArticleGoal:
+    """Bounded article context supplied alongside one Browser observation."""
+
+    doi: str | None = None
+    title: str | None = None
+    authors: tuple[str, ...] = ()
+    landing_origins: tuple[str, ...] = ()
+    asset_origins: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("doi", "title"):
+            value = getattr(self, name)
+            if value is not None:
+                if (
+                    type(value) is not str
+                    or not value.strip()
+                    or len(value.encode("utf-8", "strict")) > 512
+                ):
+                    raise ValueError(f"{name} must be bounded text or None")
+                object.__setattr__(self, name, value.strip())
+        if not isinstance(self.authors, tuple) or any(
+            type(value) is not str
+            or not value.strip()
+            or len(value.encode("utf-8", "strict")) > 256
+            for value in self.authors
+        ):
+            raise ValueError("authors must contain bounded text")
+        object.__setattr__(self, "authors", tuple(value.strip() for value in self.authors))
+        for name in ("landing_origins", "asset_origins"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(
+                type(value) is not str
+                or not value.startswith("https://")
+                or "?" in value
+                or "#" in value
+                or len(value.encode("utf-8", "strict")) > 512
+                for value in values
+            ):
+                raise ValueError(f"{name} must contain safe HTTPS origins")
+            object.__setattr__(self, name, tuple(dict.fromkeys(values)))
+
 
 # The system instruction is static.  Page-derived text, the request-local
 # article identity, and the screenshot are separate user inputs and can never
@@ -72,117 +139,103 @@ _BROWSER_AGENT_SYSTEM_INSTRUCTION: Final[str] = (
     "and you must not fabricate or inject a challenge result. Never navigate to an "
     "arbitrary URL, enter credentials or other text, log in, select an institution, "
     "handle MFA, upload a file, execute script, or create another Browser. Use stop "
-    "when the primary PDF cannot be reached safely with these closed actions."
+    "when the primary PDF cannot be reached safely with these closed actions. Choose "
+    "the most specific declared stop reason when the page visibly requires login or "
+    "MFA, denies entitlement or access, is not found, or leaves a challenge unresolved; "
+    "otherwise use normal-miss or not-actionable. A stop reason reports "
+    "only the visible page outcome and never claims that a PDF was downloaded."
 )
 
 
-@unique
-class BrowserControllerKind(str, Enum):
-    """The mutually exclusive controller selected for one Browser job."""
-
-    RULES = "rules"
-    AGENT = "agent"
-
-
 @runtime_checkable
-class BrowserRuleExecution(Protocol):
-    """One finite, reviewed Publisher rule execution owned by Acquisition."""
+class BrowserStepSessionFactory(Protocol):
+    """Bind Publisher classification to one request-local atomic step session."""
 
-    def run(self, session: BrowserFlowSession) -> None: ...
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class RuleBrowserController:
-    """Run one deterministic execution without constructing an Agent call."""
-
-    execution: BrowserRuleExecution
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.execution, BrowserRuleExecution):
-            raise TypeError("execution must implement BrowserRuleExecution")
-
-    def run(self, session: BrowserFlowSession) -> None:
-        if not isinstance(session, BrowserFlowSession):
-            raise TypeError("session must implement BrowserFlowSession")
-        _LOGGER.debug("event=browser-controller-start controller=rules")
-        try:
-            self.execution.run(session)
-        except BaseException:
-            _LOGGER.debug("event=browser-controller-result controller=rules result=failure")
-            raise
-        _LOGGER.debug("event=browser-controller-result controller=rules result=completed")
-
-
-@runtime_checkable
-class BrowserAgentControlSession(Protocol):
-    """Acquisition-classified view of Network's article-local control handle."""
-
-    def observe(self) -> BrowserObservation: ...
-
-    def execute(
+    def open(
         self,
-        action: BrowserAction,
-        observation: BrowserObservation,
+        session: BrowserFlowSession,
         *,
         timeout_seconds: float,
-    ) -> BrowserActionReceipt: ...
+    ) -> BrowserStepSession: ...
 
 
-@runtime_checkable
-class BrowserAgentControlFactory(Protocol):
-    """Bind Publisher classification to one request-local Network session."""
-
-    def open(self, session: BrowserFlowSession) -> BrowserAgentControlSession: ...
+_BrowserTerminalStep: TypeAlias = (
+    BrowserCaptured | BrowserBlocked | BrowserFailed | BrowserCancelled
+)
 
 
-@unique
-class BrowserAgentDisposition(str, Enum):
-    """Natural terminal outcomes of one Agent-controlled article flow."""
-
-    CAPTURE_AVAILABLE = "capture-available"
-    PAGE_TERMINAL = "page-terminal"
-    STOPPED = "stopped"
-    CANCELLED = "cancelled"
-    NO_PROGRESS = "no-progress"
-    FAILED = "failed"
+def _step_outcome(step: _BrowserTerminalStep) -> str:
+    if isinstance(step, BrowserCaptured):
+        return "captured"
+    if isinstance(step, BrowserCancelled):
+        return "cancelled"
+    if isinstance(step, BrowserFailed):
+        return "failed"
+    if step.reason is BrowserBlockedReason.STOPPED:
+        return "stopped"
+    if step.reason is BrowserBlockedReason.CANDIDATE_TIMEOUT:
+        return "candidate-timeout"
+    if step.reason in {
+        BrowserBlockedReason.REPEATED_SELF_TRANSITION,
+        BrowserBlockedReason.REPEATED_CYCLE_EDGE,
+    }:
+        return "no-progress"
+    return "page-terminal"
 
 
 @dataclass(frozen=True, slots=True, repr=False)
 class BrowserAgentResult:
-    """Payload-free summary retained only for the current article attempt."""
+    """The final stable Browser step plus controller-only counters."""
 
-    disposition: BrowserAgentDisposition
+    step: _BrowserTerminalStep
     action_count: int
-    page_state: BrowserPageState | None
-    capture_state: BrowserCaptureState
+    model_call_count: int = 0
     last_action: BrowserAction | None = field(default=None, repr=False)
-    failure: StableFailure | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.disposition, BrowserAgentDisposition):
-            raise TypeError("disposition must be BrowserAgentDisposition")
+        if not isinstance(
+            self.step,
+            (BrowserCaptured, BrowserBlocked, BrowserFailed, BrowserCancelled),
+        ):
+            raise TypeError("step must be a terminal Browser step")
         if type(self.action_count) is not int or self.action_count < 0:
             raise ValueError("action_count must be a nonnegative integer")
-        if self.page_state is not None and not isinstance(self.page_state, BrowserPageState):
-            raise TypeError("page_state must be BrowserPageState or None")
-        if not isinstance(self.capture_state, BrowserCaptureState):
-            raise TypeError("capture_state must be BrowserCaptureState")
+        if type(self.model_call_count) is not int or self.model_call_count < 0:
+            raise ValueError("model_call_count must be a nonnegative integer")
         if self.last_action is not None and not isinstance(
             self.last_action,
             (ClickElement, ClickPoint, ScrollSurface, GoBack, WaitForChange, Stop),
         ):
             raise TypeError("last_action must be a closed Browser action")
-        if self.failure is not None and not isinstance(self.failure, StableFailure):
-            raise TypeError("failure must be StableFailure or None")
-        requires_failure = self.disposition in {
-            BrowserAgentDisposition.CANCELLED,
-            BrowserAgentDisposition.FAILED,
-        }
-        if requires_failure != (self.failure is not None):
-            raise ValueError("only cancelled and failed results require a failure")
+
+    @property
+    def outcome(self) -> str:
+        return _step_outcome(self.step)
+
+    @property
+    def observation(self) -> BrowserObservation | None:
+        return self.step.observation
+
+    @property
+    def page_state(self) -> BrowserPageState | None:
+        observation = self.observation
+        return None if observation is None else observation.page_state
+
+    @property
+    def capture_state(self) -> BrowserCaptureState:
+        observation = self.observation
+        return BrowserCaptureState.NONE if observation is None else observation.capture_state
+
+    @property
+    def failure(self) -> AccessFailure | None:
+        return self.step.failure if isinstance(self.step, BrowserFailed) else None
+
+    @property
+    def blocked_reason(self) -> BrowserBlockedReason | None:
+        return self.step.reason if isinstance(self.step, BrowserBlocked) else None
 
 
-def _controller_failure(kind: str) -> StableFailure:
+def _controller_failure(kind: str) -> AccessFailure:
     values: dict[str, tuple[str, str, str, bool]] = {
         "cancelled": (
             "agent-cancelled",
@@ -202,23 +255,49 @@ def _controller_failure(kind: str) -> StableFailure:
             "Review the Browser runtime and retry the route.",
             True,
         ),
+        "readiness": (
+            "acquisition-browser-agent-readiness-timeout",
+            "The Browser page did not reach one consistent actionable observation.",
+            "Retry after the Publisher page and Browser runtime become stable.",
+            True,
+        ),
+        "safety": (
+            "controller-safety-limit",
+            "The Browser Agent reached its controller safety limit.",
+            "Review the Browser model decisions before retrying this route.",
+            False,
+        ),
+        "internal": (
+            "browser-agent-internal",
+            "The Browser Agent controller encountered an internal error.",
+            "Review the Debug transcript and controller implementation.",
+            False,
+        ),
     }
     try:
         code, reason, action, retryable = values[kind]
     except KeyError:
         raise ValueError("unknown Browser Agent failure kind") from None
-    return StableFailure(code=code, reason=reason, action=action, retryable=retryable)
+    return AccessFailure(code=code, reason=reason, action=action, retryable=retryable)
 
 
-def _terminal_page(page_state: BrowserPageState) -> bool:
-    return page_state in {
-        BrowserPageState.LOGIN_REQUIRED,
-        BrowserPageState.MFA_REQUIRED,
-        BrowserPageState.NOT_ENTITLED,
-        BrowserPageState.ACCESS_DENIED,
-        BrowserPageState.NOT_FOUND,
-        BrowserPageState.FAILED,
-    }
+def _agent_failure_step(
+    failure: StableFailure,
+    observation: BrowserObservation | None,
+) -> BrowserFailed:
+    """Convert an Agents failure into the stable Browser failure vocabulary."""
+
+    if not isinstance(failure, StableFailure):
+        raise TypeError("failure must be StableFailure")
+    return BrowserFailed(
+        failure=AccessFailure(
+            code=failure.code,
+            reason=failure.reason,
+            action=failure.action,
+            retryable=failure.retryable,
+        ),
+        observation=observation,
+    )
 
 
 def _closed_object_schema(properties: Mapping[str, object]) -> str:
@@ -325,7 +404,57 @@ def browser_agent_tool_declarations(
     )
 
 
-def _observation_summary(observation: BrowserObservation) -> str:
+@dataclass(frozen=True, slots=True)
+class _BrowserStepFeedback:
+    action_kind: str | None
+    dispatch_outcome: str | None
+    settle_outcome: str
+    semantic_changed: bool
+    page_state: str
+    capture_state: str
+
+
+def _observation_debug_values(
+    observation: BrowserObservation,
+) -> tuple[str, int, str, str, float, float, int, int, str]:
+    """Extract only bounded state facts suitable for a Debug LogRecord."""
+
+    root = observation.primary_surface
+    return (
+        observation.page_id,
+        observation.revision,
+        observation.page_state.value,
+        observation.capture_state.value,
+        root.scroll.y,
+        root.scroll.maximum_y,
+        len(observation.surfaces),
+        len(observation.elements),
+        root.kind.value,
+    )
+
+
+def _step_feedback(
+    step: BrowserStep,
+    requested_action: BrowserAction,
+) -> _BrowserStepFeedback:
+    observation = getattr(step, "observation", None)
+    receipt = getattr(step, "receipt", None)
+    semantic_changed = getattr(step, "semantic_changed", False)
+    return _BrowserStepFeedback(
+        action_kind=(requested_action.kind.value if receipt is None else receipt.action_kind.value),
+        dispatch_outcome=("not-dispatched" if receipt is None else receipt.outcome.value),
+        settle_outcome=step.kind.value,
+        semantic_changed=bool(semantic_changed),
+        page_state="none" if observation is None else observation.page_state.value,
+        capture_state="none" if observation is None else observation.capture_state.value,
+    )
+
+
+def _observation_summary(
+    observation: BrowserObservation,
+    previous_transition: _BrowserStepFeedback | None = None,
+    article_goal: BrowserArticleGoal | None = None,
+) -> str:
     last_receipt = observation.last_receipt
     value = {
         "article_token": observation.article_token,
@@ -387,26 +516,61 @@ def _observation_summary(observation: BrowserObservation) -> str:
                 "outcome": last_receipt.outcome.value,
             }
         ),
+        "previous_transition": (
+            None
+            if previous_transition is None
+            else {
+                "action_kind": previous_transition.action_kind,
+                "dispatch_outcome": previous_transition.dispatch_outcome,
+                "settle_outcome": previous_transition.settle_outcome,
+                "semantic_changed": previous_transition.semantic_changed,
+                "page_state": previous_transition.page_state,
+                "capture_state": previous_transition.capture_state,
+            }
+        ),
+        "article_goal": (
+            None
+            if article_goal is None
+            else {
+                "doi": article_goal.doi,
+                "title": article_goal.title,
+                "authors": list(article_goal.authors),
+                "landing_origins": list(article_goal.landing_origins),
+                "asset_origins": list(article_goal.asset_origins),
+            }
+        ),
     }
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def build_browser_agent_call(observation: BrowserObservation) -> AgentCall:
+def build_browser_agent_call(
+    observation: BrowserObservation,
+    previous_transition: _BrowserStepFeedback | None = None,
+    article_goal: BrowserArticleGoal | None = None,
+) -> AgentCall:
     """Build one independent Browser-role call for one exact observation."""
 
     if not isinstance(observation, BrowserObservation):
         raise TypeError("observation must be BrowserObservation")
+    if article_goal is not None and not isinstance(article_goal, BrowserArticleGoal):
+        raise TypeError("article_goal must be BrowserArticleGoal or None")
+    summary = _observation_summary(observation, previous_transition, article_goal)
+    input_sha256 = sha256_digest(
+        execution_binding_fingerprint(observation).root.encode("ascii")
+        + b"\0"
+        + summary.encode("utf-8")
+    )
     return AgentCall(
         role=AgentRole.BROWSER,
         required_capabilities=frozenset(
             {AgentCapability.IMAGE_INPUT, AgentCapability.TOOL_DECISION}
         ),
-        input_sha256=observation_hash(observation),
+        input_sha256=input_sha256,
         text_parts=(
             AgentTextPart(media_type="text/plain", text=_BROWSER_AGENT_SYSTEM_INSTRUCTION),
             AgentTextPart(
                 media_type="application/json",
-                text=_observation_summary(observation),
+                text=summary,
             ),
         ),
         image_parts=(
@@ -418,7 +582,7 @@ def build_browser_agent_call(observation: BrowserObservation) -> AgentCall:
             ),
         ),
         tools=browser_agent_tool_declarations(observation),
-        max_output_tokens=_BROWSER_AGENT_MAX_OUTPUT_TOKENS,
+        max_output_tokens=BROWSER_AGENT_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -583,29 +747,38 @@ def _validate_action_for_observation(
 
 
 class AgentBrowserController:
-    """Stateless-per-decision Browser loop over one request-local article."""
+    """Choose one closed action for each stable Browser step."""
 
     __slots__ = (
         "_action_timeout_seconds",
+        "_article_goal",
         "_cancel_event",
-        "_control_factory",
+        "_progress_action_count",
+        "_progress_last_action",
+        "_progress_model_call_count",
+        "_progress_observation",
+        "_provider_name",
         "_result",
         "_runtime",
         "_started",
+        "_step_factory",
     )
 
     def __init__(
         self,
         *,
         runtime: AgentRuntime,
-        control_factory: BrowserAgentControlFactory,
+        step_factory: BrowserStepSessionFactory,
+        article_goal: BrowserArticleGoal | None = None,
         cancel_event: threading.Event | None = None,
         action_timeout_seconds: float = _BROWSER_ACTION_TIMEOUT_SECONDS,
     ) -> None:
         if not isinstance(runtime, AgentRuntime):
             raise TypeError("runtime must be AgentRuntime")
-        if not isinstance(control_factory, BrowserAgentControlFactory):
-            raise TypeError("control_factory must implement BrowserAgentControlFactory")
+        if not isinstance(step_factory, BrowserStepSessionFactory):
+            raise TypeError("step_factory must implement BrowserStepSessionFactory")
+        if article_goal is not None and not isinstance(article_goal, BrowserArticleGoal):
+            raise TypeError("article_goal must be BrowserArticleGoal or None")
         if cancel_event is not None and not isinstance(cancel_event, threading.Event):
             raise TypeError("cancel_event must be a threading.Event or None")
         if isinstance(action_timeout_seconds, bool) or not isinstance(
@@ -617,10 +790,16 @@ class AgentBrowserController:
         if not math.isfinite(timeout) or not 0 < timeout <= _BROWSER_ACTION_TIMEOUT_SECONDS:
             raise ValueError("action_timeout_seconds exceeds the single-action limit")
         self._runtime = runtime
-        self._control_factory = control_factory
+        self._provider_name = runtime.identity(AgentRole.BROWSER).provider
+        self._step_factory = step_factory
+        self._article_goal = article_goal
         self._cancel_event = cancel_event
         self._action_timeout_seconds = timeout
         self._result: BrowserAgentResult | None = None
+        self._progress_action_count = 0
+        self._progress_model_call_count = 0
+        self._progress_observation: BrowserObservation | None = None
+        self._progress_last_action: BrowserAction | None = None
         self._started = False
 
     @property
@@ -635,331 +814,349 @@ class AgentBrowserController:
         if self._started:
             raise RuntimeError("AgentBrowserController is single-use")
         self._started = True
-        control = self._control_factory.open(session)
-        if not isinstance(control, BrowserAgentControlSession):
-            raise TypeError("control factory returned an invalid control session")
         _LOGGER.debug(
             "event=browser-controller-start controller=agent role=browser provider=%s",
-            self._runtime.provider_name,
+            self._provider_name,
         )
         try:
-            self._result = self._run_loop(control)
+            steps = self._step_factory.open(
+                session,
+                timeout_seconds=self._action_timeout_seconds,
+            )
+            if not isinstance(steps, BrowserStepSession):
+                raise TypeError("step factory returned an invalid BrowserStepSession")
+            self._result = self._run_loop(steps)
+        except Exception as error:
+            observation = self._progress_observation
+            _LOGGER.debug(
+                "event=browser-agent-controller-failed controller=agent role=browser "
+                "provider=%s exception_type=%s action_count=%d model_call_count=%d",
+                self._provider_name,
+                type(error).__name__,
+                self._progress_action_count,
+                self._progress_model_call_count,
+            )
+            self._result = self._finish(
+                BrowserAgentResult(
+                    step=BrowserFailed(
+                        failure=_controller_failure("internal"),
+                        observation=observation,
+                    ),
+                    action_count=self._progress_action_count,
+                    model_call_count=self._progress_model_call_count,
+                    last_action=self._progress_last_action,
+                )
+            )
         except BaseException:
             _LOGGER.debug(
                 "event=browser-agent-result controller=agent role=browser provider=%s "
-                "outcome=failed code=browser-agent-internal retryable=false "
-                "reason=The Browser Agent controller encountered an internal error. "
-                "action=Review the Debug transcript and controller implementation.",
-                self._runtime.provider_name,
+                "outcome=interrupted",
+                self._provider_name,
             )
             raise
 
     @staticmethod
     def _debug_observation(stage: str, observation: BrowserObservation) -> None:
-        fingerprint = semantic_page_fingerprint(observation).root
+        fingerprint = stable_semantic_page_fingerprint(observation).root
+        (
+            page_id,
+            revision,
+            page_state,
+            capture_state,
+            scroll_y,
+            scroll_max_y,
+            surface_count,
+            element_count,
+            surface_kind,
+        ) = _observation_debug_values(observation)
         _LOGGER.debug(
-            "event=browser-agent-observation controller=agent stage=%s revision=%d "
-            "page_state=%s agent_status=%s capture_state=%s surface_count=%d "
-            "element_count=%d actionable_count=%d screenshot_bytes=%d fingerprint=%s",
+            "event=browser-agent-observation controller=agent stage=%s page_id=%s "
+            "revision=%d page_state=%s agent_status=%s capture_state=%s "
+            "surface_count=%d element_count=%d actionable_count=%d "
+            "surface_kind=%s root_scroll_y=%.1f root_scroll_max_y=%.1f "
+            "screenshot_bytes=%d fingerprint=%s",
             stage,
-            observation.revision,
-            observation.page_state.value,
+            page_id,
+            revision,
+            page_state,
             observation.agent_status.value,
-            observation.capture_state.value,
-            len(observation.surfaces),
-            len(observation.elements),
+            capture_state,
+            surface_count,
+            element_count,
             len(observation.actionable_elements),
+            surface_kind,
+            scroll_y,
+            scroll_max_y,
             len(observation.screenshot.content),
             fingerprint,
         )
 
     def _finish(self, result: BrowserAgentResult) -> BrowserAgentResult:
         page_state = "none" if result.page_state is None else result.page_state.value
-        if result.failure is None:
-            _LOGGER.debug(
-                "event=browser-agent-result controller=agent role=browser provider=%s "
-                "outcome=%s page_state=%s capture_state=%s action_count=%d",
-                self._runtime.provider_name,
-                result.disposition.value,
-                page_state,
-                result.capture_state.value,
-                result.action_count,
-            )
-        else:
-            _LOGGER.debug(
-                "event=browser-agent-result controller=agent role=browser provider=%s "
-                "outcome=%s page_state=%s capture_state=%s action_count=%d "
-                "code=%s retryable=%s reason=%s action=%s",
-                self._runtime.provider_name,
-                result.disposition.value,
-                page_state,
-                result.capture_state.value,
-                result.action_count,
-                result.failure.code,
-                str(result.failure.retryable).lower(),
-                result.failure.reason,
-                result.failure.action,
-            )
+        failure = result.failure
+        _LOGGER.debug(
+            "event=browser-agent-result controller=agent role=browser provider=%s "
+            "outcome=%s step=%s blocked_reason=%s page_state=%s capture_state=%s "
+            "action_count=%d model_call_count=%d code=%s retryable=%s reason=%s action=%s",
+            self._provider_name,
+            result.outcome,
+            result.step.kind.value,
+            ("none" if result.blocked_reason is None else result.blocked_reason.value),
+            page_state,
+            result.capture_state.value,
+            result.action_count,
+            result.model_call_count,
+            "none" if failure is None else failure.code,
+            "none" if failure is None else str(failure.retryable).lower(),
+            "none" if failure is None else failure.reason,
+            "none" if failure is None else failure.action,
+        )
         return result
 
     def _log_action_decision(
         self,
         action: BrowserAction,
-        *,
-        before_fingerprint: str,
-        action_key: str,
+        observation: BrowserObservation,
     ) -> None:
         _LOGGER.debug(
             "event=browser-agent-action controller=agent role=browser provider=%s "
-            "action=%s before_fingerprint=%s action_fingerprint=%s",
-            self._runtime.provider_name,
+            "action=%s semantic_fingerprint=%s intent_fingerprint=%s",
+            self._provider_name,
             action.kind.value,
-            before_fingerprint,
-            action_key,
+            stable_semantic_page_fingerprint(observation).root,
+            stable_action_intent_fingerprint(action, observation).root,
         )
 
-    def _log_action_receipt(self, receipt: BrowserActionReceipt) -> None:
-        failure_code = "none" if receipt.failure_code is None else receipt.failure_code
-        _LOGGER.debug(
-            "event=browser-agent-action-result controller=agent role=browser provider=%s "
-            "action=%s result=%s failure=%s",
-            self._runtime.provider_name,
-            receipt.action_kind.value,
-            receipt.outcome.value,
+    def _log_step(
+        self,
+        step: BrowserStep,
+        *,
+        requested_action: BrowserAction | None,
+    ) -> None:
+        receipt = getattr(step, "receipt", None)
+        observation = getattr(step, "observation", None)
+        semantic_changed = bool(getattr(step, "semantic_changed", False))
+        blocked_reason = step.reason.value if isinstance(step, BrowserBlocked) else "none"
+        failure_code = step.failure.code if isinstance(step, BrowserFailed) else "none"
+        log = _LOGGER.info if receipt is not None else _LOGGER.debug
+        log(
+            "event=browser-agent-step controller=agent role=browser provider=%s "
+            "requested_action=%s action=%s dispatch=%s result=%s "
+            "semantic_changed=%s page_state=%s capture_state=%s "
+            "blocked_reason=%s failure_code=%s elapsed_ms=%s",
+            self._provider_name,
+            "none" if requested_action is None else requested_action.kind.value,
+            "none" if receipt is None else receipt.action_kind.value,
+            "not-dispatched" if receipt is None else receipt.outcome.value,
+            step.kind.value,
+            str(semantic_changed).lower(),
+            "none" if observation is None else observation.page_state.value,
+            "none" if observation is None else observation.capture_state.value,
+            blocked_reason,
             failure_code,
-        )
-        _LOGGER.debug(
-            "event=browser-agent-receipt controller=agent action=%s result=%s "
-            "before_revision=%d after_revision=%s elapsed_ms=%d failure=%s",
-            receipt.action_kind.value,
-            receipt.outcome.value,
-            receipt.before_revision,
-            "none" if receipt.after_revision is None else receipt.after_revision,
-            receipt.elapsed_milliseconds,
-            failure_code,
+            "none" if receipt is None else receipt.elapsed_milliseconds,
         )
 
     def _cancelled_result(
         self,
         action_count: int,
+        model_call_count: int,
         observation: BrowserObservation | None,
         last_action: BrowserAction | None,
-        failure: StableFailure | None = None,
     ) -> BrowserAgentResult:
         return self._finish(
             BrowserAgentResult(
-                disposition=BrowserAgentDisposition.CANCELLED,
+                step=BrowserCancelled(observation),
                 action_count=action_count,
-                page_state=None if observation is None else observation.page_state,
-                capture_state=(
-                    BrowserCaptureState.NONE if observation is None else observation.capture_state
-                ),
+                model_call_count=model_call_count,
                 last_action=last_action,
-                failure=_controller_failure("cancelled") if failure is None else failure,
             )
         )
 
-    def _run_loop(self, control: BrowserAgentControlSession) -> BrowserAgentResult:  # noqa: C901
-        transitions: dict[tuple[str, str], str] = {}
+    def _failed_result(
+        self,
+        failure: AccessFailure,
+        *,
+        action_count: int,
+        model_call_count: int,
+        observation: BrowserObservation | None,
+        last_action: BrowserAction | None,
+    ) -> BrowserAgentResult:
+        return self._finish(
+            BrowserAgentResult(
+                step=BrowserFailed(failure=failure, observation=observation),
+                action_count=action_count,
+                model_call_count=model_call_count,
+                last_action=last_action,
+            )
+        )
+
+    def _choose_action(
+        self,
+        observation: BrowserObservation,
+        previous_step: _BrowserStepFeedback | None,
+    ) -> BrowserAction | BrowserFailed | BrowserCancelled:
+        call = build_browser_agent_call(
+            observation,
+            previous_step,
+            self._article_goal,
+        )
+        try:
+            decision = self._runtime.execute(call, cancel_event=self._cancel_event)
+        except AgentFailure as error:
+            if error.failure.code == "agent-cancelled":
+                return BrowserCancelled(observation)
+            return _agent_failure_step(error.failure, observation)
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return BrowserCancelled(observation)
+        if not isinstance(decision, AgentToolCall):
+            return BrowserFailed(
+                failure=_controller_failure("internal"),
+                observation=observation,
+            )
+        try:
+            action = action_from_agent_tool_call(decision, observation)
+            self._log_action_decision(action, observation)
+        except (TypeError, ValueError):
+            return BrowserFailed(
+                failure=_controller_failure("action"),
+                observation=observation,
+            )
+        return action
+
+    def _run_loop(self, steps: BrowserStepSession) -> BrowserAgentResult:
         action_count = 0
+        model_call_count = 0
+        transient_call_retries = 0
         last_action: BrowserAction | None = None
-        observation: BrowserObservation | None = None
-        while True:
-            if self._cancel_event is not None and self._cancel_event.is_set():
-                return self._cancelled_result(action_count, observation, last_action)
-            observation = control.observe()
-            if not isinstance(observation, BrowserObservation):
-                raise TypeError("Browser control returned an invalid observation")
+        previous_step: _BrowserStepFeedback | None = None
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            return self._cancelled_result(0, 0, None, None)
+        step = steps.start()
+        self._log_step(step, requested_action=None)
+
+        while isinstance(step, BrowserReady):
+            observation = step.observation
+            self._progress_observation = observation
             self._debug_observation("before-call", observation)
-            if observation.capture_state is not BrowserCaptureState.NONE:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.CAPTURE_AVAILABLE,
-                        action_count,
-                        observation.page_state,
-                        observation.capture_state,
-                        last_action,
-                    )
-                )
-            if _terminal_page(observation.page_state):
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.PAGE_TERMINAL,
-                        action_count,
-                        observation.page_state,
-                        observation.capture_state,
-                        last_action,
-                    )
-                )
-            call = build_browser_agent_call(observation)
-            try:
-                decision = self._runtime.execute(call, cancel_event=self._cancel_event)
-            except AgentFailure as error:
-                if error.failure.code == "agent-cancelled":
-                    return self._cancelled_result(
-                        action_count,
-                        observation,
-                        last_action,
-                        error.failure,
-                    )
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.FAILED,
-                        action_count,
-                        observation.page_state,
-                        observation.capture_state,
-                        last_action,
-                        error.failure,
-                    )
-                )
             if self._cancel_event is not None and self._cancel_event.is_set():
-                return self._cancelled_result(action_count, observation, last_action)
-            if not isinstance(decision, AgentToolCall):
-                raise TypeError("Browser Agent runtime returned a non-tool result")
-
-            # A capture or page mutation can arrive while the model call is in
-            # flight.  Refresh before parsing or executing any late action.
-            current = control.observe()
-            if not isinstance(current, BrowserObservation):
-                raise TypeError("Browser control returned an invalid observation")
-            self._debug_observation("after-call", current)
-            if current.capture_state is not BrowserCaptureState.NONE:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.CAPTURE_AVAILABLE,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        last_action,
-                    )
+                return self._cancelled_result(
+                    action_count,
+                    model_call_count,
+                    observation,
+                    last_action,
                 )
-            if _terminal_page(current.page_state):
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.PAGE_TERMINAL,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        last_action,
-                    )
-                )
-            if observation_hash(current) != observation_hash(observation):
-                # No stale action reaches Network.  The next loop iteration
-                # constructs a fresh independent call for the new observation.
-                observation = current
-                continue
-            try:
-                action = action_from_agent_tool_call(decision, current)
-            except (TypeError, ValueError):
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.FAILED,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        last_action,
-                        _controller_failure("action"),
-                    )
+            if model_call_count >= _BROWSER_AGENT_MAX_MODEL_CALLS:
+                return self._failed_result(
+                    _controller_failure("safety"),
+                    action_count=action_count,
+                    model_call_count=model_call_count,
+                    observation=observation,
+                    last_action=last_action,
                 )
 
-            before = semantic_page_fingerprint(current).root
-            action_key = action_fingerprint(action).root
-            transition_key = (before, action_key)
-            self._log_action_decision(
-                action,
-                before_fingerprint=before,
-                action_key=action_key,
-            )
-            if transitions.get(transition_key) == before:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.NO_PROGRESS,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        action,
+            model_call_count += 1
+            self._progress_model_call_count = model_call_count
+            choice = self._choose_action(observation, previous_step)
+            if isinstance(choice, BrowserFailed):
+                failure = choice.failure
+                if (
+                    failure.retryable
+                    and failure.code in _TRANSIENT_BROWSER_AGENT_FAILURES
+                    and transient_call_retries < _BROWSER_AGENT_MAX_TRANSIENT_CALL_RETRIES
+                    and model_call_count < _BROWSER_AGENT_MAX_MODEL_CALLS
+                ):
+                    transient_call_retries += 1
+                    _LOGGER.debug(
+                        "event=browser-agent-call-retry controller=agent role=browser "
+                        "provider=%s retry=%d max_retries=%d code=%s",
+                        self._provider_name,
+                        transient_call_retries,
+                        _BROWSER_AGENT_MAX_TRANSIENT_CALL_RETRIES,
+                        failure.code,
                     )
+                    continue
+                return self._terminal_result(
+                    choice,
+                    action_count=action_count,
+                    model_call_count=model_call_count,
+                    last_action=last_action,
                 )
-            receipt = control.execute(
+            if isinstance(choice, BrowserCancelled):
+                return self._terminal_result(
+                    choice,
+                    action_count=action_count,
+                    model_call_count=model_call_count,
+                    last_action=last_action,
+                )
+            action = choice
+            transient_call_retries = 0
+
+            step = steps.apply(action)
+            self._log_step(step, requested_action=action)
+            previous_step = _step_feedback(step, action)
+            action_count, last_action = self._record_step_progress(
+                step,
                 action,
-                current,
-                timeout_seconds=self._action_timeout_seconds,
+                action_count=action_count,
+                last_action=last_action,
             )
-            if not isinstance(receipt, BrowserActionReceipt):
-                raise TypeError("Browser control returned an invalid action receipt")
-            self._log_action_receipt(receipt)
+
+        return self._terminal_result(
+            step,
+            action_count=action_count,
+            model_call_count=model_call_count,
+            last_action=last_action,
+        )
+
+    def _record_step_progress(
+        self,
+        step: BrowserStep,
+        action: BrowserAction,
+        *,
+        action_count: int,
+        last_action: BrowserAction | None,
+    ) -> tuple[int, BrowserAction | None]:
+        if getattr(step, "receipt", None) is not None:
             action_count += 1
             last_action = action
-            if receipt.outcome is BrowserActionOutcome.FAILURE:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.FAILED,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        last_action,
-                        _controller_failure("receipt"),
-                    )
-                )
-            if isinstance(action, Stop):
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.STOPPED,
-                        action_count,
-                        current.page_state,
-                        current.capture_state,
-                        last_action,
-                    )
-                )
+            self._progress_action_count = action_count
+            self._progress_last_action = action
+        observation = getattr(step, "observation", None)
+        if isinstance(observation, BrowserObservation):
+            self._progress_observation = observation
+            if isinstance(step, BrowserReady):
+                self._debug_observation("after-step", observation)
+        return action_count, last_action
 
-            resulting = control.observe()
-            if not isinstance(resulting, BrowserObservation):
-                raise TypeError("Browser control returned an invalid observation")
-            self._debug_observation("after-action", resulting)
-            after = semantic_page_fingerprint(resulting).root
-            transitions[transition_key] = after
-            if resulting.capture_state is not BrowserCaptureState.NONE:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.CAPTURE_AVAILABLE,
-                        action_count,
-                        resulting.page_state,
-                        resulting.capture_state,
-                        last_action,
-                    )
-                )
-            if _terminal_page(resulting.page_state):
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.PAGE_TERMINAL,
-                        action_count,
-                        resulting.page_state,
-                        resulting.capture_state,
-                        last_action,
-                    )
-                )
-            if after == before:
-                return self._finish(
-                    BrowserAgentResult(
-                        BrowserAgentDisposition.NO_PROGRESS,
-                        action_count,
-                        resulting.page_state,
-                        resulting.capture_state,
-                        last_action,
-                    )
-                )
-            observation = resulting
+    def _terminal_result(
+        self,
+        step: BrowserStep,
+        *,
+        action_count: int,
+        model_call_count: int,
+        last_action: BrowserAction | None,
+    ) -> BrowserAgentResult:
+        if not isinstance(
+            step,
+            (BrowserCaptured, BrowserBlocked, BrowserFailed, BrowserCancelled),
+        ):
+            raise TypeError("Browser step result was not exhaustive")
+        return self._finish(
+            BrowserAgentResult(
+                step=step,
+                action_count=action_count,
+                model_call_count=model_call_count,
+                last_action=last_action,
+            )
+        )
 
 
 __all__ = (
     "AgentBrowserController",
-    "BrowserAgentControlFactory",
-    "BrowserAgentControlSession",
-    "BrowserAgentDisposition",
     "BrowserAgentResult",
-    "BrowserControllerKind",
-    "BrowserRuleExecution",
-    "RuleBrowserController",
+    "BrowserArticleGoal",
+    "BrowserStepSessionFactory",
     "action_from_agent_tool_call",
     "browser_agent_tool_declarations",
     "build_browser_agent_call",

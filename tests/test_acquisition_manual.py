@@ -527,7 +527,7 @@ class ManualPdfAdmissionTests(unittest.TestCase):
         with mock.patch.object(
             manual_module,
             "validate_pdf",
-            side_effect=PdfValidationError(PdfValidationCode.ASSOCIATION_NOT_ESTABLISHED),
+            side_effect=PdfValidationError(PdfValidationCode.INVALID_BUDGET),
         ):
             with self.assertRaises(AcquisitionFailure) as raised:
                 self._service(publisher).accept_manual_pdf(

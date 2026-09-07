@@ -30,7 +30,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": null
+    "browser_probe_enabled": false
   },
   "route_verification": {
     "public": {
@@ -50,14 +50,7 @@
       "payload": "solr-and-jats-xml-are-not-a-direct-pdf-api"
     },
     "browser": {
-      "state": "unsupported",
-      "blockers": [
-        "public-pdf-does-not-require-browser",
-        "official-bulk-pdf-download-is-discouraged",
-        "no-reviewed-login-entitlement-paywall-challenge-markers",
-        "no-reviewed-primary-versus-supplement-browser-rule",
-        "upstream-browser-success-is-not-production-evidence"
-      ]
+      "state": "probe-disabled"
     }
   },
   "ownership_cases": [

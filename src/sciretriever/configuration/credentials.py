@@ -754,7 +754,7 @@ def load_runtime_secrets(
         model
         for model in (
             configuration.models.get(configuration.analysis.model),
-            configuration.models.get(configuration.access.model),
+            configuration.models.get(configuration.browser.model),
         )
         if model is not None
     )

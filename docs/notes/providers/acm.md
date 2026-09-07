@@ -3,7 +3,7 @@
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；ACM Digital Library 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://dl.acm.org`
-- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；ACM 论文已经开放获取，但没有符合当前政策与执行门槛的专属 Public、授权 API 或 Browser production route
+- 当前仓库接入状态：已进入 Publisher 验证矩阵，状态为 `unsupported`；ACM 论文已经开放获取，但没有符合当前政策与执行门槛的专属 Public 或授权 API，Profile 不提供首页 probe；具有合法文章起点的目标仍可使用 `browser:generic`
 
 ## 1. 官方入口与证据
 

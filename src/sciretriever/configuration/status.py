@@ -267,7 +267,7 @@ def configuration_runtime_status(  # noqa: C901
     analysis = configuration.analysis
     bearer_required = parser.connection_mode is ParserConnectionMode.REMOTE
     analysis_model = configuration.models.get(analysis.model)
-    browser_model = configuration.models.get(configuration.access.model)
+    browser_model = configuration.models.get(configuration.browser.model)
     analysis_provider = (
         None if analysis_model is None else configuration.providers.get(analysis_model.provider)
     )
@@ -369,7 +369,7 @@ def configuration_runtime_status(  # noqa: C901
     reference_missing = tuple(name for name, value in reference_fields if value is None)
     content_missing = tuple(name for name, value in content_fields if value is None)
     browser_fields = (
-        ("model", configuration.access.model),
+        ("model", configuration.browser.model),
         ("image", True if browser_model is not None and browser_model.image else None),
     )
     browser_missing = tuple(name for name, value in browser_fields if value is None)
@@ -693,8 +693,6 @@ def _browser_probe_precondition(
     access_key: str,
     status: BrowserAccessStatus,
 ) -> str | None:
-    if access_key not in {route.access_key for route in status.routes}:
-        return "browser-production-route-unavailable"
     if not status.enabled:
         return "browser-disabled"
     if status.profile.selected is None:

@@ -15,7 +15,6 @@ from sciretriever.acquisition.authorized import (
     UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
     AuthorizedPdfSource,
 )
-from sciretriever.acquisition.browser_control import BrowserControllerKind
 from sciretriever.acquisition.planning import RouteReadiness
 from sciretriever.acquisition.ports import CandidateKeyTracker
 from sciretriever.acquisition.registry import (
@@ -39,7 +38,6 @@ from sciretriever.acquisition.routing import (
 )
 from sciretriever.acquisition.sources import (
     CONTROLLED_BROWSER_PRODUCTION_STATUS,
-    PRODUCTION_BROWSER_RULE_CATALOG,
     ArxivPdfSource,
     ConfiguredSciHubPdfSource,
     DirectPdfSource,
@@ -87,8 +85,10 @@ from sciretriever.model.primitives import (
     UtcTimestamp,
 )
 from sciretriever.model.provenance import Provenance
+from sciretriever.model.report import StableFailure
 from sciretriever.network.admission import AccessCoordinator, AccessScope
 from sciretriever.network.browser import BrowserClient
+from sciretriever.network.browser_control import BROWSER_OBSERVATION_MEDIA_TYPE
 from sciretriever.network.browser_sessions import BrowserSessionBroker
 from sciretriever.network.http import HttpClient
 from sciretriever.network.policy import normalize_url
@@ -108,17 +108,7 @@ _ALL_PROVIDERS = (
     "core",
     "sci-hub",
 )
-_BROWSER_ROUTE_KEYS = (
-    "browser:acs-publications",
-    "browser:aip-publishing",
-    "browser:elsevier-sciencedirect",
-    "browser:iopscience",
-    "browser:oxford-academic",
-    "browser:rsc-publishing",
-    "browser:science-aaas",
-    "browser:springerlink",
-    "browser:wiley-online-library",
-)
+_BROWSER_ROUTE_KEYS = ("browser:generic",)
 
 
 def _id(index: int) -> str:
@@ -154,11 +144,11 @@ def _browser_agent_runtime() -> AgentRuntime:
             role=AgentRole.BROWSER,
             model="fixture-browser-model",
             capabilities=AgentModelCapabilities(
-                context_window_tokens=32_768,
-                max_output_tokens=512,
+                context_window_tokens=1_000_000,
+                max_output_tokens=131_072,
                 image_input=True,
                 tool_decision=True,
-                supported_image_media_types=frozenset({"image/png"}),
+                supported_image_media_types=frozenset({BROWSER_OBSERVATION_MEDIA_TYPE}),
                 max_image_count=1,
                 max_image_bytes=2 * 1024 * 1024,
             ),
@@ -168,8 +158,8 @@ def _browser_agent_runtime() -> AgentRuntime:
                 max_request_bytes=3 * 1024 * 1024,
                 max_response_bytes=1 * 1024 * 1024,
                 max_result_bytes=1 * 1024 * 1024,
-                max_output_tokens=512,
-                context_window_tokens=32_768,
+                max_output_tokens=131_072,
+                context_window_tokens=1_000_000,
             ),
         ),
     )
@@ -195,7 +185,7 @@ def _configuration(
     *,
     unpaywall_email: str | None = None,
     sci_hub_urls: tuple[str, ...] | None = None,
-    browser_enabled: bool = False,
+    enabled: bool = False,
 ) -> Any:
     lines = (
         "[sources.acquisition]",
@@ -217,12 +207,12 @@ def _configuration(
                 "urls = [" + ", ".join(f'"{url}"' for url in sci_hub_urls) + "]",
             )
         )
-    if browser_enabled:
+    if enabled:
         payload.extend(
             (
-                "[download]",
-                f"browser_enabled = {'true' if browser_enabled else 'false'}",
-                'browser_profile = "fixture-profile"',
+                "[browser]",
+                f"enabled = {'true' if enabled else 'false'}",
+                'profile = "fixture-profile"',
             )
         )
     return parse_configuration("\n".join(payload) + "\n")
@@ -235,6 +225,7 @@ def _dependencies(
     configured_resolver: _ConfiguredLocatorResolver | None = None,
     cancel_event: threading.Event | None = None,
     credentials: CredentialLookup | None = None,
+    browser_runtime_failure: StableFailure | None = None,
 ) -> tuple[AcquisitionAssemblyDependencies, HttpClient]:
     shared = coordinator or AccessCoordinator(clock=lambda: 100.0)
     browser_session_broker = BrowserSessionBroker(clock=lambda: 100.0)
@@ -256,6 +247,7 @@ def _dependencies(
         credentials=credentials,
         cancel_event=cancel_event,
         configured_sci_hub_resolver=configured_resolver,
+        browser_runtime_failure=browser_runtime_failure,
     )
     return dependencies, client
 
@@ -573,20 +565,6 @@ class AcquisitionProviderMatrixTests(unittest.TestCase):
             UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS,
             frozenset({"springer"}),
         )
-        self.assertEqual(
-            tuple(rule.rule_id for rule in PRODUCTION_BROWSER_RULE_CATALOG.rules),
-            (
-                "acs-publications-pdf",
-                "aip-publishing-pdf",
-                "sciencedirect-pdf",
-                "iopscience-pdf",
-                "oxford-academic-pdf",
-                "rsc-publishing-pdf",
-                "science-aaas-pdf",
-                "springerlink-pdf",
-                "wiley-online-library-pdf",
-            ),
-        )
         self.assertIs(
             CONTROLLED_BROWSER_PRODUCTION_STATUS.readiness,
             RouteReadiness.READY,
@@ -721,7 +699,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 for binding in disabled.route_registry.bindings[: -len(_BROWSER_ROUTE_KEYS)]
             )
         )
-        browser = disabled.route_registry.binding_for("browser:springerlink")
+        browser = disabled.route_registry.binding_for("browser:generic")
         self.assertIs(browser.spec.readiness, RouteReadiness.DISABLED)
         self.assertIsNone(browser.adapter)
 
@@ -777,7 +755,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         self.assertIs(getattr(elsevier_client, "_http_client"), client)
         self.assertNotIn(api_key, repr(registry))
         self.assertNotIn(institution_token, repr(registry))
-        browser = registry.route_registry.binding_for("browser:springerlink")
+        browser = registry.route_registry.binding_for("browser:generic")
         self.assertIs(browser.spec.readiness, RouteReadiness.DISABLED)
         self.assertIsNone(browser.adapter)
 
@@ -1253,7 +1231,11 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         with self.assertRaises(AcquisitionRegistryError) as caught:
             build_acquisition_registry(
                 _configuration(("crossref",)),
-                replace(dependencies, browser_client=browser),
+                replace(
+                    dependencies,
+                    browser_client=browser,
+                    browser_agent=BrowserAgentDependency(runtime=_browser_agent_runtime()),
+                ),
             )
         self.assertEqual(caught.exception.code, "network-bypass")
 
@@ -1265,8 +1247,12 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
             clock=lambda: 100.0,
         )
         registry = build_acquisition_registry(
-            _configuration(("crossref",), browser_enabled=True),
-            replace(dependencies, browser_client=shared_browser),
+            _configuration(("crossref",), enabled=True),
+            replace(
+                dependencies,
+                browser_client=shared_browser,
+                browser_agent=BrowserAgentDependency(runtime=_browser_agent_runtime()),
+            ),
         )
         self.assertEqual(
             tuple(binding.spec.route_key for binding in registry.route_registry.bindings),
@@ -1277,7 +1263,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
                 *_BROWSER_ROUTE_KEYS,
             ),
         )
-        browser_binding = registry.route_registry.binding_for("browser:springerlink")
+        browser_binding = registry.route_registry.binding_for("browser:generic")
         self.assertIs(browser_binding.spec.readiness, RouteReadiness.READY)
         self.assertIsNotNone(browser_binding.adapter)
         for route_key in _BROWSER_ROUTE_KEYS:
@@ -1298,7 +1284,7 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         planning = registry.planner.start(request)
         self.assertEqual(planning.resolution.access_key, "springerlink")
         self.assertIn(
-            "browser:springerlink",
+            "browser:generic",
             tuple(route.route_key for route in planning.plan.routes),
         )
 
@@ -1312,11 +1298,38 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         with self.assertRaises(AcquisitionRegistryError) as caught:
             build_acquisition_registry(
                 _configuration(("crossref",)),
-                replace(dependencies, browser_client=private_broker_browser),
+                replace(
+                    dependencies,
+                    browser_client=private_broker_browser,
+                    browser_agent=BrowserAgentDependency(runtime=_browser_agent_runtime()),
+                ),
             )
         self.assertEqual(caught.exception.code, "network-bypass")
 
-    def test_browser_controller_selection_freezes_one_shared_agent_runtime(self) -> None:
+    def test_browser_runtime_failure_is_attached_to_unconfigured_routes(self) -> None:
+        runtime_failure = StableFailure(
+            code="browser-cloak-binary-unavailable",
+            reason="The pinned CloakBrowser binary is not present in the local runtime cache.",
+            action="Install the pinned CloakBrowser binary from the configuration center.",
+            retryable=False,
+        )
+        dependencies, _client = _dependencies(
+            browser_runtime_failure=runtime_failure,
+        )
+
+        registry = build_acquisition_registry(
+            _configuration(("crossref",), enabled=True),
+            dependencies,
+        )
+
+        for route_key in _BROWSER_ROUTE_KEYS:
+            with self.subTest(route_key=route_key):
+                binding = registry.route_registry.binding_for(route_key)
+                self.assertIs(binding.spec.readiness, RouteReadiness.UNCONFIGURED)
+                self.assertEqual(binding.spec.failure, runtime_failure)
+                self.assertIsNone(binding.adapter)
+
+    def test_generic_browser_route_freezes_one_shared_agent_runtime(self) -> None:
         dependencies, _client = _dependencies()
         browser = BrowserClient(
             factory=lambda: object(),
@@ -1328,33 +1341,22 @@ class AcquisitionRegistryAssemblyTests(unittest.TestCase):
         runtime = _browser_agent_runtime()
         agent_dependency = BrowserAgentDependency(runtime=runtime)
 
-        with self.assertRaisesRegex(ValueError, "Rules Browser controller"):
-            replace(dependencies, browser_agent=agent_dependency)
-        with self.assertRaisesRegex(ValueError, "requires a ready AgentRuntime"):
-            replace(
-                dependencies,
-                browser_controller=BrowserControllerKind.AGENT,
-            )
+        with self.assertRaisesRegex(ValueError, "requires a ready Browser Agent"):
+            replace(dependencies, browser_client=browser)
 
         registry = build_acquisition_registry(
-            _configuration(("crossref",), browser_enabled=True),
+            _configuration(("crossref",), enabled=True),
             replace(
                 dependencies,
                 browser_client=browser,
-                browser_controller=BrowserControllerKind.AGENT,
                 browser_agent=agent_dependency,
             ),
         )
 
-        for route_key in _BROWSER_ROUTE_KEYS:
-            adapter = registry.route_registry.binding_for(route_key).adapter
-            self.assertIsNotNone(adapter)
-            assert adapter is not None
-            self.assertIs(
-                getattr(adapter, "browser_controller"),
-                BrowserControllerKind.AGENT,
-            )
-            self.assertIs(getattr(adapter, "_agent_runtime"), runtime)
+        adapter = registry.route_registry.binding_for("browser:generic").adapter
+        self.assertIsNotNone(adapter)
+        assert adapter is not None
+        self.assertIs(getattr(adapter, "_agent_runtime"), runtime)
 
     def test_two_registries_share_the_process_http_client_and_coordinator(self) -> None:
         dependencies, client = _dependencies()

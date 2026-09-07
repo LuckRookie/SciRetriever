@@ -32,7 +32,7 @@
   "capabilities": {
     "public_routes": [],
     "authorized_api_routes": [],
-    "browser_route": "browser:iopscience"
+    "browser_probe_enabled": true
   },
   "route_verification": {
     "public": {
@@ -45,19 +45,8 @@
       "known_contract": "contact-content-support-for-reviewed-xml-or-pdf-delivery"
     },
     "browser": {
-            "state": "production-ready",
-      "rule_id": "iopscience-pdf",
-      "rule_revision": 2,
-      "allowed_origins": ["https://iopscience.iop.org"],
-      "rate_limit_group": "iopscience",
-      "session_group": "iopscience",
-      "article_start_interval_seconds": 30,
-            "authentication_contract": "shared-persistent-profile-ip-first-user-managed-authentication",
-            "production_admission": "reviewed-ip-entitled-browser",
-            "conditions": [
-                "article-entitlement-is-checked-per-attempt",
-                "access-denial-or-challenge-stops-the-attempt"
-      ]
+      "state": "probe-enabled",
+      "contract": "reachability-only; generic Browser acquisition is not Publisher-gated"
     }
   },
   "ownership_cases": [

@@ -160,7 +160,7 @@ class BrowserAdmissionCandidate:
     route_key: str
     rate_limit_group: str
     readiness: RouteReadiness
-    resolution_confirmed: bool
+    failure: StableFailure | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "work_key", _work_key(self.work_key))
@@ -172,8 +172,8 @@ class BrowserAdmissionCandidate:
         )
         if not isinstance(self.readiness, RouteReadiness):
             raise TypeError("readiness must be RouteReadiness")
-        if type(self.resolution_confirmed) is not bool:
-            raise TypeError("resolution_confirmed must be a bool")
+        if self.failure is not None and not isinstance(self.failure, StableFailure):
+            raise TypeError("failure must be StableFailure or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,13 +396,11 @@ class BrowserAdmissionController:
     ) -> BrowserAdmissionDecision:
         disposition: BrowserAdmissionDisposition
         failure: StableFailure | None = None
-        if not candidate.resolution_confirmed:
-            disposition = BrowserAdmissionDisposition.REJECTED
-        elif candidate.readiness in {RouteReadiness.DISABLED, RouteReadiness.UNSUPPORTED}:
+        if candidate.readiness in {RouteReadiness.DISABLED, RouteReadiness.UNSUPPORTED}:
             disposition = BrowserAdmissionDisposition.REJECTED
         elif candidate.readiness is RouteReadiness.UNCONFIGURED:
             disposition = BrowserAdmissionDisposition.ACTION_REQUIRED
-            failure = _failure(
+            failure = candidate.failure or _failure(
                 "acquisition-browser-route-unconfigured",
                 "The selected Browser route is not configured.",
                 "Configure or disable this Browser route before retrying.",
@@ -410,7 +408,7 @@ class BrowserAdmissionController:
             )
         elif candidate.readiness is RouteReadiness.TEMPORARILY_UNAVAILABLE:
             disposition = BrowserAdmissionDisposition.DEFERRED
-            failure = _failure(
+            failure = candidate.failure or _failure(
                 "acquisition-browser-route-temporarily-unavailable",
                 "The selected Browser route is temporarily unavailable.",
                 "Retry after the Browser route becomes available.",
@@ -560,8 +558,7 @@ class BrowserAdmissionController:
         state: BrowserGroupAdmissionState | None,
     ) -> bool:
         return (
-            candidate.resolution_confirmed
-            and candidate.readiness is RouteReadiness.READY
+            candidate.readiness is RouteReadiness.READY
             and self._configuration.explicitly_enabled
             and self._configuration.runtime_ready
             and state is not None

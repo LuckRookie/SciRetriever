@@ -2,7 +2,7 @@
 
 - 状态：生效
 - 记录日期：2026-07-22
-- 最后同步：2026-08-26
+- 最后同步：2026-09-06
 - 适用范围：SciRetriever 全部代码、文档和规划材料
 
 本声明规定项目立场，不声明某项能力已经实现。当前公开入口和已组装能力以项目 [README](../../README.md)、Bootstrap 生产对象图、源码和直接测试为准，历史方向材料见[文献库实施归档](../archive/2026-07-literature-library/README.md)。
@@ -19,7 +19,7 @@
 
 - **文献来源接入**：生产 Bootstrap 按配置、实现状态和 readiness 组装 Metadata 与 Acquisition registry；配置接受 Provider 选择键仍不表示每项 capability 都有 concrete adapter。项目不对来源本身添加“合法/灰色/非法”的分类标签。
 - **资产获取**：当前 Acquisition 已连接通用公开路径和经过准入的授权 Provider API；Configured Sci-Hub 默认关闭，operator 显式启用后使用随版本维护的 bundled mirror set，也可用一到八个有序 HTTPS URL 完整覆盖，并只从 canonical DOI 构造 landing；程序集成仍可显式注入 resolver override。它不自动发现镜像，也不提供 Key、Cookie、代理或绕过能力，所有 landing/PDF 仍经过统一安全边界。是否存在 route、是否已启用、当前目标是否适用和是否实际取得有效 PDF 是不同事实；工具不因来源道德标签另加拒绝条件。
-- **网络与访问方式**：受控 Browser foundation 使用运行机器的正常网络出口和一个 operator-managed 固定身份 Profile；生产 rule catalog 包含 ACS、AIP、ScienceDirect、IOP、Oxford Academic、RSC、Science/AAAS、SpringerLink 和 Wiley Online Library 九条封闭 route。只有 Public 与适用的 Authorized API 层正常结束、目标仍缺 PDF、强证据解析到一个已准入平台，且 Browser 总开关、Profile/identity manifest、CloakBrowser wrapper、Playwright API、经核实 binary 与 headed display 都就绪时，Completion 才产生受控 Browser 流量。总开关、Profile presence 或保存的浏览器状态不证明组织授权、认证成功或文章 entitlement；真实页面逐项区分正文、付费墙、裸 403、统一 `page_state=CHALLENGE` 和限流。无 GUI Linux 使用 Xvfb；Publisher 请求由 patched Chromium 原生网络栈完成。所有 Publisher lane 共享一个 process/persistent context，不同供应商 risk group 可以并行，同组严格串行并服从各自政策；关闭后清理 runtime/临时下载工作区但保留 Profile。跨 Publisher cap 默认 `5`、只接受大于 `1` 的整数且不设上限，当前九条 route 不是配置最大值。作业开始前固定选择 `rules` 或 `agent`：Rules 只执行通用发现和已审查的 Publisher 确定性动作，Agent 从第一次统一 Observation 起在六种封闭动作中决定；两者不相互 fallback。Challenge 由当前 controller 按普通页面处理，未清除只形成文章级 `challenge-unresolved`，不打开 Challenge group circuit。第一版不提供可见 Browser 认证、Cookie 导入导出、未知站点 fallback、代理轮换、多身份池、外部 challenge solver/token 注入或登录/MFA 自动化。Agent 不能取得 Page/CDP/Cookie/Profile、任意 URL/selector/JavaScript 或第二 Browser。是否 production-ready 继续以 Profile 准入矩阵、生产对象图和直接测试为准。
+- **网络与访问方式**：受控 Browser foundation 使用运行机器的正常网络出口和一个 operator-managed 固定身份 Profile；生产对象图只注册 `browser:generic` 和唯一 `AgentBrowserController`，不再包含 Publisher-specific route/rule 或 Rules fallback。只有 Public 与适用的 Authorized API 层正常结束、目标仍缺 PDF、存在合法文章起点，且 Browser 总开关、图像 Model、Profile/identity manifest、CloakBrowser wrapper、Playwright API、经核实 binary 与 headed display 都就绪时，Completion 才产生受控 Browser 流量。Agent 每次只看到稳定 Observation 和当前截图，并在六种封闭动作中选择一步；Network 负责精确绑定、页面稳定、capture 与清理，Acquisition 独立验证 PDF 字节和目标 DOI/标题/作者/起点 lineage。总开关、Profile presence、保存的浏览器状态或 Agent 结论都不证明组织授权、认证成功、文章 entitlement 或下载成功。无 GUI Linux 使用 Xvfb；网页请求由 patched Chromium 原生网络栈完成，所有文章共享一个 process/persistent context 和单一 `browser-generic` 限速串行政策；关闭后清理 runtime/临时下载工作区但保留 Profile。Challenge 与普通页面共享 Observation/action/终态合同。第一版不提供可见 Browser 认证、Cookie 导入导出、代理轮换、多身份池、外部 challenge solver/token 注入或登录/MFA 自动化。Agent 不能取得 Page/CDP/Cookie/Profile、任意 URL/selector/JavaScript 或第二 Browser。Publisher Profile 状态只说明访问画像和可选首页 probe，不控制通用 Browser 下载准入。
 
 ## 3. 工程约束 vs 使用限制
 

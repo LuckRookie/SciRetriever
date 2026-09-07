@@ -171,7 +171,6 @@ class ProviderHttpAdapterBase:
         try:
             self._check_capabilities(call)
             limits = self._effective_limits(call)
-            self._check_call_budgets(call, limits)
             _LOGGER.debug(
                 "event=agent-call-started role=%s provider=%s wire_model=%s "
                 "protocol=%s stream=%s capabilities=%s reasoning_effort=%s "
@@ -303,7 +302,6 @@ class ProviderHttpAdapterBase:
         parsed = self._parse_result(body, call)
         if not isinstance(parsed, _ParsedResult):
             raise TypeError("provider response parser returned an unsupported value")
-        _validate_usage(parsed.usage, call, limits)
         provenance = AgentProvenance(
             provider=self._provider_name,
             model=call.model,
@@ -423,31 +421,6 @@ class ProviderHttpAdapterBase:
         """
 
         return AgentCallLimits.stricter(self._limits, call.limits)
-
-    def _check_call_budgets(
-        self,
-        call: AgentProviderCall,
-        limits: AgentCallLimits,
-    ) -> None:
-        if utf8_size(call.prompt) > limits.max_prompt_bytes:
-            raise provider_failure("input-budget")
-        input_bytes = sum(utf8_size(part.text) for part in call.text_parts)
-        input_bytes += sum(len(part.data) for part in call.image_parts)
-        input_bytes += len(_tools_bytes(call))
-        if input_bytes > limits.max_input_bytes:
-            raise provider_failure("input-budget")
-        if (
-            call.response_schema is not None
-            and utf8_size(call.response_schema) > limits.max_schema_bytes
-        ):
-            raise provider_failure("input-budget")
-        if call.max_output_tokens > limits.max_output_tokens:
-            raise provider_failure("output-budget")
-        request_tokens = _conservative_token_estimate(
-            input_bytes + utf8_size(call.response_schema or "")
-        )
-        if request_tokens + call.max_output_tokens > limits.context_window_tokens:
-            raise provider_failure("context-budget")
 
     def _parameter_bytes(
         self,
@@ -664,27 +637,6 @@ def usage_from_payload(payload: object) -> AgentUsage:
     if input_tokens < 0 or output_tokens < 0 or input_tokens > 10**9 or output_tokens > 10**9:
         raise provider_failure("protocol")
     return AgentUsage(input_tokens=input_tokens, output_tokens=output_tokens)
-
-
-def _validate_usage(
-    usage: AgentUsage,
-    call: AgentProviderCall,
-    limits: AgentCallLimits,
-) -> None:
-    if not isinstance(usage, AgentUsage):
-        raise provider_failure("protocol")
-    if usage.output_tokens > call.max_output_tokens or usage.output_tokens > (
-        limits.max_output_tokens
-    ):
-        raise provider_failure("output-budget")
-    if usage.input_tokens + usage.output_tokens > limits.context_window_tokens:
-        raise provider_failure("context-budget")
-
-
-def _conservative_token_estimate(byte_count: int) -> int:
-    if type(byte_count) is not int or byte_count < 0:
-        raise TypeError("byte_count must be a non-negative integer")
-    return byte_count
 
 
 def _normalized_agent_endpoint(

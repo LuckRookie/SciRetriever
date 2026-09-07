@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Container
 from dataclasses import dataclass
 from enum import Enum, unique
-
-BROWSER_OBSERVATION_MEDIA_TYPE = "image/png"
 
 
 @unique
@@ -130,30 +127,11 @@ def capability_missing(
     return frozenset(required - supported)
 
 
-def browser_observation_input_ready(
-    *,
-    image_input: bool,
-    supported_image_media_types: Container[str],
-    max_image_count: int,
-    max_image_bytes: int,
-) -> bool:
-    """Return whether a Browser binding can accept one production Observation image."""
-
-    return (
-        image_input
-        and BROWSER_OBSERVATION_MEDIA_TYPE in supported_image_media_types
-        and max_image_count >= 1
-        and max_image_bytes >= 1
-    )
-
-
 __all__ = (
     "AgentCapability",
     "AgentCapabilityReadiness",
     "AgentModelCapabilities",
     "AgentRole",
-    "BROWSER_OBSERVATION_MEDIA_TYPE",
-    "browser_observation_input_ready",
     "capability_missing",
     "required_capabilities",
 )
