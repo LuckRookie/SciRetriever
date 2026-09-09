@@ -1,0 +1,252 @@
+{
+  "baseline": "e1a33d5986f654f2692d7619dd58448944ec3463",
+  "reviewDate": "2026-09-07",
+  "sources": [
+    {
+      "id": "R01",
+      "title": "当前master提交",
+      "url": "https://github.com/LuckRookie/SciRetriever/commit/e1a33d5986f654f2692d7619dd58448944ec3463",
+      "scope": "分支与commit元数据已读取；2026-09-07冻结基线。"
+    },
+    {
+      "id": "R02",
+      "title": "AGENTS.md",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/AGENTS.md",
+      "scope": "全文读取：范围、所有权、协作、测试及授权边界。"
+    },
+    {
+      "id": "R03",
+      "title": "HARNESS.md",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/HARNESS.md",
+      "scope": "读取1–180行：旧质量门禁、离线约束和文档职责。"
+    },
+    {
+      "id": "R04",
+      "title": "代码与文档映射",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/docs/development/documentation-map.md",
+      "scope": "读取模块映射，长响应部分截断；不能作为逐文件完整清单。"
+    },
+    {
+      "id": "R05",
+      "title": "当前依赖与Python入口",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/pyproject.toml",
+      "scope": "全文读取：CloakBrowser 0.5.8、Playwright 1.55.0等实际依赖。"
+    },
+    {
+      "id": "R06",
+      "title": "通用Browser Source与导航预取",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/acquisition/sources/browser.py",
+      "scope": "读取1–540行：控制边界、_GenericCapturePolicy、全导航prefetch及内存候选。"
+    },
+    {
+      "id": "R07",
+      "title": "当前Browser Agent Controller",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/acquisition/browser_control.py",
+      "scope": "读取1–156行：六动作、预算、系统提示和禁止事项。"
+    },
+    {
+      "id": "R08",
+      "title": "当前PDF身份判断",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/acquisition/pdf_identity.py",
+      "scope": "全文读取：前三页、supplement判断、DOI集合与标题作者匹配。"
+    },
+    {
+      "id": "R09",
+      "title": "CloakBrowser运行适配",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/network/cloakbrowser.py",
+      "scope": "读取1–220行：线程所有权、Linux fs context、环境清理和binary基线。"
+    },
+    {
+      "id": "R10",
+      "title": "SQLite schema manifest",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/storage/sqlite/schema.py",
+      "scope": "全文读取：version=1 CHECK、原始DDL、fingerprint生成。"
+    },
+    {
+      "id": "R11",
+      "title": "SQLite引擎",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/storage/sqlite/engine.py",
+      "scope": "读取1–240行：只创建或验证、路径检查、WAL/FK、完整对象集合。"
+    },
+    {
+      "id": "R12",
+      "title": "内容规范序列化与接纳",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/literature/content.py",
+      "scope": "读取1–215行：metadata/content JSON字节和hash、stale条件。"
+    },
+    {
+      "id": "R13",
+      "title": "当前配置示例",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/example/config.example.toml",
+      "scope": "全文读取：仍包含旧download/rules字段，必须与活动解析器核对。"
+    },
+    {
+      "id": "R14",
+      "title": "ADR 0023：通用Browser Agent",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/docs/architecture/decisions/0023-generic-browser-agent-executor.md",
+      "scope": "全文已读取：通用路线、六动作、Network-owned交接、capture与验收。"
+    },
+    {
+      "id": "R15",
+      "title": "CONNECT与Xvfb",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/network/browser_connect.py",
+      "scope": "读取1–150行：非TLS终止隧道与Xvfb lease。"
+    },
+    {
+      "id": "R16",
+      "title": "当前README",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/README.md",
+      "scope": "重点读取入口、运行行为、来源、三模型协议、配置与MinerU说明；示例与实际代码冲突处需M0核验。"
+    },
+    {
+      "id": "R17",
+      "title": "Storage技术合同",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/docs/architecture/technical/storage.md",
+      "scope": "读取SQLite/文件安全/事务/发布/锁/恢复等章节；本轮重点复核210–350行。"
+    },
+    {
+      "id": "R18",
+      "title": "原语与UTC时间合同",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/src/sciretriever/model/primitives.py",
+      "scope": "全文读取：严格值对象、相对路径和UTC字符串。"
+    },
+    {
+      "id": "R19",
+      "title": "PDF归属直接测试",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/tests/test_acquisition_pdf_identity.py",
+      "scope": "读取1–220行：空白PDF加元数据fixture与主要测试。"
+    },
+    {
+      "id": "R20",
+      "title": "Browser相关测试位置",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/tests/test_network_browser.py",
+      "scope": "通过仓库搜索定位_GenericCapturePolicy相关引用；未声称全文审查。"
+    },
+    {
+      "id": "R21",
+      "title": "ADR索引",
+      "url": "https://github.com/LuckRookie/SciRetriever/blob/e1a33d5986f654f2692d7619dd58448944ec3463/docs/architecture/decisions/README.md",
+      "scope": "读取0001–0023当前决策与主题关系；长响应可能截断尾部说明。"
+    },
+    {
+      "id": "W01",
+      "title": "Node.js版本支持状态",
+      "url": "https://nodejs.org/en/about/previous-releases",
+      "scope": "Node 24 LTS为拟验证基线；具体补丁版本待实施冻结。"
+    },
+    {
+      "id": "W02",
+      "title": "Playwright Screencast",
+      "url": "https://playwright.dev/docs/api/class-screencast",
+      "scope": "1.59接口、JPEG回调与视口信息；仅说明API，不证明Cloak组合兼容。"
+    },
+    {
+      "id": "W03",
+      "title": "better-sqlite3项目文档",
+      "url": "https://github.com/WiseLibs/better-sqlite3",
+      "scope": "同步驱动与worker使用；生产版本和预编译资源须冻结。"
+    },
+    {
+      "id": "W04",
+      "title": "Node SQLite API",
+      "url": "https://nodejs.org/api/sqlite.html",
+      "scope": "当前文档分支不能当成Node24完全相同的能力/稳定等级。"
+    },
+    {
+      "id": "W05",
+      "title": "Node Worker Threads",
+      "url": "https://nodejs.org/api/worker_threads.html",
+      "scope": "独立JS线程与消息交互；本方案用于隔离同步任务。"
+    },
+    {
+      "id": "W06",
+      "title": "Chrome DevTools Protocol Page",
+      "url": "https://chromedevtools.github.io/devtools-protocol/tot/Page/",
+      "scope": "screencast/ACK与页面相关事件；实验性协议仅作经测试适配路径。"
+    },
+    {
+      "id": "W07",
+      "title": "Fastify Server参考",
+      "url": "https://fastify.dev/docs/latest/Reference/Server/",
+      "scope": "拟选HTTP服务基础；工作区业务协议为本计划自行设计。"
+    },
+    {
+      "id": "W08",
+      "title": "Zod基础",
+      "url": "https://zod.dev/basics",
+      "scope": "运行时解析；strict与交叉字段规则由项目明确实现。"
+    },
+    {
+      "id": "W09",
+      "title": "Vitest指南",
+      "url": "https://vitest.dev/guide/",
+      "scope": "拟选测试工具；具体Harness尚待实现。"
+    },
+    {
+      "id": "W10",
+      "title": "Playwright下载指南",
+      "url": "https://playwright.dev/docs/downloads",
+      "scope": "下载事件与主流程、文件保存及Context生命周期。"
+    },
+    {
+      "id": "W11",
+      "title": "Playwright Download参考",
+      "url": "https://playwright.dev/docs/api/class-download",
+      "scope": "saveAs/下载完成语义；不代表Acquisition已入库。"
+    },
+    {
+      "id": "W12",
+      "title": "Playwright Route参考",
+      "url": "https://playwright.dev/docs/api/class-route",
+      "scope": "continue与fetch/fulfill机制区别。"
+    },
+    {
+      "id": "W13",
+      "title": "Playwright网络指南",
+      "url": "https://playwright.dev/docs/network",
+      "scope": "Service Worker与路由可见性边界。"
+    },
+    {
+      "id": "W14",
+      "title": "Playwright CI环境",
+      "url": "https://playwright.dev/docs/ci",
+      "scope": "Linux headed执行所需显示环境；投屏不能消除启动依赖。"
+    },
+    {
+      "id": "W15",
+      "title": "SQLite WAL官方说明",
+      "url": "https://sqlite.org/wal.html",
+      "scope": "单写入者、共享内存与WAL文件关系、部署约束。"
+    },
+    {
+      "id": "W16",
+      "title": "Node文件系统API",
+      "url": "https://nodejs.org/api/fs.html",
+      "scope": "FileHandle/fsync等基础能力；不能据此推断全平台无竞态原语齐全。"
+    },
+    {
+      "id": "W17",
+      "title": "PDF.js官方示例",
+      "url": "https://mozilla.github.io/pdf.js/examples/",
+      "scope": "候选PDF处理引擎的参考；验收质量需要本项目fixture验证。"
+    },
+    {
+      "id": "W18",
+      "title": "Node Single Executable Applications",
+      "url": "https://nodejs.org/api/single-executable-applications.html",
+      "scope": "可选发行方向；原生与浏览器资源仍需专项打包验证。"
+    },
+    {
+      "id": "W19",
+      "title": "CloakBrowser官方仓库",
+      "url": "https://github.com/CloakHQ/CloakBrowser",
+      "scope": "存在JavaScript wrapper；不采信“所有反爬均通过”等营销承诺。"
+    },
+    {
+      "id": "W20",
+      "title": "Playwright Auto-waiting",
+      "url": "https://playwright.dev/docs/actionability",
+      "scope": "元素可操作性等待；本计划的partial Observation是拟新增设计。"
+    }
+  ]
+}
